@@ -1,6 +1,4 @@
 %{
-#define _POSIX_C_SOURCE 200809L
-
 #include "parser.tab.h"
 
 #include <stdio.h>
@@ -12,6 +10,7 @@ extern int fileno(FILE *);
 static char *ussr_strdup(const char *text);
 static char *unquote_string(const char *text);
 %}
+
 %option noyywrap
 %option nodefault
 %option yylineno
@@ -24,58 +23,49 @@ LETTER      [a-zA-Z_]
 IDENT       {LETTER}({LETTER}|{DIGIT})*
 INTEGER     {DIGIT}+
 REAL        {DIGIT}+"."{DIGIT}+
-STRING      \"([^\"\\\n]|\\.)*
+STRING      \"([^\"\\\n]|\\.)*\"
 
 %%
 
 [ \t\r]+                    ;
 
 \#[^\r\n]*                  { return COMMENT; }
-
 \n                          { return NEWLINE; }
+
+"if"                        { return IF; }
+"else"                      { return ELSE; }
+
+"true"                      { yylval.boolean = 1; return BOOLEAN; }
+"false"                     { yylval.boolean = 0; return BOOLEAN; }
+"null"                      { return NULL_VALUE; }
+
+">="                        { return GREATER_EQUAL; }
+"<="                        { return LESS_EQUAL; }
+"=="                        { return EQUAL; }
+"!="                        { return NOT_EQUAL; }
+">"                         { return GREATER; }
+"<"                         { return LESS; }
 
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }
+"{"                         { return LBRACE; }
+"}"                         { return RBRACE; }
 "("                         { return LPAREN; }
 ")"                         { return RPAREN; }
 ":"                         { return COLON; }
 
-"true"                      {
-                                yylval.boolean = 1;
-                                return BOOLEAN;
-                            }
-
-"false"                     {
-                                yylval.boolean = 0;
-                                return BOOLEAN;
-                            }
-
-"null"                      {
-                                return NULL_VALUE;
-                            }
-
 {REAL}                      {
-                                yylval.real = strtod(
-                                    yytext,
-                                    NULL
-                                );
-
+                                yylval.real = strtod(yytext, NULL);
                                 return REAL;
                             }
 
 {INTEGER}                   {
-                                yylval.integer = strtol(
-                                    yytext,
-                                    NULL,
-                                    10
-                                );
-
+                                yylval.integer = strtol(yytext, NULL, 10);
                                 return INTEGER;
                             }
 
-{STRING}\"                 {
-                                yylval.string =
-                                    unquote_string(yytext);
+{STRING}                    {
+                                yylval.string = unquote_string(yytext);
 
                                 if (yylval.string == NULL)
                                     return 0;
@@ -84,8 +74,7 @@ STRING      \"([^\"\\\n]|\\.)*
                             }
 
 {IDENT}                     {
-                                yylval.string =
-                                    ussr_strdup(yytext);
+                                yylval.string = ussr_strdup(yytext);
 
                                 if (yylval.string == NULL)
                                     return 0;
@@ -96,8 +85,7 @@ STRING      \"([^\"\\\n]|\\.)*
 .                           {
                                 fprintf(
                                     stderr,
-                                    "USSR: unexpected character "
-                                    "'%s' at line %d\n",
+                                    "USSR: unexpected character '%s' at line %d\n",
                                     yytext,
                                     yylineno
                                 );
@@ -107,7 +95,8 @@ STRING      \"([^\"\\\n]|\\.)*
 
 %%
 
-static char *ussr_strdup(const char *text)
+static char *
+ussr_strdup(const char *text)
 {
     size_t length;
     char *copy;
@@ -115,19 +104,20 @@ static char *ussr_strdup(const char *text)
     if (text == NULL)
         return NULL;
 
-    length = strlen(text);
+    length = strlen(text) + 1;
 
-    copy = malloc(length + 1);
+    copy = malloc(length);
 
     if (copy == NULL)
         return NULL;
 
-    memcpy(copy, text, length + 1);
+    memcpy(copy, text, length);
 
     return copy;
 }
 
-static char *unquote_string(const char *text)
+static char *
+unquote_string(const char *text)
 {
     size_t length;
     size_t i;
@@ -151,7 +141,7 @@ static char *unquote_string(const char *text)
 
     for (i = 1; i < length - 1; ++i)
     {
-        if (text[i] == '\\')
+        if (text[i] == '\\' && i + 1 < length - 1)
         {
             ++i;
 

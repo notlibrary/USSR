@@ -1,0 +1,17 @@
+[
+	# USSR first program
+
+	set(name): "USSR"
+	set(a): 10
+	set(b): 20
+
+	add(result): a b
+
+	print(output): name
+
+	print(output2): result
+	if(val): {a>9}
+	
+		print(output3): "A is greater than 9"
+
+]
