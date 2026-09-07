@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern int fileno(FILE *);
-
 static char *ussr_strdup(const char *text);
 static char *unquote_string(const char *text);
 %}
@@ -28,12 +26,8 @@ STRING      \"([^\"\\\n]|\\.)*\"
 %%
 
 [ \t\r]+                    ;
-
 \#[^\r\n]*                  { return COMMENT; }
 \n                          { return NEWLINE; }
-
-"if"                        { return IF; }
-"else"                      { return ELSE; }
 
 "true"                      { yylval.boolean = 1; return BOOLEAN; }
 "false"                     { yylval.boolean = 0; return BOOLEAN; }
@@ -45,6 +39,12 @@ STRING      \"([^\"\\\n]|\\.)*\"
 "!="                        { return NOT_EQUAL; }
 ">"                         { return GREATER; }
 "<"                         { return LESS; }
+
+"+"                         { return PLUS; }
+"-"                         { return MINUS; }
+"*"                         { return MULTIPLY; }
+"/"                         { return DIVIDE; }
+"%"                         { return MODULO; }
 
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }

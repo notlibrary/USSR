@@ -2,41 +2,6 @@
 {
 #include <stddef.h>
 #include "ussr.h"
-
-struct ussr_command_list_t;
-
-typedef enum
-{
-    USSR_EXPR_VALUE,
-    USSR_EXPR_COMPARE
-} ussr_expression_type_t;
-
-typedef enum
-{
-    USSR_CMP_GT,
-    USSR_CMP_LT,
-    USSR_CMP_GE,
-    USSR_CMP_LE,
-    USSR_CMP_EQ,
-    USSR_CMP_NE
-} ussr_comparison_t;
-
-typedef struct ussr_expression_t
-{
-    ussr_expression_type_t type;
-
-    union
-    {
-        ussr_value_t value;
-
-        struct
-        {
-            ussr_value_t left;
-            ussr_comparison_t operator;
-            ussr_value_t right;
-        } compare;
-    } data;
-} ussr_expression_t;
 }
 
 %{
@@ -51,6 +16,21 @@ void yyerror(const char *message);
 extern int yylineno;
 extern FILE *yyin;
 
+ussr_command_list_t *ussr_parsed_program = NULL;
+
+ussr_command_t *ussr_command_create(
+    char *name,
+    char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+);
+
+ussr_command_list_t *ussr_command_list_create(void);
+
+int ussr_command_list_append(
+    ussr_command_list_t *list,
+    ussr_command_t *command
+);
 %}
 
 %union
@@ -61,24 +41,17 @@ extern FILE *yyin;
     int boolean;
 
     ussr_value_t value;
-
     ussr_expression_t *expression;
+    ussr_command_list_t *command_list;
+    ussr_command_t *command;
 
-    struct ussr_command_list_t *command_list;
+    ussr_argument_t argument;
 
     struct
     {
-        ussr_value_t *values;
+        ussr_argument_t *items;
         size_t count;
-    } parameters;
-
-    struct
-    {
-        ussr_expression_t *expression;
-        char *return_variable;
-        struct ussr_command_list_t *then_list;
-        struct ussr_command_list_t *else_list;
-    } conditional;
+    } arguments;
 }
 
 %token <string> IDENTIFIER
@@ -86,7 +59,6 @@ extern FILE *yyin;
 %token <integer> INTEGER
 %token <real> REAL
 %token <boolean> BOOLEAN
-
 %token NULL_VALUE
 
 %token LBRACKET
@@ -105,313 +77,433 @@ extern FILE *yyin;
 %token EQUAL
 %token NOT_EQUAL
 
-%token IF
-%token ELSE
+%token PLUS
+%token MINUS
+%token MULTIPLY
+%token DIVIDE
+%token MODULO
 
 %token NEWLINE
 %token COMMENT
 
-%type <value> parameter
-%type <parameters> parameter_list
-
+%type <command_list> command_lines
+%type <command> command_line
+%type <command_list> program
+%type <command> command
+%type <arguments> argument_list
+%type <argument> argument
+%type <argument> block_argument
 %type <expression> expression
-%type <expression> boolean_expression
-
-%type <command_list> command_list
-%type <command_list> optional_else
-
-%type <conditional> conditional
+%type <expression> comparison_expression
+%type <expression> additive_expression
+%type <expression> multiplicative_expression
+%type <expression> unary_expression
+%type <expression> primary_expression
+%type <value> literal
 
 %start program
 
 %%
 
 program
-    : command_list
-    ;
-
-command_list
-    : LBRACKET command_lines RBRACKET
+    : command_lines
       {
-          $$ = NULL;
+          ussr_parsed_program = $1;
+          $$ = $1;
       }
     ;
 
 command_lines
     : %empty
+      {
+          $$ = ussr_command_list_create();
+
+          if ($$ == NULL)
+              YYABORT;
+      }
     | command_lines command_line
+      {
+          if ($2 != NULL)
+          {
+              if (ussr_command_list_append($1, $2) != 0)
+              {
+                  ussr_command_list_free($1);
+                  YYABORT;
+              }
+          }
+
+          $$ = $1;
+      }
     ;
 
 command_line
     : NEWLINE
-    | COMMENT NEWLINE
-    | command NEWLINE
-    | conditional NEWLINE
-    ;
-
-command
-    : IDENTIFIER
-      LPAREN IDENTIFIER RPAREN
-      COLON parameter_list
-      {
-          if (ussr_execute_command(
-                  $1,
-                  $3,
-                  $6.values,
-                  $6.count) != 0)
-          {
-              free($1);
-              free($3);
-              free($6.values);
-              YYERROR;
-          }
-
-          free($1);
-          free($3);
-          free($6.values);
-      }
-    ;
-
-conditional
-    : IF
-      LPAREN IDENTIFIER RPAREN
-      COLON expression
-      command_list
-      optional_else
-      {
-          $$.expression = $6;
-          $$.return_variable = $3;
-          $$.then_list = $7;
-          $$.else_list = $8;
-
- //         ussr_expression_free($$.expression);
-          free($$.return_variable);
-      }
-    ;
-
-optional_else
-    : %empty
       {
           $$ = NULL;
       }
-
-    | ELSE
-      COLON
-      command_list
+    | COMMENT NEWLINE
       {
-          $$ = $3;
+          $$ = NULL;
+      }
+    | command NEWLINE
+      {
+          $$ = $1;
       }
     ;
 
-expression
-    : LBRACE boolean_expression RBRACE
+command
+    : IDENTIFIER LPAREN IDENTIFIER RPAREN COLON argument_list
       {
-          $$ = $2;
-      }
-    ;
-
-boolean_expression
-    : parameter GREATER parameter
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_COMPARE;
-          $$->data.compare.left = $1;
-          $$->data.compare.operator = USSR_CMP_GT;
-          $$->data.compare.right = $3;
-      }
-
-    | parameter LESS parameter
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_COMPARE;
-          $$->data.compare.left = $1;
-          $$->data.compare.operator = USSR_CMP_LT;
-          $$->data.compare.right = $3;
-      }
-
-    | parameter GREATER_EQUAL parameter
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_COMPARE;
-          $$->data.compare.left = $1;
-          $$->data.compare.operator = USSR_CMP_GE;
-          $$->data.compare.right = $3;
-      }
-
-    | parameter LESS_EQUAL parameter
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_COMPARE;
-          $$->data.compare.left = $1;
-          $$->data.compare.operator = USSR_CMP_LE;
-          $$->data.compare.right = $3;
-      }
-
-    | parameter EQUAL parameter
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_COMPARE;
-          $$->data.compare.left = $1;
-          $$->data.compare.operator = USSR_CMP_EQ;
-          $$->data.compare.right = $3;
-      }
-
-    | parameter NOT_EQUAL parameter
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_COMPARE;
-          $$->data.compare.left = $1;
-          $$->data.compare.operator = USSR_CMP_NE;
-          $$->data.compare.right = $3;
-      }
-    ;
-
-parameter_list
-    : parameter
-      {
-          $$.values = malloc(sizeof(ussr_value_t));
-
-          if ($$.values == NULL)
-              YYABORT;
-
-          $$.values[0] = $1;
-          $$.count = 1;
-      }
-
-    | parameter_list parameter
-      {
-          ussr_value_t *new_values;
-
-          new_values = realloc(
-              $1.values,
-              ($1.count + 1) * sizeof(ussr_value_t)
+          $$ = ussr_command_create(
+              $1,
+              $3,
+              $6.items,
+              $6.count
           );
 
-          if (new_values == NULL)
+          if ($$ == NULL)
           {
-              size_t i;
+              free($1);
+              free($3);
+              free($6.items);
+              YYABORT;
+          }
+      }
+    ;
 
-              for (i = 0; i < $1.count; ++i)
-                  ussr_value_free(&$1.values[i]);
+argument_list
+    : argument
+      {
+          $$.items = malloc(sizeof(*$$.items));
 
-              free($1.values);
-
+          if ($$.items == NULL)
+          {
               YYABORT;
           }
 
-          new_values[$1.count] = $2;
+          $$.items[0] = $1;
+          $$.count = 1;
+      }
+    | argument_list argument
+      {
+          ussr_argument_t *items;
 
-          $$.values = new_values;
+          items = realloc(
+              $1.items,
+              ($1.count + 1) * sizeof(*items)
+          );
+
+          if (items == NULL)
+          {
+              free($1.items);
+              YYABORT;
+          }
+
+          items[$1.count] = $2;
+
+          $$.items = items;
           $$.count = $1.count + 1;
       }
     ;
 
-parameter
+argument
+    : literal
+      {
+          $$.type = USSR_ARGUMENT_VALUE;
+          $$.data.value = $1;
+      }
+    | IDENTIFIER
+      {
+          $$.type = USSR_ARGUMENT_VALUE;
+
+          if (ussr_get_variable($1) != NULL)
+          {
+              $$.data.value = ussr_value_copy(
+                  ussr_get_variable($1)
+              );
+
+              free($1);
+          }
+          else
+          {
+              /*
+               * Preserve identifiers as runtime variables.
+               * This is represented by an expression so that
+               * while-loop conditions see the current value.
+               */
+              ussr_expression_t *expression;
+
+              expression = malloc(sizeof(*expression));
+
+              if (expression == NULL)
+              {
+                  free($1);
+                  YYABORT;
+              }
+
+              expression->type = USSR_EXPR_VARIABLE;
+              expression->data.variable = $1;
+
+              $$.type = USSR_ARGUMENT_EXPRESSION;
+              $$.data.expression = expression;
+          }
+      }
+    | expression
+      {
+          $$.type = USSR_ARGUMENT_EXPRESSION;
+          $$.data.expression = $1;
+      }
+    | block_argument
+      {
+          $$ = $1;
+      }
+    ;
+
+block_argument
+    : LBRACKET command_lines RBRACKET
+      {
+          $$.type = USSR_ARGUMENT_COMMAND_LIST;
+          $$.data.command_list = $2;
+      }
+    ;
+
+literal
     : STRING
       {
           $$.type = USSR_STRING;
           $$.data.string = $1;
       }
-
     | INTEGER
       {
           $$.type = USSR_INTEGER;
           $$.data.integer = $1;
       }
-
     | REAL
       {
           $$.type = USSR_REAL;
           $$.data.real = $1;
       }
-
     | BOOLEAN
       {
           $$.type = USSR_BOOLEAN;
           $$.data.boolean = $1;
       }
-
     | NULL_VALUE
       {
           $$.type = USSR_NULL;
       }
+    ;
 
+expression
+    : LBRACE comparison_expression RBRACE
+      {
+          $$ = $2;
+      }
+    ;
+
+comparison_expression
+    : additive_expression
+      {
+          $$ = $1;
+      }
+    | additive_expression GREATER additive_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_GT;
+          $$->data.binary.right = $3;
+      }
+    | additive_expression LESS additive_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_LT;
+          $$->data.binary.right = $3;
+      }
+    | additive_expression GREATER_EQUAL additive_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_GE;
+          $$->data.binary.right = $3;
+      }
+    | additive_expression LESS_EQUAL additive_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_LE;
+          $$->data.binary.right = $3;
+      }
+    | additive_expression EQUAL additive_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_EQ;
+          $$->data.binary.right = $3;
+      }
+    | additive_expression NOT_EQUAL additive_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_NE;
+          $$->data.binary.right = $3;
+      }
+    ;
+
+additive_expression
+    : multiplicative_expression
+      {
+          $$ = $1;
+      }
+    | additive_expression PLUS multiplicative_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_ADD;
+          $$->data.binary.right = $3;
+      }
+    | additive_expression MINUS multiplicative_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_SUB;
+          $$->data.binary.right = $3;
+      }
+    ;
+
+multiplicative_expression
+    : unary_expression
+      {
+          $$ = $1;
+      }
+    | multiplicative_expression MULTIPLY unary_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_MUL;
+          $$->data.binary.right = $3;
+      }
+    | multiplicative_expression DIVIDE unary_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_DIV;
+          $$->data.binary.right = $3;
+      }
+    | multiplicative_expression MODULO unary_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_BINARY;
+          $$->data.binary.left = $1;
+          $$->data.binary.operator = USSR_OP_MOD;
+          $$->data.binary.right = $3;
+      }
+    ;
+
+unary_expression
+    : primary_expression
+      {
+          $$ = $1;
+      }
+    | MINUS unary_expression
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_UNARY;
+          $$->data.unary.operator = USSR_OP_SUB;
+          $$->data.unary.operand = $2;
+      }
+    ;
+
+primary_expression
+    : literal
+      {
+          $$ = malloc(sizeof(*$$));
+
+          if ($$ == NULL)
+              YYABORT;
+
+          $$->type = USSR_EXPR_VALUE;
+          $$->data.value = $1;
+      }
     | IDENTIFIER
       {
-          const ussr_value_t *value;
+          $$ = malloc(sizeof(*$$));
 
-          value = ussr_get_variable($1);
-
-          if (value == NULL)
+          if ($$ == NULL)
           {
-              fprintf(
-                  stderr,
-                  "USSR: undefined variable '%s'\n",
-                  $1
-              );
-
               free($1);
-              YYERROR;
+              YYABORT;
           }
 
-          $$ = ussr_value_copy(value);
-
-          free($1);
+          $$->type = USSR_EXPR_VARIABLE;
+          $$->data.variable = $1;
+      }
+    | LPAREN comparison_expression RPAREN
+      {
+          $$ = $2;
       }
     ;
 
 %%
 
-static void
-ussr_expression_free(struct ussr_expression_t *expression)
-{
-    if (expression == NULL)
-        return;
-
-    if (expression->type == USSR_EXPR_VALUE)
-    {
-        ussr_value_free(&expression->data.value);
-    }
-    else if (expression->type == USSR_EXPR_COMPARE)
-    {
-        ussr_value_free(&expression->data.compare.left);
-        ussr_value_free(&expression->data.compare.right);
-    }
-
-    free(expression);
-}
-
-void
-yyerror(const char *message)
-{
-    fprintf(
-        stderr,
-        "USSR: syntax error at line %d: %s\n",
-        yylineno,
-        message
-    );
+void yyerror(const char *message) {
+    fprintf(stderr, "Ошибка: %s на строке %d\n", message, yylineno);
 }
