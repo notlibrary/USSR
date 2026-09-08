@@ -7,3 +7,5 @@ Designed by me coded with ChatGPT after accidental prompt
 I share 0.1 version with `hello.su` first program in it
 
 Perhaps it evolves fast to something big No promises or insight unfortunately
+
+.su file extension means "script user" not that you think
