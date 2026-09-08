@@ -1,17 +1,16 @@
 [
-	# USSR first program
+    # USSR second program
 
-	set(name): "USSR"
-	set(a): 10
-	set(b): 20
+    set(name): "USSR"
+    set(a): 10
+    set(b): 20
 
-	add(result): a b
+    add(result): a b
 
-	print(output): name
+    print(output): name
+    print(output2): result
 
-	print(output2): result
-	if(val): {a>9}
-	
-		print(output3): "A is greater than 9"
-
+    if(val): {a > 9} [
+        print(output3): "A is greater than 9"
+    ]
 ]

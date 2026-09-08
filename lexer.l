@@ -27,7 +27,14 @@ STRING      \"([^\"\\\n]|\\.)*\"
 
 [ \t\r]+                    ;
 \#[^\r\n]*                  { return COMMENT; }
-\n                          { return NEWLINE; }
+\n                          { 
+                                if (yyin == stdin) {
+                                    return 0;
+                                }
+                                /* В режиме файла: возвращаем токен (если он нужен в грамматике) 
+                                   или просто ничего не делаем (символ ';' пропускает его) */
+                                return NEWLINE; 
+                            }
 
 "true"                      { yylval.boolean = 1; return BOOLEAN; }
 "false"                     { yylval.boolean = 0; return BOOLEAN; }

@@ -5,13 +5,29 @@
 }
 
 %{
+
+
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "ussr.h"
 
+extern int yylineno; 
+extern char *yytext;
+
+void yyerror(const char *message)
+{
+    fprintf(
+        stderr,
+        "Syntax error: %s (line %d, char \"%s\")\n",
+        message,
+        yylineno,
+        yytext
+    );
+}
+
+
 int yylex(void);
-void yyerror(const char *message);
 
 extern int yylineno;
 extern FILE *yyin;
@@ -86,10 +102,10 @@ int ussr_command_list_append(
 %token NEWLINE
 %token COMMENT
 
-%type <command_list> command_lines
-%type <command> command_line
 %type <command_list> program
+%type <command_list> command_lines
 %type <command> command
+%type <command> command_line
 %type <arguments> argument_list
 %type <argument> argument
 %type <argument> block_argument
@@ -111,15 +127,18 @@ program
           ussr_parsed_program = $1;
           $$ = $1;
       }
+    | LBRACKET command_lines RBRACKET
+      {
+          ussr_parsed_program = $2;
+          $$ = $2;
+      }
     ;
 
 command_lines
     : %empty
       {
           $$ = ussr_command_list_create();
-
-          if ($$ == NULL)
-              YYABORT;
+          if ($$ == NULL) YYABORT;
       }
     | command_lines command_line
       {
@@ -131,10 +150,10 @@ command_lines
                   YYABORT;
               }
           }
-
           $$ = $1;
       }
     ;
+
 
 command_line
     : NEWLINE
@@ -145,7 +164,15 @@ command_line
       {
           $$ = NULL;
       }
+    | COMMENT
+      {
+          $$ = NULL;
+      }
     | command NEWLINE
+      {
+          $$ = $1;
+      }
+    | command
       {
           $$ = $1;
       }
@@ -214,39 +241,21 @@ argument
       }
     | IDENTIFIER
       {
-          $$.type = USSR_ARGUMENT_VALUE;
+          ussr_expression_t *expression;
 
-          if (ussr_get_variable($1) != NULL)
+          expression = malloc(sizeof(*expression));
+
+          if (expression == NULL)
           {
-              $$.data.value = ussr_value_copy(
-                  ussr_get_variable($1)
-              );
-
               free($1);
+              YYABORT;
           }
-          else
-          {
-              /*
-               * Preserve identifiers as runtime variables.
-               * This is represented by an expression so that
-               * while-loop conditions see the current value.
-               */
-              ussr_expression_t *expression;
 
-              expression = malloc(sizeof(*expression));
+          expression->type = USSR_EXPR_VARIABLE;
+          expression->data.variable = $1;
 
-              if (expression == NULL)
-              {
-                  free($1);
-                  YYABORT;
-              }
-
-              expression->type = USSR_EXPR_VARIABLE;
-              expression->data.variable = $1;
-
-              $$.type = USSR_ARGUMENT_EXPRESSION;
-              $$.data.expression = expression;
-          }
+          $$.type = USSR_ARGUMENT_EXPRESSION;
+          $$.data.expression = expression;
       }
     | expression
       {
@@ -503,7 +512,3 @@ primary_expression
     ;
 
 %%
-
-void yyerror(const char *message) {
-    fprintf(stderr, "Ошибка: %s на строке %d\n", message, yylineno);
-}
