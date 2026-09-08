@@ -5,6 +5,36 @@
 #include <string.h>
 #include <math.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "ussr.h"
+
+int yylex(void);
+int yyparse(void);
+void yyerror(const char *message);
+
+extern int yylineno;
+extern char *yytext;
+extern FILE *yyin;
+
+typedef struct yy_buffer_state *YY_BUFFER_STATE;
+
+extern YY_BUFFER_STATE yy_scan_string(const char *str);
+extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
+
+extern ussr_command_list_t *ussr_parsed_program;
+
+extern YY_BUFFER_STATE yy_scan_string(const char *str);
+extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
+
+extern ussr_command_list_t *ussr_parsed_program;
+
 #define USSR_INITIAL_VARIABLES 32
 #define USSR_MAX_LOOP_ITERATIONS 1000000UL
 
@@ -794,6 +824,507 @@ static int ussr_execute_while(
     return 0;
 }
 
+static int
+ussr_command_is_executable(const char *path)
+{
+    if (path == NULL)
+        return 0;
+
+    return access(path, X_OK) == 0;
+}
+
+static char *
+ussr_find_external_command(const char *command)
+{
+    const char *path;
+    const char *start;
+    const char *end;
+    size_t directory_length;
+    size_t command_length;
+    size_t length;
+    char *candidate;
+
+    if (command == NULL || *command == '\0')
+        return NULL;
+
+    /*
+     * A command containing '/' is already a path.
+     */
+    if (strchr(command, '/') != NULL)
+    {
+        if (ussr_command_is_executable(command))
+            return ussr_strdup(command);
+
+        return NULL;
+    }
+
+    /*
+     * Search PATH first.
+     */
+    path = getenv("PATH");
+
+    if (path != NULL)
+    {
+        start = path;
+        command_length = strlen(command);
+
+        while (*start != '\0')
+        {
+            end = strchr(start, ':');
+
+            if (end == NULL)
+                end = start + strlen(start);
+
+            directory_length = (size_t)(end - start);
+
+            /*
+             * Empty PATH component means current directory.
+             */
+            if (directory_length == 0)
+            {
+                length = 2 + command_length;
+
+                candidate = malloc(length);
+
+                if (candidate == NULL)
+                    return NULL;
+
+                snprintf(
+                    candidate,
+                    length,
+                    "./%s",
+                    command
+                );
+            }
+            else
+            {
+                length =
+                    directory_length +
+                    1 +
+                    command_length +
+                    1;
+
+                candidate = malloc(length);
+
+                if (candidate == NULL)
+                    return NULL;
+
+                snprintf(
+                    candidate,
+                    length,
+                    "%.*s/%s",
+                    (int)directory_length,
+                    start,
+                    command
+                );
+            }
+
+            if (ussr_command_is_executable(candidate))
+                return candidate;
+
+            free(candidate);
+
+            if (*end == '\0')
+                break;
+
+            start = end + 1;
+        }
+    }
+
+    /*
+     * Finally check the current working directory explicitly.
+     */
+    length = 2 + strlen(command);
+
+    candidate = malloc(length);
+
+    if (candidate == NULL)
+        return NULL;
+
+    snprintf(candidate, length, "./%s", command);
+
+    if (ussr_command_is_executable(candidate))
+        return candidate;
+
+    free(candidate);
+
+    return NULL;
+}
+
+static int
+ussr_execute_external(
+    const char *command,
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+)
+{
+    char *path;
+    char **argv;
+    ussr_value_t *values;
+    size_t i;
+    pid_t pid;
+    int status;
+    ussr_value_t result;
+
+    path = ussr_find_external_command(command);
+
+    if (path == NULL)
+    {
+        fprintf(
+            stderr,
+            "USSR: command not found: %s\n",
+            command
+        );
+        return -1;
+    }
+
+    argv = calloc(argument_count + 2, sizeof(*argv));
+
+    if (argv == NULL)
+    {
+        free(path);
+        return -1;
+    }
+
+    values = calloc(argument_count, sizeof(*values));
+
+    if (values == NULL)
+    {
+        free(argv);
+        free(path);
+        return -1;
+    }
+
+    argv[0] = path;
+
+    for (i = 0; i < argument_count; ++i)
+    {
+        if (ussr_argument_evaluate(
+                &arguments[i],
+                &values[i]) != 0)
+        {
+            size_t j;
+
+            for (j = 0; j < i; ++j)
+                ussr_value_free(&values[j]);
+
+            free(values);
+            free(argv);
+            free(path);
+
+            return -1;
+        }
+
+        if (values[i].type != USSR_STRING)
+        {
+            /*
+             * Convert numeric/boolean/null values to their
+             * textual representation for exec().
+             */
+            char buffer[64];
+
+            switch (values[i].type)
+            {
+                case USSR_INTEGER:
+                    snprintf(
+                        buffer,
+                        sizeof(buffer),
+                        "%ld",
+                        values[i].data.integer
+                    );
+                    break;
+
+                case USSR_REAL:
+                    snprintf(
+                        buffer,
+                        sizeof(buffer),
+                        "%.17g",
+                        values[i].data.real
+                    );
+                    break;
+
+                case USSR_BOOLEAN:
+                    snprintf(
+                        buffer,
+                        sizeof(buffer),
+                        "%s",
+                        values[i].data.boolean ?
+                            "true" : "false"
+                    );
+                    break;
+
+                case USSR_NULL:
+                    snprintf(
+                        buffer,
+                        sizeof(buffer),
+                        "null"
+                    );
+                    break;
+
+                default:
+                    buffer[0] = '\0';
+                    break;
+            }
+
+            argv[i + 1] = ussr_strdup(buffer);
+        }
+        else
+        {
+            argv[i + 1] = ussr_strdup(values[i].data.string);
+        }
+
+        if (argv[i + 1] == NULL)
+        {
+            size_t j;
+
+            for (j = 0; j <= i; ++j)
+            {
+                free(argv[j + 1]);
+                ussr_value_free(&values[j]);
+            }
+
+            free(values);
+            free(argv);
+            free(path);
+
+            return -1;
+        }
+    }
+
+    argv[argument_count + 1] = NULL;
+
+    pid = fork();
+
+    if (pid < 0)
+    {
+        perror("USSR: fork");
+
+        for (i = 0; i < argument_count; ++i)
+        {
+            free(argv[i + 1]);
+            ussr_value_free(&values[i]);
+        }
+
+        free(values);
+        free(argv);
+        free(path);
+
+        return -1;
+    }
+
+    if (pid == 0)
+    {
+        execv(path, argv);
+
+        /*
+         * Only reached when execv() fails.
+         */
+        fprintf(
+            stderr,
+            "USSR: cannot execute '%s': %s\n",
+            path,
+            strerror(errno)
+        );
+
+        _exit(126);
+    }
+
+    do
+    {
+        if (waitpid(pid, &status, 0) < 0)
+        {
+            if (errno == EINTR)
+                continue;
+
+            perror("USSR: waitpid");
+
+            for (i = 0; i < argument_count; ++i)
+            {
+                free(argv[i + 1]);
+                ussr_value_free(&values[i]);
+            }
+
+            free(values);
+            free(argv);
+            free(path);
+
+            return -1;
+        }
+
+        break;
+    }
+    while (1);
+
+    for (i = 0; i < argument_count; ++i)
+    {
+        free(argv[i + 1]);
+        ussr_value_free(&values[i]);
+    }
+
+    free(values);
+    free(argv);
+    free(path);
+
+    /*
+     * Return the normal process exit status.
+     *
+     * If the process was killed by a signal, use 128 + signal
+     * in the same general convention used by shells.
+     */
+    if (WIFEXITED(status))
+    {
+        result = ussr_integer((long)WEXITSTATUS(status));
+    }
+    else if (WIFSIGNALED(status))
+    {
+        result = ussr_integer(
+            128L + (long)WTERMSIG(status)
+        );
+    }
+    else
+    {
+        result = ussr_integer(-1);
+    }
+
+    if (ussr_set_variable(return_name, &result) != 0)
+    {
+        ussr_value_free(&result);
+        return -1;
+    }
+
+    ussr_value_free(&result);
+
+    return 0;
+}
+
+
+static int
+ussr_execute_eval(
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+)
+{
+    ussr_value_t source;
+    ussr_value_t result;
+    ussr_command_list_t *program;
+    YY_BUFFER_STATE buffer;
+    int parse_result;
+
+    if (return_name == NULL)
+        return -1;
+
+    if (argument_count != 1)
+    {
+        fprintf(
+            stderr,
+            "USSR: eval expects 1 parameter\n"
+        );
+        return -1;
+    }
+
+    if (ussr_argument_evaluate(
+            &arguments[0],
+            &source) != 0)
+        return -1;
+
+    if (source.type != USSR_STRING)
+    {
+        fprintf(
+            stderr,
+            "USSR: eval requires a string parameter\n"
+        );
+
+        ussr_value_free(&source);
+        return -1;
+    }
+
+    /*
+     * Save the current parsed program because yyparse()
+     * writes to the global parser result.
+     */
+    program = ussr_parsed_program;
+    ussr_parsed_program = NULL;
+
+    buffer = yy_scan_string(source.data.string);
+
+    if (buffer == NULL)
+    {
+        ussr_parsed_program = program;
+        ussr_value_free(&source);
+
+        fprintf(
+            stderr,
+            "USSR: eval could not create parser buffer\n"
+        );
+
+        return -1;
+    }
+
+    parse_result = yyparse();
+
+    yy_delete_buffer(buffer);
+
+    ussr_value_free(&source);
+
+    if (parse_result != 0 ||
+        ussr_parsed_program == NULL)
+    {
+        ussr_parsed_program = program;
+
+        fprintf(
+            stderr,
+            "USSR: eval syntax error\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * Execute the dynamically parsed program.
+     */
+    if (ussr_execute_program(ussr_parsed_program) != 0)
+    {
+        ussr_command_list_free(ussr_parsed_program);
+        ussr_parsed_program = program;
+
+        return -1;
+    }
+
+    /*
+     * eval returns the value of its return variable.
+     */
+    {
+        const ussr_value_t *value;
+
+        value = ussr_get_variable(return_name);
+
+        if (value == NULL)
+        {
+            result = ussr_null();
+        }
+        else
+        {
+            result = ussr_value_copy(value);
+        }
+    }
+
+    ussr_command_list_free(ussr_parsed_program);
+    ussr_parsed_program = program;
+
+    if (ussr_set_variable(return_name, &result) != 0)
+    {
+        ussr_value_free(&result);
+        return -1;
+    }
+
+    ussr_value_free(&result);
+
+    return 0;
+}
+
+
 int ussr_execute_command(
     const char *command,
     const char *return_name,
@@ -825,7 +1356,14 @@ int ussr_execute_command(
         return -1;
 
     result = ussr_null();
-
+	
+	if (strcmp(command, "eval") == 0)
+	return ussr_execute_eval(
+		return_name,
+		arguments,
+		argument_count
+	);
+	
     if (strcmp(command, "set") == 0)
     {
         if (argument_count != 1)
@@ -906,15 +1444,15 @@ int ussr_execute_command(
         ussr_value_free(&a);
         ussr_value_free(&b);
     }
-    else
-    {
-        fprintf(
-            stderr,
-            "USSR: unknown command '%s'\n",
-            command
-        );
-        return -1;
-    }
+	else
+	{
+		return ussr_execute_external(
+			command,
+			return_name,
+			arguments,
+			argument_count
+		);
+	}
 
     if (ussr_set_variable(return_name, &result) != 0)
     {

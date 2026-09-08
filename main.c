@@ -4,8 +4,9 @@
 #include "ussr.h"
 
 extern FILE *yyin;
+extern int yyparse(void);
 
-int yyparse(void);
+extern ussr_command_list_t *ussr_parsed_program; 
 
 static int run_file(const char *filename)
 {
@@ -13,7 +14,6 @@ static int run_file(const char *filename)
     int result;
 
     file = fopen(filename, "r");
-
     if (file == NULL)
     {
         perror(filename);
@@ -21,14 +21,18 @@ static int run_file(const char *filename)
     }
 
     yyin = file;
-
     result = yyparse();
-
     fclose(file);
 
-    return result == 0
-        ? EXIT_SUCCESS
-        : EXIT_FAILURE;
+
+    if (result == 0 && ussr_parsed_program != NULL)
+    {
+        ussr_execute_program(ussr_parsed_program);
+        ussr_command_list_free(ussr_parsed_program);
+        ussr_parsed_program = NULL; 
+    }
+
+    return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 static int run_repl(void)
@@ -48,6 +52,13 @@ static int run_repl(void)
 
         if (result != 0)
             return EXIT_FAILURE;
+
+        if (ussr_parsed_program != NULL)
+        {
+            ussr_execute_program(ussr_parsed_program);
+            ussr_command_list_free(ussr_parsed_program);
+            ussr_parsed_program = NULL; // Готовы к следующей строке ввода
+        }
     }
 
     return EXIT_SUCCESS;
