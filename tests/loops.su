@@ -1,0 +1,8 @@
+[
+	set(a): 0
+	while(b): {a<10} [
+		print(val): a
+		set(a): {a+1}
+]
+
+]
