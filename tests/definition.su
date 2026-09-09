@@ -1,0 +1,7 @@
+inc(ret): a [
+	set(a): {a+1}
+	set(ret): a
+]
+set(b): 6
+inc(b): 0
+print(ret): b

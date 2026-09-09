@@ -41,8 +41,9 @@ extern ussr_command_list_t *ussr_parsed_program;
 static ussr_variable_t *variables = NULL;
 static size_t variable_count = 0;
 static size_t variable_capacity = 0;
+static ussr_definition_t *definitions = NULL;
 
-static void ussr_fatal(const char *message)
+void ussr_fatal(const char *message)
 {
     fprintf(stderr, "USSR: %s\n", message);
     exit(EXIT_FAILURE);
@@ -67,6 +68,441 @@ static char *ussr_strdup(const char *src)
 
     return dst;
 }
+
+
+
+static ussr_definition_t *
+ussr_find_definition(const char *name)
+{
+    ussr_definition_t *definition;
+
+    if (name == NULL)
+        return NULL;
+
+    definition = definitions;
+
+    while (definition != NULL)
+    {
+        if (strcmp(definition->name, name) == 0)
+            return definition;
+
+        definition = definition->next;
+    }
+
+    return NULL;
+}
+
+int ussr_argument_evaluate(const ussr_argument_t *argument, ussr_value_t *result)
+{
+    if (argument == NULL || result == NULL)
+        return -1;
+
+    *result = ussr_null();
+
+    if (argument->type == USSR_ARGUMENT_VALUE)
+        *result = ussr_value_copy(&argument->data.value);
+    else if (argument->type == USSR_ARGUMENT_EXPRESSION)
+        return ussr_expression_evaluate(
+            argument->data.expression,
+            result
+        );
+    else
+    {
+        fprintf(
+            stderr,
+            "USSR: command block cannot be used as a value\n"
+        );
+        return -1;
+    }
+
+    return 0;
+}
+
+int
+ussr_execute_user_definition(
+    const char *name,
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+)
+{
+    ussr_definition_t *definition;
+    ussr_saved_variable_t *saved;
+    ussr_value_t *values;
+    ussr_value_t result;
+    const ussr_value_t *return_value;
+    size_t i;
+    int execute_result;
+
+    definition = ussr_find_definition(name);
+
+    if (definition == NULL)
+        return -1;
+
+    if (argument_count != definition->parameter_count)
+    {
+        fprintf(
+            stderr,
+            "USSR: %s expects %zu parameter%s\n",
+            name,
+            definition->parameter_count,
+            definition->parameter_count == 1 ? "" : "s"
+        );
+        return -1;
+    }
+
+    saved = calloc(
+        definition->parameter_count + 1,
+        sizeof(*saved)
+    );
+
+    values = calloc(
+        definition->parameter_count,
+        sizeof(*values)
+    );
+
+    if (saved == NULL ||
+        (definition->parameter_count != 0 && values == NULL))
+    {
+        free(saved);
+        free(values);
+        return -1;
+    }
+
+    /*
+     * Evaluate arguments before modifying the caller's variables.
+     */
+    for (i = 0; i < definition->parameter_count; ++i)
+    {
+        if (ussr_argument_evaluate(
+                &arguments[i],
+                &values[i]) != 0)
+        {
+            while (i > 0)
+            {
+                --i;
+                ussr_value_free(&values[i]);
+            }
+
+            free(values);
+            free(saved);
+
+            return -1;
+        }
+    }
+
+    /*
+     * Save parameter variables and the definition's return variable.
+     */
+    for (i = 0; i < definition->parameter_count; ++i)
+    {
+        const ussr_value_t *old;
+
+        saved[i].name =
+            ussr_strdup(definition->parameter_names[i]);
+
+        old = ussr_get_variable(
+            definition->parameter_names[i]
+        );
+
+        if (old != NULL)
+        {
+            saved[i].existed = 1;
+            saved[i].value = ussr_value_copy(old);
+        }
+    }
+
+    saved[definition->parameter_count].name =
+        ussr_strdup(definition->return_name);
+
+    return_value =
+        ussr_get_variable(definition->return_name);
+
+    if (return_value != NULL)
+    {
+        saved[definition->parameter_count].existed = 1;
+        saved[definition->parameter_count].value =
+            ussr_value_copy(return_value);
+    }
+
+    /*
+     * Bind parameters.
+     */
+    for (i = 0; i < definition->parameter_count; ++i)
+    {
+        if (ussr_set_variable(
+                definition->parameter_names[i],
+                &values[i]) != 0)
+        {
+            execute_result = -1;
+            goto restore;
+        }
+    }
+
+    /*
+     * Execute the definition body.
+     */
+    execute_result =
+        ussr_execute_program(definition->body);
+
+    if (execute_result != 0)
+        goto restore;
+
+    /*
+     * Get the definition's return value.
+     */
+    return_value =
+        ussr_get_variable(definition->return_name);
+
+    if (return_value == NULL)
+        result = ussr_null();
+    else
+        result = ussr_value_copy(return_value);
+
+restore:
+
+    /*
+     * Restore the caller's variables.
+     */
+    for (i = definition->parameter_count + 1; i > 0; --i)
+    {
+        size_t index = i - 1;
+
+        if (saved[index].name == NULL)
+            continue;
+
+        if (saved[index].existed)
+        {
+            ussr_set_variable(
+                saved[index].name,
+                &saved[index].value
+            );
+        }
+        else
+        {
+            /*
+             * The current variable table has no delete API.
+             * This is handled below by removing newly-created
+             * variables.
+             */
+        }
+    }
+
+    /*
+     * Remove newly-created variables that did not exist before.
+     */
+    for (i = 0; i < definition->parameter_count + 1; ++i)
+    {
+        if (!saved[i].existed)
+        {
+            size_t j;
+
+            for (j = 0; j < variable_count; ++j)
+            {
+                if (strcmp(
+                        variables[j].name,
+                        saved[i].name) == 0)
+                {
+                    free(variables[j].name);
+                    ussr_value_free(&variables[j].value);
+
+                    if (j + 1 < variable_count)
+                    {
+                        memmove(
+                            &variables[j],
+                            &variables[j + 1],
+                            (variable_count - j - 1) *
+                            sizeof(*variables)
+                        );
+                    }
+
+                    --variable_count;
+                    break;
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < definition->parameter_count; ++i)
+        ussr_value_free(&values[i]);
+
+    free(values);
+
+    for (i = 0; i < definition->parameter_count + 1; ++i)
+    {
+        free(saved[i].name);
+        ussr_value_free(&saved[i].value);
+    }
+
+    free(saved);
+
+    if (execute_result != 0)
+        return -1;
+
+    /*
+     * The definition's return value becomes the caller's
+     * return variable.
+     */
+    if (ussr_set_variable(return_name, &result) != 0)
+    {
+        ussr_value_free(&result);
+        return -1;
+    }
+
+    ussr_value_free(&result);
+
+    return 0;
+}
+
+static int
+ussr_command_is_definition(const ussr_command_t *command)
+{
+    if (command == NULL || command->argument_count == 0)
+        return 0;
+
+    if (command->arguments[
+            command->argument_count - 1
+        ].type != USSR_ARGUMENT_COMMAND_LIST)
+        return 0;
+
+    if (strcmp(command->name, "if") == 0 ||
+        strcmp(command->name, "while") == 0)
+        return 0;
+
+    return 1;
+}
+
+
+int
+ussr_is_user_definition(const char *name)
+{
+    return ussr_find_definition(name) != NULL;
+}
+
+int
+ussr_define_command(
+    const char *name,
+    const char *return_name,
+    char **parameter_names,
+    size_t parameter_count,
+    ussr_command_list_t *body
+)
+{
+    ussr_definition_t *definition;
+    size_t i;
+
+    if (name == NULL ||
+        return_name == NULL ||
+        body == NULL)
+        return -1;
+
+    if (ussr_find_definition(name) != NULL)
+    {
+        fprintf(
+            stderr,
+            "USSR: definition '%s' already exists\n",
+            name
+        );
+        return -1;
+    }
+
+    definition = calloc(1, sizeof(*definition));
+
+    if (definition == NULL)
+        return -1;
+
+    definition->name = ussr_strdup(name);
+    definition->return_name = ussr_strdup(return_name);
+    definition->parameter_count = parameter_count;
+    definition->body = body;
+
+    if (definition->name == NULL ||
+        definition->return_name == NULL)
+    {
+        free(definition->name);
+        free(definition->return_name);
+        free(definition);
+        return -1;
+    }
+
+    if (parameter_count != 0)
+    {
+        definition->parameter_names = calloc(
+            parameter_count,
+            sizeof(*definition->parameter_names)
+        );
+
+        if (definition->parameter_names == NULL)
+        {
+            free(definition->name);
+            free(definition->return_name);
+            free(definition);
+            return -1;
+        }
+
+        for (i = 0; i < parameter_count; ++i)
+        {
+            definition->parameter_names[i] =
+                ussr_strdup(parameter_names[i]);
+
+            if (definition->parameter_names[i] == NULL)
+            {
+                while (i > 0)
+                {
+                    --i;
+                    free(definition->parameter_names[i]);
+                }
+
+                free(definition->parameter_names);
+                free(definition->name);
+                free(definition->return_name);
+                free(definition);
+                return -1;
+            }
+        }
+    }
+
+    definition->next = definitions;
+    definitions = definition;
+
+    return 0;
+}
+
+void
+ussr_definitions_cleanup(void)
+{
+    ussr_definition_t *definition;
+    ussr_definition_t *next;
+    size_t i;
+
+    definition = definitions;
+
+    while (definition != NULL)
+    {
+        next = definition->next;
+
+        free(definition->name);
+        free(definition->return_name);
+
+        for (i = 0; i < definition->parameter_count; ++i)
+            free(definition->parameter_names[i]);
+
+        free(definition->parameter_names);
+
+/*        ussr_command_list_free(definition->body); */
+
+        free(definition);
+
+        definition = next;
+    }
+
+    definitions = NULL;
+}
+
+
+
+
+
 
 void ussr_init(void)
 {
@@ -97,6 +533,7 @@ void ussr_cleanup(void)
     variables = NULL;
     variable_count = 0;
     variable_capacity = 0;
+	ussr_definitions_cleanup();
 }
 
 ussr_value_t ussr_null(void)
@@ -376,7 +813,7 @@ static int ussr_value_truthy(const ussr_value_t *value)
     return 0;
 }
 
-static int ussr_expression_evaluate(
+int ussr_expression_evaluate(
     const ussr_expression_t *expression,
     ussr_value_t *result
 )
@@ -627,34 +1064,6 @@ static int ussr_expression_evaluate(
     return 0;
 }
 
-static int ussr_argument_evaluate(
-    const ussr_argument_t *argument,
-    ussr_value_t *result
-)
-{
-    if (argument == NULL || result == NULL)
-        return -1;
-
-    *result = ussr_null();
-
-    if (argument->type == USSR_ARGUMENT_VALUE)
-        *result = ussr_value_copy(&argument->data.value);
-    else if (argument->type == USSR_ARGUMENT_EXPRESSION)
-        return ussr_expression_evaluate(
-            argument->data.expression,
-            result
-        );
-    else
-    {
-        fprintf(
-            stderr,
-            "USSR: command block cannot be used as a value\n"
-        );
-        return -1;
-    }
-
-    return 0;
-}
 
 static int ussr_execute_list(
     ussr_command_list_t *list
@@ -669,12 +1078,83 @@ static int ussr_execute_list(
 
     while (command != NULL)
     {
-        if (ussr_execute_command(
+        if (ussr_command_is_definition(command))
+        {
+            ussr_argument_t *body_argument;
+            char **parameter_names;
+            size_t parameter_count;
+            size_t i;
+            int result;
+
+            body_argument =
+                &command->arguments[
+                    command->argument_count - 1
+                ];
+
+            parameter_count =
+                command->argument_count - 1;
+
+            parameter_names = calloc(
+                parameter_count,
+                sizeof(*parameter_names)
+            );
+
+            if (parameter_names == NULL &&
+                parameter_count != 0)
+                return -1;
+
+            for (i = 0; i < parameter_count; ++i)
+            {
+                if (command->arguments[i].type !=
+                    USSR_ARGUMENT_EXPRESSION ||
+                    command->arguments[i].data.expression == NULL ||
+                    command->arguments[i].data.expression->type !=
+                    USSR_EXPR_VARIABLE)
+                {
+                    fprintf(
+                        stderr,
+                        "USSR: definition '%s' "
+                        "parameters must be identifiers\n",
+                        command->name
+                    );
+
+                    free(parameter_names);
+                    return -1;
+                }
+
+                parameter_names[i] =
+                    command->arguments[i]
+                        .data.expression
+                        ->data.variable;
+            }
+
+            result = ussr_define_command(
                 command->name,
                 command->return_name,
-                command->arguments,
-                command->argument_count) != 0)
-            return -1;
+                parameter_names,
+                parameter_count,
+                body_argument->data.command_list
+            );
+
+            free(parameter_names);
+
+            if (result != 0)
+                return -1;
+
+            /*
+             * Ownership of the body has now moved into
+             * the definition. Don't execute it.
+             */
+        }
+        else
+        {
+            if (ussr_execute_command(
+                    command->name,
+                    command->return_name,
+                    command->arguments,
+                    command->argument_count) != 0)
+                return -1;
+        }
 
         command = command->next;
     }
@@ -1444,6 +1924,16 @@ int ussr_execute_command(
         ussr_value_free(&a);
         ussr_value_free(&b);
     }
+
+	else if (ussr_is_user_definition(command))
+	{
+		return ussr_execute_user_definition(
+			command,
+			return_name,
+			arguments,
+			argument_count
+		);
+	}
 	else
 	{
 		return ussr_execute_external(
