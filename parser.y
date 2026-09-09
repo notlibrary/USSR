@@ -15,16 +15,6 @@
 extern int yylineno; 
 extern char *yytext;
 
-void yyerror(const char *message)
-{
-    fprintf(
-        stderr,
-        "Syntax error: %s (line %d, char \"%s\")\n",
-        message,
-        yylineno,
-        yytext
-    );
-}
 
 
 int yylex(void);

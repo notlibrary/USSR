@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <math.h>
 
 #include <stdio.h>
@@ -42,6 +43,19 @@ static ussr_variable_t *variables = NULL;
 static size_t variable_count = 0;
 static size_t variable_capacity = 0;
 static ussr_definition_t *definitions = NULL;
+
+void yyerror(const char *message)
+{
+    if (message == NULL)
+        message = "syntax error";
+
+    fprintf(
+        stderr,
+        "USSR: %s at line %d\n",
+        message,
+        yylineno
+    );
+}
 
 void ussr_fatal(const char *message)
 {
@@ -1871,6 +1885,102 @@ int ussr_execute_command(
             return -1;
 
         ussr_print_value(&result);
+    }
+    else if (strcmp(command, "concat") == 0)
+    {
+        ussr_value_t *values;
+        size_t total_length = 0;
+        char *string;
+        char *cursor;
+
+        if (argument_count < 2)
+        {
+            fprintf(
+                stderr,
+                "USSR: concat expects at least 2 parameters\n"
+            );
+            return -1;
+        }
+
+        values = calloc(argument_count, sizeof(*values));
+
+        if (values == NULL)
+            return -1;
+
+        for (i = 0; i < argument_count; ++i)
+        {
+            if (ussr_argument_evaluate(
+                    &arguments[i],
+                    &values[i]) != 0)
+            {
+                size_t j;
+
+                for (j = 0; j < i; ++j)
+                    ussr_value_free(&values[j]);
+
+                free(values);
+                return -1;
+            }
+
+            if (values[i].type != USSR_STRING)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: concat requires string parameters\n"
+                );
+
+                for (size_t j = 0; j <= i; ++j)
+                    ussr_value_free(&values[j]);
+
+                free(values);
+                return -1;
+            }
+
+            if (total_length >
+                SIZE_MAX - strlen(values[i].data.string) - 1)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: concat result is too large\n"
+                );
+
+                for (size_t j = 0; j <= i; ++j)
+                    ussr_value_free(&values[j]);
+
+                free(values);
+                return -1;
+            }
+
+            total_length += strlen(values[i].data.string);
+        }
+
+        string = malloc(total_length + 1);
+
+        if (string == NULL)
+        {
+            for (i = 0; i < argument_count; ++i)
+                ussr_value_free(&values[i]);
+
+            free(values);
+            return -1;
+        }
+
+        cursor = string;
+
+        for (i = 0; i < argument_count; ++i)
+        {
+            size_t length = strlen(values[i].data.string);
+
+            memcpy(cursor, values[i].data.string, length);
+            cursor += length;
+            ussr_value_free(&values[i]);
+        }
+
+        *cursor = '\0';
+        free(values);
+
+        result.type = USSR_STRING;
+        result.data.string = string;
     }
     else if (strcmp(command, "add") == 0)
     {
