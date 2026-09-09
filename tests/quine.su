@@ -1,0 +1,6 @@
+#Compact USSR quine
+set(q): "set(q): {\"%s%s%s\"}\nprint(out): q"
+set(a): "set(q): {\""
+set(b): "\"}\nprint(out): q"
+set(q): {a+q+b}
+print(out): q
