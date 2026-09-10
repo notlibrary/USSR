@@ -116,12 +116,13 @@ STRING      \"([^\"\\\n]|\\.)*\"
 %%
 
 [ \t\r]+                    ;
-\#[^\r\n]*                  { return COMMENT; }
+\#[^\r\n]*                  ;
 \n                          { return NEWLINE; }
 
 "true"                      { yylval.boolean = 1; return BOOLEAN; }
 "false"                     { yylval.boolean = 0; return BOOLEAN; }
 "null"                      { return NULL_VALUE; }
+
 
 ">="                        { return GREATER_EQUAL; }
 "<="                        { return LESS_EQUAL; }
@@ -136,6 +137,11 @@ STRING      \"([^\"\\\n]|\\.)*\"
 "/"                         { return DIVIDE; }
 "%"                         { return MODULO; }
 
+
+"?"                         { return QUESTION; }
+"!"                         { return EXCLAMATION; }
+
+
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }
 "{"                         { return LBRACE; }
@@ -144,24 +150,43 @@ STRING      \"([^\"\\\n]|\\.)*\"
 ")"                         { return RPAREN; }
 ":"                         { return COLON; }
 
-{REAL}                      { yylval.real = strtod(yytext, NULL); return REAL; }
-{INTEGER}                   { yylval.integer = strtol(yytext, NULL, 10); return INTEGER; }
+{REAL}                      {
+    yylval.real = strtod(yytext, NULL);
+    return REAL;
+}
+
+{INTEGER}                   {
+    yylval.integer = strtol(yytext, NULL, 10);
+    return INTEGER;
+}
 
 {STRING}                    {
     yylval.string = unquote_string(yytext);
-    if (yylval.string == NULL) return 0;
+
+    if (yylval.string == NULL)
+        return 0;
+
     return STRING;
 }
 
-    /* Built-ins such as set, print, add, eval and concat are ordinary identifiers. */
 {IDENT}                     {
     yylval.string = ussr_strdup(yytext);
-    if (yylval.string == NULL) return 0;
+
+    if (yylval.string == NULL)
+        return 0;
+
     return IDENTIFIER;
 }
 
 .                           {
-    fprintf(stderr, "USSR: unexpected character '%s' at line %d\n", yytext, yylineno);
+    fprintf(
+        stderr,
+        "USSR: unexpected character '%s' at line %d\n",
+        yytext,
+        yylineno
+    );
+
     return 0;
 }
+
 %%

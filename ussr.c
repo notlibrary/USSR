@@ -5,16 +5,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "ussr.h"
+#include "uthash.h"
 
 int yylex(void);
 int yyparse(void);
@@ -31,106 +27,23 @@ extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
 
 extern ussr_command_list_t *ussr_parsed_program;
 
-extern YY_BUFFER_STATE yy_scan_string(const char *str);
-extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
+static char *ussr_strdup(const char *src);
+static ussr_definition_t *ussr_find_definition(const char *name);
+static int ussr_argument_evaluate(
+    const ussr_argument_t *argument,
+    ussr_value_t *result
+);
 
-extern ussr_command_list_t *ussr_parsed_program;
-
-#define USSR_INITIAL_VARIABLES 32
 #define USSR_MAX_LOOP_ITERATIONS 1000000UL
 
-static ussr_variable_t *variables = NULL;
+/*
+ * Variables are stored directly in a uthash table.  The variable name is
+ * the hash key, so normal return map and explicit ! assignments use
+ * exactly the same key/value store.
+ */
+static ussr_variable_t *map = NULL;
 static size_t variable_count = 0;
-static size_t variable_capacity = 0;
 static ussr_definition_t *definitions = NULL;
-
-void yyerror(const char *message)
-{
-    if (message == NULL)
-        message = "syntax error";
-
-    fprintf(
-        stderr,
-        "USSR: %s at line %d\n",
-        message,
-        yylineno
-    );
-}
-
-void ussr_fatal(const char *message)
-{
-    fprintf(stderr, "USSR: %s\n", message);
-    exit(EXIT_FAILURE);
-}
-
-static char *ussr_strdup(const char *src)
-{
-    size_t length;
-    char *dst;
-
-    if (src == NULL)
-        return NULL;
-
-    length = strlen(src);
-
-    dst = malloc(length + 1);
-
-    if (dst == NULL)
-        ussr_fatal("out of memory");
-
-    memcpy(dst, src, length + 1);
-
-    return dst;
-}
-
-
-
-static ussr_definition_t *
-ussr_find_definition(const char *name)
-{
-    ussr_definition_t *definition;
-
-    if (name == NULL)
-        return NULL;
-
-    definition = definitions;
-
-    while (definition != NULL)
-    {
-        if (strcmp(definition->name, name) == 0)
-            return definition;
-
-        definition = definition->next;
-    }
-
-    return NULL;
-}
-
-int ussr_argument_evaluate(const ussr_argument_t *argument, ussr_value_t *result)
-{
-    if (argument == NULL || result == NULL)
-        return -1;
-
-    *result = ussr_null();
-
-    if (argument->type == USSR_ARGUMENT_VALUE)
-        *result = ussr_value_copy(&argument->data.value);
-    else if (argument->type == USSR_ARGUMENT_EXPRESSION)
-        return ussr_expression_evaluate(
-            argument->data.expression,
-            result
-        );
-    else
-    {
-        fprintf(
-            stderr,
-            "USSR: command block cannot be used as a value\n"
-        );
-        return -1;
-    }
-
-    return 0;
-}
 
 int
 ussr_execute_user_definition(
@@ -184,7 +97,7 @@ ussr_execute_user_definition(
     }
 
     /*
-     * Evaluate arguments before modifying the caller's variables.
+     * Evaluate arguments before modifying the caller's map.
      */
     for (i = 0; i < definition->parameter_count; ++i)
     {
@@ -206,7 +119,7 @@ ussr_execute_user_definition(
     }
 
     /*
-     * Save parameter variables and the definition's return variable.
+     * Save parameter map and the definition's return variable.
      */
     for (i = 0; i < definition->parameter_count; ++i)
     {
@@ -276,7 +189,7 @@ ussr_execute_user_definition(
 restore:
 
     /*
-     * Restore the caller's variables.
+     * Restore the caller's map.
      */
     for (i = definition->parameter_count + 1; i > 0; --i)
     {
@@ -295,44 +208,36 @@ restore:
         else
         {
             /*
-             * The current variable table has no delete API.
-             * This is handled below by removing newly-created
-             * variables.
+             * Variables created only inside the definition are
+             * removed during restoration below.
              */
         }
     }
 
     /*
-     * Remove newly-created variables that did not exist before.
+     * Remove variables created only inside the definition.
      */
     for (i = 0; i < definition->parameter_count + 1; ++i)
     {
         if (!saved[i].existed)
         {
-            size_t j;
+            ussr_variable_t *variable;
 
-            for (j = 0; j < variable_count; ++j)
+            HASH_FIND(
+                hh,
+                map,
+                saved[i].name,
+                (unsigned)strlen(saved[i].name),
+                variable
+            );
+
+            if (variable != NULL)
             {
-                if (strcmp(
-                        variables[j].name,
-                        saved[i].name) == 0)
-                {
-                    free(variables[j].name);
-                    ussr_value_free(&variables[j].value);
-
-                    if (j + 1 < variable_count)
-                    {
-                        memmove(
-                            &variables[j],
-                            &variables[j + 1],
-                            (variable_count - j - 1) *
-                            sizeof(*variables)
-                        );
-                    }
-
-                    --variable_count;
-                    break;
-                }
+                HASH_DEL(map, variable);
+                free(variable->name);
+                ussr_value_free(&variable->value);
+                free(variable);
+                --variable_count;
             }
         }
     }
@@ -386,6 +291,26 @@ ussr_command_is_definition(const ussr_command_t *command)
     return 1;
 }
 
+static ussr_definition_t *
+ussr_find_definition(const char *name)
+{
+    ussr_definition_t *definition;
+
+    if (name == NULL)
+        return NULL;
+
+    definition = definitions;
+
+    while (definition != NULL)
+    {
+        if (strcmp(definition->name, name) == 0)
+            return definition;
+
+        definition = definition->next;
+    }
+
+    return NULL;
+}
 
 int
 ussr_is_user_definition(const char *name)
@@ -515,39 +440,54 @@ ussr_definitions_cleanup(void)
 
 
 
+static void ussr_fatal(const char *message)
+{
+    fprintf(stderr, "USSR: %s\n", message);
+    exit(EXIT_FAILURE);
+}
 
+static char *ussr_strdup(const char *src)
+{
+    size_t length;
+    char *dst;
 
+    if (src == NULL)
+        return NULL;
+
+    length = strlen(src);
+
+    dst = malloc(length + 1);
+
+    if (dst == NULL)
+        ussr_fatal("out of memory");
+
+    memcpy(dst, src, length + 1);
+
+    return dst;
+}
 
 void ussr_init(void)
 {
-    variables = calloc(
-        USSR_INITIAL_VARIABLES,
-        sizeof(*variables)
-    );
-
-    if (variables == NULL)
-        ussr_fatal("out of memory");
-
-    variable_capacity = USSR_INITIAL_VARIABLES;
+    map = NULL;
     variable_count = 0;
 }
 
 void ussr_cleanup(void)
 {
-    size_t i;
+    ussr_variable_t *variable;
+    ussr_variable_t *tmp;
 
-    for (i = 0; i < variable_count; ++i)
+    HASH_ITER(hh, map, variable, tmp)
     {
-        free(variables[i].name);
-        ussr_value_free(&variables[i].value);
+        HASH_DEL(map, variable);
+        free(variable->name);
+        ussr_value_free(&variable->value);
+        free(variable);
     }
 
-    free(variables);
-
-    variables = NULL;
+    map = NULL;
     variable_count = 0;
-    variable_capacity = 0;
-	ussr_definitions_cleanup();
+    ussr_definitions_cleanup();
 }
 
 ussr_value_t ussr_null(void)
@@ -649,70 +589,79 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
     return copy;
 }
 
-static void ussr_grow_variables(void)
-{
-    size_t new_capacity;
-    ussr_variable_t *new_variables;
-
-    new_capacity = variable_capacity * 2;
-
-    new_variables = realloc(
-        variables,
-        new_capacity * sizeof(*new_variables)
-    );
-
-    if (new_variables == NULL)
-        ussr_fatal("out of memory");
-
-    variables = new_variables;
-    variable_capacity = new_capacity;
-}
-
 int ussr_set_variable(
     const char *name,
     const ussr_value_t *value
 )
 {
-    size_t i;
+    ussr_variable_t *variable;
+    unsigned key_length;
 
     if (name == NULL || value == NULL)
         return -1;
 
-    for (i = 0; i < variable_count; ++i)
+    key_length = (unsigned)strlen(name);
+
+    HASH_FIND(
+        hh,
+        map,
+        name,
+        key_length,
+        variable
+    );
+
+    if (variable != NULL)
     {
-        if (strcmp(variables[i].name, name) == 0)
-        {
-            ussr_value_free(&variables[i].value);
-            variables[i].value = ussr_value_copy(value);
-            return 0;
-        }
+        ussr_value_t copy = ussr_value_copy(value);
+        ussr_value_free(&variable->value);
+        variable->value = copy;
+        return 0;
     }
 
-    if (variable_count == variable_capacity)
-        ussr_grow_variables();
+    variable = calloc(1, sizeof(*variable));
+    if (variable == NULL)
+        return -1;
 
-    variables[variable_count].name = ussr_strdup(name);
-    variables[variable_count].value = ussr_value_copy(value);
+    variable->name = ussr_strdup(name);
+    if (variable->name == NULL)
+    {
+        free(variable);
+        return -1;
+    }
+
+    variable->value = ussr_value_copy(value);
+
+    HASH_ADD_KEYPTR(
+        hh,
+        map,
+        variable->name,
+        key_length,
+        variable
+    );
 
     ++variable_count;
-
     return 0;
 }
 
 const ussr_value_t *ussr_get_variable(const char *name)
 {
-    size_t i;
+    ussr_variable_t *variable;
 
     if (name == NULL)
         return NULL;
 
-    for (i = 0; i < variable_count; ++i)
-    {
-        if (strcmp(variables[i].name, name) == 0)
-            return &variables[i].value;
-    }
+    HASH_FIND(
+        hh,
+        map,
+        name,
+        (unsigned)strlen(name),
+        variable
+    );
 
-    return NULL;
+    if (variable == NULL)
+        return NULL;
+
+    return &variable->value;
 }
 
 void ussr_print_value(const ussr_value_t *value)
@@ -827,7 +776,7 @@ static int ussr_value_truthy(const ussr_value_t *value)
     return 0;
 }
 
-int ussr_expression_evaluate(
+static int ussr_expression_evaluate(
     const ussr_expression_t *expression,
     ussr_value_t *result
 )
@@ -1078,6 +1027,59 @@ int ussr_expression_evaluate(
     return 0;
 }
 
+static int ussr_argument_evaluate(
+    const ussr_argument_t *argument,
+    ussr_value_t *result
+)
+{
+    const char *key;
+    const ussr_value_t *value;
+
+    if (argument == NULL || result == NULL)
+        return -1;
+
+    *result = ussr_null();
+
+    if (argument->type == USSR_ARGUMENT_VALUE)
+    {
+        *result = ussr_value_copy(&argument->data.value);
+        return 0;
+    }
+
+    if (argument->type == USSR_ARGUMENT_EXPRESSION)
+        return ussr_expression_evaluate(
+            argument->data.expression,
+            result
+        );
+
+    if (argument->type == USSR_ARGUMENT_LOOKUP)
+    {
+        if (argument->data.expression == NULL ||
+            argument->data.expression->type != USSR_EXPR_VARIABLE)
+        {
+            fprintf(stderr, "USSR: hash lookup requires a key identifier\n");
+            return -1;
+        }
+
+        key = argument->data.expression->data.variable;
+        value = ussr_get_variable(key);
+
+        if (value == NULL)
+        {
+            fprintf(stderr, "USSR: undefined hash key '%s'\n", key);
+            return -1;
+        }
+
+        *result = ussr_value_copy(value);
+        return 0;
+    }
+
+    fprintf(
+        stderr,
+        "USSR: command block cannot be used as a value\n"
+    );
+    return -1;
+}
 
 static int ussr_execute_list(
     ussr_command_list_t *list
@@ -1827,6 +1829,8 @@ int ussr_execute_command(
 )
 {
     ussr_value_t result;
+    ussr_value_t assignment_value;
+    int assignment_index = -1;
     size_t i;
 
     if (command == NULL)
@@ -1849,15 +1853,63 @@ int ussr_execute_command(
     if (return_name == NULL)
         return -1;
 
+    /*
+     * A ! marker makes the marked argument an explicit hash write.
+     * The command executes normally; after it succeeds, the marked
+     * argument's value is stored under return_name.
+     */
+    for (i = 0; i < argument_count; ++i)
+    {
+        if (arguments[i].assignment)
+        {
+            if (assignment_index >= 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: a command may have only one ! assignment\n"
+                );
+                return -1;
+            }
+
+            assignment_index = (int)i;
+        }
+    }
+
     result = ussr_null();
 	
-	if (strcmp(command, "eval") == 0)
-	return ussr_execute_eval(
-		return_name,
-		arguments,
-		argument_count
-	);
-	
+    if (strcmp(command, "eval") == 0)
+    {
+        int execute_result;
+
+        execute_result = ussr_execute_eval(
+            return_name,
+            arguments,
+            argument_count
+        );
+
+        if (execute_result != 0)
+            return execute_result;
+
+        if (assignment_index >= 0)
+        {
+            if (ussr_argument_evaluate(
+                    &arguments[assignment_index],
+                    &assignment_value) != 0)
+                return -1;
+
+            if (ussr_set_variable(
+                    return_name,
+                    &assignment_value) != 0)
+            {
+                ussr_value_free(&assignment_value);
+                return -1;
+            }
+
+            ussr_value_free(&assignment_value);
+        }
+
+        return 0;
+    }
     if (strcmp(command, "set") == 0)
     {
         if (argument_count != 1)
@@ -1885,102 +1937,6 @@ int ussr_execute_command(
             return -1;
 
         ussr_print_value(&result);
-    }
-    else if (strcmp(command, "concat") == 0)
-    {
-        ussr_value_t *values;
-        size_t total_length = 0;
-        char *string;
-        char *cursor;
-
-        if (argument_count < 2)
-        {
-            fprintf(
-                stderr,
-                "USSR: concat expects at least 2 parameters\n"
-            );
-            return -1;
-        }
-
-        values = calloc(argument_count, sizeof(*values));
-
-        if (values == NULL)
-            return -1;
-
-        for (i = 0; i < argument_count; ++i)
-        {
-            if (ussr_argument_evaluate(
-                    &arguments[i],
-                    &values[i]) != 0)
-            {
-                size_t j;
-
-                for (j = 0; j < i; ++j)
-                    ussr_value_free(&values[j]);
-
-                free(values);
-                return -1;
-            }
-
-            if (values[i].type != USSR_STRING)
-            {
-                fprintf(
-                    stderr,
-                    "USSR: concat requires string parameters\n"
-                );
-
-                for (size_t j = 0; j <= i; ++j)
-                    ussr_value_free(&values[j]);
-
-                free(values);
-                return -1;
-            }
-
-            if (total_length >
-                SIZE_MAX - strlen(values[i].data.string) - 1)
-            {
-                fprintf(
-                    stderr,
-                    "USSR: concat result is too large\n"
-                );
-
-                for (size_t j = 0; j <= i; ++j)
-                    ussr_value_free(&values[j]);
-
-                free(values);
-                return -1;
-            }
-
-            total_length += strlen(values[i].data.string);
-        }
-
-        string = malloc(total_length + 1);
-
-        if (string == NULL)
-        {
-            for (i = 0; i < argument_count; ++i)
-                ussr_value_free(&values[i]);
-
-            free(values);
-            return -1;
-        }
-
-        cursor = string;
-
-        for (i = 0; i < argument_count; ++i)
-        {
-            size_t length = strlen(values[i].data.string);
-
-            memcpy(cursor, values[i].data.string, length);
-            cursor += length;
-            ussr_value_free(&values[i]);
-        }
-
-        *cursor = '\0';
-        free(values);
-
-        result.type = USSR_STRING;
-        result.data.string = string;
     }
     else if (strcmp(command, "add") == 0)
     {
@@ -2035,24 +1991,96 @@ int ussr_execute_command(
         ussr_value_free(&b);
     }
 
-	else if (ussr_is_user_definition(command))
-	{
-		return ussr_execute_user_definition(
-			command,
-			return_name,
-			arguments,
-			argument_count
-		);
-	}
-	else
-	{
-		return ussr_execute_external(
-			command,
-			return_name,
-			arguments,
-			argument_count
-		);
-	}
+    else if (ussr_is_user_definition(command))
+    {
+        int execute_result;
+
+        execute_result = ussr_execute_user_definition(
+            command,
+            return_name,
+            arguments,
+            argument_count
+        );
+
+        if (execute_result != 0)
+        {
+            ussr_value_free(&assignment_value);
+            return execute_result;
+        }
+
+        if (assignment_index >= 0)
+        {
+            if (ussr_argument_evaluate(
+                    &arguments[assignment_index],
+                    &assignment_value) != 0)
+                return -1;
+
+            if (ussr_set_variable(
+                    return_name,
+                    &assignment_value) != 0)
+            {
+                ussr_value_free(&assignment_value);
+                return -1;
+            }
+
+            ussr_value_free(&assignment_value);
+        }
+
+        return 0;
+    }
+    else
+    {
+        int execute_result;
+
+        execute_result = ussr_execute_external(
+            command,
+            return_name,
+            arguments,
+            argument_count
+        );
+
+        if (execute_result != 0)
+        {
+            ussr_value_free(&assignment_value);
+            return execute_result;
+        }
+
+        if (assignment_index >= 0)
+        {
+            if (ussr_argument_evaluate(
+                    &arguments[assignment_index],
+                    &assignment_value) != 0)
+                return -1;
+
+            if (ussr_set_variable(
+                    return_name,
+                    &assignment_value) != 0)
+            {
+                ussr_value_free(&assignment_value);
+                return -1;
+            }
+
+            ussr_value_free(&assignment_value);
+        }
+
+        return 0;
+    }
+
+    if (assignment_index >= 0)
+    {
+        ussr_value_t marked_value;
+
+        if (ussr_argument_evaluate(
+                &arguments[assignment_index],
+                &marked_value) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+
+        ussr_value_free(&result);
+        result = marked_value;
+    }
 
     if (ussr_set_variable(return_name, &result) != 0)
     {
@@ -2171,7 +2199,8 @@ static void ussr_argument_free(ussr_argument_t *argument)
     {
         ussr_value_free(&argument->data.value);
     }
-    else if (argument->type == USSR_ARGUMENT_EXPRESSION)
+    else if (argument->type == USSR_ARGUMENT_EXPRESSION ||
+             argument->type == USSR_ARGUMENT_LOOKUP)
     {
         ussr_expression_free(argument->data.expression);
     }

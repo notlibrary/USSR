@@ -1,0 +1,5 @@
+set(name): "USSR"!
+set(number): 42!
+
+print(out): name?
+print(out): number?

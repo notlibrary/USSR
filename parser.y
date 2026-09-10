@@ -5,22 +5,20 @@
 }
 
 %{
-
-
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "ussr.h"
 
-extern int yylineno; 
-extern char *yytext;
-
-
-
-int yylex(void);
-
 extern int yylineno;
 extern FILE *yyin;
+
+int yylex(void);
+void yyerror(const char *message)
+{
+    fprintf(stderr, "USSR: %s at line %d\n", message, yylineno);
+}
+
 
 ussr_command_list_t *ussr_parsed_program = NULL;
 
@@ -91,6 +89,8 @@ int ussr_command_list_append(
 
 %token NEWLINE
 %token COMMENT
+%token QUESTION
+%token EXCLAMATION
 
 %type <command_list> program
 %type <command_list> command_lines
@@ -98,6 +98,7 @@ int ussr_command_list_append(
 %type <command> command_line
 %type <arguments> argument_list
 %type <argument> argument
+%type <argument> argument_base
 %type <argument> block_argument
 %type <expression> expression
 %type <expression> comparison_expression
@@ -128,7 +129,9 @@ command_lines
     : %empty
       {
           $$ = ussr_command_list_create();
-          if ($$ == NULL) YYABORT;
+
+          if ($$ == NULL)
+              YYABORT;
       }
     | command_lines command_line
       {
@@ -140,10 +143,10 @@ command_lines
                   YYABORT;
               }
           }
+
           $$ = $1;
       }
     ;
-
 
 command_line
     : NEWLINE
@@ -154,15 +157,7 @@ command_line
       {
           $$ = NULL;
       }
-    | COMMENT
-      {
-          $$ = NULL;
-      }
     | command NEWLINE
-      {
-          $$ = $1;
-      }
-    | command
       {
           $$ = $1;
       }
@@ -224,17 +219,76 @@ argument_list
     ;
 
 argument
-    : literal
+    : argument_base
+      {
+          $$ = $1;
+      }
+    | IDENTIFIER QUESTION
+      {
+          ussr_expression_t *expression;
+
+          expression = malloc(sizeof(*expression));
+          if (expression == NULL)
+          {
+              free($1);
+              YYABORT;
+          }
+
+          expression->type = USSR_EXPR_VARIABLE;
+          expression->data.variable = $1;
+
+          $$.type = USSR_ARGUMENT_LOOKUP;
+          $$.assignment = 0;
+          $$.data.expression = expression;
+      }
+    | argument_base EXCLAMATION
+      {
+          $$ = $1;
+          $$.assignment = 1;
+      }
+    ;
+
+
+block_argument
+    : LBRACKET command_lines RBRACKET
+      {
+          $$.type = USSR_ARGUMENT_COMMAND_LIST;
+          $$.assignment = 0;
+          $$.data.command_list = $2;
+      }
+    ;
+
+argument_base
+    : STRING
       {
           $$.type = USSR_ARGUMENT_VALUE;
-          $$.data.value = $1;
+          $$.assignment = 0;
+          $$.data.value = ussr_string($1);
+          free($1);
+      }
+    | INTEGER
+      {
+          $$.type = USSR_ARGUMENT_VALUE;
+          $$.assignment = 0;
+          $$.data.value = ussr_integer($1);
+      }
+    | REAL
+      {
+          $$.type = USSR_ARGUMENT_VALUE;
+          $$.assignment = 0;
+          $$.data.value = ussr_real($1);
+      }
+    | BOOLEAN
+      {
+          $$.type = USSR_ARGUMENT_VALUE;
+          $$.assignment = 0;
+          $$.data.value = ussr_boolean($1);
       }
     | IDENTIFIER
       {
           ussr_expression_t *expression;
 
           expression = malloc(sizeof(*expression));
-
           if (expression == NULL)
           {
               free($1);
@@ -245,24 +299,18 @@ argument
           expression->data.variable = $1;
 
           $$.type = USSR_ARGUMENT_EXPRESSION;
+          $$.assignment = 0;
           $$.data.expression = expression;
       }
-    | expression
+    | LPAREN expression RPAREN
       {
           $$.type = USSR_ARGUMENT_EXPRESSION;
-          $$.data.expression = $1;
+          $$.assignment = 0;
+          $$.data.expression = $2;
       }
     | block_argument
       {
           $$ = $1;
-      }
-    ;
-
-block_argument
-    : LBRACKET command_lines RBRACKET
-      {
-          $$.type = USSR_ARGUMENT_COMMAND_LIST;
-          $$.data.command_list = $2;
       }
     ;
 

@@ -2,6 +2,22 @@
 #define USSR_H
 
 #include <stddef.h>
+#include "uthash.h"
+
+typedef struct ussr_command_list_t ussr_command_list_t;
+
+typedef struct ussr_definition_t
+{
+    char *name;
+    char *return_name;
+
+    char **parameter_names;
+    size_t parameter_count;
+
+    ussr_command_list_t *body;
+
+    struct ussr_definition_t *next;
+} ussr_definition_t;
 
 typedef enum
 {
@@ -25,10 +41,11 @@ typedef struct
     } data;
 } ussr_value_t;
 
-typedef struct
+typedef struct ussr_variable_t
 {
     char *name;
     ussr_value_t value;
+    UT_hash_handle hh;
 } ussr_variable_t;
 
 typedef enum
@@ -82,39 +99,14 @@ typedef enum
 {
     USSR_ARGUMENT_VALUE,
     USSR_ARGUMENT_EXPRESSION,
-    USSR_ARGUMENT_COMMAND_LIST
+    USSR_ARGUMENT_COMMAND_LIST,
+    USSR_ARGUMENT_LOOKUP
 } ussr_argument_type_t;
-
-struct ussr_command_t;
-
-typedef struct ussr_command_list_t
-{
-    struct ussr_command_t *head;
-    struct ussr_command_t *tail;
-} ussr_command_list_t;
-
-/*
- * User-defined command.
- *
- * This must come after ussr_command_list_t because
- * body contains a pointer to that type.
- */
-typedef struct ussr_definition_t
-{
-    char *name;
-    char *return_name;
-
-    char **parameter_names;
-    size_t parameter_count;
-
-    ussr_command_list_t *body;
-
-    struct ussr_definition_t *next;
-} ussr_definition_t;
 
 typedef struct
 {
     ussr_argument_type_t type;
+    int assignment;
 
     union
     {
@@ -142,7 +134,12 @@ typedef struct ussr_command_t
     struct ussr_command_t *next;
 } ussr_command_t;
 
-/* User-defined commands. */
+struct ussr_command_list_t
+{
+    ussr_command_t *head;
+    ussr_command_t *tail;
+};
+
 int ussr_define_command(
     const char *name,
     const char *return_name,
@@ -162,11 +159,9 @@ int ussr_execute_user_definition(
 
 void ussr_definitions_cleanup(void);
 
-/* Runtime. */
 void ussr_init(void);
 void ussr_cleanup(void);
 
-/* Values. */
 ussr_value_t ussr_null(void);
 ussr_value_t ussr_integer(long value);
 ussr_value_t ussr_real(double value);
@@ -176,7 +171,6 @@ ussr_value_t ussr_string(const char *value);
 void ussr_value_free(ussr_value_t *value);
 ussr_value_t ussr_value_copy(const ussr_value_t *value);
 
-/* Variables. */
 int ussr_set_variable(
     const char *name,
     const ussr_value_t *value
@@ -184,7 +178,6 @@ int ussr_set_variable(
 
 const ussr_value_t *ussr_get_variable(const char *name);
 
-/* Execution. */
 void ussr_print_value(const ussr_value_t *value);
 
 int ussr_execute_command(
@@ -196,10 +189,20 @@ int ussr_execute_command(
 
 int ussr_execute_program(ussr_command_list_t *program);
 
-/* Memory management. */
+ussr_command_list_t *ussr_command_list_create(void);
+ussr_command_t *ussr_command_create(
+    char *name,
+    char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+);
+int ussr_command_list_append(
+    ussr_command_list_t *list,
+    ussr_command_t *command
+);
+
 void ussr_command_list_free(ussr_command_list_t *list);
+
 void ussr_expression_free(ussr_expression_t *expression);
-int ussr_argument_evaluate(const ussr_argument_t *argument, ussr_value_t *result);
-int ussr_expression_evaluate( const ussr_expression_t *expression,ussr_value_t *result);
 
 #endif
