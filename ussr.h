@@ -2,8 +2,6 @@
 #define USSR_H
 
 #include <stddef.h>
-#include "uthash.h"
-
 typedef struct ussr_command_list_t ussr_command_list_t;
 
 typedef struct ussr_definition_t
@@ -45,7 +43,6 @@ typedef struct ussr_variable_t
 {
     char *name;
     ussr_value_t value;
-    UT_hash_handle hh;
 } ussr_variable_t;
 
 typedef enum

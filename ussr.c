@@ -33,16 +33,30 @@ static int ussr_argument_evaluate(
     const ussr_argument_t *argument,
     ussr_value_t *result
 );
+static int ussr_remove_variable(const char *name);
 
 #define USSR_MAX_LOOP_ITERATIONS 1000000UL
 
-/*
- * Variables are stored directly in a uthash table.  The variable name is
- * the hash key, so normal return map and explicit ! assignments use
- * exactly the same key/value store.
- */
-static ussr_variable_t *map = NULL;
-static size_t variable_count = 0;
+/* Local variables are kept in their own linear store. */
+typedef struct
+{
+    char *name;
+    ussr_value_t value;
+} ussr_local_variable_t;
+
+typedef struct ussr_hash_entry_t
+{
+    char *name;
+    ussr_value_t value;
+    UT_hash_handle hh;
+} ussr_hash_entry_t;
+
+static ussr_local_variable_t *locals = NULL;
+static size_t local_count = 0;
+static size_t local_capacity = 0;
+
+/* Explicit !/? variables live in a separate uthash table. */
+static ussr_hash_entry_t *map = NULL;
 static ussr_definition_t *definitions = NULL;
 
 int
@@ -220,26 +234,7 @@ restore:
     for (i = 0; i < definition->parameter_count + 1; ++i)
     {
         if (!saved[i].existed)
-        {
-            ussr_variable_t *variable;
-
-            HASH_FIND(
-                hh,
-                map,
-                saved[i].name,
-                (unsigned)strlen(saved[i].name),
-                variable
-            );
-
-            if (variable != NULL)
-            {
-                HASH_DEL(map, variable);
-                free(variable->name);
-                ussr_value_free(&variable->value);
-                free(variable);
-                --variable_count;
-            }
-        }
+            ussr_remove_variable(saved[i].name);
     }
 
     for (i = 0; i < definition->parameter_count; ++i)
@@ -468,14 +463,28 @@ static char *ussr_strdup(const char *src)
 
 void ussr_init(void)
 {
+    locals = NULL;
+    local_count = 0;
+    local_capacity = 0;
     map = NULL;
-    variable_count = 0;
 }
 
 void ussr_cleanup(void)
 {
-    ussr_variable_t *variable;
-    ussr_variable_t *tmp;
+    ussr_hash_entry_t *variable;
+    ussr_hash_entry_t *tmp;
+    size_t i;
+
+    for (i = 0; i < local_count; ++i)
+    {
+        free(locals[i].name);
+        ussr_value_free(&locals[i].value);
+    }
+
+    free(locals);
+    locals = NULL;
+    local_count = 0;
+    local_capacity = 0;
 
     HASH_ITER(hh, map, variable, tmp)
     {
@@ -486,7 +495,6 @@ void ussr_cleanup(void)
     }
 
     map = NULL;
-    variable_count = 0;
     ussr_definitions_cleanup();
 }
 
@@ -594,7 +602,96 @@ int ussr_set_variable(
     const ussr_value_t *value
 )
 {
-    ussr_variable_t *variable;
+    size_t i;
+
+    if (name == NULL || value == NULL)
+        return -1;
+
+    for (i = 0; i < local_count; ++i)
+    {
+        if (strcmp(locals[i].name, name) == 0)
+        {
+            ussr_value_t copy = ussr_value_copy(value);
+            ussr_value_free(&locals[i].value);
+            locals[i].value = copy;
+            return 0;
+        }
+    }
+
+    if (local_count == local_capacity)
+    {
+        size_t capacity = local_capacity == 0 ? 16 : local_capacity * 2;
+        ussr_local_variable_t *new_locals;
+
+        new_locals = realloc(locals, capacity * sizeof(*new_locals));
+        if (new_locals == NULL)
+            return -1;
+
+        locals = new_locals;
+        local_capacity = capacity;
+    }
+
+    locals[local_count].name = ussr_strdup(name);
+    if (locals[local_count].name == NULL)
+        return -1;
+
+    locals[local_count].value = ussr_value_copy(value);
+    ++local_count;
+
+    return 0;
+}
+
+const ussr_value_t *ussr_get_variable(const char *name)
+{
+    size_t i;
+
+    if (name == NULL)
+        return NULL;
+
+    for (i = 0; i < local_count; ++i)
+    {
+        if (strcmp(locals[i].name, name) == 0)
+            return &locals[i].value;
+    }
+
+    return NULL;
+}
+
+static int ussr_remove_variable(const char *name)
+{
+    size_t i;
+
+    if (name == NULL)
+        return -1;
+
+    for (i = 0; i < local_count; ++i)
+    {
+        if (strcmp(locals[i].name, name) == 0)
+        {
+            free(locals[i].name);
+            ussr_value_free(&locals[i].value);
+
+            if (i + 1 < local_count)
+                memmove(
+                    &locals[i],
+                    &locals[i + 1],
+                    (local_count - i - 1) * sizeof(*locals)
+                );
+
+            --local_count;
+            return 0;
+        }
+    }
+
+    return 0;
+}
+
+static int ussr_hash_set(
+    const char *name,
+    const ussr_value_t *value
+)
+{
+    ussr_hash_entry_t *variable;
     unsigned key_length;
 
     if (name == NULL || value == NULL)
@@ -639,13 +736,12 @@ int ussr_set_variable(
         variable
     );
 
-    ++variable_count;
     return 0;
 }
 
-const ussr_value_t *ussr_get_variable(const char *name)
+static const ussr_value_t *ussr_hash_get(const char *name)
 {
-    ussr_variable_t *variable;
+    ussr_hash_entry_t *variable;
 
     if (name == NULL)
         return NULL;
@@ -1062,7 +1158,7 @@ static int ussr_argument_evaluate(
         }
 
         key = argument->data.expression->data.variable;
-        value = ussr_get_variable(key);
+        value = ussr_hash_get(key);
 
         if (value == NULL)
         {
@@ -1897,7 +1993,7 @@ int ussr_execute_command(
                     &assignment_value) != 0)
                 return -1;
 
-            if (ussr_set_variable(
+            if (ussr_hash_set(
                     return_name,
                     &assignment_value) != 0)
             {
@@ -1990,7 +2086,102 @@ int ussr_execute_command(
         ussr_value_free(&a);
         ussr_value_free(&b);
     }
+	else if (strcmp(command, "concat") == 0)
+    {
+        ussr_value_t *values;
+        size_t total_length = 0;
+        char *string;
+        char *cursor;
 
+        if (argument_count < 2)
+        {
+            fprintf(
+                stderr,
+                "USSR: concat expects at least 2 parameters\n"
+            );
+            return -1;
+        }
+
+        values = calloc(argument_count, sizeof(*values));
+
+        if (values == NULL)
+            return -1;
+
+        for (i = 0; i < argument_count; ++i)
+        {
+            if (ussr_argument_evaluate(
+                    &arguments[i],
+                    &values[i]) != 0)
+            {
+                size_t j;
+
+                for (j = 0; j < i; ++j)
+                    ussr_value_free(&values[j]);
+
+                free(values);
+                return -1;
+            }
+
+            if (values[i].type != USSR_STRING)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: concat requires string parameters\n"
+                );
+
+                for (size_t j = 0; j <= i; ++j)
+                    ussr_value_free(&values[j]);
+
+                free(values);
+                return -1;
+            }
+
+            if (total_length >
+                SIZE_MAX - strlen(values[i].data.string) - 1)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: concat result is too large\n"
+                );
+
+                for (size_t j = 0; j <= i; ++j)
+                    ussr_value_free(&values[j]);
+
+                free(values);
+                return -1;
+            }
+
+            total_length += strlen(values[i].data.string);
+        }
+
+        string = malloc(total_length + 1);
+
+        if (string == NULL)
+        {
+            for (i = 0; i < argument_count; ++i)
+                ussr_value_free(&values[i]);
+
+            free(values);
+            return -1;
+        }
+
+        cursor = string;
+
+        for (i = 0; i < argument_count; ++i)
+        {
+            size_t length = strlen(values[i].data.string);
+
+            memcpy(cursor, values[i].data.string, length);
+            cursor += length;
+            ussr_value_free(&values[i]);
+        }
+
+        *cursor = '\0';
+        free(values);
+
+        result.type = USSR_STRING;
+        result.data.string = string;
+    }
     else if (ussr_is_user_definition(command))
     {
         int execute_result;
@@ -2015,7 +2206,7 @@ int ussr_execute_command(
                     &assignment_value) != 0)
                 return -1;
 
-            if (ussr_set_variable(
+            if (ussr_hash_set(
                     return_name,
                     &assignment_value) != 0)
             {
@@ -2052,7 +2243,7 @@ int ussr_execute_command(
                     &assignment_value) != 0)
                 return -1;
 
-            if (ussr_set_variable(
+            if (ussr_hash_set(
                     return_name,
                     &assignment_value) != 0)
             {
@@ -2066,22 +2257,6 @@ int ussr_execute_command(
         return 0;
     }
 
-    if (assignment_index >= 0)
-    {
-        ussr_value_t marked_value;
-
-        if (ussr_argument_evaluate(
-                &arguments[assignment_index],
-                &marked_value) != 0)
-        {
-            ussr_value_free(&result);
-            return -1;
-        }
-
-        ussr_value_free(&result);
-        result = marked_value;
-    }
-
     if (ussr_set_variable(return_name, &result) != 0)
     {
         ussr_value_free(&result);
@@ -2089,6 +2264,22 @@ int ussr_execute_command(
     }
 
     ussr_value_free(&result);
+
+    if (assignment_index >= 0)
+    {
+        if (ussr_argument_evaluate(
+                &arguments[assignment_index],
+                &assignment_value) != 0)
+            return -1;
+
+        if (ussr_hash_set(return_name, &assignment_value) != 0)
+        {
+            ussr_value_free(&assignment_value);
+            return -1;
+        }
+
+        ussr_value_free(&assignment_value);
+    }
 
     /*
      * Arguments belong to the command tree and are freed when

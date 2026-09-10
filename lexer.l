@@ -9,94 +9,6 @@ extern int fileno(FILE *);
 
 static char *ussr_strdup(const char *text);
 static char *unquote_string(const char *text);
-
-static char *ussr_strdup(const char *text)
-{
-    size_t length;
-    char *result;
-
-    if (text == NULL)
-        return NULL;
-
-    length = strlen(text);
-
-    result = malloc(length + 1);
-
-    if (result == NULL)
-        return NULL;
-
-    memcpy(result, text, length + 1);
-
-    return result;
-}
-
-static char *unquote_string(const char *text)
-{
-    size_t length;
-    size_t i;
-    size_t j;
-    char *result;
-
-    if (text == NULL)
-        return NULL;
-
-    length = strlen(text);
-
-    if (length < 2 ||
-        text[0] != '"' ||
-        text[length - 1] != '"')
-        return NULL;
-
-    result = malloc(length);
-
-    if (result == NULL)
-        return NULL;
-
-    j = 0;
-
-    for (i = 1; i < length - 1; ++i)
-    {
-        if (text[i] == '\\' && i + 1 < length - 1)
-        {
-            ++i;
-
-            switch (text[i])
-            {
-                case 'n':
-                    result[j++] = '\n';
-                    break;
-
-                case 'r':
-                    result[j++] = '\r';
-                    break;
-
-                case 't':
-                    result[j++] = '\t';
-                    break;
-
-                case '\\':
-                    result[j++] = '\\';
-                    break;
-
-                case '"':
-                    result[j++] = '"';
-                    break;
-
-                default:
-                    result[j++] = text[i];
-                    break;
-            }
-        }
-        else
-        {
-            result[j++] = text[i];
-        }
-    }
-
-    result[j] = '\0';
-
-    return result;
-}
 %}
 
 %option noyywrap
@@ -123,11 +35,12 @@ STRING      \"([^\"\\\n]|\\.)*\"
 "false"                     { yylval.boolean = 0; return BOOLEAN; }
 "null"                      { return NULL_VALUE; }
 
-
 ">="                        { return GREATER_EQUAL; }
 "<="                        { return LESS_EQUAL; }
 "=="                        { return EQUAL; }
 "!="                        { return NOT_EQUAL; }
+"?"                         { return QUESTION; }
+"!"                         { return EXCLAMATION; }
 ">"                         { return GREATER; }
 "<"                         { return LESS; }
 
@@ -136,11 +49,6 @@ STRING      \"([^\"\\\n]|\\.)*\"
 "*"                         { return MULTIPLY; }
 "/"                         { return DIVIDE; }
 "%"                         { return MODULO; }
-
-
-"?"                         { return QUESTION; }
-"!"                         { return EXCLAMATION; }
-
 
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }
@@ -181,7 +89,7 @@ STRING      \"([^\"\\\n]|\\.)*\"
 .                           {
     fprintf(
         stderr,
-        "USSR: unexpected character '%s' at line %d\n",
+        "USSR: unexpected character '%s' at line %d\\n",
         yytext,
         yylineno
     );
@@ -190,3 +98,82 @@ STRING      \"([^\"\\\n]|\\.)*\"
 }
 
 %%
+
+static char *
+ussr_strdup(const char *text)
+{
+    size_t length;
+    char *copy;
+
+    if (text == NULL)
+        return NULL;
+
+    length = strlen(text) + 1;
+    copy = malloc(length);
+
+    if (copy == NULL)
+        return NULL;
+
+    memcpy(copy, text, length);
+    return copy;
+}
+
+static char *
+unquote_string(const char *text)
+{
+    size_t length;
+    size_t i;
+    size_t output_index;
+    char *output;
+
+    if (text == NULL)
+        return NULL;
+
+    length = strlen(text);
+
+    if (length < 2)
+        return NULL;
+
+    output = malloc(length);
+    if (output == NULL)
+        return NULL;
+
+    output_index = 0;
+
+    for (i = 1; i < length - 1; ++i)
+    {
+        if (text[i] == '\\' && i + 1 < length - 1)
+        {
+            ++i;
+
+            switch (text[i])
+            {
+                case 'n':
+                    output[output_index++] = '\n';
+                    break;
+                case 't':
+                    output[output_index++] = '\t';
+                    break;
+                case 'r':
+                    output[output_index++] = '\r';
+                    break;
+                case '\\':
+                    output[output_index++] = '\\';
+                    break;
+                case '"':
+                    output[output_index++] = '"';
+                    break;
+                default:
+                    output[output_index++] = text[i];
+                    break;
+            }
+        }
+        else
+        {
+            output[output_index++] = text[i];
+        }
+    }
+
+    output[output_index] = '\0';
+    return output;
+}

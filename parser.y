@@ -10,15 +10,14 @@
 
 #include "ussr.h"
 
+int yylex(void);
 extern int yylineno;
 extern FILE *yyin;
 
-int yylex(void);
 void yyerror(const char *message)
 {
     fprintf(stderr, "USSR: %s at line %d\n", message, yylineno);
 }
-
 
 ussr_command_list_t *ussr_parsed_program = NULL;
 
@@ -88,27 +87,17 @@ int ussr_command_list_append(
 %token MODULO
 
 %token NEWLINE
-%token COMMENT
 %token QUESTION
 %token EXCLAMATION
 
-%type <command_list> program
-%type <command_list> command_lines
+%type <command_list> program command_lines
 %type <command> command
-%type <command> command_line
 %type <arguments> argument_list
-%type <argument> argument
-%type <argument> argument_base
-%type <argument> block_argument
-%type <expression> expression
-%type <expression> comparison_expression
-%type <expression> additive_expression
-%type <expression> multiplicative_expression
-%type <expression> unary_expression
-%type <expression> primary_expression
+%type <argument> argument argument_base block_argument
+%type <command> command_line
 %type <value> literal
-
-%start program
+%type <expression> expression comparison_expression additive_expression
+%type <expression> multiplicative_expression unary_expression primary_expression
 
 %%
 
@@ -153,11 +142,11 @@ command_line
       {
           $$ = NULL;
       }
-    | COMMENT NEWLINE
-      {
-          $$ = NULL;
-      }
     | command NEWLINE
+      {
+          $$ = $1;
+      }
+    | command
       {
           $$ = $1;
       }
@@ -248,41 +237,12 @@ argument
       }
     ;
 
-
-block_argument
-    : LBRACKET command_lines RBRACKET
-      {
-          $$.type = USSR_ARGUMENT_COMMAND_LIST;
-          $$.assignment = 0;
-          $$.data.command_list = $2;
-      }
-    ;
-
 argument_base
-    : STRING
+    : literal
       {
           $$.type = USSR_ARGUMENT_VALUE;
           $$.assignment = 0;
-          $$.data.value = ussr_string($1);
-          free($1);
-      }
-    | INTEGER
-      {
-          $$.type = USSR_ARGUMENT_VALUE;
-          $$.assignment = 0;
-          $$.data.value = ussr_integer($1);
-      }
-    | REAL
-      {
-          $$.type = USSR_ARGUMENT_VALUE;
-          $$.assignment = 0;
-          $$.data.value = ussr_real($1);
-      }
-    | BOOLEAN
-      {
-          $$.type = USSR_ARGUMENT_VALUE;
-          $$.assignment = 0;
-          $$.data.value = ussr_boolean($1);
+          $$.data.value = $1;
       }
     | IDENTIFIER
       {
@@ -302,15 +262,24 @@ argument_base
           $$.assignment = 0;
           $$.data.expression = expression;
       }
-    | LPAREN expression RPAREN
+    | expression
       {
           $$.type = USSR_ARGUMENT_EXPRESSION;
           $$.assignment = 0;
-          $$.data.expression = $2;
+          $$.data.expression = $1;
       }
     | block_argument
       {
           $$ = $1;
+      }
+    ;
+
+block_argument
+    : LBRACKET command_lines RBRACKET
+      {
+          $$.type = USSR_ARGUMENT_COMMAND_LIST;
+          $$.assignment = 0;
+          $$.data.command_list = $2;
       }
     ;
 
