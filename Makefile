@@ -18,6 +18,7 @@ $(TARGET): parser.tab.c lex.yy.c ussr.c main.c
 		parser.tab.c \
 		lex.yy.c \
 		ussr.c \
+		bestline.c \
 		main.c
 
 clean:
