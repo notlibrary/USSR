@@ -49,6 +49,13 @@ STRING      \"([^\"\\\n]|\\.)*\"
 "*"                         { return MULTIPLY; }
 "/"                         { return DIVIDE; }
 "%"                         { return MODULO; }
+"&&"                        { return LOGICAL_AND; }
+"||"                        { return LOGICAL_OR; }
+"<<"                        { return SHIFT_LEFT; }
+">>"                        { return SHIFT_RIGHT; }
+"^"                         { return BITWISE_XOR; }
+"&"                         { return BITWISE_AND; }
+"|"                         { return BITWISE_OR; }
 
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }

@@ -65,7 +65,14 @@ typedef enum
     USSR_OP_GE,
     USSR_OP_LE,
     USSR_OP_EQ,
-    USSR_OP_NE
+    USSR_OP_NE,
+    USSR_OP_LOGICAL_AND,
+    USSR_OP_LOGICAL_OR,
+    USSR_OP_SHIFT_LEFT,
+    USSR_OP_SHIFT_RIGHT,
+    USSR_OP_BITWISE_XOR,
+    USSR_OP_BITWISE_AND,
+    USSR_OP_BITWISE_OR
 } ussr_operator_t;
 
 typedef struct ussr_expression_t

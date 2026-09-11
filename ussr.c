@@ -34,6 +34,16 @@ static int ussr_argument_evaluate(
     ussr_value_t *result
 );
 static int ussr_remove_variable(const char *name);
+void ussr_expression_free(ussr_expression_t *expression);
+
+typedef enum
+{
+    USSR_EXEC_OK = 0,
+    USSR_EXEC_ERROR = -1,
+    USSR_EXEC_BREAK = 1,
+    USSR_EXEC_CONTINUE = 2,
+    USSR_EXEC_RETURN = 3
+} ussr_exec_status_t;
 
 #define USSR_MAX_LOOP_ITERATIONS 1000000UL
 
@@ -58,6 +68,31 @@ static size_t local_capacity = 0;
 /* Explicit !/? variables live in a separate uthash table. */
 static ussr_hash_entry_t *map = NULL;
 static ussr_definition_t *definitions = NULL;
+
+ussr_expression_t *
+ussr_make_binary_expression(
+    ussr_expression_t *left,
+    ussr_operator_t operator,
+    ussr_expression_t *right
+)
+{
+    ussr_expression_t *expression;
+
+    expression = malloc(sizeof(*expression));
+    if (expression == NULL)
+    {
+        ussr_expression_free(left);
+        ussr_expression_free(right);
+        return NULL;
+    }
+
+    expression->type = USSR_EXPR_BINARY;
+    expression->data.binary.left = left;
+    expression->data.binary.operator = operator;
+    expression->data.binary.right = right;
+
+    return expression;
+}
 
 int
 ussr_execute_user_definition(
@@ -186,7 +221,21 @@ ussr_execute_user_definition(
     execute_result =
         ussr_execute_program(definition->body);
 
-    if (execute_result != 0)
+    if (execute_result == USSR_EXEC_RETURN)
+    {
+        return_value =
+            ussr_get_variable(definition->return_name);
+
+        if (return_value == NULL)
+            result = ussr_null();
+        else
+            result = ussr_value_copy(return_value);
+
+        execute_result = USSR_EXEC_OK;
+        goto restore;
+    }
+
+    if (execute_result != USSR_EXEC_OK)
         goto restore;
 
     /*
@@ -250,8 +299,8 @@ restore:
 
     free(saved);
 
-    if (execute_result != 0)
-        return -1;
+    if (execute_result != USSR_EXEC_OK)
+        return execute_result;
 
     /*
      * The definition's return value becomes the caller's
@@ -280,7 +329,10 @@ ussr_command_is_definition(const ussr_command_t *command)
         return 0;
 
     if (strcmp(command->name, "if") == 0 ||
-        strcmp(command->name, "while") == 0)
+        strcmp(command->name, "while") == 0 ||
+        strcmp(command->name, "break") == 0 ||
+        strcmp(command->name, "continue") == 0 ||
+        strcmp(command->name, "return") == 0)
         return 0;
 
     return 1;
@@ -943,6 +995,28 @@ static int ussr_expression_evaluate(
             &left) != 0)
         return -1;
 
+    if (expression->data.binary.operator == USSR_OP_LOGICAL_AND ||
+        expression->data.binary.operator == USSR_OP_LOGICAL_OR)
+    {
+        int left_truth = ussr_value_truthy(&left);
+
+        if (expression->data.binary.operator == USSR_OP_LOGICAL_AND &&
+            !left_truth)
+        {
+            *result = ussr_boolean(0);
+            ussr_value_free(&left);
+            return 0;
+        }
+
+        if (expression->data.binary.operator == USSR_OP_LOGICAL_OR &&
+            left_truth)
+        {
+            *result = ussr_boolean(1);
+            ussr_value_free(&left);
+            return 0;
+        }
+    }
+
     if (ussr_expression_evaluate(
             expression->data.binary.right,
             &right) != 0)
@@ -1059,6 +1133,82 @@ static int ussr_expression_evaluate(
             *result = ussr_integer(
                 left.data.integer % right.data.integer
             );
+            break;
+
+        case USSR_OP_LOGICAL_AND:
+            *result = ussr_boolean(
+                ussr_value_truthy(&left) &&
+                ussr_value_truthy(&right)
+            );
+            break;
+
+        case USSR_OP_LOGICAL_OR:
+            *result = ussr_boolean(
+                ussr_value_truthy(&left) ||
+                ussr_value_truthy(&right)
+            );
+            break;
+
+        case USSR_OP_SHIFT_LEFT:
+        case USSR_OP_SHIFT_RIGHT:
+            if (left.type != USSR_INTEGER ||
+                right.type != USSR_INTEGER ||
+                right.data.integer < 0 ||
+                (unsigned long)right.data.integer >=
+                    sizeof(unsigned long) * 8UL)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: shift requires integer operands and a valid shift count\n"
+                );
+                ussr_value_free(&left);
+                ussr_value_free(&right);
+                return -1;
+            }
+
+            if (expression->data.binary.operator == USSR_OP_SHIFT_LEFT)
+            {
+                *result = ussr_integer(
+                    (long)((unsigned long)left.data.integer <<
+                           (unsigned long)right.data.integer)
+                );
+            }
+            else
+            {
+                *result = ussr_integer(
+                    (long)((unsigned long)left.data.integer >>
+                           (unsigned long)right.data.integer)
+                );
+            }
+            break;
+
+        case USSR_OP_BITWISE_XOR:
+        case USSR_OP_BITWISE_AND:
+        case USSR_OP_BITWISE_OR:
+            if (left.type != USSR_INTEGER ||
+                right.type != USSR_INTEGER)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: bitwise operators require integer operands\n"
+                );
+                ussr_value_free(&left);
+                ussr_value_free(&right);
+                return -1;
+            }
+
+            if (expression->data.binary.operator == USSR_OP_BITWISE_XOR)
+                *result = ussr_integer(
+                    left.data.integer ^ right.data.integer
+                );
+            else if (expression->data.binary.operator == USSR_OP_BITWISE_AND)
+                *result = ussr_integer(
+                    left.data.integer & right.data.integer
+                );
+            else
+                *result = ussr_integer(
+                    left.data.integer | right.data.integer
+                );
             break;
 
         case USSR_OP_GT:
@@ -1260,12 +1410,19 @@ static int ussr_execute_list(
         }
         else
         {
-            if (ussr_execute_command(
+            {
+                int execute_result;
+
+                execute_result = ussr_execute_command(
                     command->name,
                     command->return_name,
                     command->arguments,
-                    command->argument_count) != 0)
-                return -1;
+                    command->argument_count
+                );
+
+                if (execute_result != USSR_EXEC_OK)
+                    return execute_result;
+            }
         }
 
         command = command->next;
@@ -1319,9 +1476,14 @@ static int ussr_execute_if(
                 return -1;
             }
 
-            if (ussr_execute_list(
-                    arguments[1].data.command_list) != 0)
-                return -1;
+            {
+                int execute_result = ussr_execute_list(
+                    arguments[1].data.command_list
+                );
+
+                if (execute_result != USSR_EXEC_OK)
+                    return execute_result;
+            }
         }
         else if (argument_count == 3)
         {
@@ -1331,9 +1493,14 @@ static int ussr_execute_if(
                 return -1;
             }
 
-            if (ussr_execute_list(
-                    arguments[2].data.command_list) != 0)
-                return -1;
+            {
+                int execute_result = ussr_execute_list(
+                    arguments[2].data.command_list
+                );
+
+                if (execute_result != USSR_EXEC_OK)
+                    return execute_result;
+            }
         }
 
         result = ussr_boolean(true_condition);
@@ -1400,9 +1567,20 @@ static int ussr_execute_while(
             return -1;
         }
 
-        if (ussr_execute_list(
-                arguments[1].data.command_list) != 0)
-            return -1;
+        {
+            int execute_result = ussr_execute_list(
+                arguments[1].data.command_list
+            );
+
+            if (execute_result == USSR_EXEC_BREAK)
+                break;
+
+            if (execute_result == USSR_EXEC_CONTINUE)
+                continue;
+
+            if (execute_result != USSR_EXEC_OK)
+                return execute_result;
+        }
     }
 
     result = ussr_boolean(1);
@@ -1945,6 +2123,54 @@ int ussr_execute_command(
             arguments,
             argument_count
         );
+
+    if (strcmp(command, "break") == 0 ||
+        strcmp(command, "continue") == 0 ||
+        strcmp(command, "return") == 0)
+    {
+        int status;
+
+        if (return_name == NULL || argument_count != 1 ||
+            arguments[0].type == USSR_ARGUMENT_COMMAND_LIST)
+        {
+            fprintf(
+                stderr,
+                "USSR: %s expects 1 value parameter\n",
+                command
+            );
+            return USSR_EXEC_ERROR;
+        }
+
+        if (ussr_argument_evaluate(
+                &arguments[0], &result) != 0)
+            return USSR_EXEC_ERROR;
+
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return USSR_EXEC_ERROR;
+        }
+
+        if (arguments[0].assignment)
+        {
+            if (ussr_hash_set(return_name, &result) != 0)
+            {
+                ussr_value_free(&result);
+                return USSR_EXEC_ERROR;
+            }
+        }
+
+        if (strcmp(command, "break") == 0)
+            status = USSR_EXEC_BREAK;
+        else if (strcmp(command, "continue") == 0)
+            status = USSR_EXEC_CONTINUE;
+        else
+            status = USSR_EXEC_RETURN;
+
+        ussr_value_free(&result);
+
+        return status;
+    }
 
     if (return_name == NULL)
         return -1;

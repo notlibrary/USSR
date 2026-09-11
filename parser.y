@@ -34,6 +34,12 @@ int ussr_command_list_append(
     ussr_command_list_t *list,
     ussr_command_t *command
 );
+
+ussr_expression_t *ussr_make_binary_expression(
+    ussr_expression_t *left,
+    ussr_operator_t operator,
+    ussr_expression_t *right
+);
 %}
 
 %union
@@ -85,6 +91,13 @@ int ussr_command_list_append(
 %token MULTIPLY
 %token DIVIDE
 %token MODULO
+%token LOGICAL_AND
+%token LOGICAL_OR
+%token SHIFT_LEFT
+%token SHIFT_RIGHT
+%token BITWISE_XOR
+%token BITWISE_AND
+%token BITWISE_OR
 
 %token NEWLINE
 %token QUESTION
@@ -96,7 +109,9 @@ int ussr_command_list_append(
 %type <argument> argument argument_base block_argument
 %type <command> command_line
 %type <value> literal
-%type <expression> expression comparison_expression additive_expression
+%type <expression> expression logical_or_expression logical_and_expression
+%type <expression> bitwise_or_expression bitwise_xor_expression bitwise_and_expression
+%type <expression> comparison_expression shift_expression additive_expression
 %type <expression> multiplicative_expression unary_expression primary_expression
 
 %%
@@ -311,88 +326,162 @@ literal
     ;
 
 expression
-    : LBRACE comparison_expression RBRACE
+    : LBRACE logical_or_expression RBRACE
       {
           $$ = $2;
       }
     ;
 
+logical_or_expression
+    : logical_and_expression
+      {
+          $$ = $1;
+      }
+    | logical_or_expression LOGICAL_OR logical_and_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LOGICAL_OR, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
+logical_and_expression
+    : bitwise_or_expression
+      {
+          $$ = $1;
+      }
+    | logical_and_expression LOGICAL_AND bitwise_or_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LOGICAL_AND, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
+bitwise_or_expression
+    : bitwise_xor_expression
+      {
+          $$ = $1;
+      }
+    | bitwise_or_expression BITWISE_OR bitwise_xor_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_BITWISE_OR, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
+bitwise_xor_expression
+    : bitwise_and_expression
+      {
+          $$ = $1;
+      }
+    | bitwise_xor_expression BITWISE_XOR bitwise_and_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_BITWISE_XOR, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
+bitwise_and_expression
+    : comparison_expression
+      {
+          $$ = $1;
+      }
+    | bitwise_and_expression BITWISE_AND comparison_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_BITWISE_AND, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
 comparison_expression
+    : shift_expression
+      {
+          $$ = $1;
+      }
+    | shift_expression GREATER shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_GT, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression LESS shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LT, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression GREATER_EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_GE, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression LESS_EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LE, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_EQ, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression NOT_EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_NE, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
+shift_expression
     : additive_expression
       {
           $$ = $1;
       }
-    | additive_expression GREATER additive_expression
+    | shift_expression SHIFT_LEFT additive_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_SHIFT_LEFT, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_GT;
-          $$->data.binary.right = $3;
       }
-    | additive_expression LESS additive_expression
+    | shift_expression SHIFT_RIGHT additive_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_SHIFT_RIGHT, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_LT;
-          $$->data.binary.right = $3;
-      }
-    | additive_expression GREATER_EQUAL additive_expression
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_GE;
-          $$->data.binary.right = $3;
-      }
-    | additive_expression LESS_EQUAL additive_expression
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_LE;
-          $$->data.binary.right = $3;
-      }
-    | additive_expression EQUAL additive_expression
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_EQ;
-          $$->data.binary.right = $3;
-      }
-    | additive_expression NOT_EQUAL additive_expression
-      {
-          $$ = malloc(sizeof(*$$));
-
-          if ($$ == NULL)
-              YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_NE;
-          $$->data.binary.right = $3;
       }
     ;
 
@@ -403,27 +492,19 @@ additive_expression
       }
     | additive_expression PLUS multiplicative_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_ADD, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_ADD;
-          $$->data.binary.right = $3;
       }
     | additive_expression MINUS multiplicative_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_SUB, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_SUB;
-          $$->data.binary.right = $3;
       }
     ;
 
@@ -434,39 +515,27 @@ multiplicative_expression
       }
     | multiplicative_expression MULTIPLY unary_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_MUL, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_MUL;
-          $$->data.binary.right = $3;
       }
     | multiplicative_expression DIVIDE unary_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_DIV, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_DIV;
-          $$->data.binary.right = $3;
       }
     | multiplicative_expression MODULO unary_expression
       {
-          $$ = malloc(sizeof(*$$));
-
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_MOD, $3
+          );
           if ($$ == NULL)
               YYABORT;
-
-          $$->type = USSR_EXPR_BINARY;
-          $$->data.binary.left = $1;
-          $$->data.binary.operator = USSR_OP_MOD;
-          $$->data.binary.right = $3;
       }
     ;
 
@@ -478,10 +547,8 @@ unary_expression
     | MINUS unary_expression
       {
           $$ = malloc(sizeof(*$$));
-
           if ($$ == NULL)
               YYABORT;
-
           $$->type = USSR_EXPR_UNARY;
           $$->data.unary.operator = USSR_OP_SUB;
           $$->data.unary.operand = $2;
@@ -492,27 +559,23 @@ primary_expression
     : literal
       {
           $$ = malloc(sizeof(*$$));
-
           if ($$ == NULL)
               YYABORT;
-
           $$->type = USSR_EXPR_VALUE;
           $$->data.value = $1;
       }
     | IDENTIFIER
       {
           $$ = malloc(sizeof(*$$));
-
           if ($$ == NULL)
           {
               free($1);
               YYABORT;
           }
-
           $$->type = USSR_EXPR_VARIABLE;
           $$->data.variable = $1;
       }
-    | LPAREN comparison_expression RPAREN
+    | LPAREN logical_or_expression RPAREN
       {
           $$ = $2;
       }
