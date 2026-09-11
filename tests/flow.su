@@ -1,0 +1,38 @@
+[
+    set(i): 0
+    while(b): {i < 10} [
+        set(i): {i + 1}
+
+        if(b): {i == 3} [
+            continue(c): null
+        ]
+
+        if(b): {i == 7} [
+            break(c): null
+        ]
+
+        print(out): i
+    ]
+
+    test(ret): x [
+        if(done): {x == 5} [
+            return(done): "returned"
+        ]
+        set(ret): "not returned"
+    ]
+
+    test(value): 5
+    print(out): value
+
+    print(out): {true && true}
+    print(out): {true && false}
+    print(out): {false || true}
+    print(out): {false || false}
+
+    print(out): {1 << 4}
+    print(out): {32 >> 3}
+
+    print(out): {5 ^ 3}
+    print(out): {5 & 3}
+    print(out): {5 | 3}
+]
