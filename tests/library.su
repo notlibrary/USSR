@@ -1,0 +1,11 @@
+$define LIBRARY
+
+*private_helper*(result): [
+    set(result): "private helper"
+]
+
+public_helper(result): [
+    set(result): "public helper"
+]
+
+print(out): "library loaded"

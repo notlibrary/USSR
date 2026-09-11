@@ -1,0 +1,17 @@
+$define DEBUG
+
+$ifdef DEBUG
+print(out): "debug enabled"
+$endif
+
+$if defined(DEBUG)
+print(out): "also enabled"
+$else
+print(out): "not enabled"
+$endif
+
+$include "library.su"
+
+[
+    print(out): "main program"
+]
