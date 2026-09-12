@@ -19,7 +19,8 @@ $(TARGET): parser.tab.c lex.yy.c ussr.c main.c
 		lex.yy.c \
 		ussr.c \
 		bestline.c \
-		main.c
+		main.c \
+		pp.c
 
 clean:
 	rm -f $(TARGET)

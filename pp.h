@@ -31,6 +31,18 @@ typedef struct ussr_preprocessor_t
     int current_active;
 } ussr_preprocessor_t;
 
+typedef struct ussr_pp_macro_t
+{
+    char *name;
+
+    char **parameters;
+    size_t parameter_count;
+
+    char *replacement;
+
+    struct ussr_pp_macro_t *next;
+} ussr_pp_macro_t;
+
 int ussr_pp_init(ussr_preprocessor_t *pp);
 
 void ussr_pp_cleanup(ussr_preprocessor_t *pp);

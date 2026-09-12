@@ -269,17 +269,25 @@ static void pp_pop_include(
 
 static int pp_resolve_include_path(
     const char *filename,
+    const char *current_file,
     char *result,
     size_t result_size
 )
 {
+    const char *slash;
+    size_t directory_length;
+
     if (filename == NULL ||
+        current_file == NULL ||
         result == NULL ||
         result_size == 0)
     {
         return -1;
     }
 
+    /*
+     * Absolute Unix path.
+     */
     if (filename[0] == '/')
     {
         if (snprintf(
@@ -296,21 +304,62 @@ static int pp_resolve_include_path(
     }
 
     /*
-     * Relative includes are currently resolved against
-     * the process working directory.
+     * Resolve relative includes against the directory
+     * containing the current source file.
      *
-     * This can later be changed to resolve against the
-     * directory of the file containing the directive.
+     * Example:
+     *
+     *   current_file = tests/pp.su
+     *   filename     = library.su
+     *
+     *   result       = tests/library.su
      */
-    if (snprintf(
-            result,
-            result_size,
-            "%s",
-            filename
-        ) >= (int)result_size)
+    slash = strrchr(current_file, '/');
+
+    if (slash == NULL)
+    {
+        if (snprintf(
+                result,
+                result_size,
+                "%s",
+                filename
+            ) >= (int)result_size)
+        {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    directory_length = (size_t)(slash - current_file);
+
+    if (directory_length == 0)
+    {
+        if (snprintf(
+                result,
+                result_size,
+                "/%s",
+                filename
+            ) >= (int)result_size)
+        {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    if (directory_length + 1 + strlen(filename) + 1 > result_size)
     {
         return -1;
     }
+
+    memcpy(result, current_file, directory_length);
+    result[directory_length] = '/';
+
+    strcpy(
+        result + directory_length + 1,
+        filename
+    );
 
     return 0;
 }
@@ -322,20 +371,22 @@ static int pp_process_include(
 {
     char resolved[PATH_MAX];
 
-    if (pp_resolve_include_path(
-            filename,
-            resolved,
-            sizeof(resolved)
-        ) != 0)
-    {
-        fprintf(
-            stderr,
-            "USSR: include path is too long: %s\n",
-            filename
-        );
+const char *current_file = NULL;
 
-        return -1;
-    }
+if (pp->include_depth > 0)
+{
+    current_file = pp->include_stack[pp->include_depth - 1];
+}
+
+if (pp_resolve_include_path(
+        filename,
+        current_file,
+        resolved,
+        sizeof(resolved)
+    ) != 0)
+{
+    return -1;
+}
 
     return ussr_pp_process_file(pp, resolved);
 }
@@ -459,9 +510,14 @@ static int pp_parse_defined(
     size_t length;
     int result;
 
+    if (pp == NULL || text == NULL)
+        return -1;
+
     cursor = pp_skip_space(text);
 
-    if (strncmp(cursor, "defined", 7) != 0)
+    if (strncmp(cursor, "defined", 7) != 0 ||
+        (isalnum((unsigned char)cursor[7]) ||
+         cursor[7] == '_'))
     {
         fprintf(
             stderr,
@@ -489,16 +545,8 @@ static int pp_parse_defined(
 
     start = cursor;
 
-    while (*cursor != '\0' &&
-           (isalnum((unsigned char)*cursor) ||
-            *cursor == '_'))
-    {
-        ++cursor;
-    }
-
-    length = (size_t)(cursor - start);
-
-    if (length == 0)
+    if (!isalpha((unsigned char)*cursor) &&
+        *cursor != '_')
     {
         fprintf(
             stderr,
@@ -507,6 +555,17 @@ static int pp_parse_defined(
 
         return -1;
     }
+
+    ++cursor;
+
+    while (*cursor != '\0' &&
+           (isalnum((unsigned char)*cursor) ||
+            *cursor == '_'))
+    {
+        ++cursor;
+    }
+
+    length = (size_t)(cursor - start);
 
     name = pp_strndup(start, length);
 
@@ -520,6 +579,24 @@ static int pp_parse_defined(
         fprintf(
             stderr,
             "USSR: expected ')' after defined identifier\n"
+        );
+
+        free(name);
+        return -1;
+    }
+
+    ++cursor;
+    cursor = pp_skip_space(cursor);
+
+    /*
+     * Nothing except whitespace is allowed after
+     * defined(NAME).
+     */
+    if (*cursor != '\0')
+    {
+        fprintf(
+            stderr,
+            "USSR: unexpected text after defined(...)\n"
         );
 
         free(name);
