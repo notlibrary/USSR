@@ -269,25 +269,17 @@ static void pp_pop_include(
 
 static int pp_resolve_include_path(
     const char *filename,
-    const char *current_file,
     char *result,
     size_t result_size
 )
 {
-    const char *slash;
-    size_t directory_length;
-
     if (filename == NULL ||
-        current_file == NULL ||
         result == NULL ||
         result_size == 0)
     {
         return -1;
     }
 
-    /*
-     * Absolute Unix path.
-     */
     if (filename[0] == '/')
     {
         if (snprintf(
@@ -304,62 +296,21 @@ static int pp_resolve_include_path(
     }
 
     /*
-     * Resolve relative includes against the directory
-     * containing the current source file.
+     * Relative includes are currently resolved against
+     * the process working directory.
      *
-     * Example:
-     *
-     *   current_file = tests/pp.su
-     *   filename     = library.su
-     *
-     *   result       = tests/library.su
+     * This can later be changed to resolve against the
+     * directory of the file containing the directive.
      */
-    slash = strrchr(current_file, '/');
-
-    if (slash == NULL)
-    {
-        if (snprintf(
-                result,
-                result_size,
-                "%s",
-                filename
-            ) >= (int)result_size)
-        {
-            return -1;
-        }
-
-        return 0;
-    }
-
-    directory_length = (size_t)(slash - current_file);
-
-    if (directory_length == 0)
-    {
-        if (snprintf(
-                result,
-                result_size,
-                "/%s",
-                filename
-            ) >= (int)result_size)
-        {
-            return -1;
-        }
-
-        return 0;
-    }
-
-    if (directory_length + 1 + strlen(filename) + 1 > result_size)
+    if (snprintf(
+            result,
+            result_size,
+            "%s",
+            filename
+        ) >= (int)result_size)
     {
         return -1;
     }
-
-    memcpy(result, current_file, directory_length);
-    result[directory_length] = '/';
-
-    strcpy(
-        result + directory_length + 1,
-        filename
-    );
 
     return 0;
 }
@@ -371,22 +322,20 @@ static int pp_process_include(
 {
     char resolved[PATH_MAX];
 
-const char *current_file = NULL;
+    if (pp_resolve_include_path(
+            filename,
+            resolved,
+            sizeof(resolved)
+        ) != 0)
+    {
+        fprintf(
+            stderr,
+            "USSR: include path is too long: %s\n",
+            filename
+        );
 
-if (pp->include_depth > 0)
-{
-    current_file = pp->include_stack[pp->include_depth - 1];
-}
-
-if (pp_resolve_include_path(
-        filename,
-        current_file,
-        resolved,
-        sizeof(resolved)
-    ) != 0)
-{
-    return -1;
-}
+        return -1;
+    }
 
     return ussr_pp_process_file(pp, resolved);
 }
@@ -510,14 +459,9 @@ static int pp_parse_defined(
     size_t length;
     int result;
 
-    if (pp == NULL || text == NULL)
-        return -1;
-
     cursor = pp_skip_space(text);
 
-    if (strncmp(cursor, "defined", 7) != 0 ||
-        (isalnum((unsigned char)cursor[7]) ||
-         cursor[7] == '_'))
+    if (strncmp(cursor, "defined", 7) != 0)
     {
         fprintf(
             stderr,
@@ -545,19 +489,6 @@ static int pp_parse_defined(
 
     start = cursor;
 
-    if (!isalpha((unsigned char)*cursor) &&
-        *cursor != '_')
-    {
-        fprintf(
-            stderr,
-            "USSR: expected identifier in defined(...)\n"
-        );
-
-        return -1;
-    }
-
-    ++cursor;
-
     while (*cursor != '\0' &&
            (isalnum((unsigned char)*cursor) ||
             *cursor == '_'))
@@ -566,6 +497,16 @@ static int pp_parse_defined(
     }
 
     length = (size_t)(cursor - start);
+
+    if (length == 0)
+    {
+        fprintf(
+            stderr,
+            "USSR: expected identifier in defined(...)\n"
+        );
+
+        return -1;
+    }
 
     name = pp_strndup(start, length);
 
@@ -585,29 +526,852 @@ static int pp_parse_defined(
         return -1;
     }
 
-    ++cursor;
-    cursor = pp_skip_space(cursor);
-
-    /*
-     * Nothing except whitespace is allowed after
-     * defined(NAME).
-     */
-    if (*cursor != '\0')
-    {
-        fprintf(
-            stderr,
-            "USSR: unexpected text after defined(...)\n"
-        );
-
-        free(name);
-        return -1;
-    }
-
     result = pp_is_defined(pp, name);
 
     free(name);
 
     return result;
+}
+
+static int pp_is_identifier_start(char c)
+{
+    return isalpha((unsigned char)c) || c == '_';
+}
+
+static int pp_is_identifier_char(char c)
+{
+    return isalnum((unsigned char)c) || c == '_';
+}
+
+static int pp_macro_signature(
+    const ussr_pp_define_t *define,
+    const char *name,
+    char ***parameters_out,
+    size_t *parameter_count_out
+)
+{
+    const char *open;
+    const char *cursor;
+    const char *start;
+    char **parameters;
+    size_t count;
+    size_t capacity;
+    size_t length;
+    char *parameter;
+    char **new_parameters;
+
+    if (define == NULL || name == NULL ||
+        parameters_out == NULL || parameter_count_out == NULL)
+    {
+        return -1;
+    }
+
+    *parameters_out = NULL;
+    *parameter_count_out = 0;
+
+    open = strchr(define->name, '(');
+
+    if (open == NULL)
+        return 0;
+
+    if ((size_t)(open - define->name) != strlen(name) ||
+        strncmp(define->name, name, (size_t)(open - define->name)) != 0)
+    {
+        return 0;
+    }
+
+    cursor = open + 1;
+    parameters = NULL;
+    count = 0;
+    capacity = 0;
+
+    cursor = pp_skip_space(cursor);
+
+    if (*cursor == ')')
+    {
+        if (cursor[1] != '\0')
+            return 0;
+
+        *parameters_out = NULL;
+        *parameter_count_out = 0;
+        return 1;
+    }
+
+    for (;;)
+    {
+        start = cursor;
+
+        while (*cursor != '\0' &&
+               pp_is_identifier_char(*cursor))
+        {
+            ++cursor;
+        }
+
+        length = (size_t)(cursor - start);
+
+        if (length == 0)
+            goto invalid;
+
+        parameter = pp_strndup(start, length);
+
+        if (parameter == NULL)
+            goto error;
+
+        if (count >= capacity)
+        {
+            capacity = capacity == 0 ? 4 : capacity * 2;
+
+            new_parameters = realloc(
+                parameters,
+                capacity * sizeof(*new_parameters)
+            );
+
+            if (new_parameters == NULL)
+            {
+                free(parameter);
+                goto error;
+            }
+
+            parameters = new_parameters;
+        }
+
+        parameters[count++] = parameter;
+
+        cursor = pp_skip_space(cursor);
+
+        if (*cursor == ')')
+        {
+            if (cursor[1] != '\0')
+                goto invalid;
+
+            *parameters_out = parameters;
+            *parameter_count_out = count;
+            return 1;
+        }
+
+        if (*cursor != ',')
+            goto invalid;
+
+        ++cursor;
+        cursor = pp_skip_space(cursor);
+    }
+
+invalid:
+    fprintf(
+        stderr,
+        "USSR: invalid macro parameter list: %s\n",
+        define->name
+    );
+
+error:
+    if (parameters != NULL)
+    {
+        size_t i;
+
+        for (i = 0; i < count; ++i)
+            free(parameters[i]);
+
+        free(parameters);
+    }
+
+    return -1;
+}
+
+static void pp_free_macro_parameters(
+    char **parameters,
+    size_t count
+)
+{
+    size_t i;
+
+    if (parameters == NULL)
+        return;
+
+    for (i = 0; i < count; ++i)
+        free(parameters[i]);
+
+    free(parameters);
+}
+
+static ussr_pp_define_t *pp_find_function_define(
+    ussr_preprocessor_t *pp,
+    const char *name,
+    char ***parameters_out,
+    size_t *parameter_count_out
+)
+{
+    ussr_pp_define_t *define;
+    char **parameters;
+    size_t parameter_count;
+    int result;
+
+    if (parameters_out == NULL || parameter_count_out == NULL)
+        return NULL;
+
+    *parameters_out = NULL;
+    *parameter_count_out = 0;
+
+    for (define = pp->defines;
+         define != NULL;
+         define = define->next)
+    {
+        if (strchr(define->name, '(') == NULL)
+            continue;
+
+        result = pp_macro_signature(
+            define,
+            name,
+            &parameters,
+            &parameter_count
+        );
+
+        if (result == 1)
+        {
+            *parameters_out = parameters;
+            *parameter_count_out = parameter_count;
+            return define;
+        }
+
+        if (result < 0)
+            return NULL;
+    }
+
+    return NULL;
+}
+
+static char *pp_trimmed_strndup(
+    const char *src,
+    size_t length
+)
+{
+    size_t start;
+
+    if (src == NULL)
+        return NULL;
+
+    start = 0;
+
+    while (start < length &&
+           isspace((unsigned char)src[start]))
+    {
+        ++start;
+    }
+
+    while (length > start &&
+           isspace((unsigned char)src[length - 1]))
+    {
+        --length;
+    }
+
+    return pp_strndup(src + start, length - start);
+}
+
+static int pp_extract_macro_arguments(
+    const char *open,
+    char ***arguments_out,
+    size_t *argument_count_out,
+    const char **after_out
+)
+{
+    const char *cursor;
+    const char *start;
+    char **arguments;
+    char **new_arguments;
+    size_t count;
+    size_t capacity;
+    size_t length;
+    int paren_depth;
+    int brace_depth;
+    int in_string;
+    int escaped;
+    char *argument;
+
+    if (open == NULL || arguments_out == NULL ||
+        argument_count_out == NULL || after_out == NULL ||
+        *open != '(')
+    {
+        return -1;
+    }
+
+    arguments = NULL;
+    count = 0;
+    capacity = 0;
+    cursor = open + 1;
+    start = cursor;
+    paren_depth = 0;
+    brace_depth = 0;
+    in_string = 0;
+    escaped = 0;
+
+    while (*cursor != '\0')
+    {
+        char c;
+
+        c = *cursor;
+
+        if (in_string)
+        {
+            if (escaped)
+            {
+                escaped = 0;
+            }
+            else if (c == '\\')
+            {
+                escaped = 1;
+            }
+            else if (c == '"')
+            {
+                in_string = 0;
+            }
+
+            ++cursor;
+            continue;
+        }
+
+        if (c == '"')
+        {
+            in_string = 1;
+            ++cursor;
+            continue;
+        }
+
+        if (c == '(')
+        {
+            ++paren_depth;
+            ++cursor;
+            continue;
+        }
+
+        if (c == ')')
+        {
+            if (paren_depth > 0)
+            {
+                --paren_depth;
+                ++cursor;
+                continue;
+            }
+
+            if (brace_depth != 0)
+                goto invalid;
+
+            length = (size_t)(cursor - start);
+
+            if (length != 0 || count != 0)
+            {
+                argument = pp_trimmed_strndup(start, length);
+
+                if (argument == NULL)
+                    goto error;
+
+                if (count >= capacity)
+                {
+                    capacity = capacity == 0 ? 4 : capacity * 2;
+
+                    new_arguments = realloc(
+                        arguments,
+                        capacity * sizeof(*new_arguments)
+                    );
+
+                    if (new_arguments == NULL)
+                    {
+                        free(argument);
+                        goto error;
+                    }
+
+                    arguments = new_arguments;
+                }
+
+                arguments[count++] = argument;
+            }
+
+            *arguments_out = arguments;
+            *argument_count_out = count;
+            *after_out = cursor + 1;
+            return 0;
+        }
+
+        if (c == '{')
+        {
+            ++brace_depth;
+            ++cursor;
+            continue;
+        }
+
+        if (c == '}' && brace_depth > 0)
+        {
+            --brace_depth;
+            ++cursor;
+            continue;
+        }
+
+        if (c == ',' && paren_depth == 0 && brace_depth == 0)
+        {
+            length = (size_t)(cursor - start);
+            argument = pp_trimmed_strndup(start, length);
+
+            if (argument == NULL)
+                goto error;
+
+            if (count >= capacity)
+            {
+                capacity = capacity == 0 ? 4 : capacity * 2;
+
+                new_arguments = realloc(
+                    arguments,
+                    capacity * sizeof(*new_arguments)
+                );
+
+                if (new_arguments == NULL)
+                {
+                    free(argument);
+                    goto error;
+                }
+
+                arguments = new_arguments;
+            }
+
+            arguments[count++] = argument;
+            ++cursor;
+            start = cursor;
+            continue;
+        }
+
+        ++cursor;
+    }
+
+invalid:
+    fprintf(
+        stderr,
+        "USSR: unterminated macro invocation\n"
+    );
+
+error:
+    if (arguments != NULL)
+    {
+        size_t i;
+
+        for (i = 0; i < count; ++i)
+            free(arguments[i]);
+
+        free(arguments);
+    }
+
+    return -1;
+}
+
+static int pp_substitute_macro(
+    const char *body,
+    char **parameters,
+    char **arguments,
+    size_t parameter_count,
+    ussr_preprocessor_t *pp
+)
+{
+    const char *cursor;
+    const char *start;
+    char *name;
+    size_t length;
+    size_t i;
+    int in_string;
+    int escaped;
+
+    cursor = body;
+    in_string = 0;
+    escaped = 0;
+
+    while (*cursor != '\0')
+    {
+        if (in_string)
+        {
+            char one[2];
+
+            one[0] = *cursor;
+            one[1] = '\0';
+
+            if (pp_append(pp, one) != 0)
+                return -1;
+
+            if (escaped)
+                escaped = 0;
+            else if (*cursor == '\\')
+                escaped = 1;
+            else if (*cursor == '"')
+                in_string = 0;
+
+            ++cursor;
+            continue;
+        }
+
+        if (*cursor == '"')
+        {
+            in_string = 1;
+
+            if (pp_append(pp, "\"") != 0)
+                return -1;
+
+            ++cursor;
+            continue;
+        }
+
+        if (!pp_is_identifier_start(*cursor))
+        {
+            char one[2];
+
+            one[0] = *cursor;
+            one[1] = '\0';
+
+            if (pp_append(pp, one) != 0)
+                return -1;
+
+            ++cursor;
+            continue;
+        }
+
+        start = cursor;
+        ++cursor;
+
+        while (*cursor != '\0' &&
+               pp_is_identifier_char(*cursor))
+        {
+            ++cursor;
+        }
+
+        length = (size_t)(cursor - start);
+        name = pp_strndup(start, length);
+
+        if (name == NULL)
+            return -1;
+
+        for (i = 0; i < parameter_count; ++i)
+        {
+            if (strcmp(name, parameters[i]) == 0)
+                break;
+        }
+
+        if (i < parameter_count)
+        {
+            if (pp_append(pp, arguments[i]) != 0)
+            {
+                free(name);
+                return -1;
+            }
+        }
+        else if (pp_append(pp, name) != 0)
+        {
+            free(name);
+            return -1;
+        }
+
+        free(name);
+    }
+
+    return 0;
+}
+
+static int pp_expand_text_depth(
+    ussr_preprocessor_t *pp,
+    const char *text,
+    unsigned int depth
+)
+{
+    const char *cursor;
+    const char *start;
+    const char *string_start;
+    const char *after;
+    char *name;
+    char *string;
+    char **parameters;
+    char **arguments;
+    size_t length;
+    size_t parameter_count;
+    size_t argument_count;
+    int escaped;
+    ussr_pp_define_t *define;
+    ussr_pp_define_t *function_define;
+
+    if (pp == NULL || text == NULL)
+        return -1;
+
+    if (depth > 64)
+    {
+        fprintf(
+            stderr,
+            "USSR: macro expansion too deep\n"
+        );
+        return -1;
+    }
+
+    cursor = text;
+
+    while (*cursor != '\0')
+    {
+        if (*cursor == '"')
+        {
+            string_start = cursor;
+            ++cursor;
+            escaped = 0;
+
+            while (*cursor != '\0')
+            {
+                if (escaped)
+                {
+                    escaped = 0;
+                    ++cursor;
+                    continue;
+                }
+
+                if (*cursor == '\\')
+                {
+                    escaped = 1;
+                    ++cursor;
+                    continue;
+                }
+
+                if (*cursor == '"')
+                {
+                    ++cursor;
+                    break;
+                }
+
+                ++cursor;
+            }
+
+            length = (size_t)(cursor - string_start);
+            string = pp_strndup(string_start, length);
+
+            if (string == NULL)
+                return -1;
+
+            if (pp_append(pp, string) != 0)
+            {
+                free(string);
+                return -1;
+            }
+
+            free(string);
+            continue;
+        }
+
+        if (!pp_is_identifier_start(*cursor))
+        {
+            char one[2];
+
+            one[0] = *cursor;
+            one[1] = '\0';
+
+            if (pp_append(pp, one) != 0)
+                return -1;
+
+            ++cursor;
+            continue;
+        }
+
+        start = cursor;
+        ++cursor;
+
+        while (*cursor != '\0' &&
+               pp_is_identifier_char(*cursor))
+        {
+            ++cursor;
+        }
+
+        length = (size_t)(cursor - start);
+        name = pp_strndup(start, length);
+
+        if (name == NULL)
+            return -1;
+
+        define = pp_find_define(pp, name);
+
+        /*
+         * Function-like macros have a name containing the complete
+         * signature, for example SQUARE(x).  Look for one only when
+         * the identifier is immediately followed by an invocation.
+         */
+        function_define = NULL;
+        parameters = NULL;
+        parameter_count = 0;
+
+        {
+            const char *lookahead;
+
+            lookahead = pp_skip_space(cursor);
+
+            if (*lookahead == '(')
+            {
+                function_define = pp_find_function_define(
+                    pp,
+                    name,
+                    &parameters,
+                    &parameter_count
+                );
+
+                if (function_define != NULL)
+                {
+                    arguments = NULL;
+                    argument_count = 0;
+
+                    if (pp_extract_macro_arguments(
+                            lookahead,
+                            &arguments,
+                            &argument_count,
+                            &after
+                        ) != 0)
+                    {
+                        pp_free_macro_parameters(
+                            parameters,
+                            parameter_count
+                        );
+                        free(name);
+                        return -1;
+                    }
+
+                    if (argument_count != parameter_count)
+                    {
+                        fprintf(
+                            stderr,
+                            "USSR: macro '%s' expects %zu argument%s, got %zu\n",
+                            name,
+                            parameter_count,
+                            parameter_count == 1 ? "" : "s",
+                            argument_count
+                        );
+
+                        pp_free_macro_parameters(
+                            parameters,
+                            parameter_count
+                        );
+
+                        for (length = 0;
+                             length < argument_count;
+                             ++length)
+                        {
+                            free(arguments[length]);
+                        }
+
+                        free(arguments);
+                        free(name);
+                        return -1;
+                    }
+
+                    {
+                        ussr_preprocessor_t temporary;
+
+                        memset(&temporary, 0, sizeof(temporary));
+                        temporary.defines = pp->defines;
+                        temporary.current_active = 1;
+                        temporary.output_capacity = 1024;
+                        temporary.output = malloc(temporary.output_capacity);
+
+                        if (temporary.output == NULL)
+                        {
+                            pp_free_macro_parameters(
+                                parameters,
+                                parameter_count
+                            );
+
+                            for (length = 0;
+                                 length < argument_count;
+                                 ++length)
+                            {
+                                free(arguments[length]);
+                            }
+
+                            free(arguments);
+                            free(name);
+                            return -1;
+                        }
+
+                        temporary.output[0] = '\0';
+
+                        if (pp_substitute_macro(
+                                function_define->value,
+                                parameters,
+                                arguments,
+                                parameter_count,
+                                &temporary
+                            ) != 0 ||
+                            pp_expand_text_depth(
+                                pp,
+                                temporary.output,
+                                depth + 1
+                            ) != 0)
+                        {
+                            free(temporary.output);
+
+                            pp_free_macro_parameters(
+                                parameters,
+                                parameter_count
+                            );
+
+                            for (length = 0;
+                                 length < argument_count;
+                                 ++length)
+                            {
+                                free(arguments[length]);
+                            }
+
+                            free(arguments);
+                            free(name);
+                            return -1;
+                        }
+
+                        free(temporary.output);
+                    }
+
+                    cursor = after;
+
+                    pp_free_macro_parameters(
+                        parameters,
+                        parameter_count
+                    );
+
+                    for (length = 0;
+                         length < argument_count;
+                         ++length)
+                    {
+                        free(arguments[length]);
+                    }
+
+                    free(arguments);
+                    free(name);
+                    continue;
+                }
+
+                pp_free_macro_parameters(parameters, parameter_count);
+            }
+        }
+
+        if (define != NULL && strchr(define->name, '(') == NULL)
+        {
+            if (pp_expand_text_depth(
+                    pp,
+                    define->value,
+                    depth + 1
+                ) != 0)
+            {
+                free(name);
+                return -1;
+            }
+        }
+        else if (pp_append(pp, name) != 0)
+        {
+            free(name);
+            return -1;
+        }
+
+        free(name);
+    }
+
+    return 0;
+}
+
+static int pp_expand_text(
+    ussr_preprocessor_t *pp,
+    const char *text
+)
+{
+    return pp_expand_text_depth(pp, text, 0);
 }
 
 static int pp_parse_define(
@@ -618,45 +1382,150 @@ static int pp_parse_define(
     const char *cursor;
     const char *name_start;
     const char *value_start;
+    const char *signature_end;
     char *name;
     char *value;
     size_t name_length;
+    size_t signature_length;
     int result;
 
     cursor = pp_skip_space(text);
-
     name_start = cursor;
 
+    if (!pp_is_identifier_start(*cursor))
+    {
+        fprintf(
+            stderr,
+            "USSR: $define requires a name\n"
+        );
+        return -1;
+    }
+
+    ++cursor;
+
     while (*cursor != '\0' &&
-           (isalnum((unsigned char)*cursor) ||
-            *cursor == '_'))
+           pp_is_identifier_char(*cursor))
     {
         ++cursor;
     }
 
     name_length = (size_t)(cursor - name_start);
 
-    if (name_length == 0)
-    {
-        fprintf(
-            stderr,
-            "USSR: $define requires a name\n"
-        );
-
-        return -1;
-    }
-
-    name = pp_strndup(name_start, name_length);
-
-    if (name == NULL)
-        return -1;
-
     cursor = pp_skip_space(cursor);
 
-    if (*cursor == '\0')
-        value_start = "";
+    if (*cursor == '(')
+    {
+        const char *scan;
+        int depth;
+        int in_string;
+        int escaped;
+
+        scan = cursor;
+        depth = 0;
+        in_string = 0;
+        escaped = 0;
+
+        while (*scan != '\0')
+        {
+            char c;
+
+            c = *scan;
+
+            if (in_string)
+            {
+                if (escaped)
+                    escaped = 0;
+                else if (c == '\\')
+                    escaped = 1;
+                else if (c == '"')
+                    in_string = 0;
+
+                ++scan;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                in_string = 1;
+                ++scan;
+                continue;
+            }
+
+            if (c == '(')
+                ++depth;
+            else if (c == ')')
+            {
+                --depth;
+
+                if (depth == 0)
+                    break;
+            }
+
+            ++scan;
+        }
+
+        if (*scan != ')')
+        {
+            fprintf(
+                stderr,
+                "USSR: unterminated $define parameter list\n"
+            );
+            return -1;
+        }
+
+        signature_end = scan + 1;
+        signature_length = (size_t)(signature_end - name_start);
+        name = pp_strndup(name_start, signature_length);
+
+        if (name == NULL)
+            return -1;
+
+        /* Validate the stored function-like signature. */
+        {
+            ussr_pp_define_t temporary;
+            char *base_name;
+            char **parameters = NULL;
+            size_t parameter_count = 0;
+
+            base_name = pp_strndup(name_start, name_length);
+
+            if (base_name == NULL)
+            {
+                free(name);
+                return -1;
+            }
+
+            memset(&temporary, 0, sizeof(temporary));
+            temporary.name = name;
+
+            result = pp_macro_signature(
+                &temporary,
+                base_name,
+                &parameters,
+                &parameter_count
+            );
+
+            free(base_name);
+            pp_free_macro_parameters(parameters, parameter_count);
+
+            if (result != 1)
+            {
+                free(name);
+                return -1;
+            }
+        }
+
+        cursor = pp_skip_space(signature_end);
+    }
     else
-        value_start = cursor;
+    {
+        name = pp_strndup(name_start, name_length);
+
+        if (name == NULL)
+            return -1;
+    }
+
+    value_start = cursor;
 
     value = pp_strdup(value_start);
 
@@ -664,6 +1533,20 @@ static int pp_parse_define(
     {
         free(name);
         return -1;
+    }
+
+    /* A directive line normally ends with a newline from fgets(). */
+    {
+        size_t value_length;
+
+        value_length = strlen(value);
+
+        while (value_length > 0 &&
+               (value[value_length - 1] == '\n' ||
+                value[value_length - 1] == '\r'))
+        {
+            value[--value_length] = '\0';
+        }
     }
 
     result = pp_define(pp, name, value);
@@ -1029,7 +1912,7 @@ int ussr_pp_process_line(
     if (!pp->current_active)
         return 0;
 
-    result = pp_append(pp, line);
+    result = pp_expand_text(pp, line);
 
     if (result != 0)
         return -1;
