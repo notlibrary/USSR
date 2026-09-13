@@ -23,8 +23,20 @@ typedef enum
     USSR_INTEGER,
     USSR_REAL,
     USSR_STRING,
-    USSR_BOOLEAN
+    USSR_BOOLEAN,
+    USSR_VECTOR,
+    USSR_STRUCT
 } ussr_value_type_t;
+
+/*
+ * USSR_VECTOR and USSR_STRUCT are reference types: the value union
+ * holds a pointer to a heap object with its own refcount (see
+ * uno.h). Copying an ussr_value_t of either kind (ussr_value_copy)
+ * must retain the pointee; freeing it (ussr_value_free) must release
+ * it. Everything else keeps the existing value-copy semantics.
+ */
+typedef struct ussr_vector_t ussr_vector_t;
+typedef struct ussr_struct_instance_t ussr_struct_instance_t;
 
 typedef struct
 {
@@ -36,6 +48,8 @@ typedef struct
         double real;
         char *string;
         int boolean;
+        ussr_vector_t *vector;
+        ussr_struct_instance_t *instance;
     } data;
 } ussr_value_t;
 
@@ -104,7 +118,8 @@ typedef enum
     USSR_ARGUMENT_VALUE,
     USSR_ARGUMENT_EXPRESSION,
     USSR_ARGUMENT_COMMAND_LIST,
-    USSR_ARGUMENT_LOOKUP
+    USSR_ARGUMENT_LOOKUP,
+    USSR_ARGUMENT_UNO_LITERAL
 } ussr_argument_type_t;
 
 typedef struct
@@ -117,6 +132,19 @@ typedef struct
         ussr_value_t value;
         ussr_expression_t *expression;
         ussr_command_list_t *command_list;
+
+        /*
+         * Raw text between a `'...'` literal's quotes, e.g. for
+         * 'Point{x=1,y=2}' this is "Point{x=1,y=2}". Owned; free it
+         * the same way you already free .expression/.command_list for
+         * the other deferred argument kinds. Resolved to a real value
+         * with ussr_uno_decode() (uno.h) wherever arguments are
+         * evaluated for a command call — struct types referenced here
+         * may not be registered until the interpreter actually runs
+         * the struct(...) command that defines them, so this can't be
+         * resolved any earlier than the other deferred kinds are.
+         */
+        char *uno_text;
     } data;
 } ussr_argument_t;
 
@@ -171,6 +199,14 @@ ussr_value_t ussr_integer(long value);
 ussr_value_t ussr_real(double value);
 ussr_value_t ussr_boolean(int value);
 ussr_value_t ussr_string(const char *value);
+
+/*
+ * Wrap an existing (already-owned) vector/instance pointer in a
+ * value, taking one reference. Do not call on a pointer you still
+ * need a reference to elsewhere without retaining it yourself first.
+ */
+ussr_value_t ussr_vector_value(ussr_vector_t *vector);
+ussr_value_t ussr_struct_value(ussr_struct_instance_t *instance);
 
 void ussr_value_free(ussr_value_t *value);
 ussr_value_t ussr_value_copy(const ussr_value_t *value);

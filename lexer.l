@@ -25,6 +25,7 @@ INTEGER     {DIGIT}+
 REAL        {DIGIT}+"."{DIGIT}+
 STRING      \"([^\"\\\n]|\\.)*\"
 
+
 %%
 
 [ \t\r]+                    ;
@@ -83,6 +84,12 @@ STRING      \"([^\"\\\n]|\\.)*\"
 
     return STRING;
 }
+
+\'[^'\n]*\'    {
+                   yylval.string = ussr_strdup(yytext + 1);
+                   return UNO_LITERAL;
+               }
+
 
 {IDENT}                     {
     yylval.string = ussr_strdup(yytext);

@@ -65,6 +65,7 @@ ussr_expression_t *ussr_make_binary_expression(
 
 %token <string> IDENTIFIER
 %token <string> STRING
+%token <string> UNO_LITERAL
 %token <integer> INTEGER
 %token <real> REAL
 %token <boolean> BOOLEAN
@@ -286,6 +287,18 @@ argument_base
     | block_argument
       {
           $$ = $1;
+      }
+    | UNO_LITERAL
+      {
+          /*
+           * Deferred, like block_argument: the struct type(s) this
+           * text names may not be registered until execution time
+           * (see ussr.h's ussr_argument_t.data.uno_text), so we can't
+           * resolve it to a real ussr_value_t here at parse time.
+           */
+          $$.type = USSR_ARGUMENT_UNO_LITERAL;
+          $$.assignment = 0;
+          $$.data.uno_text = $1;
       }
     ;
 

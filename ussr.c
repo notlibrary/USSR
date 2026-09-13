@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include "uthash.h"
+#include "uno.h"
+#include "ussr_oop_builtins.h"
 
 int yylex(void);
 int yyparse(void);
@@ -29,12 +31,15 @@ extern ussr_command_list_t *ussr_parsed_program;
 
 static char *ussr_strdup(const char *src);
 static ussr_definition_t *ussr_find_definition(const char *name);
-static int ussr_argument_evaluate(
+int ussr_argument_evaluate(
     const ussr_argument_t *argument,
     ussr_value_t *result
 );
 static int ussr_remove_variable(const char *name);
 void ussr_expression_free(ussr_expression_t *expression);
+
+
+static int ussr_remove_variable(const char *name);
 
 typedef enum
 {
@@ -611,6 +616,10 @@ void ussr_value_free(ussr_value_t *value)
 
     if (value->type == USSR_STRING)
         free(value->data.string);
+    else if (value->type == USSR_VECTOR)
+        ussr_vector_release(value->data.vector);
+    else if (value->type == USSR_STRUCT)
+        ussr_struct_instance_release(value->data.instance);
 
     *value = ussr_null();
 }
@@ -643,6 +652,16 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
 
         case USSR_STRING:
             copy.data.string = ussr_strdup(value->data.string);
+            break;
+
+        case USSR_VECTOR:
+            ussr_vector_retain(value->data.vector);
+            copy.data.vector = value->data.vector;
+            break;
+
+        case USSR_STRUCT:
+            ussr_struct_instance_retain(value->data.instance);
+            copy.data.instance = value->data.instance;
             break;
     }
 
@@ -841,6 +860,15 @@ void ussr_print_value(const ussr_value_t *value)
         case USSR_BOOLEAN:
             printf("%s\n", value->data.boolean ? "true" : "false");
             break;
+
+        case USSR_VECTOR:
+        case USSR_STRUCT:
+        {
+            char *text = ussr_uno_encode(value);
+            printf("%s\n", text != NULL ? text : "<unencodable>");
+            free(text);
+            break;
+        }
     }
 }
 
@@ -892,6 +920,15 @@ static int ussr_values_equal(
                 left->data.string,
                 right->data.string
             ) == 0;
+
+        case USSR_VECTOR:
+            /* Reference types: same underlying object, not
+             * same-shaped contents. Compare encode()d text yourself
+             * for structural equality. */
+            return left->data.vector == right->data.vector;
+
+        case USSR_STRUCT:
+            return left->data.instance == right->data.instance;
     }
 
     return 0;
@@ -919,6 +956,12 @@ static int ussr_value_truthy(const ussr_value_t *value)
         case USSR_STRING:
             return value->data.string != NULL &&
                    value->data.string[0] != '\0';
+
+        case USSR_VECTOR:
+            return ussr_vector_length(value->data.vector) > 0;
+
+        case USSR_STRUCT:
+            return 1;
     }
 
     return 0;
@@ -1273,7 +1316,7 @@ static int ussr_expression_evaluate(
     return 0;
 }
 
-static int ussr_argument_evaluate(
+int ussr_argument_evaluate(
     const ussr_argument_t *argument,
     ussr_value_t *result
 )
@@ -1319,6 +1362,9 @@ static int ussr_argument_evaluate(
         *result = ussr_value_copy(value);
         return 0;
     }
+
+    if (argument->type == USSR_ARGUMENT_UNO_LITERAL)
+        return ussr_uno_decode(argument->data.uno_text, result) == 0 ? 0 : -1;
 
     fprintf(
         stderr,
@@ -2105,6 +2151,7 @@ int ussr_execute_command(
     ussr_value_t result;
     ussr_value_t assignment_value;
     int assignment_index = -1;
+    int oop_status;
     size_t i;
 
     if (command == NULL)
@@ -2408,6 +2455,19 @@ int ussr_execute_command(
         result.type = USSR_STRING;
         result.data.string = string;
     }
+    else if ((oop_status = ussr_oop_dispatch(
+                  command, return_name, arguments, argument_count, &result
+              )) != 0)
+    {
+        if (oop_status < 0)
+        {
+            ussr_value_free(&assignment_value);
+            return -1;
+        }
+        /* oop_status > 0: `result` is set and falls through to the
+         * shared bottom code below (ussr_set_variable(return_name,
+         * &result), the `!`-assignment handling, etc.) */
+    }
     else if (ussr_is_user_definition(command))
     {
         int execute_result;
@@ -2624,6 +2684,10 @@ static void ussr_argument_free(ussr_argument_t *argument)
     else if (argument->type == USSR_ARGUMENT_COMMAND_LIST)
     {
         ussr_command_list_free(argument->data.command_list);
+    }
+    else if (argument->type == USSR_ARGUMENT_UNO_LITERAL)
+    {
+        free(argument->data.uno_text);
     }
 
     argument->type = USSR_ARGUMENT_VALUE;
