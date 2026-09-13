@@ -124,11 +124,16 @@ program
           ussr_parsed_program = $1;
           $$ = $1;
       }
-    | LBRACKET command_lines RBRACKET
+    | LBRACKET command_lines RBRACKET trailing_newlines
       {
           ussr_parsed_program = $2;
           $$ = $2;
       }
+    ;
+
+trailing_newlines
+    : %empty
+    | trailing_newlines NEWLINE
     ;
 
 command_lines
