@@ -10,8 +10,6 @@ $else
 print(out): "not enabled"
 $endif
 
-$include "library.su"
+$include "tests/library.su"
 
-[
-    print(out): "main program"
-]
+print(out): "main program"

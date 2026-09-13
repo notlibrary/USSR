@@ -1,6 +1,6 @@
 $define LIBRARY
 
-*private_helper*(result): [
+private_helper(result): [
     set(result): "private helper"
 ]
 

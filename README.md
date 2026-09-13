@@ -11,6 +11,7 @@ Perhaps it evolves fast to something big No promises or insight unfortunately
 .su file extension means "script user" not that you think
 
 ```USSR
+	#ЗДОРОВО МОРЯЧОК
 	emerge(report): "K-152"
 	print(aye): "BOOM!"
 ```
