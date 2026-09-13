@@ -86,7 +86,11 @@ STRING      \"([^\"\\\n]|\\.)*\"
 }
 
 \'[^'\n]*\'    {
-                   yylval.string = ussr_strdup(yytext + 1);
+                   yylval.string = malloc((size_t)yyleng - 1);
+                   if (yylval.string == NULL)
+                       return 0;
+                   memcpy(yylval.string, yytext + 1, (size_t)yyleng - 2);
+                   yylval.string[yyleng - 2] = '\0';
                    return UNO_LITERAL;
                }
 

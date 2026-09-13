@@ -1,6 +1,10 @@
 #Compact USSR quine
-set(q): "set(q): {\"%s%s%s\"}\nprint(out): q"
-set(a): "set(q): {\""
-set(b): "\"}\nprint(out): q"
-concat(q): a q b
-print(out): q 
+set(c): ""
+set(a): ""
+set(n): ""
+concat(c): "" ":"
+concat(a): "" "\""
+concat(n): "" "\n"
+set(q): "concat(o): \"set(c): \" a a n \"set(a): \" a a n \"set(n): \" a a n \"concat(c): \" a a \" \":\"\" n \"concat(a): \" a a \" \"\\\"\"\" n \"concat(n): \" a a \" \"\\\\n\"\" n \"set(q): \" a q a n \"eval(ret): q\" n \"print(out): o\""
+eval(ret): q
+print(out): o

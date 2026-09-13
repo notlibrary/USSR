@@ -20,7 +20,9 @@ $(TARGET): parser.tab.c lex.yy.c ussr.c main.c
 		ussr.c \
 		bestline.c \
 		main.c \
-		pp.c
+		pp.c \
+		uno.c \
+		ussr_oop_builtins.c
 
 clean:
 	rm -f $(TARGET)

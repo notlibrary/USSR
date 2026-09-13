@@ -65,7 +65,6 @@ ussr_expression_t *ussr_make_binary_expression(
 
 %token <string> IDENTIFIER
 %token <string> STRING
-%token <string> UNO_LITERAL
 %token <integer> INTEGER
 %token <real> REAL
 %token <boolean> BOOLEAN
@@ -103,6 +102,8 @@ ussr_expression_t *ussr_make_binary_expression(
 %token NEWLINE
 %token QUESTION
 %token EXCLAMATION
+
+%token <string> UNO_LITERAL
 
 %type <command_list> program command_lines
 %type <command> command
