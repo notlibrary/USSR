@@ -1,0 +1,16 @@
+# Expected: fails. push() type-checks against the vector's declared
+# element type.
+#
+# Run: ./ussr tests/oop/errors_vector_type.su
+# Expect on stderr something like:
+#   USSR: vector expects element type 'Point'
+# and a nonzero exit status. The print below must NOT run.
+
+struct(Point): "x:number" "y:number"
+struct(Label): "text:string"
+
+vec(points): "Point"
+
+new(l): "Label" "nope"
+push(_): points l
+print(_): "should not reach here"

@@ -1,0 +1,14 @@
+# Expected: fails. UNO strings are backtick-delimited with no escape
+# mechanism in v1, so a string containing a literal backtick can't be
+# represented and encode() refuses rather than silently corrupting it.
+#
+# Run: ./ussr tests/oop/errors_uno_backtick.su
+# Expect on stderr something like:
+#   USSR: cannot encode string containing '`' or a newline in UNO
+# and a nonzero exit status. The print below must NOT run.
+
+struct(Tag): "label:string"
+
+new(t): "Tag" "has `backtick` inside"
+encode(s): t
+print(_): "should not reach here"

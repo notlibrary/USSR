@@ -1,0 +1,76 @@
+# UNO (Unified Object Notation): encode()/decode() round trip, the
+# '...' source literal, backtick-quoted internal strings, and nested
+# structs/vectors.
+#
+# Run: ./ussr tests/oop/uno.su
+
+struct(Point): "x:number" "y:number"
+
+# --- basic encode/decode round trip --------------------------------
+
+new(p): "Point" 1 2
+encode(s): p
+print(_): s          # Point{x=1,y=2}
+
+decode(p2): s
+getf(x2): p2 "x"
+getf(y2): p2 "y"
+print(_): x2         # 1
+print(_): y2         # 2
+
+# --- '...' source literal: decoded at execution time, no decode() ---
+
+set(p3): 'Point{x=5,y=6}'
+getf(x3): p3 "x"
+print(_): x3         # 5
+
+# --- strings inside UNO use backticks, not '"' or "'" --------------
+
+struct(Tag): "label:string"
+
+new(t): "Tag" "hello world"
+encode(ts): t
+print(_): ts         # Tag{label=`hello world`}
+
+decode(t2): ts
+getf(label2): t2 "label"
+print(_): label2     # hello world
+
+# --- nested struct fields ------------------------------------------
+
+struct(Line): "start:Point" "end:Point"
+
+new(a): "Point" 0 0
+new(b): "Point" 3 4
+new(ln): "Line" a b
+
+encode(ls): ln
+print(_): ls         # Line{start=Point{x=0,y=0},end=Point{x=3,y=4}}
+
+decode(ln2): ls
+getf(start2): ln2 "start"
+getf(sx2): start2 "x"
+print(_): sx2        # 0
+
+# --- vectors through UNO, both encode() and a literal ---------------
+
+vec(pts): "Point"
+push(_): pts a
+push(_): pts b
+
+encode(vs): pts
+print(_): vs         # [Point{x=0,y=0},Point{x=3,y=4}]
+
+decode(pts2): vs
+len(pn2): pts2
+print(_): pn2        # 2
+at(pt0): pts2 0
+getf(pt0x): pt0 "x"
+print(_): pt0x       # 0
+
+set(pts3): '[Point{x=7,y=8},Point{x=9,y=10}]'
+len(pn3): pts3
+print(_): pn3        # 2
+at(q1): pts3 1
+getf(q1y): q1 "y"
+print(_): q1y        # 10

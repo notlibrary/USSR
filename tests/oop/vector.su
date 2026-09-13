@@ -1,0 +1,61 @@
+# Vector container: an untyped ("any") vector of plain values, and a
+# typed vector of struct instances.
+#
+# Run: ./ussr tests/oop/vector.su
+
+# --- untyped vector, mixed ordinary values -----------------------
+# vec() always needs an argument (no command can have zero), so an
+# explicit "" means "no element type" / untyped.
+
+vec(bag): ""
+push(_): bag 1
+push(_): bag "two"
+push(_): bag true
+push(_): bag null
+
+len(n): bag
+print(_): n       # 4
+
+at(item0): bag 0
+at(item1): bag 1
+at(item2): bag 2
+at(item3): bag 3
+print(_): item0   # 1
+print(_): item1   # two
+print(_): item2   # true
+print(_): item3   # null
+
+# --- typed vector of struct instances -----------------------------
+
+struct(Point): "x:number" "y:number"
+
+vec(points): "Point"
+
+new(p1): "Point" 0 0
+new(p2): "Point" 3 4
+push(_): points p1
+push(_): points p2
+
+len(pn): points
+print(_): pn      # 2
+
+at(first): points 0
+at(second): points 1
+
+getf(fx): first "x"
+getf(fy): first "y"
+getf(sx): second "x"
+getf(sy): second "y"
+
+print(_): fx      # 0
+print(_): fy      # 0
+print(_): sx      # 3
+print(_): sy      # 4
+
+# push() through an alias is visible via the original variable too --
+# vectors are reference types, same as structs.
+set(points_alias): points
+new(p3): "Point" 9 9
+push(_): points_alias p3
+len(pn2): points
+print(_): pn2     # 3

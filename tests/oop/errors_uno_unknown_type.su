@@ -1,0 +1,10 @@
+# Expected: fails. decode() (and a '...' literal) refuses to guess a
+# shape for a struct type that was never declared with struct(...).
+#
+# Run: ./ussr tests/oop/errors_uno_unknown_type.su
+# Expect on stderr something like:
+#   USSR: unknown struct type 'Nope'
+# and a nonzero exit status. The print below must NOT run.
+
+decode(x): "Nope{y=1}"
+print(_): "should not reach here"

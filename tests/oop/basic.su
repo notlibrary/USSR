@@ -1,0 +1,32 @@
+# Struct basics: definition, construction, field access, mutation,
+# and reference semantics.
+#
+# Run: ./ussr tests/oop/basic.su
+# Every print() line is followed by the value it should show.
+
+struct(Point): "x:number" "y:number"
+
+new(p): "Point" 1 2
+getf(x): p "x"
+getf(y): p "y"
+print(_): x   # 1
+print(_): y   # 2
+
+setf(_): p "x" 9
+getf(x2): p "x"
+print(_): x2  # 9
+
+# Structs are reference types: a second variable bound to the same
+# instance sees mutations made through the first one.
+set(alias): p
+setf(_): alias "y" 42
+getf(y2): p "y"
+print(_): y2  # 42, not 2 -- proves p and alias share one instance
+
+# A fresh instance is independent of the first.
+new(q): "Point" 100 200
+setf(_): q "x" 0
+getf(px): p "x"
+getf(qx): q "x"
+print(_): px  # 9  -- unaffected by q's mutation
+print(_): qx  # 0

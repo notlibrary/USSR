@@ -1,0 +1,11 @@
+# Expected: fails. A "number" field rejects a string argument.
+#
+# Run: ./ussr tests/oop/errors_type_mismatch.su
+# Expect on stderr something like:
+#   USSR: Point.x expects type 'number'
+# and a nonzero exit status. The print below must NOT run.
+
+struct(Point): "x:number" "y:number"
+
+new(bad): "Point" "not a number" 2
+print(_): "should not reach here"

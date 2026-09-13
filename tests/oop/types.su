@@ -1,0 +1,38 @@
+# Struct fields covering every scalar type, "any", and the
+# implicit-nullable-for-every-field convention.
+#
+# Run: ./ussr tests/oop/types.su
+
+struct(Profile): "name:string" "active:boolean" "note:any"
+
+new(p1): "Profile" "Nordom" true "hello"
+getf(name1): p1 "name"
+getf(active1): p1 "active"
+getf(note1): p1 "note"
+print(_): name1    # Nordom
+print(_): active1  # true
+print(_): note1    # hello
+
+# "any" happily takes a different type on a different instance.
+new(p2): "Profile" "Ghost" false 42
+getf(note2): p2 "note"
+print(_): note2    # 42
+
+# Every field is implicitly nullable (v1 convention): null is always
+# accepted regardless of the field's declared type.
+new(p3): "Profile" "Nobody" false null
+getf(note3): p3 "note"
+print(_): note3    # null
+
+# Real numbers keep a forced ".0" through UNO so they round-trip as
+# reals rather than becoming integers on decode -- this affects
+# encode(), not getf()/print(), which show the value as stored.
+struct(Measurement): "value:number"
+
+new(m1): "Measurement" 5
+encode(s1): m1
+print(_): s1        # Measurement{value=5}
+
+new(m2): "Measurement" 3.0
+encode(s2): m2
+print(_): s2        # Measurement{value=3.0}

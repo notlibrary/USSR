@@ -1,0 +1,12 @@
+# Expected: fails. new() checks positional argument count against the
+# struct's total field count before doing anything else.
+#
+# Run: ./ussr tests/oop/errors_argcount.su
+# Expect on stderr something like:
+#   USSR: Point(...) expects 2 argument(s), got 1
+# and a nonzero exit status. The print below must NOT run.
+
+struct(Point): "x:number" "y:number"
+
+new(bad): "Point" 1
+print(_): "should not reach here"
