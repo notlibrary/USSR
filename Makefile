@@ -13,7 +13,8 @@ SRCS    = $(SRC_DIR)/parser.tab.c \
           $(SRC_DIR)/main.c \
           $(SRC_DIR)/pp.c \
           $(SRC_DIR)/uno.c \
-          $(SRC_DIR)/ussr_oop_builtins.c
+          $(SRC_DIR)/ussr_oop_builtins.c \
+		  $(SRC_DIR)/ussr_bytecode.c \
 
 all: $(TARGET)
 

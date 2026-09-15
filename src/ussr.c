@@ -831,6 +831,16 @@ static const ussr_value_t *ussr_hash_get(const char *name)
     return &variable->value;
 }
 
+int ussr_hash_set_value(const char *name, const ussr_value_t *value)
+{
+    return ussr_hash_set(name, value);
+}
+
+const ussr_value_t *ussr_hash_get_value(const char *name)
+{
+    return ussr_hash_get(name);
+}
+
 void ussr_print_value(const ussr_value_t *value)
 {
     if (value == NULL)
@@ -2014,6 +2024,57 @@ ussr_execute_external(
     return 0;
 }
 
+
+int ussr_external_execute_values(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_value_t *result
+)
+{
+    ussr_argument_t *arguments;
+    size_t i;
+    int status;
+
+    if (command == NULL || result == NULL)
+        return -1;
+
+    arguments = calloc(value_count, sizeof(*arguments));
+    if (arguments == NULL && value_count != 0)
+        return -1;
+
+    for (i = 0; i < value_count; ++i)
+    {
+        arguments[i].type = USSR_ARGUMENT_VALUE;
+        arguments[i].assignment = 0;
+        arguments[i].data.value = ussr_value_copy(&values[i]);
+    }
+
+    status = ussr_execute_external(
+        command,
+        "__ussr_external_result",
+        arguments,
+        value_count
+    );
+
+    for (i = 0; i < value_count; ++i)
+        ussr_value_free(&arguments[i].data.value);
+    free(arguments);
+
+    if (status != 0)
+        return status;
+
+    {
+        const ussr_value_t *stored =
+            ussr_get_variable("__ussr_external_result");
+        if (stored == NULL)
+            *result = ussr_null();
+        else
+            *result = ussr_value_copy(stored);
+    }
+
+    return 0;
+}
 
 static int
 ussr_execute_eval(

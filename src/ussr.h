@@ -218,6 +218,18 @@ int ussr_set_variable(
 
 const ussr_value_t *ussr_get_variable(const char *name);
 
+/* VM runtime access to the separate !/? hash namespace. */
+int ussr_hash_set_value(const char *name, const ussr_value_t *value);
+const ussr_value_t *ussr_hash_get_value(const char *name);
+
+/* Host-only external process service used by the EXTERNAL VM opcode. */
+int ussr_external_execute_values(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_value_t *result
+);
+
 void ussr_print_value(const ussr_value_t *value);
 
 int ussr_execute_command(

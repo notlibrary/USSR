@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <limits.h>
 
-#include "uno.h"
 
 /*
  * Compiler only.
@@ -1091,6 +1090,10 @@ while_error:
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
 
+        if (command->return_name != NULL &&
+            bc_store_result(p, command->return_name, 0, a[0].assignment) != 0)
+            return -1;
+
         jump = bc_emit(
             p,
             USSR_BC_JMP,
@@ -1130,6 +1133,14 @@ while_error:
                 p,
                 &a[0],
                 USSR_BC_RETURN_REG
+            ) != 0)
+            return -1;
+
+        if (bc_store_result(
+                p,
+                current->return_name,
+                USSR_BC_RETURN_REG,
+                a[0].assignment
             ) != 0)
             return -1;
 
@@ -1329,12 +1340,18 @@ while_error:
             ) < 0)
             return -1;
 
-        return bc_store_result(
-            p,
-            command->return_name,
-            USSR_BC_RETURN_REG - 1,
-            0
-        );
+        {
+            int hash_assignment = 0;
+            for (i = 0; i < count; ++i)
+                hash_assignment |= a[i].assignment != 0;
+
+            return bc_store_result(
+                p,
+                command->return_name,
+                USSR_BC_RETURN_REG - 1,
+                hash_assignment
+            );
+        }
     }
 
     /*
@@ -1420,12 +1437,18 @@ while_error:
         ) < 0)
         return -1;
 
-    return bc_store_result(
-        p,
-        command->return_name,
-        USSR_BC_RETURN_REG - 1,
-        0
-    );
+    {
+        int hash_assignment = 0;
+        for (i = 0; i < count; ++i)
+            hash_assignment |= a[i].assignment != 0;
+
+        return bc_store_result(
+            p,
+            command->return_name,
+            USSR_BC_RETURN_REG - 1,
+            hash_assignment
+        );
+    }
 }
 
 static int bc_compile_list(
