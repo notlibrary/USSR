@@ -5,7 +5,7 @@
 # Requires cl.exe (a "Developer Command Prompt for VS" shell) and
 # win_bison.exe / win_flex.exe on PATH -- MSVC ships neither yacc nor
 # lex. The winflexbison project provides Bison/Flex-compatible
-# binaries for Windows: https://github.com/lexxmark/winflexbison
+# binaries for Windows: https://github.com
 #
 # If you'd rather not take that dependency, generate parser.tab.c /
 # parser.tab.h / lexer.c once (on any machine with real bison/flex,
@@ -24,6 +24,7 @@
 # their sources, rather than the project root.
 
 CC      = cl.exe
+RC      = rc.exe
 BISON   = win_bison.exe
 FLEX    = win_flex.exe
 
@@ -48,10 +49,15 @@ OBJS = \
     $(WIN)\process_win32.obj \
     $(WIN)\worstline.obj
 
+RES = ussr.res
+
 all: $(TARGET)
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) $(OBJS) $(LIBS)
+$(TARGET): $(OBJS) $(RES)
+	$(CC) $(LDFLAGS) $(OBJS) $(RES) $(LIBS)
+
+$(RES): ussr.rc ussr.ico
+	$(RC) /fo $(RES) ussr.rc
 
 # --- generated parser/lexer ------------------------------------------
 # Skipped when PREGENERATED=1 is passed on the nmake command line.
@@ -67,7 +73,7 @@ $(SRC)\lexer.c: $(SRC)\lexer.l $(SRC)\parser.tab.h
 # --- object files -----------------------------------------------------
 # Written as explicit per-file rules (rather than relying on nmake's
 # automatic $** / $< inside multi-dependency rules, which behaves
-# inconsistently across nmake versions outside simple inference
+# inconsistenced across nmake versions outside simple inference
 # rules) so this stays predictable everywhere.
 
 $(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)\ussr_oop_builtins.h $(SRC)\process.h
@@ -101,5 +107,5 @@ $(WIN)\worstline.obj: $(WIN)\worstline.c $(WIN)\worstline.h
 	$(CC) $(CFLAGS) /c /Fo:$(WIN)\worstline.obj $(WIN)\worstline.c
 
 clean:
-	-del /q $(SRC)\*.obj $(WIN)\*.obj $(TARGET) *.pdb 2>NUL
+	-del /q $(SRC)\*.obj $(WIN)\*.obj $(TARGET) *.pdb $(RES) 2>NUL
 	-del /q $(SRC)\parser.tab.c $(SRC)\parser.tab.h $(SRC)\lexer.c 2>NUL
