@@ -1,7 +1,7 @@
 {
   "id": "ussr",
   "name": "USSR",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "minAppVersion": "0.4.2",
   "description": "USSR Unified Shell Script REPL programming language",
   "author": "notlibrary",
