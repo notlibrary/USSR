@@ -45,8 +45,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          bison -d -Wall parser.y
-          flex lexer.l
+          win_bison -d -Wall src\parser.y
+          win_flex src\lexer.l
           nmake -f Makefile.msc ussr.exe
           New-Item -ItemType Directory -Force ussr-win-bin
           Copy-Item ussr.exe ussr-win-bin\ -Force
@@ -70,8 +70,8 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          bison -d -Wall parser.y
-          flex lexer.l
+          bison -d -Wall src/parser.y
+          flex src/lexer.l
           make -f ussr-ubuntu.mk ussr
           mkdir -p ussr-linux-bin
           cp ussr README.md CHANGELOG.md LICENSE ussr-linux-bin/ 2>/dev/null || true
