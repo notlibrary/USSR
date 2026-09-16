@@ -110,26 +110,6 @@ jobs:
           token: ${{ secrets.PAT8 }}
           files: ussr-unix-tarball-amd64-${{ github.ref_name }}.tar.gz
 
-      - name: Setup WASI SDK
-        if: runner.os != 'Windows'
-        uses: bytecodealliance/setup-wasi-sdk-action@main
-        with:
-          version: '33'
-
-      - name: Build on WASM
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          make -f ussr-wasm.mk ussr.wasm dist
-          mv ussr-wasm-bin.tar.gz ussr-wasm-bin-${{ github.ref_name }}.tar.gz
-
-      - name: Upload to Release WASM
-        if: runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.PAT8 }}
-          files: ussr-wasm-bin-${{ github.ref_name }}.tar.gz
-
       - name: Extract Release Notes
         if: runner.os != 'Windows'
         id: parse_changelog
