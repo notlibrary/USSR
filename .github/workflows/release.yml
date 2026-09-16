@@ -45,6 +45,9 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Install WiX
+        if: runner.os == 'Windows'
+        run: dotnet tool install --global wix --version 7.0.0
 
       - name: Build on Windows
         if: runner.os == 'Windows'
@@ -58,15 +61,14 @@ jobs:
           New-Item -ItemType Directory -Force ussr-win-bin
           Copy-Item ussr.exe ussr-win-bin\ -Force
           Copy-Item README.md, CHANGELOG.md, LICENSE ussr-win-bin\ -ErrorAction SilentlyContinue
-          tar -czf ussr-win-bin-amd64-${{ github.ref_name }}.tar.gz ussr-win-bin
-
+          wix build -acceptEula wix7 ussr.wxs -arch x64 -out ussr-win-bin-amd64-${{ github.ref_name }}.msi 
 
       - name: Upload to Release Win
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows'       
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.PAT8 }}
-          files: ussr-win-bin-amd64-${{ github.ref_name }}.tar.gz
+          files: ussr-win-bin-amd64-${{ github.ref_name }}.msi
 
       - name: Install Flex, Bison and build tools
         if: runner.os != 'Windows'
