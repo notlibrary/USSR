@@ -3,7 +3,11 @@
 #include <string.h>
 #include <stdint.h>
 
+#ifdef _WIN32
+#include "win/worstline.h"
+#else
 #include "bestline.h"
+#endif
 #include "ussr.h"
 #include "pp.h"
 
