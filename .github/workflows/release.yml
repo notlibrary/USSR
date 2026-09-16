@@ -1,0 +1,136 @@
+name: Release USSR
+
+on:
+  push:
+    tags:
+      - "*"
+
+env:
+  APP_NAME: ussr-win-bin-amd64
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+    steps:
+      - uses: softprops/action-gh-release@v2
+        id: create
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: USSR
+          draft: false
+          prerelease: false
+          body: Unified Shell Script REPL
+          token: ${{ secrets.PAT8 }}
+
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flex and Bison
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install winflexbison3 --no-progress -y
+          echo "C:\\Program Files\\winflexbison3" >> $env:GITHUB_PATH
+
+      - name: Build on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          bison -d -Wall parser.y
+          flex lexer.l
+          nmake -f Makefile.msc ussr.exe
+          New-Item -ItemType Directory -Force ussr-win-bin
+          Copy-Item ussr.exe ussr-win-bin\ -Force
+          Copy-Item README.md, CHANGELOG.md, LICENSE ussr-win-bin\ -ErrorAction SilentlyContinue
+          tar -czf ussr-win-bin-amd64-${{ github.ref_name }}.tar.gz ussr-win-bin
+
+      - name: Upload to Release Win
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.PAT8 }}
+          files: ussr-win-bin-amd64-${{ github.ref_name }}.tar.gz
+
+      - name: Install Flex, Bison and build tools
+        if: runner.os != 'Windows'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison autoconf automake libtool
+
+      - name: Build on Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bison -d -Wall parser.y
+          flex lexer.l
+          make -f ussr-ubuntu.mk ussr
+          mkdir -p ussr-linux-bin
+          cp ussr README.md CHANGELOG.md LICENSE ussr-linux-bin/ 2>/dev/null || true
+          tar -czf ussr-linux-bin-${{ github.ref_name }}.tar.gz ussr-linux-bin
+
+      - name: Upload to Release Linux
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.PAT8 }}
+          files: ussr-linux-bin-${{ github.ref_name }}.tar.gz
+
+      - name: Reconfigure build env
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          autoreconf -ivf
+          ./configure
+          make dist
+          mv ussr-${{ github.ref_name }}.tar.gz ussr-unix-tarball-amd64-${{ github.ref_name }}.tar.gz
+
+      - name: Upload Unix tarball to Release
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.PAT8 }}
+          files: ussr-unix-tarball-amd64-${{ github.ref_name }}.tar.gz
+
+      - name: Setup WASI SDK
+        if: runner.os != 'Windows'
+        uses: bytecodealliance/setup-wasi-sdk-action@main
+        with:
+          version: '33'
+
+      - name: Build on WASM
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          make -f ussr-wasm.mk ussr.wasm dist
+          mv ussr-wasm-bin.tar.gz ussr-wasm-bin-${{ github.ref_name }}.tar.gz
+
+      - name: Upload to Release WASM
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.PAT8 }}
+          files: ussr-wasm-bin-${{ github.ref_name }}.tar.gz
+
+      - name: Extract Release Notes
+        if: runner.os != 'Windows'
+        id: parse_changelog
+        uses: ffurrer2/extract-release-notes@v3.1.0
+        with:
+          changelog_file: CHANGELOG.md
+
+      - name: Update Existing GitHub Release
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body: ${{ steps.parse_changelog.outputs.release_notes }}
+          token: ${{ secrets.PAT8 }}

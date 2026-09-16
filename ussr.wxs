@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="USSR" 
+           Scope="perMachine"
+           Compressed="yes" 
+           InstallerVersion="200" 
+           Manufacturer="Serenity Software" 
+           Version="0.4.2" 
+           UpgradeCode="D9A72AD4-DE60-460D-B83D-4C8312AC0D4F">
+    
+    <MediaTemplate EmbedCab="yes" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    
+    <Icon Id="ussr.ico" SourceFile="ussr.ico" /> 
+    <Property Id="ARPPRODUCTICON" Value="ussr.ico" />	
+    
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="USSR" />
+    </StandardDirectory>
+    
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ApplicationFiles" Guid="5990BD57-7F87-4DED-9246-3A98E31DFC76" Bitness="always64">
+        <File Id="UssrEXE" Source="ussr.exe" KeyPath="yes" />
+        <File Id="MoscowSU" Source="moscow.su" />
+        <File Id="UserManualMD" Source="docs\USSR_USER_MANUAL.md" />
+      </Component>
+    </DirectoryRef>
+    
+    <Feature Id="MainFeature" Title="Main Application" Level="1">
+      <ComponentRef Id="ApplicationFiles" />
+    </Feature>
+    
+  </Package>
+</Wix>
