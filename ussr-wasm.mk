@@ -20,58 +20,58 @@ LDFLAGS = \
     --target=wasm32-wasip1
 
 OBJECTS = \
-    parser.tab.o \
-    lex.yy.o \
-    ussr.o \
-    ussr_bytecode.o \
-    bestline.o \
-    main.o \
-    pp.o \
-    uno.o \
-    ussr_oop_builtins.o
+    src/parser.tab.o \
+    src/lex.yy.o \
+    src/ussr.o \
+    src/ussr_bytecode.o \
+    src/bestline.o \
+    src/main.o \
+    src/pp.o \
+    src/uno.o \
+    src/ussr_oop_builtins.o
 
 .PHONY: all clean dist
 
 all: ussr.wasm
 
-parser.tab.c parser.tab.h: parser.y
-	bison -d -Wall parser.y
+src/parser.tab.c src/parser.tab.h: src/parser.y
+	bison -d -Wall src/parser.y -o src/parser.tab.c
 
-lex.yy.c: lexer.l parser.tab.h
-	flex lexer.l
+src/lex.yy.c: src/lexer.l src/parser.tab.h
+	flex -o src/lex.yy.c src/lexer.l
 
-parser.tab.o: parser.tab.c ussr.h
+src/parser.tab.o: src/parser.tab.c src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-lex.yy.o: lex.yy.c ussr.h
+src/lex.yy.o: src/lex.yy.c src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-ussr.o: ussr.c ussr.h uno.h ussr_oop_builtins.h uthash.h
+src/ussr.o: src/ussr.c src/ussr.h src/uno.h src/ussr_oop_builtins.h src/uthash.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-ussr_bytecode.o: ussr_bytecode.c ussr_bytecode.h ussr.h
+src/ussr_bytecode.o: src/ussr_bytecode.c src/ussr_bytecode.h src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-bestline.o: bestline.c bestline.h
+src/bestline.o: src/bestline.c src/bestline.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-main.o: main.c ussr.h ussr_bytecode.h pp.h uno.h ussr_oop_builtins.h
+src/main.o: src/main.c src/ussr.h src/ussr_bytecode.h src/pp.h src/uno.h src/ussr_oop_builtins.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-pp.o: pp.c pp.h
+src/pp.o: src/pp.c src/pp.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-uno.o: uno.c uno.h ussr.h
+src/uno.o: src/uno.c src/uno.h src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-ussr_oop_builtins.o: ussr_oop_builtins.c ussr_oop_builtins.h ussr.h uno.h
+src/ussr_oop_builtins.o: src/ussr_oop_builtins.c src/ussr_oop_builtins.h src/ussr.h src/uno.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ussr.wasm: $(OBJECTS)
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
 
 clean:
-	$(RM) $(OBJECTS) ussr.wasm parser.tab.c parser.tab.h lex.yy.c
+	$(RM) $(OBJECTS) ussr.wasm src/parser.tab.c src/parser.tab.h src/lex.yy.c
 	$(RM) -r ussr-wasm-bin ussr-wasm-bin.tar.gz
 
 dist: all
