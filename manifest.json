@@ -1,0 +1,11 @@
+{
+  "id": "ussr",
+  "name": "USSR",
+  "version": "0.4.1",
+  "minAppVersion": "0.4.2",
+  "description": "USSR Unified Shell Script REPL programming language",
+  "author": "notlibrary",
+  "authorUrl": "https://github.com/notlibrary",
+  "fundingUrl": "https://github.com/notlibrary",
+  "isDesktopOnly": false
+}
