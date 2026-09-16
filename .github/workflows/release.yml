@@ -41,12 +41,11 @@ jobs:
           choco install winflexbison3 --no-progress -y
           echo "C:\\Program Files\\winflexbison3" >> $env:GITHUB_PATH
 
-      # 1. Включаем окружение MSVC (добавляет cl, nmake и библиотеки в PATH)
       - name: Initialize MSVC Environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # 2. Запускаем сборку в PowerShell
+
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: powershell
