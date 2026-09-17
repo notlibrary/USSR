@@ -40,3 +40,5 @@ The actual list of epithets are:
 - Partially AI designed
 - Command
 - Virtually executed
+- Portable
+- Multiplatform
