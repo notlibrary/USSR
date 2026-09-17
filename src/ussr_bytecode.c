@@ -210,7 +210,11 @@ static int bc_is_definition(
         strcmp(name, "while") == 0 ||
         strcmp(name, "break") == 0 ||
         strcmp(name, "continue") == 0 ||
-        strcmp(name, "return") == 0)
+        strcmp(name, "return") == 0 ||
+        strcmp(name, "method") == 0 ||
+        strcmp(name, "each") == 0 ||
+        strcmp(name, "map") == 0 ||
+        strcmp(name, "filter") == 0)
         return 0;
 
     return 1;
@@ -696,7 +700,7 @@ static int bc_compile_argument(
 
     if (p == NULL ||
         argument == NULL ||
-        dst >= USSR_BC_RETURN_REG)
+        dst > USSR_BC_RETURN_REG)
         return -1;
 
     switch (argument->type)
@@ -855,6 +859,61 @@ static int bc_store_boolean(
     );
 
     return result;
+}
+
+static int bc_add_oop_site(
+    ussr_bc_program_t *p,
+    uint32_t instruction,
+    const ussr_command_t *command
+)
+{
+    ussr_bc_oop_site_t *q;
+    size_t capacity;
+
+    if (p == NULL || command == NULL)
+        return -1;
+
+    if (p->oop_site_count == p->oop_site_capacity)
+    {
+        capacity = p->oop_site_capacity == 0 ?
+            16 : p->oop_site_capacity * 2;
+
+        q = realloc(
+            p->oop_sites,
+            capacity * sizeof(*q)
+        );
+
+        if (q == NULL)
+            return -1;
+
+        p->oop_sites = q;
+        p->oop_site_capacity = capacity;
+    }
+
+    p->oop_sites[p->oop_site_count].instruction = instruction;
+    p->oop_sites[p->oop_site_count].command = command;
+    ++p->oop_site_count;
+
+    return 0;
+}
+
+static const ussr_command_t *bc_find_oop_site(
+    const ussr_bc_program_t *p,
+    uint32_t instruction
+)
+{
+    size_t i;
+
+    if (p == NULL)
+        return NULL;
+
+    for (i = 0; i < p->oop_site_count; ++i)
+    {
+        if (p->oop_sites[i].instruction == instruction)
+            return p->oop_sites[i].command;
+    }
+
+    return NULL;
 }
 
 static int bc_compile_command(
@@ -1411,6 +1470,11 @@ while_error:
 
     for (i = 0; i < count; ++i)
     {
+        /* Block arguments are carried by the OOP source-site metadata;
+         * value arguments are materialized in the matching VM register. */
+        if (a[i].type == USSR_ARGUMENT_COMMAND_LIST)
+            continue;
+
         if (bc_compile_argument(
                 p,
                 &a[i],
@@ -1427,15 +1491,28 @@ while_error:
     if (index < 0)
         return -1;
 
-    if (bc_emit(
+    {
+        int instruction;
+
+        instruction = bc_emit(
             p,
             USSR_BC_OOP,
             USSR_BC_RETURN_REG - 1,
-            0,
             (uint8_t)count,
+            0,
             (uint32_t)index
-        ) < 0)
-        return -1;
+        );
+
+        if (instruction < 0)
+            return -1;
+
+        if (bc_add_oop_site(
+                p,
+                (uint32_t)instruction,
+                command
+            ) != 0)
+            return -1;
+    }
 
     {
         int hash_assignment = 0;
@@ -1718,6 +1795,7 @@ void ussr_bc_program_free(
     }
 
     free(program->functions);
+    free(program->oop_sites);
 
     memset(program, 0, sizeof(*program));
 }

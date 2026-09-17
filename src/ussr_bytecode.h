@@ -96,6 +96,12 @@ typedef struct
 
 typedef struct
 {
+    uint32_t instruction;
+    const ussr_command_t *command;
+} ussr_bc_oop_site_t;
+
+typedef struct
+{
     ussr_bc_instruction_t *code;
     size_t code_count;
     size_t code_capacity;
@@ -115,6 +121,12 @@ typedef struct
     ussr_bc_function_t *functions;
     size_t function_count;
     size_t function_capacity;
+
+    /* Source command metadata for OOP calls whose arguments may include blocks.
+     * These pointers are valid only while the parsed source tree is alive. */
+    ussr_bc_oop_site_t *oop_sites;
+    size_t oop_site_count;
+    size_t oop_site_capacity;
 } ussr_bc_program_t;
 
 /*

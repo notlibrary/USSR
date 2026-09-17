@@ -336,6 +336,25 @@ static void vm_free_values(ussr_value_t *values, size_t count)
     free(values);
 }
 
+static const ussr_command_t *vm_find_oop_site(
+    const ussr_bc_program_t *program,
+    uint32_t instruction
+)
+{
+    size_t i;
+
+    if (program == NULL)
+        return NULL;
+
+    for (i = 0; i < program->oop_site_count; ++i)
+    {
+        if (program->oop_sites[i].instruction == instruction)
+            return program->oop_sites[i].command;
+    }
+
+    return NULL;
+}
+
 static int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program)
@@ -410,8 +429,127 @@ static int vm_execute(
                 if (ins.immediate>=program->string_count || ins.b>USSR_VM_RETURN_REG || vm_values_from_registers(vm,0,ins.b,&args)!=0) {result=-1;goto done;}
                 value=ussr_null(); result=ussr_external_execute_values(program->strings[ins.immediate],args,ins.b,&value); vm_free_values(args,ins.b);args=NULL; if(result!=0)goto done; ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; break;
             case USSR_BC_OOP:
-                if (ins.immediate>=program->string_count || vm_values_from_registers(vm,0,ins.b,&args)!=0) {result=-1;goto done;}
-                { ussr_argument_t *av=calloc(ins.b,sizeof(*av)); if(!av&&ins.b){vm_free_values(args,ins.b);result=-1;goto done;} for(i=0;i<ins.b;++i){av[i].type=USSR_ARGUMENT_VALUE;av[i].data.value=ussr_value_copy(&args[i]);} value=ussr_null(); result=ussr_oop_dispatch(program->strings[ins.immediate],"__ussr_oop_result",av,ins.b,&value); for(i=0;i<ins.b;++i)ussr_value_free(&av[i].data.value);free(av); if(result<0){vm_free_values(args,ins.b);args=NULL;ussr_value_free(&value);goto done;} if(result==0){ ussr_value_free(&value); value=ussr_null(); result=ussr_external_execute_values(program->strings[ins.immediate],args,ins.b,&value); } vm_free_values(args,ins.b);args=NULL; if(result!=0)goto done; ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
+            {
+                const ussr_command_t *source_command;
+                ussr_argument_t *av;
+                size_t argument_count;
+
+                if (ins.immediate >= program->string_count ||
+                    ins.b >= USSR_VM_RETURN_REG)
+                {
+                    fprintf(stderr, "USSR VM: invalid OOP instruction\n");
+                    result = -1;
+                    goto done;
+                }
+
+                argument_count = ins.b;
+                source_command = vm_find_oop_site(
+                    program,
+                    vm->ip - 1
+                );
+
+                av = calloc(argument_count, sizeof(*av));
+                if (av == NULL && argument_count != 0)
+                {
+                    result = -1;
+                    goto done;
+                }
+
+                for (i = 0; i < argument_count; ++i)
+                {
+                    av[i].assignment = 0;
+
+                    if (source_command != NULL &&
+                        i < source_command->argument_count &&
+                        source_command->arguments[i].type ==
+                            USSR_ARGUMENT_COMMAND_LIST)
+                    {
+                        av[i].type = USSR_ARGUMENT_COMMAND_LIST;
+                        av[i].assignment =
+                            source_command->arguments[i].assignment;
+                        av[i].data.command_list =
+                            source_command->arguments[i].data.command_list;
+                    }
+                    else
+                    {
+                        av[i].type = USSR_ARGUMENT_VALUE;
+                        if (source_command != NULL &&
+                            i < source_command->argument_count)
+                            av[i].assignment =
+                                source_command->arguments[i].assignment;
+                        av[i].data.value =
+                            ussr_value_copy(&vm->registers[i]);
+                    }
+                }
+
+                value = ussr_null();
+                result = ussr_oop_dispatch(
+                    program->strings[ins.immediate],
+                    source_command != NULL ? source_command->return_name : NULL,
+                    av,
+                    argument_count,
+                    &value
+                );
+
+                for (i = 0; i < argument_count; ++i)
+                {
+                    if (av[i].type == USSR_ARGUMENT_VALUE)
+                        ussr_value_free(&av[i].data.value);
+                }
+                free(av);
+
+                if (result < 0)
+                {
+                    ussr_value_free(&value);
+                    goto done;
+                }
+
+                if (result == 0)
+                {
+                    /* Not an OOP builtin: execute it as a host command. */
+                    ussr_value_t *external_values;
+
+                    if (source_command != NULL)
+                    {
+                        if (argument_count !=
+                            source_command->argument_count)
+                        {
+                            ussr_value_free(&value);
+                            result = -1;
+                            goto done;
+                        }
+                    }
+
+                    if (vm_values_from_registers(
+                            vm, 0, (uint8_t)argument_count,
+                            &external_values) != 0)
+                    {
+                        ussr_value_free(&value);
+                        result = -1;
+                        goto done;
+                    }
+
+                    ussr_value_free(&value);
+                    value = ussr_null();
+                    result = ussr_external_execute_values(
+                        program->strings[ins.immediate],
+                        external_values,
+                        argument_count,
+                        &value
+                    );
+                    vm_free_values(
+                        external_values,
+                        argument_count
+                    );
+
+                    if (result != 0)
+                        goto done;
+                }
+
+                ussr_value_free(&vm->registers[ins.a]);
+                vm->registers[ins.a] = value;
+                break;
+            }
             case USSR_BC_EVAL:
                 /* eval is implemented by the VM boundary: source is parsed, compiled, then executed as bytecode. */
                 if(ins.a>=USSR_VM_REGISTER_COUNT || program->strings[ins.immediate]==NULL || vm->registers[0].type!=USSR_STRING){result=-1;goto done;}
@@ -553,6 +691,7 @@ static int parse_and_execute(const char *source)
 
     if (result != 0)
     {
+        fprintf(stderr, "USSR parser: syntax error");
         ussr_parsed_program = NULL;
         return -1;
     }
@@ -563,6 +702,7 @@ static int parse_and_execute(const char *source)
     /* AST -> bytecode happens once. Execution starts only after compilation. */
     if (ussr_bc_compile(ussr_parsed_program, &bytecode) != 0)
     {
+        fprintf(stderr, "USSR compiler: compilation failed");
         ussr_command_list_free(ussr_parsed_program);
         ussr_parsed_program = NULL;
         return -1;
@@ -571,6 +711,8 @@ static int parse_and_execute(const char *source)
     vm_init(&vm);
     vm.running = 1;
     result = vm_execute(&vm, &bytecode);
+    if (result != 0)
+        fprintf(stderr, "USSR VM: execution failed (status %d)", result);
     vm_cleanup(&vm);
     ussr_bc_program_free(&bytecode);
 
@@ -618,7 +760,7 @@ static int run_repl(void)
     int result;
 
     printf("USSR Unified Shell Script REPL\n");
-    printf("USSR v%d.%d\n",USSR_VERSION_MAJOR,USSR_VERSION_MINOR);
+    printf("USSR v0.1\n");
     printf("Enter a command list or press Ctrl-D to exit.\n\n");
 
     if (ussr_pp_init(&pp) != 0)
@@ -754,6 +896,8 @@ version_long(void)
     exit(EXIT_SUCCESS);
 }
 
+
+
 int main(int argc, char **argv)
 {
     /*
@@ -805,3 +949,4 @@ int main(int argc, char **argv)
     ussr_cleanup();
     return result;
 }
+
