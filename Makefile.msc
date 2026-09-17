@@ -5,7 +5,7 @@
 # Requires cl.exe (a "Developer Command Prompt for VS" shell) and
 # win_bison.exe / win_flex.exe on PATH -- MSVC ships neither yacc nor
 # lex. The winflexbison project provides Bison/Flex-compatible
-# binaries for Windows: https://github.com/lexxmark/winflexbison
+# binaries for Windows: https://github.com
 #
 # If you'd rather not take that dependency, generate parser.tab.c /
 # parser.tab.h / lexer.c once (on any machine with real bison/flex,
@@ -24,6 +24,7 @@
 # their sources, rather than the project root.
 
 CC      = cl.exe
+RC      = rc.exe
 BISON   = win_bison.exe
 FLEX    = win_flex.exe
 
@@ -31,6 +32,7 @@ SRC     = src
 WIN     = src\win
 
 CFLAGS  = /nologo /W3 /Zi /Od /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /I$(SRC) /I$(WIN)
+RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
 LIBS    = user32.lib
 
@@ -47,12 +49,18 @@ OBJS = \
     $(SRC)\lexer.obj \
     $(WIN)\process_win32.obj \
     $(WIN)\worstline.obj \
-    $(WIN)\getopt.obj
+    $(WIN)\getopt.obj \
+    ussr.res
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LIBS)
+
+# --- resources --------------------------------------------------------
+
+ussr.res: ussr.rc ussr.ico
+	$(RC) $(RCFLAGS) /fo ussr.res ussr.rc
 
 # --- generated parser/lexer ------------------------------------------
 # Skipped when PREGENERATED=1 is passed on the nmake command line.
@@ -104,9 +112,6 @@ $(WIN)\worstline.obj: $(WIN)\worstline.c $(WIN)\worstline.h
 $(WIN)\getopt.obj: $(WIN)\getopt.c $(WIN)\getopt.h
 	$(CC) $(CFLAGS) /c /Fo:$(WIN)\getopt.obj $(WIN)\getopt.c
 
-$(WIN)\getopt.obj: $(WIN)\getopt.c $(WIN)\getopt.h
-	$(CC) $(CFLAGS) /c /Fo:$(WIN)\getopt.obj $(WIN)\getopt.c
-
 clean:
-	-del /q $(SRC)\*.obj $(WIN)\*.obj $(TARGET) *.pdb 2>NUL
+	-del /q $(SRC)\*.obj $(WIN)\*.obj $(TARGET) *.pdb *.res 2>NUL
 	-del /q $(SRC)\parser.tab.c $(SRC)\parser.tab.h $(SRC)\lexer.c 2>NUL
