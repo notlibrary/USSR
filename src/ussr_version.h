@@ -1,0 +1,10 @@
+#ifndef USSR_VERSION_H
+#define USSR_VERSION_H
+
+#define _USSR_STRING "USSR"
+
+#define USSR_VERSION_MAJOR 0
+#define USSR_VERSION_MINOR 4
+#define USSR_VERSION_PATCH 2
+
+#endif

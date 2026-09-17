@@ -5,11 +5,14 @@
 
 #ifdef _WIN32
 #include "win/worstline.h"
+#include "win/getopt.h"
 #else
 #include "bestline.h"
+#include <getopt.h>
 #endif
 #include "ussr.h"
 #include "pp.h"
+#include "ussr_version.h"
 
 int yyparse(void);
 
@@ -615,7 +618,7 @@ static int run_repl(void)
     int result;
 
     printf("USSR Unified Shell Script REPL\n");
-    printf("USSR v0.1\n");
+    printf("USSR v%d.%d\n",USSR_VERSION_MAJOR,USSR_VERSION_MINOR);
     printf("Enter a command list or press Ctrl-D to exit.\n\n");
 
     if (ussr_pp_init(&pp) != 0)
@@ -703,14 +706,99 @@ static int run_repl(void)
     return EXIT_SUCCESS;
 }
 
+static void
+version_short(void)
+{
+    printf(
+        "%s %u.%u.%u\n",
+        _USSR_STRING,
+        USSR_VERSION_MAJOR,
+        USSR_VERSION_MINOR,
+        USSR_VERSION_PATCH
+    );
+    exit(EXIT_SUCCESS);
+}
+
+static void
+version_long(void)
+{
+    printf(
+        "%s %u.%u.%u\n",
+        _USSR_STRING,
+        USSR_VERSION_MAJOR,
+        USSR_VERSION_MINOR,
+        USSR_VERSION_PATCH
+    );
+    printf("Compiled %s at %s\n", __DATE__, __TIME__);
+
+#if defined(__clang__) && !defined(__EMSCRIPTEN__)
+    printf("Compiler: Clang/LLVM %d.%d\n", __clang_major__, __clang_minor__);
+#elif defined(__GNUC__) || defined(__GNUG__)
+    printf("Compiler: GCC %d.%d\n", __GNUC__, __GNUC_MINOR__);
+#elif defined(_MSC_VER)
+    printf("Compiler: Microsoft Visual Studio %d\n", _MSC_VER);
+#elif defined(__INTEL_COMPILER)
+    printf("Compiler: Intel ICC %d\n", __INTEL_COMPILER);
+#elif defined(__TINYC__)
+    printf("Compiler: Tiny CC %d\n", __TINYC__);
+#elif defined(__EMSCRIPTEN__)
+    printf(
+        "Compiler: Emscripten %d.%d\n",
+        __EMSCRIPTEN_major__,
+        __EMSCRIPTEN_minor__
+    );
+#else
+    printf("Compiler: unknown\n");
+#endif
+
+    exit(EXIT_SUCCESS);
+}
+
 int main(int argc, char **argv)
 {
+    /*
+     * --version and -v deliberately map to two different internal
+     * codes ('V' vs 'v') even though both are "the version flag" --
+     * that's the whole point: getopt_long lets a long option report
+     * whatever val it likes, so the short and long forms can trigger
+     * genuinely different output (short report vs. long report)
+     * instead of being forced to behave identically the way most
+     * -x/--xxx pairs do.
+     */
+    static const struct option long_options[] = {
+        { "version", no_argument, NULL, 'V' },
+        { NULL, 0, NULL, 0 }
+    };
+
     int result;
+    int opt;
+
+    while ((opt = getopt_long(argc, argv, "v", long_options, NULL)) != -1)
+    {
+        switch (opt)
+        {
+        case 'v':
+            version_short();
+            break; /* unreachable -- version_short() calls exit() */
+
+        case 'V':
+            version_long();
+            break; /* unreachable -- version_long() calls exit() */
+
+        default:
+            fprintf(
+                stderr,
+                "usage: %s [-v | --version] [script.su]\n",
+                argv[0]
+            );
+            return EXIT_FAILURE;
+        }
+    }
 
     ussr_init();
 
-    if (argc > 1)
-        result = run_file(argv[1]);
+    if (optind < argc)
+        result = run_file(argv[optind]);
     else
         result = run_repl();
 
