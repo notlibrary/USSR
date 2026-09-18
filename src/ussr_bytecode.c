@@ -897,6 +897,35 @@ static int bc_add_oop_site(
     return 0;
 }
 
+static int bc_add_scan_site(
+    ussr_bc_program_t *p,
+    uint32_t instruction,
+    const ussr_command_t *command
+)
+{
+    ussr_bc_scan_site_t *q;
+    size_t capacity;
+
+    if (p == NULL || command == NULL)
+        return -1;
+
+    if (p->scan_site_count == p->scan_site_capacity)
+    {
+        capacity = p->scan_site_capacity == 0 ?
+            16 : p->scan_site_capacity * 2;
+        q = realloc(p->scan_sites, capacity * sizeof(*q));
+        if (q == NULL)
+            return -1;
+        p->scan_sites = q;
+        p->scan_site_capacity = capacity;
+    }
+
+    p->scan_sites[p->scan_site_count].instruction = instruction;
+    p->scan_sites[p->scan_site_count].command = command;
+    ++p->scan_site_count;
+    return 0;
+}
+
 static const ussr_command_t *bc_find_oop_site(
     const ussr_bc_program_t *p,
     uint32_t instruction
@@ -1414,6 +1443,112 @@ while_error:
     }
 
     /*
+     * get: get(a): b means b = a.
+     */
+    if (strcmp(command->name, "get") == 0)
+    {
+        const ussr_expression_t *expression;
+        int source_index;
+        int destination_index;
+
+        if (count != 1 || command->return_name == NULL ||
+            a[0].type != USSR_ARGUMENT_EXPRESSION ||
+            a[0].data.expression == NULL ||
+            a[0].data.expression->type != USSR_EXPR_VARIABLE)
+            return -1;
+
+        expression = a[0].data.expression;
+        source_index = bc_add_string(p, command->return_name);
+        destination_index = bc_add_string(p, expression->data.variable);
+        if (source_index < 0 || destination_index < 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_LOAD_VAR, 0, 0, 0,
+                    (uint32_t)source_index) < 0)
+            return -1;
+        if (bc_emit(p, USSR_BC_STORE_VAR, 0, 0, 0,
+                    (uint32_t)destination_index) < 0)
+            return -1;
+
+        return 0;
+    }
+
+    /* random64(i) returns the next xoshiro256** value. */
+    if (strcmp(command->name, "random64") == 0)
+    {
+        if (count != 1 || command->return_name == NULL)
+            return -1;
+        if (bc_emit(p, USSR_BC_RANDOM64, USSR_BC_RETURN_REG,
+                    0, 0, 0) < 0)
+            return -1;
+        return bc_store_result(p, command->return_name,
+                               USSR_BC_RETURN_REG, 0);
+    }
+
+    /* seed_random64(res): seed */
+    if (strcmp(command->name, "seed_random64") == 0)
+    {
+        if (count != 1 || command->return_name == NULL)
+            return -1;
+        if (bc_compile_argument(p, &a[0], 0) != 0)
+            return -1;
+        if (bc_emit(p, USSR_BC_SEED64, USSR_BC_RETURN_REG,
+                    0, 0, 0) < 0)
+            return -1;
+        return bc_store_result(p, command->return_name,
+                               USSR_BC_RETURN_REG, 0);
+    }
+
+    /* time(now) returns epoch seconds. */
+    if (strcmp(command->name, "time") == 0)
+    {
+        if (count != 1 || command->return_name == NULL)
+            return -1;
+        if (bc_emit(p, USSR_BC_TIME, USSR_BC_RETURN_REG,
+                    0, 0, 0) < 0)
+            return -1;
+        return bc_store_result(p, command->return_name,
+                               USSR_BC_RETURN_REG, 0);
+    }
+
+    /* scan(return): "prompt TYPE;TYPE;..." destination... */
+    if (strcmp(command->name, "scan") == 0)
+    {
+        int instruction;
+
+        if (count < 2 || command->return_name == NULL ||
+            a[0].type != USSR_ARGUMENT_VALUE ||
+            a[0].data.value.type != USSR_STRING ||
+            count - 1 > 255)
+            return -1;
+
+        for (i = 1; i < count; ++i)
+        {
+            if (a[i].type != USSR_ARGUMENT_EXPRESSION ||
+                a[i].data.expression == NULL ||
+                a[i].data.expression->type != USSR_EXPR_VARIABLE)
+                return -1;
+        }
+
+        index = bc_add_string(p, a[0].data.value.data.string);
+        if (index < 0)
+            return -1;
+
+        instruction = bc_emit(
+            p, USSR_BC_SCAN, USSR_BC_RETURN_REG,
+            (uint8_t)(count - 1), 0, (uint32_t)index
+        );
+        if (instruction < 0)
+            return -1;
+
+        if (bc_add_scan_site(p, (uint32_t)instruction, command) != 0)
+            return -1;
+
+        return bc_store_result(p, command->return_name,
+                               USSR_BC_RETURN_REG, 0);
+    }
+
+    /*
      * eval is compiled as a dedicated dynamic-code instruction.
      * The runtime implementation must parse/compile its string into
      * another bytecode program; it must not call ussr_execute_program().
@@ -1796,6 +1931,7 @@ void ussr_bc_program_free(
 
     free(program->functions);
     free(program->oop_sites);
+    free(program->scan_sites);
 
     memset(program, 0, sizeof(*program));
 }
@@ -1813,6 +1949,7 @@ static const char *bc_opcode_name(
         case USSR_BC_LOAD_HASH: return "LOAD_HASH";
         case USSR_BC_STORE_HASH: return "STORE_HASH";
         case USSR_BC_DECODE_UNO: return "DECODE_UNO";
+        case USSR_BC_GET: return "GET";
 
         case USSR_BC_ADD: return "ADD";
         case USSR_BC_SUB: return "SUB";
@@ -1844,6 +1981,10 @@ static const char *bc_opcode_name(
         case USSR_BC_EXTERNAL: return "EXTERNAL";
         case USSR_BC_OOP: return "OOP";
         case USSR_BC_EVAL: return "EVAL";
+        case USSR_BC_RANDOM64: return "RANDOM64";
+        case USSR_BC_SEED64: return "SEED64";
+        case USSR_BC_SCAN: return "SCAN";
+        case USSR_BC_TIME: return "TIME";
 
         case USSR_BC_CALL: return "CALL";
         case USSR_BC_RET: return "RET";

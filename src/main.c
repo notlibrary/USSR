@@ -14,6 +14,7 @@
 #include "ussr.h"
 #include "pp.h"
 #include "ussr_version.h"
+#include "prng64_xrp32.h"
 
 int yyparse(void);
 
@@ -31,7 +32,6 @@ extern int ussr_argument_evaluate(
 #include "ussr_bytecode.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
-#include "prng64_xrp32.h"
 
 /* VM runtime state lives here. Bytecode generation lives in ussr_bytecode.c. */
 
@@ -357,6 +357,317 @@ static const ussr_command_t *vm_find_oop_site(
     return NULL;
 }
 
+static const ussr_command_t *vm_find_scan_site(
+    const ussr_bc_program_t *program,
+    uint32_t instruction)
+{
+    size_t i;
+
+    if (program == NULL)
+        return NULL;
+
+    for (i = 0; i < program->scan_site_count; ++i)
+    {
+        if (program->scan_sites[i].instruction == instruction)
+            return program->scan_sites[i].command;
+    }
+
+    return NULL;
+}
+
+static const char *vm_scan_type_end(const char *p)
+{
+    if (strncmp(p, "STR", 3) == 0)
+        return p + 3;
+    if (strncmp(p, "INT", 3) == 0)
+        return p + 3;
+    if (strncmp(p, "REAL", 4) == 0)
+        return p + 4;
+    if (strncmp(p, "BOOL", 4) == 0)
+        return p + 4;
+    return NULL;
+}
+
+static int vm_scan_type_valid(const char *p, const char **end,
+                              const char **type)
+{
+    const char *q;
+
+    if (p == NULL || end == NULL || type == NULL)
+        return -1;
+
+    q = vm_scan_type_end(p);
+    if (q == NULL)
+        return -1;
+
+    if ((q[0] != '\0') && q[0] != ';' &&
+        q[0] != ' ' && q[0] != '\t')
+        return -1;
+
+    *end = q;
+    *type = p;
+    return 0;
+}
+
+static char *vm_scan_trim_copy(const char *start, const char *end)
+{
+    size_t length;
+    char *copy;
+
+    while (start < end && (*start == ' ' || *start == '\t'))
+        ++start;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+        --end;
+
+    length = (size_t)(end - start);
+    copy = malloc(length + 1);
+    if (copy == NULL)
+        return NULL;
+
+    memcpy(copy, start, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+static int vm_scan_parse_field(
+    const char *type,
+    const char *start,
+    const char *end,
+    ussr_value_t *value)
+{
+    char *text;
+    char *tail;
+
+    if (type == NULL || start == NULL || end == NULL || value == NULL)
+        return -1;
+
+    text = vm_scan_trim_copy(start, end);
+    if (text == NULL)
+        return -1;
+
+    *value = ussr_null();
+
+    if (strncmp(type, "STR", 3) == 0)
+    {
+        *value = ussr_string(text);
+        free(text);
+        return 0;
+    }
+
+    if (strncmp(type, "INT", 3) == 0)
+    {
+        long number = strtol(text, &tail, 10);
+        if (tail == text || *tail != '\0')
+        {
+            free(text);
+            return -1;
+        }
+        *value = ussr_integer(number);
+        free(text);
+        return 0;
+    }
+
+    if (strncmp(type, "REAL", 4) == 0)
+    {
+        double number = strtod(text, &tail);
+        if (tail == text || *tail != '\0')
+        {
+            free(text);
+            return -1;
+        }
+        *value = ussr_real(number);
+        free(text);
+        return 0;
+    }
+
+    if (strncmp(type, "BOOL", 4) == 0)
+    {
+        if (strcmp(text, "true") == 0 || strcmp(text, "1") == 0)
+            *value = ussr_boolean(1);
+        else if (strcmp(text, "false") == 0 || strcmp(text, "0") == 0)
+            *value = ussr_boolean(0);
+        else
+        {
+            free(text);
+            return -1;
+        }
+        free(text);
+        return 0;
+    }
+
+    free(text);
+    return -1;
+}
+
+static int vm_scan_execute(
+    const char *format,
+    const ussr_command_t *command)
+{
+    const char *spec;
+    const char *cursor;
+    const char *end;
+    const char *type;
+    const char *token;
+    char line[4096];
+    const char *field_start;
+    const char *field_end;
+    ussr_value_t values[256];
+    size_t value_count = 0;
+    size_t i;
+    int have_spec = 0;
+
+    if (format == NULL || command == NULL || command->argument_count < 2)
+        return -1;
+
+    for (i = 0; i < 256; ++i)
+        values[i] = ussr_null();
+
+    /* Find the first format token. Everything before it is the prompt. */
+    spec = NULL;
+    for (cursor = format; *cursor != '\0'; ++cursor)
+    {
+        if ((cursor == format || cursor[-1] == ' ' || cursor[-1] == '\t') &&
+            vm_scan_type_valid(cursor, &end, &type) == 0)
+        {
+            spec = cursor;
+            have_spec = 1;
+            break;
+        }
+    }
+
+    if (!have_spec)
+    {
+        fprintf(stderr, "USSR: scan format has no type token\n");
+        return -1;
+    }
+
+    if (spec > format)
+        fwrite(format, 1, (size_t)(spec - format), stdout);
+    fflush(stdout);
+
+    /* Parse the semicolon-delimited format tokens. */
+    cursor = spec;
+    while (*cursor != '\0')
+    {
+        if (value_count >= 256 ||
+            vm_scan_type_valid(cursor, &end, &type) != 0)
+            goto fail;
+
+        ++value_count;
+        cursor = end;
+        while (*cursor == ' ' || *cursor == '\t')
+            ++cursor;
+
+        if (*cursor == '\0')
+            break;
+        if (*cursor != ';')
+            goto fail;
+        ++cursor;
+        while (*cursor == ' ' || *cursor == '\t')
+            ++cursor;
+    }
+
+    if (value_count != command->argument_count - 1)
+    {
+        fprintf(stderr,
+                "USSR: scan format expects %zu values, got %zu destinations\n",
+                value_count, command->argument_count - 1);
+        goto fail;
+    }
+
+    if (fgets(line, sizeof(line), stdin) == NULL)
+        goto fail;
+
+    /* Remove the physical line ending. */
+    line[strcspn(line, "\r\n")] = '\0';
+
+    /*
+     * Accept either semicolon-delimited fields or ordinary whitespace
+     * fields.  The former mirrors the format notation; the latter makes
+     * a line such as "alice 42 bob 7" natural to enter interactively.
+     */
+    field_start = line;
+    {
+        int semicolon_input = strchr(line, ';') != NULL;
+
+        for (i = 0; i < value_count; ++i)
+        {
+            const char *next;
+            size_t j;
+
+            token = spec;
+            for (j = 0; j < i; ++j)
+            {
+                token = strchr(token, ';');
+                if (token == NULL)
+                    goto fail;
+                ++token;
+                while (*token == ' ' || *token == '\t')
+                    ++token;
+            }
+
+            if (semicolon_input)
+            {
+                next = strchr(field_start, ';');
+                field_end = next != NULL ? next :
+                    field_start + strlen(field_start);
+            }
+            else
+            {
+                while (*field_start == ' ' || *field_start == '\t')
+                    ++field_start;
+                field_end = field_start;
+                while (*field_end != '\0' &&
+                       *field_end != ' ' && *field_end != '\t')
+                    ++field_end;
+                next = *field_end != '\0' ? field_end : NULL;
+            }
+
+            if (vm_scan_type_valid(token, &end, &type) != 0 ||
+                vm_scan_parse_field(type, field_start, field_end, &values[i]) != 0)
+            {
+                fprintf(stderr, "USSR: scan input does not match format\n");
+                goto fail;
+            }
+
+            if (next == NULL)
+            {
+                if (i + 1 != value_count)
+                    goto fail;
+                field_start = field_end;
+                break;
+            }
+
+            field_start = next + 1;
+        }
+    }
+
+    for (i = 0; i < value_count; ++i)
+    {
+        const ussr_argument_t *destination = &command->arguments[i + 1];
+        const char *name;
+
+        if (destination->type != USSR_ARGUMENT_EXPRESSION ||
+            destination->data.expression == NULL ||
+            destination->data.expression->type != USSR_EXPR_VARIABLE)
+            goto fail;
+
+        name = destination->data.expression->data.variable;
+        if (ussr_set_variable(name, &values[i]) != 0)
+            goto fail;
+    }
+
+    for (i = 0; i < value_count; ++i)
+        ussr_value_free(&values[i]);
+
+    return 0;
+
+fail:
+    for (i = 0; i < value_count && i < 256; ++i)
+        ussr_value_free(&values[i]);
+    return -1;
+}
+
 static int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program)
@@ -400,6 +711,18 @@ static int vm_execute(
             case USSR_BC_DECODE_UNO:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
                 value=ussr_null(); if (ussr_uno_decode(program->strings[ins.immediate],&value)!=0) { result=-1; goto done; } ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=value; break;
+            case USSR_BC_GET:
+                if (ins.immediate >= program->string_count ||
+                    ins.a >= USSR_VM_REGISTER_COUNT)
+                { result=-1; goto done; }
+                {
+                    const ussr_value_t *source =
+                        ussr_get_variable(program->strings[ins.immediate]);
+                    if (source == NULL) { result=-1; goto done; }
+                    ussr_value_free(&vm->registers[ins.a]);
+                    vm->registers[ins.a] = ussr_value_copy(source);
+                }
+                break;
             case USSR_BC_NEG:
                 if (ins.a>=USSR_VM_REGISTER_COUNT || ins.b>=USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
                 if (!vm_numeric(&vm->registers[ins.b])) { result=-1; goto done; }
@@ -413,6 +736,43 @@ static int vm_execute(
                 if (ins.immediate >= program->code_count || (ins.opcode != USSR_BC_JMP && ins.a >= USSR_VM_REGISTER_COUNT)) { result=-1; goto done; }
                 if (ins.opcode==USSR_BC_JMP || (ins.opcode==USSR_BC_JMP_TRUE && vm_truthy(&vm->registers[ins.a])) || (ins.opcode==USSR_BC_JMP_FALSE && !vm_truthy(&vm->registers[ins.a]))) vm->ip=ins.immediate;
                 break;
+            case USSR_BC_RANDOM64:
+                if (ins.a >= USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
+                value = ussr_integer((long)prng64_xrp32());
+                ussr_value_free(&vm->registers[ins.a]);
+                vm->registers[ins.a] = value;
+                break;
+            case USSR_BC_SEED64:
+                if (ins.a >= USSR_VM_REGISTER_COUNT ||
+                    vm->registers[0].type != USSR_INTEGER)
+                { fprintf(stderr, "USSR VM: seed_random64 requires an integer seed\n"); result=-1; goto done; }
+                seed_xrp32((uint64_t)vm->registers[0].data.integer);
+                value = ussr_value_copy(&vm->registers[0]);
+                ussr_value_free(&vm->registers[ins.a]);
+                vm->registers[ins.a] = value;
+                break;
+            case USSR_BC_TIME:
+                if (ins.a >= USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
+                value = ussr_integer((long)time(NULL));
+                ussr_value_free(&vm->registers[ins.a]);
+                vm->registers[ins.a] = value;
+                break;
+            case USSR_BC_SCAN:
+            {
+                const ussr_command_t *scan_command =
+                    vm_find_scan_site(program, vm->ip - 1);
+                if (ins.immediate >= program->string_count ||
+                    ins.a >= USSR_VM_REGISTER_COUNT ||
+                    scan_command == NULL ||
+                    ins.b != scan_command->argument_count - 1 ||
+                    vm_scan_execute(program->strings[ins.immediate],
+                                    scan_command) != 0)
+                { result=-1; goto done; }
+                value = ussr_boolean(1);
+                ussr_value_free(&vm->registers[ins.a]);
+                vm->registers[ins.a] = value;
+                break;
+            }
             case USSR_BC_SET:
                 if (ins.a>=USSR_VM_REGISTER_COUNT || ins.immediate>=program->string_count) { result=-1; goto done; }
                 if (ussr_set_variable(program->strings[ins.immediate],&vm->registers[ins.a])!=0) { result=-1; goto done; } break;
@@ -762,7 +1122,7 @@ static int run_repl(void)
     int result;
 
     printf("USSR Unified Shell Script REPL\n");
-    printf("USSR v%d.%d\n",USSR_VERSION_MAJOR,USSR_VERSION_MINOR);
+    printf("USSR v%d.%d\n",USSR_VERSION_MAJOR, USSR_VERSION_MINOR);
     printf("Enter a command list or press Ctrl-D to exit.\n\n");
 
     if (ussr_pp_init(&pp) != 0)
@@ -954,4 +1314,3 @@ int main(int argc, char **argv)
     ussr_cleanup();
     return result;
 }
-

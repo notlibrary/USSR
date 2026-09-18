@@ -11,13 +11,15 @@
 #include "ussr.h"
 
 int yylex(void);
+
 extern int yylineno;
-extern FILE *yyin;
 
 void yyerror(const char *message)
 {
     fprintf(stderr, "USSR: %s at line %d\n", message, yylineno);
 }
+
+extern FILE *yyin;
 
 ussr_command_list_t *ussr_parsed_program = NULL;
 
@@ -35,11 +37,13 @@ int ussr_command_list_append(
     ussr_command_t *command
 );
 
+
 ussr_expression_t *ussr_make_binary_expression(
     ussr_expression_t *left,
     ussr_operator_t operator,
     ussr_expression_t *right
 );
+
 %}
 
 %union
@@ -65,6 +69,7 @@ ussr_expression_t *ussr_make_binary_expression(
 
 %token <string> IDENTIFIER
 %token <string> STRING
+%token <string> UNO_LITERAL
 %token <integer> INTEGER
 %token <real> REAL
 %token <boolean> BOOLEAN
@@ -85,12 +90,8 @@ ussr_expression_t *ussr_make_binary_expression(
 %token LESS_EQUAL
 %token EQUAL
 %token NOT_EQUAL
-
-%token PLUS
-%token MINUS
-%token MULTIPLY
-%token DIVIDE
-%token MODULO
+%token QUESTION
+%token EXCLAMATION
 %token LOGICAL_AND
 %token LOGICAL_OR
 %token SHIFT_LEFT
@@ -99,22 +100,38 @@ ussr_expression_t *ussr_make_binary_expression(
 %token BITWISE_AND
 %token BITWISE_OR
 
+%token PLUS
+%token MINUS
+%token MULTIPLY
+%token DIVIDE
+%token MODULO
+
 %token NEWLINE
-%token QUESTION
-%token EXCLAMATION
+%token COMMENT
 
-%token <string> UNO_LITERAL
-
-%type <command_list> program command_lines
+%type <command_list> program
+%type <command_list> command_lines
 %type <command> command
-%type <arguments> argument_list
-%type <argument> argument argument_base block_argument
 %type <command> command_line
+%type <arguments> argument_list
+%type <argument> argument
+%type <argument> argument_base
+%type <argument> block_argument
+%type <expression> expression
+%type <expression> comparison_expression
+%type <expression> logical_or_expression
+%type <expression> logical_and_expression
+%type <expression> bitwise_or_expression
+%type <expression> bitwise_xor_expression
+%type <expression> bitwise_and_expression
+%type <expression> shift_expression
+%type <expression> additive_expression
+%type <expression> multiplicative_expression
+%type <expression> unary_expression
+%type <expression> primary_expression
 %type <value> literal
-%type <expression> expression logical_or_expression logical_and_expression
-%type <expression> bitwise_or_expression bitwise_xor_expression bitwise_and_expression
-%type <expression> comparison_expression shift_expression additive_expression
-%type <expression> multiplicative_expression unary_expression primary_expression
+
+%start program
 
 %%
 
@@ -124,16 +141,6 @@ program
           ussr_parsed_program = $1;
           $$ = $1;
       }
-    | LBRACKET command_lines RBRACKET trailing_newlines
-      {
-          ussr_parsed_program = $2;
-          $$ = $2;
-      }
-    ;
-
-trailing_newlines
-    : %empty
-    | trailing_newlines NEWLINE
     ;
 
 command_lines
@@ -164,11 +171,11 @@ command_line
       {
           $$ = NULL;
       }
-    | command NEWLINE
+    | COMMENT NEWLINE
       {
-          $$ = $1;
+          $$ = NULL;
       }
-    | command
+    | command NEWLINE
       {
           $$ = $1;
       }
@@ -189,6 +196,55 @@ command
               free($1);
               free($3);
               free($6.items);
+              YYABORT;
+          }
+      }
+    | IDENTIFIER LPAREN IDENTIFIER RPAREN
+      {
+          ussr_argument_t *items;
+
+          /*
+           * `command(out)` is source-level shorthand for
+           * `command(out): ""`.  Keeping one empty-string
+           * argument preserves the existing command ABI.
+           */
+          items = malloc(sizeof(*items));
+
+          if (items == NULL)
+          {
+              free($1);
+              free($3);
+              YYABORT;
+          }
+
+          items[0].type = USSR_ARGUMENT_VALUE;
+          items[0].assignment = 0;
+          items[0].data.value.type = USSR_STRING;
+          items[0].data.value.data.string = malloc(1);
+
+          if (items[0].data.value.data.string == NULL)
+          {
+              free(items);
+              free($1);
+              free($3);
+              YYABORT;
+          }
+
+          items[0].data.value.data.string[0] = '\0';
+
+          $$ = ussr_command_create(
+              $1,
+              $3,
+              items,
+              1
+          );
+
+          if ($$ == NULL)
+          {
+              free(items[0].data.value.data.string);
+              free(items);
+              free($1);
+              free($3);
               YYABORT;
           }
       }
@@ -266,6 +322,12 @@ argument_base
           $$.assignment = 0;
           $$.data.value = $1;
       }
+    | UNO_LITERAL
+      {
+          $$.type = USSR_ARGUMENT_UNO_LITERAL;
+          $$.assignment = 0;
+          $$.data.uno_text = $1;
+      }
     | IDENTIFIER
       {
           ussr_expression_t *expression;
@@ -293,18 +355,6 @@ argument_base
     | block_argument
       {
           $$ = $1;
-      }
-    | UNO_LITERAL
-      {
-          /*
-           * Deferred, like block_argument: the struct type(s) this
-           * text names may not be registered until execution time
-           * (see ussr.h's ussr_argument_t.data.uno_text), so we can't
-           * resolve it to a real ussr_value_t here at parse time.
-           */
-          $$.type = USSR_ARGUMENT_UNO_LITERAL;
-          $$.assignment = 0;
-          $$.data.uno_text = $1;
       }
     ;
 
@@ -345,217 +395,79 @@ literal
     ;
 
 expression
-    : LBRACE logical_or_expression RBRACE
+    : LBRACE comparison_expression RBRACE
       {
           $$ = $2;
       }
     ;
 
+comparison_expression
+    : logical_or_expression
+      { $$ = $1; }
+    ;
+
 logical_or_expression
     : logical_and_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | logical_or_expression LOGICAL_OR logical_and_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_LOGICAL_OR, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_LOGICAL_OR, $3); }
     ;
 
 logical_and_expression
     : bitwise_or_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | logical_and_expression LOGICAL_AND bitwise_or_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_LOGICAL_AND, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_LOGICAL_AND, $3); }
     ;
 
 bitwise_or_expression
     : bitwise_xor_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | bitwise_or_expression BITWISE_OR bitwise_xor_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_BITWISE_OR, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_BITWISE_OR, $3); }
     ;
 
 bitwise_xor_expression
     : bitwise_and_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | bitwise_xor_expression BITWISE_XOR bitwise_and_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_BITWISE_XOR, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_BITWISE_XOR, $3); }
     ;
 
 bitwise_and_expression
-    : comparison_expression
-      {
-          $$ = $1;
-      }
-    | bitwise_and_expression BITWISE_AND comparison_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_BITWISE_AND, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
-    ;
-
-comparison_expression
     : shift_expression
-      {
-          $$ = $1;
-      }
-    | shift_expression GREATER shift_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_GT, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
-    | shift_expression LESS shift_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_LT, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
-    | shift_expression GREATER_EQUAL shift_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_GE, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
-    | shift_expression LESS_EQUAL shift_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_LE, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
-    | shift_expression EQUAL shift_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_EQ, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
-    | shift_expression NOT_EQUAL shift_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_NE, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = $1; }
+    | bitwise_and_expression BITWISE_AND shift_expression
+      { $$ = ussr_make_binary_expression($1, USSR_OP_BITWISE_AND, $3); }
     ;
 
 shift_expression
     : additive_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | shift_expression SHIFT_LEFT additive_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_SHIFT_LEFT, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_SHIFT_LEFT, $3); }
     | shift_expression SHIFT_RIGHT additive_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_SHIFT_RIGHT, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_SHIFT_RIGHT, $3); }
     ;
 
 additive_expression
     : multiplicative_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | additive_expression PLUS multiplicative_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_ADD, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_ADD, $3); }
     | additive_expression MINUS multiplicative_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_SUB, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_SUB, $3); }
     ;
 
 multiplicative_expression
     : unary_expression
-      {
-          $$ = $1;
-      }
+      { $$ = $1; }
     | multiplicative_expression MULTIPLY unary_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_MUL, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_MUL, $3); }
     | multiplicative_expression DIVIDE unary_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_DIV, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_DIV, $3); }
     | multiplicative_expression MODULO unary_expression
-      {
-          $$ = ussr_make_binary_expression(
-              $1, USSR_OP_MOD, $3
-          );
-          if ($$ == NULL)
-              YYABORT;
-      }
+      { $$ = ussr_make_binary_expression($1, USSR_OP_MOD, $3); }
     ;
 
 unary_expression
@@ -566,8 +478,10 @@ unary_expression
     | MINUS unary_expression
       {
           $$ = malloc(sizeof(*$$));
+
           if ($$ == NULL)
               YYABORT;
+
           $$->type = USSR_EXPR_UNARY;
           $$->data.unary.operator = USSR_OP_SUB;
           $$->data.unary.operand = $2;
@@ -578,23 +492,27 @@ primary_expression
     : literal
       {
           $$ = malloc(sizeof(*$$));
+
           if ($$ == NULL)
               YYABORT;
+
           $$->type = USSR_EXPR_VALUE;
           $$->data.value = $1;
       }
     | IDENTIFIER
       {
           $$ = malloc(sizeof(*$$));
+
           if ($$ == NULL)
           {
               free($1);
               YYABORT;
           }
+
           $$->type = USSR_EXPR_VARIABLE;
           $$->data.variable = $1;
       }
-    | LPAREN logical_or_expression RPAREN
+    | LPAREN comparison_expression RPAREN
       {
           $$ = $2;
       }

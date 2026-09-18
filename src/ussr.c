@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
+
+#include "prng64_xrp32.h"
 #include <math.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -2202,6 +2205,261 @@ ussr_execute_eval(
 }
 
 
+static const char *ussr_scan_type_end(const char *p)
+{
+    if (strncmp(p, "STR", 3) == 0)
+        return p + 3;
+    if (strncmp(p, "INT", 3) == 0)
+        return p + 3;
+    if (strncmp(p, "REAL", 4) == 0)
+        return p + 4;
+    if (strncmp(p, "BOOL", 4) == 0)
+        return p + 4;
+    return NULL;
+}
+
+static int ussr_scan_parse_field(
+    const char *type,
+    const char *start,
+    const char *end,
+    ussr_value_t *value)
+{
+    size_t length;
+    char *text;
+    char *tail;
+
+    while (start < end && (*start == ' ' || *start == '\t'))
+        ++start;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+        --end;
+
+    length = (size_t)(end - start);
+    text = malloc(length + 1);
+    if (text == NULL)
+        return -1;
+    memcpy(text, start, length);
+    text[length] = '\0';
+
+    *value = ussr_null();
+
+    if (strncmp(type, "STR", 3) == 0)
+    {
+        *value = ussr_string(text);
+        free(text);
+        return 0;
+    }
+
+    if (strncmp(type, "INT", 3) == 0)
+    {
+        long n = strtol(text, &tail, 10);
+        if (tail == text || *tail != '\0')
+        {
+            free(text);
+            return -1;
+        }
+        *value = ussr_integer(n);
+        free(text);
+        return 0;
+    }
+
+    if (strncmp(type, "REAL", 4) == 0)
+    {
+        double n = strtod(text, &tail);
+        if (tail == text || *tail != '\0')
+        {
+            free(text);
+            return -1;
+        }
+        *value = ussr_real(n);
+        free(text);
+        return 0;
+    }
+
+    if (strncmp(type, "BOOL", 4) == 0)
+    {
+        if (strcmp(text, "true") == 0 || strcmp(text, "1") == 0)
+            *value = ussr_boolean(1);
+        else if (strcmp(text, "false") == 0 || strcmp(text, "0") == 0)
+            *value = ussr_boolean(0);
+        else
+        {
+            free(text);
+            return -1;
+        }
+        free(text);
+        return 0;
+    }
+
+    free(text);
+    return -1;
+}
+
+static int ussr_execute_scan(
+    const char *format,
+    ussr_command_t *command)
+{
+    const char *spec = NULL;
+    const char *p;
+    const char *q;
+    const char *type;
+    const char *field;
+    const char *next;
+    char line[4096];
+    ussr_value_t values[256];
+    size_t count = 0;
+    size_t i;
+
+    if (format == NULL || command == NULL || command->argument_count < 2)
+        return -1;
+
+    for (i = 0; i < 256; ++i)
+        values[i] = ussr_null();
+
+    for (p = format; *p != '\0'; ++p)
+    {
+		if ((p == format || p[-1] == ' ' || p[-1] == '\t' || p[-1] == ';') &&
+            (strncmp(p, "STR", 3) == 0 ||
+             strncmp(p, "INT", 3) == 0 ||
+             strncmp(p, "REAL", 4) == 0 ||
+             strncmp(p, "BOOL", 4) == 0))
+        {
+            q = ussr_scan_type_end(p);
+            if (q != NULL &&
+                (*q == '\0' || *q == ';' || *q == ' ' || *q == '\t'))
+            {
+                spec = p;
+                break;
+            }
+        }
+    }
+
+    if (spec == NULL)
+    {
+        fprintf(stderr, "USSR: scan format has no type token\n");
+        return -1;
+    }
+
+	if (spec > format)
+	{
+		const char *prompt_end = spec;
+
+		if (spec[-1] == ';')
+			--prompt_end;
+
+		fwrite(format, 1, (size_t)(prompt_end - format), stdout);
+	}
+    fflush(stdout);
+
+    for (p = spec; *p != '\0'; )
+    {
+        q = ussr_scan_type_end(p);
+        if (q == NULL || count >= 256 ||
+            (*q != '\0' && *q != ';' && *q != ' ' && *q != '\t'))
+            goto fail;
+
+        ++count;
+        p = q;
+        while (*p == ' ' || *p == '\t')
+            ++p;
+        if (*p == '\0')
+            break;
+        if (*p != ';')
+            goto fail;
+        ++p;
+        while (*p == ' ' || *p == '\t')
+            ++p;
+    }
+
+    if (count != command->argument_count - 1)
+    {
+        fprintf(stderr, "USSR: scan format/destination count mismatch\n");
+        goto fail;
+    }
+
+    if (fgets(line, sizeof(line), stdin) == NULL)
+        goto fail;
+    line[strcspn(line, "\r\n")] = '\0';
+
+    field = line;
+    {
+        int semicolon_input = strchr(line, ';') != NULL;
+
+        for (i = 0; i < count; ++i)
+        {
+            const char *token = spec;
+            size_t j;
+
+            for (j = 0; j < i; ++j)
+            {
+                token = strchr(token, ';');
+                if (token == NULL)
+                    goto fail;
+                ++token;
+                while (*token == ' ' || *token == '\t')
+                    ++token;
+            }
+
+            q = ussr_scan_type_end(token);
+            if (q == NULL)
+                goto fail;
+
+            if (semicolon_input)
+            {
+                next = strchr(field, ';');
+                if (next == NULL)
+                    next = field + strlen(field);
+            }
+            else
+            {
+                while (*field == ' ' || *field == '\t')
+                    ++field;
+                next = field;
+                while (*next != '\0' && *next != ' ' && *next != '\t')
+                    ++next;
+            }
+
+            if (ussr_scan_parse_field(token, field, next, &values[i]) != 0)
+            {
+                fprintf(stderr, "USSR: scan input does not match format\n");
+                goto fail;
+            }
+
+            if (*next == '\0')
+            {
+                if (i + 1 != count)
+                    goto fail;
+                field = next;
+            }
+            else if (semicolon_input)
+                field = next + 1;
+            else
+                field = next + 1;
+        }
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        ussr_argument_t *destination = &command->arguments[i + 1];
+        if (destination->type != USSR_ARGUMENT_EXPRESSION ||
+            destination->data.expression == NULL ||
+            destination->data.expression->type != USSR_EXPR_VARIABLE)
+            goto fail;
+        if (ussr_set_variable(
+                destination->data.expression->data.variable,
+                &values[i]) != 0)
+            goto fail;
+    }
+
+    for (i = 0; i < count; ++i)
+        ussr_value_free(&values[i]);
+    return 0;
+
+fail:
+    for (i = 0; i < count && i < 256; ++i)
+        ussr_value_free(&values[i]);
+    return -1;
+}
+
 int ussr_execute_command(
     const char *command,
     const char *return_name,
@@ -2278,6 +2536,111 @@ int ussr_execute_command(
         ussr_value_free(&result);
 
         return status;
+    }
+
+    if (strcmp(command, "get") == 0)
+    {
+        const ussr_value_t *source;
+
+        if (return_name == NULL || argument_count != 1 ||
+            arguments[0].type != USSR_ARGUMENT_EXPRESSION ||
+            arguments[0].data.expression == NULL ||
+            arguments[0].data.expression->type != USSR_EXPR_VARIABLE)
+        {
+            fprintf(stderr, "USSR: get expects one destination variable\n");
+            return -1;
+        }
+
+        source = ussr_get_variable(return_name);
+        if (source == NULL)
+        {
+            fprintf(stderr, "USSR: get source variable '%s' is undefined\n",
+                    return_name);
+            return -1;
+        }
+
+        if (ussr_set_variable(
+                arguments[0].data.expression->data.variable,
+                source) != 0)
+            return -1;
+
+        return 0;
+    }
+
+    if (strcmp(command, "random64") == 0)
+    {
+        if (return_name == NULL || argument_count != 1)
+            return -1;
+        result = ussr_integer((long)prng64_xrp32());
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "seed_random64") == 0)
+    {
+        if (return_name == NULL || argument_count != 1)
+            return -1;
+        if (ussr_argument_evaluate(&arguments[0], &result) != 0)
+            return -1;
+        if (result.type != USSR_INTEGER)
+        {
+            fprintf(stderr, "USSR: seed_random64 requires an integer seed\n");
+            ussr_value_free(&result);
+            return -1;
+        }
+        seed_xrp32((uint64_t)result.data.integer);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "time") == 0)
+    {
+        if (return_name == NULL || argument_count != 1)
+            return -1;
+        result = ussr_integer((long)time(NULL));
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "scan") == 0)
+    {
+        if (return_name == NULL || argument_count < 2 ||
+            arguments[0].type != USSR_ARGUMENT_VALUE ||
+            arguments[0].data.value.type != USSR_STRING)
+            return -1;
+        if (ussr_execute_scan(
+                arguments[0].data.value.data.string,
+                (ussr_command_t *)(&(ussr_command_t){
+                    .name = command,
+                    .return_name = (char *)return_name,
+                    .arguments = arguments,
+                    .argument_count = argument_count,
+                    .next = NULL
+                })) != 0)
+            return -1;
+        result = ussr_boolean(1);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
     }
 
     if (return_name == NULL)

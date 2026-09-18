@@ -42,6 +42,7 @@ typedef enum
     USSR_BC_LOAD_HASH  = 0x04,
     USSR_BC_STORE_HASH = 0x05,
     USSR_BC_DECODE_UNO = 0x06,
+    USSR_BC_GET        = 0x07,
 
     USSR_BC_ADD  = 0x10,
     USSR_BC_SUB  = 0x11,
@@ -75,6 +76,10 @@ typedef enum
     USSR_BC_EXTERNAL = 0x43,
     USSR_BC_OOP      = 0x44,
     USSR_BC_EVAL     = 0x45,
+    USSR_BC_RANDOM64 = 0x46,
+    USSR_BC_SEED64   = 0x47,
+    USSR_BC_SCAN     = 0x48,
+    USSR_BC_TIME     = 0x49,
 
     USSR_BC_CALL   = 0x50,
     USSR_BC_RET    = 0x51,
@@ -99,6 +104,12 @@ typedef struct
     uint32_t instruction;
     const ussr_command_t *command;
 } ussr_bc_oop_site_t;
+
+typedef struct
+{
+    uint32_t instruction;
+    const ussr_command_t *command;
+} ussr_bc_scan_site_t;
 
 typedef struct
 {
@@ -127,6 +138,11 @@ typedef struct
     ussr_bc_oop_site_t *oop_sites;
     size_t oop_site_count;
     size_t oop_site_capacity;
+
+    /* Source command metadata for scan calls. */
+    ussr_bc_scan_site_t *scan_sites;
+    size_t scan_site_count;
+    size_t scan_site_capacity;
 } ussr_bc_program_t;
 
 /*
