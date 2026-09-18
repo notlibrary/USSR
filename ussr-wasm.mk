@@ -13,11 +13,16 @@ CFLAGS = \
     --target=wasm32-wasip1 \
     -O2 \
     -Wall \
-    -Wextra
+    -Wextra \
+    -D_WASI_EMULATED_SIGNAL \
+    -D_WASI_EMULATED_MMAN \
+    -mllvm -wasm-enable-sjlj
 
 LDFLAGS = \
     --sysroot=$(WASI_SDK_PATH)/share/wasi-sysroot \
-    --target=wasm32-wasip1
+    --target=wasm32-wasip1 \
+    -lwasi-emulated-signal \
+    -lwasi-emulated-mman
 
 OBJECTS = \
     src/parser.tab.o \

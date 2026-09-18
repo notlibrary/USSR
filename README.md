@@ -42,3 +42,5 @@ The actual list of epithets are:
 - Virtually executed
 - Portable
 - Multiplatform
+
+P.S. СССР Средство Создания Совершенных Разработок

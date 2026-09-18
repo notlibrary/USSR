@@ -1,0 +1,15 @@
+#4 - Self-building USSR quine
+set(a): "set(a): "
+set(b): "concat(a): a "
+set(c): "print(out): a"
+concat(a): a "\""
+concat(a): a a
+concat(a): a "\""
+concat(a): a "\n"
+concat(a): a b
+concat(a): a "\""
+concat(a): a a
+concat(a): a "\""
+concat(a): a "\n"
+concat(a): a c
+print(out): a

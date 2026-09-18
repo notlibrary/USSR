@@ -760,7 +760,7 @@ static int run_repl(void)
     int result;
 
     printf("USSR Unified Shell Script REPL\n");
-    printf("USSR v0.1\n");
+    printf("USSR v%d.%d\n",USSR_VERSION_MAJOR,USSR_VERSION_MINOR);
     printf("Enter a command list or press Ctrl-D to exit.\n\n");
 
     if (ussr_pp_init(&pp) != 0)
