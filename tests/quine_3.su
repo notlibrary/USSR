@@ -1,0 +1,3 @@
+$define A() {"$define"}
+$define B() {" A() {}"}
+eval A() + B()
