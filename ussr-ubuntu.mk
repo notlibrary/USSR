@@ -17,7 +17,8 @@ SRCS    = $(SRC_DIR)/parser.tab.c \
           $(SRC_DIR)/uno.c \
           $(SRC_DIR)/ussr_oop_builtins.c \
           $(SRC_DIR)/ussr_bytecode.c \
-          $(SRC_DIR)/process_posix.c
+          $(SRC_DIR)/process_posix.c \
+		  $(SRC_DIR)/prng64_xrp32.c
 
 all: $(TARGET)
 

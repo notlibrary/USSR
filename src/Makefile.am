@@ -9,8 +9,8 @@ ussr_SOURCES = \
     main.c \
     pp.c \
     uno.c \
-    ussr_oop_builtins.c
-
+    ussr_oop_builtins.c \
+    prng64_xrp32.c
 AM_CPPFLAGS = -I$(srcdir)
 
 EXTRA_DIST = \
@@ -20,4 +20,5 @@ EXTRA_DIST = \
     ussr_oop_builtins.h \
     pp.h \
     bestline.h \
-    uthash.h
+    uthash.h \
+	prng64_xrp32.h

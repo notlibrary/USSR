@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include "win/worstline.h"
@@ -30,6 +31,7 @@ extern int ussr_argument_evaluate(
 #include "ussr_bytecode.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
+#include "prng64_xrp32.h"
 
 /* VM runtime state lives here. Bytecode generation lives in ussr_bytecode.c. */
 
@@ -916,7 +918,10 @@ int main(int argc, char **argv)
 
     int result;
     int opt;
-
+	
+	srand(time(NULL));
+	seed_xrp32(rand());
+	
     while ((opt = getopt_long(argc, argv, "v", long_options, NULL)) != -1)
     {
         switch (opt)

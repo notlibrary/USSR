@@ -47,6 +47,7 @@ OBJS = \
     $(SRC)\ussr_bytecode.obj \
     $(SRC)\parser.tab.obj \
     $(SRC)\lexer.obj \
+	$(SRC)\prng64_xrp32.obj \
     $(WIN)\process_win32.obj \
     $(WIN)\worstline.obj \
     $(WIN)\getopt.obj \
@@ -102,6 +103,9 @@ $(SRC)\parser.tab.obj: $(SRC)\parser.tab.c $(SRC)\parser.tab.h
 
 $(SRC)\lexer.obj: $(SRC)\lexer.c $(SRC)\parser.tab.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\lexer.obj $(SRC)\lexer.c
+
+$(SRC)\prng64_xrp32.obj: $(SRC)\prng64_xrp32.c $(SRC)\prng64_xrp32.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\prng64_xrp32.obj $(SRC)\prng64_xrp32.c
 
 $(WIN)\process_win32.obj: $(WIN)\process_win32.c $(SRC)\process.h
 	$(CC) $(CFLAGS) /c /Fo:$(WIN)\process_win32.obj $(WIN)\process_win32.c

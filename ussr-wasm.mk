@@ -33,7 +33,8 @@ OBJECTS = \
     src/main.o \
     src/pp.o \
     src/uno.o \
-    src/ussr_oop_builtins.o
+    src/ussr_oop_builtins \
+	src/prng64_xrp32.o
 
 .PHONY: all clean dist
 
@@ -70,6 +71,9 @@ src/uno.o: src/uno.c src/uno.h src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/ussr_oop_builtins.o: src/ussr_oop_builtins.c src/ussr_oop_builtins.h src/ussr.h src/uno.h
+	$(CC) $(CFLAGS) -c $< -o $@
+	
+src/prng64_xrp32.o: src/prng64_xrp32.c src/prng64_xrp32.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ussr.wasm: $(OBJECTS)
