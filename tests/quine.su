@@ -1,9 +1,9 @@
 #Compact USSR quine
-set(c): ""
-set(a): ""
-set(n): ""
-concat(c): "" ":"
-concat(a): "" "\""
+set(c): " "
+set(a): " "
+set(n): " "
+concat(c): " " ":"
+concat(a): " " "\""
 concat(n): "" "\n"
 set(q): "concat(o): \"set(c): \" a a n \"set(a): \" a a n \"set(n): \" a a n \"concat(c): \" a a \" \":\"\" n \"concat(a): \" a a \" \"\\\"\"\" n \"concat(n): \" a a \" \"\\\\n\"\" n \"set(q): \" a q a n \"eval(ret): q\" n \"print(out): o\""
 eval(ret): q

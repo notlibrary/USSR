@@ -3,6 +3,15 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <errno.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define ussr_chdir _chdir
+#else
+#include <unistd.h>
+#define ussr_chdir chdir
+#endif
 
 #ifdef _WIN32
 #include "win/worstline.h"
@@ -47,6 +56,10 @@ typedef struct
     int running;
     int exit_code;
     unsigned long steps;
+    int chain_active;
+    char *chain_buffer;
+    size_t chain_length;
+    int entry_function;
 } ussr_vm_t;
 
 typedef struct
@@ -188,6 +201,9 @@ static void vm_init(ussr_vm_t *vm)
     memset(vm, 0, sizeof(*vm));
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         vm->registers[i] = ussr_null();
+
+    /* No script entry function unless init(...) is found. */
+    vm->entry_function = -1;
 }
 
 static void vm_cleanup(ussr_vm_t *vm)
@@ -195,6 +211,11 @@ static void vm_cleanup(ussr_vm_t *vm)
     size_t i;
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         ussr_value_free(&vm->registers[i]);
+    free(vm->chain_buffer);
+    vm->chain_buffer = NULL;
+    vm->chain_length = 0;
+    vm->chain_active = 0;
+    vm->entry_function = -1;
 }
 
 static void vm_frame_free(ussr_vm_frame_t *frame)
@@ -668,6 +689,50 @@ fail:
     return -1;
 }
 
+static int vm_chain_set_buffer(ussr_vm_t *vm, char *text)
+{
+    size_t length;
+
+    if (vm == NULL)
+    {
+        free(text);
+        return -1;
+    }
+    if (text == NULL)
+    {
+        text = malloc(1);
+        if (text != NULL) text[0] = '\0';
+    }
+    if (text == NULL) return -1;
+    length = strlen(text);
+    free(vm->chain_buffer);
+    vm->chain_buffer = text;
+    vm->chain_length = length;
+    return 0;
+}
+
+static int vm_chain_write_file(const ussr_vm_t *vm, const char *filename)
+{
+    FILE *fp;
+    size_t written;
+    if (vm == NULL || filename == NULL || vm->chain_buffer == NULL) return -1;
+    fp = fopen(filename, "wb");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "USSR: cannot open chain output '%s': %s\n", filename, strerror(errno));
+        return -1;
+    }
+    written = fwrite(vm->chain_buffer, 1, vm->chain_length, fp);
+    if (written != vm->chain_length)
+    {
+        fclose(fp);
+        return -1;
+    }
+    if (fclose(fp) != 0)
+        return -1;
+    return 0;
+}
+
 static int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program)
@@ -675,6 +740,35 @@ static int vm_execute(
     ussr_vm_frame_t *frames = NULL;
     size_t frame_count = 0, frame_capacity = 0;
     int result = 0;
+
+    if (vm->entry_function >= 0)
+    {
+        ussr_bc_instruction_t entry_call;
+
+        if ((size_t)vm->entry_function >= program->function_count ||
+            program->functions[vm->entry_function].parameter_count != 2 ||
+            program->code_count == 0)
+        {
+            result = -1;
+            goto done;
+        }
+
+        memset(&entry_call, 0, sizeof(entry_call));
+        entry_call.opcode = USSR_BC_CALL;
+        entry_call.a = 0;
+        entry_call.b = 2;
+        entry_call.c = USSR_VM_RETURN_REG;
+        entry_call.immediate = (uint32_t)vm->entry_function;
+
+        /* Return from init directly to the program HALT instruction. */
+        vm->ip = (uint32_t)(program->code_count - 1);
+        if (vm_call(vm, program, &frames, &frame_count,
+                    &frame_capacity, &entry_call) != 0)
+        {
+            result = -1;
+            goto done;
+        }
+    }
 
     while (vm->running)
     {
@@ -756,6 +850,32 @@ static int vm_execute(
                 value = ussr_integer((long)time(NULL));
                 ussr_value_free(&vm->registers[ins.a]);
                 vm->registers[ins.a] = value;
+                break;
+            case USSR_BC_CHAIN:
+                vm->chain_active = 1;
+                value = ussr_integer(0);
+                ussr_value_free(&vm->registers[0]);
+                vm->registers[0] = value;
+                break;
+            case USSR_BC_FILE:
+                if (vm->registers[0].type != USSR_STRING || !vm->chain_active ||
+                    vm_chain_write_file(vm, vm->registers[0].data.string) != 0)
+                { result=-1; goto done; }
+                vm->chain_active = 0;
+                free(vm->chain_buffer); vm->chain_buffer = NULL; vm->chain_length = 0;
+                value = ussr_integer(0);
+                ussr_value_free(&vm->registers[0]); vm->registers[0] = value;
+                break;
+            case USSR_BC_CD:
+                if (vm->registers[0].type != USSR_STRING ||
+                    ussr_chdir(vm->registers[0].data.string) != 0)
+                {
+                    if (vm->registers[0].type == USSR_STRING)
+                        fprintf(stderr, "USSR: cd '%s': %s\n", vm->registers[0].data.string, strerror(errno));
+                    result=-1; goto done;
+                }
+                value = ussr_integer(0);
+                ussr_value_free(&vm->registers[0]); vm->registers[0] = value;
                 break;
             case USSR_BC_SCAN:
             {
@@ -893,19 +1013,24 @@ static int vm_execute(
 
                     ussr_value_free(&value);
                     value = ussr_null();
-                    result = ussr_external_execute_values(
-                        program->strings[ins.immediate],
-                        external_values,
-                        argument_count,
-                        &value
-                    );
-                    vm_free_values(
-                        external_values,
-                        argument_count
-                    );
-
-                    if (result != 0)
-                        goto done;
+                    if (vm->chain_active || ins.c != 0)
+                    {
+                        char *output = NULL;
+                        result = ussr_external_execute_values_io(
+                            program->strings[ins.immediate], external_values,
+                            argument_count, vm->chain_active ? vm->chain_buffer : NULL,
+                            &output, &value);
+                        if (result == 0 && vm_chain_set_buffer(vm, output) != 0)
+                            result = -1;
+                    }
+                    else
+                    {
+                        result = ussr_external_execute_values(
+                            program->strings[ins.immediate], external_values,
+                            argument_count, &value);
+                    }
+                    vm_free_values(external_values, argument_count);
+                    if (result != 0) goto done;
                 }
 
                 ussr_value_free(&vm->registers[ins.a]);
@@ -1028,7 +1153,7 @@ static int count_brackets(
     return bracket_depth;
 }
 
-static int parse_and_execute(const char *source)
+static int parse_and_execute(const char *source, int argc, char **argv)
 {
     YY_BUFFER_STATE buffer;
     int result;
@@ -1072,7 +1197,69 @@ static int parse_and_execute(const char *source)
 
     vm_init(&vm);
     vm.running = 1;
+
+    {
+        size_t fi;
+        for (fi = 0; fi < bytecode.function_count; ++fi)
+        {
+            if (strcmp(bytecode.functions[fi].name, "init") == 0)
+            {
+                ussr_bc_function_t *init = &bytecode.functions[fi];
+                ussr_vector_t *args_vector;
+                ussr_value_t arg_count_value;
+                ussr_value_t vector_value;
+                size_t i;
+
+                if (init->parameter_count != 2)
+                {
+                    fprintf(stderr,
+                            "USSR: init must have parameters arg_cnt and arg_vec\n");
+                    result = -1;
+                    goto parse_execute_after_vm;
+                }
+
+                args_vector = ussr_vector_create("string");
+                if (args_vector == NULL)
+                {
+                    result = -1;
+                    goto parse_execute_after_vm;
+                }
+
+                for (i = 1; i < (size_t)argc; ++i)
+                {
+                    ussr_value_t item = ussr_string(argv[i]);
+                    if (ussr_vector_push(args_vector, item) != 0)
+                    {
+                        ussr_value_free(&item);
+                        ussr_vector_release(args_vector);
+                        result = -1;
+                        goto parse_execute_after_vm;
+                    }
+                    ussr_value_free(&item);
+                }
+
+                arg_count_value = ussr_integer(
+                    argc > 0 ? (long)(argc - 1) : 0
+                );
+                vector_value = ussr_vector_value(args_vector);
+
+                vm.registers[0] = arg_count_value;
+                vm.registers[1] = vector_value;
+                vm.entry_function = (int)fi;
+                break;
+            }
+        }
+    }
+
     result = vm_execute(&vm, &bytecode);
+    if (result == 0 && vm.entry_function >= 0 &&
+        vm.registers[USSR_VM_RETURN_REG].type == USSR_INTEGER)
+    {
+        long exit_value = vm.registers[USSR_VM_RETURN_REG].data.integer;
+        if (exit_value >= 0 && exit_value <= 255)
+            result = (int)exit_value;
+    }
+parse_execute_after_vm:
     if (result != 0)
         fprintf(stderr, "USSR VM: execution failed (status %d)", result);
     vm_cleanup(&vm);
@@ -1084,7 +1271,7 @@ static int parse_and_execute(const char *source)
     return result;
 }
 
-static int run_file(const char *filename)
+static int run_file(const char *filename, int argc, char **argv)
 {
     ussr_preprocessor_t pp;
     int result;
@@ -1104,7 +1291,7 @@ static int run_file(const char *filename)
         return EXIT_FAILURE;
     }
 
-    result = parse_and_execute(ussr_pp_output(&pp));
+    result = parse_and_execute(ussr_pp_output(&pp), argc, argv);
     ussr_pp_cleanup(&pp);
 
     return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -1193,7 +1380,7 @@ static int run_repl(void)
         if (bracket_depth > 0)
             continue;
 
-        result = parse_and_execute(source);
+        result = parse_and_execute(source, 0, NULL);
 
         source_length = 0;
         if (source != NULL)
@@ -1306,8 +1493,24 @@ int main(int argc, char **argv)
 
     ussr_init();
 
+    /* moscow.su is the USSR shell startup file, analogous to a shell rc.
+     * It is optional and is loaded from the current working directory. */
+    {
+        FILE *moscow = fopen("moscow.su", "rb");
+        if (moscow != NULL)
+        {
+            char *moscow_argv[] = { (char *)"moscow.su", NULL };
+            fclose(moscow);
+            if (run_file("moscow.su", 1, moscow_argv) != EXIT_SUCCESS)
+            {
+                ussr_cleanup();
+                return EXIT_FAILURE;
+            }
+        }
+    }
+
     if (optind < argc)
-        result = run_file(argv[optind]);
+        result = run_file(argv[optind], argc - optind, argv + optind);
     else
         result = run_repl();
 

@@ -1,6 +1,10 @@
 #include "ussr.h"
 
 #include <stdio.h>
+
+#ifndef _WIN32
+extern int fileno(FILE *stream);
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -12,6 +16,9 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 #include "uthash.h"
 #include "uno.h"
@@ -1659,7 +1666,11 @@ ussr_command_is_executable(const char *path)
     if (path == NULL)
         return 0;
 
+#ifdef _WIN32
+    return _access(path, 0) == 0;
+#else
     return access(path, X_OK) == 0;
+#endif
 }
 
 static char *
@@ -1683,7 +1694,19 @@ ussr_find_external_command(const char *command)
     {
         if (ussr_command_is_executable(command))
             return ussr_strdup(command);
-
+#ifdef _WIN32
+        if (strstr(command, ".exe") == NULL)
+        {
+            size_t n = strlen(command);
+            candidate = malloc(n + 5);
+            if (candidate == NULL) return NULL;
+            memcpy(candidate, command, n);
+            memcpy(candidate + n, ".exe", 5);
+            if (ussr_command_is_executable(candidate))
+                return candidate;
+            free(candidate);
+        }
+#endif
         return NULL;
     }
 
@@ -1751,6 +1774,25 @@ ussr_find_external_command(const char *command)
             if (ussr_command_is_executable(candidate))
                 return candidate;
 
+#ifdef _WIN32
+            if (strstr(command, ".exe") == NULL)
+            {
+                size_t candidate_length = strlen(candidate);
+                char *exe_candidate = malloc(candidate_length + 5);
+                if (exe_candidate == NULL)
+                {
+                    free(candidate);
+                    return NULL;
+                }
+                memcpy(exe_candidate, candidate, candidate_length);
+                memcpy(exe_candidate + candidate_length, ".exe", 5);
+                free(candidate);
+                candidate = exe_candidate;
+                if (ussr_command_is_executable(candidate))
+                    return candidate;
+            }
+#endif
+
             free(candidate);
 
             if (*end == '\0')
@@ -1774,6 +1816,25 @@ ussr_find_external_command(const char *command)
 
     if (ussr_command_is_executable(candidate))
         return candidate;
+
+#ifdef _WIN32
+    if (strstr(command, ".exe") == NULL)
+    {
+        size_t candidate_length = strlen(candidate);
+        char *exe_candidate = malloc(candidate_length + 5);
+        if (exe_candidate == NULL)
+        {
+            free(candidate);
+            return NULL;
+        }
+        memcpy(exe_candidate, candidate, candidate_length);
+        memcpy(exe_candidate + candidate_length, ".exe", 5);
+        free(candidate);
+        candidate = exe_candidate;
+        if (ussr_command_is_executable(candidate))
+            return candidate;
+    }
+#endif
 
     free(candidate);
 
@@ -2027,6 +2088,208 @@ ussr_execute_external(
     return 0;
 }
 
+
+static int
+ussr_execute_external_io(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    const char *input,
+    char **output,
+    ussr_value_t *result
+)
+{
+#ifndef _WIN32
+    char *path;
+    char **argv;
+    ussr_value_t *copies;
+    FILE *input_file = NULL;
+    FILE *output_file = NULL;
+    size_t i;
+    pid_t pid;
+    int status;
+    char *text = NULL;
+
+    if (command == NULL || result == NULL || output == NULL)
+        return -1;
+
+    *output = NULL;
+    *result = ussr_null();
+
+    path = ussr_find_external_command(command);
+    if (path == NULL)
+    {
+        fprintf(stderr, "USSR: command not found: %s\n", command);
+        return -1;
+    }
+
+    argv = calloc(value_count + 2, sizeof(*argv));
+    copies = calloc(value_count, sizeof(*copies));
+    if (argv == NULL || (copies == NULL && value_count != 0))
+    {
+        free(argv);
+        free(copies);
+        free(path);
+        return -1;
+    }
+
+    argv[0] = path;
+    for (i = 0; i < value_count; ++i)
+    {
+        char buffer[64];
+        const char *text_value;
+
+        copies[i] = ussr_value_copy(&values[i]);
+        switch (copies[i].type)
+        {
+            case USSR_STRING:
+                text_value = copies[i].data.string;
+                argv[i + 1] = ussr_strdup(text_value);
+                break;
+            case USSR_INTEGER:
+                snprintf(buffer, sizeof(buffer), "%ld", copies[i].data.integer);
+                argv[i + 1] = ussr_strdup(buffer);
+                break;
+            case USSR_REAL:
+                snprintf(buffer, sizeof(buffer), "%.17g", copies[i].data.real);
+                argv[i + 1] = ussr_strdup(buffer);
+                break;
+            case USSR_BOOLEAN:
+                argv[i + 1] = ussr_strdup(copies[i].data.boolean ? "true" : "false");
+                break;
+            case USSR_NULL:
+                argv[i + 1] = ussr_strdup("null");
+                break;
+            default:
+                argv[i + 1] = ussr_strdup("");
+                break;
+        }
+        if (argv[i + 1] == NULL)
+            goto io_fail;
+    }
+    argv[value_count + 1] = NULL;
+
+    if (input != NULL)
+    {
+        input_file = tmpfile();
+        if (input_file == NULL)
+            goto io_fail;
+        if (fwrite(input, 1, strlen(input), input_file) != strlen(input))
+            goto io_fail;
+        fflush(input_file);
+        rewind(input_file);
+    }
+
+    output_file = tmpfile();
+    if (output_file == NULL)
+        goto io_fail;
+
+    pid = fork();
+    if (pid < 0)
+    {
+        perror("USSR: fork");
+        goto io_fail;
+    }
+
+    if (pid == 0)
+    {
+        if (input_file != NULL && dup2(fileno(input_file), STDIN_FILENO) < 0)
+            _exit(126);
+        if (dup2(fileno(output_file), STDOUT_FILENO) < 0)
+            _exit(126);
+
+        execv(path, argv);
+        _exit(126);
+    }
+
+    do
+    {
+        if (waitpid(pid, &status, 0) < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            perror("USSR: waitpid");
+            goto io_fail;
+        }
+        break;
+    } while (1);
+
+    fflush(output_file);
+    if (fseek(output_file, 0, SEEK_END) != 0)
+        goto io_fail;
+    {
+        long size = ftell(output_file);
+        if (size < 0)
+            goto io_fail;
+        rewind(output_file);
+        text = malloc((size_t)size + 1);
+        if (text == NULL)
+            goto io_fail;
+        if (size != 0 && fread(text, 1, (size_t)size, output_file) != (size_t)size)
+            goto io_fail;
+        text[size] = '\0';
+    }
+
+    if (WIFEXITED(status))
+        *result = ussr_integer((long)WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+        *result = ussr_integer(128L + (long)WTERMSIG(status));
+    else
+        *result = ussr_integer(-1);
+
+    *output = text;
+    text = NULL;
+
+    for (i = 0; i < value_count; ++i)
+    {
+        free(argv[i + 1]);
+        ussr_value_free(&copies[i]);
+    }
+    free(argv);
+    free(copies);
+    free(path);
+    if (input_file != NULL) fclose(input_file);
+    if (output_file != NULL) fclose(output_file);
+    return 0;
+
+io_fail:
+    free(text);
+    if (input_file != NULL) fclose(input_file);
+    if (output_file != NULL) fclose(output_file);
+    for (i = 0; i < value_count; ++i)
+    {
+        free(argv != NULL ? argv[i + 1] : NULL);
+        if (copies != NULL) ussr_value_free(&copies[i]);
+    }
+    free(argv);
+    free(copies);
+    free(path);
+    return -1;
+#else
+    (void)command;
+    (void)values;
+    (void)value_count;
+    (void)input;
+    (void)output;
+    (void)result;
+    fprintf(stderr, "USSR: command chaining is not available on this platform\n");
+    return -1;
+#endif
+}
+
+int ussr_external_execute_values_io(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    const char *input,
+    char **output,
+    ussr_value_t *result
+)
+{
+    return ussr_execute_external_io(
+        command, values, value_count, input, output, result
+    );
+}
 
 int ussr_external_execute_values(
     const char *command,
@@ -2317,7 +2580,7 @@ static int ussr_execute_scan(
 
     for (p = format; *p != '\0'; ++p)
     {
-		if ((p == format || p[-1] == ' ' || p[-1] == '\t' || p[-1] == ';') &&
+        if ((p == format || p[-1] == ' ' || p[-1] == '\t') &&
             (strncmp(p, "STR", 3) == 0 ||
              strncmp(p, "INT", 3) == 0 ||
              strncmp(p, "REAL", 4) == 0 ||
@@ -2339,15 +2602,8 @@ static int ussr_execute_scan(
         return -1;
     }
 
-	if (spec > format)
-	{
-		const char *prompt_end = spec;
-
-		if (spec[-1] == ';')
-			--prompt_end;
-
-		fwrite(format, 1, (size_t)(prompt_end - format), stdout);
-	}
+    if (spec > format)
+        fwrite(format, 1, (size_t)(spec - format), stdout);
     fflush(stdout);
 
     for (p = spec; *p != '\0'; )
@@ -2538,6 +2794,37 @@ int ussr_execute_command(
         return status;
     }
 
+    if (strcmp(command, "cd") == 0)
+    {
+        ussr_value_t path_value;
+
+        if (return_name == NULL || argument_count != 1 ||
+            ussr_argument_evaluate(&arguments[0], &path_value) != 0 ||
+            path_value.type != USSR_STRING)
+        {
+            fprintf(stderr, "USSR: cd expects one string parameter\n");
+            return -1;
+        }
+
+        if (chdir(path_value.data.string) != 0)
+        {
+            fprintf(stderr, "USSR: cd '%s': %s\n",
+                    path_value.data.string, strerror(errno));
+            ussr_value_free(&path_value);
+            return -1;
+        }
+
+        ussr_value_free(&path_value);
+        result = ussr_integer(0);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
     if (strcmp(command, "get") == 0)
     {
         const ussr_value_t *source;
@@ -2569,7 +2856,7 @@ int ussr_execute_command(
 
     if (strcmp(command, "random64") == 0)
     {
-        if (return_name == NULL || argument_count != 1)
+        if (return_name == NULL || argument_count != 0)
             return -1;
         result = ussr_integer((long)prng64_xrp32());
         if (ussr_set_variable(return_name, &result) != 0)
@@ -2605,7 +2892,7 @@ int ussr_execute_command(
 
     if (strcmp(command, "time") == 0)
     {
-        if (return_name == NULL || argument_count != 1)
+        if (return_name == NULL || argument_count != 0)
             return -1;
         result = ussr_integer((long)time(NULL));
         if (ussr_set_variable(return_name, &result) != 0)

@@ -7,19 +7,18 @@
 %{
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "ussr.h"
 
 int yylex(void);
-
 extern int yylineno;
+extern FILE *yyin;
 
 void yyerror(const char *message)
 {
     fprintf(stderr, "USSR: %s at line %d\n", message, yylineno);
 }
-
-extern FILE *yyin;
 
 ussr_command_list_t *ussr_parsed_program = NULL;
 
@@ -37,13 +36,72 @@ int ussr_command_list_append(
     ussr_command_t *command
 );
 
-
 ussr_expression_t *ussr_make_binary_expression(
     ussr_expression_t *left,
     ussr_operator_t operator,
     ussr_expression_t *right
 );
 
+static int ussr_parser_block_allowed(const char *name)
+{
+    if (name == NULL)
+        return 0;
+
+    if (strcmp(name, "if") == 0 ||
+        strcmp(name, "while") == 0 ||
+        strcmp(name, "method") == 0 ||
+        strcmp(name, "each") == 0 ||
+        strcmp(name, "map") == 0 ||
+        strcmp(name, "filter") == 0)
+        return 1;
+
+    /* An otherwise unknown command with a trailing block is a
+     * user-defined function declaration. */
+    if (strcmp(name, "break") == 0 ||
+        strcmp(name, "continue") == 0 ||
+        strcmp(name, "return") == 0 ||
+        strcmp(name, "set") == 0 ||
+        strcmp(name, "print") == 0 ||
+        strcmp(name, "add") == 0 ||
+        strcmp(name, "sub") == 0 ||
+        strcmp(name, "mul") == 0 ||
+        strcmp(name, "div") == 0 ||
+        strcmp(name, "mod") == 0 ||
+        strcmp(name, "concat") == 0 ||
+        strcmp(name, "eval") == 0 ||
+        strcmp(name, "get") == 0 ||
+        strcmp(name, "random64") == 0 ||
+        strcmp(name, "seed_random64") == 0 ||
+        strcmp(name, "scan") == 0 ||
+        strcmp(name, "time") == 0 ||
+        strcmp(name, "cd") == 0 ||
+        strcmp(name, "chain") == 0 ||
+        strcmp(name, "file") == 0)
+        return 0;
+
+    return 1;
+}
+
+static int ussr_parser_block_count(ussr_argument_t *items, size_t count)
+{
+    size_t i;
+    int blocks = 0;
+    for (i = 0; i < count; ++i)
+        if (items[i].type == USSR_ARGUMENT_COMMAND_LIST)
+            ++blocks;
+    return blocks;
+}
+
+static int ussr_parser_blocks_are_trailing(ussr_argument_t *items, size_t count)
+{
+    size_t i;
+    if (count == 0)
+        return 1;
+    for (i = 0; i + 1 < count; ++i)
+        if (items[i].type == USSR_ARGUMENT_COMMAND_LIST)
+            return 0;
+    return 1;
+}
 %}
 
 %union
@@ -69,7 +127,6 @@ ussr_expression_t *ussr_make_binary_expression(
 
 %token <string> IDENTIFIER
 %token <string> STRING
-%token <string> UNO_LITERAL
 %token <integer> INTEGER
 %token <real> REAL
 %token <boolean> BOOLEAN
@@ -90,8 +147,12 @@ ussr_expression_t *ussr_make_binary_expression(
 %token LESS_EQUAL
 %token EQUAL
 %token NOT_EQUAL
-%token QUESTION
-%token EXCLAMATION
+
+%token PLUS
+%token MINUS
+%token MULTIPLY
+%token DIVIDE
+%token MODULO
 %token LOGICAL_AND
 %token LOGICAL_OR
 %token SHIFT_LEFT
@@ -100,47 +161,37 @@ ussr_expression_t *ussr_make_binary_expression(
 %token BITWISE_AND
 %token BITWISE_OR
 
-%token PLUS
-%token MINUS
-%token MULTIPLY
-%token DIVIDE
-%token MODULO
-
 %token NEWLINE
-%token COMMENT
+%token QUESTION
+%token EXCLAMATION
 
-%type <command_list> program
-%type <command_list> command_lines
+%token <string> UNO_LITERAL
+
+%type <command_list> program command_lines
 %type <command> command
-%type <command> command_line
+%type <arguments> command_tail
 %type <arguments> argument_list
-%type <argument> argument
-%type <argument> argument_base
-%type <argument> block_argument
-%type <expression> expression
-%type <expression> comparison_expression
-%type <expression> logical_or_expression
-%type <expression> logical_and_expression
-%type <expression> bitwise_or_expression
-%type <expression> bitwise_xor_expression
-%type <expression> bitwise_and_expression
-%type <expression> shift_expression
-%type <expression> additive_expression
-%type <expression> multiplicative_expression
-%type <expression> unary_expression
-%type <expression> primary_expression
+%type <argument> argument argument_base block_argument
+%type <command> command_line
 %type <value> literal
-
-%start program
+%type <expression> expression logical_or_expression logical_and_expression
+%type <expression> bitwise_or_expression bitwise_xor_expression bitwise_and_expression
+%type <expression> comparison_expression shift_expression additive_expression
+%type <expression> multiplicative_expression unary_expression primary_expression
 
 %%
 
 program
-    : command_lines
+    : command_lines trailing_newlines
       {
           ussr_parsed_program = $1;
           $$ = $1;
       }
+    ;
+
+trailing_newlines
+    : %empty
+    | trailing_newlines NEWLINE
     ;
 
 command_lines
@@ -171,82 +222,74 @@ command_line
       {
           $$ = NULL;
       }
-    | COMMENT NEWLINE
-      {
-          $$ = NULL;
-      }
     | command NEWLINE
+      {
+          $$ = $1;
+      }
+    | command
       {
           $$ = $1;
       }
     ;
 
 command
-    : IDENTIFIER LPAREN IDENTIFIER RPAREN COLON argument_list
+    : IDENTIFIER LPAREN IDENTIFIER RPAREN command_tail
       {
           $$ = ussr_command_create(
               $1,
               $3,
-              $6.items,
-              $6.count
+              $5.items,
+              $5.count
           );
 
           if ($$ == NULL)
           {
               free($1);
               free($3);
-              free($6.items);
+              free($5.items);
+              YYABORT;
+          }
+
+          if (!ussr_parser_blocks_are_trailing($5.items, $5.count))
+          {
+              fprintf(stderr,
+                      "USSR: [] blocks must be trailing command blocks\n");
+              free($1);
+              free($3);
+              free($5.items);
+              free($$);
+              YYABORT;
+          }
+
+          if (ussr_parser_block_count($5.items, $5.count) != 0 &&
+              !ussr_parser_block_allowed($1))
+          {
+              fprintf(stderr,
+                      "USSR: command '%s' cannot have a [] block\n",
+                      $1);
+              free($1);
+              free($3);
+              free($5.items);
+              free($$);
               YYABORT;
           }
       }
-    | IDENTIFIER LPAREN IDENTIFIER RPAREN
+    ;
+
+command_tail
+    : %empty
       {
-          ussr_argument_t *items;
-
-          /*
-           * `command(out)` is source-level shorthand for
-           * `command(out): ""`.  Keeping one empty-string
-           * argument preserves the existing command ABI.
-           */
-          items = malloc(sizeof(*items));
-
-          if (items == NULL)
-          {
-              free($1);
-              free($3);
-              YYABORT;
-          }
-
-          items[0].type = USSR_ARGUMENT_VALUE;
-          items[0].assignment = 0;
-          items[0].data.value.type = USSR_STRING;
-          items[0].data.value.data.string = malloc(1);
-
-          if (items[0].data.value.data.string == NULL)
-          {
-              free(items);
-              free($1);
-              free($3);
-              YYABORT;
-          }
-
-          items[0].data.value.data.string[0] = '\0';
-
-          $$ = ussr_command_create(
-              $1,
-              $3,
-              items,
-              1
-          );
-
-          if ($$ == NULL)
-          {
-              free(items[0].data.value.data.string);
-              free(items);
-              free($1);
-              free($3);
-              YYABORT;
-          }
+          $$.items = NULL;
+          $$.count = 0;
+      }
+    | COLON
+      {
+          $$.items = NULL;
+          $$.count = 0;
+      }
+    | COLON argument_list
+      {
+          $$ = $2;
       }
     ;
 
@@ -322,12 +365,6 @@ argument_base
           $$.assignment = 0;
           $$.data.value = $1;
       }
-    | UNO_LITERAL
-      {
-          $$.type = USSR_ARGUMENT_UNO_LITERAL;
-          $$.assignment = 0;
-          $$.data.uno_text = $1;
-      }
     | IDENTIFIER
       {
           ussr_expression_t *expression;
@@ -355,6 +392,18 @@ argument_base
     | block_argument
       {
           $$ = $1;
+      }
+    | UNO_LITERAL
+      {
+          /*
+           * Deferred, like block_argument: the struct type(s) this
+           * text names may not be registered until execution time
+           * (see ussr.h's ussr_argument_t.data.uno_text), so we can't
+           * resolve it to a real ussr_value_t here at parse time.
+           */
+          $$.type = USSR_ARGUMENT_UNO_LITERAL;
+          $$.assignment = 0;
+          $$.data.uno_text = $1;
       }
     ;
 
@@ -395,79 +444,217 @@ literal
     ;
 
 expression
-    : LBRACE comparison_expression RBRACE
+    : LBRACE logical_or_expression RBRACE
       {
           $$ = $2;
       }
     ;
 
-comparison_expression
-    : logical_or_expression
-      { $$ = $1; }
-    ;
-
 logical_or_expression
     : logical_and_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | logical_or_expression LOGICAL_OR logical_and_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_LOGICAL_OR, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LOGICAL_OR, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 logical_and_expression
     : bitwise_or_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | logical_and_expression LOGICAL_AND bitwise_or_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_LOGICAL_AND, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LOGICAL_AND, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 bitwise_or_expression
     : bitwise_xor_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | bitwise_or_expression BITWISE_OR bitwise_xor_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_BITWISE_OR, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_BITWISE_OR, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 bitwise_xor_expression
     : bitwise_and_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | bitwise_xor_expression BITWISE_XOR bitwise_and_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_BITWISE_XOR, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_BITWISE_XOR, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 bitwise_and_expression
+    : comparison_expression
+      {
+          $$ = $1;
+      }
+    | bitwise_and_expression BITWISE_AND comparison_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_BITWISE_AND, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    ;
+
+comparison_expression
     : shift_expression
-      { $$ = $1; }
-    | bitwise_and_expression BITWISE_AND shift_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_BITWISE_AND, $3); }
+      {
+          $$ = $1;
+      }
+    | shift_expression GREATER shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_GT, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression LESS shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LT, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression GREATER_EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_GE, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression LESS_EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_LE, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_EQ, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
+    | shift_expression NOT_EQUAL shift_expression
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_NE, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 shift_expression
     : additive_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | shift_expression SHIFT_LEFT additive_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_SHIFT_LEFT, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_SHIFT_LEFT, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     | shift_expression SHIFT_RIGHT additive_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_SHIFT_RIGHT, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_SHIFT_RIGHT, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 additive_expression
     : multiplicative_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | additive_expression PLUS multiplicative_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_ADD, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_ADD, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     | additive_expression MINUS multiplicative_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_SUB, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_SUB, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 multiplicative_expression
     : unary_expression
-      { $$ = $1; }
+      {
+          $$ = $1;
+      }
     | multiplicative_expression MULTIPLY unary_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_MUL, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_MUL, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     | multiplicative_expression DIVIDE unary_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_DIV, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_DIV, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     | multiplicative_expression MODULO unary_expression
-      { $$ = ussr_make_binary_expression($1, USSR_OP_MOD, $3); }
+      {
+          $$ = ussr_make_binary_expression(
+              $1, USSR_OP_MOD, $3
+          );
+          if ($$ == NULL)
+              YYABORT;
+      }
     ;
 
 unary_expression
@@ -478,10 +665,8 @@ unary_expression
     | MINUS unary_expression
       {
           $$ = malloc(sizeof(*$$));
-
           if ($$ == NULL)
               YYABORT;
-
           $$->type = USSR_EXPR_UNARY;
           $$->data.unary.operator = USSR_OP_SUB;
           $$->data.unary.operand = $2;
@@ -492,27 +677,23 @@ primary_expression
     : literal
       {
           $$ = malloc(sizeof(*$$));
-
           if ($$ == NULL)
               YYABORT;
-
           $$->type = USSR_EXPR_VALUE;
           $$->data.value = $1;
       }
     | IDENTIFIER
       {
           $$ = malloc(sizeof(*$$));
-
           if ($$ == NULL)
           {
               free($1);
               YYABORT;
           }
-
           $$->type = USSR_EXPR_VARIABLE;
           $$->data.variable = $1;
       }
-    | LPAREN comparison_expression RPAREN
+    | LPAREN logical_or_expression RPAREN
       {
           $$ = $2;
       }

@@ -1,3 +1,3 @@
-[ 
-print(out): "hello"
+init(ret): arg_cnt arg_vec [ 
+print(out): "Hello, world!"
 ]

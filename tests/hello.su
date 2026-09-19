@@ -1,4 +1,4 @@
-[
+init(ret): arg_cnt arg_vec [
 # USSR first program
 
 set(name): "USSR"

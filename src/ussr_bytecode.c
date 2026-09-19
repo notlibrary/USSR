@@ -926,25 +926,6 @@ static int bc_add_scan_site(
     return 0;
 }
 
-static const ussr_command_t *bc_find_oop_site(
-    const ussr_bc_program_t *p,
-    uint32_t instruction
-)
-{
-    size_t i;
-
-    if (p == NULL)
-        return NULL;
-
-    for (i = 0; i < p->oop_site_count; ++i)
-    {
-        if (p->oop_sites[i].instruction == instruction)
-            return p->oop_sites[i].command;
-    }
-
-    return NULL;
-}
-
 static int bc_compile_command(
     ussr_bc_program_t *p,
     const ussr_command_t *command,
@@ -1476,7 +1457,7 @@ while_error:
     /* random64(i) returns the next xoshiro256** value. */
     if (strcmp(command->name, "random64") == 0)
     {
-        if (count != 1 || command->return_name == NULL)
+        if (count != 0 || command->return_name == NULL)
             return -1;
         if (bc_emit(p, USSR_BC_RANDOM64, USSR_BC_RETURN_REG,
                     0, 0, 0) < 0)
@@ -1502,7 +1483,7 @@ while_error:
     /* time(now) returns epoch seconds. */
     if (strcmp(command->name, "time") == 0)
     {
-        if (count != 1 || command->return_name == NULL)
+        if (count != 0 || command->return_name == NULL)
             return -1;
         if (bc_emit(p, USSR_BC_TIME, USSR_BC_RETURN_REG,
                     0, 0, 0) < 0)
@@ -1546,6 +1527,49 @@ while_error:
 
         return bc_store_result(p, command->return_name,
                                USSR_BC_RETURN_REG, 0);
+    }
+
+    /* cd: change the interpreter working directory. */
+    if (strcmp(command->name, "cd") == 0)
+    {
+        if (count != 1 || command->return_name == NULL)
+            return -1;
+
+        if (bc_compile_argument(p, &a[0], 0) != 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_CD, 0, 0, 0, 0) < 0)
+            return -1;
+
+        return bc_store_result(p, command->return_name, 0,
+                               a[0].assignment);
+    }
+
+    /* chain: the preceding external command is already captured by the
+     * compiler when it is immediately followed by chain.  This instruction
+     * turns that captured output into the input of the next command. */
+    if (strcmp(command->name, "chain") == 0)
+    {
+        if (count != 0 || command->return_name == NULL)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_CHAIN, 0, 0, 0, 0) < 0)
+            return -1;
+
+        return bc_store_result(p, command->return_name, 0, 0);
+    }
+
+    /* file: terminate a chain by writing its captured output to a file. */
+    if (strcmp(command->name, "file") == 0)
+    {
+        if (count != 1 || command->return_name == NULL)
+            return -1;
+        if (bc_compile_argument(p, &a[0], 0) != 0)
+            return -1;
+        if (bc_emit(p, USSR_BC_FILE, 0, 0, 0, 0) < 0)
+            return -1;
+        return bc_store_result(p, command->return_name, 0,
+                               a[0].assignment);
     }
 
     /*
@@ -1634,7 +1658,8 @@ while_error:
             USSR_BC_OOP,
             USSR_BC_RETURN_REG - 1,
             (uint8_t)count,
-            0,
+            (command->next != NULL &&
+             strcmp(command->next->name, "chain") == 0) ? 1 : 0,
             (uint32_t)index
         );
 
@@ -1985,6 +2010,9 @@ static const char *bc_opcode_name(
         case USSR_BC_SEED64: return "SEED64";
         case USSR_BC_SCAN: return "SCAN";
         case USSR_BC_TIME: return "TIME";
+        case USSR_BC_CHAIN: return "CHAIN";
+        case USSR_BC_FILE: return "FILE";
+        case USSR_BC_CD: return "CD";
 
         case USSR_BC_CALL: return "CALL";
         case USSR_BC_RET: return "RET";
