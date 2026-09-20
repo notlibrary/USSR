@@ -80,6 +80,9 @@ typedef enum
     USSR_BC_SEED64   = 0x47,
     USSR_BC_SCAN     = 0x48,
     USSR_BC_TIME     = 0x49,
+    USSR_BC_CHAIN    = 0x4a,
+    USSR_BC_FILE     = 0x4b,
+    USSR_BC_CD       = 0x4c,
 
     USSR_BC_CALL   = 0x50,
     USSR_BC_RET    = 0x51,

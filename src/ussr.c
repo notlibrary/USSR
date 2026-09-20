@@ -13,9 +13,12 @@ extern int fileno(FILE *stream);
 #include "prng64_xrp32.h"
 #include <math.h>
 #include <errno.h>
+
+#ifndef _WIN32
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 #ifdef _WIN32
 #include <io.h>
 #endif

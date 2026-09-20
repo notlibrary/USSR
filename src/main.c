@@ -1187,13 +1187,16 @@ static int parse_and_execute(const char *source, int argc, char **argv)
         return 0;
 
     /* AST -> bytecode happens once. Execution starts only after compilation. */
-    if (ussr_bc_compile(ussr_parsed_program, &bytecode) != 0)
-    {
-        fprintf(stderr, "USSR compiler: compilation failed");
-        ussr_command_list_free(ussr_parsed_program);
-        ussr_parsed_program = NULL;
-        return -1;
-    }
+	int error_code = ussr_bc_compile(ussr_parsed_program, &bytecode);
+	if (error_code != 0)
+	{
+		// %d используется для целых чисел (int)
+		fprintf(stderr, "USSR compiler: compilation failed with error code %d\n", error_code);
+		
+		ussr_command_list_free(ussr_parsed_program);
+		ussr_parsed_program = NULL;
+		return -1;
+	}
 
     vm_init(&vm);
     vm.running = 1;

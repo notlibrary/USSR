@@ -1,170 +1,181 @@
-#define _POSIX_C_SOURCE 200809L
-
-#include "process.h"
 #include "process.h"
 
-#include <errno.h>
+#ifndef _WIN32
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
-static int ussr_command_is_executable(const char *path)
+extern int fileno(FILE *stream);
+
+static int write_all(FILE *file, const char *data)
 {
-    if (path == NULL)
+    size_t length;
+    size_t written;
+
+    if (file == NULL || data == NULL)
         return 0;
 
-    return access(path, X_OK) == 0;
+    length = strlen(data);
+    written = fwrite(data, 1, length, file);
+
+    if (written != length)
+        return -1;
+
+    return fflush(file) == 0 ? 0 : -1;
 }
 
-char *ussr_find_external_command(const char *command)
+static int read_all(FILE *file, char **result)
 {
-    const char *path;
-    const char *start;
-    const char *end;
-    size_t directory_length;
-    size_t command_length;
+    char *buffer;
     size_t length;
-    char *candidate;
+    size_t capacity;
+    size_t n;
 
-    if (command == NULL || *command == '\0')
-        return NULL;
+    if (file == NULL || result == NULL)
+        return -1;
 
-    /*
-     * A command containing '/' is already a path.
-     */
-    if (strchr(command, '/') != NULL)
+    *result = NULL;
+    buffer = NULL;
+    length = 0;
+    capacity = 0;
+
+    rewind(file);
+
+    for (;;)
     {
-        if (ussr_command_is_executable(command))
-            return strdup(command);
-
-        return NULL;
-    }
-
-    /*
-     * Search PATH first.
-     */
-    path = getenv("PATH");
-
-    if (path != NULL)
-    {
-        start = path;
-        command_length = strlen(command);
-
-        while (*start != '\0')
+        if (length + 4096 + 1 > capacity)
         {
-            end = strchr(start, ':');
+            size_t new_capacity = capacity == 0 ? 4096 : capacity * 2;
+            char *new_buffer;
 
-            if (end == NULL)
-                end = start + strlen(start);
+            while (new_capacity < length + 4096 + 1)
+                new_capacity *= 2;
 
-            directory_length = (size_t)(end - start);
-
-            /*
-             * Empty PATH component means current directory.
-             */
-            if (directory_length == 0)
+            new_buffer = realloc(buffer, new_capacity);
+            if (new_buffer == NULL)
             {
-                length = 2 + command_length;
-
-                candidate = malloc(length);
-
-                if (candidate == NULL)
-                    return NULL;
-
-                snprintf(
-                    candidate,
-                    length,
-                    "./%s",
-                    command
-                );
-            }
-            else
-            {
-                length =
-                    directory_length +
-                    1 +
-                    command_length +
-                    1;
-
-                candidate = malloc(length);
-
-                if (candidate == NULL)
-                    return NULL;
-
-                snprintf(
-                    candidate,
-                    length,
-                    "%.*s/%s",
-                    (int)directory_length,
-                    start,
-                    command
-                );
+                free(buffer);
+                return -1;
             }
 
-            if (ussr_command_is_executable(candidate))
-                return candidate;
+            buffer = new_buffer;
+            capacity = new_capacity;
+        }
 
-            free(candidate);
+        n = fread(buffer + length, 1, 4096, file);
+        length += n;
 
-            if (*end == '\0')
-                break;
-
-            start = end + 1;
+        if (n < 4096)
+        {
+            if (ferror(file))
+            {
+                free(buffer);
+                return -1;
+            }
+            break;
         }
     }
 
-    /*
-     * Finally check the current working directory explicitly.
-     */
-    length = 2 + strlen(command);
+    if (buffer == NULL)
+    {
+        buffer = malloc(1);
+        if (buffer == NULL)
+            return -1;
+    }
 
-    candidate = malloc(length);
-
-    if (candidate == NULL)
-        return NULL;
-
-    snprintf(candidate, length, "./%s", command);
-
-    if (ussr_command_is_executable(candidate))
-        return candidate;
-
-    free(candidate);
-
-    return NULL;
+    buffer[length] = '\0';
+    *result = buffer;
+    return 0;
 }
 
-int ussr_run_process(char *const argv[], long *exit_code)
+int ussr_process_run(
+    const ussr_process_t *process,
+    int *exit_code
+)
 {
+    FILE *input_file;
+    FILE *output_file;
     pid_t pid;
     int status;
+
+    if (process == NULL || process->program == NULL ||
+        process->argv == NULL || exit_code == NULL)
+        return -1;
+
+    if (process->capture_stdout && process->stdout_data == NULL)
+        return -1;
+
+    if (process->stdout_data != NULL)
+        *process->stdout_data = NULL;
+
+    input_file = NULL;
+    output_file = NULL;
+
+    if (process->stdin_data != NULL)
+    {
+        input_file = tmpfile();
+        if (input_file == NULL)
+            return -1;
+
+        if (write_all(input_file, process->stdin_data) != 0)
+        {
+            fclose(input_file);
+            return -1;
+        }
+
+        rewind(input_file);
+    }
+
+    if (process->capture_stdout)
+    {
+        output_file = tmpfile();
+        if (output_file == NULL)
+        {
+            if (input_file != NULL)
+                fclose(input_file);
+            return -1;
+        }
+    }
 
     pid = fork();
 
     if (pid < 0)
     {
-        perror("USSR: fork");
+        if (input_file != NULL)
+            fclose(input_file);
+        if (output_file != NULL)
+            fclose(output_file);
         return -1;
     }
 
     if (pid == 0)
     {
-        execv(argv[0], argv);
+        if (input_file != NULL)
+        {
+            if (dup2(fileno(input_file), STDIN_FILENO) < 0)
+                _exit(126);
+        }
 
-        /*
-         * Only reached when execv() fails.
-         */
-        fprintf(
-            stderr,
-            "USSR: cannot execute '%s': %s\n",
-            argv[0],
-            strerror(errno)
-        );
+        if (output_file != NULL)
+        {
+            if (dup2(fileno(output_file), STDOUT_FILENO) < 0)
+                _exit(126);
+        }
 
+        execv(process->program, process->argv);
         _exit(126);
     }
+
+    if (input_file != NULL)
+        fclose(input_file);
+
+    if (output_file != NULL)
+        fflush(output_file);
 
     do
     {
@@ -173,24 +184,32 @@ int ussr_run_process(char *const argv[], long *exit_code)
             if (errno == EINTR)
                 continue;
 
-            perror("USSR: waitpid");
+            if (output_file != NULL)
+                fclose(output_file);
             return -1;
         }
-
         break;
     }
     while (1);
 
-    /*
-     * If the process was killed by a signal, use 128 + signal in
-     * the same general convention used by shells.
-     */
+    if (output_file != NULL)
+    {
+        if (read_all(output_file, process->stdout_data) != 0)
+        {
+            fclose(output_file);
+            return -1;
+        }
+        fclose(output_file);
+    }
+
     if (WIFEXITED(status))
-        *exit_code = (long)WEXITSTATUS(status);
+        *exit_code = WEXITSTATUS(status);
     else if (WIFSIGNALED(status))
-        *exit_code = 128L + (long)WTERMSIG(status);
+        *exit_code = 128 + WTERMSIG(status);
     else
         *exit_code = -1;
 
     return 0;
 }
+
+#endif /* !_WIN32 */

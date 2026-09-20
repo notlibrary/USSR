@@ -1193,35 +1193,40 @@ while_error:
         );
     }
 
-    if (strcmp(command->name, "return") == 0)
-    {
-        if (current == NULL || count != 1)
-            return -1;
+	if (strcmp(command->name, "return") == 0)
+	{
+		if (current == NULL || count != 1)
+			return -1;
 
-        if (bc_compile_argument(
-                p,
-                &a[0],
-                USSR_BC_RETURN_REG
-            ) != 0)
-            return -1;
+		/*
+		 * RETURN_REG is reserved for CALL results and cannot be used
+		 * as a compiler expression destination. Evaluate the return
+		 * expression in an ordinary register first.
+		 */
+		if (bc_compile_argument(
+				p,
+				&a[0],
+				0
+			) != 0)
+			return -1;
 
-        if (bc_store_result(
-                p,
-                current->return_name,
-                USSR_BC_RETURN_REG,
-                a[0].assignment
-            ) != 0)
-            return -1;
+		if (bc_store_result(
+			p,
+			current->return_name,
+			0,
+			a[0].assignment
+		) != 0)
+			return -1;
 
-        return bc_emit(
-            p,
-            USSR_BC_RET,
-            0,
-            0,
-            0,
-            0
-        ) < 0 ? -1 : 0;
-    }
+		return bc_emit(
+			p,
+			USSR_BC_RET,
+			0,
+			0,
+			0,
+			0
+		) < 0 ? -1 : 0;
+	}
 
     /*
      * User-defined functions are resolved by the compiler, so CALL
@@ -1710,7 +1715,18 @@ static int bc_compile_list(
                 loop,
                 current
             ) != 0)
+        {
+            fprintf(
+                stderr,
+                "USSR compiler: failed command '%s' in function '%s'\n",
+                command->name != NULL ? command->name : "<null>",
+                current != NULL && current->name != NULL
+                    ? current->name
+                    : "<top-level>"
+            );
+
             return -1;
+        }
     }
 
     return 0;
@@ -1751,13 +1767,20 @@ static int bc_compile_functions(
                 command->argument_count - 1
             ].data.command_list;
 
-            if (bc_compile_list(
-                    p,
-                    body,
-                    NULL,
-                    function
-                ) != 0)
-                return -1;
+			if (bc_compile_list(
+					p,
+					body,
+					NULL,
+					function
+				) != 0)
+			{
+				fprintf(
+					stderr,
+					"USSR compiler: failed compiling function '%s'\n",
+					function->name
+				);
+				return -1;
+			}
 
             /*
              * Implicit function fall-through returns null.
@@ -1850,7 +1873,7 @@ int ussr_bc_compile(
         ) != 0)
     {
         ussr_bc_program_free(program);
-        return -1;
+        return -2;
     }
 
     /*
@@ -1868,7 +1891,7 @@ int ussr_bc_compile(
     if (skip_functions < 0)
     {
         ussr_bc_program_free(program);
-        return -1;
+        return -3;
     }
 
     if (bc_compile_functions(
@@ -1877,7 +1900,7 @@ int ussr_bc_compile(
         ) != 0)
     {
         ussr_bc_program_free(program);
-        return -1;
+        return -4;
     }
 
     if (bc_patch(
@@ -1899,7 +1922,7 @@ int ussr_bc_compile(
     {
         bc_loop_free(&loop);
         ussr_bc_program_free(program);
-        return -1;
+        return -5;
     }
 
     bc_loop_free(&loop);
@@ -1914,7 +1937,7 @@ int ussr_bc_compile(
         ) < 0)
     {
         ussr_bc_program_free(program);
-        return -1;
+        return -6;
     }
 
     return 0;
