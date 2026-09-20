@@ -1844,12 +1844,12 @@ ussr_find_external_command(const char *command)
     return NULL;
 }
 
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
 #ifndef MAX_PATH
 #define MAX_PATH 260
 #endif
@@ -1901,30 +1901,52 @@ ussr_execute_external(
     long exit_code = 0;
     ussr_value_t result;
 
-    // 1. Поиск исполняемого файла по имени команды
     path = ussr_find_external_command(command);
 
 #if defined(_WIN32) || defined(_WIN64)
-    // Корректировка для Windows: если команда не найдена и в ней нет расширения ".exe", пробуем искать с ".exe"
-    if (path == NULL && strstr(command, ".exe") == NULL && strstr(command, ".EXE") == NULL)
+    if (path == NULL)
     {
         char win_cmd_buffer[MAX_PATH];
-        snprintf(win_cmd_buffer, sizeof(win_cmd_buffer), "%s.exe", command);
-        path = ussr_find_external_command(win_cmd_buffer);
+        char full_path_buffer[MAX_PATH];
+        char *file_part = NULL;
+
+
+        if (strstr(command, ".exe") == NULL && strstr(command, ".EXE") == NULL)
+        {
+            snprintf(win_cmd_buffer, sizeof(win_cmd_buffer), "%s.exe", command);
+        }
+        else
+        {
+            snprintf(win_cmd_buffer, sizeof(win_cmd_buffer), "%s", command);
+        }
+
+
+        DWORD search_result = SearchPathA(
+            NULL,               
+            win_cmd_buffer,     
+            NULL,              
+            MAX_PATH,           
+            full_path_buffer,  
+            &file_part         
+        );
+
+        if (search_result > 0 && search_result < MAX_PATH)
+        {
+            path = ussr_strdup(full_path_buffer);
+        }
+        else
+        {
+            path = ussr_strdup(win_cmd_buffer);
+        }
     }
 #endif
 
     if (path == NULL)
     {
-        fprintf(
-            stderr,
-            "USSR: command not found: %s\n",
-            command
-        );
+        fprintf(stderr, "USSR: command not found: %s\n", command);
         return -1;
     }
 
-    // 2. Выделение памяти под аргументы и значения
     argv = calloc(argument_count + 2, sizeof(*argv));
     if (argv == NULL)
     {
@@ -1940,10 +1962,8 @@ ussr_execute_external(
         return -1;
     }
 
-    // Записываем путь к программе в первый элемент массива аргументов
     argv[0] = path;
 
-    // 3. Вычисление и конвертация аргументов
     for (i = 0; i < argument_count; ++i)
     {
         if (ussr_argument_evaluate(&arguments[i], &values[i]) != 0)
@@ -1963,39 +1983,19 @@ ussr_execute_external(
             switch (values[i].type)
             {
                 case USSR_INTEGER:
-                    snprintf(
-                        buffer,
-                        sizeof(buffer),
-                        "%ld",
-                        values[i].data.integer
-                    );
+                    snprintf(buffer, sizeof(buffer), "%ld", values[i].data.integer);
                     break;
 
                 case USSR_REAL:
-                    snprintf(
-                        buffer,
-                        sizeof(buffer),
-                        "%.17g",
-                        values[i].data.real
-                    );
+                    snprintf(buffer, sizeof(buffer), "%.17g", values[i].data.real);
                     break;
 
                 case USSR_BOOLEAN:
-                    snprintf(
-                        buffer,
-                        sizeof(buffer),
-                        "%s",
-                        values[i].data.boolean ?
-                            "true" : "false"
-                    );
+                    snprintf(buffer, sizeof(buffer), "%s", values[i].data.boolean ? "true" : "false");
                     break;
 
                 case USSR_NULL:
-                    snprintf(
-                        buffer,
-                        sizeof(buffer),
-                        "null"
-                    );
+                    snprintf(buffer, sizeof(buffer), "null");
                     break;
 
                 default:
@@ -2017,12 +2017,10 @@ ussr_execute_external(
         }
     }
 
-    // Финализируем массив аргументов для exec-подобных вызовов
     argv[argument_count + 1] = NULL;
 
-    // 4. Настройка структуры процесса ussr_process_t под новые требования
     ussr_process_t proc;
-    memset(&proc, 0, sizeof(ussr_process_t)); // Очищаем от мусорных данных в памяти
+    memset(&proc, 0, sizeof(ussr_process_t)); 
     
     proc.program = path;
     proc.argv = (char *const *)argv;
@@ -2030,20 +2028,20 @@ ussr_execute_external(
     proc.stdout_data = NULL;
     proc.capture_stdout = 0;
 
-    // 5. Запуск процесса с передачей указателя на структуру
-    if (ussr_process_run(&proc, &exit_code) != 0)
+
+    int run_status = ussr_process_run(&proc, (int *)&exit_code);
+    
+    if (run_status != 0)
     {
         free_external_resources(argv, argument_count, values, argument_count, path);
         return -1;
     }
 
-    // Освобождаем ресурсы после успешного завершения процесса
     free_external_resources(argv, argument_count, values, argument_count, path);
 
     /*
      * ussr_run_process() already normalized the platform-specific
-     * exit/termination status into a single shell-style exit code
-     * (see process.h / process_posix.c / src/win/process_win32.c).
+     * exit/termination status into a single shell-style exit code.
      */
     result = ussr_integer(exit_code);
 
@@ -2057,6 +2055,11 @@ ussr_execute_external(
 
     return 0;
 }
+
+
+
+
+
 
 
 
