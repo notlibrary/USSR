@@ -26,7 +26,7 @@ extern int fileno(FILE *stream);
 #include "uthash.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
-
+#include "process.h"
 int yylex(void);
 int yyparse(void);
 void yyerror(const char *message);
@@ -1844,6 +1844,48 @@ ussr_find_external_command(const char *command)
     return NULL;
 }
 
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+#ifndef MAX_PATH
+#define MAX_PATH 260
+#endif
+#endif
+
+// Вспомогательная функция для глубокой очистки всех ресурсов (DRY-подход)
+static void free_external_resources(char **argv, size_t allocated_argv_count, ussr_value_t *values, size_t allocated_values_count, char *path)
+{
+    if (argv)
+    {
+        // Освобождаем только те строки, которые были выделены через ussr_strdup (индексы от 1 до allocated_argv_count)
+        for (size_t j = 0; j < allocated_argv_count; ++j)
+        {
+            if (argv[j + 1])
+            {
+                free(argv[j + 1]);
+            }
+        }
+        free(argv);
+    }
+
+    if (values)
+    {
+        for (size_t j = 0; j < allocated_values_count; ++j)
+        {
+            ussr_value_free(&values[j]);
+        }
+        free(values);
+    }
+
+    if (path)
+    {
+        free(path);
+    }
+}
+
 static int
 ussr_execute_external(
     const char *command,
@@ -1852,15 +1894,25 @@ ussr_execute_external(
     size_t argument_count
 )
 {
-    char *path;
-    char **argv;
-    ussr_value_t *values;
+    char *path = NULL;
+    char **argv = NULL;
+    ussr_value_t *values = NULL;
     size_t i;
-    pid_t pid;
-    int status;
+    long exit_code = 0;
     ussr_value_t result;
 
+    // 1. Поиск исполняемого файла по имени команды
     path = ussr_find_external_command(command);
+
+#if defined(_WIN32) || defined(_WIN64)
+    // Корректировка для Windows: если команда не найдена и в ней нет расширения ".exe", пробуем искать с ".exe"
+    if (path == NULL && strstr(command, ".exe") == NULL && strstr(command, ".EXE") == NULL)
+    {
+        char win_cmd_buffer[MAX_PATH];
+        snprintf(win_cmd_buffer, sizeof(win_cmd_buffer), "%s.exe", command);
+        path = ussr_find_external_command(win_cmd_buffer);
+    }
+#endif
 
     if (path == NULL)
     {
@@ -1872,8 +1924,8 @@ ussr_execute_external(
         return -1;
     }
 
+    // 2. Выделение памяти под аргументы и значения
     argv = calloc(argument_count + 2, sizeof(*argv));
-
     if (argv == NULL)
     {
         free(path);
@@ -1881,7 +1933,6 @@ ussr_execute_external(
     }
 
     values = calloc(argument_count, sizeof(*values));
-
     if (values == NULL)
     {
         free(argv);
@@ -1889,23 +1940,15 @@ ussr_execute_external(
         return -1;
     }
 
+    // Записываем путь к программе в первый элемент массива аргументов
     argv[0] = path;
 
+    // 3. Вычисление и конвертация аргументов
     for (i = 0; i < argument_count; ++i)
     {
-        if (ussr_argument_evaluate(
-                &arguments[i],
-                &values[i]) != 0)
+        if (ussr_argument_evaluate(&arguments[i], &values[i]) != 0)
         {
-            size_t j;
-
-            for (j = 0; j < i; ++j)
-                ussr_value_free(&values[j]);
-
-            free(values);
-            free(argv);
-            free(path);
-
+            free_external_resources(argv, i, values, i, path);
             return -1;
         }
 
@@ -1969,116 +2012,40 @@ ussr_execute_external(
 
         if (argv[i + 1] == NULL)
         {
-            size_t j;
-
-            for (j = 0; j <= i; ++j)
-            {
-                free(argv[j + 1]);
-                ussr_value_free(&values[j]);
-            }
-
-            free(values);
-            free(argv);
-            free(path);
-
+            free_external_resources(argv, i, values, i + 1, path);
             return -1;
         }
     }
 
+    // Финализируем массив аргументов для exec-подобных вызовов
     argv[argument_count + 1] = NULL;
 
-    pid = fork();
+    // 4. Настройка структуры процесса ussr_process_t под новые требования
+    ussr_process_t proc;
+    memset(&proc, 0, sizeof(ussr_process_t)); // Очищаем от мусорных данных в памяти
+    
+    proc.program = path;
+    proc.argv = (char *const *)argv;
+    proc.stdin_data = NULL;
+    proc.stdout_data = NULL;
+    proc.capture_stdout = 0;
 
-    if (pid < 0)
+    // 5. Запуск процесса с передачей указателя на структуру
+    if (ussr_process_run(&proc, &exit_code) != 0)
     {
-        perror("USSR: fork");
-
-        for (i = 0; i < argument_count; ++i)
-        {
-            free(argv[i + 1]);
-            ussr_value_free(&values[i]);
-        }
-
-        free(values);
-        free(argv);
-        free(path);
-
+        free_external_resources(argv, argument_count, values, argument_count, path);
         return -1;
     }
 
-    if (pid == 0)
-    {
-        execv(path, argv);
-
-        /*
-         * Only reached when execv() fails.
-         */
-        fprintf(
-            stderr,
-            "USSR: cannot execute '%s': %s\n",
-            path,
-            strerror(errno)
-        );
-
-        _exit(126);
-    }
-
-    do
-    {
-        if (waitpid(pid, &status, 0) < 0)
-        {
-            if (errno == EINTR)
-                continue;
-
-            perror("USSR: waitpid");
-
-            for (i = 0; i < argument_count; ++i)
-            {
-                free(argv[i + 1]);
-                ussr_value_free(&values[i]);
-            }
-
-            free(values);
-            free(argv);
-            free(path);
-
-            return -1;
-        }
-
-        break;
-    }
-    while (1);
-
-    for (i = 0; i < argument_count; ++i)
-    {
-        free(argv[i + 1]);
-        ussr_value_free(&values[i]);
-    }
-
-    free(values);
-    free(argv);
-    free(path);
+    // Освобождаем ресурсы после успешного завершения процесса
+    free_external_resources(argv, argument_count, values, argument_count, path);
 
     /*
-     * Return the normal process exit status.
-     *
-     * If the process was killed by a signal, use 128 + signal
-     * in the same general convention used by shells.
+     * ussr_run_process() already normalized the platform-specific
+     * exit/termination status into a single shell-style exit code
+     * (see process.h / process_posix.c / src/win/process_win32.c).
      */
-    if (WIFEXITED(status))
-    {
-        result = ussr_integer((long)WEXITSTATUS(status));
-    }
-    else if (WIFSIGNALED(status))
-    {
-        result = ussr_integer(
-            128L + (long)WTERMSIG(status)
-        );
-    }
-    else
-    {
-        result = ussr_integer(-1);
-    }
+    result = ussr_integer(exit_code);
 
     if (ussr_set_variable(return_name, &result) != 0)
     {
@@ -2090,6 +2057,10 @@ ussr_execute_external(
 
     return 0;
 }
+
+
+
+
 
 
 static int
