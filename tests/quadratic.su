@@ -1,8 +1,8 @@
 # Quadratic equation test
 
 sqrt(root): x [
-	if(done): {x < 0.001} [
-	return(done): 0.0
+	if(done): {x == 0} [
+	return(done): 0
 	]
 
 	set(guess): x
@@ -19,7 +19,7 @@ sqrt(root): x [
 ]
 
 solve(root): a b c [
-	if(done): {a < 0.001} [
+	if(done): {a == 0} [
 	print(out): "error: a must not be zero"
 	return(done): 0
 	]
@@ -27,7 +27,7 @@ solve(root): a b c [
 
 	set(d): {b * b - 4 * a * c}
 
-	if(done): {d < 0.001} [
+	if(done): {d < 0} [
 		print(out): "error: complex roots"
 		return(done): 0
 	]
