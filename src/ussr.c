@@ -27,6 +27,7 @@ extern int fileno(FILE *stream);
 #include "uno.h"
 #include "ussr_oop_builtins.h"
 #include "process.h"
+
 int yylex(void);
 int yyparse(void);
 void yyerror(const char *message);
@@ -350,7 +351,9 @@ ussr_command_is_definition(const ussr_command_t *command)
         strcmp(command->name, "while") == 0 ||
         strcmp(command->name, "break") == 0 ||
         strcmp(command->name, "continue") == 0 ||
-        strcmp(command->name, "return") == 0)
+        strcmp(command->name, "return") == 0 ||
+        strcmp(command->name, "do") == 0 ||
+        strcmp(command->name, "loop") == 0)
         return 0;
 
     return 1;
@@ -1477,21 +1480,54 @@ static int ussr_execute_list(
              * the definition. Don't execute it.
              */
         }
+        else if (strcmp(command->name, "do") == 0)
+        {
+            int execute_result;
+
+            if (command->next == NULL ||
+                strcmp(command->next->name, "loop") != 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: do must be followed by loop(condition)\n"
+                );
+                return -1;
+            }
+
+            execute_result = ussr_execute_do_loop(
+                command->return_name,
+                command->arguments,
+                command->argument_count,
+                command->next
+            );
+
+            if (execute_result != USSR_EXEC_OK)
+                return execute_result;
+
+            command = command->next->next;
+            continue;
+        }
+        else if (strcmp(command->name, "loop") == 0)
+        {
+            fprintf(
+                stderr,
+                "USSR: loop must follow do\n"
+            );
+            return -1;
+        }
         else
         {
-            {
-                int execute_result;
+            int execute_result;
 
-                execute_result = ussr_execute_command(
-                    command->name,
-                    command->return_name,
-                    command->arguments,
-                    command->argument_count
-                );
+            execute_result = ussr_execute_command(
+                command->name,
+                command->return_name,
+                command->arguments,
+                command->argument_count
+            );
 
-                if (execute_result != USSR_EXEC_OK)
-                    return execute_result;
-            }
+            if (execute_result != USSR_EXEC_OK)
+                return execute_result;
         }
 
         command = command->next;
@@ -1585,6 +1621,94 @@ static int ussr_execute_if(
 
     ussr_value_free(&condition);
     return -1;
+}
+
+int ussr_execute_do_loop(
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    const ussr_command_t *loop_command
+)
+{
+    unsigned long iterations = 0;
+    ussr_value_t condition;
+    ussr_value_t result;
+
+    /*
+     * Compatibility execution for eval/non-VM execution.
+     *
+     * Syntax:
+     *     do(_): 0 [ body ]
+     *     loop(b): {condition}
+     */
+    if (argument_count != 2 ||
+        arguments[1].type != USSR_ARGUMENT_COMMAND_LIST ||
+        loop_command == NULL ||
+        strcmp(loop_command->name, "loop") != 0 ||
+        loop_command->argument_count != 1)
+    {
+        fprintf(
+            stderr,
+            "USSR: do must be followed by loop(condition)\n"
+        );
+        return -1;
+    }
+
+    while (1)
+    {
+        int execute_result;
+
+        if (++iterations > USSR_MAX_LOOP_ITERATIONS)
+        {
+            fprintf(
+                stderr,
+                "USSR: do/loop exceeded maximum iterations\n"
+            );
+            return -1;
+        }
+
+        execute_result = ussr_execute_list(
+            arguments[1].data.command_list
+        );
+
+        if (execute_result == USSR_EXEC_BREAK)
+            break;
+
+        if (execute_result != USSR_EXEC_OK &&
+            execute_result != USSR_EXEC_CONTINUE)
+            return execute_result;
+
+        if (ussr_argument_evaluate(
+                &loop_command->arguments[0],
+                &condition
+            ) != 0)
+            return -1;
+
+        if (!ussr_value_truthy(&condition))
+        {
+            ussr_value_free(&condition);
+            break;
+        }
+
+        ussr_value_free(&condition);
+    }
+
+    result = ussr_boolean(1);
+
+    if (return_name != NULL)
+    {
+        if (ussr_set_variable(
+                return_name,
+                &result
+            ) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+    }
+
+    ussr_value_free(&result);
+    return 0;
 }
 
 static int ussr_execute_while(
@@ -2055,15 +2179,6 @@ ussr_execute_external(
 
     return 0;
 }
-
-
-
-
-
-
-
-
-
 
 
 static int
@@ -2722,6 +2837,24 @@ int ussr_execute_command(
             arguments,
             argument_count
         );
+
+    if (strcmp(command, "do") == 0)
+    {
+        fprintf(
+            stderr,
+            "USSR: do must be executed as do followed by loop(condition)\n"
+        );
+        return -1;
+    }
+
+    if (strcmp(command, "loop") == 0)
+    {
+        fprintf(
+            stderr,
+            "USSR: loop must follow do\n"
+        );
+        return -1;
+    }
 
     if (strcmp(command, "break") == 0 ||
         strcmp(command, "continue") == 0 ||

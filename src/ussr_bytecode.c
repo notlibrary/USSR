@@ -211,6 +211,8 @@ static int bc_is_definition(
         strcmp(name, "break") == 0 ||
         strcmp(name, "continue") == 0 ||
         strcmp(name, "return") == 0 ||
+	    strcmp(name, "do") == 0 ||
+		strcmp(name, "loop") == 0 ||
         strcmp(name, "method") == 0 ||
         strcmp(name, "each") == 0 ||
         strcmp(name, "map") == 0 ||
@@ -1049,7 +1051,141 @@ static int bc_compile_command(
     /*
      * while(condition): [body]
      */
-    if (strcmp(command->name, "while") == 0)
+if (strcmp(command->name, "do") == 0)
+    {
+        bc_loop_t child;
+        const ussr_command_t *loop_command;
+        size_t body_start;
+        size_t cond_start;
+        size_t end;
+        size_t n;
+        int jump_false;
+
+        memset(&child, 0, sizeof(child));
+
+        /*
+         * Syntax:
+         *
+         *     do(_): 0 [
+         *         ...
+         *     ]
+         *     loop(b): {condition}
+         *
+         * The first do argument is the do command's value/result
+         * parameter. The second argument is the body block.
+         * The loop command is the NEXT command in the list.
+         */
+        if (count != 2 ||
+            a[1].type != USSR_ARGUMENT_COMMAND_LIST)
+            return -1;
+
+        loop_command = command->next;
+
+        if (loop_command == NULL ||
+            strcmp(loop_command->name, "loop") != 0 ||
+            loop_command->argument_count != 1)
+        {
+            fprintf(
+                stderr,
+                "USSR compiler: do must be followed by loop(condition)\n"
+            );
+            return -1;
+        }
+
+        body_start = p->code_count;
+
+        if (bc_compile_list(
+                p,
+                a[1].data.command_list,
+                &child,
+                current
+            ) != 0)
+            goto do_error;
+
+        /*
+         * continue jumps here, so the loop condition is evaluated
+         * before another body iteration.
+         */
+        cond_start = p->code_count;
+
+        if (bc_compile_argument(
+                p,
+                &loop_command->arguments[0],
+                0
+            ) != 0)
+            goto do_error;
+
+        jump_false = bc_emit(
+            p,
+            USSR_BC_JMP_FALSE,
+            0,
+            0,
+            0,
+            0
+        );
+
+        if (jump_false < 0)
+            goto do_error;
+
+        if (bc_emit(
+                p,
+                USSR_BC_JMP,
+                0,
+                0,
+                0,
+                (uint32_t)body_start
+            ) < 0)
+            goto do_error;
+
+        end = p->code_count;
+
+        for (n = 0; n < child.continue_count; ++n)
+        {
+            if (bc_patch(
+                    p,
+                    child.continues[n],
+                    cond_start
+                ) != 0)
+                goto do_error;
+        }
+
+        if (bc_patch(
+                p,
+                (size_t)jump_false,
+                end
+            ) != 0)
+            goto do_error;
+
+        for (n = 0; n < child.break_count; ++n)
+        {
+            if (bc_patch(
+                    p,
+                    child.breaks[n],
+                    end
+                ) != 0)
+                goto do_error;
+        }
+
+        bc_loop_free(&child);
+
+        if (command->return_name != NULL)
+        {
+            if (bc_store_boolean(
+                    p,
+                    command->return_name,
+                    1
+                ) != 0)
+                return -1;
+        }
+
+        return 0;
+
+do_error:
+        bc_loop_free(&child);
+        return -1;
+    }
+
+ if (strcmp(command->name, "while") == 0)
     {
         bc_loop_t child;
         size_t start;
@@ -1705,27 +1841,52 @@ static int bc_compile_list(
     if (list == NULL)
         return 0;
 
-    for (command = list->head;
-         command != NULL;
-         command = command->next)
+    command = list->head;
+
+    while (command != NULL)
     {
+        const ussr_command_t *next;
+
         if (bc_compile_command(
                 p,
                 command,
                 loop,
                 current
             ) != 0)
-        {
-            fprintf(
-                stderr,
-                "USSR compiler: failed command '%s' in function '%s'\n",
-                command->name != NULL ? command->name : "<null>",
-                current != NULL && current->name != NULL
-                    ? current->name
-                    : "<top-level>"
-            );
-
             return -1;
+
+        next = command->next;
+
+        /*
+         * do/loop is one control-flow construct.  The compiler
+         * compiles do and consumes its immediately following loop.
+         */
+        if (strcmp(command->name, "do") == 0)
+        {
+            if (next == NULL ||
+                strcmp(next->name, "loop") != 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR compiler: do must be followed by loop(condition)\n"
+                );
+                return -1;
+            }
+
+            command = next->next;
+        }
+        else
+        {
+            if (strcmp(command->name, "loop") == 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR compiler: loop must follow do\n"
+                );
+                return -1;
+            }
+
+            command = next;
         }
     }
 
@@ -1758,7 +1919,10 @@ static int bc_compile_functions(
             );
 
             if (function == NULL)
+            {
+                fprintf(stderr, "USSR compiler error: could not find function definition for '%s'\n", command->name);
                 return -1;
+            }
 
             function->entry =
                 (uint32_t)p->code_count;
@@ -1767,20 +1931,16 @@ static int bc_compile_functions(
                 command->argument_count - 1
             ].data.command_list;
 
-			if (bc_compile_list(
-					p,
-					body,
-					NULL,
-					function
-				) != 0)
-			{
-				fprintf(
-					stderr,
-					"USSR compiler: failed compiling function '%s'\n",
-					function->name
-				);
-				return -1;
-			}
+            if (bc_compile_list(
+                    p,
+                    body,
+                    NULL,
+                    function
+                ) != 0)
+            {
+                fprintf(stderr, "USSR compiler error: failed to compile body of function '%s'\n", function->name);
+                return -1;
+            }
 
             /*
              * Implicit function fall-through returns null.
@@ -1797,7 +1957,10 @@ static int bc_compile_functions(
                 ussr_value_free(&null_value);
 
                 if (constant < 0)
+                {
+                    fprintf(stderr, "USSR compiler error: failed to add null constant in function '%s'\n", function->name);
                     return -1;
+                }
 
                 if (bc_emit(
                         p,
@@ -1807,7 +1970,10 @@ static int bc_compile_functions(
                         0,
                         (uint32_t)constant
                     ) < 0)
+                {
+                    fprintf(stderr, "USSR compiler error: failed to emit implicit return value for function '%s'\n", function->name);
                     return -1;
+                }
             }
 
             if (bc_emit(
@@ -1818,13 +1984,21 @@ static int bc_compile_functions(
                     0,
                     0
                 ) < 0)
+            {
+                fprintf(stderr, "USSR compiler error: failed to emit RET instruction for function '%s'\n", function->name);
                 return -1;
+            }
 
             if (bc_compile_functions(
                     p,
                     body
                 ) != 0)
+            {
+                // Ошибка во вложенных функциях уже распечатает свое имя ниже, 
+                // но можно также пометить, внутри какой функции это произошло:
+                fprintf(stderr, "USSR compiler error: failed to compile nested functions inside '%s'\n", function->name);
                 return -1;
+            }
         }
         else
         {
@@ -1848,6 +2022,7 @@ static int bc_compile_functions(
 
     return 0;
 }
+
 
 int ussr_bc_compile(
     const ussr_command_list_t *source,
@@ -1922,7 +2097,7 @@ int ussr_bc_compile(
     {
         bc_loop_free(&loop);
         ussr_bc_program_free(program);
-        return -5;
+        return -1;
     }
 
     bc_loop_free(&loop);
@@ -1937,7 +2112,7 @@ int ussr_bc_compile(
         ) < 0)
     {
         ussr_bc_program_free(program);
-        return -6;
+        return -5;
     }
 
     return 0;

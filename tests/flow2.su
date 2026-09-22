@@ -1,0 +1,21 @@
+init(ret): arg_cnt arg_vec [
+    set(i): 0
+
+    do(_): 0 [
+        set(i): {i + 1}
+
+        if(b): {i = 3} [
+            continue(c): null
+        ]
+
+        if(b): {i = 7} [
+            break(c): null
+        ]
+
+        print(out): i
+    ]
+
+    loop(b): {i < 10}
+
+    return(ret): 0
+]

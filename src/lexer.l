@@ -38,7 +38,7 @@ STRING      \"([^\"\\\n]|\\.)*\"
 
 ">="                        { return GREATER_EQUAL; }
 "<="                        { return LESS_EQUAL; }
-"=="                        { return EQUAL; }
+"="                         { return EQUAL; }
 "!="                        { return NOT_EQUAL; }
 "?"                         { return QUESTION; }
 "!"                         { return EXCLAMATION; }

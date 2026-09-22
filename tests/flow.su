@@ -3,11 +3,11 @@ init(ret): arg_cnt arg_vec [
     while(b): {i < 10} [
         set(i): {i + 1}
 
-        if(b): {i == 3} [
+        if(b): {i = 3} [
             continue(c): null
         ]
 
-        if(b): {i == 7} [
+        if(b): {i = 7} [
             break(c): null
         ]
 
@@ -15,7 +15,7 @@ init(ret): arg_cnt arg_vec [
     ]
 
     test(ret): x [
-        if(done): {x == 5} [
+        if(done): {x = 5} [
             return(done): "returned"
         ]
         set(ret): "not returned"
