@@ -2434,7 +2434,7 @@ int ussr_external_execute_values(
     return 0;
 }
 
-static int
+int
 ussr_execute_eval(
     const char *return_name,
     ussr_argument_t *arguments,

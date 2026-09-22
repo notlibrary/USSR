@@ -256,5 +256,7 @@ int ussr_command_list_append(
 void ussr_command_list_free(ussr_command_list_t *list);
 
 void ussr_expression_free(ussr_expression_t *expression);
+int ussr_execute_eval(const char *return_name, ussr_argument_t *arguments, size_t argument_count);
+int ussr_execute_do_loop(const char *return_name,ussr_argument_t *arguments,size_t argument_count,const ussr_command_t *loop_command);
 
 #endif

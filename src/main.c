@@ -1448,7 +1448,13 @@ version_long(void)
     exit(EXIT_SUCCESS);
 }
 
-
+static void
+usage(char* prog_name)
+{
+	fprintf(stderr, "Usage: %s [-v] [-e code] script.su \n", prog_name);
+	exit(EXIT_SUCCESS);
+	return;
+}
 
 int main(int argc, char **argv)
 {
@@ -1463,6 +1469,7 @@ int main(int argc, char **argv)
      */
     static const struct option long_options[] = {
         { "version", no_argument, NULL, 'V' },
+		{ "eval", required_argument, NULL, 'e' },
         { NULL, 0, NULL, 0 }
     };
 
@@ -1472,25 +1479,45 @@ int main(int argc, char **argv)
 	srand(time(NULL));
 	seed_xrp32(rand());
 	
-    while ((opt = getopt_long(argc, argv, "v", long_options, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "ve:", long_options, NULL)) != -1)
     {
         switch (opt)
         {
         case 'v':
             version_short();
             break; /* unreachable -- version_short() calls exit() */
+		case 'e': {
+			ussr_argument_t eval_arguments[1];
+			eval_arguments[0].type = USSR_ARGUMENT_VALUE;
+			eval_arguments[0].assignment = -1; 
+			eval_arguments[0].data.value.type = USSR_STRING;
+			eval_arguments[0].data.value.data.string = optarg; 
+			
+			const char *dummy_return_name = "_"; 
 
+			int execute_result = ussr_execute_eval(
+				dummy_return_name,
+				eval_arguments,
+				1
+			);
+
+			if (execute_result != 0) {
+				fprintf(stderr, "USSR: error evaluating -e expression\n");
+				return execute_result;
+			}
+			break;
+			
+			
+			}
         case 'V':
             version_long();
             break; /* unreachable -- version_long() calls exit() */
 
-        default:
-            fprintf(
-                stderr,
-                "usage: %s [-v | --version] [script.su]\n",
-                argv[0]
-            );
-            return EXIT_FAILURE;
+        case '?':
+			usage(argv[0]);
+		break;
+		default:
+		break;
         }
     }
 

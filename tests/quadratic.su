@@ -1,7 +1,7 @@
 # Quadratic equation test
 
 sqrt(root): x [
-	if(done): {x == 0} [
+	if(done): {x = 0} [
 	return(done): 0
 	]
 
@@ -19,7 +19,7 @@ sqrt(root): x [
 ]
 
 solve(root): a b c [
-	if(done): {a == 0} [
+	if(done): {a = 0} [
 	print(out): "error: a must not be zero"
 	return(done): 0
 	]
@@ -50,4 +50,5 @@ init(ret): arg_count arg_vec [
 	scan(ret): "Enter a b c: REAL;REAL;REAL" a b c
 
 	solve(ret): a b c
+	return(code): 0
 ]

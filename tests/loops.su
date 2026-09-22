@@ -1,9 +1,7 @@
 init(ret): arg_cnt arg_vec [ 
 	set(a): 0
-	while(b): {a<10} 
-	[
+	while(b): {a<10} [
 		print(val): a
 		set(a): {a+1}
-]
-
+	]
 ]

@@ -8,7 +8,7 @@
 
 ### Maintenance
 
-## [0.4.3] - 2026-09-21
+## [0.4.3] - 2026-09-22
 
 ### Added
 - Added random64 seed_random64 scan get time builtins
@@ -22,7 +22,8 @@
 
 ### Maintenance
 - Fix failing tests
-
+- Added Notepad++ syntax highlighter
+- Added VIM syntax highlighter
 
 ## [0.4.2] - 2026-09-16
 
