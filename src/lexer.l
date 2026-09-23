@@ -24,7 +24,7 @@ IDENT       {LETTER}({LETTER}|{DIGIT})*
 INTEGER     {DIGIT}+
 REAL        {DIGIT}+"."{DIGIT}+
 STRING      \"([^\"\\\n]|\\.)*\"
-
+UNO         '([^'\\\n]|\\.)*'
 
 %%
 
@@ -38,18 +38,11 @@ STRING      \"([^\"\\\n]|\\.)*\"
 
 ">="                        { return GREATER_EQUAL; }
 "<="                        { return LESS_EQUAL; }
-"="                         { return EQUAL; }
 "!="                        { return NOT_EQUAL; }
-"?"                         { return QUESTION; }
-"!"                         { return EXCLAMATION; }
+"="                         { return EQUAL; }
 ">"                         { return GREATER; }
 "<"                         { return LESS; }
 
-"+"                         { return PLUS; }
-"-"                         { return MINUS; }
-"*"                         { return MULTIPLY; }
-"/"                         { return DIVIDE; }
-"%"                         { return MODULO; }
 "&&"                        { return LOGICAL_AND; }
 "||"                        { return LOGICAL_OR; }
 "<<"                        { return SHIFT_LEFT; }
@@ -57,6 +50,14 @@ STRING      \"([^\"\\\n]|\\.)*\"
 "^"                         { return BITWISE_XOR; }
 "&"                         { return BITWISE_AND; }
 "|"                         { return BITWISE_OR; }
+
+"+"                         { return PLUS; }
+"-"                         { return MINUS; }
+"*"                         { return MULTIPLY; }
+"/"                         { return DIVIDE; }
+"%"                         { return MODULO; }
+"?"                         { return QUESTION; }
+"!"                         { return EXCLAMATION; }
 
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }
@@ -85,15 +86,31 @@ STRING      \"([^\"\\\n]|\\.)*\"
     return STRING;
 }
 
-\'[^'\n]*\'    {
-                   yylval.string = malloc((size_t)yyleng - 1);
-                   if (yylval.string == NULL)
-                       return 0;
-                   memcpy(yylval.string, yytext + 1, (size_t)yyleng - 2);
-                   yylval.string[yyleng - 2] = '\0';
-                   return UNO_LITERAL;
-               }
+{UNO}                       {
+    size_t length = yyleng;
+    char *value = malloc(length - 1);
 
+    if (value == NULL)
+        return 0;
+
+    memcpy(value, yytext + 1, length - 2);
+    value[length - 2] = '\0';
+    yylval.string = value;
+    return UNO_LITERAL;
+}
+
+[A-Za-z0-9_./\\:-]+\( {
+    size_t length = yyleng - 1;
+
+    yylval.string = ussr_strdup(yytext);
+
+    if (yylval.string == NULL)
+        return 0;
+
+    yylval.string[length] = '\0';
+    yyless((int)length);
+    return COMMAND_HEAD;
+}
 
 {IDENT}                     {
     yylval.string = ussr_strdup(yytext);
@@ -107,7 +124,7 @@ STRING      \"([^\"\\\n]|\\.)*\"
 .                           {
     fprintf(
         stderr,
-        "USSR: unexpected character '%s' at line %d\\n",
+        "USSR: unexpected character '%s' at line %d\n",
         yytext,
         yylineno
     );
@@ -166,24 +183,12 @@ unquote_string(const char *text)
 
             switch (text[i])
             {
-                case 'n':
-                    output[output_index++] = '\n';
-                    break;
-                case 't':
-                    output[output_index++] = '\t';
-                    break;
-                case 'r':
-                    output[output_index++] = '\r';
-                    break;
-                case '\\':
-                    output[output_index++] = '\\';
-                    break;
-                case '"':
-                    output[output_index++] = '"';
-                    break;
-                default:
-                    output[output_index++] = text[i];
-                    break;
+                case 'n': output[output_index++] = '\n'; break;
+                case 't': output[output_index++] = '\t'; break;
+                case 'r': output[output_index++] = '\r'; break;
+                case '\\': output[output_index++] = '\\'; break;
+                case '"': output[output_index++] = '"'; break;
+                default: output[output_index++] = text[i]; break;
             }
         }
         else

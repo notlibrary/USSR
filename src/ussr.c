@@ -351,9 +351,7 @@ ussr_command_is_definition(const ussr_command_t *command)
         strcmp(command->name, "while") == 0 ||
         strcmp(command->name, "break") == 0 ||
         strcmp(command->name, "continue") == 0 ||
-        strcmp(command->name, "return") == 0 ||
-        strcmp(command->name, "do") == 0 ||
-        strcmp(command->name, "loop") == 0)
+        strcmp(command->name, "return") == 0)
         return 0;
 
     return 1;
@@ -1480,54 +1478,22 @@ static int ussr_execute_list(
              * the definition. Don't execute it.
              */
         }
-        else if (strcmp(command->name, "do") == 0)
-        {
-            int execute_result;
-
-            if (command->next == NULL ||
-                strcmp(command->next->name, "loop") != 0)
-            {
-                fprintf(
-                    stderr,
-                    "USSR: do must be followed by loop(condition)\n"
-                );
-                return -1;
-            }
-
-            execute_result = ussr_execute_do_loop(
-                command->return_name,
-                command->arguments,
-                command->argument_count,
-                command->next
-            );
-
-            if (execute_result != USSR_EXEC_OK)
-                return execute_result;
-
-            command = command->next->next;
-            continue;
-        }
-        else if (strcmp(command->name, "loop") == 0)
-        {
-            fprintf(
-                stderr,
-                "USSR: loop must follow do\n"
-            );
-            return -1;
-        }
         else
         {
-            int execute_result;
+            {
+                int execute_result;
 
-            execute_result = ussr_execute_command(
-                command->name,
-                command->return_name,
-                command->arguments,
-                command->argument_count
-            );
+                execute_result = ussr_execute_command(
+                    command->path,
+                    command->name,
+                    command->return_name,
+                    command->arguments,
+                    command->argument_count
+                );
 
-            if (execute_result != USSR_EXEC_OK)
-                return execute_result;
+                if (execute_result != USSR_EXEC_OK)
+                    return execute_result;
+            }
         }
 
         command = command->next;
@@ -1623,65 +1589,67 @@ static int ussr_execute_if(
     return -1;
 }
 
-int ussr_execute_do_loop(
+static int ussr_execute_do_loop(
     const char *return_name,
     ussr_argument_t *arguments,
-    size_t argument_count,
-    const ussr_command_t *loop_command
+    size_t argument_count
 )
 {
     unsigned long iterations = 0;
     ussr_value_t condition;
     ussr_value_t result;
 
-    /*
-     * Compatibility execution for eval/non-VM execution.
-     *
-     * Syntax:
-     *     do(_): 0 [ body ]
-     *     loop(b): {condition}
-     */
-    if (argument_count != 2 ||
-        arguments[1].type != USSR_ARGUMENT_COMMAND_LIST ||
-        loop_command == NULL ||
-        strcmp(loop_command->name, "loop") != 0 ||
-        loop_command->argument_count != 1)
+    // Проверяем количество аргументов: 1-й — блок команд, 2-й — условие
+    if (argument_count != 2)
     {
         fprintf(
             stderr,
-            "USSR: do must be followed by loop(condition)\n"
+            "USSR: do_loop expects block and condition\n"
         );
+        return -1;
+    }
+
+    // Проверяем, что первый аргумент действительно является списком команд
+    if (arguments[0].type != USSR_ARGUMENT_COMMAND_LIST)
+    {
+        fprintf(stderr, "USSR: do_loop block is required as the first argument\n");
         return -1;
     }
 
     while (1)
     {
-        int execute_result;
-
+        // Защита от бесконечного цикла
         if (++iterations > USSR_MAX_LOOP_ITERATIONS)
         {
             fprintf(
                 stderr,
-                "USSR: do/loop exceeded maximum iterations\n"
+                "USSR: do_loop exceeded maximum iterations\n"
             );
             return -1;
         }
 
-        execute_result = ussr_execute_list(
-            arguments[1].data.command_list
+        // Выполняем тело цикла (первый аргумент)
+        int execute_result = ussr_execute_list(
+            arguments[0].data.command_list
         );
 
         if (execute_result == USSR_EXEC_BREAK)
             break;
 
-        if (execute_result != USSR_EXEC_OK &&
-            execute_result != USSR_EXEC_CONTINUE)
+        if (execute_result == USSR_EXEC_CONTINUE)
+        {
+            // При continue в do-while мы всё равно должны проверить условие перед следующим шагом
+            goto evaluate_condition;
+        }
+
+        if (execute_result != USSR_EXEC_OK)
             return execute_result;
 
+    evaluate_condition:
+        // Вычисляем условие (второй аргумент) после выполнения тела
         if (ussr_argument_evaluate(
-                &loop_command->arguments[0],
-                &condition
-            ) != 0)
+                &arguments[1],
+                &condition) != 0)
             return -1;
 
         if (!ussr_value_truthy(&condition))
@@ -1693,21 +1661,15 @@ int ussr_execute_do_loop(
         ussr_value_free(&condition);
     }
 
+    // Записываем результат выполнения (истина/1)
     result = ussr_boolean(1);
 
     if (return_name != NULL)
     {
-        if (ussr_set_variable(
-                return_name,
-                &result
-            ) != 0)
-        {
-            ussr_value_free(&result);
+        if (ussr_set_variable(return_name, &result) != 0)
             return -1;
-        }
     }
 
-    ussr_value_free(&result);
     return 0;
 }
 
@@ -2809,6 +2771,7 @@ fail:
 }
 
 int ussr_execute_command(
+    const char *command_path,
     const char *command,
     const char *return_name,
     ussr_argument_t *arguments,
@@ -2820,6 +2783,9 @@ int ussr_execute_command(
     int assignment_index = -1;
     int oop_status;
     size_t i;
+
+    /* Phase 0 stores the path in the AST; execution semantics are unchanged. */
+    (void)command_path;
 
     if (command == NULL)
         return -1;
@@ -2839,23 +2805,12 @@ int ussr_execute_command(
         );
 
     if (strcmp(command, "do") == 0)
-    {
-        fprintf(
-            stderr,
-            "USSR: do must be executed as do followed by loop(condition)\n"
+        return ussr_execute_do_loop(
+            return_name,
+            arguments,
+            argument_count
         );
-        return -1;
-    }
-
-    if (strcmp(command, "loop") == 0)
-    {
-        fprintf(
-            stderr,
-            "USSR: loop must follow do\n"
-        );
-        return -1;
-    }
-
+		
     if (strcmp(command, "break") == 0 ||
         strcmp(command, "continue") == 0 ||
         strcmp(command, "return") == 0)
@@ -3409,6 +3364,7 @@ ussr_command_list_create(void)
 
 ussr_command_t *
 ussr_command_create(
+    char *path,
     char *name,
     char *return_name,
     ussr_argument_t *arguments,
@@ -3422,6 +3378,7 @@ ussr_command_create(
     if (command == NULL)
         return NULL;
 
+    command->path = path;
     command->name = name;
     command->return_name = return_name;
     command->arguments = arguments;
@@ -3530,6 +3487,7 @@ void ussr_command_list_free(ussr_command_list_t *list)
     {
         next = command->next;
 
+        free(command->path);
         free(command->name);
         free(command->return_name);
 

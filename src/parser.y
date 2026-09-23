@@ -23,6 +23,7 @@ void yyerror(const char *message)
 ussr_command_list_t *ussr_parsed_program = NULL;
 
 ussr_command_t *ussr_command_create(
+    char *path,
     char *name,
     char *return_name,
     ussr_argument_t *arguments,
@@ -49,6 +50,7 @@ static int ussr_parser_block_allowed(const char *name)
 
     if (strcmp(name, "if") == 0 ||
         strcmp(name, "while") == 0 ||
+        strcmp(name, "do") == 0 ||
         strcmp(name, "method") == 0 ||
         strcmp(name, "each") == 0 ||
         strcmp(name, "map") == 0 ||
@@ -126,6 +128,7 @@ static int ussr_parser_blocks_are_trailing(ussr_argument_t *items, size_t count)
 }
 
 %token <string> IDENTIFIER
+%token <string> COMMAND_HEAD
 %token <string> STRING
 %token <integer> INTEGER
 %token <real> REAL
@@ -233,10 +236,90 @@ command_line
     ;
 
 command
-    : IDENTIFIER LPAREN IDENTIFIER RPAREN command_tail
+    : COMMAND_HEAD LPAREN IDENTIFIER RPAREN command_tail
       {
+          char *head;
+          char *path;
+          char *name;
+          char *separator;
+
+          head = $1;
+          path = NULL;
+          name = NULL;
+
+          separator = strrchr(head, '/');
+          {
+              char *backslash = strrchr(head, '\\');
+
+              if (backslash != NULL &&
+                  (separator == NULL || backslash > separator))
+                  separator = backslash;
+          }
+
+          if (separator != NULL)
+          {
+              size_t path_length;
+              size_t name_length;
+
+              path_length = (size_t)(separator - head) + 1;
+              name_length = strlen(separator + 1);
+
+              path = malloc(path_length + 1);
+              name = malloc(name_length + 1);
+
+              if (path == NULL || name == NULL)
+              {
+                  free(path);
+                  free(name);
+                  free(head);
+                  free($3);
+                  free($5.items);
+                  YYABORT;
+              }
+
+              memcpy(path, head, path_length);
+              path[path_length] = '\0';
+              memcpy(name, separator + 1, name_length + 1);
+          }
+          else
+          {
+              name = head;
+              head = NULL;
+          }
+
+          if (!ussr_parser_blocks_are_trailing($5.items, $5.count))
+          {
+              fprintf(
+                  stderr,
+                  "USSR: [] blocks must be trailing command blocks\n"
+              );
+              free(path);
+              free(name);
+              free(head);
+              free($3);
+              free($5.items);
+              YYABORT;
+          }
+
+          if (ussr_parser_block_count($5.items, $5.count) != 0 &&
+              !ussr_parser_block_allowed(name))
+          {
+              fprintf(
+                  stderr,
+                  "USSR: command '%s' cannot have a [] block\n",
+                  name
+              );
+              free(path);
+              free(name);
+              free(head);
+              free($3);
+              free($5.items);
+              YYABORT;
+          }
+
           $$ = ussr_command_create(
-              $1,
+              path,
+              name,
               $3,
               $5.items,
               $5.count
@@ -244,45 +327,20 @@ command
 
           if ($$ == NULL)
           {
-              free($1);
+              free(path);
+              free(name);
+              free(head);
               free($3);
               free($5.items);
               YYABORT;
           }
 
-          if (!ussr_parser_blocks_are_trailing($5.items, $5.count))
-          {
-              fprintf(stderr,
-                      "USSR: [] blocks must be trailing command blocks\n");
-              free($1);
-              free($3);
-              free($5.items);
-              free($$);
-              YYABORT;
-          }
-
-          if (ussr_parser_block_count($5.items, $5.count) != 0 &&
-              !ussr_parser_block_allowed($1))
-          {
-              fprintf(stderr,
-                      "USSR: command '%s' cannot have a [] block\n",
-                      $1);
-              free($1);
-              free($3);
-              free($5.items);
-              free($$);
-              YYABORT;
-          }
+          free(head);
       }
     ;
 
 command_tail
-    : %empty
-      {
-          $$.items = NULL;
-          $$.count = 0;
-      }
-    | COLON
+    : COLON
       {
           $$.items = NULL;
           $$.count = 0;

@@ -157,6 +157,9 @@ typedef struct ussr_saved_variable_t
 
 typedef struct ussr_command_t
 {
+    /* Directory/device prefix of an explicit command path, or NULL.
+     * Examples: "./", "/usr/bin/", "C:\\Users\\serenity\\". */
+    char *path;
     char *name;
     char *return_name;
 
@@ -233,6 +236,7 @@ int ussr_external_execute_values(
 void ussr_print_value(const ussr_value_t *value);
 
 int ussr_execute_command(
+    const char *command_path,
     const char *command,
     const char *return_name,
     ussr_argument_t *arguments,
@@ -243,6 +247,7 @@ int ussr_execute_program(ussr_command_list_t *program);
 
 ussr_command_list_t *ussr_command_list_create(void);
 ussr_command_t *ussr_command_create(
+    char *path,
     char *name,
     char *return_name,
     ussr_argument_t *arguments,
@@ -256,7 +261,7 @@ int ussr_command_list_append(
 void ussr_command_list_free(ussr_command_list_t *list);
 
 void ussr_expression_free(ussr_expression_t *expression);
+
 int ussr_execute_eval(const char *return_name, ussr_argument_t *arguments, size_t argument_count);
 int ussr_execute_do_loop(const char *return_name,ussr_argument_t *arguments,size_t argument_count,const ussr_command_t *loop_command);
-
 #endif
