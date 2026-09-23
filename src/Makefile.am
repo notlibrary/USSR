@@ -10,7 +10,9 @@ ussr_SOURCES = \
     pp.c \
     uno.c \
     ussr_oop_builtins.c \
-    prng64_xrp32.c
+    prng64_xrp32.c \
+	autocomplete.c
+	
 AM_CPPFLAGS = -I$(srcdir)
 
 EXTRA_DIST = \
@@ -21,4 +23,5 @@ EXTRA_DIST = \
     pp.h \
     bestline.h \
     uthash.h \
-	prng64_xrp32.h
+	prng64_xrp32.h \
+	autocomplete.h

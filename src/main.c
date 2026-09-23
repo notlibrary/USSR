@@ -24,6 +24,8 @@
 #include "pp.h"
 #include "ussr_version.h"
 #include "prng64_xrp32.h"
+#include "autocomplete.h"
+#include "completion_fs.h"
 
 int yyparse(void);
 
@@ -1187,16 +1189,13 @@ static int parse_and_execute(const char *source, int argc, char **argv)
         return 0;
 
     /* AST -> bytecode happens once. Execution starts only after compilation. */
-	int error_code = ussr_bc_compile(ussr_parsed_program, &bytecode);
-	if (error_code != 0)
-	{
-		// %d используется для целых чисел (int)
-		fprintf(stderr, "USSR compiler: compilation failed with error code %d\n", error_code);
-		
-		ussr_command_list_free(ussr_parsed_program);
-		ussr_parsed_program = NULL;
-		return -1;
-	}
+    if (ussr_bc_compile(ussr_parsed_program, &bytecode) != 0)
+    {
+        fprintf(stderr, "USSR compiler: compilation failed");
+        ussr_command_list_free(ussr_parsed_program);
+        ussr_parsed_program = NULL;
+        return -1;
+    }
 
     vm_init(&vm);
     vm.running = 1;
@@ -1274,6 +1273,18 @@ parse_execute_after_vm:
     return result;
 }
 
+static int run_eval(const char *source, int argc, char **argv)
+{
+    int result;
+
+    if (source == NULL || source[0] == '\0')
+        return 0;
+
+    result = parse_and_execute(source, argc, argv);
+
+    return result;
+}
+
 static int run_file(const char *filename, int argc, char **argv)
 {
     ussr_preprocessor_t pp;
@@ -1315,6 +1326,9 @@ static int run_repl(void)
     printf("USSR v%d.%d\n",USSR_VERSION_MAJOR, USSR_VERSION_MINOR);
     printf("Enter a command list or press Ctrl-D to exit.\n\n");
 
+    ussr_autocomplete_init();
+    bestlineSetCompletionCallback(ussr_autocomplete_callback);
+
     if (ussr_pp_init(&pp) != 0)
     {
         fprintf(stderr,
@@ -1341,6 +1355,7 @@ static int run_repl(void)
         }
 
         bestlineHistoryAdd(line);
+        ussr_autocomplete_record_history(line);
 
         result = ussr_pp_process_line(&pp, line);
         bestlineFree(line);
@@ -1353,6 +1368,7 @@ static int run_repl(void)
             if (source != NULL)
                 source[0] = '\0';
 
+            ussr_autocomplete_set_source(NULL);
             ussr_pp_clear_output(&pp);
             continue;
         }
@@ -1361,6 +1377,7 @@ static int run_repl(void)
 
         if (processed == NULL || processed[0] == '\0')
         {
+            ussr_autocomplete_set_source(NULL);
             ussr_pp_clear_output(&pp);
             continue;
         }
@@ -1371,6 +1388,7 @@ static int run_repl(void)
                 &capacity,
                 processed) != 0)
         {
+            ussr_autocomplete_cleanup();
             ussr_pp_clear_output(&pp);
             free(source);
             ussr_pp_cleanup(&pp);
@@ -1378,6 +1396,7 @@ static int run_repl(void)
         }
 
         bracket_depth = count_brackets(processed, bracket_depth);
+        ussr_autocomplete_set_source(source);
         ussr_pp_clear_output(&pp);
 
         if (bracket_depth > 0)
@@ -1389,10 +1408,13 @@ static int run_repl(void)
         if (source != NULL)
             source[0] = '\0';
 
+        ussr_autocomplete_set_source(NULL);
+
         if (result != 0)
             continue;
     }
 
+    ussr_autocomplete_cleanup();
     free(source);
     ussr_pp_cleanup(&pp);
 
@@ -1469,12 +1491,13 @@ int main(int argc, char **argv)
      */
     static const struct option long_options[] = {
         { "version", no_argument, NULL, 'V' },
-		{ "eval", required_argument, NULL, 'e' },
+        { "eval", required_argument, NULL, 'e' },
         { NULL, 0, NULL, 0 }
     };
 
     int result;
     int opt;
+    const char *eval_source = NULL;
 	
 	srand(time(NULL));
 	seed_xrp32(rand());
@@ -1486,32 +1509,14 @@ int main(int argc, char **argv)
         case 'v':
             version_short();
             break; /* unreachable -- version_short() calls exit() */
-		case 'e': {
-			ussr_argument_t eval_arguments[1];
-			eval_arguments[0].type = USSR_ARGUMENT_VALUE;
-			eval_arguments[0].assignment = -1; 
-			eval_arguments[0].data.value.type = USSR_STRING;
-			eval_arguments[0].data.value.data.string = optarg; 
-			
-			const char *dummy_return_name = "_"; 
 
-			int execute_result = ussr_execute_eval(
-				dummy_return_name,
-				eval_arguments,
-				1
-			);
-
-			if (execute_result != 0) {
-				fprintf(stderr, "USSR: error evaluating -e expression\n");
-				return execute_result;
-			}
-			break;
-			
-			
-			}
         case 'V':
             version_long();
             break; /* unreachable -- version_long() calls exit() */
+
+        case 'e':
+            eval_source = optarg;
+            break;
 
         case '?':
 			usage(argv[0]);
@@ -1539,7 +1544,15 @@ int main(int argc, char **argv)
         }
     }
 
-    if (optind < argc)
+    if (eval_source != NULL)
+    {
+        result = run_eval(
+            eval_source,
+            argc - optind,
+            argv + optind
+        );
+    }
+    else if (optind < argc)
         result = run_file(argv[optind], argc - optind, argv + optind);
     else
         result = run_repl();

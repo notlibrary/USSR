@@ -1589,11 +1589,7 @@ static int ussr_execute_if(
     return -1;
 }
 
-static int ussr_execute_do_loop(
-    const char *return_name,
-    ussr_argument_t *arguments,
-    size_t argument_count
-)
+int ussr_execute_do_loop(const char *return_name,ussr_argument_t *arguments,size_t argument_count)
 {
     unsigned long iterations = 0;
     ussr_value_t condition;
