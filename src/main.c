@@ -20,6 +20,7 @@
 #include "bestline.h"
 #include <getopt.h>
 #endif
+#include "autocomplete.h"
 #include "ussr.h"
 #include "pp.h"
 #include "ussr_version.h"
@@ -1327,7 +1328,11 @@ static int run_repl(void)
     printf("Enter a command list or press Ctrl-D to exit.\n\n");
 
     ussr_autocomplete_init();
-    bestlineSetCompletionCallback(ussr_autocomplete_callback);
+#ifdef _WIN32	
+	worstlineSetCompletionCallback(ussr_autocomplete_callback);	
+#else
+	bestlineSetCompletionCallback(ussr_autocomplete_callback);
+#endif
 
     if (ussr_pp_init(&pp) != 0)
     {

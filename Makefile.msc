@@ -3,25 +3,12 @@
 #     nmake /f Makefile.msc
 #
 # Requires cl.exe (a "Developer Command Prompt for VS" shell) and
-# win_bison.exe / win_flex.exe on PATH -- MSVC ships neither yacc nor
-# lex. The winflexbison project provides Bison/Flex-compatible
-# binaries for Windows: https://github.com
+# win_bison.exe / win_flex.exe on PATH.
 #
-# If you'd rather not take that dependency, generate parser.tab.c /
-# parser.tab.h / lexer.c once (on any machine with real bison/flex,
-# including WSL) and check them into src\; then override:
-#     nmake /f Makefile.msc PREGENERATED=1
-# which skips the win_bison/win_flex rules entirely and just compiles
-# whatever src\parser.tab.c/src\lexer.c already exist.
+# All sources live under src\. Windows-only replacements live under
+# src\win\.
 #
-# All sources live under src\. Windows-only replacements (fork/exec ->
-# CreateProcess, bestline -> the native console line editor named
-# worstline.*, deliberately not bestline.*, so grepping a symbol never
-# leaves you wondering which implementation you're looking at) live
-# under src\win\, alongside the shared cross-platform
-# src\process.h/src\process_posix.c that the POSIX build also uses.
-# Object files are written back into src\ (and src\win\) too, next to
-# their sources, rather than the project root.
+# Object files are written next to their sources.
 
 CC      = cl.exe
 RC      = rc.exe
@@ -47,7 +34,9 @@ OBJS = \
     $(SRC)\ussr_bytecode.obj \
     $(SRC)\parser.tab.obj \
     $(SRC)\lexer.obj \
-	$(SRC)\prng64_xrp32.obj \
+    $(SRC)\prng64_xrp32.obj \
+    $(SRC)\autocomplete.obj \
+    $(SRC)\completion_fs_win32.obj \
     $(WIN)\process_win32.obj \
     $(WIN)\worstline.obj \
     $(WIN)\getopt.obj \
@@ -75,10 +64,6 @@ $(SRC)\lexer.c: $(SRC)\lexer.l $(SRC)\parser.tab.h
 !ENDIF
 
 # --- object files -----------------------------------------------------
-# Written as explicit per-file rules (rather than relying on nmake's
-# automatic $** / $< inside multi-dependency rules, which behaves
-# inconsistently across nmake versions outside simple inference
-# rules) so this stays predictable everywhere.
 
 $(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)\ussr_oop_builtins.h $(SRC)\process.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr.obj $(SRC)\ussr.c
@@ -86,7 +71,7 @@ $(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)
 $(SRC)\pp.obj: $(SRC)\pp.c $(SRC)\pp.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\pp.obj $(SRC)\pp.c
 
-$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_oop_builtins.h
+$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\main.obj $(SRC)\main.c
 
 $(SRC)\uno.obj: $(SRC)\uno.c $(SRC)\uno.h $(SRC)\ussr.h
@@ -107,6 +92,15 @@ $(SRC)\lexer.obj: $(SRC)\lexer.c $(SRC)\parser.tab.h
 $(SRC)\prng64_xrp32.obj: $(SRC)\prng64_xrp32.c $(SRC)\prng64_xrp32.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\prng64_xrp32.obj $(SRC)\prng64_xrp32.c
 
+# --- autocomplete ----------------------------------------------------
+
+$(SRC)\autocomplete.obj: $(SRC)\autocomplete.c $(SRC)\autocomplete.h $(SRC)\completion_fs.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\autocomplete.obj $(SRC)\autocomplete.c
+
+# Windows gets only the Win32 filesystem completion backend.
+$(SRC)\completion_fs_win32.obj: $(SRC)\completion_fs_win32.c $(SRC)\completion_fs.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\completion_fs_win32.obj $(SRC)\completion_fs_win32.c
+
 $(WIN)\process_win32.obj: $(WIN)\process_win32.c $(SRC)\process.h
 	$(CC) $(CFLAGS) /c /Fo:$(WIN)\process_win32.obj $(WIN)\process_win32.c
 
@@ -119,3 +113,5 @@ $(WIN)\getopt.obj: $(WIN)\getopt.c $(WIN)\getopt.h
 clean:
 	-del /q $(SRC)\*.obj $(WIN)\*.obj $(TARGET) *.pdb *.res 2>NUL
 	-del /q $(SRC)\parser.tab.c $(SRC)\parser.tab.h $(SRC)\lexer.c 2>NUL
+
+.PHONY: all clean
