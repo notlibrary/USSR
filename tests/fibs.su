@@ -1,0 +1,23 @@
+
+fib(result): n a b [
+    if(done): {n = 0} [
+        return(result): a
+    ]
+
+    set(next_n): {n - 1}
+    set(next_a): b
+    set(next_b): {a + b}
+
+    fib(result): next_n next_a next_b
+]
+
+init(ret): arg_cnt arg_vec [
+    scan(ok): "Enter n: INTEGER INT;" n
+
+    fib(result): n 0 1
+
+    print(out): result
+
+    return(ret): 0
+]
+
