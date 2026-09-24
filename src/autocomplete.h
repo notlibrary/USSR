@@ -1,7 +1,7 @@
 #ifndef USSR_AUTOCOMPLETE_H
 #define USSR_AUTOCOMPLETE_H
 
-#include "bestline.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,11 +28,24 @@ void ussr_autocomplete_set_source(const char *source);
 void ussr_autocomplete_record_history(const char *line);
 
 /* Bestline callback. Register this only while running the REPL. */
+#ifndef _WIN32
+#include "bestline.h"
+#endif
+
+#ifdef _WIN32
+void ussr_autocomplete_callback(
+    const char *line,
+    size_t cursor,
+    char ***matches,
+    size_t *match_count
+);
+#else
 void ussr_autocomplete_callback(
     const char *line,
     int cursor,
     bestlineCompletions *completions
 );
+#endif
 
 #ifdef __cplusplus
 }

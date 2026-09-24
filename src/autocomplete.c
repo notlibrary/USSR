@@ -705,31 +705,21 @@ void ussr_autocomplete_record_history(const char *line)
     ++state.serial;
 }
 
-void ussr_autocomplete_callback(
+static size_t ac_collect_candidates(
     const char *line,
-    int cursor,
-    bestlineCompletions *completions)
+    size_t cursor,
+    ac_candidate_t *candidates)
 {
-    ac_candidate_t candidates[USSR_AUTOCOMPLETE_MAX_CANDIDATES];
     char token[AC_MAX_TOKEN];
     size_t token_start;
     size_t count = 0;
-    size_t i;
     int command_context;
     int argument_context;
 
-    if (completions == NULL || line == NULL)
-        return;
+    if (line == NULL || candidates == NULL)
+        return 0;
 
-    memset(candidates, 0, sizeof(candidates));
-
-    ac_extract_token(
-        line,
-        cursor,
-        token,
-        sizeof(token),
-        &token_start
-    );
+    ac_extract_token(line, (int)cursor, token, sizeof(token), &token_start);
 
     command_context = ac_in_command_head(line, token_start);
     argument_context = ac_argument_position(line, token_start, token);
@@ -748,24 +738,87 @@ void ussr_autocomplete_callback(
     }
     else
     {
-        /* In an argument position, bare names are also filesystem
-         * candidates from the current directory. */
         ac_add_filesystem_candidates(token, candidates, &count);
-
         ac_add_history_options(line, token, candidates, &count);
         ac_add_source_identifiers(token, candidates, &count);
     }
 
     ac_add_candidate_prefix_bonus(candidates, count, token);
-    qsort(
-        candidates,
-        count,
-        sizeof(candidates[0]),
-        ac_compare_candidates
-    );
+    qsort(candidates, count, sizeof(candidates[0]), ac_compare_candidates);
+    return count;
+}
+
+#ifdef _WIN32
+void ussr_autocomplete_callback(
+    const char *line,
+    size_t cursor,
+    char ***matches,
+    size_t *match_count)
+{
+    ac_candidate_t candidates[USSR_AUTOCOMPLETE_MAX_CANDIDATES];
+    char **result;
+    size_t count;
+    size_t i;
+
+    if (matches == NULL || match_count == NULL)
+        return;
+
+    *matches = NULL;
+    *match_count = 0;
+    memset(candidates, 0, sizeof(candidates));
+    count = ac_collect_candidates(line, cursor, candidates);
+
+    if (count == 0)
+    {
+        ac_free_candidates(candidates, count);
+        return;
+    }
+
+    result = calloc(count, sizeof(*result));
+    if (result == NULL)
+    {
+        ac_free_candidates(candidates, count);
+        return;
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        result[i] = ac_strdup(candidates[i].text);
+        if (result[i] == NULL)
+        {
+            size_t j;
+            for (j = 0; j < i; ++j)
+                free(result[j]);
+            free(result);
+            ac_free_candidates(candidates, count);
+            return;
+        }
+    }
+
+    *matches = result;
+    *match_count = count;
+    ac_free_candidates(candidates, count);
+}
+#else
+void ussr_autocomplete_callback(
+    const char *line,
+    int cursor,
+    bestlineCompletions *completions)
+{
+    ac_candidate_t candidates[USSR_AUTOCOMPLETE_MAX_CANDIDATES];
+    size_t count;
+    size_t i;
+
+    if (completions == NULL || line == NULL)
+        return;
+
+    memset(candidates, 0, sizeof(candidates));
+    count = ac_collect_candidates(
+        line, cursor < 0 ? 0U : (size_t)cursor, candidates);
 
     for (i = 0; i < count; ++i)
         bestlineAddCompletion(completions, candidates[i].text);
 
     ac_free_candidates(candidates, count);
 }
+#endif

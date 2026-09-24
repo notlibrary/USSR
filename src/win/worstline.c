@@ -31,6 +31,15 @@ static char **g_history = NULL;
 static size_t g_history_count = 0;
 static size_t g_history_capacity = 0;
 
+static worstlineCompletionCallback *g_completion_callback = NULL;
+
+void worstlineSetCompletionCallback(
+    worstlineCompletionCallback *callback
+)
+{
+    g_completion_callback = callback;
+}
+
 void worstlineHistoryAdd(const char *line)
 {
     char *copy;
@@ -189,6 +198,28 @@ char *worstline(const char *prompt)
     for (;;)
     {
         int c = _getch();
+
+        if (c == '\t')
+        {
+            char **matches = NULL;
+            size_t match_count = 0;
+
+            if (g_completion_callback != NULL)
+                g_completion_callback(state.data, state.cursor,
+                                      &matches, &match_count);
+
+            if (match_count > 0 && matches != NULL)
+                line_set_text(&state, matches[0]);
+
+            if (matches != NULL)
+            {
+                size_t i;
+                for (i = 0; i < match_count; ++i)
+                    free(matches[i]);
+                free(matches);
+            }
+            continue;
+        }
 
         if (c == '\r' || c == '\n')
         {
