@@ -83,6 +83,7 @@ typedef enum
     USSR_BC_CHAIN    = 0x4a,
     USSR_BC_FILE     = 0x4b,
     USSR_BC_CD       = 0x4c,
+    USSR_BC_TEMPLATE = 0x4d,
 
     USSR_BC_CALL   = 0x50,
     USSR_BC_RET    = 0x51,

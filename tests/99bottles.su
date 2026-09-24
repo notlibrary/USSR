@@ -1,7 +1,7 @@
 init(ret): arg_cnt arg_vec [ 
 	set(a): 99
 	while(b): {a>0} [
-		template(_): "INT;STR;INT;STR;STR;INT;STR" a "bottles of beer on the wall\n" a "bottles of beer\n" "Take one down, pass it around\n" {a-1} "bottles of beer on the wall\n\n"
+		template(_): "INT;STR;INT;STR;STR;INT;STR" a " bottles of beer on the wall\n" a " bottles of beer\n" "Take one down, pass it around\n" {a-1} " bottles of beer on the wall\n\n"
 		set(a): {a-1}
 	]
 ]

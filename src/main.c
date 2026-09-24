@@ -736,6 +736,129 @@ static int vm_chain_write_file(const ussr_vm_t *vm, const char *filename)
     return 0;
 }
 
+static int vm_template_type(
+    const char *p,
+    const char **end,
+    const char **type)
+{
+    static const char *types[] = { "STR", "INT", "REAL", "BOOL" };
+    size_t i;
+
+    if (p == NULL || end == NULL || type == NULL)
+        return -1;
+
+    for (i = 0; i < sizeof(types) / sizeof(types[0]); ++i)
+    {
+        size_t length = strlen(types[i]);
+
+        if (strncmp(p, types[i], length) != 0)
+            continue;
+
+        if (p[length] != '\0' &&
+            p[length] != ';' &&
+            p[length] != ' ' &&
+            p[length] != '\t')
+            continue;
+
+        *end = p + length;
+        *type = types[i];
+        return 0;
+    }
+
+    return -1;
+}
+
+static int vm_template_emit_value(
+    const char *type,
+    const ussr_value_t *value)
+{
+    if (type == NULL || value == NULL)
+        return -1;
+
+    if (strcmp(type, "STR") == 0)
+    {
+        if (value->type != USSR_STRING)
+            return -1;
+        fputs(value->data.string, stdout);
+        return 0;
+    }
+
+    if (strcmp(type, "INT") == 0)
+    {
+        if (value->type != USSR_INTEGER)
+            return -1;
+        printf("%ld", value->data.integer);
+        return 0;
+    }
+
+    if (strcmp(type, "REAL") == 0)
+    {
+        if (value->type != USSR_REAL)
+            return -1;
+        printf("%.17g", value->data.real);
+        return 0;
+    }
+
+    if (strcmp(type, "BOOL") == 0)
+    {
+        if (value->type != USSR_BOOLEAN)
+            return -1;
+        fputs(value->data.boolean ? "true" : "false", stdout);
+        return 0;
+    }
+
+    return -1;
+}
+
+static int vm_template_execute(
+    const char *format,
+    const ussr_value_t *values,
+    size_t value_count)
+{
+    const char *p;
+    size_t value_index = 0;
+
+    if (format == NULL || values == NULL || value_count > 255)
+        return -1;
+
+    for (p = format; *p != '\0'; )
+    {
+        const char *end;
+        const char *type;
+
+        if (p[0] == ';' && p[1] == ';')
+        {
+            fputc(';', stdout);
+            p += 2;
+            continue;
+        }
+
+        if ((p == format || p[-1] == ' ' || p[-1] == '\t' || p[-1] == ';') &&
+            vm_template_type(p, &end, &type) == 0)
+        {
+            if (value_index >= value_count ||
+                vm_template_emit_value(type, &values[value_index]) != 0)
+                return -1;
+
+            ++value_index;
+            p = end;
+
+            if (*p == ';')
+                ++p;
+            continue;
+        }
+
+        fputc((unsigned char)*p, stdout);
+        ++p;
+    }
+
+    if (value_index != value_count)
+        return -1;
+
+    fflush(stdout);
+    return 0;
+}
+
 static int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program)
@@ -891,6 +1014,34 @@ static int vm_execute(
                     vm_scan_execute(program->strings[ins.immediate],
                                     scan_command) != 0)
                 { result=-1; goto done; }
+                value = ussr_boolean(1);
+                ussr_value_free(&vm->registers[ins.a]);
+                vm->registers[ins.a] = value;
+                break;
+            }
+            case USSR_BC_TEMPLATE:
+            {
+                ussr_value_t *template_values;
+
+                if (ins.immediate >= program->string_count ||
+                    ins.a >= USSR_VM_REGISTER_COUNT ||
+                    ins.b > USSR_BC_RETURN_REG)
+                {
+                    result = -1;
+                    goto done;
+                }
+
+                template_values = &vm->registers[0];
+                if (vm_template_execute(
+                        program->strings[ins.immediate],
+                        template_values,
+                        ins.b) != 0)
+                {
+                    fprintf(stderr, "USSR: template arguments do not match format\n");
+                    result = -1;
+                    goto done;
+                }
+
                 value = ussr_boolean(1);
                 ussr_value_free(&vm->registers[ins.a]);
                 vm->registers[ins.a] = value;
@@ -1346,13 +1497,8 @@ static int run_repl(void)
     capacity = 0;
     bracket_depth = 0;
 
-#ifdef _WIN32
-    while ((line = worstline(
-                bracket_depth > 0 ? "... " : "ussr> ")) != NULL)
-#else
     while ((line = bestline(
                 bracket_depth > 0 ? "... " : "ussr> ")) != NULL)
-#endif
     {
         const char *processed;
 
@@ -1360,27 +1506,15 @@ static int run_repl(void)
 
         if (line_length == 0)
         {
-#ifdef _WIN32
-            worstlineFree(line);
-#else
             bestlineFree(line);
-#endif
             continue;
         }
 
-#ifdef _WIN32
-        worstlineHistoryAdd(line);
-#else
         bestlineHistoryAdd(line);
-#endif
         ussr_autocomplete_record_history(line);
 
         result = ussr_pp_process_line(&pp, line);
-#ifdef _WIN32
-        worstlineFree(line);
-#else
         bestlineFree(line);
-#endif
 
         if (result != 0)
         {
