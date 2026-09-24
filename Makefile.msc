@@ -35,8 +35,8 @@ OBJS = \
     $(SRC)\parser.tab.obj \
     $(SRC)\lexer.obj \
     $(SRC)\prng64_xrp32.obj \
-    $(SRC)\autocomplete.obj \
-    $(SRC)\completion_fs_win32.obj \
+	$(SRC)\autocomplete.obj \
+	$(SRC)\completion_fs_win32.obj \
     $(WIN)\process_win32.obj \
     $(WIN)\worstline.obj \
     $(WIN)\getopt.obj \
@@ -97,7 +97,6 @@ $(SRC)\prng64_xrp32.obj: $(SRC)\prng64_xrp32.c $(SRC)\prng64_xrp32.h
 $(SRC)\autocomplete.obj: $(SRC)\autocomplete.c $(SRC)\autocomplete.h $(SRC)\completion_fs.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\autocomplete.obj $(SRC)\autocomplete.c
 
-# Windows gets only the Win32 filesystem completion backend.
 $(SRC)\completion_fs_win32.obj: $(SRC)\completion_fs_win32.c $(SRC)\completion_fs.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\completion_fs_win32.obj $(SRC)\completion_fs_win32.c
 
