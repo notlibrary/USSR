@@ -1051,80 +1051,139 @@ static int bc_compile_command(
     /*
      * while(condition): [body]
      */
-if (strcmp(command->name, "do") == 0) {
-    bc_loop_t child;
-    size_t body_start;
-    size_t cond_start;
-    size_t end;
-    size_t n;
-    int jump_false;
-    const ussr_argument_t *block_arg = NULL;
-    const ussr_argument_t *loop_arg = NULL;
+if (strcmp(command->name, "do") == 0)
+    {
+        bc_loop_t child;
+        const ussr_command_t *loop_command;
+        size_t body_start;
+        size_t cond_start;
+        size_t end;
+        size_t n;
+        int jump_false;
 
-    memset(&child, 0, sizeof(child));
-    if (count != 2) return -1;
+        memset(&child, 0, sizeof(child));
 
-    // Корректно определяем, где блок, а где команда loop
-    if (a[0].type == USSR_ARGUMENT_COMMAND_LIST && a[0].data.command_list != NULL &&
-        a[0].data.command_list->head != NULL && strcmp(a[0].data.command_list->head->name, "loop") == 0) {
-        loop_arg = &a[0];
-        block_arg = &a[1];
-    } else if (a[1].type == USSR_ARGUMENT_COMMAND_LIST && a[1].data.command_list != NULL &&
-               a[1].data.command_list->head != NULL && strcmp(a[1].data.command_list->head->name, "loop") == 0) {
-        block_arg = &a[0];
-        loop_arg = &a[1];
-    } else {
-        return -1;
-    }
+        /*
+         * Syntax:
+         *
+         *     do(_): 0 [
+         *         ...
+         *     ]
+         *     loop(b): {condition}
+         *
+         * The first do argument is the do command's value/result
+         * parameter. The second argument is the body block.
+         * The loop command is the NEXT command in the list.
+         */
+        if (count != 2 ||
+            a[1].type != USSR_ARGUMENT_COMMAND_LIST)
+            return -1;
 
-    if (block_arg->type != USSR_ARGUMENT_COMMAND_LIST) return -1;
-    if (loop_arg->data.command_list->head->argument_count < 1) return -1; // Защита от отсутствия условия
+        loop_command = command->next;
 
-    // 1. Точка начала тела цикла
-    body_start = p->code_count;
-    if (bc_compile_list(p, block_arg->data.command_list, &child, current) != 0) goto do_error;
+        if (loop_command == NULL ||
+            strcmp(loop_command->name, "loop") != 0 ||
+            loop_command->argument_count != 1)
+        {
+            fprintf(
+                stderr,
+                "USSR compiler: do must be followed by loop(condition)\n"
+            );
+            return -1;
+        }
 
-    // 2. Точка вычисления условия (сюда прыгают все 'continue')
-    cond_start = p->code_count;
-    if (bc_compile_argument(p, &loop_arg->data.command_list->head->arguments[0], 0) != 0) goto do_error;
+        body_start = p->code_count;
 
-    // 3. Проверка условия. Если FALSE -> прыгаем на end.
-    // Если ваша ВМ требует очистки значения из стека, убедитесь, что JMP_FALSE "съедает" его.
-    jump_false = bc_emit(p, USSR_BC_JMP_FALSE, 0, 0, 0, 0);
-    if (jump_false < 0) goto do_error;
+        if (bc_compile_list(
+                p,
+                a[1].data.command_list,
+                &child,
+                current
+            ) != 0)
+            goto do_error;
 
-    // 4. Если TRUE -> прыгаем обратно на body_start
-    if (bc_emit(p, USSR_BC_JMP, 0, 0, 0, (uint32_t)body_start) < 0) goto do_error;
+        /*
+         * continue jumps here, so the loop condition is evaluated
+         * before another body iteration.
+         */
+        cond_start = p->code_count;
 
-    // 5. Точка выхода из цикла (сюда прыгают 'break' и JMP_FALSE)
-    end = p->code_count;
+        if (bc_compile_argument(
+                p,
+                &loop_command->arguments[0],
+                0
+            ) != 0)
+            goto do_error;
 
-    // Патчим все 'continue' на cond_start (вычисление условия)
-    for (n = 0; n < child.continue_count; ++n) {
-        if (bc_patch(p, child.continues[n], cond_start) != 0) goto do_error;
-    }
+        jump_false = bc_emit(
+            p,
+            USSR_BC_JMP_FALSE,
+            0,
+            0,
+            0,
+            0
+        );
 
-    // Патчим выход по несовпадению условия
-    if (bc_patch(p, (size_t)jump_false, end) != 0) goto do_error;
+        if (jump_false < 0)
+            goto do_error;
 
-    // Патчим все 'break' на end
-    for (n = 0; n < child.break_count; ++n) {
-        if (bc_patch(p, child.breaks[n], end) != 0) goto do_error;
-    }
+        if (bc_emit(
+                p,
+                USSR_BC_JMP,
+                0,
+                0,
+                0,
+                (uint32_t)body_start
+            ) < 0)
+            goto do_error;
 
-    bc_loop_free(&child);
+        end = p->code_count;
 
-    // Запись возвращаемого значения, если необходимо
-    if (command->return_name != NULL) {
-        if (bc_store_boolean(p, command->return_name, 1) != 0) return -1;
-    }
+        for (n = 0; n < child.continue_count; ++n)
+        {
+            if (bc_patch(
+                    p,
+                    child.continues[n],
+                    cond_start
+                ) != 0)
+                goto do_error;
+        }
 
-    return 0;
+        if (bc_patch(
+                p,
+                (size_t)jump_false,
+                end
+            ) != 0)
+            goto do_error;
+
+        for (n = 0; n < child.break_count; ++n)
+        {
+            if (bc_patch(
+                    p,
+                    child.breaks[n],
+                    end
+                ) != 0)
+                goto do_error;
+        }
+
+        bc_loop_free(&child);
+
+        if (command->return_name != NULL)
+        {
+            if (bc_store_boolean(
+                    p,
+                    command->return_name,
+                    1
+                ) != 0)
+                return -1;
+        }
+
+        return 0;
 
 do_error:
-    bc_loop_free(&child);
-    return -1;
-}
+        bc_loop_free(&child);
+        return -1;
+    }
 
  if (strcmp(command->name, "while") == 0)
     {
@@ -1812,10 +1871,12 @@ static int bc_compile_list(
     if (list == NULL)
         return 0;
 
-    for (command = list->head;
-         command != NULL;
-         command = command->next)
+    command = list->head;
+
+    while (command != NULL)
     {
+        const ussr_command_t *next;
+
         if (bc_compile_command(
                 p,
                 command,
@@ -1823,6 +1884,40 @@ static int bc_compile_list(
                 current
             ) != 0)
             return -1;
+
+        next = command->next;
+
+        /*
+         * do/loop is one control-flow construct.  The compiler
+         * compiles do and consumes its immediately following loop.
+         */
+        if (strcmp(command->name, "do") == 0)
+        {
+            if (next == NULL ||
+                strcmp(next->name, "loop") != 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR compiler: do must be followed by loop(condition)\n"
+                );
+                return -1;
+            }
+
+            command = next->next;
+        }
+        else
+        {
+            if (strcmp(command->name, "loop") == 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR compiler: loop must follow do\n"
+                );
+                return -1;
+            }
+
+            command = next;
+        }
     }
 
     return 0;
