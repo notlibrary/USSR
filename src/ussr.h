@@ -265,4 +265,13 @@ void ussr_expression_free(ussr_expression_t *expression);
 int ussr_execute_eval(const char *return_name, ussr_argument_t *arguments, size_t argument_count);
 int ussr_execute_do_loop(const char *return_name,ussr_argument_t *arguments,size_t argument_count);
 int ussr_external_execute_values_io(const char *command,const ussr_value_t *values,size_t value_count,const char *input,char **output,ussr_value_t *result);
+ussr_vector_t *ussr_vector_create(const char *element_type);
+void ussr_vector_retain(ussr_vector_t *vector);
+void ussr_vector_release(ussr_vector_t *vector);
+int ussr_vector_push(ussr_vector_t *vector, ussr_value_t item);
+int ussr_vector_get(const ussr_vector_t *vector, size_t index, ussr_value_t *out);
+int ussr_vector_set(ussr_vector_t *vector, size_t index, ussr_value_t item);
+size_t ussr_vector_length(const ussr_vector_t *vector);
+
+
 #endif

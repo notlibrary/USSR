@@ -943,6 +943,53 @@ static int vm_execute(
                     vm->registers[ins.a] = ussr_value_copy(source);
                 }
                 break;
+            case USSR_BC_VECTOR_GET:
+                if (ins.a >= USSR_VM_REGISTER_COUNT ||
+                    ins.b >= USSR_VM_REGISTER_COUNT ||
+                    ins.c >= USSR_VM_REGISTER_COUNT ||
+                    vm->registers[ins.b].type != USSR_VECTOR ||
+                    vm->registers[ins.c].type != USSR_INTEGER)
+                {
+                    fprintf(stderr, "USSR VM: vector get requires vector and integer index\n");
+                    result = -1;
+                    goto done;
+                }
+                {
+                    ussr_value_t vector_value = ussr_null();
+                    if (vm->registers[ins.c].data.integer < 0 ||
+                        !ussr_vector_get(
+                            vm->registers[ins.b].data.vector,
+                            (size_t)vm->registers[ins.c].data.integer,
+                            &vector_value))
+                    {
+                        fprintf(stderr, "USSR VM: vector index out of range\n");
+                        result = -1;
+                        goto done;
+                    }
+                    ussr_value_free(&vm->registers[ins.a]);
+                    vm->registers[ins.a] = vector_value;
+                }
+                break;
+
+            case USSR_BC_VECTOR_SET:
+                if (ins.a >= USSR_VM_REGISTER_COUNT ||
+                    ins.b >= USSR_VM_REGISTER_COUNT ||
+                    ins.c >= USSR_VM_REGISTER_COUNT ||
+                    vm->registers[ins.a].type != USSR_VECTOR ||
+                    vm->registers[ins.b].type != USSR_INTEGER ||
+                    vm->registers[ins.b].data.integer < 0 ||
+                    !ussr_vector_set(
+                        vm->registers[ins.a].data.vector,
+                        (size_t)vm->registers[ins.b].data.integer,
+                        vm->registers[ins.c]
+                    ))
+                {
+                    fprintf(stderr, "USSR VM: vector index out of range or incompatible value\n");
+                    result = -1;
+                    goto done;
+                }
+                break;
+
             case USSR_BC_NEG:
                 if (ins.a>=USSR_VM_REGISTER_COUNT || ins.b>=USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
                 if (!vm_numeric(&vm->registers[ins.b])) { result=-1; goto done; }
@@ -1497,13 +1544,8 @@ static int run_repl(void)
     capacity = 0;
     bracket_depth = 0;
 
-#ifdef _WIN32
-    while ((line = worstline(
-                bracket_depth > 0 ? "... " : "ussr> ")) != NULL)
-#else
     while ((line = bestline(
                 bracket_depth > 0 ? "... " : "ussr> ")) != NULL)
-#endif
     {
         const char *processed;
 
@@ -1511,27 +1553,15 @@ static int run_repl(void)
 
         if (line_length == 0)
         {
-#ifdef _WIN32
-            worstlineFree(line);
-#else
             bestlineFree(line);
-#endif
             continue;
         }
 
-#ifdef _WIN32
-        worstlineHistoryAdd(line);
-#else
         bestlineHistoryAdd(line);
-#endif
         ussr_autocomplete_record_history(line);
 
         result = ussr_pp_process_line(&pp, line);
-#ifdef _WIN32
-        worstlineFree(line);
-#else
         bestlineFree(line);
-#endif
 
         if (result != 0)
         {

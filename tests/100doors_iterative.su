@@ -1,0 +1,43 @@
+init(ret): arg_cnt arg_vec [
+    vec(doors): ""
+
+    for(_): {i <= 100} [
+        set(i): 1
+        set(i): {i + 1}
+        push(_): doors false
+    ]
+
+    for(_): {pass <= 100} [
+        set(pass): 1
+        set(pass): {pass + 1}
+        if(_): true [
+            set(i): pass
+            for(_): {i <= 100} [
+                set(i): pass
+                set(i): {i + pass}
+                if(_): true [
+                    get(doors): {i - 1} door
+
+                    if(_): {door = false} [
+                        set(doors): {i - 1} true
+                    ]
+                    if(_): {door = true} [
+                        set(doors): {i - 1} false
+                    ]
+                ]
+            ]
+        ]
+    ]
+
+    for(_): {k <= 100} [
+        set(k): 1
+        set(k): {k + 1}
+        get(doors): {k - 1} open
+
+        if(_): {open = true} [
+            print(_): k
+        ]
+    ]
+
+    return(ret): 0
+]

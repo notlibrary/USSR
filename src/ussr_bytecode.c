@@ -207,6 +207,7 @@ static int bc_is_definition(
      * constructs, not user-defined function declarations.
      */
     if (strcmp(name, "if") == 0 ||
+        strcmp(name, "for") == 0 ||
         strcmp(name, "while") == 0 ||
         strcmp(name, "break") == 0 ||
         strcmp(name, "continue") == 0 ||
@@ -1185,6 +1186,110 @@ do_error:
         return -1;
     }
 
+    /*
+     * for(condition): [ initializer iterator body ]
+     *
+     * The block must contain exactly three commands. Their positions
+     * define their roles; no special grammar is required.
+     */
+    if (strcmp(command->name, "for") == 0)
+    {
+        bc_loop_t child;
+        const ussr_command_list_t *for_body;
+        const ussr_command_t *initializer;
+        const ussr_command_t *iterator;
+        const ussr_command_t *body;
+        size_t condition_start;
+        size_t iterator_start;
+        size_t end;
+        size_t n;
+        int jump_false;
+
+        memset(&child, 0, sizeof(child));
+
+        if (count != 2 ||
+            a[1].type != USSR_ARGUMENT_COMMAND_LIST ||
+            a[1].data.command_list == NULL)
+            return -1;
+
+        for_body = a[1].data.command_list;
+        initializer = for_body->head;
+        iterator = initializer != NULL ? initializer->next : NULL;
+        body = iterator != NULL ? iterator->next : NULL;
+
+        if (initializer == NULL ||
+            iterator == NULL ||
+            body == NULL ||
+            body->next != NULL)
+        {
+            fprintf(
+                stderr,
+                "USSR compiler: for requires exactly initializer, iterator, and body commands\n"
+            );
+            return -1;
+        }
+
+        if (bc_compile_command(p, initializer, loop, current) != 0)
+            return -1;
+
+        condition_start = p->code_count;
+
+        if (bc_compile_argument(p, &a[0], 0) != 0)
+            return -1;
+
+        jump_false = bc_emit(
+            p, USSR_BC_JMP_FALSE, 0, 0, 0, 0
+        );
+        if (jump_false < 0)
+            return -1;
+
+        if (bc_compile_command(p, body, &child, current) != 0)
+            goto for_error;
+
+        iterator_start = p->code_count;
+
+        if (bc_compile_command(p, iterator, &child, current) != 0)
+            goto for_error;
+
+        if (bc_emit(
+                p, USSR_BC_JMP, 0, 0, 0,
+                (uint32_t)condition_start
+            ) < 0)
+            goto for_error;
+
+        end = p->code_count;
+
+        /* continue -> iterator, not condition */
+        for (n = 0; n < child.continue_count; ++n)
+        {
+            if (bc_patch(
+                    p, child.continues[n], iterator_start
+                ) != 0)
+                goto for_error;
+        }
+
+        if (bc_patch(p, (size_t)jump_false, end) != 0)
+            goto for_error;
+
+        for (n = 0; n < child.break_count; ++n)
+        {
+            if (bc_patch(p, child.breaks[n], end) != 0)
+                goto for_error;
+        }
+
+        bc_loop_free(&child);
+
+        if (command->return_name != NULL &&
+            bc_store_boolean(p, command->return_name, 1) != 0)
+            return -1;
+
+        return 0;
+
+for_error:
+        bc_loop_free(&child);
+        return -1;
+    }
+
  if (strcmp(command->name, "while") == 0)
     {
         bc_loop_t child;
@@ -1417,6 +1522,33 @@ while_error:
         );
     }
 
+    /* set(vector): index value */
+    if (strcmp(command->name, "set") == 0 && count == 2)
+    {
+        int vector_name;
+
+        if (command->return_name == NULL)
+            return -1;
+
+        vector_name = bc_add_string(p, command->return_name);
+        if (vector_name < 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_LOAD_VAR, 0, 0, 0,
+                    (uint32_t)vector_name) < 0)
+            return -1;
+
+        if (bc_compile_argument(p, &a[0], 1) != 0 ||
+            bc_compile_argument(p, &a[1], 2) != 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_VECTOR_SET, 0, 1, 2, 0) < 0)
+            return -1;
+
+        /* The vector itself remains the command's return value/name. */
+        return 0;
+    }
+
     /*
      * set
      */
@@ -1562,6 +1694,44 @@ while_error:
                 hash_assignment
             );
         }
+    }
+
+    /* get(vector): index output */
+    if (strcmp(command->name, "get") == 0 && count == 2)
+    {
+        const ussr_expression_t *destination;
+        int vector_name;
+        int destination_name;
+
+        if (command->return_name == NULL ||
+            a[1].type != USSR_ARGUMENT_EXPRESSION ||
+            a[1].data.expression == NULL ||
+            a[1].data.expression->type != USSR_EXPR_VARIABLE)
+            return -1;
+
+        destination = a[1].data.expression;
+        vector_name = bc_add_string(p, command->return_name);
+        destination_name = bc_add_string(
+            p, destination->data.variable
+        );
+        if (vector_name < 0 || destination_name < 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_LOAD_VAR, 0, 0, 0,
+                    (uint32_t)vector_name) < 0)
+            return -1;
+
+        if (bc_compile_argument(p, &a[0], 1) != 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_VECTOR_GET, 2, 0, 1, 0) < 0)
+            return -1;
+
+        if (bc_emit(p, USSR_BC_STORE_VAR, 2, 0, 0,
+                    (uint32_t)destination_name) < 0)
+            return -1;
+
+        return 0;
     }
 
     /*
@@ -2203,6 +2373,8 @@ static const char *bc_opcode_name(
         case USSR_BC_STORE_HASH: return "STORE_HASH";
         case USSR_BC_DECODE_UNO: return "DECODE_UNO";
         case USSR_BC_GET: return "GET";
+        case USSR_BC_VECTOR_GET: return "VECTOR_GET";
+        case USSR_BC_VECTOR_SET: return "VECTOR_SET";
 
         case USSR_BC_ADD: return "ADD";
         case USSR_BC_SUB: return "SUB";

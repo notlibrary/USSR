@@ -734,6 +734,30 @@ int ussr_vector_get(const ussr_vector_t *vector, size_t index, ussr_value_t *out
     return uno_store_value(out, vector->items[index]) == 0;
 }
 
+int ussr_vector_set(
+    ussr_vector_t *vector,
+    size_t index,
+    ussr_value_t item
+)
+{
+    ussr_value_t stored;
+
+    if (vector == NULL || index >= vector->count)
+        return 0;
+
+    if (vector->element_type != NULL &&
+        !uno_type_matches(vector->element_type, &item))
+        return 0;
+
+    if (uno_store_value(&stored, item) != 0)
+        return 0;
+
+    uno_release_value(&vector->items[index]);
+    vector->items[index] = stored;
+
+    return 1;
+}
+
 size_t ussr_vector_length(const ussr_vector_t *vector)
 {
     return vector->count;

@@ -43,6 +43,8 @@ typedef enum
     USSR_BC_STORE_HASH = 0x05,
     USSR_BC_DECODE_UNO = 0x06,
     USSR_BC_GET        = 0x07,
+    USSR_BC_VECTOR_GET = 0x08,
+    USSR_BC_VECTOR_SET = 0x09,
 
     USSR_BC_ADD  = 0x10,
     USSR_BC_SUB  = 0x11,
