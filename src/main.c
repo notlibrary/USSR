@@ -1543,8 +1543,12 @@ static int run_repl(void)
     source_length = 0;
     capacity = 0;
     bracket_depth = 0;
+#ifdef _WIN32
+    while ((line = worstline(
+#else
+	while ((line = bestline(
+#endif
 
-    while ((line = bestline(
                 bracket_depth > 0 ? "... " : "ussr> ")) != NULL)
     {
         const char *processed;
@@ -1553,16 +1557,27 @@ static int run_repl(void)
 
         if (line_length == 0)
         {
-            bestlineFree(line);
+#ifdef _WIN32
+            worstlineFree(line);
+#else
+			bestlineFree(line);
+#endif
             continue;
         }
-
+#ifdef _WIN32
+		worstlineHistoryAdd(line);
+#else
         bestlineHistoryAdd(line);
+#endif
+		
         ussr_autocomplete_record_history(line);
 
         result = ussr_pp_process_line(&pp, line);
-        bestlineFree(line);
-
+#ifdef _WIN32
+        worstlineFree(line);
+#else
+		bestlineFree(line);
+#endif	
         if (result != 0)
         {
             source_length = 0;
