@@ -1,0 +1,15 @@
+gcd(ret): a b [
+    if(_): {b != 0} [
+        gcd(c): b {a % b}
+        return(_): c ]
+    if(_): {b = 0} [ 
+        print(_): a
+        return(_): a
+    ]
+]
+
+init(ret): arg_cnt arg_vec [
+    scan(ok): "Enter a b: INTEGER INT; INT" a b
+    gcd(result): a b
+    return(_): result
+]
