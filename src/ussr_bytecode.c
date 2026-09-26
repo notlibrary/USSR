@@ -1185,12 +1185,24 @@ do_error:
         bc_loop_free(&child);
         return -1;
     }
-
     /*
-     * for(condition): [ initializer iterator body ]
+     * for(condition): [ initializer iterator body... ]
      *
-     * The block must contain exactly three commands. Their positions
-     * define their roles; no special grammar is required.
+     * The ordinary command grammar already gives us one command list.
+     * Its first command is the initializer, its second command is the
+     * iterator, and every remaining command belongs to the loop body.
+     * No special grammar is required.
+     *
+     * Execution order is:
+     *
+     *     initializer
+     *     condition
+     *     body...
+     *     iterator
+     *     condition
+     *     ...
+     *
+     * Therefore continue must jump to iterator_start, not condition_start.
      */
     if (strcmp(command->name, "for") == 0)
     {
@@ -1217,18 +1229,18 @@ do_error:
         iterator = initializer != NULL ? initializer->next : NULL;
         body = iterator != NULL ? iterator->next : NULL;
 
-        if (initializer == NULL ||
-            iterator == NULL ||
-            body == NULL ||
-            body->next != NULL)
+        /* Initializer and iterator are mandatory. Everything after them
+         * is the body, including zero or more commands. */
+        if (initializer == NULL || iterator == NULL)
         {
             fprintf(
                 stderr,
-                "USSR compiler: for requires exactly initializer, iterator, and body commands\n"
+                "USSR compiler: for requires initializer and iterator commands\n"
             );
             return -1;
         }
 
+        /* Initializer executes exactly once, before the first condition. */
         if (bc_compile_command(p, initializer, loop, current) != 0)
             return -1;
 
@@ -1243,9 +1255,44 @@ do_error:
         if (jump_false < 0)
             return -1;
 
-        if (bc_compile_command(p, body, &child, current) != 0)
-            goto for_error;
+        /* Compile every command after initializer/iterator as the body. */
+        while (body != NULL)
+        {
+            const ussr_command_t *next = body->next;
 
+            if (bc_compile_command(p, body, &child, current) != 0)
+                goto for_error;
+
+            /* Match bc_compile_list(): do/loop is one construct. */
+            if (strcmp(body->name, "do") == 0)
+            {
+                if (next == NULL || strcmp(next->name, "loop") != 0)
+                {
+                    fprintf(
+                        stderr,
+                        "USSR compiler: do must be followed by loop(condition)\n"
+                    );
+                    goto for_error;
+                }
+
+                body = next->next;
+            }
+            else
+            {
+                if (strcmp(body->name, "loop") == 0)
+                {
+                    fprintf(
+                        stderr,
+                        "USSR compiler: loop must follow do\n"
+                    );
+                    goto for_error;
+                }
+
+                body = next;
+            }
+        }
+
+        /* Iterator executes after the complete body on every iteration. */
         iterator_start = p->code_count;
 
         if (bc_compile_command(p, iterator, &child, current) != 0)
