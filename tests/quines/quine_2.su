@@ -1,4 +1,3 @@
-#Compact USSR quine 2
 set(c): ""
 set(a): ""
 set(n): ""
@@ -6,5 +5,5 @@ concat(c): "" ":"
 concat(a): "" "\""
 concat(n): "" "\n"
 set(q): "set(c): \"\""
-concat(o): q n "set(a): \"\"" n "set(n): \"\"" n "concat(c): \"\" \":\"" n "concat(a): \"\" \"\\\"\"" n "concat(n): \"\" \"\\n\"" n "set(q): " a q a n "concat(o): q n \"set(a): \\\"\\\"\" n \"set(n): \\\"\\\"\" n \"concat(c): \\\"\\\" \\\":\\\"\" n \"concat(a): \\\"\\\" \\\"\\\\\\\"\\\"\" n \"concat(n): \\\"\\\" \\\"\\\\n\\\"\" n \"set(q): \" a q a n \"print(out): o\"" n "print(out): o"
-print(out): o
+concat(o): q n "set(a): \"\"" n "set(n): \"\"" n "concat(c): \"\" \":\"" n "concat(a): \"\" \"\\\"\"" n "concat(n): \"\" \"\\n\"" n "set(q): " a q a n "concat(o): q n \"set(a): \\\"\\\"\" n \"set(n): \\\"\\\"\" n \"concat(c): \\\"\\\" \\\":\\\"\" n \"concat(a): \\\"\\\" \\\"\\\\\\\"\\\"\" n \"concat(n): \\\"\\\" \\\"\\\\n\\\"\" n \"set(q): \" a q a n \"template(_): \\\"STR\\\" o\"" n "template(_): \"STR\" o"
+template(_): "STR" o

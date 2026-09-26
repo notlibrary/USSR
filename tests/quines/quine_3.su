@@ -1,3 +1,2 @@
-$define A() {"$define"}
-$define B() {" A() {}"}
-eval A() + B()
+set(q): "set(q): \"STR\"\ntemplate(_): \"STR\" q"
+template(_): "STR" q
