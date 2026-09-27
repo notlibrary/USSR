@@ -6,8 +6,8 @@ option(_): 1
 print(_): "one"
 option(_): 2
 print(_): "two"
-break()
+break(_):
 option(_): 3
 print(_): "three"
-default(_): ""
+default(_):
 print(_): "default"
