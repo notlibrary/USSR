@@ -108,7 +108,9 @@ UNO         '([^'\\\n]|\\.)*'
         return 0;
 
     yylval.string[length] = '\0';
+
     yyless((int)length);
+
     return COMMAND_HEAD;
 }
 

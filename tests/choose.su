@@ -1,0 +1,13 @@
+# choose / option / default / break test
+set(a): 2
+
+choose(_): a
+option(_): 1
+print(_): "one"
+option(_): 2
+print(_): "two"
+break()
+option(_): 3
+print(_): "three"
+default(_): ""
+print(_): "default"

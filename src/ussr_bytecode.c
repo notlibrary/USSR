@@ -207,6 +207,11 @@ static int bc_is_definition(
      * constructs, not user-defined function declarations.
      */
     if (strcmp(name, "if") == 0 ||
+        strcmp(name, "elif") == 0 ||
+        strcmp(name, "else") == 0 ||
+        strcmp(name, "choose") == 0 ||
+        strcmp(name, "option") == 0 ||
+        strcmp(name, "default") == 0 ||
         strcmp(name, "for") == 0 ||
         strcmp(name, "while") == 0 ||
         strcmp(name, "break") == 0 ||
@@ -929,6 +934,31 @@ static int bc_add_scan_site(
     return 0;
 }
 
+static int bc_compile_until(
+    ussr_bc_program_t *p,
+    const ussr_command_t *start,
+    const ussr_command_t *stop,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+);
+
+static int bc_compile_conditional_chain(
+    ussr_bc_program_t *p,
+    const ussr_command_t *first,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+);
+
+static int bc_compile_choose(
+    ussr_bc_program_t *p,
+    const ussr_command_t *first,
+    bc_loop_t *outer_loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+);
+
 static int bc_compile_command(
     ussr_bc_program_t *p,
     const ussr_command_t *command,
@@ -1441,15 +1471,23 @@ while_error:
     {
         int jump;
 
-        if (loop == NULL || count != 1)
+        if (loop == NULL || count > 1)
             return -1;
 
-        if (bc_compile_argument(p, &a[0], 0) != 0)
-            return -1;
+        if (count == 1)
+        {
+            if (bc_compile_argument(p, &a[0], 0) != 0)
+                return -1;
 
-        if (command->return_name != NULL &&
-            bc_store_result(p, command->return_name, 0, a[0].assignment) != 0)
+            if (command->return_name != NULL &&
+                bc_store_result(p, command->return_name, 0, a[0].assignment) != 0)
+                return -1;
+        }
+        else if (command->return_name != NULL &&
+                 bc_store_boolean(p, command->return_name, 1) != 0)
+        {
             return -1;
+        }
 
         jump = bc_emit(
             p,
@@ -2076,6 +2114,403 @@ while_error:
     }
 }
 
+
+static int bc_is_conditional_label(const ussr_command_t *command)
+{
+    return command != NULL &&
+           (strcmp(command->name, "elif") == 0 ||
+            strcmp(command->name, "else") == 0);
+}
+
+static int bc_is_choose_label(const ussr_command_t *command)
+{
+    return command != NULL &&
+           (strcmp(command->name, "option") == 0 ||
+            strcmp(command->name, "default") == 0);
+}
+
+static int bc_compile_until(
+    ussr_bc_program_t *p,
+    const ussr_command_t *start,
+    const ussr_command_t *stop,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+)
+{
+    const ussr_command_t *command = start;
+
+    while (command != NULL && command != stop)
+    {
+        const ussr_command_t *next;
+
+        if (strcmp(command->name, "if") == 0 &&
+            command->argument_count == 1)
+        {
+            if (bc_compile_conditional_chain(
+                    p, command, loop, current, &next) != 0)
+                return -1;
+            command = next;
+            continue;
+        }
+
+        if (strcmp(command->name, "choose") == 0 &&
+            command->argument_count == 1)
+        {
+            if (bc_compile_choose(
+                    p, command, loop, current, &next) != 0)
+                return -1;
+            command = next;
+            continue;
+        }
+
+        if (bc_is_conditional_label(command) ||
+            bc_is_choose_label(command))
+        {
+            fprintf(stderr,
+                    "USSR compiler: unexpected control-flow label '%s'\n",
+                    command->name);
+            return -1;
+        }
+
+        if (bc_compile_command(p, command, loop, current) != 0)
+            return -1;
+
+        next = command->next;
+
+        if (strcmp(command->name, "do") == 0)
+        {
+            if (next == NULL || strcmp(next->name, "loop") != 0)
+            {
+                fprintf(stderr,
+                        "USSR compiler: do must be followed by loop(condition)\n");
+                return -1;
+            }
+            command = next->next;
+        }
+        else
+        {
+            if (strcmp(command->name, "loop") == 0)
+            {
+                fprintf(stderr,
+                        "USSR compiler: loop must follow do\n");
+                return -1;
+            }
+            command = next;
+        }
+    }
+
+    if (next_out != NULL)
+        *next_out = command;
+
+    return 0;
+}
+
+static int bc_compile_conditional_chain(
+    ussr_bc_program_t *p,
+    const ussr_command_t *first,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+)
+{
+    const ussr_command_t *branch = first;
+    int pending_false = -1;
+    int *end_jumps = NULL;
+    size_t end_count = 0;
+    size_t end_capacity = 0;
+    int result = -1;
+
+    if (first == NULL ||
+        strcmp(first->name, "if") != 0 ||
+        first->argument_count != 1)
+        return -1;
+
+    if (first->return_name != NULL &&
+        bc_store_boolean(p, first->return_name, 0) != 0)
+        goto cleanup;
+
+    while (branch != NULL &&
+           (branch == first || bc_is_conditional_label(branch)))
+    {
+        const ussr_command_t *stop = branch->next;
+        int jump_end;
+
+        while (stop != NULL && !bc_is_conditional_label(stop))
+            stop = stop->next;
+
+        if (strcmp(branch->name, "else") == 0)
+        {
+            if (branch->argument_count != 0)
+                goto cleanup;
+
+            if (pending_false >= 0)
+            {
+                if (bc_patch(p, (size_t)pending_false, p->code_count) != 0)
+                    goto cleanup;
+                pending_false = -1;
+            }
+        }
+        else
+        {
+            if (branch->argument_count != 1)
+                goto cleanup;
+
+            if (bc_compile_argument(
+                    p, &branch->arguments[0], 0) != 0)
+                goto cleanup;
+
+            pending_false = bc_emit(
+                p, USSR_BC_JMP_FALSE, 0, 0, 0, 0
+            );
+            if (pending_false < 0)
+                goto cleanup;
+        }
+
+        if (first->return_name != NULL &&
+            bc_store_boolean(p, first->return_name, 1) != 0)
+            goto cleanup;
+
+        if (bc_compile_until(
+                p, branch->next, stop, loop, current, NULL) != 0)
+            goto cleanup;
+
+        jump_end = bc_emit(p, USSR_BC_JMP, 0, 0, 0, 0);
+        if (jump_end < 0)
+            goto cleanup;
+
+        if (end_count == end_capacity)
+        {
+            size_t n = end_capacity == 0 ? 4 : end_capacity * 2;
+            int *q = realloc(end_jumps, n * sizeof(*q));
+            if (q == NULL)
+                goto cleanup;
+            end_jumps = q;
+            end_capacity = n;
+        }
+        end_jumps[end_count++] = jump_end;
+
+        if (pending_false >= 0)
+        {
+            if (bc_patch(p, (size_t)pending_false, p->code_count) != 0)
+                goto cleanup;
+            pending_false = -1;
+        }
+
+        branch = stop;
+    }
+
+    if (pending_false >= 0)
+    {
+        if (bc_patch(p, (size_t)pending_false, p->code_count) != 0)
+            goto cleanup;
+    }
+
+    for (size_t i = 0; i < end_count; ++i)
+    {
+        if (bc_patch(p, (size_t)end_jumps[i], p->code_count) != 0)
+            goto cleanup;
+    }
+
+    if (next_out != NULL)
+        *next_out = branch;
+
+    result = 0;
+
+cleanup:
+    free(end_jumps);
+    return result;
+}
+
+typedef struct
+{
+    const ussr_command_t *label;
+    const ussr_command_t *stop;
+    int dispatch_jump;
+} bc_choice_case_t;
+
+static int bc_compile_choose(
+    ussr_bc_program_t *p,
+    const ussr_command_t *first,
+    bc_loop_t *outer_loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+)
+{
+    const ussr_command_t *label;
+    const ussr_command_t *after;
+    bc_choice_case_t *cases = NULL;
+    size_t case_count = 0;
+    size_t case_capacity = 0;
+    int no_match_jump = -1;
+    int has_default = 0;
+    bc_loop_t choice_loop;
+    int result = -1;
+
+    memset(&choice_loop, 0, sizeof(choice_loop));
+
+    if (first == NULL ||
+        strcmp(first->name, "choose") != 0 ||
+        first->argument_count != 1)
+        return -1;
+
+    if (first->return_name != NULL &&
+        bc_store_boolean(p, first->return_name, 0) != 0)
+        goto cleanup;
+
+    if (bc_compile_argument(p, &first->arguments[0], 0) != 0)
+        goto cleanup;
+
+    label = first->next;
+
+    while (label != NULL && bc_is_choose_label(label))
+    {
+        const ussr_command_t *cursor = label->next;
+        bc_choice_case_t *q;
+
+        while (cursor != NULL && !bc_is_choose_label(cursor))
+            cursor = cursor->next;
+
+        if (case_count == case_capacity)
+        {
+            size_t n = case_capacity == 0 ? 4 : case_capacity * 2;
+            q = realloc(cases, n * sizeof(*q));
+            if (q == NULL)
+                goto cleanup;
+            cases = q;
+            case_capacity = n;
+        }
+
+        cases[case_count].label = label;
+        cases[case_count].stop = cursor;
+        cases[case_count].dispatch_jump = -1;
+        ++case_count;
+
+        if (strcmp(label->name, "default") == 0)
+        {
+            if (label->argument_count != 0 || has_default)
+                goto cleanup;
+            has_default = 1;
+        }
+        else if (label->argument_count != 1)
+        {
+            goto cleanup;
+        }
+
+        label = cursor;
+    }
+
+    after = label;
+
+    if (case_count == 0)
+    {
+        fprintf(stderr,
+                "USSR compiler: choose requires option/default labels\n");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < case_count; ++i)
+    {
+        if (strcmp(cases[i].label->name, "option") == 0)
+        {
+            if (bc_compile_argument(
+                    p, &cases[i].label->arguments[0], 1) != 0)
+                goto cleanup;
+
+            if (bc_emit(
+                    p, USSR_BC_EQ, 2, 0, 1, 0
+                ) < 0)
+                goto cleanup;
+
+            cases[i].dispatch_jump = bc_emit(
+                p, USSR_BC_JMP_TRUE, 2, 0, 0, 0
+            );
+
+            if (cases[i].dispatch_jump < 0)
+                goto cleanup;
+        }
+    }
+
+    no_match_jump = bc_emit(
+        p, USSR_BC_JMP, 0, 0, 0, 0
+    );
+    if (no_match_jump < 0)
+        goto cleanup;
+
+    for (size_t i = 0; i < case_count; ++i)
+    {
+        label = cases[i].label;
+
+        if (cases[i].dispatch_jump >= 0)
+        {
+            if (bc_patch(
+                    p, (size_t)cases[i].dispatch_jump, p->code_count) != 0)
+                goto cleanup;
+        }
+
+        if (strcmp(label->name, "default") == 0)
+        {
+            if (bc_patch(
+                    p, (size_t)no_match_jump, p->code_count) != 0)
+                goto cleanup;
+        }
+
+        if (first->return_name != NULL &&
+            bc_store_boolean(p, first->return_name, 1) != 0)
+            goto cleanup;
+
+        if (bc_compile_until(
+                p,
+                label->next,
+                cases[i].stop,
+                &choice_loop,
+                current,
+                NULL
+            ) != 0)
+            goto cleanup;
+    }
+
+    if (!has_default)
+    {
+        if (bc_patch(
+                p, (size_t)no_match_jump, p->code_count) != 0)
+            goto cleanup;
+    }
+
+    /*
+     * choose is breakable, but it is not a loop.  continue() therefore
+     * belongs to the enclosing loop.
+     */
+    for (size_t i = 0; i < choice_loop.continue_count; ++i)
+    {
+        if (outer_loop == NULL ||
+            bc_loop_add(
+                &outer_loop->continues,
+                &outer_loop->continue_count,
+                &outer_loop->continue_capacity,
+                choice_loop.continues[i]
+            ) != 0)
+            goto cleanup;
+    }
+
+    for (size_t i = 0; i < choice_loop.break_count; ++i)
+    {
+        if (bc_patch(
+                p, choice_loop.breaks[i], p->code_count) != 0)
+            goto cleanup;
+    }
+
+    if (next_out != NULL)
+        *next_out = after;
+
+    result = 0;
+
+cleanup:
+    bc_loop_free(&choice_loop);
+    free(cases);
+    return result;
+}
+
 static int bc_compile_list(
     ussr_bc_program_t *p,
     const ussr_command_list_t *list,
@@ -2083,60 +2518,22 @@ static int bc_compile_list(
     ussr_bc_function_t *current
 )
 {
-    const ussr_command_t *command;
+    const ussr_command_t *next;
 
     if (list == NULL)
         return 0;
 
-    command = list->head;
+    if (bc_compile_until(
+            p,
+            list->head,
+            NULL,
+            loop,
+            current,
+            &next
+        ) != 0)
+        return -1;
 
-    while (command != NULL)
-    {
-        const ussr_command_t *next;
-
-        if (bc_compile_command(
-                p,
-                command,
-                loop,
-                current
-            ) != 0)
-            return -1;
-
-        next = command->next;
-
-        /*
-         * do/loop is one control-flow construct.  The compiler
-         * compiles do and consumes its immediately following loop.
-         */
-        if (strcmp(command->name, "do") == 0)
-        {
-            if (next == NULL ||
-                strcmp(next->name, "loop") != 0)
-            {
-                fprintf(
-                    stderr,
-                    "USSR compiler: do must be followed by loop(condition)\n"
-                );
-                return -1;
-            }
-
-            command = next->next;
-        }
-        else
-        {
-            if (strcmp(command->name, "loop") == 0)
-            {
-                fprintf(
-                    stderr,
-                    "USSR compiler: loop must follow do\n"
-                );
-                return -1;
-            }
-
-            command = next;
-        }
-    }
-
+    (void)next;
     return 0;
 }
 

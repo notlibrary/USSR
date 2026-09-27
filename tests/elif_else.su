@@ -1,0 +1,9 @@
+# if / elif / else command-chain test
+set(a): 150
+
+if(_): { a > 200 }
+print(_): "if"
+elif(_): { a > 100 }
+print(_): "elif"
+else(_):
+print(_): "else"
