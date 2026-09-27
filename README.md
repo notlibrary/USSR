@@ -43,4 +43,7 @@ The actual list of epithets are:
 - Portable
 - Multiplatform
 
+The language is deliberately designed for working with low-quality code *en masse* with zero equipment
+You can shout it commands without a pencil standing on construction site fab or in military or city crowd and be understood
+
 P.S. СССР Средство Создания Совершенных Разработок
