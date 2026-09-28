@@ -1166,13 +1166,41 @@ static int vm_execute(
                 }
 
                 value = ussr_null();
-                result = ussr_oop_dispatch(
-                    program->strings[ins.immediate],
-                    source_command != NULL ? source_command->return_name : NULL,
-                    av,
-                    argument_count,
-                    &value
-                );
+
+                /* Advanced control blocks are AST-backed builtins.  They
+                 * cannot go through the ordinary OOP/external-command
+                 * lookup because their command-list arguments are executable
+                 * AST objects rather than VM values. */
+                if (source_command != NULL &&
+                    strcmp(program->strings[ins.immediate], "@") == 0)
+                {
+                    result = ussr_execute_command(
+                        NULL,
+                        "@",
+                        source_command->return_name,
+                        av,
+                        argument_count
+                    );
+
+                    if (result == 0)
+                    {
+                        const ussr_value_t *stored =
+                            ussr_get_variable(source_command->return_name);
+
+                        if (stored != NULL)
+                            value = ussr_value_copy(stored);
+                    }
+                }
+                else
+                {
+                    result = ussr_oop_dispatch(
+                        program->strings[ins.immediate],
+                        source_command != NULL ? source_command->return_name : NULL,
+                        av,
+                        argument_count,
+                        &value
+                    );
+                }
 
                 for (i = 0; i < argument_count; ++i)
                 {

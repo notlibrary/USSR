@@ -50,6 +50,22 @@ int ussr_argument_evaluate(
     ussr_value_t *result
 );
 static int ussr_remove_variable(const char *name);
+
+static int ussr_execute_external_io(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    const char *input,
+    char **output,
+    ussr_value_t *result
+);
+
+static int ussr_execute_advanced_control(
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+);
+
 void ussr_expression_free(ussr_expression_t *expression);
 
 
@@ -2766,6 +2782,290 @@ fail:
     return -1;
 }
 
+
+static int ussr_execute_advanced_control(
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+)
+{
+    ussr_command_list_t *control;
+    ussr_command_list_t *target;
+    ussr_command_t *control_command;
+    ussr_command_t *target_command;
+    char *input = NULL;
+    char *output = NULL;
+    ussr_value_t status_value;
+    long status = 0;
+    int chained = 0;
+
+    if (return_name == NULL ||
+        arguments == NULL ||
+        argument_count != 2 ||
+        arguments[0].type != USSR_ARGUMENT_COMMAND_LIST ||
+        arguments[1].type != USSR_ARGUMENT_COMMAND_LIST)
+    {
+        fprintf(
+            stderr,
+            "USSR: advanced control block expects a control list and a command list\n"
+        );
+        return USSR_EXEC_ERROR;
+    }
+
+    control = arguments[0].data.command_list;
+    target = arguments[1].data.command_list;
+
+    for (control_command = control->head;
+         control_command != NULL;
+         control_command = control_command->next)
+    {
+        if (strcmp(control_command->name, "chain") == 0)
+        {
+            ussr_value_t *values = NULL;
+            size_t value_count;
+            size_t i;
+
+            if (chained ||
+                (control_command->argument_count != 0 &&
+                 !(control_command->argument_count == 1 &&
+                   control_command->arguments[0].type == USSR_ARGUMENT_VALUE &&
+                   control_command->arguments[0].data.value.type == USSR_STRING &&
+                   control_command->arguments[0].data.value.data.string != NULL &&
+                   control_command->arguments[0].data.value.data.string[0] == '\0')) ||
+                target == NULL)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: chain() expects exactly one target command list\n"
+                );
+                free(input);
+                return USSR_EXEC_ERROR;
+            }
+
+            chained = 1;
+
+            for (target_command = target->head;
+                 target_command != NULL;
+                 target_command = target_command->next)
+            {
+                if (target_command->name == NULL ||
+                    target_command->path != NULL)
+                {
+                    fprintf(
+                        stderr,
+                        "USSR: chain target must contain command names\n"
+                    );
+                    free(input);
+                    return USSR_EXEC_ERROR;
+                }
+
+                if (strcmp(target_command->name, "chain") == 0 ||
+                    strcmp(target_command->name, "file") == 0 ||
+                    strcmp(target_command->name, "filter") == 0 ||
+                    strcmp(target_command->name, "reverse") == 0)
+                {
+                    fprintf(
+                        stderr,
+                        "USSR: chain target '%s' is a control command, not a system command\n",
+                        target_command->name
+                    );
+                    free(input);
+                    return USSR_EXEC_ERROR;
+                }
+
+                value_count = target_command->argument_count;
+                values = calloc(
+                    value_count,
+                    sizeof(*values)
+                );
+
+                if (values == NULL && value_count != 0)
+                {
+                    free(input);
+                    return USSR_EXEC_ERROR;
+                }
+
+                for (i = 0; i < value_count; ++i)
+                {
+                    if (target_command->arguments[i].type ==
+                            USSR_ARGUMENT_COMMAND_LIST ||
+                        target_command->arguments[i].type ==
+                            USSR_ARGUMENT_ADVANCED_LIST ||
+                        ussr_argument_evaluate(
+                            &target_command->arguments[i],
+                            &values[i]
+                        ) != 0)
+                    {
+                        size_t j;
+                        for (j = 0; j < i; ++j)
+                            ussr_value_free(&values[j]);
+                        free(values);
+                        free(input);
+                        return USSR_EXEC_ERROR;
+                    }
+                }
+
+                if (ussr_execute_external_io(
+                        target_command->name,
+                        values,
+                        value_count,
+                        input,
+                        &output,
+                        &status_value
+                    ) != 0)
+                {
+                    for (i = 0; i < value_count; ++i)
+                        ussr_value_free(&values[i]);
+                    free(values);
+                    free(input);
+                    return USSR_EXEC_ERROR;
+                }
+
+                for (i = 0; i < value_count; ++i)
+                    ussr_value_free(&values[i]);
+                free(values);
+
+                free(input);
+                input = output;
+                output = NULL;
+
+                if (status_value.type == USSR_INTEGER)
+                    status = status_value.data.integer;
+
+                ussr_value_free(&status_value);
+
+                if (target_command->return_name != NULL)
+                {
+                    ussr_value_t command_status = ussr_integer(status);
+                    if (ussr_set_variable(
+                            target_command->return_name,
+                            &command_status
+                        ) != 0)
+                    {
+                        ussr_value_free(&command_status);
+                        free(input);
+                        return USSR_EXEC_ERROR;
+                    }
+                    ussr_value_free(&command_status);
+                }
+            }
+        }
+        else if (strcmp(control_command->name, "file") == 0)
+        {
+            ussr_value_t filename;
+
+            if (!chained ||
+                control_command->argument_count != 1 ||
+                control_command->arguments[0].type ==
+                    USSR_ARGUMENT_COMMAND_LIST ||
+                ussr_argument_evaluate(
+                    &control_command->arguments[0],
+                    &filename
+                ) != 0 ||
+                filename.type != USSR_STRING)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: file() expects one string after chain()\n"
+                );
+                free(input);
+                return USSR_EXEC_ERROR;
+            }
+
+            {
+                FILE *file = fopen(filename.data.string, "wb");
+                size_t length;
+
+                if (file == NULL)
+                {
+                    fprintf(
+                        stderr,
+                        "USSR: cannot open '%s': %s\n",
+                        filename.data.string,
+                        strerror(errno)
+                    );
+                    ussr_value_free(&filename);
+                    free(input);
+                    return USSR_EXEC_ERROR;
+                }
+
+                length = input == NULL ? 0 : strlen(input);
+
+                if (length != 0 &&
+                    fwrite(input, 1, length, file) != length)
+                {
+                    fclose(file);
+                    ussr_value_free(&filename);
+                    free(input);
+                    return USSR_EXEC_ERROR;
+                }
+
+                fclose(file);
+            }
+
+            ussr_value_free(&filename);
+        }
+        else if (strcmp(control_command->name, "reverse") == 0)
+        {
+            /*
+             * reverse() reverses the target command list before the
+             * next chain(). It is deliberately an advanced-control
+             * operation, not a normal system command.
+             */
+            ussr_command_t *previous = NULL;
+            ussr_command_t *current = target->head;
+            ussr_command_t *next;
+
+            while (current != NULL)
+            {
+                next = current->next;
+                current->next = previous;
+                previous = current;
+                current = next;
+            }
+
+            target->head = previous;
+
+            target->tail = NULL;
+            for (current = target->head;
+                 current != NULL;
+                 current = current->next)
+                target->tail = current;
+        }
+        else
+        {
+            fprintf(
+                stderr,
+                "USSR: unknown advanced control command '%s'\n",
+                control_command->name
+            );
+            free(input);
+            return USSR_EXEC_ERROR;
+        }
+    }
+
+    if (!chained)
+    {
+        fprintf(stderr, "USSR: advanced block contains no chain()\n");
+        free(input);
+        return USSR_EXEC_ERROR;
+    }
+
+    status_value = ussr_integer(status);
+
+    if (ussr_set_variable(return_name, &status_value) != 0)
+    {
+        ussr_value_free(&status_value);
+        free(input);
+        return USSR_EXEC_ERROR;
+    }
+
+    ussr_value_free(&status_value);
+    free(input);
+
+    return 0;
+}
+
 int ussr_execute_command(
     const char *command_path,
     const char *command,
@@ -2785,6 +3085,13 @@ int ussr_execute_command(
 
     if (command == NULL)
         return -1;
+
+    if (strcmp(command, "@") == 0)
+        return ussr_execute_advanced_control(
+            return_name,
+            arguments,
+            argument_count
+        );
 
     if (strcmp(command, "if") == 0)
         return ussr_execute_if(
@@ -3455,7 +3762,8 @@ static void ussr_argument_free(ussr_argument_t *argument)
     {
         ussr_expression_free(argument->data.expression);
     }
-    else if (argument->type == USSR_ARGUMENT_COMMAND_LIST)
+    else if (argument->type == USSR_ARGUMENT_COMMAND_LIST ||
+             argument->type == USSR_ARGUMENT_ADVANCED_LIST)
     {
         ussr_command_list_free(argument->data.command_list);
     }

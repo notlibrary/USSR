@@ -60,6 +60,7 @@ UNO         '([^'\\\n]|\\.)*'
 "!"                         { return EXCLAMATION; }
 
 "["                         { return LBRACKET; }
+"@"                         { return AT; }
 "]"                         { return RBRACKET; }
 "{"                         { return LBRACE; }
 "}"                         { return RBRACE; }

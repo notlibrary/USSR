@@ -206,7 +206,8 @@ static int bc_is_definition(
      * These commands also accept blocks, but they are control-flow
      * constructs, not user-defined function declarations.
      */
-    if (strcmp(name, "if") == 0 ||
+    if (strcmp(name, "@") == 0 ||
+        strcmp(name, "if") == 0 ||
         strcmp(name, "elif") == 0 ||
         strcmp(name, "else") == 0 ||
         strcmp(name, "choose") == 0 ||

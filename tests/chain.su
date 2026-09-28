@@ -1,0 +1,9 @@
+# Advanced control block / command-list pipeline test
+@[ 
+    chain(_):
+    file(_): "ps_output.txt"
+]
+[
+    ps(_): "-aux"
+    grep(_): "ussr"
+]

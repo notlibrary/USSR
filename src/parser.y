@@ -22,6 +22,23 @@ void yyerror(const char *message)
 
 ussr_command_list_t *ussr_parsed_program = NULL;
 
+static char *ussr_parser_strdup(const char *text)
+{
+    size_t length;
+    char *copy;
+
+    if (text == NULL)
+        return NULL;
+
+    length = strlen(text) + 1;
+    copy = malloc(length);
+
+    if (copy != NULL)
+        memcpy(copy, text, length);
+
+    return copy;
+}
+
 ussr_command_t *ussr_command_create(
     char *path,
     char *name,
@@ -137,6 +154,7 @@ static int ussr_parser_blocks_are_trailing(ussr_argument_t *items, size_t count)
 
 %token LBRACKET
 %token RBRACKET
+%token AT
 %token LBRACE
 %token RBRACE
 
@@ -175,7 +193,7 @@ static int ussr_parser_blocks_are_trailing(ussr_argument_t *items, size_t count)
 %type <arguments> command_tail
 %type <arguments> argument_list
 %type <argument> argument argument_base block_argument
-%type <command> command_line
+%type <command> command_line advanced_control
 %type <value> literal
 %type <expression> expression logical_or_expression logical_and_expression
 %type <expression> bitwise_or_expression bitwise_xor_expression bitwise_and_expression
@@ -233,6 +251,83 @@ command_line
       {
           $$ = $1;
       }
+    | advanced_control NEWLINE
+      {
+          $$ = $1;
+      }
+    | advanced_control
+      {
+          $$ = $1;
+      }
+    ;
+
+advanced_control
+    : AT LBRACKET command_lines RBRACKET
+      advanced_control_separator
+      LBRACKET command_lines RBRACKET
+      {
+          ussr_argument_t *arguments;
+          char *name;
+          char *return_name;
+
+          arguments = calloc(2, sizeof(*arguments));
+          name = ussr_parser_strdup("@");
+          return_name = ussr_parser_strdup("_");
+
+          if (arguments == NULL ||
+              name == NULL ||
+              return_name == NULL)
+          {
+              free(arguments);
+              free(name);
+              free(return_name);
+              ussr_command_list_free($3);
+              ussr_command_list_free($7);
+              YYABORT;
+          }
+
+          arguments[0].type = USSR_ARGUMENT_COMMAND_LIST;
+          arguments[0].assignment = 0;
+          arguments[0].data.command_list = $3;
+
+          arguments[1].type = USSR_ARGUMENT_COMMAND_LIST;
+          arguments[1].assignment = 0;
+          arguments[1].data.command_list = $7;
+
+          $$ = ussr_command_create(
+              NULL,
+              name,
+              return_name,
+              arguments,
+              2
+          );
+
+          if ($$ == NULL)
+          {
+              free(arguments);
+              free(name);
+              free(return_name);
+              ussr_command_list_free($3);
+              ussr_command_list_free($7);
+              YYABORT;
+          }
+      }
+    ;
+
+/*
+ * The two command lists in an advanced control block are allowed
+ * to be separated by one or more physical newlines:
+ *
+ *     @[ ... ]
+ *     [ ... ]
+ *
+ * NEWLINE cannot simply be placed directly in advanced_control because
+ * command_lines already owns newlines inside each list.  Keeping the
+ * separator as its own nonterminal makes the boundary unambiguous.
+ */
+advanced_control_separator
+    : %empty
+    | advanced_control_separator NEWLINE
     ;
 
 command
