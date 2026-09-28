@@ -8,13 +8,28 @@
 
 ### Maintenance
 
+## [0.4.4] - 2026-09-28
+
+### Added
+- Added basic autocomplete in REPL mode
+- Added template output(Hello 99 Bottles of Beer)
+- Added `for(_): {i < MAX}` loops
+- Added `else (_): elif(_): choose(_): option(_): default(_): break(_):` conditional constructions
+ 
+### Documentation
+- Uploaded some tests as [Rosetta Code](https://rosettacode.org/wiki/Category:USSR) tasks
+
+### Maintenance
+- Added 99bottles.su fibs.su fac.su euclid.su and 100doors.su tests
+- Fixed failing tests
+
 ## [0.4.3] - 2026-09-22
 
 ### Added
 - Added random64 seed_random64 scan get time builtins
 - Added chaining and redirecting output to file or named pipe
 - Added script entry points
-- Added cd builtin and based shell pwd manipulation
+- Added cd builtin and basic shell PWD manipulation
 - Added quadratic equation test
 - Added do(_): loop(_): {cond}
 ### Documentation
