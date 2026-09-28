@@ -4,7 +4,6 @@ TARGET  = ussr
 PREFIX  = /usr
 SRC_DIR = src
 
-# Базовые объектные файлы из вашей структуры src/
 OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/lex.yy.o \
        $(SRC_DIR)/ussr.o \
@@ -18,7 +17,6 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/prng64_xrp32.o \
        $(SRC_DIR)/autocomplete.o		  
 
-# Динамическое добавление файлов в зависимости от ОС
 ifeq ($(OS),Windows_NT)
 OBJS += $(SRC_DIR)/completion_fs_win32.o
 else
@@ -27,18 +25,15 @@ endif
 
 all: $(TARGET)
 
-# Линковка финального бинарника
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
-# Генерация парсера и лексера
 $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.y
 	bison -d -Wall -o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.y
 
 $(SRC_DIR)/lex.yy.c: $(SRC_DIR)/lexer.l $(SRC_DIR)/parser.tab.h
 	flex -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/lexer.l
 
-# Правила компиляции отдельных модулей из папки src/
 $(SRC_DIR)/parser.tab.o: $(SRC_DIR)/parser.tab.c $(SRC_DIR)/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 

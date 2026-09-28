@@ -10,6 +10,7 @@ ussr_SOURCES = \
     pp.c \
     uno.c \
     ussr_oop_builtins.c \
+	process_posix.c \
     prng64_xrp32.c \
 	autocomplete.c
 	
@@ -24,4 +25,5 @@ EXTRA_DIST = \
     bestline.h \
     uthash.h \
 	prng64_xrp32.h \
-	autocomplete.h
+	autocomplete.h \
+	proces.h
