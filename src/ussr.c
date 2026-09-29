@@ -2950,6 +2950,29 @@ static int ussr_execute_advanced_control(
                 }
             }
         }
+        else if (strcmp(control_command->name, "capture") == 0)
+        {
+            ussr_value_t captured;
+
+            if (!chained || control_command->argument_count != 0)
+            {
+                fprintf(
+                    stderr,
+                    "USSR: capture() expects no arguments after chain()\n"
+                );
+                free(input);
+                return USSR_EXEC_ERROR;
+            }
+
+            captured = ussr_string(input != NULL ? input : "");
+            if (ussr_set_variable(control_command->return_name, &captured) != 0)
+            {
+                ussr_value_free(&captured);
+                free(input);
+                return USSR_EXEC_ERROR;
+            }
+            ussr_value_free(&captured);
+        }
         else if (strcmp(control_command->name, "file") == 0)
         {
             ussr_value_t filename;

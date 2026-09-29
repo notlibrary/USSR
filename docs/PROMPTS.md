@@ -306,3 +306,10 @@ reverse each e.t.c. implement it as you wish
 Do not forget to add the test chain.su
 
 It works perfectly fine
+
+Luke I am your father Luke
+Let's now do that all programming language developers do sooner or later write a compiler(interpreter) for their own language in their own language
+So you need to write USSR interpreter in USSR this repository have all data to accomplish this including docs
+Good luck If you need change existing C interpreter in process do it
+We are waiting for your answer Own the WHOLE loop
+This is the hardest task I gave you There are ~20k lines of C code to unwind into USSR `./ussr ussr.su hello.su`

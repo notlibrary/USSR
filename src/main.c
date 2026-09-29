@@ -1269,7 +1269,77 @@ static int vm_execute(
             case USSR_BC_EVAL:
                 /* eval is implemented by the VM boundary: source is parsed, compiled, then executed as bytecode. */
                 if(ins.a>=USSR_VM_REGISTER_COUNT || program->strings[ins.immediate]==NULL || vm->registers[0].type!=USSR_STRING){result=-1;goto done;}
-                { YY_BUFFER_STATE b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
+                {
+                    YY_BUFFER_STATE b=yy_scan_string(vm->registers[0].data.string);
+                    ussr_command_list_t *old=ussr_parsed_program;
+                    ussr_parsed_program=NULL;
+                    ussr_bc_program_t nested;
+                    ussr_vm_t nested_vm;
+                    size_t fi;
+                    int nested_entry = -1;
+                    const ussr_value_t *outer_count;
+                    const ussr_value_t *outer_vector;
+
+                    if(!b){result=-1;goto done;}
+                    if(yyparse()!=0||ussr_parsed_program==NULL){
+                        yy_delete_buffer(b);
+                        ussr_parsed_program=old;
+                        result=-1;
+                        goto done;
+                    }
+                    yy_delete_buffer(b);
+
+                    if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){
+                        ussr_command_list_free(ussr_parsed_program);
+                        ussr_parsed_program=old;
+                        result=-1;
+                        goto done;
+                    }
+
+                    vm_init(&nested_vm);
+                    nested_vm.running=1;
+
+                    /* eval() behaves like a nested script invocation.  If
+                     * the caller already has init arguments, forward them
+                     * through the conventional arg_cnt/arg_vec variables. */
+                    outer_count = ussr_get_variable("arg_cnt");
+                    outer_vector = ussr_get_variable("arg_vec");
+                    if (outer_count != NULL && outer_vector != NULL)
+                    {
+                        nested_vm.registers[0] = ussr_value_copy(outer_count);
+                        nested_vm.registers[1] = ussr_value_copy(outer_vector);
+                    }
+
+                    for (fi = 0; fi < nested.function_count; ++fi)
+                    {
+                        if (strcmp(nested.functions[fi].name, "init") == 0)
+                        {
+                            if (nested.functions[fi].parameter_count == 2)
+                                nested_entry = (int)fi;
+                            break;
+                        }
+                    }
+                    nested_vm.entry_function = nested_entry;
+
+                    result=vm_execute(&nested_vm,&nested);
+                    if(result==0){
+                        if (nested_entry >= 0 &&
+                            nested_vm.registers[USSR_VM_RETURN_REG].type != USSR_NULL)
+                            value = ussr_value_copy(&nested_vm.registers[USSR_VM_RETURN_REG]);
+                        else
+                        {
+                            const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]);
+                            value=v?ussr_value_copy(v):ussr_null();
+                        }
+                    }
+                    vm_cleanup(&nested_vm);
+                    ussr_bc_program_free(&nested);
+                    ussr_command_list_free(ussr_parsed_program);
+                    ussr_parsed_program=old;
+                    if(result!=0)goto done;
+                    ussr_value_free(&vm->registers[ins.a]);
+                    vm->registers[ins.a]=value;
+                } break;
             case USSR_BC_HALT: vm->running=0; vm->exit_code=0; break;
             default: fprintf(stderr,"USSR VM: unknown opcode 0x%02x\n",ins.opcode);result=-1;goto done;
         }
