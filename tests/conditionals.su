@@ -2,7 +2,7 @@ init(ret): arg_cnt arg_vec [
     # USSR second program
 
     set(name): "USSR"
-    set(a): 10
+    set(a): 5
     set(b): 20
 
     add(result): a b
@@ -13,4 +13,7 @@ init(ret): arg_cnt arg_vec [
     if(val): {a > 9} [
         print(output3): "A is greater than 9"
     ]
+	else(_): " " [
+		"A is lower than 9"
+	]
 ]

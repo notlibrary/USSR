@@ -1,3 +1,7 @@
+This are some of system prompts collection that I used to create USSR with the AI
+I saved them just in case
+
+
 Here's your files they are diff in few lines of what you have
 After fixing quadratic equation we must add
 do(_): loop(_): {conditon expression}

@@ -1,0 +1,18 @@
+fac(result): n acc [
+    if(done): {n <= 1} [
+        return(result): acc
+    ]
+
+    set(next_n): {n - 1}
+    set(next_acc): {acc * n}  
+
+    fac(result): next_n next_acc
+]
+
+init(ret): arg_cnt arg_vec [
+    scan(ok): "Enter n: INTEGER INT;" n
+    fac(result): n 1
+    print(out): result
+    return(ret): 0
+]
+

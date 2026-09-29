@@ -1,5 +1,5 @@
-init(z): arg_cnt arg_vec [
 # USSR first program
+init(z): arg_cnt arg_vec [
 
 set(name): "USSR"
 set(a): 10

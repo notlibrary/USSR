@@ -1,7 +1,7 @@
 init(ret): arg_cnt arg_vec [
     set(i): 0
 
-    do(_): 0 [
+    do(_): 1 [
         set(i): {i + 1}
 
         if(b): {i = 3} [
