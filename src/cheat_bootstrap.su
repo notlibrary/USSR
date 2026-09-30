@@ -1,0 +1,29 @@
+# USSR self-host bootstrap driver.
+#
+# Usage:
+#     ./ussr ussr.su program.su [args...]
+#
+# The driver is itself a USSR program.  It loads the requested source
+# through the advanced command-list pipeline, then evaluates it as a
+# nested USSR program.  arg_cnt and arg_vec are forwarded by the host
+# VM's nested-eval boundary.
+
+init(ret): arg_cnt arg_vec [
+    if(_): {arg_cnt = 0} [
+        print(_): "usage: ussr.su program.su [args...]"
+        return(_): 1
+    ]
+
+    at(path): arg_vec 0
+
+    @[
+        chain(_): ""
+        capture(source):
+    ]
+    [
+        cat(_): path
+    ]
+
+    eval(result): source
+    set(ret): result
+]
