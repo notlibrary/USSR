@@ -742,22 +742,50 @@ static int oop_do_readfile(
         return -1;
     }
 
-    if (fseek(fp, 0, SEEK_END) != 0)
+    if (fseek(fp, 0, SEEK_END) != 0 || (size = ftell(fp)) < 0)
     {
+        /* pipe or non-seekable: read incrementally */
+        size_t cap = 4096;
+        size_t got = 0;
+        clearerr(fp);
+        buffer = (char *)malloc(cap);
+        if (buffer == NULL)
+        {
+            fclose(fp);
+            ussr_value_free(&path_v);
+            return -1;
+        }
+        for (;;)
+        {
+            size_t n;
+            if (got + 2048 > cap)
+            {
+                char *nb;
+                cap *= 2;
+                nb = (char *)realloc(buffer, cap);
+                if (nb == NULL)
+                {
+                    free(buffer);
+                    fclose(fp);
+                    ussr_value_free(&path_v);
+                    return -1;
+                }
+                buffer = nb;
+            }
+            n = fread(buffer + got, 1, 2048, fp);
+            got += n;
+            if (n < 2048)
+                break;
+        }
         fclose(fp);
+        buffer[got] = '\0';
+        *out_result = ussr_string(buffer);
+        free(buffer);
         ussr_value_free(&path_v);
-        return -1;
+        return 0;
     }
 
-    size = ftell(fp);
     rewind(fp);
-
-    if (size < 0)
-    {
-        fclose(fp);
-        ussr_value_free(&path_v);
-        return -1;
-    }
 
     buffer = (char *)malloc((size_t)size + 1);
     if (buffer == NULL)

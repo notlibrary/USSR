@@ -1634,6 +1634,8 @@ ex_alias(r): fd cret sv [
     rt_find(rt_ai): rt_anm
     new(rt_ap): "rt_sv" rt_anm 0 0 ""
     setf(_): rt_ap "n" rt_anm
+    set(rt_asame): 0
+    if(_): {rt_anm = cret} [ set(rt_asame): 1 ]
     if(_): {rt_ai < 0} [
         setf(_): rt_ap "had" 0
         setf(_): rt_ap "v" 0
@@ -1641,7 +1643,9 @@ ex_alias(r): fd cret sv [
         new(rt_np): "rt_sp" rt_anm 0 ""
         setf(_): rt_np "n" rt_anm
         setf(_): rt_np "v" 0
-        setf(_): rt_np "t" cret
+        if(_): {rt_asame = 0} [
+            setf(_): rt_np "t" cret
+        ]
         push(_): rt_store rt_np
     ]
     if(_): {rt_ai + 1 > 0} [
@@ -1651,7 +1655,9 @@ ex_alias(r): fd cret sv [
         getf(rt_ot): rt_op "t"
         setf(_): rt_ap "v" rt_ov
         setf(_): rt_ap "t" rt_ot
-        setf(_): rt_op "t" cret
+        if(_): {rt_asame = 0} [
+            setf(_): rt_op "t" cret
+        ]
     ]
     push(_): sv rt_ap
     set(r): 0
@@ -2369,6 +2375,7 @@ cv_stmt_i(r): items idx [
             if(_): {cv_nm = "if"} [ set(cv_m): 1 ]
             if(_): {cv_nm = "elif"} [ set(cv_m): 1 ]
             if(_): {cv_nm = "else"} [ set(cv_m): 2 ]
+            if(_): {cv_nm = "choose"} [ set(cv_m): 5 ]
         ]
         cv_stmt_go(r): items idx cv_m
     ]
@@ -2396,6 +2403,9 @@ cv_stmt_go(r): items idx m [
     if(_): {m = 4} [
         add(cv_nx3): idx 1
         cv_stmt_i(r): items cv_nx3
+    ]
+    if(_): {m = 5} [
+                cv_choose(r): items idx
     ]
 ]
 cv_cmd(r): nd [
@@ -2590,33 +2600,40 @@ cv_next(r): items nexti p1 ends [
             if(_): {cv_ni5n = "else"} [ set(cv_nm2): 2 ]
         ]
     ]
-    cv_patch(_): cv_code p1 {0 - 1} nexti
-    if(_): {cv_nm2 = 1} [
+    set(cv_nx5): nexti
+    if(_): {cv_nm2 = 2} [
+        add(cv_nx5): nexti 1
+    ]
+    cv_next2(r): items nexti p1 ends cv_nm2 cv_nx5
+]
+cv_next2(r): items nexti p1 ends nm2 nx5 [
+    len(cv_here): cv_code
+    cv_patch(_): cv_code p1 {0 - 1} cv_here
+    if(_): {nm2 = 1} [
         cv_chain2(r): items nexti ends
     ]
-    if(_): {cv_nm2 = 2} [
-        cv_else2(r): items nexti
-        add(cv_ei3): nexti 1
-        cv_endpatch(r): items cv_ei3 ends
-    ]
     set(cv_nm3): 0
-    if(_): {cv_nm2 = 0} [ set(cv_nm3): 1 ]
-    if(_): {cv_nm2 = 2} [ set(cv_nm3): 1 ]
+    if(_): {nm2 = 0} [ set(cv_nm3): 1 ]
+    if(_): {nm2 = 2} [ set(cv_nm3): 1 ]
     if(_): {cv_nm3 = 1} [
-        cv_endpatch(r): items nexti ends
+        if(_): {nm2 = 2} [
+            cv_else2(r): items nexti
+        ]
+        cv_endpatch(r): items nx5 ends
     ]
 ]
 cv_endpatch(r): items nexti ends [
-    cv_ep_i(r): items nexti ends 0
+    len(cv_ept): cv_code
+    cv_ep_i(r): items nexti ends cv_ept 0
 ]
-cv_ep_i(r): items nexti ends i [
+cv_ep_i(r): items nexti ends target i [
     len(cv_epl): ends
     set(r): 0
     if(_): {i < cv_epl} [
         at(cv_epi): ends i
-        cv_patch(_): cv_code cv_epi {0 - 1} nexti
+        cv_patch(_): cv_code cv_epi {0 - 1} target
         add(cv_ep2): i 1
-        cv_ep_i(r): items nexti ends cv_ep2
+        cv_ep_i(r): items nexti ends target cv_ep2
     ]
     if(_): {i = cv_epl} [
         cv_stmt_i(r): items nexti
@@ -2652,6 +2669,113 @@ cv_else3(r): items idx zb [
         at(cv_zpl): items cv_zp
         cv_one(r): cv_zpl
     ]
+]
+cv_choose(r): items idx [
+        at(cc): items idx
+    getf(ck): cc "kids"
+    at(ce): ck 0
+    cv_e(_): ce 16
+    len(cl): cv_code
+    vec(clb): ""
+    vec(clc): ""
+    new(cld): "vm_rv" 0
+    push(_): clc cld
+    new(clp): "cv_lp" cl clb clc 0
+    push(_): cv_lps clp
+    add(cni): idx 1
+    cv_ch_i(r): items cni clp
+]
+cv_ch_i(r): items idx lp [
+    len(cil): items
+    set(cm0): 2
+    if(_): {idx < cil} [
+        at(cit): items idx
+        getf(cit2): cit "tag"
+        if(_): {cit2 = 2} [
+            getf(citn): cit "s1"
+            if(_): {citn = "option"} [ set(cm0): 0 ]
+            if(_): {citn = "default"} [ set(cm0): 1 ]
+        ]
+    ]
+    cv_ch_i2(r): items idx lp cm0
+]
+cv_ch_i2(r): items idx lp cm [
+    if(_): {cm = 0} [
+        at(cit3): items idx
+        getf(cik): cit3 "kids"
+        at(cov): cik 0
+        cv_e(_): cov 17
+        cv_emit(_): 16 17 16 17 0
+        cv_emit(cph): 9 17 0 0 0
+        add(cpi): idx 1
+        cv_opt_body(r): items cpi lp
+        len(chere): cv_code
+        cv_patch(_): cv_code cph {0 - 1} chere
+        getf(ccnt): lp "cnt"
+        at(cni2x): ccnt 0
+        getf(cni2): cni2x "v"
+        cv_ch_i(r): items cni2 lp
+    ]
+    if(_): {cm = 1} [
+        add(cpi2): idx 1
+        cv_opt_body(r): items cpi2 lp
+        getf(ccnt2): lp "cnt"
+        at(cni3x): ccnt2 0
+        getf(cni3): cni3x "v"
+        cv_ch_end(r): items cni3 lp
+    ]
+    if(_): {cm = 2} [
+        cv_ch_end(r): items idx lp
+    ]
+]
+cv_opt_body(r): items i lp [
+    len(cobl): items
+    set(r): 0
+    if(_): {i < cobl} [
+        at(cob): items i
+        getf(cobt): cob "tag"
+        set(cisbrk): 0
+        if(_): {cobt = 2} [
+            getf(cobn): cob "s1"
+            if(_): {cobn = "break"} [ set(cisbrk): 1 ]
+            if(_): {cobn = "option"} [ set(cisbrk): 2 ]
+            if(_): {cobn = "default"} [ set(cisbrk): 2 ]
+        ]
+        if(_): {cisbrk = 1} [
+            cv_emit(cobj): 7 0 0 0 0
+            getf(clst3): lp "brk"
+            push(_): clst3 cobj
+            add(cobn2): i 1
+            getf(ccnt3): lp "cnt"
+            at(ccx): ccnt3 0
+            setf(_): ccx "v" cobn2
+        ]
+        if(_): {cisbrk = 2} [
+            getf(ccnt5): lp "cnt"
+            at(ccx3): ccnt5 0
+            setf(_): ccx3 "v" i
+        ]
+        set(cbgo): 1
+        if(_): {cisbrk = 1} [ set(cbgo): 0 ]
+        if(_): {cisbrk = 2} [ set(cbgo): 0 ]
+        if(_): {cbgo = 1} [
+            cv_one(r): cob
+            add(cobn3): i 1
+            cv_opt_body(r): items cobn3 lp
+        ]
+    ]
+    if(_): {i = cobl} [
+        getf(ccnt4): lp "cnt"
+        at(ccx2): ccnt4 0
+        setf(_): ccx2 "v" i
+    ]
+]
+cv_ch_end(r): items nexti lp [
+    len(cend): cv_code
+    getf(clst2): lp "brk"
+    cv_pv_i(r): clst2 0 cend
+    setf(_): lp "done" 1
+    cv_stmt_i(r): items nexti
 ]
 cv_one(r): item [
     getf(cv_ot): item "tag"
@@ -2751,12 +2875,16 @@ cv_return(r): nd [
     cv_e(_): cv_r0 16
     getf(cv_rn): nd "s2"
     set(cv_rs): 0
-    if(_): {cv_rn = "_"} [ set(cv_rs): 1 ]
+    set(cv_rb): 1
+    if(_): {cv_rn = "_"} [
+        set(cv_rs): 1
+        set(cv_rb): 0
+    ]
     if(_): {cv_rs = 0} [
         cv_name(cv_ri): cv_rn
         cv_emit(_): 3 16 0 0 cv_ri
     ]
-    cv_emit(_): 6 16 0 0 0
+    cv_emit(_): 6 16 cv_rb 0 0
     set(r): 0
 ]
 
@@ -2785,7 +2913,14 @@ cv_findf2(r): nm [
 ]
 cv_defcall2(r): nd nm [
     cv_findf2(cv_df): nm
-    if(_): {cv_df < 0} [
+    set(cv_dc): 0
+    if(_): {cv_df + 1 > 0} [
+        set(cv_dc): 1
+    ]
+    if(_): {cv_dc = 1} [
+        cv_call(r): nd cv_df
+    ]
+    if(_): {cv_dc = 0} [
         getf(cv_dk): nd "kids"
         len(cv_dk2): cv_dk
         set(cv_hb): 0
@@ -2803,9 +2938,6 @@ cv_defcall2(r): nd nm [
         if(_): {cv_hb = 0} [
             print(_): "unknown command"
         ]
-    ]
-    if(_): {cv_df + 1 > 0} [
-        cv_call(r): nd cv_df
     ]
 ]
 cv_regdef(r): nd nm [
@@ -2864,7 +2996,6 @@ cv_call_i(r): nd kids idx fi [
         getf(cv_cr5): nd "s2"
         cv_name(cv_crn): cv_cr5
         cv_emit(_): 5 16 cv_cn cv_crn fi
-        cv_emit(_): 3 31 0 0 cv_crn
     ]
 ]
 cv_fldname(r): s [
@@ -2983,13 +3114,33 @@ cv_scanc(r): nd [
     getf(cv_sck): nd "kids"
     at(cv_sca): cv_sck 0
     cv_e(_): cv_sca 16
+    set(cv_sck2): 1
+    cv_scargs(r): nd 1
+    getf(cv_scl2): nd "kids"
+    len(cv_scn2): cv_scl2
     cv_name(cv_sci): "scan"
-    cv_emit(_): 4 16 1 16 cv_sci
+    cv_emit(_): 4 16 cv_scn2 16 cv_sci
     getf(cv_scr): nd "s2"
     cv_name(cv_scri): cv_scr
     cv_emit(_): 3 16 0 0 cv_scri
-    cv_scanfill(r): nd 1
     set(r): 0
+]
+cv_scargs(r): nd i [
+    getf(cv_sck3): nd "kids"
+    len(cv_scl3): cv_sck3
+    set(r): 0
+    if(_): {i < cv_scl3} [
+        at(cv_sca2): cv_sck3 i
+        getf(cv_sct2): cv_sca2 "tag"
+        if(_): {cv_sct2 = 4} [
+            getf(cv_scnm): cv_sca2 "s1"
+            add(cv_scr2): 16 i
+            cv_const(cv_scc): cv_scnm
+            cv_emit(_): 1 cv_scr2 0 0 cv_scc
+        ]
+        add(cv_sci3): i 1
+        cv_scargs(r): nd cv_sci3
+    ]
 ]
 cv_scanfill(r): nd i [
     getf(cv_sfk): nd "kids"
@@ -3044,13 +3195,19 @@ vm_setreg(r): k val [
 vm_loop(r): [
     set(r): 0
     len(vm_codelen): cv_code
-    if(_): {vm_flow = 0} [
-        if(_): {vm_ip < vm_codelen} [
+    set(vm_lgo): 1
+    while(_): {vm_lgo = 1} [
+        set(vm_lgo): 0
+        if(_): {vm_flow = 0} [
+            if(_): {vm_ip < vm_codelen} [
+                set(vm_lgo): 1
+            ]
+        ]
+        if(_): {vm_lgo = 1} [
             at(vm_cur): cv_code vm_ip
             getf(vm_op): vm_cur "op"
             vm_step(r): vm_cur vm_op
             add(vm_ip): vm_ip 1
-            vm_loop(r):
         ]
     ]
 ]
@@ -3078,6 +3235,7 @@ vm_bind_i(r): prm sv ab i n [
         ]
         push(_): sv vm_bs
         rt_write(_): vm_bnm vm_bv
+        rt_read(vm_ck): vm_bnm
         add(vm_bi2): i 1
         vm_bind_i(r): prm sv ab vm_bi2 n
     ]
@@ -3089,6 +3247,8 @@ vm_alias2(r): rnm crt sv [
     rt_find(vm_ai): rnm
     new(vm_as): "rt_sv" vm_rnm 0 0 ""
     setf(_): vm_as "n" rnm
+    set(vm_asame): 0
+    if(_): {rnm = crt} [ set(vm_asame): 1 ]
     if(_): {vm_ai < 0} [
         setf(_): vm_as "had" 0
         setf(_): vm_as "v" 0
@@ -3096,7 +3256,9 @@ vm_alias2(r): rnm crt sv [
         new(vm_an): "rt_sp" vm_rnm 0 ""
         setf(_): vm_an "n" rnm
         setf(_): vm_an "v" 0
-        setf(_): vm_an "t" crt
+        if(_): {vm_asame = 0} [
+            setf(_): vm_an "t" crt
+        ]
         push(_): rt_store vm_an
     ]
     if(_): {vm_ai + 1 > 0} [
@@ -3106,7 +3268,9 @@ vm_alias2(r): rnm crt sv [
         getf(vm_at): vm_ap "t"
         setf(_): vm_as "v" vm_av
         setf(_): vm_as "t" vm_at
-        setf(_): vm_ap "t" crt
+        if(_): {vm_asame = 0} [
+            setf(_): vm_ap "t" crt
+        ]
     ]
     push(_): sv vm_as
     set(r): 0
@@ -3183,7 +3347,11 @@ vm_step(r): cur op [
         len(vm_sv3l): vm_sv3
         ex_rest(_): vm_sv3 0 vm_sv3l
         getf(vm_crt2): vm_fr2 "crt"
-        rt_write(_): vm_crt2 rt_rv
+        getf(vm_rvb): cur "b"
+        print(_): rt_rv
+        if(_): {vm_rvb = 1} [
+            rt_write(_): vm_crt2 rt_rv
+        ]
         getf(vm_rp2): vm_fr2 "rip"
         sub(vm_ip2): vm_rp2 1
         set(vm_ip): vm_ip2
@@ -3401,12 +3569,24 @@ vm_native(r): name dst nb [
 ]
 vm_native_b(r): name dst nb [
     set(r): 0
-    if(_): {name = "add"} [ add(r): rt_na0 rt_na1 ]
+    set(vm_m): 0
+    if(_): {name = "add"} [ add(r): rt_na0 rt_na1
+        set(vm_m): 1 ]
     if(_): {name = "sub"} [ sub(r): rt_na0 rt_na1 ]
     if(_): {name = "mul"} [ mul(r): rt_na0 rt_na1 ]
     if(_): {name = "div"} [ div(r): rt_na0 rt_na1 ]
     if(_): {name = "mod"} [ mod(r): rt_na0 rt_na1 ]
     if(_): {name = "concat"} [ concat(r): rt_na0 rt_na1 ]
+    set(vm_m2): 0
+    if(_): {name = "add"} [ set(vm_m2): 1 ]
+    if(_): {name = "sub"} [ set(vm_m2): 1 ]
+    if(_): {name = "mul"} [ set(vm_m2): 1 ]
+    if(_): {name = "div"} [ set(vm_m2): 1 ]
+    if(_): {name = "mod"} [ set(vm_m2): 1 ]
+    if(_): {name = "concat"} [ set(vm_m2): 1 ]
+    if(_): {vm_m2 = 0} [
+        vm_native_c(r): name dst nb
+    ]
 ]
 vm_native_c(r): name dst nb [
     set(r): 0
@@ -3418,6 +3598,18 @@ vm_native_c(r): name dst nb [
     if(_): {name = "vec"} [ vec(r): "rt_obj" ]
     if(_): {name = "encode"} [ encode(r): rt_na0 ]
     if(_): {name = "decode"} [ decode(r): rt_na0 ]
+    set(vm_m3): 0
+    if(_): {name = "push"} [ set(vm_m3): 1 ]
+    if(_): {name = "at"} [ set(vm_m3): 1 ]
+    if(_): {name = "len"} [ set(vm_m3): 1 ]
+    if(_): {name = "getf"} [ set(vm_m3): 1 ]
+    if(_): {name = "setf"} [ set(vm_m3): 1 ]
+    if(_): {name = "vec"} [ set(vm_m3): 1 ]
+    if(_): {name = "encode"} [ set(vm_m3): 1 ]
+    if(_): {name = "decode"} [ set(vm_m3): 1 ]
+    if(_): {vm_m3 = 0} [
+        vm_native_d(r): name dst nb
+    ]
 ]
 vm_targ(r): k [
     set(r): rt_na1
@@ -3490,7 +3682,84 @@ vm_template(r): nb [
             add(vm_tp): vm_tp 1
         ]
     ]
-    vm_tflush(r): vm_tslot vm_ta vm_tout
+    vm_tflush(vm_tfin): vm_tslot vm_ta vm_tout
+    print(_): vm_tfin
+    set(r): ""
+]
+vm_scanN(r): nb [
+    len(vm_sbl): vm_scanbuf
+    if(_): {vm_sbl = 0} [
+        readfile(vm_scanbuf): "/dev/stdin"
+        set(vm_scanpos): 0
+    ]
+    set(vm_k): 1
+    set(r): 0
+    while(_): {vm_k < nb} [
+        vm_nexttok(vm_tk): 
+        decode(vm_tv2): vm_tk
+        if(_): {vm_k = 1} [ set(r): vm_tv2 ]
+        if(_): {vm_k = 1} [ vm_targ2(_): rt_na1 vm_tv2 ]
+        if(_): {vm_k = 2} [ vm_targ2(_): rt_na2 vm_tv2 ]
+        if(_): {vm_k = 3} [ vm_targ2(_): rt_na3 vm_tv2 ]
+        if(_): {vm_k = 4} [ vm_targ2(_): rt_na4 vm_tv2 ]
+        if(_): {vm_k = 5} [ vm_targ2(_): rt_na5 vm_tv2 ]
+        if(_): {vm_k = 6} [ vm_targ2(_): rt_na6 vm_tv2 ]
+        add(vm_k): vm_k 1
+    ]
+]
+vm_targ2(r): nm val [
+    if(_): {nm = ""} [
+        set(r): 0
+    ]
+    if(_): {nm != ""} [
+        rt_write(_): nm val
+        set(r): 0
+    ]
+]
+vm_nexttok(r): [
+    len(vm_sbl2): vm_scanbuf
+    set(vm_sdone): 0
+    while(_): {vm_sdone = 0} [
+        if(_): {vm_scanpos + 1 > vm_sbl2} [
+            set(vm_sdone): 1
+        ]
+        if(_): {vm_scanpos < vm_sbl2} [
+            byte(vm_sch): vm_scanbuf vm_scanpos
+            set(vm_sws): 0
+            if(_): {vm_sch = 32} [ set(vm_sws): 1 ]
+            if(_): {vm_sch = 9} [ set(vm_sws): 1 ]
+            if(_): {vm_sch = 10} [ set(vm_sws): 1 ]
+            if(_): {vm_sch = 13} [ set(vm_sws): 1 ]
+            if(_): {vm_sws = 1} [
+                add(vm_scanpos): vm_scanpos 1
+            ]
+            if(_): {vm_sws = 0} [
+                set(vm_sdone): 1
+            ]
+        ]
+    ]
+    set(vm_sstart): vm_scanpos
+    set(vm_tdone): 0
+    while(_): {vm_tdone = 0} [
+        if(_): {vm_scanpos + 1 > vm_sbl2} [
+            set(vm_tdone): 1
+        ]
+        if(_): {vm_scanpos < vm_sbl2} [
+            byte(vm_sch2): vm_scanbuf vm_scanpos
+            set(vm_sws2): 0
+            if(_): {vm_sch2 = 32} [ set(vm_sws2): 1 ]
+            if(_): {vm_sch2 = 9} [ set(vm_sws2): 1 ]
+            if(_): {vm_sch2 = 10} [ set(vm_sws2): 1 ]
+            if(_): {vm_sch2 = 13} [ set(vm_sws2): 1 ]
+            if(_): {vm_sws2 = 0} [
+                add(vm_scanpos): vm_scanpos 1
+            ]
+            if(_): {vm_sws2 = 1} [
+                set(vm_tdone): 1
+            ]
+        ]
+    ]
+    slice(r): vm_scanbuf vm_sstart {vm_scanpos - vm_sstart}
 ]
 vm_scan2(r): fmt [
     len(vm_sbl): vm_scanbuf
@@ -3499,67 +3768,113 @@ vm_scan2(r): fmt [
         set(vm_scanpos): 0
     ]
     len(vm_sbl2): vm_scanbuf
-    while(_): {vm_scanpos < vm_sbl2} [
-        byte(vm_sch): vm_scanbuf vm_scanpos
-        set(vm_sws): 0
-        if(_): {vm_sch = 32} [ set(vm_sws): 1 ]
-        if(_): {vm_sch = 9} [ set(vm_sws): 1 ]
-        if(_): {vm_sch = 10} [ set(vm_sws): 1 ]
-        if(_): {vm_sch = 13} [ set(vm_sws): 1 ]
-        if(_): {vm_sws = 1} [
-            add(vm_scanpos): vm_scanpos 1
+    set(vm_sdone): 0
+    while(_): {vm_sdone = 0} [
+        if(_): {vm_scanpos + 1 > vm_sbl2} [
+            set(vm_sdone): 1
         ]
-        if(_): {vm_sws = 0} [
-            set(vm_scanpos): vm_sbl2
+        if(_): {vm_scanpos < vm_sbl2} [
+            byte(vm_sch): vm_scanbuf vm_scanpos
+            set(vm_sws): 0
+            if(_): {vm_sch = 32} [ set(vm_sws): 1 ]
+            if(_): {vm_sch = 9} [ set(vm_sws): 1 ]
+            if(_): {vm_sch = 10} [ set(vm_sws): 1 ]
+            if(_): {vm_sch = 13} [ set(vm_sws): 1 ]
+            if(_): {vm_sws = 1} [
+                add(vm_scanpos): vm_scanpos 1
+            ]
+            if(_): {vm_sws = 0} [
+                set(vm_sdone): 1
+            ]
         ]
     ]
     set(vm_sstart): vm_scanpos
     set(vm_sdot): 0
-    while(_): {vm_scanpos < vm_sbl2} [
-        byte(vm_sch2): vm_scanbuf vm_scanpos
-        set(vm_sws2): 0
-        if(_): {vm_sch2 = 32} [ set(vm_sws2): 1 ]
-        if(_): {vm_sch2 = 9} [ set(vm_sws2): 1 ]
-        if(_): {vm_sch2 = 10} [ set(vm_sws2): 1 ]
-        if(_): {vm_sch2 = 13} [ set(vm_sws2): 1 ]
-        if(_): {vm_sws2 = 0} [
-            if(_): {vm_sch2 = 46} [ set(vm_sdot): 1 ]
-            add(vm_scanpos): vm_scanpos 1
+    set(vm_tdone): 0
+    while(_): {vm_tdone = 0} [
+        if(_): {vm_scanpos + 1 > vm_sbl2} [
+            set(vm_tdone): 1
         ]
-        if(_): {vm_sws2 = 1} [
-            set(vm_scanpos): vm_sbl2
+        if(_): {vm_scanpos < vm_sbl2} [
+            byte(vm_sch2): vm_scanbuf vm_scanpos
+            set(vm_sws2): 0
+            if(_): {vm_sch2 = 32} [ set(vm_sws2): 1 ]
+            if(_): {vm_sch2 = 9} [ set(vm_sws2): 1 ]
+            if(_): {vm_sch2 = 10} [ set(vm_sws2): 1 ]
+            if(_): {vm_sch2 = 13} [ set(vm_sws2): 1 ]
+            if(_): {vm_sws2 = 0} [
+                if(_): {vm_sch2 = 46} [ set(vm_sdot): 1 ]
+                add(vm_scanpos): vm_scanpos 1
+            ]
+            if(_): {vm_sws2 = 1} [
+                set(vm_tdone): 1
+            ]
         ]
     ]
     slice(vm_tok): vm_scanbuf vm_sstart {vm_scanpos - vm_sstart}
     set(r): vm_tok
-    if(_): {fmt = "STR"} [
-        set(r): vm_tok
-    ]
+    set(vm_sstr): 0
+    if(_): {fmt = "STR"} [ set(vm_sstr): 1 ]
     set(vm_snum): 0
     if(_): {fmt = "INT"} [ set(vm_snum): 1 ]
     if(_): {fmt = "REAL"} [ set(vm_snum): 1 ]
+    if(_): {vm_snum = 0} [
+        if(_): {vm_sstr = 0} [
+            set(vm_sreal): 0
+            set(vm_fp3): 0
+            len(vm_fl4): fmt
+            while(_): {vm_fp3 + 4 <= vm_fl4} [
+                slice(vm_fs4): fmt vm_fp3 4
+                if(_): {vm_fs4 = "REAL"} [ set(vm_sreal): 1 ]
+                add(vm_fp3): vm_fp3 1
+            ]
+            if(_): {vm_sreal = 1} [ set(vm_snum): 1 ]
+            if(_): {vm_sreal = 0} [ set(vm_snum): 1 ]
+        ]
+    ]
     if(_): {vm_snum = 1} [
-        set(r): 0
-        if(_): {vm_sdot = 1} [
-            decode(r): vm_tok
-        ]
-        if(_): {vm_sdot = 0} [
-            if(_): {fmt = "REAL"} [
-                decode(r): vm_tok
-            ]
-            if(_): {fmt = "INT"} [
-                decode(r): vm_tok
-            ]
-        ]
+        decode(r): vm_tok
     ]
 ]
 vm_native_d(r): name dst nb [
     set(r): 0
     if(_): {name = "new"} [ vm_newobj(r): nb ]
     if(_): {name = "template"} [ vm_template(r): nb ]
-    if(_): {name = "scan"} [ vm_scan2(r): rt_na0 ]
+    if(_): {name = "scan"} [ vm_scanN(r): nb ]
 ]
 # ---- VM driver ----
+cv_dump(r): [
+    set(cv_i): 0
+    len(cv_dl): cv_code
+    while(_): {cv_i < cv_dl} [
+        at(cv_din): cv_code cv_i
+        getf(cv_do): cv_din "op"
+        getf(cv_da): cv_din "a"
+        getf(cv_db): cv_din "b"
+        getf(cv_dc): cv_din "c"
+        getf(cv_dm): cv_din "imm"
+        template(_): "STR;INT;STR;INT;STR;INT;STR;INT;STR;INT;STR;INT;STR" "L" cv_i " " cv_do " a" cv_da " b" cv_db " c" cv_dc " i" cv_dm "\n"
+        add(cv_i): cv_i 1
+    ]
+    set(cv_i2): 0
+    len(cv_nl): cv_names
+    while(_): {cv_i2 < cv_nl} [
+        at(cv_nx2): cv_names cv_i2
+        template(_): "STR;INT;STR;STR" "N" cv_i2 "=" cv_nx2 "\n"
+        add(cv_i2): cv_i2 1
+    ]
+    set(cv_i3): 0
+    len(cv_fl): cv_funcs
+    while(_): {cv_i3 < cv_fl} [
+        at(cv_ff2): cv_funcs cv_i3
+        getf(cv_fn2): cv_ff2 "name"
+        getf(cv_fe): cv_ff2 "entry"
+        getf(cv_fp): cv_ff2 "nparams"
+        template(_): "STR;INT;STR;STR;STR;INT;STR" "F" cv_i3 " " cv_fn2 " e" cv_fe " p" cv_fp "\n"
+        add(cv_i3): cv_i3 1
+    ]
+    set(r): 0
+]
 cv_driver(r): prog acnt avec [
     cv_stmt(r): prog
     cv_findf2(cv_mi): "init"
@@ -3654,18 +3969,24 @@ init(ret): arg_cnt arg_vec [
         ]
     ]
     if(_): {ps_mode != "tokens"} [
-        if(_): {ps_mode = "ast"} [
+        set(rt_md): 0
+        if(_): {ps_mode = "ast"} [ set(rt_md): 1 ]
+        if(_): {ps_mode = "walk"} [ set(rt_md): 2 ]
+        if(_): {ps_mode = "dump"} [ set(rt_md): 3 ]
+        if(_): {rt_md = 1} [
             ps_dump(_): ps_root 0
         ]
-        if(_): {ps_mode != "ast"} [
-            if(_): {ps_mode = "walk"} [
-                set(rt_acnt): {arg_cnt - 1}
-                rt_run(_): ps_root rt_acnt arg_vec
-            ]
-            if(_): {ps_mode != "walk"} [
-                set(rt_acnt): {arg_cnt - 1}
-                cv_driver(_): ps_root rt_acnt arg_vec
-            ]
+        if(_): {rt_md = 2} [
+            set(rt_acnt): {arg_cnt - 1}
+            rt_run(_): ps_root rt_acnt arg_vec
+        ]
+        if(_): {rt_md = 3} [
+            cv_stmt(_): ps_root
+            cv_dump(_): 
+        ]
+        if(_): {rt_md = 0} [
+            set(rt_acnt): {arg_cnt - 1}
+            cv_driver(_): ps_root rt_acnt arg_vec
         ]
     ]
 ]

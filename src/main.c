@@ -47,7 +47,7 @@ extern int ussr_argument_evaluate(
 
 /* VM runtime state lives here. Bytecode generation lives in ussr_bytecode.c. */
 
-#define USSR_VM_MAX_STEPS 10000000UL
+#define USSR_VM_MAX_STEPS 2000000000UL
 #define USSR_VM_MAX_CALLS 1024U
 #define USSR_VM_RETURN_REG USSR_BC_RETURN_REG
 #define USSR_VM_REGISTER_COUNT USSR_BC_MAX_REGS
