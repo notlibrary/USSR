@@ -421,6 +421,37 @@ static int oop_do_at(
         return -1;
     }
 
+    if (vec_v.type == USSR_STRING && vec_v.data.string != NULL)
+    {
+        const char *text = vec_v.data.string;
+        size_t text_length = strlen(text);
+        char *piece;
+
+        if (!oop_expect_integer(&index_v, &index) || index < 0 ||
+            (size_t)index >= text_length)
+        {
+            fprintf(stderr, "USSR: string index %ld out of range\n", index);
+            ussr_value_free(&vec_v);
+            ussr_value_free(&index_v);
+            return -1;
+        }
+
+        piece = (char *)malloc(2);
+        if (piece == NULL)
+        {
+            ussr_value_free(&vec_v);
+            ussr_value_free(&index_v);
+            return -1;
+        }
+        piece[0] = text[index];
+        piece[1] = '\0';
+        *out_result = ussr_string(piece);
+        free(piece);
+        ussr_value_free(&vec_v);
+        ussr_value_free(&index_v);
+        return 0;
+    }
+
     if (!oop_expect_vector(&vec_v, &vector) || !oop_expect_integer(&index_v, &index) || index < 0)
     {
         fprintf(stderr, "USSR: at() expects (vector, non-negative integer index)\n");
@@ -460,9 +491,16 @@ static int oop_do_len(
     if (oop_eval(&arguments[0], &vec_v) != 0)
         return -1;
 
+    if (vec_v.type == USSR_STRING && vec_v.data.string != NULL)
+    {
+        *out_result = ussr_integer((long)strlen(vec_v.data.string));
+        ussr_value_free(&vec_v);
+        return 0;
+    }
+
     if (!oop_expect_vector(&vec_v, &vector))
     {
-        fprintf(stderr, "USSR: len() expects a vector\n");
+        fprintf(stderr, "USSR: len() expects a vector or a string\n");
         ussr_value_free(&vec_v);
         return -1;
     }
@@ -537,6 +575,208 @@ static int oop_do_decode(
     return status;
 }
 
+
+/* ------------------------------------------------------------- */
+/* byte(v): s i   /   slice(v): s i n  (string primitives)          */
+/* ------------------------------------------------------------- */
+
+static int oop_do_byte(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t str_v, index_v;
+    const char *text;
+    long index;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: byte(v): s i\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &str_v) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &index_v) != 0)
+    {
+        ussr_value_free(&str_v);
+        return -1;
+    }
+
+    if (!oop_expect_string(&str_v, &text))
+    {
+        fprintf(stderr, "USSR: byte() expects (string, integer index)\n");
+        ussr_value_free(&str_v);
+        ussr_value_free(&index_v);
+        return -1;
+    }
+
+    if (!oop_expect_integer(&index_v, &index) || index < 0 ||
+        (size_t)index >= strlen(text))
+    {
+        fprintf(stderr, "USSR: byte() index out of range\n");
+        ussr_value_free(&str_v);
+        ussr_value_free(&index_v);
+        return -1;
+    }
+
+    *out_result = ussr_integer((long)(unsigned char)text[index]);
+    ussr_value_free(&str_v);
+    ussr_value_free(&index_v);
+    return 0;
+}
+
+static int oop_do_slice(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t str_v, index_v, count_v;
+    const char *text;
+    long index, count, text_length;
+
+    if (argument_count != 3)
+    {
+        fprintf(stderr, "USSR: slice(v): s i n\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &str_v) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &index_v) != 0)
+    {
+        ussr_value_free(&str_v);
+        return -1;
+    }
+    if (oop_eval(&arguments[2], &count_v) != 0)
+    {
+        ussr_value_free(&str_v);
+        ussr_value_free(&index_v);
+        return -1;
+    }
+
+    if (!oop_expect_string(&str_v, &text) ||
+        !oop_expect_integer(&index_v, &index) ||
+        !oop_expect_integer(&count_v, &count) ||
+        index < 0 || count < 0)
+    {
+        fprintf(stderr, "USSR: slice() expects (string, non-negative integer index, non-negative integer count)\n");
+        ussr_value_free(&str_v);
+        ussr_value_free(&index_v);
+        ussr_value_free(&count_v);
+        return -1;
+    }
+
+    text_length = (long)strlen(text);
+    if (index > text_length || index + count > text_length)
+    {
+        fprintf(stderr, "USSR: slice() range out of bounds\n");
+        ussr_value_free(&str_v);
+        ussr_value_free(&index_v);
+        ussr_value_free(&count_v);
+        return -1;
+    }
+
+    {
+        char *piece = (char *)malloc((size_t)count + 1);
+        if (piece == NULL)
+        {
+            ussr_value_free(&str_v);
+            ussr_value_free(&index_v);
+            ussr_value_free(&count_v);
+            return -1;
+        }
+        memcpy(piece, text + index, (size_t)count);
+        piece[count] = '\0';
+        *out_result = ussr_string(piece);
+        free(piece);
+    }
+
+    ussr_value_free(&str_v);
+    ussr_value_free(&index_v);
+    ussr_value_free(&count_v);
+    return 0;
+}
+
+
+/* ------------------------------------------------------------- */
+/* readfile(v): path -- host file-read service                      */
+/* ------------------------------------------------------------- */
+
+static int oop_do_readfile(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+    FILE *fp;
+    long size;
+    size_t got;
+    char *buffer;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: readfile(v): path\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &path_v) != 0)
+        return -1;
+
+    if (!oop_expect_string(&path_v, &path))
+    {
+        fprintf(stderr, "USSR: readfile() expects a string path\n");
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    fp = fopen(path, "rb");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "USSR: readfile cannot open '%s'\n", path);
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    if (fseek(fp, 0, SEEK_END) != 0)
+    {
+        fclose(fp);
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    size = ftell(fp);
+    rewind(fp);
+
+    if (size < 0)
+    {
+        fclose(fp);
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    buffer = (char *)malloc((size_t)size + 1);
+    if (buffer == NULL)
+    {
+        fclose(fp);
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    got = fread(buffer, 1, (size_t)size, fp);
+    fclose(fp);
+    buffer[got] = '\0';
+
+    *out_result = ussr_string(buffer);
+    free(buffer);
+    ussr_value_free(&path_v);
+    return 0;
+}
+
 /* ------------------------------------------------------------- */
 /* dispatch                                                         */
 /* ------------------------------------------------------------- */
@@ -567,6 +807,12 @@ int ussr_oop_dispatch(
         status = oop_do_at(arguments, argument_count, out_result);
     else if (strcmp(command, "len") == 0)
         status = oop_do_len(arguments, argument_count, out_result);
+    else if (strcmp(command, "byte") == 0)
+        status = oop_do_byte(arguments, argument_count, out_result);
+    else if (strcmp(command, "slice") == 0)
+        status = oop_do_slice(arguments, argument_count, out_result);
+    else if (strcmp(command, "readfile") == 0)
+        status = oop_do_readfile(arguments, argument_count, out_result);
     else if (strcmp(command, "encode") == 0)
         status = oop_do_encode(arguments, argument_count, out_result);
     else if (strcmp(command, "decode") == 0)

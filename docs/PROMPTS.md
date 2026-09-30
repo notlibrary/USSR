@@ -312,4 +312,5 @@ Let's now do that all programming language developers do sooner or later write a
 So you need to write USSR interpreter in USSR this repository have all data to accomplish this including docs
 Good luck If you need change existing C interpreter in process do it
 We are waiting for your answer Own the WHOLE loop
-This is the hardest task I gave you There are ~20k lines of C code to unwind into USSR `./ussr ussr.su hello.su`
+This is the hardest task I gave you There are ~28k lines of C code to unwind into USSR `./ussr ussr.su hello.su`
+You need fully unwind interpreter by porting it's C code in USSR not running eval capture driver as already done in USSR.su
