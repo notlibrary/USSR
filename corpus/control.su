@@ -1,0 +1,18 @@
+# Control flow and advanced control.
+while(_): {counter < 10} [
+    print(_): counter
+    set(counter): {counter + 1}
+]
+
+if(_): {value == 1} [
+    print(_): "one"
+]
+
+@[ 
+    chain(_): ""
+    file(_): "ps_output.txt"
+]
+[
+    ps(_): "-aux"
+    grep(_): "ussr"
+]

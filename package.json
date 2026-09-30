@@ -1,0 +1,26 @@
+{
+  "name": "tree-sitter-ussr",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the USSR Unified Shell Script REPL language",
+  "main": "bindings/node",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ussr-lang/tree-sitter-ussr.git"
+  },
+  "license": "MIT",
+  "keywords": ["tree-sitter", "ussr", "unified-shell-script-repl", "parser"],
+  "tree-sitter": [
+    {
+      "scope": "source.ussr",
+      "file-types": ["su"]
+    }
+  ],
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.6"
+  }
+}

@@ -1,0 +1,7 @@
+set(a): {1 + 2 * 3}
+set(b): {(a + 4) << 1}
+set(c): {a >= 7 && a < 20 || b == 0}
+set(d): {a ^ b & 255 | 1}
+set(e): {-42}
+set(v): value?
+set(v): value!

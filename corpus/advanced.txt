@@ -1,0 +1,8 @@
+@[ 
+    chain(_): ""
+    reverse(_):
+]
+[
+    first(_): "one"
+    second(_): "two"
+]

@@ -1,0 +1,14 @@
+{
+  "grammars": [
+    {
+      "name": "ussr",
+      "camelcase": "USSR",
+      "scope": "source.ussr",
+      "file-types": ["su"],
+      "injection-regex": "^(ussr|unified shell script repl)$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0"
+  }
+}

@@ -1,0 +1,6 @@
+set(x): 42
+set(name): "USSR"
+set(flag): true
+set(nothing): null
+print(_): name
+print(_): 'uno literal'

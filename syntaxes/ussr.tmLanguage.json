@@ -1,0 +1,127 @@
+{
+  "name": "USSR",
+  "scopeName": "source.ussr",
+  "fileTypes": ["su"],
+  "firstLineMatch": "^#!.*\\bussr(?:\\s|$)",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#preprocessor" },
+    { "include": "#advanced-control" },
+    { "include": "#commands" },
+    { "include": "#expressions" },
+    { "include": "#literals" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.ussr",
+          "match": "#[^\\r\\n]*$"
+        }
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {
+          "name": "meta.preprocessor.ussr",
+          "match": "^(\\s*)(\\$(?:define|ifdef|else|endif|include)\\b)(.*)$",
+          "captures": {
+            "2": { "name": "keyword.control.preprocessor.ussr" },
+            "3": { "name": "string.unquoted.preprocessor.ussr" }
+          }
+        }
+      ]
+    },
+    "advanced-control": {
+      "patterns": [
+        {
+          "name": "meta.advanced-control.ussr",
+          "begin": "@(?=\\s*\\[)",
+          "beginCaptures": { "0": { "name": "keyword.control.advanced.ussr" } },
+          "end": "(?<=\\])\\s*(?=\\[)",
+          "patterns": [
+            { "include": "#commands" },
+            { "include": "#literals" },
+            { "include": "#comments" },
+            { "include": "#punctuation" }
+          ]
+        }
+      ]
+    },
+    "commands": {
+      "patterns": [
+        {
+          "match": "\\b(@|(?:[A-Za-z0-9_./\\\\:-]+))(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.ussr" }
+          }
+        },
+        {
+          "match": "(?<=\\()[A-Za-z_][A-Za-z0-9_]*?(?=\\))",
+          "name": "variable.parameter.return.ussr"
+        },
+        {
+          "match": "\\b(?:if|elif|else|while|do|break|continue|return|choose|option|default|for|loop)\\b",
+          "name": "keyword.control.ussr"
+        },
+        {
+          "match": "\\b(?:set|get|setf|getf|print|add|sub|mul|div|mod|concat|len|push|new|struct|method|template|vec|vector|map|filter|each|reverse|chain|file|capture|eval|encode|decode|scan|at|any|random64|seed_random64|time|cd|include|define|init)\\b(?=\\s*\\()",
+          "name": "support.function.ussr"
+        }
+      ]
+    },
+    "expressions": {
+      "patterns": [
+        {
+          "name": "meta.expression.ussr",
+          "begin": "\\{",
+          "beginCaptures": { "0": { "name": "punctuation.section.expression.begin.ussr" } },
+          "end": "\\}",
+          "endCaptures": { "0": { "name": "punctuation.section.expression.end.ussr" } },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#literals" },
+            { "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b", "name": "variable.other.ussr" },
+            {
+              "match": "&&|\\|\\||<<|>>|>=|<=|!=|=|>|<|\\+|-|\\*|/|%|\\^|&|\\|",
+              "name": "keyword.operator.ussr"
+            },
+            { "match": "[()]", "name": "punctuation.parenthesis.ussr" }
+          ]
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.ussr",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.ussr", "match": "\\\\(?:n|t|r|\\\\|\")" }
+          ]
+        },
+        {
+          "name": "string.quoted.single.ussr",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.ussr", "match": "\\\\." }
+          ]
+        },
+        { "name": "constant.language.boolean.ussr", "match": "\\b(?:true|false)\\b" },
+        { "name": "constant.language.null.ussr", "match": "\\bnull\\b" },
+        { "name": "constant.numeric.float.ussr", "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.ussr", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.brackets.ussr", "match": "[\\[\\]{}()]" },
+        { "name": "punctuation.separator.ussr", "match": ":" },
+        { "name": "keyword.operator.assignment.ussr", "match": "!|\\?" }
+      ]
+    }
+  }
+}
