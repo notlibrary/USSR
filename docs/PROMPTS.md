@@ -325,3 +325,12 @@ serialize(vec) a "INT"
 vec is the byte vector from INT a
 deserialize(a) vec "INT"
 decode into a INT from vec
+
+The problem still persists after I ask you to fix the interpreter you stuck in an endless
+thinking loop depleting all chat length limits and producing useless bugged trash instead of working intepreter
+so we will attack it from 2 sides
+1 optimizing and shrinking the VM instructions set as much as possible
+2 expanding the library to keep the interpreter's shared calls out of the VM loop thus simplifying and relaxing VM even more
+After that we hit critical point where your model capabilities overpower the entropy and we win by owning the interpreter passing all the tests
+owning THE WHOLE LOOP do not jump from one idea to other concentrate on optimizing quality of the build product ussr.su
+
