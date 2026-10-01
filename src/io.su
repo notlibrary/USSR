@@ -1,0 +1,43 @@
+# io.su - basic I/O library for USSR.
+# Native VM primitives owned by this module:
+#   template(ok): "TYPE;TYPE;..." value...   (printf-style output)
+#   scan(ok): "prompt TYPE;TYPE;..." dest... (line/token input)
+# Library-provided helpers:
+#   putch(ok): code                          (write one byte/char)
+#   getch(code):                             (read one char, -1 at EOF)
+# No top-level state: programs with init(...) skip top-level commands.
+
+putch(r): code [
+    set(r): 0
+    if(_): {code = 9} [
+        template(_): "STR" "\t"
+        set(r): 1
+    ]
+    if(_): {code = 10} [
+        template(_): "STR" "\n"
+        set(r): 1
+    ]
+    if(_): {code = 13} [
+        template(_): "STR" "\r"
+        set(r): 1
+    ]
+    if(_): {code > 31} [
+        if(_): {code < 127} [
+            set(io_ascii): " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+            set(io_ai): {code - 32}
+            slice(io_ch): io_ascii io_ai 1
+            template(_): "STR" io_ch
+            set(r): 1
+        ]
+    ]
+]
+
+getch(r): [
+    set(io_s): ""
+    scan(io_ok): "STR" io_s
+    set(r): {0 - 1}
+    len(io_l): io_s
+    if(_): {io_l > 0} [
+        byte(r): io_s 0
+    ]
+]

@@ -1,0 +1,23 @@
+# math.su - numeric helpers.
+# sqrt(r): x uses Newton iterations and returns a real root.
+# Negative input returns -1 after printing an error.
+
+sqrt(r): x [
+    if(_): {x < 0} [
+        print(_): "sqrt: negative input"
+        set(r): {0 - 1}
+    ]
+    if(_): {x = 0} [
+        set(r): 0
+    ]
+    if(_): {x > 0} [
+        set(math_x): {x * 1.0}
+        set(math_g): math_x
+        set(math_i): 0
+        while(_): {math_i < 40} [
+            set(math_g): {(math_g + math_x / math_g) / 2.0}
+            add(math_i): math_i 1
+        ]
+        set(r): math_g
+    ]
+]

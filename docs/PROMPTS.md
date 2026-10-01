@@ -314,3 +314,14 @@ Good luck If you need change existing C interpreter in process do it
 We are waiting for your answer Own the WHOLE loop
 This is the hardest task I gave you There are ~28k lines of C code to unwind into USSR `./ussr ussr.su hello.su`
 You need fully unwind interpreter by porting it's C code in USSR not running eval capture driver as already done in USSR.su
+
+You are falling in endless VM interpreter debug loop because USSR has no standard library
+Now we design it then include into ussr.su and everything will work again
+It must have io.su(template scan putch getch) math.su(sqrt) bytes.su(serialize deserialize) standard.su(random64 seed_random64)
+then all this calls are in library it's easier to debug whole thing
+When library is done we must $include it into ussr.su 
+
+serialize(vec) a "INT" 
+vec is the byte vector from INT a
+deserialize(a) vec "INT"
+decode into a INT from vec

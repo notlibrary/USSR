@@ -1,0 +1,6 @@
+# standard.su - core VM services exposed as part of the standard library.
+# Native VM primitives owned by this module:
+#   random64(r):              -> next 64-bit pseudo-random integer
+#   seed_random64(ok): seed   -> seed the PRNG and echo the seed
+# They are implemented by the interpreter/VM; this file anchors them in
+# the standard library so user code has one stable place to rely on.

@@ -1,0 +1,40 @@
+# bytes.su - byte-vector serialization.
+# serialize(v): value "INT"    -> v becomes 8 little-endian bytes of value
+# deserialize(v): bytes "INT"  -> v becomes the integer stored in bytes
+# Only "INT" is supported; other tags return null.
+
+serialize(r): value tag [
+    if(_): {tag != "INT"} [
+        print(_): "serialize: unsupported type"
+        set(r): null
+    ]
+    if(_): {tag = "INT"} [
+        vec(bytes_tmp): ""
+        set(bytes_v): value
+        set(bytes_i): 0
+        while(_): {bytes_i < 8} [
+            set(bytes_b): {bytes_v & 255}
+            push(_): bytes_tmp bytes_b
+            set(bytes_v): {bytes_v >> 8}
+            add(bytes_i): bytes_i 1
+        ]
+        set(r): bytes_tmp
+    ]
+]
+
+deserialize(r): bytes tag [
+    if(_): {tag != "INT"} [
+        print(_): "deserialize: unsupported type"
+        set(r): null
+    ]
+    if(_): {tag = "INT"} [
+        set(bytes_v): 0
+        set(bytes_i): 0
+        while(_): {bytes_i < 8} [
+            at(bytes_b): bytes {7 - bytes_i}
+            set(bytes_v): {(bytes_v << 8) | bytes_b}
+            add(bytes_i): bytes_i 1
+        ]
+        set(r): bytes_v
+    ]
+]
