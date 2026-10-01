@@ -3,6 +3,12 @@
 # The interpreted program is lexed by this code; nothing is handed
 # back to the host interpreter (no eval no chain/capture).
 
+# Standard library: keep the interpreter's shared calls out of the VM loop.
+$include "standard.su"
+$include "io.su"
+$include "math.su"
+$include "bytes.su"
+
 # ---- char classes ----
 lx_alpha_p(r): b [
     set(r): 0
@@ -2449,6 +2455,11 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "decode"} [ cv_native2(r): nd nm ]
         if(_): {nm = "new"} [ cv_native2(r): nd nm ]
         if(_): {nm = "template"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "byte"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "slice"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "readfile"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "random64"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "seed_random64"} [ cv_native2(r): nd nm ]
         if(_): {nm = "scan"} [ cv_scanc(r): nd ]
         if(_): {nm = "do"} [ cv_do(r): nd ]
         if(_): {nm = "struct"} [ cv_struct2(r): nd ]
@@ -2475,6 +2486,11 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "decode"} [ set(cv_kn): 0 ]
         if(_): {nm = "new"} [ set(cv_kn): 0 ]
         if(_): {nm = "template"} [ set(cv_kn): 0 ]
+        if(_): {nm = "byte"} [ set(cv_kn): 0 ]
+        if(_): {nm = "slice"} [ set(cv_kn): 0 ]
+        if(_): {nm = "readfile"} [ set(cv_kn): 0 ]
+        if(_): {nm = "random64"} [ set(cv_kn): 0 ]
+        if(_): {nm = "seed_random64"} [ set(cv_kn): 0 ]
         if(_): {nm = "scan"} [ set(cv_kn): 0 ]
         if(_): {nm = "do"} [ set(cv_kn): 0 ]
         if(_): {nm = "struct"} [ set(cv_kn): 0 ]
@@ -2610,6 +2626,8 @@ cv_next2(r): items nexti p1 ends nm2 nx5 [
     len(cv_here): cv_code
     cv_patch(_): cv_code p1 {0 - 1} cv_here
     if(_): {nm2 = 1} [
+        cv_emit(cv_je): 7 0 0 0 0
+        push(_): ends cv_je
         cv_chain2(r): items nexti ends
     ]
     set(cv_nm3): 0
@@ -2617,6 +2635,8 @@ cv_next2(r): items nexti p1 ends nm2 nx5 [
     if(_): {nm2 = 2} [ set(cv_nm3): 1 ]
     if(_): {cv_nm3 = 1} [
         if(_): {nm2 = 2} [
+            cv_emit(cv_je): 7 0 0 0 0
+            push(_): ends cv_je
             cv_else2(r): items nexti
         ]
         cv_endpatch(r): items nx5 ends
@@ -2649,10 +2669,12 @@ cv_else2(r): items idx [
     getf(cv_zk): cv_zi "kids"
     len(cv_zl): cv_zk
     set(cv_zb): 0
-    if(_): {cv_zl = 1} [
-        at(cv_z0): cv_zk 0
+    set(cv_zi2): 0
+    while(_): {cv_zi2 < cv_zl} [
+        at(cv_z0): cv_zk cv_zi2
         getf(cv_z0t): cv_z0 "tag"
         if(_): {cv_z0t = 3} [ set(cv_zb): 1 ]
+        add(cv_zi2): cv_zi2 1
     ]
     cv_else3(r): items idx cv_zb
 ]
@@ -2661,8 +2683,16 @@ cv_else3(r): items idx zb [
     if(_): {zb = 1} [
         at(cv_zi2): items idx
         getf(cv_zk2): cv_zi2 "kids"
-        at(cv_zb2): cv_zk2 0
-        cv_stmt(r): cv_zb2
+        len(cv_zkl): cv_zk2
+        set(cv_zbi): 0
+        while(_): {cv_zbi < cv_zkl} [
+            at(cv_zbk): cv_zk2 cv_zbi
+            getf(cv_zbkt): cv_zbk "tag"
+            if(_): {cv_zbkt = 3} [
+                cv_stmt(r): cv_zbk
+            ]
+            add(cv_zbi): cv_zbi 1
+        ]
     ]
     if(_): {zb = 0} [
         add(cv_zp): idx 1
@@ -2871,20 +2901,12 @@ cv_findlp(r): i [
 ]
 cv_return(r): nd [
     getf(cv_rk2): nd "kids"
-    at(cv_r0): cv_rk2 0
-    cv_e(_): cv_r0 16
-    getf(cv_rn): nd "s2"
-    set(cv_rs): 0
-    set(cv_rb): 1
-    if(_): {cv_rn = "_"} [
-        set(cv_rs): 1
-        set(cv_rb): 0
+    len(cv_rl2): cv_rk2
+    if(_): {cv_rl2 = 1} [
+        at(cv_r0): cv_rk2 0
+        cv_e(_): cv_r0 16
     ]
-    if(_): {cv_rs = 0} [
-        cv_name(cv_ri): cv_rn
-        cv_emit(_): 3 16 0 0 cv_ri
-    ]
-    cv_emit(_): 6 16 cv_rb 0 0
+    cv_emit(_): 6 16 1 0 0
     set(r): 0
 ]
 
@@ -3120,9 +3142,6 @@ cv_scanc(r): nd [
     len(cv_scn2): cv_scl2
     cv_name(cv_sci): "scan"
     cv_emit(_): 4 16 cv_scn2 16 cv_sci
-    getf(cv_scr): nd "s2"
-    cv_name(cv_scri): cv_scr
-    cv_emit(_): 3 16 0 0 cv_scri
     set(r): 0
 ]
 cv_scargs(r): nd i [
@@ -3272,7 +3291,9 @@ vm_alias2(r): rnm crt sv [
             setf(_): vm_ap "t" crt
         ]
     ]
-    push(_): sv vm_as
+    if(_): {vm_asame = 0} [
+        push(_): sv vm_as
+    ]
     set(r): 0
 ]
 vm_step(r): cur op [
@@ -3348,7 +3369,6 @@ vm_step(r): cur op [
         ex_rest(_): vm_sv3 0 vm_sv3l
         getf(vm_crt2): vm_fr2 "crt"
         getf(vm_rvb): cur "b"
-        print(_): rt_rv
         if(_): {vm_rvb = 1} [
             rt_write(_): vm_crt2 rt_rv
         ]
@@ -3595,7 +3615,10 @@ vm_native_c(r): name dst nb [
     if(_): {name = "len"} [ len(r): rt_na0 ]
     if(_): {name = "getf"} [ vm_getf(r): rt_na0 rt_na1 ]
     if(_): {name = "setf"} [ vm_setf(r): rt_na0 rt_na1 rt_na2 ]
-    if(_): {name = "vec"} [ vec(r): "rt_obj" ]
+    if(_): {name = "vec"} [
+        if(_): {rt_na0 = ""} [ vec(r): "" ]
+        if(_): {rt_na0 != ""} [ vec(r): "rt_obj" ]
+    ]
     if(_): {name = "encode"} [ encode(r): rt_na0 ]
     if(_): {name = "decode"} [ decode(r): rt_na0 ]
     set(vm_m3): 0
@@ -3841,6 +3864,11 @@ vm_native_d(r): name dst nb [
     if(_): {name = "new"} [ vm_newobj(r): nb ]
     if(_): {name = "template"} [ vm_template(r): nb ]
     if(_): {name = "scan"} [ vm_scanN(r): nb ]
+    if(_): {name = "byte"} [ byte(r): rt_na0 rt_na1 ]
+    if(_): {name = "slice"} [ slice(r): rt_na0 rt_na1 rt_na2 ]
+    if(_): {name = "readfile"} [ readfile(r): rt_na0 ]
+    if(_): {name = "random64"} [ random64(r): ]
+    if(_): {name = "seed_random64"} [ seed_random64(r): rt_na0 ]
 ]
 # ---- VM driver ----
 cv_dump(r): [
@@ -3912,6 +3940,21 @@ init(ret): arg_cnt arg_vec [
     ]
     at(lx_path): arg_vec 0
     readfile(lx_src): lx_path
+
+    # Prepend the plain-source standard library to the interpreted program.
+    # The host preprocessor handles the interpreter's own $include above;
+    # target programs are read raw, so they receive the library text here.
+    readfile(ussr_std_standard): "standard.su"
+    readfile(ussr_std_io): "io.su"
+    readfile(ussr_std_math): "math.su"
+    readfile(ussr_std_bytes): "bytes.su"
+    set(ussr_std_src): ""
+    concat(ussr_std_src): ussr_std_src ussr_std_standard
+    concat(ussr_std_src): ussr_std_src ussr_std_io
+    concat(ussr_std_src): ussr_std_src ussr_std_math
+    concat(ussr_std_src): ussr_std_src ussr_std_bytes
+    concat(lx_src): ussr_std_src lx_src
+
     struct(lx_Tok): "kind:number" "text:string" "line:number"
     vec(lx_tokens): "lx_Tok"
     lx_scan(lx_status): lx_src
