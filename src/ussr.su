@@ -1900,6 +1900,8 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "template"} [ set(rt_unk): 0 ]
         if(_): {nm = "option"} [ set(rt_unk): 0 ]
         if(_): {nm = "default"} [ set(rt_unk): 0 ]
+        if(_): {nm = "do"} [ set(rt_unk): 0 ]
+        if(_): {nm = "loop"} [ set(rt_unk): 0 ]
         if(_): {rt_unk = 1} [
             ex_defcall(r): nd nm
         ]
@@ -2238,6 +2240,8 @@ ex_block_h(r): items idx [
             if(_): {rt_bn2 = "choose"} [ set(rt_bm): 5 ]
             if(_): {rt_bn2 = "option"} [ set(rt_bm): 4 ]
             if(_): {rt_bn2 = "default"} [ set(rt_bm): 4 ]
+            if(_): {rt_bn2 = "do"} [ set(rt_bm): 6 ]
+            if(_): {rt_bn2 = "loop"} [ set(rt_bm): 4 ]
         ]
         ex_block_i(r): items idx rt_bm
     ]
@@ -2269,6 +2273,9 @@ ex_block_i(r): items idx bm [
         ]
         if(_): {bm = 5} [
             ex_choose(r): items idx
+        ]
+        if(_): {bm = 6} [
+            ex_do(r): items idx
         ]
     ]
 ]
@@ -2380,10 +2387,16 @@ ex_while_go(r): nd c [
             getf(rt_wk2): nd "kids"
             at(rt_wb): rt_wk2 1
             ex_block(rt_wb): rt_wb
-            if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
+            set(rt_wstop): 0
+            if(_): {rt_flow = 1} [
+                set(rt_flow): 0
+                set(rt_wstop): 1
+            ]
             if(_): {rt_flow = 2} [ set(rt_flow): 0 ]
-            if(_): {rt_flow = 0} [
-                ex_while(r): nd
+            if(_): {rt_wstop = 0} [
+                if(_): {rt_flow = 0} [
+                    ex_while(r): nd
+                ]
             ]
         ]
     ]
@@ -2476,6 +2489,56 @@ ex_chexec(r): items match dflt crv [
         if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
     ]
 ]
+ex_do(r): items idx [
+    len(rt_doln2): items
+    add(rt_dol): idx 1
+    set(rt_dook): 0
+    if(_): {rt_dol < rt_doln2} [
+        at(rt_doln3): items rt_dol
+        getf(rt_dolt): rt_doln3 "tag"
+        if(_): {rt_dolt = 2} [
+            getf(rt_dolnm): rt_doln3 "s1"
+            if(_): {rt_dolnm = "loop"} [ set(rt_dook): 1 ]
+        ]
+    ]
+    if(_): {rt_dook = 1} [
+        at(rt_doc): items idx
+        getf(rt_dok): rt_doc "kids"
+        at(rt_dob): rt_dok 1
+        at(rt_doln4): items rt_dol
+        getf(rt_dolk): rt_doln4 "kids"
+        at(rt_docond): rt_dolk 0
+        ex_do_go(r): items idx rt_dob rt_docond
+    ]
+    if(_): {rt_dook = 0} [
+        add(rt_donx2): idx 1
+        ex_block_h(r): items rt_donx2
+    ]
+]
+ex_do_go(r): items idx body cond [
+    set(r): 0
+    ex_block(_): body
+    set(rt_dcont): 0
+    if(_): {rt_flow = 0} [ set(rt_dcont): 1 ]
+    if(_): {rt_flow = 2} [
+        set(rt_flow): 0
+        set(rt_dcont): 1
+    ]
+    if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
+    if(_): {rt_dcont = 1} [
+        ex_val(rt_dcv): cond
+        if(_): {rt_dcv = true} [
+            if(_): {rt_flow = 0} [ ex_do_go(r): items idx body cond ]
+        ]
+    ]
+    if(_): {rt_flow = 0} [
+        at(rt_doc2): items idx
+        getf(rt_dorv): rt_doc2 "s2"
+        rt_write(_): rt_dorv {1 = 1}
+        add(rt_donx): idx 2
+        ex_block_h(r): items rt_donx
+    ]
+]
 ex_scan_prompt(r): fmt [
     set(rt_sp): 0
     len(rt_sfl): fmt
@@ -2532,37 +2595,63 @@ ex_scan_prompt(r): fmt [
 
 ex_scan(r): nd [
     getf(rt_sk): nd "kids"
-    len(rt_sn): rt_sk
     at(rt_sf): rt_sk 0
     ex_val(rt_sfv): rt_sf
-    ex_scan_prompt(_): rt_sfv
-    set(rt_na0): rt_sfv
-    if(_): {rt_sn > 1} [
-        at(rt_sd1): rt_sk 1
-        getf(rt_sd1s): rt_sd1 "s1"
-        set(rt_na1): rt_sd1s
+    getf(rt_sk2): nd "kids"
+    len(rt_sn2): rt_sk2
+    ex_scgo(r): nd rt_sn2 rt_sfv
+]
+ex_scgo(r): nd sn fmt [
+    set(r): 0
+    if(_): {sn > 1} [
+        set(rt_hsc1): null
+        set(rt_hsc2): null
+        set(rt_hsc3): null
+        set(rt_hsc4): null
+        set(rt_hsc5): null
+        ex_scape(rt_evs): fmt
+        set(rt_evs2): "scan(rt_hok): \""
+        concat(rt_evs2): rt_evs2 rt_evs
+        concat(rt_evs2): rt_evs2 "\""
+        if(_): {sn > 1} [ concat(rt_evs2): rt_evs2 " rt_hsc1" ]
+        if(_): {sn > 2} [ concat(rt_evs2): rt_evs2 " rt_hsc2" ]
+        if(_): {sn > 3} [ concat(rt_evs2): rt_evs2 " rt_hsc3" ]
+        if(_): {sn > 4} [ concat(rt_evs2): rt_evs2 " rt_hsc4" ]
+        if(_): {sn > 5} [ concat(rt_evs2): rt_evs2 " rt_hsc5" ]
+        eval(rt_evr): rt_evs2
+        ex_scwr(r): nd sn rt_hsc1 rt_hsc2 rt_hsc3 rt_hsc4 rt_hsc5
     ]
-    if(_): {rt_sn > 2} [
-        at(rt_sd2): rt_sk 2
-        getf(rt_sd2s): rt_sd2 "s1"
-        set(rt_na2): rt_sd2s
+]
+ex_scwr(r): nd sn h1 h2 h3 h4 h5 [
+    set(r): 0
+    if(_): {sn > 1} [ ex_scw1(_): nd 1 h1 ]
+    if(_): {sn > 2} [ ex_scw1(_): nd 2 h2 ]
+    if(_): {sn > 3} [ ex_scw1(_): nd 3 h3 ]
+    if(_): {sn > 4} [ ex_scw1(_): nd 4 h4 ]
+    if(_): {sn > 5} [ ex_scw1(_): nd 5 h5 ]
+    getf(rt_s2n): nd "s2"
+    rt_write(_): rt_s2n {1 = 1}
+]
+ex_scw1(r): nd k v [
+    getf(rt_wk2): nd "kids"
+    at(rt_wkn): rt_wk2 k
+    getf(rt_wnm): rt_wkn "s1"
+    rt_write(_): rt_wnm v
+    set(r): 0
+]
+ex_scape(r): s [
+    set(rt_sce): ""
+    set(rt_sci): 0
+    len(rt_scl2): s
+    while(_): {rt_sci < rt_scl2} [
+        byte(rt_scb): s rt_sci
+        slice(rt_scch): s rt_sci 1
+        if(_): {rt_scb = 34} [ concat(rt_scch): "\\" rt_scch ]
+        if(_): {rt_scb = 92} [ concat(rt_scch): "\\" rt_scch ]
+        concat(rt_sce): rt_sce rt_scch
+        add(rt_sci): rt_sci 1
     ]
-    if(_): {rt_sn > 3} [
-        at(rt_sd3): rt_sk 3
-        getf(rt_sd3s): rt_sd3 "s1"
-        set(rt_na3): rt_sd3s
-    ]
-    if(_): {rt_sn > 4} [
-        at(rt_sd4): rt_sk 4
-        getf(rt_sd4s): rt_sd4 "s1"
-        set(rt_na4): rt_sd4s
-    ]
-    if(_): {rt_sn > 5} [
-        at(rt_sd5): rt_sk 5
-        getf(rt_sd5s): rt_sd5 "s1"
-        set(rt_na5): rt_sd5s
-    ]
-    vm_scanN(r): rt_sn
+    set(r): rt_sce
 ]
 rt_ast_needed(r): nd [
     set(r): 0
@@ -2573,6 +2662,7 @@ rt_ast_needed(r): nd [
         if(_): {rt_ann = "template"} [ set(r): 1 ]
         if(_): {rt_ann = "get"} [ set(r): 1 ]
         if(_): {rt_ann = "choose"} [ set(r): 1 ]
+        if(_): {rt_ann = "do"} [ set(r): 1 ]
         if(_): {rt_ann = "scan"} [
             getf(rt_akids): nd "kids"
             len(rt_aklen): rt_akids
