@@ -457,11 +457,6 @@ lx_scan(r): s [
             if(_): {lx_b = 61} [
                 set(lx_hasop): 1
                 set(lx_op): "="
-                if(_): {lx_p1 = 61} [
-                    set(lx_hasop): 1
-                    set(lx_op): "=="
-                    set(lx_pos): {lx_pos + 1}
-                ]
             ]
             if(_): {lx_b = 33} [
                 set(lx_hasop): 1
@@ -831,15 +826,15 @@ ps_e6_loop(r): left [
     if(_): {ps_stop = 0} [
         set(ps_l6_m): 0
         set(ps_l6_op): ""
-        ps_istok(ps_l6_t): "=="
+        ps_istok(ps_l6_t): "="
         if(_): {ps_l6_t = 1} [
             set(ps_l6_m): 1
-            set(ps_l6_op): "=="
+            set(ps_l6_op): "="
         ]
         ps_istok(ps_l6_t): "="
         if(_): {ps_l6_t = 1} [
             set(ps_l6_m): 1
-            set(ps_l6_op): "=="
+            set(ps_l6_op): "="
         ]
         ps_istok(ps_l6_t): "!="
         if(_): {ps_l6_t = 1} [
@@ -954,15 +949,19 @@ ps_e3_loop(r): left [
         ]
         if(_): {ps_l3_m = 1} [
             ps_adv(_): 0
-            ps_e2(ps_l3_right):
-            vec(ps_l3_kids): ""
-            push(_): ps_l3_kids left
-            push(_): ps_l3_kids ps_l3_right
-            nd_new(ps_l3_node): 12 ps_l3_op "" 0 ps_l3_kids
-            ps_e3_loop(r): ps_l3_node
+            ps_e3_make(r): left ps_l3_op
         ]
     ]
 ]
+ps_e3_make(r): left op [
+    ps_e2(ps_l3_right):
+    vec(ps_l3_kids): ""
+    push(_): ps_l3_kids left
+    push(_): ps_l3_kids ps_l3_right
+    nd_new(ps_l3_node): 12 op "" 0 ps_l3_kids
+    ps_e3_loop(r): ps_l3_node
+]
+
 ps_e2(r): [
     if(_): {ps_stop = 0} [
         ps_e1(r):
@@ -991,14 +990,17 @@ ps_e2_loop(r): left [
         ]
         if(_): {ps_l2_m = 1} [
             ps_adv(_): 0
-            ps_e1(ps_l2_right):
-            vec(ps_l2_kids): ""
-            push(_): ps_l2_kids left
-            push(_): ps_l2_kids ps_l2_right
-            nd_new(ps_l2_node): 12 ps_l2_op "" 0 ps_l2_kids
-            ps_e2_loop(r): ps_l2_node
+            ps_e2_make(r): left ps_l2_op
         ]
     ]
+]
+ps_e2_make(r): left op [
+    ps_e1(ps_l2_right):
+    vec(ps_l2_kids): ""
+    push(_): ps_l2_kids left
+    push(_): ps_l2_kids ps_l2_right
+    nd_new(ps_l2_node): 12 op "" 0 ps_l2_kids
+    ps_e2_loop(r): ps_l2_node
 ]
 
 # ---------- parser: parameters ----------
@@ -1313,6 +1315,7 @@ ps_dump_kids(r): kids idx depth [
 ps_parse(r): src [
     set(ps_i): 0
     set(ps_stop): 0
+    vec(ps_opstack): ""
     set(ps_err): ""
     struct(nd): "tag:number" "s1:string" "s2:string" "n1:number" "kids:any"
     ps_prog(ps_root): 
@@ -1470,7 +1473,7 @@ ex_bin_do(r): op lv rv [
     if(_): {op = "%"} [
         mod(r): lv rv
     ]
-    if(_): {op = "=="} [
+    if(_): {op = "="} [
         set(r): {lv = rv}
     ]
     if(_): {op = "!="} [
@@ -1569,26 +1572,27 @@ ex_reg_i(r): cmd prm i blim [
     ]
 ]
 rt_findf_i(r): nm i [
-    len(rt_ffl): rt_fdefs
+    len(rt_fl): rt_fdefs
     set(r): {0 - 1}
-    if(_): {i < rt_ffl} [
-        at(rt_ffp): rt_fdefs i
-        getf(rt_ffn): rt_ffp "n"
-        set(rt_ffok): 0
-        if(_): {rt_ffn = nm} [
-            set(rt_ffok): 1
-        ]
-        if(_): {rt_ffok = 1} [
+    if(_): {i + 1 > 0} [
+        at(rt_fp): rt_fdefs i
+        getf(rt_fn): rt_fp "n"
+        if(_): {rt_fn = nm} [
             set(r): i
         ]
-        if(_): {rt_ffok = 0} [
-            add(rt_ffi2): i 1
-            rt_findf_i(r): nm rt_ffi2
+        if(_): {rt_fn != nm} [
+            sub(rt_fi2): i 1
+            rt_findf_i(r): nm rt_fi2
         ]
     ]
 ]
 rt_findf(r): nm [
-    rt_findf_i(r): nm 0
+    len(rt_fl2): rt_fdefs
+    set(r): {0 - 1}
+    if(_): {rt_fl2 > 0} [
+        sub(rt_fstart): rt_fl2 1
+        rt_findf_i(r): nm rt_fstart
+    ]
 ]
 
 # ---- function call (save-vec as param: recursion-safe) ----
@@ -1752,6 +1756,12 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "while"} [
             ex_while(r): nd
         ]
+        if(_): {nm = "for"} [
+            ex_for(r): nd
+        ]
+        if(_): {nm = "scan"} [
+            ex_scan(r): nd
+        ]
         if(_): {nm = "push"} [
             ex_oop(r): nd nm
         ]
@@ -1795,6 +1805,8 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "continue"} [ set(rt_unk): 0 ]
         if(_): {nm = "return"} [ set(rt_unk): 0 ]
         if(_): {nm = "while"} [ set(rt_unk): 0 ]
+        if(_): {nm = "for"} [ set(rt_unk): 0 ]
+        if(_): {nm = "scan"} [ set(rt_unk): 0 ]
         if(_): {nm = "push"} [ set(rt_unk): 0 ]
         if(_): {nm = "at"} [ set(rt_unk): 0 ]
         if(_): {nm = "len"} [ set(rt_unk): 0 ]
@@ -1989,32 +2001,33 @@ ex_new_w(r): nd obj [
     set(r): 0
 ]
 ex_defcall(r): nd nm [
-    rt_findf(rt_df): nm
-    if(_): {rt_df < 0} [
-        getf(rt_dk): nd "kids"
-        len(rt_dk2): rt_dk
-        set(rt_hb): 0
-        if(_): {rt_dk2 > 0} [
-            sub(rt_dl): rt_dk2 1
-            at(rt_dl2): rt_dk rt_dl
-            getf(rt_dl3): rt_dl2 "tag"
-            if(_): {rt_dl3 = 3} [
-                set(rt_hb): 1
-            ]
+    getf(rt_dk): nd "kids"
+    len(rt_dk2): rt_dk
+    set(rt_hb): 0
+    if(_): {rt_dk2 > 0} [
+        sub(rt_dl): rt_dk2 1
+        at(rt_dl2): rt_dk rt_dl
+        getf(rt_dl3): rt_dl2 "tag"
+        if(_): {rt_dl3 = 3} [
+            set(rt_hb): 1
         ]
-        if(_): {rt_hb = 1} [
-            rt_reg(_): nd
-        ]
-        if(_): {rt_hb = 0} [
+    ]
+    if(_): {rt_hb = 1} [
+        rt_reg(_): nd
+    ]
+    if(_): {rt_hb = 0} [
+        rt_findf(rt_df): nm
+        if(_): {rt_df < 0} [
             print(_): "unknown command"
         ]
-    ]
-    if(_): {rt_df + 1 > 0} [
-        at(rt_fd2): rt_fdefs rt_df
-        getf(rt_cr2): nd "s2"
-        rt_call(r): rt_fd2 nd rt_cr2
+        if(_): {rt_df + 1 > 0} [
+            at(rt_fd2): rt_fdefs rt_df
+            getf(rt_cr2): nd "s2"
+            rt_call(r): rt_fd2 nd rt_cr2
+        ]
     ]
 ]
+
 ex_block(r): nd [
     getf(rt_bk4): nd "kids"
     ex_block_h(r): rt_bk4 0
@@ -2185,6 +2198,134 @@ ex_while_go(r): nd c [
         ]
     ]
 ]
+ex_for(r): nd [
+    getf(rt_fk): nd "kids"
+    at(rt_fc): rt_fk 0
+    at(rt_fb): rt_fk 1
+    getf(rt_fbk): rt_fb "kids"
+    len(rt_fbn): rt_fbk
+    if(_): {rt_fbn > 1} [
+        at(rt_finit): rt_fbk 0
+        at(rt_fiter): rt_fbk 1
+        ex_cmd(r): rt_finit
+        ex_for_go(r): nd rt_fiter
+    ]
+    set(r): 0
+]
+ex_for_go(r): nd iter [
+    getf(rt_fk2): nd "kids"
+    at(rt_fc2): rt_fk2 0
+    ex_val(rt_fcv): rt_fc2
+    if(_): {rt_fcv = true} [
+        if(_): {rt_flow = 0} [
+            at(rt_fb2): rt_fk2 1
+            getf(rt_fbk2): rt_fb2 "kids"
+            len(rt_fbn2): rt_fbk2
+            if(_): {rt_fbn2 > 2} [
+                set(rt_fbi): 2
+                ex_block_h(r): rt_fbk2 rt_fbi
+            ]
+            if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
+            if(_): {rt_flow = 2} [ set(rt_flow): 0 ]
+            if(_): {rt_flow = 0} [
+                ex_cmd(r): iter
+                if(_): {rt_flow = 0} [ ex_for_go(r): nd iter ]
+            ]
+        ]
+    ]
+]
+ex_scan(r): nd [
+    getf(rt_sk): nd "kids"
+    len(rt_sn): rt_sk
+    at(rt_sf): rt_sk 0
+    ex_val(rt_sfv): rt_sf
+    set(rt_na0): rt_sfv
+    if(_): {rt_sn > 1} [
+        at(rt_sd1): rt_sk 1
+        getf(rt_sd1s): rt_sd1 "s1"
+        set(rt_na1): rt_sd1s
+    ]
+    if(_): {rt_sn > 2} [
+        at(rt_sd2): rt_sk 2
+        getf(rt_sd2s): rt_sd2 "s1"
+        set(rt_na2): rt_sd2s
+    ]
+    if(_): {rt_sn > 3} [
+        at(rt_sd3): rt_sk 3
+        getf(rt_sd3s): rt_sd3 "s1"
+        set(rt_na3): rt_sd3s
+    ]
+    if(_): {rt_sn > 4} [
+        at(rt_sd4): rt_sk 4
+        getf(rt_sd4s): rt_sd4 "s1"
+        set(rt_na4): rt_sd4s
+    ]
+    if(_): {rt_sn > 5} [
+        at(rt_sd5): rt_sk 5
+        getf(rt_sd5s): rt_sd5 "s1"
+        set(rt_na5): rt_sd5s
+    ]
+    vm_scanN(r): rt_sn
+]
+rt_ast_needed(r): nd [
+    set(r): 0
+    getf(rt_ank): nd "tag"
+    if(_): {rt_ank = 2} [
+        getf(rt_ann): nd "s1"
+        if(_): {rt_ann = "for"} [ set(r): 1 ]
+        if(_): {rt_ann = "scan"} [
+            getf(rt_akids): nd "kids"
+            len(rt_aklen): rt_akids
+            if(_): {rt_aklen > 2} [ set(r): 1 ]
+        ]
+    ]
+    if(_): {r = 0} [
+        getf(rt_akids2): nd "kids"
+        rt_ast_needed_i(r): rt_akids2 0
+    ]
+]
+rt_ast_needed_i(r): items i [
+    set(r): 0
+    len(rt_ail): items
+    if(_): {i < rt_ail} [
+        at(rt_anode): items i
+        rt_ast_needed(rt_ares): rt_anode
+        if(_): {rt_ares = 1} [
+            set(r): 1
+        ]
+        if(_): {rt_ares = 0} [
+            add(rt_ai2): i 1
+            rt_ast_needed_i(r): items rt_ai2
+        ]
+    ]
+]
+rt_has_choose(r): nd [
+    set(r): 0
+    getf(rt_hct): nd "tag"
+    if(_): {rt_hct = 2} [
+        getf(rt_hcn): nd "s1"
+        if(_): {rt_hcn = "choose"} [ set(r): 1 ]
+    ]
+    if(_): {r = 0} [
+        getf(rt_hck): nd "kids"
+        rt_has_choose_i(r): rt_hck 0
+    ]
+]
+rt_has_choose_i(r): items i [
+    set(r): 0
+    len(rt_hcl): items
+    if(_): {i < rt_hcl} [
+        at(rt_hcn2): items i
+        rt_has_choose(rt_hcr): rt_hcn2
+        if(_): {rt_hcr = 1} [
+            set(r): 1
+        ]
+        if(_): {rt_hcr = 0} [
+            add(rt_hci2): i 1
+            rt_has_choose_i(r): items rt_hci2
+        ]
+    ]
+]
 ex_single(r): item [
     getf(rt_st): item "tag"
     set(r): 0
@@ -2223,7 +2364,7 @@ rt_run(r): prog acnt avec [
         ex_rest(_): rt_sv2 0 1
     ]
     if(_): {rt_fi < 0} [
-        print(_): "no init"
+        set(r): 0
     ]
 ]
 # ---------- M4: bytecode compiler + VM ----------
@@ -2333,7 +2474,7 @@ cv_e_t(r): nd tgt t [
         if(_): {cv_op = "*"} [ set(cv_opc): 12 ]
         if(_): {cv_op = "/"} [ set(cv_opc): 13 ]
         if(_): {cv_op = "%"} [ set(cv_opc): 14 ]
-        if(_): {cv_op = "=="} [ set(cv_opc): 16 ]
+        if(_): {cv_op = "="} [ set(cv_opc): 16 ]
         if(_): {cv_op = "!="} [ set(cv_opc): 17 ]
         if(_): {cv_op = "<"} [ set(cv_opc): 18 ]
         if(_): {cv_op = "<="} [ set(cv_opc): 19 ]
@@ -2459,6 +2600,7 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "continue"} [ cv_continue(r): nd ]
         if(_): {nm = "return"} [ cv_return(r): nd ]
         if(_): {nm = "while"} [ cv_while(r): nd ]
+        if(_): {nm = "for"} [ cv_for(r): nd ]
         if(_): {nm = "push"} [ cv_native2(r): nd nm ]
         if(_): {nm = "at"} [ cv_native2(r): nd nm ]
         if(_): {nm = "len"} [ cv_native2(r): nd nm ]
@@ -2490,6 +2632,7 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "continue"} [ set(cv_kn): 0 ]
         if(_): {nm = "return"} [ set(cv_kn): 0 ]
         if(_): {nm = "while"} [ set(cv_kn): 0 ]
+        if(_): {nm = "for"} [ set(cv_kn): 0 ]
         if(_): {nm = "push"} [ set(cv_kn): 0 ]
         if(_): {nm = "at"} [ set(cv_kn): 0 ]
         if(_): {nm = "len"} [ set(cv_kn): 0 ]
@@ -2850,6 +2993,44 @@ cv_while(r): nd [
     cv_patch(_): cv_code cv_wp {0 - 1} cv_wend
     cv_patchv(_): cv_lp cv_wend cv_wi2
     setf(_): cv_lp "done" 1
+    set(r): 0
+]
+cv_for(r): nd [
+    getf(cv_fk): nd "kids"
+    len(cv_fnl): cv_fk
+    if(_): {cv_fnl = 2} [
+        at(cv_fblock): cv_fk 1
+        getf(cv_fbk): cv_fblock "kids"
+        len(cv_fbn): cv_fbk
+        if(_): {cv_fbn < 2} [
+            print(_): "for requires initializer and iterator commands"
+        ]
+        if(_): {cv_fbn > 1} [
+            at(cv_finit): cv_fbk 0
+            at(cv_fiter): cv_fbk 1
+            cv_cmd(r): cv_finit
+            len(cv_fcond): cv_code
+            vec(cv_fbrk): ""
+            vec(cv_fcnt): ""
+            new(cv_flp): "cv_lp" cv_fcond cv_fbrk cv_fcnt 0
+            push(_): cv_lps cv_flp
+            at(cv_fcondarg): cv_fk 0
+            cv_e(_): cv_fcondarg 16
+            cv_emit(cv_ffj): 9 16 0 0 0
+            set(cv_fbody_i): 2
+            cv_stmt_i(r): cv_fbk cv_fbody_i
+            len(cv_fiterpos): cv_code
+            cv_cmd(r): cv_fiter
+            cv_emit(_): 7 0 0 0 cv_fcond
+            len(cv_fend): cv_code
+            cv_patch(_): cv_code cv_ffj {0 - 1} cv_fend
+            cv_patchv(_): cv_flp cv_fend cv_fiterpos
+            setf(_): cv_flp "done" 1
+        ]
+    ]
+    if(_): {cv_fnl != 2} [
+        print(_): "for requires condition and body"
+    ]
     set(r): 0
 ]
 cv_patchv(r): lp end top [
@@ -3923,6 +4104,18 @@ cv_dump(r): [
 cv_driver(r): prog acnt avec [
     cv_stmt(r): prog
     cv_findf2(cv_mi): "init"
+    rt_ast_needed(rt_need_ast): prog
+    rt_has_choose(rt_has_ch): prog
+    if(_): {cv_mi < 0} [
+        if(_): {rt_has_ch = 0} [
+            rt_run(r): prog acnt avec
+            return(r): 0
+        ]
+    ]
+    if(_): {rt_need_ast = 1} [
+        rt_run(r): prog acnt avec
+        return(r): 0
+    ]
     set(r): 0
     if(_): {cv_mi + 1 > 0} [
         cv_const(cv_mc1): acnt

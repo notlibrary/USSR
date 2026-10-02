@@ -8,6 +8,21 @@
 
 ### Maintenance
 
+## [0.4.5] - 2026-10-5
+
+### Added
+- Added advaced control blocks syntax `@[]`
+- Added Kimi K3 `ussr.su` bootstrap attempt
+- Added TreeSitter grammar
+- Added parts of library math.su bytes.su io.su standard.su
+ 
+### Documentation
+- Upadated docs
+
+### Maintenance
+- Fixed failing tests
+- Added chain.su test
+
 ## [0.4.4] - 2026-09-28
 
 ### Added
