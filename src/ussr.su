@@ -9,6 +9,11 @@ $include "io.su"
 $include "math.su"
 $include "bytes.su"
 
+# Almost impossible programming task
+# Write USSR interpreter in USSR
+# Kimi K3 died in hallucinations ChatGPT go went to eval cheat
+# Need to pay Antropics 20$ and check how Claude fails it
+
 # ---- char classes ----
 lx_alpha_p(r): b [
     set(r): 0
