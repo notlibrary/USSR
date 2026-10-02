@@ -1265,6 +1265,7 @@ ps_prog(r): [
                             set(ps_pr_atgo): 0
                         ]
                         if(_): {ps_pr_atgo = 1} [
+                            ps_skipnl(_): 0
                             ps_isk(ps_pr_ath): 12
                             if(_): {ps_pr_ath = 0} [
                                 set(ps_pr_atgo): 0
@@ -1864,6 +1865,9 @@ ex_cmd_n(r): nd nm [
             getf(rt_tmn): nd "s2"
             rt_write(_): rt_tmn rt_tmv
         ]
+        if(_): {nm = "@"} [
+            ex_at(r): nd
+        ]
         set(rt_unk): 1
         if(_): {nm = "set"} [ set(rt_unk): 0 ]
         if(_): {nm = "print"} [ set(rt_unk): 0 ]
@@ -1902,6 +1906,7 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "default"} [ set(rt_unk): 0 ]
         if(_): {nm = "do"} [ set(rt_unk): 0 ]
         if(_): {nm = "loop"} [ set(rt_unk): 0 ]
+        if(_): {nm = "@"} [ set(rt_unk): 0 ]
         if(_): {rt_unk = 1} [
             ex_defcall(r): nd nm
         ]
@@ -2204,7 +2209,7 @@ ex_defcall(r): nd nm [
     if(_): {rt_hb = 0} [
         rt_findf(rt_df): nm
         if(_): {rt_df < 0} [
-            print(_): "unknown command"
+            ex_ext(r): nd nm
         ]
         if(_): {rt_df + 1 > 0} [
             at(rt_fd2): rt_fdefs rt_df
@@ -2212,6 +2217,51 @@ ex_defcall(r): nd nm [
             rt_call(r): rt_fd2 nd rt_cr2
         ]
     ]
+]
+ex_ext(r): nd nm [
+    getf(rt_xk): nd "kids"
+    len(rt_xn): rt_xk
+    set(rt_xa1): null
+    set(rt_xa2): null
+    set(rt_xa3): null
+    set(rt_xa4): null
+    set(rt_xa5): null
+    set(rt_xa6): null
+    ex_ext_ev(_): rt_xk 0 rt_xn
+    set(rt_xrv): null
+    ex_ext_b(r): nd nm rt_xn
+]
+ex_ext_ev(r): kids i n [
+    set(r): 0
+    if(_): {i < n} [
+        if(_): {i < 6} [
+            at(rt_xen): kids i
+            ex_val(rt_xev): rt_xen
+            if(_): {i = 0} [ set(rt_xa1): rt_xev ]
+            if(_): {i = 1} [ set(rt_xa2): rt_xev ]
+            if(_): {i = 2} [ set(rt_xa3): rt_xev ]
+            if(_): {i = 3} [ set(rt_xa4): rt_xev ]
+            if(_): {i = 4} [ set(rt_xa5): rt_xev ]
+            if(_): {i = 5} [ set(rt_xa6): rt_xev ]
+        ]
+        add(rt_xi2): i 1
+        ex_ext_ev(r): kids rt_xi2 n
+    ]
+]
+ex_ext_b(r): nd nm n [
+    set(rt_xes): ""
+    concat(rt_xes): rt_xes nm
+    concat(rt_xes): rt_xes "(rt_xrv):"
+    if(_): {n > 0} [ concat(rt_xes): rt_xes " rt_xa1" ]
+    if(_): {n > 1} [ concat(rt_xes): rt_xes " rt_xa2" ]
+    if(_): {n > 2} [ concat(rt_xes): rt_xes " rt_xa3" ]
+    if(_): {n > 3} [ concat(rt_xes): rt_xes " rt_xa4" ]
+    if(_): {n > 4} [ concat(rt_xes): rt_xes " rt_xa5" ]
+    if(_): {n > 5} [ concat(rt_xes): rt_xes " rt_xa6" ]
+    eval(rt_xer): rt_xes
+    getf(rt_xrn): nd "s2"
+    rt_write(_): rt_xrn rt_xrv
+    set(r): 0
 ]
 
 ex_block(r): nd [
@@ -2231,7 +2281,7 @@ ex_block_h(r): items idx [
         set(rt_bm): 0
         if(_): {rt_bt = 3} [ set(rt_bm): 3 ]
         if(_): {rt_bt = 14} [ set(rt_bm): 4 ]
-        if(_): {rt_bt = 23} [ set(rt_bm): 4 ]
+        if(_): {rt_bt = 23} [ set(rt_bm): 7 ]
         if(_): {rt_bt = 2} [
             getf(rt_bn2): rt_bi "s1"
             if(_): {rt_bn2 = "if"} [ set(rt_bm): 1 ]
@@ -2276,6 +2326,12 @@ ex_block_i(r): items idx bm [
         ]
         if(_): {bm = 6} [
             ex_do(r): items idx
+        ]
+        if(_): {bm = 7} [
+            at(rt_bi7): items idx
+            ex_at(r): rt_bi7
+            add(rt_nx7): idx 1
+            ex_block_h(r): items rt_nx7
         ]
     ]
 ]
@@ -2539,6 +2595,273 @@ ex_do_go(r): items idx body cond [
         ex_block_h(r): items rt_donx
     ]
 ]
+ex_at(r): nd [
+    getf(rt_atk): nd "kids"
+    at(rt_atcb): rt_atk 0
+    at(rt_attb): rt_atk 1
+    getf(rt_atck): rt_atcb "kids"
+    getf(rt_attk): rt_attb "kids"
+    ex_atc(r): nd rt_atck rt_attk 0
+]
+ex_atc(r): nd ctl tgt i [
+    set(r): 0
+    len(rt_acln): ctl
+    if(_): {i < rt_acln} [
+        at(rt_aci): ctl i
+        getf(rt_act): rt_aci "tag"
+        set(rt_acm): 0
+        if(_): {rt_act = 2} [
+            getf(rt_acn): rt_aci "s1"
+            if(_): {rt_acn = "chain"} [ set(rt_acm): 1 ]
+            if(_): {rt_acn = "file"} [ set(rt_acm): 2 ]
+            if(_): {rt_acn = "capture"} [ set(rt_acm): 2 ]
+        ]
+        if(_): {rt_acm = 1} [ ex_atpipe(r): nd ctl tgt i ]
+        if(_): {rt_acm = 2} [
+            add(rt_aci2): i 1
+            ex_atc(r): nd ctl tgt rt_aci2
+        ]
+        if(_): {rt_acm = 0} [
+            print(_): "unknown command"
+        ]
+    ]
+]
+ex_atpipe(r): nd ctl tgt i [
+    ex_ata(_): tgt
+    len(rt_apn): tgt
+    ex_atb(rt_apsrc): tgt rt_apn
+    add(rt_apj): i 1
+    ex_atf_s(r): nd ctl tgt rt_apj rt_apsrc 0 ""
+]
+ex_ata(r): tgt [
+    set(rt_t1a1): null
+    set(rt_t1a2): null
+    set(rt_t1a3): null
+    set(rt_t2a1): null
+    set(rt_t2a2): null
+    set(rt_t2a3): null
+    set(rt_t3a1): null
+    set(rt_t3a2): null
+    set(rt_t3a3): null
+    set(rt_t4a1): null
+    set(rt_t4a2): null
+    set(rt_t4a3): null
+    set(rt_t5a1): null
+    set(rt_t5a2): null
+    set(rt_t5a3): null
+    ex_ata_i(r): tgt 0
+]
+ex_ata_i(r): tgt i [
+    set(r): 0
+    len(rt_atl): tgt
+    if(_): {i < rt_atl} [
+        at(rt_atnd): tgt i
+        getf(rt_atk2): rt_atnd "kids"
+        len(rt_atan): rt_atk2
+        if(_): {rt_atan > 0} [ ex_ata_args(_): rt_atk2 0 rt_atan i ]
+        add(rt_atii): i 1
+        ex_ata_i(r): tgt rt_atii
+    ]
+]
+ex_ata_args(r): kids j n ti [
+    set(r): 0
+    if(_): {j < n} [
+        if(_): {j < 3} [
+            at(rt_aan): kids j
+            ex_val(rt_aav): rt_aan
+            ex_ata_s(_): ti j rt_aav
+        ]
+        add(rt_aaj2): j 1
+        ex_ata_args(r): kids rt_aaj2 n ti
+    ]
+]
+ex_ata_s(r): ti j v [
+    if(_): {ti = 0} [
+        if(_): {j = 0} [ set(rt_t1a1): v ]
+        if(_): {j = 1} [ set(rt_t1a2): v ]
+        if(_): {j = 2} [ set(rt_t1a3): v ]
+    ]
+    if(_): {ti = 1} [
+        if(_): {j = 0} [ set(rt_t2a1): v ]
+        if(_): {j = 1} [ set(rt_t2a2): v ]
+        if(_): {j = 2} [ set(rt_t2a3): v ]
+    ]
+    if(_): {ti = 2} [
+        if(_): {j = 0} [ set(rt_t3a1): v ]
+        if(_): {j = 1} [ set(rt_t3a2): v ]
+        if(_): {j = 2} [ set(rt_t3a3): v ]
+    ]
+    if(_): {ti = 3} [
+        if(_): {j = 0} [ set(rt_t4a1): v ]
+        if(_): {j = 1} [ set(rt_t4a2): v ]
+        if(_): {j = 2} [ set(rt_t4a3): v ]
+    ]
+    if(_): {ti = 4} [
+        if(_): {j = 0} [ set(rt_t5a1): v ]
+        if(_): {j = 1} [ set(rt_t5a2): v ]
+        if(_): {j = 2} [ set(rt_t5a3): v ]
+    ]
+    set(r): 0
+]
+ex_atb(r): tgt n [
+    ex_atb_i(r): tgt 0 n ""
+]
+ex_atb_i(r): tgt i n acc [
+    set(r): acc
+    if(_): {i < n} [
+        at(rt_abn2): tgt i
+        getf(rt_abnm): rt_abn2 "s1"
+        getf(rt_abk): rt_abn2 "kids"
+        len(rt_abkn): rt_abk
+        concat(acc): acc rt_abnm
+        if(_): {i = 0} [ concat(acc): acc "(rt_cs1):" ]
+        if(_): {i = 1} [ concat(acc): acc "(rt_cs2):" ]
+        if(_): {i = 2} [ concat(acc): acc "(rt_cs3):" ]
+        if(_): {i = 3} [ concat(acc): acc "(rt_cs4):" ]
+        if(_): {i = 4} [ concat(acc): acc "(rt_cs5):" ]
+        if(_): {rt_abkn > 0} [ ex_atb_ai(acc): acc i 0 rt_abkn ]
+        concat(acc): acc "\nchain(_):\n"
+        add(rt_abi): i 1
+        ex_atb_i(r): tgt rt_abi n acc
+    ]
+]
+ex_atb_ai(r): s i j n [
+    set(r): s
+    if(_): {j < n} [
+        if(_): {i = 0} [
+            if(_): {j = 0} [ concat(s): s " rt_t1a1" ]
+            if(_): {j = 1} [ concat(s): s " rt_t1a2" ]
+            if(_): {j = 2} [ concat(s): s " rt_t1a3" ]
+        ]
+        if(_): {i = 1} [
+            if(_): {j = 0} [ concat(s): s " rt_t2a1" ]
+            if(_): {j = 1} [ concat(s): s " rt_t2a2" ]
+            if(_): {j = 2} [ concat(s): s " rt_t2a3" ]
+        ]
+        if(_): {i = 2} [
+            if(_): {j = 0} [ concat(s): s " rt_t3a1" ]
+            if(_): {j = 1} [ concat(s): s " rt_t3a2" ]
+            if(_): {j = 2} [ concat(s): s " rt_t3a3" ]
+        ]
+        if(_): {i = 3} [
+            if(_): {j = 0} [ concat(s): s " rt_t4a1" ]
+            if(_): {j = 1} [ concat(s): s " rt_t4a2" ]
+            if(_): {j = 2} [ concat(s): s " rt_t4a3" ]
+        ]
+        if(_): {i = 4} [
+            if(_): {j = 0} [ concat(s): s " rt_t5a1" ]
+            if(_): {j = 1} [ concat(s): s " rt_t5a2" ]
+            if(_): {j = 2} [ concat(s): s " rt_t5a3" ]
+        ]
+        add(rt_abj): j 1
+        ex_atb_ai(r): s i rt_abj n
+    ]
+]
+ex_atf_s(r): nd ctl tgt j src capf cfn [
+    set(r): 0
+    len(rt_afcl): ctl
+    set(rt_afgo): 0
+    if(_): {j < rt_afcl} [ set(rt_afgo): 1 ]
+    if(_): {rt_afgo = 1} [
+        at(rt_afci): ctl j
+        getf(rt_afct): rt_afci "tag"
+        set(rt_afcm): 0
+        if(_): {rt_afct = 2} [
+            getf(rt_afcn): rt_afci "s1"
+            if(_): {rt_afcn = "file"} [ set(rt_afcm): 1 ]
+            if(_): {rt_afcn = "capture"} [ set(rt_afcm): 2 ]
+        ]
+        if(_): {rt_afcm = 1} [
+            getf(rt_afck): rt_afci "kids"
+            at(rt_afcfe): rt_afck 0
+            ex_val(rt_afcv): rt_afcfe
+            add(rt_afj2): j 1
+            ex_atf_s(r): nd ctl tgt rt_afj2 src capf rt_afcv
+        ]
+        if(_): {rt_afcm = 2} [
+            add(rt_afj3): j 1
+            ex_atf_s(r): nd ctl tgt rt_afj3 src 1 cfn
+        ]
+        if(_): {rt_afcm = 0} [ ex_atf_e(r): nd ctl tgt j src capf cfn ]
+    ]
+    if(_): {rt_afgo = 0} [ ex_atf_e(r): nd ctl tgt j src capf cfn ]
+]
+ex_atf_e(r): nd ctl tgt nexti src capf cfn [
+    set(r): 0
+    set(rt_cs1): null
+    set(rt_cs2): null
+    set(rt_cs3): null
+    set(rt_cs4): null
+    set(rt_cs5): null
+    set(rt_afsrc): src
+    if(_): {cfn != ""} [
+        set(rt_cfn2): cfn
+        concat(rt_afsrc): rt_afsrc "file(_): rt_cfn2\n"
+    ]
+    if(_): {capf = 1} [
+        concat(rt_afsrc): rt_afsrc "file(_): \"/tmp/ussr_cap.txt\"\n"
+    ]
+    eval(rt_afe): rt_afsrc
+    ex_atw(_): tgt 0 rt_cs1 rt_cs2 rt_cs3 rt_cs4 rt_cs5
+    ex_atp(_): ctl 0 capf
+    ex_atc(r): nd ctl tgt nexti
+]
+ex_atw(r): tgt i c1 c2 c3 c4 c5 [
+    set(r): 0
+    len(rt_awl): tgt
+    if(_): {i < rt_awl} [
+        at(rt_awn): tgt i
+        if(_): {i = 0} [
+            getf(rt_awrv): rt_awn "s2"
+            rt_write(_): rt_awrv c1
+        ]
+        if(_): {i = 1} [
+            getf(rt_awrv): rt_awn "s2"
+            rt_write(_): rt_awrv c2
+        ]
+        if(_): {i = 2} [
+            getf(rt_awrv): rt_awn "s2"
+            rt_write(_): rt_awrv c3
+        ]
+        if(_): {i = 3} [
+            getf(rt_awrv): rt_awn "s2"
+            rt_write(_): rt_awrv c4
+        ]
+        if(_): {i = 4} [
+            getf(rt_awrv): rt_awn "s2"
+            rt_write(_): rt_awrv c5
+        ]
+        add(rt_awi): i 1
+        ex_atw_i(r): tgt rt_awi c1 c2 c3 c4 c5
+    ]
+]
+ex_atw_i(r): tgt i c1 c2 c3 c4 c5 [
+    ex_atw(r): tgt i c1 c2 c3 c4 c5
+]
+ex_atp(r): ctl i capf [
+    set(r): 0
+    len(rt_apl): ctl
+    if(_): {i < rt_apl} [
+        at(rt_apnd): ctl i
+        getf(rt_apt): rt_apnd "tag"
+        if(_): {rt_apt = 2} [
+            getf(rt_apnm): rt_apnd "s1"
+            if(_): {rt_apnm = "file"} [
+                getf(rt_aprv): rt_apnd "s2"
+                rt_write(_): rt_aprv 0
+            ]
+            if(_): {rt_apnm = "capture"} [
+                if(_): {capf = 1} [
+                    readfile(rt_apcv): "/tmp/ussr_cap.txt"
+                    getf(rt_aprv2): rt_apnd "s2"
+                    rt_write(_): rt_aprv2 rt_apcv
+                ]
+            ]
+        ]
+        add(rt_api): i 1
+        ex_atp(r): ctl rt_api capf
+    ]
+]
 ex_scan_prompt(r): fmt [
     set(rt_sp): 0
     len(rt_sfl): fmt
@@ -2656,6 +2979,7 @@ ex_scape(r): s [
 rt_ast_needed(r): nd [
     set(r): 0
     getf(rt_ank): nd "tag"
+    if(_): {rt_ank = 23} [ set(r): 1 ]
     if(_): {rt_ank = 2} [
         getf(rt_ann): nd "s1"
         if(_): {rt_ann = "for"} [ set(r): 1 ]
@@ -2663,6 +2987,7 @@ rt_ast_needed(r): nd [
         if(_): {rt_ann = "get"} [ set(r): 1 ]
         if(_): {rt_ann = "choose"} [ set(r): 1 ]
         if(_): {rt_ann = "do"} [ set(r): 1 ]
+        if(_): {rt_ann = "@"} [ set(r): 1 ]
         if(_): {rt_ann = "scan"} [
             getf(rt_akids): nd "kids"
             len(rt_aklen): rt_akids
