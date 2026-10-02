@@ -1318,7 +1318,10 @@ ps_parse(r): src [
     set(ps_stop): 0
     vec(ps_opstack): ""
     set(ps_err): ""
-    struct(nd): "tag:number" "s1:string" "s2:string" "n1:number" "kids:any"
+    if(_): {ps_nddef = 0} [
+        struct(nd): "tag:number" "s1:string" "s2:string" "n1:number" "kids:any"
+        set(ps_nddef): 1
+    ]
     ps_prog(ps_root): 
     set(r): 0
     if(_): {ps_stop = 1} [
@@ -4858,12 +4861,9 @@ vm_init_i(r): i [
     ]
 ]
 # ---- entry point ----
-init(ret): arg_cnt arg_vec [
-    if(_): {arg_cnt = 0} [
-        print(_): "usage: ussr ussr.su program.su"
-        return(_): 1
-    ]
-    at(lx_path): arg_vec 0
+init_src(r): avec [
+    set(r): 0
+    at(lx_path): avec 0
     readfile(lx_src): lx_path
 
     # Prepend the plain-source standard library to the interpreted program.
@@ -4880,15 +4880,30 @@ init(ret): arg_cnt arg_vec [
     concat(ussr_std_src): ussr_std_src ussr_std_bytes
     concat(lx_src): ussr_std_src lx_src
 
-    struct(lx_Tok): "kind:number" "text:string" "line:number"
     vec(lx_tokens): "lx_Tok"
     lx_scan(lx_status): lx_src
     if(_): {lx_status = 1} [
-        return(_): 1
+        set(r): 1
     ]
-    ps_parse(ps_st): lx_src
-    if(_): {ps_st = 1} [
-        return(_): 1
+    if(_): {lx_status = 0} [
+        ps_parse(ps_st): lx_src
+        if(_): {ps_st = 1} [
+            set(r): 1
+        ]
+    ]
+]
+init(ret): arg_cnt arg_vec [
+    struct(lx_Tok): "kind:number" "text:string" "line:number"
+    set(ps_nddef): 0
+    set(rt_repl): 0
+    if(_): {arg_cnt = 0} [
+        set(rt_repl): 1
+    ]
+    if(_): {rt_repl = 0} [
+        init_src(init_st): arg_vec
+        if(_): {init_st = 1} [
+            return(_): 1
+        ]
     ]
     struct(In): "op:number" "a:number" "b:number" "c:number" "imm:number"
     struct(vm_rv): "v:any"
@@ -4923,6 +4938,10 @@ init(ret): arg_cnt arg_vec [
     vec(rt_store): "rt_sp"
     vec(rt_fdefs): "rt_fd"
     set(rt_flow): 0
+    if(_): {rt_repl = 1} [
+        repl(_): 
+        return(_): 0
+    ]
     at(ps_mode): arg_vec {arg_cnt - 1}
     if(_): {ps_mode = "tokens"} [
         set(lx_i): 0
@@ -4957,4 +4976,112 @@ init(ret): arg_cnt arg_vec [
             cv_driver(_): ps_root rt_acnt arg_vec
         ]
     ]
+]
+
+# ---------- REPL ----------
+# Read-eval-print loop, entered when ussr.su itself runs with no target
+# program (./ussr ussr.su). Each line is read through the host one at a
+# time (Enter-terminated, no Ctrl-D needed): a nested eval runs head -1
+# and captures its stdout through the chain machinery into a scratch file.
+# Input accumulates until square brackets balance (string-aware, like the
+# host REPL), then the buffered command list is lexed, parsed and executed
+# by the tree walker against the persistent rt_store/rt_fdefs, so
+# variables and function definitions survive between lines. Ctrl-D (an
+# empty read) exits the loop.
+
+repl_rd(r): [
+    set(rrd_h1): null
+    set(rrd_src): "head(rrd_h1): \"-1\"\nchain(_):\nfile(_): \"/tmp/ussr_repl_line.txt\"\n"
+    eval(rrd_ok): rrd_src
+    readfile(r): "/tmp/ussr_repl_line.txt"
+]
+
+repl_dep(r): s d [
+    len(rd_n): s
+    set(rd_i): 0
+    set(rd_str): 0
+    set(rd_esc): 0
+    set(rd_d): d
+    while(_): {rd_i < rd_n} [
+        byte(rd_b): s rd_i
+        set(rd_was): rd_str
+        if(_): {rd_was = 1} [
+            set(rd_skip): 0
+            if(_): {rd_esc = 1} [
+                set(rd_esc): 0
+                set(rd_skip): 1
+            ]
+            if(_): {rd_skip = 0} [
+                if(_): {rd_b = 92} [
+                    set(rd_esc): 1
+                ]
+                if(_): {rd_b = 34} [
+                    set(rd_str): 0
+                ]
+            ]
+        ]
+        if(_): {rd_was = 0} [
+            if(_): {rd_b = 34} [
+                set(rd_str): 1
+            ]
+            if(_): {rd_b = 91} [
+                set(rd_d): {rd_d + 1}
+            ]
+            if(_): {rd_b = 93} [
+                if(_): {rd_d > 0} [
+                    set(rd_d): {rd_d - 1}
+                ]
+            ]
+        ]
+        set(rd_i): {rd_i + 1}
+    ]
+    set(r): rd_d
+]
+
+repl_exec(r): src [
+    vec(lx_tokens): "lx_Tok"
+    lx_scan(rex_ls): src
+    if(_): {rex_ls = 0} [
+        ps_parse(rex_ps): src
+        if(_): {rex_ps = 0} [
+            getf(rex_kids): ps_root "kids"
+            ex_block_h(_): rex_kids 0
+        ]
+    ]
+    set(rt_flow): 0
+    set(r): 0
+]
+
+repl(r): [
+    print(_): "USSR Unified Shell Script REPL"
+    print(_): "USSR v0.4"
+    print(_): "Enter a command list or press Ctrl-D to exit."
+    print(_): ""
+    set(rp_buf): ""
+    set(rp_dep): 0
+    set(rp_eof): 0
+    while(_): {rp_eof = 0} [
+        if(_): {rp_dep = 0} [
+            template(_): "STR" "ussr> "
+        ]
+        if(_): {rp_dep > 0} [
+            template(_): "STR" "... "
+        ]
+        repl_rd(rp_line): 
+        len(rp_ll): rp_line
+        if(_): {rp_ll = 0} [
+            set(rp_eof): 1
+        ]
+        if(_): {rp_eof = 0} [
+            concat(rp_buf): rp_buf rp_line
+            repl_dep(rp_dep): rp_line rp_dep
+            if(_): {rp_dep < 1} [
+                repl_exec(_): rp_buf
+                set(rp_buf): ""
+                set(rp_dep): 0
+            ]
+        ]
+    ]
+    print(_): ""
+    set(r): 0
 ]
