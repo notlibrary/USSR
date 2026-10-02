@@ -1673,6 +1673,9 @@ ex_alias(r): fd cret sv [
         if(_): {rt_asame = 0} [
             setf(_): rt_op "t" cret
         ]
+        if(_): {rt_asame = 1} [
+            setf(_): rt_ap "had" 2
+        ]
     ]
     push(_): sv rt_ap
     set(r): 0
@@ -1711,10 +1714,44 @@ ex_cmd_n(r): nd nm [
     if(_): {rt_flow = 0} [
         if(_): {nm = "set"} [
             getf(rt_sk): nd "kids"
-            at(rt_s0): rt_sk 0
+            len(rt_skn): rt_sk
             getf(rt_dn): nd "s2"
-            ex_val(rt_dv): rt_s0
-            rt_write(_): rt_dn rt_dv
+            if(_): {rt_skn = 1} [
+                at(rt_s0): rt_sk 0
+                ex_val(rt_dv): rt_s0
+                rt_write(_): rt_dn rt_dv
+            ]
+            if(_): {rt_skn = 2} [
+                at(rt_s0): rt_sk 0
+                at(rt_s1b): rt_sk 1
+                ex_val(rt_didx): rt_s0
+                ex_val(rt_dval): rt_s1b
+                rt_read(rt_dvec): rt_dn
+                set(rt_dvec): rt_didx rt_dval
+            ]
+        ]
+        if(_): {nm = "get"} [
+            getf(rt_gk): nd "kids"
+            len(rt_gkn): rt_gk
+            getf(rt_gv2): nd "s2"
+            if(_): {rt_gkn = 1} [
+                at(rt_g0): rt_gk 0
+                getf(rt_gdn): rt_g0 "s1"
+                rt_read(rt_gval): rt_gv2
+                rt_write(_): rt_gdn rt_gval
+            ]
+            if(_): {rt_gkn = 2} [
+                at(rt_g0): rt_gk 0
+                ex_val(rt_gidx): rt_g0
+                rt_read(rt_gvec): rt_gv2
+                at(rt_gval2): rt_gvec rt_gidx
+                at(rt_g1): rt_gk 1
+                getf(rt_gdn2): rt_g1 "s1"
+                rt_write(_): rt_gdn2 rt_gval2
+            ]
+        ]
+        if(_): {nm = "template"} [
+            ex_template(r): nd
         ]
         if(_): {nm = "print"} [
             getf(rt_pk): nd "kids"
@@ -1792,6 +1829,41 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "decode"} [
             ex_oop(r): nd nm
         ]
+        if(_): {nm = "byte"} [
+            ex_oop(r): nd nm
+        ]
+        if(_): {nm = "slice"} [
+            ex_oop(r): nd nm
+        ]
+        if(_): {nm = "readfile"} [
+            ex_oop(r): nd nm
+        ]
+        if(_): {nm = "eval"} [
+            getf(rt_ek2): nd "kids"
+            at(rt_e0): rt_ek2 0
+            ex_val(rt_es): rt_e0
+            eval(rt_evr): rt_es
+            getf(rt_en): nd "s2"
+            rt_write(_): rt_en rt_evr
+        ]
+        if(_): {nm = "random64"} [
+            getf(rt_rrn): nd "s2"
+            random64(rt_rrv):
+            rt_write(_): rt_rrn rt_rrv
+        ]
+        if(_): {nm = "seed_random64"} [
+            getf(rt_srk): nd "kids"
+            at(rt_sr0): rt_srk 0
+            ex_val(rt_srv): rt_sr0
+            seed_random64(rt_srr): rt_srv
+            getf(rt_srn): nd "s2"
+            rt_write(_): rt_srn rt_srv
+        ]
+        if(_): {nm = "time"} [
+            time(rt_tmv):
+            getf(rt_tmn): nd "s2"
+            rt_write(_): rt_tmn rt_tmv
+        ]
         set(rt_unk): 1
         if(_): {nm = "set"} [ set(rt_unk): 0 ]
         if(_): {nm = "print"} [ set(rt_unk): 0 ]
@@ -1817,6 +1889,15 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "struct"} [ set(rt_unk): 0 ]
         if(_): {nm = "setf"} [ set(rt_unk): 0 ]
         if(_): {nm = "decode"} [ set(rt_unk): 0 ]
+        if(_): {nm = "byte"} [ set(rt_unk): 0 ]
+        if(_): {nm = "slice"} [ set(rt_unk): 0 ]
+        if(_): {nm = "readfile"} [ set(rt_unk): 0 ]
+        if(_): {nm = "eval"} [ set(rt_unk): 0 ]
+        if(_): {nm = "random64"} [ set(rt_unk): 0 ]
+        if(_): {nm = "seed_random64"} [ set(rt_unk): 0 ]
+        if(_): {nm = "time"} [ set(rt_unk): 0 ]
+        if(_): {nm = "get"} [ set(rt_unk): 0 ]
+        if(_): {nm = "template"} [ set(rt_unk): 0 ]
         if(_): {rt_unk = 1} [
             ex_defcall(r): nd nm
         ]
@@ -1881,6 +1962,83 @@ ex_concat_i(r): kids idx acc [
         ex_concat_i(r): kids rt_ci rt_c2
     ]
 ]
+ex_tout(r): s [
+    len(rt_tol): s
+    set(rt_toi): 0
+    while(_): {rt_toi < rt_tol} [
+        byte(rt_tob): s rt_toi
+        putch(_): rt_tob
+        add(rt_toi): rt_toi 1
+    ]
+    set(r): 0
+]
+
+ex_tval(r): v [
+    encode(rt_tve): v
+    ex_tout(r): rt_tve
+]
+
+ex_template(r): nd [
+    getf(rt_tk): nd "kids"
+    at(rt_tf0): rt_tk 0
+    ex_val(rt_fmt): rt_tf0
+    set(rt_tslot): ""
+    set(rt_targ): 0
+    set(rt_tp): 0
+    len(rt_tfl): rt_fmt
+    while(_): {rt_tp < rt_tfl} [
+        byte(rt_tb): rt_fmt rt_tp
+        set(rt_tnom): 1
+        if(_): {rt_tb = 59} [
+            ex_tflush(_): rt_tslot rt_targ nd
+            set(rt_tslot): ""
+            add(rt_targ): rt_targ 1
+            add(rt_tp): rt_tp 1
+            set(rt_tnom): 0
+        ]
+        if(_): {rt_tb = 92} [
+            add(rt_tp): rt_tp 1
+            byte(rt_tb2): rt_fmt rt_tp
+            if(_): {rt_tb2 = 110} [ putch(_): 10 ]
+            if(_): {rt_tb2 = 116} [ putch(_): 9 ]
+            if(_): {rt_tb2 = 59} [ putch(_): 59 ]
+            if(_): {rt_tb2 = 92} [ putch(_): 92 ]
+            add(rt_tp): rt_tp 1
+            set(rt_tnom): 0
+        ]
+        if(_): {rt_tnom = 1} [
+            slice(rt_tch): rt_fmt rt_tp 1
+            concat(rt_tslot): rt_tslot rt_tch
+            add(rt_tp): rt_tp 1
+        ]
+    ]
+    ex_tflush(_): rt_tslot rt_targ nd
+    getf(rt_tr): nd "s2"
+    rt_write(_): rt_tr 1
+    set(r): 0
+]
+
+ex_targ(r): nd k [
+    getf(rt_tk2): nd "kids"
+    add(rt_tkk): k 1
+    at(rt_tn): rt_tk2 rt_tkk
+    ex_val(r): rt_tn
+]
+
+ex_tflush(r): slot aidx nd [
+    if(_): {slot = "STR"} [
+        ex_targ(rt_tsv): nd aidx
+        ex_tout(_): rt_tsv
+    ]
+    if(_): {slot != "STR"} [
+        if(_): {slot != ""} [
+            ex_targ(rt_tiv): nd aidx
+            ex_tval(_): rt_tiv
+        ]
+    ]
+    set(r): 0
+]
+
 ex_oop(r): nd nm [
     set(r): 0
     getf(rt_ok2): nd "kids"
@@ -1940,6 +2098,30 @@ ex_oop(r): nd nm [
         ex_val(rt_ov1): rt_o1
         decode(rt_rv7): rt_ov1
         rt_write(_): rt_or rt_rv7
+    ]
+    if(_): {nm = "byte"} [
+        at(rt_o1): rt_ok2 0
+        at(rt_o2): rt_ok2 1
+        ex_val(rt_ov1): rt_o1
+        ex_val(rt_ov2): rt_o2
+        byte(rt_rv8): rt_ov1 rt_ov2
+        rt_write(_): rt_or rt_rv8
+    ]
+    if(_): {nm = "slice"} [
+        at(rt_o1): rt_ok2 0
+        at(rt_o2): rt_ok2 1
+        at(rt_o3): rt_ok2 2
+        ex_val(rt_ov1): rt_o1
+        ex_val(rt_ov2): rt_o2
+        ex_val(rt_ov3): rt_o3
+        slice(rt_rv9): rt_ov1 rt_ov2 rt_ov3
+        rt_write(_): rt_or rt_rv9
+    ]
+    if(_): {nm = "readfile"} [
+        at(rt_o1): rt_ok2 0
+        ex_val(rt_ov1): rt_o1
+        readfile(rt_rv10): rt_ov1
+        rt_write(_): rt_or rt_rv10
     ]
     if(_): {nm = "new"} [
         ex_new(r): nd
@@ -2234,11 +2416,66 @@ ex_for_go(r): nd iter [
         ]
     ]
 ]
+ex_scan_prompt(r): fmt [
+    set(rt_sp): 0
+    len(rt_sfl): fmt
+    set(rt_sdone): 0
+    while(_): {rt_sdone = 0} [
+        if(_): {rt_sp + 1 > rt_sfl} [ set(rt_sdone): 1 ]
+        if(_): {rt_sp < rt_sfl} [
+            set(rt_stok): 0
+            set(rt_stl2): 3
+            slice(rt_sw3): fmt rt_sp 3
+            if(_): {rt_sw3 = "INT"} [ set(rt_stok): 1 ]
+            if(_): {rt_sw3 = "STR"} [ set(rt_stok): 1 ]
+            slice(rt_sw4): fmt rt_sp 4
+            if(_): {rt_sw4 = "REAL"} [
+                set(rt_stok): 1
+                set(rt_stl2): 4
+            ]
+            if(_): {rt_sw4 = "BOOL"} [
+                set(rt_stok): 1
+                set(rt_stl2): 4
+            ]
+            set(rt_sbd): 0
+            if(_): {rt_sp = 0} [ set(rt_sbd): 1 ]
+            if(_): {rt_sp > 0} [
+                byte(rt_spb): fmt {rt_sp - 1}
+                if(_): {rt_spb = 32} [ set(rt_sbd): 1 ]
+                if(_): {rt_spb = 9} [ set(rt_sbd): 1 ]
+            ]
+            set(rt_saft): 0
+            add(rt_spn): rt_sp rt_stl2
+            if(_): {rt_stok = 1} [
+                if(_): {rt_spn + 1 > rt_sfl} [ set(rt_saft): 1 ]
+                if(_): {rt_spn < rt_sfl} [
+                    byte(rt_sab): fmt rt_spn
+                    if(_): {rt_sab = 59} [ set(rt_saft): 1 ]
+                    if(_): {rt_sab = 32} [ set(rt_saft): 1 ]
+                    if(_): {rt_sab = 9} [ set(rt_saft): 1 ]
+                ]
+            ]
+            if(_): {rt_stok = 1} [
+                if(_): {rt_sbd = 1} [
+                    if(_): {rt_saft = 1} [ set(rt_sdone): 2 ]
+                ]
+            ]
+            if(_): {rt_sdone = 0} [
+                byte(rt_spch): fmt rt_sp
+                putch(_): rt_spch
+                add(rt_sp): rt_sp 1
+            ]
+        ]
+    ]
+    set(r): 0
+]
+
 ex_scan(r): nd [
     getf(rt_sk): nd "kids"
     len(rt_sn): rt_sk
     at(rt_sf): rt_sk 0
     ex_val(rt_sfv): rt_sf
+    ex_scan_prompt(_): rt_sfv
     set(rt_na0): rt_sfv
     if(_): {rt_sn > 1} [
         at(rt_sd1): rt_sk 1
@@ -2273,6 +2510,8 @@ rt_ast_needed(r): nd [
     if(_): {rt_ank = 2} [
         getf(rt_ann): nd "s1"
         if(_): {rt_ann = "for"} [ set(r): 1 ]
+        if(_): {rt_ann = "template"} [ set(r): 1 ]
+        if(_): {rt_ann = "get"} [ set(r): 1 ]
         if(_): {rt_ann = "scan"} [
             getf(rt_akids): nd "kids"
             len(rt_aklen): rt_akids
@@ -4102,19 +4341,19 @@ cv_dump(r): [
     set(r): 0
 ]
 cv_driver(r): prog acnt avec [
-    cv_stmt(r): prog
-    cv_findf2(cv_mi): "init"
     rt_ast_needed(rt_need_ast): prog
     rt_has_choose(rt_has_ch): prog
+    if(_): {rt_need_ast = 1} [
+        rt_run(r): prog acnt avec
+        return(r): 0
+    ]
+    cv_stmt(r): prog
+    cv_findf2(cv_mi): "init"
     if(_): {cv_mi < 0} [
         if(_): {rt_has_ch = 0} [
             rt_run(r): prog acnt avec
             return(r): 0
         ]
-    ]
-    if(_): {rt_need_ast = 1} [
-        rt_run(r): prog acnt avec
-        return(r): 0
     ]
     set(r): 0
     if(_): {cv_mi + 1 > 0} [
