@@ -1898,6 +1898,8 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "time"} [ set(rt_unk): 0 ]
         if(_): {nm = "get"} [ set(rt_unk): 0 ]
         if(_): {nm = "template"} [ set(rt_unk): 0 ]
+        if(_): {nm = "option"} [ set(rt_unk): 0 ]
+        if(_): {nm = "default"} [ set(rt_unk): 0 ]
         if(_): {rt_unk = 1} [
             ex_defcall(r): nd nm
         ]
@@ -2233,6 +2235,9 @@ ex_block_h(r): items idx [
             if(_): {rt_bn2 = "if"} [ set(rt_bm): 1 ]
             if(_): {rt_bn2 = "elif"} [ set(rt_bm): 1 ]
             if(_): {rt_bn2 = "else"} [ set(rt_bm): 2 ]
+            if(_): {rt_bn2 = "choose"} [ set(rt_bm): 5 ]
+            if(_): {rt_bn2 = "option"} [ set(rt_bm): 4 ]
+            if(_): {rt_bn2 = "default"} [ set(rt_bm): 4 ]
         ]
         ex_block_i(r): items idx rt_bm
     ]
@@ -2261,6 +2266,9 @@ ex_block_i(r): items idx bm [
         if(_): {bm = 4} [
             add(rt_nx3): idx 1
             ex_block_h(r): items rt_nx3
+        ]
+        if(_): {bm = 5} [
+            ex_choose(r): items idx
         ]
     ]
 ]
@@ -2416,6 +2424,58 @@ ex_for_go(r): nd iter [
         ]
     ]
 ]
+ex_choose(r): items idx [
+    at(rt_chc): items idx
+    getf(rt_chk): rt_chc "kids"
+    at(rt_che): rt_chk 0
+    ex_val(rt_chv): rt_che
+    at(rt_chc2): items idx
+    getf(rt_chr): rt_chc2 "s2"
+    rt_write(_): rt_chr {1 = 2}
+    add(rt_chs): idx 1
+    ex_chscan(r): items rt_chs rt_chv rt_chr {0 - 1} {0 - 1}
+]
+ex_chscan(r): items i cv crv match dflt [
+    set(r): 0
+    len(rt_csl): items
+    if(_): {i < rt_csl} [
+        at(rt_csi): items i
+        getf(rt_cst): rt_csi "tag"
+        set(rt_csn): 0
+        if(_): {rt_cst = 2} [
+            getf(rt_csname): rt_csi "s1"
+            if(_): {rt_csname = "option"} [ set(rt_csn): 1 ]
+            if(_): {rt_csname = "default"} [ set(rt_csn): 2 ]
+        ]
+        if(_): {rt_csn = 1} [
+            if(_): {match < 0} [
+                getf(rt_csk): rt_csi "kids"
+                at(rt_cso): rt_csk 0
+                ex_val(rt_csov): rt_cso
+                if(_): {rt_csov = cv} [ set(match): i ]
+            ]
+        ]
+        if(_): {rt_csn = 2} [
+            if(_): {dflt < 0} [ set(dflt): i ]
+        ]
+        add(rt_csi2): i 1
+        ex_chscan(r): items rt_csi2 cv crv match dflt
+    ]
+    if(_): {i + 1 > rt_csl} [
+        ex_chexec(r): items match dflt crv
+    ]
+]
+ex_chexec(r): items match dflt crv [
+    set(r): 0
+    set(rt_cxt): match
+    if(_): {rt_cxt < 0} [ set(rt_cxt): dflt ]
+    if(_): {rt_cxt + 1 > 0} [
+        rt_write(_): crv {1 = 1}
+        add(rt_cxs): rt_cxt 1
+        ex_block_h(_): items rt_cxs
+        if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
+    ]
+]
 ex_scan_prompt(r): fmt [
     set(rt_sp): 0
     len(rt_sfl): fmt
@@ -2512,6 +2572,7 @@ rt_ast_needed(r): nd [
         if(_): {rt_ann = "for"} [ set(r): 1 ]
         if(_): {rt_ann = "template"} [ set(r): 1 ]
         if(_): {rt_ann = "get"} [ set(r): 1 ]
+        if(_): {rt_ann = "choose"} [ set(r): 1 ]
         if(_): {rt_ann = "scan"} [
             getf(rt_akids): nd "kids"
             len(rt_aklen): rt_akids
