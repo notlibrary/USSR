@@ -337,3 +337,5 @@ owning THE WHOLE LOOP do not jump from one idea to other concentrate on optimizi
 Now we will create vi-clone called vibe.su spartan set of features base visual console text editor for USSR
 
 Here's vi-clone written In USSR it blinks and unusable when run from bootstrap does not have :e command and executes dd to pick user input fix all this and improve it windows do not have dd
+Here's vi-clone now it has working :e command do not use dd to pick user input but it still nor running on windows
+can you made it work both on windows and debian else it still do not working from bootstrap blinking but not blocking user input

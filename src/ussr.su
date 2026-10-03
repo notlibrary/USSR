@@ -271,7 +271,7 @@ lx_scan(r): s [
                                     set(lx_ec): "\t"
                                 ]
                                 if(_): {lx_eb = 114} [
-                                    set(lx_ec): "\n"
+                                    set(lx_ec): "\r"
                                 ]
                                 if(_): {lx_eb = 92} [
                                     set(lx_ec): "\\"
@@ -2063,13 +2063,10 @@ ex_concat_i(r): kids idx acc [
     ]
 ]
 ex_tout(r): s [
-    len(rt_tol): s
-    set(rt_toi): 0
-    while(_): {rt_toi < rt_tol} [
-        byte(rt_tob): s rt_toi
-        putch(_): rt_tob
-        add(rt_toi): rt_toi 1
-    ]
+    # Emit the whole string with one host template call so every byte
+    # (ESC, CR, high bytes) survives exactly; the old per-byte putch
+    # loop silently dropped anything outside 9/10/13/32..126.
+    template(_): "STR" s
     set(r): 0
 ]
 

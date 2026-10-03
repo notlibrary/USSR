@@ -1,9 +1,24 @@
 #include "ussr_oop_builtins.h"
 #include "uno.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <conio.h>
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+#else
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 /*
  * ussr_argument_evaluate is declared `static` in ussr.c. Remove that
@@ -806,6 +821,458 @@ static int oop_do_readfile(
 }
 
 /* ------------------------------------------------------------- */
+/* Portable host primitives for interactive programs (vibe.su).  */
+/* Same command set on POSIX and Windows:                        */
+/*   writefile(v): path data    -> 0 ok / 1 error (non-fatal)    */
+/*   file_exists(v): path       -> 1 yes / 0 no                  */
+/*   terminal_escape(v):        -> the ESC character             */
+/*   terminal_raw(v):           raw input mode, 0 ok / 1 non-tty */
+/*   terminal_sane(v):          restore input mode               */
+/*   terminal_getch(v):         one blocking byte, -1 at EOF.    */
+/*                              Arrow keys always arrive as the  */
+/*                              3-byte sequence ESC [ A/B/C/D    */
+/*                              (synthesized on Windows).        */
+/*   terminal_size(v):          "rows cols" or "" if unknown     */
+/* ------------------------------------------------------------- */
+
+static int oop_do_writefile(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v, data_v;
+    const char *path;
+    const char *data;
+    FILE *fp;
+    size_t length;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: writefile(v): path data\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &path_v) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &data_v) != 0)
+    {
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    if (!oop_expect_string(&path_v, &path) ||
+        !oop_expect_string(&data_v, &data))
+    {
+        fprintf(stderr, "USSR: writefile() expects (string path, string data)\n");
+        ussr_value_free(&path_v);
+        ussr_value_free(&data_v);
+        return -1;
+    }
+
+    fp = fopen(path, "wb");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "USSR: writefile cannot open '%s'\n", path);
+        *out_result = ussr_integer(1);
+        ussr_value_free(&path_v);
+        ussr_value_free(&data_v);
+        return 0; /* non-fatal: status value reports the failure */
+    }
+
+    length = strlen(data);
+    if (length > 0 && fwrite(data, 1, length, fp) != length)
+    {
+        fprintf(stderr, "USSR: writefile failed writing '%s'\n", path);
+        fclose(fp);
+        *out_result = ussr_integer(1);
+        ussr_value_free(&path_v);
+        ussr_value_free(&data_v);
+        return 0;
+    }
+
+    fclose(fp);
+    *out_result = ussr_integer(0);
+    ussr_value_free(&path_v);
+    ussr_value_free(&data_v);
+    return 0;
+}
+
+static int oop_do_file_exists(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+    FILE *fp;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: file_exists(v): path\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &path_v) != 0)
+        return -1;
+
+    if (!oop_expect_string(&path_v, &path))
+    {
+        fprintf(stderr, "USSR: file_exists() expects a string path\n");
+        ussr_value_free(&path_v);
+        return -1;
+    }
+
+    fp = fopen(path, "rb");
+    *out_result = ussr_integer(fp != NULL ? 1 : 0);
+    if (fp != NULL)
+        fclose(fp);
+
+    ussr_value_free(&path_v);
+    return 0;
+}
+
+static int oop_do_terminal_escape(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    (void)arguments;
+    (void)argument_count;
+    *out_result = ussr_string("\x1b");
+    return 0;
+}
+
+#ifdef _WIN32
+
+static DWORD term_saved_imode;
+static int term_have_imode = 0;
+static int term_saved_in_bin = -1;
+static int term_saved_out_bin = -1;
+static unsigned char term_pushback[4];
+static int term_pushback_count = 0;
+static int term_atexit_registered = 0;
+
+static void term_restore(void)
+{
+    if (term_have_imode)
+    {
+        SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), term_saved_imode);
+        term_have_imode = 0;
+    }
+    if (term_saved_in_bin != -1)
+    {
+        _setmode(_fileno(stdin), term_saved_in_bin);
+        term_saved_in_bin = -1;
+    }
+    if (term_saved_out_bin != -1)
+    {
+        _setmode(_fileno(stdout), term_saved_out_bin);
+        term_saved_out_bin = -1;
+    }
+}
+
+static int term_stdin_is_console(void)
+{
+    DWORD mode;
+    return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) != 0;
+}
+
+static int oop_do_terminal_raw(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    HANDLE hin;
+    DWORD mode;
+    int ok = 0;
+
+    (void)arguments;
+    (void)argument_count;
+
+    hin = GetStdHandle(STD_INPUT_HANDLE);
+    if (GetConsoleMode(hin, &mode))
+    {
+        term_saved_imode = mode;
+        term_have_imode = 1;
+        SetConsoleMode(
+            hin,
+            mode & ~(DWORD)(ENABLE_LINE_INPUT |
+                            ENABLE_ECHO_INPUT |
+                            ENABLE_PROCESSED_INPUT)
+        );
+
+        /* best-effort: ANSI escape processing on the console */
+        {
+            HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
+            DWORD omode;
+
+            if (GetConsoleMode(hout, &omode))
+                SetConsoleMode(hout, omode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+
+        ok = 1;
+    }
+
+    if (!term_atexit_registered)
+    {
+        atexit(term_restore);
+        term_atexit_registered = 1;
+    }
+
+    /* binary stdio keeps pipes byte-exact (\r\n is not translated) */
+    if (term_saved_in_bin == -1)
+        term_saved_in_bin = _setmode(_fileno(stdin), _O_BINARY);
+    if (term_saved_out_bin == -1)
+        term_saved_out_bin = _setmode(_fileno(stdout), _O_BINARY);
+
+    term_pushback_count = 0;
+    *out_result = ussr_integer(ok ? 0 : 1);
+    return 0;
+}
+
+static int oop_do_terminal_sane(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    (void)arguments;
+    (void)argument_count;
+    term_restore();
+    *out_result = ussr_integer(0);
+    return 0;
+}
+
+static int oop_do_terminal_getch(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    (void)arguments;
+    (void)argument_count;
+
+    if (term_pushback_count > 0)
+    {
+        int c = term_pushback[0];
+
+        --term_pushback_count;
+        memmove(
+            term_pushback,
+            term_pushback + 1,
+            (size_t)term_pushback_count
+        );
+        *out_result = ussr_integer(c);
+        return 0;
+    }
+
+    if (term_stdin_is_console())
+    {
+        for (;;)
+        {
+            int c = _getch();
+
+            if (c == 0 || c == 0xE0)
+            {
+                /* special key: translate arrows to ESC [ letter */
+                int c2 = _getch();
+                char letter = '\0';
+
+                if (c2 == 72) letter = 'A';      /* up    */
+                else if (c2 == 80) letter = 'B'; /* down  */
+                else if (c2 == 77) letter = 'C'; /* right */
+                else if (c2 == 75) letter = 'D'; /* left  */
+
+                if (letter != '\0')
+                {
+                    term_pushback[0] = (unsigned char)'[';
+                    term_pushback[1] = (unsigned char)letter;
+                    term_pushback_count = 2;
+                    *out_result = ussr_integer(27);
+                    return 0;
+                }
+
+                continue; /* ignore other special keys */
+            }
+
+            *out_result = ussr_integer(c);
+            return 0;
+        }
+    }
+
+    /* redirected stdin (pipe/file): plain byte read */
+    {
+        unsigned char c;
+        int n = _read(0, &c, 1);
+
+        *out_result = ussr_integer(n == 1 ? (long)c : -1);
+        return 0;
+    }
+}
+
+static int oop_do_terminal_size(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    char buffer[32];
+
+    (void)arguments;
+    (void)argument_count;
+
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info))
+    {
+        int rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+        int cols = info.srWindow.Right - info.srWindow.Left + 1;
+
+        if (rows > 0 && cols > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "%d %d", rows, cols);
+            *out_result = ussr_string(buffer);
+            return 0;
+        }
+    }
+
+    *out_result = ussr_string("");
+    return 0;
+}
+
+#else /* POSIX */
+
+static struct termios term_saved;
+static int term_have_saved = 0;
+static int term_atexit_registered = 0;
+
+static void term_restore(void)
+{
+    if (term_have_saved)
+    {
+        tcsetattr(0, TCSANOW, &term_saved);
+        term_have_saved = 0;
+    }
+}
+
+static int oop_do_terminal_raw(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    struct termios raw;
+
+    (void)arguments;
+    (void)argument_count;
+
+    if (!isatty(0) || tcgetattr(0, &term_saved) != 0)
+    {
+        *out_result = ussr_integer(1); /* pipe/file: nothing to do */
+        return 0;
+    }
+
+    raw = term_saved;
+    raw.c_iflag &= ~(tcflag_t)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= ~(tcflag_t)(OPOST);
+    raw.c_cflag |= (tcflag_t)CS8;
+    raw.c_lflag &= ~(tcflag_t)(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(0, TCSANOW, &raw) != 0)
+    {
+        *out_result = ussr_integer(1);
+        return 0;
+    }
+
+    term_have_saved = 1;
+    if (!term_atexit_registered)
+    {
+        atexit(term_restore);
+        term_atexit_registered = 1;
+    }
+    *out_result = ussr_integer(0);
+    return 0;
+}
+
+static int oop_do_terminal_sane(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    (void)arguments;
+    (void)argument_count;
+    term_restore();
+    *out_result = ussr_integer(0);
+    return 0;
+}
+
+static int oop_do_terminal_getch(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    unsigned char c;
+    ssize_t n;
+
+    (void)arguments;
+    (void)argument_count;
+
+    do
+    {
+        n = read(0, &c, 1);
+    } while (n < 0 && errno == EINTR);
+
+    *out_result = ussr_integer(n == 1 ? (long)c : -1);
+    return 0;
+}
+
+static int oop_do_terminal_size(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    struct winsize ws;
+    char buffer[32];
+
+    (void)arguments;
+    (void)argument_count;
+
+    memset(&ws, 0, sizeof(ws));
+    if ((ioctl(1, TIOCGWINSZ, &ws) != 0 || ws.ws_row == 0) &&
+        ioctl(0, TIOCGWINSZ, &ws) != 0)
+    {
+        *out_result = ussr_string("");
+        return 0;
+    }
+
+    if (ws.ws_row == 0 || ws.ws_col == 0)
+    {
+        *out_result = ussr_string("");
+        return 0;
+    }
+
+    snprintf(
+        buffer,
+        sizeof(buffer),
+        "%u %u",
+        (unsigned)ws.ws_row,
+        (unsigned)ws.ws_col
+    );
+    *out_result = ussr_string(buffer);
+    return 0;
+}
+
+#endif /* _WIN32 */
+
+/* ------------------------------------------------------------- */
 /* dispatch                                                         */
 /* ------------------------------------------------------------- */
 
@@ -841,6 +1308,20 @@ int ussr_oop_dispatch(
         status = oop_do_slice(arguments, argument_count, out_result);
     else if (strcmp(command, "readfile") == 0)
         status = oop_do_readfile(arguments, argument_count, out_result);
+    else if (strcmp(command, "writefile") == 0)
+        status = oop_do_writefile(arguments, argument_count, out_result);
+    else if (strcmp(command, "file_exists") == 0)
+        status = oop_do_file_exists(arguments, argument_count, out_result);
+    else if (strcmp(command, "terminal_escape") == 0)
+        status = oop_do_terminal_escape(arguments, argument_count, out_result);
+    else if (strcmp(command, "terminal_raw") == 0)
+        status = oop_do_terminal_raw(arguments, argument_count, out_result);
+    else if (strcmp(command, "terminal_sane") == 0)
+        status = oop_do_terminal_sane(arguments, argument_count, out_result);
+    else if (strcmp(command, "terminal_getch") == 0)
+        status = oop_do_terminal_getch(arguments, argument_count, out_result);
+    else if (strcmp(command, "terminal_size") == 0)
+        status = oop_do_terminal_size(arguments, argument_count, out_result);
     else if (strcmp(command, "encode") == 0)
         status = oop_do_encode(arguments, argument_count, out_result);
     else if (strcmp(command, "decode") == 0)

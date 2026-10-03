@@ -9,6 +9,7 @@
 #               o         open new line below     x   delete char
 #               d d       delete current line     :   command line
 # Commands:     :w [name] write file   :q quit   :wq write+quit   :q! quit
+#               :e [name] reload / edit another file
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
 #               (and joins lines at column 0), ESC or Ctrl+C -> normal.
 #
@@ -27,6 +28,35 @@ vb_initesc(r): [
 vb_termsize(r): [
     set(vb_rows): 24
     set(vb_cols): 80
+    terminal_size(vbt_s):
+    len(vbt_n): vbt_s
+    set(vbt_i): 0
+    set(vbt_part): 0
+    set(vbt_r): 0
+    set(vbt_c): 0
+    while(_): {vbt_i < vbt_n} [
+        byte(vbt_b): vbt_s vbt_i
+        if(_): {vbt_b = 32} [
+            set(vbt_part): 1
+        ]
+        if(_): {vbt_b > 47} [
+            if(_): {vbt_b < 58} [
+                if(_): {vbt_part = 0} [
+                    set(vbt_r): {vbt_r * 10 + vbt_b - 48}
+                ]
+                if(_): {vbt_part = 1} [
+                    set(vbt_c): {vbt_c * 10 + vbt_b - 48}
+                ]
+            ]
+        ]
+        set(vbt_i): {vbt_i + 1}
+    ]
+    if(_): {vbt_r > 2} [
+        set(vb_rows): vbt_r
+    ]
+    if(_): {vbt_c > 2} [
+        set(vb_cols): vbt_c
+    ]
     set(r): 0
 ]
 
@@ -244,8 +274,8 @@ vb_delete_line(r): [
 vb_load(r): path [
     vec(vb_buf): ""
     set(vb_dirty): 0
-    test(vbl_tf): "-f" path
-    if(_): {vbl_tf = 0} [
+    file_exists(vbl_tf): path
+    if(_): {vbl_tf = 1} [
         readfile(vbl_d): path
         len(vbl_n): vbl_d
         set(vbl_i): 0
@@ -369,8 +399,16 @@ vb_render(r): [
 # ---------- input queue ----------
 
 vb_next(r): [
-    terminal_getch(vbnx_b):
-    set(r): vbnx_b
+    set(vbnx_have): 0
+    if(_): {vb_pb > 0 - 1} [
+        set(vbnx_have): 1
+        set(r): vb_pb
+        set(vb_pb): {0 - 1}
+    ]
+    if(_): {vbnx_have = 0} [
+        terminal_getch(vbnx_b):
+        set(r): vbnx_b
+    ]
 ]
 
 # ---------- mode handlers ----------
