@@ -15,6 +15,7 @@
 - Added Kimi K3 `ussr.su` bootstrap attempt
 - Added TreeSitter grammar
 - Added parts of library math.su bytes.su io.su standard.su
+- Added vibe.su builtin text editor
  
 ### Documentation
 - Upadated docs

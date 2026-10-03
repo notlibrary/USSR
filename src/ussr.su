@@ -1905,6 +1905,50 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "@"} [
             ex_at(r): nd
         ]
+        # Portable host file/terminal primitives used by interactive programs.
+        if(_): {nm = "writefile"} [
+            getf(rt_wfk): nd "kids"
+            at(rt_wf0): rt_wfk 0
+            at(rt_wf1): rt_wfk 1
+            ex_val(rt_wfv0): rt_wf0
+            ex_val(rt_wfv1): rt_wf1
+            writefile(rt_wfr): rt_wfv0 rt_wfv1
+            getf(rt_wfrn): nd "s2"
+            rt_write(_): rt_wfrn rt_wfr
+        ]
+        if(_): {nm = "file_exists"} [
+            getf(rt_fek): nd "kids"
+            at(rt_fe0): rt_fek 0
+            ex_val(rt_fev): rt_fe0
+            file_exists(rt_fer): rt_fev
+            getf(rt_fern): nd "s2"
+            rt_write(_): rt_fern rt_fer
+        ]
+        if(_): {nm = "terminal_escape"} [
+            terminal_escape(rt_te):
+            getf(rt_ten): nd "s2"
+            rt_write(_): rt_ten rt_te
+        ]
+        if(_): {nm = "terminal_raw"} [
+            terminal_raw(rt_tr):
+            getf(rt_trn): nd "s2"
+            rt_write(_): rt_trn rt_tr
+        ]
+        if(_): {nm = "terminal_sane"} [
+            terminal_sane(rt_ts):
+            getf(rt_tsn): nd "s2"
+            rt_write(_): rt_tsn rt_ts
+        ]
+        if(_): {nm = "terminal_getch"} [
+            terminal_getch(rt_tg):
+            getf(rt_tgn): nd "s2"
+            rt_write(_): rt_tgn rt_tg
+        ]
+        if(_): {nm = "terminal_size"} [
+            terminal_size(rt_tz):
+            getf(rt_tzn): nd "s2"
+            rt_write(_): rt_tzn rt_tz
+        ]
         set(rt_unk): 1
         if(_): {nm = "set"} [ set(rt_unk): 0 ]
         if(_): {nm = "print"} [ set(rt_unk): 0 ]
@@ -1933,6 +1977,13 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "byte"} [ set(rt_unk): 0 ]
         if(_): {nm = "slice"} [ set(rt_unk): 0 ]
         if(_): {nm = "readfile"} [ set(rt_unk): 0 ]
+        if(_): {nm = "writefile"} [ set(rt_unk): 0 ]
+        if(_): {nm = "file_exists"} [ set(rt_unk): 0 ]
+        if(_): {nm = "terminal_escape"} [ set(rt_unk): 0 ]
+        if(_): {nm = "terminal_raw"} [ set(rt_unk): 0 ]
+        if(_): {nm = "terminal_sane"} [ set(rt_unk): 0 ]
+        if(_): {nm = "terminal_getch"} [ set(rt_unk): 0 ]
+        if(_): {nm = "terminal_size"} [ set(rt_unk): 0 ]
         if(_): {nm = "eval"} [ set(rt_unk): 0 ]
         if(_): {nm = "random64"} [ set(rt_unk): 0 ]
         if(_): {nm = "seed_random64"} [ set(rt_unk): 0 ]

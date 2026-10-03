@@ -14,6 +14,16 @@ extern int fileno(FILE *stream);
 #include <math.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#include <conio.h>
+#include <windows.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#endif
+
 #ifndef _WIN32
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -3089,6 +3099,156 @@ static int ussr_execute_advanced_control(
     return 0;
 }
 
+
+static int
+ussr_terminal_raw(void)
+{
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+
+    if (h == INVALID_HANDLE_VALUE || !GetConsoleMode(h, &mode))
+        return -1;
+
+    mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+    mode |= ENABLE_PROCESSED_INPUT;
+    if (!SetConsoleMode(h, mode))
+        return -1;
+
+    {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD out_mode;
+
+        if (out != INVALID_HANDLE_VALUE &&
+            GetConsoleMode(out, &out_mode))
+        {
+            out_mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            SetConsoleMode(out, out_mode);
+        }
+    }
+
+    return 0;
+#else
+    struct termios raw;
+
+    if (tcgetattr(STDIN_FILENO, &raw) != 0)
+        return -1;
+
+    raw.c_lflag &= (tcflag_t)~(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    return tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+#endif
+}
+
+static int
+ussr_terminal_sane(void)
+{
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+
+    if (h == INVALID_HANDLE_VALUE || !GetConsoleMode(h, &mode))
+        return -1;
+
+    mode |= ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+    if (!SetConsoleMode(h, mode))
+        return -1;
+
+    return 0;
+#else
+    struct termios sane;
+
+    if (tcgetattr(STDIN_FILENO, &sane) != 0)
+        return -1;
+
+    sane.c_lflag |= (tcflag_t)(ICANON | ECHO);
+    sane.c_cc[VMIN] = 1;
+    sane.c_cc[VTIME] = 0;
+
+    return tcsetattr(STDIN_FILENO, TCSANOW, &sane);
+#endif
+}
+
+static int
+ussr_terminal_getch(int *value)
+{
+    if (value == NULL)
+        return -1;
+
+#ifdef _WIN32
+    {
+        static int pending[2];
+        static int pending_count = 0;
+        int c;
+
+        if (pending_count > 0)
+        {
+            *value = pending[0];
+            pending[0] = pending[1];
+            --pending_count;
+            return 0;
+        }
+
+        c = _getch();
+
+        if (c == 0 || c == 224)
+        {
+            int k = _getch();
+
+            switch (k)
+            {
+                case 72:
+                    pending[0] = 91;
+                    pending[1] = 65;
+                    pending_count = 2;
+                    *value = 27;
+                    return 0;
+                case 80:
+                    pending[0] = 91;
+                    pending[1] = 66;
+                    pending_count = 2;
+                    *value = 27;
+                    return 0;
+                case 77:
+                    pending[0] = 91;
+                    pending[1] = 67;
+                    pending_count = 2;
+                    *value = 27;
+                    return 0;
+                case 75:
+                    pending[0] = 91;
+                    pending[1] = 68;
+                    pending_count = 2;
+                    *value = 27;
+                    return 0;
+                default:
+                    *value = k;
+                    return 0;
+            }
+        }
+
+        *value = c;
+        return 0;
+    }
+#else
+    {
+        unsigned char c;
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+
+        if (n == 1)
+        {
+            *value = (int)c;
+            return 0;
+        }
+
+        *value = -1;
+        return 0;
+    }
+#endif
+}
+
 int ussr_execute_command(
     const char *command_path,
     const char *command,
@@ -3286,6 +3446,218 @@ int ussr_execute_command(
         if (return_name == NULL || argument_count != 0)
             return -1;
         result = ussr_integer((long)time(NULL));
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "writefile") == 0)
+    {
+        ussr_value_t path_value;
+        ussr_value_t data_value;
+        FILE *fp;
+        size_t length;
+
+        if (return_name == NULL || argument_count != 2 ||
+            ussr_argument_evaluate(&arguments[0], &path_value) != 0 ||
+            ussr_argument_evaluate(&arguments[1], &data_value) != 0)
+        {
+            return -1;
+        }
+
+        if (path_value.type != USSR_STRING ||
+            data_value.type != USSR_STRING)
+        {
+            ussr_value_free(&path_value);
+            ussr_value_free(&data_value);
+            return -1;
+        }
+
+        fp = fopen(path_value.data.string, "wb");
+        if (fp == NULL)
+        {
+            fprintf(
+                stderr,
+                "USSR: cannot write '%s': %s\n",
+                path_value.data.string,
+                strerror(errno)
+            );
+            ussr_value_free(&path_value);
+            ussr_value_free(&data_value);
+            return -1;
+        }
+
+        length = strlen(data_value.data.string);
+        if (length != 0 &&
+            fwrite(data_value.data.string, 1, length, fp) != length)
+        {
+            fclose(fp);
+            ussr_value_free(&path_value);
+            ussr_value_free(&data_value);
+            return -1;
+        }
+
+        if (fclose(fp) != 0)
+        {
+            ussr_value_free(&path_value);
+            ussr_value_free(&data_value);
+            return -1;
+        }
+
+        ussr_value_free(&path_value);
+        ussr_value_free(&data_value);
+
+        result = ussr_integer(0);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "file_exists") == 0)
+    {
+        struct stat st;
+        ussr_value_t path_value;
+        int exists;
+
+        if (return_name == NULL || argument_count != 1 ||
+            ussr_argument_evaluate(&arguments[0], &path_value) != 0 ||
+            path_value.type != USSR_STRING)
+        {
+            return -1;
+        }
+
+        exists = stat(path_value.data.string, &st) == 0;
+        ussr_value_free(&path_value);
+
+        result = ussr_boolean(exists);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "terminal_escape") == 0)
+    {
+        char escape[2];
+
+        if (return_name == NULL || argument_count != 0)
+            return -1;
+
+        escape[0] = 27;
+        escape[1] = '\0';
+        result = ussr_string(escape);
+
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "terminal_raw") == 0)
+    {
+        if (return_name == NULL || argument_count != 0)
+            return -1;
+
+        result = ussr_integer(ussr_terminal_raw() == 0 ? 0 : -1);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "terminal_sane") == 0)
+    {
+        if (return_name == NULL || argument_count != 0)
+            return -1;
+
+        result = ussr_integer(ussr_terminal_sane() == 0 ? 0 : -1);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "terminal_size") == 0)
+    {
+        char buffer[64];
+
+        if (return_name == NULL || argument_count != 0)
+            return -1;
+
+#ifdef _WIN32
+        {
+            HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+            CONSOLE_SCREEN_BUFFER_INFO info;
+
+            if (out == INVALID_HANDLE_VALUE ||
+                !GetConsoleScreenBufferInfo(out, &info))
+                return -1;
+
+            snprintf(
+                buffer,
+                sizeof(buffer),
+                "%d %d",
+                (int)(info.srWindow.Bottom - info.srWindow.Top + 1),
+                (int)(info.srWindow.Right - info.srWindow.Left + 1)
+            );
+        }
+#else
+        {
+            struct winsize ws;
+
+            if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0)
+                return -1;
+
+            snprintf(
+                buffer,
+                sizeof(buffer),
+                "%u %u",
+                (unsigned)ws.ws_row,
+                (unsigned)ws.ws_col
+            );
+        }
+#endif
+        result = ussr_string(buffer);
+        if (ussr_set_variable(return_name, &result) != 0)
+        {
+            ussr_value_free(&result);
+            return -1;
+        }
+        ussr_value_free(&result);
+        return 0;
+    }
+
+    if (strcmp(command, "terminal_getch") == 0)
+    {
+        int c;
+
+        if (return_name == NULL || argument_count != 0)
+            return -1;
+
+        if (ussr_terminal_getch(&c) != 0)
+            return -1;
+
+        result = ussr_integer((long)c);
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);

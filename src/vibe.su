@@ -12,71 +12,21 @@
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
 #               (and joins lines at column 0), ESC or Ctrl+C -> normal.
 #
-# Implementation: the terminal is put in raw mode via stty; keypresses are
-# read one per read() with dd bs=4096 count=1 captured through the chain
-# machinery; the whole screen is rebuilt as one string per frame and
-# written with a single template call.
+# Implementation: the terminal is put in raw mode through native USSR
+# terminal primitives. Each key is read directly; no shell commands,
+# stty, shell utilities, or POSIX-only utilities are required. The whole screen is
+# rebuilt as one string per frame and written with a single template call.
 
 # ---------- terminal helpers ----------
 
 vb_initesc(r): [
-    @[
-        chain(_):
-        capture(vbe_out):
-    ]
-    [
-        printf(vbe_p): "\\033"
-    ]
-    set(vb_esc): vbe_out
+    terminal_escape(vb_esc):
     set(r): 0
-]
-
-vb_key(r): [
-    eval(vbk_e): "dd(vbk_r): \"bs=4096\" \"count=1\" \"status=none\"\nchain(_):\nfile(_): \"/tmp/vibe_key.txt\"\n"
-    readfile(r): "/tmp/vibe_key.txt"
 ]
 
 vb_termsize(r): [
     set(vb_rows): 24
     set(vb_cols): 80
-    @[
-        chain(_):
-        capture(vbt_s):
-    ]
-    [
-        stty(vbt_sr): "size"
-    ]
-    len(vbt_n): vbt_s
-    set(vbt_i): 0
-    set(vbt_part): 0
-    set(vbt_r): 0
-    set(vbt_c): 0
-    while(_): {vbt_i < vbt_n} [
-        byte(vbt_b): vbt_s vbt_i
-        if(_): {vbt_b = 32} [
-            set(vbt_part): 1
-        ]
-        if(_): {vbt_b = 10} [
-            set(vbt_part): 2
-        ]
-        if(_): {vbt_b > 47} [
-            if(_): {vbt_b < 58} [
-                if(_): {vbt_part = 0} [
-                    set(vbt_r): {vbt_r * 10 + vbt_b - 48}
-                ]
-                if(_): {vbt_part = 1} [
-                    set(vbt_c): {vbt_c * 10 + vbt_b - 48}
-                ]
-            ]
-        ]
-        set(vbt_i): {vbt_i + 1}
-    ]
-    if(_): {vbt_r > 2} [
-        set(vb_rows): vbt_r
-    ]
-    if(_): {vbt_c > 2} [
-        set(vb_cols): vbt_c
-    ]
     set(r): 0
 ]
 
@@ -273,15 +223,15 @@ vb_delch(r): [
     set(r): 0
 ]
 
-vb_dd(r): [
+vb_delete_line(r): [
     vb_linedel(_): vb_cy
-    len(vbddd_n): vb_buf
-    if(_): {vbddd_n = 0} [
+    len(vbdel_n): vb_buf
+    if(_): {vbdel_n = 0} [
         push(_): vb_buf ""
     ]
-    len(vbddd_n2): vb_buf
-    if(_): {vb_cy + 1 > vbddd_n2} [
-        set(vb_cy): {vbddd_n2 - 1}
+    len(vbdel_n2): vb_buf
+    if(_): {vb_cy + 1 > vbdel_n2} [
+        set(vb_cy): {vbdel_n2 - 1}
     ]
     set(vb_cx): 0
     set(vb_dirty): 1
@@ -342,13 +292,7 @@ vb_save(r): [
             concat(vb_payload): vb_payload "\n"
             set(vbw_i): {vbw_i + 1}
         ]
-        @[
-            chain(_):
-            file(_): vb_file
-        ]
-        [
-            printf(vbw_p): "%s" vb_payload
-        ]
+        writefile(vbw_ok): vb_file vb_payload
         set(vb_dirty): 0
         set(vb_msg): "written"
     ]
@@ -425,29 +369,7 @@ vb_render(r): [
 # ---------- input queue ----------
 
 vb_next(r): [
-    set(vbnx_b): {0 - 1}
-    if(_): {vb_pb > 0 - 1} [
-        set(vbnx_b): vb_pb
-        set(vb_pb): {0 - 1}
-    ]
-    if(_): {vbnx_b < 0} [
-        len(vbnx_n): vb_inq
-        if(_): {vbnx_n = 0} [
-            @[
-                chain(_):
-                capture(vb_inq):
-            ]
-            [
-                dd(vbnx_r): "bs=4096" "count=1" "status=none"
-            ]
-            len(vbnx_n): vb_inq
-        ]
-        if(_): {vbnx_n > 0} [
-            byte(vbnx_b): vb_inq 0
-            len(vbnx_n2): vb_inq
-            slice(vb_inq): vb_inq 1 {vbnx_n2 - 1}
-        ]
-    ]
+    terminal_getch(vbnx_b):
     set(r): vbnx_b
 ]
 
@@ -544,7 +466,7 @@ vb_normal(r): b [
         set(vbnm_was): vb_pend
         set(vb_pend): 0
         if(_): {vbnm_was = 1} [
-            vb_dd(_): 
+            vb_delete_line(_): 
         ]
         if(_): {vbnm_was = 0} [
             set(vb_pend): 1
@@ -585,6 +507,20 @@ vb_runcmd(r): cmd [
             slice(vb_file): cmd 2 {vbrc_n - 2}
             set(vb_showname): vb_file
             vb_save(_): 
+        ]
+    ]
+    if(_): {cmd = "e"} [
+        set(vbrc_ok): 1
+        vb_load(_): vb_file
+    ]
+    len(vbrc_n): cmd
+    if(_): {vbrc_n > 2} [
+        slice(vbrc_p2): cmd 0 2
+        if(_): {vbrc_p2 = "e "} [
+            set(vbrc_ok): 1
+            slice(vb_file): cmd 2 {vbrc_n - 2}
+            set(vb_showname): vb_file
+            vb_load(_): vb_file
         ]
     ]
     if(_): {vbrc_ok = 0} [
@@ -685,7 +621,7 @@ init(ret): arg_cnt arg_vec [
     set(vb_ascii): " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
     set(vb_inq): ""
     set(vb_pb): {0 - 1}
-    stty(vbit_r1): "raw" "-echo"
+    terminal_raw(vbit_r1): 
     set(vb_mode): 0
     set(vb_cx): 0
     set(vb_cy): 0
@@ -708,7 +644,7 @@ init(ret): arg_cnt arg_vec [
             vb_dispatch(_): vb_b
         ]
     ]
-    stty(vbit_r2): "sane"
+    terminal_sane(vbit_r2): 
     set(vbit_s2): vb_esc
     concat(vbit_s2): vbit_s2 "[2J"
     concat(vbit_s2): vbit_s2 vb_esc

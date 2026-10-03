@@ -334,3 +334,6 @@ so we will attack it from 2 sides
 After that we hit critical point where your model capabilities overpower the entropy and we win by owning the interpreter passing all the tests
 owning THE WHOLE LOOP do not jump from one idea to other concentrate on optimizing quality of the build product ussr.su
 
+Now we will create vi-clone called vibe.su spartan set of features base visual console text editor for USSR
+
+Here's vi-clone written In USSR it blinks and unusable when run from bootstrap does not have :e command and executes dd to pick user input fix all this and improve it windows do not have dd

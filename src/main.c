@@ -900,6 +900,7 @@ static int vm_execute(
     {
         ussr_bc_instruction_t ins;
         ussr_value_t value, temp;
+        int native_handled = 0;
         const char *name;
         ussr_value_t *args = NULL;
         size_t i;
@@ -1191,6 +1192,36 @@ static int vm_execute(
                             value = ussr_value_copy(stored);
                     }
                 }
+                else if (
+                    strcmp(program->strings[ins.immediate], "file_exists") == 0 ||
+                    strcmp(program->strings[ins.immediate], "writefile") == 0 ||
+                    strcmp(program->strings[ins.immediate], "terminal_escape") == 0 ||
+                    strcmp(program->strings[ins.immediate], "terminal_raw") == 0 ||
+                    strcmp(program->strings[ins.immediate], "terminal_sane") == 0 ||
+                    strcmp(program->strings[ins.immediate], "terminal_getch") == 0 ||
+                    strcmp(program->strings[ins.immediate], "terminal_size") == 0
+                )
+                {
+                    result = ussr_execute_command(
+                        NULL,
+                        program->strings[ins.immediate],
+                        source_command != NULL ? source_command->return_name : NULL,
+                        av,
+                        argument_count
+                    );
+
+                    if (result == 0 && source_command != NULL)
+                    {
+                        const ussr_value_t *stored =
+                            ussr_get_variable(source_command->return_name);
+
+                        if (stored != NULL)
+                            value = ussr_value_copy(stored);
+                    }
+
+                    if (result == 0)
+                        native_handled = 1;
+                }
                 else
                 {
                     result = ussr_oop_dispatch(
@@ -1215,7 +1246,7 @@ static int vm_execute(
                     goto done;
                 }
 
-                if (result == 0)
+                if (result == 0 && !native_handled)
                 {
                     /* Not an OOP builtin: execute it as a host command. */
                     ussr_value_t *external_values;
