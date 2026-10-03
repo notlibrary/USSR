@@ -3,7 +3,7 @@
 #   ussr vibe.su [file]
 #
 # A minimal visual console text editor with vi-style modal editing.
-# Normal mode:  h l       cursor left / right
+# Normal mode:  h l       cursor left / right     (Backspace = left)
 #               j k       cursor down / up        (arrow keys work too)
 #               i         insert before cursor    a   insert after cursor
 #               o         open new line below     x   delete char
@@ -466,6 +466,12 @@ vb_normal(r): b [
     if(_): {b != 100} [
         set(vb_pend): 0
     ]
+    if(_): {b = 8} [
+        vb_left(_): 
+    ]
+    if(_): {b = 127} [
+        vb_left(_): 
+    ]
     if(_): {b = 104} [
         vb_left(_): 
     ]
@@ -591,6 +597,9 @@ vb_command(r): [
         ]
         if(_): {vbcm_b = 3} [
             set(vbcm_done): 1
+        ]
+        if(_): {vbcm_b = 8} [
+            set(vbcm_b): 127
         ]
         if(_): {vbcm_b = 127} [
             len(vbcm_cl): vbcm_cmd
