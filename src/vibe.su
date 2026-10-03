@@ -271,11 +271,42 @@ vb_delete_line(r): [
 
 # ---------- file I/O ----------
 
+# Different host builds disagree on file_exists: 1=exists, 0=exists
+# (test -f style), string results, or no builtin at all. Detect the
+# convention at startup: write a witness file we know exists, probe it
+# and a name that cannot exist, and remember the value that means
+# "exists" (vb_fe_yes). If both probes answer the same, the builtin is
+# unusable -> vb_fe_ok stays 0 and vb_load falls back to `test -f`.
+vb_detect(r): [
+    set(vb_fe_ok): 0
+    set(vb_fe_yes): 1
+    writefile(vbdt_w): ".vibe_probe.tmp" "x"
+    file_exists(vbdt_y): ".vibe_probe.tmp"
+    file_exists(vbdt_n): ".vibe_probe_absent_9x7q.tmp"
+    if(_): {vbdt_y != vbdt_n} [
+        set(vb_fe_ok): 1
+        set(vb_fe_yes): vbdt_y
+    ]
+    set(r): 0
+]
+
 vb_load(r): path [
     vec(vb_buf): ""
     set(vb_dirty): 0
-    file_exists(vbl_tf): path
-    if(_): {vbl_tf = 1} [
+    set(vbl_go): 0
+    if(_): {vb_fe_ok = 1} [
+        file_exists(vbl_tf): path
+        if(_): {vbl_tf = vb_fe_yes} [
+            set(vbl_go): 1
+        ]
+    ]
+    if(_): {vb_fe_ok = 0} [
+        test(vbl_tt): "-f" path
+        if(_): {vbl_tt = 0} [
+            set(vbl_go): 1
+        ]
+    ]
+    if(_): {vbl_go = 1} [
         readfile(vbl_d): path
         len(vbl_n): vbl_d
         set(vbl_i): 0
@@ -303,6 +334,9 @@ vb_load(r): path [
     if(_): {vbl_bn = 0} [
         push(_): vb_buf ""
     ]
+    set(vb_cx): 0
+    set(vb_cy): 0
+    set(vb_top): 0
     set(r): 0
 ]
 
@@ -662,6 +696,7 @@ init(ret): arg_cnt arg_vec [
         at(vb_file): arg_vec 0
         set(vb_showname): vb_file
     ]
+    vb_detect(_): 
     vb_load(_): vb_file
     vb_initesc(_): 
     vb_termsize(_): 
