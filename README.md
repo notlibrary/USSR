@@ -46,4 +46,9 @@ The actual list of epithets are:
 The language is deliberately designed for working with low-quality code *en masse* with zero equipment
 You can shout it commands without a pencil standing on construction site fab or in military or city crowd and be understood
 
+Because of AI development we achieved near impossible performance USSR interpreter written in USSR is up
+in less than a man month there are even own vi clone vibe.su quality is mediocre but nobody cares
+the whole thing is running forward like a steam engine now it's all about quantity now how much tests lines of code rosetta tasks interpreted commands gigabytes 
+and other statistical parameters you can imagine
+
 P.S. СССР Средство Создания Совершенных Разработок
