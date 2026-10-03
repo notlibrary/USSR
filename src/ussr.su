@@ -1223,8 +1223,42 @@ ps_block_body(r): kids [
             ]
         ]
         if(_): {ps_bterm = 0} [
-            ps_cmd(ps_bc): 
-            push(_): kids ps_bc
+            set(ps_bhandled): 0
+            if(_): {ps_bk2 = 22} [
+                ps_adv(_): 0
+                vec(ps_bakids): ""
+                set(ps_bago): 1
+                while(_): {ps_bago = 1} [
+                    if(_): {ps_stop = 1} [
+                        set(ps_bago): 0
+                    ]
+                    if(_): {ps_bago = 1} [
+                        ps_skipnl(_): 0
+                        ps_isk(ps_bah): 12
+                        if(_): {ps_bah = 0} [
+                            set(ps_bago): 0
+                        ]
+                        if(_): {ps_bah = 1} [
+                            ps_block(ps_bab): 
+                            push(_): ps_bakids ps_bab
+                        ]
+                    ]
+                ]
+                nd_new(ps_ban): 23 "@" "" 0 ps_bakids
+                push(_): kids ps_ban
+                set(ps_bhandled): 1
+            ]
+            if(_): {ps_bk2 = 21} [
+                ps_txt(ps_bas): 0
+                ps_adv(_): 0
+                nd_new(ps_ban2): 14 ps_bas "" 0 ""
+                push(_): kids ps_ban2
+                set(ps_bhandled): 1
+            ]
+            if(_): {ps_bhandled = 0} [
+                ps_cmd(ps_bc): 
+                push(_): kids ps_bc
+            ]
             ps_block_body(r): kids
         ]
     ]
@@ -1961,7 +1995,10 @@ ex_concat(r): nd [
     getf(rt_ck): nd "kids"
     at(rt_c0): rt_ck 0
     ex_val(rt_acc): rt_c0
-    ex_concat_i(r): rt_ck 1 rt_acc
+    ex_concat_i(rt_ccv): rt_ck 1 rt_acc
+    getf(rt_cr): nd "s2"
+    rt_write(_): rt_cr rt_ccv
+    set(r): 0
 ]
 ex_concat_i(r): kids idx acc [
     len(rt_cl): kids
@@ -4963,17 +5000,30 @@ init(ret): arg_cnt arg_vec [
         if(_): {rt_md = 1} [
             ps_dump(_): ps_root 0
         ]
+        # Build the target's argument vector: strip arg_vec[0] (the target
+        # path itself, like argv[0]) and a trailing mode flag, matching the
+        # host convention where programs see only their own arguments.
+        vec(rt_argv): ""
+        set(rt_ai): 1
+        set(rt_aend): arg_cnt
+        if(_): {rt_md > 0} [
+            set(rt_aend): {arg_cnt - 1}
+        ]
+        while(_): {rt_ai < rt_aend} [
+            at(rt_av): arg_vec rt_ai
+            push(_): rt_argv rt_av
+            set(rt_ai): {rt_ai + 1}
+        ]
+        len(rt_acnt): rt_argv
         if(_): {rt_md = 2} [
-            set(rt_acnt): {arg_cnt - 1}
-            rt_run(_): ps_root rt_acnt arg_vec
+            rt_run(_): ps_root rt_acnt rt_argv
         ]
         if(_): {rt_md = 3} [
             cv_stmt(_): ps_root
             cv_dump(_): 
         ]
         if(_): {rt_md = 0} [
-            set(rt_acnt): {arg_cnt - 1}
-            cv_driver(_): ps_root rt_acnt arg_vec
+            cv_driver(_): ps_root rt_acnt rt_argv
         ]
     ]
 ]
