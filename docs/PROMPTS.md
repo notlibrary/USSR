@@ -357,4 +357,4 @@ List of all we need:
 4. garbage collector
 5. more library functions
 
-Do it by list one-by-one
+Do it by list one-by-one first in the C version then in bootstrap
