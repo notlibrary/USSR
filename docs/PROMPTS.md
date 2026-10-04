@@ -354,10 +354,11 @@ library source are in lib folder
 List of all we need:
 1. multithreading scheduler
 2. event queue
-3. async/await support
+3. async/await commands support
 4. garbage collector
 5. more library functions
 
 Do it by list one-by-one first in the C version then in bootstrap
 It must be fresh implemented code no dependencies from pthreads and libevent libev
 Aware of how newly implemented scheduler interacts with existing fork-exec model
+async/await must be commands not distinct grammar entity
