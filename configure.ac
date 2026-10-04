@@ -1,4 +1,4 @@
-AC_INIT([ussr], [0.4.4], [yendorium@gmail.com])
+AC_INIT([ussr], [0.4.5], [yendorium@gmail.com])
 AM_INIT_AUTOMAKE([foreign])
 AC_PROG_CC
 AM_PROG_LEX
