@@ -338,4 +338,23 @@ Now we will create vi-clone called vibe.su spartan set of features base visual c
 
 Here's vi-clone written In USSR it blinks and unusable when run from bootstrap does not have :e command and executes dd to pick user input fix all this and improve it windows do not have dd
 Here's vi-clone now it has working :e command do not use dd to pick user input but it still nor running on windows
-can you made it work both on windows and debian else it still do not working from bootstrap blinking but not blocking user input
+can you made it work both on windows and debian else it still do not working from bootstrap blinking but not blocking 
+user input
+
+Now we will go further we need full multithreading scheduler and event queue like FreeBSD kernel have
+This will give us async await commands and asynchronous i/o
+Then we need garbage collector and finally more library functions 
+open_file close_file write_file read_file goes to io.su 
+random64 seed_random64 time goes to standard.su
+sin ln M_PI M_E(macro) goes to math.su
+set_bytes(memset analog) and clear_bytes(set_bytes(bytes): 0) goes to bytes.su
+library source are in lib folder
+
+List of all we need:
+1. multithreading scheduler
+2. event queue
+3. async/await support
+4. garbage collector
+5. more library functions
+
+Do it by list one-by-one
