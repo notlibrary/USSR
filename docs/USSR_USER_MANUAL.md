@@ -191,6 +191,27 @@ isolated this way — they're plain global variables, same as anywhere
 else in the language, so name them carefully if you're writing
 recursive functions with internal temporaries.
 
+**`elif` / `else` chains.** `elif` and `else` are ordinary commands
+placed directly after an `if` (or another `elif`) command; the `if`
+takes its condition and then-block as two arguments, and the chain
+continues through any number of `elif` commands to an optional `else`:
+
+```
+if(_): {a = 9} [
+    print(_): "nine"
+]
+elif(_): {a > 3} [
+    print(_): "A is greater than 3 but not 9"
+]
+else(_): [
+    print(_): "small"
+]
+```
+
+Like everything else in USSR these are commands, not grammar: the
+parser sees a sequence of commands, and the compiler links an
+`if`/`elif`/`else` run into one conditional chain.
+
 ---
 
 ## 8. Structs, vectors, and UNO
@@ -384,6 +405,115 @@ A runtime error (bad argument type, division by zero, an invalid VM
 operation, a failed `struct`/`getf`/`setf`/`push`, and so on) prints a
 message to `stderr` and halts the entire script immediately — there's
 no exception/try-catch mechanism. The process exits non-zero.
+
+---
+
+## 13. The scheduler: processes, async/await, events
+
+USSR has a cooperative multithreading scheduler, modelled on the
+FreeBSD kernel's design: a run queue of runnable processes, a timer
+event queue, and context switches only at well-defined points. It is
+implemented from scratch — no pthreads, no libevent/libev — and it
+works together with the existing fork-exec model: spawning an
+external command from a scheduled process blocks only that process
+(the child becomes an event-queue entry), never the whole
+interpreter.
+
+Every script runs as process 1 (its `init`), so the scheduler is
+always active; single-threaded scripts behave exactly as before.
+
+### async / await
+
+`async(p): "name" arg...` spawns the definition `name` as a new
+scheduled process and stores its process id in `p`. The child starts
+with a copy of the caller's variables (fork semantics). The name may
+be a string or a bare identifier.
+
+`await(r): p` blocks the current process until process `p` finishes
+and stores its return value in `r`. Awaiting an already-finished
+process returns immediately.
+
+```
+worker(r): n delay [
+    sleep(_): delay
+    set(r): n
+]
+
+init(ret): arg_cnt arg_vec [
+    async(p1): "worker" 1 50
+    async(p2): worker 2 10
+    await(r2): p2      # short sleeper finishes first
+    print(_): r2       # 2
+    await(r1): p1
+    print(_): r1       # 1
+    set(ret): 0
+]
+```
+
+### sleep / yield
+
+`sleep(_): ms` suspends the current process onto the timer event
+queue for `ms` milliseconds; other processes run meanwhile.
+`yield(_): 0` voluntarily ends the current time slice and moves the
+process to the back of the run queue. Scheduling is cooperative with
+a quantum: a long-running process is also suspended after its
+instruction budget is spent, so CPU-bound loops can't starve others.
+
+### process / load: the init hierarchy
+
+There are three levels of entry points:
+
+1. **outer commands** typed into the REPL;
+2. **global init** — the script's own `init` without a process mark;
+3. **local init** — a definition marked as a separate scheduled
+   entity, invoked through `load` from a level above.
+
+`process(_): name` in a file marks the definition `name` as that
+file's scheduled entry point. `load(p): "file.su" ["entry"]` reads,
+parses and compiles the file as a new scheduled process with a fresh
+scope (exec semantics — its top-level code does not run) and stores
+the new pid in `p`. The entry is the explicit second argument when
+given, otherwise the first `process(_)` mark in the file, otherwise a
+definition called `init`. An entry taking `(arg_cnt, arg_vec)`
+receives `0` and an empty vector.
+
+```
+# worker.su
+process(_): init
+init(ret): arg_cnt arg_vec [
+    set(ret): 7
+]
+
+# main.su
+init(ret): arg_cnt arg_vec [
+    load(p): "worker.su"
+    await(r): p
+    print(_): r        # 7
+    set(ret): 0
+]
+```
+
+### gc
+
+`gc(_): 0` asks the garbage collector to reclaim unreachable values.
+The collector is incremental and also runs on its own as allocation
+pressure grows; the command exists for moments where a script knows
+it has just dropped a large structure.
+
+### Notes and limits
+
+- Scheduler commands (`async`, `await`, `sleep`, `yield`, `process`,
+  `load`, `gc`) are bytecode-VM features. Inside `@[]` advanced
+  control blocks (the tree-walking interpreter) there is no resumable
+  VM state, so they are rejected with a clear error there.
+- The `ussr.su` bootstrap implements the same scheduler in pure USSR
+  inside its own bytecode VM. There time is a *logical* tick (one VM
+  slice is one tick, idle time jumps straight to the next timer), and
+  a loaded file shares the main program's function table, so a
+  definition in a loaded file that reuses a main-file name is
+  shadowed by the main-file version (the entry point itself is
+  resolved correctly among the loaded definitions).
+- The `ussr.su` bootstrap does not implement the `!`/`?` hash sigils.
 
 ---
 

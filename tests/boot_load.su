@@ -1,0 +1,10 @@
+# load(_)/process(_) feature test for the bootstrap scheduler: the
+# worker file is loaded as a separate scheduled process and awaited
+# by the main process. Expects: 42, worker done, 7.
+init(ret): arg_cnt arg_vec [
+    load(p): "tests/boot_worker.su"
+    await(r): p
+    print(_): "worker done"
+    print(_): r
+    set(ret): 0
+]

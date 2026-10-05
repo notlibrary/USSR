@@ -1,0 +1,9 @@
+# Explicit-entry load plus gc command smoke test.
+init(ret): arg_cnt arg_vec [
+    load(p): "tests/boot_worker.su" init
+    await(r): p
+    print(_): r
+    gc(_): 0
+    print(_): "gc ok"
+    set(ret): 0
+]

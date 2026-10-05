@@ -1,0 +1,24 @@
+# Bootstrap scheduler test: two workers sleeping different spans.
+# The short sleeper must finish first although it was spawned second
+# (cooperative scheduling, timer event queue on the logical tick).
+# Print order 1 2 12 2 11 1 proves the interleave: worker 2 prints
+# its post-sleep line (12) before worker 1 (11), and each await
+# returns the finishing worker's own value.
+worker(r): n delay [
+    print(_): n
+    sleep(_): delay
+    add(r2): n 10
+    print(_): r2
+    set(r): n
+]
+
+init(ret): arg_cnt arg_vec [
+    async(p1): "worker" 1 50
+    async(p2): "worker" 2 10
+    yield(_): 0
+    await(a2): p2
+    print(_): a2
+    await(a1): p1
+    print(_): a1
+    set(ret): 0
+]

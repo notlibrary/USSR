@@ -1,0 +1,11 @@
+# Process entry loaded by tests/boot_load.su via load(_).
+# The process(_): mark names init as this file's scheduled entry
+# point; load spawns it with a fresh scope (exec semantics).
+process(_): init
+
+init(ret): arg_cnt arg_vec [
+    set(x): 41
+    add(r): x 1
+    print(_): r
+    set(ret): 7
+]
