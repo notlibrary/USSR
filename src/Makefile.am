@@ -26,4 +26,4 @@ EXTRA_DIST = \
     uthash.h \
 	prng64_xrp32.h \
 	autocomplete.h \
-	proces.h
+	process.h
