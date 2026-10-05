@@ -1,6 +1,6 @@
 # USSR User Manual
 
-USSR (Unified Shell Script) is a small command-oriented scripting
+USSR (Unified Shell Script REPL) is a small command-oriented scripting
 language: every operation is a *command* with a name, a return
 variable, and a list of arguments. Source is preprocessed, parsed,
 compiled to bytecode, and run on a register-based virtual machine —
