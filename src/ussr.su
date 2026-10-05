@@ -3450,6 +3450,13 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "scan"} [ cv_scanc(r): nd ]
         if(_): {nm = "do"} [ cv_do(r): nd ]
         if(_): {nm = "struct"} [ cv_struct2(r): nd ]
+        if(_): {nm = "await"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "sleep"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "yield"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "gc"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "async"} [ cv_async2(r): nd ]
+        if(_): {nm = "process"} [ cv_process2(r): nd ]
+        if(_): {nm = "load"} [ cv_load2(r): nd ]
         set(cv_kn): 1
         if(_): {nm = "set"} [ set(cv_kn): 0 ]
         if(_): {nm = "print"} [ set(cv_kn): 0 ]
@@ -3482,6 +3489,13 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "scan"} [ set(cv_kn): 0 ]
         if(_): {nm = "do"} [ set(cv_kn): 0 ]
         if(_): {nm = "struct"} [ set(cv_kn): 0 ]
+        if(_): {nm = "await"} [ set(cv_kn): 0 ]
+        if(_): {nm = "sleep"} [ set(cv_kn): 0 ]
+        if(_): {nm = "yield"} [ set(cv_kn): 0 ]
+        if(_): {nm = "gc"} [ set(cv_kn): 0 ]
+        if(_): {nm = "async"} [ set(cv_kn): 0 ]
+        if(_): {nm = "process"} [ set(cv_kn): 0 ]
+        if(_): {nm = "load"} [ set(cv_kn): 0 ]
         if(_): {cv_kn = 1} [
             cv_defcall2(r): nd nm
         ]
@@ -4242,13 +4256,15 @@ vm_setreg(r): k val [
 ]
 vm_loop(r): [
     set(r): 0
-    len(vm_codelen): cv_code
     set(vm_lgo): 1
     while(_): {vm_lgo = 1} [
         set(vm_lgo): 0
         if(_): {vm_flow = 0} [
-            if(_): {vm_ip < vm_codelen} [
-                set(vm_lgo): 1
+            if(_): {vm_suspend = 0} [
+                len(vm_codelen): cv_code
+                if(_): {vm_ip < vm_codelen} [
+                    set(vm_lgo): 1
+                ]
             ]
         ]
         if(_): {vm_lgo = 1} [
@@ -4256,6 +4272,15 @@ vm_loop(r): [
             getf(vm_op): vm_cur "op"
             vm_step(r): vm_cur vm_op
             add(vm_ip): vm_ip 1
+            # Quantum countdown: sc_run charges vm_qleft before each
+            # slice; when it runs out the process suspends at the next
+            # instruction boundary and the scheduler picks another one.
+            if(_): {vm_qleft > 0} [
+                sub(vm_qleft): vm_qleft 1
+                if(_): {vm_qleft = 0} [
+                    set(vm_suspend): 1
+                ]
+            ]
         ]
     ]
 ]
@@ -4385,8 +4410,11 @@ vm_step(r): cur op [
         getf(vm_rnn): vm_fd "retname"
         vm_alias2(_): vm_rnn vm_crt vm_sv
         getf(vm_ent): vm_fd "entry"
-        set(vm_ip): vm_ent
-        vm_loop(r):
+        # Flat dispatch: ip = entry - 1 so the caller's vm_loop
+        # advances to entry. No recursive vm_loop here — machine
+        # state is fully global, and a flat loop is what lets the
+        # scheduler suspend a process at any instruction boundary.
+        set(vm_ip): {vm_ent - 1}
     ]
     if(_): {op = 6} [
         getf(vm_ra): cur "a"
@@ -4898,6 +4926,18 @@ vm_native_d(r): name dst nb [
     if(_): {name = "readfile"} [ readfile(r): rt_na0 ]
     if(_): {name = "random64"} [ random64(r): ]
     if(_): {name = "seed_random64"} [ seed_random64(r): rt_na0 ]
+    set(vm_m4): 0
+    if(_): {name = "new"} [ set(vm_m4): 1 ]
+    if(_): {name = "template"} [ set(vm_m4): 1 ]
+    if(_): {name = "scan"} [ set(vm_m4): 1 ]
+    if(_): {name = "byte"} [ set(vm_m4): 1 ]
+    if(_): {name = "slice"} [ set(vm_m4): 1 ]
+    if(_): {name = "readfile"} [ set(vm_m4): 1 ]
+    if(_): {name = "random64"} [ set(vm_m4): 1 ]
+    if(_): {name = "seed_random64"} [ set(vm_m4): 1 ]
+    if(_): {vm_m4 = 0} [
+        vm_native_e(r): name dst nb
+    ]
 ]
 # ---- VM driver ----
 cv_dump(r): [
@@ -4932,9 +4972,586 @@ cv_dump(r): [
     ]
     set(r): 0
 ]
+# ---------- cooperative scheduler (bootstrap port of the C scheduler) ----------
+# A process is a saved slice of the fully-global VM state: instruction
+# pointer, stack pointer, register vector, frame vector and variable
+# store. cv_code/cv_consts/cv_names/cv_funcs stay shared — processes
+# share compiled code, like threads share text in the C version.
+# Scheduling is cooperative with a quantum: vm_loop counts down
+# vm_qleft instructions per slice and suspends the process at an
+# instruction boundary when the slice is spent; sleep/await suspend
+# voluntarily. The event queue is the run queue plus the timer edges
+# (wake_at) and await edges (wait_pid) stored on each process; sc_idle
+# fires expired timers when nothing is runnable. Time is a logical
+# tick — one slice is one tick, idle time jumps straight to the next
+# timer, so no host sleeping is needed.
+# Process states: 0 runnable 1 sleeping 2 waiting(await) 3 zombie.
+
+sc_regs_i(r): regs i [
+    if(_): {i < 32} [
+        new(sc_rvx): "vm_rv" 0
+        push(_): regs sc_rvx
+        add(sc_ri2): i 1
+        sc_regs_i(r): regs sc_ri2
+    ]
+    if(_): {i = 32} [
+        set(r): 0
+    ]
+]
+sc_args_i(r): regs args i n [
+    set(r): 0
+    if(_): {i < n} [
+        if(_): {i < 16} [
+            at(sc_av2): args i
+            add(sc_rk2): 16 i
+            at(sc_rv3): regs sc_rk2
+            setf(_): sc_rv3 "v" sc_av2
+        ]
+        add(sc_ai3): i 1
+        sc_args_i(r): regs args sc_ai3 n
+    ]
+]
+sc_store_ci(r): src dst i n [
+    set(r): 0
+    if(_): {i < n} [
+        at(sc_ss): src i
+        getf(sc_sn): sc_ss "n"
+        getf(sc_sv2): sc_ss "v"
+        getf(sc_st3): sc_ss "t"
+        new(sc_ns): "rt_sp" sc_sn sc_sv2 sc_st3
+        push(_): dst sc_ns
+        add(sc_si2): i 1
+        sc_store_ci(r): src dst sc_si2 n
+    ]
+]
+sc_store_clone(r): src [
+    vec(r): "rt_sp"
+    len(sc_sl): src
+    sc_store_ci(_): src r 0 sc_sl
+]
+sc_store_gi(r): store nm i n [
+    set(r): 0
+    if(_): {i < n} [
+        at(sc_gs): store i
+        getf(sc_gn): sc_gs "n"
+        set(sc_gf): 0
+        if(_): {sc_gn = nm} [ set(sc_gf): 1 ]
+        if(_): {sc_gf = 1} [
+            getf(sc_gt): sc_gs "t"
+            if(_): {sc_gt = ""} [
+                getf(r): sc_gs "v"
+            ]
+        ]
+        if(_): {sc_gf = 0} [
+            add(sc_gi2): i 1
+            sc_store_gi(r): store nm sc_gi2 n
+        ]
+    ]
+]
+sc_store_get(r): store nm [
+    len(sc_gl): store
+    sc_store_gi(r): store nm 0 sc_gl
+]
+# Wrap the currently loaded VM state as the main process (pid 1).
+sc_boot(r): [
+    new(sc_bp): "sc_pr" 1 "init" 0 vm_ip vm_sp vm_regs vm_frames rt_store 0 0 0 0
+    push(_): sc_procs sc_bp
+    push(_): sc_runq 1
+    set(r): 0
+]
+# Spawn function fi(args...) as a new process: append a private
+# trampoline (CALL fi + HALT) to the shared code and point the new
+# process at it. fork=1 clones the caller's variable store (async
+# semantics), fork=0 starts an empty one (load/exec semantics).
+# Spawning by table index (not name) is what lets load() spawn the
+# loaded file's own entry even when its name collides with a main
+# file definition — the C version gives each loaded file a separate
+# program, the bootstrap shares one function table instead. r = pid.
+sc_spawn_i(r): fi fname args fork [
+    set(r): {0 - 1}
+    if(_): {fi + 1 > 0} [
+        len(sc_al): args
+        cv_name(sc_rni): "__sc_result"
+        cv_emit(_): 5 16 sc_al sc_rni fi
+        cv_emit(_): 15 0 0 0 0
+        len(sc_tl): cv_code
+        sub(sc_ti): sc_tl 2
+        vec(sc_newregs): "vm_rv"
+        sc_regs_i(_): sc_newregs 0
+        sc_args_i(_): sc_newregs args 0 sc_al
+        vec(sc_newframes): "vm_fr"
+        vec(sc_newstore): "rt_sp"
+        if(_): {fork = 1} [
+            sc_store_clone(sc_cl): rt_store
+            set(sc_newstore): sc_cl
+        ]
+        len(sc_pl2): sc_procs
+        add(sc_pid2): sc_pl2 1
+        new(sc_npr): "sc_pr" sc_pid2 fname 0 sc_ti 0 sc_newregs sc_newframes sc_newstore 0 0 0 0
+        push(_): sc_procs sc_npr
+        push(_): sc_runq sc_pid2
+        set(r): sc_pid2
+    ]
+]
+sc_spawn(r): fname args fork [
+    cv_findf2(sc_fi): fname
+    sc_spawn_i(r): sc_fi fname args fork
+]
+sc_zombify(r): pid [
+    sub(sc_zi): pid 1
+    at(sc_zp): sc_procs sc_zi
+    setf(_): sc_zp "state" 3
+    getf(sc_zs): sc_zp "store"
+    sc_store_get(sc_zr): sc_zs "__sc_result"
+    setf(_): sc_zp "result" sc_zr
+    # wake every process blocked in await on this pid
+    len(sc_zn): sc_procs
+    set(sc_zi2): 0
+    while(_): {sc_zi2 < sc_zn} [
+        at(sc_wp): sc_procs sc_zi2
+        getf(sc_ws): sc_wp "state"
+        set(sc_wf): 0
+        if(_): {sc_ws = 2} [
+            getf(sc_wpid): sc_wp "wait_pid"
+            if(_): {sc_wpid = pid} [ set(sc_wf): 1 ]
+        ]
+        if(_): {sc_wf = 1} [
+            getf(sc_wr): sc_wp "regs"
+            getf(sc_wg): sc_wp "wreg"
+            at(sc_wrv): sc_wr sc_wg
+            setf(_): sc_wrv "v" sc_zr
+            setf(_): sc_wp "state" 0
+            getf(sc_wp2): sc_wp "pid"
+            push(_): sc_runq sc_wp2
+        ]
+        add(sc_zi2): sc_zi2 1
+    ]
+    set(r): 0
+]
+sc_dequeue(r): [
+    set(r): {0 - 1}
+    len(sc_ql): sc_runq
+    if(_): {sc_ql > 0} [
+        at(r): sc_runq 0
+        vec(sc_nq): ""
+        set(sc_qi): 1
+        while(_): {sc_qi < sc_ql} [
+            at(sc_qp): sc_runq sc_qi
+            push(_): sc_nq sc_qp
+            add(sc_qi): sc_qi 1
+        ]
+        set(sc_runq): sc_nq
+    ]
+]
+# Fire every timer due at sc_tick (called after sc_idle jumps time).
+sc_fire(r): [
+    set(r): 0
+    len(sc_fn): sc_procs
+    set(sc_fi3): 0
+    while(_): {sc_fi3 < sc_fn} [
+        at(sc_fp2): sc_procs sc_fi3
+        getf(sc_fs): sc_fp2 "state"
+        if(_): {sc_fs = 1} [
+            getf(sc_fw): sc_fp2 "wake_at"
+            set(sc_ff): 0
+            if(_): {sc_fw < sc_tick} [ set(sc_ff): 1 ]
+            if(_): {sc_fw = sc_tick} [ set(sc_ff): 1 ]
+            if(_): {sc_ff = 1} [
+                setf(_): sc_fp2 "state" 0
+                getf(sc_fpid): sc_fp2 "pid"
+                push(_): sc_runq sc_fpid
+            ]
+        ]
+        add(sc_fi3): sc_fi3 1
+    ]
+]
+# Idle handling when the run queue is empty: 0 = all processes done,
+# 1 = timers fired, keep scheduling, 2 = deadlock.
+sc_idle(r): [
+    set(r): 0
+    set(sc_live): 0
+    set(sc_minw): 0
+    set(sc_hasw): 0
+    len(sc_in): sc_procs
+    set(sc_ii): 0
+    while(_): {sc_ii < sc_in} [
+        at(sc_ip2): sc_procs sc_ii
+        getf(sc_is): sc_ip2 "state"
+        if(_): {sc_is < 3} [
+            add(sc_live): sc_live 1
+        ]
+        if(_): {sc_is = 1} [
+            getf(sc_iw): sc_ip2 "wake_at"
+            set(sc_iu): 0
+            if(_): {sc_hasw = 0} [ set(sc_iu): 1 ]
+            if(_): {sc_hasw = 1} [
+                if(_): {sc_iw < sc_minw} [ set(sc_iu): 1 ]
+            ]
+            if(_): {sc_iu = 1} [
+                set(sc_minw): sc_iw
+                set(sc_hasw): 1
+            ]
+        ]
+        add(sc_ii): sc_ii 1
+    ]
+    if(_): {sc_live > 0} [
+        if(_): {sc_hasw = 1} [
+            set(sc_tick): sc_minw
+            sc_fire(_):
+            set(r): 1
+        ]
+        if(_): {sc_hasw = 0} [
+            print(_): "scheduler: deadlock (processes waiting with no timers)"
+            set(r): 2
+        ]
+    ]
+]
+# The scheduler loop: dequeue a runnable process, swap the global VM
+# state to its slice, run one quantum, swap back and requeue. The
+# register/frame/store vectors are owned by the process, so only the
+# scalar ip/sp need saving — the vectors stay shared by reference.
+sc_run(r): [
+    set(r): 0
+    set(sc_done): 0
+    while(_): {sc_done = 0} [
+        sc_dequeue(sc_pid):
+        if(_): {sc_pid > 0} [
+            sub(sc_pi): sc_pid 1
+            at(sc_pr): sc_procs sc_pi
+            getf(sc_pst): sc_pr "state"
+            if(_): {sc_pst = 0} [
+                getf(vm_ip): sc_pr "ip"
+                getf(vm_sp): sc_pr "sp"
+                getf(vm_regs): sc_pr "regs"
+                getf(vm_frames): sc_pr "frames"
+                getf(rt_store): sc_pr "store"
+                set(vm_flow): 0
+                set(vm_suspend): 0
+                set(vm_qleft): 10000
+                set(sc_cur): sc_pid
+                vm_loop(_):
+                setf(_): sc_pr "ip" vm_ip
+                setf(_): sc_pr "sp" vm_sp
+                add(sc_tick): sc_tick 1
+                if(_): {vm_flow = 1} [
+                    sc_zombify(_): sc_pid
+                ]
+                if(_): {vm_flow = 0} [
+                    getf(sc_ps2): sc_pr "state"
+                    if(_): {sc_ps2 = 0} [
+                        push(_): sc_runq sc_pid
+                    ]
+                ]
+            ]
+        ]
+        if(_): {sc_pid < 0} [
+            sc_idle(sc_ir):
+            if(_): {sc_ir = 0} [ set(sc_done): 1 ]
+            if(_): {sc_ir = 2} [
+                set(sc_done): 1
+                set(r): 1
+            ]
+        ]
+    ]
+    set(sc_cur): 0
+]
+# Collect native arguments rt_na1..rt_na(n-1) into a fresh vector
+# (async's variadic worker arguments). vm_targ(k) reads rt_na(k+1).
+sc_col_i(r): out j n [
+    set(r): 0
+    if(_): {j < n} [
+        sub(sc_tk): j 1
+        vm_targ(sc_tv): sc_tk
+        push(_): out sc_tv
+        add(sc_cj2): j 1
+        sc_col_i(r): out sc_cj2 n
+    ]
+]
+# Register every definition-shaped top-level command of a loaded file
+# (a tag-2 command whose last kid is a block and whose name is not a
+# control-flow keyword). process(_) marks carry no block and are left
+# for sc_firstmark.
+sc_regfile(r): kids [
+    len(sc_rfl): kids
+    set(sc_ri3): 0
+    while(_): {sc_ri3 < sc_rfl} [
+        at(sc_rfd): kids sc_ri3
+        getf(sc_rft): sc_rfd "tag"
+        if(_): {sc_rft = 2} [
+            getf(sc_rfn): sc_rfd "s1"
+            getf(sc_rfk): sc_rfd "kids"
+            len(sc_rfn2): sc_rfk
+            set(sc_rhb): 0
+            if(_): {sc_rfn2 > 0} [
+                sub(sc_rl2): sc_rfn2 1
+                at(sc_rlk): sc_rfk sc_rl2
+                getf(sc_rlt): sc_rlk "tag"
+                if(_): {sc_rlt = 3} [ set(sc_rhb): 1 ]
+            ]
+            set(sc_rctl): 0
+            if(_): {sc_rfn = "if"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "elif"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "else"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "while"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "for"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "do"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "loop"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "choose"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "option"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "default"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "break"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "continue"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "return"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "method"} [ set(sc_rctl): 1 ]
+            if(_): {sc_rfn = "@"} [ set(sc_rctl): 1 ]
+            set(sc_rdo): 0
+            if(_): {sc_rhb = 1} [
+                if(_): {sc_rctl = 0} [ set(sc_rdo): 1 ]
+            ]
+            if(_): {sc_rdo = 1} [
+                cv_regdef(_): sc_rfd sc_rfn
+            ]
+        ]
+        add(sc_ri3): sc_ri3 1
+    ]
+    set(r): 0
+]
+# First top-level process(_): name mark in a loaded file, "" if none.
+sc_firstmark(r): kids [
+    set(r): ""
+    len(sc_fml): kids
+    set(sc_fmi): 0
+    set(sc_fmd): 0
+    while(_): {sc_fmi < sc_fml} [
+        if(_): {sc_fmd = 0} [
+            at(sc_fmn): kids sc_fmi
+            getf(sc_fmt): sc_fmn "tag"
+            if(_): {sc_fmt = 2} [
+                getf(sc_fms): sc_fmn "s1"
+                if(_): {sc_fms = "process"} [
+                    getf(sc_fmk): sc_fmn "kids"
+                    len(sc_fmn2): sc_fmk
+                    if(_): {sc_fmn2 > 0} [
+                        at(sc_fm0): sc_fmk 0
+                        getf(sc_fm0t): sc_fm0 "tag"
+                        if(_): {sc_fm0t = 4} [
+                            getf(r): sc_fm0 "s1"
+                            set(sc_fmd): 1
+                        ]
+                        if(_): {sc_fm0t = 7} [
+                            getf(r): sc_fm0 "s1"
+                            set(sc_fmd): 1
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        add(sc_fmi): sc_fmi 1
+    ]
+]
+# load(p): "file.su" ["entry"] — lex/parse the file (the outer AST is
+# dead after compilation, so clobbering lx_tokens/ps_root is safe),
+# register its definitions, pick the entry (explicit argument, else
+# first process(_) mark, else init) and spawn it with exec semantics.
+sc_n_load(r): path pname hasp [
+    readfile(sc_lsrc): path
+    vec(lx_tokens): "lx_Tok"
+    lx_scan(sc_ls): sc_lsrc
+    set(r): {0 - 1}
+    if(_): {sc_ls = 0} [
+        ps_parse(sc_lps): sc_lsrc
+        if(_): {sc_lps = 0} [
+            getf(sc_lk): ps_root "kids"
+            # Definitions registered by this load start at sc_fbase;
+            # resolving the entry from there (and spawning by index)
+            # keeps a loaded init distinct from the main file's init.
+            len(sc_fbase): cv_funcs
+            sc_regfile(_): sc_lk
+            set(sc_lent): pname
+            if(_): {sc_lhas = 0} [
+                sc_firstmark(sc_lfm): sc_lk
+                if(_): {sc_lfm != ""} [
+                    set(sc_lent): sc_lfm
+                ]
+            ]
+            cv_findf2_i(sc_lfi): sc_lent sc_fbase
+            if(_): {sc_lfi + 1 > 0} [
+                at(sc_lfd): cv_funcs sc_lfi
+                getf(sc_lnp): sc_lfd "nparams"
+                vec(sc_largs): ""
+                if(_): {sc_lnp = 2} [
+                    push(_): sc_largs 0
+                    vec(sc_lev): ""
+                    push(_): sc_largs sc_lev
+                ]
+                sc_spawn_i(r): sc_lfi sc_lent sc_largs 0
+            ]
+        ]
+    ]
+]
+# Scheduler natives, dispatched from vm_native_d when no earlier
+# builtin matched. All of them run inside a scheduled process
+# (sc_cur > 0); outside the scheduler they degrade to no-ops.
+vm_native_e(r): name dst nb [
+    set(r): 0
+    if(_): {name = "yield"} [
+        set(vm_suspend): 1
+    ]
+    if(_): {name = "gc"} [
+        gc(vm_gcx): 0
+    ]
+    if(_): {name = "process"} [
+        push(_): sc_marks rt_na0
+    ]
+    if(_): {name = "sleep"} [
+        if(_): {sc_cur > 0} [
+            sub(sc_sci): sc_cur 1
+            at(sc_spr): sc_procs sc_sci
+            setf(_): sc_spr "state" 1
+            add(sc_wa): sc_tick rt_na0
+            setf(_): sc_spr "wake_at" sc_wa
+            set(vm_suspend): 1
+        ]
+    ]
+    if(_): {name = "async"} [
+        vec(sc_av3): ""
+        sc_col_i(_): sc_av3 1 nb
+        sc_spawn(r): rt_na0 sc_av3 1
+    ]
+    if(_): {name = "await"} [
+        len(sc_pnl): sc_procs
+        set(sc_aok): 0
+        if(_): {rt_na0 > 0} [
+            if(_): {rt_na0 <= sc_pnl} [ set(sc_aok): 1 ]
+        ]
+        if(_): {sc_aok = 1} [
+            sub(sc_api): rt_na0 1
+            at(sc_apr): sc_procs sc_api
+            getf(sc_ast): sc_apr "state"
+            if(_): {sc_ast = 3} [
+                getf(r): sc_apr "result"
+            ]
+            if(_): {sc_ast < 3} [
+                if(_): {sc_cur > 0} [
+                    sub(sc_aci): sc_cur 1
+                    at(sc_mpr): sc_procs sc_aci
+                    setf(_): sc_mpr "state" 2
+                    setf(_): sc_mpr "wait_pid" rt_na0
+                    setf(_): sc_mpr "wreg" dst
+                    set(vm_suspend): 1
+                ]
+            ]
+        ]
+    ]
+    if(_): {name = "load"} [
+        set(sc_lproc): "init"
+        set(sc_lhas): 0
+        if(_): {nb > 1} [
+            set(sc_lproc): rt_na1
+            set(sc_lhas): 1
+        ]
+        sc_n_load(r): rt_na0 sc_lproc sc_lhas
+    ]
+]
+# Compile a name argument: a bare identifier means the literal name
+# (async(p): worker n), anything else is a normal expression
+# (async(p): "worker" n, load(p): pathvar entry).
+cv_scname(r): nd tgt [
+    getf(cv_snt): nd "tag"
+    if(_): {cv_snt = 4} [
+        getf(cv_snn): nd "s1"
+        cv_const(cv_sci): cv_snn
+        cv_emit(_): 1 tgt 0 0 cv_sci
+    ]
+    if(_): {cv_snt != 4} [
+        cv_e(r): nd tgt
+    ]
+]
+# cv_native2 variant where argument position sp is a name (cv_scname)
+# instead of a value expression. async/process: sp=0, load: sp=1.
+cv_nat3_i(r): nd kids nm idx sp [
+    len(cv_n3l): kids
+    set(r): 0
+    if(_): {idx < cv_n3l} [
+        add(cv_t3r): 16 idx
+        at(cv_p3): kids idx
+        set(cv_isc): 0
+        if(_): {idx = sp} [ set(cv_isc): 1 ]
+        if(_): {cv_isc = 1} [
+            cv_scname(_): cv_p3 cv_t3r
+        ]
+        if(_): {cv_isc = 0} [
+            cv_e(_): cv_p3 cv_t3r
+        ]
+        add(cv_i3n): idx 1
+        cv_nat3_i(r): nd kids nm cv_i3n sp
+    ]
+    if(_): {idx = cv_n3l} [
+        cv_name(cv_n3i): nm
+        getf(cv_r3): nd "s2"
+        cv_name(cv_r3i): cv_r3
+        cv_emit(_): 4 16 cv_n3l 16 cv_n3i
+        cv_emit(_): 3 16 0 0 cv_r3i
+    ]
+]
+cv_async2(r): nd [
+    getf(cv_nk): nd "kids"
+    cv_nat3_i(r): nd cv_nk "async" 0 0
+]
+cv_process2(r): nd [
+    getf(cv_nk): nd "kids"
+    cv_nat3_i(r): nd cv_nk "process" 0 0
+]
+cv_load2(r): nd [
+    getf(cv_nk): nd "kids"
+    cv_nat3_i(r): nd cv_nk "load" 0 1
+]
+# Does this program use scheduler commands anywhere? When it does the
+# bytecode route is mandatory (the tree walker cannot suspend), so
+# cv_driver clears rt_need_ast and forces the VM path.
+rt_need_vm(r): nd [
+    set(r): 0
+    getf(rt_nvt): nd "tag"
+    if(_): {rt_nvt = 2} [
+        getf(rt_nvn): nd "s1"
+        if(_): {rt_nvn = "async"} [ set(r): 1 ]
+        if(_): {rt_nvn = "await"} [ set(r): 1 ]
+        if(_): {rt_nvn = "sleep"} [ set(r): 1 ]
+        if(_): {rt_nvn = "yield"} [ set(r): 1 ]
+        if(_): {rt_nvn = "gc"} [ set(r): 1 ]
+        if(_): {rt_nvn = "process"} [ set(r): 1 ]
+        if(_): {rt_nvn = "load"} [ set(r): 1 ]
+    ]
+    if(_): {r = 0} [
+        getf(rt_nvk): nd "kids"
+        rt_need_vm_i(r): rt_nvk 0
+    ]
+]
+rt_need_vm_i(r): items i [
+    set(r): 0
+    len(rt_nvl): items
+    if(_): {i < rt_nvl} [
+        at(rt_nvd): items i
+        rt_need_vm(rt_nvr): rt_nvd
+        if(_): {rt_nvr = 1} [
+            set(r): 1
+        ]
+        if(_): {rt_nvr = 0} [
+            add(rt_nvi): i 1
+            rt_need_vm_i(r): items rt_nvi
+        ]
+    ]
+]
 cv_driver(r): prog acnt avec [
+    rt_need_vm(rt_nvm): prog
     rt_ast_needed(rt_need_ast): prog
     rt_has_choose(rt_has_ch): prog
+    # Scheduler commands need resumable VM state: force the bytecode
+    # route even when the program (or the prepended library) would
+    # otherwise require the tree walker.
+    if(_): {rt_nvm = 1} [
+        set(rt_need_ast): 0
+    ]
     if(_): {rt_need_ast = 1} [
         rt_run(r): prog acnt avec
         return(r): 0
@@ -4953,14 +5570,18 @@ cv_driver(r): prog acnt avec [
         cv_emit(_): 1 0 0 0 cv_mc1
         cv_const(cv_mc2): avec
         cv_emit(_): 1 1 0 0 cv_mc2
-        cv_name(cv_mn): "_"
+        # The main process's init return value lands in __sc_result,
+        # where sc_zombify picks it up as the process result.
+        cv_name(cv_mn): "__sc_result"
         cv_emit(_): 5 0 2 cv_mn cv_mi
     ]
     cv_emit(_): 15 0 0 0 0
     set(vm_ip): 0
     set(vm_flow): 0
     set(vm_sp): 0
-    vm_loop(r):
+    # Every VM program runs under the scheduler; main is pid 1.
+    sc_boot(_):
+    sc_run(r):
 ]
 vm_init_i(r): i [
     if(_): {i < 32} [
@@ -5051,6 +5672,16 @@ init(ret): arg_cnt arg_vec [
     vec(rt_store): "rt_sp"
     vec(rt_fdefs): "rt_fd"
     set(rt_flow): 0
+    # Scheduler state: process table, run queue, process(_) marks,
+    # current pid and the logical tick (one VM slice is one tick).
+    struct(sc_pr): "pid:number" "name:string" "state:number" "ip:number" "sp:number" "regs:vector" "frames:vector" "store:vector" "wake_at:number" "wait_pid:number" "wreg:number" "result:any"
+    vec(sc_procs): "sc_pr"
+    vec(sc_runq): ""
+    vec(sc_marks): ""
+    set(sc_cur): 0
+    set(sc_tick): 0
+    set(vm_suspend): 0
+    set(vm_qleft): 0
     if(_): {rt_repl = 1} [
         repl(_): 
         return(_): 0
