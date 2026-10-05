@@ -13,6 +13,9 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/uno.o \
        $(SRC_DIR)/ussr_oop_builtins.o \
        $(SRC_DIR)/ussr_bytecode.o \
+       $(SRC_DIR)/scheduler.o \
+       $(SRC_DIR)/eventq.o \
+       $(SRC_DIR)/gc.o \
        $(SRC_DIR)/process_posix.o \
        $(SRC_DIR)/prng64_xrp32.o \
        $(SRC_DIR)/autocomplete.o		  
@@ -26,7 +29,7 @@ endif
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) -lm
 
 $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.y
 	bison -d -Wall -o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.y
@@ -71,6 +74,15 @@ $(SRC_DIR)/bestline.o: $(SRC_DIR)/bestline.c $(SRC_DIR)/bestline.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/process_posix.o: $(SRC_DIR)/process_posix.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/eventq.o: $(SRC_DIR)/eventq.c $(SRC_DIR)/eventq.h $(SRC_DIR)/process.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/gc.o: $(SRC_DIR)/gc.c $(SRC_DIR)/gc.h $(SRC_DIR)/uno.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c

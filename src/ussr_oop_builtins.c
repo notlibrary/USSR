@@ -2,6 +2,7 @@
 #include "uno.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1273,6 +1274,451 @@ static int oop_do_terminal_size(
 #endif /* _WIN32 */
 
 /* ------------------------------------------------------------- */
+/* io.su primitives: stream file handles                           */
+/*                                                                 */
+/* open_file(h): "path" "mode"  -> integer handle >= 0, -1 on error */
+/* close_file(ok): h            -> 0 on success                     */
+/* write_file(n): h "text"      -> bytes written                    */
+/* read_file(s): h [n]          -> string (rest of file, or n bytes)*/
+/*                                                                 */
+/* Handles index a small process-global table of FILE*. The whole-  */
+/* file readfile/writefile builtins above stay untouched.           */
+/* ------------------------------------------------------------- */
+
+#define USSR_MAX_FILE_HANDLES 64
+
+static FILE *ussr_file_table[USSR_MAX_FILE_HANDLES];
+
+static int oop_file_handle_valid(long handle)
+{
+    return handle >= 0 &&
+           handle < USSR_MAX_FILE_HANDLES &&
+           ussr_file_table[handle] != NULL;
+}
+
+static int oop_do_open_file(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    ussr_value_t mode_v;
+    const char *path;
+    const char *mode;
+    FILE *fp;
+    long handle;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: open_file(h): \"path\" \"mode\"\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &path_v) != 0 ||
+        oop_eval(&arguments[1], &mode_v) != 0)
+        return -1;
+
+    if (!oop_expect_string(&path_v, &path) ||
+        !oop_expect_string(&mode_v, &mode))
+    {
+        fprintf(stderr,
+                "USSR: open_file expects string path and mode\n");
+        ussr_value_free(&path_v);
+        ussr_value_free(&mode_v);
+        return -1;
+    }
+
+    /* Whitelist C fopen modes so garbage stays garbage. */
+    {
+        static const char *modes[] = {
+            "r", "w", "a", "r+", "w+", "a+",
+            "rb", "wb", "ab", "r+b", "w+b", "a+b",
+            "rb+", "wb+", "ab+"
+        };
+        size_t i;
+        int ok = 0;
+
+        for (i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i)
+            if (strcmp(mode, modes[i]) == 0)
+                ok = 1;
+
+        if (!ok)
+        {
+            fprintf(stderr,
+                    "USSR: open_file: unsupported mode '%s'\n", mode);
+            ussr_value_free(&path_v);
+            ussr_value_free(&mode_v);
+            return -1;
+        }
+    }
+
+    for (handle = 0; handle < USSR_MAX_FILE_HANDLES; ++handle)
+        if (ussr_file_table[handle] == NULL)
+            break;
+
+    if (handle == USSR_MAX_FILE_HANDLES)
+    {
+        fprintf(stderr, "USSR: open_file: too many open files\n");
+        ussr_value_free(&path_v);
+        ussr_value_free(&mode_v);
+        return -1;
+    }
+
+    fp = fopen(path, mode);
+    if (fp == NULL)
+    {
+        *out_result = ussr_integer(-1);
+        ussr_value_free(&path_v);
+        ussr_value_free(&mode_v);
+        return 0;
+    }
+
+    ussr_file_table[handle] = fp;
+
+    ussr_value_free(&path_v);
+    ussr_value_free(&mode_v);
+
+    *out_result = ussr_integer(handle);
+    return 0;
+}
+
+static int oop_do_close_file(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t handle_v;
+    long handle;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: close_file(ok): h\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &handle_v) != 0)
+        return -1;
+
+    if (!oop_expect_integer(&handle_v, &handle) ||
+        !oop_file_handle_valid(handle))
+    {
+        fprintf(stderr, "USSR: close_file: invalid handle\n");
+        ussr_value_free(&handle_v);
+        return -1;
+    }
+
+    fclose(ussr_file_table[handle]);
+    ussr_file_table[handle] = NULL;
+
+    ussr_value_free(&handle_v);
+    *out_result = ussr_integer(0);
+    return 0;
+}
+
+static int oop_do_write_file(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t handle_v;
+    ussr_value_t text_v;
+    long handle;
+    const char *text;
+    size_t written;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: write_file(n): h \"text\"\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &handle_v) != 0 ||
+        oop_eval(&arguments[1], &text_v) != 0)
+        return -1;
+
+    if (!oop_expect_integer(&handle_v, &handle) ||
+        !oop_file_handle_valid(handle))
+    {
+        fprintf(stderr, "USSR: write_file: invalid handle\n");
+        ussr_value_free(&handle_v);
+        ussr_value_free(&text_v);
+        return -1;
+    }
+
+    if (!oop_expect_string(&text_v, &text))
+    {
+        fprintf(stderr, "USSR: write_file expects a string\n");
+        ussr_value_free(&handle_v);
+        ussr_value_free(&text_v);
+        return -1;
+    }
+
+    written = fwrite(text, 1, strlen(text), ussr_file_table[handle]);
+    fflush(ussr_file_table[handle]);
+
+    ussr_value_free(&handle_v);
+    ussr_value_free(&text_v);
+
+    *out_result = ussr_integer((long)written);
+    return 0;
+}
+
+static int oop_do_read_file(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t handle_v;
+    long handle;
+    long requested = -1;
+    FILE *fp;
+    char *buffer;
+    size_t length;
+    size_t capacity;
+
+    if (argument_count < 1 || argument_count > 2)
+    {
+        fprintf(stderr, "USSR: read_file(s): h [n]\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &handle_v) != 0)
+        return -1;
+
+    if (!oop_expect_integer(&handle_v, &handle) ||
+        !oop_file_handle_valid(handle))
+    {
+        fprintf(stderr, "USSR: read_file: invalid handle\n");
+        ussr_value_free(&handle_v);
+        return -1;
+    }
+    ussr_value_free(&handle_v);
+
+    if (argument_count == 2)
+    {
+        ussr_value_t count_v;
+
+        if (oop_eval(&arguments[1], &count_v) != 0)
+            return -1;
+
+        if (!oop_expect_integer(&count_v, &requested) || requested < 0)
+        {
+            fprintf(stderr, "USSR: read_file: bad byte count\n");
+            ussr_value_free(&count_v);
+            return -1;
+        }
+        ussr_value_free(&count_v);
+    }
+
+    fp = ussr_file_table[handle];
+
+    capacity = requested >= 0 ? (size_t)requested + 1 : 4096;
+    buffer = malloc(capacity);
+    if (buffer == NULL)
+        return -1;
+
+    length = 0;
+    for (;;)
+    {
+        size_t want;
+        size_t got;
+
+        if (requested >= 0)
+        {
+            if (length >= (size_t)requested)
+                break;
+            want = (size_t)requested - length;
+        }
+        else
+        {
+            if (length + 2048 + 1 > capacity)
+            {
+                char *grown;
+                capacity *= 2;
+                grown = realloc(buffer, capacity);
+                if (grown == NULL)
+                {
+                    free(buffer);
+                    return -1;
+                }
+                buffer = grown;
+            }
+            want = 2048;
+        }
+
+        got = fread(buffer + length, 1, want, fp);
+        length += got;
+
+        if (got < want)
+            break; /* EOF or error; both end the read */
+    }
+
+    buffer[length] = '\0';
+    *out_result = ussr_string(buffer);
+    free(buffer);
+    return 0;
+}
+
+/* ------------------------------------------------------------- */
+/* math.su primitives                                              */
+/*                                                                 */
+/* sin(r): x -> sine of x (radians)                                 */
+/* ln(r): x  -> natural logarithm, x > 0                            */
+/* M_PI / M_E arrive as preprocessor macros from math.su itself.    */
+/* ------------------------------------------------------------- */
+
+static int oop_do_math_unary(
+    const char *name,
+    double (*function)(double),
+    int positive_only,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t x_v;
+    double x;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: %s(r): x\n", name);
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &x_v) != 0)
+        return -1;
+
+    if (x_v.type != USSR_INTEGER && x_v.type != USSR_REAL)
+    {
+        fprintf(stderr, "USSR: %s expects a number\n", name);
+        ussr_value_free(&x_v);
+        return -1;
+    }
+
+    x = x_v.type == USSR_REAL
+        ? x_v.data.real
+        : (double)x_v.data.integer;
+
+    ussr_value_free(&x_v);
+
+    if (positive_only && x <= 0.0)
+    {
+        fprintf(stderr, "USSR: %s: input must be positive\n", name);
+        return -1;
+    }
+
+    *out_result = ussr_real(function(x));
+    return 0;
+}
+
+/* ------------------------------------------------------------- */
+/* bytes.su primitives (memset analogs)                            */
+/*                                                                 */
+/* set_bytes(v): vec value count -> first count items of vec set to */
+/*                                 value (0..255); returns vec      */
+/* clear_bytes(v): vec count     -> set_bytes with value 0          */
+/* ------------------------------------------------------------- */
+
+static int oop_do_set_bytes(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    int clear,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t vec_v;
+    ussr_value_t value_v;
+    ussr_value_t count_v;
+    ussr_vector_t *vector;
+    long fill = 0;
+    long count;
+    long i;
+
+    if (argument_count != (clear ? 2u : 3u))
+    {
+        fprintf(stderr,
+                clear
+                    ? "USSR: clear_bytes(v): vec count\n"
+                    : "USSR: set_bytes(v): vec value count\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &vec_v) != 0)
+        return -1;
+
+    if (!clear && oop_eval(&arguments[1], &value_v) != 0)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+
+    if (oop_eval(&arguments[clear ? 1 : 2], &count_v) != 0)
+    {
+        ussr_value_free(&vec_v);
+        if (!clear)
+            ussr_value_free(&value_v);
+        return -1;
+    }
+
+    if (!clear && !oop_expect_integer(&value_v, &fill))
+    {
+        fprintf(stderr, "USSR: set_bytes value must be an integer\n");
+        ussr_value_free(&vec_v);
+        ussr_value_free(&value_v);
+        ussr_value_free(&count_v);
+        return -1;
+    }
+
+    if (!oop_expect_integer(&count_v, &count) || count < 0)
+    {
+        fprintf(stderr, "USSR: set_bytes count must be >= 0\n");
+        ussr_value_free(&vec_v);
+        if (!clear)
+            ussr_value_free(&value_v);
+        ussr_value_free(&count_v);
+        return -1;
+    }
+
+    if (!oop_expect_vector(&vec_v, &vector))
+    {
+        fprintf(stderr, "USSR: set_bytes expects a vector\n");
+        ussr_value_free(&vec_v);
+        if (!clear)
+            ussr_value_free(&value_v);
+        ussr_value_free(&count_v);
+        return -1;
+    }
+
+    if ((size_t)count > ussr_vector_length(vector))
+        count = (long)ussr_vector_length(vector);
+
+    for (i = 0; i < count; ++i)
+    {
+        ussr_value_t byte_value = ussr_integer(fill);
+        if (!ussr_vector_set(vector, (size_t)i, byte_value))
+        {
+            fprintf(stderr, "USSR: set_bytes: incompatible element\n");
+            ussr_value_free(&vec_v);
+            if (!clear)
+                ussr_value_free(&value_v);
+            ussr_value_free(&count_v);
+            return -1;
+        }
+    }
+
+    if (!clear)
+        ussr_value_free(&value_v);
+    ussr_value_free(&count_v);
+
+    *out_result = vec_v; /* ownership moves to the result */
+    return 0;
+}
+
+/* ------------------------------------------------------------- */
 /* dispatch                                                         */
 /* ------------------------------------------------------------- */
 
@@ -1310,6 +1756,22 @@ int ussr_oop_dispatch(
         status = oop_do_readfile(arguments, argument_count, out_result);
     else if (strcmp(command, "writefile") == 0)
         status = oop_do_writefile(arguments, argument_count, out_result);
+    else if (strcmp(command, "open_file") == 0)
+        status = oop_do_open_file(arguments, argument_count, out_result);
+    else if (strcmp(command, "close_file") == 0)
+        status = oop_do_close_file(arguments, argument_count, out_result);
+    else if (strcmp(command, "write_file") == 0)
+        status = oop_do_write_file(arguments, argument_count, out_result);
+    else if (strcmp(command, "read_file") == 0)
+        status = oop_do_read_file(arguments, argument_count, out_result);
+    else if (strcmp(command, "sin") == 0)
+        status = oop_do_math_unary("sin", sin, 0, arguments, argument_count, out_result);
+    else if (strcmp(command, "ln") == 0)
+        status = oop_do_math_unary("ln", log, 1, arguments, argument_count, out_result);
+    else if (strcmp(command, "set_bytes") == 0)
+        status = oop_do_set_bytes(arguments, argument_count, 0, out_result);
+    else if (strcmp(command, "clear_bytes") == 0)
+        status = oop_do_set_bytes(arguments, argument_count, 1, out_result);
     else if (strcmp(command, "file_exists") == 0)
         status = oop_do_file_exists(arguments, argument_count, out_result);
     else if (strcmp(command, "terminal_escape") == 0)

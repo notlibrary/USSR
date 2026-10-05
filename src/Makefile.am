@@ -10,6 +10,9 @@ ussr_SOURCES = \
     pp.c \
     uno.c \
     ussr_oop_builtins.c \
+    scheduler.c \
+    eventq.c \
+    gc.c \
 	process_posix.c \
     prng64_xrp32.c \
 	autocomplete.c
@@ -21,6 +24,10 @@ EXTRA_DIST = \
     ussr_bytecode.h \
     uno.h \
     ussr_oop_builtins.h \
+    scheduler.h \
+    eventq.h \
+    gc.h \
+    vm.h \
     pp.h \
     bestline.h \
     uthash.h \

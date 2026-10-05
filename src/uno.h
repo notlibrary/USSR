@@ -69,6 +69,11 @@ struct ussr_struct_instance_t
     ussr_value_t *fields; /* parallel to ussr_struct_total_field_count(type), parent-first order */
     size_t field_count;
     size_t refcount;
+
+    /* Mark-sweep GC registry linkage (gc.c). Every live instance is
+     * chained into the GC heap list exactly once. */
+    unsigned char gc_mark;
+    struct ussr_struct_instance_t *gc_next;
 };
 
 /* Positional construction, args in declared (parent-first) order.
@@ -142,6 +147,10 @@ struct ussr_vector_t
     size_t count;
     size_t capacity;
     size_t refcount;
+
+    /* Mark-sweep GC registry linkage (gc.c). */
+    unsigned char gc_mark;
+    struct ussr_vector_t *gc_next;
 };
 
 ussr_vector_t *ussr_vector_create(const char *element_type /* may be NULL or "" for any */);
@@ -201,5 +210,39 @@ int ussr_uno_decode(const char *text, ussr_value_t *out);
 
 /* Release all registered struct types/methods. Call at interpreter shutdown. */
 void ussr_uno_cleanup(void);
+
+/*
+ * ---------------------------------------------------------------
+ * GC support (gc.c) — raw destroy and registry iteration
+ * ---------------------------------------------------------------
+ *
+ * The mark-sweep collector owns a registry of every live vector and
+ * struct instance. uno.c registers each object at creation and
+ * unregisters it when the refcount destroys it. During a sweep the
+ * collector destroys unreachable objects directly with the raw
+ * destroyers below, bypassing the refcount: the garbage set is by
+ * definition unreachable, so nothing outside it can observe the
+ * teardown. Children shared with the live set are impossible (they
+ * would have been marked), so raw destroy must NOT release children.
+ */
+
+/* Registry iteration: returns the head of each intrusive list. */
+ussr_vector_t *ussr_uno_gc_vectors(void);
+ussr_struct_instance_t *ussr_uno_gc_instances(void);
+
+/* Registry maintenance (called by uno.c create/destroy paths). */
+void ussr_uno_gc_register_vector(ussr_vector_t *vector);
+void ussr_uno_gc_unregister_vector(ussr_vector_t *vector);
+void ussr_uno_gc_register_instance(ussr_struct_instance_t *instance);
+void ussr_uno_gc_unregister_instance(ussr_struct_instance_t *instance);
+
+/*
+ * Raw destroy: frees the object's own storage (items/fields arrays
+ * included) WITHOUT releasing child references and WITHOUT touching
+ * the GC registry. Only the collector calls these, after it has
+ * already fixed up child refcounts for the garbage set.
+ */
+void ussr_uno_vector_destroy_raw(ussr_vector_t *vector);
+void ussr_uno_instance_destroy_raw(ussr_struct_instance_t *instance);
 
 #endif

@@ -37,6 +37,7 @@ extern int fileno(FILE *stream);
 
 #include "uthash.h"
 #include "uno.h"
+#include "gc.h"
 #include "ussr_oop_builtins.h"
 #include "process.h"
 
@@ -94,12 +95,8 @@ typedef enum
 
 #define USSR_MAX_LOOP_ITERATIONS 1000000UL
 
-/* Local variables are kept in their own linear store. */
-typedef struct
-{
-    char *name;
-    ussr_value_t value;
-} ussr_local_variable_t;
+/* Local variables are kept in their own linear store, one per scope. */
+typedef ussr_scope_variable_t ussr_local_variable_t;
 
 typedef struct ussr_hash_entry_t
 {
@@ -108,13 +105,55 @@ typedef struct ussr_hash_entry_t
     UT_hash_handle hh;
 } ussr_hash_entry_t;
 
-static ussr_local_variable_t *locals = NULL;
-static size_t local_count = 0;
-static size_t local_capacity = 0;
+/* Default global scope used at the top level and whenever the
+ * scheduler has not installed a process scope. */
+static ussr_scope_t ussr_default_scope;
+static ussr_scope_t *ussr_current_scope_ptr = NULL;
 
-/* Explicit !/? variables live in a separate uthash table. */
+/* Explicit !/? variables live in a separate uthash table.  The table
+ * is global on purpose: scheduled processes share it as an IPC
+ * channel, like shared memory between kernel threads. */
 static ussr_hash_entry_t *map = NULL;
 static ussr_definition_t *definitions = NULL;
+
+static ussr_scope_t *ussr_active_scope(void)
+{
+    return ussr_current_scope_ptr != NULL
+        ? ussr_current_scope_ptr
+        : &ussr_default_scope;
+}
+
+ussr_scope_t *ussr_scope_create(void)
+{
+    return calloc(1, sizeof(ussr_scope_t));
+}
+
+void ussr_scope_free(ussr_scope_t *scope)
+{
+    size_t i;
+
+    if (scope == NULL)
+        return;
+
+    for (i = 0; i < scope->count; ++i)
+    {
+        free(scope->vars[i].name);
+        ussr_value_free(&scope->vars[i].value);
+    }
+
+    free(scope->vars);
+    free(scope);
+}
+
+void ussr_scope_set_current(ussr_scope_t *scope)
+{
+    ussr_current_scope_ptr = scope;
+}
+
+ussr_scope_t *ussr_scope_current(void)
+{
+    return ussr_active_scope();
+}
 
 ussr_expression_t *
 ussr_make_binary_expression(
@@ -376,6 +415,8 @@ ussr_command_is_definition(const ussr_command_t *command)
         return 0;
 
     if (strcmp(command->name, "if") == 0 ||
+        strcmp(command->name, "elif") == 0 ||
+        strcmp(command->name, "else") == 0 ||
         strcmp(command->name, "while") == 0 ||
         strcmp(command->name, "break") == 0 ||
         strcmp(command->name, "continue") == 0 ||
@@ -562,9 +603,8 @@ static char *ussr_strdup(const char *src)
 
 void ussr_init(void)
 {
-    locals = NULL;
-    local_count = 0;
-    local_capacity = 0;
+    memset(&ussr_default_scope, 0, sizeof(ussr_default_scope));
+    ussr_current_scope_ptr = NULL;
     map = NULL;
 }
 
@@ -573,17 +613,17 @@ void ussr_cleanup(void)
     ussr_hash_entry_t *variable;
     ussr_hash_entry_t *tmp;
     size_t i;
+    ussr_scope_t *scope = &ussr_default_scope;
 
-    for (i = 0; i < local_count; ++i)
+    for (i = 0; i < scope->count; ++i)
     {
-        free(locals[i].name);
-        ussr_value_free(&locals[i].value);
+        free(scope->vars[i].name);
+        ussr_value_free(&scope->vars[i].value);
     }
 
-    free(locals);
-    locals = NULL;
-    local_count = 0;
-    local_capacity = 0;
+    free(scope->vars);
+    memset(&ussr_default_scope, 0, sizeof(ussr_default_scope));
+    ussr_current_scope_ptr = NULL;
 
     HASH_ITER(hh, map, variable, tmp)
     {
@@ -710,61 +750,76 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
     return copy;
 }
 
-int ussr_set_variable(
+int ussr_scope_set(
+    ussr_scope_t *scope,
     const char *name,
     const ussr_value_t *value
 )
 {
     size_t i;
 
-    if (name == NULL || value == NULL)
+    if (scope == NULL || name == NULL || value == NULL)
         return -1;
 
-    for (i = 0; i < local_count; ++i)
+    for (i = 0; i < scope->count; ++i)
     {
-        if (strcmp(locals[i].name, name) == 0)
+        if (strcmp(scope->vars[i].name, name) == 0)
         {
             ussr_value_t copy = ussr_value_copy(value);
-            ussr_value_free(&locals[i].value);
-            locals[i].value = copy;
+            ussr_value_free(&scope->vars[i].value);
+            scope->vars[i].value = copy;
             return 0;
         }
     }
 
-    if (local_count == local_capacity)
+    if (scope->count == scope->capacity)
     {
-        size_t capacity = local_capacity == 0 ? 16 : local_capacity * 2;
-        ussr_local_variable_t *new_locals;
+        size_t capacity = scope->capacity == 0 ? 16 : scope->capacity * 2;
+        ussr_scope_variable_t *new_vars;
 
-        new_locals = realloc(locals, capacity * sizeof(*new_locals));
-        if (new_locals == NULL)
+        new_vars = realloc(scope->vars, capacity * sizeof(*new_vars));
+        if (new_vars == NULL)
             return -1;
 
-        locals = new_locals;
-        local_capacity = capacity;
+        scope->vars = new_vars;
+        scope->capacity = capacity;
     }
 
-    locals[local_count].name = ussr_strdup(name);
-    if (locals[local_count].name == NULL)
+    scope->vars[scope->count].name = ussr_strdup(name);
+    if (scope->vars[scope->count].name == NULL)
         return -1;
 
-    locals[local_count].value = ussr_value_copy(value);
-    ++local_count;
+    scope->vars[scope->count].value = ussr_value_copy(value);
+    ++scope->count;
 
     return 0;
 }
 
+int ussr_set_variable(
+    const char *name,
+    const ussr_value_t *value
+)
+{
+    if (name == NULL || value == NULL)
+        return -1;
+
+    return ussr_scope_set(ussr_active_scope(), name, value);
+}
+
 const ussr_value_t *ussr_get_variable(const char *name)
 {
+    const ussr_scope_t *scope;
     size_t i;
 
     if (name == NULL)
         return NULL;
 
-    for (i = 0; i < local_count; ++i)
+    scope = ussr_active_scope();
+
+    for (i = 0; i < scope->count; ++i)
     {
-        if (strcmp(locals[i].name, name) == 0)
-            return &locals[i].value;
+        if (strcmp(scope->vars[i].name, name) == 0)
+            return &scope->vars[i].value;
     }
 
     return NULL;
@@ -772,26 +827,29 @@ const ussr_value_t *ussr_get_variable(const char *name)
 
 static int ussr_remove_variable(const char *name)
 {
+    ussr_scope_t *scope;
     size_t i;
 
     if (name == NULL)
         return -1;
 
-    for (i = 0; i < local_count; ++i)
-    {
-        if (strcmp(locals[i].name, name) == 0)
-        {
-            free(locals[i].name);
-            ussr_value_free(&locals[i].value);
+    scope = ussr_active_scope();
 
-            if (i + 1 < local_count)
+    for (i = 0; i < scope->count; ++i)
+    {
+        if (strcmp(scope->vars[i].name, name) == 0)
+        {
+            free(scope->vars[i].name);
+            ussr_value_free(&scope->vars[i].value);
+
+            if (i + 1 < scope->count)
                 memmove(
-                    &locals[i],
-                    &locals[i + 1],
-                    (local_count - i - 1) * sizeof(*locals)
+                    &scope->vars[i],
+                    &scope->vars[i + 1],
+                    (scope->count - i - 1) * sizeof(*scope->vars)
                 );
 
-            --local_count;
+            --scope->count;
             return 0;
         }
     }
@@ -881,6 +939,19 @@ int ussr_hash_set_value(const char *name, const ussr_value_t *value)
 const ussr_value_t *ussr_hash_get_value(const char *name)
 {
     return ussr_hash_get(name);
+}
+
+void ussr_runtime_mark_gc_roots(void)
+{
+    const ussr_scope_t *scope = &ussr_default_scope;
+    ussr_hash_entry_t *variable;
+    size_t i;
+
+    for (i = 0; i < scope->count; ++i)
+        ussr_gc_mark_value(&scope->vars[i].value);
+
+    for (variable = map; variable != NULL; variable = variable->hh.next)
+        ussr_gc_mark_value(&variable->value);
 }
 
 void ussr_print_value(const ussr_value_t *value)
@@ -1996,20 +2067,23 @@ static void free_external_resources(char **argv, size_t allocated_argv_count, us
     }
 }
 
+/*
+ * Shared helper: resolve the command path and build an argv vector
+ * from already-evaluated values. argv[0] is the resolved path.
+ * On success the caller frees with free_external_resources().
+ */
 static int
-ussr_execute_external(
+ussr_external_build_argv(
     const char *command,
-    const char *return_name,
-    ussr_argument_t *arguments,
-    size_t argument_count
+    const ussr_value_t *values,
+    size_t value_count,
+    char **out_path,
+    char ***out_argv
 )
 {
     char *path = NULL;
     char **argv = NULL;
-    ussr_value_t *values = NULL;
     size_t i;
-    long exit_code = 0;
-    ussr_value_t result;
 
     path = ussr_find_external_command(command);
 
@@ -2032,12 +2106,12 @@ ussr_execute_external(
 
 
         DWORD search_result = SearchPathA(
-            NULL,               
-            win_cmd_buffer,     
-            NULL,              
-            MAX_PATH,           
-            full_path_buffer,  
-            &file_part         
+            NULL,
+            win_cmd_buffer,
+            NULL,
+            MAX_PATH,
+            full_path_buffer,
+            &file_part
         );
 
         if (search_result > 0 && search_result < MAX_PATH)
@@ -2057,31 +2131,17 @@ ussr_execute_external(
         return -1;
     }
 
-    argv = calloc(argument_count + 2, sizeof(*argv));
+    argv = calloc(value_count + 2, sizeof(*argv));
     if (argv == NULL)
     {
         free(path);
         return -1;
     }
 
-    values = calloc(argument_count, sizeof(*values));
-    if (values == NULL)
-    {
-        free(argv);
-        free(path);
-        return -1;
-    }
-
     argv[0] = path;
 
-    for (i = 0; i < argument_count; ++i)
+    for (i = 0; i < value_count; ++i)
     {
-        if (ussr_argument_evaluate(&arguments[i], &values[i]) != 0)
-        {
-            free_external_resources(argv, i, values, i, path);
-            return -1;
-        }
-
         if (values[i].type != USSR_STRING)
         {
             /*
@@ -2122,12 +2182,82 @@ ussr_execute_external(
 
         if (argv[i + 1] == NULL)
         {
-            free_external_resources(argv, i, values, i + 1, path);
+            free_external_resources(argv, i, NULL, 0, path);
             return -1;
         }
     }
 
-    argv[argument_count + 1] = NULL;
+    argv[value_count + 1] = NULL;
+
+    *out_path = path;
+    *out_argv = argv;
+    return 0;
+}
+
+int
+ussr_external_spawn_values(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_child_t *child
+)
+{
+    char *path = NULL;
+    char **argv = NULL;
+    int status;
+
+    if (command == NULL || child == NULL)
+        return -1;
+
+    if (ussr_external_build_argv(
+            command, values, value_count, &path, &argv) != 0)
+        return -1;
+
+    status = ussr_process_spawn(
+        path,
+        argv,
+        child
+    );
+
+    free_external_resources(argv, value_count, NULL, 0, path);
+
+    return status;
+}
+
+static int
+ussr_execute_external(
+    const char *command,
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count
+)
+{
+    char *path = NULL;
+    char **argv = NULL;
+    ussr_value_t *values = NULL;
+    size_t i;
+    long exit_code = 0;
+    ussr_value_t result;
+
+    values = calloc(argument_count, sizeof(*values));
+    if (values == NULL && argument_count != 0)
+        return -1;
+
+    for (i = 0; i < argument_count; ++i)
+    {
+        if (ussr_argument_evaluate(&arguments[i], &values[i]) != 0)
+        {
+            free_external_resources(NULL, 0, values, i, NULL);
+            return -1;
+        }
+    }
+
+    if (ussr_external_build_argv(
+            command, values, argument_count, &path, &argv) != 0)
+    {
+        free_external_resources(NULL, 0, values, argument_count, NULL);
+        return -1;
+    }
 
     ussr_process_t proc;
     memset(&proc, 0, sizeof(ussr_process_t)); 
@@ -3270,6 +3400,31 @@ int ussr_execute_command(
 
     if (command == NULL)
         return -1;
+
+    /*
+     * Scheduler commands (async/await/process/load/sleep/yield/gc) are
+     * only meaningful at the bytecode-VM boundary, where the scheduler
+     * can suspend and resume the calling process. Inside the
+     * tree-walking interpreter (advanced @[] control blocks) there is
+     * no resumable VM state, so reject them with a clear message
+     * instead of falling through to external command lookup.
+     */
+    if (strcmp(command, "async") == 0 ||
+        strcmp(command, "await") == 0 ||
+        strcmp(command, "process") == 0 ||
+        strcmp(command, "load") == 0 ||
+        strcmp(command, "sleep") == 0 ||
+        strcmp(command, "yield") == 0 ||
+        strcmp(command, "gc") == 0)
+    {
+        fprintf(
+            stderr,
+            "USSR: %s is only supported in bytecode context "
+            "(not inside @[] blocks)\n",
+            command
+        );
+        return -1;
+    }
 
     if (strcmp(command, "@") == 0)
         return ussr_execute_advanced_control(

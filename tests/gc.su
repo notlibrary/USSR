@@ -1,0 +1,19 @@
+# gc(_) feature test: every loop iteration abandons a vector; the
+# mark-sweep collector must reclaim them without dropping live data.
+init(ret): arg_cnt arg_vec [
+    set(i): 0
+    while(_): {i < 2000} [
+        vec(v): ""
+        push(_): v i
+        push(_): v "payload"
+        add(i): i 1
+    ]
+    gc(_): 0
+    vec(keep): ""
+    push(_): keep 42
+    gc(_): 0
+    at(k): keep 0
+    print(_): k
+    print(_): "gc ok"
+    set(ret): 0
+]

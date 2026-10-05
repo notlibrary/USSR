@@ -2,6 +2,7 @@
 #define USSR_H
 
 #include <stddef.h>
+#include "process.h"
 typedef struct ussr_command_list_t ussr_command_list_t;
 
 typedef struct ussr_definition_t
@@ -58,6 +59,44 @@ typedef struct ussr_variable_t
     char *name;
     ussr_value_t value;
 } ussr_variable_t;
+
+/*
+ * Variable scope. Each scheduled process (scheduler.c) owns its own
+ * scope; the interpreter also keeps a default global scope for the
+ * top level / non-scheduled execution. The !/? hash namespace is NOT
+ * part of the scope: it is deliberately global and shared between
+ * processes as an IPC channel.
+ */
+typedef ussr_variable_t ussr_scope_variable_t;
+
+typedef struct ussr_scope_t
+{
+    ussr_scope_variable_t *vars;
+    size_t count;
+    size_t capacity;
+} ussr_scope_t;
+
+/* Scope lifecycle. The current scope pointer is cooperative-thread
+ * local in effect: the scheduler swaps it on every context switch. */
+ussr_scope_t *ussr_scope_create(void);
+void ussr_scope_free(ussr_scope_t *scope);
+
+/* Passing NULL restores the default global scope. */
+void ussr_scope_set_current(ussr_scope_t *scope);
+ussr_scope_t *ussr_scope_current(void);
+
+/* Set a variable inside a specific scope (no current-scope switch).
+ * Used by the scheduler when it clones parent scopes on spawn. */
+int ussr_scope_set(
+    ussr_scope_t *scope,
+    const char *name,
+    const ussr_value_t *value
+);
+
+/* Mark GC roots owned by the runtime itself: the default scope and
+ * the global hash namespace. Process scopes are marked by the
+ * scheduler. */
+void ussr_runtime_mark_gc_roots(void);
 
 typedef enum
 {
@@ -232,6 +271,19 @@ int ussr_external_execute_values(
     const ussr_value_t *values,
     size_t value_count,
     ussr_value_t *result
+);
+
+/*
+ * Non-blocking variant: resolves the command and launches it with
+ * inherited std handles, returning immediately with the child handle
+ * registered nowhere yet — the caller (VM/scheduler) parks the
+ * current process on it via ussr_sched_block_on_child().
+ */
+int ussr_external_spawn_values(
+    const char *command,
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_child_t *child
 );
 
 void ussr_print_value(const ussr_value_t *value);

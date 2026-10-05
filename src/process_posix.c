@@ -212,4 +212,110 @@ int ussr_process_run(
     return 0;
 }
 
+int ussr_process_spawn(
+    const char *program,
+    char *const *argv,
+    ussr_child_t *child
+)
+{
+    pid_t pid;
+
+    if (program == NULL || argv == NULL || child == NULL)
+        return -1;
+
+    child->pid = -1;
+
+    pid = fork();
+
+    if (pid < 0)
+        return -1;
+
+    if (pid == 0)
+    {
+        /* Child: inherit stdin/stdout/stderr, then exec. */
+        execv(program, argv);
+        _exit(126);
+    }
+
+    child->pid = (int)pid;
+    return 0;
+}
+
+int ussr_child_poll(ussr_child_t *child, int *exit_code)
+{
+    int status;
+    pid_t result;
+
+    if (child == NULL || child->pid <= 0)
+        return -1;
+
+    result = waitpid((pid_t)child->pid, &status, WNOHANG);
+
+    if (result == 0)
+        return 0;
+
+    if (result < 0)
+    {
+        if (errno == EINTR)
+            return 0;
+        child->pid = -1;
+        return -1;
+    }
+
+    child->pid = -1;
+
+    if (exit_code != NULL)
+    {
+        if (WIFEXITED(status))
+            *exit_code = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status))
+            *exit_code = 128 + WTERMSIG(status);
+        else
+            *exit_code = -1;
+    }
+
+    return 1;
+}
+
+int ussr_child_wait(ussr_child_t *child, int *exit_code)
+{
+    int status;
+
+    if (child == NULL || child->pid <= 0)
+        return -1;
+
+    for (;;)
+    {
+        if (waitpid((pid_t)child->pid, &status, 0) < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            child->pid = -1;
+            return -1;
+        }
+        break;
+    }
+
+    child->pid = -1;
+
+    if (exit_code != NULL)
+    {
+        if (WIFEXITED(status))
+            *exit_code = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status))
+            *exit_code = 128 + WTERMSIG(status);
+        else
+            *exit_code = -1;
+    }
+
+    return 0;
+}
+
+void ussr_child_close(ussr_child_t *child)
+{
+    if (child == NULL)
+        return;
+    child->pid = -1;
+}
+
 #endif /* !_WIN32 */

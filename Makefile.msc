@@ -32,6 +32,9 @@ OBJS = \
     $(SRC)\uno.obj \
     $(SRC)\ussr_oop_builtins.obj \
     $(SRC)\ussr_bytecode.obj \
+    $(SRC)\scheduler.obj \
+    $(SRC)\eventq.obj \
+    $(SRC)\gc.obj \
     $(SRC)\parser.tab.obj \
     $(SRC)\lexer.obj \
     $(SRC)\prng64_xrp32.obj \
@@ -82,6 +85,15 @@ $(SRC)\ussr_oop_builtins.obj: $(SRC)\ussr_oop_builtins.c $(SRC)\ussr_oop_builtin
 
 $(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_bytecode.obj $(SRC)\ussr_bytecode.c
+
+$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
+
+$(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\eventq.obj $(SRC)\eventq.c
+
+$(SRC)\gc.obj: $(SRC)\gc.c $(SRC)\gc.h $(SRC)\uno.h $(SRC)\ussr.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\gc.obj $(SRC)\gc.c
 
 $(SRC)\parser.tab.obj: $(SRC)\parser.tab.c $(SRC)\parser.tab.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\parser.tab.obj $(SRC)\parser.tab.c

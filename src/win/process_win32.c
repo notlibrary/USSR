@@ -435,4 +435,131 @@ int ussr_process_run(
     return 0;
 }
 
+int ussr_process_spawn(
+    const char *program,
+    char *const *argv,
+    ussr_child_t *child
+)
+{
+    STARTUPINFOA startup;
+    PROCESS_INFORMATION info;
+    SECURITY_ATTRIBUTES security;
+    char *command_line;
+    int result;
+
+    if (program == NULL || argv == NULL || child == NULL)
+        return -1;
+
+    child->handle = NULL;
+
+    command_line = build_command_line(argv);
+    if (command_line == NULL)
+        return -1;
+
+    memset(&startup, 0, sizeof(startup));
+    memset(&info, 0, sizeof(info));
+    memset(&security, 0, sizeof(security));
+
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+    result = CreateProcessA(
+        program,
+        command_line,
+        &security,
+        NULL,
+        TRUE,
+        CREATE_NEW_PROCESS_GROUP,
+        NULL,
+        NULL,
+        &startup,
+        &info
+    );
+
+    free(command_line);
+
+    if (!result)
+        return -1;
+
+    CloseHandle(info.hThread);
+    child->handle = (void *)info.hProcess;
+    return 0;
+}
+
+int ussr_child_poll(ussr_child_t *child, int *exit_code)
+{
+    DWORD wait_result;
+    DWORD process_exit;
+
+    if (child == NULL || child->handle == NULL)
+        return -1;
+
+    wait_result = WaitForSingleObject((HANDLE)child->handle, 0);
+
+    if (wait_result == WAIT_TIMEOUT)
+        return 0;
+
+    if (wait_result != WAIT_OBJECT_0)
+    {
+        CloseHandle((HANDLE)child->handle);
+        child->handle = NULL;
+        return -1;
+    }
+
+    if (!GetExitCodeProcess((HANDLE)child->handle, &process_exit))
+    {
+        CloseHandle((HANDLE)child->handle);
+        child->handle = NULL;
+        return -1;
+    }
+
+    CloseHandle((HANDLE)child->handle);
+    child->handle = NULL;
+
+    if (exit_code != NULL)
+        *exit_code = (int)process_exit;
+
+    return 1;
+}
+
+int ussr_child_wait(ussr_child_t *child, int *exit_code)
+{
+    DWORD process_exit;
+
+    if (child == NULL || child->handle == NULL)
+        return -1;
+
+    WaitForSingleObject((HANDLE)child->handle, INFINITE);
+
+    if (!GetExitCodeProcess((HANDLE)child->handle, &process_exit))
+    {
+        CloseHandle((HANDLE)child->handle);
+        child->handle = NULL;
+        return -1;
+    }
+
+    CloseHandle((HANDLE)child->handle);
+    child->handle = NULL;
+
+    if (exit_code != NULL)
+        *exit_code = (int)process_exit;
+
+    return 0;
+}
+
+void ussr_child_close(ussr_child_t *child)
+{
+    if (child == NULL)
+        return;
+    if (child->handle != NULL)
+        CloseHandle((HANDLE)child->handle);
+    child->handle = NULL;
+}
+
 #endif /* _WIN32 */

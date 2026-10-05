@@ -128,6 +128,114 @@ static void uno_release_value(ussr_value_t *v)
 }
 
 /* ------------------------------------------------------------- */
+/* GC registry (mark-sweep collector support, gc.c)                */
+/* ------------------------------------------------------------- */
+
+static ussr_vector_t *g_gc_vectors = NULL;
+static ussr_struct_instance_t *g_gc_instances = NULL;
+
+ussr_vector_t *ussr_uno_gc_vectors(void)
+{
+    return g_gc_vectors;
+}
+
+ussr_struct_instance_t *ussr_uno_gc_instances(void)
+{
+    return g_gc_instances;
+}
+
+void ussr_uno_gc_register_vector(ussr_vector_t *vector)
+{
+    if (vector == NULL)
+        return;
+    vector->gc_mark = 0;
+    vector->gc_next = g_gc_vectors;
+    g_gc_vectors = vector;
+}
+
+void ussr_uno_gc_unregister_vector(ussr_vector_t *vector)
+{
+    ussr_vector_t **link;
+
+    if (vector == NULL)
+        return;
+
+    link = &g_gc_vectors;
+    while (*link != NULL)
+    {
+        if (*link == vector)
+        {
+            *link = vector->gc_next;
+            vector->gc_next = NULL;
+            return;
+        }
+        link = &(*link)->gc_next;
+    }
+}
+
+void ussr_uno_gc_register_instance(ussr_struct_instance_t *instance)
+{
+    if (instance == NULL)
+        return;
+    instance->gc_mark = 0;
+    instance->gc_next = g_gc_instances;
+    g_gc_instances = instance;
+}
+
+void ussr_uno_gc_unregister_instance(ussr_struct_instance_t *instance)
+{
+    ussr_struct_instance_t **link;
+
+    if (instance == NULL)
+        return;
+
+    link = &g_gc_instances;
+    while (*link != NULL)
+    {
+        if (*link == instance)
+        {
+            *link = instance->gc_next;
+            instance->gc_next = NULL;
+            return;
+        }
+        link = &(*link)->gc_next;
+    }
+}
+
+void ussr_uno_vector_destroy_raw(ussr_vector_t *vector)
+{
+    size_t i;
+
+    if (vector == NULL)
+        return;
+
+    /* Scalar string items are owned outright; reference-typed
+     * children are left alone (the collector fixed up refcounts). */
+    for (i = 0; i < vector->count; ++i)
+        if (vector->items[i].type == USSR_STRING)
+            free(vector->items[i].data.string);
+
+    free(vector->items);
+    free(vector->element_type);
+    free(vector);
+}
+
+void ussr_uno_instance_destroy_raw(ussr_struct_instance_t *instance)
+{
+    size_t i;
+
+    if (instance == NULL)
+        return;
+
+    for (i = 0; i < instance->field_count; ++i)
+        if (instance->fields[i].type == USSR_STRING)
+            free(instance->fields[i].data.string);
+
+    free(instance->fields);
+    free(instance);
+}
+
+/* ------------------------------------------------------------- */
 /* struct type registry                                           */
 /* ------------------------------------------------------------- */
 
@@ -360,6 +468,7 @@ static ussr_struct_instance_t *uno_alloc_instance(
         }
     }
 
+    ussr_uno_gc_register_instance(instance);
     return instance;
 }
 
@@ -520,6 +629,8 @@ void ussr_struct_instance_release(ussr_struct_instance_t *instance)
     if (--instance->refcount > 0)
         return;
 
+    ussr_uno_gc_unregister_instance(instance);
+
     for (i = 0; i < instance->field_count; ++i)
         uno_release_value(&instance->fields[i]);
 
@@ -670,6 +781,7 @@ ussr_vector_t *ussr_vector_create(const char *element_type)
     }
 
     v->refcount = 1;
+    ussr_uno_gc_register_vector(v);
     return v;
 }
 
@@ -688,6 +800,8 @@ void ussr_vector_release(ussr_vector_t *vector)
 
     if (--vector->refcount > 0)
         return;
+
+    ussr_uno_gc_unregister_vector(vector);
 
     for (i = 0; i < vector->count; ++i)
         uno_release_value(&vector->items[i]);

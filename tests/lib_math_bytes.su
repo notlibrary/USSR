@@ -1,0 +1,23 @@
+# math.su / bytes.su feature test.
+# sin/ln are native primitives; M_PI/M_E arrive as macros;
+# set_bytes/clear_bytes are the memset analogs.
+$include "math.su"
+$include "bytes.su"
+
+init(ret): arg_cnt arg_vec [
+    sin(s): M_PI
+    print(_): s
+    ln(l): M_E
+    print(_): l
+    vec(v): ""
+    push(_): v 1
+    push(_): v 2
+    push(_): v 3
+    set_bytes(_): v 9 2
+    at(a0): v 0
+    print(_): a0
+    clear_bytes(_): v 2
+    at(a1): v 0
+    print(_): a1
+    set(ret): 0
+]

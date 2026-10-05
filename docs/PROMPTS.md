@@ -362,3 +362,11 @@ Do it by list one-by-one first in the C version then in bootstrap
 It must be fresh implemented code no dependencies from pthreads and libevent libev
 Aware of how newly implemented scheduler interacts with existing fork-exec model
 async/await must be commands not distinct grammar entity
+We forgot interface for scheduler `process(_): proc_name` command marks
+definition as separate scheduled by scheduler entity
+`load(_): file_name proc_name` command actually loads process
+so the hierarchy of init entry points are:
+1. outer commands loaded from repl mode
+2. global init without process mark
+3. local init with process mark invoked by load command from upper hierarchy entry points
+

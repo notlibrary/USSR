@@ -44,37 +44,14 @@ extern int ussr_argument_evaluate(
 #include "ussr_bytecode.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
+#include "vm.h"
+#include "scheduler.h"
+#include "eventq.h"
+#include "gc.h"
 
-/* VM runtime state lives here. Bytecode generation lives in ussr_bytecode.c. */
-
-#define USSR_VM_MAX_STEPS 2000000000UL
-#define USSR_VM_MAX_CALLS 1024U
-#define USSR_VM_RETURN_REG USSR_BC_RETURN_REG
-#define USSR_VM_REGISTER_COUNT USSR_BC_MAX_REGS
-
-typedef struct
-{
-    ussr_value_t registers[USSR_VM_REGISTER_COUNT];
-    uint32_t ip;
-    int running;
-    int exit_code;
-    unsigned long steps;
-    int chain_active;
-    char *chain_buffer;
-    size_t chain_length;
-    int entry_function;
-} ussr_vm_t;
-
-typedef struct
-{
-    uint32_t return_ip;
-    uint8_t return_register;
-    uint32_t function_index;
-    ussr_value_t saved_registers[USSR_VM_REGISTER_COUNT];
-    ussr_value_t *saved_variables;
-    unsigned char *saved_variable_existed;
-    size_t saved_variable_count;
-} ussr_vm_frame_t;
+/* VM runtime state lives here. Bytecode generation lives in ussr_bytecode.c.
+ * The ussr_vm_t/ussr_vm_frame_t types and the vm_execute() contract moved
+ * to vm.h so the scheduler (scheduler.c) can own and switch VM contexts. */
 
 static int vm_truthy(const ussr_value_t *value)
 {
@@ -198,22 +175,35 @@ static int vm_binary(
     return -1;
 }
 
-static void vm_init(ussr_vm_t *vm)
+static void vm_frame_free(ussr_vm_frame_t *frame);
+
+void vm_init(ussr_vm_t *vm)
 {
     size_t i;
     memset(vm, 0, sizeof(*vm));
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         vm->registers[i] = ussr_null();
 
+    vm->resume_value = ussr_null();
+
     /* No script entry function unless init(...) is found. */
     vm->entry_function = -1;
 }
 
-static void vm_cleanup(ussr_vm_t *vm)
+void vm_cleanup(ussr_vm_t *vm)
 {
     size_t i;
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         ussr_value_free(&vm->registers[i]);
+    while (vm->frame_count > 0)
+    {
+        vm_frame_free(&vm->frames[vm->frame_count - 1]);
+        --vm->frame_count;
+    }
+    free(vm->frames);
+    vm->frames = NULL;
+    vm->frame_capacity = 0;
+    ussr_value_free(&vm->resume_value);
     free(vm->chain_buffer);
     vm->chain_buffer = NULL;
     vm->chain_length = 0;
@@ -236,9 +226,6 @@ static void vm_frame_free(ussr_vm_frame_t *frame)
 
 static int vm_push_frame(
     ussr_vm_t *vm,
-    ussr_vm_frame_t **frames,
-    size_t *count,
-    size_t *capacity,
     const ussr_bc_function_t *function,
     const ussr_bc_instruction_t *ins)
 {
@@ -246,15 +233,15 @@ static int vm_push_frame(
     size_t i;
     const ussr_value_t *v;
 
-    if (*count >= USSR_VM_MAX_CALLS) return -1;
-    if (*count == *capacity)
+    if (vm->frame_count >= USSR_VM_MAX_CALLS) return -1;
+    if (vm->frame_count == vm->frame_capacity)
     {
-        size_t n = *capacity == 0 ? 16 : *capacity * 2;
-        ussr_vm_frame_t *q = realloc(*frames, n * sizeof(*q));
+        size_t n = vm->frame_capacity == 0 ? 16 : vm->frame_capacity * 2;
+        ussr_vm_frame_t *q = realloc(vm->frames, n * sizeof(*q));
         if (q == NULL) return -1;
-        *frames = q; *capacity = n;
+        vm->frames = q; vm->frame_capacity = n;
     }
-    frame = &(*frames)[*count];
+    frame = &vm->frames[vm->frame_count];
     memset(frame, 0, sizeof(*frame));
     frame->return_ip = vm->ip;
     frame->return_register = ins->c;
@@ -274,16 +261,13 @@ static int vm_push_frame(
     }
     v = ussr_get_variable(function->return_name);
     if (v != NULL) { frame->saved_variable_existed[function->parameter_count] = 1; frame->saved_variables[function->parameter_count] = ussr_value_copy(v); }
-    ++*count;
+    ++vm->frame_count;
     return 0;
 }
 
 static int vm_call(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program,
-    ussr_vm_frame_t **frames,
-    size_t *frame_count,
-    size_t *frame_capacity,
     const ussr_bc_instruction_t *ins)
 {
     const ussr_bc_function_t *f;
@@ -293,7 +277,7 @@ static int vm_call(
     if ((unsigned)ins->a + (unsigned)ins->b > USSR_VM_RETURN_REG)
         return -1;
     f = &program->functions[ins->immediate];
-    if (vm_push_frame(vm, frames, frame_count, frame_capacity, f, ins) != 0)
+    if (vm_push_frame(vm, f, ins) != 0)
         return -1;
     for (i = 0; i < f->parameter_count; ++i)
     {
@@ -308,17 +292,15 @@ static int vm_call(
 
 static int vm_return(
     ussr_vm_t *vm,
-    const ussr_bc_program_t *program,
-    ussr_vm_frame_t *frames,
-    size_t *frame_count)
+    const ussr_bc_program_t *program)
 {
     ussr_vm_frame_t *frame;
     const ussr_bc_function_t *f;
     ussr_value_t result;
     size_t i;
     const ussr_value_t *v;
-    if (*frame_count == 0) return -1;
-    frame = &frames[*frame_count - 1];
+    if (vm->frame_count == 0) return -1;
+    frame = &vm->frames[vm->frame_count - 1];
     if (frame->function_index >= program->function_count) return -1;
     f = &program->functions[frame->function_index];
     v = ussr_get_variable(f->return_name);
@@ -335,8 +317,42 @@ static int vm_return(
     ussr_value_free(&vm->registers[frame->return_register]);
     vm->registers[frame->return_register] = result;
     vm_frame_free(frame);
-    --*frame_count;
+    --vm->frame_count;
     return 0;
+}
+
+int vm_spawn_call(
+    ussr_vm_t *vm,
+    const ussr_bc_program_t *program,
+    size_t function_index,
+    const ussr_value_t *args,
+    size_t arg_count)
+{
+    ussr_bc_instruction_t call;
+    size_t i;
+
+    if (vm == NULL || program == NULL ||
+        function_index >= program->function_count ||
+        program->functions[function_index].parameter_count != arg_count ||
+        program->code_count == 0)
+        return -1;
+
+    for (i = 0; i < arg_count; ++i)
+    {
+        ussr_value_free(&vm->registers[i]);
+        vm->registers[i] = ussr_value_copy(&args[i]);
+    }
+
+    memset(&call, 0, sizeof(call));
+    call.opcode = USSR_BC_CALL;
+    call.a = 0;
+    call.b = (uint8_t)arg_count;
+    call.c = USSR_VM_RETURN_REG;
+    call.immediate = (uint32_t)function_index;
+
+    /* Return from the function straight into the program HALT. */
+    vm->ip = (uint32_t)(program->code_count - 1);
+    return vm_call(vm, program, &call);
 }
 
 static int vm_values_from_registers(
@@ -859,12 +875,247 @@ static int vm_template_execute(
     return 0;
 }
 
-static int vm_execute(
-    ussr_vm_t *vm,
-    const ussr_bc_program_t *program)
+/*
+ * load(p): "file.su" ["entry"]
+ *
+ * Loads a USSR source file as a new scheduled process — the third
+ * level of the init hierarchy (below REPL chunks and the script's
+ * global init). The file is preprocessed, parsed, and compiled into a
+ * program owned by the new process; its top-level code does NOT run
+ * (same semantics as a script with init). The entry point is:
+ *
+ *   1. the explicit second argument, when given;
+ *   2. otherwise the first top-level process(_): name mark found in
+ *      the loaded file;
+ *   3. otherwise a definition called init, if one exists.
+ *
+ * The entry definition takes either no parameters or the usual
+ * (arg_cnt, arg_vec) pair, which then receives 0 and an empty vector.
+ * p receives the new process id.
+ */
+static int vm_do_load(
+    const ussr_value_t *values,
+    size_t value_count,
+    const ussr_command_t *source_command,
+    uint8_t ins_a,
+    ussr_value_t *out)
 {
-    ussr_vm_frame_t *frames = NULL;
-    size_t frame_count = 0, frame_capacity = 0;
+    ussr_preprocessor_t pp;
+    YY_BUFFER_STATE buffer;
+    ussr_command_list_t *old_program;
+    ussr_bc_program_t bc;
+    ussr_sched_program_t *program;
+    const char *filename;
+    const char *entry = NULL;
+    const char *first_mark = NULL;
+    ussr_value_t args[2];
+    size_t arg_count = 0;
+    long pid;
+    size_t fi;
+    int function_index = -1;
+
+    (void)ins_a;
+
+    if (value_count < 1 || values[0].type != USSR_STRING)
+    {
+        fprintf(stderr, "USSR: load(p): \"file.su\" [\"entry\"]\n");
+        return -1;
+    }
+
+    filename = values[0].data.string;
+
+    /* Explicit entry name: string value or bare name in source. */
+    if (value_count >= 2)
+    {
+        if (values[1].type == USSR_STRING)
+        {
+            entry = values[1].data.string;
+        }
+        else if (source_command != NULL &&
+                 source_command->argument_count >= 2)
+        {
+            const ussr_argument_t *argument =
+                &source_command->arguments[1];
+            if (argument->type == USSR_ARGUMENT_EXPRESSION &&
+                argument->data.expression != NULL &&
+                argument->data.expression->type == USSR_EXPR_VARIABLE)
+            {
+                entry = argument->data.expression->data.variable;
+            }
+        }
+
+        if (entry == NULL)
+        {
+            fprintf(stderr,
+                    "USSR: load entry must be a definition name\n");
+            return -1;
+        }
+    }
+
+    if (ussr_pp_init(&pp) != 0)
+        return -1;
+
+    if (ussr_pp_process_file(&pp, filename) != 0)
+    {
+        fprintf(stderr, "USSR: load: cannot read '%s'\n", filename);
+        ussr_pp_cleanup(&pp);
+        return -1;
+    }
+
+    buffer = yy_scan_string(ussr_pp_output(&pp));
+    ussr_pp_cleanup(&pp);
+
+    if (buffer == NULL)
+        return -1;
+
+    /* Parse with the parser's global program slot saved/restored,
+     * exactly like eval does. */
+    old_program = ussr_parsed_program;
+    ussr_parsed_program = NULL;
+
+    if (yyparse() != 0 || ussr_parsed_program == NULL)
+    {
+        yy_delete_buffer(buffer);
+        ussr_parsed_program = old_program;
+        fprintf(stderr, "USSR: load: syntax error in '%s'\n", filename);
+        return -1;
+    }
+
+    yy_delete_buffer(buffer);
+
+    /* Scan the loaded file's top level for process(_): name marks. */
+    {
+        const ussr_command_t *command;
+
+        for (command = ussr_parsed_program->head;
+             command != NULL;
+             command = command->next)
+        {
+            const char *mark = NULL;
+
+            if (command->name == NULL ||
+                strcmp(command->name, "process") != 0 ||
+                command->argument_count < 1)
+                continue;
+
+            if (command->arguments[0].type == USSR_ARGUMENT_VALUE &&
+                command->arguments[0].data.value.type == USSR_STRING)
+            {
+                mark = command->arguments[0].data.value.data.string;
+            }
+            else if (command->arguments[0].type ==
+                         USSR_ARGUMENT_EXPRESSION &&
+                     command->arguments[0].data.expression != NULL &&
+                     command->arguments[0].data.expression->type ==
+                         USSR_EXPR_VARIABLE)
+            {
+                mark = command->arguments[0]
+                    .data.expression->data.variable;
+            }
+
+            if (mark != NULL)
+            {
+                if (first_mark == NULL)
+                    first_mark = mark;
+                ussr_sched_mark_process(mark);
+            }
+        }
+    }
+
+    if (ussr_bc_compile(ussr_parsed_program, &bc) != 0)
+    {
+        fprintf(stderr, "USSR: load: compilation failed for '%s'\n",
+                filename);
+        ussr_command_list_free(ussr_parsed_program);
+        ussr_parsed_program = old_program;
+        return -1;
+    }
+
+    /* The wrapper adopts the AST: OOP/scan sites point into it. */
+    program = ussr_sched_program_wrap(&bc, ussr_parsed_program);
+    ussr_parsed_program = old_program;
+
+    if (program == NULL)
+    {
+        ussr_bc_program_free(&bc);
+        return -1;
+    }
+
+    /* Entry-point hierarchy: explicit > first process mark > init. */
+    if (entry == NULL)
+        entry = first_mark;
+    if (entry == NULL)
+        entry = "init";
+
+    for (fi = 0; fi < bc.function_count; ++fi)
+    {
+        if (strcmp(bc.functions[fi].name, entry) == 0)
+        {
+            function_index = (int)fi;
+            break;
+        }
+    }
+
+    if (function_index < 0)
+    {
+        fprintf(stderr,
+                "USSR: load: '%s' has no process entry '%s'\n",
+                filename, entry);
+        ussr_sched_program_release(program);
+        return -1;
+    }
+
+    /* init-style ABI: (arg_cnt, arg_vec) gets 0 and an empty vector. */
+    args[0] = ussr_null();
+    args[1] = ussr_null();
+
+    if (bc.functions[function_index].parameter_count == 2)
+    {
+        ussr_vector_t *empty = ussr_vector_create("string");
+        if (empty == NULL)
+        {
+            ussr_sched_program_release(program);
+            return -1;
+        }
+        args[0] = ussr_integer(0);
+        args[1] = ussr_vector_value(empty);
+        arg_count = 2;
+    }
+    else if (bc.functions[function_index].parameter_count != 0)
+    {
+        fprintf(stderr,
+                "USSR: load entry '%s' must take 0 or 2 parameters\n",
+                entry);
+        ussr_sched_program_release(program);
+        return -1;
+    }
+
+    pid = ussr_sched_spawn_func(
+        ussr_sched_current(),
+        program,
+        (size_t)function_index,
+        args,
+        arg_count,
+        entry,
+        0 /* exec semantics: fresh empty scope */
+    );
+
+    ussr_value_free(&args[0]);
+    ussr_value_free(&args[1]);
+    ussr_sched_program_release(program);
+
+    if (pid < 0)
+        return -1;
+
+    *out = ussr_integer(pid);
+    return 1;
+}
+
+int vm_execute(
+    ussr_vm_t *vm,
+    const ussr_bc_program_t *program,
+    unsigned long quantum)
+{
     int result = 0;
 
     if (vm->entry_function >= 0)
@@ -888,12 +1139,14 @@ static int vm_execute(
 
         /* Return from init directly to the program HALT instruction. */
         vm->ip = (uint32_t)(program->code_count - 1);
-        if (vm_call(vm, program, &frames, &frame_count,
-                    &frame_capacity, &entry_call) != 0)
+        if (vm_call(vm, program, &entry_call) != 0)
         {
             result = -1;
             goto done;
         }
+
+        /* Entered: do not call init again on the next time slice. */
+        vm->entry_function = -1;
     }
 
     while (vm->running)
@@ -904,6 +1157,35 @@ static int vm_execute(
         const char *name;
         ussr_value_t *args = NULL;
         size_t i;
+
+        /*
+         * Cooperative preemption point: the scheduler's quantum
+         * elapsed or a yield(_) command asked for a reschedule.
+         */
+        if (quantum != 0)
+        {
+            if (quantum-- == 0)
+                return USSR_VM_STATUS_SUSPENDED;
+        }
+
+        if (vm->yield_request)
+        {
+            vm->yield_request = 0;
+            return USSR_VM_STATUS_SUSPENDED;
+        }
+
+        /*
+         * Blocked-command resume: the scheduler woke this process and
+         * delivered the awaited/slept/child result into resume_value;
+         * it belongs in the register the blocked command targeted.
+         */
+        if (vm->resume_pending)
+        {
+            vm->resume_pending = 0;
+            ussr_value_free(&vm->registers[vm->resume_register]);
+            vm->registers[vm->resume_register] = vm->resume_value;
+            vm->resume_value = ussr_null();
+        }
 
         if (vm->ip >= program->code_count) { result = -1; goto done; }
         if (++vm->steps > USSR_VM_MAX_STEPS) { fprintf(stderr, "USSR VM: execution step limit exceeded\n"); result = -1; goto done; }
@@ -1104,13 +1386,31 @@ static int vm_execute(
                 if (ins.a >= USSR_VM_RETURN_REG || (unsigned)ins.c > (unsigned)ins.a) { result=-1; goto done; }
                 { size_t total=0; char *str,*cur; for(i=0;i<ins.c;++i){ if(vm->registers[i].type!=USSR_STRING){result=-1;goto done;} total+=strlen(vm->registers[i].data.string); } str=malloc(total+1); if(!str){result=-1;goto done;} cur=str; for(i=0;i<ins.c;++i){size_t n=strlen(vm->registers[i].data.string);memcpy(cur,vm->registers[i].data.string,n);cur+=n;}*cur='\0';value=ussr_string(str);free(str);ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
             case USSR_BC_CALL:
-                if (vm_call(vm,program,&frames,&frame_count,&frame_capacity,&ins)!=0) {result=-1;goto done;} break;
+                if (vm_call(vm,program,&ins)!=0) {result=-1;goto done;} break;
             case USSR_BC_RET:
-                if (vm_return(vm,program,frames,&frame_count)!=0) {result=-1;goto done;} break;
+                if (vm_return(vm,program)!=0) {result=-1;goto done;} break;
             case USSR_BC_RETURN:
-                if (frame_count==0) {result=-1;goto done;} if(vm_return(vm,program,frames,&frame_count)!=0){result=-1;goto done;} break;
+                if (vm->frame_count==0) {result=-1;goto done;} if(vm_return(vm,program)!=0){result=-1;goto done;} break;
             case USSR_BC_EXTERNAL:
                 if (ins.immediate>=program->string_count || ins.b>USSR_VM_RETURN_REG || vm_values_from_registers(vm,0,ins.b,&args)!=0) {result=-1;goto done;}
+                if (ussr_sched_current()!=NULL)
+                {
+                    /*
+                     * Fork-exec integration: under the scheduler the
+                     * child is spawned WITHOUT waiting; the process
+                     * parks on the event queue and other USSR
+                     * processes keep running. The child's exit code
+                     * lands in register a on wakeup.
+                     */
+                    ussr_child_t child;
+                    memset(&child,0,sizeof(child));
+                    if (ussr_external_spawn_values(program->strings[ins.immediate],args,ins.b,&child)!=0)
+                    { vm_free_values(args,ins.b);args=NULL; result=-1; goto done; }
+                    vm_free_values(args,ins.b);args=NULL;
+                    if (ussr_sched_block_on_child(child,ins.a)!=0)
+                    { ussr_child_close(&child); result=-1; goto done; }
+                    return USSR_VM_STATUS_SUSPENDED;
+                }
                 value=ussr_null(); result=ussr_external_execute_values(program->strings[ins.immediate],args,ins.b,&value); vm_free_values(args,ins.b);args=NULL; if(result!=0)goto done; ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; break;
             case USSR_BC_OOP:
             {
@@ -1167,6 +1467,85 @@ static int vm_execute(
                 }
 
                 value = ussr_null();
+
+                /*
+                 * Scheduler commands (async/await/sleep/yield/gc/
+                 * process) and the process loader. They sit on the VM
+                 * OOP boundary because they may SUSPEND this process:
+                 * a blocked command returns USSR_VM_STATUS_SUSPENDED
+                 * here and the scheduler resumes the instruction once
+                 * the wait completes.
+                 */
+                {
+                    ussr_value_t *sched_values = NULL;
+                    int sched_status = 0;
+                    int is_load = strcmp(program->strings[ins.immediate], "load") == 0;
+                    int is_sched_name = is_load ||
+                        strcmp(program->strings[ins.immediate], "async") == 0 ||
+                        strcmp(program->strings[ins.immediate], "await") == 0 ||
+                        strcmp(program->strings[ins.immediate], "sleep") == 0 ||
+                        strcmp(program->strings[ins.immediate], "yield") == 0 ||
+                        strcmp(program->strings[ins.immediate], "gc") == 0 ||
+                        strcmp(program->strings[ins.immediate], "process") == 0;
+
+                    if (is_sched_name &&
+                        vm_values_from_registers(
+                            vm, 0, (uint8_t)argument_count,
+                            &sched_values) != 0)
+                    {
+                        result = -1;
+                        goto done;
+                    }
+
+                    if (is_load)
+                        sched_status = vm_do_load(
+                            sched_values, argument_count,
+                            source_command, ins.a, &value);
+                    else if (is_sched_name)
+                        sched_status = ussr_sched_dispatch(
+                            ussr_sched_current_program(),
+                            program->strings[ins.immediate],
+                            sched_values, argument_count,
+                            source_command, ins.a, &value);
+
+                    if (is_sched_name)
+                        vm_free_values(sched_values, argument_count);
+
+                    if (sched_status < 0)
+                    {
+                        ussr_value_free(&value);
+                        result = -1;
+                        goto done;
+                    }
+
+                    if (sched_status == 2)
+                    {
+                        /* Blocked: suspend mid-instruction. The wake
+                         * value lands in register a via resume_value. */
+                        for (i = 0; i < argument_count; ++i)
+                        {
+                            if (av[i].type == USSR_ARGUMENT_VALUE)
+                                ussr_value_free(&av[i].data.value);
+                        }
+                        free(av);
+                        ussr_value_free(&value);
+                        return USSR_VM_STATUS_SUSPENDED;
+                    }
+
+                    if (sched_status == 1)
+                    {
+                        for (i = 0; i < argument_count; ++i)
+                        {
+                            if (av[i].type == USSR_ARGUMENT_VALUE)
+                                ussr_value_free(&av[i].data.value);
+                        }
+                        free(av);
+
+                        ussr_value_free(&vm->registers[ins.a]);
+                        vm->registers[ins.a] = value;
+                        break;
+                    }
+                }
 
                 /* Advanced control blocks are AST-backed builtins.  They
                  * cannot go through the ordinary OOP/external-command
@@ -1275,6 +1654,11 @@ static int vm_execute(
                     value = ussr_null();
                     if (vm->chain_active || ins.c != 0)
                     {
+                        /*
+                         * Capture/chained variant: still synchronous,
+                         * because the process layer must pump the
+                         * child's pipes to completion.
+                         */
                         char *output = NULL;
                         result = ussr_external_execute_values_io(
                             program->strings[ins.immediate], external_values,
@@ -1282,15 +1666,59 @@ static int vm_execute(
                             &output, &value);
                         if (result == 0 && vm_chain_set_buffer(vm, output) != 0)
                             result = -1;
+                        vm_free_values(external_values, argument_count);
+                        if (result != 0) goto done;
+                    }
+                    else if (ussr_sched_current() != NULL)
+                    {
+                        /*
+                         * Plain external under the scheduler: spawn
+                         * without waiting and park this process on the
+                         * child handle (fork-exec stays intact; only
+                         * the wait moved to the event queue).
+                         */
+                        ussr_child_t child;
+
+                        memset(&child, 0, sizeof(child));
+
+                        if (ussr_external_spawn_values(
+                                program->strings[ins.immediate],
+                                external_values, argument_count,
+                                &child) != 0)
+                        {
+                            vm_free_values(external_values, argument_count);
+                            ussr_value_free(&value);
+                            result = -1;
+                            goto done;
+                        }
+
+                        vm_free_values(external_values, argument_count);
+
+                        if (ussr_sched_block_on_child(child, ins.a) != 0)
+                        {
+                            ussr_child_close(&child);
+                            ussr_value_free(&value);
+                            result = -1;
+                            goto done;
+                        }
+
+                        /*
+                         * av was already released above with the other
+                         * OOP-lookup temporaries; only the pending null
+                         * result value needs dropping before we park.
+                         */
+                        ussr_value_free(&value);
+
+                        return USSR_VM_STATUS_SUSPENDED;
                     }
                     else
                     {
                         result = ussr_external_execute_values(
                             program->strings[ins.immediate], external_values,
                             argument_count, &value);
+                        vm_free_values(external_values, argument_count);
+                        if (result != 0) goto done;
                     }
-                    vm_free_values(external_values, argument_count);
-                    if (result != 0) goto done;
                 }
 
                 ussr_value_free(&vm->registers[ins.a]);
@@ -1300,15 +1728,14 @@ static int vm_execute(
             case USSR_BC_EVAL:
                 /* eval is implemented by the VM boundary: source is parsed, compiled, then executed as bytecode. */
                 if(ins.a>=USSR_VM_REGISTER_COUNT || program->strings[ins.immediate]==NULL || vm->registers[0].type!=USSR_STRING){result=-1;goto done;}
-                { YY_BUFFER_STATE b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
+                { YY_BUFFER_STATE b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested,0); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
             case USSR_BC_HALT: vm->running=0; vm->exit_code=0; break;
             default: fprintf(stderr,"USSR VM: unknown opcode 0x%02x\n",ins.opcode);result=-1;goto done;
         }
     }
-    result=vm->exit_code;
+    result=USSR_VM_STATUS_DONE;
 done:
-    while(frame_count>0){vm_frame_free(&frames[frame_count-1]);--frame_count;}
-    free(frames); return result;
+    return result == USSR_VM_STATUS_DONE ? USSR_VM_STATUS_DONE : USSR_VM_STATUS_ERROR;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1413,12 +1840,16 @@ static int count_brackets(
     return bracket_depth;
 }
 
-static int parse_and_execute(const char *source, int argc, char **argv)
+static int parse_and_execute(const char *source, int argc, char **argv, int background_ok)
 {
     YY_BUFFER_STATE buffer;
     int result;
     ussr_bc_program_t bytecode;
-    ussr_vm_t vm;
+    ussr_sched_program_t *program;
+    long main_pid;
+    ussr_proc_t *main_proc;
+    int entry_function = -1;
+    size_t fi;
 
     if (source == NULL || source[0] == '\0')
         return 0;
@@ -1455,78 +1886,84 @@ static int parse_and_execute(const char *source, int argc, char **argv)
         return -1;
     }
 
-    vm_init(&vm);
-    vm.running = 1;
+    /*
+     * The wrapper adopts the AST: OOP/scan metadata points into it,
+     * and async-spawned processes may outlive this call frame.
+     */
+    program = ussr_sched_program_wrap(&bytecode, ussr_parsed_program);
+    ussr_parsed_program = NULL;
 
+    if (program == NULL)
     {
-        size_t fi;
-        for (fi = 0; fi < bytecode.function_count; ++fi)
+        ussr_bc_program_free(&bytecode);
+        return -1;
+    }
+
+    for (fi = 0; fi < bytecode.function_count; ++fi)
+    {
+        if (strcmp(bytecode.functions[fi].name, "init") == 0)
         {
-            if (strcmp(bytecode.functions[fi].name, "init") == 0)
+            if (bytecode.functions[fi].parameter_count != 2)
             {
-                ussr_bc_function_t *init = &bytecode.functions[fi];
-                ussr_vector_t *args_vector;
-                ussr_value_t arg_count_value;
-                ussr_value_t vector_value;
-                size_t i;
-
-                if (init->parameter_count != 2)
-                {
-                    fprintf(stderr,
-                            "USSR: init must have parameters arg_cnt and arg_vec\n");
-                    result = -1;
-                    goto parse_execute_after_vm;
-                }
-
-                args_vector = ussr_vector_create("string");
-                if (args_vector == NULL)
-                {
-                    result = -1;
-                    goto parse_execute_after_vm;
-                }
-
-                for (i = 1; i < (size_t)argc; ++i)
-                {
-                    ussr_value_t item = ussr_string(argv[i]);
-                    if (ussr_vector_push(args_vector, item) != 0)
-                    {
-                        ussr_value_free(&item);
-                        ussr_vector_release(args_vector);
-                        result = -1;
-                        goto parse_execute_after_vm;
-                    }
-                    ussr_value_free(&item);
-                }
-
-                arg_count_value = ussr_integer(
-                    argc > 0 ? (long)(argc - 1) : 0
-                );
-                vector_value = ussr_vector_value(args_vector);
-
-                vm.registers[0] = arg_count_value;
-                vm.registers[1] = vector_value;
-                vm.entry_function = (int)fi;
-                break;
+                fprintf(stderr,
+                        "USSR: init must have parameters arg_cnt and arg_vec\n");
+                ussr_sched_program_release(program);
+                return -1;
             }
+            entry_function = (int)fi;
+            break;
         }
     }
 
-    result = vm_execute(&vm, &bytecode);
-    if (result == 0 && vm.entry_function >= 0 &&
-        vm.registers[USSR_VM_RETURN_REG].type == USSR_INTEGER)
+    main_pid = ussr_sched_spawn_main(program, entry_function, "init");
+    ussr_sched_program_release(program);
+
+    if (main_pid < 0)
+        return -1;
+
+    main_proc = ussr_sched_find(main_pid);
+
+    /* init(arg_cnt, arg_vec) receives the script arguments. */
+    if (entry_function >= 0 && main_proc != NULL)
     {
-        long exit_value = vm.registers[USSR_VM_RETURN_REG].data.integer;
+        ussr_vector_t *args_vector;
+        size_t i;
+
+        args_vector = ussr_vector_create("string");
+        if (args_vector == NULL)
+            return -1;
+
+        for (i = 1; i < (size_t)argc; ++i)
+        {
+            ussr_value_t item = ussr_string(argv[i]);
+            if (ussr_vector_push(args_vector, item) != 0)
+            {
+                ussr_value_free(&item);
+                ussr_vector_release(args_vector);
+                return -1;
+            }
+            ussr_value_free(&item);
+        }
+
+        main_proc->vm.registers[0] = ussr_integer(
+            argc > 0 ? (long)(argc - 1) : 0
+        );
+        main_proc->vm.registers[1] = ussr_vector_value(args_vector);
+    }
+
+    result = ussr_sched_run(background_ok);
+
+    if (result == 0 && entry_function >= 0 && main_proc != NULL &&
+        main_proc->state == USSR_PROC_ZOMBIE &&
+        main_proc->result.type == USSR_INTEGER)
+    {
+        long exit_value = main_proc->result.data.integer;
         if (exit_value >= 0 && exit_value <= 255)
             result = (int)exit_value;
     }
-parse_execute_after_vm:
-    if (result != 0)
-        fprintf(stderr, "USSR VM: execution failed (status %d)", result);
-    vm_cleanup(&vm);
-    ussr_bc_program_free(&bytecode);
 
-    ussr_command_list_free(ussr_parsed_program);
-    ussr_parsed_program = NULL;
+    if (result == -1)
+        fprintf(stderr, "USSR VM: execution failed (status %d)", result);
 
     return result;
 }
@@ -1538,7 +1975,7 @@ static int run_eval(const char *source, int argc, char **argv)
     if (source == NULL || source[0] == '\0')
         return 0;
 
-    result = parse_and_execute(source, argc, argv);
+    result = parse_and_execute(source, argc, argv, 0);
 
     return result;
 }
@@ -1563,7 +2000,7 @@ static int run_file(const char *filename, int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    result = parse_and_execute(ussr_pp_output(&pp), argc, argv);
+    result = parse_and_execute(ussr_pp_output(&pp), argc, argv, 0);
     ussr_pp_cleanup(&pp);
 
     return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -1679,7 +2116,7 @@ static int run_repl(void)
         if (bracket_depth > 0)
             continue;
 
-        result = parse_and_execute(source, 0, NULL);
+        result = parse_and_execute(source, 0, NULL, 1);
 
         source_length = 0;
         if (source != NULL)
@@ -1804,6 +2241,7 @@ int main(int argc, char **argv)
     }
 
     ussr_init();
+    ussr_sched_init();
 
     /* moscow.su is the USSR shell startup file, analogous to a shell rc.
      * It is optional and is loaded from the current working directory. */
@@ -1815,6 +2253,7 @@ int main(int argc, char **argv)
             fclose(moscow);
             if (run_file("moscow.su", 1, moscow_argv) != EXIT_SUCCESS)
             {
+                ussr_sched_cleanup();
                 ussr_cleanup();
                 return EXIT_FAILURE;
             }
@@ -1834,6 +2273,7 @@ int main(int argc, char **argv)
     else
         result = run_repl();
 
+    ussr_sched_cleanup();
     ussr_cleanup();
     return result;
 }

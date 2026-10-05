@@ -1184,6 +1184,13 @@ ps_cmd_iter(r): nm rt pv k mode [
             if(_): {ps_it_k2 = 13} [
                 set(ps_it_m2): 2
             ]
+            # A block is the last element of a command: after one,
+            # only another block (inline else) may continue it.
+            if(_): {mode = 1} [
+                if(_): {ps_it_m2 = 0} [
+                    set(ps_it_m2): 2
+                ]
+            ]
             ps_cmd_iter(r): nm rt pv ps_it_k2 ps_it_m2
         ]
     ]
@@ -2448,7 +2455,8 @@ ex_if_go(r): items idx hasblk c [
             at(rt_ibk): rt_ik2 1
             ex_block(rt_ibk): rt_ibk
             add(rt_inx): idx 1
-            ex_block_h(r): items rt_inx
+            skip_chain_block(rt_scb): items rt_inx
+            ex_block_h(r): items rt_scb
         ]
         if(_): {hasblk = 0} [
             add(rt_ip): idx 1
@@ -2485,6 +2493,26 @@ skip_chain(r): items i [
         if(_): {rt_scm = 1} [
             add(rt_sci2): i 2
             skip_chain(r): items rt_sci2
+        ]
+    ]
+]
+# skip a block-style elif/else chain: each label carries its body
+# block inside the same item, so labels are one item apart.
+skip_chain_block(r): items i [
+    len(rt_scbl): items
+    set(r): i
+    if(_): {i < rt_scbl} [
+        at(rt_scbi): items i
+        getf(rt_scbt): rt_scbi "tag"
+        set(rt_scbm): 0
+        if(_): {rt_scbt = 2} [
+            getf(rt_scbn): rt_scbi "s1"
+            if(_): {rt_scbn = "elif"} [ set(rt_scbm): 1 ]
+            if(_): {rt_scbn = "else"} [ set(rt_scbm): 1 ]
+        ]
+        if(_): {rt_scbm = 1} [
+            add(rt_scbi2): i 1
+            skip_chain_block(r): items rt_scbi2
         ]
     ]
 ]

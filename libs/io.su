@@ -2,6 +2,10 @@
 # Native VM primitives owned by this module:
 #   template(ok): "TYPE;TYPE;..." value...   (printf-style output)
 #   scan(ok): "prompt TYPE;TYPE;..." dest... (line/token input)
+#   open_file(h): "path" "mode"              (stream open, h >= 0 or -1)
+#   close_file(ok): h                        (stream close)
+#   write_file(n): h "text"                  (bytes written)
+#   read_file(s): h [n]                      (rest of file, or n bytes)
 # Library-provided helpers:
 #   putch(ok): code                          (write one byte/char)
 #   getch(code):                             (read one char, -1 at EOF)

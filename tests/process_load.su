@@ -1,0 +1,9 @@
+# load(_)/process(_) feature test: the worker file is loaded as a
+# separate scheduled process and awaited by the main process.
+init(ret): arg_cnt arg_vec [
+    load(p): "tests/worker.su"
+    await(r): p
+    print(_): "worker done"
+    print(_): r
+    set(ret): 0
+]

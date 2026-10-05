@@ -1,0 +1,6 @@
+# USSR startup configuration.
+# This file is loaded automatically before a script or the REPL.
+# Put persistent shell setup commands here.
+# Example:
+# set(home): "/home/user"
+# cd(_): home

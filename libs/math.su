@@ -1,6 +1,14 @@
 # math.su - numeric helpers.
+# Native VM primitives owned by this module:
+#   sin(r): x   -> sine of x (x in radians)
+#   ln(r): x    -> natural logarithm of x, x must be positive
+# Constants arrive as preprocessor macros:
+#   M_PI, M_E
 # sqrt(r): x uses Newton iterations and returns a real root.
 # Negative input returns -1 after printing an error.
+
+$define M_PI 3.14159265358979323846
+$define M_E 2.71828182845904523536
 
 sqrt(r): x [
     if(_): {x < 0} [

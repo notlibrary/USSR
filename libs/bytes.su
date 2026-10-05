@@ -1,4 +1,7 @@
-# bytes.su - byte-vector serialization.
+# bytes.su - byte-vector serialization and memory filling.
+# Native VM primitives owned by this module (memset analogs):
+#   set_bytes(v): vec value count  -> first count items of vec := value
+#   clear_bytes(v): vec count      -> first count items of vec := 0
 # serialize(v): value "INT"    -> v becomes 8 little-endian bytes of value
 # deserialize(v): bytes "INT"  -> v becomes the integer stored in bytes
 # Only "INT" is supported; other tags return null.

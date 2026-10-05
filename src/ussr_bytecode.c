@@ -952,6 +952,14 @@ static int bc_compile_conditional_chain(
     const ussr_command_t **next_out
 );
 
+static int bc_compile_block_chain(
+    ussr_bc_program_t *p,
+    const ussr_command_t *first,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+);
+
 static int bc_compile_choose(
     ussr_bc_program_t *p,
     const ussr_command_t *first,
@@ -2155,6 +2163,25 @@ static int bc_compile_until(
             continue;
         }
 
+        /*
+         * Block-style if followed by elif/else block siblings:
+         * the whole chain is compiled as one multi-branch
+         * conditional. A lone block-if keeps the historical
+         * single-construct path below.
+         */
+        if (strcmp(command->name, "if") == 0 &&
+            command->argument_count == 2 &&
+            command->arguments[1].type == USSR_ARGUMENT_COMMAND_LIST &&
+            command->next != NULL &&
+            bc_is_conditional_label(command->next))
+        {
+            if (bc_compile_block_chain(
+                    p, command, loop, current, &next) != 0)
+                return -1;
+            command = next;
+            continue;
+        }
+
         if (strcmp(command->name, "choose") == 0 &&
             command->argument_count == 1)
         {
@@ -2305,6 +2332,157 @@ static int bc_compile_conditional_chain(
     {
         if (bc_patch(p, (size_t)pending_false, p->code_count) != 0)
             goto cleanup;
+    }
+
+    for (size_t i = 0; i < end_count; ++i)
+    {
+        if (bc_patch(p, (size_t)end_jumps[i], p->code_count) != 0)
+            goto cleanup;
+    }
+
+    if (next_out != NULL)
+        *next_out = branch;
+
+    result = 0;
+
+cleanup:
+    free(end_jumps);
+    return result;
+}
+
+/*
+ * Block-style conditional chain:
+ *
+ *     if(val): {c1} [ b1 ]
+ *     elif(_): {c2} [ b2 ]
+ *     else(_): [ b3 ]
+ *
+ * Unlike the flat chain form, each branch body is a nested command
+ * list carried as the branch command's trailing block argument.
+ * The `if` keeps its historical form (condition + block); following
+ * `elif`/`else` siblings with blocks are consumed here. Returns the
+ * first unconsumed command in next_out.
+ */
+static int bc_compile_block_chain(
+    ussr_bc_program_t *p,
+    const ussr_command_t *first,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current,
+    const ussr_command_t **next_out
+)
+{
+    const ussr_command_t *branch = first;
+    int pending_false = -1;
+    int *end_jumps = NULL;
+    size_t end_count = 0;
+    size_t end_capacity = 0;
+    int result = -1;
+
+    if (first == NULL ||
+        strcmp(first->name, "if") != 0 ||
+        first->argument_count != 2 ||
+        first->arguments[1].type != USSR_ARGUMENT_COMMAND_LIST)
+        return -1;
+
+    if (first->return_name != NULL &&
+        bc_store_boolean(p, first->return_name, 0) != 0)
+        goto cleanup;
+
+    for (;;)
+    {
+        const ussr_argument_t *ba = branch->arguments;
+        size_t bcount = branch->argument_count;
+        int is_else = strcmp(branch->name, "else") == 0;
+        const ussr_command_list_t *body;
+        const ussr_command_t *next;
+        int jump_end;
+
+        if (is_else)
+        {
+            /* else(_): [body] — the block is the only argument. */
+            if (bcount != 1 ||
+                ba[0].type != USSR_ARGUMENT_COMMAND_LIST)
+            {
+                fprintf(stderr,
+                        "USSR compiler: else expects a single block\n");
+                goto cleanup;
+            }
+            body = ba[0].data.command_list;
+
+            if (pending_false >= 0)
+            {
+                if (bc_patch(p, (size_t)pending_false,
+                             p->code_count) != 0)
+                    goto cleanup;
+                pending_false = -1;
+            }
+        }
+        else
+        {
+            /* if/elif: (condition, body-block). */
+            if (bcount != 2 ||
+                ba[1].type != USSR_ARGUMENT_COMMAND_LIST)
+            {
+                fprintf(stderr,
+                        "USSR compiler: %s expects a condition and a "
+                        "block\n", branch->name);
+                goto cleanup;
+            }
+            body = ba[1].data.command_list;
+
+            if (bc_compile_argument(p, &ba[0], 0) != 0)
+                goto cleanup;
+
+            pending_false = bc_emit(p, USSR_BC_JMP_FALSE, 0, 0, 0, 0);
+            if (pending_false < 0)
+                goto cleanup;
+        }
+
+        if (first->return_name != NULL &&
+            bc_store_boolean(p, first->return_name, 1) != 0)
+            goto cleanup;
+
+        if (bc_compile_list(p, body, loop, current) != 0)
+            goto cleanup;
+
+        jump_end = bc_emit(p, USSR_BC_JMP, 0, 0, 0, 0);
+        if (jump_end < 0)
+            goto cleanup;
+
+        if (end_count == end_capacity)
+        {
+            size_t n = end_capacity == 0 ? 4 : end_capacity * 2;
+            int *q = realloc(end_jumps, n * sizeof(*q));
+            if (q == NULL)
+                goto cleanup;
+            end_jumps = q;
+            end_capacity = n;
+        }
+        end_jumps[end_count++] = jump_end;
+
+        if (pending_false >= 0)
+        {
+            if (bc_patch(p, (size_t)pending_false, p->code_count) != 0)
+                goto cleanup;
+            pending_false = -1;
+        }
+
+        next = branch->next;
+
+        if (next == NULL || !bc_is_conditional_label(next))
+        {
+            branch = next;
+            break;
+        }
+
+        if (is_else)
+        {
+            fprintf(stderr,
+                    "USSR compiler: else must be the last branch\n");
+            goto cleanup;
+        }
+
+        branch = next;
     }
 
     for (size_t i = 0; i < end_count; ++i)

@@ -1,0 +1,22 @@
+# async/await/sleep/yield scheduler feature test.
+# Two workers sleep for different spans; the short one must finish
+# first even though it was spawned second (cooperative scheduling,
+# timer event queue). The shared ! hash proves execution interleaved:
+# its final value comes from the LAST finisher, not the last spawner.
+worker(r): n delay [
+    sleep(_): delay
+    set(w): n!
+    set(r): n
+]
+
+init(ret): arg_cnt arg_vec [
+    async(p1): "worker" 1 50
+    async(p2): "worker" 2 10
+    yield(_): 0
+    await(r2): p2
+    print(_): r2
+    await(r1): p1
+    print(_): r1
+    print(out): w?
+    set(ret): 0
+]

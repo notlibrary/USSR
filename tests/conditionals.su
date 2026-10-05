@@ -13,7 +13,10 @@ init(ret): arg_cnt arg_vec [
     if(val): {a > 9} [
         print(output3): "A is greater than 9"
     ]
-	else(_): " " [
-		"A is lower than 9"
-	]
+    elif(_): {a > 3} [
+        print(output3): "A is greater than 3 but not 9"
+    ]
+    else(_): [
+        print(output3): "A is lower than 4"
+    ]
 ]

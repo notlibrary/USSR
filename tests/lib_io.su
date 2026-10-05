@@ -1,0 +1,14 @@
+# io.su feature test: open_file/write_file/close_file/read_file
+# roundtrip through a temporary file.
+$include "io.su"
+
+init(ret): arg_cnt arg_vec [
+    open_file(h): "tests/lib_io_tmp.txt" "w"
+    write_file(n): h "ussr io roundtrip"
+    close_file(ok): h
+    open_file(h2): "tests/lib_io_tmp.txt" "r"
+    read_file(s): h2
+    close_file(ok2): h2
+    print(_): s
+    set(ret): 0
+]

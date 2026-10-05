@@ -31,4 +31,41 @@ int ussr_process_run(
     int *exit_code
 );
 
+/*
+ * Asynchronous child handle used by the scheduler's event queue.
+ *
+ * The fork-exec model stays intact: ussr_process_spawn() performs the
+ * same fork+exec (POSIX) / CreateProcess (Windows) launch as
+ * ussr_process_run(), but returns immediately without waiting.  The
+ * event queue then watches the handle and reaps the child when it
+ * exits, waking whichever USSR process spawned it — so one process
+ * running an external command no longer stalls the whole scheduler.
+ */
+typedef struct
+{
+#ifdef _WIN32
+    void *handle;   /* HANDLE of the child process, NULL when empty */
+#else
+    int pid;        /* pid_t; <= 0 when empty */
+#endif
+} ussr_child_t;
+
+/* Launch program with inherited stdin/stdout/stderr, no waiting.
+ * Returns 0 and fills child on success. */
+int ussr_process_spawn(
+    const char *program,
+    char *const *argv,
+    ussr_child_t *child
+);
+
+/* Non-blocking reap: 1 = child exited (exit_code set, handle closed),
+ * 0 = still running, -1 = error. */
+int ussr_child_poll(ussr_child_t *child, int *exit_code);
+
+/* Blocking wait; reaps and closes the handle. */
+int ussr_child_wait(ussr_child_t *child, int *exit_code);
+
+/* Abandon the handle without an exit code (error paths). */
+void ussr_child_close(ussr_child_t *child);
+
 #endif /* USSR_PROCESS_H */
