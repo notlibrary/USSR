@@ -1,0 +1,736 @@
+# Mbl.su - spartan vi-clone for USSR.
+#
+#   ussr Mbl.su [file]
+#
+# A minimal visual console text editor with vi-style modal editing.
+# Normal mode:  h l       cursor left / right     (Backspace = left)
+#               j k       cursor down / up        (arrow keys work too)
+#               i         insert before cursor    a   insert after cursor
+#               o         open new line below     x   delete char
+#               d d       delete current line     :   command line
+# Commands:     :w [name] write file   :q quit   :wq write+quit   :q! quit
+#               :e [name] reload / edit another file
+# Insert mode:  type to insert, Enter splits the line, Backspace deletes
+#               (and joins lines at column 0), ESC or Ctrl+C -> normal.
+#
+# Implementation: the terminal is put in raw mode through native USSR
+# terminal primitives. Each key is read directly; no shell commands,
+# stty, shell utilities, or POSIX-only utilities are required. The whole screen is
+# rebuilt as one string per frame and written with a single template call.
+
+# ---------- terminal helpers ----------
+
+Mbl_initesc(r): [
+    terminal_escape(Mbl_esc):
+    set(r): 0
+]
+
+Mbl_termsize(r): [
+    set(Mbl_rows): 24
+    set(Mbl_cols): 80
+    terminal_size(Mblt_s):
+    len(Mblt_n): Mblt_s
+    set(Mblt_i): 0
+    set(Mblt_part): 0
+    set(Mblt_r): 0
+    set(Mblt_c): 0
+    while(_): {Mblt_i < Mblt_n} [
+        byte(Mblt_b): Mblt_s Mblt_i
+        if(_): {Mblt_b = 32} [
+            set(Mblt_part): 1
+        ]
+        if(_): {Mblt_b > 47} [
+            if(_): {Mblt_b < 58} [
+                if(_): {Mblt_part = 0} [
+                    set(Mblt_r): {Mblt_r * 10 + Mblt_b - 48}
+                ]
+                if(_): {Mblt_part = 1} [
+                    set(Mblt_c): {Mblt_c * 10 + Mblt_b - 48}
+                ]
+            ]
+        ]
+        set(Mblt_i): {Mblt_i + 1}
+    ]
+    if(_): {Mblt_r > 2} [
+        set(Mbl_rows): Mblt_r
+    ]
+    if(_): {Mblt_c > 2} [
+        set(Mbl_cols): Mblt_c
+    ]
+    set(r): 0
+]
+
+# ---------- buffer helpers ----------
+
+Mbl_setline(r): idx line [
+    vec(Mblsl_new): ""
+    len(Mblsl_n): Mbl_buf
+    set(Mblsl_i): 0
+    while(_): {Mblsl_i < Mblsl_n} [
+        at(Mblsl_l): Mbl_buf Mblsl_i
+        if(_): {Mblsl_i = idx} [
+            set(Mblsl_l): line
+        ]
+        push(_): Mblsl_new Mblsl_l
+        set(Mblsl_i): {Mblsl_i + 1}
+    ]
+    set(Mbl_buf): Mblsl_new
+    set(r): 0
+]
+
+Mbl_linedel(r): idx [
+    vec(Mbldl_new): ""
+    len(Mbldl_n): Mbl_buf
+    set(Mbldl_i): 0
+    while(_): {Mbldl_i < Mbldl_n} [
+        if(_): {Mbldl_i != idx} [
+            at(Mbldl_l): Mbl_buf Mbldl_i
+            push(_): Mbldl_new Mbldl_l
+        ]
+        set(Mbldl_i): {Mbldl_i + 1}
+    ]
+    set(Mbl_buf): Mbldl_new
+    set(r): 0
+]
+
+Mbl_lineins(r): idx line [
+    vec(Mblil_new): ""
+    len(Mblil_n): Mbl_buf
+    set(Mblil_i): 0
+    while(_): {Mblil_i < Mblil_n} [
+        if(_): {Mblil_i = idx} [
+            push(_): Mblil_new line
+        ]
+        at(Mblil_l): Mbl_buf Mblil_i
+        push(_): Mblil_new Mblil_l
+        set(Mblil_i): {Mblil_i + 1}
+    ]
+    if(_): {Mblil_i = idx} [
+        push(_): Mblil_new line
+    ]
+    set(Mbl_buf): Mblil_new
+    set(r): 0
+]
+
+Mbl_fixcx(r): [
+    at(Mblfx_l): Mbl_buf Mbl_cy
+    len(Mblfx_n): Mblfx_l
+    set(Mblfx_max): Mblfx_n
+    if(_): {Mbl_mode = 0} [
+        set(Mblfx_max): {Mblfx_n - 1}
+    ]
+    if(_): {Mblfx_max < 0} [
+        set(Mblfx_max): 0
+    ]
+    if(_): {Mbl_cx > Mblfx_max} [
+        set(Mbl_cx): Mblfx_max
+    ]
+    set(r): 0
+]
+
+Mbl_scroll(r): [
+    if(_): {Mbl_cy < Mbl_top} [
+        set(Mbl_top): Mbl_cy
+    ]
+    set(Mblsc_last): {Mbl_top + Mbl_rows - 2}
+    if(_): {Mbl_cy > Mblsc_last} [
+        set(Mbl_top): {Mbl_cy - Mbl_rows + 2}
+    ]
+    set(r): 0
+]
+
+# ---------- movement ----------
+
+Mbl_left(r): [
+    if(_): {Mbl_cx > 0} [
+        set(Mbl_cx): {Mbl_cx - 1}
+    ]
+    set(r): 0
+]
+
+Mbl_right(r): [
+    at(Mblm_l): Mbl_buf Mbl_cy
+    len(Mblm_n): Mblm_l
+    set(Mblm_max): Mblm_n
+    if(_): {Mbl_mode = 0} [
+        set(Mblm_max): {Mblm_n - 1}
+    ]
+    if(_): {Mblm_max < 0} [
+        set(Mblm_max): 0
+    ]
+    if(_): {Mbl_cx < Mblm_max} [
+        set(Mbl_cx): {Mbl_cx + 1}
+    ]
+    set(r): 0
+]
+
+Mbl_up(r): [
+    if(_): {Mbl_cy > 0} [
+        set(Mbl_cy): {Mbl_cy - 1}
+        Mbl_fixcx(_): 
+    ]
+    Mbl_scroll(_): 
+    set(r): 0
+]
+
+Mbl_down(r): [
+    len(Mblm2_n): Mbl_buf
+    if(_): {Mbl_cy < Mblm2_n - 1} [
+        set(Mbl_cy): {Mbl_cy + 1}
+        Mbl_fixcx(_): 
+    ]
+    Mbl_scroll(_): 
+    set(r): 0
+]
+
+# ---------- editing ----------
+
+Mbl_insch(r): ch [
+    at(Mblic_l): Mbl_buf Mbl_cy
+    len(Mblic_n): Mblic_l
+    slice(Mblic_a): Mblic_l 0 Mbl_cx
+    slice(Mblic_b): Mblic_l Mbl_cx {Mblic_n - Mbl_cx}
+    concat(Mblic_a): Mblic_a ch
+    concat(Mblic_a): Mblic_a Mblic_b
+    Mbl_setline(_): Mbl_cy Mblic_a
+    set(Mbl_cx): {Mbl_cx + 1}
+    set(Mbl_dirty): 1
+    set(r): 0
+]
+
+Mbl_bs(r): [
+    set(r): 0
+    if(_): {Mbl_cx > 0} [
+        at(Mblbs_l): Mbl_buf Mbl_cy
+        len(Mblbs_n): Mblbs_l
+        slice(Mblbs_a): Mblbs_l 0 {Mbl_cx - 1}
+        slice(Mblbs_b): Mblbs_l Mbl_cx {Mblbs_n - Mbl_cx}
+        concat(Mblbs_a): Mblbs_a Mblbs_b
+        Mbl_setline(_): Mbl_cy Mblbs_a
+        set(Mbl_cx): {Mbl_cx - 1}
+        set(Mbl_dirty): 1
+    ]
+    if(_): {Mbl_cx = 0} [
+        if(_): {Mbl_cy > 0} [
+            at(Mblbs_p): Mbl_buf {Mbl_cy - 1}
+            at(Mblbs_c): Mbl_buf Mbl_cy
+            len(Mblbs_pl): Mblbs_p
+            concat(Mblbs_p): Mblbs_p Mblbs_c
+            Mbl_linedel(_): Mbl_cy
+            Mbl_setline(_): {Mbl_cy - 1} Mblbs_p
+            set(Mbl_cy): {Mbl_cy - 1}
+            set(Mbl_cx): Mblbs_pl
+            set(Mbl_dirty): 1
+        ]
+    ]
+]
+
+Mbl_enter(r): [
+    at(Mblen_l): Mbl_buf Mbl_cy
+    len(Mblen_n): Mblen_l
+    slice(Mblen_a): Mblen_l 0 Mbl_cx
+    slice(Mblen_b): Mblen_l Mbl_cx {Mblen_n - Mbl_cx}
+    Mbl_setline(_): Mbl_cy Mblen_a
+    Mbl_lineins(_): {Mbl_cy + 1} Mblen_b
+    set(Mbl_cy): {Mbl_cy + 1}
+    set(Mbl_cx): 0
+    set(Mbl_dirty): 1
+    Mbl_scroll(_): 
+    set(r): 0
+]
+
+Mbl_delch(r): [
+    at(Mbldc_l): Mbl_buf Mbl_cy
+    len(Mbldc_n): Mbldc_l
+    if(_): {Mbl_cx < Mbldc_n} [
+        slice(Mbldc_a): Mbldc_l 0 Mbl_cx
+        slice(Mbldc_b): Mbldc_l {Mbl_cx + 1} {Mbldc_n - Mbl_cx - 1}
+        concat(Mbldc_a): Mbldc_a Mbldc_b
+        Mbl_setline(_): Mbl_cy Mbldc_a
+        set(Mbl_dirty): 1
+        Mbl_fixcx(_): 
+    ]
+    set(r): 0
+]
+
+Mbl_delete_line(r): [
+    Mbl_linedel(_): Mbl_cy
+    len(Mbldel_n): Mbl_buf
+    if(_): {Mbldel_n = 0} [
+        push(_): Mbl_buf ""
+    ]
+    len(Mbldel_n2): Mbl_buf
+    if(_): {Mbl_cy + 1 > Mbldel_n2} [
+        set(Mbl_cy): {Mbldel_n2 - 1}
+    ]
+    set(Mbl_cx): 0
+    set(Mbl_dirty): 1
+    Mbl_scroll(_): 
+    set(r): 0
+]
+
+# ---------- file I/O ----------
+
+# Different host builds disagree on file_exists: 1=exists, 0=exists
+# (test -f style), string results, or no builtin at all. Detect the
+# convention at startup: write a witness file we know exists, probe it
+# and a name that cannot exist, and remember the value that means
+# "exists" (Mbl_fe_yes). If both probes answer the same, the builtin is
+# unusable -> Mbl_fe_ok stays 0 and Mbl_load falls back to `test -f`.
+Mbl_detect(r): [
+    set(Mbl_fe_ok): 0
+    set(Mbl_fe_yes): 1
+    writefile(Mbldt_w): ".Mbl_probe.tmp" "x"
+    file_exists(Mbldt_y): ".Mbl_probe.tmp"
+    file_exists(Mbldt_n): ".Mbl_probe_absent_9x7q.tmp"
+    if(_): {Mbldt_y != Mbldt_n} [
+        set(Mbl_fe_ok): 1
+        set(Mbl_fe_yes): Mbldt_y
+    ]
+    set(r): 0
+]
+
+Mbl_load(r): path [
+    vec(Mbl_buf): ""
+    set(Mbl_dirty): 0
+    set(Mbll_go): 0
+    if(_): {Mbl_fe_ok = 1} [
+        file_exists(Mbll_tf): path
+        if(_): {Mbll_tf = Mbl_fe_yes} [
+            set(Mbll_go): 1
+        ]
+    ]
+    if(_): {Mbl_fe_ok = 0} [
+        test(Mbll_tt): "-f" path
+        if(_): {Mbll_tt = 0} [
+            set(Mbll_go): 1
+        ]
+    ]
+    if(_): {Mbll_go = 1} [
+        readfile(Mbll_d): path
+        len(Mbll_n): Mbll_d
+        set(Mbll_i): 0
+        set(Mbll_cur): ""
+        while(_): {Mbll_i < Mbll_n} [
+            byte(Mbll_b): Mbll_d Mbll_i
+            if(_): {Mbll_b = 10} [
+                push(_): Mbl_buf Mbll_cur
+                set(Mbll_cur): ""
+            ]
+            if(_): {Mbll_b != 10} [
+                if(_): {Mbll_b != 13} [
+                    slice(Mbll_ch): Mbll_d Mbll_i 1
+                    concat(Mbll_cur): Mbll_cur Mbll_ch
+                ]
+            ]
+            set(Mbll_i): {Mbll_i + 1}
+        ]
+        len(Mbll_cl): Mbll_cur
+        if(_): {Mbll_cl > 0} [
+            push(_): Mbl_buf Mbll_cur
+        ]
+    ]
+    len(Mbll_bn): Mbl_buf
+    if(_): {Mbll_bn = 0} [
+        push(_): Mbl_buf ""
+    ]
+    set(Mbl_cx): 0
+    set(Mbl_cy): 0
+    set(Mbl_top): 0
+    set(r): 0
+]
+
+Mbl_save(r): [
+    set(r): 0
+    len(Mblw_fn): Mbl_file
+    if(_): {Mblw_fn = 0} [
+        set(Mbl_msg): "no file name"
+    ]
+    if(_): {Mblw_fn > 0} [
+        set(Mbl_payload): ""
+        len(Mblw_n): Mbl_buf
+        set(Mblw_i): 0
+        while(_): {Mblw_i < Mblw_n} [
+            at(Mblw_l): Mbl_buf Mblw_i
+            concat(Mbl_payload): Mbl_payload Mblw_l
+            concat(Mbl_payload): Mbl_payload "\n"
+            set(Mblw_i): {Mblw_i + 1}
+        ]
+        writefile(Mblw_ok): Mbl_file Mbl_payload
+        set(Mbl_dirty): 0
+        set(Mbl_msg): "written"
+    ]
+]
+
+# ---------- render ----------
+
+Mbl_render(r): [
+    set(Mblrn_s): Mbl_esc
+    concat(Mblrn_s): Mblrn_s "[H"
+    len(Mblrn_n): Mbl_buf
+    set(Mblrn_row): 0
+    set(Mblrn_last): {Mbl_rows - 1}
+    while(_): {Mblrn_row < Mblrn_last} [
+        set(Mblrn_li): {Mblrn_row + Mbl_top}
+        set(Mblrn_has): 0
+        if(_): {Mblrn_li < Mblrn_n} [
+            set(Mblrn_has): 1
+            at(Mblrn_l): Mbl_buf Mblrn_li
+            len(Mblrn_ll): Mblrn_l
+            if(_): {Mblrn_ll > Mbl_cols} [
+                slice(Mblrn_l): Mblrn_l 0 Mbl_cols
+            ]
+            concat(Mblrn_s): Mblrn_s Mblrn_l
+        ]
+        if(_): {Mblrn_has = 0} [
+            concat(Mblrn_s): Mblrn_s "~"
+        ]
+        concat(Mblrn_s): Mblrn_s Mbl_esc
+        concat(Mblrn_s): Mblrn_s "[K"
+        concat(Mblrn_s): Mblrn_s "\r\n"
+        set(Mblrn_row): {Mblrn_row + 1}
+    ]
+    concat(Mblrn_s): Mblrn_s Mbl_esc
+    concat(Mblrn_s): Mblrn_s "[7m"
+    if(_): {Mbl_mode = 2} [
+        concat(Mblrn_s): Mblrn_s Mbl_msg
+    ]
+    if(_): {Mbl_mode < 2} [
+        concat(Mblrn_s): Mblrn_s " "
+        if(_): {Mbl_mode = 0} [
+            concat(Mblrn_s): Mblrn_s "NORMAL"
+        ]
+        if(_): {Mbl_mode = 1} [
+            concat(Mblrn_s): Mblrn_s "INSERT"
+        ]
+        concat(Mblrn_s): Mblrn_s "  "
+        concat(Mblrn_s): Mblrn_s Mbl_showname
+        if(_): {Mbl_dirty = 1} [
+            concat(Mblrn_s): Mblrn_s " [+]"
+        ]
+        if(_): {Mbl_dirty = 0} [
+            concat(Mblrn_s): Mblrn_s "    "
+        ]
+        concat(Mblrn_s): Mblrn_s "  "
+        concat(Mblrn_s): Mblrn_s Mbl_msg
+    ]
+    concat(Mblrn_s): Mblrn_s Mbl_esc
+    concat(Mblrn_s): Mblrn_s "[0m"
+    concat(Mblrn_s): Mblrn_s Mbl_esc
+    concat(Mblrn_s): Mblrn_s "[K"
+    concat(Mblrn_s): Mblrn_s Mbl_esc
+    concat(Mblrn_s): Mblrn_s "["
+    encode(Mblrn_y): {Mbl_cy - Mbl_top + 1}
+    concat(Mblrn_s): Mblrn_s Mblrn_y
+    concat(Mblrn_s): Mblrn_s ";"
+    encode(Mblrn_x): {Mbl_cx + 1}
+    concat(Mblrn_s): Mblrn_s Mblrn_x
+    concat(Mblrn_s): Mblrn_s "H"
+    template(_): "STR" Mblrn_s
+    set(r): 0
+]
+
+# ---------- input queue ----------
+
+Mbl_next(r): [
+    set(Mblnx_have): 0
+    if(_): {Mbl_pb > 0 - 1} [
+        set(Mblnx_have): 1
+        set(r): Mbl_pb
+        set(Mbl_pb): {0 - 1}
+    ]
+    if(_): {Mblnx_have = 0} [
+        terminal_getch(Mblnx_b):
+        set(r): Mblnx_b
+    ]
+]
+
+# ---------- mode handlers ----------
+
+Mbl_escape(r): [
+    set(Mbl_mode): 0
+    set(Mbl_pend): 0
+    Mbl_fixcx(_): 
+    set(r): 0
+]
+
+Mbl_arrow(r): c [
+    if(_): {c = 65} [
+        Mbl_up(_): 
+    ]
+    if(_): {c = 66} [
+        Mbl_down(_): 
+    ]
+    if(_): {c = 67} [
+        Mbl_right(_): 
+    ]
+    if(_): {c = 68} [
+        Mbl_left(_): 
+    ]
+    set(r): 0
+]
+
+Mbl_insert(r): b [
+    set(r): 0
+    if(_): {b = 13} [
+        Mbl_enter(_): 
+    ]
+    if(_): {b = 10} [
+        Mbl_enter(_): 
+    ]
+    if(_): {b = 127} [
+        Mbl_bs(_): 
+    ]
+    if(_): {b = 8} [
+        Mbl_bs(_): 
+    ]
+    if(_): {b = 3} [
+        Mbl_escape(_): 
+    ]
+    if(_): {b > 31} [
+        if(_): {b < 127} [
+            slice(Mblin_ch): Mbl_ascii {b - 32} 1
+            Mbl_insch(_): Mblin_ch
+        ]
+    ]
+]
+
+Mbl_normal(r): b [
+    set(r): 0
+    if(_): {b != 100} [
+        set(Mbl_pend): 0
+    ]
+    if(_): {b = 8} [
+        Mbl_left(_): 
+    ]
+    if(_): {b = 127} [
+        Mbl_left(_): 
+    ]
+    if(_): {b = 104} [
+        Mbl_left(_): 
+    ]
+    if(_): {b = 108} [
+        Mbl_right(_): 
+    ]
+    if(_): {b = 106} [
+        Mbl_down(_): 
+    ]
+    if(_): {b = 107} [
+        Mbl_up(_): 
+    ]
+    if(_): {b = 105} [
+        set(Mbl_mode): 1
+    ]
+    if(_): {b = 97} [
+        at(Mblnm_l): Mbl_buf Mbl_cy
+        len(Mblnm_n): Mblnm_l
+        if(_): {Mbl_cx < Mblnm_n} [
+            set(Mbl_cx): {Mbl_cx + 1}
+        ]
+        set(Mbl_mode): 1
+    ]
+    if(_): {b = 111} [
+        Mbl_lineins(_): {Mbl_cy + 1} ""
+        set(Mbl_cy): {Mbl_cy + 1}
+        set(Mbl_cx): 0
+        set(Mbl_mode): 1
+        set(Mbl_dirty): 1
+        Mbl_scroll(_): 
+    ]
+    if(_): {b = 120} [
+        Mbl_delch(_): 
+    ]
+    if(_): {b = 100} [
+        set(Mblnm_was): Mbl_pend
+        set(Mbl_pend): 0
+        if(_): {Mblnm_was = 1} [
+            Mbl_delete_line(_): 
+        ]
+        if(_): {Mblnm_was = 0} [
+            set(Mbl_pend): 1
+        ]
+    ]
+    if(_): {b = 58} [
+        Mbl_command(_): 
+    ]
+]
+
+# ---------- command line ----------
+
+Mbl_runcmd(r): cmd [
+    set(r): 0
+    set(Mblrc_ok): 0
+    if(_): {cmd = "q"} [
+        set(Mblrc_ok): 1
+        set(Mbl_running): 0
+    ]
+    if(_): {cmd = "q!"} [
+        set(Mblrc_ok): 1
+        set(Mbl_running): 0
+    ]
+    if(_): {cmd = "w"} [
+        set(Mblrc_ok): 1
+        Mbl_save(_): 
+    ]
+    if(_): {cmd = "wq"} [
+        set(Mblrc_ok): 1
+        Mbl_save(_): 
+        set(Mbl_running): 0
+    ]
+    len(Mblrc_n): cmd
+    if(_): {Mblrc_n > 2} [
+        slice(Mblrc_p): cmd 0 2
+        if(_): {Mblrc_p = "w "} [
+            set(Mblrc_ok): 1
+            slice(Mbl_file): cmd 2 {Mblrc_n - 2}
+            set(Mbl_showname): Mbl_file
+            Mbl_save(_): 
+        ]
+    ]
+    if(_): {cmd = "e"} [
+        set(Mblrc_ok): 1
+        Mbl_load(_): Mbl_file
+    ]
+    len(Mblrc_n): cmd
+    if(_): {Mblrc_n > 2} [
+        slice(Mblrc_p2): cmd 0 2
+        if(_): {Mblrc_p2 = "e "} [
+            set(Mblrc_ok): 1
+            slice(Mbl_file): cmd 2 {Mblrc_n - 2}
+            set(Mbl_showname): Mbl_file
+            Mbl_load(_): Mbl_file
+        ]
+    ]
+    if(_): {Mblrc_ok = 0} [
+        set(Mbl_msg): "not an editor command"
+    ]
+]
+
+Mbl_command(r): [
+    set(Mbl_mode): 2
+    set(Mbl_msg): ":"
+    set(Mblcm_cmd): ""
+    set(Mblcm_ok): 0
+    set(Mblcm_done): 0
+    while(_): {Mblcm_done = 0} [
+        Mbl_render(_): 
+        Mbl_next(Mblcm_b): 
+        if(_): {Mblcm_b < 0} [
+            set(Mblcm_done): 1
+        ]
+        if(_): {Mblcm_b = 13} [
+            set(Mblcm_done): 1
+            set(Mblcm_ok): 1
+        ]
+        if(_): {Mblcm_b = 10} [
+            set(Mblcm_done): 1
+            set(Mblcm_ok): 1
+        ]
+        if(_): {Mblcm_b = 27} [
+            set(Mblcm_done): 1
+        ]
+        if(_): {Mblcm_b = 3} [
+            set(Mblcm_done): 1
+        ]
+        if(_): {Mblcm_b = 8} [
+            set(Mblcm_b): 127
+        ]
+        if(_): {Mblcm_b = 127} [
+            len(Mblcm_cl): Mblcm_cmd
+            if(_): {Mblcm_cl > 0} [
+                slice(Mblcm_cmd): Mblcm_cmd 0 {Mblcm_cl - 1}
+                set(Mbl_msg): ":"
+                concat(Mbl_msg): Mbl_msg Mblcm_cmd
+            ]
+        ]
+        if(_): {Mblcm_b > 31} [
+            if(_): {Mblcm_b < 127} [
+                slice(Mblcm_ch): Mbl_ascii {Mblcm_b - 32} 1
+                concat(Mblcm_cmd): Mblcm_cmd Mblcm_ch
+                concat(Mbl_msg): Mbl_msg Mblcm_ch
+            ]
+        ]
+    ]
+    set(Mbl_mode): 0
+    set(Mbl_msg): ""
+    if(_): {Mblcm_ok = 1} [
+        Mbl_runcmd(_): Mblcm_cmd
+    ]
+    set(r): 0
+]
+
+# ---------- key dispatch ----------
+
+Mbl_dispatch(r): b [
+    set(r): 0
+    if(_): {b = 27} [
+        Mbl_next(Mbldp_b2): 
+        if(_): {Mbldp_b2 = 91} [
+            Mbl_next(Mbldp_b3): 
+            Mbl_arrow(_): Mbldp_b3
+        ]
+        if(_): {Mbldp_b2 != 91} [
+            Mbl_escape(_): 
+            if(_): {Mbldp_b2 > 0 - 1} [
+                set(Mbl_pb): Mbldp_b2
+            ]
+        ]
+    ]
+    if(_): {b != 27} [
+        set(Mbldp_m): Mbl_mode
+        if(_): {Mbldp_m = 0} [
+            Mbl_normal(_): b
+        ]
+        if(_): {Mbldp_m = 1} [
+            Mbl_insert(_): b
+        ]
+    ]
+]
+
+# ---------- entry ----------
+
+init(ret): arg_cnt arg_vec [
+    set(Mbl_file): ""
+    set(Mbl_showname): "[No Name]"
+    if(_): {arg_cnt > 0} [
+        at(Mbl_file): arg_vec 0
+        set(Mbl_showname): Mbl_file
+    ]
+    Mbl_detect(_): 
+    Mbl_load(_): Mbl_file
+    Mbl_initesc(_): 
+    Mbl_termsize(_): 
+    set(Mbl_ascii): " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    set(Mbl_inq): ""
+    set(Mbl_pb): {0 - 1}
+    terminal_raw(Mblit_r1): 
+    set(Mbl_mode): 0
+    set(Mbl_cx): 0
+    set(Mbl_cy): 0
+    set(Mbl_top): 0
+    set(Mbl_pend): 0
+    set(Mbl_msg): ""
+    set(Mbl_running): 1
+    set(Mblit_s): Mbl_esc
+    concat(Mblit_s): Mblit_s "[2J"
+    concat(Mblit_s): Mblit_s Mbl_esc
+    concat(Mblit_s): Mblit_s "[H"
+    template(_): "STR" Mblit_s
+    while(_): {Mbl_running = 1} [
+        Mbl_render(_): 
+        Mbl_next(Mbl_b): 
+        if(_): {Mbl_b < 0} [
+            set(Mbl_running): 0
+        ]
+        if(_): {Mbl_b > 0 - 1} [
+            Mbl_dispatch(_): Mbl_b
+        ]
+    ]
+    terminal_sane(Mblit_r2): 
+    set(Mblit_s2): Mbl_esc
+    concat(Mblit_s2): Mblit_s2 "[2J"
+    concat(Mblit_s2): Mblit_s2 Mbl_esc
+    concat(Mblit_s2): Mblit_s2 "[H"
+    template(_): "STR" Mblit_s2
+    set(ret): 0
+]
