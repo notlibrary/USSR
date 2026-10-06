@@ -52,7 +52,8 @@ the whole thing is running forward like a steam engine now it's all about quanti
 and other statistical parameters you can imagine
 
 The project uses real existing geographical toponyms or cultural significant objects to name it's scripts 
-e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon tver.su - file manager russia.su - bootstrapped interpreter petersburg.su - gui library etc
+e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon tver.su - file manager russia.su - bootstrapped interpreter petersburg.su - gui library 
+moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
 ./ussr ural.su instsall ukraine russia
