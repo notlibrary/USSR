@@ -56,6 +56,9 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-./ussr ural.su instsall ukraine russia
+```USSR
+$include "ural.su"
+instsall(code): "ukraine russia"
+```
 
 P.S. СССР Средство Создания Совершенных Разработок
