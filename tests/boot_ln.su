@@ -1,0 +1,8 @@
+# Bootstrap check of the fixed math.su ln (atanh series).
+init(ret): arg_cnt arg_vec [
+    ln(a): 1
+    print(_): a
+    ln(b): 10
+    print(_): b
+    set(ret): 0
+]

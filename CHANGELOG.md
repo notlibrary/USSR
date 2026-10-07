@@ -18,6 +18,12 @@
 - Renamed the bootstrap `ussr.su` to `russia.su` and the builtin
   editor `vibe.su` to `Mbl.su`
 
+### Fixed
+- Fixed math.su `ln`: the fitted degree-12 polynomial had a wrong
+  constant term (ln(1) came out as -3.1 and ln(e) as -0.33);
+  replaced with the atanh series 2*(z + z^3/3 + z^5/5 + ...) on the
+  same range reduction, accurate to full double precision
+
 ### Documentation
 - Documented the standard library modules (io/bytes/math/standard)
   in the user manual
