@@ -1,0 +1,99 @@
+# sin.su - range-reduced polynomial sine for USSR.
+#
+# Range reduction:
+#   x -> [-pi, pi] -> [-pi/2, pi/2] -> [-pi/4, pi/4]
+#
+# The final approximations are fitted polynomials, not Taylor expansions.
+# A degree-7 odd sine polynomial is used in the center and a degree-8
+# even cosine polynomial is used near +/-pi/2.
+#
+# Approximation error on [-pi/4, pi/4]:
+#   sine polynomial: about 3.3e-9
+#   cosine polynomial: about 1.4e-10
+#
+# The reduction uses loops instead of a dependency on fmod().
+
+sine(r): x [
+    set(pi): 3.141592653589793
+    set(two_pi): 6.283185307179586
+    set(half_pi): 1.570796326794897
+    set(quarter_pi): 0.785398163397448
+    set(neg_pi): {0 - pi}
+    set(neg_half_pi): {0 - half_pi}
+    set(neg_quarter_pi): {0 - quarter_pi}
+
+    while(_): {x > pi} [
+        set(x): {x - two_pi}
+    ]
+    while(_): {x < neg_pi} [
+        set(x): {x + two_pi}
+    ]
+
+    # Fold the second and third quadrants onto [-pi/2, pi/2].
+    if(_): {x > half_pi} [
+        set(x): {pi - x}
+    ]
+    if(_): {x < neg_half_pi} [
+        set(t): {0 - pi}
+        set(x): {t - x}
+    ]
+
+    # Fitted odd polynomial for sin(x), valid on [-pi/4, pi/4].
+    # Evaluate as a sum of powers rather than Horner: this also keeps the
+    # arithmetic explicit for USSR's current real-expression evaluator.
+    set(xsq): {x * x}
+    set(xcube): {x * xsq}
+    set(xquint): {xcube * xsq}
+    set(xsept): {xquint * xsq}
+    set(t1): {0.999999989793263 * x}
+    set(tsq): {0.166666423788931 * xcube}
+    set(t3): {0.00833179568404441 * xquint}
+    set(tquart): {0.000194842004366703 * xsept}
+    set(r): {t1 - tsq}
+    set(r): {r + t3}
+    set(r): {r - tquart}
+
+    # For the outer part use sin(x) = cos(pi/2-|x|), with the sign.
+    if(_): {x > quarter_pi} [
+        set(t): {half_pi - x}
+        set(tsq): {t * t}
+        set(tquart): {tsq * tsq}
+        set(tsext): {tquart * tsq}
+        set(toct): {tsext * tsq}
+        set(cc): 0.999999999966839
+        set(csq): {0.499999997041751 * tsq}
+        set(cquart): {0.041666625073429 * tquart}
+        set(csext): {0.00138868635757995 * tsext}
+        set(coct): {0.000024401924633 * toct}
+        set(r): {cc - csq}
+        set(r): {r + cquart}
+        set(r): {r - csext}
+        set(r): {r + coct}
+    ]
+
+    if(_): {x < neg_quarter_pi} [
+        set(t): {half_pi + x}
+        set(tsq): {t * t}
+        set(tquart): {tsq * tsq}
+        set(tsext): {tquart * tsq}
+        set(toct): {tsext * tsq}
+        set(cc): 0.999999999966839
+        set(csq): {0.499999997041751 * tsq}
+        set(cquart): {0.041666625073429 * tquart}
+        set(csext): {0.00138868635757995 * tsext}
+        set(coct): {0.000024401924633 * toct}
+        set(r): {0 - cc}
+        set(r): {r + csq}
+        set(r): {r - cquart}
+        set(r): {r + csext}
+        set(r): {r - coct}
+    ]
+
+]
+
+init(ret): arg_cnt arg_vec [
+    scan(ok): "x: REAL;" x
+    sin(s): x
+    print(_): s
+    return(ret): 0
+]

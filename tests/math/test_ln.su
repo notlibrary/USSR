@@ -1,0 +1,77 @@
+
+ln(r): x [
+    set(sqrt_half): 0.707106781186548
+    set(sqrt_two): 1.414213562373095
+    set(ln_two): 0.6931471805599453
+    set(e): 0
+
+    # ln is defined here only for positive real x.
+    if(_): {x <= 0} [
+        set(r): 0
+        return(r): r
+    ]
+
+    # Range reduction: x = m * 2^e.
+    while(_): {x > sqrt_two} [
+        set(x): {x / 2}
+        set(e): {e + 1}
+    ]
+    while(_): {x < sqrt_half} [
+        set(x): {x * 2}
+        set(e): {e - 1}
+    ]
+
+    # Fitted degree-12 polynomial for ln(m).
+    # Evaluate powers explicitly to keep this friendly to the current
+    # USSR real-expression evaluator.
+    set(t): {x - 1}
+    set(t2): {t * t}
+    set(t3): {t2 * t}
+    set(t4): {t3 * t}
+    set(t5): {t4 * t}
+    set(t6): {t5 * t}
+    set(t7): {t6 * t}
+    set(t8): {t7 * t}
+    set(t9): {t8 * t}
+    set(t10): {t9 * t}
+    set(t11): {t10 * t}
+    set(t12): {t11 * t}
+
+    set(r): -3.1008762043328355
+    set(r): -3.1008762043328355
+    set(term): {11.942979116723437 * t}
+    set(r): {r + term}
+    set(term): {32.528916223050715 * t2}
+    set(r): {r - term}
+    set(term): {71.249121208646372 * t3}
+    set(r): {r + term}
+    set(term): {117.93752207290035 * t4}
+    set(r): {r - term}
+    set(term): {147.36949817037649 * t5}
+    set(r): {r + term}
+    set(term): {139.20308643650262 * t6}
+    set(r): {r - term}
+    set(term): {98.895517061264641 * t7}
+    set(r): {r + term}
+    set(term): {52.053431326793479 * t8}
+    set(r): {r - term}
+    set(term): {19.700726110340572 * t9}
+    set(r): {r + term}
+    set(term): {5.0724633898296609 * t10}
+    set(r): {r - term}
+    set(term): {0.79591197965958238 * t11}
+    set(r): {r + term}
+    set(term): {0.057457993591416102 * t12}
+    set(r): {r - term}
+    set(term): {e * ln_two}
+    set(r): {r + term}
+    return(r): r
+]
+
+# Test the USSR range-reduced polynomial ln.
+init(ret): arg_cnt arg_vec [
+    scan(ok): "x: REAL;" x
+    ln(r): x
+    print(_): r
+    return(ret): 0
+]
