@@ -1,6 +1,6 @@
 
 # ln.su
-# Range-reduced polynomial approximation of natural logarithm.
+# Range-reduced series for the natural logarithm.
 #
 # For x > 0:
 #
@@ -14,10 +14,12 @@
 #
 #     ln(x) = ln(m) + e * ln(2)
 #
-# ln(m) is approximated by a fitted degree-12 polynomial.
-# The polynomial is evaluated with Horner's method.
+# ln(m) uses the atanh series with z = (m - 1) / (m + 1):
 #
-# This is NOT a Taylor-series implementation.
+#     ln(m) = 2 * (z + z^3/3 + z^5/5 + ...)
+#
+# On the reduced interval |z| <= 0.1716, so 12 terms land at full
+# double precision (worst-case error about 1e-19 before rounding).
 
 ln(r): x [
     set(sqrt_half): 0.7071067811865475
@@ -49,41 +51,32 @@ ln(r): x [
         set(e): {e - 1}
     ]
 
-    # Polynomial variable.
+    # atanh series variable.
     #
-    # t = x - 1
-    #
-    # The polynomial coefficients are fitted to ln(x)
-    # over the reduced interval.
+    # z = (m - 1) / (m + 1)
 
-    set(t): {x - 1}
+    set(z): {(x - 1) / (x + 1)}
+    set(zsq): {z * z}
+    set(term): z
+    set(sum): z
 
-    # Degree 12 fitted polynomial.
-    #
-    # r = (((((c12*t + c11)*t + c10)*t + ...)*t + c1)*t + c0)
+    # 12 odd-power terms: z^3/3 .. z^25/25.
 
-    set(r): 0.057457993591416102
-    set(r): {r * t + 0.79591197965958238}
-    set(r): {r * t - 5.0724633898296609}
-    set(r): {r * t + 19.700726110340572}
-    set(r): {r * t - 52.053431326793479}
-    set(r): {r * t + 98.895517061264641}
-    set(r): {r * t - 139.20308643650262}
-    set(r): {r * t + 147.36949817037649}
-    set(r): {r * t - 117.93752207290035}
-    set(r): {r * t + 71.249121208646372}
-    set(r): {r * t - 32.528916223050715}
-    set(r): {r * t + 11.942979116723437}
-    set(r): {r * t - 3.1008762043328355}
+    set(i): 1
+    while(_): {i < 12} [
+        set(term): {term * zsq}
+        set(denom): {2 * i + 1}
+        set(sum): {sum + term / denom}
+        add(i): i 1
+    ]
 
-    # Restore the exponent contribution.
+    # ln(m) = 2 * atanh(z); restore the exponent contribution.
 
-    set(r): {r + e * ln_two}
+    set(r): {2 * sum + e * ln_two}
 
     return(r): r
 ]
 
-# Test the USSR range-reduced polynomial ln.
 init(ret): arg_cnt arg_vec [
     scan(ok): "x: REAL;" x
     ln(r): x
