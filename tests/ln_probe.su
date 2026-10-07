@@ -1,0 +1,12 @@
+$include "math.su"
+init(ret): arg_cnt arg_vec [
+    ln(a): 1
+    print(_): a
+    ln(b): M_E
+    print(_): b
+    ln(c): 10
+    print(_): c
+    ln(d): 0
+    print(_): d
+    set(ret): 0
+]
