@@ -13,7 +13,7 @@
 #
 # The reduction uses loops instead of a dependency on fmod().
 
-sine(r): x [
+sin(r): x [
     set(pi): 3.141592653589793
     set(two_pi): 6.283185307179586
     set(half_pi): 1.570796326794897
