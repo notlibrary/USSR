@@ -3,10 +3,24 @@
 ## [Unreleased]
 
 ### Added
+- Added io.su stream primitives to the `russia.su` bootstrap VM:
+  `open_file` `close_file` `write_file` `read_file` with C-style modes
+  ("r" "w" "a" "rb" "wb" "ab" and "+" variants)
+- Added bytes.su memset analogs to the `russia.su` bootstrap VM:
+  `set_bytes` `clear_bytes`
+- Added boot_lib.su bootstrap test; extended lib_io.su with append,
+  binary and counted-read coverage
+
+### Changed
+- **Breaking:** `set_bytes(_): value vec` / `clear_bytes(_): vec`
+  fill the whole vector (memset-style); the old `vec value count` /
+  `vec count` forms are gone
+- Renamed the bootstrap `ussr.su` to `russia.su` and the builtin
+  editor `vibe.su` to `Mbl.su`
 
 ### Documentation
-
-### Maintenance
+- Documented the standard library modules (io/bytes/math/standard)
+  in the user manual
 
 ## [0.4.6] - 2026-10-5
 

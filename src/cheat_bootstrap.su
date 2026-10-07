@@ -1,7 +1,7 @@
 # USSR self-host bootstrap driver.
 #
 # Usage:
-#     ./ussr ussr.su program.su [args...]
+#     ./ussr russia.su program.su [args...]
 #
 # The driver is itself a USSR program.  It loads the requested source
 # through the advanced command-list pipeline, then evaluates it as a
@@ -10,7 +10,7 @@
 
 init(ret): arg_cnt arg_vec [
     if(_): {arg_cnt = 0} [
-        print(_): "usage: ussr.su program.su [args...]"
+        print(_): "usage: russia.su program.su [args...]"
         return(_): 1
     ]
 

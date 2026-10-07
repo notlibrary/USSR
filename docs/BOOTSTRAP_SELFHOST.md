@@ -1,6 +1,6 @@
 # USSR self-host bootstrap
 
-`ussr.su` is the self-hosted compiler/interpreter bootstrap.  It does not use
+`russia.su` is the self-hosted compiler/interpreter bootstrap.  It does not use
 `eval`, `chain`, or `capture` to hand the target program back to the C runtime.
 
 The pipeline is:
@@ -10,7 +10,7 @@ The pipeline is:
 3. AST representation written in USSR (`nd`).
 4. USSR bytecode compiler written in USSR (`cv_*`).
 5. USSR bytecode VM written in USSR (`vm_*`).
-6. The C executable is only the stage-0 bootstrap that starts `ussr.su`.
+6. The C executable is only the stage-0 bootstrap that starts `russia.su`.
 
 The bootstrap currently includes the fixes for:
 
@@ -20,11 +20,11 @@ The bootstrap currently includes the fixes for:
 
 Build the stage-0 executable using the normal project build, then run:
 
-    ./ussr src/ussr.su tests/hello.su
+    ./ussr src/russia.su tests/hello.su
 
 or from `src`:
 
-    ./../ussr ussr.su ../tests/hello.su
+    ./../ussr russia.su ../tests/hello.su
 
 This is a bootstrap stage, not yet a replacement for every OS-facing C service.
 External process execution and some compatibility commands still belong to the
