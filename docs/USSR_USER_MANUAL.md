@@ -506,14 +506,52 @@ it has just dropped a large structure.
   `load`, `gc`) are bytecode-VM features. Inside `@[]` advanced
   control blocks (the tree-walking interpreter) there is no resumable
   VM state, so they are rejected with a clear error there.
-- The `ussr.su` bootstrap implements the same scheduler in pure USSR
+- The `russia.su` bootstrap implements the same scheduler in pure USSR
   inside its own bytecode VM. There time is a *logical* tick (one VM
   slice is one tick, idle time jumps straight to the next timer), and
   a loaded file shares the main program's function table, so a
   definition in a loaded file that reuses a main-file name is
   shadowed by the main-file version (the entry point itself is
   resolved correctly among the loaded definitions).
-- The `ussr.su` bootstrap does not implement the `!`/`?` hash sigils.
+- The `russia.su` bootstrap does not implement the `!`/`?` hash sigils.
+
+---
+
+## 14. Standard library
+
+The library sources live in `libs/` (`io.su`, `bytes.su`, `math.su`,
+`standard.su`); each module's header comment lists what it owns. The
+file and byte primitives are real host operations, independent of the
+whole-file `readfile`/`writefile` VM builtins.
+
+**io.su — stream files with C-style handles:**
+
+```
+open_file(h): "path" "mode"   # h >= 0 is a handle, -1 on error
+close_file(ok): h
+write_file(n): h "text"       # n = bytes written
+read_file(s): h [n]           # rest of file, or n bytes
+```
+
+`mode` is a C `fopen` mode: `"r"` `"w"` `"a"`, the binary forms
+`"rb"` `"wb"` `"ab"`, and the `"+"` update variants.
+
+```
+open_file(h): "log.txt" "a"
+write_file(_): h "one more line\n"
+close_file(_): h
+```
+
+**bytes.su — memset analogs over vectors:**
+
+```
+set_bytes(v): value bytes     # every item of bytes := value (0..255)
+clear_bytes(v): bytes         # set_bytes with value 0
+```
+
+**math.su:** `sin(r): x`, `ln(r): x` plus the `M_PI` / `M_E`
+preprocessor macros. **standard.su:** `random64(r):`,
+`seed_random64(_): seed`, `time(r):`.
 
 ---
 

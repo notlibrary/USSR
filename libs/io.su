@@ -3,9 +3,13 @@
 #   template(ok): "TYPE;TYPE;..." value...   (printf-style output)
 #   scan(ok): "prompt TYPE;TYPE;..." dest... (line/token input)
 #   open_file(h): "path" "mode"              (stream open, h >= 0 or -1)
+#     mode is a C fopen mode: "r" "w" "a" "rb" "wb" "ab"
+#     (and the "+" update variants r+ w+ a+ rb+ r+b ...)
 #   close_file(ok): h                        (stream close)
 #   write_file(n): h "text"                  (bytes written)
 #   read_file(s): h [n]                      (rest of file, or n bytes)
+# These are real stream operations on open handles; the whole-file
+# readfile/writefile VM builtins stay available separately.
 # Library-provided helpers:
 #   putch(ok): code                          (write one byte/char)
 #   getch(code):                             (read one char, -1 at EOF)

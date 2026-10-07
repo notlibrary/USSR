@@ -822,7 +822,7 @@ static int oop_do_readfile(
 }
 
 /* ------------------------------------------------------------- */
-/* Portable host primitives for interactive programs (vibe.su).  */
+/* Portable host primitives for interactive programs (Mbl.su).   */
 /* Same command set on POSIX and Windows:                        */
 /*   writefile(v): path data    -> 0 ok / 1 error (non-fatal)    */
 /*   file_exists(v): path       -> 1 yes / 0 no                  */
@@ -1618,9 +1618,10 @@ static int oop_do_math_unary(
 /* ------------------------------------------------------------- */
 /* bytes.su primitives (memset analogs)                            */
 /*                                                                 */
-/* set_bytes(v): vec value count -> first count items of vec set to */
-/*                                 value (0..255); returns vec      */
-/* clear_bytes(v): vec count     -> set_bytes with value 0          */
+/* set_bytes(r): value vec -> every item of vec set to value        */
+/*                            (0..255), like memset(vec, value,     */
+/*                            sizeof vec); returns vec              */
+/* clear_bytes(r): vec     -> set_bytes with value 0                */
 /* ------------------------------------------------------------- */
 
 static int oop_do_set_bytes(
@@ -1632,33 +1633,25 @@ static int oop_do_set_bytes(
 {
     ussr_value_t vec_v;
     ussr_value_t value_v;
-    ussr_value_t count_v;
     ussr_vector_t *vector;
     long fill = 0;
-    long count;
-    long i;
+    size_t count;
+    size_t i;
 
-    if (argument_count != (clear ? 2u : 3u))
+    if (argument_count != (clear ? 1u : 2u))
     {
         fprintf(stderr,
                 clear
-                    ? "USSR: clear_bytes(v): vec count\n"
-                    : "USSR: set_bytes(v): vec value count\n");
+                    ? "USSR: clear_bytes(r): vec\n"
+                    : "USSR: set_bytes(r): value vec\n");
         return -1;
     }
 
-    if (oop_eval(&arguments[0], &vec_v) != 0)
+    if (!clear && oop_eval(&arguments[0], &value_v) != 0)
         return -1;
 
-    if (!clear && oop_eval(&arguments[1], &value_v) != 0)
+    if (oop_eval(&arguments[clear ? 0 : 1], &vec_v) != 0)
     {
-        ussr_value_free(&vec_v);
-        return -1;
-    }
-
-    if (oop_eval(&arguments[clear ? 1 : 2], &count_v) != 0)
-    {
-        ussr_value_free(&vec_v);
         if (!clear)
             ussr_value_free(&value_v);
         return -1;
@@ -1667,52 +1660,37 @@ static int oop_do_set_bytes(
     if (!clear && !oop_expect_integer(&value_v, &fill))
     {
         fprintf(stderr, "USSR: set_bytes value must be an integer\n");
-        ussr_value_free(&vec_v);
         ussr_value_free(&value_v);
-        ussr_value_free(&count_v);
-        return -1;
-    }
-
-    if (!oop_expect_integer(&count_v, &count) || count < 0)
-    {
-        fprintf(stderr, "USSR: set_bytes count must be >= 0\n");
         ussr_value_free(&vec_v);
-        if (!clear)
-            ussr_value_free(&value_v);
-        ussr_value_free(&count_v);
         return -1;
     }
 
     if (!oop_expect_vector(&vec_v, &vector))
     {
         fprintf(stderr, "USSR: set_bytes expects a vector\n");
-        ussr_value_free(&vec_v);
         if (!clear)
             ussr_value_free(&value_v);
-        ussr_value_free(&count_v);
+        ussr_value_free(&vec_v);
         return -1;
     }
 
-    if ((size_t)count > ussr_vector_length(vector))
-        count = (long)ussr_vector_length(vector);
+    count = ussr_vector_length(vector);
 
     for (i = 0; i < count; ++i)
     {
         ussr_value_t byte_value = ussr_integer(fill);
-        if (!ussr_vector_set(vector, (size_t)i, byte_value))
+        if (!ussr_vector_set(vector, i, byte_value))
         {
             fprintf(stderr, "USSR: set_bytes: incompatible element\n");
-            ussr_value_free(&vec_v);
             if (!clear)
                 ussr_value_free(&value_v);
-            ussr_value_free(&count_v);
+            ussr_value_free(&vec_v);
             return -1;
         }
     }
 
     if (!clear)
         ussr_value_free(&value_v);
-    ussr_value_free(&count_v);
 
     *out_result = vec_v; /* ownership moves to the result */
     return 0;

@@ -1,0 +1,26 @@
+# Bootstrap library-native test: io.su stream primitives and bytes.su
+# memset analogs exercised on the bootstrap bytecode VM. The yield(_)
+# forces the scheduler (VM) route instead of the tree walker.
+init(ret): arg_cnt arg_vec [
+    yield(_): 0
+    open_file(h): "tests/boot_lib_tmp.txt" "w"
+    write_file(n): h "boot io"
+    close_file(ok): h
+    open_file(h2): "tests/boot_lib_tmp.txt" "r"
+    read_file(s): h2
+    close_file(ok2): h2
+    print(_): s
+    vec(v): ""
+    push(_): v 1
+    push(_): v 2
+    push(_): v 3
+    set_bytes(_): 7 v
+    at(a0): v 0
+    at(a2): v 2
+    print(_): a0
+    print(_): a2
+    clear_bytes(_): v
+    at(a1): v 1
+    print(_): a1
+    set(ret): 0
+]

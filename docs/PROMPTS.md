@@ -370,3 +370,16 @@ so the hierarchy of init entry points are:
 2. global init without process mark
 3. local init with process mark invoked by load command from upper hierarchy entry points
 
+Now let's polish standard library
+library source are in lib folder
+
+`open_file(_) "name" mode` `close_file(_) file` `write_file(_): file var` `read_file(_): file var` goes to io.su 
+`set_bytes(_): val bytes`
+(memset analog) and 
+`clear_bytes(_): bytes` (set_bytes(bytes): 0) goes to bytes.su
+
+Do file operations anyway even they are in VM readfile writefile
+
+open_file mode is like in c "rb" "wb" "r" "w" "a"
+
+

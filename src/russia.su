@@ -1,5 +1,5 @@
 # USSR interpreter in USSR. Stage M1: lexer + token dump.
-# Usage: ./ussr ussr.su program.su
+# Usage: ./ussr russia.su program.su
 # The interpreted program is lexed by this code; nothing is handed
 # back to the host interpreter (no eval no chain/capture).
 
@@ -3457,6 +3457,12 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "async"} [ cv_async2(r): nd ]
         if(_): {nm = "process"} [ cv_process2(r): nd ]
         if(_): {nm = "load"} [ cv_load2(r): nd ]
+        if(_): {nm = "open_file"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "close_file"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "write_file"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "read_file"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "set_bytes"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "clear_bytes"} [ cv_native2(r): nd nm ]
         set(cv_kn): 1
         if(_): {nm = "set"} [ set(cv_kn): 0 ]
         if(_): {nm = "print"} [ set(cv_kn): 0 ]
@@ -3496,6 +3502,12 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "async"} [ set(cv_kn): 0 ]
         if(_): {nm = "process"} [ set(cv_kn): 0 ]
         if(_): {nm = "load"} [ set(cv_kn): 0 ]
+        if(_): {nm = "open_file"} [ set(cv_kn): 0 ]
+        if(_): {nm = "close_file"} [ set(cv_kn): 0 ]
+        if(_): {nm = "write_file"} [ set(cv_kn): 0 ]
+        if(_): {nm = "read_file"} [ set(cv_kn): 0 ]
+        if(_): {nm = "set_bytes"} [ set(cv_kn): 0 ]
+        if(_): {nm = "clear_bytes"} [ set(cv_kn): 0 ]
         if(_): {cv_kn = 1} [
             cv_defcall2(r): nd nm
         ]
@@ -4916,6 +4928,12 @@ vm_scan2(r): fmt [
         decode(r): vm_tok
     ]
 ]
+# read_file's second argument (byte count) is optional; the host
+# command must be called with exactly as many arguments as given.
+vm_readfileN(r): nb [
+    if(_): {nb = 1} [ read_file(r): rt_na0 ]
+    if(_): {nb > 1} [ read_file(r): rt_na0 rt_na1 ]
+]
 vm_native_d(r): name dst nb [
     set(r): 0
     if(_): {name = "new"} [ vm_newobj(r): nb ]
@@ -4926,6 +4944,17 @@ vm_native_d(r): name dst nb [
     if(_): {name = "readfile"} [ readfile(r): rt_na0 ]
     if(_): {name = "random64"} [ random64(r): ]
     if(_): {name = "seed_random64"} [ seed_random64(r): rt_na0 ]
+    # io.su stream primitives: real host file operations with C-style
+    # modes ("r" "w" "a" "rb" "wb" ...), not the whole-file VM
+    # readfile/writefile.
+    if(_): {name = "open_file"} [ open_file(r): rt_na0 rt_na1 ]
+    if(_): {name = "close_file"} [ close_file(r): rt_na0 ]
+    if(_): {name = "write_file"} [ write_file(r): rt_na0 rt_na1 ]
+    if(_): {name = "read_file"} [ vm_readfileN(r): nb ]
+    # bytes.su memset analogs: set_bytes(r): value vec fills the whole
+    # vector, clear_bytes(r): vec fills it with zero.
+    if(_): {name = "set_bytes"} [ set_bytes(r): rt_na0 rt_na1 ]
+    if(_): {name = "clear_bytes"} [ clear_bytes(r): rt_na0 ]
     set(vm_m4): 0
     if(_): {name = "new"} [ set(vm_m4): 1 ]
     if(_): {name = "template"} [ set(vm_m4): 1 ]
@@ -4935,6 +4964,12 @@ vm_native_d(r): name dst nb [
     if(_): {name = "readfile"} [ set(vm_m4): 1 ]
     if(_): {name = "random64"} [ set(vm_m4): 1 ]
     if(_): {name = "seed_random64"} [ set(vm_m4): 1 ]
+    if(_): {name = "open_file"} [ set(vm_m4): 1 ]
+    if(_): {name = "close_file"} [ set(vm_m4): 1 ]
+    if(_): {name = "write_file"} [ set(vm_m4): 1 ]
+    if(_): {name = "read_file"} [ set(vm_m4): 1 ]
+    if(_): {name = "set_bytes"} [ set(vm_m4): 1 ]
+    if(_): {name = "clear_bytes"} [ set(vm_m4): 1 ]
     if(_): {vm_m4 = 0} [
         vm_native_e(r): name dst nb
     ]
@@ -5736,8 +5771,8 @@ init(ret): arg_cnt arg_vec [
 ]
 
 # ---------- REPL ----------
-# Read-eval-print loop, entered when ussr.su itself runs with no target
-# program (./ussr ussr.su). Each line is read through the host one at a
+# Read-eval-print loop, entered when russia.su itself runs with no target
+# program (./ussr russia.su). Each line is read through the host one at a
 # time (Enter-terminated, no Ctrl-D needed): a nested eval runs head -1
 # and captures its stdout through the chain machinery into a scratch file.
 # Input accumulates until square brackets balance (string-aware, like the
