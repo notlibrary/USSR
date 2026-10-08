@@ -1,0 +1,7 @@
+$include "math.su"
+
+pow(a): M_E M_PI
+print(_): a
+
+pow(a): M_PI M_E
+print(_): a

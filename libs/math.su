@@ -252,3 +252,108 @@ abs(r): x [
     set(r): x
     return(r): r
 ]
+
+# exp.su
+# Exponential function.
+#
+# exp(x) = e^x
+#
+# Range reduction:
+#
+#     x = k * ln(2) + r
+#
+# therefore:
+#
+#     e^x = 2^k * e^r
+#
+# The polynomial is evaluated with Horner's method.
+
+exp(r): x [
+    set(ln_two): 0.69314718055994530942
+
+    # Split x into an integer multiple of ln(2)
+    # and a small remainder.
+    #
+    # k is chosen so that r is approximately
+    # in [-ln(2)/2, ln(2)/2].
+
+    set(k): {x / ln_two}
+
+    if(_): {k >= 0} [
+        set(k): {k + 0.5}
+    ]
+
+    if(_): {k < 0} [
+        set(k): {k - 0.5}
+    ]
+
+    # USSR integer conversion through division/modulo
+    # is not yet guaranteed to provide floor(), so
+    # keep the reduction explicit.
+
+    set(n): 0
+
+    while(_): {k >= 1} [
+        set(k): {k - 1}
+        set(n): {n + 1}
+    ]
+
+    while(_): {k <= -1} [
+        set(k): {k + 1}
+        set(n): {n - 1}
+    ]
+
+    set(r): {x - n * ln_two}
+
+    # e^r polynomial.
+    #
+    # Coefficients of the Taylor polynomial are used
+    # only over the small reduced interval.
+    #
+    # e^r ≈
+    #
+    # 1 + r + r²/2! + ... + r^12/12!
+
+    set(p): 0.00000000208767569878681
+    set(p): {p * r + 0.0000000250521083854417}
+    set(p): {p * r + 0.000000275573192239859}
+    set(p): {p * r + 0.00000275573192239859}
+    set(p): {p * r + 0.0000248015873015873}
+    set(p): {p * r + 0.000198412698412698}
+    set(p): {p * r + 0.00138888888888889}
+    set(p): {p * r + 0.00833333333333333}
+    set(p): {p * r + 0.0416666666666667}
+    set(p): {p * r + 0.166666666666667}
+    set(p): {p * r + 0.5}
+    set(p): {p * r + 1}
+    set(p): {p * r + 1}
+
+    # Restore the power of two.
+    #
+    # p = e^r
+    # result = p * 2^n
+
+    if(_): {n > 0} [
+        while(_): {n > 0} [
+            set(p): {p * 2}
+            set(n): {n - 1}
+        ]
+    ]
+
+    if(_): {n < 0} [
+        while(_): {n < 0} [
+            set(p): {p / 2}
+            set(n): {n + 1}
+        ]
+    ]
+
+    set(r): p
+    return(r): r
+]
+
+pow(r): x y [
+    ln(l): x
+    set(t): {y * l}
+    exp(r): t
+    return(r): r
+]
