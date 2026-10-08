@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added a canonical TextMate grammar at highlighters/TextMate/ussr.tmLanguage.json covering the 0.4.6+ surface (scheduler commands, io/bytes/math primitives, `$if`/`defined`, `M_PI`/`M_E`, hash sigils); the tree-sitter copy in highlighters/tree-sitter/syntaxes/ is updated to match
 
 ### Changed
 
