@@ -200,3 +200,55 @@ ln(r): x [
 
     return(r): r
 ]
+
+# cos.su
+# Cosine based on the USSR polynomial sin() implementation.
+
+cos(r): x [
+    set(pi): 3.14159265358979323846
+    set(half_pi): 1.57079632679489661923
+
+    set(r): {x + half_pi}
+
+    sin(r): r
+
+    return(r): r
+]
+
+# tan.su
+# Tangent based on sin() and cos().
+
+tan(r): x [
+    cos(c): x
+    sin(s): x
+
+    # tan(x) = sin(x) / cos(x)
+    set(r): {s / c}
+
+    return(r): r
+]
+
+# ctg.su
+# Cotangent based on sin() and cos().
+
+ctg(r): x [
+    cos(c): x
+    sin(s): x
+
+    # ctg(x) = cos(x) / sin(x)
+    set(r): {c / s}
+
+    return(r): r
+]
+
+# abs.su
+# Absolute value.
+
+abs(r): x [
+    if(_): {x < 0} [
+        set(x): {-x}
+    ]
+
+    set(r): x
+    return(r): r
+]
