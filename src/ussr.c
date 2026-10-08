@@ -116,6 +116,51 @@ static ussr_scope_t *ussr_current_scope_ptr = NULL;
 static ussr_hash_entry_t *map = NULL;
 static ussr_definition_t *definitions = NULL;
 
+/*
+ * Fast inverse square root, based on the classic Quake III algorithm.
+ *
+ * USSR REAL is double, while the original algorithm operates on
+ * IEEE-754 binary32 float. The argument is therefore converted to
+ * float before the bit-level approximation and converted back to
+ * double for the USSR result.
+ */
+static int
+ussr_fast_inverse_sqrt(
+    double number,
+    double *result
+)
+{
+    float x;
+    float x2;
+    float y;
+    uint32_t bits;
+    const float three_halfs = 1.5F;
+
+    if (result == NULL || number <= 0.0 || !isfinite(number))
+        return -1;
+
+    x = (float)number;
+
+    if (x <= 0.0F || !isfinite(x))
+        return -1;
+
+    x2 = x * 0.5F;
+    y = x;
+
+    memcpy(&bits, &y, sizeof(bits));
+
+    bits = UINT32_C(0x5f3759df) - (bits >> 1);
+
+    memcpy(&y, &bits, sizeof(y));
+
+    /* First Newton-Raphson iteration. */
+    y = y * (three_halfs - (x2 * y * y));
+
+    *result = (double)y;
+
+    return 0;
+}
+
 static ussr_scope_t *ussr_active_scope(void)
 {
     return ussr_current_scope_ptr != NULL
@@ -3910,8 +3955,54 @@ int ussr_execute_command(
 
         return 0;
     }
-    if (strcmp(command, "set") == 0)
-    {
+	if (strcmp(command, "finv_sqrt") == 0)
+	{
+		ussr_value_t argument_value;
+		double value;
+
+		if (argument_count != 1)
+		{
+			fprintf(
+				stderr,
+				"USSR: finv_sqrt expects 1 parameter\n"
+			);
+			return -1;
+		}
+
+		if (ussr_argument_evaluate(
+				&arguments[0],
+				&argument_value) != 0)
+			return -1;
+
+		if (!ussr_is_numeric(&argument_value))
+		{
+			fprintf(
+				stderr,
+				"USSR: finv_sqrt requires a numeric parameter\n"
+			);
+			ussr_value_free(&argument_value);
+			return -1;
+		}
+
+		if (ussr_fast_inverse_sqrt(
+				ussr_to_real(&argument_value),
+				&value
+			) != 0)
+		{
+			fprintf(
+				stderr,
+				"USSR: finv_sqrt requires a positive finite number\n"
+			);
+			ussr_value_free(&argument_value);
+			return -1;
+		}
+
+		ussr_value_free(&argument_value);
+
+		result = ussr_real(value);
+	}
+	else if (strcmp(command, "set") == 0)
+	{
         if (argument_count != 1)
         {
             fprintf(stderr, "USSR: set expects 1 parameter\n");

@@ -1,0 +1,26 @@
+# Fast inverse square root tests.
+# The result is an approximation, not an exact reciprocal square root.
+
+finv_sqrt(r): 1
+print(_): r
+
+finv_sqrt(r): 2
+print(_): r
+
+finv_sqrt(r): 4
+print(_): r
+
+finv_sqrt(r): 9
+print(_): r
+
+finv_sqrt(r): 16
+print(_): r
+
+finv_sqrt(r): 0.25
+print(_): r
+
+finv_sqrt(r): 100
+print(_): r
+
+finv_sqrt(r): 0.01
+print(_): r

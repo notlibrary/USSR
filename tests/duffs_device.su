@@ -1,0 +1,33 @@
+# Duff's device analogue in USSR.
+
+# tests/duffs_device.su
+
+set(n): 10
+set(i): 0
+set(r): 0
+
+do(_) [
+    choose(_): {n % 4} [
+        option(_): 0 [
+            set(i): {i + 1}
+            set(r): {r + i}
+        ]
+
+        option(_): 1 [
+            set(i): {i + 1}
+            set(r): {r + i}
+        ]
+
+        option(_): 2 [
+            set(i): {i + 1}
+            set(r): {r + i}
+        ]
+
+        option(_): 3 [
+            set(i): {i + 1}
+            set(r): {r + i}
+        ]
+    ]
+]
+
+print(_): r
