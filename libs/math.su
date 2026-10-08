@@ -1,11 +1,19 @@
 # math.su - numeric helpers.
-# Native VM primitives owned by this module:
-#   sin(r): x   -> sine of x (x in radians)
-#   ln(r): x    -> natural logarithm of x, x must be positive
 # Constants arrive as preprocessor macros:
 #   M_PI, M_E
-# sqrt(r): x uses Newton iterations and returns a real root.
-# Negative input returns -1 after printing an error.
+# Library-provided functions (pure USSR):
+#   sqrt(r): x      -> Newton iterations, -1 after error for x < 0
+#   sin(r): x       -> range-reduced fitted polynomials, radians
+#   cos(r): x       -> same reduction, radians
+#   ln(r): x        -> atanh series, x > 0 (0 after error otherwise)
+#   exp(r): x       -> range-reduced series
+#   pow(r): x y     -> exp(y * ln(x))
+#   floor(r): x     -> largest integer <= x
+#   ceil(r): x      -> smallest integer >= x
+#   atan(r): x      -> inverse tangent via reduction + Taylor series
+#   asin(r): x      -> atan(x / sqrt(1 - x^2)), |x| <= 1
+#   acos(r): x      -> pi/2 - asin(x), |x| <= 1
+#   atan2(r): y x   -> angle of point (x, y) in (-pi, pi]
 
 $define M_PI 3.14159265358979323846
 $define M_E 2.71828182845904523536
@@ -381,5 +389,150 @@ ceil(r): x [
     ]
 
     set(r): i
+    return(r): r
+]
+
+# atan.su - inverse tangent.
+#
+# Range reduction for x >= 0:
+#   x > 1            -> atan(x) = pi/2 - atan(1/x)
+#   x > tan(pi/12)   -> atan(x) = pi/6 + atan((x - t6) / (1 + x*t6))
+#                       with t6 = tan(pi/6) = 1/sqrt(3)
+#
+# The reduced argument is within |x| <= tan(pi/12) ~= 0.268, where the
+# Taylor series x - x^3/3 + x^5/5 - ... converges fast; 13 odd terms
+# give full double precision. Negative input is mirrored at the end.
+
+atan(r): x [
+    set(pi): 3.141592653589793
+    set(half_pi): 1.5707963267948966
+    set(sixth_pi): 0.5235987755982988
+    set(tan12): 0.2679491924311228
+    set(tan6): 0.5773502691896258
+
+    set(neg): 0
+    if(_): {x < 0} [
+        set(neg): 1
+        set(x): {0 - x}
+    ]
+
+    set(add): 0
+    if(_): {x > 1} [
+        set(x): {1.0 / x}
+        set(add): 1
+    ]
+
+    set(adj): 0
+    if(_): {x > tan12} [
+        set(x): {(x - tan6) / (1.0 + x * tan6)}
+        set(adj): 1
+    ]
+
+    set(xsq): {x * x}
+    set(term): x
+    set(sum): x
+    set(i): 1
+    while(_): {i < 14} [
+        set(term): {0 - term * xsq}
+        set(denom): {2 * i + 1}
+        set(sum): {sum + term / denom}
+        add(i): i 1
+    ]
+
+    if(_): {adj = 1} [
+        set(sum): {sum + sixth_pi}
+    ]
+    if(_): {add = 1} [
+        set(sum): {half_pi - sum}
+    ]
+    if(_): {neg = 1} [
+        set(sum): {0 - sum}
+    ]
+
+    set(r): sum
+    return(r): r
+]
+
+# asin.su - inverse sine through atan:
+#   asin(x) = atan(x / sqrt(1 - x^2)), |x| < 1
+# asin(+/-1) = +/-pi/2. Out-of-domain input prints an error and
+# returns 0, like ln returns 0 for x <= 0.
+
+asin(r): x [
+    set(half_pi): 1.5707963267948966
+    set(neg_one): {0 - 1}
+    set(ok): 1
+
+    if(_): {x > 1} [
+        print(_): "asin: out of domain"
+        set(ok): 0
+    ]
+    if(_): {x < neg_one} [
+        print(_): "asin: out of domain"
+        set(ok): 0
+    ]
+
+    set(r): 0
+    if(_): {ok = 1} [
+        if(_): {x = 1} [
+            set(r): half_pi
+        ]
+        if(_): {x = neg_one} [
+            set(r): {0 - half_pi}
+        ]
+        set(inner): 0
+        if(_): {x < 1} [
+            if(_): {x > neg_one} [
+                set(inner): 1
+            ]
+        ]
+        if(_): {inner = 1} [
+            sqrt(q): {1.0 - x * x}
+            atan(r): {x / q}
+        ]
+    ]
+    return(r): r
+]
+
+# acos.su - inverse cosine:
+#   acos(x) = pi/2 - asin(x)
+
+acos(r): x [
+    set(half_pi): 1.5707963267948966
+    asin(a): x
+    set(r): {half_pi - a}
+    return(r): r
+]
+
+# atan2.su - two-argument inverse tangent: the angle of the point
+# (x, y), result in (-pi, pi]. atan2(0, 0) is undefined and returns 0.
+
+atan2(r): y x [
+    set(pi): 3.141592653589793
+    set(half_pi): 1.5707963267948966
+    set(r): 0
+
+    if(_): {x > 0} [
+        atan(a): {y / x}
+        set(r): a
+    ]
+    if(_): {x < 0} [
+        atan(a): {y / x}
+        if(_): {y >= 0} [
+            set(r): {a + pi}
+        ]
+        if(_): {y < 0} [
+            set(r): {a - pi}
+        ]
+    ]
+    if(_): {x = 0} [
+        if(_): {y > 0} [
+            set(r): half_pi
+        ]
+        if(_): {y < 0} [
+            set(r): {0 - half_pi}
+        ]
+    ]
+
     return(r): r
 ]
