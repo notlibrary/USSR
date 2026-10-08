@@ -1,0 +1,23 @@
+floor(r): 3.7
+print(_): r
+
+floor(r): 3.0
+print(_): r
+
+floor(r): -3.7
+print(_): r
+
+floor(r): -3.0
+print(_): r
+
+ceil(r): 3.7
+print(_): r
+
+ceil(r): 3.0
+print(_): r
+
+ceil(r): -3.7
+print(_): r
+
+ceil(r): -3.0
+print(_): r

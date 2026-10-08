@@ -3,7 +3,6 @@
 ## [Unreleased]
 
 ### Added
-- Added a canonical TextMate grammar at highlighters/TextMate/ussr.tmLanguage.json covering the 0.4.6+ surface (scheduler commands, io/bytes/math primitives, `$if`/`defined`, `M_PI`/`M_E`, hash sigils); the tree-sitter copy in highlighters/tree-sitter/syntaxes/ is updated to match
 
 ### Changed
 
@@ -33,7 +32,8 @@
 - **Testing:**
   - Added the `boot_lib.su` bootstrap test.
   - Extended `lib_io.su` to cover file appending, binary modes, and counted-read boundaries.
-  - Added `sin ln exp cos tan ctg abs pow` commands to `math.su`
+  - Added `sin ln exp cos tan ctg abs pow ceil floor` commands to `math.su`
+  - Added a canonical TextMate grammar at highlighters/TextMate/ussr.tmLanguage.json covering the 0.4.6+ surface (scheduler commands, io/bytes/math primitives, `$if`/`defined`, `M_PI`/`M_E`, hash sigils); the tree-sitter copy in highlighters/tree-sitter/syntaxes/ is updated to match
 ### Changed
 - **Breaking API Change:** `set_bytes(_): value vec` and `clear_bytes(_): vec` now fill the entire target vector (memset-style notation). The legacy `vec value count` and `vec count` parameter footprints have been fully removed.
 - **System Renames:** Re-branded the bootstrap subsystem from `ussr.su` to `russia.su` and the native built-in editor from `vibe.su` to `Mbl.su`.
