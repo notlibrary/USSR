@@ -1,0 +1,1 @@
+cloc --read-lang-def=ussr-cloc.def --include-lang=USSR .
