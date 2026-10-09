@@ -1,0 +1,31 @@
+$include "math.su"
+
+log2(r): 1
+print(_): r
+
+log2(r): 8
+print(_): r
+
+log2(r): 1024
+print(_): r
+
+log10(r): 1
+print(_): r
+
+log10(r): 100
+print(_): r
+
+log10(r): 1000
+print(_): r
+
+hypot(r): 3 4
+print(_): r
+
+hypot(r): 5 12
+print(_): r
+
+hypot(r): 0 0
+print(_): r
+
+hypot(r): 3000000000000 4000000000000
+print(_): r

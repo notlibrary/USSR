@@ -1,0 +1,4 @@
+USSR
+    filter remove_matches ^\s*#.*$
+    extension su
+    3rd_gen_scale 1.00

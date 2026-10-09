@@ -633,3 +633,45 @@ grcirc_dist(r): lat1 long1 lat2 long2 [
     set(r): {earth_radius_km * angle}
     return(r): r
 ]
+
+# log2.su - Base-2 logarithm.
+
+log2(r): x [
+    ln(l): x
+    set(r): {l / 0.69314718055994530942}
+    return(r): r
+]
+
+# log10.su - Base-10 logarithm.
+
+log10(r): x [
+    ln(l): x
+    set(r): {l / 2.30258509299404568402}
+    return(r): r
+]
+
+# hypot.su - Stable Euclidean hypotenuse.
+
+hypot(r): x y [
+    abs(ax): x
+    abs(ay): y
+
+    if(_): {ax >= ay} [
+        if(_): {ax = 0} [
+            set(r): 0
+            return(r): r
+        ]
+
+        set(t): {ay / ax}
+        sqrt(s): {1 + t * t}
+        set(r): {ax * s}
+    ]
+
+    if(_): {ay > ax} [
+        set(t): {ax / ay}
+        sqrt(s): {1 + t * t}
+        set(r): {ay * s}
+    ]
+
+    return(r): r
+]
