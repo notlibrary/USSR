@@ -43,6 +43,7 @@
 - **Stability & Memory Fixes:** 
   - Resolved an ASAN-verified use-after-free vulnerability triggered when spawning external commands from within active scheduled processes.
   - Fixed a routing bug where asynchronous external-command execution results failed to reach their target return variable.
+  - Fixed negative integers printing bug
 
 ### Documentation
 - Completed comprehensive user manual updates covering the new cooperative scheduler architecture, `async`/`await` primitives, process hierarchy, memory management (`gc`), sequential conditional chains, and all core library modules (`io` / `bytes` / `math` / `standard`).

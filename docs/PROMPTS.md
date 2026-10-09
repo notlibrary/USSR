@@ -382,4 +382,13 @@ Do file operations anyway even they are in VM readfile writefile
 
 open_file mode is like in c "rb" "wb" "r" "w" "a"
 
+Here is the new context USSR.su bootstrap now russia.su vibe.su now mbl.su
+The problem that ussr now failing negatives.su test for printing negative numbers
 
+nordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr tests/negatives.su
+USSR: syntax error at line 6
+USSR parser: syntax errornordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr src/russia.su tests/negatives.su
+bad parameter
+20-642
+
+Fail in both bootstrap and C mode fix it if you can
