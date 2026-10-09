@@ -366,26 +366,78 @@ pow(r): x y [
     return(r): r
 ]
 
-floor(r): x [
-    set(i): x
+# floor/ceil use a binary-step search, so the number of iterations is
+# logarithmic in |x| rather than proportional to its magnitude. The
+# integer step is doubled until it no longer fits, then halved back down.
+# This avoids relying on a real-to-integer cast or a native math function.
 
+# floor/ceil use a binary-step search, so the number of iterations is
+# logarithmic in |x| rather than proportional to its magnitude. The
+# integer step is doubled until it no longer fits, then halved back down.
+# This avoids relying on a real-to-integer cast or a native math function.
+
+floor(r): x [
+    set(neg): 0
     if(_): {x < 0} [
-        if(_): {i > x} [
-            set(i): {i - 1}
+        set(neg): 1
+        set(x): {0 - x}
+    ]
+
+    set(i): 0
+    set(step): 1
+
+    while(_): {i + step <= x} [
+        set(i): {i + step}
+        set(step): {step * 2}
+    ]
+
+    while(_): {step >= 1} [
+        if(_): {i + step <= x} [
+            set(i): {i + step}
         ]
+        set(step): {step / 2}
+    ]
+
+    if(_): {neg = 1} [
+        if(_): {x > i} [
+            set(i): {i + 1}
+        ]
+        set(i): {0 - i}
     ]
 
     set(r): i
     return(r): r
 ]
 
-ceil(r): z [
-    set(i): z
+ceil(r): x [
+    set(neg): 0
+    if(_): {x < 0} [
+        set(neg): 1
+        set(x): {0 - x}
+    ]
 
-    if(_): {z > 0} [
-        if(_): {i < z} [
+    set(i): 0
+    set(step): 1
+
+    while(_): {i + step <= x} [
+        set(i): {i + step}
+        set(step): {step * 2}
+    ]
+
+    while(_): {step >= 1} [
+        if(_): {i + step <= x} [
+            set(i): {i + step}
+        ]
+        set(step): {step / 2}
+    ]
+
+    if(_): {neg = 0} [
+        if(_): {x > i} [
             set(i): {i + 1}
         ]
+    ]
+    if(_): {neg = 1} [
+        set(i): {0 - i}
     ]
 
     set(r): i
