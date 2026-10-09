@@ -366,78 +366,26 @@ pow(r): x y [
     return(r): r
 ]
 
-# floor/ceil use a binary-step search, so the number of iterations is
-# logarithmic in |x| rather than proportional to its magnitude. The
-# integer step is doubled until it no longer fits, then halved back down.
-# This avoids relying on a real-to-integer cast or a native math function.
-
-# floor/ceil use a binary-step search, so the number of iterations is
-# logarithmic in |x| rather than proportional to its magnitude. The
-# integer step is doubled until it no longer fits, then halved back down.
-# This avoids relying on a real-to-integer cast or a native math function.
-
 floor(r): x [
-    set(neg): 0
+    set(i): x
+
     if(_): {x < 0} [
-        set(neg): 1
-        set(x): {0 - x}
-    ]
-
-    set(i): 0
-    set(step): 1
-
-    while(_): {i + step <= x} [
-        set(i): {i + step}
-        set(step): {step * 2}
-    ]
-
-    while(_): {step >= 1} [
-        if(_): {i + step <= x} [
-            set(i): {i + step}
+        if(_): {i > x} [
+            set(i): {i - 1}
         ]
-        set(step): {step / 2}
-    ]
-
-    if(_): {neg = 1} [
-        if(_): {x > i} [
-            set(i): {i + 1}
-        ]
-        set(i): {0 - i}
     ]
 
     set(r): i
     return(r): r
 ]
 
-ceil(r): x [
-    set(neg): 0
-    if(_): {x < 0} [
-        set(neg): 1
-        set(x): {0 - x}
-    ]
+ceil(r): z [
+    set(i): z
 
-    set(i): 0
-    set(step): 1
-
-    while(_): {i + step <= x} [
-        set(i): {i + step}
-        set(step): {step * 2}
-    ]
-
-    while(_): {step >= 1} [
-        if(_): {i + step <= x} [
-            set(i): {i + step}
-        ]
-        set(step): {step / 2}
-    ]
-
-    if(_): {neg = 0} [
-        if(_): {x > i} [
+    if(_): {z > 0} [
+        if(_): {i < z} [
             set(i): {i + 1}
         ]
-    ]
-    if(_): {neg = 1} [
-        set(i): {0 - i}
     ]
 
     set(r): i
@@ -586,5 +534,50 @@ atan2(r): y x [
         ]
     ]
 
+    return(r): r
+]
+
+
+# Great-circle distance between two geographic coordinates.
+# Inputs: latitude/longitude pairs in degrees.
+# Output: distance in kilometers using Earth's mean radius.
+#
+# The haversine central-angle form is stable for small distances:
+#   a = sin^2(dlat/2) + cos(lat1)*cos(lat2)*sin^2(dlon/2)
+#   central_angle = 2*atan2(sqrt(a), sqrt(1-a))
+#   distance = Earth_radius * central_angle
+
+grcirc_dist(r): lat1 long1 lat2 long2 [
+    set(deg_to_rad): {3.14159265358979323846 / 180.0}
+    set(earth_radius_km): 6371.0088
+
+    set(phi1): {lat1 * deg_to_rad}
+    set(phi2): {lat2 * deg_to_rad}
+    set(dphi): {(lat2 - lat1) * deg_to_rad}
+    set(dlambda): {(long2 - long1) * deg_to_rad}
+    set(half_dphi): {dphi / 2.0}
+    set(half_dlambda): {dlambda / 2.0}
+
+    sin(s1): half_dphi
+    sin(s2): half_dlambda
+    cos(c1): phi1
+    cos(c2): phi2
+
+    set(a): {s1 * s1 + c1 * c2 * s2 * s2}
+
+    # Protect square roots from tiny floating-point overshoots.
+    if(_): {a < 0} [
+        set(a): 0
+    ]
+    if(_): {a > 1} [
+        set(a): 1
+    ]
+
+    sqrt(root_a): a
+    set(complement): {1.0 - a}
+    sqrt(root_complement): complement
+    atan2(angle_half): root_a root_complement
+    set(angle): {2.0 * angle_half}
+    set(r): {earth_radius_km * angle}
     return(r): r
 ]

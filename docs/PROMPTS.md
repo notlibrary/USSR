@@ -392,3 +392,8 @@ bad parameter
 20-642
 
 Fail in both bootstrap and C mode fix it if you can
+
+Now let's implement great circle distance between 2 cities `grcirc_dist` command
+4 parameters lat1 long1 lat2 long2 in degrees geographical coordinates output result in kilometers
+use central angle formula which is most comfort for 64 bit computer calculation
+For test input take Moscow(Russia) New York(USA) coordinates
