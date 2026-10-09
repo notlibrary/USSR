@@ -1008,11 +1008,28 @@ ps_par(r): [
     if(_): {ps_stop = 0} [
         ps_cur(ps_par_k): 0
         set(ps_par_m): 0
-        if(_): {ps_par_k = 1} [
+        # A leading minus is a unary expression in command parameters.
+        # Keep '-' separate from numbers so 1-100 remains subtraction.
+        ps_istok(ps_par_minus): "-"
+        if(_): {ps_par_minus = 1} [
+            ps_at(ps_par_tok): 1
+            getf(ps_par_next_kind): ps_par_tok "kind"
+            if(_): {ps_par_next_kind = 2} [
+                ps_e1(r):
+                set(ps_par_m): 1
+            ]
+            if(_): {ps_par_next_kind = 3} [
+                ps_e1(r):
+                set(ps_par_m): 1
+            ]
+        ]
+        if(_): {ps_par_m = 0} [
+            if(_): {ps_par_k = 1} [
             ps_txt(ps_par_s): 0
             ps_adv(_): 0
             nd_new(r): 4 ps_par_s "" 0 ""
             set(ps_par_m): 1
+            ]
         ]
         if(_): {ps_par_m = 0} [
             if(_): {ps_par_k = 2} [

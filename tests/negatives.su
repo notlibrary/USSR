@@ -1,0 +1,23 @@
+#Print and template negative numbers from different sources both real and integer
+
+print(_): -4
+template(_): "INT;" -4
+
+set(a): -10
+print(_): a
+template(_): "INT;" a
+
+set(a): { 1 - 100 }
+print(_): a
+template(_): "INT;" a
+
+print(_): -4.5
+template(_): "REAL;" -4.5
+
+set(a): -10.9
+print(_): a
+template(_): "REAL;" a
+
+set(a): { 1.5 - 100.3 }
+print(_): a
+template(_): "REAL;" a

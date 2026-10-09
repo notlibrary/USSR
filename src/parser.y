@@ -580,10 +580,20 @@ literal
           $$.type = USSR_INTEGER;
           $$.data.integer = $1;
       }
+    | MINUS INTEGER
+      {
+          $$.type = USSR_INTEGER;
+          $$.data.integer = -$2;
+      }
     | REAL
       {
           $$.type = USSR_REAL;
           $$.data.real = $1;
+      }
+    | MINUS REAL
+      {
+          $$.type = USSR_REAL;
+          $$.data.real = -$2;
       }
     | BOOLEAN
       {
