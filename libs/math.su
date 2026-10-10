@@ -675,3 +675,65 @@ hypot(r): x y [
 
     return(r): r
 ]
+
+# cbrt.su - numerically stable real cube root.
+#
+# Handles positive, negative, zero, very small, and very large
+# finite real inputs without taking logarithms or cubing x.
+#
+# Range reduction:
+#   x = y * 8^n
+#   cbrt(x) = cbrt(y) * 2^n
+#
+# After scaling, 1 <= y < 8, so Newton iteration stays
+# well-conditioned and avoids overflow in intermediate powers.
+
+cbrt(r): x [
+    set(y): x
+    set(scale): 1.0
+    set(neg): 0
+
+    if(_): {y = 0} [
+        set(r): 0
+        return(r): r
+    ]
+
+    if(_): {y < 0} [
+        set(neg): 1
+        set(y): {0 - y}
+    ]
+
+    # Scale large inputs down by powers of 8.
+    # Each division by 8 requires multiplying the result by 2.
+    while(_): {y >= 8.0} [
+        set(y): {y / 8.0}
+        set(scale): {scale * 2.0}
+    ]
+
+    # Scale tiny inputs up by powers of 8.
+    # Each multiplication by 8 requires dividing the result by 2.
+    while(_): {y < 1.0} [
+        set(y): {y * 8.0}
+        set(scale): {scale / 2.0}
+    ]
+
+    # Newton iteration for g^3 = y:
+    #   g_next = (2*g + y/(g*g)) / 3
+    #
+    # Since 1 <= y < 8, g = 2 is a safe initial estimate.
+    set(g): 2.0
+    set(i): 0
+
+    while(_): {i < 12} [
+        set(g): {(2.0 * g + y / (g * g)) / 3.0}
+        add(i): i 1
+    ]
+
+    set(r): {scale * g}
+
+    if(_): {neg = 1} [
+        set(r): {0 - r}
+    ]
+
+    return(r): r
+]

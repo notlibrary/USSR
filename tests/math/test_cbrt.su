@@ -1,0 +1,12 @@
+$include "math.su"
+cbrt(a): 0
+print(_): a
+
+cbrt(a): 8
+print(_): a
+
+cbrt(a): {0 - 27}
+print(_): a
+
+cbrt(a): 0.000000001
+print(_): a
