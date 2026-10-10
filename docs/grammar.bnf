@@ -1,71 +1,158 @@
-<program> ::= <command-list>
+# USSR Unified Shell Script (USSR) grammar
+#
+# Updated from the previous grammar.bnf to match src/parser.y and
+# src/lexer.l in the supplied project archive.
+#
+# Notation:
+#   ::=       production
+#   |         alternative
+#   { ... }   zero or more repetitions
+#   [ ... ]   optional syntax (meta-notation, not USSR brackets)
+#   terminals in double quotes are literal source characters/tokens
+#   REGEX(...) describes a token recognized by the lexer
+#
+# The lexer discards spaces/tabs/carriage returns and # comments.
+# Newline tokens remain significant between command lines.
+# Preprocessor directives ($define, $ifdef, etc.) are processed before
+# the lexer/parser and are intentionally not part of this grammar.
 
-<command-list> ::= "[" <command-sequence> "]"
+<program> ::= <command-lines> <trailing-newlines>
 
-<command-sequence> ::= <command-line>
-                     | <command-line> <newline> <command-sequence>
+<trailing-newlines> ::= { <newline> }
 
-<command-line> ::= <command>
-                 | <comment>
+<command-lines> ::= <empty>
+                  | <command-lines> <command-line>
 
-<command> ::= <command-name> "(" <return-variable> ")" ":" <parameter-list>
+<command-line> ::= <newline>
+                 | <command> <newline>
+                 | <command>
+                 | <advanced-control> <newline>
+                 | <advanced-control>
 
-<comment> ::= "#" <comment-text>
+<command> ::= <command-head> "(" <identifier> ")" <command-tail>
 
-<parameter-list> ::= <parameter>
-                   | <parameter> " " <parameter-list>
+<command-head> ::= REGEX([A-Za-z0-9_./\\:-]+ followed by "(")
+# The lexer returns the matched command head without its opening parenthesis.
+# A slash or backslash separates an optional path from the command name.
+# Whether a command may have trailing [] blocks is checked semantically.
 
-<parameter> ::= <string>
-              | <number>
-              | <boolean>
-              | <variable>
-              | <null>
-              | <command-list>
+<command-tail> ::= ":"
+                 | ":" <argument-list>
+
+<argument-list> ::= <argument>
+                  | <argument-list> <argument>
+# Arguments are separated by one or more lexer-discarded whitespace
+# characters; there are no comma separators in the current grammar.
+
+<argument> ::= <argument-base>
+             | <identifier> "?"
+             | <argument-base> "!"
+
+<argument-base> ::= <literal>
+                  | <identifier>
+                  | <expression>
+                  | <block-argument>
+                  | <uno-literal>
+
+<block-argument> ::= "[" <command-lines> "]"
+
+<advanced-control> ::= "@" "[" <command-lines> "]"
+                       { <newline> }
+                       "[" <command-lines> "]"
+# This two-block form is used by the parser for advanced control flow.
+
+<literal> ::= <string>
+            | <integer>
+            | <real>
+            | <boolean>
+            | <null>
+
+<expression> ::= "{" <logical-or-expression> "}"
+
+<logical-or-expression> ::= <logical-and-expression>
+                          | <logical-or-expression> "||" <logical-and-expression>
+
+<logical-and-expression> ::= <bitwise-or-expression>
+                            | <logical-and-expression> "&&" <bitwise-or-expression>
+
+<bitwise-or-expression> ::= <bitwise-xor-expression>
+                           | <bitwise-or-expression> "|" <bitwise-xor-expression>
+
+<bitwise-xor-expression> ::= <bitwise-and-expression>
+                            | <bitwise-xor-expression> "^" <bitwise-and-expression>
+
+<bitwise-and-expression> ::= <comparison-expression>
+                            | <bitwise-and-expression> "&" <comparison-expression>
+
+<comparison-expression> ::= <shift-expression>
+                           | <shift-expression> ">" <shift-expression>
+                           | <shift-expression> "<" <shift-expression>
+                           | <shift-expression> ">=" <shift-expression>
+                           | <shift-expression> "<=" <shift-expression>
+                           | <shift-expression> "=" <shift-expression>
+                           | <shift-expression> "!=" <shift-expression>
+
+<shift-expression> ::= <additive-expression>
+                      | <shift-expression> "<<" <additive-expression>
+                      | <shift-expression> ">>" <additive-expression>
+
+<additive-expression> ::= <multiplicative-expression>
+                         | <additive-expression> "+" <multiplicative-expression>
+                         | <additive-expression> "-" <multiplicative-expression>
+
+<multiplicative-expression> ::= <unary-expression>
+                               | <multiplicative-expression> "*" <unary-expression>
+                               | <multiplicative-expression> "/" <unary-expression>
+                               | <multiplicative-expression> "%" <unary-expression>
+
+<unary-expression> ::= <primary-expression>
+                      | "-" <unary-expression>
+# Unary minus is currently the only unary operator in parser.y.
+
+<primary-expression> ::= <literal>
+                        | <identifier>
+                        | "(" <logical-or-expression> ")"
+
+<uno-literal> ::= REGEX('([^'\\\n]|\\.)*')
+# UNO literals use single quotes and are stored as deferred raw text.
+
+<identifier> ::= REGEX([a-zA-Z_] [a-zA-Z_0-9]*)
+
+<command-name> ::= <identifier>
+# Actual command heads are broader than identifiers: see <command-head>.
 
 <return-variable> ::= <identifier>
 
-<command-name> ::= <identifier>
+<variable-reference> ::= <identifier>
 
-<variable> ::= <identifier>
-
-<identifier> ::= <identifier-start> <identifier-character>*
-
-<identifier-start> ::= <letter>
-                     | "_"
-
-<identifier-character> ::= <letter>
-                         | <digit>
-                         | "_"
-
-<number> ::= <integer>
-           | <real>
-
-<integer> ::= <digit>+
-
-<real> ::= <digit>+ "." <digit>+
-
-<boolean> ::= "true"
-            | "false"
+<boolean> ::= "true" | "false"
 
 <null> ::= "null"
 
-<string> ::= "\"" <string-character>* "\""
+<integer> ::= REGEX([0-9]+)
 
-<string-character> ::= <any-character-except-quote-or-newline>
+<real> ::= REGEX([0-9]+ "." [0-9]+)
+# Numeric tokens are unsigned. Negative values are expressed using unary
+# minus inside {...}, for example {0 - 5} or {-5}.
 
-<comment-text> ::= <any-character-except-newline>*
+<string> ::= "\"" { <string-character> | <escape-sequence> } "\""
+
+<string-character> ::= any character except quote, backslash, or newline
+
+<escape-sequence> ::= "\\" ("n" | "t" | "r" | "\\" | "\"" | any other character)
+# The lexer decodes \n, \t, \r, \\, and \"; for other escaped
+# characters it keeps the character following the backslash.
+
+<comment> ::= "#" { any character except carriage return or newline }
+# Comments are discarded by the lexer; the newline after a comment is kept.
 
 <newline> ::= "\n"
-            | "\r\n"
 
-<letter> ::= "a" | "b" | "c" | "d" | "e" | "f" | "g"
-           | "h" | "i" | "j" | "k" | "l" | "m" | "n"
-           | "o" | "p" | "q" | "r" | "s" | "t" | "u"
-           | "v" | "w" | "x" | "y" | "z"
-           | "A" | "B" | "C" | "D" | "E" | "F" | "G"
-           | "H" | "I" | "J" | "K" | "L" | "M" | "N"
-           | "O" | "P" | "Q" | "R" | "S" | "T" | "U"
-           | "V" | "W" | "X" | "Y" | "Z"
+<whitespace> ::= space | tab | carriage return
+# Whitespace is discarded outside string/UNO literals.
 
-<digit> ::= "0" | "1" | "2" | "3" | "4"
-          | "5" | "6" | "7" | "8" | "9"
+<operator> ::= "+" | "-" | "*" | "/" | "%"
+             | ">" | "<" | ">=" | "<=" | "=" | "!="
+             | "&&" | "||" | "<<" | ">>" | "^" | "&" | "|"
+
+<empty> ::= epsilon
