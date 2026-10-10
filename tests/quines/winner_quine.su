@@ -1,0 +1,29 @@
+set(body): "set(escaped): \"\"\nset(bs): \"\\\\\"\nset(dq): \"\\\"\"\nset(nl): \"\\n\"\nlen(size): body\nset(i): 0\nwhile(_): {i < size} [\n    slice(ch): body i 1\n    set(handled): false\n    if(_): {ch = dq} [\n        concat(escaped): escaped bs dq\n        set(handled): true\n    ]\n    if(_): {ch = bs} [\n        concat(escaped): escaped bs bs\n        set(handled): true\n    ]\n    if(_): {ch = nl} [\n        concat(escaped): escaped bs \"n\"\n        set(handled): true\n    ]\n    if(_): {handled = false} [\n        concat(escaped): escaped ch\n    ]\n    add(i): i 1\n]\nconcat(out): \"set(body): \\\"\" escaped \"\\\"\\n\" body\ntemplate(_): \"STR\" out"
+set(escaped): ""
+set(bs): "\\"
+set(dq): "\""
+set(nl): "\n"
+len(size): body
+set(i): 0
+while(_): {i < size} [
+    slice(ch): body i 1
+    set(handled): false
+    if(_): {ch = dq} [
+        concat(escaped): escaped bs dq
+        set(handled): true
+    ]
+    if(_): {ch = bs} [
+        concat(escaped): escaped bs bs
+        set(handled): true
+    ]
+    if(_): {ch = nl} [
+        concat(escaped): escaped bs "n"
+        set(handled): true
+    ]
+    if(_): {handled = false} [
+        concat(escaped): escaped ch
+    ]
+    add(i): i 1
+]
+concat(out): "set(body): \"" escaped "\"\n" body
+template(_): "STR" out
