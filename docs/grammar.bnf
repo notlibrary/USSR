@@ -1,4 +1,4 @@
-# USSR Unified Shell Script (USSR) grammar
+# USSR Unified Shell Script REPL (USSR) grammar
 #
 # Updated from the previous grammar.bnf to match src/parser.y and
 # src/lexer.l in the supplied project archive.
