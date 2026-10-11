@@ -141,11 +141,19 @@ def stroke_path(pen, points, radius=STROKE / 2):
         dx, dy = x2 - x1, y2 - y1
         length = sqrt(dx * dx + dy * dy)
         nx, ny = -dy * radius / length, dx * radius / length
-        pen.moveTo((round(x1 + nx), round(y1 + ny)))
-        pen.lineTo((round(x2 + nx), round(y2 + ny)))
+        pen.moveTo((round(x1 - nx), round(y1 - ny)))
         pen.lineTo((round(x2 - nx), round(y2 - ny)))
-        pen.lineTo((round(x1 - nx), round(y1 - ny)))
+        pen.lineTo((round(x2 + nx), round(y2 + ny)))
+        pen.lineTo((round(x1 + nx), round(y1 + ny)))
         pen.closePath()
+
+
+def center_glyph(glyph):
+    if not glyph.coordinates:
+        return
+    left = min(x for x, _ in glyph.coordinates)
+    right = max(x for x, _ in glyph.coordinates)
+    glyph.coordinates.translate((round((ADVANCE - (right - left)) / 2 - left), 0))
 
 
 def draw_glyph(glyph_name, paths, special=None):
@@ -254,6 +262,9 @@ def build():
             }
             outlines[glyph_id(code)] = draw_glyph(glyph_id(code), punctuation.get(char, []))
 
+    for glyph in outlines.values():
+        center_glyph(glyph)
+
     fb.setupGlyf(outlines)
     fb.setupHorizontalMetrics({name: (ADVANCE, 70) for name in glyph_names})
     fb.setupHorizontalHeader(ascent=820, descent=-220)
@@ -265,10 +276,10 @@ def build():
     fb.setupNameTable({
         "familyName": "Pobeda",
         "styleName": "Regular",
-        "uniqueFontIdentifier": "USSR Pobeda Regular 1.3",
+        "uniqueFontIdentifier": "USSR Pobeda Regular 1.4",
         "fullName": "Pobeda Regular",
         "psName": "Pobeda-Regular",
-        "version": "Version 1.3",
+        "version": "Version 1.4",
         "manufacturer": "USSR",
         "designer": "USSR",
         "description": "Monospaced steel-office type for code, with Cyrillic support.",
