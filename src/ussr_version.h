@@ -5,6 +5,6 @@
 
 #define USSR_VERSION_MAJOR 0
 #define USSR_VERSION_MINOR 4
-#define USSR_VERSION_PATCH 5
+#define USSR_VERSION_PATCH 6
 
 #endif
