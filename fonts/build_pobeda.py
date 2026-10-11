@@ -1,6 +1,6 @@
 """Build the Pobeda monospace TrueType font (requires FontTools)."""
 
-from math import cos, pi, sin, sqrt
+from math import sqrt
 from pathlib import Path
 
 from fontTools.fontBuilder import FontBuilder
@@ -8,7 +8,7 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 
 
 OUTPUT = Path(__file__).with_name("pobeda.ttf")
-ADVANCE = 680
+ADVANCE = 740
 STROKE = 81
 
 # Stroke paths use a compact character grid: x=0..4, baseline y=0, cap y=7.
@@ -105,7 +105,7 @@ CYRILLIC_LOWER = {
     "ж": [[(0, 5), (4, 0)], [(4, 5), (0, 0)], [(2, 5), (2, 0)]],
     "з": [[(0, 4.5), (1, 5), (3, 5), (4, 4), (3, 3), (2, 2.5), (3, 2), (4, 1), (3, 0), (1, 0), (0, .5)]],
     "и": [[(0, 0), (0, 5)], [(0, 0), (4, 5)], [(4, 0), (4, 5)]], "й": [[(0, 0), (0, 5)], [(0, 0), (4, 5)], [(4, 0), (4, 5)], [(1, 6), (2, 6.5), (3, 6)]],
-    "к": LOWERS["k"], "л": [[(0, 0), (1, 5), (3, 5), (4, 0)]], "м": LOWERS["m"], "н": [[(0, 0), (0, 5)], [(4, 0), (4, 5)], [(0, 2.5), (4, 2.5)]],
+    "к": CAPS["K"], "л": [[(0, 0), (1, 5), (3, 5), (4, 0)]], "м": LOWERS["m"], "н": [[(0, 0), (0, 5)], [(4, 0), (4, 5)], [(0, 2.5), (4, 2.5)]],
     "о": LOWERS["o"], "п": [[(0, 0), (0, 5), (4, 5), (4, 0)]], "р": LOWERS["p"],
     "с": LOWERS["c"], "т": [[(0, 5), (4, 5)], [(2, 5), (2, 0)]],
     "у": LOWERS["y"], "ф": [[(2, 7), (2, -2)], [(2, 4.5), (0, 4), (0, 1), (2, 0), (4, 1), (4, 4), (2, 4.5)]],
@@ -121,22 +121,18 @@ CYRILLIC_LOWER = {
 }
 
 
-def circle(pen, x, y, radius, sides=12):
-    pen.moveTo((round(x + radius), round(y)))
-    for i in range(1, sides):
-        angle = 2 * pi * i / sides
-        pen.lineTo((round(x + radius * cos(angle)), round(y + radius * sin(angle))))
-    pen.closePath()
-
-
 def path_points(points):
-    return [(90 + x * 82 * 1.3, 130 + y * 86) for x, y in points]
+    return [(90 + x * 82 * 1.38, 130 + y * 86) for x, y in points]
 
 
 def stroke_path(pen, points, radius=STROKE / 2):
     pts = path_points(points)
     for x, y in pts:
-        circle(pen, x, y, radius)
+        pen.moveTo((round(x - radius), round(y + radius)))
+        pen.lineTo((round(x + radius), round(y + radius)))
+        pen.lineTo((round(x + radius), round(y - radius)))
+        pen.lineTo((round(x - radius), round(y - radius)))
+        pen.closePath()
     for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
         dx, dy = x2 - x1, y2 - y1
         length = sqrt(dx * dx + dy * dy)
@@ -265,10 +261,10 @@ def build():
     fb.setupNameTable({
         "familyName": "Pobeda",
         "styleName": "Regular",
-        "uniqueFontIdentifier": "USSR Pobeda Regular 1.1",
+        "uniqueFontIdentifier": "USSR Pobeda Regular 1.2",
         "fullName": "Pobeda Regular",
         "psName": "Pobeda-Regular",
-        "version": "Version 1.1",
+        "version": "Version 1.2",
         "manufacturer": "USSR",
         "designer": "USSR",
         "description": "Monospaced steel-office type for code, with Cyrillic support.",
