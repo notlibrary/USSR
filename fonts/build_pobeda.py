@@ -55,10 +55,10 @@ LOWERS = {
     "f": [[(0, 0), (0, 6), (1, 7), (3, 7)], [(0, 4.5), (3, 4.5)]],
     "g": [[(4, 5), (4, -1), (3, -2), (1, -2), (0, -1)], [(4, 4), (3, 5), (1, 5), (0, 4), (0, 1), (1, 0), (3, 0), (4, 1)]],
     "h": [[(0, 7), (0, 0)], [(0, 3.5), (1, 5), (3, 5), (4, 4), (4, 0)]],
-    "i": [[(2.625, 5), (2.625, 0)], [(2.625, 7)]],
+    "i": [[(2.625, 5), (2.625, 0)], [(1, 7), (4, 7)]],
     "j": [[(2, 5), (2, -1), (1, -2), (0, -2)], [(2, 7), (2.05, 7)]],
     "k": [[(0, 7), (0, 0)], [(4, 5), (0, 2.5), (4, 0)]],
-    "l": [[(1.625, 7), (1.625, 1), (2.625, 0), (3.625, 0)]],
+    "l": [[(1.5, 7), (1.5, 0)], [(.5, 7), (3.5, 7)], [(1, 0), (3.5, 0)]],
     "m": [[(0, 0), (0, 5)], [(0, 3.5), (1, 5), (2, 5), (2.5, 4), (2.5, 0)],
           [(2.5, 3.5), (3.5, 5), (4.5, 5), (5, 4), (5, 0)]],
     "n": [[(0, 0), (0, 5)], [(0, 3.5), (1, 5), (3, 5), (4, 4), (4, 0)]],
@@ -266,7 +266,10 @@ def build():
         center_glyph(glyph)
 
     fb.setupGlyf(outlines)
-    fb.setupHorizontalMetrics({name: (ADVANCE, 70) for name in glyph_names})
+    fb.setupHorizontalMetrics({
+        name: (ADVANCE, min(x for x, _ in glyph.coordinates) if glyph.coordinates else 0)
+        for name, glyph in outlines.items()
+    })
     fb.setupHorizontalHeader(ascent=820, descent=-220)
     fb.setupOS2(
         sTypoAscender=820, sTypoDescender=-220, sTypoLineGap=100,
@@ -276,10 +279,10 @@ def build():
     fb.setupNameTable({
         "familyName": "Pobeda",
         "styleName": "Regular",
-        "uniqueFontIdentifier": "USSR Pobeda Regular 1.4",
+        "uniqueFontIdentifier": "USSR Pobeda Regular 1.5",
         "fullName": "Pobeda Regular",
         "psName": "Pobeda-Regular",
-        "version": "Version 1.4",
+        "version": "Version 1.5",
         "manufacturer": "USSR",
         "designer": "USSR",
         "description": "Monospaced steel-office type for code, with Cyrillic support.",
