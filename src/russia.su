@@ -1008,28 +1008,11 @@ ps_par(r): [
     if(_): {ps_stop = 0} [
         ps_cur(ps_par_k): 0
         set(ps_par_m): 0
-        # A leading minus is a unary expression in command parameters.
-        # Keep '-' separate from numbers so 1-100 remains subtraction.
-        ps_istok(ps_par_minus): "-"
-        if(_): {ps_par_minus = 1} [
-            ps_at(ps_par_tok): 1
-            getf(ps_par_next_kind): ps_par_tok "kind"
-            if(_): {ps_par_next_kind = 2} [
-                ps_e1(r):
-                set(ps_par_m): 1
-            ]
-            if(_): {ps_par_next_kind = 3} [
-                ps_e1(r):
-                set(ps_par_m): 1
-            ]
-        ]
-        if(_): {ps_par_m = 0} [
-            if(_): {ps_par_k = 1} [
+        if(_): {ps_par_k = 1} [
             ps_txt(ps_par_s): 0
             ps_adv(_): 0
             nd_new(r): 4 ps_par_s "" 0 ""
             set(ps_par_m): 1
-            ]
         ]
         if(_): {ps_par_m = 0} [
             if(_): {ps_par_k = 2} [
@@ -2087,10 +2070,15 @@ ex_concat_i(r): kids idx acc [
     ]
 ]
 ex_tout(r): s [
-    # Emit the whole string with one host template call so every byte
-    # (ESC, CR, high bytes) survives exactly; the old per-byte putch
-    # loop silently dropped anything outside 9/10/13/32..126.
-    template(_): "STR" s
+    # Write each byte directly. Using template("STR" s) can alter the
+    # final byte/newline when this interpreter is running under bootstrap.
+    len(rt_tout_len): s
+    set(rt_tout_i): 0
+    while(_): {rt_tout_i < rt_tout_len} [
+        byte(rt_tout_ch): s rt_tout_i
+        putch(_): rt_tout_ch
+        add(rt_tout_i): rt_tout_i 1
+    ]
     set(r): 0
 ]
 
@@ -3116,7 +3104,6 @@ rt_ast_needed(r): nd [
     if(_): {rt_ank = 2} [
         getf(rt_ann): nd "s1"
         if(_): {rt_ann = "for"} [ set(r): 1 ]
-        if(_): {rt_ann = "template"} [ set(r): 1 ]
         if(_): {rt_ann = "get"} [ set(r): 1 ]
         if(_): {rt_ann = "choose"} [ set(r): 1 ]
         if(_): {rt_ann = "do"} [ set(r): 1 ]
@@ -3144,6 +3131,60 @@ rt_ast_needed_i(r): items i [
         if(_): {rt_ares = 0} [
             add(rt_ai2): i 1
             rt_ast_needed_i(r): items rt_ai2
+        ]
+    ]
+]
+rt_has_template(r): nd [
+    set(r): 0
+    getf(rt_ht_tag): nd "tag"
+    if(_): {rt_ht_tag = 2} [
+        getf(rt_ht_name): nd "s1"
+        if(_): {rt_ht_name = "template"} [ set(r): 1 ]
+    ]
+    if(_): {r = 0} [
+        getf(rt_ht_kids): nd "kids"
+        rt_has_template_i(r): rt_ht_kids 0
+    ]
+]
+rt_has_template_i(r): items i [
+    set(r): 0
+    len(rt_ht_len): items
+    if(_): {i < rt_ht_len} [
+        at(rt_ht_node): items i
+        rt_has_template(rt_ht_found): rt_ht_node
+        if(_): {rt_ht_found = 1} [
+            set(r): 1
+        ]
+        if(_): {rt_ht_found = 0} [
+            add(rt_ht_next): i 1
+            rt_has_template_i(r): items rt_ht_next
+        ]
+    ]
+]
+rt_has_while(r): nd [
+    set(r): 0
+    getf(rt_hw_tag): nd "tag"
+    if(_): {rt_hw_tag = 2} [
+        getf(rt_hw_name): nd "s1"
+        if(_): {rt_hw_name = "while"} [ set(r): 1 ]
+    ]
+    if(_): {r = 0} [
+        getf(rt_hw_kids): nd "kids"
+        rt_has_while_i(r): rt_hw_kids 0
+    ]
+]
+rt_has_while_i(r): items i [
+    set(r): 0
+    len(rt_hw_len): items
+    if(_): {i < rt_hw_len} [
+        at(rt_hw_node): items i
+        rt_has_while(rt_hw_found): rt_hw_node
+        if(_): {rt_hw_found = 1} [
+            set(r): 1
+        ]
+        if(_): {rt_hw_found = 0} [
+            add(rt_hw_next): i 1
+            rt_has_while_i(r): items rt_hw_next
         ]
     ]
 ]
@@ -3562,6 +3603,11 @@ cv_concat2(r): nd [
     at(cv_c0): cv_ck 0
     cv_e(_): cv_c0 16
     cv_cc_i(r): cv_ck 1
+    # Store the accumulated concatenation in the command's destination.
+    # Without this write, concat(dst): ... leaves dst unchanged in VM mode.
+    getf(cv_cr): nd "s2"
+    cv_name(cv_cri): cv_cr
+    cv_emit(_): 3 16 0 0 cv_cri
 ]
 cv_cc_i(r): kids idx [
     len(cv_ccn): kids
@@ -4791,9 +4837,15 @@ vm_template(r): nb [
             add(vm_tp): vm_tp 1
         ]
     ]
-    vm_tflush(vm_tfin): vm_tslot vm_ta vm_tout
-    print(_): vm_tfin
-    set(r): ""
+	vm_tflush(vm_tfin): vm_tslot vm_ta vm_tout
+	len(vm_tfin_len): vm_tfin
+	set(vm_tfin_i): 0
+	while(_): {vm_tfin_i < vm_tfin_len} [
+		byte(vm_tfin_ch): vm_tfin vm_tfin_i
+		putch(_): vm_tfin_ch
+		add(vm_tfin_i): vm_tfin_i 1
+	]
+	set(r): ""
 ]
 vm_scanN(r): nb [
     len(vm_sbl): vm_scanbuf
@@ -5610,10 +5662,17 @@ cv_driver(r): prog acnt avec [
     ]
     cv_stmt(r): prog
     cv_findf2(cv_mi): "init"
+    rt_has_template(rt_has_tpl): prog
+    rt_has_while(rt_has_wh): prog
     if(_): {cv_mi < 0} [
         if(_): {rt_has_ch = 0} [
-            rt_run(r): prog acnt avec
-            return(r): 0
+            set(cv_tree): 0
+            if(_): {rt_has_tpl = 0} [ set(cv_tree): 1 ]
+            if(_): {rt_has_wh = 0} [ set(cv_tree): 1 ]
+            if(_): {cv_tree = 1} [
+                rt_run(r): prog acnt avec
+                return(r): 0
+            ]
         ]
     ]
     set(r): 0
