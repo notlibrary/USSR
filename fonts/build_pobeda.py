@@ -8,8 +8,8 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 
 
 OUTPUT = Path(__file__).with_name("pobeda.ttf")
-ADVANCE = 600
-STROKE = 62
+ADVANCE = 680
+STROKE = 81
 
 # Stroke paths use a compact character grid: x=0..4, baseline y=0, cap y=7.
 CAPS = {
@@ -82,7 +82,7 @@ EXTRA = {
     "Е": CAPS["E"], "Ё": [*CAPS["E"], [(1, 8), (1.05, 8)], [(3, 8), (3.05, 8)]],
     "Ж": [[(0, 7), (4, 0)], [(4, 7), (0, 0)], [(2, 7), (2, 0)]],
     "З": [[(0, 6.5), (1, 7), (3, 7), (4, 6), (3, 4), (2, 3.5), (3, 3), (4, 1), (3, 0), (1, 0), (0, .5)]],
-    "И": [[(0, 0), (0, 7), (4, 0), (4, 7)]], "Й": [[(0, 0), (0, 7), (4, 0), (4, 7)], [(1, 8), (2, 8.5), (3, 8)]],
+    "И": [[(0, 0), (0, 7)], [(0, 0), (4, 7)], [(4, 0), (4, 7)]], "Й": [[(0, 0), (0, 7)], [(0, 0), (4, 7)], [(4, 0), (4, 7)], [(1, 8), (2, 8.5), (3, 8)]],
     "К": CAPS["K"], "Л": [[(0, 0), (1, 7), (3, 7), (4, 0)]], "М": CAPS["M"], "Н": CAPS["H"],
     "О": CAPS["O"], "П": [[(0, 0), (0, 7), (4, 7), (4, 0)]], "Р": CAPS["P"],
     "С": CAPS["C"], "Т": CAPS["T"], "У": [[(0, 7), (2, 4), (4, 7)], [(2, 4), (1, 0), (0, 0)]], "Ф": [[(2, 7), (2, 0)], [(2, 6), (0, 5), (0, 2), (2, 1), (4, 2), (4, 5), (2, 6)]],
@@ -104,7 +104,7 @@ CYRILLIC_LOWER = {
     "е": LOWERS["e"], "ё": [*LOWERS["e"], [(1, 6), (1.05, 6)], [(3, 6), (3.05, 6)]],
     "ж": [[(0, 5), (4, 0)], [(4, 5), (0, 0)], [(2, 5), (2, 0)]],
     "з": [[(0, 4.5), (1, 5), (3, 5), (4, 4), (3, 3), (2, 2.5), (3, 2), (4, 1), (3, 0), (1, 0), (0, .5)]],
-    "и": [[(0, 0), (0, 5), (4, 0), (4, 5)]], "й": [[(0, 0), (0, 5), (4, 0), (4, 5)], [(1, 6), (2, 6.5), (3, 6)]],
+    "и": [[(0, 0), (0, 5)], [(0, 0), (4, 5)], [(4, 0), (4, 5)]], "й": [[(0, 0), (0, 5)], [(0, 0), (4, 5)], [(4, 0), (4, 5)], [(1, 6), (2, 6.5), (3, 6)]],
     "к": LOWERS["k"], "л": [[(0, 0), (1, 5), (3, 5), (4, 0)]], "м": LOWERS["m"], "н": [[(0, 0), (0, 5)], [(4, 0), (4, 5)], [(0, 2.5), (4, 2.5)]],
     "о": LOWERS["o"], "п": [[(0, 0), (0, 5), (4, 5), (4, 0)]], "р": LOWERS["p"],
     "с": LOWERS["c"], "т": [[(0, 5), (4, 5)], [(2, 5), (2, 0)]],
@@ -130,7 +130,7 @@ def circle(pen, x, y, radius, sides=12):
 
 
 def path_points(points):
-    return [(90 + x * 82, 130 + y * 86) for x, y in points]
+    return [(90 + x * 82 * 1.3, 130 + y * 86) for x, y in points]
 
 
 def stroke_path(pen, points, radius=STROKE / 2):
@@ -154,7 +154,7 @@ def draw_glyph(glyph_name, paths, special=None):
         return pen.glyph()
     if special == "colon":
         for y in (315, 565):
-            half = 31
+            half = 41
             pen.moveTo((300 - half, y - half))
             pen.lineTo((300 + half, y - half))
             pen.lineTo((300 + half, y + half))
@@ -265,10 +265,10 @@ def build():
     fb.setupNameTable({
         "familyName": "Pobeda",
         "styleName": "Regular",
-        "uniqueFontIdentifier": "USSR Pobeda Regular 1.0",
+        "uniqueFontIdentifier": "USSR Pobeda Regular 1.1",
         "fullName": "Pobeda Regular",
         "psName": "Pobeda-Regular",
-        "version": "Version 1.0",
+        "version": "Version 1.1",
         "manufacturer": "USSR",
         "designer": "USSR",
         "description": "Monospaced steel-office type for code, with Cyrillic support.",
