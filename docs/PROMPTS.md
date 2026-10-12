@@ -397,3 +397,131 @@ Now let's implement great circle distance between 2 cities `grcirc_dist` command
 4 parameters lat1 long1 lat2 long2 in degrees geographical coordinates output result in kilometers
 use central angle formula which is most comfort for 64 bit computer calculation
 For test input take Moscow(Russia) New York(USA) coordinates
+
+Here's 4 USSR failing quines with sources
+
+#Compact USSR quine
+set(c): " "
+set(a): " "
+set(n): " "
+concat(c): " " ":"
+concat(a): " " "\""
+concat(n): "" "\n"
+set(q): "concat(o): \"set(c): \" a a n \"set(a): \" a a n \"set(n): \" a a n \"concat(c): \" a a \" \":\"" n \"concat(a): \" a a \" \"\\\"\"\" n \"concat(n): \" a a \" \"\\\\n\"\" n \"set(q): \" a q a n \"eval(ret): q\" n \"template(_): \"STR\" o\""
+eval(ret): q
+template(_): "STR" o
+
+#2 Ussr quine
+set(c): ""
+set(a): ""
+set(n): ""
+concat(c): "" ":"
+concat(a): "" "\""
+concat(n): "" "\n"
+set(q): "set(c): \"\""
+concat(o): q n "set(a): \"\"" n "set(n): \"\"" n "concat(c): \"\" \":\"" n "concat(a): \"\" \"\\\"\"" n "concat(n): \"\" \"\\n\"" n "set(q): " a q a n "concat(o): q n \"set(a): \\\"\\\"\" n \"set(n): \\\"\\\"\" n \"concat(c): \\\"\\\" \\\":\\\"\" n \"concat(a): \\\"\\\" \\\"\\\\\\\"\\\"\" n \"concat(n): \\\"\\\" \\\"\\\\n\\\"\" n \"set(q): \" a q a n \"template(_): \\\"STR\\\" o\"" n "template(_): \"STR\" o"
+template(_): "STR" o
+
+#3 Ussr quine
+set(q): "set(q): \"STR\"\ntemplate(_): \"STR\" q"
+template(_): "STR" q
+
+#4 - Self-building USSR quine
+set(a): "set(a): "
+set(b): "concat(a): a "
+set(c): "template(_): \"STR\" a"
+concat(a): a "\""
+concat(a): a a
+concat(a): a "\""
+concat(a): a "\n"
+concat(a): a b
+concat(a): a "\""
+concat(a): a a
+concat(a): a "\""
+concat(a): a "\n"
+concat(a): a c
+template(_): "STR" a
+
+Here's tests
+nordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr tests/quines/quine_1.su
+USSR: unexpected character '\' at line 11
+USSR VM: vector index out of range or incompatible value
+USSR scheduler: process 2 (init) failed
+USSR VM: execution failed (status -1)nordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr tests/quines/quine_2.su
+set(c): ""
+set(a): ""
+set(n): ""
+concat(c): "" ":"
+concat(a): "" "\""
+concat(n): "" "\n"
+set(q): "set(c): """
+concat(o): q n "set(a): \"\"" n "set(n): \"\"" n "concat(c): \"\" \":\"" n "concat(a): \"\" \"\\\"\"" n "concat(n): \"\" \"\\n\"" n "set(q): " a q a n "template(_): \"STR\" o"
+template(_): "STR" onordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr tests/quines/quine_3.su
+set(q): "STR"
+template(_): "STR" qnordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr tests/quines/quine_4.su
+set(a): "set(a): ""
+concat(a): a "set(a): "set(a): ""
+concat(a): a ""
+nordom@SERENITY:/mnt/c/users/serenity/ussr$
+
+
+
+Find the working one quine or fix existed
+I found workng quine but it fails in bootstrap can you fix bootstap?
+
+nordom@SERENITY:/mnt/c/users/serenity/ussr$ ./ussr ./src/russia.su tests/quines/winner_quine.su > /tmp/quine.out
+USSR scheduler: process 2 (init) failed
+USSR VM: execution failed (status -1)nordom@SERENITY:/mnt/c/users/serenity/ussr$
+
+set(body): "set(escaped): \"\"\nset(bs): \"\\\\\"\nset(dq): \"\\\"\"\nset(nl): \"\\n\"\nlen(size): body\nset(i): 0\nwhile(_): {i < size} [\n    slice(ch): body i 1\n    set(handled): false\n    if(_): {ch = dq} [\n        concat(escaped): escaped bs dq\n        set(handled): true\n    ]\n    if(_): {ch = bs} [\n        concat(escaped): escaped bs bs\n        set(handled): true\n    ]\n    if(_): {ch = nl} [\n        concat(escaped): escaped bs \"n\"\n        set(handled): true\n    ]\n    if(_): {handled = false} [\n        concat(escaped): escaped ch\n    ]\n    add(i): i 1\n]\nconcat(out): \"set(body): \\\"\" escaped \"\\\"\\n\" body\ntemplate(_): \"STR\" out"
+set(escaped): ""
+set(bs): "\\"
+set(dq): "\""
+set(nl): "\n"
+len(size): body
+set(i): 0
+while(_): {i < size} [
+    slice(ch): body i 1
+    set(handled): false
+    if(_): {ch = dq} [
+        concat(escaped): escaped bs dq
+        set(handled): true
+    ]
+    if(_): {ch = bs} [
+        concat(escaped): escaped bs bs
+        set(handled): true
+    ]
+    if(_): {ch = nl} [
+        concat(escaped): escaped bs "n"
+        set(handled): true
+    ]
+    if(_): {handled = false} [
+        concat(escaped): escaped ch
+    ]
+    add(i): i 1
+]
+concat(out): "set(body): \"" escaped "\"\n" body
+template(_): "STR" out
+
+Let's now design the monospace font for USSR programmers
+The goal is to emphasis on language elements to make characters more recognizable
+colons : square brackets [] and single quotes ' must be special () circle bracket usual
+Whole font must be casual "grey"
+Include also Cyrillic glyph s output format is .ttf
+It should remind old soviet newspaper book and typewriter
+Less art more dull grey steel concrete office rectangle reality
+Autumn raining mood
+Font is called pobeda.ttf
+No special need in bold italic glyph s design it only monospace
+It must be seen and notable from monitor
+Put into fonts folder
+
+Nice font you have now make it 1.3 times bolder 1.3 times more rectangular and fix Cyrillic glyphs latin И and Cyrillic И looks the same N
+and make colon : dots bolder and pull it again n
+
+The problem is that you just copy liberation mono regular
+and i want build brand new monospace font
+use fontTools python package to build ttf font from script build_pobeda
+edit script make it more courier-like emphasis on small character details
+then fix Cyrillic small к and small м looks like M also fix Дд character add two hatches
+Do not copy existing fonts  use supplied script build_pobeda.py

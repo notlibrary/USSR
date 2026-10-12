@@ -34,6 +34,7 @@
   - Extended `lib_io.su` to cover file appending, binary modes, and counted-read boundaries.
   - Added `sin ln exp cos tan ctg abs pow ceil floor asin acos atan atan2 grcirc_dist log2 log10 hypot cbrt` commands to `math.su`
   - Added a canonical TextMate grammar at highlighters/TextMate/ussr.tmLanguage.json covering the 0.4.6+ surface (scheduler commands, io/bytes/math primitives, `$if`/`defined`, `M_PI`/`M_E`, hash sigils); the tree-sitter copy in highlighters/tree-sitter/syntaxes/ is updated to match
+  
 ### Changed
 - **Breaking API Change:** `set_bytes(_): value vec` and `clear_bytes(_): vec` now fill the entire target vector (memset-style notation). The legacy `vec value count` and `vec count` parameter footprints have been fully removed.
 - **System Renames:** Re-branded the bootstrap subsystem from `ussr.su` to `russia.su` and the native built-in editor from `vibe.su` to `Mbl.su`.
@@ -53,6 +54,7 @@
 - Completely refactored `conditionals.su` to leverage the new `elif` syntax.
 - Added Duff's device analog test
 - Added winner quine test
+- Added pobeda.ttf font for casual USSR programming
 
 ## [0.4.5] - 2026-10-5
 
