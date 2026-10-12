@@ -12,3 +12,5 @@ Includes ASCII and Russian Cyrillic, square code punctuation, custom lowercase �
 Early custom font design; not yet a full professional type family.
 
 Version 3.2: enlarged the two diagonal base hatches on Cyrillic Д and д so they remain visibly distinct at normal text sizes.
+
+I am bad font designer AI is worse I am sorry if it damages your unique aesthetic pleasure and sense of beauty
