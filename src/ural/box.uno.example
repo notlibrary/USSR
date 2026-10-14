@@ -1,0 +1,1 @@
+'Package{name=`ukraine`,version=`0.1.0`,description=`HTTP server and web framework for USSR`,entry=`ukraine.su`,dependencies=[`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
