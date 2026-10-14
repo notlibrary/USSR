@@ -1,0 +1,190 @@
+# Ukraine HTTP/1.1 server and small handler framework.
+#
+# Applications include this file and define:
+#   uk_route(result): method target raw_request [ ... uk_response(result): ... ]
+# The server owns a nonblocking listener. Each accepted connection is handled
+# by a USSR scheduler task; this module does not spawn operating-system tasks.
+
+uk_find(result): text needle start [
+    len(uk_find_text_len): text
+    len(uk_find_needle_len): needle
+    set(result): {0 - 1}
+    set(uk_find_i): start
+    if(_): {uk_find_i < 0} [
+        set(uk_find_i): 0
+    ]
+    while(_): {uk_find_i <= uk_find_text_len - uk_find_needle_len} [
+        slice(uk_find_part): text uk_find_i uk_find_needle_len
+        if(_): {uk_find_part = needle} [
+            set(result): uk_find_i
+            return(result): result
+        ]
+        add(uk_find_i): uk_find_i 1
+    ]
+]
+
+uk_read_request(result): client [
+    set(result): ""
+    set(uk_read_done): 0
+    set(uk_read_failed): 0
+    while(_): {uk_read_done = 0} [
+        wait_readable(uk_read_ready): client
+        socket_recv(uk_read_chunk): client 4096
+        if(_): {uk_read_chunk = null} [
+            set(uk_read_failed): 1
+            set(uk_read_done): 1
+        ]
+        if(_): {uk_read_chunk != null} [
+            len(uk_read_chunk_len): uk_read_chunk
+            if(_): {uk_read_chunk_len = 0} [
+                set(uk_read_failed): 1
+                set(uk_read_done): 1
+            ]
+            if(_): {uk_read_chunk_len > 0} [
+                concat(result): result uk_read_chunk
+                len(uk_read_total): result
+                uk_find(uk_read_end): result "\r\n\r\n" 0
+                if(_): {uk_read_end >= 0} [
+                    if(_): {uk_read_end > 16380} [
+                        set(uk_read_failed): 1
+                        set(uk_read_done): 1
+                    ]
+                    if(_): {uk_read_end <= 16380} [
+                        set(uk_read_done): 1
+                    ]
+                ]
+                if(_): {uk_read_end < 0} [
+                    if(_): {uk_read_total > 16384} [
+                        set(uk_read_failed): 1
+                        set(uk_read_done): 1
+                    ]
+                ]
+            ]
+        ]
+    ]
+    if(_): {uk_read_failed = 1} [
+        set(result): ""
+    ]
+]
+
+uk_request_method(result): request [
+    uk_find(uk_method_end): request " " 0
+    if(_): {uk_method_end < 1} [
+        set(result): ""
+        return(result): result
+    ]
+    slice(result): request 0 uk_method_end
+]
+
+uk_request_target(result): request [
+    uk_find(uk_target_first): request " " 0
+    if(_): {uk_target_first < 0} [
+        set(result): ""
+        return(result): result
+    ]
+    add(uk_target_start): uk_target_first 1
+    uk_find(uk_target_end): request " " uk_target_start
+    if(_): {uk_target_end <= uk_target_start} [
+        set(result): ""
+        return(result): result
+    ]
+    slice(result): request uk_target_start {uk_target_end - uk_target_start}
+]
+
+uk_response(result): status_line content_type body [
+    set(result): "HTTP/1.1 "
+    concat(result): result status_line "\r\n"
+    concat(result): result "Content-Type: " content_type "\r\n"
+    concat(result): result "Connection: close\r\n"
+    concat(result): result "X-Content-Type-Options: nosniff\r\n\r\n"
+    concat(result): result body
+]
+
+uk_send_all(result): client response [
+    len(uk_send_total): response
+    set(uk_send_offset): 0
+    set(uk_send_retries): 0
+    set(uk_send_failed): 0
+    while(_): {uk_send_offset < uk_send_total} [
+        slice(uk_send_chunk): response uk_send_offset {uk_send_total - uk_send_offset}
+        socket_send(uk_send_count): client uk_send_chunk
+        if(_): {uk_send_count > 0} [
+            add(uk_send_offset): uk_send_offset uk_send_count
+            set(uk_send_retries): 0
+        ]
+        if(_): {uk_send_count <= 0} [
+            add(uk_send_retries): uk_send_retries 1
+            if(_): {uk_send_retries > 8} [
+                set(uk_send_failed): 1
+                set(uk_send_offset): uk_send_total
+            ]
+            if(_): {uk_send_failed = 0} [
+                wait_writable(uk_send_ready): client
+            ]
+        ]
+    ]
+    set(result): {0 - 1}
+    if(_): {uk_send_failed = 0} [
+        set(result): 0
+    ]
+]
+
+uk_client(result): client [
+    uk_read_request(uk_client_request): client
+    len(uk_client_request_len): uk_client_request
+    if(_): {uk_client_request_len > 0} [
+        uk_request_method(uk_client_method): uk_client_request
+        uk_request_target(uk_client_target): uk_client_request
+        if(_): {uk_client_method = ""} [
+            uk_response(uk_client_response): "400 Bad Request" "text/plain; charset=utf-8" "Bad Request\n"
+        ]
+        if(_): {uk_client_method != ""} [
+            if(_): {uk_client_target = ""} [
+                uk_response(uk_client_response): "400 Bad Request" "text/plain; charset=utf-8" "Bad Request\n"
+            ]
+            if(_): {uk_client_target != ""} [
+                uk_route(uk_client_response): uk_client_method uk_client_target uk_client_request
+            ]
+        ]
+        uk_send_all(uk_client_sent): client uk_client_response
+    ]
+    socket_close(uk_client_closed): client
+    set(result): 0
+]
+
+uk_server(result): host port [
+    socket_tcp(uk_listener):
+    if(_): {uk_listener < 1} [
+        print(_): "ukraine: could not create TCP socket\n"
+        set(result): {0 - 1}
+        return(result): result
+    ]
+    socket_bind(uk_bound): uk_listener host port
+    if(_): {uk_bound != 0} [
+        print(_): "ukraine: could not bind listener\n"
+        socket_close(uk_closed): uk_listener
+        set(result): {0 - 1}
+        return(result): result
+    ]
+    socket_listen(uk_listening): uk_listener 128
+    if(_): {uk_listening != 0} [
+        print(_): "ukraine: could not listen on socket\n"
+        socket_close(uk_closed): uk_listener
+        set(result): {0 - 1}
+        return(result): result
+    ]
+    set(uk_listening_message): "ukraine: listening on "
+    concat(uk_listening_message): uk_listening_message host "\n"
+    print(_): uk_listening_message
+    while(_): {true} [
+        wait_readable(uk_accept_ready): uk_listener
+        socket_accept(uk_client_socket): uk_listener
+        if(_): {uk_client_socket > 0} [
+            async(uk_client_pid): "uk_client" uk_client_socket
+            if(_): {uk_client_pid < 0} [
+                socket_close(uk_rejected_client): uk_client_socket
+                print(_): "ukraine: could not schedule client handler\n"
+            ]
+        ]
+    ]
+]

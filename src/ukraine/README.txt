@@ -1,27 +1,43 @@
-ukraine.su cross-platform socket/scheduler alpha
+ukraine.su is a small HTTP/1.1 server and request-handler framework written in
+USSR. It uses the existing nonblocking socket library and USSR's built-in
+cooperative scheduler. It does not fork or exec processes to serve requests.
 
-This package contains a separate socket API, POSIX and Windows implementations,
-and scheduler/event-queue integration for USSR.
+## Run the example
 
-Apply by copying the included src/, tests/, docs/, and ussr-ubuntu.mk paths over
-the corresponding paths in your USSR checkout. Back up your tree first.
+Build the interpreter with the repository's platform build:
 
-Build on Linux with the project's normal command, adding src/socket_posix.c to
-the link inputs. The supplied ussr-ubuntu.mk selects socket_posix.c on POSIX and
-socket_win32.c plus ws2_32 and process_win32.c on Windows.
+  POSIX:   make -f ussr-ubuntu.mk ussr
+  Windows: nmake /f Makefile.msc
 
-Tests:
-  ussr tests/socket_smoke.su
-  ussr tests/socket_echo.su
-Then connect to 127.0.0.1:18991 and send text. The server should echo it.
+From the repository root, run:
 
-Verified in this environment: Linux/POSIX build, socket smoke test, and TCP echo
-integration test. The Windows backend is implemented but was not compiled here
-because a Windows/MinGW toolchain is unavailable. Please run the Windows build
-before treating this as release-ready.
+  ussr tests/ukraine_http.su
 
-The socket API returns small integer handles managed by the library, not native
-OS descriptors. No fork/exec is used to service network connections; readiness
-waits are integrated with the existing scheduler. Existing external-process
-support remains untouched apart from selecting the platform's process backend
-in ussr-ubuntu.mk.
+The example binds to 127.0.0.1:18992. In another terminal, request:
+
+  curl -i http://127.0.0.1:18992/
+  curl -i http://127.0.0.1:18992/health
+  curl -i http://127.0.0.1:18992/missing
+
+## Write an application
+
+Include `src/ukraine/ukraine.su` and define `uk_route(result): method target
+raw_request [...]`. The route returns a response by calling
+`uk_response(result): "200 OK" content_type body`; status_line is the HTTP
+status code and reason phrase, for example `"404 Not Found"`.
+`uk_server(result): host port` creates the listener and starts one USSR `async`
+scheduler task for each accepted connection. Each response closes its
+connection; handlers can run concurrently while the scheduler waits for socket
+readiness.
+
+See `tests/ukraine_http.su` for a runnable example and
+`tests/ukraine_unit.su` for helper checks. The existing
+`tests/socket_smoke.su` and `tests/socket_echo.su` exercise the lower-level
+socket API.
+
+The socket API returns small integer handles, not native descriptors. The
+current HTTP layer is intentionally small: IPv4 TCP, one request per
+connection, a 16 KiB request-header limit, and application-defined routing.
+It does not yet parse request bodies, implement TLS, or provide DNS/IPv6.
+Keep the server on trusted networks until those features and production-grade
+timeouts/limits are added.
