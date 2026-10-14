@@ -65,7 +65,8 @@ typedef enum
     USSR_BLOCK_NONE = 0,
     USSR_BLOCK_AWAIT,    /* wait_pid holds the target process */
     USSR_BLOCK_TIMER,    /* event queue token in block_token */
-    USSR_BLOCK_CHILD     /* event queue token in block_token */
+    USSR_BLOCK_CHILD,    /* event queue token in block_token */
+    USSR_BLOCK_SOCKET    /* socket readiness token in block_token */
 } ussr_block_kind_t;
 
 /*

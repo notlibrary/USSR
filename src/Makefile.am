@@ -12,6 +12,7 @@ ussr_SOURCES = \
     ussr_oop_builtins.c \
     scheduler.c \
     eventq.c \
+    socket_posix.c \
     gc.c \
 	process_posix.c \
     prng64_xrp32.c \
@@ -26,6 +27,7 @@ EXTRA_DIST = \
     ussr_oop_builtins.h \
     scheduler.h \
     eventq.h \
+    socket.h \
     gc.h \
     vm.h \
     pp.h \

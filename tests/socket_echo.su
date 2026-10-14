@@ -1,0 +1,14 @@
+# Cross-platform scheduler-aware TCP echo prototype.
+init(ret): arg_cnt arg_vec [
+    socket_tcp(server):
+    socket_bind(bound): server "127.0.0.1" 18991
+    socket_listen(listening): server 16
+    wait_readable(ready): server
+    socket_accept(client): server
+    wait_readable(client_ready): client
+    socket_recv(message): client 1024
+    socket_send(sent): client message
+    socket_close(client_closed): client
+    socket_close(server_closed): server
+    set(ret): 0
+]

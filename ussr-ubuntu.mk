@@ -16,20 +16,20 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/scheduler.o \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
-       $(SRC_DIR)/process_posix.o \
        $(SRC_DIR)/prng64_xrp32.o \
        $(SRC_DIR)/autocomplete.o		  
 
 ifeq ($(OS),Windows_NT)
-OBJS += $(SRC_DIR)/completion_fs_win32.o
+OBJS += $(SRC_DIR)/completion_fs_win32.o $(SRC_DIR)/socket_win32.o $(SRC_DIR)/win/process_win32.o
+LDLIBS += -lws2_32
 else
-OBJS += $(SRC_DIR)/completion_fs_posix.o
+OBJS += $(SRC_DIR)/completion_fs_posix.o $(SRC_DIR)/socket_posix.o $(SRC_DIR)/process_posix.o
 endif
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) -lm
+	$(CC) $(CFLAGS) -o $@ $(OBJS) -lm $(LDLIBS)
 
 $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.y
 	bison -d -Wall -o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.y
@@ -76,10 +76,19 @@ $(SRC_DIR)/bestline.o: $(SRC_DIR)/bestline.c $(SRC_DIR)/bestline.h
 $(SRC_DIR)/process_posix.o: $(SRC_DIR)/process_posix.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h
+$(SRC_DIR)/win/process_win32.o: $(SRC_DIR)/win/process_win32.c $(SRC_DIR)/process.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/eventq.o: $(SRC_DIR)/eventq.c $(SRC_DIR)/eventq.h $(SRC_DIR)/process.h
+$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/eventq.o: $(SRC_DIR)/eventq.c $(SRC_DIR)/eventq.h $(SRC_DIR)/process.h $(SRC_DIR)/socket.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/socket_posix.o: $(SRC_DIR)/socket_posix.c $(SRC_DIR)/socket.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/socket_win32.o: $(SRC_DIR)/socket_win32.c $(SRC_DIR)/socket.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/gc.o: $(SRC_DIR)/gc.c $(SRC_DIR)/gc.h $(SRC_DIR)/uno.h

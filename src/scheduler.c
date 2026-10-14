@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "socket.h"
+
+
 #include "eventq.h"
 #include "gc.h"
 
@@ -764,6 +767,99 @@ static int sched_do_process(
     return 1;
 }
 
+static int sched_socket_handle_arg(const ussr_value_t *values, size_t index, int *handle)
+{
+    long value;
+    if (values[index].type != USSR_INTEGER) return -1;
+    value = values[index].data.integer;
+    if (value < 1 || value > INT32_MAX) return -1;
+    *handle = (int)value;
+    return 0;
+}
+
+static int sched_do_socket(const char *name, const ussr_value_t *values,
+                           size_t count, ussr_value_t *out)
+{
+    int h;
+    if (strcmp(name, "socket_tcp") == 0) {
+        if (count != 0) return -1;
+        *out = ussr_integer(ussr_socket_tcp()); return 1;
+    }
+    if (strcmp(name, "socket_bind") == 0) {
+        if (count != 3 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type!=USSR_STRING || values[2].type!=USSR_INTEGER ||
+            values[2].data.integer<0 || values[2].data.integer>65535) return -1;
+        *out=ussr_integer(ussr_socket_bind(h,values[1].data.string,(unsigned short)values[2].data.integer)); return 1;
+    }
+    if (strcmp(name, "socket_listen") == 0) {
+        if (count!=2 || sched_socket_handle_arg(values,0,&h)!=0 || values[1].type!=USSR_INTEGER) return -1;
+        *out=ussr_integer(ussr_socket_listen(h,(int)values[1].data.integer)); return 1;
+    }
+    if (strcmp(name, "socket_accept") == 0) {
+        if (count!=1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out=ussr_integer(ussr_socket_accept(h)); return 1;
+    }
+    if (strcmp(name, "socket_nonblocking") == 0) {
+        if (count!=1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out=ussr_integer(ussr_socket_nonblocking(h)); return 1;
+    }
+    if (strcmp(name, "socket_recv") == 0) {
+        char *buffer; long got; size_t cap;
+        if (count!=2 || sched_socket_handle_arg(values,0,&h)!=0 || values[1].type!=USSR_INTEGER || values[1].data.integer<1 || values[1].data.integer>65536) return -1;
+        cap=(size_t)values[1].data.integer; buffer=malloc(cap+1); if(!buffer)return -1;
+        got=ussr_socket_recv(h,buffer,cap);
+        if(got<0){free(buffer);*out=ussr_null();return 1;}
+        buffer[got]='\0'; *out=ussr_string(buffer); free(buffer); return 1;
+    }
+    if (strcmp(name, "socket_send") == 0) {
+        long sent;
+        if(count!=2 || sched_socket_handle_arg(values,0,&h)!=0 || values[1].type!=USSR_STRING)return -1;
+        sent=ussr_socket_send(h,values[1].data.string,strlen(values[1].data.string)); *out=ussr_integer(sent); return 1;
+    }
+    if (strcmp(name, "socket_close") == 0) {
+        if(count!=1 || sched_socket_handle_arg(values,0,&h)!=0)return -1;
+        *out=ussr_integer(ussr_socket_close(h)); return 1;
+    }
+    return 0;
+}
+
+static int sched_do_wait_fd(
+    const ussr_value_t *values,
+    size_t value_count,
+    int write_ready,
+    uint8_t resume_register)
+{
+    long fd;
+    uint64_t token;
+
+    if (value_count != 1)
+    {
+        fprintf(stderr, "USSR: %s(_): file descriptor\n",
+                write_ready ? "wait_writable" : "wait_readable");
+        return -1;
+    }
+
+    fd = sched_arg_integer(values, 0);
+    if (fd < 1 || fd > INT32_MAX)
+    {
+        fprintf(stderr, "USSR: socket wait expects a valid socket handle\n");
+        return -1;
+    }
+
+    if (sched_current == NULL)
+        return -1;
+
+    token = ussr_eq_add_fd(sched_current->pid, (int)fd, write_ready);
+    if (token == 0)
+    {
+        fprintf(stderr, "USSR: socket readiness is unavailable on this platform\n");
+        return -1;
+    }
+
+    sched_block_current(USSR_BLOCK_SOCKET, 0, token, resume_register);
+    return 2;
+}
+
 int ussr_sched_dispatch(
     ussr_sched_program_t *program,
     const char *name,
@@ -800,6 +896,19 @@ int ussr_sched_dispatch(
         *out = ussr_integer(0);
         return 1;
     }
+
+    if (strncmp(name, "socket_", 7) == 0)
+    {
+        int socket_result = sched_do_socket(name, values, value_count, out);
+        if (socket_result != 0)
+            return socket_result;
+    }
+
+    if (strcmp(name, "wait_readable") == 0)
+        return sched_do_wait_fd(values, value_count, 0, ins_a);
+
+    if (strcmp(name, "wait_writable") == 0)
+        return sched_do_wait_fd(values, value_count, 1, ins_a);
 
     if (strcmp(name, "process") == 0)
         return sched_do_process(values, value_count,
@@ -976,6 +1085,7 @@ int ussr_sched_run(int background_ok)
 
 void ussr_sched_init(void)
 {
+    (void)ussr_socket_init();
     sched_procs = NULL;
     sched_next_pid = 1;
     sched_main_pid = 0;
@@ -993,6 +1103,7 @@ void ussr_sched_init(void)
 
 void ussr_sched_cleanup(void)
 {
+    ussr_socket_cleanup();
     size_t i;
 
     while (sched_procs != NULL)

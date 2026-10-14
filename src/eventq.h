@@ -31,7 +31,9 @@
 typedef enum
 {
     USSR_EQ_TIMER = 1,
-    USSR_EQ_CHILD = 2
+    USSR_EQ_CHILD = 2,
+    USSR_EQ_READABLE = 3,
+    USSR_EQ_WRITABLE = 4
 } ussr_eq_kind_t;
 
 typedef struct
@@ -51,6 +53,9 @@ uint64_t ussr_eq_now_ms(void);
 /* Registration. Tokens are nonzero and unique per process lifetime. */
 uint64_t ussr_eq_add_timer(long owner_pid, uint64_t deadline_ms);
 uint64_t ussr_eq_add_child(long owner_pid, ussr_child_t child);
+/* Wait until a USSR socket handle is readable (write_ready == 0) or
+ * writable (write_ready != 0). The socket remains owned by caller. */
+uint64_t ussr_eq_add_fd(long owner_pid, int fd, int write_ready);
 
 /* Cancel a pending registration. Returns 0 when found. */
 int ussr_eq_cancel(uint64_t token);

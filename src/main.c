@@ -1469,9 +1469,9 @@ int vm_execute(
                 value = ussr_null();
 
                 /*
-                 * Scheduler commands (async/await/sleep/yield/gc/
-                 * process) and the process loader. They sit on the VM
-                 * OOP boundary because they may SUSPEND this process:
+                 * Scheduler commands (async/await/sleep/yield/gc/process),
+                 * socket primitives, and the process loader. They sit on
+                 * the VM OOP boundary because they may SUSPEND this process:
                  * a blocked command returns USSR_VM_STATUS_SUSPENDED
                  * here and the scheduler resumes the instruction once
                  * the wait completes.
@@ -1486,7 +1486,10 @@ int vm_execute(
                         strcmp(program->strings[ins.immediate], "sleep") == 0 ||
                         strcmp(program->strings[ins.immediate], "yield") == 0 ||
                         strcmp(program->strings[ins.immediate], "gc") == 0 ||
-                        strcmp(program->strings[ins.immediate], "process") == 0;
+                        strcmp(program->strings[ins.immediate], "process") == 0 ||
+                        strcmp(program->strings[ins.immediate], "wait_readable") == 0 ||
+                        strcmp(program->strings[ins.immediate], "wait_writable") == 0 ||
+                        strncmp(program->strings[ins.immediate], "socket_", 7) == 0;
 
                     if (is_sched_name &&
                         vm_values_from_registers(

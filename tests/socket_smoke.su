@@ -1,0 +1,10 @@
+# Basic POSIX socket built-in smoke test.
+init(ret): arg_cnt arg_vec [
+    socket_tcp(fd):
+    print(out): fd
+    socket_nonblocking(status): fd
+    print(out): status
+    socket_close(closed): fd
+    print(out): closed
+    set(ret): 0
+]
