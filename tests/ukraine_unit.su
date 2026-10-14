@@ -1,0 +1,42 @@
+# Smoke-test the HTTP helpers without opening a listening socket.
+$include "src/ukraine/ukraine.su"
+
+uk_route(result): method target raw_request [
+    uk_response(result): "200 OK" "text/plain" "ok"
+]
+
+init(result): arg_cnt arg_vec [
+    uk_find(found): "GET /health HTTP/1.1" " /" 0
+    if(_): {found != 3} [
+        print(_): "FAIL: uk_find\n"
+        set(result): 1
+        return(result): result
+    ]
+    uk_request_method(method): "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    if(_): {method != "GET"} [
+        print(_): "FAIL: request method\n"
+        set(result): 1
+        return(result): result
+    ]
+    uk_request_target(target): "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    if(_): {target != "/health"} [
+        print(_): "FAIL: request target\n"
+        set(result): 1
+        return(result): result
+    ]
+    uk_response(response): "200 OK" "text/plain" "ok"
+    uk_find(header): response "HTTP/1.1 200 OK\r\n" 0
+    if(_): {header != 0} [
+        print(_): "FAIL: response status\n"
+        set(result): 1
+        return(result): result
+    ]
+    uk_find(body): response "\r\n\r\nok" 0
+    if(_): {body < 0} [
+        print(_): "FAIL: response body\n"
+        set(result): 1
+        return(result): result
+    ]
+    print(_): "ukraine helpers: ok\n"
+    set(result): 0
+]

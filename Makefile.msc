@@ -18,10 +18,10 @@ FLEX    = win_flex.exe
 SRC     = src
 WIN     = src\win
 
-CFLAGS  = /nologo /W3 /Zi /Od /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /I$(SRC) /I$(WIN)
+CFLAGS  = /nologo /W3 /Zi /Od /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN)
 RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
-LIBS    = user32.lib
+LIBS    = user32.lib ws2_32.lib
 
 TARGET  = ussr.exe
 
@@ -40,7 +40,8 @@ OBJS = \
     $(SRC)\prng64_xrp32.obj \
 	$(SRC)\autocomplete.obj \
 	$(SRC)\completion_fs_win32.obj \
-    $(WIN)\process_win32.obj \
+	$(SRC)\socket_win32.obj \
+	$(WIN)\process_win32.obj \
     $(WIN)\worstline.obj \
     $(WIN)\getopt.obj \
     ussr.res
@@ -86,11 +87,14 @@ $(SRC)\ussr_oop_builtins.obj: $(SRC)\ussr_oop_builtins.c $(SRC)\ussr_oop_builtin
 $(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_bytecode.obj $(SRC)\ussr_bytecode.c
 
-$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h
+$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
 
-$(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h
+$(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\eventq.obj $(SRC)\eventq.c
+
+$(SRC)\socket_win32.obj: $(SRC)\socket_win32.c $(SRC)\socket.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\socket_win32.obj $(SRC)\socket_win32.c
 
 $(SRC)\gc.obj: $(SRC)\gc.c $(SRC)\gc.h $(SRC)\uno.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\gc.obj $(SRC)\gc.c
