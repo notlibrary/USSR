@@ -94,3 +94,23 @@ does not yet fetch or extract remote archives.
 Versions and dependency lists in these initial `box.uno` files are placeholders
 to establish the metadata contract, not declarations that all packages have
 already been published.
+
+## 0.1.1-alpha development increment: local database layer
+
+This increment adds `native/ural_db.c` / `native/ural_db.h`, a small SQLite
+layer for opening/initializing `ussr.boxes`, managing the trusted HTTPS server
+allow-list, and listing installed packages or trusted servers through callbacks.
+The layer uses prepared statements for URL mutations and rejects non-HTTPS
+URLs when adding trusted repositories. It is intentionally independent of the
+interpreter so it can be tested before the USSR command-dispatch integration.
+
+Build and run the native unit test with `make test` (requires a C compiler,
+SQLite development headers/library, and `pkg-config` optionally). On Windows,
+configure `SQLITE_CFLAGS` and `SQLITE_LIBS` for the SQLite distribution in use.
+
+**Scope note:** this is a tested local-DB foundation, not yet a complete package
+manager. The `ural_*` commands called by `ural.su` still need to be registered
+in USSR's command dispatcher and wired to this layer. Network fetching, UNO
+manifest decoding, archive verification/extraction, dependency resolution, and
+transactional install/uninstall/update remain future work. No remote package is
+installed by this increment.
