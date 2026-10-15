@@ -11,7 +11,7 @@
 #define USSR_BC_RETURN_REG     31U
 
 /*
- * USSR bytecode instruction format.
+ * USSR VM instruction format, shared by UUASM and executable bytecode.
  *
  * Every instruction is exactly 8 bytes:
  *
@@ -21,7 +21,9 @@
  *   c      : 8 bits
  *   imm    : 32 bits
  *
- * The compiler only produces this representation.  It never executes it.
+ * The compiler emits UUASM in this layout, then validates and translates it
+ * one-to-one into the executable bytecode stream. This record is never run
+ * directly by the compiler.
  */
 typedef struct
 {

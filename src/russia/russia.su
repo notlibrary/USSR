@@ -3256,15 +3256,125 @@ rt_run(r): prog acnt avec [
         set(r): 0
     ]
 ]
-# ---------- M4: bytecode compiler + VM ----------
-# In{op,a,b,c,imm}: 0 NOP 1 LOAD_CONST 2 LOAD_VAR 3 STORE_VAR 4 NATIVE
-# 5 CALL 6 RET 7 JMP 8 JMP_TRUE 9 JMP_FALSE 10 ADD 11 SUB 12 MUL 13 DIV 14 MOD 15 HALT
-
-cv_emit(r): op a b c imm [
-    new(cv_in): "In" op a b c imm
+# ---------- M4: UUASM compiler + bootstrap VM ----------
+# UUASM uses the C VM opcode ABI. Bootstrap compilation goes through ua_emit,
+# which validates a mnemonic/opcode and records exactly one instruction.
+# vm_step translates that opcode one-to-one to the legacy dispatch number.
+ua_to_vm(r): op [
+    set(r): {0 - 1}
+    if(_): {op = 0} [ set(r): 0 ]
+    if(_): {op = 1} [ set(r): 1 ]
+    if(_): {op = 2} [ set(r): 2 ]
+    if(_): {op = 3} [ set(r): 3 ]
+    if(_): {op = 4} [ set(r): 68 ]
+    if(_): {op = 5} [ set(r): 80 ]
+    if(_): {op = 6} [ set(r): 81 ]
+    if(_): {op = 7} [ set(r): 48 ]
+    if(_): {op = 8} [ set(r): 49 ]
+    if(_): {op = 9} [ set(r): 50 ]
+    if(_): {op = 10} [ set(r): 16 ]
+    if(_): {op = 11} [ set(r): 17 ]
+    if(_): {op = 12} [ set(r): 18 ]
+    if(_): {op = 13} [ set(r): 19 ]
+    if(_): {op = 14} [ set(r): 20 ]
+    if(_): {op = 15} [ set(r): 240 ]
+    if(_): {op = 16} [ set(r): 22 ]
+    if(_): {op = 17} [ set(r): 23 ]
+    if(_): {op = 18} [ set(r): 24 ]
+    if(_): {op = 19} [ set(r): 25 ]
+    if(_): {op = 20} [ set(r): 26 ]
+    if(_): {op = 21} [ set(r): 27 ]
+    if(_): {op = 22} [ set(r): 28 ]
+    if(_): {op = 23} [ set(r): 29 ]
+    if(_): {op = 24} [ set(r): 33 ]
+    if(_): {op = 25} [ set(r): 34 ]
+    if(_): {op = 26} [ set(r): 30 ]
+    if(_): {op = 27} [ set(r): 31 ]
+    if(_): {op = 28} [ set(r): 32 ]
+    if(_): {op = 29} [ set(r): 21 ]
+]
+ua_to_bootstrap(r): op [
+    set(r): {0 - 1}
+    if(_): {op = 0} [ set(r): 0 ]
+    if(_): {op = 1} [ set(r): 1 ]
+    if(_): {op = 2} [ set(r): 2 ]
+    if(_): {op = 3} [ set(r): 3 ]
+    if(_): {op = 68} [ set(r): 4 ]
+    if(_): {op = 80} [ set(r): 5 ]
+    if(_): {op = 81} [ set(r): 6 ]
+    if(_): {op = 48} [ set(r): 7 ]
+    if(_): {op = 49} [ set(r): 8 ]
+    if(_): {op = 50} [ set(r): 9 ]
+    if(_): {op = 16} [ set(r): 10 ]
+    if(_): {op = 17} [ set(r): 11 ]
+    if(_): {op = 18} [ set(r): 12 ]
+    if(_): {op = 19} [ set(r): 13 ]
+    if(_): {op = 20} [ set(r): 14 ]
+    if(_): {op = 240} [ set(r): 15 ]
+    if(_): {op = 22} [ set(r): 16 ]
+    if(_): {op = 23} [ set(r): 17 ]
+    if(_): {op = 24} [ set(r): 18 ]
+    if(_): {op = 25} [ set(r): 19 ]
+    if(_): {op = 26} [ set(r): 20 ]
+    if(_): {op = 27} [ set(r): 21 ]
+    if(_): {op = 28} [ set(r): 22 ]
+    if(_): {op = 29} [ set(r): 23 ]
+    if(_): {op = 33} [ set(r): 24 ]
+    if(_): {op = 34} [ set(r): 25 ]
+    if(_): {op = 30} [ set(r): 26 ]
+    if(_): {op = 31} [ set(r): 27 ]
+    if(_): {op = 32} [ set(r): 28 ]
+    if(_): {op = 21} [ set(r): 29 ]
+]
+ua_name(r): op [
+    set(r): "INVALID"
+    if(_): {op = 0} [ set(r): "NOP" ]
+    if(_): {op = 1} [ set(r): "LOAD_CONST" ]
+    if(_): {op = 2} [ set(r): "LOAD_VAR" ]
+    if(_): {op = 3} [ set(r): "STORE_VAR" ]
+    if(_): {op = 68} [ set(r): "OOP" ]
+    if(_): {op = 80} [ set(r): "CALL" ]
+    if(_): {op = 81} [ set(r): "RET" ]
+    if(_): {op = 48} [ set(r): "JMP" ]
+    if(_): {op = 49} [ set(r): "JMP_TRUE" ]
+    if(_): {op = 50} [ set(r): "JMP_FALSE" ]
+    if(_): {op = 16} [ set(r): "ADD" ]
+    if(_): {op = 17} [ set(r): "SUB" ]
+    if(_): {op = 18} [ set(r): "MUL" ]
+    if(_): {op = 19} [ set(r): "DIV" ]
+    if(_): {op = 20} [ set(r): "MOD" ]
+    if(_): {op = 240} [ set(r): "HALT" ]
+    if(_): {op = 22} [ set(r): "EQ" ]
+    if(_): {op = 23} [ set(r): "NE" ]
+    if(_): {op = 24} [ set(r): "LT" ]
+    if(_): {op = 25} [ set(r): "LE" ]
+    if(_): {op = 26} [ set(r): "GT" ]
+    if(_): {op = 27} [ set(r): "GE" ]
+    if(_): {op = 28} [ set(r): "LAND" ]
+    if(_): {op = 29} [ set(r): "LOR" ]
+    if(_): {op = 33} [ set(r): "SHL" ]
+    if(_): {op = 34} [ set(r): "SHR" ]
+    if(_): {op = 30} [ set(r): "XOR" ]
+    if(_): {op = 31} [ set(r): "BAND" ]
+    if(_): {op = 32} [ set(r): "BOR" ]
+    if(_): {op = 21} [ set(r): "NEG" ]
+]
+ua_emit(r): op a b c imm [
+    ua_name(cv_mnemonic): op
+    if(_): {cv_mnemonic = "INVALID"} [
+        print(_): "UUASM assembler: unsupported opcode"
+        set(vm_flow): 1
+        set(r): {0 - 1}
+        return(r): r
+    ]
+    new(cv_in): "In" op a b c imm cv_mnemonic
     push(_): cv_code cv_in
     len(cv_el): cv_code
     sub(r): cv_el 1
+]
+cv_emit(r): op a b c imm [
+    ua_to_vm(cv_vmop): op
+    ua_emit(r): cv_vmop a b c imm
 ]
 cv_name_i(r): s i [
     len(cv_nl): cv_names
@@ -4427,6 +4537,13 @@ vm_alias2(r): rnm crt sv [
 ]
 vm_step(r): cur op [
     set(r): 0
+    ua_to_bootstrap(vm_backend_opcode): op
+    if(_): {vm_backend_opcode < 0} [
+        print(_): "UUASM opcode has no bootstrap VM mapping"
+        set(vm_flow): 1
+        return(r): 0
+    ]
+    set(op): vm_backend_opcode
     if(_): {op = 1} [
         getf(vm_ci): cur "imm"
         getf(vm_d): cur "a"
@@ -5050,11 +5167,12 @@ cv_dump(r): [
     while(_): {cv_i < cv_dl} [
         at(cv_din): cv_code cv_i
         getf(cv_do): cv_din "op"
+        getf(cv_mn): cv_din "mnemonic"
         getf(cv_da): cv_din "a"
         getf(cv_db): cv_din "b"
         getf(cv_dc): cv_din "c"
         getf(cv_dm): cv_din "imm"
-        template(_): "STR;INT;STR;INT;STR;INT;STR;INT;STR;INT;STR;INT;STR" "L" cv_i " " cv_do " a" cv_da " b" cv_db " c" cv_dc " i" cv_dm "\n"
+        template(_): "STR;INT;STR;INT;STR;STR;STR;INT;STR;INT;STR;INT;STR;INT;STR" "L" cv_i " " cv_do " " cv_mn " a" cv_da " b" cv_db " c" cv_dc " i" cv_dm "\n"
         add(cv_i): cv_i 1
     ]
     set(cv_i2): 0
@@ -5750,7 +5868,7 @@ init(ret): arg_cnt arg_vec [
             return(_): 1
         ]
     ]
-    struct(In): "op:number" "a:number" "b:number" "c:number" "imm:number"
+    struct(In): "op:number" "a:number" "b:number" "c:number" "imm:number" "mnemonic:string"
     struct(vm_rv): "v:any"
     struct(vm_fr): "rip:number" "sv:vector" "crt:string"
     struct(cv_lp): "top:number" "brk:vector" "cnt:vector" "done:number"

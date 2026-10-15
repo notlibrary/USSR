@@ -6,6 +6,7 @@
 
 #include "ussr.h"
 #include "ussr_bytecode.h"
+#include "ussr_uuasm.h"
 
 /*
  * Resumable virtual machine state.
@@ -90,6 +91,17 @@ void vm_cleanup(ussr_vm_t *vm);
 int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program,
+    unsigned long quantum
+);
+
+/*
+ * Execute a UUASM program using the same VM. The instruction stream is
+ * translated one instruction at a time; a suspended VM may be resumed by
+ * calling this function again with the same UUASM program.
+ */
+int vm_execute_uuasm(
+    ussr_vm_t *vm,
+    const ussr_uuasm_program_t *program,
     unsigned long quantum
 );
 
