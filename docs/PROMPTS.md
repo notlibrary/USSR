@@ -525,3 +525,45 @@ use fontTools python package to build ttf font from script build_pobeda
 edit script make it more courier-like emphasis on small character details
 then fix Cyrillic small к and small м looks like M also fix Дд character add two hatches
 Do not copy existing fonts  use supplied script build_pobeda.py
+
+Now let's build USSR packet manager ural.su
+We will use sqlite file called ussr.boxes to store package db
+and box.uno to store metadata and to mark directory as package(package.json analog)
+ussr.boxes db will have trusted package servers urls list
+client program may also work in server to maintain it
+Example fetching of scripts by name
+```
+$include "ural.su"
+instsall(code): "ukraine russia"
+```
+
+operations are standard install uninstall update
+
+Now initial packages list
+1 ural USSR package manager
+2 russia bootstrapped USSR intepreter
+3 Mbl vi-like console text editor 
+4 Ukraine HTTPd and framework
+5 library USSR standard library
+6 docs USSR manual specs and design documents collection
+7 tests USSR tests collection
+
+Let's open 3 more USSR subprojects
+
+petersburg.su cross-platform GUI widget library createwindow visual basic and friends
+tver.su cross-platform 2-panel file manager with petersburg.su gui like total commander midnight commander etc
+tula.su classic GUI cross-platform general purpose 2D CAD program
+
+We have the critical flaw in architecture Ukraine needs more control
+it does not want to be just and HTTPd framework
+Solution is to add an assembler layer called UUASM(USSR Ukraine ASM)
+We need specify it and put to vm opcodes one to one
+We need rebuild ussr_bytecode.c to compile to UUASM first and then convert UUASM to VM opcodes 1-1
+Also we need VM able to run UUASM not only bytecode
+We must do it all both in C and bootstrap assembler layer will give us more control for free 
+do it carefully
+
+Here's my new context remain uasm to uuasm and add uuasm support to src\russia.su bootstrap
+add more features if you know them and can
+Then deliver everything to the new USSR context I uploaded
+
