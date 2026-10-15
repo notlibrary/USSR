@@ -13,6 +13,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/uno.o \
        $(SRC_DIR)/ussr_oop_builtins.o \
        $(SRC_DIR)/ussr_bytecode.o \
+       $(SRC_DIR)/ussr_uuasm.o \
        $(SRC_DIR)/scheduler.o \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
@@ -46,7 +47,10 @@ $(SRC_DIR)/lex.yy.o: $(SRC_DIR)/lex.yy.c $(SRC_DIR)/ussr.h
 $(SRC_DIR)/ussr.o: $(SRC_DIR)/ussr.c $(SRC_DIR)/ussr.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/uthash.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ussr_bytecode.o: $(SRC_DIR)/ussr_bytecode.c $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr.h
+$(SRC_DIR)/ussr_bytecode.o: $(SRC_DIR)/ussr_bytecode.c $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/ussr.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/ussr_uuasm.o: $(SRC_DIR)/ussr_uuasm.c $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/autocomplete.o: $(SRC_DIR)/autocomplete.c $(SRC_DIR)/autocomplete.h $(SRC_DIR)/completion_fs.h $(SRC_DIR)/bestline.h
@@ -58,7 +62,7 @@ $(SRC_DIR)/completion_fs_posix.o: $(SRC_DIR)/completion_fs_posix.c $(SRC_DIR)/co
 $(SRC_DIR)/completion_fs_win32.o: $(SRC_DIR)/completion_fs_win32.c $(SRC_DIR)/completion_fs.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h
+$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/pp.o: $(SRC_DIR)/pp.c $(SRC_DIR)/pp.h
