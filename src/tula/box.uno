@@ -1,0 +1,1 @@
+'Package{name=`tula`,version=`0.1.0-alpha`,description=`General-purpose 2D CAD program for USSR with geometry, layers, snapping, dimensions, and export.`,entry=`tula.su`,dependencies=[`petersburg`,`library`],files=[`tula.su`,`README.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

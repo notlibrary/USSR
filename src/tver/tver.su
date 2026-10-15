@@ -1,0 +1,6 @@
+# tver.su — Tver — cross-platform two-panel file manager
+# API scaffold: native commands are proposed, not registered in stock USSR yet.
+
+# Public API: tver_createwindow, tver_panel, tver_refresh, tver_select, tver_copy, tver_move, tver_rename, tver_mkdir, tver_delete, tver_view, tver_bookmark, tver_bind_keys, tver_show, tver_run
+# See README.md and docs/ for implementation requirements.
+

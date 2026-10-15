@@ -1,0 +1,6 @@
+# tula.su — Tula — cross-platform 2D CAD
+# API scaffold: native commands are proposed, not registered in stock USSR yet.
+
+# Public API: tula_createwindow, tula_newdrawing, tula_open, tula_save, tula_line, tula_polyline, tula_circle, tula_arc, tula_rectangle, tula_text, tula_dimension, tula_layer, tula_snap, tula_undo, tula_redo, tula_zoom_fit, tula_export_svg
+# See README.md and docs/ for implementation requirements.
+

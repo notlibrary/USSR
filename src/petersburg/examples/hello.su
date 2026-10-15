@@ -1,0 +1,11 @@
+# Petersburg API sketch (not executable until native commands are registered)
+$include "petersburg.su"
+
+createwindow(window): "Petersburg demo" 640 420
+label(title): window "Hello from USSR"
+button(ok): window "OK"
+on(ok): "click" [
+    close(window):
+]
+show(window):
+run():

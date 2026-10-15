@@ -1,0 +1,12 @@
+# Tula API sketch (not executable until dependencies are integrated)
+$include "petersburg.su"
+$include "tula.su"
+
+tula_createwindow(app): "Tula CAD"
+tula_newdrawing(drawing):
+tula_layer(drawing): "0"
+tula_line(drawing): 0 0 100 0
+tula_circle(drawing): 50 50 25
+tula_zoom_fit(drawing):
+tula_show(app drawing):
+tula_run(app):

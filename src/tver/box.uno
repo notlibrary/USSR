@@ -1,0 +1,1 @@
+'Package{name=`tver`,version=`0.1.0-alpha`,description=`Two-panel file manager for USSR, inspired by Total Commander and Midnight Commander.`,entry=`tver.su`,dependencies=[`petersburg`,`library`],files=[`tver.su`,`README.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

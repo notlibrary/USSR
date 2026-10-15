@@ -1,0 +1,6 @@
+# petersburg.su — Petersburg — cross-platform GUI widget library
+# API scaffold: native commands are proposed, not registered in stock USSR yet.
+
+# Public API: createwindow, close, show, run, label, button, textbox, checkbox, combobox, panel, menu, dialog, settext, gettext, on, destroy
+# See README.md and docs/ for implementation requirements.
+

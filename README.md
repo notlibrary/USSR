@@ -64,4 +64,6 @@ instsall(code): "ukraine russia"
 USSR is a bug-ridden project critical simple system crippling bugs may appear RANDOMLY in any time any place AI won't help much too big context
 Examples: it can't print negative numbers else branches is broken e.t.c
 
+USSR is a neuroslopware it's created entirely by prompting an AI followed by enrichment and refining results with the next AI "centrifuge"
+
 P.S. СССР Средство Создания Совершенных Разработок
