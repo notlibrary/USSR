@@ -1741,6 +1741,48 @@ done:
     return result == USSR_VM_STATUS_DONE ? USSR_VM_STATUS_DONE : USSR_VM_STATUS_ERROR;
 }
 
+int vm_execute_uuasm(
+    ussr_vm_t *vm,
+    const ussr_uuasm_program_t *program,
+    unsigned long quantum)
+{
+    ussr_bc_program_t translated;
+    ussr_bc_instruction_t *code;
+    size_t i;
+    int result;
+
+    if (vm == NULL || program == NULL || program->code_count == 0 ||
+        program->code_count > USSR_BC_MAX_CODE ||
+        program->code == NULL)
+        return USSR_VM_STATUS_ERROR;
+
+    code = malloc(program->code_count * sizeof(*code));
+    if (code == NULL)
+        return USSR_VM_STATUS_ERROR;
+
+    for (i = 0; i < program->code_count; ++i)
+    {
+        uint8_t opcode;
+        if (ussr_uuasm_to_vm_opcode(program->code[i].opcode, &opcode) != 0)
+        {
+            fprintf(stderr,
+                    "USSR VM: UUASM opcode 0x%02x has no VM mapping\n",
+                    program->code[i].opcode);
+            free(code);
+            return USSR_VM_STATUS_ERROR;
+        }
+        code[i] = program->code[i];
+        code[i].opcode = opcode;
+    }
+
+    translated = *program;
+    translated.code = code;
+    translated.code_capacity = program->code_count;
+    result = vm_execute(vm, &translated, quantum);
+    free(code);
+    return result;
+}
+
 /* ------------------------------------------------------------------------- */
 /* SOURCE INPUT                                                              */
 /* ------------------------------------------------------------------------- */
@@ -1987,6 +2029,64 @@ static int run_file(const char *filename, int argc, char **argv)
 {
     ussr_preprocessor_t pp;
     int result;
+
+    {
+        size_t filename_length = strlen(filename);
+        if (filename_length >= 6 &&
+            strcmp(filename + filename_length - 6, ".uuasm") == 0)
+        {
+            FILE *input = fopen(filename, "rb");
+            long file_length;
+            char *source;
+            ussr_uuasm_program_t program;
+            ussr_vm_t vm;
+
+            (void)argc;
+            (void)argv;
+            if (input == NULL)
+            {
+                fprintf(stderr, "UUASM: cannot open '%s'\n", filename);
+                return EXIT_FAILURE;
+            }
+            if (fseek(input, 0, SEEK_END) != 0 ||
+                (file_length = ftell(input)) < 0 ||
+                fseek(input, 0, SEEK_SET) != 0)
+            {
+                fprintf(stderr, "UUASM: cannot read '%s'\n", filename);
+                fclose(input);
+                return EXIT_FAILURE;
+            }
+            source = malloc((size_t)file_length + 1);
+            if (source == NULL)
+            {
+                fclose(input);
+                return EXIT_FAILURE;
+            }
+            if (fread(source, 1, (size_t)file_length, input) !=
+                (size_t)file_length)
+            {
+                fprintf(stderr, "UUASM: short read from '%s'\n", filename);
+                free(source);
+                fclose(input);
+                return EXIT_FAILURE;
+            }
+            source[file_length] = '\0';
+            fclose(input);
+
+            result = ussr_uuasm_assemble(source, &program);
+            free(source);
+            if (result != 0)
+                return EXIT_FAILURE;
+
+            vm_init(&vm);
+            vm.running = 1;
+            result = vm_execute_uuasm(&vm, &program, 0);
+            vm_cleanup(&vm);
+            ussr_bc_program_free(&program);
+            return result == USSR_VM_STATUS_DONE ?
+                EXIT_SUCCESS : EXIT_FAILURE;
+        }
+    }
 
     if (ussr_pp_init(&pp) != 0)
     {

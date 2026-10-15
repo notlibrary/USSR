@@ -5,15 +5,21 @@ Status: architecture baseline
 
 ## 1. Purpose
 
-The USSR Virtual Machine (VM) is the execution machine for Unified Shell Script. USSR source is parsed into an intermediate representation and compiled into a flat bytecode instruction stream. Runtime execution consumes bytecode only.
+The USSR Virtual Machine (VM) is the execution machine for Unified Shell Script. USSR source is parsed into an intermediate representation and compiled through UUASM (USSR Ukraine ASM) into a flat VM instruction stream. Runtime execution accepts VM bytecode; the C VM also provides a direct UUASM entry point that validates and translates each instruction one-to-one before execution.
 
 The VM must never execute the parser's linked command list or AST. Lists and trees are compiler input, not runtime execution structures.
 
-The long-term architecture is:
+The source architecture is:
 
-    source -> preprocessor -> lexer/parser -> bytecode compiler -> bytecode -> VM
+    source -> preprocessor -> lexer/parser -> UUASM compiler -> UUASM
+           -> one-to-one VM opcode translation -> bytecode -> VM
 
 C is the first host implementation of the VM. The VM instruction set and value semantics are the portable language runtime contract.
+
+Textual `.uuasm` programs use the versioned syntax described in
+[`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md). `vm_execute_uuasm()` is the direct
+runtime entry point; existing bytecode consumers and `ussr_bc_compile()` remain
+supported.
 
 ## 2. Machine state
 
@@ -76,22 +82,24 @@ There is no `command->next` operation in the VM execution loop.
 
 ### 5.2 Value loading and movement
 
-    0x02 EVAL_ARG
+    0x01 LOAD_CONST
+    0x02 LOAD_VAR
     0x03 STORE_VAR
-    0x07 LOAD_VAR
-    0x08 LOAD_HASH
-    0x09 LOAD_CONST
-
-`EVAL_ARG` is a compatibility/deferred-value instruction. It is reserved for values which cannot yet be represented by ordinary VM instructions, such as UNO literals or other deferred runtime objects. Ordinary literals and expressions should compile to normal bytecode.
+    0x04 LOAD_HASH
+    0x05 STORE_HASH
+    0x06 DECODE_UNO
+    0x07 GET
+    0x08 VECTOR_GET
+    0x09 VECTOR_SET
 
 ### 5.3 Arithmetic
 
-    0x0a ADD
-    0x0b SUB
-    0x0c MUL
-    0x0d DIV
-    0x0e MOD
-    0x0f NEG
+    0x10 ADD
+    0x11 SUB
+    0x12 MUL
+    0x13 DIV
+    0x14 MOD
+    0x15 NEG
 
 Arithmetic follows existing USSR value semantics:
 
@@ -103,29 +111,24 @@ Arithmetic follows existing USSR value semantics:
 
 ### 5.4 Comparison and logical/bitwise operations
 
-    0x13 CMP
-
-`CMP` uses the referenced USSR operator to implement:
-
-    >  <  >=  <=  ==  !=
-    && ||
-    << >>
-    ^ & |
-
-The compiler should eventually specialize these into separate opcodes when useful, but the grouped form is the v0.1 ABI.
+    0x16 EQ       0x17 NE       0x18 LT       0x19 LE
+    0x1a GT       0x1b GE       0x1c LAND     0x1d LOR
+    0x1e XOR      0x1f BAND     0x20 BOR      0x21 SHL
+    0x22 SHR
 
 ### 5.5 Control flow
 
-    0x10 JMP
-    0x11 JMP_TRUE
-    0x12 JMP_FALSE
+    0x30 JMP
+    0x31 JMP_TRUE
+    0x32 JMP_FALSE
 
 Jump targets are bytecode instruction indices, not C pointers.
 
 ### 5.6 Function calls
 
-    0x05 CALL
-    0x06 RET
+    0x50 CALL
+    0x51 RET
+    0x52 RETURN
 
 `CALL` identifies a VM function by function-table index.
 
@@ -140,20 +143,21 @@ A call creates a VM frame. The frame stores the caller IP, return register, func
 
 ### 5.7 Runtime/native services
 
-    0x01 NATIVE
+    0x40 SET        0x41 PRINT       0x42 CONCAT
+    0x43 EXTERNAL   0x44 OOP         0x45 EVAL
+    0x46 RANDOM64   0x47 SEED64      0x48 SCAN
+    0x49 TIME       0x4a CHAIN       0x4b FILE
+    0x4c CD         0x4d TEMPLATE
 
-`NATIVE` is a host-runtime boundary, not the old command-list execution engine.
-
-It is used for operations that inherently require the host environment, such as OOP runtime services and external process execution. Built-in language operations should preferably become dedicated VM instructions.
+These are explicit VM operations. Host-facing instructions remain runtime
+boundaries; they do not dispatch through the old command-list interpreter.
 
 ### 5.8 Program control
 
-    0x20 BREAK
-    0x21 CONTINUE
-    0x22 RETURN
     0xf0 HALT
 
-During compilation, `BREAK` and `CONTINUE` are patched to concrete jump targets. Function `RETURN` is compiled to value production followed by `RET`.
+`BREAK` and `CONTINUE` compile to concrete jump targets. Function returns use
+`RET` or `RETURN`.
 
 ## 6. Register convention
 
@@ -188,10 +192,10 @@ The existing local variable store remains a runtime storage implementation detai
 
 Explicit hash semantics are:
 
-    name?   read hash entry
-    value!  write hash entry under the command return name
+        name?   read hash entry
+        value!  write hash entry under the command return name
 
-The final VM ABI will expose these as `LOAD_HASH` and `STORE_HASH` rather than routing through generic command execution.
+    These compile to `LOAD_HASH` and `STORE_HASH`.
 
 ## 9. Expressions
 
@@ -211,7 +215,8 @@ becomes conceptually:
 
 The runtime does not call the old recursive expression evaluator for normal arithmetic.
 
-Logical `&&` and `||` must eventually compile with short-circuit jumps, preserving existing USSR semantics.
+Logical and comparison operations use their dedicated opcodes. Where the
+source construct requires short-circuit behavior, the compiler emits jumps.
 
 ## 10. Commands
 
@@ -225,10 +230,10 @@ Examples:
 
     set     -> LOAD/STORE instructions
     add     -> ADD + STORE_VAR
-    print   -> NATIVE/PRINT service during v0.1
+    print   -> PRINT
     user function -> CALL
-    external process -> NATIVE host service
-    UNO operation -> NATIVE host service until a stable VM ABI exists
+    external process -> EXTERNAL
+    UNO operation -> OOP
 
 The forbidden execution path is:
 

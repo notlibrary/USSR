@@ -16,8 +16,9 @@ USSR AST / command linked lists
    |
    |  compile only
    v
-ussr_bytecode.c
+ussr_bytecode.c -> UUASM instruction stream
    |
+   |  one-to-one opcode validation and translation
    v
 flat USSR bytecode
    |
@@ -52,7 +53,8 @@ external-process operations.
 
 ### `ussr_bytecode.c`
 
-This is the bytecode compiler.
+This compiles the parsed source into UUASM first, then validates and maps each
+UUASM opcode one-to-one into VM bytecode.
 
 Its central function is:
 
@@ -60,8 +62,8 @@ Its central function is:
 static int bc_compile_command(...);
 ```
 
-It translates command nodes into explicit opcodes. It is the only component
-that walks `ussr_command_list_t` for execution purposes.
+It translates command nodes into explicit instructions. It is the only
+component that walks `ussr_command_list_t` for compilation.
 
 It also compiles:
 
@@ -86,13 +88,20 @@ It also compiles:
 - OOP/UNO command calls
 - external command calls
 
+### `ussr_uuasm.c`
+
+Owns UUASM mnemonic lookup, opcode mapping validation, and textual UUASM
+assembly. `USSR_UUASM_SPEC.md` specifies syntax, operands, labels, pools,
+control flow, and the calling convention.
+
 ### `main.c`
 
 Contains the VM runtime.
 
 It fetches an 8-byte instruction, decodes it, and performs the operation.
 It does not traverse command lists and does not dispatch through
-`ussr_execute_command()`.
+`ussr_execute_command()`. `vm_execute_uuasm()` executes UUASM through the same
+runtime after validated one-to-one opcode translation.
 
 ### `uno.c`
 
@@ -120,29 +129,24 @@ Every instruction is 8 bytes:
 +--------+----+----+----+----------------+
 ```
 
+UUASM uses the same fields. Translation validates the opcode and copies each
+operand unchanged; instructions are never expanded.
+
 ## 4. Opcode ABI
 
 | Range | Opcode | Purpose |
 |---|---|---|
 | 00 | NOP | no operation |
-| 01 | LOAD_CONST | constant pool -> register |
-| 02 | LOAD_VAR | local variable -> register |
-| 03 | STORE_VAR | register -> local variable |
-| 04 | LOAD_HASH | `?` lookup |
-| 05 | STORE_HASH | `!` store |
-| 06 | DECODE_UNO | UNO text -> value |
-| 10-22 | arithmetic/logic | value operations |
-| 30-32 | jumps | control flow |
-| 40 | SET | direct assignment primitive |
-| 41 | PRINT | print register |
-| 42 | CONCAT | concatenate strings |
-| 43 | EXTERNAL | host process primitive |
-| 44 | OOP | UNO/OOP primitive boundary |
-| 45 | EVAL | parse + compile + execute generated source |
-| 50 | CALL | VM function call |
-| 51 | RET | VM function return |
-| 52 | RETURN | compatibility/control opcode |
+| 01-09 | LOAD_CONST, LOAD_VAR, STORE_VAR, LOAD_HASH, STORE_HASH, DECODE_UNO, GET, VECTOR_GET, VECTOR_SET | values and collections |
+| 10-22 | arithmetic and logic | value operations |
+| 30-32 | JMP, JMP_TRUE, JMP_FALSE | control flow |
+| 40-4d | SET, PRINT, CONCAT, EXTERNAL, OOP, EVAL, RANDOM64, SEED64, SCAN, TIME, CHAIN, FILE, CD, TEMPLATE | host/runtime operations |
+| 50-52 | CALL, RET, RETURN | VM function control |
 | f0 | HALT | stop VM |
+
+Every opcode has a same-named UUASM mnemonic and maps to exactly one VM opcode
+with the same number. The complete list is the `ussr_bc_opcode_t` enum in
+`src/ussr_bytecode.h`.
 
 ## 5. Registers
 

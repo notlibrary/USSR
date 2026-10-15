@@ -5,6 +5,7 @@ ussr_SOURCES = \
     lexer.l \
     ussr.c \
     ussr_bytecode.c \
+    ussr_uuasm.c \
     bestline.c \
     main.c \
     pp.c \
@@ -23,6 +24,7 @@ AM_CPPFLAGS = -I$(srcdir)
 EXTRA_DIST = \
     ussr.h \
     ussr_bytecode.h \
+    ussr_uuasm.h \
     uno.h \
     ussr_oop_builtins.h \
     scheduler.h \

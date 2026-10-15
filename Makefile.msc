@@ -32,6 +32,7 @@ OBJS = \
     $(SRC)\uno.obj \
     $(SRC)\ussr_oop_builtins.obj \
     $(SRC)\ussr_bytecode.obj \
+    $(SRC)\ussr_uuasm.obj \
     $(SRC)\scheduler.obj \
     $(SRC)\eventq.obj \
     $(SRC)\gc.obj \
@@ -75,7 +76,7 @@ $(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)
 $(SRC)\pp.obj: $(SRC)\pp.c $(SRC)\pp.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\pp.obj $(SRC)\pp.c
 
-$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h
+$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\vm.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\main.obj $(SRC)\main.c
 
 $(SRC)\uno.obj: $(SRC)\uno.c $(SRC)\uno.h $(SRC)\ussr.h
@@ -84,8 +85,11 @@ $(SRC)\uno.obj: $(SRC)\uno.c $(SRC)\uno.h $(SRC)\ussr.h
 $(SRC)\ussr_oop_builtins.obj: $(SRC)\ussr_oop_builtins.c $(SRC)\ussr_oop_builtins.h $(SRC)\uno.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_oop_builtins.obj $(SRC)\ussr_oop_builtins.c
 
-$(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\ussr.h
+$(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_bytecode.obj $(SRC)\ussr_bytecode.c
+
+$(SRC)\ussr_uuasm.obj: $(SRC)\ussr_uuasm.c $(SRC)\ussr_uuasm.h $(SRC)\ussr_bytecode.h $(SRC)\ussr.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_uuasm.obj $(SRC)\ussr_uuasm.c
 
 $(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c

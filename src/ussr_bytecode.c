@@ -1,4 +1,5 @@
 #include "ussr_bytecode.h"
+#include "ussr_uuasm.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2847,9 +2848,9 @@ static int bc_compile_functions(
 }
 
 
-int ussr_bc_compile(
+static int uuasm_compile_source(
     const ussr_command_list_t *source,
-    ussr_bc_program_t *program
+    ussr_uuasm_program_t *program
 )
 {
     bc_loop_t loop;
@@ -2941,6 +2942,67 @@ int ussr_bc_compile(
     return 0;
 }
 
+int ussr_uuasm_compile(
+    const ussr_command_list_t *source,
+    ussr_uuasm_program_t *program
+)
+{
+    return uuasm_compile_source(source, program);
+}
+
+int ussr_uuasm_compile_to_bytecode(
+    const ussr_command_list_t *source,
+    ussr_bc_program_t *program
+)
+{
+    ussr_uuasm_program_t uuasm;
+    ussr_bc_instruction_t *vm_code;
+    size_t i;
+
+    if (source == NULL || program == NULL)
+        return -1;
+
+    memset(program, 0, sizeof(*program));
+    if (ussr_uuasm_compile(source, &uuasm) != 0)
+        return -1;
+
+    vm_code = malloc(uuasm.code_count * sizeof(*vm_code));
+    if (vm_code == NULL && uuasm.code_count != 0)
+    {
+        ussr_bc_program_free(&uuasm);
+        return -1;
+    }
+
+    for (i = 0; i < uuasm.code_count; ++i)
+    {
+        uint8_t opcode;
+        if (ussr_uuasm_to_vm_opcode(uuasm.code[i].opcode, &opcode) != 0)
+        {
+            fprintf(stderr,
+                    "USSR compiler: UUASM opcode 0x%02x has no VM mapping\n",
+                    uuasm.code[i].opcode);
+            free(vm_code);
+            ussr_bc_program_free(&uuasm);
+            return -1;
+        }
+        vm_code[i] = uuasm.code[i];
+        vm_code[i].opcode = opcode;
+    }
+
+    *program = uuasm;
+    free(uuasm.code);
+    program->code = vm_code;
+    return 0;
+}
+
+int ussr_bc_compile(
+    const ussr_command_list_t *source,
+    ussr_bc_program_t *program
+)
+{
+    return ussr_uuasm_compile_to_bytecode(source, program);
+}
+
 void ussr_bc_program_free(
     ussr_bc_program_t *program
 )
@@ -2967,10 +3029,13 @@ void ussr_bc_program_free(
         free(program->functions[i].name);
         free(program->functions[i].return_name);
 
-        for (size_t j = 0;
-             j < program->functions[i].parameter_count;
-             ++j)
-            free(program->functions[i].parameters[j]);
+        if (program->functions[i].parameters != NULL)
+        {
+            for (size_t j = 0;
+                 j < program->functions[i].parameter_count;
+                 ++j)
+                free(program->functions[i].parameters[j]);
+        }
 
         free(program->functions[i].parameters);
     }

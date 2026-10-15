@@ -8,8 +8,9 @@ The pipeline is:
 1. USSR lexer written in USSR (`lx_scan`).
 2. USSR parser written in USSR (`ps_parse`).
 3. AST representation written in USSR (`nd`).
-4. USSR bytecode compiler written in USSR (`cv_*`).
-5. USSR bytecode VM written in USSR (`vm_*`).
+4. USSR UUASM instruction emitter/compiler written in USSR (`ua_emit`, `cv_*`).
+5. Bootstrap VM written in USSR (`vm_*`), with an explicit one-to-one adapter
+   between C VM opcode IDs and its legacy dispatch IDs.
 6. The C executable is only the stage-0 bootstrap that starts `russia.su`.
 
 The bootstrap currently includes the fixes for:
@@ -30,3 +31,10 @@ This is a bootstrap stage, not yet a replacement for every OS-facing C service.
 External process execution and some compatibility commands still belong to the
 stage-0 host runtime, and forward function declarations are not yet implemented
 by the USSR-side compiler.
+
+The bootstrap's internal `In` records now retain the UUASM mnemonic and C VM
+opcode ID. `ua_emit` validates supported opcodes before emitting one record;
+`vm_step` maps that opcode to the existing bootstrap dispatch number without
+changing operands or expanding instructions. This keeps scheduler execution
+and legacy `.su` behavior on the bootstrap VM while making its compiler output
+explicitly UUASM-shaped.
