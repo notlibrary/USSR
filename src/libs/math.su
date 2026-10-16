@@ -230,11 +230,17 @@ tan(r): x [
     cos(c): x
     sin(s): x
 
+    # tan(x) is undefined when cos(x) = 0.
+    if(e): {c == 0} [
+        return(r): null
+    ]
+
     # tan(x) = sin(x) / cos(x)
     set(r): {s / c}
 
     return(r): r
 ]
+
 
 # ctg.su
 # Cotangent based on sin() and cos().
@@ -242,6 +248,11 @@ tan(r): x [
 ctg(r): x [
     cos(c): x
     sin(s): x
+
+    # ctg(x) is undefined when sin(x) = 0.
+    if(e): {s == 0} [
+        return(r): null
+    ]
 
     # ctg(x) = cos(x) / sin(x)
     set(r): {c / s}
