@@ -24,10 +24,15 @@
         <File Id="MoscowSU" Source="moscow.su" />
         <File Id="UserManualMD" Source="docs\USSR_USER_MANUAL.md" />
       </Component>
+      <Component Id="UralApplicationFiles" Guid="01A156F1-56B8-4411-9844-AF1A8CE360C6" Bitness="always64">
+        <File Id="UralEXE" Source="ural.exe" KeyPath="yes" />
+        <File Id="UssrBoxesDB" Source="ussr.boxes" />
+      </Component>
     </DirectoryRef>
     
     <Feature Id="MainFeature" Title="Main Application" Level="1">
       <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="UralApplicationFiles" />
     </Feature>
     
   </Package>

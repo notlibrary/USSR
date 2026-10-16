@@ -49,6 +49,32 @@ jobs:
         if: runner.os == 'Windows'
         run: dotnet tool install --global wix --version 7.0.0
 
+      - name: Build Ural for Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot) { $vcpkgRoot = 'C:\vcpkg' }
+          & "$vcpkgRoot\vcpkg.exe" install 'sqlite3' 'curl[openssl]' 'openssl' 'zlib' --triplet x64-windows-static
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cmake -S src/ural -B build/ural `
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DURAL_STATIC_DEPS=ON -DBUILD_TESTING=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/ural --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $ural = Join-Path $PWD 'build\ural\Release\ural.exe'
+          if (-not (Test-Path $ural)) { throw "Ural executable not found at $ural" }
+          $env:LOCALAPPDATA = Join-Path $PWD 'build\ural-state'
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          & $ural init
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item $ural .\ural.exe -Force
+          Copy-Item (Join-Path $env:LOCALAPPDATA 'USSR\ussr.boxes') .\ussr.boxes -Force
+
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: powershell
@@ -60,6 +86,8 @@ jobs:
           
           New-Item -ItemType Directory -Force ussr-win-bin
           Copy-Item ussr.exe ussr-win-bin\ -Force
+          Copy-Item ural.exe ussr-win-bin\ -Force
+          Copy-Item ussr.boxes ussr-win-bin\ -Force
           Copy-Item README.md, CHANGELOG.md, LICENSE ussr-win-bin\ -ErrorAction SilentlyContinue
           wix build -acceptEula wix7 ussr.wxs -arch x64 -out ussr-win-bin-amd64-${{ github.ref_name }}.msi 
 
@@ -74,7 +102,15 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison autoconf automake libtool
+          sudo apt-get install -y flex bison autoconf automake libtool \
+            cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev
+
+      - name: Build and test Ural
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S src/ural -B build/ural -DURAL_STATIC_DEPS=OFF
+          cmake --build build/ural --parallel
+          ctest --test-dir build/ural --output-on-failure
 
       - name: Build on Linux
         if: runner.os != 'Windows'
@@ -83,9 +119,7 @@ jobs:
           bison -d -Wall src/parser.y
           flex src/lexer.l
           make -f ussr-ubuntu.mk ussr
-          mkdir -p ussr-linux-bin
-          cp ussr README.md CHANGELOG.md LICENSE ussr-linux-bin/ 2>/dev/null || true
-          tar -czf ussr-linux-bin-${{ github.ref_name }}.tar.gz ussr-linux-bin
+          make -f ussr-ubuntu.mk dist VERSION=${{ github.ref_name }}
 
       - name: Upload to Release Linux
         if: runner.os != 'Windows'

@@ -3,6 +3,10 @@ CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic
 TARGET  = ussr
 PREFIX  = /usr
 SRC_DIR = src
+VERSION ?= $(shell awk -F'[][]' '/^AC_INIT/ { print $$4; exit }' configure.ac)
+URAL_BUILD_DIR ?= build/ural
+URAL_BIN = $(URAL_BUILD_DIR)/ural
+URAL_SOURCES = $(wildcard src/ural/CMakeLists.txt src/ural/native/*.c src/ural/native/*.h)
 
 OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/lex.yy.o \
@@ -102,7 +106,7 @@ $(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(TARGET) $(SRC_DIR)/*.o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h $(SRC_DIR)/lex.yy.c $(TARGET).tar.gz
+	rm -f $(TARGET) $(SRC_DIR)/*.o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h $(SRC_DIR)/lex.yy.c $(TARGET).tar.gz ussr-linux-bin-$(VERSION).tar.gz
 
 install: $(TARGET)
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
@@ -112,7 +116,22 @@ install: $(TARGET)
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 
-dist: $(TARGET)
-	tar -czvf $(TARGET).tar.gz $(TARGET) docs/ussr_user_manual.md moscow.su
+$(URAL_BIN): $(URAL_SOURCES)
+	cmake -S src/ural -B $(URAL_BUILD_DIR) -DURAL_STATIC_DEPS=OFF -DBUILD_TESTING=OFF
+	cmake --build $(URAL_BUILD_DIR) --parallel
+
+dist: $(TARGET) $(URAL_BIN)
+	@set -eu; \
+	stage=$$(mktemp -d); \
+	state=$$(mktemp -d); \
+	trap 'rm -rf "$$stage" "$$state"' EXIT; \
+	mkdir -p "$$stage/ussr-linux-bin"; \
+	HOME="$$state" "$(CURDIR)/$(URAL_BIN)" init; \
+	cp "$(TARGET)" "$(URAL_BIN)" docs/ussr_user_manual.md moscow.su "$$stage/ussr-linux-bin/"; \
+	cp "$$state/.ussr/ussr.boxes" "$$stage/ussr-linux-bin/ussr.boxes"; \
+	if test -f README.md; then cp README.md "$$stage/ussr-linux-bin/"; fi; \
+	if test -f CHANGELOG.md; then cp CHANGELOG.md "$$stage/ussr-linux-bin/"; fi; \
+	if test -f LICENSE; then cp LICENSE "$$stage/ussr-linux-bin/"; fi; \
+	tar -czf "ussr-linux-bin-$(VERSION).tar.gz" -C "$$stage" ussr-linux-bin
 
 .PHONY: all clean install uninstall dist

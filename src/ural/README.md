@@ -98,6 +98,15 @@ files for the USSR interpreter do not automatically build Ural; this package
 has its own CMake project. A Makefile is also provided for POSIX environments
 with `pkg-config`.
 
+The Windows MSI and release archives contain the `ural` executable and a blank,
+initialized `ussr.boxes` client database. `make dist` builds Ural and adds both
+files to the Automake source distribution. The Linux release bundle is produced
+by `make -f ussr-ubuntu.mk dist`; it reads the default version from
+`configure.ac` and writes `ussr-linux-bin-<version>.tar.gz`. Set
+`VERSION=<version>` to override it for a release tag. The bundled database is a
+clean starting template, not a populated repository index; Ural creates its
+working database under the user's per-user state directory on first use.
+
 ## Initial package collection
 
 The bootstrap list contains nine package manifests: `ural`, `russia`, `mbl`,
