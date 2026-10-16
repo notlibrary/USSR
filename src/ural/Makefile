@@ -1,16 +1,38 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Wpedantic
-SQLITE_CFLAGS ?= $(shell pkg-config --cflags sqlite3 2>/dev/null)
-SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || echo -lsqlite3)
+PKG_CFLAGS := $(shell pkg-config --cflags sqlite3 libcurl openssl zlib 2>/dev/null)
+PKG_LIBS := $(shell pkg-config --libs sqlite3 libcurl openssl zlib 2>/dev/null)
+ifeq ($(strip $(PKG_LIBS)),)
+PKG_LIBS = -lsqlite3 -lcurl -lssl -lcrypto -lz
+endif
+
+NATIVE = native
+TESTS = tests
 
 .PHONY: all test clean
-all: test_db
+all: ural
 
-test_db: native/ural_db.c native/ural_db.h tests/test_db.c
-	$(CC) $(CFLAGS) $(SQLITE_CFLAGS) -o $@ native/ural_db.c tests/test_db.c $(SQLITE_LIBS)
+ural: $(NATIVE)/ural.c $(NATIVE)/ural_db.c $(NATIVE)/ural_db.h \
+      $(NATIVE)/ural_archive.c $(NATIVE)/ural_archive.h \
+      $(NATIVE)/ural_manifest.c $(NATIVE)/ural_manifest.h
+	$(CC) $(CFLAGS) $(PKG_CFLAGS) -o $@ \
+	  $(NATIVE)/ural.c $(NATIVE)/ural_db.c \
+	  $(NATIVE)/ural_archive.c $(NATIVE)/ural_manifest.c $(PKG_LIBS)
 
-test: test_db
+test_db: $(NATIVE)/ural_db.c $(NATIVE)/ural_db.h $(TESTS)/test_db.c
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags sqlite3 2>/dev/null) \
+	  -o $@ $(NATIVE)/ural_db.c $(TESTS)/test_db.c -lsqlite3
+
+test_archive: $(NATIVE)/ural_archive.c $(NATIVE)/ural_archive.h $(TESTS)/test_archive.c
+	$(CC) $(CFLAGS) -o $@ $(NATIVE)/ural_archive.c $(TESTS)/test_archive.c -lz
+
+test_manifest: $(NATIVE)/ural_manifest.c $(NATIVE)/ural_manifest.h $(TESTS)/test_manifest.c
+	$(CC) $(CFLAGS) -o $@ $(NATIVE)/ural_manifest.c $(TESTS)/test_manifest.c
+
+test: test_db test_archive test_manifest
 	./test_db
+	./test_archive
+	./test_manifest
 
 clean:
-	rm -f test_db ural-test-boxes.sqlite
+	rm -f ural test_db test_archive test_manifest ural-test-boxes.sqlite

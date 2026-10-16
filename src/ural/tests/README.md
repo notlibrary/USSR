@@ -1,16 +1,17 @@
-# Ural tests
+# Ural native tests
 
-Planned integration cases:
+Run `cmake -S src/ural -B build/ural`, `cmake --build build/ural`, and
+`ctest --test-dir build/ural --output-on-failure`, or use `make test` where
+`pkg-config` is available.
 
-1. Initialize an empty `ussr.boxes` database.
-2. Add/remove trusted server URLs.
-3. Install a local package fixture.
-4. Reject an invalid `box.uno` name/version.
-5. Reject archive hash mismatch.
-6. Reject archive path traversal.
-7. Uninstall only files recorded as package-owned.
-8. Update transaction rollback when extraction fails.
-9. Preserve package DB on interrupted update.
-10. Verify `install(code): "ukraine russia"` reports per-package results.
+- `test_ural_db` checks database/schema initialization, trusted HTTPS URL
+  validation, duplicate insertion/removal, legacy schema migration, and the
+  empty installed-package list.
+- `test_ural_manifest` checks valid UNO package fields, dependency parsing,
+  duplicate fields, and invalid package names.
+- `test_ural_archive` checks ZIP packing/extraction, empty files, FNV-1a, and
+  rejection of path traversal in archive entries.
 
-These are test specifications; the native command bridge is not yet integrated.
+Live HTTPS/FTP tests are intentionally not run as part of the unit suite;
+they require a configured test repository. FTP uploads print a warning because
+credentials and file contents are transmitted without encryption.

@@ -1,45 +1,41 @@
 # ural.su — Ural package manager API
 # Include this file with: $include "ural.su"
 #
-# Native commands required by this first implementation:
-#   ural_init(ok): "ussr.boxes"
-#   ural_install(code): "ukraine russia"
-#   ural_uninstall(code): "ukraine"
-#   ural_update(code): "ukraine"
-#   ural_list(code):
-#   ural_search(code): "ukraine"
-#   ural_server_add(code): "https://packages.example.invalid"
-#   ural_server_remove(code): "https://packages.example.invalid"
-#
-# The ural_* commands are intended to be registered by the native SQLite /
-# transport bridge. They are not stock USSR built-ins yet.
-
-ural_init(ok): "ussr.boxes"
+# These functions call the standalone native `ural` executable. Install the
+# executable from the Ural package or put it on PATH before including this API.
 
 install(code): packages [
-    ural_install(code): packages
+    ural(code): "install" packages
 ]
 
 uninstall(code): package [
-    ural_uninstall(code): package
+    ural(code): "uninstall" package
 ]
 
 update(code): package [
-    ural_update(code): package
+    ural(code): "update" package
 ]
 
 list_packages(code): [
-    ural_list(code):
+    ural(code): "list"
 ]
 
 search_packages(code): query [
-    ural_search(code): query
+    ural(code): "search" query
 ]
 
 trust_server(code): url [
-    ural_server_add(code): url
+    ural(code): "server" "add" url
 ]
 
 untrust_server(code): url [
-    ural_server_remove(code): url
+    ural(code): "server" "remove" url
+]
+
+pack(code): target_dir public_url [
+    ural(code): "pack" target_dir public_url
+]
+
+upload(code): target_dir ftp_url login password [
+    ural(code): "upload" target_dir ftp_url login password
 ]
