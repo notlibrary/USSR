@@ -127,7 +127,7 @@ dist: $(TARGET) $(URAL_BIN)
 	trap 'rm -rf "$$stage" "$$state"' EXIT; \
 	mkdir -p "$$stage/ussr-linux-bin"; \
 	HOME="$$state" "$(CURDIR)/$(URAL_BIN)" init; \
-	cp "$(TARGET)" "$(URAL_BIN)" docs/ussr_user_manual.md moscow.su "$$stage/ussr-linux-bin/"; \
+	cp "$(TARGET)" "$(URAL_BIN)" src/ural/ural.su docs/ussr_user_manual.md moscow.su "$$stage/ussr-linux-bin/"; \
 	cp "$$state/.ussr/ussr.boxes" "$$stage/ussr-linux-bin/ussr.boxes"; \
 	if test -f README.md; then cp README.md "$$stage/ussr-linux-bin/"; fi; \
 	if test -f CHANGELOG.md; then cp CHANGELOG.md "$$stage/ussr-linux-bin/"; fi; \

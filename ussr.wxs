@@ -27,6 +27,7 @@
       <Component Id="UralApplicationFiles" Guid="01A156F1-56B8-4411-9844-AF1A8CE360C6" Bitness="always64">
         <File Id="UralEXE" Source="ural.exe" KeyPath="yes" />
         <File Id="UssrBoxesDB" Source="ussr.boxes" />
+        <File Id="UralUSSRWrapper" Source="src\ural\ural.su" />
       </Component>
     </DirectoryRef>
     
