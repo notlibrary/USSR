@@ -200,7 +200,7 @@ def glyph_id(codepoint):
 
 def build():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    unicodes = list(range(32, 127)) + [0x0401, 0x0451] + list(range(0x0410, 0x0450))
+    unicodes = list(range(32, 127)) + [0x2014, 0x0401, 0x0451] + list(range(0x0410, 0x0450))
     glyph_names = [".notdef"] + [glyph_id(code) for code in unicodes]
     fb = FontBuilder(1000, isTTF=True)
     fb.setupGlyphOrder(glyph_names)
@@ -267,6 +267,7 @@ def build():
                 "`": [[(1, 7), (2, 6)]], "{": [[(3, 7), (2, 6), (2, 4), (1, 3.5), (2, 3), (2, 1), (3, 0)]],
                 "|": [[(2, 8), (2, -1)]], "}": [[(1, 7), (2, 6), (2, 4), (3, 3.5), (2, 3), (2, 1), (1, 0)]],
                 "~": [[(0, 3), (1, 4), (3, 2), (4, 3)]],
+                "\u2014": [[(-.7, 3), (4.7, 3)]],
             }
             outlines[glyph_id(code)] = draw_glyph(glyph_id(code), punctuation.get(char, []))
 
@@ -279,18 +280,19 @@ def build():
         for name, glyph in outlines.items()
     })
     fb.setupHorizontalHeader(ascent=820, descent=-220)
+    fb.font["head"].fontRevision = 3.4
     fb.setupOS2(
         sTypoAscender=820, sTypoDescender=-220, sTypoLineGap=100,
         usWinAscent=900, usWinDescent=250, sxHeight=560, sCapHeight=732,
         usWeightClass=400, usWidthClass=5, achVendID="USSR",
     )
     fb.setupNameTable({
-        "familyName": "Pobeda 3.3",
+        "familyName": "Pobeda 3.4",
         "styleName": "Regular",
-        "uniqueFontIdentifier": "USSR Pobeda Regular 3.3 Hatches",
-        "fullName": "Pobeda 3.3 Regular",
-        "psName": "Pobeda-3-3-Regular",
-        "version": "Version 3.3",
+        "uniqueFontIdentifier": "USSR Pobeda Regular 3.4 Hatches",
+        "fullName": "Pobeda 3.4 Regular",
+        "psName": "Pobeda-3-4-Regular",
+        "version": "Version 3.4",
         "manufacturer": "USSR",
         "designer": "USSR",
         "description": "Monospaced steel-office type for code, with Cyrillic support.",
