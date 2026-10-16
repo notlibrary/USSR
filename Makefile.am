@@ -12,4 +12,5 @@ dist-hook:
 	cmake --build "$$build_dir" --parallel; \
 	HOME="$$state_dir" "$$build_dir/ural" init; \
 	cp "$$build_dir/ural" "$(distdir)/ural"; \
-	cp "$$state_dir/.ussr/ussr.boxes" "$(distdir)/ussr.boxes"
+	cp "$$state_dir/.ussr/ussr.boxes" "$(distdir)/ussr.boxes"; \
+	cp "$(abs_srcdir)/src/ural/ural.su" "$(distdir)/ural.su"

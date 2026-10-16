@@ -87,6 +87,7 @@ jobs:
           New-Item -ItemType Directory -Force ussr-win-bin
           Copy-Item ussr.exe ussr-win-bin\ -Force
           Copy-Item ural.exe ussr-win-bin\ -Force
+          Copy-Item src\ural\ural.su ussr-win-bin\ -Force
           Copy-Item ussr.boxes ussr-win-bin\ -Force
           Copy-Item README.md, CHANGELOG.md, LICENSE ussr-win-bin\ -ErrorAction SilentlyContinue
           wix build -acceptEula wix7 ussr.wxs -arch x64 -out ussr-win-bin-amd64-${{ github.ref_name }}.msi 
