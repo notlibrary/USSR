@@ -91,8 +91,11 @@ It also compiles:
 ### `ussr_uuasm.c`
 
 Owns UUASM mnemonic lookup, opcode mapping validation, and textual UUASM
-assembly. `USSR_UUASM_SPEC.md` specifies syntax, operands, labels, pools,
-control flow, and the calling convention.
+assembly. `.ua` is its canonical source-file suffix (`.uuasm` is accepted as a
+compatibility suffix). `USSR_UUASM_SPEC.md` specifies syntax, operands, labels,
+pools, control flow, and the calling convention. `.ru` is reserved for final
+VM binary bytecode; the C writer exists, but no loader or CLI execution path is
+implemented yet.
 
 ### `main.c`
 
@@ -201,8 +204,9 @@ There is no runtime `if` command object.
 
 ## 8. Expressions
 
-Expressions are compiled recursively into registers. Logical AND/OR use
-short-circuit jumps.
+Expressions are compiled recursively into registers. Logical AND/OR use the
+`LAND` and `LOR` opcodes; both operands are evaluated, so they are not
+short-circuiting.
 
 Supported operators include:
 

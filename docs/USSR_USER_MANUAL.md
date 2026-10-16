@@ -3,15 +3,19 @@
 USSR (Unified Shell Script REPL) is a small command-oriented scripting
 language: every operation is a *command* with a name, a return
 variable, and a list of arguments. Source is preprocessed, parsed,
-compiled to bytecode, and run on a register-based virtual machine —
-none of that is visible to you as a user, but it's why USSR programs
-run the same way every time regardless of what's on disk.
+compiled through UUASM, and run on a register-based virtual machine.
 
-This manual documents the language as built. A short appendix at the
-end lists the handful of details worth double-checking against your
-own grammar/compiler source before relying on them in production —
-everywhere else, what's written here is confirmed against the actual
-implementation.
+USSR uses three file extensions for its language and execution formats:
+
+| Extension | Meaning | Current use |
+|-----------|---------|-------------|
+| `.su` | USSR source script ("script user") | Run source scripts with `ussr file.su`. |
+| `.ua` | USSR Ukraine assembler, textual UUASM | Run assembler text directly with `ussr file.ua`. `.uuasm` remains a compatible legacy extension. |
+| `.ru` | Final VM binary bytecode | Reserved for serialized VM programs. The C library has a bytecode writer, but the CLI does not yet load or execute `.ru` files. |
+
+This manual documents the language and libraries in the current source
+tree. Runtime limitations that affect behavior are called out alongside
+the relevant feature.
 
 ---
 
@@ -46,6 +50,15 @@ is supported on every platform.
 On Windows, the same binary and the same `.su` scripts work
 unmodified: `ussr.exe myscript.su`.
 
+Textual assembler files can also be run directly:
+
+```
+./ussr program.ua
+```
+
+The previous `.uuasm` spelling is still accepted. `.ru` is the planned
+binary VM-program extension; it is not yet a runnable CLI input format.
+
 ---
 
 ## 2. The core idea: everything is a command
@@ -58,10 +71,10 @@ name(return_variable): argument argument ...
 - `return_variable` is where its result gets stored — a plain
   variable name. If you don't care about the result, the convention
   is to use `_`.
-- Every command needs **at least one argument** — there's no
-  zero-argument form. If a command conceptually needs no input (like
-  creating an untyped vector), pass an explicit empty string: `vec(v):
-  ""` rather than `vec(v):`.
+- Commands that take inputs list them after the colon. Some builtins
+  take no inputs, for example `random64(r):` and `time(now):`; commands
+  that require a placeholder (like creating an untyped vector) use an
+  explicit empty string: `vec(v): ""`.
 - Arguments are separated by whitespace, not commas.
 - `#` starts a comment that runs to the end of the line.
 
@@ -112,8 +125,9 @@ if(_): {total > 100} [
 ```
 
 Supported operators: `+ - * / %` (arithmetic), `> < >= <= == !=`
-(comparison), `&& ||` (logical, short-circuiting), `<< >> ^ & |`
-(bitwise shift/xor/and/or).
+(comparison), `&& ||` (logical), `<< >> ^ & |` (bitwise
+shift/xor/and/or). Both sides of a logical expression are evaluated;
+do not rely on short-circuit evaluation.
 
 There are also dedicated two-argument arithmetic commands that skip
 the braces entirely, useful when the operands are already named
@@ -519,9 +533,17 @@ it has just dropped a large structure.
 
 ## 14. Standard library
 
-The library sources live in `libs/` (`io.su`, `bytes.su`, `math.su`,
-`standard.su`); each module's header comment lists what it owns. The
-file and byte primitives are real host operations, independent of the
+The standard library sources in this repository live in `src/libs/`
+(`io.su`, `bytes.su`, `math.su`, `standard.su`); each module's header
+comment describes its purpose. Include the needed source file with
+`$include`, using a path relative to the script that contains the
+directive. For example, from a script in the repository root:
+
+```
+$include "src/libs/math.su"
+```
+
+The file and byte primitives are real host operations, independent of the
 whole-file `readfile`/`writefile` VM builtins.
 
 **io.su — stream files with C-style handles:**
@@ -549,33 +571,56 @@ set_bytes(v): value bytes     # every item of bytes := value (0..255)
 clear_bytes(v): bytes         # set_bytes with value 0
 ```
 
-**math.su:** `sin(r): x`, `ln(r): x` plus the `M_PI` / `M_E`
-preprocessor macros. **standard.su:** `random64(r):`,
-`seed_random64(_): seed`, `time(r):`.
+**math.su — mathematical functions:**
+
+All functions below are USSR functions defined in `src/libs/math.su`,
+not C builtins. Trigonometric inputs and outputs are in radians unless
+explicitly stated otherwise. Include the file before calling them.
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `sqrt` | `sqrt(r): x` | Square root by Newton iteration; negative input prints an error and returns `-1`. |
+| `sin` | `sin(r): x` | Range-reduced polynomial sine, radians. |
+| `cos` | `cos(r): x` | Sine shifted by pi/2, radians. |
+| `tan` | `tan(r): x` | `sin(x) / cos(x)`, radians. |
+| `ctg` | `ctg(r): x` | Cotangent, `cos(x) / sin(x)`, radians. |
+| `ln` | `ln(r): x` | Natural logarithm for positive input; returns `0` for `x <= 0`. |
+| `exp` | `exp(r): x` | Exponential, `e^x`, using range reduction and a polynomial. |
+| `pow` | `pow(r): x y` | `x^y`, implemented as `exp(y * ln(x))`; when `x <= 0`, `ln` returns `0`, so this does not implement general powers for those bases. |
+| `floor` | `floor(r): x` | Greatest integer not greater than `x`. |
+| `ceil` | `ceil(r): x` | Least integer not less than `x`. |
+| `abs` | `abs(r): x` | Absolute value. |
+| `atan` | `atan(r): x` | Inverse tangent in radians. |
+| `asin` | `asin(r): x` | Inverse sine for `-1 <= x <= 1`; out-of-domain input prints an error and returns `0`. |
+| `acos` | `acos(r): x` | Inverse cosine for `-1 <= x <= 1`, in radians; uses `asin`. |
+| `atan2` | `atan2(r): y x` | Angle of point `(x,y)` in `(-pi, pi]`; `(0,0)` returns `0`. |
+| `grcirc_dist` | `grcirc_dist(r): lat1 long1 lat2 long2` | Great-circle distance between latitude/longitude pairs in degrees; result is kilometers using Earth's mean radius. |
+| `log2` | `log2(r): x` | Base-2 logarithm derived from `ln`; positive input is required for a meaningful result. |
+| `log10` | `log10(r): x` | Base-10 logarithm derived from `ln`; positive input is required for a meaningful result. |
+| `hypot` | `hypot(r): x y` | Euclidean hypotenuse, scaled to reduce intermediate overflow/underflow. |
+| `cbrt` | `cbrt(r): x` | Real cube root, including negative inputs, using range reduction and Newton iteration. |
+
+`tan` and `ctg` divide by `cos(x)` and `sin(x)` respectively, so their
+poles result in the runtime's division-by-zero error.
+
+`math.su` also defines the preprocessor constants `M_PI` and `M_E`.
+For example:
+
+```
+$include "src/libs/math.su"
+
+sin(s): {M_PI / 2.0}
+print(_): s
+```
+
+**standard.su:** `random64(r):`, `seed_random64(_): seed`, and
+`time(r):`.
 
 ---
 
-## Appendix: verify against your build
+## 15. More details
 
-Everything above is confirmed against the implementation as built
-through this project. A few things came from the architecture
-spec/design intent rather than something I directly traced end-to-end
-in source, and are worth a quick sanity check before you rely on them
-in something important:
-
-- **`if`'s exact argument shape** — documented above as `if(_):
-  {condition} [ then ] [ else ]` with an optional else block, based on
-  the VM spec's description of if/else compilation. I didn't
-  personally verify the exact argument count/order the compiler
-  expects for `if` the way I did for `while` (which I traced directly).
-- **`?` / `!` sigils** — the grammar reserves these for a "hash"
-  lookup/assignment mechanism (`name?` reads a hash entry, `value!`
-  marks an assignment) distinct from plain variables. Real, separate
-  hash storage exists in the runtime (`ussr_hash_get_value`/
-  `ussr_hash_set_value`), but this manual doesn't document the exact
-  surface syntax for triggering it, since I never saw a worked example
-  exercise it directly.
-- **Directive list** — only `$define`, `$include`, `$ifdef`, `$if
-  defined(...)`, `$else`, `$endif` are confirmed present. There's no
-  confirmed `$ifndef`, `$elif`, or similar — don't assume one exists
-  without checking.
+The textual UUASM format and instruction reference are documented in
+[`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md). The current C VM instruction
+set, runtime behavior, and bytecode status are described in
+[`USSR_VM_SPEC.md`](USSR_VM_SPEC.md).

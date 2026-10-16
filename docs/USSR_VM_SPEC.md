@@ -1,13 +1,13 @@
 # USSR Virtual Machine Specification
 
-Version: 0.1
-Status: architecture baseline
+Status: current C VM implementation reference
 
 ## 1. Purpose
 
-The USSR Virtual Machine (VM) is the execution machine for Unified Shell Script. USSR source is parsed into an intermediate representation and compiled through UUASM (USSR Ukraine ASM) into a flat VM instruction stream. Runtime execution accepts VM bytecode; the C VM also provides a direct UUASM entry point that validates and translates each instruction one-to-one before execution.
+The USSR Virtual Machine (VM) executes compiled Unified Shell Script. The C compiler emits an in-memory UUASM instruction stream and translates it one-to-one into the VM instruction ABI. The VM also accepts textual UUASM directly through `vm_execute_uuasm()`.
 
-The VM must never execute the parser's linked command list or AST. Lists and trees are compiler input, not runtime execution structures.
+The bytecode VM does not execute the parser's linked command list or AST. Lists
+and trees are compiler input, not VM instructions.
 
 The source architecture is:
 
@@ -16,34 +16,33 @@ The source architecture is:
 
 C is the first host implementation of the VM. The VM instruction set and value semantics are the portable language runtime contract.
 
-Textual `.uuasm` programs use the versioned syntax described in
-[`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md). `vm_execute_uuasm()` is the direct
-runtime entry point; existing bytecode consumers and `ussr_bc_compile()` remain
-supported.
+File formats are named `.su` (USSR source), `.ua` (textual UUASM), and `.ru`
+(final VM binary bytecode). The CLI runs `.su` and `.ua` files; `.uuasm` remains
+a compatibility suffix for assembler text. Although the C library can write
+bytecode files, `.ru` loading and execution are not implemented yet. The
+versioned text syntax is described in [`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md).
 
 ## 2. Machine state
 
-The VM has 32 general-purpose registers:
+The VM has 32 value registers:
 
     R0 .. R31
 
 Every register contains a `ussr_value_t` value. The current implementation supports the existing primitive and UNO object value kinds defined by the USSR runtime.
 
-Special machine registers:
+The VM also keeps an instruction pointer and execution state. Call frames are
+stored in a VM-owned frame stack; there are no public bytecode `SP` or `FP`
+registers.
 
-    IP  instruction pointer
-    SP  value/VM stack pointer
-    FP  current call-frame pointer
+The resumable VM state includes:
 
-The first implementation keeps these as 32-bit VM addresses so bytecode does not depend on host pointer size.
-
-Additional state:
-
+    ip            instruction pointer
     running       non-zero while the VM is executing
     exit_code     VM termination status
     steps         instruction execution counter
 
-The VM has a bounded call depth and instruction count to prevent accidental runaway execution.
+The implementation limits a program to 1,000,000 instructions, 1,024 call
+frames, and 2,000,000,000 executed steps.
 
 ## 3. Instruction format
 
@@ -57,9 +56,13 @@ The baseline instruction is fixed-width:
 
 Total: 8 bytes.
 
-The bytecode format never stores host pointers directly.
+Operands refer to the program's constant pool, string pool, and function
+table; the in-memory instruction contains no pointers.
 
-References to compiler/runtime objects use 32-bit reference indices into a separate reference table in the host implementation. This is a transitional implementation mechanism; serialized portable bytecode will eventually replace host reference entries with proper constant-pool and symbol-pool records.
+`ussr_bc_write_file()` writes a versioned file beginning with `USSRBC01`.
+That writer is currently a C API only: the CLI has no matching bytecode
+reader, and the emitted representation is not yet a finalized portable `.ru`
+ABI.
 
 ## 4. Fetch/decode/execute cycle
 
@@ -141,7 +144,7 @@ The instruction fields are:
 
 A call creates a VM frame. The frame stores the caller IP, return register, function identity, and the state needed to restore the caller.
 
-### 5.7 Runtime/native services
+### 5.7 Runtime and host services
 
     0x40 SET        0x41 PRINT       0x42 CONCAT
     0x43 EXTERNAL   0x44 OOP         0x45 EVAL
@@ -149,8 +152,9 @@ A call creates a VM frame. The frame stores the caller IP, return register, func
     0x49 TIME       0x4a CHAIN       0x4b FILE
     0x4c CD         0x4d TEMPLATE
 
-These are explicit VM operations. Host-facing instructions remain runtime
-boundaries; they do not dispatch through the old command-list interpreter.
+These are explicit VM operations. `EXTERNAL`, `OOP`, `EVAL`, `SCAN`, and file
+operations use host/runtime services; they do not dispatch through the old
+command-list interpreter.
 
 ### 5.8 Program control
 
@@ -161,15 +165,16 @@ boundaries; they do not dispatch through the old command-list interpreter.
 
 ## 6. Register convention
 
-The first compiler/runtime convention is:
+The current compiler convention is:
 
     R0-R29   general temporary/value registers
-    R30-R30  compiler scratch where needed
+    R30      compiler scratch where needed
     R31      function return register
 
-This convention is not a restriction on the future VM ABI; it is the v0.1 compiler convention.
-
-Function arguments are placed starting at `R0` before `CALL`.
+For `CALL`, `A` is the first argument register, `B` the argument count, `C` the
+destination register, and `immediate` the function-table index. Arguments are
+copied into the function's named parameters before the callee's registers are
+cleared for execution.
 
 ## 7. Constants
 
@@ -177,7 +182,9 @@ Literal values are stored in the program constant pool/reference table and loade
 
     LOAD_CONST destination, constant
 
-The compiler must not emit repeated C literals into the instruction stream.
+`LOAD_CONST` reads an entry from the program constant pool. Names and textual
+operands are held in the string pool and are referenced by their index in the
+instruction's `immediate` field.
 
 Strings are immutable VM values from the bytecode compiler's perspective.
 
@@ -188,14 +195,15 @@ Normal USSR variables are accessed by bytecode:
     LOAD_VAR
     STORE_VAR
 
-The existing local variable store remains a runtime storage implementation detail. It is not an execution structure.
+The variable store is provided by the USSR runtime. It is not the VM's
+instruction stream or control-flow representation.
 
 Explicit hash semantics are:
 
-        name?   read hash entry
-        value!  write hash entry under the command return name
+    name?   read hash entry
+    value!  write hash entry under the command return name
 
-    These compile to `LOAD_HASH` and `STORE_HASH`.
+These compile to `LOAD_HASH` and `STORE_HASH`.
 
 ## 9. Expressions
 
@@ -215,8 +223,9 @@ becomes conceptually:
 
 The runtime does not call the old recursive expression evaluator for normal arithmetic.
 
-Logical and comparison operations use their dedicated opcodes. Where the
-source construct requires short-circuit behavior, the compiler emits jumps.
+Logical and comparison operations use their dedicated opcodes. In the current
+compiler, both operands of `LAND` and `LOR` are evaluated before the operation;
+they do not provide source-level short-circuit evaluation.
 
 ## 10. Commands
 
@@ -319,6 +328,11 @@ VM errors include:
 
 A VM error terminates the current VM invocation with a non-zero status.
 
+`vm_execute()` and `vm_execute_uuasm()` return `USSR_VM_STATUS_DONE` (`0`) when
+the program halts, `USSR_VM_STATUS_ERROR` (`-1`) on failure, and
+`USSR_VM_STATUS_SUSPENDED` (`1`) when the instruction quantum expires or the
+process yields/blocks. The scheduler resumes suspended VM state.
+
 ## 15. Memory ownership
 
 VM registers own their current `ussr_value_t` contents.
@@ -327,9 +341,10 @@ Call frames own saved register values and saved frame state.
 
 The bytecode program owns its instruction buffer and compiler metadata.
 
-The parser AST is owned by the parser-side program object and is freed after compilation. It is not retained as an execution object.
-
-The host reference table in v0.1 points at compiler-owned AST objects and therefore must not outlive the AST. A future serialized bytecode format must eliminate this limitation by storing true constants/symbols in the bytecode file.
+Some compiler metadata for `OOP` and `SCAN` instructions points to the parsed
+source tree. That AST must remain alive while the compiled program uses this
+metadata. The current binary writer does not serialize these source-site
+tables, so such instructions are not portable in the emitted binary snapshot.
 
 ## 16. Compiler/runtime boundary
 
@@ -352,17 +367,16 @@ The VM is responsible for:
 - runtime value operations
 - runtime errors
 
-The C host runtime is responsible only for host-dependent facilities:
+The C host runtime provides host-dependent facilities:
 
 - terminal I/O
 - filesystem
 - process creation
 - UNO object services
-- future OS interfaces
 
 ## 17. Portability goal
 
-A future portable USSR program is represented by:
+A portable serialized USSR program is intended to contain:
 
     bytecode header
     instruction stream
@@ -380,19 +394,18 @@ No serialized instruction may contain:
 - AST pointers
 - compiler-private memory addresses
 
-A conforming USSR VM implemented in another language should be able to execute the same bytecode.
+The current `USSRBC01` writer is not yet that finalized cross-platform
+contract: there is no matching reader, raw instructions use the host's
+in-memory representation, and source-site metadata is omitted. Treat `.ru` as
+the intended final VM-binary extension, not as a currently executable CLI
+format.
 
 ## 18. Debugging interface
 
-The VM should eventually support:
-
-    disassemble bytecode
-    dump registers
-    dump call stack
-    trace instructions
-    break at bytecode address
-
-A disassembler is especially important because bytecode is now the language's executable representation.
+`ussr_bc_dump()` prints a human-readable bytecode disassembly, including
+instruction indices, opcode names, operands, immediates, and pool/function
+counts. Register tracing and interactive breakpoints are not currently
+provided.
 
 ## 19. Execution example
 
@@ -421,31 +434,28 @@ Conceptual bytecode:
 
 The VM executes those instructions sequentially. There is no command-list traversal during execution.
 
-## 20. v0.1 implementation rule
+## 20. Runtime boundary
 
-The existing parser representation may remain temporarily because it is currently the compiler input. The critical architectural boundary is:
+The parser representation is compiler input. The runtime boundary is:
 
-    parser representation -> compiler -> bytecode -> VM
+    parser representation -> UUASM compiler -> one-to-one opcode translation -> VM
 
 and never:
 
     parser representation -> runtime execution
 
-Once the bytecode compiler covers all ordinary USSR semantics, the old `ussr_execute_program`, `ussr_execute_list`, and `ussr_execute_command` path can be removed from the executable runtime.
+The normal compiled execution path does not traverse command lists. The C
+runtime still contains a separate tree-walking execution path for legacy and
+advanced-control contexts; it is not the bytecode VM's instruction loop.
 
-## 21. Next ABI milestones
+## 21. Current limitations and next work
 
-1. Compile all primitive expressions to VM opcodes.
-2. Compile `?` and `!` to dedicated hash instructions.
-3. Compile `concat` to a VM instruction.
-4. Move `print` to a dedicated VM/runtime instruction.
-5. Compile `eval` through a VM-owned compiler invocation.
-6. Give external processes a dedicated host-service ABI.
-7. Give UNO a VM-native call ABI.
-8. Remove `ussr_execute_command()` from the VM build.
-9. Remove `ussr_execute_list()` from normal runtime.
-10. Replace host reference tables with a serialized constant/symbol pool.
-11. Add bytecode serialization and versioning.
-12. Add an independent VM test suite using hand-written bytecode.
+The C source compiler, textual `.ua` assembler, opcode translator, and VM are
+implemented. Remaining format/runtime work includes:
 
-The final goal is that `ussr.c` supplies value/storage/host facilities while the VM defines how a USSR program executes.
+- a `.ru` reader and executable CLI path;
+- a portable, explicitly endian-defined binary encoding and complete metadata
+  serialization;
+- round-trip tests for bytecode writing and loading;
+- preserving or replacing AST-backed `OOP` and `SCAN` metadata in serialized
+  programs.

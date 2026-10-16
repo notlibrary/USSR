@@ -76,18 +76,22 @@ translation used by the existing scheduler and bytecode runtime. Existing
 
 Text assembly is available through `ussr_uuasm_assemble()`. Call
 `vm_execute_uuasm()` to execute its program directly; quantum-limited runs can
-be resumed by passing the same program again. The CLI also executes `.uuasm`
-files directly:
+be resumed by passing the same program again. `.ua` is the canonical file
+extension for textual UUASM; the CLI also accepts `.uuasm` for compatibility:
 
 ```text
-ussr tests/uuasm_loop.uuasm
-ussr tests/uuasm_function.uuasm
+ussr tests/uuasm_loop.ua
+ussr tests/uuasm_function.ua
 ```
 
 The bytecode VM still owns runtime execution. The parser AST remains compiler
 input only. Text assembly does not fabricate parser-owned source metadata:
 AST-backed `OOP` and `SCAN` operations requiring such metadata must be
 generated from parsed USSR source, not written as standalone UUASM.
+
+`.ru` is reserved for the final serialized VM bytecode format. The current C
+library can write a versioned bytecode file with `ussr_bc_write_file()`, but
+there is no `.ru` reader or CLI execution path yet.
 
 ## Bootstrap
 
@@ -97,6 +101,6 @@ UUASM opcode per bootstrap instruction, records the canonical mnemonic, and
 validates the supported opcode set. The bootstrap VM maps those opcode IDs
 one-to-one to its legacy dispatch numbers; operands and instruction counts
 remain unchanged. This adapter is internal to the bootstrap and does not
-serialize bootstrap instruction records as C VM bytecode. The textual
-`.uuasm` assembler and the C VM remain the authoritative implementation of the
-versioned external format.
+serialize bootstrap instruction records as C VM bytecode. The C textual
+assembler and VM implement the versioned assembler text format, conventionally
+stored as `.ua` (`.uuasm` is accepted for compatibility).

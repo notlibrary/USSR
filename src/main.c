@@ -2032,8 +2032,10 @@ static int run_file(const char *filename, int argc, char **argv)
 
     {
         size_t filename_length = strlen(filename);
-        if (filename_length >= 6 &&
-            strcmp(filename + filename_length - 6, ".uuasm") == 0)
+        if ((filename_length >= 3 &&
+             strcmp(filename + filename_length - 3, ".ua") == 0) ||
+            (filename_length >= 6 &&
+             strcmp(filename + filename_length - 6, ".uuasm") == 0))
         {
             FILE *input = fopen(filename, "rb");
             long file_length;
