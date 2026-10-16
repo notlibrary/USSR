@@ -16,6 +16,12 @@ Perhaps it evolves fast to something big No promises or insight unfortunately
 
 .su file extension means "script user" not that you think
 
+The language/toolchain uses three file extensions: `.su` is USSR source,
+`.ua` is textual UUASM (USSR Ukraine assembler), and `.ru` is the intended
+final VM binary bytecode. The CLI runs `.su` and `.ua`; `.uuasm` is retained
+as a compatibility suffix for assembler source. `.ru` writing is available
+through the C bytecode API, but the CLI does not yet load or execute `.ru`.
+
 ```USSR
 	#ЗДОРОВО МОРЯЧОК
 	emerge(report): "K-152"
