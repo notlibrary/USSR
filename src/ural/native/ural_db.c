@@ -20,6 +20,25 @@ static int exec_sql(sqlite3 *db, const char *sql, char *err, size_t cap)
     return 0;
 }
 
+static int has_column(sqlite3 *db, const char *table, const char *column)
+{
+    sqlite3_stmt *stmt = NULL;
+    char sql[128];
+    int found = 0;
+    snprintf(sql, sizeof sql, "PRAGMA table_info(%s)", table);
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return -1;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *name = sqlite3_column_text(stmt, 1);
+        if (name != NULL && strcmp((const char *)name, column) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
+
 int ural_db_open(ural_db_t *db, const char *path, char *err, size_t cap)
 {
     static const char schema[] =
@@ -27,13 +46,13 @@ int ural_db_open(ural_db_t *db, const char *path, char *err, size_t cap)
         "CREATE TABLE IF NOT EXISTS trusted_servers ("
         " id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE,"
         " enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),"
-        " added_at INTEGER NOT NULL DEFAULT (unixepoch()));"
+        " added_at INTEGER NOT NULL DEFAULT (strftime('%s','now')));"
         "CREATE TABLE IF NOT EXISTS packages ("
         " name TEXT PRIMARY KEY, version TEXT NOT NULL,"
         " description TEXT NOT NULL DEFAULT '', source_url TEXT NOT NULL,"
         " install_path TEXT NOT NULL, manifest_hash TEXT NOT NULL DEFAULT '',"
-        " installed_at INTEGER NOT NULL DEFAULT (unixepoch()),"
-        " updated_at INTEGER NOT NULL DEFAULT (unixepoch()));"
+        " installed_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),"
+        " updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')));"
         "CREATE TABLE IF NOT EXISTS package_files ("
         " package_name TEXT NOT NULL REFERENCES packages(name) ON DELETE CASCADE,"
         " relative_path TEXT NOT NULL, file_hash TEXT NOT NULL DEFAULT '',"
@@ -41,7 +60,10 @@ int ural_db_open(ural_db_t *db, const char *path, char *err, size_t cap)
         "CREATE TABLE IF NOT EXISTS repository_index ("
         " server_url TEXT NOT NULL, package_name TEXT NOT NULL, version TEXT NOT NULL,"
         " metadata_url TEXT NOT NULL, archive_url TEXT NOT NULL, archive_hash TEXT NOT NULL,"
+        " metadata_hash TEXT NOT NULL DEFAULT '',"
         " PRIMARY KEY(server_url,package_name,version));"
+        "CREATE TABLE IF NOT EXISTS repository_config ("
+        " server_url TEXT PRIMARY KEY, public_url TEXT NOT NULL);"
         "CREATE INDEX IF NOT EXISTS repository_index_name ON repository_index(package_name);";
     int rc;
     if (db == NULL || path == NULL || path[0] == '\0') {
@@ -59,6 +81,15 @@ int ural_db_open(ural_db_t *db, const char *path, char *err, size_t cap)
     }
     sqlite3_busy_timeout(db->handle, 5000);
     if (exec_sql(db->handle, schema, err, cap) != 0) {
+        ural_db_close(db);
+        return -1;
+    }
+    rc = has_column(db->handle, "repository_index", "metadata_hash");
+    if (rc < 0 || (rc == 0 && exec_sql(db->handle,
+        "ALTER TABLE repository_index ADD COLUMN metadata_hash TEXT NOT NULL DEFAULT ''",
+        err, cap) != 0)) {
+        if (rc < 0)
+            set_error(err, cap, sqlite3_errmsg(db->handle));
         ural_db_close(db);
         return -1;
     }
@@ -90,6 +121,11 @@ static int server_change(ural_db_t *db, const char *url, int add,
         const unsigned char *p = (const unsigned char *)url;
         if (strncmp(url, "https://", 8) != 0) {
             set_error(err, cap, "trusted repository URL must use https://");
+            return -1;
+        }
+        if (url[8] == '\0' || url[8] == '/' || strchr(url, '?') != NULL ||
+            strchr(url, '#') != NULL || strchr(url + 8, '@') != NULL) {
+            set_error(err, cap, "trusted repository URL must have a host and no credentials, query, or fragment");
             return -1;
         }
         for (; *p; ++p) {

@@ -1,116 +1,113 @@
-# Ural (`ural.su`) — USSR package manager bootstrap
+# Ural package manager
 
-Ural is the planned package manager for USSR. Its local package database is
-`ussr.boxes` (SQLite); each package directory contains `box.uno` metadata.
-The initial package set is `ural`, `russia`, `mbl`, `ukraine`, `library`,
-`docs`, and `tests`.
+Ural is a standalone cross-platform package manager and repository maintenance
+tool. It does not run a server daemon. The same `ural` executable installs
+packages, edits the local trust list, builds repository artifacts, and uploads
+them.
 
-## Package metadata
+## Package format
 
-`box.uno` is a UTF-8 **USSR UNO literal**, not JSON. Each manifest is a
-single-quoted UNO object literal whose type is `Package`; strings inside UNO
-objects use backticks. The `Package` struct must be registered in USSR before
-the literal is decoded. The fields are `name`, `version`, `description`,
-`entry`, `dependencies` (a vector of package-name strings), `files` (a vector),
-`license`, `minimum_ussr`, and `source`.
-
-Example:
+Each package directory contains `box.uno`, a UTF-8 USSR UNO literal with a
+`Package` object:
 
 ```text
 'Package{name=`ukraine`,version=`0.1.0`,description=`HTTP server and web framework for USSR`,entry=`ukraine.su`,dependencies=[`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
 ```
 
-Ural should register the manifest type before decoding a manifest, using the
-USSR UNO/struct facilities. Package names must match the directory and use a
-normalized lowercase identifier.
+`name`, `version`, and `dependencies` are required. Package names and versions
+use lowercase letters, digits, dots, underscores, or hyphens; names cannot
+contain path separators. `entry` is optional and, when present, must name a
+file included in the package archive. The archive is a ZIP file named
+`<name>-<version>.ural`; the repository also contains `<name>-box.uno` and
+`ussr.boxes`.
 
-## Database
+The `ussr.boxes` SQLite database contains the trusted repository list, package
+index, installed-package records, and each installed package's owned files.
+The repository index records absolute HTTPS URLs and 64-bit FNV-1a hashes for
+both the manifest and archive. FNV-1a detects accidental corruption; it is
+**not cryptographic authentication**. HTTPS certificate verification and an
+explicit trusted-server list are required, but repository signatures and
+publisher identity are not implemented.
 
-`sql/ussr.boxes.sql` creates:
-- `trusted_servers`: trusted repository URL allow-list.
-- `packages`: installed package registry.
-- `package_files`: files owned by each installed package.
-- `repository_index`: package/version metadata, archive URL, and archive hash.
+## Commands
 
-The `repository_index.archive_hash` field is required before an archive can be
-installed. The installer must verify the archive bytes before extraction.
-The server list is an explicit trust list, not merely a cache of URLs.
+```text
+ural init
+ural server add https://packages.example.org/USSR
+ural server list
+ural search ukraine
+ural install ukraine russia
+ural update ukraine
+ural list
+ural uninstall ukraine
+ural pack ./repository https://packages.example.org/USSR
+ural upload ./repository ftp://packages.example.org/var/www/USSR LOGIN PASSWORD
+```
 
-## USSR API and current implementation status
+`pack` recursively searches for package manifests, creates `.ural` archives
+and `*-box.uno` sidecars in the target directory, then updates that
+directory's `ussr.boxes`. The public HTTPS URL is mandatory and independent of
+the FTP filesystem path. `upload` transfers only top-level `.ural`,
+`*-box.uno`, and `ussr.boxes` files from the target directory.
 
-The desired source-level interface is:
+`install` reads only enabled trusted repositories, downloads their SQLite
+index over verified HTTPS, chooses the newest available version, checks its
+FNV-1a hashes, validates the manifest and archive paths, installs dependencies
+first, and records every extracted file. Packages are installed per user under
+`~/.ussr/packages` on POSIX or `%LOCALAPPDATA%\USSR\packages` on Windows.
+Updates preserve the previous directory under the per-user `backups` folder;
+Ural intentionally does not recursively delete untracked package data.
+`uninstall` removes only recorded package-owned files and leaves unrelated
+files untouched. Package scripts are never executed.
+
+`upload` uses **plain FTP by design**. It prints a warning because FTP exposes
+credentials and package contents on the network. Prefer a protected network
+or a later secure transport when handling real credentials. Passwords passed
+as command-line arguments may also be visible to local process inspectors.
+
+## USSR source wrapper
+
+Include `ural.su` after installing `ural` and placing it on `PATH`:
 
 ```ussr
 $include "ural.su"
+
 install(code): "ukraine russia"
-uninstall(code): "ukraine"
-update(code): "ukraine"
 ```
 
-This archive is **the first design/bootstrap scaffold**, not a finished,
-working package manager. The public wrappers in `ural.su` call `ural_*`
-native commands that must be integrated into the USSR interpreter. This
-package does not pretend those commands are already stock built-ins, and it
-does not yet fetch or extract remote archives.
+The wrapper invokes the standalone executable through USSR's external-command
+facility; it does not add a package-specific VM opcode or interpreter daemon.
+Repository maintenance is available through `pack(code): target_dir public_url`
+and `upload(code): target_dir ftp_url login password`.
 
-## Implementation order
+## Build
 
-1. Add native SQLite bridge commands (`ural_init`, `ural_install`, etc.) to
-   the interpreter, linked against SQLite (`-lsqlite3` on POSIX; the Windows
-   build must link an available SQLite library).
-2. Add cross-platform HTTPS transport using the project's `ukraine.su` socket
-   / HTTP stack or a separately approved TLS backend. Plain sockets alone
-   must not be used for trusted package downloads.
-3. Implement a repository index format and signature/hash verification.
-4. Implement safe archive extraction with path traversal protections.
-5. Implement install/uninstall/update transactions and rollback.
-6. Add end-to-end tests using a local test repository before enabling remote
-   repositories by default.
+The native program requires SQLite, cURL, OpenSSL, and zlib development
+libraries. CMake is the recommended cross-platform build:
 
-## Security requirements
+```sh
+cmake -S src/ural -B build/ural -DURAL_STATIC_DEPS=ON
+cmake --build build/ural
+ctest --test-dir build/ural --output-on-failure
+```
 
-- Do not execute package scripts during installation.
-- Reject paths that escape the target package directory (`..`, absolute paths,
-  drive prefixes, symlink escapes).
-- Verify package archive hash and, before public deployment, repository
-  signatures using pinned trust keys.
-- Use SQLite transactions for registry changes.
-- Never remove files that are not recorded as owned by the package.
-- Do not silently downgrade packages; require an explicit version selection.
-- Avoid running as administrator/root for ordinary package operations.
+`URAL_STATIC_DEPS=ON` prefers static libraries. Supply the platform's static
+dependency prefix through `CMAKE_PREFIX_PATH` (and, where needed,
+`SQLite3_LIBRARY`) to produce a static-dependency build. The project build
+files for the USSR interpreter do not automatically build Ural; this package
+has its own CMake project. A Makefile is also provided for POSIX environments
+with `pkg-config`.
 
-## Bootstrap package set
+## Initial package collection
 
-| Name | Purpose |
-|---|---|
-| `ural` | USSR package manager |
-| `russia` | Bootstrapped USSR interpreter |
-| `mbl` | Vi-like console text editor |
-| `ukraine` | HTTP server and web framework |
-| `library` | USSR standard library |
-| `docs` | USSR manual, specifications, and design documents |
-| `tests` | USSR test collection |
+The bootstrap list contains nine package manifests: `ural`, `russia`, `mbl`,
+`ukraine`, `library`, `docs`, `tests`, `highlight`, and `fonts`. These manifests
+define the initial package catalog; they do not claim that all nine archives
+have been published or that placeholder package contents are complete.
 
-Versions and dependency lists in these initial `box.uno` files are placeholders
-to establish the metadata contract, not declarations that all packages have
-already been published.
+## Tests
 
-## 0.1.1-alpha development increment: local database layer
-
-This increment adds `native/ural_db.c` / `native/ural_db.h`, a small SQLite
-layer for opening/initializing `ussr.boxes`, managing the trusted HTTPS server
-allow-list, and listing installed packages or trusted servers through callbacks.
-The layer uses prepared statements for URL mutations and rejects non-HTTPS
-URLs when adding trusted repositories. It is intentionally independent of the
-interpreter so it can be tested before the USSR command-dispatch integration.
-
-Build and run the native unit test with `make test` (requires a C compiler,
-SQLite development headers/library, and `pkg-config` optionally). On Windows,
-configure `SQLITE_CFLAGS` and `SQLITE_LIBS` for the SQLite distribution in use.
-
-**Scope note:** this is a tested local-DB foundation, not yet a complete package
-manager. The `ural_*` commands called by `ural.su` still need to be registered
-in USSR's command dispatcher and wired to this layer. Network fetching, UNO
-manifest decoding, archive verification/extraction, dependency resolution, and
-transactional install/uninstall/update remain future work. No remote package is
-installed by this increment.
+The CTest suite covers SQLite initialization and trusted-server rules, package
+manifest parsing and validation, archive round-tripping, FNV-1a, and unsafe
+archive path rejection. Network operations require a configured HTTPS or FTP
+repository and are not exercised against public servers by the unit tests.

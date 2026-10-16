@@ -1,0 +1,1 @@
+'Package{name=`highlight`,version=`0.1.0`,description=`Syntax highlighters for USSR source, assembler, and VM formats`,entry=`README.md`,dependencies=[],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

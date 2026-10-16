@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS trusted_servers (
     id INTEGER PRIMARY KEY,
     url TEXT NOT NULL UNIQUE,
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-    added_at INTEGER NOT NULL DEFAULT (unixepoch())
+    added_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 
 CREATE TABLE IF NOT EXISTS packages (
@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS packages (
     source_url TEXT NOT NULL,
     install_path TEXT NOT NULL,
     manifest_hash TEXT NOT NULL DEFAULT '',
-    installed_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    installed_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 
 CREATE TABLE IF NOT EXISTS package_files (
@@ -32,8 +32,14 @@ CREATE TABLE IF NOT EXISTS repository_index (
     metadata_url TEXT NOT NULL,
     archive_url TEXT NOT NULL,
     archive_hash TEXT NOT NULL,
+    metadata_hash TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (server_url, package_name, version)
 );
 
 CREATE INDEX IF NOT EXISTS repository_index_name
     ON repository_index(package_name);
+
+CREATE TABLE IF NOT EXISTS repository_config (
+    server_url TEXT PRIMARY KEY,
+    public_url TEXT NOT NULL
+);
