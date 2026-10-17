@@ -78,4 +78,6 @@ Examples: it can't print negative numbers else branches is broken e.t.c
 
 USSR is a neuroslopware it's created entirely by prompting an AI followed by enrichment and refining results with the next AI "centrifuge"
 
+<img width="1536" height="1024" alt="USSR Compilation Pipeline Infographic" src="https://github.com/user-attachments/assets/bd7b768f-d02b-4fc3-bde6-009b68e75875" />
+
 P.S. СССР Средство Создания Совершенных Разработок
