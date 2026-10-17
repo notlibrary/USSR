@@ -526,7 +526,7 @@ edit script make it more courier-like emphasis on small character details
 then fix Cyrillic small к and small м looks like M also fix Дд character add two hatches
 Do not copy existing fonts  use supplied script build_pobeda.py
 
-Now let's build USSR packet manager ural.su
+Now let's build USSR cross platform packet manager ural.su
 We will use sqlite file called ussr.boxes to store package db
 and box.uno to store metadata and to mark directory as package(package.json analog)
 ussr.boxes db will have trusted package servers urls list
@@ -537,7 +537,15 @@ $include "ural.su"
 instsall(code): "ukraine russia"
 ```
 
-operations are standard install uninstall update
+Example of server-side control
+```
+$include "ural.su"
+pack(code): "src"
+upload(code): "src" "ftp://my_ussr_packets.com" "anon" "anon"
+```
+
+
+operations are standard `install uninstall update pack upload`
 
 Now initial packages list
 1 ural USSR package manager
@@ -547,6 +555,21 @@ Now initial packages list
 5 library USSR standard library
 6 docs USSR manual specs and design documents collection
 7 tests USSR tests collection
+8 highlight syntax highlighters for USSR
+9 font monospace fonts for USSR
+
+The 3 critical system dependencies for cross-platform static linking are sqlite zlib and openssl
+Also we need simple non-crypto hash to check packages
+Used protocols for download is https and ftp for upload
+Operations
+`pack target-dir` walk the `target-dir` subdirs search for the `box.uno` then zip it into `package-name-version.ural` and save `box.uno` as separate file `package-name-box.uno`
+`upload target-dir url login password` uploads \*.ural archives and \*.box.uno and ussr.boxes in `target-dir` to server by ftp
+ 
+pack and upload oprations is for packet server management 
+ural operates without demonizing not as client-server architecture
+single ural program does all job including serving users packets and controlling server
+ural holds url of trusted serves in ussr.boxes db
+testing trusted server url is https://tpmme.me/USSR for download and ftp://tpmme.me/var/www/html/USSR for upload
 
 Let's open 3 more USSR subprojects
 
@@ -563,7 +586,31 @@ Also we need VM able to run UUASM not only bytecode
 We must do it all both in C and bootstrap assembler layer will give us more control for free 
 do it carefully
 
-Here's my new context remain uasm to uuasm and add uuasm support to src\russia.su bootstrap
-add more features if you know them and can
-Then deliver everything to the new USSR context I uploaded
 
+The implementation target is clear:
+1. Specify UUASM — define its instruction set, operands, labels, constants, control flow, and calling conventions.
+2. Make the mapping one-to-one — each UUASM instruction maps to exactly one corresponding VM opcode, with explicit validation and no hidden multi-opcode expansions.
+3. Rework ussr_bytecode.c — compile USSR source into UUASM first, then translate UUASM into executable VM instructions.
+4. Run UUASM directly — add a VM entry point that accepts UUASM programs as well as existing bytecode, without unnecessarily breaking backward compatibility.
+5. Extend src/russia.su — implement the bootstrap assembler layer so UUASM can eventually assemble itself, keeping the C implementation and bootstrap implementation consistent.
+6. Add tests and documentation — instruction mapping, labels and jumps, arithmetic, calls, errors, bootstrap assembly, and regression tests for existing .su programs.
+I’ll also keep the Ukraine socket and scheduler integration intact rather than replacing newer build files with older ones. The goal is a single coherent source archive for the new USSR context—not another partial alpha archive presented as a finished implementation.
+
+First let's clarify the extensions
+.su USSR source code(script user
+.ua USSR Ukraine assembler text source
+.ru Final VM binary byte code
+
+Next update docs 
+Add std src/libs/math.su functions in manual
+Update manual with source 
+Update VM manual using current source
+
+Now let's create petersburg.su cross-platform USSR widget library
+It must support create window call have fiew widgets like
+button textbox label checkbox list combobox image
+Have separate function to show messagebox
+Visual Basic and friends it is
+Next it must interact with a scheduler 
+And have automatic relative widget packing algorithm 
+And renderer it must somehow call opengl not pset command

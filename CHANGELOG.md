@@ -10,6 +10,29 @@
 
 ### Documentation
 
+## [0.4.7] - 2026-10-19
+
+### Added
+
+Added UUASM assembler layer for USSR VM
+Added basic non-crypto sockets support
+Added ukraine.su HTTPd and web framework
+Added ural.su native package manager
+Added tver.su a two-panel file manager
+Added tula.su general-purpose 2D CAD application  
+Added petersburg.su cross-platform GUI/widget layer for USSR
+Added pobeda.ttf monospace font for USSR programmers 
+
+### Documentation
+
+Documented new sub-projects
+Documented UUASM spec
+
+### Maintenance
+
+Added test ukraine web app
+Added first USSR packages server URL https://tpmme.me/USSR
+
 ## [0.4.6] - 2026-10-12
 
 ### Added

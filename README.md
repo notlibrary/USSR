@@ -67,6 +67,12 @@ $include "ural.su"
 instsall(code): "ukraine russia"
 ```
 
+or(if you prefer classic shell)
+
+```bash
+ural install ukraine russia
+```
+
 USSR is a bug-ridden project critical simple system crippling bugs may appear RANDOMLY in any time any place AI won't help much too big context
 Examples: it can't print negative numbers else branches is broken e.t.c
 
