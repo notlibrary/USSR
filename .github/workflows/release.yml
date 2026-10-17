@@ -57,7 +57,7 @@ jobs:
           if (-not $vcpkgRoot) { $vcpkgRoot = 'C:\vcpkg' }
           & "$vcpkgRoot\vcpkg.exe" install 'sqlite3' 'curl[openssl]' 'openssl' 'zlib' --triplet x64-windows-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
+          
           cmake -S src/ural -B build/ural `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
@@ -65,7 +65,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/ural --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
+          
           $ural = Join-Path $PWD 'build\ural\Release\ural.exe'
           if (-not (Test-Path $ural)) { throw "Ural executable not found at $ural" }
           $env:LOCALAPPDATA = Join-Path $PWD 'build\ural-state'
