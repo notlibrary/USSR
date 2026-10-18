@@ -32,12 +32,17 @@ typedef struct petersburg_widget
     char *text;
     char *click_callback;
     char *change_callback;
+    char *key_callback;
     int x;
     int y;
     int width;
     int height;
     int preferred_height;
     int expand;
+    int grid_row;
+    int grid_column;
+    int in_grid;
+    int scroll;
     int checked;
     int selected;
     unsigned char *pixels;
@@ -51,6 +56,8 @@ typedef struct
 {
     long widget_id;
     int changed;
+    int has_key;
+    int key;
     char callback[128];
 } petersburg_event_t;
 
@@ -163,6 +170,8 @@ static petersburg_widget_t *petersburg_add(
     widget->id = petersburg_next_id++;
     widget->parent_id = parent_id;
     widget->type = type;
+    widget->grid_row = -1;
+    widget->grid_column = -1;
     widget->preferred_height = type == PETERSBURG_LABEL ? 28 :
                                type == PETERSBURG_TEXTBOX ? 34 :
                                type == PETERSBURG_LIST ? 112 :
@@ -206,7 +215,39 @@ static void petersburg_queue_event(
     ];
     event->widget_id = widget->id;
     event->changed = changed;
+    event->has_key = 0;
+    event->key = 0;
     snprintf(event->callback, sizeof(event->callback), "%s", callback);
+    ++petersburg_event_count;
+}
+
+static void petersburg_queue_key(
+    petersburg_widget_t *window,
+    int key
+)
+{
+    petersburg_event_t *event;
+
+    if (window == NULL || window->key_callback == NULL ||
+        window->key_callback[0] == '\0' || petersburg_last_error)
+        return;
+    if (petersburg_event_count == sizeof(petersburg_events) /
+                                 sizeof(petersburg_events[0]))
+    {
+        fprintf(stderr, "USSR: Petersburg event queue is full\n");
+        petersburg_last_error = 1;
+        return;
+    }
+    event = &petersburg_events[
+        (petersburg_event_head + petersburg_event_count) %
+        (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
+    ];
+    event->widget_id = window->id;
+    event->changed = 0;
+    event->has_key = 1;
+    event->key = key;
+    snprintf(event->callback, sizeof(event->callback), "%s",
+             window->key_callback);
     ++petersburg_event_count;
 }
 
@@ -265,10 +306,24 @@ static unsigned char petersburg_glyph(char character, int row)
                   pattern[3] = 2; pattern[4] = 4; pattern[6] = 4; break;
         case '-': pattern[3] = 14; break;
         case '_': pattern[6] = 31; break;
+        case '*': pattern[0] = 17; pattern[1] = 10; pattern[2] = 31;
+                  pattern[3] = 10; pattern[4] = 17; break;
         case '+': pattern[2] = 4; pattern[3] = 14; pattern[4] = 4; break;
         case '/': pattern[0] = 1; pattern[1] = 2; pattern[2] = 2;
                   pattern[3] = 4; pattern[4] = 8; pattern[5] = 8;
                   pattern[6] = 16; break;
+        case '\\': pattern[0] = 16; pattern[1] = 8; pattern[2] = 8;
+                   pattern[3] = 4; pattern[4] = 2; pattern[5] = 2;
+                   pattern[6] = 1; break;
+        case '|': pattern[0] = 4; pattern[1] = 4; pattern[2] = 4;
+                  pattern[3] = 4; pattern[4] = 4; pattern[5] = 4;
+                  pattern[6] = 4; break;
+        case '[': pattern[0] = 14; pattern[1] = 8; pattern[2] = 8;
+                  pattern[3] = 8; pattern[4] = 8; pattern[5] = 8;
+                  pattern[6] = 14; break;
+        case ']': pattern[0] = 14; pattern[1] = 2; pattern[2] = 2;
+                  pattern[3] = 2; pattern[4] = 2; pattern[5] = 2;
+                  pattern[6] = 14; break;
         case '(': pattern[0] = 2; pattern[1] = 4; pattern[2] = 8;
                   pattern[3] = 8; pattern[4] = 8; pattern[5] = 4;
                   pattern[6] = 2; break;
@@ -316,9 +371,16 @@ static void petersburg_text(
 static void petersburg_layout(petersburg_widget_t *window)
 {
     petersburg_widget_t *widget;
+    petersburg_widget_t *grid_widgets[256];
+    int grid_rows[256];
+    int row_heights[256];
+    int row_expand[256];
     int count = 0;
     int preferred = 0;
     int expand_count = 0;
+    int grid_count = 0;
+    int max_grid_row = -1;
+    int has_grid = 0;
     int gap = 8;
     int margin = 16;
     int available;
@@ -329,12 +391,92 @@ static void petersburg_layout(petersburg_widget_t *window)
     {
         if (widget->parent_id == window->id && widget->type != PETERSBURG_WINDOW)
         {
+            if (widget->in_grid)
+            {
+                has_grid = 1;
+                if (widget->grid_row >= 0 && widget->grid_row < 256 &&
+                    grid_count < 256)
+                {
+                    grid_widgets[grid_count] = widget;
+                    grid_rows[grid_count] = widget->grid_row;
+                    if (widget->grid_row > max_grid_row)
+                        max_grid_row = widget->grid_row;
+                    ++grid_count;
+                }
+                continue;
+            }
             ++count;
             preferred += widget->preferred_height;
             if (widget->expand)
                 ++expand_count;
         }
     }
+
+    if (has_grid && max_grid_row >= 0)
+    {
+        int row;
+        int grid_available;
+        int grid_preferred = 0;
+        int grid_expand = 0;
+
+        for (row = 0; row <= max_grid_row; ++row)
+        {
+            row_heights[row] = 0;
+            row_expand[row] = 0;
+        }
+        for (count = 0; count < grid_count; ++count)
+        {
+            widget = grid_widgets[count];
+            row = grid_rows[count];
+            if (widget->preferred_height > row_heights[row])
+                row_heights[row] = widget->preferred_height;
+            if (widget->expand)
+                row_expand[row] = 1;
+        }
+        for (row = 0; row <= max_grid_row; ++row)
+        {
+            grid_preferred += row_heights[row];
+            if (row_expand[row])
+                ++grid_expand;
+        }
+        grid_available = window->height - margin * 2 -
+                         gap * max_grid_row;
+        extra = grid_available - grid_preferred;
+        for (row = 0; row <= max_grid_row; ++row)
+        {
+            if (extra > 0 && row_expand[row] && grid_expand > 0)
+                row_heights[row] += extra / grid_expand;
+            for (count = 0; count < grid_count; ++count)
+            {
+                int column_width;
+                if (grid_rows[count] != row)
+                    continue;
+                widget = grid_widgets[count];
+                column_width = (window->width - margin * 2 - gap) / 2;
+                widget->x = margin + widget->grid_column *
+                                      (column_width + gap);
+                widget->y = y;
+                widget->width = column_width;
+                widget->height = row_heights[row];
+            }
+            y += row_heights[row] + gap;
+        }
+        count = 0;
+        for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
+        {
+            if (widget->parent_id == window->id &&
+                widget->type != PETERSBURG_WINDOW && !widget->in_grid)
+            {
+                widget->x = margin;
+                widget->y = y;
+                widget->width = window->width - margin * 2;
+                widget->height = widget->preferred_height;
+                y += widget->height + gap;
+            }
+        }
+        return;
+    }
+
     if (count == 0)
         return;
     available = window->height - margin * 2 - gap * (count - 1);
@@ -363,16 +505,78 @@ static int petersburg_item_count(const char *items)
 
     while (cursor != NULL && *cursor != '\0')
     {
-        size_t length = strcspn(cursor, "|");
-        if (length > 0)
+        int nonempty = 0;
+        while (*cursor != '\0')
+        {
+            if (*cursor == '|')
+                break;
+            if (*cursor == '\\' &&
+                (cursor[1] == '|' || cursor[1] == '\\'))
+            {
+                nonempty = 1;
+                cursor += 2;
+            }
+            else
+            {
+                nonempty = 1;
+                ++cursor;
+            }
+        }
+        if (nonempty)
             ++count;
-        cursor += length;
         if (*cursor == '|')
+            ++cursor;
+    }
+    return count;
+}
+
+static int petersburg_item_at(
+    const petersburg_widget_t *widget,
+    int index,
+    char *buffer,
+    size_t buffer_size
+)
+{
+    const char *cursor = widget->text;
+    int item_index = 0;
+    size_t length = 0;
+
+    if (cursor == NULL || buffer == NULL || buffer_size == 0 || index < 0)
+        return 0;
+    while (*cursor != '\0')
+    {
+        if (*cursor == '|')
+        {
+            if (length > 0 && item_index == index)
+            {
+                buffer[length] = '\0';
+                return 1;
+            }
+            if (length > 0)
+                ++item_index;
+            length = 0;
+            if (*cursor == '|')
+            {
+                ++cursor;
+                continue;
+            }
+            break;
+        }
+        if (*cursor == '\\' &&
+            (cursor[1] == '|' || cursor[1] == '\\'))
         {
             ++cursor;
         }
+        if (length + 1 >= buffer_size)
+            return 0;
+        buffer[length++] = *cursor++;
     }
-    return count;
+    if (item_index == index && length > 0)
+    {
+        buffer[length] = '\0';
+        return 1;
+    }
+    return 0;
 }
 
 static const char *petersburg_selected_item(
@@ -381,60 +585,28 @@ static const char *petersburg_selected_item(
     size_t buffer_size
 )
 {
-    const char *cursor = widget->text;
-    int selected = widget->selected;
-
-    while (cursor != NULL && *cursor != '\0')
+    if (!petersburg_item_at(widget, widget->selected, buffer, buffer_size))
     {
-        size_t length = strcspn(cursor, "|");
-        if (length != 0)
-        {
-            if (selected == 0)
-            {
-                if (length >= buffer_size)
-                    length = buffer_size - 1;
-                memcpy(buffer, cursor, length);
-                buffer[length] = '\0';
-                return buffer;
-            }
-            --selected;
-        }
-        cursor += length;
-        if (*cursor == '|')
-            ++cursor;
+        if (buffer_size > 0)
+            buffer[0] = '\0';
     }
-    return "";
+    return buffer;
 }
 
 static char *petersburg_selected_item_copy(
     const petersburg_widget_t *widget
 )
 {
-    const char *cursor = widget->text;
-    int selected = widget->selected;
+    size_t size = widget != NULL && widget->text != NULL
+                      ? strlen(widget->text) + 1
+                      : 1;
+    char *copy = malloc(size);
 
-    while (cursor != NULL && *cursor != '\0')
-    {
-        size_t length = strcspn(cursor, "|");
-        if (length != 0)
-        {
-            if (selected == 0)
-            {
-                char *copy = malloc(length + 1);
-                if (copy != NULL)
-                {
-                    memcpy(copy, cursor, length);
-                    copy[length] = '\0';
-                }
-                return copy;
-            }
-            --selected;
-        }
-        cursor += length;
-        if (*cursor == '|')
-            ++cursor;
-    }
-    return petersburg_strdup("");
+    if (copy == NULL)
+        return NULL;
+    if (!petersburg_item_at(widget, widget->selected, copy, size))
+        copy[0] = '\0';
+    return copy;
 }
 
 static void petersburg_render_window(petersburg_widget_t *window)
@@ -510,34 +682,46 @@ static void petersburg_render_window(petersburg_widget_t *window)
                             widget->height);
             if (widget->text != NULL)
             {
-                char *items = petersburg_strdup(widget->text);
-                char *item;
                 int row = 0;
-                if (items == NULL)
+                int visible = widget->height / 18;
+                if (visible < 1)
+                    visible = 1;
+                if (widget->selected < widget->scroll)
+                    widget->scroll = widget->selected;
+                if (widget->selected >= widget->scroll + visible)
+                    widget->scroll = widget->selected - visible + 1;
+                for (row = 0; row < visible; ++row)
                 {
-                    fprintf(stderr, "USSR: Petersburg could not render list items\n");
-                    petersburg_last_error = 1;
-                }
-                else
-                {
-                    item = strtok(items, "|");
-                    while (item != NULL && row < widget->height / 18)
+                    size_t item_size = strlen(widget->text) + 1;
+                    char *item = malloc(item_size);
+                    if (item == NULL)
                     {
-                        if (row == widget->selected)
-                        {
-                            glColor3f(0.18f, 0.37f, 0.62f);
-                            petersburg_rect(widget->x + 2,
-                                            widget->y + 2 + row * 18,
-                                            widget->width - 4, 17);
-                        }
-                        petersburg_text(widget->x + 8,
-                                        widget->y + 7 + row * 18,
-                                        item, 0.92f, 0.94f, 0.98f,
-                                        widget->width - 16);
-                        ++row;
-                        item = strtok(NULL, "|");
+                        fprintf(stderr,
+                                "USSR: Petersburg could not render list items\n");
+                        petersburg_last_error = 1;
+                        break;
                     }
-                    free(items);
+                    if (!petersburg_item_at(widget, widget->scroll + row,
+                                            item, item_size))
+                    {
+                        free(item);
+                        break;
+                    }
+                    if (widget->scroll + row == widget->selected)
+                    {
+                        if (petersburg_focus == widget)
+                            glColor3f(0.18f, 0.37f, 0.62f);
+                        else
+                            glColor3f(0.12f, 0.22f, 0.34f);
+                        petersburg_rect(widget->x + 2,
+                                        widget->y + 2 + row * 18,
+                                        widget->width - 4, 17);
+                    }
+                    petersburg_text(widget->x + 8,
+                                    widget->y + 7 + row * 18,
+                                    item, 0.92f, 0.94f, 0.98f,
+                                    widget->width - 16);
+                    free(item);
                 }
             }
             break;
@@ -617,7 +801,10 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             mouse_x < widget->x || mouse_x >= widget->x + widget->width ||
             mouse_y < widget->y || mouse_y >= widget->y + widget->height)
             continue;
-        if (widget->type != PETERSBURG_TEXTBOX)
+        if (widget->type == PETERSBURG_TEXTBOX ||
+            widget->type == PETERSBURG_LIST)
+            petersburg_focus = widget;
+        else
             petersburg_focus = NULL;
         if (widget->type == PETERSBURG_CHECKBOX)
         {
@@ -633,7 +820,21 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             if (item_count > 0)
             {
                 if (widget->type == PETERSBURG_LIST)
-                    widget->selected = (int)(mouse_y - widget->y - 2) / 18;
+                {
+                    int row = (int)(mouse_y - widget->y - 2) / 18;
+                    if (row < 0)
+                        row = 0;
+                    if (widget->scroll + row >= item_count)
+                    {
+                        petersburg_queue_event(widget, 1);
+                        return;
+                    }
+                    widget->selected = widget->scroll + row;
+                    if (widget->selected < 0)
+                        widget->selected = 0;
+                    if (widget->selected >= item_count)
+                        widget->selected = item_count - 1;
+                }
                 else
                     widget->selected =
                         (widget->selected + 1) % item_count;
@@ -679,13 +880,32 @@ static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
 static void petersburg_key(GLFWwindow *native, int key, int scancode,
                            int action, int modifiers)
 {
+    petersburg_widget_t *window = petersburg_window_for(native);
     size_t length;
     char *text;
-    (void)native;
     (void)scancode;
     (void)modifiers;
 
-    if (petersburg_focus == NULL || action != GLFW_PRESS ||
+    if (action != GLFW_PRESS && action != GLFW_REPEAT)
+        return;
+    if (action == GLFW_PRESS)
+        petersburg_queue_key(window, key);
+    if (petersburg_focus == NULL || action != GLFW_PRESS)
+        return;
+    if (petersburg_focus->type == PETERSBURG_LIST)
+    {
+        int count = petersburg_item_count(petersburg_focus->text);
+        if (key == GLFW_KEY_UP && petersburg_focus->selected > 0)
+            --petersburg_focus->selected;
+        else if (key == GLFW_KEY_DOWN &&
+                 petersburg_focus->selected + 1 < count)
+            ++petersburg_focus->selected;
+        else
+            return;
+        petersburg_queue_event(petersburg_focus, 1);
+        return;
+    }
+    if (petersburg_focus->type != PETERSBURG_TEXTBOX ||
         key != GLFW_KEY_BACKSPACE)
         return;
     length = strlen(petersburg_focus->text);
@@ -814,6 +1034,7 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->text);
     free(widget->click_callback);
     free(widget->change_callback);
+    free(widget->key_callback);
     free(widget);
 }
 
@@ -991,9 +1212,13 @@ static int petersburg_set_callback(
         slot = &widget->click_callback;
     else if (strcmp(event_name, "change") == 0)
         slot = &widget->change_callback;
+    else if (strcmp(event_name, "key") == 0 &&
+             widget->type == PETERSBURG_WINDOW)
+        slot = &widget->key_callback;
     else
     {
-        fprintf(stderr, "USSR: Petersburg event must be click or change\n");
+        fprintf(stderr,
+                "USSR: Petersburg event must be click, change, or key on a window\n");
         return -1;
     }
     copy = petersburg_strdup(callback);
@@ -1159,6 +1384,96 @@ int ussr_petersburg_dispatch(
         widget->expand = values[1].type == USSR_BOOLEAN
                              ? values[1].data.boolean
                              : (int)values[1].data.integer;
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_grid") == 0)
+    {
+        long row;
+        long column;
+        long expand;
+
+        if (value_count != 4 ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            !petersburg_expect_integer(values, 1, &row) ||
+            !petersburg_expect_integer(values, 2, &column) ||
+            (values[3].type != USSR_INTEGER &&
+             values[3].type != USSR_BOOLEAN) ||
+            row < 0 || row >= 256 || column < 0 || column > 1 ||
+            (values[3].type == USSR_INTEGER &&
+             values[3].data.integer != 0 &&
+             values[3].data.integer != 1) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type == PETERSBURG_WINDOW)
+        {
+            fprintf(stderr,
+                    "USSR: petersburg_grid expects widget, row, column, expand\n");
+            return -1;
+        }
+        expand = values[3].type == USSR_BOOLEAN
+                     ? values[3].data.boolean
+                     : values[3].data.integer;
+        widget->grid_row = (int)row;
+        widget->grid_column = (int)column;
+        widget->in_grid = 1;
+        widget->expand = (int)expand;
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_get_index") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            (widget->type != PETERSBURG_LIST &&
+             widget->type != PETERSBURG_COMBOBOX))
+        {
+            fprintf(stderr,
+                    "USSR: petersburg_get_index expects a list or combo box\n");
+            return -1;
+        }
+        *out = ussr_integer(widget->selected);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_set_index") == 0)
+    {
+        long index;
+        int item_count;
+
+        if (value_count != 2 ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            !petersburg_expect_integer(values, 1, &index) ||
+            (widget = petersburg_find(id)) == NULL ||
+            (widget->type != PETERSBURG_LIST &&
+             widget->type != PETERSBURG_COMBOBOX))
+        {
+            fprintf(stderr,
+                    "USSR: petersburg_set_index expects widget and index\n");
+            return -1;
+        }
+        item_count = petersburg_item_count(widget->text);
+        if (index < 0 || index >= item_count)
+        {
+            fprintf(stderr, "USSR: Petersburg selection index is out of range\n");
+            return -1;
+        }
+        widget->selected = (int)index;
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_set_focus") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            (widget->type != PETERSBURG_TEXTBOX &&
+             widget->type != PETERSBURG_LIST))
+        {
+            fprintf(stderr,
+                    "USSR: petersburg_set_focus expects a text box or list\n");
+            return -1;
+        }
+        petersburg_focus = widget;
         *out = ussr_integer(0);
         return 1;
     }
@@ -1368,7 +1683,8 @@ int ussr_petersburg_pump(
             (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
         ];
         int function = petersburg_find_function(program, event->callback);
-        ussr_value_t argument;
+        ussr_value_t arguments[2];
+        size_t argument_count;
         if (function < 0)
         {
             fprintf(stderr,
@@ -1377,9 +1693,16 @@ int ussr_petersburg_pump(
             petersburg_last_error = 1;
             return -1;
         }
-        argument = ussr_integer(event->widget_id);
+        arguments[0] = ussr_integer(event->widget_id);
+        argument_count = 1;
+        if (event->has_key)
+        {
+            arguments[1] = ussr_integer(event->key);
+            argument_count = 2;
+        }
         if (ussr_sched_spawn_func(parent, program, (size_t)function,
-                                  &argument, 1, event->callback, 1) < 0)
+                                  arguments, argument_count,
+                                  event->callback, 1) < 0)
         {
             petersburg_last_error = 1;
             return -1;

@@ -1,6 +1,15 @@
-# tver.su — Tver — cross-platform two-panel file manager
-# API scaffold: native commands are proposed, not registered in stock USSR yet.
+# Tver native runtime API. The graphical application is assembled from
+# Petersburg widgets and the existing USSR scheduler.
+$include "../petersburg/petersburg.su"
 
-# Public API: tver_createwindow, tver_panel, tver_refresh, tver_select, tver_copy, tver_move, tver_rename, tver_mkdir, tver_delete, tver_view, tver_bookmark, tver_bind_keys, tver_show, tver_run
-# See README.md and docs/ for implementation requirements.
+tverinitialize(result): window left_path left_list right_path right_list status [
+    tver_initialize(result): window left_path left_list right_path right_list status
+]
 
+tverhandlekey(result): window key [
+    tver_handle_key(result): window key
+]
+
+tveractivatepanel(result): widget [
+    tver_activate_panel(result): widget
+]

@@ -33,7 +33,8 @@ executes as a normal scheduled USSR process.
 `combobox`, and `image` return opaque integer handles. Each widget is
 automatically packed into its window in creation order. Its default height is
 based on its type; widths track the window. `pack(widget, expand)` marks a
-widget to share additional vertical space when the window grows.
+widget to share additional vertical space when the window grows. `grid(widget, row, column, expand)` lays widgets out in
+responsive rows and two columns; expanded rows take remaining window height.
 
 Lists and combo boxes take a pipe-separated string, for example
 `"ONE|TWO|THREE"`. Images currently accept binary P6 PPM files. Text rendering
@@ -43,9 +44,11 @@ uses a small built-in bitmap font; text input is ASCII.
 
 `on(widget, "click", "handler")` and `on(widget, "change", "handler")`
 register a one-argument USSR definition. Button clicks fire `click`; checkbox,
-text-box, list, and combo-box changes fire `change`. The native layer only
-queues input events; the scheduler starts the handlers outside OpenGL/GLFW
-callbacks.
+text-box, list, and combo-box changes fire `change`. A window can register
+`on(window, "key", "handler")`; its callback receives the window handle and
+the GLFW key code as two arguments. List widgets support Up/Down selection and
+scrolling. The native layer only queues input events; the scheduler starts the
+handlers outside OpenGL/GLFW callbacks.
 
 Call `run(_)` after setup. The scheduler continues processing scripts while
 the UI is open and returns when all Petersburg windows close. Use `close` to

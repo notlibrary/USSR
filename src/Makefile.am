@@ -13,6 +13,7 @@ ussr_SOURCES = \
     ussr_oop_builtins.c \
     scheduler.c \
     petersburg.c \
+    tver.c \
     eventq.c \
     socket_posix.c \
     gc.c \
@@ -31,6 +32,7 @@ EXTRA_DIST = \
     ussr_oop_builtins.h \
     scheduler.h \
     petersburg.h \
+    tver.h \
     eventq.h \
     socket.h \
     gc.h \
@@ -48,4 +50,11 @@ EXTRA_DIST = \
 	petersburg/CHANGELOG.md \
 	petersburg/docs/API.md \
 	petersburg/examples/hello.su \
-	petersburg/tests/TESTPLAN.md
+	petersburg/tests/TESTPLAN.md \
+	tver/tver.su \
+	tver/box.uno \
+	tver/README.md \
+	tver/CHANGELOG.md \
+	tver/docs/API.md \
+	tver/examples/hello.su \
+	tver/tests/TESTPLAN.md
