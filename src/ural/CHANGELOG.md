@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1-alpha (repository and startup fixes)
+- Make FTP uploads address absolute server-root paths rather than paths relative
+  to the FTP account's home directory.
+- Include the repository index URL and HTTP status in index-fetch errors.
+- Seed the per-user database from the bundled `ussr.boxes` template on first
+  use, and add `ural db-path` to locate the active client database.
+
 ## 0.2.0-alpha (native package manager)
 - Added the standalone `ural` executable with SQLite trust/index/install
   records, HTTPS repository lookup, dependency-first install, update and
