@@ -38,6 +38,10 @@ pack(result): widget expand [
     petersburg_pack(result): widget expand
 ]
 
+grid(result): widget row column expand [
+    petersburg_grid(result): widget row column expand
+]
+
 settext(result): widget text [
     petersburg_set_text(result): widget text
 ]
@@ -48,6 +52,18 @@ gettext(result): widget [
 
 getselection(result): widget [
     petersburg_get_selection(result): widget
+]
+
+getindex(result): widget [
+    petersburg_get_index(result): widget
+]
+
+setindex(result): widget index [
+    petersburg_set_index(result): widget index
+]
+
+setfocus(result): widget [
+    petersburg_set_focus(result): widget
 ]
 
 getchecked(result): widget [

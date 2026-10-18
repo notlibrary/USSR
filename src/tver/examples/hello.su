@@ -1,10 +1,32 @@
-# Tver API sketch (not executable until dependencies are integrated)
-$include "../petersburg.su"
 $include "../tver.su"
 
-tver_createwindow(app): "Tver"
-tver_panel(left): app "left" "."
-tver_panel(right): app "right" "."
-tver_bind_keys(app):
-tver_show(app):
-tver_run(app):
+key_handler(result): window key [
+    tverhandlekey(_): window key
+]
+
+panel_changed(result): widget [
+    tveractivatepanel(_): widget
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Tver - Two-panel file manager" 900 620
+    label(left_path): window "Loading left panel..."
+    label(right_path): window "Loading right panel..."
+    listbox(left_files): window ""
+    listbox(right_files): window ""
+    label(status): window "Starting Tver..."
+    label(keys): window "TAB panel  INS mark  ENTER open  F6 move  F8 delete"
+
+    grid(_): left_path 0 0 false
+    grid(_): right_path 0 1 false
+    grid(_): left_files 1 0 true
+    grid(_): right_files 1 1 true
+    grid(_): status 2 0 false
+    grid(_): keys 2 1 false
+
+    on(_): window "key" "key_handler"
+    on(_): left_files "change" "panel_changed"
+    on(_): right_files "change" "panel_changed"
+    tverinitialize(_): window left_path left_files right_path right_files status
+    run(_):
+]
