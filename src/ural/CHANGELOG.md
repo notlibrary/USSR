@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Use the Windows native certificate store for HTTPS when supported by libcurl,
+  allow explicit PEM CA bundle configuration, and report TLS verification
+  results without disabling certificate checks.
+
 ## 0.2.1-alpha (repository and startup fixes)
 - Make FTP uploads address absolute server-root paths rather than paths relative
   to the FTP account's home directory.
