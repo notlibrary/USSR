@@ -1,6 +1,83 @@
-# petersburg.su — Petersburg — cross-platform GUI widget library
-# API scaffold: native commands are proposed, not registered in stock USSR yet.
+# petersburg.su — portable OpenGL widgets for USSR.
+# Handles are integers owned by the C runtime; event callbacks are definition
+# names passed as strings and run as normal USSR scheduler processes.
 
-# Public API: createwindow, close, show, run, label, button, textbox, checkbox, combobox, panel, menu, dialog, settext, gettext, on, destroy
-# See README.md and docs/ for implementation requirements.
+createwindow(result): title width height [
+    petersburg_create_window(result): title width height
+]
 
+label(result): window text [
+    petersburg_create_label(result): window text
+]
+
+button(result): window text [
+    petersburg_create_button(result): window text
+]
+
+textbox(result): window initial_text [
+    petersburg_create_textbox(result): window initial_text
+]
+
+checkbox(result): window text [
+    petersburg_create_checkbox(result): window text
+]
+
+listbox(result): window items [
+    petersburg_create_list(result): window items
+]
+
+combobox(result): window items [
+    petersburg_create_combobox(result): window items
+]
+
+image(result): window ppm_path [
+    petersburg_create_image(result): window ppm_path
+]
+
+pack(result): widget expand [
+    petersburg_pack(result): widget expand
+]
+
+settext(result): widget text [
+    petersburg_set_text(result): widget text
+]
+
+gettext(result): widget [
+    petersburg_get_text(result): widget
+]
+
+getselection(result): widget [
+    petersburg_get_selection(result): widget
+]
+
+getchecked(result): widget [
+    petersburg_get_checked(result): widget
+]
+
+setchecked(result): widget checked [
+    petersburg_set_checked(result): widget checked
+]
+
+on(result): widget event callback_name [
+    petersburg_on(result): widget event callback_name
+]
+
+show(result): window [
+    petersburg_show(result): window
+]
+
+close(result): window [
+    petersburg_close(result): window
+]
+
+destroy(result): widget [
+    petersburg_destroy(result): widget
+]
+
+run(result): [
+    petersburg_run(result):
+]
+
+messagebox(result): title text [
+    petersburg_message_box(result): title text
+]

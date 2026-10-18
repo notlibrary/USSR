@@ -1,11 +1,19 @@
-# Petersburg API sketch (not executable until native commands are registered)
 $include "petersburg.su"
 
-createwindow(window): "Petersburg demo" 640 420
-label(title): window "Hello from USSR"
-button(ok): window "OK"
-on(ok): "click" [
-    close(window):
+clicked(result): widget [
+    settext(_): status "BUTTON CLICKED"
 ]
-show(window):
-run():
+
+init(result): arg_count arg_values [
+    createwindow(window): "Petersburg demo" 640 420
+    label(title): window "Hello from USSR"
+    textbox(name): window "Type here"
+    checkbox(enabled): window "Enable the feature"
+    listbox(options): window "FIRST|SECOND|THIRD"
+    combobox(choice): window "RED|GREEN|BLUE"
+    button(ok): window "OK"
+    label(status): window "Waiting for input"
+    on(_): ok "click" "clicked"
+    pack(_): options true
+    run(_):
+]

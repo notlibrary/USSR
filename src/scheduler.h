@@ -152,9 +152,9 @@ ussr_sched_program_t *ussr_sched_current_program(void);
 int ussr_sched_block_on_child(ussr_child_t child, uint8_t resume_register);
 
 /*
- * Scheduler-command dispatch at the VM OOP boundary. `values` are the
- * command's argument values (register materialized); `source_command`
- * gives access to unevaluated argument syntax (bare names). Return:
+ * Scheduler/runtime command dispatch at the VM OOP boundary. `values`
+ * are the command's argument values (register materialized);
+ * `source_command` gives access to unevaluated argument syntax (bare names). Return:
  *   1  handled, *out holds the command's value;
  *   2  handled, current process blocked (VM must suspend; resume
  *      register is ins_a);

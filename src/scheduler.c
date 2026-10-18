@@ -9,6 +9,7 @@
 
 #include "eventq.h"
 #include "gc.h"
+#include "petersburg.h"
 
 /*
  * Cooperative multithreading scheduler, modeled on the FreeBSD
@@ -344,7 +345,10 @@ long ussr_sched_spawn_func(
      */
     if (fork_scope && parent != NULL)
     {
-        scope = sched_scope_clone(ussr_scope_current());
+        const ussr_scope_t *parent_scope = parent->scope != NULL
+                                               ? parent->scope
+                                               : ussr_scope_current();
+        scope = sched_scope_clone(parent_scope);
         if (scope == NULL)
             return -1;
     }
@@ -869,8 +873,16 @@ int ussr_sched_dispatch(
     uint8_t ins_a,
     ussr_value_t *out)
 {
+    int petersburg_status;
+
     if (name == NULL)
         return 0;
+
+    petersburg_status = ussr_petersburg_dispatch(
+        program, name, values, value_count, out
+    );
+    if (petersburg_status != 0)
+        return petersburg_status;
 
     if (strcmp(name, "async") == 0)
         return sched_do_async(program, values, value_count,
@@ -971,6 +983,8 @@ static void sched_handle_events(void)
     long timeout;
 
     timeout = ussr_eq_next_timeout_ms();
+    if (ussr_petersburg_running() && (timeout < 0 || timeout > 50))
+        timeout = 50;
 
     count = ussr_eq_dispatch(
         timeout < 0 ? -1 : (int)timeout,
@@ -1007,6 +1021,16 @@ int ussr_sched_run(int background_ok)
     {
         ussr_proc_t *proc;
         int status;
+        ussr_proc_t *main_proc;
+        ussr_sched_program_t *main_program;
+
+        main_proc = ussr_sched_find(sched_main_pid);
+        main_program = main_proc != NULL ? main_proc->program : NULL;
+        if (ussr_petersburg_pump(main_program, main_proc, 0) != 0)
+        {
+            failed = 1;
+            break;
+        }
 
         /* GC runs only here, at slice boundaries, never
          * mid-instruction. */
@@ -1018,10 +1042,21 @@ int ussr_sched_run(int background_ok)
         if (proc == NULL)
         {
             /* Nobody runnable. */
+            if (ussr_petersburg_running())
+            {
+                if (ussr_petersburg_pump(main_program, main_proc, 1) != 0)
+                {
+                    failed = 1;
+                    break;
+                }
+                continue;
+            }
+
             if (!sched_any_live())
                 break;
 
-            if (background_ok && sched_main_done())
+            if (background_ok && sched_main_done() &&
+                !ussr_petersburg_running())
                 break;
 
             if (!ussr_eq_pending())
@@ -1085,6 +1120,7 @@ int ussr_sched_run(int background_ok)
 
 void ussr_sched_init(void)
 {
+    ussr_petersburg_cleanup();
     (void)ussr_socket_init();
     sched_procs = NULL;
     sched_next_pid = 1;
@@ -1103,6 +1139,7 @@ void ussr_sched_init(void)
 
 void ussr_sched_cleanup(void)
 {
+    ussr_petersburg_cleanup();
     ussr_socket_cleanup();
     size_t i;
 

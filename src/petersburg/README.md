@@ -1,24 +1,54 @@
-# Petersburg (petersburg.su)
+# Petersburg (`petersburg.su`)
 
-Petersburg is the proposed cross-platform GUI/widget layer for USSR. Its goal is to make ordinary desktop applications possible from `.su` scripts: forms, windows, buttons, text fields, labels, menus, dialogs, and event callbacks.
+Petersburg is USSR's cross-platform widget library. Its public API is written
+in `.su`; the interpreter's C runtime owns window/widget handles, input, layout,
+and an OpenGL renderer. GLFW supplies the portable window and OpenGL-context
+layer on Windows and Linux.
 
-## Design goals
+## Build support
 
-- One script-facing API across Windows and Linux; keep platform details behind a native adapter.
-- Event-loop integration with the USSR scheduler; callbacks must not block the interpreter.
-- Explicit widget handles and deterministic destruction.
-- Layout containers rather than pixel positioning as the default.
-- UTF-8 text, keyboard navigation, accessibility-friendly controls, and DPI-aware sizing.
-- No shelling out to external processes to create or manage windows.
+Petersburg's C module is part of the normal interpreter build. When GLFW
+development files are found at configure time, the native OpenGL backend is
+enabled. Otherwise the interpreter still builds, but Petersburg calls fail
+with an explicit missing-GLFW error.
 
-## Proposed API
+- Autotools: install GLFW 3 development files and OpenGL development files,
+  then run `./configure` and `make`.
+- GNU make: install GLFW 3 and OpenGL development files discoverable through
+  `pkg-config`, then run `make -f ussr-ubuntu.mk`.
+- MSVC: install GLFW 3, then pass `GLFW_DIR` and `GLFW_LIB` to NMAKE, for
+  example `nmake /f Makefile.msc GLFW_DIR=C:\glfw GLFW_LIB=C:\glfw\lib-vc2022\glfw3.lib`.
 
-`createwindow`, `label`, `button`, `textbox`, `checkbox`, `combobox`, `panel`, `menu`, `dialog`, `settext`, `gettext`, `show`, `close`, `on`, `run`, and `destroy`. Every command returns a USSR value; errors should be returned as values and not silently ignored. Exact call syntax must be reconciled with the current interpreter before implementation.
+## Quick start
 
-## Native backend
+Run `examples/hello.su` with the USSR interpreter. The script creates a window,
+adds controls, registers a named callback, and calls `run(_)` to hand event
+pumping to the existing scheduler. A callback definition receives the widget
+handle as its single argument and executes as a normal scheduled USSR process.
 
-Use a small C ABI with opaque handles and platform-specific implementation files. Candidate backends: Win32 on Windows and GTK on Linux, selected at build time. Do not mix backend-specific handles into `.su` scripts. The initial alpha contains API proposals and tests/specifications, not a compiled backend.
+## Widgets and layout
 
-## Example
+`createwindow`, `label`, `button`, `textbox`, `checkbox`, `listbox`,
+`combobox`, and `image` return opaque integer handles. Each widget is
+automatically packed into its window in creation order. Its default height is
+based on its type; widths track the window. `pack(widget, expand)` marks a
+widget to share additional vertical space when the window grows.
 
-See `examples/hello.su` for intended API shape.
+Lists and combo boxes take a pipe-separated string, for example
+`"ONE|TWO|THREE"`. Images currently accept binary P6 PPM files. Text rendering
+uses a small built-in bitmap font; text input is ASCII.
+
+## Events and lifecycle
+
+`on(widget, "click", "handler")` and `on(widget, "change", "handler")`
+register a one-argument USSR definition. Button clicks fire `click`; checkbox,
+text-box, list, and combo-box changes fire `change`. The native layer only
+queues input events; the scheduler starts the handlers outside OpenGL/GLFW
+callbacks.
+
+Call `run(_)` after setup. The scheduler continues processing scripts while
+the UI is open and returns when all Petersburg windows close. Use `close` to
+request a window close, and `destroy` to release a widget or its entire window
+and children. `messagebox(title, text)` displays a modal OpenGL dialog.
+
+See `docs/API.md` for argument and return contracts.

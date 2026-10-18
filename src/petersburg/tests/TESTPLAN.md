@@ -1,14 +1,14 @@
-# petersburg test plan
+# Petersburg tests
 
-- Package manifest parses as UNO (not JSON).
-- Entry script parses with the target USSR grammar once API syntax is finalized.
-- Each public command returns a value on success and failure.
-- Invalid handles/arguments return clear errors.
-- Resource cleanup is safe when windows/documents/panels are closed.
-- Platform adapter tests run on Windows and Linux.
-- Scheduler integration does not block the main event loop.
+- Parse `petersburg.su` and `examples/hello.su` with the USSR parser.
+- Build with GLFW/OpenGL and without GLFW (disabled-backend diagnostic).
+- Validate all widget constructors, getters, mutators, and stale-handle errors.
+- Check vertical packing at initial and resized window dimensions.
+- Verify click/change callbacks execute through the scheduler and can mutate
+  other widgets.
+- Verify window close, explicit destroy, message-box close, and scheduler
+  cleanup release all native windows and widget resources.
+- Verify binary P6 PPM loading and invalid-image diagnostics.
 
-## Project-specific
-
-- Create/show/close a window; widget events fire once; UTF-8 text; keyboard focus and DPI behavior.
-- Destroy parent containers and ensure child widgets are released.
+The GLFW-dependent interaction checks require a display and must be run on both
+Windows and Linux CI hosts. Text-entry coverage currently uses ASCII.
