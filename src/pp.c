@@ -268,11 +268,17 @@ static void pp_pop_include(
 }
 
 static int pp_resolve_include_path(
+    const ussr_preprocessor_t *pp,
     const char *filename,
     char *result,
     size_t result_size
 )
 {
+    const char *including_file;
+    const char *separator;
+    size_t directory_length;
+    size_t filename_length;
+
     if (filename == NULL ||
         result == NULL ||
         result_size == 0)
@@ -280,7 +286,11 @@ static int pp_resolve_include_path(
         return -1;
     }
 
-    if (filename[0] == '/')
+    if (filename[0] == '/' ||
+        filename[0] == '\\' ||
+        (isalpha((unsigned char)filename[0]) &&
+         filename[1] == ':' &&
+         (filename[2] == '/' || filename[2] == '\\')))
     {
         if (snprintf(
                 result,
@@ -295,22 +305,44 @@ static int pp_resolve_include_path(
         return 0;
     }
 
-    /*
-     * Relative includes are currently resolved against
-     * the process working directory.
-     *
-     * This can later be changed to resolve against the
-     * directory of the file containing the directive.
-     */
-    if (snprintf(
-            result,
-            result_size,
-            "%s",
-            filename
-        ) >= (int)result_size)
+    if (pp == NULL || pp->include_depth == 0)
+        including_file = NULL;
+    else
+        including_file = pp->include_stack[pp->include_depth - 1];
+
+    if (including_file == NULL)
+        directory_length = 0;
+    else
     {
-        return -1;
+        separator = strrchr(including_file, '/');
+        {
+            const char *backslash = strrchr(including_file, '\\');
+
+            if (backslash != NULL &&
+                (separator == NULL || backslash > separator))
+            {
+                separator = backslash;
+            }
+        }
+
+        directory_length =
+            separator == NULL
+                ? 0
+                : (size_t)(separator - including_file) + 1;
     }
+
+    filename_length = strlen(filename);
+
+    if (directory_length >= result_size ||
+        filename_length >= result_size - directory_length)
+        return -1;
+
+    if (directory_length > 0)
+    {
+        memcpy(result, including_file, directory_length);
+    }
+
+    memcpy(result + directory_length, filename, filename_length + 1);
 
     return 0;
 }
@@ -323,6 +355,7 @@ static int pp_process_include(
     char resolved[PATH_MAX];
 
     if (pp_resolve_include_path(
+            pp,
             filename,
             resolved,
             sizeof(resolved)

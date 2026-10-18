@@ -21,10 +21,11 @@ with an explicit missing-GLFW error.
 
 ## Quick start
 
-Run `examples/hello.su` with the USSR interpreter. The script creates a window,
-adds controls, registers a named callback, and calls `run(_)` to hand event
-pumping to the existing scheduler. A callback definition receives the widget
-handle as its single argument and executes as a normal scheduled USSR process.
+From the repository root, run `ussr src/petersburg/examples/hello.su` with the
+USSR interpreter. The script creates a window, adds controls, registers a named
+callback, and calls `run(_)` to hand event pumping to the existing scheduler. A
+callback definition receives the widget handle as its single argument and
+executes as a normal scheduled USSR process.
 
 ## Widgets and layout
 
