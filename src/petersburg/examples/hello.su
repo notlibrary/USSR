@@ -1,4 +1,4 @@
-$include "petersburg.su"
+$include "../petersburg.su"
 
 clicked(result): widget [
     settext(_): status "BUTTON CLICKED"

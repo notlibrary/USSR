@@ -1,6 +1,6 @@
 # Tver API sketch (not executable until dependencies are integrated)
-$include "petersburg.su"
-$include "tver.su"
+$include "../petersburg.su"
+$include "../tver.su"
 
 tver_createwindow(app): "Tver"
 tver_panel(left): app "left" "."
