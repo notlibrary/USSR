@@ -33,6 +33,7 @@ publisher identity are not implemented.
 
 ```text
 ural init
+ural db-path
 ural server add https://packages.example.org/USSR
 ural server list
 ural search ukraine
@@ -60,10 +61,23 @@ Ural intentionally does not recursively delete untracked package data.
 `uninstall` removes only recorded package-owned files and leaves unrelated
 files untouched. Package scripts are never executed.
 
+The client database is stored at `~/.ussr/ussr.boxes` on POSIX or
+`%LOCALAPPDATA%\USSR\ussr.boxes` on Windows. `ural db-path` prints the active
+database path. `ural server add` records trusted repositories in this
+per-user client database; `ural pack` writes the separate repository index
+database in its target directory. Ural creates the per-user database and
+schema automatically on first use; running `ural init` manually is optional.
+If `install` cannot fetch an index, Ural reports the exact HTTPS URL and HTTP
+status when the server returns one. A 404 for `ussr.boxes` means the repository
+index and package artifacts need to be packed and uploaded to that public path.
+
 `upload` uses **plain FTP by design**. It prints a warning because FTP exposes
 credentials and package contents on the network. Prefer a protected network
 or a later secure transport when handling real credentials. Passwords passed
 as command-line arguments may also be visible to local process inspectors.
+FTP upload paths are treated as absolute paths from the FTP server root, so
+`ftp://host/var/www/html/USSR` uploads into `/var/www/html/USSR`, not a path
+relative to the FTP account's home directory.
 
 ## USSR source wrapper
 
@@ -118,6 +132,7 @@ have been published or that placeholder package contents are complete.
 ## Tests
 
 The CTest suite covers SQLite initialization and trusted-server rules, package
-manifest parsing and validation, archive round-tripping, FNV-1a, and unsafe
-archive path rejection. Network operations require a configured HTTPS or FTP
-repository and are not exercised against public servers by the unit tests.
+manifest parsing and validation, archive round-tripping, FTP URL paths, FNV-1a,
+and unsafe archive path rejection. Network operations require a configured
+HTTPS or FTP repository and are not exercised against public servers by the
+unit tests.

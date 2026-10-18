@@ -9,6 +9,8 @@ Run `cmake -S src/ural -B build/ural`, `cmake --build build/ural`, and
   empty installed-package list.
 - `test_ural_manifest` checks valid UNO package fields, dependency parsing,
   duplicate fields, and invalid package names.
+- `test_ural_url` checks FTP paths are rooted at the server filesystem root,
+  including already-rooted paths and URLs without a base path.
 - `test_ural_archive` checks ZIP packing/extraction, empty files, FNV-1a, and
   rejection of path traversal in archive entries.
 

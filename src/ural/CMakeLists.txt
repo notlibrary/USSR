@@ -16,7 +16,8 @@ find_package(ZLIB REQUIRED)
 add_library(ural_core STATIC
     native/ural_db.c
     native/ural_archive.c
-    native/ural_manifest.c)
+    native/ural_manifest.c
+    native/ural_url.c)
 target_include_directories(ural_core PUBLIC native)
 target_compile_features(ural_core PUBLIC c_std_11)
 target_link_libraries(ural_core PUBLIC
@@ -42,6 +43,10 @@ if(BUILD_TESTING)
     add_executable(test_ural_manifest tests/test_manifest.c)
     target_link_libraries(test_ural_manifest PRIVATE ural_core)
     add_test(NAME ural_manifest COMMAND test_ural_manifest)
+
+    add_executable(test_ural_url tests/test_url.c)
+    target_link_libraries(test_ural_url PRIVATE ural_core)
+    add_test(NAME ural_url COMMAND test_ural_url)
 endif()
 
 install(TARGETS ural RUNTIME DESTINATION bin)

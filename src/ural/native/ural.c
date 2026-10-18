@@ -5,9 +5,11 @@
 #include "ural_archive.h"
 #include "ural_db.h"
 #include "ural_manifest.h"
+#include "ural_url.h"
 
 #include <curl/curl.h>
 #include <ctype.h>
+#include <errno.h>
 #include <openssl/ssl.h>
 #include <sqlite3.h>
 #include <stdint.h>
@@ -292,6 +294,7 @@ static int curl_download(const char *url, const char *path, char *err, size_t ca
     FILE *file;
     download_stream_t stream;
     CURLcode rc;
+    long response_code = 0;
     if (curl == NULL) {
         set_error(err, cap, "cannot initialize HTTPS transport");
         return -1;
@@ -317,11 +320,17 @@ static int curl_download(const char *url, const char *path, char *err, size_t ca
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     rc = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
     if (fclose(file) != 0 && rc == CURLE_OK)
         rc = CURLE_WRITE_ERROR;
     if (rc != CURLE_OK) {
-        if (err != NULL && cap > 0)
-            snprintf(err, cap, "HTTPS download failed: %s", curl_easy_strerror(rc));
+        if (err != NULL && cap > 0) {
+            if (response_code != 0)
+                snprintf(err, cap, "HTTPS request failed with HTTP %ld: %s",
+                         response_code, curl_easy_strerror(rc));
+            else
+                snprintf(err, cap, "HTTPS request failed: %s", curl_easy_strerror(rc));
+        }
         URAL_UNLINK(path);
         curl_easy_cleanup(curl);
         return -1;
@@ -637,7 +646,7 @@ static int ftp_upload_file(CURL *curl, const char *path, const char *base,
     escaped = curl_easy_escape(curl, name, 0);
     if (escaped == NULL)
         goto done;
-    url = url_join(base, escaped);
+    url = ural_ftp_url_join(base, escaped);
     if (url == NULL)
         goto done;
     file = fopen(path, "rb");
@@ -918,7 +927,7 @@ static int find_remote_package(sqlite3 *local, const char *state,
 {
     sqlite3_stmt *servers = NULL;
     unsigned int index_number = 0;
-    int rc, found = 0, indexes_read = 0;
+    int rc, found = 0, indexes_read = 0, servers_seen = 0;
     if (sqlite3_prepare_v2(local,
             "SELECT url FROM trusted_servers WHERE enabled=1 ORDER BY url",
             -1, &servers, NULL) != SQLITE_OK) {
@@ -930,6 +939,8 @@ static int find_remote_package(sqlite3 *local, const char *state,
         char index_name[80];
         char *index_path, *index_url;
         sqlite3 *remote = NULL;
+        char server_err[512] = {0};
+        ++servers_seen;
         if (server_text == NULL)
             continue;
         snprintf(index_name, sizeof index_name, ".ural-index-%lu-%u.sqlite",
@@ -943,18 +954,36 @@ static int find_remote_package(sqlite3 *local, const char *state,
             sqlite3_finalize(servers);
             return -1;
         }
-        if (curl_download(index_url, index_path, err, cap) == 0 &&
-            sqlite3_open_v2(index_path, &remote, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
-            ++indexes_read;
-            if (read_remote_package(remote, (const char *)server_text, name, out) == 0 &&
-                out->version != NULL)
-                found = 1;
+        if (curl_download(index_url, index_path, server_err, sizeof server_err) == 0) {
+            int open_rc = sqlite3_open_v2(index_path, &remote, SQLITE_OPEN_READONLY, NULL);
+            if (open_rc == SQLITE_OK) {
+                int read_rc = read_remote_package(remote, (const char *)server_text,
+                                                  name, out);
+                if (read_rc == 0) {
+                    ++indexes_read;
+                    if (out->version != NULL)
+                        found = 1;
+                } else {
+                    snprintf(server_err, sizeof server_err,
+                             "repository index has an invalid schema: %s",
+                             sqlite3_errmsg(remote));
+                }
+            } else {
+                snprintf(server_err, sizeof server_err,
+                         "repository index is not a readable SQLite database: %s",
+                         remote != NULL ? sqlite3_errmsg(remote) : "cannot open file");
+            }
         }
+        if (server_err[0] != '\0')
+            snprintf(err, cap, "cannot read repository index %s: %.400s",
+                     index_url, server_err);
         if (remote != NULL)
             sqlite3_close(remote);
         URAL_UNLINK(index_path);
         free(index_path);
         free(index_url);
+        if (found)
+            break;
     }
     if (rc != SQLITE_DONE && rc != SQLITE_ROW && !found) {
         set_error(err, cap, sqlite3_errmsg(local));
@@ -963,13 +992,195 @@ static int find_remote_package(sqlite3 *local, const char *state,
     }
     sqlite3_finalize(servers);
     if (!found) {
-        if (indexes_read == 0)
-            set_error(err, cap, "could not download an enabled trusted repository index");
-        else
+        if (indexes_read > 0)
             snprintf(err, cap, "package '%s' was not found on any trusted repository", name);
+        else if (servers_seen == 0)
+            set_error(err, cap, "no enabled trusted repositories are configured");
+        else if (err != NULL && cap > 0 && err[0] == '\0')
+            set_error(err, cap, "could not download a trusted repository index");
         return -1;
     }
     return 0;
+}
+
+static char *executable_path(const char *argv0)
+{
+    (void)argv0;
+#ifdef _WIN32
+    DWORD capacity = MAX_PATH;
+    char *path = NULL;
+    for (;;) {
+        DWORD length;
+        char *grown = (char *)realloc(path, (size_t)capacity + 1);
+        if (grown == NULL) {
+            free(path);
+            return NULL;
+        }
+        path = grown;
+        length = GetModuleFileNameA(NULL, path, capacity);
+        if (length == 0) {
+            free(path);
+            return NULL;
+        }
+        if (length < capacity) {
+            path[length] = '\0';
+            return path;
+        }
+        if (capacity >= 32768) {
+            free(path);
+            return NULL;
+        }
+        capacity *= 2;
+    }
+#elif defined(__linux__)
+    size_t capacity = 512;
+    char *path = NULL;
+    for (;;) {
+        ssize_t length;
+        char *grown = (char *)realloc(path, capacity);
+        if (grown == NULL) {
+            free(path);
+            return NULL;
+        }
+        path = grown;
+        length = readlink("/proc/self/exe", path, capacity - 1);
+        if (length < 0) {
+            free(path);
+            return NULL;
+        }
+        if ((size_t)length < capacity - 1) {
+            path[length] = '\0';
+            return path;
+        }
+        if (capacity >= 32768) {
+            free(path);
+            return NULL;
+        }
+        capacity *= 2;
+    }
+#else
+    if (argv0 != NULL && (strchr(argv0, '/') != NULL || strchr(argv0, '\\') != NULL))
+        return duplicate(argv0);
+    return NULL;
+#endif
+}
+
+static int seed_user_database(const char *db_path, const char *state,
+                              const char *argv0, char *err, size_t cap)
+{
+    char *program = NULL, *directory = NULL, *seed = NULL, *temporary = NULL;
+    const char *separator;
+    struct stat st;
+    FILE *input = NULL, *output = NULL;
+    unsigned char buffer[32768];
+    size_t count;
+    int result = 0;
+
+    if (stat(db_path, &st) == 0)
+        return 0;
+    if (errno != ENOENT) {
+        set_error(err, cap, "cannot inspect per-user database path");
+        return -1;
+    }
+    program = executable_path(argv0);
+    if (program == NULL)
+        return 0;
+    separator = strrchr(program, '/');
+#ifdef _WIN32
+    {
+        const char *backslash = strrchr(program, '\\');
+        if (backslash != NULL && (separator == NULL || backslash > separator))
+            separator = backslash;
+    }
+#endif
+    if (separator == NULL)
+        goto done;
+    directory = duplicate(program);
+    if (directory == NULL) {
+        set_error(err, cap, "out of memory locating bundled database");
+        result = -1;
+        goto done;
+    }
+    {
+        size_t directory_length = (size_t)(separator - program);
+#ifdef _WIN32
+        if (directory_length == 2 && program[1] == ':')
+            ++directory_length;
+#endif
+        if (directory_length == 0)
+            directory_length = 1;
+        directory[directory_length] = '\0';
+    }
+    seed = join_path(directory, "ussr.boxes");
+    if (seed == NULL) {
+        set_error(err, cap, "out of memory locating bundled database");
+        result = -1;
+        goto done;
+    }
+    input = fopen(seed, "rb");
+    if (input == NULL) {
+        if (errno != ENOENT) {
+            set_error(err, cap, "cannot open bundled database template");
+            result = -1;
+        }
+        goto done;
+    }
+    {
+        char temporary_name[96];
+        snprintf(temporary_name, sizeof temporary_name, ".ussr.boxes.seed-%lu",
+                 process_id());
+        temporary = join_path(state, temporary_name);
+    }
+    if (temporary == NULL || (output = fopen(temporary, "wb")) == NULL) {
+        set_error(err, cap, "cannot create per-user database from bundled template");
+        result = -1;
+        goto done;
+    }
+    while ((count = fread(buffer, 1, sizeof buffer, input)) != 0) {
+        if (fwrite(buffer, 1, count, output) != count) {
+            set_error(err, cap, "cannot copy bundled database template");
+            result = -1;
+            goto done;
+        }
+    }
+    {
+        int read_failed = ferror(input);
+        int close_failed = fclose(output) != 0;
+        output = NULL;
+        if (read_failed || close_failed) {
+            set_error(err, cap, "cannot finish copying bundled database template");
+            result = -1;
+            goto done;
+        }
+    }
+#ifdef _WIN32
+    {
+        if (!MoveFileA(temporary, db_path)) {
+            DWORD move_error = GetLastError();
+            if (move_error != ERROR_ALREADY_EXISTS && move_error != ERROR_FILE_EXISTS) {
+                set_error(err, cap, "cannot install bundled database template");
+                result = -1;
+            }
+        }
+    }
+#else
+    if (link(temporary, db_path) != 0 && errno != EEXIST) {
+        set_error(err, cap, "cannot install bundled database template");
+        result = -1;
+    }
+#endif
+done:
+    if (input != NULL)
+        fclose(input);
+    if (output != NULL)
+        fclose(output);
+    if (temporary != NULL)
+        URAL_UNLINK(temporary);
+    free(program);
+    free(directory);
+    free(seed);
+    free(temporary);
+    return result;
 }
 
 static int installed_version(sqlite3 *db, const char *name, char **version)
@@ -1537,6 +1748,7 @@ static void usage(FILE *out)
 {
     fputs("Usage:\n"
           "  ural init\n"
+          "  ural db-path\n"
           "  ural install PACKAGE...\n"
           "  ural uninstall PACKAGE...\n"
           "  ural update PACKAGE...\n"
@@ -1590,11 +1802,29 @@ int main(int argc, char **argv)
         return 1;
     }
     db_path = join_path(state, "ussr.boxes");
-    if (db_path == NULL || ural_db_open(&db, db_path, err, sizeof err) != 0) {
-        fprintf(stderr, "ural: %s\n", db_path == NULL ? "out of memory" : err);
+    if (db_path == NULL) {
+        fprintf(stderr, "ural: out of memory\n");
+        free(state);
+        return 1;
+    }
+    if (seed_user_database(db_path, state, argv[0], err, sizeof err) != 0) {
+        fprintf(stderr, "ural: %s\n", err);
+        free(db_path);
+        free(state);
+        return 1;
+    }
+    if (ural_db_open(&db, db_path, err, sizeof err) != 0) {
+        fprintf(stderr, "ural: %s\n", err);
         free(state);
         free(db_path);
         return 1;
+    }
+    if (argc == 2 && !strcmp(argv[1], "db-path")) {
+        puts(db_path);
+        ural_db_close(&db);
+        free(db_path);
+        free(state);
+        return 0;
     }
     if (OPENSSL_init_ssl(0, NULL) != 1 ||
         curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
@@ -1612,6 +1842,8 @@ int main(int argc, char **argv)
         result = ural_db_list_trusted_servers(&db, list_callback, stdout, err, sizeof err) == 0 ? 0 : 1;
     } else if (argc == 4 && !strcmp(argv[1], "server") && !strcmp(argv[2], "add")) {
         result = ural_db_add_trusted_server(&db, argv[3], err, sizeof err) == 0 ? 0 : 1;
+        if (result == 0)
+            printf("trusted server saved in %s\n", db_path);
     } else if (argc == 4 && !strcmp(argv[1], "server") && !strcmp(argv[2], "remove")) {
         result = ural_db_remove_trusted_server(&db, argv[3], err, sizeof err) == 0 ? 0 : 1;
     } else if (argc >= 3 && (!strcmp(argv[1], "install") ||
