@@ -1469,12 +1469,9 @@ int vm_execute(
                 value = ussr_null();
 
                 /*
-                 * Scheduler commands (async/await/sleep/yield/gc/process),
-                 * socket primitives, and the process loader. They sit on
-                 * the VM OOP boundary because they may SUSPEND this process:
-                 * a blocked command returns USSR_VM_STATUS_SUSPENDED
-                 * here and the scheduler resumes the instruction once
-                 * the wait completes.
+                 * Scheduler commands, socket primitives, process loading,
+                 * and Petersburg natives are routed at the VM boundary;
+                 * scheduler operations may suspend the current process.
                  */
                 {
                     ussr_value_t *sched_values = NULL;
@@ -1489,7 +1486,8 @@ int vm_execute(
                         strcmp(program->strings[ins.immediate], "process") == 0 ||
                         strcmp(program->strings[ins.immediate], "wait_readable") == 0 ||
                         strcmp(program->strings[ins.immediate], "wait_writable") == 0 ||
-                        strncmp(program->strings[ins.immediate], "socket_", 7) == 0;
+                        strncmp(program->strings[ins.immediate], "socket_", 7) == 0 ||
+                        strncmp(program->strings[ins.immediate], "petersburg_", 11) == 0;
 
                     if (is_sched_name &&
                         vm_values_from_registers(

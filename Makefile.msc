@@ -18,10 +18,20 @@ FLEX    = win_flex.exe
 SRC     = src
 WIN     = src\win
 
-CFLAGS  = /nologo /W3 /Zi /Od /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN)
+PETERSBURG_CFLAGS =
+PETERSBURG_LIBS =
+!IFDEF GLFW_DIR
+PETERSBURG_CFLAGS = /DUSSR_WITH_GLFW /I$(GLFW_DIR)\include
+!IFNDEF GLFW_LIB
+GLFW_LIB = $(GLFW_DIR)\lib-vc2022\glfw3.lib
+!ENDIF
+PETERSBURG_LIBS = $(GLFW_LIB) opengl32.lib gdi32.lib shell32.lib winmm.lib imm32.lib
+!ENDIF
+
+CFLAGS  = /nologo /W3 /Zi /Od /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN) $(PETERSBURG_CFLAGS)
 RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
-LIBS    = user32.lib ws2_32.lib
+LIBS    = user32.lib ws2_32.lib $(PETERSBURG_LIBS)
 
 TARGET  = ussr.exe
 
@@ -34,6 +44,7 @@ OBJS = \
     $(SRC)\ussr_bytecode.obj \
     $(SRC)\ussr_uuasm.obj \
     $(SRC)\scheduler.obj \
+    $(SRC)\petersburg.obj \
     $(SRC)\eventq.obj \
     $(SRC)\gc.obj \
     $(SRC)\parser.tab.obj \
@@ -91,8 +102,11 @@ $(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\u
 $(SRC)\ussr_uuasm.obj: $(SRC)\ussr_uuasm.c $(SRC)\ussr_uuasm.h $(SRC)\ussr_bytecode.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_uuasm.obj $(SRC)\ussr_uuasm.c
 
-$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
+$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
+
+$(SRC)\petersburg.obj: $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\scheduler.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\petersburg.obj $(SRC)\petersburg.c
 
 $(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\eventq.obj $(SRC)\eventq.c

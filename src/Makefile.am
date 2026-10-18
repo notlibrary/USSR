@@ -12,6 +12,7 @@ ussr_SOURCES = \
     uno.c \
     ussr_oop_builtins.c \
     scheduler.c \
+    petersburg.c \
     eventq.c \
     socket_posix.c \
     gc.c \
@@ -19,7 +20,8 @@ ussr_SOURCES = \
     prng64_xrp32.c \
 	autocomplete.c
 	
-AM_CPPFLAGS = -I$(srcdir)
+AM_CPPFLAGS = -I$(srcdir) $(PETERSBURG_CPPFLAGS)
+ussr_LDADD = $(PETERSBURG_LIBS) -lm
 
 EXTRA_DIST = \
     ussr.h \
@@ -28,6 +30,7 @@ EXTRA_DIST = \
     uno.h \
     ussr_oop_builtins.h \
     scheduler.h \
+    petersburg.h \
     eventq.h \
     socket.h \
     gc.h \
@@ -37,4 +40,12 @@ EXTRA_DIST = \
     uthash.h \
 	prng64_xrp32.h \
 	autocomplete.h \
-	process.h
+    process.h \
+	petersburg/petersburg.su \
+	petersburg/box.uno \
+	petersburg/README.md \
+	petersburg/README-SUBPROJ.md \
+	petersburg/CHANGELOG.md \
+	petersburg/docs/API.md \
+	petersburg/examples/hello.su \
+	petersburg/tests/TESTPLAN.md
