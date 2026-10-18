@@ -70,6 +70,10 @@ schema automatically on first use; running `ural init` manually is optional.
 If `install` cannot fetch an index, Ural reports the exact HTTPS URL and HTTP
 status when the server returns one. A 404 for `ussr.boxes` means the repository
 index and package artifacts need to be packed and uploaded to that public path.
+HTTPS certificate verification remains enabled. On Windows, Ural uses the
+native Windows certificate store when its libcurl build supports it. For
+OpenSSL-based builds without native-store support, set `CURL_CA_BUNDLE` or
+`SSL_CERT_FILE` to a PEM CA bundle path if the system trust store is unavailable.
 
 `upload` uses **plain FTP by design**. It prints a warning because FTP exposes
 credentials and package contents on the network. Prefer a protected network

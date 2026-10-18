@@ -295,6 +295,10 @@ static int curl_download(const char *url, const char *path, char *err, size_t ca
     download_stream_t stream;
     CURLcode rc;
     long response_code = 0;
+    long ssl_verify_result = 0;
+    const char *ca_bundle = getenv("CURL_CA_BUNDLE");
+    if (ca_bundle == NULL || ca_bundle[0] == '\0')
+        ca_bundle = getenv("SSL_CERT_FILE");
     if (curl == NULL) {
         set_error(err, cap, "cannot initialize HTTPS transport");
         return -1;
@@ -316,16 +320,29 @@ static int curl_download(const char *url, const char *path, char *err, size_t ca
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    if (ca_bundle != NULL && ca_bundle[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle);
+    }
+#if defined(_WIN32) && defined(CURLSSLOPT_NATIVE_CA)
+    else {
+        curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
+    }
+#endif
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     rc = curl_easy_perform(curl);
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+    curl_easy_getinfo(curl, CURLINFO_SSL_VERIFYRESULT, &ssl_verify_result);
     if (fclose(file) != 0 && rc == CURLE_OK)
         rc = CURLE_WRITE_ERROR;
     if (rc != CURLE_OK) {
         if (err != NULL && cap > 0) {
-            if (response_code != 0)
+            if (rc == CURLE_PEER_FAILED_VERIFICATION)
+                snprintf(err, cap,
+                         "HTTPS certificate verification failed (TLS verify result %ld)",
+                         ssl_verify_result);
+            else if (response_code != 0)
                 snprintf(err, cap, "HTTPS request failed with HTTP %ld: %s",
                          response_code, curl_easy_strerror(rc));
             else
