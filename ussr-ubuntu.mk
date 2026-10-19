@@ -6,6 +6,12 @@ ifneq ($(strip $(PETERSBURG_LIBS)),)
 CFLAGS += -DUSSR_WITH_GLFW $(PETERSBURG_CFLAGS)
 LDLIBS += $(PETERSBURG_LIBS)
 endif
+ifneq ($(PETERSBURG_BUNDLE),)
+ifeq ($(strip $(PETERSBURG_LIBS)),)
+$(error PETERSBURG_BUNDLE=1 requires GLFW and OpenGL development files discoverable through pkg-config)
+endif
+LDFLAGS += -Wl,-rpath,'$$ORIGIN/lib'
+endif
 TARGET  = ussr
 PREFIX  = /usr
 SRC_DIR = src
@@ -42,7 +48,7 @@ endif
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) -lm $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) -lm $(LDLIBS)
 
 $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.y
 	bison -d -Wall -o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.y
@@ -143,6 +149,13 @@ dist: $(TARGET) $(URAL_BIN)
 	HOME="$$state" "$(CURDIR)/$(URAL_BIN)" init; \
 	cp "$(TARGET)" "$(URAL_BIN)" src/ural/ural.su docs/ussr_user_manual.md moscow.su "$$stage/ussr-linux-bin/"; \
 	cp "$$state/.ussr/ussr.boxes" "$$stage/ussr-linux-bin/ussr.boxes"; \
+	if test -n "$(PETERSBURG_BUNDLE)"; then \
+		glfw_libdir=$$(pkg-config --variable=libdir glfw3); \
+		glfw_library=$$(readlink -f "$$glfw_libdir/libglfw.so.3"); \
+		test -n "$$glfw_library" && test -f "$$glfw_library" || { echo "Could not locate the GLFW runtime library" >&2; exit 1; }; \
+		mkdir -p "$$stage/ussr-linux-bin/lib"; \
+		cp "$$glfw_library" "$$stage/ussr-linux-bin/lib/libglfw.so.3"; \
+	fi; \
 	if test -f README.md; then cp README.md "$$stage/ussr-linux-bin/"; fi; \
 	if test -f CHANGELOG.md; then cp CHANGELOG.md "$$stage/ussr-linux-bin/"; fi; \
 	if test -f LICENSE; then cp LICENSE "$$stage/ussr-linux-bin/"; fi; \
