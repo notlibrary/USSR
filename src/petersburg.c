@@ -58,6 +58,9 @@ typedef struct
     int changed;
     int has_key;
     int key;
+    int has_pointer;
+    int pointer_x;
+    int pointer_y;
     char callback[128];
 } petersburg_event_t;
 
@@ -108,7 +111,6 @@ static int petersburg_expect_integer(
     *out = value[index].data.integer;
     return 1;
 }
-
 static int petersburg_expect_string(
     const ussr_value_t *value,
     size_t index,
@@ -217,7 +219,42 @@ static void petersburg_queue_event(
     event->changed = changed;
     event->has_key = 0;
     event->key = 0;
+    event->has_pointer = 0;
     snprintf(event->callback, sizeof(event->callback), "%s", callback);
+    ++petersburg_event_count;
+}
+
+static void petersburg_queue_pointer(
+    petersburg_widget_t *widget,
+    int x,
+    int y
+)
+{
+    petersburg_event_t *event;
+
+    if (widget == NULL || widget->click_callback == NULL ||
+        widget->click_callback[0] == '\0' || petersburg_last_error)
+        return;
+    if (petersburg_event_count == sizeof(petersburg_events) /
+                                 sizeof(petersburg_events[0]))
+    {
+        fprintf(stderr, "USSR: Petersburg event queue is full\n");
+        petersburg_last_error = 1;
+        return;
+    }
+    event = &petersburg_events[
+        (petersburg_event_head + petersburg_event_count) %
+        (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
+    ];
+    event->widget_id = widget->id;
+    event->changed = 0;
+    event->has_key = 0;
+    event->key = 0;
+    event->has_pointer = 1;
+    event->pointer_x = x;
+    event->pointer_y = y;
+    snprintf(event->callback, sizeof(event->callback), "%s",
+             widget->click_callback);
     ++petersburg_event_count;
 }
 
@@ -246,6 +283,7 @@ static void petersburg_queue_key(
     event->changed = 0;
     event->has_key = 1;
     event->key = key;
+    event->has_pointer = 0;
     snprintf(event->callback, sizeof(event->callback), "%s",
              window->key_callback);
     ++petersburg_event_count;
@@ -843,6 +881,14 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             }
             petersburg_queue_event(widget, 1);
         }
+        else if (widget->type == PETERSBURG_IMAGE)
+        {
+            int local_x = (int)((mouse_x - widget->x) *
+                                widget->image_width / widget->width);
+            int local_y = (int)((mouse_y - widget->y) *
+                                widget->image_height / widget->height);
+            petersburg_queue_pointer(widget, local_x, local_y);
+        }
         else
             petersburg_queue_event(widget, 0);
         return;
@@ -1181,6 +1227,22 @@ static int petersburg_create_window(
     return 1;
 }
 
+static int petersburg_reload_image(
+    petersburg_widget_t *widget,
+    const char *path
+)
+{
+    petersburg_widget_t image = {0};
+
+    if (!petersburg_read_ppm(&image, path))
+        return 0;
+    free(widget->pixels);
+    widget->pixels = image.pixels;
+    widget->image_width = image.image_width;
+    widget->image_height = image.image_height;
+    return 1;
+}
+
 static int petersburg_set_callback(
     const ussr_value_t *values,
     size_t value_count
@@ -1212,13 +1274,16 @@ static int petersburg_set_callback(
         slot = &widget->click_callback;
     else if (strcmp(event_name, "change") == 0)
         slot = &widget->change_callback;
+    else if (strcmp(event_name, "pointer") == 0 &&
+             widget->type == PETERSBURG_IMAGE)
+        slot = &widget->click_callback;
     else if (strcmp(event_name, "key") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         slot = &widget->key_callback;
     else
     {
         fprintf(stderr,
-                "USSR: Petersburg event must be click, change, or key on a window\n");
+                "USSR: Petersburg event must be click/change on a widget, pointer on an image, or key on a window\n");
         return -1;
     }
     copy = petersburg_strdup(callback);
@@ -1339,6 +1404,20 @@ int ussr_petersburg_dispatch(
         return 0;
     if (strcmp(name, "petersburg_create_window") == 0)
         return petersburg_create_window(values, value_count, out);
+    if (strcmp(name, "petersburg_maximize") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_WINDOW)
+        {
+            fprintf(stderr, "USSR: petersburg_maximize expects a window handle\n");
+            return -1;
+        }
+        glfwMaximizeWindow(widget->native_window);
+        *out = ussr_integer(0);
+        return 1;
+    }
     if (strcmp(name, "petersburg_create_label") == 0)
         return petersburg_create_widget(name, PETERSBURG_LABEL,
                                         values, value_count, out);
@@ -1499,6 +1578,23 @@ int ussr_petersburg_dispatch(
         if (widget->type == PETERSBURG_LIST ||
             widget->type == PETERSBURG_COMBOBOX)
             widget->selected = 0;
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_reload_image") == 0)
+    {
+        if (value_count != 2 ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            !petersburg_expect_string(values, 1, &text) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_IMAGE)
+        {
+            fprintf(stderr,
+                    "USSR: petersburg_reload_image expects image handle and PPM path\n");
+            return -1;
+        }
+        if (!petersburg_reload_image(widget, text))
+            return -1;
         *out = ussr_integer(0);
         return 1;
     }
@@ -1683,7 +1779,7 @@ int ussr_petersburg_pump(
             (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
         ];
         int function = petersburg_find_function(program, event->callback);
-        ussr_value_t arguments[2];
+        ussr_value_t arguments[3];
         size_t argument_count;
         if (function < 0)
         {
@@ -1699,6 +1795,12 @@ int ussr_petersburg_pump(
         {
             arguments[1] = ussr_integer(event->key);
             argument_count = 2;
+        }
+        else if (event->has_pointer)
+        {
+            arguments[1] = ussr_integer(event->pointer_x);
+            arguments[2] = ussr_integer(event->pointer_y);
+            argument_count = 3;
         }
         if (ussr_sched_spawn_func(parent, program, (size_t)function,
                                   arguments, argument_count,

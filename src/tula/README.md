@@ -1,18 +1,19 @@
-# Tula (tula.su)
+# Tula
 
-Tula is a planned general-purpose 2D CAD application with a Petersburg-based GUI and a geometry core independent of the rendering backend.
+Tula is a small interactive 2D CAD program for USSR, built with Petersburg.
+From the repository root, run `ussr src/tula/examples/hello.su` with a
+GLFW-enabled build. The window requests maximized display at startup.
 
-## Initial scope
+Choose **Line** and click two points on the canvas, or choose **Circle** and
+click its center followed by a point on its circumference. Points snap to a
+visible 5-unit grid. The fine grid is 5 units and major lines are 20 units
+apart. The drawing uses millimeters and is exported as ASCII DXF 2000.
 
-- Infinite/pannable drawing canvas with zoom and fit-to-drawing.
-- Entities: point, line, polyline, circle, arc, rectangle, text, and dimensions.
-- Layers, visibility/lock, selection, undo/redo, grid, object snaps, and orthogonal mode.
-- Precise coordinates and units; avoid floating-point display drift.
-- Save/load a documented native text format and export SVG; DXF import/export can follow.
-- Deterministic geometry tests separated from GUI tests.
+Enter an output filename (defaults to `drawing.dxf`) and click **Save DXF**.
+Only line and circle entities are written. The in-memory geometry is stored
+in world coordinates; the canvas is a rendered view, not the source of truth.
+Tula supports up to 10,000 entities per drawing in this initial version.
 
-## Architecture
-
-Keep model geometry, commands, file format, and GUI in separate modules. The geometry core must be testable headlessly. Use integer/fixed-point or double-precision internal coordinates as appropriate, with explicit unit conversion; the UI must not be the source of truth for geometry. Large files and expensive operations should cooperate with the USSR scheduler.
-
-The initial alpha is a design scaffold with sample command syntax and test plan, not a functioning CAD engine.
+The drawing canvas is rendered into a temporary PPM image and displayed by
+Petersburg's OpenGL-backed image widget. Temporary canvas files are removed
+when the interpreter shuts down.

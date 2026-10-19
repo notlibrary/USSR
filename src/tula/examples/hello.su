@@ -1,12 +1,35 @@
-# Tula API sketch (not executable until dependencies are integrated)
-$include "../petersburg.su"
 $include "../tula.su"
 
-tula_createwindow(app): "Tula CAD"
-tula_newdrawing(drawing):
-tula_layer(drawing): "0"
-tula_line(drawing): 0 0 100 0
-tula_circle(drawing): 50 50 25
-tula_zoom_fit(drawing):
-tula_show(app drawing):
-tula_run(app):
+line_tool(result): widget [
+    tulatool(_): "line"
+]
+
+circle_tool(result): widget [
+    tulatool(_): "circle"
+]
+
+canvas_input(result): canvas x y [
+    tulaclick(_): canvas x y
+]
+
+save_drawing(result): widget [
+    tulasave(_):
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Tula 2D CAD" 1100 800
+    button(line_button): window "Line: click two points"
+    button(circle_button): window "Circle: center, then radius"
+    textbox(filename): window "drawing.dxf"
+    button(save_button): window "Save DXF"
+    label(status): window "Choose a tool, draw on the snapped grid, then save DXF"
+
+    on(_): line_button "click" "line_tool"
+    on(_): circle_button "click" "circle_tool"
+    on(_): save_button "click" "save_drawing"
+    tulainitialize(canvas): window status filename
+    on(_): canvas "pointer" "canvas_input"
+    pack(_): canvas true
+    maximize(_): window
+    run(_):
+]
