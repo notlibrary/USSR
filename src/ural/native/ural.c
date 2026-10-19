@@ -562,8 +562,9 @@ static int scan_packages(const char *directory, const char *root,
     }
 #endif
     free(manifest_path);
-    if (found)
-        return pack_one(directory, root, public_url, db, err, cap);
+    /* A directory may itself be a package and still contain nested packages. */
+    if (found && pack_one(directory, root, public_url, db, err, cap) != 0)
+        return -1;
 #ifdef _WIN32
     {
         char *pattern = join_path(directory, "*");
@@ -651,6 +652,48 @@ static int command_pack(const char *root, const char *public_url)
     return result == 0 ? 0 : 1;
 }
 
+/* Escape each path component independently so '/' remains a directory separator. */
+static char *escape_relative_path(CURL *curl, const char *relative)
+{
+    const char *part = relative;
+    char *result = NULL;
+    size_t used = 0, capacity = 0;
+    while (1) {
+        const char *slash = strchr(part, '/');
+        const char *backslash = strchr(part, '\\');
+        if (backslash != NULL && (slash == NULL || backslash < slash)) slash = backslash;
+        size_t length = slash ? (size_t)(slash - part) : strlen(part);
+        char *component = (char *)malloc(length + 1);
+        char *escaped;
+        size_t escaped_length;
+        char *grown;
+        if (component == NULL) { free(result); return NULL; }
+        memcpy(component, part, length);
+        component[length] = '\0';
+        escaped = curl_easy_escape(curl, component, 0);
+        free(component);
+        if (escaped == NULL) { free(result); return NULL; }
+        escaped_length = strlen(escaped);
+        if (used + escaped_length + (slash ? 1 : 0) + 1 > capacity) {
+            size_t need = used + escaped_length + (slash ? 1 : 0) + 1;
+            size_t next = capacity ? capacity : 64;
+            while (next < need) next *= 2;
+            grown = (char *)realloc(result, next);
+            if (grown == NULL) { curl_free(escaped); free(result); return NULL; }
+            result = grown;
+            capacity = next;
+        }
+        memcpy(result + used, escaped, escaped_length);
+        used += escaped_length;
+        curl_free(escaped);
+        if (!slash) break;
+        result[used++] = '/';
+        part = slash + 1;
+    }
+    result[used] = '\0';
+    return result;
+}
+
 static int ftp_upload_file(CURL *curl, const char *path, const char *base,
                            const char *login, const char *password,
                            const char *name, char *err, size_t cap)
@@ -660,7 +703,7 @@ static int ftp_upload_file(CURL *curl, const char *path, const char *base,
     struct stat st;
     CURLcode rc;
     int result = -1;
-    escaped = curl_easy_escape(curl, name, 0);
+    escaped = escape_relative_path(curl, name);
     if (escaped == NULL)
         goto done;
     url = ural_ftp_url_join(base, escaped);
@@ -714,8 +757,7 @@ static int upload_if_package_file(CURL *curl, const char *root, const char *name
     char *path;
     size_t n = strlen(name);
     int is_upload = (n >= 5 && strcmp(name + n - 5, ".ural") == 0) ||
-                    (n >= 8 && strcmp(name + n - 8, "-box.uno") == 0) ||
-                    strcmp(name, "ussr.boxes") == 0;
+                    (n >= 8 && strcmp(name + n - 8, "-box.uno") == 0);
     int result;
     if (!is_upload)
         return 0;
@@ -725,6 +767,73 @@ static int upload_if_package_file(CURL *curl, const char *root, const char *name
     result = ftp_upload_file(curl, path, base, login, password, name, err, cap);
     free(path);
     return result;
+}
+
+static int scan_upload_directory(CURL *curl, const char *directory,
+                                 const char *root, const char *base,
+                                 const char *login, const char *password,
+                                 char *err, size_t cap)
+{
+#ifdef _WIN32
+    char *pattern = join_path(directory, "*");
+    WIN32_FIND_DATAA data;
+    HANDLE find;
+    int result = 0;
+    if (pattern == NULL) return -1;
+    find = FindFirstFileA(pattern, &data);
+    free(pattern);
+    if (find == INVALID_HANDLE_VALUE)
+        return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    do {
+        char *child;
+        if (!strcmp(data.cFileName, ".") || !strcmp(data.cFileName, "..") ||
+            (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            continue;
+        child = join_path(directory, data.cFileName);
+        if (child == NULL) { result = -1; break; }
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            result = scan_upload_directory(curl, child, root, base, login,
+                                           password, err, cap);
+        } else {
+            size_t root_len = strlen(root);
+            const char *relative = child + root_len;
+            while (*relative == '/' || *relative == '\\') ++relative;
+            result = upload_if_package_file(curl, root, relative, base, login,
+                                            password, err, cap);
+        }
+        free(child);
+        if (result != 0) break;
+    } while (FindNextFileA(find, &data));
+    FindClose(find);
+    return result;
+#else
+    DIR *dir = opendir(directory);
+    struct dirent *item;
+    int result = 0;
+    if (dir == NULL) { set_error(err, cap, "cannot scan upload directory"); return -1; }
+    while ((item = readdir(dir)) != NULL) {
+        char *child;
+        struct stat st;
+        if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
+            continue;
+        child = join_path(directory, item->d_name);
+        if (child == NULL) { result = -1; break; }
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
+            result = scan_upload_directory(curl, child, root, base, login,
+                                           password, err, cap);
+        } else if (lstat(child, &st) == 0 && S_ISREG(st.st_mode)) {
+            size_t root_len = strlen(root);
+            const char *relative = child + root_len;
+            while (*relative == '/') ++relative;
+            result = upload_if_package_file(curl, root, relative, base, login,
+                                            password, err, cap);
+        }
+        free(child);
+        if (result != 0) break;
+    }
+    closedir(dir);
+    return result;
+#endif
 }
 
 static int command_upload(const char *root, const char *url,
@@ -748,55 +857,8 @@ static int command_upload(const char *root, const char *url,
         curl_global_cleanup();
         return 1;
     }
-#ifdef _WIN32
-    {
-        char *pattern = join_path(root, "*");
-        WIN32_FIND_DATAA data;
-        HANDLE find;
-        if (pattern == NULL) { curl_easy_cleanup(curl); return 1; }
-        find = FindFirstFileA(pattern, &data);
-        free(pattern);
-        if (find == INVALID_HANDLE_VALUE) {
-            fprintf(stderr, "ural: cannot scan upload directory\n");
-            curl_easy_cleanup(curl);
-            curl_global_cleanup();
-            return 1;
-        }
-        do {
-            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                continue;
-            result = upload_if_package_file(curl, root, data.cFileName,
-                                            url, login, password, err, sizeof err);
-            if (result != 0) break;
-        } while (FindNextFileA(find, &data));
-        FindClose(find);
-    }
-#else
-    {
-        DIR *dir = opendir(root);
-        struct dirent *item;
-        if (dir == NULL) {
-            fprintf(stderr, "ural: cannot scan upload directory\n");
-            curl_easy_cleanup(curl);
-            curl_global_cleanup();
-            return 1;
-        }
-        while ((item = readdir(dir)) != NULL) {
-            struct stat st;
-            char *path;
-            if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
-                continue;
-            path = join_path(root, item->d_name);
-            if (path == NULL) { result = -1; break; }
-            if (lstat(path, &st) == 0 && S_ISREG(st.st_mode))
-                result = upload_if_package_file(curl, root, item->d_name,
-                                                url, login, password, err, sizeof err);
-            free(path);
-            if (result != 0) break;
-        }
-        closedir(dir);
-    }
-#endif
+    result = scan_upload_directory(curl, root, root, url, login, password,
+                                   err, sizeof err);
     if (result != 0)
         fprintf(stderr, "ural: %s\n", err[0] ? err : "upload failed");
     curl_easy_cleanup(curl);

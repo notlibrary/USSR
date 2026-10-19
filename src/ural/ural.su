@@ -32,10 +32,13 @@ untrust_server(code): url [
     ural(code): "server" "remove" url
 ]
 
+# Recursively finds every box.uno under target_dir. Generated archives and
+# metadata are written at the repository root.
 pack(code): target_dir public_url [
     ural(code): "pack" target_dir public_url
 ]
 
+# Recursively uploads .ural and *-box.uno files, preserving relative paths.
 upload(code): target_dir ftp_url login password [
     ural(code): "upload" target_dir ftp_url login password
 ]

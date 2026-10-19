@@ -140,3 +140,17 @@ manifest parsing and validation, archive round-tripping, FTP URL paths, FNV-1a,
 and unsafe archive path rejection. Network operations require a configured
 HTTPS or FTP repository and are not exercised against public servers by the
 unit tests.
+
+
+### Recursive repository publishing
+
+`ural pack . https://packages.example/repository` walks the repository tree
+recursively and packs every directory containing a `box.uno` manifest, including
+a manifest at the repository root and manifests in nested directories. Generated
+`.ural` archives and `*-box.uno` metadata files are written to the repository
+root. Package names therefore need to be unique across the repository.
+
+`ural upload . ftp://host/path USER PASSWORD` also scans recursively, uploading
+only `.ural` archives and `*-box.uno` metadata files. It preserves each matching
+file's relative directory path on the FTP server. FTP does not encrypt credentials
+or content; use it only when appropriate for your server setup.
