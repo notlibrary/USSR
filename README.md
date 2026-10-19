@@ -82,4 +82,7 @@ USSR is a neuroslopware it's created entirely by prompting an AI followed by enr
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
 
+I am far beyond postneuroslopware coder now I owned the WHOLE LOOP and found literally nothingness in the end on the other side
+dreadful emptiness the guy with dozens anime-avatar accounts is following me
+
 P.S. СССР Средство Создания Совершенных Разработок

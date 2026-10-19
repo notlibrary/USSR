@@ -614,3 +614,23 @@ Visual Basic and friends it is
 Next it must interact with a scheduler 
 And have automatic relative widget packing algorithm 
 And renderer it must somehow call opengl not pset command
+
+I found 3 bugs in ural
+1.Upload into wrong folder 
+I want /var/www/html/USSR it uploads to /home/tno/var/www/html/USSR
+Adding ../.. to url does not help
+2. Cant install
+
+	PS C:\Users\Serenity\USSR> .\ural install ukraine
+	ural: could not download an enabled trusted repository index
+	PS C:\Users\Serenity\USSR>
+3. Added trusted server do not seen in database boxes.ussr but appear in server list
+trusted serverURL is https://tpmme.me/USSR
+4. Also dummy boxes.ussr must be in wix installer automake dist and ussr_ubuntu.mk dist
+So user do not need to run ural init each time
+
+
+Now let's use petersburg to make something useful tver.su a classic 2-panel file manager
+like total commander or midnight commander but with GUI tab to switch panels ins to select file
+
+f8 to delete f6 to move skip view or edit do it carefully
