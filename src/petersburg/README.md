@@ -7,13 +7,14 @@ layer on Windows and Linux.
 
 ## Build support
 
-Petersburg's C module is part of the normal interpreter build. When GLFW
-development files are found at configure time, the native OpenGL backend is
-enabled. Otherwise the interpreter still builds, but Petersburg calls fail
-with an explicit missing-GLFW error.
+Petersburg's C module is part of the normal interpreter build. Autotools
+enables the native OpenGL backend by default and requires GLFW and OpenGL
+development files; use `./configure --disable-petersburg` only for a
+deliberately headless build. Release binaries bundle the GLFW runtime library
+alongside the executable, so users do not need to install GLFW separately.
 
 - Autotools: install GLFW 3 development files and OpenGL development files,
-  then run `./configure` and `make`.
+  then run `./configure --enable-petersburg` and `make`.
 - GNU make: install GLFW 3 and OpenGL development files discoverable through
   `pkg-config`, then run `make -f ussr-ubuntu.mk`.
 - MSVC: install GLFW 3, then pass `GLFW_DIR` and `GLFW_LIB` to NMAKE, for

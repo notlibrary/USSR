@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="USSR" 
-           Scope="perMachine"
+  <Package Name="USSR"
+         Scope="perUser"
            Compressed="yes" 
            InstallerVersion="200" 
            Manufacturer="Serenity Software" 
@@ -14,7 +14,7 @@
     <Icon Id="ussr.ico" SourceFile="ussr.ico" /> 
     <Property Id="ARPPRODUCTICON" Value="ussr.ico" />	
     
-    <StandardDirectory Id="ProgramFiles6432Folder">
+    <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="INSTALLFOLDER" Name="USSR" />
     </StandardDirectory>
     
@@ -23,6 +23,9 @@
         <File Id="UssrEXE" Source="ussr.exe" KeyPath="yes" />
         <File Id="MoscowSU" Source="moscow.su" />
         <File Id="UserManualMD" Source="docs\USSR_USER_MANUAL.md" />
+      </Component>
+      <Component Id="GLFWRuntime" Guid="1C101AAE-0570-4E8B-A1C8-7949F67079B2" Bitness="always64">
+        <File Id="GLFW3DLL" Source="glfw3.dll" KeyPath="yes" />
       </Component>
       <Component Id="UralApplicationFiles" Guid="01A156F1-56B8-4411-9844-AF1A8CE360C6" Bitness="always64">
         <File Id="UralEXE" Source="ural.exe" KeyPath="yes" />
@@ -33,6 +36,7 @@
     
     <Feature Id="MainFeature" Title="Main Application" Level="1">
       <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="GLFWRuntime" />
       <ComponentRef Id="UralApplicationFiles" />
     </Feature>
     

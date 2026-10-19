@@ -49,7 +49,7 @@ jobs:
         if: runner.os == 'Windows'
         run: dotnet tool install --global wix --version 7.0.0
 
-      - name: Build Ural for Windows
+      - name: Build Ural and install GLFW for Windows
         if: runner.os == 'Windows'
         shell: powershell
         run: |
@@ -57,6 +57,10 @@ jobs:
           if (-not $vcpkgRoot) { $vcpkgRoot = 'C:\vcpkg' }
           & "$vcpkgRoot\vcpkg.exe" install 'sqlite3' 'curl[openssl]' 'openssl' 'zlib' --triplet x64-windows-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force build | Out-Null
+          $glfwArchive = Join-Path $PWD 'build\glfw-3.4.bin.WIN64.zip'
+          Invoke-WebRequest 'https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip' -OutFile $glfwArchive
+          Expand-Archive $glfwArchive -DestinationPath build\glfw -Force
           
           cmake -S src/ural -B build/ural `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
@@ -82,29 +86,40 @@ jobs:
           win_bison -d -Wall src\parser.y -o src\parser.tab.c
           win_flex -o src\lex.yy.c src\lexer.l
           
-          nmake -e /f Makefile.msc ussr.exe
+          $glfwRoot = Join-Path $PWD 'build\glfw\glfw-3.4.bin.WIN64'
+          nmake -e /f Makefile.msc GLFW_DIR=$glfwRoot GLFW_LIB=$glfwRoot\lib-vc2022\glfw3dll.lib ussr.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $glfwDll = Join-Path $glfwRoot 'lib-vc2022\glfw3.dll'
+          if (-not (Test-Path $glfwDll)) { throw "GLFW runtime DLL not found at $glfwDll" }
+          Copy-Item $glfwDll .\glfw3.dll -Force
           
           New-Item -ItemType Directory -Force ussr-win-bin
           Copy-Item ussr.exe ussr-win-bin\ -Force
+          Copy-Item glfw3.dll ussr-win-bin\ -Force
           Copy-Item ural.exe ussr-win-bin\ -Force
           Copy-Item src\ural\ural.su ussr-win-bin\ -Force
           Copy-Item ussr.boxes ussr-win-bin\ -Force
           Copy-Item README.md, CHANGELOG.md, LICENSE ussr-win-bin\ -ErrorAction SilentlyContinue
+          Compress-Archive -Path ussr-win-bin\* -DestinationPath ussr-win-bin-amd64-${{ github.ref_name }}.zip -Force
           wix build -acceptEula wix7 ussr.wxs -arch x64 -out ussr-win-bin-amd64-${{ github.ref_name }}.msi 
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload to Release Win
         if: runner.os == 'Windows'       
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.PAT8 }}
-          files: ussr-win-bin-amd64-${{ github.ref_name }}.msi
+          files: |
+            ussr-win-bin-amd64-${{ github.ref_name }}.msi
+            ussr-win-bin-amd64-${{ github.ref_name }}.zip
 
       - name: Install Flex, Bison and build tools
         if: runner.os != 'Windows'
         run: |
           sudo apt-get update
           sudo apt-get install -y flex bison autoconf automake libtool \
-            cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev
+            cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev \
+            libglfw3-dev libgl1-mesa-dev
 
       - name: Build and test Ural
         if: runner.os != 'Windows'
@@ -119,8 +134,8 @@ jobs:
         run: |
           bison -d -Wall src/parser.y
           flex src/lexer.l
-          make -f ussr-ubuntu.mk ussr
-          make -f ussr-ubuntu.mk dist VERSION=${{ github.ref_name }}
+          make -f ussr-ubuntu.mk PETERSBURG_BUNDLE=1 ussr
+          make -f ussr-ubuntu.mk PETERSBURG_BUNDLE=1 dist VERSION=${{ github.ref_name }}
 
       - name: Upload to Release Linux
         if: runner.os != 'Windows'
@@ -134,7 +149,8 @@ jobs:
         shell: bash
         run: |
           autoreconf -ivf
-          ./configure
+          ./configure --enable-petersburg
+          make -j"$(nproc)"
           make dist
           mv ussr-${{ github.ref_name }}.tar.gz ussr-unix-tarball-amd64-${{ github.ref_name }}.tar.gz
 
