@@ -5,3 +5,40 @@
 #   time(r):                  -> current UNIX time in seconds
 # They are implemented by the interpreter/VM; this file anchors them in
 # the standard library so user code has one stable place to rely on.
+splitmix_next(ret): [
+	set(_sm_state): {_sm_state + -7046029254386353131}
+	set(_sm_z): _sm_state
+	set(_sm_z): {_sm_z ^ (_sm_z >> 30)}
+	set(_sm_z): {_sm_z * -4658895280553007687}
+	set(_sm_z): {_sm_z ^ (_sm_z >> 27)}
+	set(_sm_z): {_sm_z * -7723592293110705685}
+	set(ret): {_sm_z ^ (_sm_z >> 31)}
+]
+
+seed_random64(ret): seed [
+	set(_sm_state): seed
+
+	splitmix_next(_rng_w):
+	splitmix_next(_rng_x):
+	splitmix_next(_rng_y):
+	splitmix_next(_rng_z):
+
+	set(ret): null
+]
+
+random64(ret): [
+	set(_rng_result): {_rng_x * 5}
+	set(_rng_result): {((_rng_result << 7) | (_rng_result >> 57)) * 9}
+
+	set(_rng_t): {_rng_x << 17}
+
+	set(_rng_y): {_rng_y ^ _rng_w}
+	set(_rng_z): {_rng_z ^ _rng_x}
+	set(_rng_x): {_rng_x ^ _rng_y}
+	set(_rng_w): {_rng_w ^ _rng_z}
+
+	set(_rng_y): {_rng_y ^ _rng_t}
+	set(_rng_z): {(_rng_z >> 19) | (_rng_z << 45)}
+
+	set(ret): _rng_result
+]
