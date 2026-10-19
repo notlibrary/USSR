@@ -9,6 +9,7 @@ a diagnostic.
 | Function | Arguments | Result |
 |---|---|---|
 | `createwindow(title, width, height)` | String, positive integers (160..8192 by 120..8192) | Window handle |
+| `maximize(window)` | Window handle | Zero; requests a maximized window |
 | `label(window, text)` | Window handle, string | Label handle |
 | `button(window, text)` | Window handle, string | Button handle |
 | `textbox(window, initial_text)` | Window handle, string | Text-box handle |
@@ -16,6 +17,7 @@ a diagnostic.
 | `listbox(window, items)` | Window handle, pipe-separated string | List handle |
 | `combobox(window, items)` | Window handle, pipe-separated string | Combo-box handle |
 | `image(window, path)` | Window handle, P6 PPM path | Image handle |
+| `reloadimage(widget, path)` | Image handle, P6 PPM path | Zero; replaces the displayed image |
 | `pack(widget, expand)` | Handle, boolean | Zero; expands vertically when true |
 | `grid(widget, row, column, expand)` | Handle, non-negative row, column 0 or 1, boolean | Zero; responsive two-column placement |
 | `settext(widget, text)` / `gettext(widget)` | Handle and optional string | Zero / current string |
@@ -34,10 +36,15 @@ responsive columns with row-based heights. Expanded grid rows share positive
 remaining vertical space. Lists support Up/Down selection and scroll the
 highlighted row into view. The current renderer uses OpenGL 2.1
 compatibility drawing, with a built-in bitmap font; text input accepts ASCII.
+Image widgets also support `"pointer"` callbacks receiving the image handle
+and click coordinates in source-image pixels.
 
-The `on` callback must name a one-parameter USSR definition. It receives the
-widget handle. Native GLFW callbacks only enqueue events; `scheduler.c` drains
-them between VM instruction slices and schedules handlers through
+Click/change callbacks name a one-parameter USSR definition and receive the
+widget handle. Image pointer callbacks name a three-parameter definition and
+receive the image handle plus x/y source-image pixels. Window key callbacks
+name a two-parameter definition and receive the window handle and GLFW key
+code. Native GLFW callbacks only enqueue events; `scheduler.c` drains them
+between VM instruction slices and schedules handlers through
 `ussr_sched_spawn_func`.
 
 ## Image format

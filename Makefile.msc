@@ -46,6 +46,7 @@ OBJS = \
     $(SRC)\scheduler.obj \
     $(SRC)\petersburg.obj \
     $(SRC)\tver.obj \
+    $(SRC)\tula.obj \
     $(SRC)\eventq.obj \
     $(SRC)\gc.obj \
     $(SRC)\parser.tab.obj \
@@ -103,7 +104,7 @@ $(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\u
 $(SRC)\ussr_uuasm.obj: $(SRC)\ussr_uuasm.c $(SRC)\ussr_uuasm.h $(SRC)\ussr_bytecode.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_uuasm.obj $(SRC)\ussr_uuasm.c
 
-$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\tver.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
+$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\tver.h $(SRC)\tula.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
 
 $(SRC)\petersburg.obj: $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\scheduler.h
@@ -111,6 +112,9 @@ $(SRC)\petersburg.obj: $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\scheduler.
 
 $(SRC)\tver.obj: $(SRC)\tver.c $(SRC)\tver.h $(SRC)\petersburg.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\tver.obj $(SRC)\tver.c
+
+$(SRC)\tula.obj: $(SRC)\tula.c $(SRC)\tula.h $(SRC)\petersburg.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\tula.obj $(SRC)\tula.c
 
 $(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\eventq.obj $(SRC)\eventq.c

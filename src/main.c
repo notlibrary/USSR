@@ -1488,7 +1488,8 @@ int vm_execute(
                         strcmp(program->strings[ins.immediate], "wait_writable") == 0 ||
                         strncmp(program->strings[ins.immediate], "socket_", 7) == 0 ||
                         strncmp(program->strings[ins.immediate], "petersburg_", 11) == 0 ||
-                        strncmp(program->strings[ins.immediate], "tver_", 5) == 0;
+                        strncmp(program->strings[ins.immediate], "tver_", 5) == 0 ||
+                        strncmp(program->strings[ins.immediate], "tula_", 5) == 0;
 
                     if (is_sched_name &&
                         vm_values_from_registers(

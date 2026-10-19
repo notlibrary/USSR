@@ -33,6 +33,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/scheduler.o \
        $(SRC_DIR)/petersburg.o \
        $(SRC_DIR)/tver.o \
+       $(SRC_DIR)/tula.o \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
        $(SRC_DIR)/prng64_xrp32.o \
@@ -101,13 +102,16 @@ $(SRC_DIR)/process_posix.o: $(SRC_DIR)/process_posix.c
 $(SRC_DIR)/win/process_win32.o: $(SRC_DIR)/win/process_win32.c $(SRC_DIR)/process.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/petersburg.h $(SRC_DIR)/tver.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h
+$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/petersburg.h $(SRC_DIR)/tver.h $(SRC_DIR)/tula.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/petersburg.o: $(SRC_DIR)/petersburg.c $(SRC_DIR)/petersburg.h $(SRC_DIR)/scheduler.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/tver.o: $(SRC_DIR)/tver.c $(SRC_DIR)/tver.h $(SRC_DIR)/petersburg.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/tula.o: $(SRC_DIR)/tula.c $(SRC_DIR)/tula.h $(SRC_DIR)/petersburg.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/eventq.o: $(SRC_DIR)/eventq.c $(SRC_DIR)/eventq.h $(SRC_DIR)/process.h $(SRC_DIR)/socket.h

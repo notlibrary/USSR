@@ -11,6 +11,7 @@
 #include "gc.h"
 #include "petersburg.h"
 #include "tver.h"
+#include "tula.h"
 
 /*
  * Cooperative multithreading scheduler, modeled on the FreeBSD
@@ -889,6 +890,11 @@ int ussr_sched_dispatch(
     );
     if (petersburg_status != 0)
         return petersburg_status;
+    petersburg_status = ussr_tula_dispatch(
+        program, name, values, value_count, out
+    );
+    if (petersburg_status != 0)
+        return petersburg_status;
 
     if (strcmp(name, "async") == 0)
         return sched_do_async(program, values, value_count,
@@ -1147,6 +1153,7 @@ void ussr_sched_cleanup(void)
 {
     ussr_petersburg_cleanup();
     ussr_tver_cleanup();
+    ussr_tula_cleanup();
     ussr_socket_cleanup();
     size_t i;
 

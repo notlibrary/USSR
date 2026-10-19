@@ -6,6 +6,10 @@ createwindow(result): title width height [
     petersburg_create_window(result): title width height
 ]
 
+maximize(result): window [
+    petersburg_maximize(result): window
+]
+
 label(result): window text [
     petersburg_create_label(result): window text
 ]
@@ -32,6 +36,10 @@ combobox(result): window items [
 
 image(result): window ppm_path [
     petersburg_create_image(result): window ppm_path
+]
+
+reloadimage(result): widget ppm_path [
+    petersburg_reload_image(result): widget ppm_path
 ]
 
 pack(result): widget expand [

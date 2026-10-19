@@ -14,6 +14,7 @@ ussr_SOURCES = \
     scheduler.c \
     petersburg.c \
     tver.c \
+    tula.c \
     eventq.c \
     socket_posix.c \
     gc.c \
@@ -33,6 +34,7 @@ EXTRA_DIST = \
     scheduler.h \
     petersburg.h \
     tver.h \
+    tula.h \
     eventq.h \
     socket.h \
     gc.h \
@@ -57,4 +59,11 @@ EXTRA_DIST = \
 	tver/CHANGELOG.md \
 	tver/docs/API.md \
 	tver/examples/hello.su \
-	tver/tests/TESTPLAN.md
+	tver/tests/TESTPLAN.md \
+	tula/tula.su \
+	tula/box.uno \
+	tula/README.md \
+	tula/CHANGELOG.md \
+	tula/docs/API.md \
+	tula/examples/hello.su \
+	tula/tests/TESTPLAN.md

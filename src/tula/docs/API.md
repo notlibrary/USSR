@@ -1,31 +1,22 @@
-# tula API contract draft
+# Tula API
 
-Package: `tula`
+Include `tula.su`. The runnable example in `examples/hello.su` is the
+recommended starting point.
 
-## Proposed public commands
+| Script wrapper | Native command | Arguments | Behavior |
+|---|---|---|---|
+| `tulainitialize(canvas)` | `tula_initialize` | Window, status label, filename text box | Creates the temporary drawing canvas and returns its Petersburg image handle |
+| `tulatool(_)` | `tula_set_tool` | `"line"` or `"circle"` | Selects the drawing tool and starts a fresh point sequence |
+| `tulaclick(_)` | `tula_canvas_click` | Canvas handle, canvas x, canvas y | Snaps and consumes a canvas pointer event |
+| `tulasave(_)` | `tula_save_dxf` | None | Writes current line/circle entities to the filename field as ASCII DXF 2000 |
 
-- `tula_createwindow`
-- `tula_newdrawing`
-- `tula_open`
-- `tula_save`
-- `tula_line`
-- `tula_polyline`
-- `tula_circle`
-- `tula_arc`
-- `tula_rectangle`
-- `tula_text`
-- `tula_dimension`
-- `tula_layer`
-- `tula_snap`
-- `tula_undo`
-- `tula_redo`
-- `tula_zoom_fit`
-- `tula_export_svg`
+Line input is two canvas clicks; circle input is center then radius point.
+Both points snap to a 5-unit grid. The drawing coordinate system uses
+millimeters, has its origin at the lower-left of the visible canvas, and spans
+200 by 140 units. DXF `LINE` and `CIRCLE` entities are placed on layer `0`.
+`$ACADVER` is set to `AC1015` (DXF 2000), and `$INSUNITS` is set to 4
+(millimeters).
 
-## Return values and errors
-
-Every command returns a USSR value. Commands that can fail should return a documented error value or status object; they must not silently discard errors. Handles should be validated before use. Destruction should be idempotent where practical.
-
-## Status
-
-This is a design contract, not an implementation guarantee. Check the package README before treating any command as available.
+Petersburg provides the `"pointer"` event on image widgets. Its callback
+receives the image handle plus x/y coordinates in source-image pixels. The
+example also uses Petersburg's `maximize(window)` function before `run()`.
