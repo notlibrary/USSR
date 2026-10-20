@@ -80,3 +80,34 @@ str_trim(s): "   "
 check(_): "trim blank" s ""
 str_repeat(s): "ab" 3
 check(_): "repeat" s "ababab"
+
+# UTF-8: "Ж" is 2 bytes, "€" 3 bytes, "😀" 4 bytes
+set(ru): "Мир, world!"
+utf8_count(n): ru
+check(_): "utf8 count mixed" n 11
+len(n): ru
+check(_): "utf8 byte length" n 14
+utf8_next(i): ru 0
+check(_): "utf8 next over cyrillic" i 2
+utf8_prev(i): ru 6
+check(_): "utf8 prev over cyrillic" i 4
+utf8_index(i): ru 4
+check(_): "utf8 index of column" i 7
+utf8_column(c): ru 7
+check(_): "utf8 column of index" c 4
+set(e): "a€😀b"
+utf8_count(n): e
+check(_): "utf8 count 3 and 4 byte" n 4
+utf8_next(i): e 1
+check(_): "utf8 next over euro" i 4
+utf8_prev(i): e 8
+check(_): "utf8 prev over emoji" i 4
+utf8_index(i): e 9
+check(_): "utf8 index past end" i 9
+vec(bytes): ""
+push(_): bytes 208
+push(_): bytes 150
+utf8_from_bytes(s): bytes
+check(_): "utf8 from bytes" s "Ж"
+chr(c): 65
+check(_): "chr ascii" c "A"

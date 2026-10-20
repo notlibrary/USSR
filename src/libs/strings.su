@@ -17,6 +17,7 @@
 #   str_trim(r): s                -> s without leading/trailing blanks
 #                                    (space, tab, CR, LF)
 #   str_repeat(r): s count        -> s repeated count times
+#   utf8_* helpers (end of file)  -> step through UTF-8 text by character
 #   str_int_limit(r):             -> largest value str_trunc can return:
 #                                    2147483647 where the host integer is
 #                                    32 bits (MSVC builds), about 4.6e18 on
@@ -334,4 +335,125 @@ str_repeat(r): s count [
         set(_strr_i): {_strr_i + 1}
     ]
     set(r): _strr_out
+]
+
+# --- UTF-8 ------------------------------------------------------------------
+# Text stays a byte string; these helpers step over whole characters. Byte
+# indexes passed in are expected to sit on character boundaries. Malformed
+# bytes count as one character each, so no input can stall a loop.
+#   utf8_len(r): b            -> bytes in the sequence led by byte b (1..4)
+#   utf8_next(r): s i         -> index of the character after the one at i
+#   utf8_prev(r): s i         -> index where the character before i starts
+#   utf8_count(r): s          -> number of characters in s
+#   utf8_index(r): s column   -> byte index of character `column`, or len(s)
+#   utf8_column(r): s i       -> number of characters before byte index i
+#   utf8_from_bytes(r): v     -> string built from a vector of byte values
+
+utf8_len(r): b [
+    set(r): 1
+    if(_): {b >= 192 && b < 224} [
+        set(r): 2
+    ]
+    elif(_): {b >= 224 && b < 240} [
+        set(r): 3
+    ]
+    elif(_): {b >= 240 && b < 248} [
+        set(r): 4
+    ]
+]
+
+utf8_next(r): s i [
+    len(_u8n_n): s
+    set(r): i
+    if(_): {i < _u8n_n} [
+        byte(_u8n_b): s i
+        utf8_len(_u8n_k): _u8n_b
+        set(r): {i + 1}
+        set(_u8n_k): {_u8n_k - 1}
+        set(_u8n_go): {_u8n_k > 0 && r < _u8n_n}
+        while(_): _u8n_go [
+            byte(_u8n_b): s r
+            set(_u8n_go): {_u8n_b >= 128 && _u8n_b < 192}
+            if(_): _u8n_go [
+                set(r): {r + 1}
+                set(_u8n_k): {_u8n_k - 1}
+                set(_u8n_go): {_u8n_k > 0 && r < _u8n_n}
+            ]
+        ]
+    ]
+]
+
+utf8_prev(r): s i [
+    set(r): i
+    if(_): {i > 0} [
+        set(r): {i - 1}
+        set(_u8p_steps): 1
+        set(_u8p_go): {r > 0}
+        while(_): _u8p_go [
+            byte(_u8p_b): s r
+            set(_u8p_go): {_u8p_b >= 128 && _u8p_b < 192 && r > 0 && _u8p_steps < 4}
+            if(_): _u8p_go [
+                set(r): {r - 1}
+                set(_u8p_steps): {_u8p_steps + 1}
+            ]
+        ]
+        # A run of continuation bytes without a lead counts byte by byte.
+        byte(_u8p_b): s r
+        if(_): {_u8p_b >= 128 && _u8p_b < 192} [
+            set(r): {i - 1}
+        ]
+        else(_): [
+            utf8_next(_u8p_end): s r
+            if(_): {_u8p_end != i} [
+                set(r): {i - 1}
+            ]
+        ]
+    ]
+]
+
+utf8_count(r): s [
+    len(_u8c_n): s
+    set(_u8c_i): 0
+    set(r): 0
+    while(_): {_u8c_i < _u8c_n} [
+        utf8_next(_u8c_i): s _u8c_i
+        set(r): {r + 1}
+    ]
+]
+
+utf8_index(r): s column [
+    len(_u8i_n): s
+    set(r): 0
+    set(_u8i_k): 0
+    while(_): {_u8i_k < column && r < _u8i_n} [
+        utf8_next(r): s r
+        set(_u8i_k): {_u8i_k + 1}
+    ]
+]
+
+utf8_column(r): s i [
+    set(_u8col_at): 0
+    set(r): 0
+    while(_): {_u8col_at < i} [
+        utf8_next(_u8col_next): s _u8col_at
+        if(_): {_u8col_next = _u8col_at} [
+            set(_u8col_at): i
+        ]
+        else(_): [
+            set(_u8col_at): _u8col_next
+            set(r): {r + 1}
+        ]
+    ]
+]
+
+utf8_from_bytes(r): v [
+    len(_u8fb_n): v
+    set(_u8fb_i): 0
+    set(r): ""
+    while(_): {_u8fb_i < _u8fb_n} [
+        at(_u8fb_b): v _u8fb_i
+        chr(_u8fb_c): _u8fb_b
+        concat(r): r _u8fb_c
+        set(_u8fb_i): {_u8fb_i + 1}
+    ]
 ]

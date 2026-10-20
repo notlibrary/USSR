@@ -13,10 +13,18 @@
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
 #               (and joins lines at column 0), ESC or Ctrl+C -> normal.
 #
+# Text is UTF-8 (Russian and other Cyrillic included): lines are byte
+# strings, the cursor Mbl_cx is a byte offset that always sits on a
+# character boundary, and movement, deletion and the screen column count
+# characters. Each character takes one screen column (wide CJK glyphs are
+# not measured). A UTF-8 byte-order mark is kept when the file is saved.
+#
 # Implementation: the terminal is put in raw mode through native USSR
-# terminal primitives. Each key is read directly; no shell commands,
+# terminal primitives.Each key is read directly; no shell commands,
 # stty, shell utilities, or POSIX-only utilities are required. The whole screen is
 # rebuilt as one string per frame and written with a single template call.
+
+$include "../libs/strings.su"
 
 # ---------- terminal helpers ----------
 
@@ -112,19 +120,31 @@ Mbl_lineins(r): idx line [
     set(r): 0
 ]
 
+# Keeps Mbl_cx on a character start inside the line; in normal mode the
+# cursor rests on the last character, in insert mode it may follow it.
 Mbl_fixcx(r): [
     at(Mblfx_l): Mbl_buf Mbl_cy
     len(Mblfx_n): Mblfx_l
+    utf8_column(Mblfx_col): Mblfx_l Mbl_cx
+    utf8_index(Mbl_cx): Mblfx_l Mblfx_col
     set(Mblfx_max): Mblfx_n
     if(_): {Mbl_mode = 0} [
-        set(Mblfx_max): {Mblfx_n - 1}
-    ]
-    if(_): {Mblfx_max < 0} [
-        set(Mblfx_max): 0
+        utf8_prev(Mblfx_max): Mblfx_l Mblfx_n
     ]
     if(_): {Mbl_cx > Mblfx_max} [
         set(Mbl_cx): Mblfx_max
     ]
+    set(r): 0
+]
+
+# Moves to line `target`, keeping the cursor's character column.
+Mbl_goto_line(r): target [
+    at(Mblgl_l): Mbl_buf Mbl_cy
+    utf8_column(Mblgl_col): Mblgl_l Mbl_cx
+    set(Mbl_cy): target
+    at(Mblgl_l): Mbl_buf Mbl_cy
+    utf8_index(Mbl_cx): Mblgl_l Mblgl_col
+    Mbl_fixcx(_):
     set(r): 0
 ]
 
@@ -142,44 +162,39 @@ Mbl_scroll(r): [
 # ---------- movement ----------
 
 Mbl_left(r): [
-    if(_): {Mbl_cx > 0} [
-        set(Mbl_cx): {Mbl_cx - 1}
-    ]
+    at(Mblm_l): Mbl_buf Mbl_cy
+    utf8_prev(Mbl_cx): Mblm_l Mbl_cx
     set(r): 0
 ]
 
 Mbl_right(r): [
     at(Mblm_l): Mbl_buf Mbl_cy
     len(Mblm_n): Mblm_l
-    set(Mblm_max): Mblm_n
-    if(_): {Mbl_mode = 0} [
-        set(Mblm_max): {Mblm_n - 1}
+    utf8_next(Mblm_next): Mblm_l Mbl_cx
+    set(Mblm_ok): {Mblm_next > Mbl_cx}
+    if(_): {Mbl_mode = 0 && Mblm_next >= Mblm_n} [
+        set(Mblm_ok): false
     ]
-    if(_): {Mblm_max < 0} [
-        set(Mblm_max): 0
-    ]
-    if(_): {Mbl_cx < Mblm_max} [
-        set(Mbl_cx): {Mbl_cx + 1}
+    if(_): Mblm_ok [
+        set(Mbl_cx): Mblm_next
     ]
     set(r): 0
 ]
 
 Mbl_up(r): [
     if(_): {Mbl_cy > 0} [
-        set(Mbl_cy): {Mbl_cy - 1}
-        Mbl_fixcx(_): 
+        Mbl_goto_line(_): {Mbl_cy - 1}
     ]
-    Mbl_scroll(_): 
+    Mbl_scroll(_):
     set(r): 0
 ]
 
 Mbl_down(r): [
     len(Mblm2_n): Mbl_buf
     if(_): {Mbl_cy < Mblm2_n - 1} [
-        set(Mbl_cy): {Mbl_cy + 1}
-        Mbl_fixcx(_): 
+        Mbl_goto_line(_): {Mbl_cy + 1}
     ]
-    Mbl_scroll(_): 
+    Mbl_scroll(_):
     set(r): 0
 ]
 
@@ -193,7 +208,8 @@ Mbl_insch(r): ch [
     concat(Mblic_a): Mblic_a ch
     concat(Mblic_a): Mblic_a Mblic_b
     Mbl_setline(_): Mbl_cy Mblic_a
-    set(Mbl_cx): {Mbl_cx + 1}
+    len(Mblic_cl): ch
+    set(Mbl_cx): {Mbl_cx + Mblic_cl}
     set(Mbl_dirty): 1
     set(r): 0
 ]
@@ -203,12 +219,14 @@ Mbl_bs(r): [
     if(_): {Mbl_cx > 0} [
         at(Mblbs_l): Mbl_buf Mbl_cy
         len(Mblbs_n): Mblbs_l
-        slice(Mblbs_a): Mblbs_l 0 {Mbl_cx - 1}
+        utf8_prev(Mblbs_start): Mblbs_l Mbl_cx
+        slice(Mblbs_a): Mblbs_l 0 Mblbs_start
         slice(Mblbs_b): Mblbs_l Mbl_cx {Mblbs_n - Mbl_cx}
         concat(Mblbs_a): Mblbs_a Mblbs_b
         Mbl_setline(_): Mbl_cy Mblbs_a
-        set(Mbl_cx): {Mbl_cx - 1}
+        set(Mbl_cx): Mblbs_start
         set(Mbl_dirty): 1
+        return(_): r
     ]
     if(_): {Mbl_cx = 0} [
         if(_): {Mbl_cy > 0} [
@@ -243,8 +261,9 @@ Mbl_delch(r): [
     at(Mbldc_l): Mbl_buf Mbl_cy
     len(Mbldc_n): Mbldc_l
     if(_): {Mbl_cx < Mbldc_n} [
+        utf8_next(Mbldc_end): Mbldc_l Mbl_cx
         slice(Mbldc_a): Mbldc_l 0 Mbl_cx
-        slice(Mbldc_b): Mbldc_l {Mbl_cx + 1} {Mbldc_n - Mbl_cx - 1}
+        slice(Mbldc_b): Mbldc_l Mbldc_end {Mbldc_n - Mbldc_end}
         concat(Mbldc_a): Mbldc_a Mbldc_b
         Mbl_setline(_): Mbl_cy Mbldc_a
         set(Mbl_dirty): 1
@@ -306,28 +325,30 @@ Mbl_load(r): path [
             set(Mbll_go): 1
         ]
     ]
+    set(Mbl_bom): 0
     if(_): {Mbll_go = 1} [
-        readfile(Mbll_d): path
-        len(Mbll_n): Mbll_d
-        set(Mbll_i): 0
-        set(Mbll_cur): ""
-        while(_): {Mbll_i < Mbll_n} [
-            byte(Mbll_b): Mbll_d Mbll_i
-            if(_): {Mbll_b = 10} [
-                push(_): Mbl_buf Mbll_cur
-                set(Mbll_cur): ""
-            ]
-            if(_): {Mbll_b != 10} [
-                if(_): {Mbll_b != 13} [
-                    slice(Mbll_ch): Mbll_d Mbll_i 1
-                    concat(Mbll_cur): Mbll_cur Mbll_ch
+        # Line by line: CRLF and LF both end a line; bytes are kept as-is,
+        # so UTF-8 text loads unchanged.
+        open_file(Mbll_h): path "rb"
+        if(_): {Mbll_h >= 0} [
+            read_line(Mbll_cur): Mbll_h
+            set(Mbll_first): 1
+            while(_): {Mbll_cur != null} [
+                if(_): {Mbll_first = 1} [
+                    set(Mbll_first): 0
+                    len(Mbll_cl): Mbll_cur
+                    if(_): {Mbll_cl >= 3} [
+                        slice(Mbll_head): Mbll_cur 0 3
+                        if(_): {Mbll_head = Mbl_bom_text} [
+                            set(Mbl_bom): 1
+                            slice(Mbll_cur): Mbll_cur 3 {Mbll_cl - 3}
+                        ]
+                    ]
                 ]
+                push(_): Mbl_buf Mbll_cur
+                read_line(Mbll_cur): Mbll_h
             ]
-            set(Mbll_i): {Mbll_i + 1}
-        ]
-        len(Mbll_cl): Mbll_cur
-        if(_): {Mbll_cl > 0} [
-            push(_): Mbl_buf Mbll_cur
+            close_file(_): Mbll_h
         ]
     ]
     len(Mbll_bn): Mbl_buf
@@ -348,6 +369,9 @@ Mbl_save(r): [
     ]
     if(_): {Mblw_fn > 0} [
         set(Mbl_payload): ""
+        if(_): {Mbl_bom = 1} [
+            set(Mbl_payload): Mbl_bom_text
+        ]
         len(Mblw_n): Mbl_buf
         set(Mblw_i): 0
         while(_): {Mblw_i < Mblw_n} [
@@ -376,9 +400,11 @@ Mbl_render(r): [
         if(_): {Mblrn_li < Mblrn_n} [
             set(Mblrn_has): 1
             at(Mblrn_l): Mbl_buf Mblrn_li
+            # cut at Mbl_cols characters, never inside a UTF-8 sequence
+            utf8_index(Mblrn_cut): Mblrn_l Mbl_cols
             len(Mblrn_ll): Mblrn_l
-            if(_): {Mblrn_ll > Mbl_cols} [
-                slice(Mblrn_l): Mblrn_l 0 Mbl_cols
+            if(_): {Mblrn_cut < Mblrn_ll} [
+                slice(Mblrn_l): Mblrn_l 0 Mblrn_cut
             ]
             concat(Mblrn_s): Mblrn_s Mblrn_l
         ]
@@ -423,7 +449,9 @@ Mbl_render(r): [
     encode(Mblrn_y): {Mbl_cy - Mbl_top + 1}
     concat(Mblrn_s): Mblrn_s Mblrn_y
     concat(Mblrn_s): Mblrn_s ";"
-    encode(Mblrn_x): {Mbl_cx + 1}
+    at(Mblrn_cl): Mbl_buf Mbl_cy
+    utf8_column(Mblrn_col): Mblrn_cl Mbl_cx
+    encode(Mblrn_x): {Mblrn_col + 1}
     concat(Mblrn_s): Mblrn_s Mblrn_x
     concat(Mblrn_s): Mblrn_s "H"
     template(_): "STR" Mblrn_s
@@ -442,6 +470,37 @@ Mbl_next(r): [
     if(_): {Mblnx_have = 0} [
         terminal_getch(Mblnx_b):
         set(r): Mblnx_b
+    ]
+]
+
+# Completes the character whose first byte is b: reads the UTF-8
+# continuation bytes and returns the whole character as a string, or ""
+# for a stray continuation byte or a control byte.
+Mbl_readchar(r): b [
+    set(r): ""
+    if(_): {b > 31 && b < 127} [
+        chr(r): b
+    ]
+    elif(_): {b >= 192 && b < 248} [
+        utf8_len(Mblrc_k): b
+        chr(r): b
+        set(Mblrc_i): 1
+        while(_): {Mblrc_i < Mblrc_k} [
+            Mbl_next(Mblrc_b):
+            if(_): {Mblrc_b >= 128 && Mblrc_b < 192} [
+                chr(Mblrc_c): Mblrc_b
+                concat(r): r Mblrc_c
+                set(Mblrc_i): {Mblrc_i + 1}
+            ]
+            else(_): [
+                # broken sequence: drop it and replay the byte
+                set(r): ""
+                if(_): {Mblrc_b > 0 - 1} [
+                    set(Mbl_pb): Mblrc_b
+                ]
+                set(Mblrc_i): Mblrc_k
+            ]
+        ]
     ]
 ]
 
@@ -487,9 +546,9 @@ Mbl_insert(r): b [
     if(_): {b = 3} [
         Mbl_escape(_): 
     ]
-    if(_): {b > 31} [
-        if(_): {b < 127} [
-            slice(Mblin_ch): Mbl_ascii {b - 32} 1
+    if(_): {b > 31 && b != 127} [
+        Mbl_readchar(Mblin_ch): b
+        if(_): {Mblin_ch != ""} [
             Mbl_insch(_): Mblin_ch
         ]
     ]
@@ -523,10 +582,7 @@ Mbl_normal(r): b [
     ]
     if(_): {b = 97} [
         at(Mblnm_l): Mbl_buf Mbl_cy
-        len(Mblnm_n): Mblnm_l
-        if(_): {Mbl_cx < Mblnm_n} [
-            set(Mbl_cx): {Mbl_cx + 1}
-        ]
+        utf8_next(Mbl_cx): Mblnm_l Mbl_cx
         set(Mbl_mode): 1
     ]
     if(_): {b = 111} [
@@ -638,17 +694,16 @@ Mbl_command(r): [
         if(_): {Mblcm_b = 127} [
             len(Mblcm_cl): Mblcm_cmd
             if(_): {Mblcm_cl > 0} [
-                slice(Mblcm_cmd): Mblcm_cmd 0 {Mblcm_cl - 1}
+                utf8_prev(Mblcm_cut): Mblcm_cmd Mblcm_cl
+                slice(Mblcm_cmd): Mblcm_cmd 0 Mblcm_cut
                 set(Mbl_msg): ":"
                 concat(Mbl_msg): Mbl_msg Mblcm_cmd
             ]
         ]
-        if(_): {Mblcm_b > 31} [
-            if(_): {Mblcm_b < 127} [
-                slice(Mblcm_ch): Mbl_ascii {Mblcm_b - 32} 1
-                concat(Mblcm_cmd): Mblcm_cmd Mblcm_ch
-                concat(Mbl_msg): Mbl_msg Mblcm_ch
-            ]
+        if(_): {Mblcm_b > 31 && Mblcm_b != 127} [
+            Mbl_readchar(Mblcm_ch): Mblcm_b
+            concat(Mblcm_cmd): Mblcm_cmd Mblcm_ch
+            concat(Mbl_msg): Mbl_msg Mblcm_ch
         ]
     ]
     set(Mbl_mode): 0
@@ -692,6 +747,12 @@ Mbl_dispatch(r): b [
 init(ret): arg_cnt arg_vec [
     set(Mbl_file): ""
     set(Mbl_showname): "[No Name]"
+    set(Mbl_pb): {0 - 1}
+    vec(Mblit_bom): ""
+    push(_): Mblit_bom 239
+    push(_): Mblit_bom 187
+    push(_): Mblit_bom 191
+    utf8_from_bytes(Mbl_bom_text): Mblit_bom
     if(_): {arg_cnt > 0} [
         at(Mbl_file): arg_vec 0
         set(Mbl_showname): Mbl_file

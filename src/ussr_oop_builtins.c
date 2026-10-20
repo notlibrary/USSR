@@ -954,12 +954,19 @@ static DWORD term_saved_imode;
 static int term_have_imode = 0;
 static int term_saved_in_bin = -1;
 static int term_saved_out_bin = -1;
-static unsigned char term_pushback[4];
+static unsigned char term_pushback[8];
 static int term_pushback_count = 0;
 static int term_atexit_registered = 0;
 
+static UINT term_saved_output_cp;
+
 static void term_restore(void)
 {
+    if (term_saved_output_cp != 0)
+    {
+        SetConsoleOutputCP(term_saved_output_cp);
+        term_saved_output_cp = 0;
+    }
     if (term_have_imode)
     {
         SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), term_saved_imode);
@@ -1015,6 +1022,12 @@ static int oop_do_terminal_raw(
 
             if (GetConsoleMode(hout, &omode))
                 SetConsoleMode(hout, omode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            /* Programs write UTF-8; show it as UTF-8 while raw. */
+            if (term_saved_output_cp == 0)
+            {
+                term_saved_output_cp = GetConsoleOutputCP();
+                SetConsoleOutputCP(CP_UTF8);
+            }
         }
 
         ok = 1;
@@ -1077,12 +1090,12 @@ static int oop_do_terminal_getch(
     {
         for (;;)
         {
-            int c = _getch();
+            int c = (int)_getwch();
 
             if (c == 0 || c == 0xE0)
             {
                 /* special key: translate arrows to ESC [ letter */
-                int c2 = _getch();
+                int c2 = (int)_getwch();
                 char letter = '\0';
 
                 if (c2 == 72) letter = 'A';      /* up    */
@@ -1100,6 +1113,51 @@ static int oop_do_terminal_getch(
                 }
 
                 continue; /* ignore other special keys */
+            }
+
+            /* Console characters arrive as UTF-16; hand them out as UTF-8
+             * bytes like a POSIX terminal: first byte now, rest queued. */
+            if (c >= 0xD800 && c <= 0xDBFF)
+            {
+                int low = (int)_getwch();
+                if (low >= 0xDC00 && low <= 0xDFFF)
+                    c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
+                else
+                    c = 0xFFFD;
+            }
+            else if (c >= 0xDC00 && c <= 0xDFFF)
+                c = 0xFFFD;
+            if (c >= 0x80)
+            {
+                unsigned char bytes[4];
+                int count;
+                int i;
+
+                if (c < 0x800)
+                {
+                    bytes[0] = (unsigned char)(0xC0 | (c >> 6));
+                    count = 2;
+                }
+                else if (c < 0x10000)
+                {
+                    bytes[0] = (unsigned char)(0xE0 | (c >> 12));
+                    bytes[1] = (unsigned char)(0x80 | ((c >> 6) & 0x3F));
+                    count = 3;
+                }
+                else
+                {
+                    bytes[0] = (unsigned char)(0xF0 | (c >> 18));
+                    bytes[1] = (unsigned char)(0x80 | ((c >> 12) & 0x3F));
+                    bytes[2] = (unsigned char)(0x80 | ((c >> 6) & 0x3F));
+                    count = 4;
+                }
+                if (count == 2)
+                    bytes[1] = (unsigned char)(0x80 | (c & 0x3F));
+                else
+                    bytes[count - 1] = (unsigned char)(0x80 | (c & 0x3F));
+                for (i = 1; i < count; ++i)
+                    term_pushback[term_pushback_count++] = bytes[i];
+                c = bytes[0];
             }
 
             *out_result = ussr_integer(c);
@@ -2144,6 +2202,38 @@ static int oop_do_typeof(
     return out_result->data.string != NULL ? 0 : -1;
 }
 
+/* chr(s): b -> one-byte string for 1..255; UTF-8 text is built by joining
+ * the bytes of each character. */
+static int oop_do_chr(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t value;
+    long code;
+    char text[2];
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: chr(s): byte\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &value) != 0)
+        return -1;
+    if (!oop_expect_integer(&value, &code) || code < 1 || code > 255)
+    {
+        fprintf(stderr, "USSR: chr() expects an integer byte 1..255\n");
+        ussr_value_free(&value);
+        return -1;
+    }
+    ussr_value_free(&value);
+    text[0] = (char)(unsigned char)code;
+    text[1] = '\0';
+    *out_result = ussr_string(text);
+    return out_result->data.string != NULL ? 0 : -1;
+}
+
 static int oop_do_fail(
     ussr_argument_t *arguments,
     size_t argument_count
@@ -2227,6 +2317,8 @@ int ussr_oop_dispatch(
         status = oop_do_file_exists(arguments, argument_count, out_result);
     else if (strcmp(command, "typeof") == 0)
         status = oop_do_typeof(arguments, argument_count, out_result);
+    else if (strcmp(command, "chr") == 0)
+        status = oop_do_chr(arguments, argument_count, out_result);
     else if (strcmp(command, "fail") == 0)
         status = oop_do_fail(arguments, argument_count);
     else if (strcmp(command, "list_dir") == 0)

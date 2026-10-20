@@ -599,6 +599,35 @@ remove_dir(ok): "path"     # 0 ok, 1 failed; empty directories only
 `concat` accepts only strings, so convert numbers with `str_from_int` or
 `str_from_number` before joining them into text.
 
+`strings.su` also steps through UTF-8 text by character (text stays a byte
+string; `len`, `byte` and `slice` count bytes):
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `utf8_count` | `utf8_count(n): s` | Number of characters. |
+| `utf8_next` / `utf8_prev` | `utf8_next(i): s i` | Byte index of the next / previous character start. |
+| `utf8_index` | `utf8_index(i): s column` | Byte index of character number `column` (or `len(s)`). |
+| `utf8_column` | `utf8_column(c): s i` | Characters before byte index `i`. |
+| `utf8_len` | `utf8_len(k): lead_byte` | Length of the sequence a lead byte starts. |
+| `utf8_from_bytes` | `utf8_from_bytes(s): v` | String from a vector of byte values. |
+
+Malformed bytes count as one character each. On every platform
+`terminal_getch` delivers keyboard input as UTF-8 bytes (Windows console
+input is converted), and `terminal_raw` switches the Windows console to
+UTF-8 output.
+
+**Runtime helpers (native):**
+
+```
+typeof(t): value     # "null" "integer" "real" "string" "boolean" "vector",
+                     # or a struct instance's type name
+fail(_): "message"   # print "USSR: message" and stop like any runtime error
+chr(s): byte         # one-byte string for 1..255
+```
+
+Integers are the host C `long`: 64-bit on Linux/macOS, 32-bit in MSVC builds
+(at most 2147483647). `str_int_limit(m):` reports the limit.
+
 **bytes.su — memset analogs over vectors:**
 
 ```

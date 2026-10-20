@@ -1572,14 +1572,12 @@ int vm_execute(
                             value = ussr_value_copy(stored);
                     }
                 }
+                /* terminal_* go through ussr_oop_dispatch: those versions
+                 * also work on redirected stdin/stdout and deliver console
+                 * input as UTF-8 bytes on Windows. */
                 else if (
                     strcmp(program->strings[ins.immediate], "file_exists") == 0 ||
-                    strcmp(program->strings[ins.immediate], "writefile") == 0 ||
-                    strcmp(program->strings[ins.immediate], "terminal_escape") == 0 ||
-                    strcmp(program->strings[ins.immediate], "terminal_raw") == 0 ||
-                    strcmp(program->strings[ins.immediate], "terminal_sane") == 0 ||
-                    strcmp(program->strings[ins.immediate], "terminal_getch") == 0 ||
-                    strcmp(program->strings[ins.immediate], "terminal_size") == 0
+                    strcmp(program->strings[ins.immediate], "writefile") == 0
                 )
                 {
                     result = ussr_execute_command(
