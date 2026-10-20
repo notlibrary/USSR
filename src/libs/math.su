@@ -231,7 +231,7 @@ tan(r): x [
     sin(s): x
 
     # tan(x) is undefined when cos(x) = 0.
-    if(e): {c == 0} [
+    if(e): {c = 0} [
         return(r): null
     ]
 
@@ -250,7 +250,7 @@ ctg(r): x [
     sin(s): x
 
     # ctg(x) is undefined when sin(x) = 0.
-    if(e): {s == 0} [
+    if(e): {s = 0} [
         return(r): null
     ]
 
