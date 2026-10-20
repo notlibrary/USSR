@@ -681,6 +681,26 @@ Malformed bytes count as one character each. On every platform
 input is converted), and `terminal_raw` switches the Windows console to
 UTF-8 output.
 
+**Environment variables (native):**
+
+```
+getenv(v): "HOME"            # value; "" when set to empty; null when not set
+setenv(ok): "MODE" "fast"    # create or overwrite; 0 ok, 1 refused
+unsetenv(ok): "MODE"         # remove; 0 ok (also when it was not set), 1 refused
+```
+
+A name must be non-empty and must not contain `=`; otherwise `setenv` and
+`unsetenv` return `1` and `getenv` returns `null`. Values are stored byte
+for byte (spaces, `=` and UTF-8 text included). Passing a non-string is a
+runtime error. Changes affect the `ussr` process and the external commands
+it starts afterwards, never the shell that started `ussr`.
+
+Platform notes: on Windows names are case-insensitive (`Path` and `PATH` are
+one variable), values are converted between UTF-8 and the Win32 Unicode
+environment, and empty values are kept rather than deleting the variable.
+On POSIX systems names are case-sensitive and the C library's `setenv`,
+`unsetenv` and `getenv` are used.
+
 **Runtime helpers (native):**
 
 ```

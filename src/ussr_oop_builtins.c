@@ -1,3 +1,8 @@
+/* POSIX and BSD interfaces (setenv, lstat, mkdir, ...) under -std=c11. */
+#if !defined(_WIN32) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+#endif
+
 #include "ussr_oop_builtins.h"
 #include "uno.h"
 
@@ -2202,6 +2207,178 @@ static int oop_do_typeof(
     return out_result->data.string != NULL ? 0 : -1;
 }
 
+/* ------------------------------------------------------------- */
+/* Environment variables of the ussr process (inherited by the    */
+/* external commands it starts):                                   */
+/*   getenv(v): name          -> value, "" if set to empty, null   */
+/*                               if not set                       */
+/*   setenv(ok): name value   -> 0 ok / 1 invalid name or failure  */
+/*   unsetenv(ok): name       -> 0 ok (also when it was not set) / */
+/*                               1 invalid name or failure         */
+/* A valid name is non-empty and has no "=". Non-string arguments  */
+/* are errors. Windows uses the Win32 environment block, so empty  */
+/* values are kept (the C runtime's _putenv would delete them).    */
+/* ------------------------------------------------------------- */
+
+static int oop_env_name_valid(const char *name)
+{
+    return name[0] != '\0' && strchr(name, '=') == NULL;
+}
+
+#ifdef _WIN32
+/* UTF-8 <-> UTF-16 so non-ASCII names and values survive the round trip. */
+static wchar_t *oop_env_wide(const char *text)
+{
+    int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+    wchar_t *wide;
+
+    if (count <= 0)
+        return NULL;
+    wide = malloc((size_t)count * sizeof(*wide));
+    if (wide != NULL &&
+        MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, count) <= 0)
+    {
+        free(wide);
+        wide = NULL;
+    }
+    return wide;
+}
+
+static char *oop_env_utf8(const wchar_t *wide)
+{
+    int count = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+    char *text;
+
+    if (count <= 0)
+        return NULL;
+    text = malloc((size_t)count);
+    if (text != NULL &&
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, text, count, NULL, NULL) <= 0)
+    {
+        free(text);
+        text = NULL;
+    }
+    return text;
+}
+#endif
+
+static int oop_env_argument(
+    const char *command,
+    ussr_argument_t *arguments,
+    size_t index,
+    ussr_value_t *value,
+    const char **text
+)
+{
+    if (oop_eval(&arguments[index], value) != 0)
+        return 0;
+    if (!oop_expect_string(value, text))
+    {
+        fprintf(stderr, "USSR: %s() expects string arguments\n", command);
+        ussr_value_free(value);
+        return 0;
+    }
+    return 1;
+}
+
+static int oop_do_env(
+    const char *command,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    int setting = strcmp(command, "setenv") == 0;
+    int getting = strcmp(command, "getenv") == 0;
+    ussr_value_t name_v;
+    ussr_value_t value_v;
+    const char *name;
+    const char *value = NULL;
+    int failed;
+
+    if (argument_count != (setting ? 2u : 1u))
+    {
+        fprintf(stderr, "USSR: %s(v): %s\n", command,
+                setting ? "name value" : "name");
+        return -1;
+    }
+    if (!oop_env_argument(command, arguments, 0, &name_v, &name))
+        return -1;
+    if (setting && !oop_env_argument(command, arguments, 1, &value_v, &value))
+    {
+        ussr_value_free(&name_v);
+        return -1;
+    }
+
+    if (getting)
+    {
+        if (!oop_env_name_valid(name))
+            *out_result = ussr_null();
+        else
+        {
+#ifdef _WIN32
+            wchar_t *wide_name = oop_env_wide(name);
+            DWORD size;
+
+            if (wide_name == NULL)
+            {
+                ussr_value_free(&name_v);
+                return -1;
+            }
+            SetLastError(0);
+            size = GetEnvironmentVariableW(wide_name, NULL, 0);
+            if (size == 0)
+                *out_result = GetLastError() == ERROR_ENVVAR_NOT_FOUND
+                                  ? ussr_null() : ussr_string("");
+            else
+            {
+                wchar_t *buffer = malloc((size_t)size * sizeof(*buffer));
+                char *text = NULL;
+
+                if (buffer != NULL &&
+                    GetEnvironmentVariableW(wide_name, buffer, size) < size)
+                    text = oop_env_utf8(buffer);
+                *out_result = ussr_string(text != NULL ? text : "");
+                free(text);
+                free(buffer);
+            }
+            free(wide_name);
+#else
+            const char *found = getenv(name);
+            *out_result = found != NULL ? ussr_string(found) : ussr_null();
+#endif
+        }
+        ussr_value_free(&name_v);
+        return 0;
+    }
+
+    failed = !oop_env_name_valid(name);
+    if (!failed)
+    {
+#ifdef _WIN32
+        wchar_t *wide_name = oop_env_wide(name);
+        wchar_t *wide_value = setting ? oop_env_wide(value) : NULL;
+
+        if (wide_name == NULL || (setting && wide_value == NULL))
+            failed = 1;
+        else if (setting)
+            failed = !SetEnvironmentVariableW(wide_name, wide_value);
+        else
+            failed = !SetEnvironmentVariableW(wide_name, NULL) &&
+                     GetLastError() != ERROR_ENVVAR_NOT_FOUND;
+        free(wide_name);
+        free(wide_value);
+#else
+        failed = setting ? setenv(name, value, 1) != 0 : unsetenv(name) != 0;
+#endif
+    }
+    *out_result = ussr_integer(failed ? 1 : 0);
+    ussr_value_free(&name_v);
+    if (setting)
+        ussr_value_free(&value_v);
+    return 0;
+}
+
 /* chr(s): b -> one-byte string for 1..255; UTF-8 text is built by joining
  * the bytes of each character. */
 static int oop_do_chr(
@@ -2317,6 +2494,10 @@ int ussr_oop_dispatch(
         status = oop_do_file_exists(arguments, argument_count, out_result);
     else if (strcmp(command, "typeof") == 0)
         status = oop_do_typeof(arguments, argument_count, out_result);
+    else if (strcmp(command, "getenv") == 0 ||
+             strcmp(command, "setenv") == 0 ||
+             strcmp(command, "unsetenv") == 0)
+        status = oop_do_env(command, arguments, argument_count, out_result);
     else if (strcmp(command, "chr") == 0)
         status = oop_do_chr(arguments, argument_count, out_result);
     else if (strcmp(command, "fail") == 0)

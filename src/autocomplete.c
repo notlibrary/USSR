@@ -261,6 +261,20 @@ static const char *ac_builtin_commands[] =
     "chain",
     "file",
     "eval",
+    "getenv",
+    "setenv",
+    "unsetenv",
+    "typeof",
+    "fail",
+    "chr",
+    "read_line",
+    "list_dir",
+    "is_dir",
+    "getcwd",
+    "make_dir",
+    "rename_path",
+    "remove_file",
+    "remove_dir",
     NULL
 };
 

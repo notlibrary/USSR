@@ -1,0 +1,78 @@
+# Environment variable tests: getenv, setenv, unsetenv. Prints PASS or FAIL
+# per check. Variables use the USSR_TEST_ prefix and are removed at the end.
+#     ussr tests/env_test.su
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    getenv(v): "USSR_TEST_NEVER_SET_7Q"
+    check(_): "missing variable is null" v null
+
+    setenv(ok): "USSR_TEST_A" "hello"
+    check(_): "setenv succeeds" ok 0
+    getenv(v): "USSR_TEST_A"
+    check(_): "getenv reads it back" v "hello"
+    setenv(ok): "USSR_TEST_A" "world"
+    getenv(v): "USSR_TEST_A"
+    check(_): "setenv overwrites" v "world"
+
+    setenv(ok): "USSR_TEST_EMPTY" ""
+    check(_): "empty value accepted" ok 0
+    getenv(v): "USSR_TEST_EMPTY"
+    check(_): "empty value is empty, not null" v ""
+
+    setenv(ok): "USSR_TEST_SPACES" "  a b=c ; d  "
+    getenv(v): "USSR_TEST_SPACES"
+    check(_): "value kept byte for byte" v "  a b=c ; d  "
+    setenv(ok): "USSR_TEST_RU" "Привет, мир"
+    getenv(v): "USSR_TEST_RU"
+    check(_): "UTF-8 value" v "Привет, мир"
+
+    unsetenv(ok): "USSR_TEST_A"
+    check(_): "unsetenv succeeds" ok 0
+    getenv(v): "USSR_TEST_A"
+    check(_): "unset variable is null" v null
+    unsetenv(ok): "USSR_TEST_A"
+    check(_): "unsetting a missing variable succeeds" ok 0
+
+    setenv(ok): "" "x"
+    check(_): "empty name refused" ok 1
+    setenv(ok): "USSR=TEST" "x"
+    check(_): "name with = refused" ok 1
+    getenv(v): "USSR=TEST"
+    check(_): "getenv of an invalid name is null" v null
+    unsetenv(ok): ""
+    check(_): "unsetenv of an invalid name refused" ok 1
+
+    # External commands inherit the environment: the child exits with the
+    # number stored in the variable.
+    setenv(_): "USSR_TEST_CODE" "7"
+    getenv(os): "OS"
+    if(_): {os = "Windows_NT"} [
+        cmd(code): "/c" "exit %USSR_TEST_CODE%"
+    ]
+    else(_): [
+        sh(code): "-c" "exit $USSR_TEST_CODE"
+    ]
+    check(_): "child process sees the variable" code 7
+
+    unsetenv(_): "USSR_TEST_EMPTY"
+    unsetenv(_): "USSR_TEST_SPACES"
+    unsetenv(_): "USSR_TEST_RU"
+    unsetenv(_): "USSR_TEST_CODE"
+    getenv(v): "USSR_TEST_CODE"
+    check(_): "cleanup" v null
+    set(result): 0
+]
