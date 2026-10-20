@@ -20,7 +20,8 @@ ussr_SOURCES = \
     gc.c \
 	process_posix.c \
     prng64_xrp32.c \
-	autocomplete.c
+	autocomplete.c \
+	completion_fs_posix.c
 	
 AM_CPPFLAGS = -I$(srcdir) $(PETERSBURG_CPPFLAGS)
 ussr_LDADD = $(PETERSBURG_LIBS) -lm
