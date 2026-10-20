@@ -61,6 +61,38 @@ else
     fail=$((fail + 1)); printf 'FAIL write to a Cyrillic file name\n'
 fi
 
+# Counts and word motions
+case_ count_right 'abcdef\n' "3lx:wq" 'abcef\n'
+case_ count_with_zero 'abcdefghijklm\n' "10lx:wq" 'abcdefghijlm\n'
+case_ count_down 'a\nb\nc\nd\n' "2jx:wq" 'a\nb\n\nd\n'
+case_ count_up_cyrillic 'один\nдва\nтри\n' "2jl2kx:wq" 'оин\nдва\nтри\n'
+case_ count_delete_chars 'abcdefg\n' "l3x:wq" 'aefg\n'
+case_ count_delete_stops_at_line_end 'abc\nxyz\n' "l9x:wq" 'a\nxyz\n'
+case_ count_delete_lines 'a\nb\nc\nd\n' "j2dd:wq" 'a\nd\n'
+case_ count_arrow_keys 'abcdef\n' "2${ESC}[Cx:wq" 'abdef\n'
+case_ word_forward 'one two three\n' "wx:wq" 'one wo three\n'
+case_ word_forward_count 'one two three\n' "2wx:wq" 'one two hree\n'
+case_ word_forward_punctuation 'foo, bar\n' "wx:wq" 'foo bar\n'
+case_ word_forward_next_line 'one\ntwo\n' "wx:wq" 'one\nwo\n'
+case_ word_forward_cyrillic 'привет мир\n' "wx:wq" 'привет ир\n'
+case_ change_word 'hello world\n' "cwXYZ$ESC:wq" 'XYZ world\n'
+case_ change_word_mid_word 'hello world\n' "llcwy$ESC:wq" 'hey world\n'
+case_ change_last_word 'one two\n' "wcwX$ESC:wq" 'one X\n'
+case_ change_punctuation 'foo, bar\n' "lllcw;$ESC:wq" 'foo; bar\n'
+case_ change_blanks 'a   b\n' "lcw_$ESC:wq" 'a_b\n'
+case_ change_word_count_before 'one two three\n' "2cwX$ESC:wq" 'X three\n'
+case_ change_word_count_after 'one two three\n' "c2wX$ESC:wq" 'X three\n'
+case_ change_word_counts_multiply 'a b c d e f g\n' "2c2wX$ESC:wq" 'X e f g\n'
+case_ change_word_count_past_end 'one two\n' "5cwX$ESC:wq" 'X\n'
+case_ change_word_empty_line 'a\n\nb\n' "jcwnew$ESC:wq" 'a\nnew\nb\n'
+case_ change_word_cyrillic 'привет мир\n' "cwздравствуй$ESC:wq" 'здравствуй мир\n'
+case_ change_word_mixed 'Мир-world 2\n' "cwX$ESC:wq" 'X-world 2\n'
+case_ change_word_guillemet '«слово»\n' "cw<$ESC:wq" '<слово»\n'
+case_ change_word_dash 'да — нет\n' "wcw-$ESC:wq" 'да - нет\n'
+case_ change_word_last_line_no_newline 'end' "cwX$ESC:wq" 'X\n'
+case_ c_then_other_key_cancels 'abc\n' "cxx:wq" 'bc\n'
+case_ escape_clears_count 'abcdef\n' "3${ESC}lx:wq" 'acdef\n'
+
 # The cursor column counts characters: after "ll" on a Cyrillic line the
 # final cursor escape is ESC[1;3H, not the byte column ESC[1;5H.
 printf 'щука\n' >"$TMP/col.txt"

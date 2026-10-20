@@ -8,6 +8,10 @@
 #               i         insert before cursor    a   insert after cursor
 #               o         open new line below     x   delete char
 #               d d       delete current line     :   command line
+#               w         start of next word      c w change word
+#               count     a number before a motion or command repeats it:
+#                         3l 5j 2k 4x 2dd 3w c2w 2cw, and arrow keys
+#               (no undo: Mbl does not keep an undo history)
 # Commands:     :w [name] write file   :q quit   :wq write+quit   :q! quit
 #               :e [name] reload / edit another file
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
@@ -504,27 +508,168 @@ Mbl_readchar(r): b [
     ]
 ]
 
+# ---------- words ----------
+
+# Character class at byte i of line: 0 blank, 1 word, 2 punctuation.
+# Word characters are ASCII letters, digits, "_" and non-ASCII letters
+# (Cyrillic included). Latin-1 symbols (U+0080..U+00BF, e.g. << >>) and
+# general punctuation (U+2000..U+206F, e.g. dashes, quotes, ellipsis) are
+# punctuation; the no-break space U+00A0 is blank.
+Mbl_class(r): line i [
+    byte(Mblcl_b): line i
+    set(r): 2
+    if(_): {Mblcl_b = 32 || Mblcl_b = 9} [
+        set(r): 0
+    ]
+    elif(_): {(Mblcl_b >= 48 && Mblcl_b <= 57) || (Mblcl_b >= 65 && Mblcl_b <= 90) || (Mblcl_b >= 97 && Mblcl_b <= 122) || Mblcl_b = 95} [
+        set(r): 1
+    ]
+    elif(_): {Mblcl_b >= 192} [
+        set(r): 1
+        len(Mblcl_n): line
+        if(_): {Mblcl_b = 194 && i + 1 < Mblcl_n} [
+            byte(Mblcl_b2): line {i + 1}
+            set(r): 2
+            if(_): {Mblcl_b2 = 160} [
+                set(r): 0
+            ]
+        ]
+        if(_): {Mblcl_b = 226 && i + 1 < Mblcl_n} [
+            byte(Mblcl_b2): line {i + 1}
+            if(_): {Mblcl_b2 = 128 || Mblcl_b2 = 129} [
+                set(r): 2
+            ]
+        ]
+    ]
+]
+
+# Byte index just past the end of `count` words starting at byte i, staying
+# inside the line. On blanks the first "word" is the run of blanks.
+Mbl_word_end(r): line i count [
+    len(Mblwe_n): line
+    set(r): i
+    set(Mblwe_k): 0
+    while(_): {Mblwe_k < count && r < Mblwe_n} [
+        if(_): {Mblwe_k > 0} [
+            set(Mblwe_go): true
+            while(_): {Mblwe_go && r < Mblwe_n} [
+                Mbl_class(Mblwe_c): line r
+                set(Mblwe_go): {Mblwe_c = 0}
+                if(_): Mblwe_go [
+                    utf8_next(r): line r
+                ]
+            ]
+        ]
+        if(_): {r < Mblwe_n} [
+            Mbl_class(Mblwe_start): line r
+            set(Mblwe_go): true
+            while(_): {Mblwe_go && r < Mblwe_n} [
+                Mbl_class(Mblwe_c): line r
+                set(Mblwe_go): {Mblwe_c = Mblwe_start}
+                if(_): Mblwe_go [
+                    utf8_next(r): line r
+                ]
+            ]
+        ]
+        set(Mblwe_k): {Mblwe_k + 1}
+    ]
+]
+
+# w: start of the next word, continuing on following lines like vi.
+Mbl_word_forward(r): [
+    at(Mblwf_l): Mbl_buf Mbl_cy
+    len(Mblwf_n): Mblwf_l
+    set(Mblwf_i): Mbl_cx
+    if(_): {Mblwf_i < Mblwf_n} [
+        Mbl_class(Mblwf_start): Mblwf_l Mblwf_i
+        if(_): {Mblwf_start != 0} [
+            Mbl_word_end(Mblwf_i): Mblwf_l Mblwf_i 1
+        ]
+    ]
+    set(Mblwf_found): false
+    while(_): {Mblwf_found = false} [
+        # skip blanks on this line
+        set(Mblwf_go): {Mblwf_i < Mblwf_n}
+        while(_): Mblwf_go [
+            Mbl_class(Mblwf_c): Mblwf_l Mblwf_i
+            set(Mblwf_go): {Mblwf_c = 0}
+            if(_): Mblwf_go [
+                utf8_next(Mblwf_i): Mblwf_l Mblwf_i
+                set(Mblwf_go): {Mblwf_i < Mblwf_n}
+            ]
+        ]
+        len(Mblwf_lines): Mbl_buf
+        if(_): {Mblwf_i < Mblwf_n} [
+            set(Mblwf_found): true
+        ]
+        elif(_): {Mbl_cy + 1 < Mblwf_lines} [
+            # an empty line counts as a word start; otherwise go on
+            set(Mbl_cy): {Mbl_cy + 1}
+            at(Mblwf_l): Mbl_buf Mbl_cy
+            len(Mblwf_n): Mblwf_l
+            set(Mblwf_i): 0
+            if(_): {Mblwf_n = 0} [
+                set(Mblwf_found): true
+            ]
+        ]
+        else(_): [
+            # end of file: rest on the last character
+            set(Mblwf_found): true
+        ]
+    ]
+    set(Mbl_cx): Mblwf_i
+    Mbl_fixcx(_):
+    Mbl_scroll(_):
+    set(r): 0
+]
+
+# cw: replaces `count` words from the cursor and enters insert mode.
+Mbl_change_word(r): count [
+    at(Mblcw_l): Mbl_buf Mbl_cy
+    len(Mblcw_n): Mblcw_l
+    set(Mbl_mode): 1
+    if(_): {Mbl_cx < Mblcw_n} [
+        Mbl_word_end(Mblcw_end): Mblcw_l Mbl_cx count
+        slice(Mblcw_a): Mblcw_l 0 Mbl_cx
+        slice(Mblcw_b): Mblcw_l Mblcw_end {Mblcw_n - Mblcw_end}
+        concat(Mblcw_a): Mblcw_a Mblcw_b
+        Mbl_setline(_): Mbl_cy Mblcw_a
+        set(Mbl_dirty): 1
+    ]
+    set(r): 0
+]
+
 # ---------- mode handlers ----------
 
 Mbl_escape(r): [
     set(Mbl_mode): 0
     set(Mbl_pend): 0
+    set(Mbl_count): 0
     Mbl_fixcx(_): 
     set(r): 0
 ]
 
 Mbl_arrow(r): c [
-    if(_): {c = 65} [
-        Mbl_up(_): 
+    set(Mblar_n): Mbl_count
+    set(Mbl_count): 0
+    set(Mbl_pend): 0
+    if(_): {Mblar_n < 1} [
+        set(Mblar_n): 1
     ]
-    if(_): {c = 66} [
-        Mbl_down(_): 
-    ]
-    if(_): {c = 67} [
-        Mbl_right(_): 
-    ]
-    if(_): {c = 68} [
-        Mbl_left(_): 
+    while(_): {Mblar_n > 0} [
+        if(_): {c = 65} [
+            Mbl_up(_):
+        ]
+        if(_): {c = 66} [
+            Mbl_down(_):
+        ]
+        if(_): {c = 67} [
+            Mbl_right(_):
+        ]
+        if(_): {c = 68} [
+            Mbl_left(_):
+        ]
+        set(Mblar_n): {Mblar_n - 1}
     ]
     set(r): 0
 ]
@@ -554,28 +699,77 @@ Mbl_insert(r): b [
     ]
 ]
 
+# Normal mode. Digits build Mbl_count (a leading 0 is not a count); the
+# next motion or command runs that many times. d and c wait in Mbl_pend
+# (1 = d, 2 = c) with their own count in Mbl_pend_count; a count typed
+# after the operator multiplies it (2c3w changes six words).
 Mbl_normal(r): b [
     set(r): 0
-    if(_): {b != 100} [
+    if(_): {(b >= 49 && b <= 57) || (b = 48 && Mbl_count > 0)} [
+        if(_): {Mbl_count < 100000} [
+            set(Mbl_count): {Mbl_count * 10 + b - 48}
+        ]
+        return(_): r
+    ]
+    set(Mblnm_n): Mbl_count
+    set(Mbl_count): 0
+    if(_): {Mblnm_n < 1} [
+        set(Mblnm_n): 1
+    ]
+    if(_): {Mbl_pend > 0} [
+        set(Mblnm_op): Mbl_pend
         set(Mbl_pend): 0
+        set(Mblnm_n): {Mblnm_n * Mbl_pend_count}
+        if(_): {Mblnm_op = 1 && b = 100} [
+            while(_): {Mblnm_n > 0} [
+                Mbl_delete_line(_):
+                set(Mblnm_n): {Mblnm_n - 1}
+            ]
+        ]
+        if(_): {Mblnm_op = 2 && b = 119} [
+            Mbl_change_word(_): Mblnm_n
+        ]
+        return(_): r
     ]
-    if(_): {b = 8} [
-        Mbl_left(_): 
+    if(_): {b = 100 || b = 99} [
+        set(Mbl_pend): 1
+        if(_): {b = 99} [
+            set(Mbl_pend): 2
+        ]
+        set(Mbl_pend_count): Mblnm_n
+        return(_): r
     ]
-    if(_): {b = 127} [
-        Mbl_left(_): 
-    ]
-    if(_): {b = 104} [
-        Mbl_left(_): 
-    ]
-    if(_): {b = 108} [
-        Mbl_right(_): 
-    ]
-    if(_): {b = 106} [
-        Mbl_down(_): 
-    ]
-    if(_): {b = 107} [
-        Mbl_up(_): 
+    while(_): {Mblnm_n > 0} [
+        if(_): {b = 8 || b = 127 || b = 104} [
+            Mbl_left(_):
+        ]
+        elif(_): {b = 108} [
+            Mbl_right(_):
+        ]
+        elif(_): {b = 106} [
+            Mbl_down(_):
+        ]
+        elif(_): {b = 107} [
+            Mbl_up(_):
+        ]
+        elif(_): {b = 119} [
+            Mbl_word_forward(_):
+        ]
+        elif(_): {b = 120} [
+            # like vi, a count never deletes past the end of the line
+            at(Mblnm_l): Mbl_buf Mbl_cy
+            len(Mblnm_len): Mblnm_l
+            utf8_next(Mblnm_next): Mblnm_l Mbl_cx
+            Mbl_delch(_):
+            if(_): {Mblnm_next >= Mblnm_len} [
+                set(Mblnm_n): 1
+            ]
+        ]
+        else(_): [
+            # not a repeatable command: run it once below
+            set(Mblnm_n): 1
+        ]
+        set(Mblnm_n): {Mblnm_n - 1}
     ]
     if(_): {b = 105} [
         set(Mbl_mode): 1
@@ -592,19 +786,6 @@ Mbl_normal(r): b [
         set(Mbl_mode): 1
         set(Mbl_dirty): 1
         Mbl_scroll(_): 
-    ]
-    if(_): {b = 120} [
-        Mbl_delch(_): 
-    ]
-    if(_): {b = 100} [
-        set(Mblnm_was): Mbl_pend
-        set(Mbl_pend): 0
-        if(_): {Mblnm_was = 1} [
-            Mbl_delete_line(_): 
-        ]
-        if(_): {Mblnm_was = 0} [
-            set(Mbl_pend): 1
-        ]
     ]
     if(_): {b = 58} [
         Mbl_command(_): 
@@ -770,6 +951,8 @@ init(ret): arg_cnt arg_vec [
     set(Mbl_cy): 0
     set(Mbl_top): 0
     set(Mbl_pend): 0
+    set(Mbl_pend_count): 1
+    set(Mbl_count): 0
     set(Mbl_msg): ""
     set(Mbl_running): 1
     set(Mblit_s): Mbl_esc
