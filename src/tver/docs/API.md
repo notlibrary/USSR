@@ -15,8 +15,16 @@ panels.
 | `tverhandlekeyup(r)` | Window handle, GLFW key code | Window `"keyup"` callback: releasing a held arrow stops repeating |
 | `tverfocus(r)` | Window handle, `1`/`0` | Window `"focus"` callback: losing focus stops repeating |
 
-All three are USSR definitions in `tver.su`. UI input is delivered from GLFW
+All of these are USSR definitions in `tver.su`. UI input is delivered from GLFW
 through Petersburg's event queue and runs as a normal USSR scheduler callback.
+
+## Running and including
+
+`ussr src/tver/tver.su [directory]` starts the application: its `init` is
+wrapped in `$ifdef __MAIN__`, so it exists only when `tver.su` is the file
+`ussr` was started with. Scripts that `$include` it keep their own `init`
+and call the commands above. A directory argument that does not exist, or
+more than one argument, prints a message and exits with a non-zero status.
 
 ## Key bindings and safety
 

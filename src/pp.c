@@ -186,6 +186,13 @@ static int pp_is_defined(
     const char *name
 )
 {
+    /*
+     * __MAIN__ is defined only while reading the file ussr was started
+     * with (include depth 1), never inside an $include'd file. A library
+     * can carry its own entry point:  $ifdef __MAIN__ ... init ... $endif
+     */
+    if (strcmp(name, "__MAIN__") == 0 && pp_find_define(pp, name) == NULL)
+        return pp->include_depth == 1;
     return pp_find_define(pp, name) != NULL;
 }
 

@@ -1,8 +1,13 @@
 # Tula
 
 Tula is a small interactive 2D CAD program written in USSR on a Petersburg
-canvas. From the repository root, run `ussr src/tula/examples/hello.su` with a
-GLFW-enabled build. The window requests maximized display at startup.
+canvas. Start it from the repository root with a GLFW-enabled build:
+
+    ussr src/tula/tula.su                 # new drawing; saves to drawing.dxf
+    ussr src/tula/tula.su plan.dxf        # opens plan.dxf
+
+The window requests maximized display at startup. `src/tula/examples/hello.su`
+builds the same window from a script that includes `tula.su`.
 
 The toolbar holds every command: **Line**, **Circle**, **Load DXF**,
 **Save DXF**, **Zoom +**, **Zoom -**, **Fit**, and the pan buttons

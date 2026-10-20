@@ -5,6 +5,7 @@
   Zoom +, Zoom -, Fit and pan buttons, the active tool shown pressed, and
   keyboard shortcuts (`tulakey`). The example uses it.
 - Added `tests/gui/tula_toolbar_test.su`.
+- `ussr src/tula/tula.su [drawing.dxf]` starts Tula directly.
 
 ## 0.3.0-alpha
 - Renders DXF drawings: `tulaload` reads LINE, CIRCLE, ARC, LWPOLYLINE,

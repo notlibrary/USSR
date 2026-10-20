@@ -1234,3 +1234,50 @@ tulaload(result): [
     tula_load_body(result):
     uiunlock(_):
 ]
+
+# --- application entry ----------------------------------------------------
+# Run directly:  ussr src/tula/tula.su [drawing.dxf]
+# Scripts that $include tula.su do not get this init; __MAIN__ is defined
+# only for the file ussr was started with.
+$ifdef __MAIN__
+tula_app_pointer(result): canvas x y [
+    tulaclick(_): canvas x y
+]
+
+tula_app_wheel(result): canvas x y direction [
+    tulawheel(_): canvas x y direction
+]
+
+tula_app_key(result): window key [
+    tulakey(_): window key
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    if(_): {arg_count > 1} [
+        print(_): "usage: ussr tula.su [drawing.dxf]"
+        set(result): 2
+        return(_): result
+    ]
+    set(_tla_file): "drawing.dxf"
+    if(_): {arg_count = 1} [
+        at(_tla_file): arg_values 0
+    ]
+    createwindow(window): "Tula 2D CAD" 1100 800
+    textbox(filename): window _tla_file
+    label(status): window ""
+    tulainitialize(canvas): window status filename
+    tulatoolbar(_): window
+    on(_): canvas "pointer" "tula_app_pointer"
+    on(_): canvas "wheel" "tula_app_wheel"
+    on(_): window "key" "tula_app_key"
+    pack(_): canvas true
+    maximize(_): window
+    run(_):
+    # Open the drawing named on the command line once the canvas has a size.
+    if(_): {arg_count = 1} [
+        sleep(_): 200
+        tulaload(_):
+    ]
+]
+$endif

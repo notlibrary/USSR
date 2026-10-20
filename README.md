@@ -80,6 +80,14 @@ USSR is a neuroslopware it's created entirely by prompting an AI followed by enr
 
 <img width="1536" height="1024" alt="USSR Compilation Pipeline Infographic" src="https://github.com/user-attachments/assets/bd7b768f-d02b-4fc3-bde6-009b68e75875" />
 
+Desktop applications run straight from their sources with a GLFW-enabled
+build:
+
+```bash
+ussr src/tver/tver.su [directory]     # Tver, two-panel file manager
+ussr src/tula/tula.su [drawing.dxf]   # Tula, 2D CAD and DXF viewer
+```
+
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
 
 I am far beyond postneuroslopware coder now I owned the WHOLE LOOP and found literally nothingness in the end on the other side

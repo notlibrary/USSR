@@ -781,3 +781,65 @@ tveractivatepanel(result): widget [
     uiunlock(_):
     set(result): 0
 ]
+
+# --- application entry ----------------------------------------------------
+# Run directly:  ussr src/tver/tver.su [directory]
+# Scripts that $include tver.su do not get this init; __MAIN__ is defined
+# only for the file ussr was started with.
+$ifdef __MAIN__
+tver_app_key(result): window key [
+    tverhandlekey(_): window key
+]
+
+tver_app_keyup(result): window key [
+    tverhandlekeyup(_): window key
+]
+
+tver_app_focus(result): window focused [
+    tverfocus(_): window focused
+]
+
+tver_app_panel(result): widget [
+    tveractivatepanel(_): widget
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    if(_): {arg_count > 1} [
+        print(_): "usage: ussr tver.su [directory]"
+        set(result): 2
+        return(_): result
+    ]
+    if(_): {arg_count = 1} [
+        at(_tva_dir): arg_values 0
+        is_dir(_tva_ok): _tva_dir
+        if(_): {_tva_ok = 0} [
+            concat(_tva_msg): "tver: not a directory: " _tva_dir
+            print(_): _tva_msg
+            set(result): 1
+            return(_): result
+        ]
+        cd(_): _tva_dir
+    ]
+    createwindow(window): "Tver - Two-panel file manager" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left_files): window ""
+    listbox(right_files): window ""
+    label(status): window ""
+    label(keys): window "TAB panel  INS mark  ENTER open  F6 move  F8 delete"
+    grid(_): left_path 0 0 false
+    grid(_): right_path 0 1 false
+    grid(_): left_files 1 0 true
+    grid(_): right_files 1 1 true
+    grid(_): status 2 0 false
+    grid(_): keys 2 1 false
+    on(_): window "key" "tver_app_key"
+    on(_): window "keyup" "tver_app_keyup"
+    on(_): window "focus" "tver_app_focus"
+    on(_): left_files "change" "tver_app_panel"
+    on(_): right_files "change" "tver_app_panel"
+    tverinitialize(_): window left_path left_files right_path right_files status
+    run(_):
+]
+$endif

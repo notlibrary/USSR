@@ -23,6 +23,13 @@ zoom one millimeter is 5 pixels and the origin starts at the lower-left of
 the canvas once the window has been laid out. Zoom is limited to 0.001 to
 1000 pixels per millimeter.
 
+## Running and including
+
+`ussr src/tula/tula.su [drawing.dxf]` starts the application with the
+toolbar, wheel zoom and keyboard shortcuts connected, and loads the named
+drawing (the filename box defaults to `drawing.dxf`). Its `init` is wrapped
+in `$ifdef __MAIN__`, so scripts that `$include` `tula.su` keep their own.
+
 ## Toolbar
 
 `tulatoolbar` creates a Petersburg toolbar, docked above the filename box and

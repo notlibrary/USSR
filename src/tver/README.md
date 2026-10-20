@@ -1,8 +1,13 @@
 # Tver
 
 Tver is a classic two-panel file manager written in USSR on top of Petersburg
-widgets. Run `ussr src/tver/examples/hello.su` from the repository root with a
-GLFW-enabled USSR build.
+widgets. Start it from the repository root with a GLFW-enabled USSR build:
+
+    ussr src/tver/tver.su            # panels open in the current directory
+    ussr src/tver/tver.su some/dir   # panels open in some/dir
+
+`src/tver/examples/hello.su` builds the same window from a script that
+includes `tver.su`.
 
 Click either file list or press **Tab** to activate a panel. Use **Up/Down** to
 move the selection (hold them to keep moving), **Enter** to open a directory, and **Insert** to mark or

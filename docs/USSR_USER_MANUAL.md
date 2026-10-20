@@ -406,6 +406,17 @@ $endif
   own directory when given a relative path.
 - `$ifdef` / `$if defined(NAME)` / `$else` / `$endif` — conditional
   inclusion.
+- `__MAIN__` counts as defined only in the file `ussr` was started with,
+  never inside an `$include`d file. A library can carry its own entry point
+  without clashing with the `init` of programs that include it:
+
+  ```
+  $ifdef __MAIN__
+  init(ret): arg_cnt arg_vec [
+      ...
+  ]
+  $endif
+  ```
 
 `#`-comments are handled by the language's own lexer, not the
 preprocessor, so they work identically inside and outside `$define`

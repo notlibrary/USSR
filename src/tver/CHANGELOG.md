@@ -6,6 +6,7 @@
   end of the list. New callbacks: `tverhandlekeyup`, `tverfocus`.
 - The left list has keyboard focus at start.
 - Added `tests/gui/tver_repeat_test.su`.
+- `ussr src/tver/tver.su [directory]` starts Tver directly.
 
 ## 0.2.0-alpha
 - Rewrote Tver in USSR. `tver.c` is gone; `tver.su` uses the standard
