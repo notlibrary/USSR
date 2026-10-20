@@ -37,7 +37,34 @@ ussr>
 
 Type a command and press Enter. If you open a `[` without closing it,
 the prompt changes to `... ` and keeps reading lines until brackets
-balance, so you can write multi-line blocks interactively. Press
+balance, so you can write multi-line blocks interactively.
+
+**Prompts.** The `PS1` environment variable sets the prompt and `PS2` the
+continuation prompt; when a variable is unset or empty the defaults
+`ussr> ` and `... ` are used. Both are read again for every prompt, so
+`setenv(_): "PS1" "dev> "` inside the REPL takes effect on the next line.
+The value is only displayed, never run. These escapes are expanded:
+
+| Escape | Shows |
+|--------|-------|
+| `\u` | user name (`USERNAME`, else `USER`) |
+| `\h` | host name (`COMPUTERNAME`, else `HOSTNAME`) |
+| `\w` | current working directory |
+| `\W` | last component of the working directory |
+| `\v` | interpreter version, e.g. `0.4` |
+| `\$` | `$` |
+| `\\` | `\` |
+
+Any other backslash pair is shown as written. Terminal escape sequences in
+the prompt are passed through but not measured, so cursor placement while
+editing may be off with colored prompts.
+
+```
+PS1='\u@\h \W\$ ' ./ussr
+```
+
+When standard input is not a terminal (a pipe or a file), the REPL reads it
+line by line on every platform, printing the prompts without line editing. Press
 Ctrl-D (Ctrl-Z on Windows) on an empty line to exit. Arrow-key history
 is supported on every platform.
 

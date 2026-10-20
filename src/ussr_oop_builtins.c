@@ -2281,6 +2281,56 @@ static int oop_env_argument(
     return 1;
 }
 
+/* Value of an environment variable as UTF-8 (malloc'd), or NULL when it is
+ * not set. Shared with the REPL prompt (PS1/PS2) so both see setenv. */
+char *ussr_env_get(const char *name)
+{
+    char *copy = NULL;
+
+    if (name == NULL || !oop_env_name_valid(name))
+        return NULL;
+#ifdef _WIN32
+    {
+        wchar_t *wide_name = oop_env_wide(name);
+        DWORD size;
+
+        if (wide_name == NULL)
+            return NULL;
+        SetLastError(0);
+        size = GetEnvironmentVariableW(wide_name, NULL, 0);
+        if (size == 0)
+        {
+            if (GetLastError() != ERROR_ENVVAR_NOT_FOUND)
+            {
+                copy = malloc(1);
+                if (copy != NULL)
+                    copy[0] = '\0';
+            }
+        }
+        else
+        {
+            wchar_t *buffer = malloc((size_t)size * sizeof(*buffer));
+            if (buffer != NULL &&
+                GetEnvironmentVariableW(wide_name, buffer, size) < size)
+                copy = oop_env_utf8(buffer);
+            free(buffer);
+        }
+        free(wide_name);
+    }
+#else
+    {
+        const char *found = getenv(name);
+        if (found != NULL)
+        {
+            copy = malloc(strlen(found) + 1);
+            if (copy != NULL)
+                strcpy(copy, found);
+        }
+    }
+#endif
+    return copy;
+}
+
 static int oop_do_env(
     const char *command,
     ussr_argument_t *arguments,
@@ -2312,42 +2362,9 @@ static int oop_do_env(
 
     if (getting)
     {
-        if (!oop_env_name_valid(name))
-            *out_result = ussr_null();
-        else
-        {
-#ifdef _WIN32
-            wchar_t *wide_name = oop_env_wide(name);
-            DWORD size;
-
-            if (wide_name == NULL)
-            {
-                ussr_value_free(&name_v);
-                return -1;
-            }
-            SetLastError(0);
-            size = GetEnvironmentVariableW(wide_name, NULL, 0);
-            if (size == 0)
-                *out_result = GetLastError() == ERROR_ENVVAR_NOT_FOUND
-                                  ? ussr_null() : ussr_string("");
-            else
-            {
-                wchar_t *buffer = malloc((size_t)size * sizeof(*buffer));
-                char *text = NULL;
-
-                if (buffer != NULL &&
-                    GetEnvironmentVariableW(wide_name, buffer, size) < size)
-                    text = oop_env_utf8(buffer);
-                *out_result = ussr_string(text != NULL ? text : "");
-                free(text);
-                free(buffer);
-            }
-            free(wide_name);
-#else
-            const char *found = getenv(name);
-            *out_result = found != NULL ? ussr_string(found) : ussr_null();
-#endif
-        }
+        char *found = ussr_env_get(name);
+        *out_result = found != NULL ? ussr_string(found) : ussr_null();
+        free(found);
         ussr_value_free(&name_v);
         return 0;
     }

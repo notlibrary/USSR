@@ -2307,6 +2307,110 @@ static int run_file(const char *filename, int argc, char **argv)
     return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/*
+ * REPL prompts: PS1 for a new command, PS2 while brackets are open. Unset
+ * or empty variables give the defaults "ussr> " and "... ". The value is
+ * only displayed, never executed. Escapes: \u user, \h host, \w working
+ * directory, \W its last component, \v version, \$ "$", \\ backslash;
+ * any other backslash pair is shown as written.
+ */
+static void repl_prompt_add(char **out, size_t *length, size_t *capacity,
+                            const char *text)
+{
+    size_t add = strlen(text);
+    if (*length + add + 1 > *capacity)
+    {
+        size_t next = (*length + add + 1) * 2;
+        char *grown = realloc(*out, next);
+        if (grown == NULL)
+            return;
+        *out = grown;
+        *capacity = next;
+    }
+    memcpy(*out + *length, text, add + 1);
+    *length += add;
+}
+
+static char *repl_prompt(int continuation)
+{
+    const char *variable = continuation ? "PS2" : "PS1";
+    char *format = ussr_env_get(variable);
+    char *out = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
+    const char *p;
+
+    if (format == NULL || format[0] == '\0')
+    {
+        free(format);
+        format = malloc(8);
+        if (format == NULL)
+            return NULL;
+        strcpy(format, continuation ? "... " : "ussr> ");
+    }
+    repl_prompt_add(&out, &length, &capacity, "");
+    for (p = format; *p != '\0'; ++p)
+    {
+        char single[2] = { *p, '\0' };
+        if (*p != '\\' || p[1] == '\0')
+        {
+            repl_prompt_add(&out, &length, &capacity, single);
+            continue;
+        }
+        ++p;
+        if (*p == 'u' || *p == 'h')
+        {
+            char *value = ussr_env_get(*p == 'u' ? "USERNAME" : "COMPUTERNAME");
+            if (value == NULL)
+                value = ussr_env_get(*p == 'u' ? "USER" : "HOSTNAME");
+            repl_prompt_add(&out, &length, &capacity,
+                            value != NULL ? value : "?");
+            free(value);
+        }
+        else if (*p == 'w' || *p == 'W')
+        {
+            char cwd[4096];
+            const char *shown = "?";
+#ifdef _WIN32
+            if (_getcwd(cwd, (int)sizeof(cwd)) != NULL)
+#else
+            if (getcwd(cwd, sizeof(cwd)) != NULL)
+#endif
+            {
+                shown = cwd;
+                if (*p == 'W')
+                {
+                    const char *slash = strrchr(cwd, '/');
+                    const char *back = strrchr(cwd, '\\');
+                    const char *last = slash > back ? slash : back;
+                    if (last != NULL && last[1] != '\0')
+                        shown = last + 1;
+                }
+            }
+            repl_prompt_add(&out, &length, &capacity, shown);
+        }
+        else if (*p == 'v')
+        {
+            char version[32];
+            snprintf(version, sizeof(version), "%d.%d",
+                     USSR_VERSION_MAJOR, USSR_VERSION_MINOR);
+            repl_prompt_add(&out, &length, &capacity, version);
+        }
+        else if (*p == '$' || *p == '\\')
+        {
+            single[0] = *p;
+            repl_prompt_add(&out, &length, &capacity, single);
+        }
+        else
+        {
+            char pair[3] = { '\\', *p, '\0' };
+            repl_prompt_add(&out, &length, &capacity, pair);
+        }
+    }
+    free(format);
+    return out;
+}
+
 static int run_repl(void)
 {
     ussr_preprocessor_t pp;
@@ -2340,15 +2444,20 @@ static int run_repl(void)
     source_length = 0;
     capacity = 0;
     bracket_depth = 0;
-#ifdef _WIN32
-    while ((line = worstline(
-#else
-	while ((line = bestline(
-#endif
-
-                bracket_depth > 0 ? "... " : "ussr> ")) != NULL)
+    for (;;)
     {
         const char *processed;
+        /* Read PS1/PS2 for every prompt so setenv takes effect at once. */
+        char *prompt = repl_prompt(bracket_depth > 0);
+
+#ifdef _WIN32
+        line = worstline(prompt != NULL ? prompt : "ussr> ");
+#else
+        line = bestline(prompt != NULL ? prompt : "ussr> ");
+#endif
+        free(prompt);
+        if (line == NULL)
+            break;
 
         line_length = strlen(line);
 
