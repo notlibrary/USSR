@@ -634,3 +634,16 @@ Now let's use petersburg to make something useful tver.su a classic 2-panel file
 like total commander or midnight commander but with GUI tab to switch panels ins to select file
 
 f8 to delete f6 to move skip view or edit do it carefully
+
+Now the problem we need to link petersburg gui and glfw in github actions release pipeline  
+integrate it on both linux windows build and even autotools
+it must have gui by default without admin manipulations
+use .github/workflow/release.yml
+this looks like dynamic linking
+and add aporpriate glfw binaries to output artifacts on all architectures
+
+Now using petersburg and tver make tula.su the small 2D CAD program
+Let it have circles and lines and visual grid to snap to it
+Save drawing to .dxf format run it in maximum size window
+
+Here's the ural.su USSR package manager can you do that pack and upload commands worked recursively e.g. pack searched box.uno files from repository root . and then upload .ural archives and *-box.uno metadata to the server from the same repository . directories visited recursively
