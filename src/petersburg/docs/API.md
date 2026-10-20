@@ -11,7 +11,8 @@ a diagnostic.
 | `createwindow(title, width, height)` | String, positive integers (160..8192 by 120..8192) | Window handle |
 | `maximize(window)` | Window handle | Zero; requests a maximized window |
 | `label(window, text)` | Window handle, string | Label handle |
-| `button(window, text)` | Window handle, string | Button handle |
+| `button(parent, text)` | Window or toolbar handle, string | Button handle |
+| `toolbar(window)` | Window handle | Toolbar handle; docks at the top of the window, its buttons laid out left to right |
 | `textbox(window, initial_text)` | Window handle, string | Text-box handle |
 | `checkbox(window, text)` | Window handle, string | Checkbox handle |
 | `listbox(window, items)` | Window handle, pipe-separated string | List handle |
@@ -24,7 +25,7 @@ a diagnostic.
 | `getselection(widget)` | List or combo-box handle | Current selected item |
 | `getindex(widget)` / `setindex(widget, index)` | List or combo-box handle and optional row index | Current / updated zero-based row |
 | `setfocus(widget)` | Text-box or list handle | Zero; directs keyboard focus |
-| `setchecked(widget, checked)` / `getchecked(widget)` | Checkbox handle and boolean | Zero / boolean |
+| `setchecked(widget, checked)` / `getchecked(widget)` | Checkbox or button handle and boolean | Zero / boolean; a checked button is drawn pressed (amber) to show an active tool or mode |
 | `on(widget, event, callback_name)` | Handle and event name | Zero; `"click"`/`"change"` callbacks receive the widget handle; a window `"key"` callback receives the window handle and GLFW key code |
 | `show(window)` / `close(window)` | Window handle | Zero |
 | `destroy(widget)` | Widget or window handle | Zero |
@@ -74,6 +75,11 @@ to end. Programs redraw by calling `canvasclear` and appending shapes again.
 A canvas holds at most 200,000 shapes.
 
 ## Layout
+
+Toolbars dock at the top of their window, one below another in creation
+order, whatever the order other widgets were created in. A toolbar's
+buttons are placed left to right at their text width and behave like any
+other button (`"click"` callbacks, `settext`, `setchecked`, `inject`).
 
 Widgets use a vertical flow by default; `grid` places widgets in up to two
 responsive columns with row-based heights. Expanded grid rows share positive

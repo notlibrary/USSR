@@ -14,12 +14,30 @@ recommended starting point.
 | `tulazoom(_)` | Factor | Zooms about the canvas center |
 | `tulapan(_)` | dx, dy in canvas pixels | Moves the view |
 | `tulafit(_)` | None | Fits the whole drawing in the canvas with a 5% margin |
+| `tulatoolbar(toolbar)` | Window | Creates the toolbar described below; call after `tulainitialize` |
+| `tulakey(_)` | Window, GLFW key code | Window `"key"` callback: arrow keys pan, `=`/`-` (and keypad `+`/`-`) zoom, `F` fits |
 
 Line input is two canvas clicks; circle input is center then radius point.
 Points snap to the visible minor grid. Drawing units are millimeters; at 1x
 zoom one millimeter is 5 pixels and the origin starts at the lower-left of
 the canvas once the window has been laid out. Zoom is limited to 0.001 to
 1000 pixels per millimeter.
+
+## Toolbar
+
+`tulatoolbar` creates a Petersburg toolbar, docked above the filename box and
+canvas, with these buttons:
+
+| Button | Action |
+|---|---|
+| Line, Circle | `tulatool`; the active tool's button is drawn pressed |
+| Load DXF, Save DXF | `tulaload` / `tulasave` with the filename box |
+| Zoom +, Zoom - | `tulazoom` 1.25 / 0.8 about the canvas center |
+| Fit | `tulafit` |
+| Left, Right, Up, Down | `tulapan` by 100 pixels, showing more of the drawing on that side |
+
+Handles and labels are kept in the `tula_buttons` and `tula_button_names`
+hash vectors in creation order.
 
 ## Grid
 

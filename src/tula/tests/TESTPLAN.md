@@ -11,6 +11,9 @@ Automated (GLFW build and a display required):
   drawn, fit, zoom about the cursor, grid spacing across 75 zoom steps, zoom
   limits, snapping to the visible grid, pan, save/load round trip, CRLF
   input, and refusal of missing, truncated, binary and malformed files.
+- `ussr tests/gui/tula_toolbar_test.su`: every toolbar button reaches its
+  action (tool selection and pressed state, zoom, pan, fit, load, save) and
+  the keyboard shortcuts work.
 
 Manual:
 

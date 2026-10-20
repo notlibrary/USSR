@@ -44,8 +44,15 @@ label(result): window text [
     petersburg_create_label(result): window text
 ]
 
+# The parent may be a window or a toolbar.
 button(result): window text [
     petersburg_create_button(result): window text
+]
+
+# A horizontal strip; buttons created with the toolbar as their parent are
+# laid out left to right at their natural width.
+toolbar(result): window [
+    petersburg_create_toolbar(result): window ""
 ]
 
 textbox(result): window initial_text [

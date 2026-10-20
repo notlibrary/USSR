@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0-alpha
+- Added a toolbar (`tulatoolbar`) with Line, Circle, Load DXF, Save DXF,
+  Zoom +, Zoom -, Fit and pan buttons, the active tool shown pressed, and
+  keyboard shortcuts (`tulakey`). The example uses it.
+- Added `tests/gui/tula_toolbar_test.su`.
+
 ## 0.3.0-alpha
 - Renders DXF drawings: `tulaload` reads LINE, CIRCLE, ARC, LWPOLYLINE,
   POLYLINE, POINT, TEXT/MTEXT and ELLIPSE from ASCII DXF and names the

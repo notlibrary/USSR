@@ -12,6 +12,9 @@
 #   tulazoom(r): factor          -> zoom about the canvas center
 #   tulapan(r): dx dy            -> move the view by dx, dy canvas pixels
 #   tulafit(r):                  -> fit the whole drawing in the canvas
+#   tulatoolbar(toolbar): window -> toolbar wired to every command above
+#   tulakey(r): window key       -> window "key" callback body: arrows pan,
+#                                   + / - zoom, F fits
 #
 # World coordinates are drawing units with y up. The view maps a world point
 # to canvas pixels as  sx = ox + x * scale,  sy = oy - y * scale.
@@ -21,7 +24,8 @@
 #   ["POLYLINE", closed, points]      (points = [x0, y0, x1, y1, ...])
 #   ["POINT", x, y]                   ["TEXT", x, y, height, text]
 # Hash keys: tula_window tula_status tula_path tula_canvas tula_entities
-# tula_tool tula_anchor tula_view ([ox, oy, scale]) tula_fitted tula_step.
+# tula_tool tula_anchor tula_view ([ox, oy, scale]) tula_fitted tula_step
+# tula_buttons tula_button_names (toolbar buttons, see tulatoolbar).
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
@@ -40,6 +44,8 @@ $define TULA_EXTENT_Y 2304
 $define TULA_MIN_SCALE 0.001
 $define TULA_MAX_SCALE 1000.0
 $define TULA_MAX_ENTITIES 10000
+# Toolbar and keyboard pan step in canvas pixels.
+$define TULA_PAN_STEP 100
 
 tula_floor(r): x [
     str_trunc(_tf_t): x
@@ -282,6 +288,10 @@ tulainitialize(canvas): window status filename [
     push(_): _ti_view 5
     set(tula_view): _ti_view!
     set(tula_fitted): false!
+    vec(_ti_buttons): ""
+    set(tula_buttons): _ti_buttons!
+    vec(_ti_names): ""
+    set(tula_button_names): _ti_names!
     tula_redraw(_):
     tula_set_status(_): "LINE tool: click two snapped points; CIRCLE tool: center then radius; Save exports DXF"
 ]
@@ -297,6 +307,7 @@ tula_tool_body(r): name [
         return(_): r
     ]
     set(tula_tool): name!
+    tula_mark_tool(_): name
     set(_tt_anchor): tula_anchor?
     vec(_tt_none): ""
     set(tula_anchor): _tt_none!
@@ -310,6 +321,24 @@ tula_tool_body(r): name [
     if(_): {_tt_had > 0} [
         tula_redraw(_):
     ]
+]
+
+# Shows the active tool as a pressed toolbar button.
+tula_mark_tool(r): name [
+    set(_tmt_buttons): tula_buttons?
+    set(_tmt_names): tula_button_names?
+    len(_tmt_n): _tmt_buttons
+    set(_tmt_i): 0
+    while(_): {_tmt_i < _tmt_n} [
+        at(_tmt_label): _tmt_names _tmt_i
+        at(_tmt_button): _tmt_buttons _tmt_i
+        if(_): {_tmt_label = "Line" || _tmt_label = "Circle"} [
+            str_lower(_tmt_lower): _tmt_label
+            setchecked(_): _tmt_button {_tmt_lower = name}
+        ]
+        set(_tmt_i): {_tmt_i + 1}
+    ]
+    set(r): 0
 ]
 
 tulatool(result): name [
@@ -605,6 +634,107 @@ tulafit(result): [
     tula_fit_view(_tf_fitted):
     tula_fit_body(result):
     uiunlock(_):
+]
+
+# --- toolbar and keys -------------------------------------------------------------
+tula_tb_line(result): widget [
+    tulatool(_): "line"
+]
+
+tula_tb_circle(result): widget [
+    tulatool(_): "circle"
+]
+
+tula_tb_load(result): widget [
+    tulaload(_):
+]
+
+tula_tb_save(result): widget [
+    tulasave(_):
+]
+
+tula_tb_zoom_in(result): widget [
+    tulazoom(_): 1.25
+]
+
+tula_tb_zoom_out(result): widget [
+    tulazoom(_): 0.8
+]
+
+tula_tb_fit(result): widget [
+    tulafit(_):
+]
+
+# Pan buttons move the view so more of the drawing shows on that side.
+tula_tb_pan_left(result): widget [
+    tulapan(_): TULA_PAN_STEP 0
+]
+
+tula_tb_pan_right(result): widget [
+    tulapan(_): {0 - TULA_PAN_STEP} 0
+]
+
+tula_tb_pan_up(result): widget [
+    tulapan(_): 0 TULA_PAN_STEP
+]
+
+tula_tb_pan_down(result): widget [
+    tulapan(_): 0 {0 - TULA_PAN_STEP}
+]
+
+tula_tb_add(r): bar label callback [
+    button(r): bar label
+    on(_): r "click" callback
+    set(_tba_buttons): tula_buttons?
+    set(_tba_names): tula_button_names?
+    push(_): _tba_buttons r
+    push(_): _tba_names label
+]
+
+# Creates the toolbar; call after tulainitialize. Labels use the characters
+# Petersburg's bitmap font can draw.
+tulatoolbar(toolbar): window [
+    toolbar(toolbar): window
+    tula_tb_add(_): toolbar "Line" "tula_tb_line"
+    tula_tb_add(_): toolbar "Circle" "tula_tb_circle"
+    tula_tb_add(_): toolbar "Load DXF" "tula_tb_load"
+    tula_tb_add(_): toolbar "Save DXF" "tula_tb_save"
+    tula_tb_add(_): toolbar "Zoom +" "tula_tb_zoom_in"
+    tula_tb_add(_): toolbar "Zoom -" "tula_tb_zoom_out"
+    tula_tb_add(_): toolbar "Fit" "tula_tb_fit"
+    tula_tb_add(_): toolbar "Left" "tula_tb_pan_left"
+    tula_tb_add(_): toolbar "Right" "tula_tb_pan_right"
+    tula_tb_add(_): toolbar "Up" "tula_tb_pan_up"
+    tula_tb_add(_): toolbar "Down" "tula_tb_pan_down"
+    set(_ttb_tool): tula_tool?
+    tula_mark_tool(_): _ttb_tool
+]
+
+# GLFW key codes: arrows 262 right, 263 left, 264 down, 265 up; "=" 61,
+# "-" 45, keypad + 334, keypad - 333, "F" 70.
+tulakey(result): window key [
+    set(result): 0
+    if(_): {key = 263} [
+        tulapan(_): TULA_PAN_STEP 0
+    ]
+    elif(_): {key = 262} [
+        tulapan(_): {0 - TULA_PAN_STEP} 0
+    ]
+    elif(_): {key = 265} [
+        tulapan(_): 0 TULA_PAN_STEP
+    ]
+    elif(_): {key = 264} [
+        tulapan(_): 0 {0 - TULA_PAN_STEP}
+    ]
+    elif(_): {key = 61 || key = 334} [
+        tulazoom(_): 1.25
+    ]
+    elif(_): {key = 45 || key = 333} [
+        tulazoom(_): 0.8
+    ]
+    elif(_): {key = 70} [
+        tulafit(_):
+    ]
 ]
 
 # --- DXF writer -----------------------------------------------------------------

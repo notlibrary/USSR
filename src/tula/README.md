@@ -4,6 +4,10 @@ Tula is a small interactive 2D CAD program written in USSR on a Petersburg
 canvas. From the repository root, run `ussr src/tula/examples/hello.su` with a
 GLFW-enabled build. The window requests maximized display at startup.
 
+The toolbar holds every command: **Line**, **Circle**, **Load DXF**,
+**Save DXF**, **Zoom +**, **Zoom -**, **Fit**, and the pan buttons
+**Left**/**Right**/**Up**/**Down**. Arrow keys pan, `=`/`-` zoom and `F` fits.
+
 Choose **Line** and click two points on the canvas, or choose **Circle** and
 click its center followed by a point on its circumference. Points snap to a
 visible 5-unit grid. The fine grid is 5 units and major lines are 20 units
@@ -33,3 +37,4 @@ and compares the exported DXF with the expected text;
 
     ussr tests/gui/tula_test.su
     ussr tests/gui/tula_dxf_test.su
+    ussr tests/gui/tula_toolbar_test.su
