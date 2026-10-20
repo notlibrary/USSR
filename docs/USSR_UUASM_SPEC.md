@@ -104,3 +104,38 @@ remain unchanged. This adapter is internal to the bootstrap and does not
 serialize bootstrap instruction records as C VM bytecode. The C textual
 assembler and VM implement the versioned assembler text format, conventionally
 stored as `.ua` (`.uuasm` is accepted for compatibility).
+
+## Bootstrap UUASM execution
+
+`russia.su` also reads textual UUASM itself, with USSR code in
+`src/russia/uuasm.su` (no host assembler or VM involved):
+
+```text
+ussr src/russia/russia.su tests/uuasm_loop.ua          # assemble and run
+ussr src/russia/russia.su tests/uuasm_loop.ua dump     # print canonical UUASM
+```
+
+The assembler accepts the syntax above and reports the same
+`UUASM:<line>: ...` diagnostics as the C assembler. The executor follows the
+C VM semantics: 32 registers, `CALL A B C idx` binding parameters from
+`A..A+B-1` and storing the callee's return variable in `C`, frames that
+restore registers, parameters and the return variable, boolean
+`LAND`/`LOR`, and runtime errors (`UUASM VM: division by zero at
+instruction N`, ...) that stop with a non-zero status.
+
+Supported: every opcode except `EXTERNAL`, `EVAL`, `SCAN`, `CHAIN`, `FILE`
+and `TEMPLATE`, which need the host runtime or parser metadata and are
+rejected when executed. `OOP` supports the value-only builtins `len`, `at`,
+`push`, `vec`, `slice`, `byte`, `getf`, `setf`, `encode`, `decode`,
+`typeof`, `readfile`, `writefile`, `file_exists`, `sin` and `ln`. Its
+variables and hash namespace are separate from the bootstrap's own.
+
+`dump` writes jump targets and function entries as `L<index>` labels; reals
+are printed with up to ten decimals (fewer where the host integer is 32
+bits), so very small fractions may round.
+
+Conformance tests run every case through both the C VM and the bootstrap:
+
+```text
+sh tests/russia/run_uuasm_tests.sh
+```

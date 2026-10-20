@@ -4,10 +4,15 @@
 # back to the host interpreter (no eval no chain/capture).
 
 # Standard library: keep the interpreter's shared calls out of the VM loop.
-$include "standard.su"
-$include "io.su"
-$include "math.su"
-$include "bytes.su"
+# standard.su is not included: its PRNG definitions shadow host builtins
+# that the host parser refuses to redefine. random64/seed_random64/time
+# are used here as host natives.
+$include "../libs/io.su"
+$include "../libs/math.su"
+$include "../libs/bytes.su"
+$include "../libs/strings.su"
+# Textual UUASM (.ua/.uuasm): assembler, disassembler and C-ABI executor.
+$include "uuasm.su"
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -5824,6 +5829,33 @@ vm_init_i(r): i [
     ]
 ]
 # ---- entry point ----
+# Reads one standard-library file for the interpreted program. The library
+# lives in src/libs; try the layouts russia.su is commonly started from.
+init_lib(r): name [
+    vec(il_dirs): ""
+    push(_): il_dirs "src/libs/"
+    push(_): il_dirs "libs/"
+    push(_): il_dirs "../libs/"
+    push(_): il_dirs "../src/libs/"
+    push(_): il_dirs ""
+    set(r): ""
+    set(il_i): 0
+    set(il_found): 0
+    while(_): {il_i < 5 && il_found = 0} [
+        at(il_d): il_dirs il_i
+        concat(il_p): il_d name
+        file_exists(il_e): il_p
+        if(_): il_e [
+            readfile(r): il_p
+            set(il_found): 1
+        ]
+        set(il_i): {il_i + 1}
+    ]
+    if(_): {il_found = 0} [
+        concat(il_msg): "russia: cannot find standard library file " name
+        print(_): il_msg
+    ]
+]
 init_src(r): avec [
     set(r): 0
     at(lx_path): avec 0
@@ -5832,10 +5864,10 @@ init_src(r): avec [
     # Prepend the plain-source standard library to the interpreted program.
     # The host preprocessor handles the interpreter's own $include above;
     # target programs are read raw, so they receive the library text here.
-    readfile(ussr_std_standard): "standard.su"
-    readfile(ussr_std_io): "io.su"
-    readfile(ussr_std_math): "math.su"
-    readfile(ussr_std_bytes): "bytes.su"
+    init_lib(ussr_std_standard): "standard.su"
+    init_lib(ussr_std_io): "io.su"
+    init_lib(ussr_std_math): "math.su"
+    init_lib(ussr_std_bytes): "bytes.su"
     set(ussr_std_src): ""
     concat(ussr_std_src): ussr_std_src ussr_std_standard
     concat(ussr_std_src): ussr_std_src ussr_std_io
@@ -5856,6 +5888,20 @@ init_src(r): avec [
     ]
 ]
 init(ret): arg_cnt arg_vec [
+    # .ua/.uuasm targets are assembled and run by uuasm.su; an optional
+    # trailing "dump" prints the assembled program instead.
+    if(_): {arg_cnt > 0} [
+        at(init_target): arg_vec 0
+        uq_is_assembly(init_is_ua): init_target
+        if(_): init_is_ua [
+            set(init_mode): ""
+            if(_): {arg_cnt > 1} [
+                at(init_mode): arg_vec {arg_cnt - 1}
+            ]
+            uq_main(ret): init_target init_mode
+            return(_): ret
+        ]
+    ]
     struct(lx_Tok): "kind:number" "text:string" "line:number"
     set(ps_nddef): 0
     set(rt_repl): 0

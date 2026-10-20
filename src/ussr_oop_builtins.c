@@ -2103,6 +2103,71 @@ static int oop_do_path_change(
 }
 
 /* ------------------------------------------------------------- */
+/* typeof(t): value -> "null" "integer" "real" "string" "boolean"   */
+/*                     "vector", or a struct instance's type name   */
+/* fail(_): message -> prints message to stderr and stops the      */
+/*                     script like any other runtime error          */
+/* ------------------------------------------------------------- */
+
+static int oop_do_typeof(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t value;
+    const char *name = "null";
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: typeof(t): value\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &value) != 0)
+        return -1;
+    switch (value.type)
+    {
+    case USSR_NULL: name = "null"; break;
+    case USSR_INTEGER: name = "integer"; break;
+    case USSR_REAL: name = "real"; break;
+    case USSR_STRING: name = "string"; break;
+    case USSR_BOOLEAN: name = "boolean"; break;
+    case USSR_VECTOR: name = "vector"; break;
+    case USSR_STRUCT:
+        name = value.data.instance != NULL &&
+               value.data.instance->type != NULL
+                   ? value.data.instance->type->name : "struct";
+        break;
+    }
+    *out_result = ussr_string(name);
+    ussr_value_free(&value);
+    return out_result->data.string != NULL ? 0 : -1;
+}
+
+static int oop_do_fail(
+    ussr_argument_t *arguments,
+    size_t argument_count
+)
+{
+    ussr_value_t value;
+    const char *message;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: fail(_): message\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &value) != 0)
+        return -1;
+    if (oop_expect_string(&value, &message))
+        fprintf(stderr, "USSR: %s\n", message);
+    else
+        fprintf(stderr, "USSR: fail() expects a message string\n");
+    ussr_value_free(&value);
+    return -1;
+}
+
+/* ------------------------------------------------------------- */
 /* dispatch                                                         */
 /* ------------------------------------------------------------- */
 
@@ -2160,6 +2225,10 @@ int ussr_oop_dispatch(
         status = oop_do_set_bytes(arguments, argument_count, 1, out_result);
     else if (strcmp(command, "file_exists") == 0)
         status = oop_do_file_exists(arguments, argument_count, out_result);
+    else if (strcmp(command, "typeof") == 0)
+        status = oop_do_typeof(arguments, argument_count, out_result);
+    else if (strcmp(command, "fail") == 0)
+        status = oop_do_fail(arguments, argument_count);
     else if (strcmp(command, "list_dir") == 0)
         status = oop_do_list_dir(arguments, argument_count, out_result);
     else if (strcmp(command, "is_dir") == 0)

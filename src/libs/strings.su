@@ -17,7 +17,23 @@
 #   str_trim(r): s                -> s without leading/trailing blanks
 #                                    (space, tab, CR, LF)
 #   str_repeat(r): s count        -> s repeated count times
+#   str_int_limit(r):             -> largest value str_trunc can return:
+#                                    2147483647 where the host integer is
+#                                    32 bits (MSVC builds), about 4.6e18 on
+#                                    64-bit hosts
+# str_from_number lowers `digits` when x * 10^digits would not fit in a host
+# integer, so very large values print with fewer decimals instead of
+# overflowing.
 # Temporaries use the _str prefix; parameters are restored after each call.
+
+str_int_limit(r): [
+    # 2147483647 + 1 wraps negative on hosts with 32-bit integers.
+    set(_strl_probe): 2147483647
+    set(r): 2147483647
+    if(_): {_strl_probe + 1 > 0} [
+        set(r): {_strl_probe * 2147483648 + _strl_probe * 2}
+    ]
+]
 
 # "/" always produces a real, so digits come from subtracting powers of ten.
 str_from_int(r): n [
@@ -29,7 +45,8 @@ str_from_int(r): n [
     vec(_stri_pow): ""
     push(_): _stri_pow 1
     set(_stri_p): 1
-    while(_): {_stri_p * 10 <= _stri_n} [
+    # Compare against n / 10 (a real) so the next power never overflows.
+    while(_): {_stri_p <= _stri_n / 10} [
         set(_stri_p): {_stri_p * 10}
         push(_): _stri_pow _stri_p
     ]
@@ -58,13 +75,14 @@ str_trunc(r): x [
     if(_): _strt_neg [
         set(_strt_x): {0 - _strt_x}
     ]
-    if(_): {_strt_x >= 4611686018427387904.0} [
+    str_int_limit(_strt_max):
+    if(_): {_strt_x > _strt_max} [
         print(_): "str_trunc: value is too large for an integer"
         set(_strt_x): 0
     ]
     set(_strt_i): 0
     set(_strt_p): 1
-    while(_): {_strt_p * 2 <= _strt_x} [
+    while(_): {_strt_p <= _strt_x / 2} [
         set(_strt_p): {_strt_p * 2}
     ]
     while(_): {_strt_p >= 1} [
@@ -90,12 +108,15 @@ str_from_number(r): x digits [
         if(_): _strn_neg [
             set(_strn_ax): {0 - x}
         ]
+        str_int_limit(_strn_max):
         set(_strn_scale): 1
         set(_strn_k): 0
-        while(_): {_strn_k < digits} [
+        set(_strn_digits): 0
+        while(_): {_strn_k < digits && (_strn_ax + 1) * _strn_scale * 10.0 < _strn_max} [
             set(_strn_scale): {_strn_scale * 10}
             set(_strn_k): {_strn_k + 1}
         ]
+        set(_strn_digits): _strn_k
         str_trunc(_strn_n): {_strn_ax * _strn_scale + 0.5}
         set(_strn_frac): {_strn_n % _strn_scale}
         str_trunc(_strn_ip): {(_strn_n - _strn_frac) / _strn_scale}
@@ -103,7 +124,7 @@ str_from_number(r): x digits [
         if(_): {_strn_frac > 0} [
             str_from_int(_strn_ftext): _strn_frac
             len(_strn_flen): _strn_ftext
-            while(_): {_strn_flen < digits} [
+            while(_): {_strn_flen < _strn_digits} [
                 concat(_strn_ftext): "0" _strn_ftext
                 set(_strn_flen): {_strn_flen + 1}
             ]

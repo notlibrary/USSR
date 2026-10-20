@@ -1,0 +1,1265 @@
+# uuasm.su - UUASM text assembler, disassembler and executor for russia.su.
+#
+# The bootstrap reads textual UUASM (.ua / .uuasm, docs/USSR_UUASM_SPEC.md)
+# with this USSR code and runs it with the C VM's instruction semantics:
+# R0..R31 registers, a constant pool, a string pool, a function table, and
+# call frames that save registers plus the callee's parameter and return
+# variables. Nothing is handed to the host assembler or VM.
+#
+#   ussr src/russia/russia.su program.ua         assemble and run
+#   ussr src/russia/russia.su program.ua dump    print canonical UUASM text
+#
+# Assembly diagnostics match the C assembler ("UUASM:<line>: ..."). Runtime
+# errors stop the program with "UUASM VM: ..." and a non-zero exit status.
+# EXTERNAL, EVAL, SCAN, CHAIN, FILE and TEMPLATE need the host runtime or
+# parser metadata and are rejected at run time. OOP supports the value-only
+# builtins listed in uq_oop.
+#
+# State lives in uq_* globals: uq_code (instructions [op a b c imm]),
+# uq_consts, uq_strings, uq_funcs ([name entry retname params]).
+
+# --- opcode table -----------------------------------------------------------
+uq_tables(r): [
+    vec(uq_op_names): ""
+    vec(uq_op_codes): ""
+    set(_uqtb_src): "NOP 0 LOAD_CONST 1 LOAD_VAR 2 STORE_VAR 3 LOAD_HASH 4 STORE_HASH 5 DECODE_UNO 6 GET 7 VECTOR_GET 8 VECTOR_SET 9 ADD 16 SUB 17 MUL 18 DIV 19 MOD 20 NEG 21 EQ 22 NE 23 LT 24 LE 25 GT 26 GE 27 LAND 28 LOR 29 XOR 30 BAND 31 BOR 32 SHL 33 SHR 34 JMP 48 JMP_TRUE 49 JMP_FALSE 50 SET 64 PRINT 65 CONCAT 66 EXTERNAL 67 OOP 68 EVAL 69 RANDOM64 70 SEED64 71 SCAN 72 TIME 73 CHAIN 74 FILE 75 CD 76 TEMPLATE 77 CALL 80 RET 81 RETURN 82 HALT 240"
+    uq_tokenize(_uqtb_t): _uqtb_src
+    len(_uqtb_n): _uqtb_t
+    set(_uqtb_i): 0
+    while(_): {_uqtb_i < _uqtb_n} [
+        at(_uqtb_name): _uqtb_t _uqtb_i
+        at(_uqtb_code): _uqtb_t {_uqtb_i + 1}
+        str_to_number(_uqtb_num): _uqtb_code
+        push(_): uq_op_names _uqtb_name
+        push(_): uq_op_codes _uqtb_num
+        set(_uqtb_i): {_uqtb_i + 2}
+    ]
+    set(r): 0
+]
+
+uq_opcode(r): name [
+    len(_uqo_n): uq_op_names
+    set(_uqo_i): 0
+    set(r): {0 - 1}
+    while(_): {_uqo_i < _uqo_n} [
+        at(_uqo_x): uq_op_names _uqo_i
+        if(_): {_uqo_x = name} [
+            at(r): uq_op_codes _uqo_i
+            set(_uqo_i): _uqo_n
+        ]
+        set(_uqo_i): {_uqo_i + 1}
+    ]
+]
+
+uq_opname(r): op [
+    len(_uqn_n): uq_op_codes
+    set(_uqn_i): 0
+    set(r): "INVALID"
+    while(_): {_uqn_i < _uqn_n} [
+        at(_uqn_x): uq_op_codes _uqn_i
+        if(_): {_uqn_x = op} [
+            at(r): uq_op_names _uqn_i
+            set(_uqn_i): _uqn_n
+        ]
+        set(_uqn_i): {_uqn_i + 1}
+    ]
+]
+
+# --- tokens -------------------------------------------------------------------
+uq_blank(r): b [
+    set(r): {b = 32 || b = 9 || b = 13 || b = 10 || b = 11 || b = 12}
+]
+
+# Splits one line into tokens; quoted tokens are unescaped. Returns null for
+# a malformed quoted token (bad escape, missing quote, junk after a quote).
+uq_tokenize(r): line [
+    vec(_uqk_out): ""
+    len(_uqk_n): line
+    set(_uqk_i): 0
+    set(_uqk_ok): true
+    set(_uqk_stop): false
+    while(_): {_uqk_ok && _uqk_stop = false && _uqk_i < _uqk_n} [
+        byte(_uqk_b): line _uqk_i
+        uq_blank(_uqk_bl): _uqk_b
+        if(_): _uqk_bl [
+            set(_uqk_i): {_uqk_i + 1}
+        ]
+        elif(_): {_uqk_b = 35 || _uqk_b = 59} [
+            set(_uqk_stop): true
+        ]
+        elif(_): {_uqk_b = 34} [
+            set(_uqk_i): {_uqk_i + 1}
+            set(_uqk_tok): ""
+            set(_uqk_closed): false
+            while(_): {_uqk_ok && _uqk_closed = false && _uqk_i < _uqk_n} [
+                byte(_uqk_c): line _uqk_i
+                at(_uqk_ch): line _uqk_i
+                set(_uqk_i): {_uqk_i + 1}
+                if(_): {_uqk_c = 34} [
+                    set(_uqk_closed): true
+                ]
+                elif(_): {_uqk_c = 92} [
+                    if(_): {_uqk_i >= _uqk_n} [
+                        set(_uqk_ok): false
+                    ]
+                    else(_): [
+                        byte(_uqk_e): line _uqk_i
+                        set(_uqk_i): {_uqk_i + 1}
+                        if(_): {_uqk_e = 110} [
+                            concat(_uqk_tok): _uqk_tok "\n"
+                        ]
+                        elif(_): {_uqk_e = 114} [
+                            concat(_uqk_tok): _uqk_tok "\r"
+                        ]
+                        elif(_): {_uqk_e = 116} [
+                            concat(_uqk_tok): _uqk_tok "\t"
+                        ]
+                        elif(_): {_uqk_e = 92} [
+                            concat(_uqk_tok): _uqk_tok "\\"
+                        ]
+                        elif(_): {_uqk_e = 34} [
+                            concat(_uqk_tok): _uqk_tok "\""
+                        ]
+                        else(_): [
+                            set(_uqk_ok): false
+                        ]
+                    ]
+                ]
+                else(_): [
+                    concat(_uqk_tok): _uqk_tok _uqk_ch
+                ]
+            ]
+            if(_): {_uqk_closed = false} [
+                set(_uqk_ok): false
+            ]
+            if(_): _uqk_ok [
+                push(_): _uqk_out _uqk_tok
+                if(_): {_uqk_i < _uqk_n} [
+                    byte(_uqk_b): line _uqk_i
+                    uq_blank(_uqk_bl): _uqk_b
+                    if(_): {_uqk_bl = false && _uqk_b != 35 && _uqk_b != 59} [
+                        set(_uqk_ok): false
+                    ]
+                ]
+            ]
+        ]
+        else(_): [
+            set(_uqk_start): _uqk_i
+            set(_uqk_go): true
+            while(_): {_uqk_go && _uqk_i < _uqk_n} [
+                byte(_uqk_b): line _uqk_i
+                uq_blank(_uqk_bl): _uqk_b
+                set(_uqk_go): {_uqk_bl = false && _uqk_b != 35 && _uqk_b != 59}
+                if(_): _uqk_go [
+                    set(_uqk_i): {_uqk_i + 1}
+                ]
+            ]
+            slice(_uqk_tok): line _uqk_start {_uqk_i - _uqk_start}
+            push(_): _uqk_out _uqk_tok
+        ]
+    ]
+    set(r): null
+    if(_): _uqk_ok [
+        set(r): _uqk_out
+    ]
+]
+
+# --- operands -------------------------------------------------------------------
+uq_all_digits(r): text [
+    len(_uqd_n): text
+    set(r): {_uqd_n > 0}
+    set(_uqd_i): 0
+    while(_): {r && _uqd_i < _uqd_n} [
+        byte(_uqd_b): text _uqd_i
+        set(r): {_uqd_b >= 48 && _uqd_b <= 57}
+        set(_uqd_i): {_uqd_i + 1}
+    ]
+]
+
+# Unsigned 32-bit value, or -1.
+uq_u32(r): text [
+    set(r): {0 - 1}
+    uq_all_digits(_uqu_ok): text
+    if(_): _uqu_ok [
+        len(_uqu_n): text
+        # At most 4294967295, and never more than a host integer holds
+        # (2147483647 on 32-bit hosts): longer digit strings are refused
+        # before they can overflow.
+        str_int_limit(_uqu_max):
+        set(_uqu_cap): 4294967295.0
+        if(_): {_uqu_max < _uqu_cap} [
+            set(_uqu_cap): _uqu_max
+        ]
+        if(_): {_uqu_n <= 10} [
+            set(_uqu_approx): 0.0
+            set(_uqu_k): 0
+            while(_): {_uqu_k < _uqu_n} [
+                byte(_uqu_b): text _uqu_k
+                set(_uqu_approx): {_uqu_approx * 10.0 + (_uqu_b - 48)}
+                set(_uqu_k): {_uqu_k + 1}
+            ]
+            if(_): {_uqu_approx <= _uqu_cap} [
+                str_to_number(r): text
+            ]
+        ]
+    ]
+]
+
+# One-byte A/B/C operand: "_", R0..R31 / r0..r31, or 0..255. -1 if invalid.
+uq_field(r): text [
+    set(r): {0 - 1}
+    len(_uqf_n): text
+    if(_): {text = "_"} [
+        set(r): 0
+    ]
+    elif(_): {_uqf_n > 1} [
+        at(_uqf_c): text 0
+        if(_): {_uqf_c = "R" || _uqf_c = "r"} [
+            slice(_uqf_rest): text 1 {_uqf_n - 1}
+            uq_u32(_uqf_v): _uqf_rest
+            if(_): {_uqf_v >= 0 && _uqf_v < 32} [
+                set(r): _uqf_v
+            ]
+        ]
+        else(_): [
+            uq_u32(_uqf_v): text
+            if(_): {_uqf_v >= 0 && _uqf_v <= 255} [
+                set(r): _uqf_v
+            ]
+        ]
+    ]
+    elif(_): {_uqf_n = 1} [
+        uq_u32(_uqf_v): text
+        if(_): {_uqf_v >= 0} [
+            set(r): _uqf_v
+        ]
+    ]
+]
+
+# Signed decimal integer text (strtol-style, optional sign).
+uq_int_text(r): text [
+    set(r): false
+    len(_uqi_n): text
+    if(_): {_uqi_n > 0} [
+        at(_uqi_c): text 0
+        set(_uqi_body): text
+        if(_): {_uqi_c = "-" || _uqi_c = "+"} [
+            slice(_uqi_body): text 1 {_uqi_n - 1}
+        ]
+        uq_all_digits(r): _uqi_body
+    ]
+]
+
+uq_label_index(r): name [
+    len(_uql_n): uq_label_names
+    set(_uql_i): 0
+    set(r): {0 - 1}
+    while(_): {_uql_i < _uql_n} [
+        at(_uql_x): uq_label_names _uql_i
+        if(_): {_uql_x = name} [
+            at(r): uq_label_addrs _uql_i
+            set(_uql_i): _uql_n
+        ]
+        set(_uql_i): {_uql_i + 1}
+    ]
+]
+
+# --- assembler ------------------------------------------------------------------
+# Returns "" on success or the diagnostic text.
+uq_line(r): tokens lineno [
+    set(r): ""
+    concat(_uqa_where): "UUASM:" lineno ": "
+    len(_uqa_n): tokens
+    if(_): {_uqa_n = 0} [
+        return(_): r
+    ]
+    at(_uqa_first): tokens 0
+    len(_uqa_fl): _uqa_first
+    byte(_uqa_last): _uqa_first {_uqa_fl - 1}
+    # label
+    if(_): {_uqa_n = 1 && _uqa_fl > 1 && _uqa_last = 58} [
+        if(_): {uq_header = false} [
+            concat(r): _uqa_where "invalid directive"
+            return(_): r
+        ]
+        slice(_uqa_label): _uqa_first 0 {_uqa_fl - 1}
+        uq_label_index(_uqa_known): _uqa_label
+        if(_): {_uqa_known >= 0} [
+            concat(r): _uqa_where "duplicate or invalid label"
+            return(_): r
+        ]
+        push(_): uq_label_names _uqa_label
+        len(_uqa_addr): uq_code
+        push(_): uq_label_addrs _uqa_addr
+        return(_): r
+    ]
+    if(_): {_uqa_n = 1} [
+        # A single token that is not a label is a malformed instruction.
+        if(_): {_uqa_first != ".uuasm" && _uqa_first != ".const" && _uqa_first != ".string" && _uqa_first != ".function"} [
+            concat(r): _uqa_where "invalid instruction or operand"
+            return(_): r
+        ]
+    ]
+    if(_): {_uqa_first = ".uuasm"} [
+        set(_uqa_ok): {uq_header = false && _uqa_n = 2}
+        if(_): _uqa_ok [
+            at(_uqa_v): tokens 1
+            set(_uqa_ok): {_uqa_v = "1"}
+        ]
+        if(_): {_uqa_ok = false} [
+            concat(r): _uqa_where "invalid directive"
+            return(_): r
+        ]
+        set(uq_header): true
+        return(_): r
+    ]
+    if(_): {uq_header = false} [
+        if(_): {_uqa_first = ".const" || _uqa_first = ".string" || _uqa_first = ".function"} [
+            concat(r): _uqa_where "invalid directive"
+        ]
+        else(_): [
+            concat(r): _uqa_where "invalid instruction or operand"
+        ]
+        return(_): r
+    ]
+    if(_): {_uqa_first = ".const"} [
+        uq_const(_uqa_ok): tokens
+        if(_): {_uqa_ok = false} [
+            concat(r): _uqa_where "invalid directive"
+        ]
+        return(_): r
+    ]
+    if(_): {_uqa_first = ".string"} [
+        set(_uqa_ok): {_uqa_n = 3}
+        if(_): _uqa_ok [
+            at(_uqa_t1): tokens 1
+            uq_u32(_uqa_idx): _uqa_t1
+            len(_uqa_have): uq_strings
+            set(_uqa_ok): {_uqa_idx = _uqa_have}
+        ]
+        if(_): _uqa_ok [
+            at(_uqa_text): tokens 2
+            push(_): uq_strings _uqa_text
+        ]
+        else(_): [
+            concat(r): _uqa_where "invalid directive"
+        ]
+        return(_): r
+    ]
+    if(_): {_uqa_first = ".function"} [
+        uq_function(_uqa_ok): tokens lineno
+        if(_): {_uqa_ok = false} [
+            concat(r): _uqa_where "invalid directive"
+        ]
+        return(_): r
+    ]
+    # instruction: MNEMONIC A B C IMMEDIATE
+    set(_uqa_ok): {_uqa_n = 5}
+    set(_uqa_op): {0 - 1}
+    if(_): _uqa_ok [
+        uq_opcode(_uqa_op): _uqa_first
+        set(_uqa_ok): {_uqa_op >= 0}
+    ]
+    if(_): _uqa_ok [
+        at(_uqa_ta): tokens 1
+        at(_uqa_tb): tokens 2
+        at(_uqa_tc): tokens 3
+        at(_uqa_ti): tokens 4
+        uq_field(_uqa_a): _uqa_ta
+        uq_field(_uqa_b): _uqa_tb
+        uq_field(_uqa_c): _uqa_tc
+        set(_uqa_ok): {_uqa_a >= 0 && _uqa_b >= 0 && _uqa_c >= 0}
+    ]
+    if(_): _uqa_ok [
+        len(_uqa_il): _uqa_ti
+        at(_uqa_i0): _uqa_ti 0
+        if(_): {_uqa_i0 = "@"} [
+            set(_uqa_ok): {_uqa_op = 48 || _uqa_op = 49 || _uqa_op = 50}
+            if(_): _uqa_ok [
+                slice(_uqa_target): _uqa_ti 1 {_uqa_il - 1}
+                len(_uqa_at): uq_code
+                push(_): uq_fix_at _uqa_at
+                push(_): uq_fix_names _uqa_target
+                push(_): uq_fix_lines lineno
+                set(_uqa_imm): 0
+            ]
+        ]
+        else(_): [
+            uq_u32(_uqa_imm): _uqa_ti
+            set(_uqa_ok): {_uqa_imm >= 0}
+        ]
+    ]
+    if(_): {_uqa_ok = false} [
+        concat(r): _uqa_where "invalid instruction or operand"
+        return(_): r
+    ]
+    vec(_uqa_ins): ""
+    push(_): _uqa_ins _uqa_op
+    push(_): _uqa_ins _uqa_a
+    push(_): _uqa_ins _uqa_b
+    push(_): _uqa_ins _uqa_c
+    push(_): _uqa_ins _uqa_imm
+    push(_): uq_code _uqa_ins
+]
+
+uq_const(r): tokens [
+    len(_uqc_n): tokens
+    set(r): {_uqc_n >= 3 && _uqc_n <= 4}
+    if(_): r [
+        at(_uqc_t1): tokens 1
+        uq_u32(_uqc_idx): _uqc_t1
+        len(_uqc_have): uq_consts
+        set(r): {_uqc_idx = _uqc_have}
+    ]
+    if(_): r [
+        at(_uqc_kind): tokens 2
+        if(_): {_uqc_kind = "null"} [
+            set(r): {_uqc_n = 3}
+            if(_): r [
+                push(_): uq_consts null
+            ]
+        ]
+        elif(_): {_uqc_n != 4} [
+            set(r): false
+        ]
+        else(_): [
+            at(_uqc_text): tokens 3
+            if(_): {_uqc_kind = "int"} [
+                uq_int_text(r): _uqc_text
+                if(_): r [
+                    str_to_number(_uqc_v): _uqc_text
+                    push(_): uq_consts _uqc_v
+                ]
+            ]
+            elif(_): {_uqc_kind = "real"} [
+                str_to_number(_uqc_v): _uqc_text
+                set(r): {_uqc_v != null}
+                if(_): r [
+                    push(_): uq_consts {_uqc_v * 1.0}
+                ]
+            ]
+            elif(_): {_uqc_kind = "bool"} [
+                set(r): {_uqc_text = "true" || _uqc_text = "false"}
+                if(_): r [
+                    push(_): uq_consts {_uqc_text = "true"}
+                ]
+            ]
+            elif(_): {_uqc_kind = "string"} [
+                push(_): uq_consts _uqc_text
+            ]
+            else(_): [
+                set(r): false
+            ]
+        ]
+    ]
+]
+
+uq_function(r): tokens lineno [
+    len(_uqfn_n): tokens
+    set(r): {_uqfn_n >= 5}
+    if(_): r [
+        at(_uqfn_name): tokens 1
+        at(_uqfn_entry): tokens 2
+        at(_uqfn_ret): tokens 3
+        at(_uqfn_t4): tokens 4
+        uq_u32(_uqfn_count): _uqfn_t4
+        len(_uqfn_el): _uqfn_entry
+        set(r): {_uqfn_count >= 0 && _uqfn_count <= 31 && _uqfn_n = _uqfn_count + 5 && _uqfn_name != "" && _uqfn_ret != "" && _uqfn_el > 1}
+    ]
+    if(_): r [
+        at(_uqfn_at): _uqfn_entry 0
+        set(r): {_uqfn_at = "@"}
+    ]
+    if(_): r [
+        vec(_uqfn_params): ""
+        set(_uqfn_i): 0
+        while(_): {_uqfn_i < _uqfn_count} [
+            at(_uqfn_p): tokens {_uqfn_i + 5}
+            if(_): {_uqfn_p = ""} [
+                set(r): false
+            ]
+            push(_): _uqfn_params _uqfn_p
+            set(_uqfn_i): {_uqfn_i + 1}
+        ]
+        len(_uqfn_have): uq_funcs
+        set(_uqfn_i): 0
+        while(_): {_uqfn_i < _uqfn_have} [
+            at(_uqfn_f): uq_funcs _uqfn_i
+            at(_uqfn_fname): _uqfn_f 0
+            if(_): {_uqfn_fname = _uqfn_name} [
+                set(r): false
+            ]
+            set(_uqfn_i): {_uqfn_i + 1}
+        ]
+    ]
+    if(_): r [
+        slice(_uqfn_label): _uqfn_entry 1 {_uqfn_el - 1}
+        vec(_uqfn_rec): ""
+        push(_): _uqfn_rec _uqfn_name
+        push(_): _uqfn_rec _uqfn_label
+        push(_): _uqfn_rec _uqfn_ret
+        push(_): _uqfn_rec _uqfn_params
+        push(_): _uqfn_rec lineno
+        push(_): uq_funcs _uqfn_rec
+    ]
+]
+
+# Assembles the file at path. Returns "" or the first diagnostic.
+uq_assemble(r): path [
+    uq_tables(_):
+    vec(uq_code): ""
+    vec(uq_consts): ""
+    vec(uq_strings): ""
+    vec(uq_funcs): ""
+    vec(uq_label_names): ""
+    vec(uq_label_addrs): ""
+    vec(uq_fix_at): ""
+    vec(uq_fix_names): ""
+    vec(uq_fix_lines): ""
+    set(uq_header): false
+    set(r): ""
+    open_file(_uqas_h): path "rb"
+    if(_): {_uqas_h < 0} [
+        concat(r): "UUASM: cannot open " path
+        return(_): r
+    ]
+    set(_uqas_lineno): 1
+    read_line(_uqas_line): _uqas_h
+    while(_): {_uqas_line != null && r = ""} [
+        uq_tokenize(_uqas_tokens): _uqas_line
+        str_from_int(_uqas_ln): _uqas_lineno
+        if(_): {_uqas_tokens = null} [
+            concat(r): "UUASM:" _uqas_ln ": malformed quoted token"
+        ]
+        else(_): [
+            uq_line(r): _uqas_tokens _uqas_ln
+        ]
+        set(_uqas_lineno): {_uqas_lineno + 1}
+        read_line(_uqas_line): _uqas_h
+    ]
+    close_file(_): _uqas_h
+    if(_): {r != ""} [
+        return(_): r
+    ]
+    if(_): {uq_header = false} [
+        set(r): "UUASM: missing .uuasm 1 header"
+        return(_): r
+    ]
+    len(_uqas_count): uq_code
+    len(_uqas_nf): uq_fix_at
+    set(_uqas_i): 0
+    while(_): {_uqas_i < _uqas_nf && r = ""} [
+        at(_uqas_name): uq_fix_names _uqas_i
+        uq_label_index(_uqas_target): _uqas_name
+        if(_): {_uqas_target < 0 || _uqas_target >= _uqas_count} [
+            at(_uqas_fl): uq_fix_lines _uqas_i
+            concat(r): "UUASM:" _uqas_fl ": unresolved or out-of-range label '" _uqas_name "'"
+        ]
+        else(_): [
+            at(_uqas_at): uq_fix_at _uqas_i
+            at(_uqas_ins): uq_code _uqas_at
+            set(_uqas_ins): 4 _uqas_target
+        ]
+        set(_uqas_i): {_uqas_i + 1}
+    ]
+    len(_uqas_nfn): uq_funcs
+    set(_uqas_i): 0
+    while(_): {_uqas_i < _uqas_nfn && r = ""} [
+        at(_uqas_f): uq_funcs _uqas_i
+        at(_uqas_label): _uqas_f 1
+        uq_label_index(_uqas_entry): _uqas_label
+        if(_): {_uqas_entry < 0 || _uqas_entry >= _uqas_count} [
+            at(_uqas_fln): _uqas_f 4
+            concat(r): "UUASM:" _uqas_fln ": unresolved function entry '" _uqas_label "'"
+        ]
+        else(_): [
+            set(_uqas_f): 1 _uqas_entry
+        ]
+        set(_uqas_i): {_uqas_i + 1}
+    ]
+    if(_): {r = ""} [
+        set(_uqas_halt): false
+        if(_): {_uqas_count > 0} [
+            at(_uqas_lastins): uq_code {_uqas_count - 1}
+            at(_uqas_lastop): _uqas_lastins 0
+            set(_uqas_halt): {_uqas_lastop = 240}
+        ]
+        if(_): {_uqas_halt = false} [
+            set(r): "UUASM: program must end with HALT"
+        ]
+    ]
+]
+
+# --- disassembler -----------------------------------------------------------------
+uq_quote(r): text [
+    len(_uqq_n): text
+    set(_uqq_i): 0
+    set(_uqq_out): "\""
+    while(_): {_uqq_i < _uqq_n} [
+        at(_uqq_c): text _uqq_i
+        if(_): {_uqq_c = "\\"} [
+            set(_uqq_c): "\\\\"
+        ]
+        elif(_): {_uqq_c = "\""} [
+            set(_uqq_c): "\\\""
+        ]
+        elif(_): {_uqq_c = "\n"} [
+            set(_uqq_c): "\\n"
+        ]
+        elif(_): {_uqq_c = "\r"} [
+            set(_uqq_c): "\\r"
+        ]
+        elif(_): {_uqq_c = "\t"} [
+            set(_uqq_c): "\\t"
+        ]
+        concat(_uqq_out): _uqq_out _uqq_c
+        set(_uqq_i): {_uqq_i + 1}
+    ]
+    concat(r): _uqq_out "\""
+]
+
+# Prints the assembled program as canonical UUASM text that reassembles to
+# the same instructions. Jump targets and function entries get L<index>.
+uq_dump(r): [
+    print(_): ".uuasm 1"
+    len(_uqdm_n): uq_consts
+    set(_uqdm_i): 0
+    while(_): {_uqdm_i < _uqdm_n} [
+        at(_uqdm_v): uq_consts _uqdm_i
+        str_from_int(_uqdm_is): _uqdm_i
+        typeof(_uqdm_t): _uqdm_v
+        if(_): {_uqdm_t = "integer"} [
+            str_from_int(_uqdm_vs): _uqdm_v
+            concat(_uqdm_line): ".const " _uqdm_is " int " _uqdm_vs
+        ]
+        elif(_): {_uqdm_t = "real"} [
+            str_from_number(_uqdm_vs): _uqdm_v 10
+            concat(_uqdm_line): ".const " _uqdm_is " real " _uqdm_vs
+        ]
+        elif(_): {_uqdm_t = "boolean"} [
+            set(_uqdm_vs): "false"
+            if(_): _uqdm_v [
+                set(_uqdm_vs): "true"
+            ]
+            concat(_uqdm_line): ".const " _uqdm_is " bool " _uqdm_vs
+        ]
+        elif(_): {_uqdm_t = "string"} [
+            uq_quote(_uqdm_vs): _uqdm_v
+            concat(_uqdm_line): ".const " _uqdm_is " string " _uqdm_vs
+        ]
+        else(_): [
+            concat(_uqdm_line): ".const " _uqdm_is " null"
+        ]
+        print(_): _uqdm_line
+        set(_uqdm_i): {_uqdm_i + 1}
+    ]
+    len(_uqdm_n): uq_strings
+    set(_uqdm_i): 0
+    while(_): {_uqdm_i < _uqdm_n} [
+        at(_uqdm_v): uq_strings _uqdm_i
+        str_from_int(_uqdm_is): _uqdm_i
+        uq_quote(_uqdm_vs): _uqdm_v
+        concat(_uqdm_line): ".string " _uqdm_is " " _uqdm_vs
+        print(_): _uqdm_line
+        set(_uqdm_i): {_uqdm_i + 1}
+    ]
+    # instruction indexes that need a label
+    len(_uqdm_count): uq_code
+    vec(_uqdm_labeled): ""
+    set(_uqdm_i): 0
+    while(_): {_uqdm_i < _uqdm_count} [
+        push(_): _uqdm_labeled false
+        set(_uqdm_i): {_uqdm_i + 1}
+    ]
+    set(_uqdm_i): 0
+    while(_): {_uqdm_i < _uqdm_count} [
+        at(_uqdm_ins): uq_code _uqdm_i
+        at(_uqdm_op): _uqdm_ins 0
+        if(_): {_uqdm_op = 48 || _uqdm_op = 49 || _uqdm_op = 50} [
+            at(_uqdm_to): _uqdm_ins 4
+            if(_): {_uqdm_to < _uqdm_count} [
+                set(_uqdm_labeled): _uqdm_to true
+            ]
+        ]
+        set(_uqdm_i): {_uqdm_i + 1}
+    ]
+    len(_uqdm_n): uq_funcs
+    set(_uqdm_i): 0
+    while(_): {_uqdm_i < _uqdm_n} [
+        at(_uqdm_f): uq_funcs _uqdm_i
+        at(_uqdm_name): _uqdm_f 0
+        at(_uqdm_entry): _uqdm_f 1
+        at(_uqdm_ret): _uqdm_f 2
+        at(_uqdm_params): _uqdm_f 3
+        set(_uqdm_labeled): _uqdm_entry true
+        str_from_int(_uqdm_es): _uqdm_entry
+        len(_uqdm_np): _uqdm_params
+        str_from_int(_uqdm_nps): _uqdm_np
+        concat(_uqdm_line): ".function " _uqdm_name " @L" _uqdm_es " " _uqdm_ret " " _uqdm_nps
+        set(_uqdm_j): 0
+        while(_): {_uqdm_j < _uqdm_np} [
+            at(_uqdm_p): _uqdm_params _uqdm_j
+            concat(_uqdm_line): _uqdm_line " " _uqdm_p
+            set(_uqdm_j): {_uqdm_j + 1}
+        ]
+        print(_): _uqdm_line
+        set(_uqdm_i): {_uqdm_i + 1}
+    ]
+    set(_uqdm_i): 0
+    while(_): {_uqdm_i < _uqdm_count} [
+        at(_uqdm_mark): _uqdm_labeled _uqdm_i
+        if(_): _uqdm_mark [
+            str_from_int(_uqdm_is): _uqdm_i
+            concat(_uqdm_line): "L" _uqdm_is ":"
+            print(_): _uqdm_line
+        ]
+        at(_uqdm_ins): uq_code _uqdm_i
+        at(_uqdm_op): _uqdm_ins 0
+        uq_opname(_uqdm_line): _uqdm_op
+        set(_uqdm_k): 1
+        while(_): {_uqdm_k < 4} [
+            at(_uqdm_v): _uqdm_ins _uqdm_k
+            str_from_int(_uqdm_vs): _uqdm_v
+            concat(_uqdm_line): _uqdm_line " " _uqdm_vs
+            set(_uqdm_k): {_uqdm_k + 1}
+        ]
+        at(_uqdm_v): _uqdm_ins 4
+        str_from_int(_uqdm_vs): _uqdm_v
+        if(_): {_uqdm_op = 48 || _uqdm_op = 49 || _uqdm_op = 50} [
+            concat(_uqdm_vs): "@L" _uqdm_vs
+        ]
+        concat(_uqdm_line): _uqdm_line " " _uqdm_vs
+        print(_): _uqdm_line
+        set(_uqdm_i): {_uqdm_i + 1}
+    ]
+    set(r): 0
+]
+
+# --- executor ---------------------------------------------------------------------
+uq_reg(r): k [
+    at(r): uq_regs k
+]
+
+uq_setreg(r): k value [
+    set(uq_regs): k value
+    set(r): 0
+]
+
+uq_find(r): names name [
+    len(_uqfd_n): names
+    set(_uqfd_i): 0
+    set(r): {0 - 1}
+    while(_): {_uqfd_i < _uqfd_n} [
+        at(_uqfd_x): names _uqfd_i
+        if(_): {_uqfd_x = name} [
+            set(r): _uqfd_i
+            set(_uqfd_i): _uqfd_n
+        ]
+        set(_uqfd_i): {_uqfd_i + 1}
+    ]
+]
+
+uq_var_set(r): name value [
+    uq_find(_uqvs_i): uq_var_names name
+    if(_): {_uqvs_i < 0} [
+        push(_): uq_var_names name
+        push(_): uq_var_values value
+    ]
+    else(_): [
+        set(uq_var_values): _uqvs_i value
+    ]
+    set(r): 0
+]
+
+# Variable value, or null when undefined; uq_var_found tells which.
+uq_var_get(r): name [
+    uq_find(_uqvg_i): uq_var_names name
+    set(r): null
+    set(uq_var_found): {_uqvg_i >= 0}
+    if(_): uq_var_found [
+        at(r): uq_var_values _uqvg_i
+    ]
+]
+
+uq_is_number(r): value [
+    typeof(_uqnm_t): value
+    set(r): {_uqnm_t = "integer" || _uqnm_t = "real"}
+]
+
+uq_is_integer(r): value [
+    typeof(_uqin_t): value
+    set(r): {_uqin_t = "integer"}
+]
+
+uq_error(r): message [
+    concat(_uqer_text): "UUASM VM: " message " at instruction " uq_ip_text
+    fail(_): _uqer_text
+    set(r): 0
+]
+
+uq_binary(r): op b c [
+    set(r): null
+    uq_is_number(_uqb_nb): b
+    uq_is_number(_uqb_nc): c
+    if(_): {op >= 16 && op <= 20} [
+        if(_): {_uqb_nb = false || _uqb_nc = false} [
+            uq_error(_): "invalid operand type"
+        ]
+    ]
+    if(_): {op = 16} [ set(r): {b + c} ]
+    elif(_): {op = 17} [ set(r): {b - c} ]
+    elif(_): {op = 18} [ set(r): {b * c} ]
+    elif(_): {op = 19} [
+        if(_): {c = 0} [
+            uq_error(_): "division by zero"
+        ]
+        set(r): {b / c}
+    ]
+    elif(_): {op = 20} [
+        uq_is_integer(_uqb_ib): b
+        uq_is_integer(_uqb_ic): c
+        if(_): {_uqb_ib = false || _uqb_ic = false} [
+            uq_error(_): "modulo requires integer operands"
+        ]
+        if(_): {c = 0} [
+            uq_error(_): "modulo by zero"
+        ]
+        set(r): {b % c}
+    ]
+    elif(_): {op = 22} [ set(r): {b = c} ]
+    elif(_): {op = 23} [ set(r): {b != c} ]
+    elif(_): {op >= 24 && op <= 27} [
+        if(_): {_uqb_nb = false || _uqb_nc = false} [
+            uq_error(_): "comparison requires numbers"
+        ]
+        if(_): {op = 24} [ set(r): {b < c} ]
+        if(_): {op = 25} [ set(r): {b <= c} ]
+        if(_): {op = 26} [ set(r): {b > c} ]
+        if(_): {op = 27} [ set(r): {b >= c} ]
+    ]
+    elif(_): {op = 28 || op = 29} [
+        # LAND/LOR yield booleans; source-level && and || short-circuit to
+        # an operand value instead, so test truthiness explicitly.
+        set(_uqb_tb): false
+        set(_uqb_tc): false
+        if(_): b [
+            set(_uqb_tb): true
+        ]
+        if(_): c [
+            set(_uqb_tc): true
+        ]
+        if(_): {op = 28} [
+            set(r): {_uqb_tb && _uqb_tc}
+        ]
+        else(_): [
+            set(r): {_uqb_tb || _uqb_tc}
+        ]
+    ]
+    else(_): [
+        uq_is_integer(_uqb_ib): b
+        uq_is_integer(_uqb_ic): c
+        if(_): {_uqb_ib = false || _uqb_ic = false} [
+            uq_error(_): "bitwise operation requires integers"
+        ]
+        if(_): {op = 30} [ set(r): {b ^ c} ]
+        if(_): {op = 31} [ set(r): {b & c} ]
+        if(_): {op = 32} [ set(r): {b | c} ]
+        if(_): {op = 33} [ set(r): {b << c} ]
+        if(_): {op = 34} [ set(r): {b >> c} ]
+    ]
+]
+
+# OOP: value-only builtins with arguments in R0..R(argc-1).
+uq_oop(r): name argc [
+    set(r): null
+    set(_uqop_known): true
+    uq_reg(_uqop_0): 0
+    uq_reg(_uqop_1): 1
+    uq_reg(_uqop_2): 2
+    if(_): {name = "len" && argc = 1} [ len(r): _uqop_0 ]
+    elif(_): {name = "at" && argc = 2} [ at(r): _uqop_0 _uqop_1 ]
+    elif(_): {name = "push" && argc = 2} [ push(_): _uqop_0 _uqop_1 ]
+    elif(_): {name = "vec" && argc = 0} [ vec(r): "" ]
+    elif(_): {name = "vec" && argc = 1} [ vec(r): _uqop_0 ]
+    elif(_): {name = "slice" && argc = 3} [ slice(r): _uqop_0 _uqop_1 _uqop_2 ]
+    elif(_): {name = "byte" && argc = 2} [ byte(r): _uqop_0 _uqop_1 ]
+    elif(_): {name = "getf" && argc = 2} [ getf(r): _uqop_0 _uqop_1 ]
+    elif(_): {name = "setf" && argc = 3} [ setf(_): _uqop_0 _uqop_1 _uqop_2 ]
+    elif(_): {name = "encode" && argc = 1} [ encode(r): _uqop_0 ]
+    elif(_): {name = "decode" && argc = 1} [ decode(r): _uqop_0 ]
+    elif(_): {name = "typeof" && argc = 1} [ typeof(r): _uqop_0 ]
+    elif(_): {name = "readfile" && argc = 1} [ readfile(r): _uqop_0 ]
+    elif(_): {name = "writefile" && argc = 2} [ writefile(r): _uqop_0 _uqop_1 ]
+    elif(_): {name = "file_exists" && argc = 1} [ file_exists(r): _uqop_0 ]
+    elif(_): {name = "sin" && argc = 1} [ sin(r): _uqop_0 ]
+    elif(_): {name = "ln" && argc = 1} [ ln(r): _uqop_0 ]
+    else(_): [
+        set(_uqop_known): false
+    ]
+    if(_): {_uqop_known = false} [
+        str_from_int(_uqop_ac): argc
+        concat(_uqop_msg): "OOP command '" name "' with " _uqop_ac " argument(s) is not available in the russia.su bootstrap"
+        uq_error(_): _uqop_msg
+    ]
+]
+
+uq_call(r): ins [
+    at(_uqcl_a): ins 1
+    at(_uqcl_b): ins 2
+    at(_uqcl_c): ins 3
+    at(_uqcl_f): ins 4
+    len(_uqcl_nf): uq_funcs
+    if(_): {_uqcl_f >= _uqcl_nf} [
+        uq_error(_): "invalid function index"
+    ]
+    at(_uqcl_fn): uq_funcs _uqcl_f
+    at(_uqcl_entry): _uqcl_fn 1
+    at(_uqcl_ret): _uqcl_fn 2
+    at(_uqcl_params): _uqcl_fn 3
+    len(_uqcl_np): _uqcl_params
+    if(_): {_uqcl_b != _uqcl_np || _uqcl_a + _uqcl_b > 31} [
+        uq_error(_): "invalid function argument count"
+    ]
+    len(_uqcl_depth): uq_frames
+    if(_): {_uqcl_depth >= 1024} [
+        uq_error(_): "call-stack overflow"
+    ]
+    # frame: [return ip, return register, function, registers, saved, existed]
+    vec(_uqcl_regs): ""
+    set(_uqcl_i): 0
+    while(_): {_uqcl_i < 32} [
+        at(_uqcl_v): uq_regs _uqcl_i
+        push(_): _uqcl_regs _uqcl_v
+        set(_uqcl_i): {_uqcl_i + 1}
+    ]
+    vec(_uqcl_saved): ""
+    vec(_uqcl_existed): ""
+    set(_uqcl_i): 0
+    while(_): {_uqcl_i <= _uqcl_np} [
+        if(_): {_uqcl_i < _uqcl_np} [
+            at(_uqcl_name): _uqcl_params _uqcl_i
+        ]
+        else(_): [
+            set(_uqcl_name): _uqcl_ret
+        ]
+        uq_var_get(_uqcl_v): _uqcl_name
+        push(_): _uqcl_saved _uqcl_v
+        push(_): _uqcl_existed uq_var_found
+        set(_uqcl_i): {_uqcl_i + 1}
+    ]
+    vec(_uqcl_frame): ""
+    push(_): _uqcl_frame uq_ip
+    push(_): _uqcl_frame _uqcl_c
+    push(_): _uqcl_frame _uqcl_f
+    push(_): _uqcl_frame _uqcl_regs
+    push(_): _uqcl_frame _uqcl_saved
+    push(_): _uqcl_frame _uqcl_existed
+    push(_): uq_frames _uqcl_frame
+    set(_uqcl_i): 0
+    while(_): {_uqcl_i < _uqcl_np} [
+        at(_uqcl_name): _uqcl_params _uqcl_i
+        at(_uqcl_v): uq_regs {_uqcl_a + _uqcl_i}
+        uq_var_set(_): _uqcl_name _uqcl_v
+        set(_uqcl_i): {_uqcl_i + 1}
+    ]
+    set(_uqcl_i): 0
+    while(_): {_uqcl_i < 32} [
+        set(uq_regs): _uqcl_i null
+        set(_uqcl_i): {_uqcl_i + 1}
+    ]
+    set(uq_ip): _uqcl_entry
+    set(r): 0
+]
+
+uq_return(r): [
+    len(_uqrt_depth): uq_frames
+    if(_): {_uqrt_depth = 0} [
+        uq_error(_): "return without a call frame"
+    ]
+    at(_uqrt_frame): uq_frames {_uqrt_depth - 1}
+    at(_uqrt_rip): _uqrt_frame 0
+    at(_uqrt_reg): _uqrt_frame 1
+    at(_uqrt_f): _uqrt_frame 2
+    at(_uqrt_regs): _uqrt_frame 3
+    at(_uqrt_saved): _uqrt_frame 4
+    at(_uqrt_existed): _uqrt_frame 5
+    at(_uqrt_fn): uq_funcs _uqrt_f
+    at(_uqrt_ret): _uqrt_fn 2
+    at(_uqrt_params): _uqrt_fn 3
+    len(_uqrt_np): _uqrt_params
+    uq_var_get(_uqrt_result): _uqrt_ret
+    set(_uqrt_i): 0
+    while(_): {_uqrt_i <= _uqrt_np} [
+        if(_): {_uqrt_i < _uqrt_np} [
+            at(_uqrt_name): _uqrt_params _uqrt_i
+        ]
+        else(_): [
+            set(_uqrt_name): _uqrt_ret
+        ]
+        at(_uqrt_had): _uqrt_existed _uqrt_i
+        set(_uqrt_v): null
+        if(_): _uqrt_had [
+            at(_uqrt_v): _uqrt_saved _uqrt_i
+        ]
+        uq_var_set(_): _uqrt_name _uqrt_v
+        set(_uqrt_i): {_uqrt_i + 1}
+    ]
+    set(uq_regs): _uqrt_regs
+    set(uq_regs): _uqrt_reg _uqrt_result
+    set(uq_ip): _uqrt_rip
+    # drop the frame: rebuild the stack without its last entry
+    vec(_uqrt_rest): ""
+    set(_uqrt_i): 0
+    while(_): {_uqrt_i < _uqrt_depth - 1} [
+        at(_uqrt_keep): uq_frames _uqrt_i
+        push(_): _uqrt_rest _uqrt_keep
+        set(_uqrt_i): {_uqrt_i + 1}
+    ]
+    set(uq_frames): _uqrt_rest
+    set(r): 0
+]
+
+# Runs the assembled program from instruction 0 until HALT.
+uq_execute(r): [
+    vec(uq_regs): ""
+    set(_uqx_i): 0
+    while(_): {_uqx_i < 32} [
+        push(_): uq_regs null
+        set(_uqx_i): {_uqx_i + 1}
+    ]
+    vec(uq_var_names): ""
+    vec(uq_var_values): ""
+    vec(uq_hash_names): ""
+    vec(uq_hash_values): ""
+    vec(uq_frames): ""
+    set(uq_var_found): false
+    set(uq_ip): 0
+    set(_uqx_running): true
+    len(_uqx_count): uq_code
+    len(_uqx_nconst): uq_consts
+    len(_uqx_nstr): uq_strings
+    while(_): _uqx_running [
+        str_from_int(uq_ip_text): uq_ip
+        if(_): {uq_ip >= _uqx_count} [
+            uq_error(_): "instruction pointer outside the program"
+        ]
+        at(_uqx_ins): uq_code uq_ip
+        set(uq_ip): {uq_ip + 1}
+        at(_uqx_op): _uqx_ins 0
+        at(_uqx_a): _uqx_ins 1
+        at(_uqx_b): _uqx_ins 2
+        at(_uqx_c): _uqx_ins 3
+        at(_uqx_imm): _uqx_ins 4
+        set(_uqx_needs_const): {_uqx_op = 1}
+        set(_uqx_needs_string): {_uqx_op >= 2 && _uqx_op <= 7 || _uqx_op = 64 || _uqx_op = 68}
+        if(_): {_uqx_needs_const && _uqx_imm >= _uqx_nconst} [
+            uq_error(_): "invalid constant index"
+        ]
+        if(_): {_uqx_needs_string && _uqx_imm >= _uqx_nstr} [
+            uq_error(_): "invalid string index"
+        ]
+        if(_): {_uqx_op = 0} [
+            set(_uqx_op): 0
+        ]
+        elif(_): {_uqx_op = 1} [
+            at(_uqx_v): uq_consts _uqx_imm
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 2} [
+            at(_uqx_name): uq_strings _uqx_imm
+            uq_var_get(_uqx_v): _uqx_name
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 3 || _uqx_op = 64} [
+            at(_uqx_name): uq_strings _uqx_imm
+            uq_reg(_uqx_v): _uqx_a
+            uq_var_set(_): _uqx_name _uqx_v
+        ]
+        elif(_): {_uqx_op = 4} [
+            at(_uqx_name): uq_strings _uqx_imm
+            uq_find(_uqx_k): uq_hash_names _uqx_name
+            if(_): {_uqx_k < 0} [
+                concat(_uqx_msg): "undefined hash key '" _uqx_name "'"
+                uq_error(_): _uqx_msg
+            ]
+            at(_uqx_v): uq_hash_values _uqx_k
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 5} [
+            at(_uqx_name): uq_strings _uqx_imm
+            uq_reg(_uqx_v): _uqx_a
+            uq_find(_uqx_k): uq_hash_names _uqx_name
+            if(_): {_uqx_k < 0} [
+                push(_): uq_hash_names _uqx_name
+                push(_): uq_hash_values _uqx_v
+            ]
+            else(_): [
+                set(uq_hash_values): _uqx_k _uqx_v
+            ]
+        ]
+        elif(_): {_uqx_op = 6} [
+            at(_uqx_text): uq_strings _uqx_imm
+            decode(_uqx_v): _uqx_text
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 7} [
+            at(_uqx_name): uq_strings _uqx_imm
+            uq_var_get(_uqx_v): _uqx_name
+            if(_): {uq_var_found = false} [
+                concat(_uqx_msg): "undefined variable '" _uqx_name "'"
+                uq_error(_): _uqx_msg
+            ]
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 8 || _uqx_op = 9} [
+            if(_): {_uqx_op = 8} [
+                uq_reg(_uqx_vec): _uqx_b
+                uq_reg(_uqx_idx): _uqx_c
+            ]
+            else(_): [
+                uq_reg(_uqx_vec): _uqx_a
+                uq_reg(_uqx_idx): _uqx_b
+            ]
+            typeof(_uqx_vt): _uqx_vec
+            uq_is_integer(_uqx_ii): _uqx_idx
+            if(_): {_uqx_vt != "vector" || _uqx_ii = false} [
+                uq_error(_): "vector access requires a vector and an integer index"
+            ]
+            len(_uqx_vl): _uqx_vec
+            if(_): {_uqx_idx < 0 || _uqx_idx >= _uqx_vl} [
+                uq_error(_): "vector index out of range"
+            ]
+            if(_): {_uqx_op = 8} [
+                at(_uqx_v): _uqx_vec _uqx_idx
+                uq_setreg(_): _uqx_a _uqx_v
+            ]
+            else(_): [
+                uq_reg(_uqx_v): _uqx_c
+                set(_uqx_vec): _uqx_idx _uqx_v
+            ]
+        ]
+        elif(_): {_uqx_op >= 16 && _uqx_op <= 34 && _uqx_op != 21} [
+            uq_reg(_uqx_vb): _uqx_b
+            uq_reg(_uqx_vc): _uqx_c
+            uq_binary(_uqx_v): _uqx_op _uqx_vb _uqx_vc
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 21} [
+            uq_reg(_uqx_vb): _uqx_b
+            uq_is_number(_uqx_nb): _uqx_vb
+            if(_): {_uqx_nb = false} [
+                uq_error(_): "NEG requires a number"
+            ]
+            uq_setreg(_): _uqx_a {0 - _uqx_vb}
+        ]
+        elif(_): {_uqx_op = 48} [
+            set(uq_ip): _uqx_imm
+        ]
+        elif(_): {_uqx_op = 49 || _uqx_op = 50} [
+            uq_reg(_uqx_v): _uqx_a
+            set(_uqx_true): false
+            if(_): _uqx_v [
+                set(_uqx_true): true
+            ]
+            if(_): {(_uqx_op = 49 && _uqx_true) || (_uqx_op = 50 && _uqx_true = false)} [
+                set(uq_ip): _uqx_imm
+            ]
+        ]
+        elif(_): {_uqx_op = 65} [
+            uq_reg(_uqx_v): _uqx_a
+            print(_): _uqx_v
+        ]
+        elif(_): {_uqx_op = 66} [
+            if(_): {_uqx_c > _uqx_a || _uqx_a >= 31} [
+                uq_error(_): "invalid CONCAT operands"
+            ]
+            set(_uqx_text): ""
+            set(_uqx_k): 0
+            while(_): {_uqx_k < _uqx_c} [
+                uq_reg(_uqx_v): _uqx_k
+                typeof(_uqx_vt): _uqx_v
+                if(_): {_uqx_vt != "string"} [
+                    uq_error(_): "CONCAT requires strings"
+                ]
+                concat(_uqx_text): _uqx_text _uqx_v
+                set(_uqx_k): {_uqx_k + 1}
+            ]
+            uq_setreg(_): _uqx_a _uqx_text
+        ]
+        elif(_): {_uqx_op = 68} [
+            at(_uqx_name): uq_strings _uqx_imm
+            uq_oop(_uqx_v): _uqx_name _uqx_b
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 70} [
+            random64(_uqx_v):
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 71} [
+            uq_reg(_uqx_v): 0
+            uq_is_integer(_uqx_ii): _uqx_v
+            if(_): {_uqx_ii = false} [
+                uq_error(_): "seed_random64 requires an integer seed"
+            ]
+            seed_random64(_): _uqx_v
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 73} [
+            time(_uqx_v):
+            uq_setreg(_): _uqx_a _uqx_v
+        ]
+        elif(_): {_uqx_op = 76} [
+            uq_reg(_uqx_v): 0
+            cd(_): _uqx_v
+            uq_setreg(_): 0 0
+        ]
+        elif(_): {_uqx_op = 80} [
+            uq_call(_): _uqx_ins
+        ]
+        elif(_): {_uqx_op = 81 || _uqx_op = 82} [
+            uq_return(_):
+        ]
+        elif(_): {_uqx_op = 240} [
+            set(_uqx_running): false
+        ]
+        else(_): [
+            uq_opname(_uqx_mn): _uqx_op
+            concat(_uqx_msg): _uqx_mn " is not available in the russia.su bootstrap"
+            uq_error(_): _uqx_msg
+        ]
+    ]
+    set(r): 0
+]
+
+uq_is_assembly(r): path [
+    len(_uqia_n): path
+    set(r): false
+    if(_): {_uqia_n > 3} [
+        slice(_uqia_ext): path {_uqia_n - 3} 3
+        str_lower(_uqia_ext): _uqia_ext
+        set(r): {_uqia_ext = ".ua"}
+    ]
+    if(_): {_uqia_n > 6} [
+        slice(_uqia_ext): path {_uqia_n - 6} 6
+        str_lower(_uqia_ext): _uqia_ext
+        if(_): {_uqia_ext = ".uuasm"} [
+            set(r): true
+        ]
+    ]
+]
+
+# Entry from russia.su's init: mode "dump" prints the program, anything else
+# runs it. Returns the process status.
+uq_main(r): path mode [
+    uq_assemble(_uqm_err): path
+    if(_): {_uqm_err != ""} [
+        fail(_): _uqm_err
+    ]
+    if(_): {mode = "dump"} [
+        uq_dump(_):
+    ]
+    else(_): [
+        uq_execute(_):
+    ]
+    set(r): 0
+]
