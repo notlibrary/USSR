@@ -1,18 +1,27 @@
 # tula.su - small interactive 2D CAD, written in USSR on a Petersburg canvas.
-# Geometry, snapping, rendering and DXF export are USSR code; Petersburg only
-# draws the retained lines/circles it is handed.
+# Geometry, snapping, the view, the grid, DXF reading/writing and rendering
+# are USSR code; Petersburg only draws the retained shapes it is handed.
 #
-# Public API (unchanged from the native version):
+# Public API:
 #   tulainitialize(canvas): window status filename -> creates the canvas
 #   tulatool(r): name            -> "line" or "circle"
 #   tulaclick(r): canvas x y     -> canvas "pointer" callback body
 #   tulasave(r):                 -> writes the DXF named by the filename box
+#   tulaload(r):                 -> reads the DXF named by the filename box
+#   tulawheel(r): canvas x y dir -> canvas "wheel" callback body (zoom at x, y)
+#   tulazoom(r): factor          -> zoom about the canvas center
+#   tulapan(r): dx dy            -> move the view by dx, dy canvas pixels
+#   tulafit(r):                  -> fit the whole drawing in the canvas
 #
 # World coordinates are drawing units with y up. The view maps a world point
 # to canvas pixels as  sx = ox + x * scale,  sy = oy - y * scale.
-# Entities are vectors: ["LINE", x1, y1, x2, y2] or ["CIRCLE", cx, cy, r].
+# Entities are vectors:
+#   ["LINE", x1, y1, x2, y2]          ["CIRCLE", cx, cy, r]
+#   ["ARC", cx, cy, r, start, end]    (degrees, counter-clockwise)
+#   ["POLYLINE", closed, points]      (points = [x0, y0, x1, y1, ...])
+#   ["POINT", x, y]                   ["TEXT", x, y, height, text]
 # Hash keys: tula_window tula_status tula_path tula_canvas tula_entities
-# tula_tool tula_anchor tula_view ([ox, oy, scale]).
+# tula_tool tula_anchor tula_view ([ox, oy, scale]) tula_fitted tula_step.
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
@@ -22,10 +31,15 @@ $define TULA_BACKGROUND 16448250
 $define TULA_GRID_MINOR 15592941
 $define TULA_GRID_MAJOR 14474460
 $define TULA_INK 1591684
+$define TULA_TEXT_INK 4876918
 $define TULA_ANCHOR 13387063
 # The grid covers this many canvas pixels so it survives window resizes.
 $define TULA_EXTENT_X 4096
 $define TULA_EXTENT_Y 2304
+# Zoom limits in pixels per drawing unit.
+$define TULA_MIN_SCALE 0.001
+$define TULA_MAX_SCALE 1000.0
+$define TULA_MAX_ENTITIES 10000
 
 tula_floor(r): x [
     str_trunc(_tf_t): x
@@ -35,9 +49,38 @@ tula_floor(r): x [
     set(r): _tf_t
 ]
 
+# Grid step in drawing units for a scale: 1-2-5 multiples of 5 units so
+# minor lines stay 10 to 100 pixels apart at every zoom level.
+tula_grid_step(r): scale [
+    set(r): TULA_GRID_STEP
+    set(_tgs_k): 0
+    while(_): {r * scale < 10 && _tgs_k < 60} [
+        set(_tgs_m): {_tgs_k % 3}
+        if(_): {_tgs_m = 1} [
+            set(r): {r * 2.5}
+        ]
+        else(_): [
+            set(r): {r * 2}
+        ]
+        set(_tgs_k): {_tgs_k + 1}
+    ]
+    set(_tgs_k): 0
+    while(_): {r * scale > 100 && _tgs_k < 60} [
+        set(_tgs_m): {_tgs_k % 3}
+        if(_): {_tgs_m = 1} [
+            set(r): {r / 2.5}
+        ]
+        else(_): [
+            set(r): {r / 2}
+        ]
+        set(_tgs_k): {_tgs_k + 1}
+    ]
+]
+
 tula_snap(r): value [
-    tula_floor(_tsn_k): {value / TULA_GRID_STEP + 0.5}
-    set(r): {_tsn_k * TULA_GRID_STEP}
+    set(_tsn_step): tula_step?
+    tula_floor(_tsn_k): {value / _tsn_step + 0.5}
+    set(r): {_tsn_k * _tsn_step}
 ]
 
 tula_set_status(r): text [
@@ -82,8 +125,10 @@ tula_draw_grid(r): canvas [
     at(_tg_ox): _tg_v 0
     at(_tg_oy): _tg_v 1
     at(_tg_s): _tg_v 2
-    set(_tg_step): {TULA_GRID_STEP * _tg_s}
-    # world range visible in the canvas extent
+    tula_grid_step(_tg_world): _tg_s
+    set(tula_step): _tg_world!
+    set(_tg_step): {_tg_world * _tg_s}
+    # world grid indexes visible in the canvas extent
     tula_floor(_tg_i0): {(0 - _tg_ox) / _tg_step}
     tula_floor(_tg_i1): {(TULA_EXTENT_X - _tg_ox) / _tg_step}
     set(_tg_i): _tg_i0
@@ -126,13 +171,67 @@ tula_draw_entity(r): canvas entity [
         tula_to_screen_y(_te_y2): _te_d
         canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 TULA_INK
     ]
-    elif(_): {_te_kind = "CIRCLE"} [
+    elif(_): {_te_kind = "CIRCLE" || _te_kind = "ARC"} [
         at(_te_a): entity 1
         at(_te_b): entity 2
         at(_te_c): entity 3
         tula_to_screen_x(_te_x1): _te_a
         tula_to_screen_y(_te_y1): _te_b
-        canvascircle(_): canvas _te_x1 _te_y1 {_te_c * _te_s} TULA_INK
+        if(_): {_te_kind = "CIRCLE"} [
+            canvascircle(_): canvas _te_x1 _te_y1 {_te_c * _te_s} TULA_INK
+        ]
+        else(_): [
+            # Screen y grows downward, but sy = oy - y * scale flips it back,
+            # so DXF's counter-clockwise angles carry over unchanged.
+            at(_te_start): entity 4
+            at(_te_end): entity 5
+            canvasarc(_): canvas _te_x1 _te_y1 {_te_c * _te_s} _te_start _te_end TULA_INK
+        ]
+    ]
+    elif(_): {_te_kind = "POLYLINE"} [
+        at(_te_closed): entity 1
+        at(_te_pts): entity 2
+        len(_te_n): _te_pts
+        set(_te_i): 2
+        if(_): {_te_n >= 2} [
+            at(_te_a): _te_pts 0
+            at(_te_b): _te_pts 1
+            tula_to_screen_x(_te_x1): _te_a
+            tula_to_screen_y(_te_y1): _te_b
+            set(_te_fx): _te_x1
+            set(_te_fy): _te_y1
+        ]
+        while(_): {_te_i + 1 < _te_n} [
+            at(_te_a): _te_pts _te_i
+            at(_te_b): _te_pts {_te_i + 1}
+            tula_to_screen_x(_te_x2): _te_a
+            tula_to_screen_y(_te_y2): _te_b
+            canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 TULA_INK
+            set(_te_x1): _te_x2
+            set(_te_y1): _te_y2
+            set(_te_i): {_te_i + 2}
+        ]
+        if(_): {_te_closed && _te_n >= 6} [
+            canvasline(_): canvas _te_x1 _te_y1 _te_fx _te_fy TULA_INK
+        ]
+    ]
+    elif(_): {_te_kind = "POINT"} [
+        at(_te_a): entity 1
+        at(_te_b): entity 2
+        tula_to_screen_x(_te_x1): _te_a
+        tula_to_screen_y(_te_y1): _te_b
+        canvasline(_): canvas {_te_x1 - 3} {_te_y1 - 3} {_te_x1 + 3} {_te_y1 + 3} TULA_INK
+        canvasline(_): canvas {_te_x1 - 3} {_te_y1 + 3} {_te_x1 + 3} {_te_y1 - 3} TULA_INK
+    ]
+    elif(_): {_te_kind = "TEXT"} [
+        # Petersburg's bitmap font has one size: the text sits on its DXF
+        # baseline point; its height only lifts the glyphs off the baseline.
+        at(_te_a): entity 1
+        at(_te_b): entity 2
+        at(_te_text): entity 4
+        tula_to_screen_x(_te_x1): _te_a
+        tula_to_screen_y(_te_y1): _te_b
+        canvastext(_): canvas _te_x1 {_te_y1 - 7} _te_text TULA_TEXT_INK
     ]
     set(r): 0
 ]
@@ -174,6 +273,7 @@ tulainitialize(canvas): window status filename [
     vec(_ti_anchor): ""
     set(tula_anchor): _ti_anchor!
     set(tula_tool): ""!
+    set(tula_step): TULA_GRID_STEP!
     # 5 pixels per unit, origin near the bottom-left; tula_fit_view moves it
     # to the real bottom-left once the canvas has been laid out.
     vec(_ti_view): ""
@@ -216,6 +316,15 @@ tulatool(result): name [
     uilock(_):
     tula_tool_body(result): name
     uiunlock(_):
+]
+
+tula_add_entity(r): entity [
+    set(_tae_entities): tula_entities?
+    len(_tae_count): _tae_entities
+    set(r): {_tae_count < TULA_MAX_ENTITIES}
+    if(_): r [
+        push(_): _tae_entities entity
+    ]
 ]
 
 tula_click_body(r): canvas x y [
@@ -280,19 +389,19 @@ tula_click_body(r): canvas x y [
         push(_): _tc_entity _tc_radius
         set(_tc_name): "Circle"
     ]
-    set(_tc_entities): tula_entities?
-    len(_tc_count): _tc_entities
-    if(_): {_tc_count >= 10000} [
+    tula_add_entity(_tc_added): _tc_entity
+    if(_): {_tc_added = false} [
         tula_set_status(_): "Drawing is full"
         return(_): r
     ]
-    push(_): _tc_entities _tc_entity
     vec(_tc_none): ""
     set(tula_anchor): _tc_none!
     tula_redraw(_):
+    set(_tc_entities): tula_entities?
+    len(_tc_count): _tc_entities
     str_from_number(_tc_axs): _tc_ax 3
     str_from_number(_tc_ays): _tc_ay 3
-    str_from_int(_tc_cs): {_tc_count + 1}
+    str_from_int(_tc_cs): _tc_count
     concat(_tc_msg): _tc_name " added at grid snap (" _tc_axs ", " _tc_ays "); " _tc_cs " object(s)"
     tula_set_status(_): _tc_msg
 ]
@@ -303,6 +412,202 @@ tulaclick(result): canvas x y [
     uiunlock(_):
 ]
 
+# --- view ---------------------------------------------------------------------
+tula_view_status(r): [
+    set(_tvs_v): tula_view?
+    at(_tvs_s): _tvs_v 2
+    set(_tvs_step): tula_step?
+    # 5 pixels per millimeter is 1x; the bitmap font has no "%" glyph.
+    str_from_number(_tvs_zoom): {_tvs_s / 5} 2
+    str_from_number(_tvs_grid): _tvs_step 4
+    concat(_tvs_msg): "Zoom " _tvs_zoom "x | grid " _tvs_grid " mm"
+    tula_set_status(_): _tvs_msg
+    set(r): 0
+]
+
+# Scales the view by factor about canvas point (x, y), which stays put.
+tula_zoom_at(r): factor x y [
+    set(_tz_v): tula_view?
+    at(_tz_ox): _tz_v 0
+    at(_tz_oy): _tz_v 1
+    at(_tz_s): _tz_v 2
+    set(_tz_new): {_tz_s * factor}
+    if(_): {_tz_new < TULA_MIN_SCALE} [
+        set(_tz_new): TULA_MIN_SCALE
+    ]
+    if(_): {_tz_new > TULA_MAX_SCALE} [
+        set(_tz_new): TULA_MAX_SCALE
+    ]
+    set(_tz_f): {_tz_new / _tz_s}
+    set(_tz_v): 0 {x - (x - _tz_ox) * _tz_f}
+    set(_tz_v): 1 {y - (y - _tz_oy) * _tz_f}
+    set(_tz_v): 2 _tz_new
+    tula_redraw(_):
+    tula_view_status(_):
+    set(r): 0
+]
+
+tula_canvas_center(r): [
+    set(_tcc_canvas): tula_canvas?
+    getwidth(_tcc_w): _tcc_canvas
+    getheight(_tcc_h): _tcc_canvas
+    vec(r): ""
+    # Before the first layout the canvas has no size; use the initial area.
+    if(_): {_tcc_w = 0} [
+        set(_tcc_w): 1000
+        set(_tcc_h): 700
+    ]
+    push(_): r {_tcc_w / 2}
+    push(_): r {_tcc_h / 2}
+]
+
+tulawheel(result): canvas x y direction [
+    uilock(_):
+    tula_fit_view(_tw_fitted):
+    set(_tw_factor): 1.25
+    if(_): {direction < 0} [
+        set(_tw_factor): 0.8
+    ]
+    tula_zoom_at(result): _tw_factor x y
+    uiunlock(_):
+]
+
+tulazoom(result): factor [
+    uilock(_):
+    tula_fit_view(_tzm_fitted):
+    tula_canvas_center(_tzm_c):
+    at(_tzm_x): _tzm_c 0
+    at(_tzm_y): _tzm_c 1
+    tula_zoom_at(result): factor _tzm_x _tzm_y
+    uiunlock(_):
+]
+
+tulapan(result): dx dy [
+    uilock(_):
+    tula_fit_view(_tp_fitted):
+    set(_tp_v): tula_view?
+    at(_tp_ox): _tp_v 0
+    at(_tp_oy): _tp_v 1
+    set(_tp_v): 0 {_tp_ox + dx}
+    set(_tp_v): 1 {_tp_oy + dy}
+    tula_redraw(_):
+    tula_view_status(_):
+    set(result): 0
+    uiunlock(_):
+]
+
+# Grows [minx, miny, maxx, maxy] to include point (x, y).
+tula_bounds_add(r): box x y [
+    len(_tba_n): box
+    if(_): {_tba_n = 0} [
+        push(_): box x
+        push(_): box y
+        push(_): box x
+        push(_): box y
+    ]
+    else(_): [
+        at(_tba_a): box 0
+        at(_tba_b): box 1
+        at(_tba_c): box 2
+        at(_tba_d): box 3
+        if(_): {x < _tba_a} [ set(box): 0 x ]
+        if(_): {y < _tba_b} [ set(box): 1 y ]
+        if(_): {x > _tba_c} [ set(box): 2 x ]
+        if(_): {y > _tba_d} [ set(box): 3 y ]
+    ]
+    set(r): 0
+]
+
+tula_bounds(r): entities [
+    vec(r): ""
+    len(_tb_n): entities
+    set(_tb_i): 0
+    while(_): {_tb_i < _tb_n} [
+        at(_tb_e): entities _tb_i
+        at(_tb_kind): _tb_e 0
+        if(_): {_tb_kind = "LINE"} [
+            at(_tb_a): _tb_e 1
+            at(_tb_b): _tb_e 2
+            at(_tb_c): _tb_e 3
+            at(_tb_d): _tb_e 4
+            tula_bounds_add(_): r _tb_a _tb_b
+            tula_bounds_add(_): r _tb_c _tb_d
+        ]
+        elif(_): {_tb_kind = "CIRCLE" || _tb_kind = "ARC"} [
+            at(_tb_a): _tb_e 1
+            at(_tb_b): _tb_e 2
+            at(_tb_c): _tb_e 3
+            tula_bounds_add(_): r {_tb_a - _tb_c} {_tb_b - _tb_c}
+            tula_bounds_add(_): r {_tb_a + _tb_c} {_tb_b + _tb_c}
+        ]
+        elif(_): {_tb_kind = "POLYLINE"} [
+            at(_tb_pts): _tb_e 2
+            len(_tb_np): _tb_pts
+            set(_tb_k): 0
+            while(_): {_tb_k + 1 < _tb_np} [
+                at(_tb_a): _tb_pts _tb_k
+                at(_tb_b): _tb_pts {_tb_k + 1}
+                tula_bounds_add(_): r _tb_a _tb_b
+                set(_tb_k): {_tb_k + 2}
+            ]
+        ]
+        else(_): [
+            at(_tb_a): _tb_e 1
+            at(_tb_b): _tb_e 2
+            tula_bounds_add(_): r _tb_a _tb_b
+        ]
+        set(_tb_i): {_tb_i + 1}
+    ]
+]
+
+# Fits the drawing's extents into the canvas with a 5% margin.
+tula_fit_body(r): [
+    set(r): 0
+    set(_tfb_entities): tula_entities?
+    tula_bounds(_tfb_box): _tfb_entities
+    len(_tfb_has): _tfb_box
+    if(_): {_tfb_has = 0} [
+        tula_set_status(_): "Nothing to fit: the drawing is empty"
+        return(_): r
+    ]
+    at(_tfb_x0): _tfb_box 0
+    at(_tfb_y0): _tfb_box 1
+    at(_tfb_x1): _tfb_box 2
+    at(_tfb_y1): _tfb_box 3
+    tula_canvas_center(_tfb_c):
+    at(_tfb_cx): _tfb_c 0
+    at(_tfb_cy): _tfb_c 1
+    set(_tfb_w): {(_tfb_x1 - _tfb_x0) * 1.1}
+    set(_tfb_h): {(_tfb_y1 - _tfb_y0) * 1.1}
+    set(_tfb_s): TULA_MAX_SCALE
+    if(_): {_tfb_w > 0} [
+        set(_tfb_s): {_tfb_cx * 2 / _tfb_w}
+    ]
+    if(_): {_tfb_h > 0 && _tfb_cy * 2 / _tfb_h < _tfb_s} [
+        set(_tfb_s): {_tfb_cy * 2 / _tfb_h}
+    ]
+    if(_): {_tfb_s < TULA_MIN_SCALE} [
+        set(_tfb_s): TULA_MIN_SCALE
+    ]
+    if(_): {_tfb_s > TULA_MAX_SCALE} [
+        set(_tfb_s): TULA_MAX_SCALE
+    ]
+    set(_tfb_v): tula_view?
+    set(_tfb_v): 0 {_tfb_cx - (_tfb_x0 + _tfb_x1) / 2 * _tfb_s}
+    set(_tfb_v): 1 {_tfb_cy + (_tfb_y0 + _tfb_y1) / 2 * _tfb_s}
+    set(_tfb_v): 2 _tfb_s
+    tula_redraw(_):
+    tula_view_status(_):
+]
+
+tulafit(result): [
+    uilock(_):
+    tula_fit_view(_tf_fitted):
+    tula_fit_body(result):
+    uiunlock(_):
+]
+
+# --- DXF writer -----------------------------------------------------------------
 # Appends "code\nvalue\n" for one DXF group.
 tula_group(r): text code value [
     concat(r): text code "\n" value "\n"
@@ -313,6 +618,15 @@ tula_group_number(r): text code value [
     concat(r): text code "\n" _tgn_v "\n"
 ]
 
+tula_dxf_point(r): text x y suffix [
+    concat(_tdp_cx): "1" suffix
+    concat(_tdp_cy): "2" suffix
+    concat(_tdp_cz): "3" suffix
+    tula_group_number(r): text _tdp_cx x
+    tula_group_number(r): r _tdp_cy y
+    tula_group(r): r _tdp_cz "0"
+]
+
 tula_dxf_text(r): entities [
     set(_tdx_t): "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
     len(_tdx_n): entities
@@ -320,22 +634,58 @@ tula_dxf_text(r): entities [
     while(_): {_tdx_i < _tdx_n} [
         at(_tdx_e): entities _tdx_i
         at(_tdx_kind): _tdx_e 0
-        tula_group(_tdx_t): _tdx_t "0" _tdx_kind
+        set(_tdx_name): _tdx_kind
+        if(_): {_tdx_kind = "POLYLINE"} [
+            set(_tdx_name): "LWPOLYLINE"
+        ]
+        tula_group(_tdx_t): _tdx_t "0" _tdx_name
         tula_group(_tdx_t): _tdx_t "8" "0"
-        at(_tdx_a): _tdx_e 1
-        at(_tdx_b): _tdx_e 2
-        at(_tdx_c): _tdx_e 3
-        tula_group_number(_tdx_t): _tdx_t "10" _tdx_a
-        tula_group_number(_tdx_t): _tdx_t "20" _tdx_b
-        tula_group(_tdx_t): _tdx_t "30" "0"
-        if(_): {_tdx_kind = "LINE"} [
-            at(_tdx_d): _tdx_e 4
-            tula_group_number(_tdx_t): _tdx_t "11" _tdx_c
-            tula_group_number(_tdx_t): _tdx_t "21" _tdx_d
-            tula_group(_tdx_t): _tdx_t "31" "0"
+        if(_): {_tdx_kind = "POLYLINE"} [
+            at(_tdx_closed): _tdx_e 1
+            at(_tdx_pts): _tdx_e 2
+            len(_tdx_np): _tdx_pts
+            str_trunc(_tdx_vertices): {(_tdx_np - _tdx_np % 2) / 2}
+            str_from_int(_tdx_count): _tdx_vertices
+            tula_group(_tdx_t): _tdx_t "90" _tdx_count
+            set(_tdx_flag): "0"
+            if(_): _tdx_closed [
+                set(_tdx_flag): "1"
+            ]
+            tula_group(_tdx_t): _tdx_t "70" _tdx_flag
+            set(_tdx_k): 0
+            while(_): {_tdx_k + 1 < _tdx_np} [
+                at(_tdx_a): _tdx_pts _tdx_k
+                at(_tdx_b): _tdx_pts {_tdx_k + 1}
+                tula_group_number(_tdx_t): _tdx_t "10" _tdx_a
+                tula_group_number(_tdx_t): _tdx_t "20" _tdx_b
+                set(_tdx_k): {_tdx_k + 2}
+            ]
         ]
         else(_): [
-            tula_group_number(_tdx_t): _tdx_t "40" _tdx_c
+            at(_tdx_a): _tdx_e 1
+            at(_tdx_b): _tdx_e 2
+            tula_dxf_point(_tdx_t): _tdx_t _tdx_a _tdx_b "0"
+            if(_): {_tdx_kind = "LINE"} [
+                at(_tdx_c): _tdx_e 3
+                at(_tdx_d): _tdx_e 4
+                tula_dxf_point(_tdx_t): _tdx_t _tdx_c _tdx_d "1"
+            ]
+            elif(_): {_tdx_kind = "CIRCLE" || _tdx_kind = "ARC"} [
+                at(_tdx_c): _tdx_e 3
+                tula_group_number(_tdx_t): _tdx_t "40" _tdx_c
+                if(_): {_tdx_kind = "ARC"} [
+                    at(_tdx_s): _tdx_e 4
+                    at(_tdx_f): _tdx_e 5
+                    tula_group_number(_tdx_t): _tdx_t "50" _tdx_s
+                    tula_group_number(_tdx_t): _tdx_t "51" _tdx_f
+                ]
+            ]
+            elif(_): {_tdx_kind = "TEXT"} [
+                at(_tdx_h): _tdx_e 3
+                at(_tdx_txt): _tdx_e 4
+                tula_group_number(_tdx_t): _tdx_t "40" _tdx_h
+                tula_group(_tdx_t): _tdx_t "1" _tdx_txt
+            ]
         ]
         set(_tdx_i): {_tdx_i + 1}
     ]
@@ -374,5 +724,383 @@ tula_save_body(r): [
 tulasave(result): [
     uilock(_):
     tula_save_body(result):
+    uiunlock(_):
+]
+
+# --- DXF reader -----------------------------------------------------------------
+# ASCII DXF only: group code / value line pairs, LF or CRLF. Entities are read
+# from the ENTITIES section; BLOCKS (and so INSERT) are not expanded.
+
+# First value for group `code` in the record, as a number; `fallback` if absent.
+tula_dxf_num(r): codes values code fallback [
+    len(_tdn_n): codes
+    set(_tdn_i): 0
+    set(r): fallback
+    while(_): {_tdn_i < _tdn_n} [
+        at(_tdn_c): codes _tdn_i
+        if(_): {_tdn_c = code} [
+            at(_tdn_v): values _tdn_i
+            str_to_number(r): _tdn_v
+            if(_): {r = null} [
+                set(r): fallback
+                set(tula_dxf_bad): true
+            ]
+            set(_tdn_i): _tdn_n
+        ]
+        set(_tdn_i): {_tdn_i + 1}
+    ]
+]
+
+tula_dxf_str(r): codes values code fallback [
+    len(_tds_n): codes
+    set(_tds_i): 0
+    set(r): fallback
+    while(_): {_tds_i < _tds_n} [
+        at(_tds_c): codes _tds_i
+        if(_): {_tds_c = code} [
+            at(r): values _tds_i
+            set(_tds_i): _tds_n
+        ]
+        set(_tds_i): {_tds_i + 1}
+    ]
+]
+
+# Polyline points from repeated 10/20 groups (LWPOLYLINE).
+tula_dxf_points(r): codes values [
+    vec(r): ""
+    len(_tdpt_n): codes
+    set(_tdpt_i): 0
+    set(_tdpt_x): null
+    while(_): {_tdpt_i < _tdpt_n} [
+        at(_tdpt_c): codes _tdpt_i
+        at(_tdpt_v): values _tdpt_i
+        if(_): {_tdpt_c = 10} [
+            str_to_number(_tdpt_x): _tdpt_v
+        ]
+        if(_): {_tdpt_c = 20 && _tdpt_x != null} [
+            str_to_number(_tdpt_y): _tdpt_v
+            if(_): {_tdpt_y != null} [
+                push(_): r _tdpt_x
+                push(_): r _tdpt_y
+            ]
+            set(_tdpt_x): null
+        ]
+        set(_tdpt_i): {_tdpt_i + 1}
+    ]
+]
+
+# ELLIPSE -> closed or open polyline with 64 segments per full turn.
+tula_dxf_ellipse(r): codes values [
+    tula_dxf_num(_tde_cx): codes values 10 0
+    tula_dxf_num(_tde_cy): codes values 20 0
+    tula_dxf_num(_tde_mx): codes values 11 1
+    tula_dxf_num(_tde_my): codes values 21 0
+    tula_dxf_num(_tde_ratio): codes values 40 1
+    tula_dxf_num(_tde_p0): codes values 41 0
+    tula_dxf_num(_tde_p1): codes values 42 {2 * M_PI}
+    sqrt(_tde_major): {_tde_mx * _tde_mx + _tde_my * _tde_my}
+    set(_tde_minor): {_tde_major * _tde_ratio}
+    atan2(_tde_rot): _tde_my _tde_mx
+    set(_tde_sweep): {_tde_p1 - _tde_p0}
+    while(_): {_tde_sweep <= 0} [
+        set(_tde_sweep): {_tde_sweep + 2 * M_PI}
+    ]
+    set(_tde_full): {_tde_sweep > 2 * M_PI - 0.000001}
+    tula_floor(_tde_steps): {64 * _tde_sweep / (2 * M_PI) + 0.999}
+    if(_): {_tde_steps < 4} [
+        set(_tde_steps): 4
+    ]
+    cos(_tde_cr): _tde_rot
+    sin(_tde_sr): _tde_rot
+    vec(_tde_pts): ""
+    set(_tde_k): 0
+    set(_tde_last): _tde_steps
+    if(_): _tde_full [
+        set(_tde_last): {_tde_steps - 1}
+    ]
+    while(_): {_tde_k <= _tde_last} [
+        set(_tde_t): {_tde_p0 + _tde_sweep * _tde_k / _tde_steps}
+        cos(_tde_ct): _tde_t
+        sin(_tde_st): _tde_t
+        set(_tde_ex): {_tde_major * _tde_ct}
+        set(_tde_ey): {_tde_minor * _tde_st}
+        push(_): _tde_pts {_tde_cx + _tde_ex * _tde_cr - _tde_ey * _tde_sr}
+        push(_): _tde_pts {_tde_cy + _tde_ex * _tde_sr + _tde_ey * _tde_cr}
+        set(_tde_k): {_tde_k + 1}
+    ]
+    vec(r): ""
+    push(_): r "POLYLINE"
+    push(_): r _tde_full
+    push(_): r _tde_pts
+]
+
+# Converts one finished DXF record to a Tula entity; null when unsupported.
+tula_dxf_entity(r): kind codes values [
+    set(r): null
+    vec(_tden_e): ""
+    if(_): {kind = "LINE"} [
+        tula_dxf_num(_tden_a): codes values 10 0
+        tula_dxf_num(_tden_b): codes values 20 0
+        tula_dxf_num(_tden_c): codes values 11 0
+        tula_dxf_num(_tden_d): codes values 21 0
+        push(_): _tden_e "LINE"
+        push(_): _tden_e _tden_a
+        push(_): _tden_e _tden_b
+        push(_): _tden_e _tden_c
+        push(_): _tden_e _tden_d
+        set(r): _tden_e
+    ]
+    elif(_): {kind = "CIRCLE" || kind = "ARC"} [
+        tula_dxf_num(_tden_a): codes values 10 0
+        tula_dxf_num(_tden_b): codes values 20 0
+        tula_dxf_num(_tden_c): codes values 40 0
+        push(_): _tden_e kind
+        push(_): _tden_e _tden_a
+        push(_): _tden_e _tden_b
+        push(_): _tden_e _tden_c
+        if(_): {kind = "ARC"} [
+            tula_dxf_num(_tden_s): codes values 50 0
+            tula_dxf_num(_tden_f): codes values 51 360
+            push(_): _tden_e _tden_s
+            push(_): _tden_e _tden_f
+        ]
+        set(r): _tden_e
+    ]
+    elif(_): {kind = "LWPOLYLINE"} [
+        tula_dxf_num(_tden_flags): codes values 70 0
+        tula_dxf_points(_tden_pts): codes values
+        push(_): _tden_e "POLYLINE"
+        push(_): _tden_e {_tden_flags % 2 = 1}
+        push(_): _tden_e _tden_pts
+        set(r): _tden_e
+    ]
+    elif(_): {kind = "POINT"} [
+        tula_dxf_num(_tden_a): codes values 10 0
+        tula_dxf_num(_tden_b): codes values 20 0
+        push(_): _tden_e "POINT"
+        push(_): _tden_e _tden_a
+        push(_): _tden_e _tden_b
+        set(r): _tden_e
+    ]
+    elif(_): {kind = "TEXT" || kind = "MTEXT"} [
+        tula_dxf_num(_tden_a): codes values 10 0
+        tula_dxf_num(_tden_b): codes values 20 0
+        tula_dxf_num(_tden_h): codes values 40 2.5
+        tula_dxf_str(_tden_txt): codes values 1 ""
+        push(_): _tden_e "TEXT"
+        push(_): _tden_e _tden_a
+        push(_): _tden_e _tden_b
+        push(_): _tden_e _tden_h
+        push(_): _tden_e _tden_txt
+        set(r): _tden_e
+    ]
+    elif(_): {kind = "ELLIPSE"} [
+        tula_dxf_ellipse(r): codes values
+    ]
+]
+
+# Reads path; returns [entities, unsupported names vector] or a string error.
+tula_dxf_read(r): path [
+    open_file(_tdr_h): path "rb"
+    if(_): {_tdr_h < 0} [
+        concat(r): "Cannot open DXF: " path
+        return(_): r
+    ]
+    vec(_tdr_entities): ""
+    vec(_tdr_skipped): ""
+    set(tula_dxf_bad): false
+    set(_tdr_section): ""
+    set(_tdr_kind): ""
+    vec(_tdr_codes): ""
+    vec(_tdr_values): ""
+    # POLYLINE ... VERTEX ... SEQEND state
+    set(_tdr_poly): false
+    vec(_tdr_poly_pts): ""
+    set(_tdr_poly_closed): false
+    set(_tdr_pairs): 0
+    set(_tdr_error): ""
+    set(_tdr_go): true
+    while(_): _tdr_go [
+        read_line(_tdr_code_line): _tdr_h
+        read_line(_tdr_value): _tdr_h
+        if(_): {_tdr_code_line = null} [
+            set(_tdr_go): false
+            set(_tdr_value): "EOF"
+            set(_tdr_code): 0
+        ]
+        elif(_): {_tdr_value = null} [
+            set(_tdr_error): "DXF ends in the middle of a group"
+            set(_tdr_go): false
+        ]
+        else(_): [
+            str_to_number(_tdr_code): _tdr_code_line
+            str_trim(_tdr_value): _tdr_value
+            set(_tdr_pairs): {_tdr_pairs + 1}
+            if(_): {_tdr_code = null} [
+                if(_): {_tdr_pairs = 1} [
+                    set(_tdr_error): "Not an ASCII DXF file (binary DXF is not supported)"
+                ]
+                else(_): [
+                    set(_tdr_error): "Malformed DXF group code"
+                ]
+                set(_tdr_go): false
+            ]
+        ]
+        if(_): {_tdr_error = "" && _tdr_code = 0} [
+            # A 0 group ends the record collected so far.
+            if(_): {_tdr_section = "ENTITIES" && _tdr_kind != ""} [
+                if(_): {_tdr_kind = "POLYLINE"} [
+                    set(_tdr_poly): true
+                    vec(_tdr_poly_pts): ""
+                    tula_dxf_num(_tdr_flags): _tdr_codes _tdr_values 70 0
+                    set(_tdr_poly_closed): {_tdr_flags % 2 = 1}
+                ]
+                elif(_): {_tdr_kind = "VERTEX" && _tdr_poly} [
+                    tula_dxf_num(_tdr_vx): _tdr_codes _tdr_values 10 0
+                    tula_dxf_num(_tdr_vy): _tdr_codes _tdr_values 20 0
+                    push(_): _tdr_poly_pts _tdr_vx
+                    push(_): _tdr_poly_pts _tdr_vy
+                ]
+                elif(_): {_tdr_kind = "SEQEND" && _tdr_poly} [
+                    vec(_tdr_pe): ""
+                    push(_): _tdr_pe "POLYLINE"
+                    push(_): _tdr_pe _tdr_poly_closed
+                    push(_): _tdr_pe _tdr_poly_pts
+                    push(_): _tdr_entities _tdr_pe
+                    set(_tdr_poly): false
+                ]
+                else(_): [
+                    tula_dxf_entity(_tdr_e): _tdr_kind _tdr_codes _tdr_values
+                    if(_): {_tdr_e = null} [
+                        push(_): _tdr_skipped _tdr_kind
+                    ]
+                    else(_): [
+                        push(_): _tdr_entities _tdr_e
+                    ]
+                ]
+            ]
+            if(_): {_tdr_kind = "SECTION"} [
+                tula_dxf_str(_tdr_section): _tdr_codes _tdr_values 2 ""
+            ]
+            if(_): {_tdr_value = "ENDSEC"} [
+                set(_tdr_section): ""
+            ]
+            set(_tdr_kind): _tdr_value
+            if(_): {_tdr_value = "ENDSEC" || _tdr_value = "EOF"} [
+                set(_tdr_kind): ""
+            ]
+            if(_): {_tdr_value = "EOF"} [
+                set(_tdr_go): false
+            ]
+            vec(_tdr_codes): ""
+            vec(_tdr_values): ""
+        ]
+        elif(_): {_tdr_error = ""} [
+            push(_): _tdr_codes _tdr_code
+            push(_): _tdr_values _tdr_value
+        ]
+    ]
+    close_file(_): _tdr_h
+    if(_): {_tdr_error = "" && tula_dxf_bad} [
+        set(_tdr_error): "Malformed number in DXF"
+    ]
+    if(_): {_tdr_error != ""} [
+        set(r): _tdr_error
+        return(_): r
+    ]
+    vec(r): ""
+    push(_): r _tdr_entities
+    push(_): r _tdr_skipped
+]
+
+# "3 unsupported entities skipped (SPLINE x2, INSERT)"
+tula_skip_text(r): names [
+    vec(_tst_kinds): ""
+    vec(_tst_counts): ""
+    len(_tst_n): names
+    set(_tst_i): 0
+    while(_): {_tst_i < _tst_n} [
+        at(_tst_name): names _tst_i
+        len(_tst_k): _tst_kinds
+        set(_tst_j): 0
+        set(_tst_at): {0 - 1}
+        while(_): {_tst_j < _tst_k} [
+            at(_tst_x): _tst_kinds _tst_j
+            if(_): {_tst_x = _tst_name} [
+                set(_tst_at): _tst_j
+            ]
+            set(_tst_j): {_tst_j + 1}
+        ]
+        if(_): {_tst_at < 0} [
+            push(_): _tst_kinds _tst_name
+            push(_): _tst_counts 1
+        ]
+        else(_): [
+            at(_tst_c): _tst_counts _tst_at
+            set(_tst_counts): _tst_at {_tst_c + 1}
+        ]
+        set(_tst_i): {_tst_i + 1}
+    ]
+    str_from_int(_tst_total): _tst_n
+    concat(r): _tst_total " unsupported entities skipped ("
+    len(_tst_k): _tst_kinds
+    set(_tst_j): 0
+    while(_): {_tst_j < _tst_k} [
+        at(_tst_x): _tst_kinds _tst_j
+        at(_tst_c): _tst_counts _tst_j
+        if(_): {_tst_j > 0} [
+            concat(r): r ", "
+        ]
+        concat(r): r _tst_x
+        if(_): {_tst_c > 1} [
+            str_from_int(_tst_cs): _tst_c
+            concat(r): r " x" _tst_cs
+        ]
+        set(_tst_j): {_tst_j + 1}
+    ]
+    concat(r): r ")"
+]
+
+tula_load_body(r): [
+    set(r): 0
+    set(_tlb_box): tula_path?
+    gettext(_tlb_path): _tlb_box
+    if(_): {_tlb_path = ""} [
+        tula_set_status(_): "Enter a DXF filename before loading"
+        return(_): r
+    ]
+    tula_dxf_read(_tlb_result): _tlb_path
+    typeof(_tlb_type): _tlb_result
+    if(_): {_tlb_type = "string"} [
+        tula_set_status(_): _tlb_result
+        set(r): 1
+        return(_): r
+    ]
+    at(_tlb_entities): _tlb_result 0
+    at(_tlb_skipped): _tlb_result 1
+    len(_tlb_n): _tlb_entities
+    if(_): {_tlb_n > TULA_MAX_ENTITIES} [
+        tula_set_status(_): "DXF has more objects than Tula can hold"
+        set(r): 1
+        return(_): r
+    ]
+    set(tula_entities): _tlb_entities!
+    vec(_tlb_none): ""
+    set(tula_anchor): _tlb_none!
+    tula_fit_body(_):
+    str_from_int(_tlb_ns): _tlb_n
+    concat(_tlb_msg): "Loaded " _tlb_ns " object(s) from " _tlb_path
+    len(_tlb_ns2): _tlb_skipped
+    if(_): {_tlb_ns2 > 0} [
+        tula_skip_text(_tlb_skip): _tlb_skipped
+        concat(_tlb_msg): _tlb_msg "; " _tlb_skip
+    ]
+    tula_set_status(_): _tlb_msg
+]
+
+tulaload(result): [
+    uilock(_):
+    tula_fit_view(_tl_fitted):
+    tula_load_body(result):
     uiunlock(_):
 ]

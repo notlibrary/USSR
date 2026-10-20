@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0-alpha
+- Renders DXF drawings: `tulaload` reads LINE, CIRCLE, ARC, LWPOLYLINE,
+  POLYLINE, POINT, TEXT/MTEXT and ELLIPSE from ASCII DXF and names the
+  entities it skips. Saving writes every kind back.
+- Zoomable view: mouse-wheel zoom about the cursor, `tulazoom`, `tulapan`
+  and `tulafit`. The grid step adapts (1-2.5-5 x 5 mm) to keep lines 10 to
+  100 pixels apart, and snapping follows the visible grid.
+- Added `tests/gui/tula_dxf_test.su` and DXF fixtures.
+
 ## 0.2.0-alpha
 - Rewrote Tula in USSR. `tula.c` and its temporary PPM canvas are gone;
   `tula.su` draws on Petersburg's vector canvas and writes DXF with the
