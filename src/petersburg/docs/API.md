@@ -41,6 +41,7 @@ a diagnostic.
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
+| `getfocus(window)` | Window handle | Handle of the window's focused text box or list, or `0` |
 | `alive(widget)` | Handle | `true` while the widget exists (and, for a window, is not closing) |
 | `inject(widget, event, a, b, c)` | Handle, event name, three integers | Zero; feeds a synthetic event through the normal input path (for tests) |
 | `uilock()` / `uiunlock()` / `uiidle()` | None | Serialize callback handlers that share state; `uiidle` is `true` when no handler holds the lock |

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0-alpha
+- Holding Up/Down repeats directory navigation (350 ms delay, 50 ms steps)
+  and stops on key release, focus loss, window close, another key, or the
+  end of the list. New callbacks: `tverhandlekeyup`, `tverfocus`.
+- The left list has keyboard focus at start.
+- Added `tests/gui/tver_repeat_test.su`.
+
 ## 0.2.0-alpha
 - Rewrote Tver in USSR. `tver.c` is gone; `tver.su` uses the standard
   library's `list_dir`/`is_dir`/`getcwd`/`rename_path`/`remove_file` and

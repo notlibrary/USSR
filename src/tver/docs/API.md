@@ -12,6 +12,8 @@ panels.
 | `tverinitialize(r)` | Window, left path label, left list, right path label, right list, status label | Starts both panels in the current directory; `r` is `0`, or `1` if a panel could not be read |
 | `tverhandlekey(r)` | Window handle, GLFW key code | Handles Tab, Insert, Enter, keypad Enter, F6, and F8 |
 | `tveractivatepanel(r)` | Changed list handle | Makes the clicked list the active panel |
+| `tverhandlekeyup(r)` | Window handle, GLFW key code | Window `"keyup"` callback: releasing a held arrow stops repeating |
+| `tverfocus(r)` | Window handle, `1`/`0` | Window `"focus"` callback: losing focus stops repeating |
 
 All three are USSR definitions in `tver.su`. UI input is delivered from GLFW
 through Petersburg's event queue and runs as a normal USSR scheduler callback.
@@ -20,6 +22,12 @@ through Petersburg's event queue and runs as a normal USSR scheduler callback.
 
 - Tab switches the active panel. Clicking a list also activates it.
 - Up/Down changes the selected row; Enter enters a selected directory.
+- Holding Up or Down repeats the movement: after 350 ms the cursor steps
+  every 50 ms until the key is released, the window loses focus or closes,
+  another key is pressed, or the cursor reaches the end of the list. A tap
+  still moves exactly one row. Register the `"keyup"` and `"focus"`
+  callbacks shown in the example; without them a repeat runs until the end
+  of the list or the next key press.
 - Insert toggles a file mark and advances to the next row; directories cannot
   be marked.
 - F6 moves the selected file, or all marked files, into the other panel.

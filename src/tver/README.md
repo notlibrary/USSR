@@ -5,7 +5,7 @@ widgets. Run `ussr src/tver/examples/hello.su` from the repository root with a
 GLFW-enabled USSR build.
 
 Click either file list or press **Tab** to activate a panel. Use **Up/Down** to
-move the selection, **Enter** to open a directory, and **Insert** to mark or
+move the selection (hold them to keep moving), **Enter** to open a directory, and **Insert** to mark or
 unmark a file (the selection advances after marking). **F6** moves the
 selected file, or all marked files, to the other panel. **F8** deletes the
 selected file or marked files; press F8 a second time to confirm.
@@ -36,4 +36,5 @@ listings and status messages:
     ussr tests/gui/tver_test.su
 
 It needs a GLFW-enabled build and a display, creates `tver_fixture/` in the
-current directory, and removes it again.
+current directory, and removes it again. `tests/gui/tver_repeat_test.su`
+checks held-arrow navigation the same way.

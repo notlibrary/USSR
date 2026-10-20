@@ -2367,6 +2367,22 @@ int ussr_petersburg_dispatch(
     if (strcmp(name, "petersburg_set_mark") == 0 ||
         strcmp(name, "petersburg_get_mark") == 0)
         return petersburg_list_mark(name, values, value_count, out);
+    if (strcmp(name, "petersburg_get_focus") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_WINDOW)
+        {
+            fprintf(stderr, "USSR: %s expects a window handle\n", name);
+            return -1;
+        }
+        /* Handle of the window's focused text box or list, or 0. */
+        *out = ussr_integer(petersburg_focus != NULL &&
+                            petersburg_focus->parent_id == id
+                                ? petersburg_focus->id : 0);
+        return 1;
+    }
     if (strcmp(name, "petersburg_alive") == 0)
     {
         if (!petersburg_arity(name, value_count, 1) ||

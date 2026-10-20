@@ -8,10 +8,19 @@
 #   tverinitialize(r): window left_path left_list right_path right_list status
 #   tverhandlekey(r): window key        -> window "key" callback body
 #   tveractivatepanel(r): widget        -> list "change" callback body
+#   tverhandlekeyup(r): window key      -> window "keyup" callback body
+#   tverfocus(r): window focused        -> window "focus" callback body
+#
+# Holding Up or Down repeats the cursor movement: after TVER_REPEAT_DELAY ms
+# a repeater process steps every TVER_REPEAT_RATE ms until the key is
+# released, the window loses focus or closes, another key is pressed, or the
+# cursor reaches the end of the list. Each press bumps tver_repeat_gen, and a
+# repeater only steps while the generation it started with is current, so at
+# most one repeater moves the cursor and a stop takes effect at the next step.
 #
 # Hash keys: tver_window tver_status tver_paths tver_lists tver_dirs
-# tver_names tver_marks tver_active tver_pending. Handlers serialize through
-# Petersburg's uilock.
+# tver_names tver_marks tver_active tver_pending tver_repeat_key
+# tver_repeat_gen. Handlers serialize through Petersburg's uilock.
 # Directory names in tver_names end with "/"; the parent entry is "../".
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
@@ -22,6 +31,10 @@ $define TVER_KEY_INSERT 260
 $define TVER_KEY_F6 295
 $define TVER_KEY_F8 297
 $define TVER_KEY_KP_ENTER 335
+$define TVER_KEY_DOWN 264
+$define TVER_KEY_UP 265
+$define TVER_REPEAT_DELAY 350
+$define TVER_REPEAT_RATE 50
 
 # --- paths ----------------------------------------------------------------
 tver_is_dir_name(r): name [
@@ -348,6 +361,8 @@ tverinitialize(result): window left_path left_list right_path right_list status 
     set(tver_marks): _tvi_marks!
     set(tver_active): 0!
     set(tver_pending): ""!
+    set(tver_repeat_key): 0!
+    set(tver_repeat_gen): 0!
     set(_tvi_i): 0
     set(result): 0
     while(_): {_tvi_i < 2} [
@@ -362,6 +377,98 @@ tverinitialize(result): window left_path left_list right_path right_list status 
     ]
     if(_): {result = 0} [
         tver_panel_status(_):
+    ]
+    setfocus(_): left_list
+]
+
+# --- held-key navigation ----------------------------------------------------
+tver_stop_repeat(r): [
+    set(_tsr_gen): tver_repeat_gen?
+    set(tver_repeat_gen): {_tsr_gen + 1}!
+    set(tver_repeat_key): 0!
+    set(r): 0
+]
+
+# Moves the active panel's cursor one row; false at either end of the list.
+tver_step(r): direction [
+    set(_tstp_active): tver_active?
+    set(_tstp_lists): tver_lists?
+    set(_tstp_all): tver_names?
+    at(_tstp_list): _tstp_lists _tstp_active
+    at(_tstp_names): _tstp_all _tstp_active
+    len(_tstp_count): _tstp_names
+    getindex(_tstp_index): _tstp_list
+    set(_tstp_next): {_tstp_index + direction}
+    set(r): {_tstp_next >= 0 && _tstp_next < _tstp_count}
+    if(_): r [
+        setindex(_): _tstp_list _tstp_next
+    ]
+]
+
+# Repeater process started by a Up/Down press.
+tver_repeat(result): window key generation [
+    set(result): 0
+    set(_trp_direction): 1
+    if(_): {key = TVER_KEY_UP} [
+        set(_trp_direction): {0 - 1}
+    ]
+    sleep(_): TVER_REPEAT_DELAY
+    set(_trp_go): true
+    while(_): _trp_go [
+        set(_trp_gen): tver_repeat_gen?
+        alive(_trp_alive): window
+        set(_trp_go): {_trp_gen = generation && _trp_alive}
+        if(_): _trp_go [
+            uilock(_):
+            # the key may have been released while we waited for the lock
+            set(_trp_gen): tver_repeat_gen?
+            set(_trp_go): {_trp_gen = generation}
+            if(_): _trp_go [
+                tver_step(_trp_go): _trp_direction
+            ]
+            uiunlock(_):
+            if(_): _trp_go [
+                sleep(_): TVER_REPEAT_RATE
+            ]
+        ]
+    ]
+]
+
+# Up/Down press: the first step is ordinary navigation; holding repeats it.
+tver_arrow(r): window key [
+    set(r): 0
+    tver_stop_repeat(_):
+    set(_tar_active): tver_active?
+    set(_tar_lists): tver_lists?
+    at(_tar_list): _tar_lists _tar_active
+    getfocus(_tar_focus): window
+    # A focused list already moved itself on the key press; otherwise take
+    # the step here and give the list focus so later presses do it natively.
+    if(_): {_tar_focus != _tar_list} [
+        setfocus(_): _tar_list
+        set(_tar_direction): 1
+        if(_): {key = TVER_KEY_UP} [
+            set(_tar_direction): {0 - 1}
+        ]
+        tver_step(_): _tar_direction
+    ]
+    set(_tar_gen): tver_repeat_gen?
+    set(tver_repeat_key): key!
+    async(_): "tver_repeat" window key _tar_gen
+]
+
+tverhandlekeyup(result): window key [
+    set(result): 0
+    set(_tku_key): tver_repeat_key?
+    if(_): {key = _tku_key} [
+        tver_stop_repeat(_):
+    ]
+]
+
+tverfocus(result): window focused [
+    set(result): 0
+    if(_): {focused = 0} [
+        tver_stop_repeat(_):
     ]
 ]
 
@@ -603,6 +710,12 @@ tver_dispatch_key(r): window key [
     if(_): {window != _tvk_window} [
         return(_): r
     ]
+    if(_): {key = TVER_KEY_UP || key = TVER_KEY_DOWN} [
+        tver_arrow(_): window key
+        return(_): r
+    ]
+    # Any other key cancels a held-arrow repeat.
+    tver_stop_repeat(_):
     set(_tvk_active): tver_active?
     set(_tvk_lists): tver_lists?
     if(_): {key = TVER_KEY_TAB} [

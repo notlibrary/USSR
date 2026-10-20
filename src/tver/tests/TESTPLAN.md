@@ -3,7 +3,10 @@
 Automated: `ussr tests/gui/tver_test.su` (GLFW build and a display required)
 covers listing order, directory mark refusal, file marks and cursor advance,
 Tab, Enter into a directory and back to `..`, F6 moves with marks, and the
-two-step F8 delete.
+two-step F8 delete. `ussr tests/gui/tver_repeat_test.su` covers held-arrow
+repeat: single tap, hold, release, focus loss, end of list, direction
+change, cancellation by another key, an unfocused list, and closing the
+window mid-repeat.
 
 Manual:
 

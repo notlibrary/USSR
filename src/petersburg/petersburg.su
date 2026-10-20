@@ -111,6 +111,11 @@ setfocus(result): widget [
     petersburg_set_focus(result): widget
 ]
 
+# Handle of the window's focused text box or list, or 0 when none has focus.
+getfocus(result): window [
+    petersburg_get_focus(result): window
+]
+
 getchecked(result): widget [
     petersburg_get_checked(result): widget
 ]

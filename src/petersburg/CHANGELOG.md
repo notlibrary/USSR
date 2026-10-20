@@ -4,6 +4,7 @@
 - Added `toolbar(window)`: a strip docked at the top of the window whose
   buttons sit side by side. Buttons accept `setchecked`/`getchecked` and are
   drawn pressed while checked.
+- Added `getfocus(window)`.
 
 ## 0.3.0-alpha
 - Added the canvas widget: retained lines, circles, arcs, rectangles, filled
