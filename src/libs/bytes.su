@@ -6,6 +6,7 @@
 # serialize(v): value "INT"    -> v becomes 8 little-endian bytes of value
 # deserialize(v): bytes "INT"  -> v becomes the integer stored in bytes
 # Only "INT" is supported; other tags return null.
+$once
 
 serialize(r): value tag [
     if(_): {tag != "INT"} [

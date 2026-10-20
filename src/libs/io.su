@@ -25,6 +25,7 @@
 #   putch(ok): code                          (write one byte/char)
 #   getch(code):                             (read one char, -1 at EOF)
 # No top-level state: programs with init(...) skip top-level commands.
+$once
 
 putch(r): code [
     set(r): 0

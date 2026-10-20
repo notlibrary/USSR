@@ -26,6 +26,7 @@
 # integer, so very large values print with fewer decimals instead of
 # overflowing.
 # Temporaries use the _str prefix; parameters are restored after each call.
+$once
 
 str_int_limit(r): [
     # 2147483647 + 1 wraps negative on hosts with 32-bit integers.

@@ -14,6 +14,7 @@
 #   asin(r): x      -> atan(x / sqrt(1 - x^2)), |x| <= 1
 #   acos(r): x      -> pi/2 - asin(x), |x| <= 1
 #   atan2(r): y x   -> angle of point (x, y) in (-pi, pi]
+$once
 
 $define M_PI 3.14159265358979323846
 $define M_E 2.71828182845904523536

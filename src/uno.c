@@ -241,12 +241,33 @@ void ussr_uno_instance_destroy_raw(ussr_struct_instance_t *instance)
 
 static ussr_struct_type_t *g_struct_types = NULL;
 
+static int uno_registering_builtin;
+
+static int uno_builtin_fields(
+    const char *name,
+    const char *const **fields,
+    size_t *count
+);
+
 ussr_struct_type_t *ussr_struct_type_find(const char *name)
 {
     ussr_struct_type_t *t;
+    const char *const *fields;
+    size_t count;
+
     for (t = g_struct_types; t != NULL; t = t->next)
         if (strcmp(t->name, name) == 0)
             return t;
+    /* Vec2/Vec3 are registered on first use (see uno_builtin_fields). */
+    if (!uno_registering_builtin && uno_builtin_fields(name, &fields, &count))
+    {
+        uno_registering_builtin = 1;
+        (void)ussr_struct_register(name, NULL, (char **)fields, count);
+        uno_registering_builtin = 0;
+        for (t = g_struct_types; t != NULL; t = t->next)
+            if (strcmp(t->name, name) == 0)
+                return t;
+    }
     return NULL;
 }
 
@@ -294,6 +315,53 @@ static int uno_parse_field_spec(
     return 0;
 }
 
+/*
+ * Built-in math vector types. They are registered the first time they are
+ * looked up, so every run (and every run after ussr_uno_cleanup) has them.
+ */
+static const char *uno_builtin_vec2_fields[] = { "x:number", "y:number" };
+static const char *uno_builtin_vec3_fields[] = { "x:number", "y:number", "z:number" };
+
+static int uno_builtin_fields(
+    const char *name,
+    const char *const **fields,
+    size_t *count
+)
+{
+    if (strcmp(name, "Vec2") == 0)
+    {
+        *fields = uno_builtin_vec2_fields;
+        *count = 2;
+        return 1;
+    }
+    if (strcmp(name, "Vec3") == 0)
+    {
+        *fields = uno_builtin_vec3_fields;
+        *count = 3;
+        return 1;
+    }
+    return 0;
+}
+
+/* Redeclaring a built-in type with exactly its own fields is allowed. */
+static int uno_same_builtin_fields(
+    const char *name,
+    char **field_specs,
+    size_t field_count
+)
+{
+    const char *const *fields;
+    size_t count;
+    size_t i;
+
+    if (!uno_builtin_fields(name, &fields, &count) || count != field_count)
+        return 0;
+    for (i = 0; i < count; ++i)
+        if (field_specs[i] == NULL || strcmp(field_specs[i], fields[i]) != 0)
+            return 0;
+    return 1;
+}
+
 int ussr_struct_register(
     const char *name,
     const char *parent_name,
@@ -307,6 +375,9 @@ int ussr_struct_register(
 
     if (ussr_struct_type_find(name) != NULL)
     {
+        if ((parent_name == NULL || parent_name[0] == '\0') &&
+            uno_same_builtin_fields(name, field_specs, field_count))
+            return 0;
         fprintf(stderr, "USSR: struct '%s' already defined\n", name);
         return -1;
     }

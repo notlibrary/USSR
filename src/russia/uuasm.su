@@ -17,6 +17,7 @@
 #
 # State lives in uq_* globals: uq_code (instructions [op a b c imm]),
 # uq_consts, uq_strings, uq_funcs ([name entry retname params]).
+$once
 
 # --- opcode table -----------------------------------------------------------
 uq_tables(r): [

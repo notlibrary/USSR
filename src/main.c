@@ -43,6 +43,7 @@ extern int ussr_argument_evaluate(
 
 #include "ussr_bytecode.h"
 #include "uno.h"
+#include "uno.h"
 #include "ussr_oop_builtins.h"
 #include "vm.h"
 #include "scheduler.h"
@@ -80,6 +81,198 @@ static double vm_real(const ussr_value_t *v)
     return v->type == USSR_REAL ? v->data.real : (double)v->data.integer;
 }
 
+/* 2 or 3 for a Vec2/Vec3 struct instance, otherwise 0. */
+static int vm_vector_dim(const ussr_value_t *v)
+{
+    if (v == NULL || v->type != USSR_STRUCT || v->data.instance == NULL ||
+        v->data.instance->type == NULL)
+        return 0;
+    if (strcmp(v->data.instance->type->name, "Vec2") == 0)
+        return 2;
+    if (strcmp(v->data.instance->type->name, "Vec3") == 0)
+        return 3;
+    return 0;
+}
+
+static const char *vm_vector_field[3] = { "x", "y", "z" };
+
+/* Component i as a number; -1 with a message if it is null or not numeric. */
+static int vm_vector_component(
+    const ussr_value_t *v,
+    int i,
+    ussr_value_t *out)
+{
+    if (!ussr_struct_get_field(v->data.instance, vm_vector_field[i], out))
+        return -1;
+    if (out->type != USSR_INTEGER && out->type != USSR_REAL)
+    {
+        fprintf(stderr, "USSR VM: %s component %s is not a number\n",
+                v->data.instance->type->name, vm_vector_field[i]);
+        ussr_value_free(out);
+        return -1;
+    }
+    return 0;
+}
+
+static const char *vm_type_label(const ussr_value_t *v)
+{
+    if (vm_vector_dim(v) != 0)
+        return v->data.instance->type->name;
+    switch (v->type)
+    {
+        case USSR_NULL: return "null";
+        case USSR_INTEGER: return "integer";
+        case USSR_REAL: return "real";
+        case USSR_STRING: return "string";
+        case USSR_BOOLEAN: return "boolean";
+        case USSR_VECTOR: return "vector";
+        case USSR_STRUCT: return "struct";
+    }
+    return "value";
+}
+
+static int vm_binary(
+    uint8_t opcode,
+    const ussr_value_t *left,
+    const ussr_value_t *right,
+    ussr_value_t *out);
+
+/*
+ * Vec2/Vec3 operators: + and - between vectors of one dimension, * and /
+ * by a number, = and != comparing components. Returns 0 when handled
+ * (*out set), -1 on an error (already reported), 1 when neither operand is
+ * a math vector.
+ */
+static int vm_vector_binary(
+    uint8_t opcode,
+    const ussr_value_t *left,
+    const ussr_value_t *right,
+    ussr_value_t *out)
+{
+    int dl = vm_vector_dim(left);
+    int dr = vm_vector_dim(right);
+    int dim = dl != 0 ? dl : dr;
+    const ussr_value_t *vector = dl != 0 ? left : right;
+    const ussr_value_t *other = dl != 0 ? right : left;
+    ussr_value_t parts[3];
+    const char *verb;
+    int i;
+
+    if (dl == 0 && dr == 0)
+        return 1;
+
+    if (opcode == USSR_BC_EQ || opcode == USSR_BC_NE)
+    {
+        int same = dl == dr;
+        for (i = 0; same && i < dim; ++i)
+        {
+            ussr_value_t a, b, eq;
+            if (vm_vector_component(left, i, &a) != 0)
+                return -1;
+            if (vm_vector_component(right, i, &b) != 0)
+            {
+                ussr_value_free(&a);
+                return -1;
+            }
+            same = vm_binary(USSR_BC_EQ, &a, &b, &eq) == 0 &&
+                   eq.data.boolean;
+            ussr_value_free(&a);
+            ussr_value_free(&b);
+        }
+        *out = ussr_boolean(opcode == USSR_BC_EQ ? same : !same);
+        return 0;
+    }
+
+    verb = opcode == USSR_BC_ADD ? "add" :
+           opcode == USSR_BC_SUB ? "subtract" :
+           opcode == USSR_BC_MUL ? "multiply" :
+           opcode == USSR_BC_DIV ? "divide" : NULL;
+    if (verb == NULL)
+    {
+        fprintf(stderr,
+                "USSR VM: this operator is not defined for %s; vectors support + - * / = !=\n",
+                vector->data.instance->type->name);
+        return -1;
+    }
+    if (opcode == USSR_BC_ADD || opcode == USSR_BC_SUB)
+    {
+        if (dl == 0 || dr == 0 || dl != dr)
+        {
+            fprintf(stderr, "USSR VM: cannot %s %s and %s\n", verb,
+                    vm_type_label(left), vm_type_label(right));
+            return -1;
+        }
+    }
+    else
+    {
+        /* vector * number, number * vector, vector / number */
+        int number_left = left->type == USSR_INTEGER || left->type == USSR_REAL;
+        int number_right = right->type == USSR_INTEGER || right->type == USSR_REAL;
+        int ok = (dl != 0 && dr == 0 && number_right) ||
+                 (opcode == USSR_BC_MUL && dl == 0 && dr != 0 && number_left);
+        if (!ok)
+        {
+            fprintf(stderr,
+                    "USSR VM: cannot %s %s by %s (vectors %s by a number; use vdot/vcross for vector products)\n",
+                    verb, vm_type_label(left), vm_type_label(right),
+                    opcode == USSR_BC_MUL ? "multiply" : "divide");
+            return -1;
+        }
+    }
+    if (opcode == USSR_BC_DIV &&
+        ((right->type == USSR_INTEGER && right->data.integer == 0) ||
+         (right->type == USSR_REAL && right->data.real == 0.0)))
+    {
+        fprintf(stderr, "USSR VM: cannot divide %s by zero\n",
+                vector->data.instance->type->name);
+        return -1;
+    }
+
+    for (i = 0; i < dim; ++i)
+    {
+        ussr_value_t a, b;
+        int status;
+
+        if (vm_vector_component(vector, i, &a) != 0)
+        {
+            while (i-- > 0)
+                ussr_value_free(&parts[i]);
+            return -1;
+        }
+        if (opcode == USSR_BC_ADD || opcode == USSR_BC_SUB)
+        {
+            if (vm_vector_component(other, i, &b) != 0)
+            {
+                ussr_value_free(&a);
+                while (i-- > 0)
+                    ussr_value_free(&parts[i]);
+                return -1;
+            }
+            status = vm_binary(opcode, &a, &b, &parts[i]);
+            ussr_value_free(&b);
+        }
+        else
+            status = vm_binary(opcode, &a, other, &parts[i]);
+        ussr_value_free(&a);
+        if (status != 0)
+        {
+            while (i-- > 0)
+                ussr_value_free(&parts[i]);
+            return -1;
+        }
+    }
+    {
+        ussr_struct_instance_t *instance = ussr_struct_instantiate(
+            vector->data.instance->type->name, parts, (size_t)dim);
+        for (i = 0; i < dim; ++i)
+            ussr_value_free(&parts[i]);
+        if (instance == NULL)
+            return -1;
+        *out = ussr_struct_value(instance);
+    }
+    return 0;
+}
+
 static int vm_equal(const ussr_value_t *a, const ussr_value_t *b)
 {
     if (a == NULL || b == NULL)
@@ -110,6 +303,13 @@ static int vm_binary(
     if (left == NULL || right == NULL || out == NULL)
         return -1;
     *out = ussr_null();
+
+    if (left->type == USSR_STRUCT || right->type == USSR_STRUCT)
+    {
+        int vector_status = vm_vector_binary(opcode, left, right, out);
+        if (vector_status != 1)
+            return vector_status;
+    }
 
     switch (opcode)
     {

@@ -238,16 +238,14 @@ a string, a file, a pipe, or straight into source code.
 ### 8.1 Declaring a struct
 
 ```
-struct(_): "Point" "x:number" "y:number"
+struct(Point): "x:number" "y:number"
 ```
 
-The first argument is the type name; the rest are `"field:type"`
-specs. `type` is one of `string`, `number`, `boolean`, `null`,
-`vector`, `any`, or the name of another struct. Every field accepts
-`null` regardless of its declared type.
-
-The return-variable slot (`_` above) is unused by `struct` — write
-`_` by convention.
+The type name goes in the return-variable slot; the arguments are
+`"field:type"` specs. `type` is one of `string`, `number`, `boolean`,
+`null`, `vector`, `any`, or the name of another struct. Every field
+accepts `null` regardless of its declared type. Declaring a type twice is
+an error.
 
 ### 8.2 Creating and using an instance
 
@@ -328,7 +326,58 @@ The three quote characters never collide: `"..."` is a normal USSR
 string, `'...'` is a UNO literal, and `` `...` `` is a string *inside*
 a UNO document.
 
-### 8.5 What UNO can't represent
+### 8.5 Math vectors: Vec2 and Vec3
+
+Two struct types are built in: `Vec2{x, y}` and `Vec3{x, y, z}`, with
+`number` fields. Everything that works on structs works on them, without
+declaring them:
+
+```
+new(a): "Vec2" 1 2
+set(p): 'Vec3{x=1,y=2,z=3}'
+getf(x): a "x"
+typeof(t): p            # "Vec3"
+vec(path): "Vec2"       # a container that only holds Vec2 values
+```
+
+Inside `{ }` the VM gives them value semantics:
+
+| Expression | Result |
+|------------|--------|
+| `{a + b}`, `{a - b}` | Component-wise, both operands the same type |
+| `{v * k}`, `{k * v}`, `{v / k}` | Scaling by a number; dividing by zero is an error |
+| `{a = b}`, `{a != b}` | Component-wise comparison (`1` equals `1.0`); a `Vec2` never equals a `Vec3` or a non-vector |
+
+Components keep USSR number semantics (integer stays integer under `+ -
+*`; `/` gives reals). Every other combination stops the script with a
+message naming both operands, for example `cannot add Vec2 and Vec3`,
+`cannot add Vec2 and integer`, `cannot multiply Vec2 by Vec2 (...use
+vdot/vcross...)`, or `this operator is not defined for Vec2` for `<`, `%`
+and the bitwise operators. A null component reports
+`Vec2 component x is not a number`. Like other structs, vectors are
+shared references: `set(b): a` aliases, while operators return new
+vectors.
+
+`src/libs/vectors.su` adds functions written in USSR:
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `vec2`, `vec3` | `vec2(v): x y` | Construct; non-numbers are an error |
+| `vdim` | `vdim(n): v` | 2 or 3; anything else is an error |
+| `vget`, `vset` | `vget(c): v i`, `vset(v): v i value` | Component by index 0..dim-1; other indexes are an error |
+| `vadd`, `vsub`, `vscale`, `vneg` | `vadd(v): a b` | Same as the operators, with dimension checks |
+| `vdot` | `vdot(n): a b` | Dot product |
+| `vcross` | `vcross(c): a b` | Vec3 cross product; for two Vec2 the scalar `a.x*b.y - a.y*b.x` |
+| `vlen`, `vdist`, `vnorm` | `vlen(n): v` | Length, distance, unit vector (zero vector is an error) |
+| `vlerp` | `vlerp(v): a b t` | `a + (b - a) * t` |
+| `vnear` | `vnear(ok): a b eps` | Every component within `eps` |
+| `vstr` | `vstr(s): v` | `"(1, 2)"`, up to six decimals |
+
+Declaring `struct(Vec2): "x:number" "y:number"` yourself is accepted (it
+matches the built-in type); a different field list is the usual
+`already defined` error.
+
+### 8.6 What UNO can't represent
 
 A string containing a literal backtick or a newline can't be encoded
 — `encode()` fails rather than silently corrupting it. Keep that in
@@ -406,6 +455,11 @@ $endif
   own directory when given a relative path.
 - `$ifdef` / `$if defined(NAME)` / `$else` / `$endif` — conditional
   inclusion.
+- `$once` makes the current file a single-inclusion file: later
+  `$include`s of the same file, by any relative path, are skipped. The
+  standard library, Petersburg, Tver and Tula files use it, so a program
+  can include `strings.su` and `vectors.su` (which includes it too) without
+  duplicate definitions.
 - `__MAIN__` counts as defined only in the file `ussr` was started with,
   never inside an `$include`d file. A library can carry its own entry point
   without clashing with the `init` of programs that include it:
@@ -690,6 +744,8 @@ print(_): s
 
 **standard.su:** `random64(r):`, `seed_random64(_): seed`, and
 `time(r):`.
+
+**vectors.su:** 2D/3D vector functions; see section 8.5.
 
 ---
 

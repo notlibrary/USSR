@@ -28,6 +28,7 @@
 # tver_names tver_marks tver_active tver_pending tver_repeat_key
 # tver_repeat_gen. Handlers serialize through Petersburg's uilock.
 # Directory names in tver_names end with "/"; the parent entry is "../".
+$once
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
 

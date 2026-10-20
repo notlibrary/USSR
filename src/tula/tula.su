@@ -26,6 +26,7 @@
 # Hash keys: tula_window tula_status tula_path tula_canvas tula_entities
 # tula_tool tula_anchor tula_view ([ox, oy, scale]) tula_fitted tula_step
 # tula_buttons tula_button_names (toolbar buttons, see tulatoolbar).
+$once
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"

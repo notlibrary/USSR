@@ -1,6 +1,7 @@
 # petersburg.su — portable OpenGL widgets for USSR.
 # Handles are integers owned by the C runtime; event callbacks are definition
 # names passed as strings and run as normal USSR scheduler processes.
+$once
 
 createwindow(result): title width height [
     petersburg_create_window(result): title width height

@@ -1,0 +1,147 @@
+# 2D/3D vector tests: built-in Vec2/Vec3 types, VM operators and
+# src/libs/vectors.su. Every check prints PASS or FAIL. Including strings.su
+# and math.su as well as vectors.su (which includes them too) also checks
+# that $once keeps the definitions single.
+$include "../../src/libs/strings.su"
+$include "../../src/libs/math.su"
+$include "../../src/libs/vectors.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+near(r): label got want [
+    set(_nr_d): {got - want}
+    check(r): label {_nr_d < 0.000001 && _nr_d > -0.000001} true
+]
+
+text(r): v [
+    encode(r): v
+]
+
+init(result): arg_count arg_values [
+    # construction and element access
+    vec2(a): 1 2
+    vec2(b): 3.5 -4
+    vec3(p): 1 2 3
+    vec3(q): 4 5 6
+    typeof(t): a
+    check(_): "vec2 type" t "Vec2"
+    typeof(t): p
+    check(_): "vec3 type" t "Vec3"
+    getf(x): a "x"
+    check(_): "getf x" x 1
+    vget(y): b 1
+    check(_): "vget index 1" y -4
+    vget(z): p 2
+    check(_): "vget z" z 3
+    vdim(d): a
+    check(_): "vdim 2" d 2
+    vdim(d): q
+    check(_): "vdim 3" d 3
+    new(n): "Vec2" 7 8
+    text(s): n
+    check(_): "new Vec2" s "Vec2{x=7,y=8}"
+
+    # UNO round trip
+    set(u): 'Vec3{x=1,y=-2,z=0.5}'
+    text(s): u
+    check(_): "UNO literal" s "Vec3{x=1,y=-2,z=0.5}"
+    decode(u2): s
+    check(_): "decode equals" {u2 = u} true
+
+    # operators
+    set(c): {a + b}
+    text(s): c
+    check(_): "Vec2 add" s "Vec2{x=4.5,y=-2}"
+    set(c): {q - p}
+    text(s): c
+    check(_): "Vec3 subtract" s "Vec3{x=3,y=3,z=3}"
+    set(c): {a * 3}
+    text(s): c
+    check(_): "scale right" s "Vec2{x=3,y=6}"
+    set(c): {2 * p}
+    text(s): c
+    check(_): "scale left" s "Vec3{x=2,y=4,z=6}"
+    set(c): {p / 2}
+    text(s): c
+    check(_): "divide" s "Vec3{x=0.5,y=1.0,z=1.5}"
+    set(c): {a + b * 2 - a}
+    text(s): c
+    check(_): "mixed expression" s "Vec2{x=7.0,y=-8}"
+    vec2(a2): 1.0 2.0
+    check(_): "equal across int/real" {a = a2} true
+    check(_): "not equal" {a != b} true
+    check(_): "dimensions differ" {a = p} false
+    check(_): "vector vs number" {a = 1} false
+
+    # library functions
+    vdot(dd): a b
+    near(_): "Vec2 dot" dd -4.5
+    vdot(dd): p q
+    check(_): "Vec3 dot" dd 32
+    vcross(cr): p q
+    text(s): cr
+    check(_): "Vec3 cross" s "Vec3{x=-3,y=6,z=-3}"
+    vec2(e1): 1 0
+    vec2(e2): 0 1
+    vcross(cz): e1 e2
+    check(_): "Vec2 cross is z" cz 1
+    vec2(v34): 3 4
+    vlen(l): v34
+    near(_): "length" l 5
+    vnorm(nv): v34
+    vec2(want): 0.6 0.8
+    vnear(ok): nv want 0.000001
+    check(_): "normalize" ok true
+    vdist(dist): e1 e2
+    near(_): "distance" dist {M_PI * 0 + 1.4142135623730951}
+    vlerp(m): p q 0.5
+    text(s): m
+    check(_): "lerp" s "Vec3{x=2.5,y=3.5,z=4.5}"
+    vneg(ng): a
+    text(s): ng
+    check(_): "negate" s "Vec2{x=-1,y=-2}"
+    vadd(s1): p q
+    vsub(s2): s1 q
+    check(_): "vadd then vsub" {s2 = p} true
+    vscale(s3): a 0.5
+    text(s): s3
+    check(_): "vscale" s "Vec2{x=0.5,y=1.0}"
+    vstr(s): b
+    check(_): "vstr 2D" s "(3.5, -4)"
+    vstr(s): p
+    check(_): "vstr 3D" s "(1, 2, 3)"
+
+    # vectors are shared references, like all structs
+    set(alias): a
+    vset(_): alias 0 10
+    getf(x): a "x"
+    check(_): "vset through alias" x 10
+
+    # vectors inside containers and typed struct fields
+    vec(path): "Vec2"
+    push(_): path a
+    push(_): path b
+    len(n): path
+    check(_): "typed container of Vec2" n 2
+    struct(Segment): "from:Vec2" "to:Vec2"
+    new(seg): "Segment" a b
+    getf(to): seg "to"
+    check(_): "struct field of type Vec2" {to = b} true
+
+    # redeclaring the built-in type with the same fields is allowed
+    struct(Vec2): "x:number" "y:number"
+    print(_): "PASS identical redeclaration accepted"
+    set(result): 0
+]
