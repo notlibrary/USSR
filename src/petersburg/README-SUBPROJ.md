@@ -1,9 +1,10 @@
 # USSR desktop subprojects
 
-- **Petersburg** (`petersburg.su`) now has a GLFW/OpenGL native widget runtime
-  and scheduler integration. See its README and API contract for build details.
-- **Tver** (`tver.su`) and **Tula** (`tula.su`) remain project scaffolds and
-  are not yet runnable applications.
+- **Petersburg** (`petersburg.su`) has a GLFW/OpenGL native widget runtime
+  and scheduler integration. It is the only GUI component compiled into
+  `ussr`. See its README and API contract for build details.
+- **Tver** (`tver.su`), a two-panel file manager, and **Tula** (`tula.su`), a
+  2D CAD, are written entirely in USSR on top of Petersburg and the standard
+  library.
 
-Petersburg is the first implementation layer for future desktop projects; it
-does not yet provide native accessibility or Unicode text input.
+Petersburg does not yet provide native accessibility or Unicode text input.

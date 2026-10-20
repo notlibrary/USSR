@@ -1,0 +1,162 @@
+# Automated Tver test. Needs a GUI-enabled ussr (GLFW) and a display; the
+# window is never shown. Run from the repository root:
+#     ussr tests/gui/tver_test.su
+# Builds tver_fixture/ in the current directory, drives Tver with injected
+# key events through Petersburg's normal input path, and removes the
+# fixture again. Every check prints PASS or FAIL.
+$include "../../src/tver/tver.su"
+
+$define KEY_ENTER 257
+$define KEY_TAB 258
+$define KEY_INSERT 260
+$define KEY_F6 295
+$define KEY_F8 297
+
+key_handler(result): window key [
+    tverhandlekey(_): window key
+]
+
+panel_changed(result): widget [
+    tveractivatepanel(_): widget
+]
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# Lets the scheduler deliver queued events and finish their handlers.
+# Gives up after about two seconds so a failed handler cannot hang the test.
+settle(r): [
+    sleep(_): 60
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 200} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    if(_): {_st_idle = false} [
+        print(_): "FAIL handler did not finish"
+        uiunlock(_):
+    ]
+    set(r): 0
+]
+
+press(r): window key [
+    inject(_): window "key" key 0 0
+    inject(_): window "keyup" key 0 0
+    settle(_):
+    set(r): 0
+]
+
+ends_with(r): text suffix [
+    len(_ew_n): text
+    len(_ew_m): suffix
+    set(r): false
+    if(_): {_ew_n >= _ew_m} [
+        slice(_ew_tail): text {_ew_n - _ew_m} _ew_m
+        set(r): {_ew_tail = suffix}
+    ]
+]
+
+init(result): arg_count arg_values [
+    make_dir(_): "tver_fixture"
+    cd(_): "tver_fixture"
+    make_dir(_): "sub"
+    writefile(_): "a.txt" "alpha"
+    writefile(_): "b.txt" "beta"
+
+    createwindow(window): "Tver test" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left_files): window ""
+    listbox(right_files): window ""
+    label(status): window ""
+    grid(_): left_path 0 0 false
+    grid(_): right_path 0 1 false
+    grid(_): left_files 1 0 true
+    grid(_): right_files 1 1 true
+    grid(_): status 2 0 false
+    on(_): window "key" "key_handler"
+    on(_): left_files "change" "panel_changed"
+    on(_): right_files "change" "panel_changed"
+    tverinitialize(ok): window left_path left_files right_path right_files status
+
+    check(_): "initialize" ok 0
+    gettext(t): left_files
+    check(_): "left listing" t "..|sub/|a.txt|b.txt"
+    gettext(t): status
+    check(_): "left panel status" t "LEFT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+
+    setindex(_): left_files 1
+    press(_): window KEY_INSERT
+    gettext(t): status
+    check(_): "directory mark refused" t "Directories cannot be marked in this version"
+
+    setindex(_): left_files 2
+    press(_): window KEY_INSERT
+    gettext(t): left_files
+    check(_): "mark shown" t "..|sub/|* a.txt|b.txt"
+    gettext(t): status
+    check(_): "mark count" t "1 file(s) marked in this panel"
+    getindex(i): left_files
+    check(_): "cursor advances after mark" i 3
+
+    press(_): window KEY_TAB
+    gettext(t): status
+    check(_): "tab to right" t "RIGHT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+
+    setindex(_): right_files 1
+    press(_): window KEY_ENTER
+    gettext(t): right_path
+    ends_with(e): t "sub"
+    check(_): "enter directory" e true
+    gettext(t): right_files
+    check(_): "empty directory listing" t ".."
+
+    press(_): window KEY_TAB
+    press(_): window KEY_F6
+    gettext(t): status
+    check(_): "move marked" t "1 file(s) moved"
+    gettext(t): left_files
+    check(_): "source after move" t "..|sub/|b.txt"
+    gettext(t): right_files
+    check(_): "destination after move" t "..|a.txt"
+
+    setindex(_): left_files 2
+    press(_): window KEY_F8
+    gettext(t): status
+    check(_): "delete asks first" t "Press F8 again to delete b.txt"
+    file_exists(e): "b.txt"
+    check(_): "file kept until confirmed" e true
+    press(_): window KEY_F8
+    gettext(t): status
+    check(_): "delete confirmed" t "1 file(s) deleted"
+    file_exists(e): "b.txt"
+    check(_): "file removed" e false
+
+    press(_): window KEY_TAB
+    setindex(_): right_files 0
+    press(_): window KEY_ENTER
+    gettext(t): right_path
+    ends_with(e): t "tver_fixture"
+    check(_): "parent directory" e true
+
+    close(_): window
+    remove_file(_): "sub/a.txt"
+    remove_dir(_): "sub"
+    cd(_): ".."
+    remove_dir(gone): "tver_fixture"
+    check(_): "fixture removed" gone 0
+    set(result): 0
+]

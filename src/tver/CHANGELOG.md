@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-alpha
+- Rewrote Tver in USSR. `tver.c` is gone; `tver.su` uses the standard
+  library's `list_dir`/`is_dir`/`getcwd`/`rename_path`/`remove_file` and
+  Petersburg widgets. The `tverinitialize`, `tverhandlekey` and
+  `tveractivatepanel` commands keep their arguments and behavior.
+- Added an automated test, `tests/gui/tver_test.su`.
+
 ## 0.1.0-alpha
 - Added a working two-panel file manager built with Petersburg widgets.
 - Added directory navigation, keyboard panel switching, Insert marking, and

@@ -1,4 +1,5 @@
 #include "petersburg.h"
+#include "eventq.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +11,10 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
+
+#define PETERSBURG_MAX_SHAPES 200000
 
 typedef enum
 {
@@ -21,8 +25,28 @@ typedef enum
     PETERSBURG_CHECKBOX,
     PETERSBURG_LIST,
     PETERSBURG_COMBOBOX,
-    PETERSBURG_IMAGE
+    PETERSBURG_IMAGE,
+    PETERSBURG_CANVAS
 } petersburg_type_t;
+
+typedef enum
+{
+    PETERSBURG_SHAPE_LINE,
+    PETERSBURG_SHAPE_CIRCLE,
+    PETERSBURG_SHAPE_ARC,
+    PETERSBURG_SHAPE_RECT,
+    PETERSBURG_SHAPE_FILL,
+    PETERSBURG_SHAPE_TEXT
+} petersburg_shape_kind_t;
+
+/* One retained canvas primitive, in canvas-local framebuffer pixels. */
+typedef struct
+{
+    petersburg_shape_kind_t kind;
+    double v[6];
+    unsigned long color;
+    char *text;
+} petersburg_shape_t;
 
 typedef struct petersburg_widget
 {
@@ -33,11 +57,15 @@ typedef struct petersburg_widget
     char *click_callback;
     char *change_callback;
     char *key_callback;
+    char *keyup_callback;
+    char *focus_callback;
+    char *wheel_callback;
     int x;
     int y;
     int width;
     int height;
     int preferred_height;
+    int laid_out;
     int expand;
     int grid_row;
     int grid_column;
@@ -49,18 +77,21 @@ typedef struct petersburg_widget
     GLFWwindow *native_window;
     int image_width;
     int image_height;
+    unsigned char *marks;
+    size_t mark_count;
+    petersburg_shape_t *shapes;
+    size_t shape_count;
+    size_t shape_capacity;
+    unsigned long background;
     struct petersburg_widget *next;
 } petersburg_widget_t;
 
+/* A queued callback: the widget handle plus up to three integer values. */
 typedef struct
 {
     long widget_id;
-    int changed;
-    int has_key;
-    int key;
-    int has_pointer;
-    int pointer_x;
-    int pointer_y;
+    size_t value_count;
+    long values[3];
     char callback[128];
 } petersburg_event_t;
 
@@ -123,6 +154,23 @@ static int petersburg_expect_string(
     return *out != NULL;
 }
 
+static int petersburg_expect_number(
+    const ussr_value_t *value,
+    size_t index,
+    double *out
+)
+{
+    if (value == NULL)
+        return 0;
+    if (value[index].type == USSR_INTEGER)
+        *out = (double)value[index].data.integer;
+    else if (value[index].type == USSR_REAL)
+        *out = value[index].data.real;
+    else
+        return 0;
+    return isfinite(*out);
+}
+
 static int petersburg_arity(
     const char *name,
     size_t actual,
@@ -177,7 +225,8 @@ static petersburg_widget_t *petersburg_add(
     widget->preferred_height = type == PETERSBURG_LABEL ? 28 :
                                type == PETERSBURG_TEXTBOX ? 34 :
                                type == PETERSBURG_LIST ? 112 :
-                               type == PETERSBURG_IMAGE ? 120 : 36;
+                               type == PETERSBURG_IMAGE ? 120 :
+                               type == PETERSBURG_CANVAS ? 240 : 36;
     widget->height = widget->preferred_height;
     if (petersburg_widgets == NULL)
         petersburg_widgets = widget;
@@ -191,18 +240,19 @@ static petersburg_widget_t *petersburg_add(
     return widget;
 }
 
-static void petersburg_queue_event(
-    petersburg_widget_t *widget,
-    int changed
+static void petersburg_queue(
+    const petersburg_widget_t *widget,
+    const char *callback,
+    size_t value_count,
+    long first,
+    long second,
+    long third
 )
 {
     petersburg_event_t *event;
-    const char *callback;
 
-    if (widget == NULL)
-        return;
-    callback = changed ? widget->change_callback : widget->click_callback;
-    if (callback == NULL || callback[0] == '\0' || petersburg_last_error)
+    if (widget == NULL || callback == NULL || callback[0] == '\0' ||
+        petersburg_last_error)
         return;
     if (petersburg_event_count == sizeof(petersburg_events) /
                                  sizeof(petersburg_events[0]))
@@ -216,12 +266,25 @@ static void petersburg_queue_event(
         (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
     ];
     event->widget_id = widget->id;
-    event->changed = changed;
-    event->has_key = 0;
-    event->key = 0;
-    event->has_pointer = 0;
+    event->value_count = value_count;
+    event->values[0] = first;
+    event->values[1] = second;
+    event->values[2] = third;
     snprintf(event->callback, sizeof(event->callback), "%s", callback);
     ++petersburg_event_count;
+}
+
+static void petersburg_queue_event(
+    petersburg_widget_t *widget,
+    int changed
+)
+{
+    if (widget == NULL)
+        return;
+    petersburg_queue(widget,
+                     changed ? widget->change_callback
+                             : widget->click_callback,
+                     0, 0, 0, 0);
 }
 
 static void petersburg_queue_pointer(
@@ -230,32 +293,9 @@ static void petersburg_queue_pointer(
     int y
 )
 {
-    petersburg_event_t *event;
-
-    if (widget == NULL || widget->click_callback == NULL ||
-        widget->click_callback[0] == '\0' || petersburg_last_error)
+    if (widget == NULL)
         return;
-    if (petersburg_event_count == sizeof(petersburg_events) /
-                                 sizeof(petersburg_events[0]))
-    {
-        fprintf(stderr, "USSR: Petersburg event queue is full\n");
-        petersburg_last_error = 1;
-        return;
-    }
-    event = &petersburg_events[
-        (petersburg_event_head + petersburg_event_count) %
-        (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
-    ];
-    event->widget_id = widget->id;
-    event->changed = 0;
-    event->has_key = 0;
-    event->key = 0;
-    event->has_pointer = 1;
-    event->pointer_x = x;
-    event->pointer_y = y;
-    snprintf(event->callback, sizeof(event->callback), "%s",
-             widget->click_callback);
-    ++petersburg_event_count;
+    petersburg_queue(widget, widget->click_callback, 2, x, y, 0);
 }
 
 static void petersburg_queue_key(
@@ -263,30 +303,9 @@ static void petersburg_queue_key(
     int key
 )
 {
-    petersburg_event_t *event;
-
-    if (window == NULL || window->key_callback == NULL ||
-        window->key_callback[0] == '\0' || petersburg_last_error)
+    if (window == NULL)
         return;
-    if (petersburg_event_count == sizeof(petersburg_events) /
-                                 sizeof(petersburg_events[0]))
-    {
-        fprintf(stderr, "USSR: Petersburg event queue is full\n");
-        petersburg_last_error = 1;
-        return;
-    }
-    event = &petersburg_events[
-        (petersburg_event_head + petersburg_event_count) %
-        (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
-    ];
-    event->widget_id = window->id;
-    event->changed = 0;
-    event->has_key = 1;
-    event->key = key;
-    event->has_pointer = 0;
-    snprintf(event->callback, sizeof(event->callback), "%s",
-             window->key_callback);
-    ++petersburg_event_count;
+    petersburg_queue(window, window->key_callback, 1, key, 0, 0);
 }
 
 static void petersburg_rect(float x, float y, float width, float height)
@@ -647,6 +666,114 @@ static char *petersburg_selected_item_copy(
     return copy;
 }
 
+static void petersburg_color(unsigned long color)
+{
+    glColor3f((float)((color >> 16) & 255) / 255.0f,
+              (float)((color >> 8) & 255) / 255.0f,
+              (float)(color & 255) / 255.0f);
+}
+
+static int petersburg_arc_segments(double radius, double sweep)
+{
+    double segments = radius * sweep / 4.0;
+
+    if (segments < 12.0)
+        segments = 12.0;
+    if (segments > 720.0)
+        segments = 720.0;
+    return (int)segments;
+}
+
+/* Draws the retained primitives clipped to the canvas rectangle. */
+static void petersburg_render_canvas(
+    const petersburg_widget_t *canvas,
+    int framebuffer_height
+)
+{
+    const double pi = 3.14159265358979323846;
+    double ox = canvas->x;
+    double oy = canvas->y;
+    size_t index;
+
+    if (canvas->width <= 0 || canvas->height <= 0)
+        return;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(canvas->x, framebuffer_height - canvas->y - canvas->height,
+              canvas->width, canvas->height);
+    petersburg_color(canvas->background);
+    petersburg_rect((float)canvas->x, (float)canvas->y,
+                    (float)canvas->width, (float)canvas->height);
+    for (index = 0; index < canvas->shape_count; ++index)
+    {
+        const petersburg_shape_t *shape = &canvas->shapes[index];
+        const double *v = shape->v;
+        int i;
+        int segments;
+        double start;
+        double sweep;
+
+        petersburg_color(shape->color);
+        switch (shape->kind)
+        {
+        case PETERSBURG_SHAPE_LINE:
+            glBegin(GL_LINES);
+            glVertex2d(ox + v[0] + 0.5, oy + v[1] + 0.5);
+            glVertex2d(ox + v[2] + 0.5, oy + v[3] + 0.5);
+            glEnd();
+            break;
+        case PETERSBURG_SHAPE_CIRCLE:
+        case PETERSBURG_SHAPE_ARC:
+            if (shape->kind == PETERSBURG_SHAPE_CIRCLE)
+            {
+                start = 0.0;
+                sweep = 2.0 * pi;
+            }
+            else
+            {
+                start = v[3] * pi / 180.0;
+                sweep = (v[4] - v[3]) * pi / 180.0;
+                while (sweep <= 0.0)
+                    sweep += 2.0 * pi;
+            }
+            segments = petersburg_arc_segments(v[2], sweep);
+            glBegin(shape->kind == PETERSBURG_SHAPE_CIRCLE
+                        ? GL_LINE_LOOP : GL_LINE_STRIP);
+            for (i = 0; i <= segments; ++i)
+            {
+                double angle = start + sweep * i / segments;
+                if (shape->kind == PETERSBURG_SHAPE_CIRCLE && i == segments)
+                    break;
+                /* Angles run counter-clockwise as seen on screen. */
+                glVertex2d(ox + v[0] + v[2] * cos(angle) + 0.5,
+                           oy + v[1] - v[2] * sin(angle) + 0.5);
+            }
+            glEnd();
+            break;
+        case PETERSBURG_SHAPE_RECT:
+            glBegin(GL_LINE_LOOP);
+            glVertex2d(ox + v[0] + 0.5, oy + v[1] + 0.5);
+            glVertex2d(ox + v[0] + v[2] - 0.5, oy + v[1] + 0.5);
+            glVertex2d(ox + v[0] + v[2] - 0.5, oy + v[1] + v[3] - 0.5);
+            glVertex2d(ox + v[0] + 0.5, oy + v[1] + v[3] - 0.5);
+            glEnd();
+            break;
+        case PETERSBURG_SHAPE_FILL:
+            petersburg_rect((float)(ox + v[0]), (float)(oy + v[1]),
+                            (float)v[2], (float)v[3]);
+            break;
+        case PETERSBURG_SHAPE_TEXT:
+            petersburg_text((float)(ox + v[0]), (float)(oy + v[1]),
+                            shape->text,
+                            (float)((shape->color >> 16) & 255) / 255.0f,
+                            (float)((shape->color >> 8) & 255) / 255.0f,
+                            (float)(shape->color & 255) / 255.0f,
+                            canvas->width);
+            break;
+        }
+    }
+    glDisable(GL_SCISSOR_TEST);
+}
+
 static void petersburg_render_window(petersburg_widget_t *window)
 {
     GLFWwindow *native = window->native_window;
@@ -678,6 +805,7 @@ static void petersburg_render_window(petersburg_widget_t *window)
         if (widget->parent_id != window->id ||
             widget->type == PETERSBURG_WINDOW)
             continue;
+        widget->laid_out = 1;
 
         switch (widget->type)
         {
@@ -745,20 +873,44 @@ static void petersburg_render_window(petersburg_widget_t *window)
                         free(item);
                         break;
                     }
-                    if (widget->scroll + row == widget->selected)
                     {
-                        if (petersburg_focus == widget)
-                            glColor3f(0.18f, 0.37f, 0.62f);
-                        else
-                            glColor3f(0.12f, 0.22f, 0.34f);
-                        petersburg_rect(widget->x + 2,
-                                        widget->y + 2 + row * 18,
-                                        widget->width - 4, 17);
+                        size_t item_index = (size_t)(widget->scroll + row);
+                        int marked = item_index < widget->mark_count &&
+                                     widget->marks[item_index];
+                        if (marked)
+                        {
+                            /* Marked rows: amber band and text, kept
+                             * distinct from the blue cursor band. */
+                            glColor3f(0.36f, 0.27f, 0.08f);
+                            petersburg_rect(widget->x + 2,
+                                            widget->y + 2 + row * 18,
+                                            widget->width - 4, 17);
+                        }
+                        if (widget->scroll + row == widget->selected)
+                        {
+                            if (petersburg_focus == widget)
+                                glColor3f(0.18f, 0.37f, 0.62f);
+                            else
+                                glColor3f(0.12f, 0.22f, 0.34f);
+                            petersburg_rect(widget->x + (marked ? 8 : 2),
+                                            widget->y + 2 + row * 18,
+                                            widget->width - (marked ? 10 : 4),
+                                            17);
+                        }
+                        if (marked)
+                        {
+                            glColor3f(1.0f, 0.74f, 0.20f);
+                            petersburg_rect(widget->x + 2,
+                                            widget->y + 2 + row * 18, 4, 17);
+                        }
+                        petersburg_text(widget->x + 12,
+                                        widget->y + 7 + row * 18,
+                                        item,
+                                        marked ? 1.0f : 0.92f,
+                                        marked ? 0.80f : 0.94f,
+                                        marked ? 0.30f : 0.98f,
+                                        widget->width - 20);
                     }
-                    petersburg_text(widget->x + 8,
-                                    widget->y + 7 + row * 18,
-                                    item, 0.92f, 0.94f, 0.98f,
-                                    widget->width - 16);
                     free(item);
                 }
             }
@@ -794,6 +946,9 @@ static void petersburg_render_window(petersburg_widget_t *window)
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
                 glPixelZoom(1.0f, 1.0f);
             }
+            break;
+        case PETERSBURG_CANVAS:
+            petersburg_render_canvas(widget, height);
             break;
         default:
             break;
@@ -881,6 +1036,10 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             }
             petersburg_queue_event(widget, 1);
         }
+        else if (widget->type == PETERSBURG_CANVAS)
+            petersburg_queue_pointer(widget,
+                                     (int)(mouse_x - widget->x),
+                                     (int)(mouse_y - widget->y));
         else if (widget->type == PETERSBURG_IMAGE)
         {
             int local_x = (int)((mouse_x - widget->x) *
@@ -932,6 +1091,12 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     (void)scancode;
     (void)modifiers;
 
+    if (action == GLFW_RELEASE)
+    {
+        if (window != NULL)
+            petersburg_queue(window, window->keyup_callback, 1, key, 0, 0);
+        return;
+    }
     if (action != GLFW_PRESS && action != GLFW_REPEAT)
         return;
     if (action == GLFW_PRESS)
@@ -967,6 +1132,54 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     text[length - 1] = '\0';
     petersburg_focus->text = text;
     petersburg_queue_event(petersburg_focus, 1);
+}
+
+static void petersburg_window_focus(GLFWwindow *native, int focused)
+{
+    petersburg_widget_t *window = petersburg_window_for(native);
+
+    if (window != NULL)
+        petersburg_queue(window, window->focus_callback, 1,
+                         focused ? 1 : 0, 0, 0);
+}
+
+/* Wheel input goes to the canvas under the cursor as (x, y, +1/-1). */
+static void petersburg_scroll(GLFWwindow *native, double x_offset,
+                              double y_offset)
+{
+    petersburg_widget_t *window = petersburg_window_for(native);
+    petersburg_widget_t *widget;
+    double mouse_x;
+    double mouse_y;
+    int logical_width;
+    int logical_height;
+    int framebuffer_width;
+    int framebuffer_height;
+    (void)x_offset;
+
+    if (window == NULL || y_offset == 0.0)
+        return;
+    glfwGetCursorPos(native, &mouse_x, &mouse_y);
+    glfwGetWindowSize(native, &logical_width, &logical_height);
+    glfwGetFramebufferSize(native, &framebuffer_width, &framebuffer_height);
+    if (logical_width > 0 && logical_height > 0)
+    {
+        mouse_x *= (double)framebuffer_width / logical_width;
+        mouse_y *= (double)framebuffer_height / logical_height;
+    }
+    for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
+    {
+        if (widget->parent_id != window->id ||
+            widget->type != PETERSBURG_CANVAS ||
+            mouse_x < widget->x || mouse_x >= widget->x + widget->width ||
+            mouse_y < widget->y || mouse_y >= widget->y + widget->height)
+            continue;
+        petersburg_queue(widget, widget->wheel_callback, 3,
+                         (long)(mouse_x - widget->x),
+                         (long)(mouse_y - widget->y),
+                         y_offset > 0.0 ? 1 : -1);
+        return;
+    }
 }
 
 static int petersburg_ppm_token(
@@ -1069,6 +1282,15 @@ static int petersburg_read_ppm(petersburg_widget_t *widget, const char *path)
     return 1;
 }
 
+static void petersburg_canvas_reset(petersburg_widget_t *canvas)
+{
+    size_t index;
+
+    for (index = 0; index < canvas->shape_count; ++index)
+        free(canvas->shapes[index].text);
+    canvas->shape_count = 0;
+}
+
 static void petersburg_free_widget(petersburg_widget_t *widget)
 {
     if (widget->native_window != NULL)
@@ -1076,11 +1298,17 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
         glfwSetWindowUserPointer(widget->native_window, NULL);
         glfwDestroyWindow(widget->native_window);
     }
+    petersburg_canvas_reset(widget);
+    free(widget->shapes);
+    free(widget->marks);
     free(widget->pixels);
     free(widget->text);
     free(widget->click_callback);
     free(widget->change_callback);
     free(widget->key_callback);
+    free(widget->keyup_callback);
+    free(widget->focus_callback);
+    free(widget->wheel_callback);
     free(widget);
 }
 
@@ -1220,6 +1448,8 @@ static int petersburg_create_window(
     glfwSetMouseButtonCallback(native, petersburg_mouse_button);
     glfwSetCharCallback(native, petersburg_character);
     glfwSetKeyCallback(native, petersburg_key);
+    glfwSetWindowFocusCallback(native, petersburg_window_focus);
+    glfwSetScrollCallback(native, petersburg_scroll);
     glfwMakeContextCurrent(native);
     glfwSwapInterval(1);
     out->type = USSR_INTEGER;
@@ -1277,13 +1507,25 @@ static int petersburg_set_callback(
     else if (strcmp(event_name, "pointer") == 0 &&
              widget->type == PETERSBURG_IMAGE)
         slot = &widget->click_callback;
+    else if (strcmp(event_name, "pointer") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        slot = &widget->click_callback;
+    else if (strcmp(event_name, "wheel") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        slot = &widget->wheel_callback;
     else if (strcmp(event_name, "key") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         slot = &widget->key_callback;
+    else if (strcmp(event_name, "keyup") == 0 &&
+             widget->type == PETERSBURG_WINDOW)
+        slot = &widget->keyup_callback;
+    else if (strcmp(event_name, "focus") == 0 &&
+             widget->type == PETERSBURG_WINDOW)
+        slot = &widget->focus_callback;
     else
     {
         fprintf(stderr,
-                "USSR: Petersburg event must be click/change on a widget, pointer on an image, or key on a window\n");
+                "USSR: Petersburg event must be click/change on a widget, pointer on an image or canvas, wheel on a canvas, or key/keyup/focus on a window\n");
         return -1;
     }
     copy = petersburg_strdup(callback);
@@ -1370,6 +1612,218 @@ static int petersburg_find_function(
         if (strcmp(program->bc.functions[i].name, name) == 0)
             return (int)i;
     return -1;
+}
+
+static int petersburg_color_value(
+    const ussr_value_t *values,
+    size_t index,
+    unsigned long *color
+)
+{
+    long raw;
+
+    if (!petersburg_expect_integer(values, index, &raw) ||
+        raw < 0 || raw > 0xFFFFFF)
+        return 0;
+    *color = (unsigned long)raw;
+    return 1;
+}
+
+/* petersburg_canvas_<shape>(canvas, numbers..., [text,] color) */
+static int petersburg_canvas_shape(
+    const char *name,
+    petersburg_shape_kind_t kind,
+    size_t number_count,
+    int has_text,
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_value_t *out
+)
+{
+    petersburg_widget_t *canvas;
+    petersburg_shape_t shape;
+    const char *text = NULL;
+    long id;
+    size_t index;
+
+    memset(&shape, 0, sizeof(shape));
+    shape.kind = kind;
+    if (!petersburg_arity(name, value_count,
+                          2 + number_count + (has_text ? 1 : 0)) ||
+        !petersburg_expect_integer(values, 0, &id) ||
+        (canvas = petersburg_find(id)) == NULL ||
+        canvas->type != PETERSBURG_CANVAS)
+    {
+        fprintf(stderr, "USSR: %s expects a canvas handle\n", name);
+        return -1;
+    }
+    for (index = 0; index < number_count; ++index)
+        if (!petersburg_expect_number(values, 1 + index, &shape.v[index]))
+        {
+            fprintf(stderr, "USSR: %s expects finite numeric coordinates\n",
+                    name);
+            return -1;
+        }
+    if (has_text &&
+        !petersburg_expect_string(values, 1 + number_count, &text))
+    {
+        fprintf(stderr, "USSR: %s expects a text string\n", name);
+        return -1;
+    }
+    if (!petersburg_color_value(values, value_count - 1, &shape.color))
+    {
+        fprintf(stderr, "USSR: %s expects a 0xRRGGBB color integer\n", name);
+        return -1;
+    }
+    if ((kind == PETERSBURG_SHAPE_CIRCLE || kind == PETERSBURG_SHAPE_ARC) &&
+        shape.v[2] < 0.0)
+    {
+        fprintf(stderr, "USSR: %s expects a non-negative radius\n", name);
+        return -1;
+    }
+    if (canvas->shape_count >= PETERSBURG_MAX_SHAPES)
+    {
+        fprintf(stderr, "USSR: Petersburg canvas holds at most %d shapes\n",
+                PETERSBURG_MAX_SHAPES);
+        return -1;
+    }
+    if (canvas->shape_count == canvas->shape_capacity)
+    {
+        size_t capacity = canvas->shape_capacity == 0
+                              ? 64 : canvas->shape_capacity * 2;
+        petersburg_shape_t *grown = realloc(canvas->shapes,
+                                            capacity * sizeof(*grown));
+        if (grown == NULL)
+        {
+            fprintf(stderr, "USSR: Petersburg could not grow a canvas\n");
+            return -1;
+        }
+        canvas->shapes = grown;
+        canvas->shape_capacity = capacity;
+    }
+    if (text != NULL)
+    {
+        shape.text = petersburg_strdup(text);
+        if (shape.text == NULL)
+            return -1;
+    }
+    canvas->shapes[canvas->shape_count++] = shape;
+    *out = ussr_integer(0);
+    return 1;
+}
+
+static int petersburg_list_mark(
+    const char *name,
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_value_t *out
+)
+{
+    int setting = strcmp(name, "petersburg_set_mark") == 0;
+    petersburg_widget_t *widget;
+    long id;
+    long index;
+    int count;
+
+    if (!petersburg_arity(name, value_count, setting ? 3 : 2) ||
+        !petersburg_expect_integer(values, 0, &id) ||
+        !petersburg_expect_integer(values, 1, &index) ||
+        (widget = petersburg_find(id)) == NULL ||
+        widget->type != PETERSBURG_LIST ||
+        (setting && values[2].type != USSR_BOOLEAN))
+    {
+        fprintf(stderr, "USSR: %s expects a list, row index%s\n", name,
+                setting ? ", and boolean" : "");
+        return -1;
+    }
+    count = petersburg_item_count(widget->text);
+    if (index < 0 || index >= count)
+    {
+        fprintf(stderr, "USSR: %s row index is out of range\n", name);
+        return -1;
+    }
+    if (!setting)
+    {
+        *out = ussr_boolean((size_t)index < widget->mark_count &&
+                            widget->marks[index]);
+        return 1;
+    }
+    if (widget->mark_count < (size_t)count)
+    {
+        unsigned char *grown = realloc(widget->marks, (size_t)count);
+        if (grown == NULL)
+        {
+            fprintf(stderr, "USSR: Petersburg could not grow list marks\n");
+            return -1;
+        }
+        memset(grown + widget->mark_count, 0,
+               (size_t)count - widget->mark_count);
+        widget->marks = grown;
+        widget->mark_count = (size_t)count;
+    }
+    widget->marks[index] = values[2].data.boolean ? 1 : 0;
+    *out = ussr_integer(0);
+    return 1;
+}
+
+/*
+ * petersburg_inject(widget, event, a, b, c): feeds a synthetic event through
+ * the same paths as real GLFW input, so GUI scripts can be tested without a
+ * person at the keyboard. Unused values are ignored.
+ */
+static int petersburg_inject(
+    const ussr_value_t *values,
+    size_t value_count,
+    ussr_value_t *out
+)
+{
+    petersburg_widget_t *widget;
+    const char *event_name;
+    long id;
+    long a;
+    long b;
+    long c;
+
+    if (!petersburg_arity("petersburg_inject", value_count, 5) ||
+        !petersburg_expect_integer(values, 0, &id) ||
+        !petersburg_expect_string(values, 1, &event_name) ||
+        !petersburg_expect_integer(values, 2, &a) ||
+        !petersburg_expect_integer(values, 3, &b) ||
+        !petersburg_expect_integer(values, 4, &c) ||
+        (widget = petersburg_find(id)) == NULL)
+    {
+        fprintf(stderr,
+                "USSR: petersburg_inject expects widget, event, and three integers\n");
+        return -1;
+    }
+    if ((strcmp(event_name, "key") == 0 ||
+         strcmp(event_name, "keyup") == 0) &&
+        widget->type == PETERSBURG_WINDOW)
+        petersburg_key(widget->native_window, (int)a, 0,
+                       event_name[3] == 'u' ? GLFW_RELEASE : GLFW_PRESS, 0);
+    else if (strcmp(event_name, "focus") == 0 &&
+             widget->type == PETERSBURG_WINDOW)
+        petersburg_window_focus(widget->native_window, a != 0);
+    else if (strcmp(event_name, "pointer") == 0 &&
+             (widget->type == PETERSBURG_CANVAS ||
+              widget->type == PETERSBURG_IMAGE))
+        petersburg_queue_pointer(widget, (int)a, (int)b);
+    else if (strcmp(event_name, "wheel") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        petersburg_queue(widget, widget->wheel_callback, 3, a, b,
+                         c > 0 ? 1 : -1);
+    else if (strcmp(event_name, "click") == 0 &&
+             widget->type != PETERSBURG_WINDOW)
+        petersburg_queue_event(widget, 0);
+    else
+    {
+        fprintf(stderr,
+                "USSR: petersburg_inject cannot send '%s' to this widget\n",
+                event_name);
+        return -1;
+    }
+    *out = ussr_integer(0);
+    return petersburg_last_error ? -1 : 1;
 }
 
 #endif
@@ -1577,7 +2031,13 @@ int ussr_petersburg_dispatch(
         widget->text = copy;
         if (widget->type == PETERSBURG_LIST ||
             widget->type == PETERSBURG_COMBOBOX)
+        {
             widget->selected = 0;
+            widget->scroll = 0;
+            free(widget->marks);
+            widget->marks = NULL;
+            widget->mark_count = 0;
+        }
         *out = ussr_integer(0);
         return 1;
     }
@@ -1710,6 +2170,110 @@ int ussr_petersburg_dispatch(
         *out = ussr_integer(0);
         return 1;
     }
+    if (strcmp(name, "petersburg_create_canvas") == 0)
+    {
+        petersburg_widget_t *parent;
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (parent = petersburg_find(id)) == NULL ||
+            parent->type != PETERSBURG_WINDOW)
+        {
+            fprintf(stderr, "USSR: %s expects a window handle\n", name);
+            return -1;
+        }
+        widget = petersburg_add(PETERSBURG_CANVAS, id, "");
+        if (widget == NULL)
+            return -1;
+        widget->background = 0xFAFAFA;
+        *out = ussr_integer(widget->id);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_canvas_clear") == 0)
+    {
+        unsigned long color;
+        if (!petersburg_arity(name, value_count, 2) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_CANVAS ||
+            !petersburg_color_value(values, 1, &color))
+        {
+            fprintf(stderr,
+                    "USSR: %s expects a canvas and 0xRRGGBB background\n", name);
+            return -1;
+        }
+        petersburg_canvas_reset(widget);
+        widget->background = color;
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_canvas_line") == 0)
+        return petersburg_canvas_shape(name, PETERSBURG_SHAPE_LINE, 4, 0,
+                                       values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_circle") == 0)
+        return petersburg_canvas_shape(name, PETERSBURG_SHAPE_CIRCLE, 3, 0,
+                                       values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_arc") == 0)
+        return petersburg_canvas_shape(name, PETERSBURG_SHAPE_ARC, 5, 0,
+                                       values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_rect") == 0)
+        return petersburg_canvas_shape(name, PETERSBURG_SHAPE_RECT, 4, 0,
+                                       values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_fill") == 0)
+        return petersburg_canvas_shape(name, PETERSBURG_SHAPE_FILL, 4, 0,
+                                       values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_text") == 0)
+        return petersburg_canvas_shape(name, PETERSBURG_SHAPE_TEXT, 2, 1,
+                                       values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_count") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_CANVAS)
+        {
+            fprintf(stderr, "USSR: %s expects a canvas handle\n", name);
+            return -1;
+        }
+        *out = ussr_integer((long)widget->shape_count);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_get_width") == 0 ||
+        strcmp(name, "petersburg_get_height") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL)
+        {
+            fprintf(stderr, "USSR: %s expects a widget handle\n", name);
+            return -1;
+        }
+        /* Zero until the first render has laid the widget out. */
+        if (!widget->laid_out && widget->type != PETERSBURG_WINDOW)
+            *out = ussr_integer(0);
+        else
+            *out = ussr_integer(name[15] == 'w' ? widget->width
+                                                : widget->height);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_set_mark") == 0 ||
+        strcmp(name, "petersburg_get_mark") == 0)
+        return petersburg_list_mark(name, values, value_count, out);
+    if (strcmp(name, "petersburg_alive") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id))
+        {
+            fprintf(stderr, "USSR: %s expects a widget handle\n", name);
+            return -1;
+        }
+        widget = petersburg_find(id);
+        *out = ussr_boolean(widget != NULL &&
+                            (widget->type != PETERSBURG_WINDOW ||
+                             !glfwWindowShouldClose(widget->native_window)));
+        return 1;
+    }
+    if (strcmp(name, "petersburg_inject") == 0)
+        return petersburg_inject(values, value_count, out);
     if (strcmp(name, "petersburg_message_box") == 0)
     {
         status = petersburg_message_box(values, value_count);
@@ -1740,7 +2304,15 @@ int ussr_petersburg_pump(
     if (!petersburg_initialized)
         return 0;
     if (wait_for_events && petersburg_run_requested)
-        glfwWaitEventsTimeout(0.05);
+    {
+        /* Never sleep past the next scheduler timer. */
+        long timer = ussr_eq_next_timeout_ms();
+        if (timer == 0)
+            glfwPollEvents();
+        else
+            glfwWaitEventsTimeout(timer > 0 && timer < 50
+                                      ? (double)timer / 1000.0 : 0.05);
+    }
     else
         glfwPollEvents();
     if (petersburg_last_error)
@@ -1779,8 +2351,9 @@ int ussr_petersburg_pump(
             (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
         ];
         int function = petersburg_find_function(program, event->callback);
-        ussr_value_t arguments[3];
+        ussr_value_t arguments[4];
         size_t argument_count;
+        size_t value_index;
         if (function < 0)
         {
             fprintf(stderr,
@@ -1791,17 +2364,9 @@ int ussr_petersburg_pump(
         }
         arguments[0] = ussr_integer(event->widget_id);
         argument_count = 1;
-        if (event->has_key)
-        {
-            arguments[1] = ussr_integer(event->key);
-            argument_count = 2;
-        }
-        else if (event->has_pointer)
-        {
-            arguments[1] = ussr_integer(event->pointer_x);
-            arguments[2] = ussr_integer(event->pointer_y);
-            argument_count = 3;
-        }
+        for (value_index = 0; value_index < event->value_count; ++value_index)
+            arguments[argument_count++] =
+                ussr_integer(event->values[value_index]);
         if (ussr_sched_spawn_func(parent, program, (size_t)function,
                                   arguments, argument_count,
                                   event->callback, 1) < 0)

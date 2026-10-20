@@ -1,0 +1,316 @@
+# strings.su - text and number formatting helpers, written in USSR.
+# Library-provided functions (pure USSR, no native code):
+#   str_from_int(r): n            -> decimal text of an integer
+#   str_trunc(r): x               -> integer part of a number, toward zero
+#                                    (USSR "/" always yields a real; use
+#                                    str_trunc(q): {a / b} for integer
+#                                    division of exact quotients)
+#   str_from_number(r): x digits  -> x rounded to `digits` decimals; trailing
+#                                    zeros (and a bare ".") are dropped, so
+#                                    whole values print as integers
+#   str_to_number(r): s           -> integer or real parsed from decimal text
+#                                    with optional sign, fraction and
+#                                    exponent; surrounding blanks are ignored;
+#                                    null when s is not a number
+#   str_lower(r): s               -> copy with ASCII letters in lower case
+#   str_find(r): s needle from    -> first index >= from of needle, or -1
+#   str_trim(r): s                -> s without leading/trailing blanks
+#                                    (space, tab, CR, LF)
+#   str_repeat(r): s count        -> s repeated count times
+# Temporaries use the _str prefix; parameters are restored after each call.
+
+# "/" always produces a real, so digits come from subtracting powers of ten.
+str_from_int(r): n [
+    set(_stri_n): n
+    set(_stri_neg): {_stri_n < 0}
+    if(_): _stri_neg [
+        set(_stri_n): {0 - _stri_n}
+    ]
+    vec(_stri_pow): ""
+    push(_): _stri_pow 1
+    set(_stri_p): 1
+    while(_): {_stri_p * 10 <= _stri_n} [
+        set(_stri_p): {_stri_p * 10}
+        push(_): _stri_pow _stri_p
+    ]
+    len(_stri_k): _stri_pow
+    set(_stri_out): ""
+    while(_): {_stri_k > 0} [
+        set(_stri_k): {_stri_k - 1}
+        at(_stri_p): _stri_pow _stri_k
+        set(_stri_d): 0
+        while(_): {_stri_n >= _stri_p} [
+            set(_stri_n): {_stri_n - _stri_p}
+            set(_stri_d): {_stri_d + 1}
+        ]
+        at(_stri_c): "0123456789" _stri_d
+        concat(_stri_out): _stri_out _stri_c
+    ]
+    if(_): _stri_neg [
+        concat(_stri_out): "-" _stri_out
+    ]
+    set(r): _stri_out
+]
+
+str_trunc(r): x [
+    set(_strt_x): x
+    set(_strt_neg): {_strt_x < 0}
+    if(_): _strt_neg [
+        set(_strt_x): {0 - _strt_x}
+    ]
+    if(_): {_strt_x >= 4611686018427387904.0} [
+        print(_): "str_trunc: value is too large for an integer"
+        set(_strt_x): 0
+    ]
+    set(_strt_i): 0
+    set(_strt_p): 1
+    while(_): {_strt_p * 2 <= _strt_x} [
+        set(_strt_p): {_strt_p * 2}
+    ]
+    while(_): {_strt_p >= 1} [
+        if(_): {_strt_i + _strt_p <= _strt_x} [
+            set(_strt_i): {_strt_i + _strt_p}
+        ]
+        set(_strt_p): {_strt_p >> 1}
+    ]
+    if(_): _strt_neg [
+        set(_strt_i): {0 - _strt_i}
+    ]
+    set(r): _strt_i
+]
+
+str_from_number(r): x digits [
+    str_trunc(_strn_t): x
+    if(_): {_strn_t = x} [
+        str_from_int(r): _strn_t
+    ]
+    else(_): [
+        set(_strn_neg): {x < 0}
+        set(_strn_ax): x
+        if(_): _strn_neg [
+            set(_strn_ax): {0 - x}
+        ]
+        set(_strn_scale): 1
+        set(_strn_k): 0
+        while(_): {_strn_k < digits} [
+            set(_strn_scale): {_strn_scale * 10}
+            set(_strn_k): {_strn_k + 1}
+        ]
+        str_trunc(_strn_n): {_strn_ax * _strn_scale + 0.5}
+        set(_strn_frac): {_strn_n % _strn_scale}
+        str_trunc(_strn_ip): {(_strn_n - _strn_frac) / _strn_scale}
+        str_from_int(_strn_text): _strn_ip
+        if(_): {_strn_frac > 0} [
+            str_from_int(_strn_ftext): _strn_frac
+            len(_strn_flen): _strn_ftext
+            while(_): {_strn_flen < digits} [
+                concat(_strn_ftext): "0" _strn_ftext
+                set(_strn_flen): {_strn_flen + 1}
+            ]
+            set(_strn_last): {_strn_flen - 1}
+            byte(_strn_b): _strn_ftext _strn_last
+            while(_): {_strn_b = 48} [
+                set(_strn_flen): _strn_last
+                set(_strn_last): {_strn_last - 1}
+                byte(_strn_b): _strn_ftext _strn_last
+            ]
+            slice(_strn_ftext): _strn_ftext 0 _strn_flen
+            concat(_strn_text): _strn_text "." _strn_ftext
+        ]
+        if(_): {_strn_neg && _strn_n > 0} [
+            concat(_strn_text): "-" _strn_text
+        ]
+        set(r): _strn_text
+    ]
+]
+
+str_is_blank_byte(r): b [
+    set(r): {b = 32 || b = 9 || b = 13 || b = 10}
+]
+
+str_trim(r): s [
+    len(_strtr_n): s
+    set(_strtr_a): 0
+    set(_strtr_go): {_strtr_a < _strtr_n}
+    while(_): _strtr_go [
+        byte(_strtr_b): s _strtr_a
+        str_is_blank_byte(_strtr_go): _strtr_b
+        if(_): _strtr_go [
+            set(_strtr_a): {_strtr_a + 1}
+            set(_strtr_go): {_strtr_a < _strtr_n}
+        ]
+    ]
+    set(_strtr_z): _strtr_n
+    set(_strtr_go): {_strtr_z > _strtr_a}
+    while(_): _strtr_go [
+        byte(_strtr_b): s {_strtr_z - 1}
+        str_is_blank_byte(_strtr_go): _strtr_b
+        if(_): _strtr_go [
+            set(_strtr_z): {_strtr_z - 1}
+            set(_strtr_go): {_strtr_z > _strtr_a}
+        ]
+    ]
+    slice(r): s _strtr_a {_strtr_z - _strtr_a}
+]
+
+str_to_number(r): s [
+    str_trim(_stnum_s): s
+    len(_stnum_n): _stnum_s
+    set(_stnum_i): 0
+    set(_stnum_sign): 1
+    set(_stnum_ok): {_stnum_n > 0}
+    set(_stnum_real): false
+    set(_stnum_digits): 0
+    set(_stnum_int): 0
+    set(_stnum_val): 0.0
+    if(_): _stnum_ok [
+        byte(_stnum_b): _stnum_s 0
+        if(_): {_stnum_b = 45 || _stnum_b = 43} [
+            if(_): {_stnum_b = 45} [
+                set(_stnum_sign): {0 - 1}
+            ]
+            set(_stnum_i): 1
+        ]
+    ]
+    # integer part
+    set(_stnum_go): {_stnum_ok && _stnum_i < _stnum_n}
+    while(_): _stnum_go [
+        byte(_stnum_b): _stnum_s _stnum_i
+        set(_stnum_go): {_stnum_b >= 48 && _stnum_b <= 57}
+        if(_): _stnum_go [
+            set(_stnum_int): {_stnum_int * 10 + (_stnum_b - 48)}
+            set(_stnum_val): {_stnum_val * 10.0 + (_stnum_b - 48)}
+            set(_stnum_digits): {_stnum_digits + 1}
+            set(_stnum_i): {_stnum_i + 1}
+            set(_stnum_go): {_stnum_i < _stnum_n}
+        ]
+    ]
+    # fraction
+    if(_): {_stnum_ok && _stnum_i < _stnum_n} [
+        byte(_stnum_b): _stnum_s _stnum_i
+        if(_): {_stnum_b = 46} [
+            set(_stnum_real): true
+            set(_stnum_i): {_stnum_i + 1}
+            set(_stnum_place): 0.1
+            set(_stnum_go): {_stnum_i < _stnum_n}
+            while(_): _stnum_go [
+                byte(_stnum_b): _stnum_s _stnum_i
+                set(_stnum_go): {_stnum_b >= 48 && _stnum_b <= 57}
+                if(_): _stnum_go [
+                    set(_stnum_val): {_stnum_val + (_stnum_b - 48) * _stnum_place}
+                    set(_stnum_place): {_stnum_place / 10.0}
+                    set(_stnum_digits): {_stnum_digits + 1}
+                    set(_stnum_i): {_stnum_i + 1}
+                    set(_stnum_go): {_stnum_i < _stnum_n}
+                ]
+            ]
+        ]
+    ]
+    if(_): {_stnum_digits = 0} [
+        set(_stnum_ok): false
+    ]
+    # exponent
+    if(_): {_stnum_ok && _stnum_i < _stnum_n} [
+        byte(_stnum_b): _stnum_s _stnum_i
+        if(_): {_stnum_b = 101 || _stnum_b = 69} [
+            set(_stnum_real): true
+            set(_stnum_i): {_stnum_i + 1}
+            set(_stnum_esign): 1
+            set(_stnum_exp): 0
+            set(_stnum_edigits): 0
+            if(_): {_stnum_i < _stnum_n} [
+                byte(_stnum_b): _stnum_s _stnum_i
+                if(_): {_stnum_b = 45 || _stnum_b = 43} [
+                    if(_): {_stnum_b = 45} [
+                        set(_stnum_esign): {0 - 1}
+                    ]
+                    set(_stnum_i): {_stnum_i + 1}
+                ]
+            ]
+            set(_stnum_go): {_stnum_i < _stnum_n}
+            while(_): _stnum_go [
+                byte(_stnum_b): _stnum_s _stnum_i
+                set(_stnum_go): {_stnum_b >= 48 && _stnum_b <= 57}
+                if(_): _stnum_go [
+                    set(_stnum_exp): {_stnum_exp * 10 + (_stnum_b - 48)}
+                    set(_stnum_edigits): {_stnum_edigits + 1}
+                    set(_stnum_i): {_stnum_i + 1}
+                    set(_stnum_go): {_stnum_i < _stnum_n}
+                ]
+            ]
+            if(_): {_stnum_edigits = 0 || _stnum_exp > 308} [
+                set(_stnum_ok): false
+            ]
+            while(_): {_stnum_ok && _stnum_exp > 0} [
+                if(_): {_stnum_esign > 0} [
+                    set(_stnum_val): {_stnum_val * 10.0}
+                ]
+                else(_): [
+                    set(_stnum_val): {_stnum_val / 10.0}
+                ]
+                set(_stnum_exp): {_stnum_exp - 1}
+            ]
+        ]
+    ]
+    if(_): {_stnum_i != _stnum_n} [
+        set(_stnum_ok): false
+    ]
+    if(_): {_stnum_ok && _stnum_real = false && _stnum_digits > 18} [
+        set(_stnum_real): true
+    ]
+    set(r): null
+    if(_): _stnum_ok [
+        if(_): _stnum_real [
+            set(r): {_stnum_val * _stnum_sign}
+        ]
+        else(_): [
+            set(r): {_stnum_int * _stnum_sign}
+        ]
+    ]
+]
+
+str_lower(r): s [
+    len(_strl_n): s
+    set(_strl_i): 0
+    set(_strl_out): ""
+    while(_): {_strl_i < _strl_n} [
+        byte(_strl_b): s _strl_i
+        if(_): {_strl_b >= 65 && _strl_b <= 90} [
+            at(_strl_c): "abcdefghijklmnopqrstuvwxyz" {_strl_b - 65}
+        ]
+        else(_): [
+            at(_strl_c): s _strl_i
+        ]
+        concat(_strl_out): _strl_out _strl_c
+        set(_strl_i): {_strl_i + 1}
+    ]
+    set(r): _strl_out
+]
+
+str_find(r): s needle from [
+    len(_strf_n): s
+    len(_strf_m): needle
+    set(_strf_i): from
+    set(_strf_at): {0 - 1}
+    if(_): {_strf_i < 0} [
+        set(_strf_i): 0
+    ]
+    while(_): {_strf_at < 0 && _strf_i + _strf_m <= _strf_n} [
+        slice(_strf_piece): s _strf_i _strf_m
+        if(_): {_strf_piece = needle} [
+            set(_strf_at): _strf_i
+        ]
+        set(_strf_i): {_strf_i + 1}
+    ]
+    set(r): _strf_at
+]
+
+str_repeat(r): s count [
+    set(_strr_out): ""
+    set(_strr_i): 0
+    while(_): {_strr_i < count} [
+        concat(_strr_out): _strr_out s
+        set(_strr_i): {_strr_i + 1}
+    ]
+    set(r): _strr_out
+]

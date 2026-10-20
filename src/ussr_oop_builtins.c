@@ -16,7 +16,9 @@
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 #else
+#include <dirent.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -1563,6 +1565,72 @@ static int oop_do_read_file(
     return 0;
 }
 
+/* read_line(s): h -> next line without its LF/CRLF, null at EOF. */
+static int oop_do_read_line(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t handle_v;
+    long handle;
+    FILE *fp;
+    char *buffer;
+    size_t length = 0;
+    size_t capacity = 256;
+    int character;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: read_line(s): h\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &handle_v) != 0)
+        return -1;
+    if (!oop_expect_integer(&handle_v, &handle) ||
+        !oop_file_handle_valid(handle))
+    {
+        fprintf(stderr, "USSR: read_line: invalid handle\n");
+        ussr_value_free(&handle_v);
+        return -1;
+    }
+    ussr_value_free(&handle_v);
+
+    fp = ussr_file_table[handle];
+    character = fgetc(fp);
+    if (character == EOF)
+    {
+        *out_result = ussr_null();
+        return 0;
+    }
+    buffer = malloc(capacity);
+    if (buffer == NULL)
+        return -1;
+    while (character != EOF && character != '\n')
+    {
+        if (length + 1 >= capacity)
+        {
+            char *grown = realloc(buffer, capacity * 2);
+            if (grown == NULL)
+            {
+                free(buffer);
+                return -1;
+            }
+            buffer = grown;
+            capacity *= 2;
+        }
+        if (character != '\0')
+            buffer[length++] = (char)character;
+        character = fgetc(fp);
+    }
+    if (length > 0 && buffer[length - 1] == '\r')
+        --length;
+    buffer[length] = '\0';
+    *out_result = ussr_string(buffer);
+    free(buffer);
+    return out_result->data.string != NULL ? 0 : -1;
+}
+
 /* ------------------------------------------------------------- */
 /* math.su primitives                                              */
 /*                                                                 */
@@ -1697,6 +1765,344 @@ static int oop_do_set_bytes(
 }
 
 /* ------------------------------------------------------------- */
+/* Directory and path primitives (io.su):                          */
+/*   list_dir(v): path        -> vector of names, sorted without   */
+/*                               case; directories end in "/";     */
+/*                               "." and ".." are omitted. null    */
+/*                               (non-fatal) when unreadable.      */
+/*   is_dir(v): path          -> 1 directory / 0 otherwise         */
+/*   getcwd(v):               -> current working directory         */
+/*   rename_path(v): from to  -> 0 ok / 1 error; never replaces    */
+/*                               an existing destination           */
+/*   remove_file(v): path     -> 0 ok / 1 error; files only        */
+/*   remove_dir(v): path      -> 0 ok / 1 error; empty dirs only   */
+/*   make_dir(v): path        -> 0 ok / 1 error or already exists  */
+/* ------------------------------------------------------------- */
+
+static int oop_path_argument(
+    const char *name,
+    ussr_argument_t *arguments,
+    size_t index,
+    ussr_value_t *value,
+    const char **path
+)
+{
+    if (oop_eval(&arguments[index], value) != 0)
+        return 0;
+    if (!oop_expect_string(value, path))
+    {
+        fprintf(stderr, "USSR: %s() expects a string path\n", name);
+        ussr_value_free(value);
+        return 0;
+    }
+    return 1;
+}
+
+static int oop_path_is_dir(const char *path)
+{
+#ifdef _WIN32
+    DWORD attributes = GetFileAttributesA(path);
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+           (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#else
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+#endif
+}
+
+static int oop_path_exists(const char *path)
+{
+#ifdef _WIN32
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat info;
+    return lstat(path, &info) == 0;
+#endif
+}
+
+static int oop_name_compare(const void *left, const void *right)
+{
+    const unsigned char *a = *(const unsigned char *const *)left;
+    const unsigned char *b = *(const unsigned char *const *)right;
+
+    for (;; ++a, ++b)
+    {
+        int ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+        int cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (ca != cb || ca == 0)
+            return ca != cb ? ca - cb : strcmp(*(const char *const *)left,
+                                               *(const char *const *)right);
+    }
+}
+
+static int oop_names_add(char ***names, size_t *count, size_t *capacity,
+                         const char *name, int directory)
+{
+    size_t length = strlen(name);
+    char *copy;
+
+    if (*count == *capacity)
+    {
+        size_t grown_capacity = *capacity == 0 ? 64 : *capacity * 2;
+        char **grown = realloc(*names, grown_capacity * sizeof(*grown));
+        if (grown == NULL)
+            return 0;
+        *names = grown;
+        *capacity = grown_capacity;
+    }
+    copy = malloc(length + 2);
+    if (copy == NULL)
+        return 0;
+    memcpy(copy, name, length);
+    if (directory)
+        copy[length++] = '/';
+    copy[length] = '\0';
+    (*names)[(*count)++] = copy;
+    return 1;
+}
+
+static int oop_list_names(const char *path, char ***names, size_t *count)
+{
+    size_t capacity = 0;
+#ifdef _WIN32
+    char pattern[MAX_PATH + 4];
+    WIN32_FIND_DATAA data;
+    HANDLE handle;
+    size_t length = strlen(path);
+
+    if (length == 0 || length + 3 >= sizeof(pattern))
+        return 0;
+    memcpy(pattern, path, length);
+    if (pattern[length - 1] != '\\' && pattern[length - 1] != '/')
+        pattern[length++] = '\\';
+    memcpy(pattern + length, "*", 2);
+    handle = FindFirstFileA(pattern, &data);
+    if (handle == INVALID_HANDLE_VALUE)
+        return 0;
+    do
+    {
+        if (strcmp(data.cFileName, ".") == 0 ||
+            strcmp(data.cFileName, "..") == 0)
+            continue;
+        if (!oop_names_add(names, count, &capacity, data.cFileName,
+                           (data.dwFileAttributes &
+                            FILE_ATTRIBUTE_DIRECTORY) != 0))
+        {
+            FindClose(handle);
+            return 0;
+        }
+    } while (FindNextFileA(handle, &data));
+    FindClose(handle);
+#else
+    DIR *directory = opendir(path);
+    struct dirent *item;
+    size_t length = strlen(path);
+
+    if (directory == NULL)
+        return 0;
+    while ((item = readdir(directory)) != NULL)
+    {
+        char *full;
+        int is_directory;
+
+        if (strcmp(item->d_name, ".") == 0 || strcmp(item->d_name, "..") == 0)
+            continue;
+        full = malloc(length + strlen(item->d_name) + 2);
+        if (full == NULL)
+        {
+            closedir(directory);
+            return 0;
+        }
+        sprintf(full, "%s%s%s", path,
+                length > 0 && path[length - 1] == '/' ? "" : "/",
+                item->d_name);
+        is_directory = oop_path_is_dir(full);
+        free(full);
+        if (!oop_names_add(names, count, &capacity, item->d_name,
+                           is_directory))
+        {
+            closedir(directory);
+            return 0;
+        }
+    }
+    closedir(directory);
+#endif
+    if (*count > 1)
+        qsort(*names, *count, sizeof(**names), oop_name_compare);
+    return 1;
+}
+
+static int oop_do_list_dir(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+    char **names = NULL;
+    size_t count = 0;
+    size_t i;
+    ussr_vector_t *vector;
+    int ok;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: list_dir(v): path\n");
+        return -1;
+    }
+    if (!oop_path_argument("list_dir", arguments, 0, &path_v, &path))
+        return -1;
+    ok = oop_list_names(path, &names, &count);
+    ussr_value_free(&path_v);
+    if (!ok)
+    {
+        for (i = 0; i < count; ++i)
+            free(names[i]);
+        free(names);
+        *out_result = ussr_null(); /* non-fatal: unreadable directory */
+        return 0;
+    }
+    vector = ussr_vector_create(NULL);
+    for (i = 0; i < count; ++i)
+    {
+        if (vector != NULL)
+        {
+            ussr_value_t item = ussr_string(names[i]);
+            if (item.data.string == NULL ||
+                ussr_vector_push(vector, item) != 0)
+            {
+                ussr_vector_release(vector);
+                vector = NULL;
+            }
+            ussr_value_free(&item);
+        }
+        free(names[i]);
+    }
+    free(names);
+    if (vector == NULL)
+        return -1;
+    *out_result = ussr_vector_value(vector);
+    return 0;
+}
+
+static int oop_do_is_dir(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: is_dir(v): path\n");
+        return -1;
+    }
+    if (!oop_path_argument("is_dir", arguments, 0, &path_v, &path))
+        return -1;
+    *out_result = ussr_integer(oop_path_is_dir(path) ? 1 : 0);
+    ussr_value_free(&path_v);
+    return 0;
+}
+
+static int oop_do_getcwd(
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    char buffer[4096];
+
+    if (argument_count != 0)
+    {
+        fprintf(stderr, "USSR: getcwd(v):\n");
+        return -1;
+    }
+#ifdef _WIN32
+    {
+        DWORD length = GetCurrentDirectoryA((DWORD)sizeof(buffer), buffer);
+        if (length == 0 || length >= sizeof(buffer))
+        {
+            fprintf(stderr, "USSR: getcwd cannot read the current directory\n");
+            return -1;
+        }
+    }
+#else
+    if (getcwd(buffer, sizeof(buffer)) == NULL)
+    {
+        fprintf(stderr, "USSR: getcwd: %s\n", strerror(errno));
+        return -1;
+    }
+#endif
+    *out_result = ussr_string(buffer);
+    return out_result->data.string != NULL ? 0 : -1;
+}
+
+/* rename_path / remove_file / remove_dir: 0 ok, 1 refused or failed. */
+static int oop_do_path_change(
+    const char *name,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    int renaming = strcmp(name, "rename_path") == 0;
+    int making = strcmp(name, "make_dir") == 0;
+    ussr_value_t first_v;
+    ussr_value_t second_v;
+    const char *first;
+    const char *second = NULL;
+    int failed;
+
+    if (argument_count != (renaming ? 2u : 1u))
+    {
+        fprintf(stderr, "USSR: %s(v): %s\n", name,
+                renaming ? "from to" : "path");
+        return -1;
+    }
+    if (!oop_path_argument(name, arguments, 0, &first_v, &first))
+        return -1;
+    if (renaming &&
+        !oop_path_argument(name, arguments, 1, &second_v, &second))
+    {
+        ussr_value_free(&first_v);
+        return -1;
+    }
+
+    if (renaming)
+        failed = !oop_path_exists(first) || oop_path_exists(second) ||
+#ifdef _WIN32
+                 !MoveFileA(first, second);
+#else
+                 rename(first, second) != 0;
+#endif
+    else if (making)
+        failed = oop_path_exists(first) ||
+#ifdef _WIN32
+                 !CreateDirectoryA(first, NULL);
+#else
+                 mkdir(first, 0777) != 0;
+#endif
+    else if (strcmp(name, "remove_dir") == 0)
+        failed = !oop_path_is_dir(first) ||
+#ifdef _WIN32
+                 !RemoveDirectoryA(first);
+#else
+                 rmdir(first) != 0;
+#endif
+    else
+        failed = !oop_path_exists(first) || oop_path_is_dir(first) ||
+                 remove(first) != 0;
+
+    *out_result = ussr_integer(failed ? 1 : 0);
+    ussr_value_free(&first_v);
+    if (renaming)
+        ussr_value_free(&second_v);
+    return 0;
+}
+
+/* ------------------------------------------------------------- */
 /* dispatch                                                         */
 /* ------------------------------------------------------------- */
 
@@ -1742,6 +2148,8 @@ int ussr_oop_dispatch(
         status = oop_do_write_file(arguments, argument_count, out_result);
     else if (strcmp(command, "read_file") == 0)
         status = oop_do_read_file(arguments, argument_count, out_result);
+    else if (strcmp(command, "read_line") == 0)
+        status = oop_do_read_line(arguments, argument_count, out_result);
     else if (strcmp(command, "sin") == 0)
         status = oop_do_math_unary("sin", sin, 0, arguments, argument_count, out_result);
     else if (strcmp(command, "ln") == 0)
@@ -1752,6 +2160,18 @@ int ussr_oop_dispatch(
         status = oop_do_set_bytes(arguments, argument_count, 1, out_result);
     else if (strcmp(command, "file_exists") == 0)
         status = oop_do_file_exists(arguments, argument_count, out_result);
+    else if (strcmp(command, "list_dir") == 0)
+        status = oop_do_list_dir(arguments, argument_count, out_result);
+    else if (strcmp(command, "is_dir") == 0)
+        status = oop_do_is_dir(arguments, argument_count, out_result);
+    else if (strcmp(command, "getcwd") == 0)
+        status = oop_do_getcwd(argument_count, out_result);
+    else if (strcmp(command, "rename_path") == 0 ||
+             strcmp(command, "remove_file") == 0 ||
+             strcmp(command, "remove_dir") == 0 ||
+             strcmp(command, "make_dir") == 0)
+        status = oop_do_path_change(command, arguments, argument_count,
+                                    out_result);
     else if (strcmp(command, "terminal_escape") == 0)
         status = oop_do_terminal_escape(arguments, argument_count, out_result);
     else if (strcmp(command, "terminal_raw") == 0)

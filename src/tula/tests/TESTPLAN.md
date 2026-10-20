@@ -1,13 +1,15 @@
 # Tula test plan
 
+Automated: `ussr tests/gui/tula_test.su` (GLFW build and a display required)
+covers the tool-required message, snapped line and circle input, degenerate
+line refusal, unknown tool refusal, the exact DXF output, and the empty
+filename error.
+
+Manual:
+
 - Build with and without the GLFW backend.
-- Parse and execute `examples/hello.su`; verify the window maximizes and the
-  grid canvas, tool buttons, filename field, and status are visible.
-- Click two points with Line selected and verify the displayed snapped line.
-- Click a center and radius point with Circle selected and verify the displayed
-  snapped circle.
-- Save a mixed drawing and verify the DXF contains `AC1015`, one `LINE` and one
-  `CIRCLE`, correct coordinates/radius, `$INSUNITS` 4, and `EOF`.
-- Verify empty filename, unwritable destination, zero-radius circles, repeated
-  points, and the entity limit report errors without corrupting the drawing.
-- Verify the temporary canvas is removed at interpreter cleanup.
+- Run `examples/hello.su`; verify the window maximizes and the grid canvas,
+  tool buttons, filename field, and status are visible.
+- Click points and verify the drawn geometry matches the grid snap.
+- Verify an unwritable destination reports an error without corrupting the
+  drawing, and that the entity limit is enforced.

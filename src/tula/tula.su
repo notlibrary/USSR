@@ -1,18 +1,378 @@
-# Tula's interactive line/circle CAD API, backed by the native geometry core.
+# tula.su - small interactive 2D CAD, written in USSR on a Petersburg canvas.
+# Geometry, snapping, rendering and DXF export are USSR code; Petersburg only
+# draws the retained lines/circles it is handed.
+#
+# Public API (unchanged from the native version):
+#   tulainitialize(canvas): window status filename -> creates the canvas
+#   tulatool(r): name            -> "line" or "circle"
+#   tulaclick(r): canvas x y     -> canvas "pointer" callback body
+#   tulasave(r):                 -> writes the DXF named by the filename box
+#
+# World coordinates are drawing units with y up. The view maps a world point
+# to canvas pixels as  sx = ox + x * scale,  sy = oy - y * scale.
+# Entities are vectors: ["LINE", x1, y1, x2, y2] or ["CIRCLE", cx, cy, r].
+# Hash keys: tula_window tula_status tula_path tula_canvas tula_entities
+# tula_tool tula_anchor tula_view ([ox, oy, scale]).
 $include "../petersburg/petersburg.su"
+$include "../libs/strings.su"
+$include "../libs/math.su"
+
+$define TULA_GRID_STEP 5
+$define TULA_BACKGROUND 16448250
+$define TULA_GRID_MINOR 15592941
+$define TULA_GRID_MAJOR 14474460
+$define TULA_INK 1591684
+$define TULA_ANCHOR 13387063
+# The grid covers this many canvas pixels so it survives window resizes.
+$define TULA_EXTENT_X 4096
+$define TULA_EXTENT_Y 2304
+
+tula_floor(r): x [
+    str_trunc(_tf_t): x
+    if(_): {_tf_t > x} [
+        set(_tf_t): {_tf_t - 1}
+    ]
+    set(r): _tf_t
+]
+
+tula_snap(r): value [
+    tula_floor(_tsn_k): {value / TULA_GRID_STEP + 0.5}
+    set(r): {_tsn_k * TULA_GRID_STEP}
+]
+
+tula_set_status(r): text [
+    set(_tss_w): tula_status?
+    settext(_): _tss_w text
+    set(r): 0
+]
+
+# Puts the world origin at the canvas's bottom-left corner the first time the
+# canvas has a laid-out size (layout happens when the window first renders).
+tula_fit_view(r): [
+    set(r): false
+    set(_tfv_done): tula_fitted?
+    if(_): {_tfv_done = false} [
+        set(_tfv_canvas): tula_canvas?
+        getheight(_tfv_h): _tfv_canvas
+        if(_): {_tfv_h > 0} [
+            set(_tfv_v): tula_view?
+            set(_tfv_v): 1 {_tfv_h - 1}
+            set(tula_fitted): true!
+            set(r): true
+        ]
+    ]
+]
+
+tula_to_screen_x(r): x [
+    set(_tsx_v): tula_view?
+    at(_tsx_ox): _tsx_v 0
+    at(_tsx_s): _tsx_v 2
+    set(r): {_tsx_ox + x * _tsx_s}
+]
+
+tula_to_screen_y(r): y [
+    set(_tsy_v): tula_view?
+    at(_tsy_oy): _tsy_v 1
+    at(_tsy_s): _tsy_v 2
+    set(r): {_tsy_oy - y * _tsy_s}
+]
+
+tula_draw_grid(r): canvas [
+    set(_tg_v): tula_view?
+    at(_tg_ox): _tg_v 0
+    at(_tg_oy): _tg_v 1
+    at(_tg_s): _tg_v 2
+    set(_tg_step): {TULA_GRID_STEP * _tg_s}
+    # world range visible in the canvas extent
+    tula_floor(_tg_i0): {(0 - _tg_ox) / _tg_step}
+    tula_floor(_tg_i1): {(TULA_EXTENT_X - _tg_ox) / _tg_step}
+    set(_tg_i): _tg_i0
+    while(_): {_tg_i <= _tg_i1 + 1} [
+        set(_tg_px): {_tg_ox + _tg_i * _tg_step}
+        set(_tg_color): TULA_GRID_MINOR
+        if(_): {_tg_i % 4 = 0} [
+            set(_tg_color): TULA_GRID_MAJOR
+        ]
+        canvasline(_): canvas _tg_px 0 _tg_px TULA_EXTENT_Y _tg_color
+        set(_tg_i): {_tg_i + 1}
+    ]
+    tula_floor(_tg_j0): {(_tg_oy - TULA_EXTENT_Y) / _tg_step}
+    tula_floor(_tg_j1): {_tg_oy / _tg_step}
+    set(_tg_j): _tg_j0
+    while(_): {_tg_j <= _tg_j1 + 1} [
+        set(_tg_py): {_tg_oy - _tg_j * _tg_step}
+        set(_tg_color): TULA_GRID_MINOR
+        if(_): {_tg_j % 4 = 0} [
+            set(_tg_color): TULA_GRID_MAJOR
+        ]
+        canvasline(_): canvas 0 _tg_py TULA_EXTENT_X _tg_py _tg_color
+        set(_tg_j): {_tg_j + 1}
+    ]
+    set(r): 0
+]
+
+tula_draw_entity(r): canvas entity [
+    at(_te_kind): entity 0
+    set(_tev): tula_view?
+    at(_te_s): _tev 2
+    if(_): {_te_kind = "LINE"} [
+        at(_te_a): entity 1
+        at(_te_b): entity 2
+        at(_te_c): entity 3
+        at(_te_d): entity 4
+        tula_to_screen_x(_te_x1): _te_a
+        tula_to_screen_y(_te_y1): _te_b
+        tula_to_screen_x(_te_x2): _te_c
+        tula_to_screen_y(_te_y2): _te_d
+        canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 TULA_INK
+    ]
+    elif(_): {_te_kind = "CIRCLE"} [
+        at(_te_a): entity 1
+        at(_te_b): entity 2
+        at(_te_c): entity 3
+        tula_to_screen_x(_te_x1): _te_a
+        tula_to_screen_y(_te_y1): _te_b
+        canvascircle(_): canvas _te_x1 _te_y1 {_te_c * _te_s} TULA_INK
+    ]
+    set(r): 0
+]
+
+# Rebuilds the whole canvas display list from the drawing state.
+tula_redraw(r): [
+    set(_trd_canvas): tula_canvas?
+    canvasclear(_): _trd_canvas TULA_BACKGROUND
+    tula_draw_grid(_): _trd_canvas
+    set(_trd_entities): tula_entities?
+    len(_trd_n): _trd_entities
+    set(_trd_i): 0
+    while(_): {_trd_i < _trd_n} [
+        at(_trd_e): _trd_entities _trd_i
+        tula_draw_entity(_): _trd_canvas _trd_e
+        set(_trd_i): {_trd_i + 1}
+    ]
+    set(_trd_anchor): tula_anchor?
+    len(_trd_has): _trd_anchor
+    if(_): {_trd_has = 2} [
+        at(_trd_ax): _trd_anchor 0
+        at(_trd_ay): _trd_anchor 1
+        tula_to_screen_x(_trd_px): _trd_ax
+        tula_to_screen_y(_trd_py): _trd_ay
+        canvasline(_): _trd_canvas {_trd_px - 5} _trd_py {_trd_px + 5} _trd_py TULA_ANCHOR
+        canvasline(_): _trd_canvas _trd_px {_trd_py - 5} _trd_px {_trd_py + 5} TULA_ANCHOR
+    ]
+    set(r): 0
+]
 
 tulainitialize(canvas): window status filename [
-    tula_initialize(canvas): window status filename
+    set(tula_window): window!
+    set(tula_status): status!
+    set(tula_path): filename!
+    canvas(canvas): window
+    set(tula_canvas): canvas!
+    vec(_ti_entities): ""
+    set(tula_entities): _ti_entities!
+    vec(_ti_anchor): ""
+    set(tula_anchor): _ti_anchor!
+    set(tula_tool): ""!
+    # 5 pixels per unit, origin near the bottom-left; tula_fit_view moves it
+    # to the real bottom-left once the canvas has been laid out.
+    vec(_ti_view): ""
+    push(_): _ti_view 0
+    push(_): _ti_view 700
+    push(_): _ti_view 5
+    set(tula_view): _ti_view!
+    set(tula_fitted): false!
+    tula_redraw(_):
+    tula_set_status(_): "LINE tool: click two snapped points; CIRCLE tool: center then radius; Save exports DXF"
+]
+
+tula_tool_body(r): name [
+    set(r): 0
+    tula_fit_view(_tt_fitted):
+    if(_): _tt_fitted [
+        tula_redraw(_):
+    ]
+    if(_): {name != "line" && name != "circle"} [
+        tula_set_status(_): "Tula supports only line and circle tools"
+        return(_): r
+    ]
+    set(tula_tool): name!
+    set(_tt_anchor): tula_anchor?
+    vec(_tt_none): ""
+    set(tula_anchor): _tt_none!
+    if(_): {name = "line"} [
+        tula_set_status(_): "LINE tool: click the first snapped endpoint"
+    ]
+    else(_): [
+        tula_set_status(_): "CIRCLE tool: click the snapped center"
+    ]
+    len(_tt_had): _tt_anchor
+    if(_): {_tt_had > 0} [
+        tula_redraw(_):
+    ]
 ]
 
 tulatool(result): name [
-    tula_set_tool(result): name
+    uilock(_):
+    tula_tool_body(result): name
+    uiunlock(_):
+]
+
+tula_click_body(r): canvas x y [
+    set(r): 0
+    set(_tc_canvas): tula_canvas?
+    if(_): {canvas != _tc_canvas} [
+        return(_): r
+    ]
+    tula_fit_view(_tc_fitted):
+    if(_): _tc_fitted [
+        tula_redraw(_):
+    ]
+    set(_tc_tool): tula_tool?
+    if(_): {_tc_tool = ""} [
+        tula_set_status(_): "Choose LINE or CIRCLE before drawing"
+        return(_): r
+    ]
+    set(_tc_v): tula_view?
+    at(_tc_ox): _tc_v 0
+    at(_tc_oy): _tc_v 1
+    at(_tc_s): _tc_v 2
+    tula_snap(_tc_x): {(x - _tc_ox) / _tc_s}
+    tula_snap(_tc_y): {(_tc_oy - y) / _tc_s}
+    str_from_number(_tc_xs): _tc_x 3
+    str_from_number(_tc_ys): _tc_y 3
+    set(_tc_anchor): tula_anchor?
+    len(_tc_has): _tc_anchor
+    if(_): {_tc_has = 0} [
+        push(_): _tc_anchor _tc_x
+        push(_): _tc_anchor _tc_y
+        tula_redraw(_):
+        concat(_tc_msg): "First point: " _tc_xs ", " _tc_ys " - click next point"
+        tula_set_status(_): _tc_msg
+        return(_): r
+    ]
+    at(_tc_ax): _tc_anchor 0
+    at(_tc_ay): _tc_anchor 1
+    vec(_tc_entity): ""
+    if(_): {_tc_tool = "line"} [
+        if(_): {_tc_ax = _tc_x && _tc_ay = _tc_y} [
+            tula_set_status(_): "Line endpoints must be different"
+            return(_): r
+        ]
+        push(_): _tc_entity "LINE"
+        push(_): _tc_entity _tc_ax
+        push(_): _tc_entity _tc_ay
+        push(_): _tc_entity _tc_x
+        push(_): _tc_entity _tc_y
+        set(_tc_name): "Line"
+    ]
+    else(_): [
+        set(_tc_dx): {_tc_x - _tc_ax}
+        set(_tc_dy): {_tc_y - _tc_ay}
+        sqrt(_tc_radius): {_tc_dx * _tc_dx + _tc_dy * _tc_dy}
+        if(_): {_tc_radius = 0} [
+            tula_set_status(_): "Circle radius must be greater than zero"
+            return(_): r
+        ]
+        push(_): _tc_entity "CIRCLE"
+        push(_): _tc_entity _tc_ax
+        push(_): _tc_entity _tc_ay
+        push(_): _tc_entity _tc_radius
+        set(_tc_name): "Circle"
+    ]
+    set(_tc_entities): tula_entities?
+    len(_tc_count): _tc_entities
+    if(_): {_tc_count >= 10000} [
+        tula_set_status(_): "Drawing is full"
+        return(_): r
+    ]
+    push(_): _tc_entities _tc_entity
+    vec(_tc_none): ""
+    set(tula_anchor): _tc_none!
+    tula_redraw(_):
+    str_from_number(_tc_axs): _tc_ax 3
+    str_from_number(_tc_ays): _tc_ay 3
+    str_from_int(_tc_cs): {_tc_count + 1}
+    concat(_tc_msg): _tc_name " added at grid snap (" _tc_axs ", " _tc_ays "); " _tc_cs " object(s)"
+    tula_set_status(_): _tc_msg
 ]
 
 tulaclick(result): canvas x y [
-    tula_canvas_click(result): canvas x y
+    uilock(_):
+    tula_click_body(result): canvas x y
+    uiunlock(_):
+]
+
+# Appends "code\nvalue\n" for one DXF group.
+tula_group(r): text code value [
+    concat(r): text code "\n" value "\n"
+]
+
+tula_group_number(r): text code value [
+    str_from_number(_tgn_v): value 10
+    concat(r): text code "\n" _tgn_v "\n"
+]
+
+tula_dxf_text(r): entities [
+    set(_tdx_t): "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
+    len(_tdx_n): entities
+    set(_tdx_i): 0
+    while(_): {_tdx_i < _tdx_n} [
+        at(_tdx_e): entities _tdx_i
+        at(_tdx_kind): _tdx_e 0
+        tula_group(_tdx_t): _tdx_t "0" _tdx_kind
+        tula_group(_tdx_t): _tdx_t "8" "0"
+        at(_tdx_a): _tdx_e 1
+        at(_tdx_b): _tdx_e 2
+        at(_tdx_c): _tdx_e 3
+        tula_group_number(_tdx_t): _tdx_t "10" _tdx_a
+        tula_group_number(_tdx_t): _tdx_t "20" _tdx_b
+        tula_group(_tdx_t): _tdx_t "30" "0"
+        if(_): {_tdx_kind = "LINE"} [
+            at(_tdx_d): _tdx_e 4
+            tula_group_number(_tdx_t): _tdx_t "11" _tdx_c
+            tula_group_number(_tdx_t): _tdx_t "21" _tdx_d
+            tula_group(_tdx_t): _tdx_t "31" "0"
+        ]
+        else(_): [
+            tula_group_number(_tdx_t): _tdx_t "40" _tdx_c
+        ]
+        set(_tdx_i): {_tdx_i + 1}
+    ]
+    concat(r): _tdx_t "0\nENDSEC\n0\nEOF\n"
+]
+
+tula_save_body(r): [
+    set(r): 0
+    set(_tsv_box): tula_path?
+    gettext(_tsv_path): _tsv_box
+    if(_): {_tsv_path = ""} [
+        tula_set_status(_): "Enter a DXF filename before saving"
+        return(_): r
+    ]
+    set(_tsv_entities): tula_entities?
+    tula_dxf_text(_tsv_text): _tsv_entities
+    open_file(_tsv_h): _tsv_path "wb"
+    if(_): {_tsv_h < 0} [
+        concat(_tsv_msg): "Cannot save DXF: " _tsv_path
+        tula_set_status(_): _tsv_msg
+        return(_): r
+    ]
+    write_file(_tsv_written): _tsv_h _tsv_text
+    close_file(_): _tsv_h
+    len(_tsv_length): _tsv_text
+    if(_): {_tsv_written != _tsv_length} [
+        tula_set_status(_): "DXF write failed"
+        return(_): r
+    ]
+    len(_tsv_n): _tsv_entities
+    str_from_int(_tsv_ns): _tsv_n
+    concat(_tsv_msg): "Saved " _tsv_ns " object(s) to " _tsv_path
+    tula_set_status(_): _tsv_msg
 ]
 
 tulasave(result): [
-    tula_save_dxf(result):
+    uilock(_):
+    tula_save_body(result):
+    uiunlock(_):
 ]

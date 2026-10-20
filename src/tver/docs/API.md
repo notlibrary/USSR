@@ -3,19 +3,18 @@
 The example in `examples/hello.su` demonstrates the supported application
 surface. It includes `tver.su`, creates six Petersburg widgets, lays them out
 with `grid`, registers key and panel-change callbacks, and initializes the
-native filesystem state.
+panels.
 
-## Native commands
+## Commands
 
 | Command | Arguments | Behavior |
 |---|---|---|
-| `tver_initialize` | Window, left path label, left list, right path label, right list, status label | Starts both panels in the current directory |
-| `tver_handle_key` | Window handle, GLFW key code | Handles Tab, Insert, Enter, F6, and F8 |
-| `tver_activate_panel` | Changed list handle | Makes the clicked list the active panel |
+| `tverinitialize(r)` | Window, left path label, left list, right path label, right list, status label | Starts both panels in the current directory; `r` is `0`, or `1` if a panel could not be read |
+| `tverhandlekey(r)` | Window handle, GLFW key code | Handles Tab, Insert, Enter, keypad Enter, F6, and F8 |
+| `tveractivatepanel(r)` | Changed list handle | Makes the clicked list the active panel |
 
-UI input is delivered from GLFW through Petersburg's event queue and run as a
-normal USSR scheduler callback. `tver.su` provides script-level wrapper
-definitions for these native commands.
+All three are USSR definitions in `tver.su`. UI input is delivered from GLFW
+through Petersburg's event queue and runs as a normal USSR scheduler callback.
 
 ## Key bindings and safety
 
@@ -25,7 +24,9 @@ definitions for these native commands.
   be marked.
 - F6 moves the selected file, or all marked files, into the other panel.
 - F8 requires a second press to confirm deletion of the selected or marked
-  files.
-- Moves refuse to overwrite existing destination files.
+  files. The confirmation is tied to the panel, directory, cursor row and mark
+  count; changing any of them disarms it.
+- Moves refuse to overwrite existing destinations.
+- Entering another directory clears that panel's marks.
 - Directory move/delete, copy, rename, view, edit, and recursive deletion are
-  not implemented in this initial usable version.
+  not implemented.

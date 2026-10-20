@@ -4,6 +4,36 @@
 
 createwindow(result): title width height [
     petersburg_create_window(result): title width height
+    set(petersburg_busy): 0!
+]
+
+# --- callback serialization -------------------------------------------------
+# Every callback runs as its own scheduler process. Handlers that touch shared
+# state bracket their work with uilock/uiunlock. The test-and-set happens in
+# the callback's first scheduler slice, so it cannot be interleaved; a lock
+# older than five seconds belongs to a handler that died on a runtime error
+# and is taken over.
+uilock(r): [
+    time(_pbl_now):
+    set(_pbl_held): petersburg_busy?
+    while(_): {_pbl_held != 0 && _pbl_now - _pbl_held < 5} [
+        sleep(_): 5
+        time(_pbl_now):
+        set(_pbl_held): petersburg_busy?
+    ]
+    set(petersburg_busy): _pbl_now!
+    set(r): 0
+]
+
+uiunlock(r): [
+    set(petersburg_busy): 0!
+    set(r): 0
+]
+
+# True while no handler holds uilock (used by tests to wait for handlers).
+uiidle(r): [
+    set(_pbi_held): petersburg_busy?
+    set(r): {_pbi_held = 0}
 ]
 
 maximize(result): window [
@@ -104,4 +134,75 @@ run(result): [
 
 messagebox(result): title text [
     petersburg_message_box(result): title text
+]
+
+# --- canvas: retained vector drawing ---------------------------------------
+# Coordinates are canvas-local pixels with y growing downward; numbers may be
+# integers or reals. Colors are 0xRRGGBB integers. Arc angles are degrees,
+# counter-clockwise as seen on screen, drawn from start to end.
+
+canvas(result): window [
+    petersburg_create_canvas(result): window
+]
+
+canvasclear(result): canvas color [
+    petersburg_canvas_clear(result): canvas color
+]
+
+canvasline(result): canvas x1 y1 x2 y2 color [
+    petersburg_canvas_line(result): canvas x1 y1 x2 y2 color
+]
+
+canvascircle(result): canvas cx cy radius color [
+    petersburg_canvas_circle(result): canvas cx cy radius color
+]
+
+canvasarc(result): canvas cx cy radius start_angle end_angle color [
+    petersburg_canvas_arc(result): canvas cx cy radius start_angle end_angle color
+]
+
+canvasrect(result): canvas x y width height color [
+    petersburg_canvas_rect(result): canvas x y width height color
+]
+
+canvasfill(result): canvas x y width height color [
+    petersburg_canvas_fill(result): canvas x y width height color
+]
+
+canvastext(result): canvas x y text color [
+    petersburg_canvas_text(result): canvas x y text color
+]
+
+canvascount(result): canvas [
+    petersburg_canvas_count(result): canvas
+]
+
+getwidth(result): widget [
+    petersburg_get_width(result): widget
+]
+
+getheight(result): widget [
+    petersburg_get_height(result): widget
+]
+
+# --- list marks: per-row highlight independent of the cursor ---------------
+
+setmark(result): list index marked [
+    petersburg_set_mark(result): list index marked
+]
+
+getmark(result): list index [
+    petersburg_get_mark(result): list index
+]
+
+# --- lifetime and testing ----------------------------------------------------
+
+alive(result): widget [
+    petersburg_alive(result): widget
+]
+
+# Sends a synthetic "key"/"keyup"/"focus" (window), "pointer"/"wheel"
+# (canvas) or "click" (widget) event through the normal input path.
+inject(result): widget event a b c [
+    petersburg_inject(result): widget event a b c
 ]

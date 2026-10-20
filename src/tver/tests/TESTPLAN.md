@@ -1,17 +1,20 @@
 # tver test plan
 
+Automated: `ussr tests/gui/tver_test.su` (GLFW build and a display required)
+covers listing order, directory mark refusal, file marks and cursor advance,
+Tab, Enter into a directory and back to `..`, F6 moves with marks, and the
+two-step F8 delete.
+
+Manual:
+
 - Package manifest parses as UNO (not JSON).
 - Example includes `tver.su` and Petersburg API and runs on a GLFW-enabled build.
-- Tab switches active panels; mouse clicks and Up/Down update selection.
-- Enter opens directories and `..` returns to the parent.
-- Insert toggles file marks, refuses directories, and preserves marks across
-  panel refreshes.
-- F6 moves files to the other panel and refuses to overwrite an existing file.
-- F8 requires a second press and deletes files only; directories are refused.
+- Mouse clicks and Up/Down update selection and activate the clicked panel.
+- F6 refuses to overwrite an existing file.
+- F8 deletes files only; directories are refused.
 - File names containing pipes and backslashes display and select correctly.
-- Invalid handles/arguments report errors; filesystem errors reach the status line.
-- Native filesystem operations run without invoking a shell.
-- Verify Windows and POSIX builds and exercise both filesystem adapters.
+- Filesystem errors (unreadable directories, locked files) reach the status line.
+- Verify Windows and POSIX builds (drive roots, UNC paths, `/`).
 
 ## Project-specific
 

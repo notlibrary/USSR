@@ -564,6 +564,41 @@ write_file(_): h "one more line\n"
 close_file(_): h
 ```
 
+`read_line(s): h` returns the next line without its LF or CRLF, or `null`
+at end of file. Prefer it to scanning a whole file byte by byte: reading a
+variable copies its string, so per-byte loops over large strings are slow.
+
+**io.su — directories and paths.** These report failure through their
+result instead of stopping the script:
+
+```
+list_dir(v): "path"        # sorted names, directories end in "/"; null if unreadable
+is_dir(b): "path"          # 1 or 0
+getcwd(s):                 # current working directory
+make_dir(ok): "path"       # 0 ok, 1 failed or already exists
+rename_path(ok): from to   # 0 ok, 1 failed; never replaces an existing destination
+remove_file(ok): "path"    # 0 ok, 1 failed; refuses directories
+remove_dir(ok): "path"     # 0 ok, 1 failed; empty directories only
+```
+
+`list_dir` omits `.` and `..` and sorts without regard to ASCII case.
+
+**strings.su — text and number conversion (pure USSR):**
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `str_from_int` | `str_from_int(s): n` | Decimal text of an integer. |
+| `str_trunc` | `str_trunc(i): x` | Integer part, toward zero. `/` always yields a real, so `str_trunc(q): {a / b}` is integer division for exact quotients. |
+| `str_from_number` | `str_from_number(s): x digits` | Rounds to `digits` decimals and drops trailing zeros; whole values print as integers. |
+| `str_to_number` | `str_to_number(n): s` | Integer or real from decimal text (sign, fraction, exponent; blanks ignored); `null` if `s` is not a number. |
+| `str_lower` | `str_lower(s): text` | ASCII lower case. |
+| `str_find` | `str_find(i): s needle from` | First index at or after `from`, or `-1`. |
+| `str_trim` | `str_trim(s): text` | Strips spaces, tabs, CR and LF at both ends. |
+| `str_repeat` | `str_repeat(s): text count` | Repeats `text`. |
+
+`concat` accepts only strings, so convert numbers with `str_from_int` or
+`str_from_number` before joining them into text.
+
 **bytes.su — memset analogs over vectors:**
 
 ```

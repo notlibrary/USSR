@@ -1,0 +1,29 @@
+# Regression test: sleep must wake while a Petersburg window is shown.
+# Before the fix the scheduler only pumped GUI input when no process was
+# runnable, so this script never printed and never exited.
+#     ussr tests/gui/petersburg_timer_test.su
+$include "../../src/petersburg/petersburg.su"
+
+init(result): arg_count arg_values [
+    createwindow(window): "Timer test" 320 200
+    label(_): window "Sleeping while visible"
+    run(_):
+    time(start):
+    set(i): 0
+    while(_): {i < 5} [
+        sleep(_): 20
+        set(i): {i + 1}
+    ]
+    print(_): "PASS sleep wakes while a window is open"
+    alive(open): window
+    if(_): open [
+        print(_): "PASS window still alive"
+    ]
+    close(_): window
+    sleep(_): 100
+    alive(open): window
+    if(_): {open = false} [
+        print(_): "PASS window closed"
+    ]
+    set(result): 0
+]
