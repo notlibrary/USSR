@@ -100,15 +100,21 @@ init(result): arg_count arg_values [
 
     setindex(_): left_files 1
     press(_): window KEY_INSERT
-    gettext(t): status
-    check(_): "directory mark refused" t "Directories cannot be marked in this version"
+    getmark(m): left_files 1
+    check(_): "directory can be marked" m true
+    setindex(_): left_files 1
+    press(_): window KEY_INSERT
+    getmark(m): left_files 1
+    check(_): "directory mark toggles off" m false
 
     setindex(_): left_files 2
     press(_): window KEY_INSERT
     gettext(t): left_files
-    check(_): "mark shown" t "..|sub/|* a.txt|b.txt"
+    check(_): "listing has no mark prefix" t "..|sub/|a.txt|b.txt"
+    getmark(m): left_files 2
+    check(_): "mark shown as row mark" m true
     gettext(t): status
-    check(_): "mark count" t "1 file(s) marked in this panel"
+    check(_): "mark count" t "1 item(s) marked in this panel"
     getindex(i): left_files
     check(_): "cursor advances after mark" i 3
 
@@ -127,7 +133,7 @@ init(result): arg_count arg_values [
     press(_): window KEY_TAB
     press(_): window KEY_F6
     gettext(t): status
-    check(_): "move marked" t "1 file(s) moved"
+    check(_): "move marked" t "1 item(s) moved"
     gettext(t): left_files
     check(_): "source after move" t "..|sub/|b.txt"
     gettext(t): right_files
@@ -141,7 +147,7 @@ init(result): arg_count arg_values [
     check(_): "file kept until confirmed" e true
     press(_): window KEY_F8
     gettext(t): status
-    check(_): "delete confirmed" t "1 file(s) deleted"
+    check(_): "delete confirmed" t "1 item(s) deleted"
     file_exists(e): "b.txt"
     check(_): "file removed" e false
 

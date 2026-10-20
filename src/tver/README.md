@@ -11,12 +11,13 @@ includes `tver.su`.
 
 Click either file list or press **Tab** to activate a panel. Use **Up/Down** to
 move the selection (hold them to keep moving), **Enter** to open a directory, and **Insert** to mark or
-unmark a file (the selection advances after marking). **F6** moves the
-selected file, or all marked files, to the other panel. **F8** deletes the
-selected file or marked files; press F8 a second time to confirm.
+unmark a file or directory (the cursor advances after marking). Marked rows
+are highlighted in amber, separately from the blue cursor. **F6** moves the
+item under the cursor, or all marked items, to the other panel. **F8**
+deletes them; press F8 a second time to confirm.
 
-Moves do not overwrite an existing destination. F6 and F8 currently operate on
-files only; directories can be entered but cannot be moved or deleted. There
+Moves do not overwrite an existing destination. F8 removes directories only
+when they are empty and never deletes recursively. There
 is intentionally no file viewer or editor. Operations use the standard
 library's filesystem primitives, never a shell command. Errors and
 confirmations appear in the status line.

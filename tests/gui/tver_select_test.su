@@ -1,0 +1,222 @@
+# Directory and file selection test for Tver (Insert marks). Needs a
+# GLFW-enabled ussr and a display; the window is never shown. Run from the
+# repository root:
+#     ussr tests/gui/tver_select_test.su
+# Builds tver_select_fixture/, checks marking, how marks behave while
+# navigating, scrolling, entering and leaving directories, and F6/F8 on
+# marked directories, then removes the fixture.
+$include "../../src/tver/tver.su"
+
+$define KEY_ENTER 257
+$define KEY_TAB 258
+$define KEY_INSERT 260
+$define KEY_DOWN 264
+$define KEY_F6 295
+$define KEY_F8 297
+
+key_handler(result): window key [
+    tverhandlekey(_): window key
+]
+
+keyup_handler(result): window key [
+    tverhandlekeyup(_): window key
+]
+
+panel_changed(result): widget [
+    tveractivatepanel(_): widget
+]
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 60
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 200} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    set(r): 0
+]
+
+press(r): window key [
+    inject(_): window "key" key 0 0
+    inject(_): window "keyup" key 0 0
+    settle(_):
+    set(r): 0
+]
+
+# "1 3 5" style list of marked rows, for compact checks.
+marked_rows(r): list count [
+    set(r): ""
+    set(_mr_i): 0
+    while(_): {_mr_i < count} [
+        getmark(_mr_m): list _mr_i
+        if(_): _mr_m [
+            str_from_int(_mr_s): _mr_i
+            concat(r): r _mr_s " "
+        ]
+        set(_mr_i): {_mr_i + 1}
+    ]
+]
+
+init(result): arg_count arg_values [
+    make_dir(_): "tver_select_fixture"
+    cd(_): "tver_select_fixture"
+    make_dir(_): "d1"
+    writefile(_): "d1/inner.txt" "x"
+    make_dir(_): "d2"
+    make_dir(_): "dest"
+    writefile(_): "a.txt" "a"
+    writefile(_): "b.txt" "b"
+    writefile(_): "c.txt" "c"
+
+    createwindow(window): "Tver selection test" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left): window ""
+    listbox(right): window ""
+    label(status): window ""
+    on(_): window "key" "key_handler"
+    on(_): window "keyup" "keyup_handler"
+    on(_): left "change" "panel_changed"
+    on(_): right "change" "panel_changed"
+    tverinitialize(_): window left_path left right_path right status
+    gettext(t): left
+    check(_): "listing" t "..|d1/|d2/|dest/|a.txt|b.txt|c.txt"
+
+    # ".." cannot be selected
+    setindex(_): left 0
+    press(_): window KEY_INSERT
+    marked_rows(m): left 7
+    check(_): "parent entry is never marked" m ""
+
+    # files and directories; the cursor moves on and is not a mark
+    setindex(_): left 2
+    press(_): window KEY_INSERT
+    setindex(_): left 5
+    press(_): window KEY_INSERT
+    marked_rows(m): left 7
+    check(_): "directory and file marked" m "2 5 "
+    getindex(i): left
+    check(_): "cursor advanced past the mark" i 6
+    getmark(c): left i
+    check(_): "cursor row is not marked" c false
+    gettext(t): status
+    check(_): "status counts items" t "2 item(s) marked in this panel"
+
+    # moving the cursor and scrolling keep marks
+    setindex(_): left 0
+    press(_): window KEY_DOWN
+    press(_): window KEY_DOWN
+    press(_): window KEY_DOWN
+    getindex(i): left
+    check(_): "arrow navigation moved the cursor" i 3
+    marked_rows(m): left 7
+    check(_): "navigation keeps marks" m "2 5 "
+
+    # toggling another row redraws the list and keeps the others
+    setindex(_): left 4
+    press(_): window KEY_INSERT
+    marked_rows(m): left 7
+    check(_): "refresh keeps marks" m "2 4 5 "
+    setindex(_): left 4
+    press(_): window KEY_INSERT
+    marked_rows(m): left 7
+    check(_): "unmark one row" m "2 5 "
+
+    # entering a directory starts with its own marks; leaving restores ours
+    setindex(_): left 1
+    press(_): window KEY_ENTER
+    gettext(t): left
+    check(_): "entered d1" t "..|inner.txt"
+    marked_rows(m): left 2
+    check(_): "new directory has no marks" m ""
+    setindex(_): left 1
+    press(_): window KEY_INSERT
+    setindex(_): left 0
+    press(_): window KEY_ENTER
+    marked_rows(m): left 7
+    check(_): "leaving restores parent marks" m "2 5 "
+    setindex(_): left 1
+    press(_): window KEY_ENTER
+    marked_rows(m): left 2
+    check(_): "returning restores d1 marks" m "1 "
+    setindex(_): left 1
+    press(_): window KEY_INSERT
+    setindex(_): left 0
+    press(_): window KEY_ENTER
+
+    # the other panel has its own marks
+    press(_): window KEY_TAB
+    marked_rows(m): right 7
+    check(_): "right panel unaffected" m ""
+    setindex(_): right 3
+    press(_): window KEY_ENTER
+    gettext(t): right_path
+    len(n): t
+    slice(tail): t {n - 4} 4
+    check(_): "right panel in dest" tail "dest"
+    press(_): window KEY_TAB
+
+    # F6 moves the marked directory and file together
+    press(_): window KEY_F6
+    gettext(t): status
+    check(_): "marked directory and file moved" t "2 item(s) moved"
+    gettext(t): left
+    check(_): "source after move" t "..|d1/|dest/|a.txt|c.txt"
+    gettext(t): right
+    check(_): "destination after move" t "..|d2/|b.txt"
+    marked_rows(m): left 5
+    check(_): "moved items leave no marks" m ""
+
+    # F8 refuses a non-empty directory
+    setindex(_): left 1
+    press(_): window KEY_INSERT
+    press(_): window KEY_F8
+    gettext(t): status
+    check(_): "delete asks first" t "Press F8 again to delete 1 marked item(s)"
+    press(_): window KEY_F8
+    gettext(t): status
+    check(_): "non-empty directory refused" t "Cannot delete d1: directory is not empty or is locked"
+    is_dir(d): "d1"
+    check(_): "d1 still there" d 1
+    marked_rows(m): left 5
+    check(_): "refused item stays marked" m "1 "
+
+    # F8 removes an empty marked directory in the right panel
+    press(_): window KEY_TAB
+    setindex(_): right 1
+    press(_): window KEY_INSERT
+    press(_): window KEY_F8
+    press(_): window KEY_F8
+    gettext(t): status
+    check(_): "empty directory deleted" t "1 item(s) deleted"
+    is_dir(d): "dest/d2"
+    check(_): "d2 removed" d 0
+
+    close(_): window
+    remove_file(_): "dest/b.txt"
+    remove_dir(_): "dest"
+    remove_file(_): "d1/inner.txt"
+    remove_dir(_): "d1"
+    remove_file(_): "a.txt"
+    remove_file(_): "c.txt"
+    cd(_): ".."
+    remove_dir(gone): "tver_select_fixture"
+    check(_): "fixture removed" gone 0
+    set(result): 0
+]

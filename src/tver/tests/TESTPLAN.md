@@ -6,7 +6,10 @@ Tab, Enter into a directory and back to `..`, F6 moves with marks, and the
 two-step F8 delete. `ussr tests/gui/tver_repeat_test.su` covers held-arrow
 repeat: single tap, hold, release, focus loss, end of list, direction
 change, cancellation by another key, an unfocused list, and closing the
-window mid-repeat.
+window mid-repeat. `ussr tests/gui/tver_select_test.su` covers marking files
+and directories, `..` refusal, cursor versus mark, marks across navigation,
+refresh, entering and leaving directories, per-panel marks, F6 on marked
+directories, and F8 on empty and non-empty directories.
 
 Manual:
 
@@ -14,7 +17,6 @@ Manual:
 - Example includes `tver.su` and Petersburg API and runs on a GLFW-enabled build.
 - Mouse clicks and Up/Down update selection and activate the clicked panel.
 - F6 refuses to overwrite an existing file.
-- F8 deletes files only; directories are refused.
 - File names containing pipes and backslashes display and select correctly.
 - Filesystem errors (unreadable directories, locked files) reach the status line.
 - Verify Windows and POSIX builds (drive roots, UNC paths, `/`).
@@ -23,4 +25,4 @@ Manual:
 
 - Large directories, permission errors, symlink behavior, and Windows drive roots.
 - Marked-file operations that encounter a failure after a partial success.
-- Directory move/delete, copy, rename, view, and edit remain out of scope.
+- Copy, rename, view, edit and recursive delete remain out of scope.

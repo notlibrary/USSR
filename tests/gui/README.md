@@ -7,6 +7,7 @@ windows (most never show them), feed input through `inject`, and print one
     ussr tests/gui/petersburg_timer_test.su
     ussr tests/gui/tver_test.su
     ussr tests/gui/tver_repeat_test.su
+    ussr tests/gui/tver_select_test.su
     ussr tests/gui/tula_test.su
     ussr tests/gui/tula_dxf_test.su
     ussr tests/gui/tula_toolbar_test.su

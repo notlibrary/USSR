@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0-alpha
+- Insert marks directories as well as files. Marks are drawn as Petersburg
+  row marks (amber) instead of a `* ` prefix, survive navigation and
+  refreshes, and are remembered per directory in each panel.
+- F6 moves marked directories; F8 deletes empty directories and reports
+  non-empty ones. Status messages count items.
+- Added `tests/gui/tver_select_test.su`.
+
 ## 0.3.0-alpha
 - Holding Up/Down repeats directory navigation (350 ms delay, 50 ms steps)
   and stops on key release, focus loss, window close, another key, or the

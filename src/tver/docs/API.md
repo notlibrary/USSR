@@ -36,13 +36,29 @@ more than one argument, prints a message and exits with a non-zero status.
   still moves exactly one row. Register the `"keyup"` and `"focus"`
   callbacks shown in the example; without them a repeat runs until the end
   of the list or the next key press.
-- Insert toggles a file mark and advances to the next row; directories cannot
-  be marked.
-- F6 moves the selected file, or all marked files, into the other panel.
-- F8 requires a second press to confirm deletion of the selected or marked
-  files. The confirmation is tied to the panel, directory, cursor row and mark
-  count; changing any of them disarms it.
+- Insert toggles the mark on the file or directory under the cursor and
+  advances to the next row; `..` is never marked.
+- F6 moves the item under the cursor, or all marked items, into the other
+  panel (directories included, same volume).
+- F8 requires a second press to confirm deletion of the item under the
+  cursor or the marked items. Files are deleted; directories only when empty
+  (a non-empty one is reported and stays marked). The confirmation is tied to
+  the panel, directory, cursor row and mark count; changing any of them
+  disarms it.
 - Moves refuse to overwrite existing destinations.
-- Entering another directory clears that panel's marks.
-- Directory move/delete, copy, rename, view, edit, and recursive deletion are
-  not implemented.
+- Copy, rename, view, edit, and recursive deletion are not implemented.
+
+## Selection
+
+- Marks are Petersburg list row marks: an amber band, bar and text. The
+  cursor is the blue band (brighter while the list has keyboard focus), so a
+  marked row under the cursor shows both.
+- Marks survive cursor movement, held-arrow repeat, scrolling and list
+  refreshes (marking, moves and deletes in the same directory).
+- Each panel remembers marks per directory. Entering a directory shows that
+  directory's own marks (none the first time); going back restores the
+  marks you left. The two panels keep separate marks.
+- F6 and F8 use the marks of the current directory only. Items that are moved
+  or deleted lose their marks; items that fail keep them.
+- The status line reports `N item(s) marked in this panel` after each
+  Insert.
