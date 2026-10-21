@@ -10,12 +10,18 @@
 #               d d       delete current line     :   command line
 #               w         start of next word      c w change word
 #               count     a number before a motion or command repeats it:
-#                         3l 5j 2k 4x 2dd 3w c2w 2cw, and arrow keys
-#               (no undo: Mbl does not keep an undo history)
+#                         3l 5j 2k 4x 2dd 3w c2w 2cw 3u, and arrow keys
+#               u         undo the last change    Ctrl+R  redo
 # Commands:     :w [name] write file   :q quit   :wq write+quit   :q! quit
 #               :e [name] reload / edit another file
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
 #               (and joins lines at column 0), ESC or Ctrl+C -> normal.
+#
+# Undo: one change is one normal-mode command together with the text typed
+# in the insert mode it starts (x, dd, cw, i/a/o + typing, with their
+# counts). History is unlimited, kept until the editor exits or :e loads a
+# file; a new change after undo drops the redo history. The [+] marker
+# follows whether the text differs from the last write.
 #
 # Text is UTF-8 (Russian and other Cyrillic included): lines are byte
 # strings, the cursor Mbl_cx is a byte offset that always sits on a
@@ -214,7 +220,7 @@ Mbl_insch(r): ch [
     Mbl_setline(_): Mbl_cy Mblic_a
     len(Mblic_cl): ch
     set(Mbl_cx): {Mbl_cx + Mblic_cl}
-    set(Mbl_dirty): 1
+    Mbl_touch(_):
     set(r): 0
 ]
 
@@ -229,7 +235,7 @@ Mbl_bs(r): [
         concat(Mblbs_a): Mblbs_a Mblbs_b
         Mbl_setline(_): Mbl_cy Mblbs_a
         set(Mbl_cx): Mblbs_start
-        set(Mbl_dirty): 1
+        Mbl_touch(_):
         return(_): r
     ]
     if(_): {Mbl_cx = 0} [
@@ -242,7 +248,7 @@ Mbl_bs(r): [
             Mbl_setline(_): {Mbl_cy - 1} Mblbs_p
             set(Mbl_cy): {Mbl_cy - 1}
             set(Mbl_cx): Mblbs_pl
-            set(Mbl_dirty): 1
+            Mbl_touch(_):
         ]
     ]
 ]
@@ -256,7 +262,7 @@ Mbl_enter(r): [
     Mbl_lineins(_): {Mbl_cy + 1} Mblen_b
     set(Mbl_cy): {Mbl_cy + 1}
     set(Mbl_cx): 0
-    set(Mbl_dirty): 1
+    Mbl_touch(_):
     Mbl_scroll(_): 
     set(r): 0
 ]
@@ -270,7 +276,7 @@ Mbl_delch(r): [
         slice(Mbldc_b): Mbldc_l Mbldc_end {Mbldc_n - Mbldc_end}
         concat(Mbldc_a): Mbldc_a Mbldc_b
         Mbl_setline(_): Mbl_cy Mbldc_a
-        set(Mbl_dirty): 1
+        Mbl_touch(_):
         Mbl_fixcx(_): 
     ]
     set(r): 0
@@ -287,9 +293,162 @@ Mbl_delete_line(r): [
         set(Mbl_cy): {Mbldel_n2 - 1}
     ]
     set(Mbl_cx): 0
-    set(Mbl_dirty): 1
+    Mbl_touch(_):
     Mbl_scroll(_): 
     set(r): 0
+]
+
+# ---------- undo ----------
+#
+# A state is the line vector, the cursor and a version number. Edits never
+# change a line vector in place (Mbl_setline, Mbl_linedel and Mbl_lineins
+# build new ones), so a state only keeps a reference to Mbl_buf. Each stack
+# is four parallel vectors plus a size; slots past the size are reused.
+# Mbl_ver numbers the text: a change gets a fresh number on its first edit,
+# and the file is unmodified while Mbl_ver equals Mbl_saved_ver.
+
+Mbl_undo_reset(r): [
+    vec(Mbl_ub): ""
+    vec(Mbl_ux): ""
+    vec(Mbl_uy): ""
+    vec(Mbl_uv): ""
+    set(Mbl_un): 0
+    vec(Mbl_rb): ""
+    vec(Mbl_rx): ""
+    vec(Mbl_ry): ""
+    vec(Mbl_rv): ""
+    set(Mbl_rn): 0
+    set(Mbl_ver): 0
+    set(Mbl_ver_next): 1
+    set(Mbl_saved_ver): 0
+    set(Mbl_touched): 1
+    set(r): 0
+]
+
+# Stores the current state in slot i of the undo (which = 0) or redo stack.
+Mbl_state_put(r): which i [
+    set(r): 0
+    if(_): {which = 0} [
+        len(Mblsp_n): Mbl_ub
+        if(_): {i < Mblsp_n} [
+            set(Mbl_ub): i Mbl_buf
+            set(Mbl_ux): i Mbl_cx
+            set(Mbl_uy): i Mbl_cy
+            set(Mbl_uv): i Mbl_ver
+        ]
+        else(_): [
+            push(_): Mbl_ub Mbl_buf
+            push(_): Mbl_ux Mbl_cx
+            push(_): Mbl_uy Mbl_cy
+            push(_): Mbl_uv Mbl_ver
+        ]
+        return(_): r
+    ]
+    len(Mblsp_n): Mbl_rb
+    if(_): {i < Mblsp_n} [
+        set(Mbl_rb): i Mbl_buf
+        set(Mbl_rx): i Mbl_cx
+        set(Mbl_ry): i Mbl_cy
+        set(Mbl_rv): i Mbl_ver
+    ]
+    else(_): [
+        push(_): Mbl_rb Mbl_buf
+        push(_): Mbl_rx Mbl_cx
+        push(_): Mbl_ry Mbl_cy
+        push(_): Mbl_rv Mbl_ver
+    ]
+]
+
+# Makes slot i of the undo (which = 0) or redo stack the current state.
+Mbl_state_get(r): which i [
+    if(_): {which = 0} [
+        at(Mbl_buf): Mbl_ub i
+        at(Mbl_cx): Mbl_ux i
+        at(Mbl_cy): Mbl_uy i
+        at(Mbl_ver): Mbl_uv i
+    ]
+    else(_): [
+        at(Mbl_buf): Mbl_rb i
+        at(Mbl_cx): Mbl_rx i
+        at(Mbl_cy): Mbl_ry i
+        at(Mbl_ver): Mbl_rv i
+    ]
+    set(Mbl_touched): 1
+    set(Mbl_dirty): 0
+    if(_): {Mbl_ver != Mbl_saved_ver} [
+        set(Mbl_dirty): 1
+    ]
+    len(Mblsg_n): Mbl_buf
+    if(_): {Mbl_cy >= Mblsg_n} [
+        set(Mbl_cy): {Mblsg_n - 1}
+    ]
+    Mbl_fixcx(_):
+    Mbl_scroll(_):
+    set(r): 0
+]
+
+# Called before a command that may change the text. The state saved here
+# is what u returns to. If the previous change never edited anything
+# (i then ESC), its slot is reused.
+Mbl_begin_change(r): [
+    set(Mblbc_slot): Mbl_un
+    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
+        set(Mblbc_slot): {Mbl_un - 1}
+    ]
+    Mbl_state_put(_): 0 Mblbc_slot
+    set(Mbl_un): {Mblbc_slot + 1}
+    set(Mbl_touched): 0
+    set(r): 0
+]
+
+# Every edit calls this: the first edit of a change numbers the new text
+# and drops the redo history.
+Mbl_touch(r): [
+    if(_): {Mbl_touched = 0} [
+        set(Mbl_touched): 1
+        set(Mbl_ver): Mbl_ver_next
+        set(Mbl_ver_next): {Mbl_ver_next + 1}
+        set(Mbl_rn): 0
+    ]
+    set(Mbl_dirty): 0
+    if(_): {Mbl_ver != Mbl_saved_ver} [
+        set(Mbl_dirty): 1
+    ]
+    set(r): 0
+]
+
+Mbl_undo(r): [
+    set(r): 0
+    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
+        # the last command changed nothing: forget its empty entry
+        set(Mbl_un): {Mbl_un - 1}
+        set(Mbl_touched): 1
+    ]
+    if(_): {Mbl_un = 0} [
+        set(Mbl_msg): "already at oldest change"
+        return(_): r
+    ]
+    Mbl_state_put(_): 1 Mbl_rn
+    set(Mbl_rn): {Mbl_rn + 1}
+    set(Mbl_un): {Mbl_un - 1}
+    Mbl_state_get(_): 0 Mbl_un
+    set(Mbl_msg): ""
+]
+
+Mbl_redo(r): [
+    set(r): 0
+    if(_): {Mbl_rn = 0} [
+        set(Mbl_msg): "already at newest change"
+        return(_): r
+    ]
+    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
+        set(Mbl_un): {Mbl_un - 1}
+    ]
+    Mbl_state_put(_): 0 Mbl_un
+    set(Mbl_un): {Mbl_un + 1}
+    set(Mbl_rn): {Mbl_rn - 1}
+    Mbl_state_get(_): 1 Mbl_rn
+    set(Mbl_msg): ""
 ]
 
 # ---------- file I/O ----------
@@ -316,6 +475,7 @@ Mbl_detect(r): [
 Mbl_load(r): path [
     vec(Mbl_buf): ""
     set(Mbl_dirty): 0
+    Mbl_undo_reset(_):
     set(Mbll_go): 0
     if(_): {Mbl_fe_ok = 1} [
         file_exists(Mbll_tf): path
@@ -385,6 +545,7 @@ Mbl_save(r): [
             set(Mblw_i): {Mblw_i + 1}
         ]
         writefile(Mblw_ok): Mbl_file Mbl_payload
+        set(Mbl_saved_ver): Mbl_ver
         set(Mbl_dirty): 0
         set(Mbl_msg): "written"
     ]
@@ -634,7 +795,7 @@ Mbl_change_word(r): count [
         slice(Mblcw_b): Mblcw_l Mblcw_end {Mblcw_n - Mblcw_end}
         concat(Mblcw_a): Mblcw_a Mblcw_b
         Mbl_setline(_): Mbl_cy Mblcw_a
-        set(Mbl_dirty): 1
+        Mbl_touch(_):
     ]
     set(r): 0
 ]
@@ -721,12 +882,14 @@ Mbl_normal(r): b [
         set(Mbl_pend): 0
         set(Mblnm_n): {Mblnm_n * Mbl_pend_count}
         if(_): {Mblnm_op = 1 && b = 100} [
+            Mbl_begin_change(_):
             while(_): {Mblnm_n > 0} [
                 Mbl_delete_line(_):
                 set(Mblnm_n): {Mblnm_n - 1}
             ]
         ]
         if(_): {Mblnm_op = 2 && b = 119} [
+            Mbl_begin_change(_):
             Mbl_change_word(_): Mblnm_n
         ]
         return(_): r
@@ -738,6 +901,9 @@ Mbl_normal(r): b [
         ]
         set(Mbl_pend_count): Mblnm_n
         return(_): r
+    ]
+    if(_): {b = 120 || b = 105 || b = 97 || b = 111} [
+        Mbl_begin_change(_):
     ]
     while(_): {Mblnm_n > 0} [
         if(_): {b = 8 || b = 127 || b = 104} [
@@ -754,6 +920,12 @@ Mbl_normal(r): b [
         ]
         elif(_): {b = 119} [
             Mbl_word_forward(_):
+        ]
+        elif(_): {b = 117} [
+            Mbl_undo(_):
+        ]
+        elif(_): {b = 18} [
+            Mbl_redo(_):
         ]
         elif(_): {b = 120} [
             # like vi, a count never deletes past the end of the line
@@ -784,7 +956,7 @@ Mbl_normal(r): b [
         set(Mbl_cy): {Mbl_cy + 1}
         set(Mbl_cx): 0
         set(Mbl_mode): 1
-        set(Mbl_dirty): 1
+        Mbl_touch(_):
         Mbl_scroll(_): 
     ]
     if(_): {b = 58} [

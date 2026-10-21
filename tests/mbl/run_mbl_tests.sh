@@ -16,6 +16,7 @@ pass=0
 fail=0
 ESC=$(printf '\033')
 BS=$(printf '\177')
+CR=$(printf '\022')
 
 # case NAME INITIAL_CONTENT KEYS EXPECTED_CONTENT
 # Contents are printf formats; "-" as INITIAL means "no file yet".
@@ -92,6 +93,50 @@ case_ change_word_dash 'да — нет\n' "wcw-$ESC:wq" 'да - нет\n'
 case_ change_word_last_line_no_newline 'end' "cwX$ESC:wq" 'X\n'
 case_ c_then_other_key_cancels 'abc\n' "cxx:wq" 'bc\n'
 case_ escape_clears_count 'abcdef\n' "3${ESC}lx:wq" 'acdef\n'
+
+# Undo (u) and redo (Ctrl+R)
+case_ undo_delete_char 'abc\n' "xu:wq" 'abc\n'
+case_ undo_counted_x_is_one_change 'abcdef\n' "3xu:wq" 'abcdef\n'
+case_ undo_insert_session 'ab\n' "iXYZ${ESC}u:wq" 'ab\n'
+case_ undo_append_session 'ab\n' "aXY${ESC}u:wq" 'ab\n'
+case_ undo_delete_line 'a\nb\nc\n' "jddu:wq" 'a\nb\nc\n'
+case_ undo_counted_dd 'a\nb\nc\n' "2ddu:wq" 'a\nb\nc\n'
+case_ undo_delete_only_line 'solo\n' "ddu:wq" 'solo\n'
+case_ undo_change_word 'hello world\n' "cwX${ESC}u:wq" 'hello world\n'
+case_ undo_open_line 'a\n' "onew${ESC}u:wq" 'a\n'
+case_ undo_enter_and_join 'один\nдва\n' "jiX$BS$BS
+${ESC}u:wq" 'один\nдва\n'
+case_ undo_multiple_levels 'abc\n' "xxuu:wq" 'abc\n'
+case_ undo_count 'abcd\n' "xxx2u:wq" 'bcd\n'
+case_ undo_past_oldest 'abc\n' "xuuuu:wq" 'abc\n'
+case_ undo_nothing 'abc\n' "u:wq" 'abc\n'
+case_ undo_skips_empty_insert 'abc\n' "xi${ESC}u:wq" 'abc\n'
+case_ undo_cyrillic 'привет\n' "xxu:wq" 'ривет\n'
+case_ undo_restores_cursor 'abc\ndef\n' "jxkux:wq" 'abc\nef\n'
+case_ redo 'abc\n' "xxuu${CR}:wq" 'bc\n'
+case_ redo_twice 'abc\n' "xxuu${CR}${CR}:wq" 'c\n'
+case_ redo_count 'abcd\n' "xxx3u2${CR}:wq" 'cd\n'
+case_ redo_past_newest 'abc\n' "xu${CR}${CR}${CR}:wq" 'bc\n'
+case_ new_change_drops_redo 'abc\n' "xulx${CR}:wq" 'ac\n'
+case_ empty_insert_keeps_redo 'abc\n' "xui${ESC}${CR}:wq" 'bc\n'
+case_ undo_after_write 'abc\n' "x:w
+u:wq" 'abc\n'
+case_ edit_command_resets_history 'abc\n' "x:e
+u:wq" 'abc\n'
+
+# The [+] marker follows the saved text: after "x :w x u" the text equals
+# the written file again, after "x :w u" it differs from it.
+marker() {
+    printf 'abc\n' >"$TMP/mark.txt"
+    printf "$1" | $LIMIT "$USSR" "$MBL" "$TMP/mark.txt" 2>&1 |
+        tr '\033' '\n' | grep 'mark\.txt' | tail -1 | grep -c '\[+\]'
+}
+if [ "$(marker 'x:w\nxu:q\n')" = 0 ] && [ "$(marker 'x:w\nu:q\n')" = 1 ] &&
+    [ "$(marker 'x:q\n')" = 1 ] && [ "$(marker 'xu:q\n')" = 0 ]; then
+    pass=$((pass + 1)); printf 'PASS undo keeps the modified marker right\n'
+else
+    fail=$((fail + 1)); printf 'FAIL undo keeps the modified marker right\n'
+fi
 
 # The cursor column counts characters: after "ll" on a Cyrillic line the
 # final cursor escape is ESC[1;3H, not the byte column ESC[1;5H.
