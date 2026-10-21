@@ -206,6 +206,12 @@ typedef struct ussr_command_t
     ussr_argument_t *arguments;
     size_t argument_count;
 
+    /* Where the command starts, for diagnostics: the source file
+     * (interned, never freed) and its 1-based line; NULL and 0 when
+     * unknown, e.g. for commands loaded from a .ru file. */
+    const char *source_file;
+    int source_line;
+
     struct ussr_command_t *next;
 } ussr_command_t;
 
@@ -325,6 +331,32 @@ int ussr_vector_push(ussr_vector_t *vector, ussr_value_t item);
 int ussr_vector_get(const ussr_vector_t *vector, size_t index, ussr_value_t *out);
 int ussr_vector_set(ussr_vector_t *vector, size_t index, ussr_value_t item);
 size_t ussr_vector_length(const ussr_vector_t *vector);
+
+/*
+ * Source locations while parsing. Call ussr_parse_begin() before every
+ * yyparse(): it restarts the lexer's line count and tells the parser how
+ * to turn a line of the parsed text into a file and line (lookup may be
+ * NULL, then every line is reported in `name`). ussr_parse_end() forgets
+ * the lookup context. The parser stores the result in each command's
+ * source_file/source_line.
+ */
+typedef int (*ussr_line_lookup_t)(
+    const void *context,
+    int text_line,
+    const char **file,
+    int *line
+);
+
+void ussr_parse_begin(
+    const char *name,
+    ussr_line_lookup_t lookup,
+    const void *context
+);
+void ussr_parse_end(void);
+void ussr_parse_locate(int text_line, const char **file, int *line);
+
+/* Returns a copy of name that lives until the process exits. */
+const char *ussr_source_name_intern(const char *name);
 
 
 #endif

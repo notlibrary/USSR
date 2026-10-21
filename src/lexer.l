@@ -6,6 +6,19 @@
 #include <string.h>
 
 extern int fileno(FILE *);
+extern int ussr_lexer_reported;
+
+/* yylineno already counts the token's own newlines here: report the line
+ * the token starts on. */
+#define YY_USER_ACTION                                  \
+    {                                                   \
+        int ussr_i;                                     \
+        yylloc.first_line = yylineno;                   \
+        for (ussr_i = 0; ussr_i < (int)yyleng; ++ussr_i) \
+            if (yytext[ussr_i] == '\n')                 \
+                --yylloc.first_line;                    \
+        yylloc.last_line = yylineno;                    \
+    }
 
 static char *ussr_strdup(const char *text);
 static char *unquote_string(const char *text);
@@ -125,14 +138,20 @@ UNO         '([^'\\\n]|\\.)*'
 }
 
 .                           {
+    const char *file;
+    int line;
+
+    ussr_parse_locate(yylineno, &file, &line);
     fprintf(
         stderr,
-        "USSR: unexpected character '%s' at line %d\n",
-        yytext,
-        yylineno
+        "%s:%d: unexpected character '%s'\n",
+        file,
+        line,
+        yytext
     );
 
-    return 0;
+    ussr_lexer_reported = 1;
+    return LEX_ERROR;
 }
 
 %%

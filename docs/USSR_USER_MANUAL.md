@@ -533,10 +533,34 @@ bodies.
 
 ## 12. Errors
 
-A runtime error (bad argument type, division by zero, an invalid VM
-operation, a failed `struct`/`getf`/`setf`/`push`, and so on) prints a
-message to `stderr` and halts the entire script immediately — there's
-no exception/try-catch mechanism. The process exits non-zero.
+**Before anything runs**, the whole program is parsed and compiled. A
+mistake stops it there with one message on `stderr`, in the form
+`file:line: reason` (the format compilers use, so editors and terminals
+can jump to it), and exit status 1:
+
+```
+tests/demo.su:3: print expects exactly one value, got 3 (join values with concat first)
+src/libs/mylib.su:12: add expects two values, got 1
+tests/demo.su:7: syntax error
+tests/demo.su:2: unexpected character '`'
+```
+
+The line is the one the command starts on in its original file, also
+inside `$include`d files and after skipped `$if` blocks. Text that has no
+file reports a stand-in name: `<stdin>` with the REPL's input line
+number, `<eval>` for `eval` strings, `<command line>` for `-e`. Only the
+first problem is reported; fix it and run again. Typical messages: wrong
+number of values for a builtin or a function, a value where a variable
+name is needed (`get(vector): index destination`, `scan` targets),
+`break`/`continue` outside a loop, `return` outside a function, `do`
+without `loop`, `else`/`option` without `if`/`choose`, a function defined
+twice.
+
+**At run time**, an error (bad argument type, division by zero, an
+invalid VM operation, a failed `struct`/`getf`/`setf`/`push`, and so on)
+prints a message to `stderr` and halts the entire script immediately —
+there's no exception/try-catch mechanism. The process exits non-zero.
+Run-time messages do not carry a line number yet.
 
 ---
 
@@ -866,8 +890,8 @@ USSR_SKIP_GUI=1 sh tests/run_all.sh    # without a display or GLFW
 xvfb-run -a sh tests/run_all.sh        # GUI tests on a headless Linux box
 ```
 
-It runs the suites in `tests/ru`, `tests/mbl`, `tests/russia`, `tests/vectors`
-and `tests/repl`; every script in `tests/`, `tests/math` and `tests/oop`,
+It runs the suites in `tests/ru`, `tests/mbl`, `tests/russia`, `tests/vectors`,
+`tests/repl` and `tests/errors`; every script in `tests/`, `tests/math` and `tests/oop`,
 comparing stdout, stderr and exit status with `tests/expected/<path>.txt`
 (stdin comes from `tests/expected/<path>.in` when that file exists); and the
 GUI tests in `tests/gui`. Each check prints a `PASS` or `FAIL` line and the

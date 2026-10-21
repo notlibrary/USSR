@@ -15,10 +15,7 @@ int yylex(void);
 extern int yylineno;
 extern FILE *yyin;
 
-void yyerror(const char *message)
-{
-    fprintf(stderr, "USSR: %s at line %d\n", message, yylineno);
-}
+void yyerror(const char *message);
 
 ussr_command_list_t *ussr_parsed_program = NULL;
 
@@ -123,6 +120,36 @@ static int ussr_parser_blocks_are_trailing(ussr_argument_t *items, size_t count)
 }
 %}
 
+%locations
+
+%code
+{
+/* Set by the lexer when it has already reported a bad token. */
+int ussr_lexer_reported = 0;
+
+void yyerror(const char *message)
+{
+    const char *file;
+    int line;
+
+    if (ussr_lexer_reported)
+    {
+        ussr_lexer_reported = 0;
+        return;
+    }
+
+    ussr_parse_locate(yylloc.first_line, &file, &line);
+    fprintf(stderr, "%s:%d: %s\n", file, line, message);
+}
+
+/* Records where a command starts (the line of its first token). */
+static void ussr_parser_set_location(ussr_command_t *command, int text_line)
+{
+    ussr_parse_locate(
+        text_line, &command->source_file, &command->source_line);
+}
+}
+
 %union
 {
     char *string;
@@ -187,6 +214,10 @@ static int ussr_parser_blocks_are_trailing(ussr_argument_t *items, size_t count)
 %token EXCLAMATION
 
 %token <string> UNO_LITERAL
+
+/* Returned by the lexer for a character it cannot use; no rule accepts
+ * it, so the parse fails instead of ending early. */
+%token LEX_ERROR
 
 %type <command_list> program command_lines
 %type <command> command
@@ -311,6 +342,8 @@ advanced_control
               ussr_command_list_free($7);
               YYABORT;
           }
+
+          ussr_parser_set_location($$, @1.first_line);
       }
     ;
 
@@ -384,10 +417,7 @@ command
 
           if (!ussr_parser_blocks_are_trailing($5.items, $5.count))
           {
-              fprintf(
-                  stderr,
-                  "USSR: [] blocks must be trailing command blocks\n"
-              );
+              yyerror("[] blocks must be trailing command blocks");
               free(path);
               free(name);
               free(head);
@@ -399,11 +429,19 @@ command
           if (ussr_parser_block_count($5.items, $5.count) != 0 &&
               !ussr_parser_block_allowed(name))
           {
-              fprintf(
-                  stderr,
-                  "USSR: command '%s' cannot have a [] block\n",
-                  name
-              );
+              {
+                  const char *file;
+                  int line;
+
+                  ussr_parse_locate(@1.first_line, &file, &line);
+                  fprintf(
+                      stderr,
+                      "%s:%d: command '%s' cannot have a [] block\n",
+                      file,
+                      line,
+                      name
+                  );
+              }
               free(path);
               free(name);
               free(head);
@@ -430,6 +468,7 @@ command
               YYABORT;
           }
 
+          ussr_parser_set_location($$, @1.first_line);
           free(head);
       }
     ;

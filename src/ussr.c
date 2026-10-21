@@ -57,6 +57,84 @@ extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
 extern ussr_command_list_t *ussr_parsed_program;
 
 static char *ussr_strdup(const char *src);
+
+/* Parse-location state: see ussr_parse_begin() in ussr.h. */
+static const char *ussr_parse_name = "<input>";
+static ussr_line_lookup_t ussr_parse_lookup = NULL;
+static const void *ussr_parse_context = NULL;
+
+const char *ussr_source_name_intern(const char *name)
+{
+    /* A short list: one entry per distinct file name ever parsed. */
+    static char **names = NULL;
+    static size_t count = 0;
+    char **grown;
+    size_t i;
+
+    if (name == NULL)
+        return NULL;
+
+    for (i = 0; i < count; ++i)
+        if (strcmp(names[i], name) == 0)
+            return names[i];
+
+    grown = realloc(names, (count + 1) * sizeof(*grown));
+    if (grown == NULL)
+        return NULL;
+    names = grown;
+    names[count] = ussr_strdup(name);
+    if (names[count] == NULL)
+        return NULL;
+
+    return names[count++];
+}
+
+void ussr_parse_begin(
+    const char *name,
+    ussr_line_lookup_t lookup,
+    const void *context
+)
+{
+    const char *interned = ussr_source_name_intern(
+        name != NULL ? name : "<input>");
+
+    ussr_parse_name = interned != NULL ? interned : "<input>";
+    ussr_parse_lookup = lookup;
+    ussr_parse_context = context;
+    yylineno = 1;
+}
+
+void ussr_parse_end(void)
+{
+    ussr_parse_lookup = NULL;
+    ussr_parse_context = NULL;
+}
+
+void ussr_parse_locate(int text_line, const char **file, int *line)
+{
+    const char *found_file = NULL;
+    int found_line = text_line;
+
+    if (ussr_parse_lookup == NULL ||
+        ussr_parse_lookup(
+            ussr_parse_context, text_line, &found_file, &found_line) != 0 ||
+        found_file == NULL)
+    {
+        found_file = ussr_parse_name;
+        found_line = text_line;
+    }
+    else
+    {
+        found_file = ussr_source_name_intern(found_file);
+        if (found_file == NULL)
+            found_file = ussr_parse_name;
+    }
+
+    if (file != NULL)
+        *file = found_file;
+    if (line != NULL)
+        *line = found_line;
+}
 static ussr_definition_t *ussr_find_definition(const char *name);
 int ussr_argument_evaluate(
     const ussr_argument_t *argument,
@@ -2643,6 +2721,7 @@ ussr_execute_eval(
     program = ussr_parsed_program;
     ussr_parsed_program = NULL;
 
+    ussr_parse_begin("<eval>", NULL, NULL);
     buffer = yy_scan_string(source.data.string);
 
     if (buffer == NULL)

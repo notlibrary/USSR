@@ -1163,11 +1163,15 @@ static int vm_do_load(
         return -1;
     }
 
+    ussr_parse_begin(filename, ussr_pp_locate, &pp);
     buffer = yy_scan_string(ussr_pp_output(&pp));
-    ussr_pp_cleanup(&pp);
 
     if (buffer == NULL)
+    {
+        ussr_parse_end();
+        ussr_pp_cleanup(&pp);
         return -1;
+    }
 
     /* Parse with the parser's global program slot saved/restored,
      * exactly like eval does. */
@@ -1177,12 +1181,16 @@ static int vm_do_load(
     if (yyparse() != 0 || ussr_parsed_program == NULL)
     {
         yy_delete_buffer(buffer);
+        ussr_parse_end();
+        ussr_pp_cleanup(&pp);
         ussr_parsed_program = old_program;
         fprintf(stderr, "USSR: load: syntax error in '%s'\n", filename);
         return -1;
     }
 
     yy_delete_buffer(buffer);
+    ussr_parse_end();
+    ussr_pp_cleanup(&pp);
 
     /* Scan the loaded file's top level for process(_): name marks. */
     {
@@ -1929,7 +1937,7 @@ int vm_execute(
             case USSR_BC_EVAL:
                 /* eval is implemented by the VM boundary: source is parsed, compiled, then executed as bytecode. */
                 if(ins.a>=USSR_VM_REGISTER_COUNT || program->strings[ins.immediate]==NULL || vm->registers[0].type!=USSR_STRING){result=-1;goto done;}
-                { YY_BUFFER_STATE b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested,0); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
+                { YY_BUFFER_STATE b; ussr_parse_begin("<eval>", NULL, NULL); b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested,0); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
             case USSR_BC_HALT: vm->running=0; vm->exit_code=0; break;
             default: fprintf(stderr,"USSR VM: unknown opcode 0x%02x\n",ins.opcode);result=-1;goto done;
         }
@@ -2111,7 +2119,6 @@ static int compile_source(const char *source, ussr_bc_program_t *bytecode,
 
     if (result != 0)
     {
-        fprintf(stderr, "USSR parser: syntax error");
         ussr_parsed_program = NULL;
         return -1;
     }
@@ -2122,7 +2129,6 @@ static int compile_source(const char *source, ussr_bc_program_t *bytecode,
     /* AST -> bytecode happens once. Execution starts only after compilation. */
     if (ussr_bc_compile(ussr_parsed_program, bytecode) != 0)
     {
-        fprintf(stderr, "USSR compiler: compilation failed");
         ussr_command_list_free(ussr_parsed_program);
         ussr_parsed_program = NULL;
         return -1;
@@ -2327,14 +2333,17 @@ static int compile_file(const char *input, const char *output)
     if (source == NULL || source[0] == '\0')
         source = "";
 
-    if (compile_source(source, &bytecode, &ast) != 0)
+    ussr_parse_begin(input, ussr_pp_locate, &pp);
+    result = compile_source(source, &bytecode, &ast);
+    ussr_parse_end();
+    ussr_pp_cleanup(&pp);
+
+    if (result != 0)
     {
-        fprintf(stderr, "\nUSSR compile: '%s' was not written\n", output);
-        ussr_pp_cleanup(&pp);
+        fprintf(stderr, "USSR compile: '%s' was not written\n", output);
         free(default_output);
         return EXIT_FAILURE;
     }
-    ussr_pp_cleanup(&pp);
 
     if (ast == NULL)
     {
@@ -2365,7 +2374,9 @@ static int run_eval(const char *source, int argc, char **argv)
     if (source == NULL || source[0] == '\0')
         return 0;
 
+    ussr_parse_begin("<command line>", NULL, NULL);
     result = parse_and_execute(source, argc, argv, 0);
+    ussr_parse_end();
 
     return result;
 }
@@ -2453,7 +2464,9 @@ static int run_file(const char *filename, int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    ussr_parse_begin(filename, ussr_pp_locate, &pp);
     result = parse_and_execute(ussr_pp_output(&pp), argc, argv, 0);
+    ussr_parse_end();
     ussr_pp_cleanup(&pp);
 
     return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -2563,6 +2576,16 @@ static char *repl_prompt(int continuation)
     return out;
 }
 
+/* Line lookup for REPL input: context points at the REPL line number of
+ * the entry's first line. */
+static int repl_locate(const void *context, int text_line,
+                       const char **file, int *line)
+{
+    *file = "<stdin>";
+    *line = *(const int *)context + text_line - 1;
+    return 0;
+}
+
 static int run_repl(void)
 {
     ussr_preprocessor_t pp;
@@ -2573,6 +2596,7 @@ static int run_repl(void)
     size_t line_length;
     int bracket_depth;
     int result;
+    int entry_line = 1;
 
     printf("USSR Unified Shell Script REPL\n");
     printf("USSR v%d.%d\n",USSR_VERSION_MAJOR, USSR_VERSION_MINOR);
@@ -2667,6 +2691,9 @@ static int run_repl(void)
             continue;
         }
 
+        if (source_length == 0)
+            entry_line = pp.current_line;
+
         if (append_source(
                 &source,
                 &source_length,
@@ -2687,7 +2714,9 @@ static int run_repl(void)
         if (bracket_depth > 0)
             continue;
 
+        ussr_parse_begin("<stdin>", repl_locate, &entry_line);
         result = parse_and_execute(source, 0, NULL, 1);
+        ussr_parse_end();
 
         source_length = 0;
         if (source != NULL)

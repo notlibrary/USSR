@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <stdarg.h>
 
 
 /*
@@ -32,6 +33,54 @@ typedef struct
     size_t continue_count;
     size_t continue_capacity;
 } bc_loop_t;
+
+/*
+ * Diagnostics. The first failure of a compilation is printed as
+ * "file:line: reason", at the command being compiled; later failures on
+ * the way out are not printed again. bc_error_command is the innermost
+ * command being compiled, used when a helper has no command at hand.
+ */
+static const ussr_command_t *bc_error_command = NULL;
+static int bc_error_reported = 0;
+
+static void bc_error(
+    const ussr_command_t *command,
+    const char *format,
+    ...
+)
+{
+    va_list arguments;
+
+    if (bc_error_reported)
+        return;
+
+    bc_error_reported = 1;
+
+    if (command == NULL)
+        command = bc_error_command;
+
+    if (command != NULL && command->source_file != NULL)
+        fprintf(
+            stderr,
+            "%s:%d: ",
+            command->source_file,
+            command->source_line
+        );
+    else
+        fputs("USSR compiler: ", stderr);
+
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
+}
+
+static int bc_is_variable_argument(const ussr_argument_t *argument)
+{
+    return argument->type == USSR_ARGUMENT_EXPRESSION &&
+           argument->data.expression != NULL &&
+           argument->data.expression->type == USSR_EXPR_VARIABLE;
+}
 
 static char *bc_strdup(const char *s)
 {
@@ -255,9 +304,9 @@ static int bc_collect_functions(
 
             if (bc_find_function(p, command->name) != NULL)
             {
-                fprintf(
-                    stderr,
-                    "USSR compiler: duplicate function '%s'\n",
+                bc_error(
+                    command,
+                    "function '%s' is defined twice",
                     command->name
                 );
                 return -1;
@@ -314,12 +363,12 @@ static int bc_collect_functions(
                         a->data.expression->type !=
                             USSR_EXPR_VARIABLE)
                     {
-                        fprintf(
-                            stderr,
-                            "USSR compiler: function '%s' "
-                            "parameter %zu must be an identifier\n",
-                            command->name,
-                            j
+                        bc_error(
+                            command,
+                            "parameter %zu of function '%s' must be a "
+                            "name",
+                            j + 1,
+                            command->name
                         );
                         return -1;
                     }
@@ -642,10 +691,7 @@ static int bc_compile_expression(
                 ) < 0 ? -1 : 0;
             }
 
-            fprintf(
-                stderr,
-                "USSR compiler: unsupported unary operator\n"
-            );
+            bc_error(NULL, "unsupported unary operator");
             return -1;
 
         case USSR_EXPR_BINARY:
@@ -654,9 +700,9 @@ static int bc_compile_expression(
 
             if (right_reg >= USSR_BC_RETURN_REG)
             {
-                fprintf(
-                    stderr,
-                    "USSR compiler: expression register pressure exceeded\n"
+                bc_error(
+                    NULL,
+                    "expression is nested too deeply; split it with set"
                 );
                 return -1;
             }
@@ -745,10 +791,7 @@ static int bc_compile_argument(
                 argument->data.expression->type !=
                     USSR_EXPR_VARIABLE)
             {
-                fprintf(
-                    stderr,
-                    "USSR compiler: hash lookup requires an identifier\n"
-                );
+                bc_error(NULL, "'?' lookup needs a variable name");
                 return -1;
             }
 
@@ -788,10 +831,7 @@ static int bc_compile_argument(
             ) < 0 ? -1 : 0;
 
         case USSR_ARGUMENT_COMMAND_LIST:
-            fprintf(
-                stderr,
-                "USSR compiler: command block cannot be used as a value\n"
-            );
+            bc_error(NULL, "a [ ] block cannot be used as a value here");
             return -1;
 
         default:
@@ -969,7 +1009,36 @@ static int bc_compile_choose(
     const ussr_command_t **next_out
 );
 
+static int bc_compile_command_body(
+    ussr_bc_program_t *p,
+    const ussr_command_t *command,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current
+);
+
 static int bc_compile_command(
+    ussr_bc_program_t *p,
+    const ussr_command_t *command,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current
+)
+{
+    const ussr_command_t *outer = bc_error_command;
+    int result;
+
+    bc_error_command = command;
+    result = bc_compile_command_body(p, command, loop, current);
+
+    /* Every failure gets a location, even one without its own message
+     * (running out of memory, for example). */
+    if (result != 0 && command != NULL)
+        bc_error(command, "cannot compile '%s'", command->name);
+
+    bc_error_command = outer;
+    return result;
+}
+
+static int bc_compile_command_body(
     ussr_bc_program_t *p,
     const ussr_command_t *command,
     bc_loop_t *loop,
@@ -1005,7 +1074,14 @@ static int bc_compile_command(
             a[1].type != USSR_ARGUMENT_COMMAND_LIST ||
             (count == 3 &&
              a[2].type != USSR_ARGUMENT_COMMAND_LIST))
+        {
+            bc_error(
+                command,
+                "if expects a condition and a [ ] block "
+                "(optionally followed by an else block)"
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1118,7 +1194,10 @@ if (strcmp(command->name, "do") == 0)
          */
         if (count != 2 ||
             a[1].type != USSR_ARGUMENT_COMMAND_LIST)
+        {
+            bc_error(command, "do expects a value and a [ ] body");
             return -1;
+        }
 
         loop_command = command->next;
 
@@ -1126,9 +1205,9 @@ if (strcmp(command->name, "do") == 0)
             strcmp(loop_command->name, "loop") != 0 ||
             loop_command->argument_count != 1)
         {
-            fprintf(
-                stderr,
-                "USSR compiler: do must be followed by loop(condition)\n"
+            bc_error(
+                command,
+                "do must be followed by loop(_): condition"
             );
             return -1;
         }
@@ -1262,7 +1341,10 @@ do_error:
         if (count != 2 ||
             a[1].type != USSR_ARGUMENT_COMMAND_LIST ||
             a[1].data.command_list == NULL)
+        {
+            bc_error(command, "for expects a condition and a [ ] block");
             return -1;
+        }
 
         for_body = a[1].data.command_list;
         initializer = for_body->head;
@@ -1273,9 +1355,10 @@ do_error:
          * is the body, including zero or more commands. */
         if (initializer == NULL || iterator == NULL)
         {
-            fprintf(
-                stderr,
-                "USSR compiler: for requires initializer and iterator commands\n"
+            bc_error(
+                command,
+                "for needs an initializer and an iterator command "
+                "at the start of its block"
             );
             return -1;
         }
@@ -1308,9 +1391,9 @@ do_error:
             {
                 if (next == NULL || strcmp(next->name, "loop") != 0)
                 {
-                    fprintf(
-                        stderr,
-                        "USSR compiler: do must be followed by loop(condition)\n"
+                    bc_error(
+                        body,
+                        "do must be followed by loop(_): condition"
                     );
                     goto for_error;
                 }
@@ -1321,10 +1404,7 @@ do_error:
             {
                 if (strcmp(body->name, "loop") == 0)
                 {
-                    fprintf(
-                        stderr,
-                        "USSR compiler: loop must follow do\n"
-                    );
+                    bc_error(body, "loop without a do before it");
                     goto for_error;
                 }
 
@@ -1388,7 +1468,10 @@ for_error:
 
         if (count != 2 ||
             a[1].type != USSR_ARGUMENT_COMMAND_LIST)
+        {
+            bc_error(command, "while expects a condition and a [ ] body");
             return -1;
+        }
 
         start = p->code_count;
 
@@ -1481,8 +1564,22 @@ while_error:
     {
         int jump;
 
-        if (loop == NULL || count > 1)
+        if (loop == NULL)
+        {
+            bc_error(command, "%s outside a loop", command->name);
             return -1;
+        }
+
+        if (count > 1)
+        {
+            bc_error(
+                command,
+                "%s takes at most one value, got %zu",
+                command->name,
+                count
+            );
+            return -1;
+        }
 
         if (count == 1)
         {
@@ -1531,8 +1628,17 @@ while_error:
 
 	if (strcmp(command->name, "return") == 0)
 	{
-		if (current == NULL || count != 1)
+		if (current == NULL)
+		{
+			bc_error(command, "return outside a function");
 			return -1;
+		}
+
+		if (count != 1)
+		{
+			bc_error(command, "return expects one value, got %zu", count);
+			return -1;
+		}
 
 		/*
 		 * RETURN_REG is reserved for CALL results and cannot be used
@@ -1574,18 +1680,27 @@ while_error:
     {
         if (count != function->parameter_count)
         {
-            fprintf(
-                stderr,
-                "USSR compiler: %s expects %zu parameter%s\n",
+            bc_error(
+                command,
+                "function '%s' expects %zu parameter%s, got %zu",
                 command->name,
                 function->parameter_count,
-                function->parameter_count == 1 ? "" : "s"
+                function->parameter_count == 1 ? "" : "s",
+                count
             );
             return -1;
         }
 
         if (count >= USSR_BC_RETURN_REG)
+        {
+            bc_error(
+                command,
+                "'%s' has too many parameters (at most %d)",
+                command->name,
+                USSR_BC_RETURN_REG - 1
+            );
             return -1;
+        }
 
         for (i = 0; i < count; ++i)
         {
@@ -1623,7 +1738,10 @@ while_error:
         int vector_name;
 
         if (command->return_name == NULL)
+        {
+            bc_error(command, "set(vector): index value needs a vector name");
             return -1;
+        }
 
         vector_name = bc_add_string(p, command->return_name);
         if (vector_name < 0)
@@ -1651,7 +1769,15 @@ while_error:
     {
         if (count != 1 ||
             command->return_name == NULL)
+        {
+            bc_error(
+                command,
+                "set expects one value (or an index and a value for a "
+                "vector), got %zu",
+                count
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1671,7 +1797,15 @@ while_error:
     {
         if (count != 1 ||
             command->return_name == NULL)
+        {
+            bc_error(
+                command,
+                "print expects exactly one value, got %zu "
+                "(join values with concat first)",
+                count
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1705,7 +1839,15 @@ while_error:
     {
         if (count != 2 ||
             command->return_name == NULL)
+        {
+            bc_error(
+                command,
+                "%s expects two values, got %zu",
+                command->name,
+                count
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0 ||
             bc_compile_argument(p, &a[1], 1) != 0)
@@ -1755,7 +1897,15 @@ while_error:
         if (count < 2 ||
             command->return_name == NULL ||
             count >= USSR_BC_RETURN_REG)
+        {
+            bc_error(
+                command,
+                "concat expects 2 to %d values, got %zu",
+                USSR_BC_RETURN_REG - 1,
+                count
+            );
             return -1;
+        }
 
         for (i = 0; i < count; ++i)
         {
@@ -1799,10 +1949,15 @@ while_error:
         int destination_name;
 
         if (command->return_name == NULL ||
-            a[1].type != USSR_ARGUMENT_EXPRESSION ||
-            a[1].data.expression == NULL ||
-            a[1].data.expression->type != USSR_EXPR_VARIABLE)
+            !bc_is_variable_argument(&a[1]))
+        {
+            bc_error(
+                command,
+                "get(vector): index destination needs a variable name as "
+                "the destination"
+            );
             return -1;
+        }
 
         destination = a[1].data.expression;
         vector_name = bc_add_string(p, command->return_name);
@@ -1839,10 +1994,18 @@ while_error:
         int destination_index;
 
         if (count != 1 || command->return_name == NULL ||
-            a[0].type != USSR_ARGUMENT_EXPRESSION ||
-            a[0].data.expression == NULL ||
-            a[0].data.expression->type != USSR_EXPR_VARIABLE)
+            !bc_is_variable_argument(&a[0]))
+        {
+            bc_error(
+                command,
+                count == 1
+                    ? "get(source): destination needs a variable name as "
+                      "the destination"
+                    : "get expects a destination (or an index and a "
+                      "destination for a vector)"
+            );
             return -1;
+        }
 
         expression = a[0].data.expression;
         source_index = bc_add_string(p, command->return_name);
@@ -1864,7 +2027,10 @@ while_error:
     if (strcmp(command->name, "random64") == 0)
     {
         if (count != 0 || command->return_name == NULL)
+        {
+            bc_error(command, "random64 takes no parameters");
             return -1;
+        }
         if (bc_emit(p, USSR_BC_RANDOM64, USSR_BC_RETURN_REG,
                     0, 0, 0) < 0)
             return -1;
@@ -1876,7 +2042,11 @@ while_error:
     if (strcmp(command->name, "seed_random64") == 0)
     {
         if (count != 1 || command->return_name == NULL)
+        {
+            bc_error(command, "seed_random64 expects one seed, got %zu",
+                     count);
             return -1;
+        }
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
         if (bc_emit(p, USSR_BC_SEED64, USSR_BC_RETURN_REG,
@@ -1890,7 +2060,10 @@ while_error:
     if (strcmp(command->name, "time") == 0)
     {
         if (count != 0 || command->return_name == NULL)
+        {
+            bc_error(command, "time takes no parameters");
             return -1;
+        }
         if (bc_emit(p, USSR_BC_TIME, USSR_BC_RETURN_REG,
                     0, 0, 0) < 0)
             return -1;
@@ -1907,14 +2080,25 @@ while_error:
             a[0].type != USSR_ARGUMENT_VALUE ||
             a[0].data.value.type != USSR_STRING ||
             count - 1 > 255)
+        {
+            bc_error(
+                command,
+                "scan expects a format string and 1 to 255 variables"
+            );
             return -1;
+        }
 
         for (i = 1; i < count; ++i)
         {
-            if (a[i].type != USSR_ARGUMENT_EXPRESSION ||
-                a[i].data.expression == NULL ||
-                a[i].data.expression->type != USSR_EXPR_VARIABLE)
+            if (!bc_is_variable_argument(&a[i]))
+            {
+                bc_error(
+                    command,
+                    "scan destination %zu must be a variable name",
+                    i
+                );
                 return -1;
+            }
         }
 
         index = bc_add_string(p, a[0].data.value.data.string);
@@ -1942,12 +2126,21 @@ while_error:
             a[0].type != USSR_ARGUMENT_VALUE ||
             a[0].data.value.type != USSR_STRING ||
             count - 1 > 255)
+        {
+            bc_error(
+                command,
+                "template expects a format string and 1 to 255 values"
+            );
             return -1;
+        }
 
         for (i = 1; i < count; ++i)
         {
             if (a[i].type == USSR_ARGUMENT_COMMAND_LIST)
+            {
+                bc_error(command, "template cannot take a [ ] block");
                 return -1;
+            }
 
             if (bc_compile_argument(p, &a[i], (uint8_t)(i - 1)) != 0)
                 return -1;
@@ -1969,7 +2162,10 @@ while_error:
     if (strcmp(command->name, "cd") == 0)
     {
         if (count != 1 || command->return_name == NULL)
+        {
+            bc_error(command, "cd expects one directory, got %zu", count);
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1987,7 +2183,10 @@ while_error:
     if (strcmp(command->name, "chain") == 0)
     {
         if (count != 0 || command->return_name == NULL)
+        {
+            bc_error(command, "chain takes no parameters");
             return -1;
+        }
 
         if (bc_emit(p, USSR_BC_CHAIN, 0, 0, 0, 0) < 0)
             return -1;
@@ -1999,7 +2198,10 @@ while_error:
     if (strcmp(command->name, "file") == 0)
     {
         if (count != 1 || command->return_name == NULL)
+        {
+            bc_error(command, "file expects one file name, got %zu", count);
             return -1;
+        }
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
         if (bc_emit(p, USSR_BC_FILE, 0, 0, 0, 0) < 0)
@@ -2017,7 +2219,10 @@ while_error:
     {
         if (count != 1 ||
             command->return_name == NULL)
+        {
+            bc_error(command, "eval expects one string, got %zu", count);
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -2061,7 +2266,15 @@ while_error:
      */
     if (command->return_name == NULL ||
         count >= USSR_BC_RETURN_REG)
+    {
+        bc_error(
+            command,
+            "'%s' has too many parameters (at most %d)",
+            command->name,
+            USSR_BC_RETURN_REG - 1
+        );
         return -1;
+    }
 
     for (i = 0; i < count; ++i)
     {
@@ -2153,15 +2366,26 @@ static int bc_compile_until(
     while (command != NULL && command != stop)
     {
         const ussr_command_t *next;
+        const ussr_command_t *outer = bc_error_command;
+        int failed;
+
+        /* if/choose chains are compiled here rather than through
+         * bc_compile_command: give their failures a location too. */
+        bc_error_command = command;
+        failed = 0;
 
         if (strcmp(command->name, "if") == 0 &&
             command->argument_count == 1)
         {
             if (bc_compile_conditional_chain(
                     p, command, loop, current, &next) != 0)
-                return -1;
-            command = next;
-            continue;
+                failed = 1;
+            else
+            {
+                bc_error_command = outer;
+                command = next;
+                continue;
+            }
         }
 
         /*
@@ -2178,9 +2402,13 @@ static int bc_compile_until(
         {
             if (bc_compile_block_chain(
                     p, command, loop, current, &next) != 0)
-                return -1;
-            command = next;
-            continue;
+                failed = 1;
+            else
+            {
+                bc_error_command = outer;
+                command = next;
+                continue;
+            }
         }
 
         if (strcmp(command->name, "choose") == 0 &&
@@ -2188,17 +2416,33 @@ static int bc_compile_until(
         {
             if (bc_compile_choose(
                     p, command, loop, current, &next) != 0)
-                return -1;
-            command = next;
-            continue;
+                failed = 1;
+            else
+            {
+                bc_error_command = outer;
+                command = next;
+                continue;
+            }
         }
+
+        if (failed)
+        {
+            bc_error(command, "cannot compile '%s'", command->name);
+            bc_error_command = outer;
+            return -1;
+        }
+
+        bc_error_command = outer;
 
         if (bc_is_conditional_label(command) ||
             bc_is_choose_label(command))
         {
-            fprintf(stderr,
-                    "USSR compiler: unexpected control-flow label '%s'\n",
-                    command->name);
+            bc_error(
+                command,
+                "%s without a matching %s before it",
+                command->name,
+                bc_is_choose_label(command) ? "choose" : "if"
+            );
             return -1;
         }
 
@@ -2211,8 +2455,10 @@ static int bc_compile_until(
         {
             if (next == NULL || strcmp(next->name, "loop") != 0)
             {
-                fprintf(stderr,
-                        "USSR compiler: do must be followed by loop(condition)\n");
+                bc_error(
+                    command,
+                    "do must be followed by loop(_): condition"
+                );
                 return -1;
             }
             command = next->next;
@@ -2221,8 +2467,7 @@ static int bc_compile_until(
         {
             if (strcmp(command->name, "loop") == 0)
             {
-                fprintf(stderr,
-                        "USSR compiler: loop must follow do\n");
+                bc_error(command, "loop without a do before it");
                 return -1;
             }
             command = next;
@@ -2271,7 +2516,10 @@ static int bc_compile_conditional_chain(
         if (strcmp(branch->name, "else") == 0)
         {
             if (branch->argument_count != 0)
+            {
+                bc_error(branch, "else takes no parameters here");
                 goto cleanup;
+            }
 
             if (pending_false >= 0)
             {
@@ -2283,7 +2531,10 @@ static int bc_compile_conditional_chain(
         else
         {
             if (branch->argument_count != 1)
+            {
+                bc_error(branch, "%s expects one condition", branch->name);
                 goto cleanup;
+            }
 
             if (bc_compile_argument(
                     p, &branch->arguments[0], 0) != 0)
@@ -2404,8 +2655,7 @@ static int bc_compile_block_chain(
             if (bcount != 1 ||
                 ba[0].type != USSR_ARGUMENT_COMMAND_LIST)
             {
-                fprintf(stderr,
-                        "USSR compiler: else expects a single block\n");
+                bc_error(branch, "else expects a single [ ] block");
                 goto cleanup;
             }
             body = ba[0].data.command_list;
@@ -2424,9 +2674,11 @@ static int bc_compile_block_chain(
             if (bcount != 2 ||
                 ba[1].type != USSR_ARGUMENT_COMMAND_LIST)
             {
-                fprintf(stderr,
-                        "USSR compiler: %s expects a condition and a "
-                        "block\n", branch->name);
+                bc_error(
+                    branch,
+                    "%s expects a condition and a [ ] block",
+                    branch->name
+                );
                 goto cleanup;
             }
             body = ba[1].data.command_list;
@@ -2478,8 +2730,7 @@ static int bc_compile_block_chain(
 
         if (is_else)
         {
-            fprintf(stderr,
-                    "USSR compiler: else must be the last branch\n");
+            bc_error(next, "%s after else", next->name);
             goto cleanup;
         }
 
@@ -2569,11 +2820,19 @@ static int bc_compile_choose(
         if (strcmp(label->name, "default") == 0)
         {
             if (label->argument_count != 0 || has_default)
+            {
+                bc_error(
+                    label,
+                    has_default ? "choose has a second default"
+                                : "default takes no parameters"
+                );
                 goto cleanup;
+            }
             has_default = 1;
         }
         else if (label->argument_count != 1)
         {
+            bc_error(label, "option expects one value");
             goto cleanup;
         }
 
@@ -2584,8 +2843,7 @@ static int bc_compile_choose(
 
     if (case_count == 0)
     {
-        fprintf(stderr,
-                "USSR compiler: choose requires option/default labels\n");
+        bc_error(first, "choose must be followed by option or default");
         goto cleanup;
     }
 
@@ -2663,8 +2921,13 @@ static int bc_compile_choose(
      */
     for (size_t i = 0; i < choice_loop.continue_count; ++i)
     {
-        if (outer_loop == NULL ||
-            bc_loop_add(
+        if (outer_loop == NULL)
+        {
+            bc_error(first, "continue inside choose but outside a loop");
+            goto cleanup;
+        }
+
+        if (bc_loop_add(
                 &outer_loop->continues,
                 &outer_loop->continue_count,
                 &outer_loop->continue_capacity,
@@ -2744,7 +3007,8 @@ static int bc_compile_functions(
 
             if (function == NULL)
             {
-                fprintf(stderr, "USSR compiler error: could not find function definition for '%s'\n", command->name);
+                bc_error(command, "function '%s' was not collected",
+                         command->name);
                 return -1;
             }
 
@@ -2762,7 +3026,8 @@ static int bc_compile_functions(
                     function
                 ) != 0)
             {
-                fprintf(stderr, "USSR compiler error: failed to compile body of function '%s'\n", function->name);
+                bc_error(command, "cannot compile function '%s'",
+                         function->name);
                 return -1;
             }
 
@@ -2782,7 +3047,8 @@ static int bc_compile_functions(
 
                 if (constant < 0)
                 {
-                    fprintf(stderr, "USSR compiler error: failed to add null constant in function '%s'\n", function->name);
+                    bc_error(command, "out of memory compiling '%s'",
+                             function->name);
                     return -1;
                 }
 
@@ -2795,7 +3061,8 @@ static int bc_compile_functions(
                         (uint32_t)constant
                     ) < 0)
                 {
-                    fprintf(stderr, "USSR compiler error: failed to emit implicit return value for function '%s'\n", function->name);
+                    bc_error(command, "out of memory compiling '%s'",
+                             function->name);
                     return -1;
                 }
             }
@@ -2809,7 +3076,8 @@ static int bc_compile_functions(
                     0
                 ) < 0)
             {
-                fprintf(stderr, "USSR compiler error: failed to emit RET instruction for function '%s'\n", function->name);
+                bc_error(command, "out of memory compiling '%s'",
+                         function->name);
                 return -1;
             }
 
@@ -2818,9 +3086,7 @@ static int bc_compile_functions(
                     body
                 ) != 0)
             {
-                // Ошибка во вложенных функциях уже распечатает свое имя ниже, 
-                // но можно также пометить, внутри какой функции это произошло:
-                fprintf(stderr, "USSR compiler error: failed to compile nested functions inside '%s'\n", function->name);
+                /* The nested function's failure is already reported. */
                 return -1;
             }
         }
@@ -2861,6 +3127,8 @@ static int uuasm_compile_source(
 
     memset(program, 0, sizeof(*program));
     memset(&loop, 0, sizeof(loop));
+    bc_error_command = NULL;
+    bc_error_reported = 0;
 
     /*
      * First pass over declarations creates stable function-table
@@ -2912,10 +3180,12 @@ static int uuasm_compile_source(
         return -1;
     }
 
+    /* The top level is not a loop: break/continue there is an error
+     * (it used to jump back to the start of the program). */
     if (bc_compile_list(
             program,
             source,
-            &loop,
+            NULL,
             NULL
         ) != 0)
     {
@@ -2978,9 +3248,8 @@ int ussr_uuasm_compile_to_bytecode(
         uint8_t opcode;
         if (ussr_uuasm_to_vm_opcode(uuasm.code[i].opcode, &opcode) != 0)
         {
-            fprintf(stderr,
-                    "USSR compiler: UUASM opcode 0x%02x has no VM mapping\n",
-                    uuasm.code[i].opcode);
+            bc_error(NULL, "UUASM opcode 0x%02x has no VM mapping",
+                     uuasm.code[i].opcode);
             free(vm_code);
             ussr_bc_program_free(&uuasm);
             return -1;
