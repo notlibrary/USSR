@@ -14,6 +14,16 @@ $include "../libs/strings.su"
 # Textual UUASM (.ua/.uuasm): assembler, disassembler and C-ABI executor.
 $include "uuasm.su"
 
+# Interpreter state shared across the stages (lx_ lexer, ps_ parser, rt_
+# tree runtime, cv_ compiler, vm_ VM, sc_ scheduler); every other variable
+# a function sets is local to it.
+global(_): ps_i ps_nddef rt_flow vm_suspend vm_ip vm_qleft vm_sp
+global(_): vm_scanbuf vm_scanpos sc_runq sc_tick lx_tokens ps_stop
+global(_): ps_root rt_store rt_fdefs rt_rv rt_tn rt_xrv vm_flow cv_code
+global(_): cv_names cv_consts cv_lps cv_funcs cv_ent cv_sdefs vm_av
+global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
+global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks
+
 # Almost impossible programming task
 # Write USSR interpreter in USSR
 # Kimi K3 died in hallucinations ChatGPT go went to eval cheat
@@ -1622,7 +1632,6 @@ ex_reg_i(r): cmd prm i blim [
     ]
 ]
 rt_findf_i(r): nm i [
-    len(rt_fl): rt_fdefs
     set(r): {0 - 1}
     if(_): {i + 1 > 0} [
         at(rt_fp): rt_fdefs i
@@ -3067,7 +3076,7 @@ ex_scgo(r): nd sn fmt [
         if(_): {sn > 3} [ concat(rt_evs2): rt_evs2 " rt_hsc3" ]
         if(_): {sn > 4} [ concat(rt_evs2): rt_evs2 " rt_hsc4" ]
         if(_): {sn > 5} [ concat(rt_evs2): rt_evs2 " rt_hsc5" ]
-        eval(rt_evr): rt_evs2
+        eval(_): rt_evs2
         ex_scwr(r): nd sn rt_hsc1 rt_hsc2 rt_hsc3 rt_hsc4 rt_hsc5
     ]
 ]

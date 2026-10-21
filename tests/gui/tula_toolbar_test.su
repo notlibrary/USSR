@@ -86,7 +86,7 @@ init(result): arg_count arg_values [
     createwindow(window): "Tula toolbar test" 1100 800
     textbox(filename): window ""
     label(status_label): window ""
-    tulainitialize(canvas): window status_label filename
+    tulainitialize(_): window status_label filename
     tulatoolbar(bar): window
     on(_): window "key" "tulakey"
 

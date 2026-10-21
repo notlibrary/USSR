@@ -274,6 +274,24 @@ static ussr_scope_t *sched_scope_clone(const ussr_scope_t *source)
         }
     }
 
+    /* Spawned from inside a function: the child also sees that call's
+     * locals, as globals, like it did before functions had locals. */
+    if (source->local_depth > 0)
+    {
+        const ussr_locals_t *top =
+            &source->locals[source->local_depth - 1];
+
+        for (i = 0; i < top->name_count; ++i)
+        {
+            if (top->assigned[i] &&
+                ussr_scope_set(clone, top->names[i], &top->values[i]) != 0)
+            {
+                ussr_scope_free(clone);
+                return NULL;
+            }
+        }
+    }
+
     return clone;
 }
 
@@ -462,10 +480,6 @@ static void sched_gc_mark_vm(const ussr_vm_t *vm)
 
         for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
             ussr_gc_mark_value(&frame->saved_registers[i]);
-
-        for (i = 0; i < frame->saved_variable_count; ++i)
-            if (frame->saved_variable_existed[i])
-                ussr_gc_mark_value(&frame->saved_variables[i]);
     }
 
     if (vm->resume_pending)
@@ -486,11 +500,7 @@ static void sched_gc_collect(void)
     for (proc = sched_procs; proc != NULL; proc = proc->next_all)
     {
         if (proc->scope != NULL)
-        {
-            size_t i;
-            for (i = 0; i < proc->scope->count; ++i)
-                ussr_gc_mark_value(&proc->scope->vars[i].value);
-        }
+            ussr_scope_mark_gc(proc->scope);
 
         sched_gc_mark_vm(&proc->vm);
 

@@ -1,0 +1,19 @@
+PASS caller's loop variable survives a helper's
+PASS helper result
+PASS recursion keeps temporaries apart
+PASS deep recursion
+PASS top-level global(_) is written by functions
+PASS second global
+PASS function-level global(_)
+PASS globals are readable without a declaration
+PASS parameter result
+PASS parameter does not touch the global
+PASS global(_): "*" keeps the old behavior
+PASS locals vanish after the call
+PASS eval inside a function sees its locals
+PASS a spawned process sees its parent's locals
+PASS nested definitions have their own locals
+
+--- stderr ---
+
+--- exit 0 ---

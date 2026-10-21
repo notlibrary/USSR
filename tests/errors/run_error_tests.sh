@@ -188,6 +188,75 @@ EOF
 check "option with two values" "choose.su:3: option expects one value" \
     "$tmp/choose.su"
 
+printf 'f(r): x [\n    global(_): 5\n    set(r): x\n]\n' >"$tmp/glob.su"
+check "global with a value" "glob.su:2: global expects variable names" \
+    "$tmp/glob.su"
+
+printf 'f(r): x [\n    global(_): x\n    set(r): x\n]\n' >"$tmp/gparam.su"
+check "parameter declared global" \
+    "gparam.su:1: 'x' is a parameter or the return variable of 'f'" \
+    "$tmp/gparam.su"
+
+# warn NAME WANT FILE: compiles and runs (exit 0) with warning WANT.
+warn() {
+    "$USSR" "$3" </dev/null >"$tmp/out" 2>"$tmp/err"
+    status=$?
+    if [ "$status" -eq 0 ] && grep -qF -- "$2" "$tmp/err"; then
+        ok "$1"
+    else
+        bad "$1" "exit $status, want '$2'; stderr: $(cat "$tmp/err")"
+    fi
+}
+
+program state <<'EOF'
+show(_): [
+    print(_): mode
+]
+init(ret): arg_cnt arg_vec [
+    set(mode): "edit"
+    show(_):
+    set(ret): 0
+]
+EOF
+warn "state set in init but not declared" \
+    "state.su:2: warning: 'mode' is read as a global but only set as a local (in 'init', line 5); declare global(_): mode" \
+    "$tmp/state.su"
+
+program counter <<'EOF'
+bump(_): [
+    print(_): n
+    set(n): 1
+]
+init(ret): arg_cnt arg_vec [
+    bump(_):
+    set(ret): 0
+]
+EOF
+warn "local read before it is set" \
+    "counter.su:2: warning: 'n' is read before it is set in 'bump'" \
+    "$tmp/counter.su"
+
+program flag <<'EOF'
+parse(r): text [
+    set(failed): true
+    set(r): text
+]
+run(r): text [
+    set(failed): false
+    parse(r): text
+    if(_): failed [
+        set(r): "error"
+    ]
+]
+init(ret): arg_cnt arg_vec [
+    run(x): "a"
+    set(ret): 0
+]
+EOF
+warn "flag set for the caller" \
+    "flag.su:2: warning: 'failed' is set in 'parse' but never read there, while other code reads it" \
+    "$tmp/flag.su"
+
 check "compile only (-c) reports the location" \
     "print.su:3: print expects exactly one value" -c "$tmp/print.su" "$tmp/out.ru"
 [ ! -f "$tmp/out.ru" ] && ok "-c writes nothing on error" ||

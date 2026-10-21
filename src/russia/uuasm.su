@@ -19,6 +19,13 @@
 # uq_consts, uq_strings, uq_funcs ([name entry retname params]).
 $once
 
+# Assembler and executor state shared by the uq_* functions; every other
+# variable a function sets is local to it.
+global(_): uq_header uq_ip uq_frames uq_op_names uq_op_codes
+global(_): uq_label_names uq_label_addrs uq_code uq_strings uq_fix_at
+global(_): uq_fix_names uq_fix_lines uq_consts uq_funcs uq_regs
+global(_): uq_var_names uq_var_values uq_var_found uq_ip_text
+
 # --- opcode table -----------------------------------------------------------
 uq_tables(r): [
     vec(uq_op_names): ""

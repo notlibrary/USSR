@@ -142,7 +142,7 @@ The instruction fields are:
     C = destination register for the returned value
     immediate = function index
 
-A call creates a VM frame. The frame stores the caller IP, return register, function identity, and the state needed to restore the caller.
+A call creates a VM frame. The frame stores the caller IP, return register, function identity, and the state needed to restore the caller. The call also gets a fresh table of local variables (section 8); `RET` reads the return variable from it and drops it.
 
 ### 5.7 Runtime and host services
 
@@ -173,8 +173,8 @@ The current compiler convention is:
 
 For `CALL`, `A` is the first argument register, `B` the argument count, `C` the
 destination register, and `immediate` the function-table index. Arguments are
-copied into the function's named parameters before the callee's registers are
-cleared for execution.
+copied into the function's named parameters, which are locals of the new
+call, before the callee's registers are cleared for execution.
 
 ## 7. Constants
 
@@ -197,6 +197,17 @@ Normal USSR variables are accessed by bytecode:
 
 The variable store is provided by the USSR runtime. It is not the VM's
 instruction stream or control-flow representation.
+
+Each function call has its own local variables (`ussr_locals_push` in
+`src/ussr.c`): the names in the function's local list (parameters, return
+variable, assigned names not declared `global`). They live in the process's
+scope, one table per active call, and vanish at `RET`. Operand `B` of
+`LOAD_VAR`/`STORE_VAR` tells where the name lives, as resolved by the
+compiler inside functions: `0` by name (the innermost call's locals if the
+name is one of them, else the globals; used by top-level code, `eval` text
+and UUASM text), `1` the innermost call's local in slot `C`, `2` the global.
+Native commands that read or write variables by name (`scan`, `@`) follow
+the `0` rule.
 
 Explicit hash semantics are:
 

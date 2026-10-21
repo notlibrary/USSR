@@ -36,6 +36,15 @@
 
 $include "../libs/strings.su"
 
+# Editor state shared by the functions below. Every other variable a
+# function sets is local to that function.
+global(_): Mbl_buf Mbl_cx Mbl_cy Mbl_top Mbl_un Mbl_touched Mbl_ver_next
+global(_): Mbl_rn Mbl_pb Mbl_count Mbl_pend Mbl_pend_count Mbl_esc
+global(_): Mbl_rows Mbl_cols Mbl_mode Mbl_ub Mbl_ux Mbl_uy Mbl_uv Mbl_rb
+global(_): Mbl_rx Mbl_ry Mbl_rv Mbl_ver Mbl_saved_ver Mbl_dirty Mbl_msg
+global(_): Mbl_fe_ok Mbl_fe_yes Mbl_bom Mbl_bom_text Mbl_file
+global(_): Mbl_showname Mbl_running
+
 # ---------- terminal helpers ----------
 
 Mbl_initesc(r): [

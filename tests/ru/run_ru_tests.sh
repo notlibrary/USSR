@@ -71,6 +71,7 @@ roundtrip "vectors" tests/vectors/vectors_test.su ''
 roundtrip "environment" tests/env_test.su ''
 roundtrip "scan from stdin" tests/fac.su '6\n'
 roundtrip "async and await" tests/async.su ''
+roundtrip "function locals" tests/locals.su ''
 roundtrip "load with a bare entry name" tests/boot_load_entry.su ''
 roundtrip "runtime error keeps status" tests/vectors/errors/divide_by_zero.su ''
 
@@ -128,7 +129,7 @@ rejects "truncated header" "$tmp/short.ru" "truncated"
 head -c $((size - 10)) "$good" > "$tmp/cut.ru"
 rejects "truncated body" "$tmp/cut.ru" "truncated"
 
-cp "$good" "$tmp/version.ru"; patch "$tmp/version.ru" 8 002
+cp "$good" "$tmp/version.ru"; patch "$tmp/version.ru" 8 377
 rejects "unknown format version" "$tmp/version.ru" "unsupported .ru format version"
 
 cp "$good" "$tmp/flags.ru"; patch "$tmp/flags.ru" 10 001

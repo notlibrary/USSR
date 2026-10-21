@@ -16,14 +16,17 @@
 
 #define USSR_RU_MAGIC          "\x89USSR\r\n\x1a"
 #define USSR_RU_MAGIC_SIZE     8U
-#define USSR_RU_FORMAT_VERSION 1U
+/* 2: functions list their local variable names. */
+#define USSR_RU_FORMAT_VERSION 2U
 
 /*
  * VM ABI revision. Bump it whenever an opcode, operand meaning or
  * calling convention changes; files with another ABI are rejected
  * instead of being run with the wrong semantics.
  */
-#define USSR_RU_VM_ABI         1U
+/* 2: each call has its own locals (CALL/RET no longer save and restore
+ * parameter variables in the shared scope). */
+#define USSR_RU_VM_ABI         2U
 
 /*
  * Write a compiled program to path. Returns 0 on success. On failure a

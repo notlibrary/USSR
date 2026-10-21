@@ -296,6 +296,9 @@ int ussr_ru_write_file(const ussr_bc_program_t *program, const char *path)
         ru_put_u32(&b, (uint32_t)f->parameter_count);
         for (j = 0; j < f->parameter_count; ++j)
             ru_put_string(&b, f->parameters[j]);
+        ru_put_u32(&b, (uint32_t)f->local_count);
+        for (j = 0; j < f->local_count; ++j)
+            ru_put_string(&b, f->locals[j]);
     }
 
     ru_put_u32(&b, (uint32_t)program->oop_site_count);
@@ -805,6 +808,25 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
             if (ru_get_string(r, 0, &f->parameters[j]) != 0)
                 return -1;
         }
+
+        /* Local names: at least the parameters and the return variable. */
+        {
+            size_t locals;
+
+            if (ru_get_count(r, 4, &locals) != 0)
+                return -1;
+            if (locals < parameters + 1)
+                return ru_fail(r, "a function lists too few local names");
+            f->locals = calloc(locals, sizeof(*f->locals));
+            if (f->locals == NULL)
+                return ru_fail(r, "out of memory");
+            for (j = 0; j < locals; ++j)
+            {
+                f->local_count = j + 1;
+                if (ru_get_string(r, 0, &f->locals[j]) != 0)
+                    return -1;
+            }
+        }
     }
     p->function_capacity = p->function_count;
 
@@ -827,6 +849,9 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
                     return ru_fail(r, "a function index is out of range");
                 break;
             case USSR_BC_LOAD_VAR: case USSR_BC_STORE_VAR:
+                if (ins->b > USSR_VAR_GLOBAL)
+                    return ru_fail(r, "a variable has an unknown scope");
+                /* fall through */
             case USSR_BC_LOAD_HASH: case USSR_BC_STORE_HASH:
             case USSR_BC_DECODE_UNO: case USSR_BC_OOP:
             case USSR_BC_SCAN: case USSR_BC_EXTERNAL:

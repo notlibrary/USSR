@@ -853,6 +853,10 @@ cleanup_line:
                     goto cleanup;
             }
             program->functions[i].entry = entry;
+            /* UUASM text has no local declarations: parameters and the
+             * return variable are local, every other name is global. */
+            if (ussr_bc_function_default_locals(&program->functions[i]) != 0)
+                goto cleanup;
         }
     }
 

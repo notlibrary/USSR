@@ -69,11 +69,31 @@ typedef struct ussr_variable_t
  */
 typedef ussr_variable_t ussr_scope_variable_t;
 
+/* The local variables of one function call: slot i holds names[i] once
+ * assigned. `names` lists the function's local names (borrowed from the
+ * compiled program); a name not in it is looked up in the globals. The
+ * slot arrays are kept and reused by later calls at the same depth. */
+typedef struct ussr_locals_t
+{
+    ussr_value_t *values;
+    unsigned char *assigned;
+    size_t capacity;
+
+    char *const *names;
+    size_t name_count;
+} ussr_locals_t;
+
 typedef struct ussr_scope_t
 {
     ussr_scope_variable_t *vars;
     size_t count;
     size_t capacity;
+
+    /* Call stack of the process using this scope: one entry per active
+     * function call, the running function's on top. */
+    ussr_locals_t *locals;
+    size_t local_depth;
+    size_t local_capacity;
 } ussr_scope_t;
 
 /* Scope lifecycle. The current scope pointer is cooperative-thread
@@ -97,6 +117,43 @@ int ussr_scope_set(
  * the global hash namespace. Process scopes are marked by the
  * scheduler. */
 void ussr_runtime_mark_gc_roots(void);
+
+/* Mark every value of a scope: globals and all call frames' locals. */
+void ussr_scope_mark_gc(const ussr_scope_t *scope);
+
+/*
+ * Function-call locals in the current scope. ussr_locals_push starts a
+ * call whose local names are `names` (they must outlive the call);
+ * ussr_get_variable/ussr_set_variable then resolve those names in the
+ * call's own table. ussr_locals_pop ends the innermost call.
+ * ussr_locals_reset drops every call of a scope (NULL = the default
+ * scope), e.g. after a program stopped inside a function.
+ */
+int ussr_locals_push(char *const *names, size_t name_count);
+
+/* Where a LOAD_VAR/STORE_VAR operand b says a name lives: decided by the
+ * compiler inside functions, by name (local first) everywhere else. For
+ * USSR_VAR_LOCAL, slot is the name's index in the function's locals. */
+typedef enum
+{
+    USSR_VAR_BY_NAME = 0,
+    USSR_VAR_LOCAL = 1,
+    USSR_VAR_GLOBAL = 2
+} ussr_var_place_t;
+
+const ussr_value_t *ussr_get_variable_at(
+    const char *name,
+    ussr_var_place_t place,
+    size_t slot
+);
+int ussr_set_variable_at(
+    const char *name,
+    const ussr_value_t *value,
+    ussr_var_place_t place,
+    size_t slot
+);
+void ussr_locals_pop(void);
+void ussr_locals_reset(ussr_scope_t *scope);
 
 typedef enum
 {

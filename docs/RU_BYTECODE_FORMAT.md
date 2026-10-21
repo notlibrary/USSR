@@ -4,7 +4,7 @@ A `.ru` file is a compiled USSR program: the VM instruction stream and the
 pools it refers to, as produced by `ussr -c file.su` and run by
 `ussr file.ru`. Writer and loader live in `src/ussr_ru.c`.
 
-Format version: **1**. VM ABI version: **1**.
+Format version: **2**. VM ABI version: **2**.
 
 ## Rules
 
@@ -20,9 +20,9 @@ Format version: **1**. VM ABI version: **1**.
 ```
 offset  size  field
 0       8     signature   89 55 53 53 52 0D 0A 1A   ("\x89USSR\r\n\x1A")
-8       2     format version (1)
+8       2     format version (2)
 10      2     flags (must be 0)
-12      4     VM ABI version (1)
+12      4     VM ABI version (2)
 16      4     producer version: major << 16 | minor << 8 | patch (informational)
 20      4     payload length: bytes from offset 24 up to the checksum
 24      ...   payload: the sections below, in this order
@@ -73,8 +73,18 @@ strings referenced by instruction immediates.
 count  n
 n x    name string, return name string (may be absent),
        entry u32 (instruction index), parameter count u32 (<= 32),
-       parameter names: string x count
+       parameter names: string x count,
+       local count u32 (>= parameter count + 1),
+       local names: string x count
 ```
+
+The local names are the variables each call of the function gets for
+itself: its parameters, its return variable and every other name it
+assigns that is not declared `global` (user manual, "Variables in
+functions"). Inside a function's code, `LOAD_VAR`/`STORE_VAR` carry the
+compiler's resolution in operand `B`: `0` look the name up (the call's
+locals first, then the globals), `1` the call's local in slot `C` (an index
+into the local names), `2` the global. A `B` above 2 is rejected.
 
 ### 5. Command call sites, 6. Scan call sites
 
@@ -134,3 +144,8 @@ for `.ua` programs.
 - `ussr_bc_write_file()` in `ussr_bytecode.c` (`USSRBC01` header) is an older
   debugging dump in host byte order; it is not the `.ru` format and has no
   loader.
+
+History: format 2 / ABI 2 added function locals (local name lists, the
+`B`/`C` operands of `LOAD_VAR`/`STORE_VAR`; `CALL`/`RET` no longer save and
+restore parameter variables in the shared scope). Files from format 1 are
+rejected; rebuild them with `-c`.

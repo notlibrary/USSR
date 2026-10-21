@@ -1,0 +1,22 @@
+# global(_): "*" at the top level: every function keeps the pre-locals
+# behavior (only parameters and return variables are per call), so code
+# written for it runs unchanged.
+global(_): "*"
+
+setup(_): [
+    set(state): "ready"
+    set(count): 0
+]
+
+step(_): [
+    add(count): count 1
+]
+
+init(ret): arg_cnt arg_vec [
+    setup(_):
+    step(_):
+    step(_):
+    print(_): state
+    print(_): count
+    set(ret): 0
+]

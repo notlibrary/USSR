@@ -62,6 +62,12 @@ in `C`, and the function-table index in `immediate`. `RET` returns the value
 stored in the function's declared return variable. Function names and
 parameter names are case-sensitive.
 
+A function written in UUASM text has its parameters and its return variable
+as locals of each call; every other name is global, and `LOAD_VAR`/
+`STORE_VAR` written with `B` = 0 look names up that way. Compiled `.su`
+functions also list the names they assign as locals (see
+`RU_BYTECODE_FORMAT.md`).
+
 Every file must begin with `.uuasm 1` and end in `HALT`. Invalid directives,
 duplicate/unresolved labels, malformed operands, invalid opcodes, and invalid
 constant/function metadata fail assembly with a line-numbered diagnostic.

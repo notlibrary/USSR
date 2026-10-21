@@ -418,10 +418,6 @@ static void vm_frame_free(ussr_vm_frame_t *frame)
     if (frame == NULL) return;
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         ussr_value_free(&frame->saved_registers[i]);
-    for (i = 0; i < frame->saved_variable_count; ++i)
-        ussr_value_free(&frame->saved_variables[i]);
-    free(frame->saved_variables);
-    free(frame->saved_variable_existed);
     memset(frame, 0, sizeof(*frame));
 }
 
@@ -432,7 +428,6 @@ static int vm_push_frame(
 {
     ussr_vm_frame_t *frame;
     size_t i;
-    const ussr_value_t *v;
 
     if (vm->frame_count >= USSR_VM_MAX_CALLS) return -1;
     if (vm->frame_count == vm->frame_capacity)
@@ -450,18 +445,10 @@ static int vm_push_frame(
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         frame->saved_registers[i] = ussr_value_copy(&vm->registers[i]);
 
-    frame->saved_variable_count = function->parameter_count + 1;
-    frame->saved_variables = calloc(frame->saved_variable_count, sizeof(*frame->saved_variables));
-    frame->saved_variable_existed = calloc(frame->saved_variable_count, sizeof(*frame->saved_variable_existed));
-    if (frame->saved_variables == NULL || frame->saved_variable_existed == NULL)
+    /* Fresh locals: parameters, the return variable and everything the
+     * function assigns that is not declared global. */
+    if (ussr_locals_push(function->locals, function->local_count) != 0)
     { vm_frame_free(frame); return -1; }
-    for (i = 0; i < function->parameter_count; ++i)
-    {
-        v = ussr_get_variable(function->parameters[i]);
-        if (v != NULL) { frame->saved_variable_existed[i] = 1; frame->saved_variables[i] = ussr_value_copy(v); }
-    }
-    v = ussr_get_variable(function->return_name);
-    if (v != NULL) { frame->saved_variable_existed[function->parameter_count] = 1; frame->saved_variables[function->parameter_count] = ussr_value_copy(v); }
     ++vm->frame_count;
     return 0;
 }
@@ -506,13 +493,7 @@ static int vm_return(
     f = &program->functions[frame->function_index];
     v = ussr_get_variable(f->return_name);
     result = v != NULL ? ussr_value_copy(v) : ussr_null();
-    for (i = 0; i < f->parameter_count + 1; ++i)
-    {
-        const char *name = i < f->parameter_count ? f->parameters[i] : f->return_name;
-        ussr_value_t restore = frame->saved_variable_existed[i] ? ussr_value_copy(&frame->saved_variables[i]) : ussr_null();
-        if (ussr_set_variable(name, &restore) != 0) { ussr_value_free(&restore); ussr_value_free(&result); return -1; }
-        ussr_value_free(&restore);
-    }
+    ussr_locals_pop();
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i) { ussr_value_free(&vm->registers[i]); vm->registers[i] = frame->saved_registers[i]; frame->saved_registers[i] = ussr_null(); }
     vm->ip = frame->return_ip;
     ussr_value_free(&vm->registers[frame->return_register]);
@@ -1409,11 +1390,13 @@ int vm_execute(
             case USSR_BC_LOAD_VAR:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
                 name=program->strings[ins.immediate];
-                { const ussr_value_t *v=ussr_get_variable(name); vm->registers[ins.a]=v?ussr_value_copy(v):ussr_null(); }
+                /* b: 0 by name, 1 the call's local in slot c, 2 global
+                 * (resolved by the compiler inside functions). */
+                { const ussr_value_t *v=ussr_get_variable_at(name, (ussr_var_place_t)ins.b, ins.c); vm->registers[ins.a]=v?ussr_value_copy(v):ussr_null(); }
                 break;
             case USSR_BC_STORE_VAR:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
-                if (ussr_set_variable(program->strings[ins.immediate], &vm->registers[ins.a]) != 0) { result=-1; goto done; } break;
+                if (ussr_set_variable_at(program->strings[ins.immediate], &vm->registers[ins.a], (ussr_var_place_t)ins.b, ins.c) != 0) { result=-1; goto done; } break;
             case USSR_BC_LOAD_HASH:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
                 { const ussr_value_t *v=ussr_hash_get_value(program->strings[ins.immediate]); if (!v) { fprintf(stderr,"USSR: undefined hash key '%s'\n",program->strings[ins.immediate]); result=-1; goto done; } ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=ussr_value_copy(v); } break;
@@ -2222,6 +2205,10 @@ static int run_bytecode(ussr_bc_program_t *bytecode_in,
     }
 
     result = ussr_sched_run(background_ok);
+
+    /* The main process uses the default scope: drop the locals of any
+     * call it was in when it stopped (an error inside a function). */
+    ussr_locals_reset(NULL);
 
     if (result == 0 && entry_function >= 0 && main_proc != NULL &&
         main_proc->state == USSR_PROC_ZOMBIE &&

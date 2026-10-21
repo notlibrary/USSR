@@ -251,21 +251,169 @@ ussr_scope_t *ussr_scope_create(void)
     return calloc(1, sizeof(ussr_scope_t));
 }
 
-void ussr_scope_free(ussr_scope_t *scope)
+static void ussr_vars_free(ussr_scope_variable_t *vars, size_t count)
 {
     size_t i;
 
+    for (i = 0; i < count; ++i)
+    {
+        free(vars[i].name);
+        ussr_value_free(&vars[i].value);
+    }
+
+    free(vars);
+}
+
+/* Drops a call's values; its slot arrays stay for the next call. */
+static void ussr_locals_clear(ussr_locals_t *locals)
+{
+    size_t i;
+
+    for (i = 0; i < locals->name_count; ++i)
+    {
+        if (locals->assigned[i])
+        {
+            ussr_value_free(&locals->values[i]);
+            locals->assigned[i] = 0;
+        }
+    }
+
+    locals->names = NULL;
+    locals->name_count = 0;
+}
+
+void ussr_locals_reset(ussr_scope_t *scope)
+{
+    if (scope == NULL)
+        scope = &ussr_default_scope;
+
+    while (scope->local_depth > 0)
+        ussr_locals_clear(&scope->locals[--scope->local_depth]);
+}
+
+static void ussr_locals_free_all(ussr_scope_t *scope)
+{
+    size_t i;
+
+    ussr_locals_reset(scope);
+
+    for (i = 0; i < scope->local_capacity; ++i)
+    {
+        free(scope->locals[i].values);
+        free(scope->locals[i].assigned);
+    }
+
+    free(scope->locals);
+    scope->locals = NULL;
+    scope->local_capacity = 0;
+}
+
+void ussr_scope_free(ussr_scope_t *scope)
+{
     if (scope == NULL)
         return;
 
-    for (i = 0; i < scope->count; ++i)
+    ussr_locals_free_all(scope);
+    ussr_vars_free(scope->vars, scope->count);
+    free(scope);
+}
+
+int ussr_locals_push(char *const *names, size_t name_count)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+    ussr_locals_t *top;
+
+    if (scope->local_depth == scope->local_capacity)
     {
-        free(scope->vars[i].name);
-        ussr_value_free(&scope->vars[i].value);
+        size_t capacity = scope->local_capacity == 0
+            ? 16 : scope->local_capacity * 2;
+        ussr_locals_t *grown = realloc(
+            scope->locals, capacity * sizeof(*grown));
+
+        if (grown == NULL)
+            return -1;
+
+        memset(grown + scope->local_capacity, 0,
+               (capacity - scope->local_capacity) * sizeof(*grown));
+        scope->locals = grown;
+        scope->local_capacity = capacity;
     }
 
-    free(scope->vars);
-    free(scope);
+    top = &scope->locals[scope->local_depth];
+
+    if (top->capacity < name_count)
+    {
+        ussr_value_t *values = realloc(
+            top->values, name_count * sizeof(*values));
+        unsigned char *assigned;
+
+        if (values == NULL)
+            return -1;
+        top->values = values;
+
+        assigned = realloc(top->assigned, name_count);
+        if (assigned == NULL)
+            return -1;
+        top->assigned = assigned;
+        top->capacity = name_count;
+    }
+
+    if (name_count > 0)
+        memset(top->assigned, 0, name_count);
+    top->names = names;
+    top->name_count = name_count;
+    ++scope->local_depth;
+
+    return 0;
+}
+
+void ussr_locals_pop(void)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+
+    if (scope->local_depth > 0)
+        ussr_locals_clear(&scope->locals[--scope->local_depth]);
+}
+
+/* The innermost call's locals if `name` is local there (and its slot),
+ * else NULL. */
+static ussr_locals_t *ussr_locals_for(const char *name, size_t *slot)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+    ussr_locals_t *top;
+    size_t i;
+
+    if (scope->local_depth == 0)
+        return NULL;
+
+    top = &scope->locals[scope->local_depth - 1];
+
+    for (i = 0; i < top->name_count; ++i)
+    {
+        if (strcmp(top->names[i], name) == 0)
+        {
+            *slot = i;
+            return top;
+        }
+    }
+
+    return NULL;
+}
+
+static int ussr_locals_store(
+    ussr_locals_t *locals,
+    size_t slot,
+    const ussr_value_t *value
+)
+{
+    ussr_value_t copy = ussr_value_copy(value);
+
+    if (locals->assigned[slot])
+        ussr_value_free(&locals->values[slot]);
+    locals->values[slot] = copy;
+    locals->assigned[slot] = 1;
+
+    return 0;
 }
 
 void ussr_scope_set_current(ussr_scope_t *scope)
@@ -738,6 +886,8 @@ void ussr_cleanup(void)
     size_t i;
     ussr_scope_t *scope = &ussr_default_scope;
 
+    ussr_locals_free_all(scope);
+
     for (i = 0; i < scope->count; ++i)
     {
         free(scope->vars[i].name);
@@ -873,49 +1023,78 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
     return copy;
 }
 
-int ussr_scope_set(
-    ussr_scope_t *scope,
+static int ussr_vars_set(
+    ussr_scope_variable_t **vars,
+    size_t *count,
+    size_t *capacity,
     const char *name,
     const ussr_value_t *value
 )
 {
     size_t i;
 
-    if (scope == NULL || name == NULL || value == NULL)
-        return -1;
-
-    for (i = 0; i < scope->count; ++i)
+    for (i = 0; i < *count; ++i)
     {
-        if (strcmp(scope->vars[i].name, name) == 0)
+        if (strcmp((*vars)[i].name, name) == 0)
         {
             ussr_value_t copy = ussr_value_copy(value);
-            ussr_value_free(&scope->vars[i].value);
-            scope->vars[i].value = copy;
+            ussr_value_free(&(*vars)[i].value);
+            (*vars)[i].value = copy;
             return 0;
         }
     }
 
-    if (scope->count == scope->capacity)
+    if (*count == *capacity)
     {
-        size_t capacity = scope->capacity == 0 ? 16 : scope->capacity * 2;
+        size_t grown_capacity = *capacity == 0 ? 16 : *capacity * 2;
         ussr_scope_variable_t *new_vars;
 
-        new_vars = realloc(scope->vars, capacity * sizeof(*new_vars));
+        new_vars = realloc(*vars, grown_capacity * sizeof(*new_vars));
         if (new_vars == NULL)
             return -1;
 
-        scope->vars = new_vars;
-        scope->capacity = capacity;
+        *vars = new_vars;
+        *capacity = grown_capacity;
     }
 
-    scope->vars[scope->count].name = ussr_strdup(name);
-    if (scope->vars[scope->count].name == NULL)
+    (*vars)[*count].name = ussr_strdup(name);
+    if ((*vars)[*count].name == NULL)
         return -1;
 
-    scope->vars[scope->count].value = ussr_value_copy(value);
-    ++scope->count;
+    (*vars)[*count].value = ussr_value_copy(value);
+    ++*count;
 
     return 0;
+}
+
+static ussr_value_t *ussr_vars_get(
+    ussr_scope_variable_t *vars,
+    size_t count,
+    const char *name
+)
+{
+    size_t i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (strcmp(vars[i].name, name) == 0)
+            return &vars[i].value;
+    }
+
+    return NULL;
+}
+
+int ussr_scope_set(
+    ussr_scope_t *scope,
+    const char *name,
+    const ussr_value_t *value
+)
+{
+    if (scope == NULL || name == NULL || value == NULL)
+        return -1;
+
+    return ussr_vars_set(
+        &scope->vars, &scope->count, &scope->capacity, name, value);
 }
 
 int ussr_set_variable(
@@ -923,8 +1102,15 @@ int ussr_set_variable(
     const ussr_value_t *value
 )
 {
+    ussr_locals_t *locals;
+    size_t slot;
+
     if (name == NULL || value == NULL)
         return -1;
+
+    locals = ussr_locals_for(name, &slot);
+    if (locals != NULL)
+        return ussr_locals_store(locals, slot, value);
 
     return ussr_scope_set(ussr_active_scope(), name, value);
 }
@@ -932,20 +1118,70 @@ int ussr_set_variable(
 const ussr_value_t *ussr_get_variable(const char *name)
 {
     const ussr_scope_t *scope;
-    size_t i;
+    ussr_locals_t *locals;
+    size_t slot;
 
     if (name == NULL)
         return NULL;
 
+    locals = ussr_locals_for(name, &slot);
+    if (locals != NULL)
+        return locals->assigned[slot] ? &locals->values[slot] : NULL;
+
     scope = ussr_active_scope();
 
-    for (i = 0; i < scope->count; ++i)
+    return ussr_vars_get(scope->vars, scope->count, name);
+}
+
+const ussr_value_t *ussr_get_variable_at(
+    const char *name,
+    ussr_var_place_t place,
+    size_t slot
+)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+
+    if (name == NULL)
+        return NULL;
+
+    if (place == USSR_VAR_LOCAL && scope->local_depth > 0)
     {
-        if (strcmp(scope->vars[i].name, name) == 0)
-            return &scope->vars[i].value;
+        ussr_locals_t *top = &scope->locals[scope->local_depth - 1];
+
+        if (slot < top->name_count)
+            return top->assigned[slot] ? &top->values[slot] : NULL;
     }
 
-    return NULL;
+    if (place == USSR_VAR_GLOBAL)
+        return ussr_vars_get(scope->vars, scope->count, name);
+
+    return ussr_get_variable(name);
+}
+
+int ussr_set_variable_at(
+    const char *name,
+    const ussr_value_t *value,
+    ussr_var_place_t place,
+    size_t slot
+)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+
+    if (name == NULL || value == NULL)
+        return -1;
+
+    if (place == USSR_VAR_LOCAL && scope->local_depth > 0)
+    {
+        ussr_locals_t *top = &scope->locals[scope->local_depth - 1];
+
+        if (slot < top->name_count)
+            return ussr_locals_store(top, slot, value);
+    }
+
+    if (place == USSR_VAR_GLOBAL)
+        return ussr_scope_set(scope, name, value);
+
+    return ussr_set_variable(name, value);
 }
 
 static int ussr_remove_variable(const char *name)
@@ -953,8 +1189,22 @@ static int ussr_remove_variable(const char *name)
     ussr_scope_t *scope;
     size_t i;
 
+    ussr_locals_t *locals;
+    size_t slot;
+
     if (name == NULL)
         return -1;
+
+    locals = ussr_locals_for(name, &slot);
+    if (locals != NULL)
+    {
+        if (locals->assigned[slot])
+        {
+            ussr_value_free(&locals->values[slot]);
+            locals->assigned[slot] = 0;
+        }
+        return 0;
+    }
 
     scope = ussr_active_scope();
 
@@ -1064,14 +1314,28 @@ const ussr_value_t *ussr_hash_get_value(const char *name)
     return ussr_hash_get(name);
 }
 
-void ussr_runtime_mark_gc_roots(void)
+void ussr_scope_mark_gc(const ussr_scope_t *scope)
 {
-    const ussr_scope_t *scope = &ussr_default_scope;
-    ussr_hash_entry_t *variable;
     size_t i;
+    size_t depth;
+
+    if (scope == NULL)
+        return;
 
     for (i = 0; i < scope->count; ++i)
         ussr_gc_mark_value(&scope->vars[i].value);
+
+    for (depth = 0; depth < scope->local_depth; ++depth)
+        for (i = 0; i < scope->locals[depth].name_count; ++i)
+            if (scope->locals[depth].assigned[i])
+                ussr_gc_mark_value(&scope->locals[depth].values[i]);
+}
+
+void ussr_runtime_mark_gc_roots(void)
+{
+    ussr_hash_entry_t *variable;
+
+    ussr_scope_mark_gc(&ussr_default_scope);
 
     for (variable = map; variable != NULL; variable = variable->hh.next)
         ussr_gc_mark_value(&variable->value);

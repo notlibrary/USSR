@@ -1421,6 +1421,7 @@ static int petersburg_destroy(long id)
     petersburg_widget_t **link = &petersburg_widgets;
     petersburg_widget_t *target = petersburg_find(id);
     int is_window;
+    long target_id;
 
     if (target == NULL)
         return 0;
@@ -1443,11 +1444,14 @@ static int petersburg_destroy(long id)
     }
     is_window = target->type == PETERSBURG_WINDOW ||
                 target->type == PETERSBURG_TOOLBAR;
+    /* target is freed inside the loop while its children are still being
+     * looked for: compare against a copy of its id. */
+    target_id = target->id;
     while (*link != NULL)
     {
         petersburg_widget_t *widget = *link;
-        if (widget == target ||
-            (is_window && widget->parent_id == target->id))
+        if (widget->id == target_id ||
+            (is_window && widget->parent_id == target_id))
         {
             *link = widget->next;
             petersburg_discard_events(widget->id);

@@ -862,6 +862,9 @@ tulasave(result): [
 # ASCII DXF only: group code / value line pairs, LF or CRLF. Entities are read
 # from the ENTITIES section; BLOCKS (and so INSERT) are not expanded.
 
+# Set by tula_dxf_num when a number does not parse; tula_dxf_read reports it.
+global(_): tula_dxf_bad
+
 # First value for group `code` in the record, as a number; `fallback` if absent.
 tula_dxf_num(r): codes values code fallback [
     len(_tdn_n): codes

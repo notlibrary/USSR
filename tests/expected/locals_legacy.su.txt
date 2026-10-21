@@ -1,0 +1,6 @@
+ready
+2
+
+--- stderr ---
+
+--- exit 0 ---

@@ -177,7 +177,7 @@ if(_): {total > 100} [
 ]
 ```
 
-Supported operators: `+ - * / %` (arithmetic), `> < >= <= == !=`
+Supported operators: `+ - * / %` (arithmetic), `> < >= <= = !=`
 (comparison), `&& ||` (logical), `<< >> ^ & |` (bitwise
 shift/xor/and/or). Both sides of a logical expression are evaluated;
 do not rely on short-circuit evaluation.
@@ -223,7 +223,7 @@ while(_): {condition} [
 set(i): 0
 while(_): {i < 10} [
     add(i): i 1
-    if(_): {i == 5} [
+    if(_): {i = 5} [
         continue(_): ""
     ]
     print(_): i
@@ -250,13 +250,68 @@ square(y): 5
 print(_): y   # 25
 ```
 
-Recursion works correctly — each call gets its own saved copy of the
-parameter variables, restored when the call returns, so a recursive
-call doesn't clobber the outer call's parameters of the same name.
-Variables a function sets internally (not its parameters) are *not*
-isolated this way — they're plain global variables, same as anywhere
-else in the language, so name them carefully if you're writing
-recursive functions with internal temporaries.
+**Variables in functions.** Each call of a function has its own
+*local* variables, created by the call and dropped when it returns, so
+recursion and helper functions cannot overwrite each other's
+temporaries. A function's local variables are:
+
+- its parameters and its return variable;
+- every variable a command in its body assigns — the name in a command's
+  parentheses (`set(i): 0`, `add(n): n 1`, `len(k): v`, a function call's
+  result, …) and the destinations of `get` and `scan`.
+
+A name the function only reads is a *global* variable, so constants and
+configuration need no declaration. Top-level code (outside any function)
+always uses the globals. In a program with `init`, though, top-level
+commands do not run — `init` is the entry point — so there the globals
+are whatever functions set under a `global` declaration.
+
+To assign a global from inside a function, declare it with `global`:
+
+```
+global(_): count total    # at the top level: global in every function
+
+bump(_): n [
+    add(count): count 1   # updates the global count
+    add(total): total n
+]
+
+scratch(r): v [
+    global(_): last       # inside a function: global in this function only
+    len(r): v
+    set(last): r
+]
+```
+
+`global(_): names…` at the top level is the place to declare a program's
+shared state once; inside a function it applies to that function only,
+wherever in the body it is written. Parameters and the return variable
+are always local. `init` is an ordinary function: state it sets up for
+the rest of the program must be declared global.
+
+Other rules:
+
+- `!`/`?` hash variables (§13) are unaffected: one namespace shared by
+  every process.
+- `eval` code run inside a function uses that function's variables: a
+  name local to the function is its local there, anything else a global.
+- A process started inside a function (`async`, GUI callbacks) starts
+  with a copy of the globals and of the starting function's locals, as
+  its own globals, as it did before locals existed.
+- Compatibility: `global(_): "*"` makes every variable global except the
+  parameters and the return variable — the behavior of USSR before
+  locals — at the top level for the whole program, inside a function for
+  that function.
+
+The compiler warns (`file:line: warning: …`, the program still runs)
+about the two mistakes this change makes likely in older code: reading a
+local variable before the function sets it, and reading a global that
+only ever gets set as some function's local:
+
+```
+demo.su:9: warning: 'state' is read before it is set in 'show'; it is local to 'show' (declare global(_): state if it is shared)
+demo.su:14: warning: 'mode' is read as a global but only set as a local (in 'init', line 3); declare global(_): mode
+```
 
 **`elif` / `else` chains.** `elif` and `else` are ordinary commands
 placed directly after an `if` (or another `elif`) command; the `if`
