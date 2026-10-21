@@ -9,10 +9,11 @@
 - `pop(item): v` removes and returns a vector's last item (error on an empty vector); tests in `tests/oop/vector_pop.su`.
 - REPL prompts from `PS1` and `PS2` with `\u \h \w \W \v \$ \\` escapes; piped stdin works on every platform.
 - Builtins for apps written in USSR: `list_dir`, `is_dir`, `getcwd`, `make_dir`, `rename_path`, `remove_file`, `remove_dir`, `read_line`, `typeof`, `fail`, `chr`.
+- `copy_file(ok): from to` copies one file byte for byte (0 ok, 1 failed); it never replaces an existing destination and refuses directories. Test: `tests/copy_file.su`.
 - Preprocessor `$once` include guard and `__MAIN__` for files that are both a library and a program.
 - `src/libs/strings.su` (number/text conversion, UTF-8 helpers) and `src/libs/vectors.su`.
 - Mbl: UTF-8 (Russian) editing by character, count prefixes, `w`, `cw`, and multi-level undo `u` / redo `Ctrl+R`.
-- Tver: directory selection with Insert, held-arrow repeat, direct launch with `ussr src/tver/tver.su`.
+- Tver: directory selection with Insert, held-arrow repeat, direct launch with `ussr src/tver/tver.su`, F5 copy (directories recursively) and F7 new directory.
 - Tula: DXF read/write, zoom, adaptive grid, toolbar, direct launch with `ussr src/tula/tula.su`.
 - Petersburg: canvas and toolbar widgets, `keyup`/`focus`/`wheel` events, event injection for tests, timers while the GUI runs.
 - russia.su assembles and runs textual UUASM (`.ua`).

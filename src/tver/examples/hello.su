@@ -23,7 +23,7 @@ init(result): arg_count arg_values [
     listbox(left_files): window ""
     listbox(right_files): window ""
     label(status): window "Starting Tver..."
-    label(keys): window "TAB panel  INS mark  ENTER open  F6 move  F8 delete"
+    label(keys): window "TAB panel  INS mark  ENTER open  F5 copy  F6 move  F7 mkdir  F8 delete"
 
     grid(_): left_path 0 0 false
     grid(_): right_path 0 1 false

@@ -1,0 +1,32 @@
+# copy_file(ok): from to copies one file's bytes: 0 ok, 1 refused or failed.
+# It never replaces an existing destination and refuses directories.
+#
+# Run: ./ussr tests/copy_file.su
+init(result): arg_count arg_values [
+    writefile(_): "copy_file_a.tmp" "first line\nsecond line\n"
+    copy_file(ok): "copy_file_a.tmp" "copy_file_b.tmp"
+    print(_): ok                       # 0
+    readfile(text): "copy_file_b.tmp"
+    print(_): {text = "first line\nsecond line\n"}    # true
+
+    # the destination exists: refused, and left as it was
+    writefile(_): "copy_file_a.tmp" "changed"
+    copy_file(ok): "copy_file_a.tmp" "copy_file_b.tmp"
+    print(_): ok                       # 1
+    readfile(text): "copy_file_b.tmp"
+    print(_): {text = "first line\nsecond line\n"}    # true
+
+    # a missing source and a directory are refused
+    copy_file(ok): "copy_file_missing.tmp" "copy_file_c.tmp"
+    print(_): ok                       # 1
+    make_dir(_): "copy_file_dir.tmp"
+    copy_file(ok): "copy_file_dir.tmp" "copy_file_c.tmp"
+    print(_): ok                       # 1
+    file_exists(e): "copy_file_c.tmp"
+    print(_): e                        # false
+
+    remove_dir(_): "copy_file_dir.tmp"
+    remove_file(_): "copy_file_a.tmp"
+    remove_file(_): "copy_file_b.tmp"
+    set(result): 0
+]
