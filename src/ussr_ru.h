@@ -25,8 +25,9 @@
  * instead of being run with the wrong semantics.
  */
 /* 2: each call has its own locals (CALL/RET no longer save and restore
- * parameter variables in the shared scope). */
-#define USSR_RU_VM_ABI         2U
+ * parameter variables in the shared scope).
+ * 3: integers are 64-bit on every platform; + - * wrap around. */
+#define USSR_RU_VM_ABI         3U
 
 /*
  * Write a compiled program to path. Returns 0 on success. On failure a

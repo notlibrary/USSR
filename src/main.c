@@ -278,6 +278,8 @@ static int vm_equal(const ussr_value_t *a, const ussr_value_t *b)
 {
     if (a == NULL || b == NULL)
         return 0;
+    if (a->type == USSR_INTEGER && b->type == USSR_INTEGER)
+        return a->data.integer == b->data.integer;
     if (vm_numeric(a) && vm_numeric(b))
         return vm_real(a) == vm_real(b);
     if (a->type != b->type)
@@ -328,12 +330,12 @@ static int vm_binary(
                 return -1;
             if (left->type == USSR_INTEGER && right->type == USSR_INTEGER && opcode != USSR_BC_DIV)
             {
-                long a = left->data.integer;
-                long b = right->data.integer;
-                if (opcode == USSR_BC_ADD) *out = ussr_integer(a + b);
-                else if (opcode == USSR_BC_SUB) *out = ussr_integer(a - b);
-                else if (opcode == USSR_BC_MUL) *out = ussr_integer(a * b);
-                else *out = ussr_integer(a % b);
+                ussr_int_t a = left->data.integer;
+                ussr_int_t b = right->data.integer;
+                if (opcode == USSR_BC_ADD) *out = ussr_integer(ussr_int_add(a, b));
+                else if (opcode == USSR_BC_SUB) *out = ussr_integer(ussr_int_sub(a, b));
+                else if (opcode == USSR_BC_MUL) *out = ussr_integer(ussr_int_mul(a, b));
+                else *out = ussr_integer(ussr_int_mod(a, b));
             }
             else
             {
@@ -352,7 +354,14 @@ static int vm_binary(
         case USSR_BC_GT:
         case USSR_BC_GE:
             if (!vm_numeric(left) || !vm_numeric(right)) return -1;
-            if (opcode == USSR_BC_LT) *out = ussr_boolean(vm_real(left) < vm_real(right));
+            if (left->type == USSR_INTEGER && right->type == USSR_INTEGER)
+            {
+                ussr_int_t a = left->data.integer, b = right->data.integer;
+                *out = ussr_boolean(opcode == USSR_BC_LT ? a < b :
+                                    opcode == USSR_BC_LE ? a <= b :
+                                    opcode == USSR_BC_GT ? a > b : a >= b);
+            }
+            else if (opcode == USSR_BC_LT) *out = ussr_boolean(vm_real(left) < vm_real(right));
             else if (opcode == USSR_BC_LE) *out = ussr_boolean(vm_real(left) <= vm_real(right));
             else if (opcode == USSR_BC_GT) *out = ussr_boolean(vm_real(left) > vm_real(right));
             else *out = ussr_boolean(vm_real(left) >= vm_real(right));
@@ -366,10 +375,18 @@ static int vm_binary(
         case USSR_BC_SHL:
         case USSR_BC_SHR:
             if (left->type != USSR_INTEGER || right->type != USSR_INTEGER) return -1;
+            if ((opcode == USSR_BC_SHL || opcode == USSR_BC_SHR) &&
+                (right->data.integer < 0 || right->data.integer > 63))
+            {
+                fprintf(stderr, "USSR VM: shift count " USSR_INT_FMT " is outside 0..63\n",
+                        right->data.integer);
+                return -1;
+            }
             if (opcode == USSR_BC_XOR) *out = ussr_integer(left->data.integer ^ right->data.integer);
             else if (opcode == USSR_BC_BAND) *out = ussr_integer(left->data.integer & right->data.integer);
             else if (opcode == USSR_BC_BOR) *out = ussr_integer(left->data.integer | right->data.integer);
-            else if (opcode == USSR_BC_SHL) *out = ussr_integer(left->data.integer << right->data.integer);
+            /* << shifts the two's complement bits; >> keeps the sign. */
+            else if (opcode == USSR_BC_SHL) *out = ussr_integer((ussr_int_t)((uint64_t)left->data.integer << right->data.integer));
             else *out = ussr_integer(left->data.integer >> right->data.integer);
             return 0;
     }
@@ -678,8 +695,11 @@ static int vm_scan_parse_field(
 
     if (strncmp(type, "INT", 3) == 0)
     {
-        long number = strtol(text, &tail, 10);
-        if (tail == text || *tail != '\0')
+        ussr_int_t number;
+
+        errno = 0;
+        number = strtoll(text, &tail, 10);
+        if (tail == text || *tail != '\0' || errno == ERANGE)
         {
             free(text);
             return -1;
@@ -985,7 +1005,7 @@ static int vm_template_emit_value(
     {
         if (value->type != USSR_INTEGER)
             return -1;
-        printf("%ld", value->data.integer);
+        printf(USSR_INT_FMT, value->data.integer);
         return 0;
     }
 
@@ -1480,7 +1500,7 @@ int vm_execute(
                 break;
             case USSR_BC_RANDOM64:
                 if (ins.a >= USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
-                value = ussr_integer((long)prng64_xrp32());
+                value = ussr_integer((ussr_int_t)prng64_xrp32());
                 ussr_value_free(&vm->registers[ins.a]);
                 vm->registers[ins.a] = value;
                 break;
@@ -1495,7 +1515,7 @@ int vm_execute(
                 break;
             case USSR_BC_TIME:
                 if (ins.a >= USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
-                value = ussr_integer((long)time(NULL));
+                value = ussr_integer((ussr_int_t)time(NULL));
                 ussr_value_free(&vm->registers[ins.a]);
                 vm->registers[ins.a] = value;
                 break;
@@ -2199,7 +2219,7 @@ static int run_bytecode(ussr_bc_program_t *bytecode_in,
         }
 
         main_proc->vm.registers[0] = ussr_integer(
-            argc > 0 ? (long)(argc - 1) : 0
+            argc > 0 ? (ussr_int_t)(argc - 1) : 0
         );
         main_proc->vm.registers[1] = ussr_vector_value(args_vector);
     }
@@ -2214,7 +2234,7 @@ static int run_bytecode(ussr_bc_program_t *bytecode_in,
         main_proc->state == USSR_PROC_ZOMBIE &&
         main_proc->result.type == USSR_INTEGER)
     {
-        long exit_value = main_proc->result.data.integer;
+        ussr_int_t exit_value = main_proc->result.data.integer;
         if (exit_value >= 0 && exit_value <= 255)
             result = (int)exit_value;
     }

@@ -714,10 +714,7 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
                 if (ru_get_u64(r, &bits) != 0)
                     return -1;
                 value = (int64_t)bits;
-                if (value < LONG_MIN || value > LONG_MAX)
-                    return ru_fail(r, "integer constant does not fit this "
-                                   "platform's integers");
-                p->constants[i] = ussr_integer((long)value);
+                p->constants[i] = ussr_integer(value);
                 break;
             }
             case RU_CONST_REAL:

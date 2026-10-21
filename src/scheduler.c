@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "socket.h"
 
@@ -603,11 +604,17 @@ static int sched_arg_name(
     return 0;
 }
 
+/* A pid, delay or count argument; -1 when it is not a number or does
+ * not fit the scheduler's long. */
 static long sched_arg_integer(const ussr_value_t *values, size_t index)
 {
-    if (values[index].type == USSR_INTEGER)
-        return values[index].data.integer;
-    if (values[index].type == USSR_REAL)
+    if (values[index].type == USSR_INTEGER &&
+        values[index].data.integer >= LONG_MIN &&
+        values[index].data.integer <= LONG_MAX)
+        return (long)values[index].data.integer;
+    if (values[index].type == USSR_REAL &&
+        values[index].data.real > (double)LONG_MIN &&
+        values[index].data.real < (double)LONG_MAX)
         return (long)values[index].data.real;
     return -1;
 }
@@ -783,7 +790,7 @@ static int sched_do_process(
 
 static int sched_socket_handle_arg(const ussr_value_t *values, size_t index, int *handle)
 {
-    long value;
+    ussr_int_t value;
     if (values[index].type != USSR_INTEGER) return -1;
     value = values[index].data.integer;
     if (value < 1 || value > INT32_MAX) return -1;

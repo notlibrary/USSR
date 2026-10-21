@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 extern int fileno(FILE *);
 extern int ussr_lexer_reported;
@@ -87,7 +88,27 @@ UNO         '([^'\\\n]|\\.)*'
 }
 
 {INTEGER}                   {
-    yylval.integer = strtol(yytext, NULL, 10);
+    errno = 0;
+    yylval.integer = strtoll(yytext, NULL, 10);
+
+    if (errno == ERANGE)
+    {
+        const char *file;
+        int line;
+
+        ussr_parse_locate(yylineno, &file, &line);
+        fprintf(
+            stderr,
+            "%s:%d: integer %s is outside -9223372036854775808..9223372036854775807 (write it as a real, e.g. %s.0)\n",
+            file,
+            line,
+            yytext,
+            yytext
+        );
+        ussr_lexer_reported = 1;
+        return LEX_ERROR;
+    }
+
     return INTEGER;
 }
 

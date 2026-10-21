@@ -4,7 +4,7 @@ A `.ru` file is a compiled USSR program: the VM instruction stream and the
 pools it refers to, as produced by `ussr -c file.su` and run by
 `ussr file.ru`. Writer and loader live in `src/ussr_ru.c`.
 
-Format version: **2**. VM ABI version: **2**.
+Format version: **2**. VM ABI version: **3**.
 
 ## Rules
 
@@ -22,7 +22,7 @@ offset  size  field
 0       8     signature   89 55 53 53 52 0D 0A 1A   ("\x89USSR\r\n\x1A")
 8       2     format version (2)
 10      2     flags (must be 0)
-12      4     VM ABI version (2)
+12      4     VM ABI version (3)
 16      4     producer version: major << 16 | minor << 8 | patch (informational)
 20      4     payload length: bytes from offset 24 up to the checksum
 24      ...   payload: the sections below, in this order
@@ -125,9 +125,6 @@ stderr, nothing executed) when:
   constant, function, or string index is out of range;
 - a function entry is outside the code, or a call site does not point at an
   instruction of its kind;
-- an integer constant does not fit the platform's integer type (a file built
-  on 64-bit Linux with a value above 2^31 is rejected on Windows, where USSR
-  integers are 32-bit);
 - bytes remain after the last section.
 
 The VM still checks register and pool operands as it executes, as it does
@@ -148,4 +145,6 @@ for `.ua` programs.
 History: format 2 / ABI 2 added function locals (local name lists, the
 `B`/`C` operands of `LOAD_VAR`/`STORE_VAR`; `CALL`/`RET` no longer save and
 restore parameter variables in the shared scope). Files from format 1 are
-rejected; rebuild them with `-c`.
+rejected; rebuild them with `-c`. ABI 3: integers are 64-bit on every
+platform (integer constants are read as full 64-bit values on Windows
+too) and `+ - *` wrap around on overflow.

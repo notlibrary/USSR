@@ -257,6 +257,18 @@ warn "flag set for the caller" \
     "flag.su:2: warning: 'failed' is set in 'parse' but never read there, while other code reads it" \
     "$tmp/flag.su"
 
+printf 'set(a): 1\nset(b): 9223372036854775808\n' >"$tmp/bigint.su"
+check "integer literal out of range" \
+    "bigint.su:2: integer 9223372036854775808 is outside" "$tmp/bigint.su"
+
+# A shift count outside 0..63 stops the program at run time.
+printf 'set(n): 64\nprint(_): {1 << n}\n' >"$tmp/shift.su"
+"$USSR" "$tmp/shift.su" </dev/null >"$tmp/out" 2>"$tmp/err"
+status=$?
+[ "$status" -ne 0 ] && grep -qF "shift count 64 is outside 0..63" "$tmp/err" &&
+    ok "shift count out of range" ||
+    bad "shift count out of range" "exit $status; $(cat "$tmp/err")"
+
 check "compile only (-c) reports the location" \
     "print.su:3: print expects exactly one value" -c "$tmp/print.su" "$tmp/out.ru"
 [ ! -f "$tmp/out.ru" ] && ok "-c writes nothing on error" ||

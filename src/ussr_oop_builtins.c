@@ -56,16 +56,20 @@ static int oop_expect_string(const ussr_value_t *v, const char **out)
     return 1;
 }
 
-static int oop_expect_integer(const ussr_value_t *v, long *out)
+static int oop_expect_integer(const ussr_value_t *v, ussr_int_t *out)
 {
     if (v->type == USSR_INTEGER)
     {
         *out = v->data.integer;
         return 1;
     }
-    if (v->type == USSR_REAL)
+    /* A real is truncated; one outside the integer range is refused
+     * (converting it would be undefined behavior). */
+    if (v->type == USSR_REAL &&
+        v->data.real > -9223372036854775808.0 &&
+        v->data.real < 9223372036854775808.0)
     {
-        *out = (long)v->data.real;
+        *out = (ussr_int_t)v->data.real;
         return 1;
     }
     return 0;
@@ -428,7 +432,7 @@ static int oop_do_at(
 {
     ussr_value_t vec_v, index_v;
     ussr_vector_t *vector;
-    long index;
+    ussr_int_t index;
 
     if (argument_count != 2)
     {
@@ -453,7 +457,7 @@ static int oop_do_at(
         if (!oop_expect_integer(&index_v, &index) || index < 0 ||
             (size_t)index >= text_length)
         {
-            fprintf(stderr, "USSR: string index %ld out of range\n", index);
+            fprintf(stderr, "USSR: string index " USSR_INT_FMT " out of range\n", index);
             ussr_value_free(&vec_v);
             ussr_value_free(&index_v);
             return -1;
@@ -485,7 +489,7 @@ static int oop_do_at(
 
     if (!ussr_vector_get(vector, (size_t)index, out_result))
     {
-        fprintf(stderr, "USSR: vector index %ld out of range\n", index);
+        fprintf(stderr, "USSR: vector index " USSR_INT_FMT " out of range\n", index);
         ussr_value_free(&vec_v);
         ussr_value_free(&index_v);
         return -1;
@@ -516,7 +520,7 @@ static int oop_do_len(
 
     if (vec_v.type == USSR_STRING && vec_v.data.string != NULL)
     {
-        *out_result = ussr_integer((long)strlen(vec_v.data.string));
+        *out_result = ussr_integer((ussr_int_t)strlen(vec_v.data.string));
         ussr_value_free(&vec_v);
         return 0;
     }
@@ -528,7 +532,7 @@ static int oop_do_len(
         return -1;
     }
 
-    *out_result = ussr_integer((long)ussr_vector_length(vector));
+    *out_result = ussr_integer((ussr_int_t)ussr_vector_length(vector));
     ussr_value_free(&vec_v);
     return 0;
 }
@@ -611,7 +615,7 @@ static int oop_do_byte(
 {
     ussr_value_t str_v, index_v;
     const char *text;
-    long index;
+    ussr_int_t index;
 
     if (argument_count != 2)
     {
@@ -644,7 +648,7 @@ static int oop_do_byte(
         return -1;
     }
 
-    *out_result = ussr_integer((long)(unsigned char)text[index]);
+    *out_result = ussr_integer((ussr_int_t)(unsigned char)text[index]);
     ussr_value_free(&str_v);
     ussr_value_free(&index_v);
     return 0;
@@ -658,7 +662,7 @@ static int oop_do_slice(
 {
     ussr_value_t str_v, index_v, count_v;
     const char *text;
-    long index, count, text_length;
+    ussr_int_t index, count, text_length;
 
     if (argument_count != 3)
     {
@@ -692,7 +696,7 @@ static int oop_do_slice(
         return -1;
     }
 
-    text_length = (long)strlen(text);
+    text_length = (ussr_int_t)strlen(text);
     if (index > text_length || index + count > text_length)
     {
         fprintf(stderr, "USSR: slice() range out of bounds\n");
@@ -1175,7 +1179,7 @@ static int oop_do_terminal_getch(
         unsigned char c;
         int n = _read(0, &c, 1);
 
-        *out_result = ussr_integer(n == 1 ? (long)c : -1);
+        *out_result = ussr_integer(n == 1 ? (ussr_int_t)c : -1);
         return 0;
     }
 }
@@ -1295,7 +1299,7 @@ static int oop_do_terminal_getch(
         n = read(0, &c, 1);
     } while (n < 0 && errno == EINTR);
 
-    *out_result = ussr_integer(n == 1 ? (long)c : -1);
+    *out_result = ussr_integer(n == 1 ? (ussr_int_t)c : -1);
     return 0;
 }
 
@@ -1354,7 +1358,7 @@ static int oop_do_terminal_size(
 
 static FILE *ussr_file_table[USSR_MAX_FILE_HANDLES];
 
-static int oop_file_handle_valid(long handle)
+static int oop_file_handle_valid(ussr_int_t handle)
 {
     return handle >= 0 &&
            handle < USSR_MAX_FILE_HANDLES &&
@@ -1372,7 +1376,7 @@ static int oop_do_open_file(
     const char *path;
     const char *mode;
     FILE *fp;
-    long handle;
+    ussr_int_t handle;
 
     if (argument_count != 2)
     {
@@ -1455,7 +1459,7 @@ static int oop_do_close_file(
 )
 {
     ussr_value_t handle_v;
-    long handle;
+    ussr_int_t handle;
 
     if (argument_count != 1)
     {
@@ -1490,7 +1494,7 @@ static int oop_do_write_file(
 {
     ussr_value_t handle_v;
     ussr_value_t text_v;
-    long handle;
+    ussr_int_t handle;
     const char *text;
     size_t written;
 
@@ -1527,7 +1531,7 @@ static int oop_do_write_file(
     ussr_value_free(&handle_v);
     ussr_value_free(&text_v);
 
-    *out_result = ussr_integer((long)written);
+    *out_result = ussr_integer((ussr_int_t)written);
     return 0;
 }
 
@@ -1538,8 +1542,8 @@ static int oop_do_read_file(
 )
 {
     ussr_value_t handle_v;
-    long handle;
-    long requested = -1;
+    ussr_int_t handle;
+    ussr_int_t requested = -1;
     FILE *fp;
     char *buffer;
     size_t length;
@@ -1636,7 +1640,7 @@ static int oop_do_read_line(
 )
 {
     ussr_value_t handle_v;
-    long handle;
+    ussr_int_t handle;
     FILE *fp;
     char *buffer;
     size_t length = 0;
@@ -1765,7 +1769,7 @@ static int oop_do_set_bytes(
     ussr_value_t vec_v;
     ussr_value_t value_v;
     ussr_vector_t *vector;
-    long fill = 0;
+    ussr_int_t fill = 0;
     size_t count;
     size_t i;
 
@@ -2405,7 +2409,7 @@ static int oop_do_chr(
 )
 {
     ussr_value_t value;
-    long code;
+    ussr_int_t code;
     char text[2];
 
     if (argument_count != 1)

@@ -1,0 +1,31 @@
+3000000000
+PASS literal above 2^31
+2147483648
+PASS 2147483647 + 1 does not wrap
+9000000000
+PASS product above 2^32
+PASS 2^32 * 2^32 wraps to 0
+9223372036854775807
+-9223372036854775808
+PASS overflow wraps around
+PASS minimum is -2^63
+PASS MIN % -1 is 0
+PASS = is exact beyond 2^53
+PASS < is exact beyond 2^53
+PASS modulo of large values
+PASS 1 << 62
+PASS 1 << 63 is the minimum
+PASS arithmetic shift right
+PASS str_from_int at the maximum
+PASS str_from_number above 2^32
+PASS str_from_number with decimals
+PASS str_to_number above 2^32
+Big{n=6000000000}
+PASS UNO round trip
+PASS scan reads a 64-bit INT
+PASS time is an integer of seconds
+PASS len
+
+--- stderr ---
+
+--- exit 0 ---

@@ -72,6 +72,7 @@ roundtrip "environment" tests/env_test.su ''
 roundtrip "scan from stdin" tests/fac.su '6\n'
 roundtrip "async and await" tests/async.su ''
 roundtrip "function locals" tests/locals.su ''
+roundtrip "64-bit integers" tests/int64.su '7000000000\n'
 roundtrip "load with a bare entry name" tests/boot_load_entry.su ''
 roundtrip "runtime error keeps status" tests/vectors/errors/divide_by_zero.su ''
 

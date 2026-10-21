@@ -153,7 +153,7 @@ static void ussr_parser_set_location(ussr_command_t *command, int text_line)
 %union
 {
     char *string;
-    long integer;
+    ussr_int_t integer;
     double real;
     int boolean;
 

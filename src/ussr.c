@@ -920,7 +920,7 @@ ussr_value_t ussr_null(void)
     return value;
 }
 
-ussr_value_t ussr_integer(long integer)
+ussr_value_t ussr_integer(ussr_int_t integer)
 {
     ussr_value_t value;
 
@@ -1356,7 +1356,7 @@ void ussr_print_value(const ussr_value_t *value)
             break;
 
         case USSR_INTEGER:
-            printf("%ld\n", value->data.integer);
+            printf(USSR_INT_FMT "\n", value->data.integer);
             break;
 
         case USSR_REAL:
@@ -1598,15 +1598,15 @@ static int ussr_expression_evaluate(
             if (left.type == USSR_INTEGER &&
                 right.type == USSR_INTEGER)
             {
-                long a = left.data.integer;
-                long b = right.data.integer;
+                ussr_int_t a = left.data.integer;
+                ussr_int_t b = right.data.integer;
 
                 if (expression->data.binary.operator == USSR_OP_ADD)
-                    *result = ussr_integer(a + b);
+                    *result = ussr_integer(ussr_int_add(a, b));
                 else if (expression->data.binary.operator == USSR_OP_SUB)
-                    *result = ussr_integer(a - b);
+                    *result = ussr_integer(ussr_int_sub(a, b));
                 else
-                    *result = ussr_integer(a * b);
+                    *result = ussr_integer(ussr_int_mul(a, b));
             }
             else
             {
@@ -1649,8 +1649,11 @@ static int ussr_expression_evaluate(
             if (left.type == USSR_INTEGER &&
                 right.type == USSR_INTEGER)
             {
+                /* MIN / -1 overflows (and traps); it wraps to MIN. */
                 *result = ussr_integer(
-                    left.data.integer / right.data.integer
+                    right.data.integer == -1
+                        ? ussr_int_sub(0, left.data.integer)
+                        : left.data.integer / right.data.integer
                 );
             }
             else
@@ -1684,7 +1687,7 @@ static int ussr_expression_evaluate(
             }
 
             *result = ussr_integer(
-                left.data.integer % right.data.integer
+                ussr_int_mod(left.data.integer, right.data.integer)
             );
             break;
 
@@ -1707,8 +1710,7 @@ static int ussr_expression_evaluate(
             if (left.type != USSR_INTEGER ||
                 right.type != USSR_INTEGER ||
                 right.data.integer < 0 ||
-                (unsigned long)right.data.integer >=
-                    sizeof(unsigned long) * 8UL)
+                right.data.integer >= 64)
             {
                 fprintf(
                     stderr,
@@ -1722,15 +1724,15 @@ static int ussr_expression_evaluate(
             if (expression->data.binary.operator == USSR_OP_SHIFT_LEFT)
             {
                 *result = ussr_integer(
-                    (long)((unsigned long)left.data.integer <<
-                           (unsigned long)right.data.integer)
+                    (ussr_int_t)((uint64_t)left.data.integer <<
+                                 right.data.integer)
                 );
             }
             else
             {
                 *result = ussr_integer(
-                    (long)((unsigned long)left.data.integer >>
-                           (unsigned long)right.data.integer)
+                    (ussr_int_t)((uint64_t)left.data.integer >>
+                                 right.data.integer)
                 );
             }
             break;
@@ -2540,7 +2542,7 @@ ussr_external_build_argv(
             switch (values[i].type)
             {
                 case USSR_INTEGER:
-                    snprintf(buffer, sizeof(buffer), "%ld", values[i].data.integer);
+                    snprintf(buffer, sizeof(buffer), USSR_INT_FMT, values[i].data.integer);
                     break;
 
                 case USSR_REAL:
@@ -2742,7 +2744,7 @@ ussr_execute_external_io(
                 argv[i + 1] = ussr_strdup(text_value);
                 break;
             case USSR_INTEGER:
-                snprintf(buffer, sizeof(buffer), "%ld", copies[i].data.integer);
+                snprintf(buffer, sizeof(buffer), USSR_INT_FMT, copies[i].data.integer);
                 argv[i + 1] = ussr_strdup(buffer);
                 break;
             case USSR_REAL:
@@ -2826,9 +2828,9 @@ ussr_execute_external_io(
     }
 
     if (WIFEXITED(status))
-        *result = ussr_integer((long)WEXITSTATUS(status));
+        *result = ussr_integer((ussr_int_t)WEXITSTATUS(status));
     else if (WIFSIGNALED(status))
-        *result = ussr_integer(128L + (long)WTERMSIG(status));
+        *result = ussr_integer(128 + (ussr_int_t)WTERMSIG(status));
     else
         *result = ussr_integer(-1);
 
@@ -3110,8 +3112,11 @@ static int ussr_scan_parse_field(
 
     if (strncmp(type, "INT", 3) == 0)
     {
-        long n = strtol(text, &tail, 10);
-        if (tail == text || *tail != '\0')
+        ussr_int_t n;
+
+        errno = 0;
+        n = strtoll(text, &tail, 10);
+        if (tail == text || *tail != '\0' || errno == ERANGE)
         {
             free(text);
             return -1;
@@ -3326,7 +3331,7 @@ static int ussr_execute_advanced_control(
     char *input = NULL;
     char *output = NULL;
     ussr_value_t status_value;
-    long status = 0;
+    ussr_int_t status = 0;
     int chained = 0;
 
     if (return_name == NULL ||
@@ -3954,7 +3959,7 @@ int ussr_execute_command(
     {
         if (return_name == NULL || argument_count != 0)
             return -1;
-        result = ussr_integer((long)prng64_xrp32());
+        result = ussr_integer((ussr_int_t)prng64_xrp32());
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);
@@ -3990,7 +3995,7 @@ int ussr_execute_command(
     {
         if (return_name == NULL || argument_count != 0)
             return -1;
-        result = ussr_integer((long)time(NULL));
+        result = ussr_integer((ussr_int_t)time(NULL));
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);
@@ -4202,7 +4207,7 @@ int ussr_execute_command(
         if (ussr_terminal_getch(&c) != 0)
             return -1;
 
-        result = ussr_integer((long)c);
+        result = ussr_integer((ussr_int_t)c);
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);

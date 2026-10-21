@@ -190,9 +190,8 @@ uq_u32(r): text [
     uq_all_digits(_uqu_ok): text
     if(_): _uqu_ok [
         len(_uqu_n): text
-        # At most 4294967295, and never more than a host integer holds
-        # (2147483647 on 32-bit hosts): longer digit strings are refused
-        # before they can overflow.
+        # At most 4294967295; longer digit strings are refused before they
+        # can overflow.
         str_int_limit(_uqu_max):
         set(_uqu_cap): 4294967295.0
         if(_): {_uqu_max < _uqu_cap} [

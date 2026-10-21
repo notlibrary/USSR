@@ -18,23 +18,18 @@
 #                                    (space, tab, CR, LF)
 #   str_repeat(r): s count        -> s repeated count times
 #   utf8_* helpers (end of file)  -> step through UTF-8 text by character
-#   str_int_limit(r):             -> largest value str_trunc can return:
-#                                    2147483647 where the host integer is
-#                                    32 bits (MSVC builds), about 4.6e18 on
-#                                    64-bit hosts
-# str_from_number lowers `digits` when x * 10^digits would not fit in a host
-# integer, so very large values print with fewer decimals instead of
-# overflowing.
+#   str_int_limit(r):             -> largest value str_trunc accepts: 2^62
+#                                    (integers are 64-bit everywhere; the
+#                                    margin keeps str_trunc's sums in range)
+# str_from_number lowers `digits` when x * 10^digits would pass that limit,
+# so very large values print with fewer decimals instead of overflowing.
 # Temporaries use the _str prefix; parameters are restored after each call.
 $once
 
 str_int_limit(r): [
-    # 2147483647 + 1 wraps negative on hosts with 32-bit integers.
-    set(_strl_probe): 2147483647
-    set(r): 2147483647
-    if(_): {_strl_probe + 1 > 0} [
-        set(r): {_strl_probe * 2147483648 + _strl_probe * 2}
-    ]
+    # str_trunc adds powers of two up to x / 2 to a sum below x: with x at
+    # most 2^62 the sum stays below 2^63.
+    set(r): 4611686018427387904
 ]
 
 # "/" always produces a real, so digits come from subtracting powers of ten.

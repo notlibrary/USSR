@@ -954,13 +954,13 @@ size_t ussr_vector_length(const ussr_vector_t *vector)
 
 static int uno_encode_value(uno_buf_t *buf, const ussr_value_t *value);
 
-static int uno_encode_number(uno_buf_t *buf, double real, int is_integer, long integer)
+static int uno_encode_number(uno_buf_t *buf, double real, int is_integer, ussr_int_t integer)
 {
     char tmp[64];
 
     if (is_integer)
     {
-        snprintf(tmp, sizeof(tmp), "%ld", integer);
+        snprintf(tmp, sizeof(tmp), USSR_INT_FMT, integer);
         return uno_buf_append(buf, tmp);
     }
 
@@ -1144,7 +1144,7 @@ static int uno_read_number(uno_reader_t *r, ussr_value_t *out)
     else
     {
         out->type = USSR_INTEGER;
-        out->data.integer = strtol(start, NULL, 10);
+        out->data.integer = strtoll(start, NULL, 10);
     }
 
     return 0;

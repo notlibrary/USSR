@@ -2,8 +2,42 @@
 #define USSR_H
 
 #include <stddef.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include "process.h"
 typedef struct ussr_command_list_t ussr_command_list_t;
+
+/*
+ * USSR integers: 64-bit signed on every platform (C `long` is 32-bit on
+ * Windows). Print them with USSR_INT_FMT, parse with strtoll.
+ */
+typedef int64_t ussr_int_t;
+#define USSR_INT_MIN INT64_MIN
+#define USSR_INT_MAX INT64_MAX
+#define USSR_INT_FMT "%" PRId64
+
+/* Integer + - * and negation wrap around (two's complement) on overflow,
+ * the same on every platform, instead of being undefined behavior. */
+static inline ussr_int_t ussr_int_add(ussr_int_t a, ussr_int_t b)
+{
+    return (ussr_int_t)((uint64_t)a + (uint64_t)b);
+}
+
+static inline ussr_int_t ussr_int_sub(ussr_int_t a, ussr_int_t b)
+{
+    return (ussr_int_t)((uint64_t)a - (uint64_t)b);
+}
+
+static inline ussr_int_t ussr_int_mul(ussr_int_t a, ussr_int_t b)
+{
+    return (ussr_int_t)((uint64_t)a * (uint64_t)b);
+}
+
+/* b must not be 0; MIN % -1 (which traps in C) is 0. */
+static inline ussr_int_t ussr_int_mod(ussr_int_t a, ussr_int_t b)
+{
+    return b == -1 ? 0 : a % b;
+}
 
 typedef struct ussr_definition_t
 {
@@ -45,7 +79,7 @@ typedef struct
 
     union
     {
-        long integer;
+        ussr_int_t integer;
         double real;
         char *string;
         int boolean;
@@ -301,7 +335,7 @@ void ussr_init(void);
 void ussr_cleanup(void);
 
 ussr_value_t ussr_null(void);
-ussr_value_t ussr_integer(long value);
+ussr_value_t ussr_integer(ussr_int_t value);
 ussr_value_t ussr_real(double value);
 ussr_value_t ussr_boolean(int value);
 ussr_value_t ussr_string(const char *value);

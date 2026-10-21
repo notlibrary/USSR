@@ -143,7 +143,7 @@ print(_): "hello, world"
 | Kind    | Syntax                          | Notes |
 |---------|----------------------------------|-------|
 | String  | `"like this"`                    | Backslash-escapes are supported (`\"`, `\\`, etc). |
-| Integer | `42`, `-7`                        | No decimal point. |
+| Integer | `42`, `-7`                        | No decimal point. 64-bit signed on every platform: `-9223372036854775808` to `9223372036854775807` (§5). A literal outside that range is a compile error. |
 | Real    | `3.0`, `-1.5`                     | **Must** include a decimal point. `3` and `3.0` are different types — this matters once a value goes through UNO encode/decode (§8), where a real always round-trips with its `.0`, even when whole. |
 | Boolean | `true`, `false`                  | |
 | Null    | `null`                            | Every struct field and vector slot accepts `null` regardless of its declared type (§8). |
@@ -181,6 +181,15 @@ Supported operators: `+ - * / %` (arithmetic), `> < >= <= = !=`
 (comparison), `&& ||` (logical), `<< >> ^ & |` (bitwise
 shift/xor/and/or). Both sides of a logical expression are evaluated;
 do not rely on short-circuit evaluation.
+
+Integer arithmetic is 64-bit on every platform. `+ - *` on two
+integers give an integer and wrap around on overflow (two's complement:
+`9223372036854775807 + 1` is `-9223372036854775808`); `/` always gives a
+real; `%` needs two integers, and `x % -1` is `0`. Comparisons and `=`
+between integers are exact, also beyond the 2^53 where a real stops
+holding every integer. `<<` shifts the bits (`1 << 63` is the smallest
+integer), `>>` keeps the sign; a shift count outside `0..63` stops the
+program with an error.
 
 There are also dedicated two-argument arithmetic commands that skip
 the braces entirely, useful when the operands are already named
@@ -848,8 +857,8 @@ and one Newton step, so results are within about 0.2% of `1/sqrt(x)`
 (`finv_sqrt(r): 4` gives `0.499154`). Zero, negative or non-finite input is
 a runtime error.
 
-Integers are the host C `long`: 64-bit on Linux/macOS, 32-bit in MSVC builds
-(at most 2147483647). `str_int_limit(m):` reports the limit.
+Integers are 64-bit on every platform (§5). `str_int_limit(m):` in
+`strings.su` gives `2^62`, the largest value `str_trunc` accepts.
 
 **bytes.su — memset analogs over vectors:**
 

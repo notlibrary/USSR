@@ -4169,7 +4169,7 @@ static void bc_print_value(
             break;
 
         case USSR_INTEGER:
-            printf("%ld", value->data.integer);
+            printf(USSR_INT_FMT, value->data.integer);
             break;
 
         case USSR_REAL:
