@@ -3,9 +3,10 @@
 ## [Unreleased]
 
 ### Added
-- `ussr -c script.su [out.ru]` (`--compile`) compiles to a `.ru` bytecode file without running it; `ussr program.ru` validates and runs it (signature, format and VM ABI versions, CRC-32, bounds). Blocks passed to commands (`@` chaining) cannot be stored yet and are refused with a message.
+- `ussr -c script.su [out.ru]` (`--compile`) compiles to a `.ru` bytecode file without running it; `ussr program.ru` validates and runs it (signature, format and VM ABI versions, CRC-32, bounds). Blocks passed to commands (`@` chaining) are stored as syntax (format 3) and run as from source; `tests/ru/blocks.su` round-trips one.
 - Built-in `Vec2`/`Vec3` struct types with `+ -`, scaling by `* /` and `= !=` in expressions; `src/libs/vectors.su` adds `vdot`, `vcross`, `vlen`, `vnorm`, `vlerp` and more.
 - `getenv`, `setenv` and `unsetenv` builtins (UTF-8 on Windows).
+- `pop(item): v` removes and returns a vector's last item (error on an empty vector); tests in `tests/oop/vector_pop.su`.
 - REPL prompts from `PS1` and `PS2` with `\u \h \w \W \v \$ \\` escapes; piped stdin works on every platform.
 - Builtins for apps written in USSR: `list_dir`, `is_dir`, `getcwd`, `make_dir`, `rename_path`, `remove_file`, `remove_dir`, `read_line`, `typeof`, `fail`, `chr`.
 - Preprocessor `$once` include guard and `__MAIN__` for files that are both a library and a program.
@@ -15,13 +16,32 @@
 - Tula: DXF read/write, zoom, adaptive grid, toolbar, direct launch with `ussr src/tula/tula.su`.
 - Petersburg: canvas and toolbar widgets, `keyup`/`focus`/`wheel` events, event injection for tests, timers while the GUI runs.
 - russia.su assembles and runs textual UUASM (`.ua`).
+- Continuous integration (`.github/workflows/ci.yml`): Ubuntu with GLFW under Xvfb, Ubuntu without GLFW, and Windows (MSVC, GLFW 3.5.1) build and run every test on pull requests and pushes to `main`.
+- Function-local variables: every call has its own parameters, return variable and every variable the function assigns, so helpers and recursion no longer overwrite each other's temporaries (before, `fib(a): m1` / `fib(b): m2` style recursion computed `fib(20)` as 1). Names a function only reads are globals. `global(_): names` declares shared state, at the top level for every function or inside one function; `global(_): "*"` restores the old behavior. `eval` inside a function uses its locals; processes started in a function see them as globals. The compiler warns (`file:line: warning:`) about reading a local before setting it, setting a local only other code reads, and reading a global that is only ever set as a local. Variable accesses inside functions are resolved at compile time. See "Variables in functions" in the manual; tests in `tests/locals.su`, `tests/locals_legacy.su`.
+- Compile errors say where and why: `file:line: reason`, with the original file and line also inside `$include`d files (the preprocessor keeps a line map). Every compiler failure path reports its command; syntax errors and bad characters use the same format; the REPL reports `<stdin>:N`, `eval` text `<eval>:N`. `tests/errors/run_error_tests.sh` checks 22 bad programs.
+- `tests/run_all.sh` runs every suite, checks each standalone test script against `tests/expected/` (stdout, stderr, exit status) and runs the GUI tests; `--update` rewrites the expectations.
 
 ### Changed
+- Integers are 64-bit on every platform (they were C `long`, 32-bit on Windows: a literal like 3000000000000 was cut to 32 bits, so `tests/math/test_log_hypot.su` printed 3.037e+09 instead of 5e+12, and overflow hung `str_from_number`). `+ - *` wrap around instead of being undefined, `x % -1` no longer traps, integer `=`/`<` are exact beyond 2^53, a shift count outside 0..63 is an error, an out-of-range literal is a compile error, `random64` gives 64 bits and `time` does not stop at 2038 on Windows. `str_int_limit` returns a constant 2^62. `.ru` VM ABI 3. Tests: `tests/int64.su` (also a `.ru` round trip).
+- **Breaking:** variables assigned inside a function are local to the call unless declared with `global(_)`. Programs whose functions share state through undeclared variables need a `global(_): ...` line (the compiler warnings name the variables) or `global(_): "*"`. In a program with `init`, top-level commands still do not run, so state set up in `init` must be declared global. Mbl, russia.su (with uuasm.su) and Tula's DXF error flag were migrated this way; Tver and the libraries needed nothing.
+- Mbl's undo and redo histories are stacks built on `pop` instead of vectors with separate size counters.
+- `.ru` format 2, VM ABI 2: functions carry their local names, `LOAD_VAR`/`STORE_VAR` their resolved scope. Format 1 files are rejected; rebuild them.
 - Tver and Tula are now written in USSR (`src/tver/tver.su`, `src/tula/tula.su`); their C sources were removed. Petersburg stays native.
 
 ### Fixed
 - `math.su`: `tan`/`ctg` guards used `==` instead of `=`.
 - REPL no longer hangs reading redirected stdin on Windows.
+- REPL on Linux and macOS prints the `PS1`/`PS2` prompts for piped input too, as on Windows and as documented.
+- `init`'s return value is the exit status: 0..255 are passed through (they all became 1), other integers give 1 (they gave 0). `-e` errors exit with 1 instead of 255. `tests/exit/run_exit_tests.sh` covers source, `.ru` and `-e`.
+- An unexpected character no longer ends the program silently at that point: the lexer reported it but the parser treated it as end of input and ran the rest.
+- `break` or `continue` outside any loop is a compile error; at the top level they jumped back to the start of the program and looped until the step limit.
+- Line numbers in syntax errors restarted from the previous parse (load, eval, the REPL) and counted lines removed by the preprocessor.
+- Petersburg read a freed widget when a window with children was destroyed (crash when a window closed).
+- Unused `set(pi)` statements removed from `cos` and `atan` in `math.su`.
+- The manual listed `==` as the equality operator; it is `=`.
+- `finv_sqrt` works again: the bytecode VM had no route to it, so every call failed.
+- `ussr-ubuntu.mk`: `make -j` no longer runs bison twice in parallel.
+- `tests/duffs_device.su` is valid USSR now (unrolled `do`/`loop` with `choose` fall-through); `tests/math/*.su`, `tests/lib_io.su`, `tests/lib_math_bytes.su` and `tests/ln_probe.su` include the libraries by their path relative to the test, so they run from any directory.
 
 ### Documentation
 - `docs/RU_BYTECODE_FORMAT.md`: `.ru` layout, validation and versioning.

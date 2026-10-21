@@ -138,9 +138,11 @@ static int petersburg_expect_integer(
 {
     if (value == NULL)
         return 0;
-    if (value[index].type != USSR_INTEGER)
+    if (value[index].type != USSR_INTEGER ||
+        value[index].data.integer < LONG_MIN ||
+        value[index].data.integer > LONG_MAX)
         return 0;
-    *out = value[index].data.integer;
+    *out = (long)value[index].data.integer;
     return 1;
 }
 static int petersburg_expect_string(
@@ -1421,6 +1423,7 @@ static int petersburg_destroy(long id)
     petersburg_widget_t **link = &petersburg_widgets;
     petersburg_widget_t *target = petersburg_find(id);
     int is_window;
+    long target_id;
 
     if (target == NULL)
         return 0;
@@ -1443,11 +1446,14 @@ static int petersburg_destroy(long id)
     }
     is_window = target->type == PETERSBURG_WINDOW ||
                 target->type == PETERSBURG_TOOLBAR;
+    /* target is freed inside the loop while its children are still being
+     * looked for: compare against a copy of its id. */
+    target_id = target->id;
     while (*link != NULL)
     {
         petersburg_widget_t *widget = *link;
-        if (widget == target ||
-            (is_window && widget->parent_id == target->id))
+        if (widget->id == target_id ||
+            (is_window && widget->parent_id == target_id))
         {
             *link = widget->next;
             petersburg_discard_events(widget->id);
@@ -2052,7 +2058,7 @@ int ussr_petersburg_dispatch(
         }
         expand = values[3].type == USSR_BOOLEAN
                      ? values[3].data.boolean
-                     : values[3].data.integer;
+                     : (long)values[3].data.integer;
         widget->grid_row = (int)row;
         widget->grid_column = (int)column;
         widget->in_grid = 1;

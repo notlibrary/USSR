@@ -278,6 +278,8 @@ static int vm_equal(const ussr_value_t *a, const ussr_value_t *b)
 {
     if (a == NULL || b == NULL)
         return 0;
+    if (a->type == USSR_INTEGER && b->type == USSR_INTEGER)
+        return a->data.integer == b->data.integer;
     if (vm_numeric(a) && vm_numeric(b))
         return vm_real(a) == vm_real(b);
     if (a->type != b->type)
@@ -328,12 +330,12 @@ static int vm_binary(
                 return -1;
             if (left->type == USSR_INTEGER && right->type == USSR_INTEGER && opcode != USSR_BC_DIV)
             {
-                long a = left->data.integer;
-                long b = right->data.integer;
-                if (opcode == USSR_BC_ADD) *out = ussr_integer(a + b);
-                else if (opcode == USSR_BC_SUB) *out = ussr_integer(a - b);
-                else if (opcode == USSR_BC_MUL) *out = ussr_integer(a * b);
-                else *out = ussr_integer(a % b);
+                ussr_int_t a = left->data.integer;
+                ussr_int_t b = right->data.integer;
+                if (opcode == USSR_BC_ADD) *out = ussr_integer(ussr_int_add(a, b));
+                else if (opcode == USSR_BC_SUB) *out = ussr_integer(ussr_int_sub(a, b));
+                else if (opcode == USSR_BC_MUL) *out = ussr_integer(ussr_int_mul(a, b));
+                else *out = ussr_integer(ussr_int_mod(a, b));
             }
             else
             {
@@ -352,7 +354,14 @@ static int vm_binary(
         case USSR_BC_GT:
         case USSR_BC_GE:
             if (!vm_numeric(left) || !vm_numeric(right)) return -1;
-            if (opcode == USSR_BC_LT) *out = ussr_boolean(vm_real(left) < vm_real(right));
+            if (left->type == USSR_INTEGER && right->type == USSR_INTEGER)
+            {
+                ussr_int_t a = left->data.integer, b = right->data.integer;
+                *out = ussr_boolean(opcode == USSR_BC_LT ? a < b :
+                                    opcode == USSR_BC_LE ? a <= b :
+                                    opcode == USSR_BC_GT ? a > b : a >= b);
+            }
+            else if (opcode == USSR_BC_LT) *out = ussr_boolean(vm_real(left) < vm_real(right));
             else if (opcode == USSR_BC_LE) *out = ussr_boolean(vm_real(left) <= vm_real(right));
             else if (opcode == USSR_BC_GT) *out = ussr_boolean(vm_real(left) > vm_real(right));
             else *out = ussr_boolean(vm_real(left) >= vm_real(right));
@@ -366,10 +375,18 @@ static int vm_binary(
         case USSR_BC_SHL:
         case USSR_BC_SHR:
             if (left->type != USSR_INTEGER || right->type != USSR_INTEGER) return -1;
+            if ((opcode == USSR_BC_SHL || opcode == USSR_BC_SHR) &&
+                (right->data.integer < 0 || right->data.integer > 63))
+            {
+                fprintf(stderr, "USSR VM: shift count " USSR_INT_FMT " is outside 0..63\n",
+                        right->data.integer);
+                return -1;
+            }
             if (opcode == USSR_BC_XOR) *out = ussr_integer(left->data.integer ^ right->data.integer);
             else if (opcode == USSR_BC_BAND) *out = ussr_integer(left->data.integer & right->data.integer);
             else if (opcode == USSR_BC_BOR) *out = ussr_integer(left->data.integer | right->data.integer);
-            else if (opcode == USSR_BC_SHL) *out = ussr_integer(left->data.integer << right->data.integer);
+            /* << shifts the two's complement bits; >> keeps the sign. */
+            else if (opcode == USSR_BC_SHL) *out = ussr_integer((ussr_int_t)((uint64_t)left->data.integer << right->data.integer));
             else *out = ussr_integer(left->data.integer >> right->data.integer);
             return 0;
     }
@@ -418,10 +435,6 @@ static void vm_frame_free(ussr_vm_frame_t *frame)
     if (frame == NULL) return;
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         ussr_value_free(&frame->saved_registers[i]);
-    for (i = 0; i < frame->saved_variable_count; ++i)
-        ussr_value_free(&frame->saved_variables[i]);
-    free(frame->saved_variables);
-    free(frame->saved_variable_existed);
     memset(frame, 0, sizeof(*frame));
 }
 
@@ -432,7 +445,6 @@ static int vm_push_frame(
 {
     ussr_vm_frame_t *frame;
     size_t i;
-    const ussr_value_t *v;
 
     if (vm->frame_count >= USSR_VM_MAX_CALLS) return -1;
     if (vm->frame_count == vm->frame_capacity)
@@ -450,18 +462,10 @@ static int vm_push_frame(
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
         frame->saved_registers[i] = ussr_value_copy(&vm->registers[i]);
 
-    frame->saved_variable_count = function->parameter_count + 1;
-    frame->saved_variables = calloc(frame->saved_variable_count, sizeof(*frame->saved_variables));
-    frame->saved_variable_existed = calloc(frame->saved_variable_count, sizeof(*frame->saved_variable_existed));
-    if (frame->saved_variables == NULL || frame->saved_variable_existed == NULL)
+    /* Fresh locals: parameters, the return variable and everything the
+     * function assigns that is not declared global. */
+    if (ussr_locals_push(function->locals, function->local_count) != 0)
     { vm_frame_free(frame); return -1; }
-    for (i = 0; i < function->parameter_count; ++i)
-    {
-        v = ussr_get_variable(function->parameters[i]);
-        if (v != NULL) { frame->saved_variable_existed[i] = 1; frame->saved_variables[i] = ussr_value_copy(v); }
-    }
-    v = ussr_get_variable(function->return_name);
-    if (v != NULL) { frame->saved_variable_existed[function->parameter_count] = 1; frame->saved_variables[function->parameter_count] = ussr_value_copy(v); }
     ++vm->frame_count;
     return 0;
 }
@@ -506,13 +510,7 @@ static int vm_return(
     f = &program->functions[frame->function_index];
     v = ussr_get_variable(f->return_name);
     result = v != NULL ? ussr_value_copy(v) : ussr_null();
-    for (i = 0; i < f->parameter_count + 1; ++i)
-    {
-        const char *name = i < f->parameter_count ? f->parameters[i] : f->return_name;
-        ussr_value_t restore = frame->saved_variable_existed[i] ? ussr_value_copy(&frame->saved_variables[i]) : ussr_null();
-        if (ussr_set_variable(name, &restore) != 0) { ussr_value_free(&restore); ussr_value_free(&result); return -1; }
-        ussr_value_free(&restore);
-    }
+    ussr_locals_pop();
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i) { ussr_value_free(&vm->registers[i]); vm->registers[i] = frame->saved_registers[i]; frame->saved_registers[i] = ussr_null(); }
     vm->ip = frame->return_ip;
     ussr_value_free(&vm->registers[frame->return_register]);
@@ -697,8 +695,11 @@ static int vm_scan_parse_field(
 
     if (strncmp(type, "INT", 3) == 0)
     {
-        long number = strtol(text, &tail, 10);
-        if (tail == text || *tail != '\0')
+        ussr_int_t number;
+
+        errno = 0;
+        number = strtoll(text, &tail, 10);
+        if (tail == text || *tail != '\0' || errno == ERANGE)
         {
             free(text);
             return -1;
@@ -1004,7 +1005,7 @@ static int vm_template_emit_value(
     {
         if (value->type != USSR_INTEGER)
             return -1;
-        printf("%ld", value->data.integer);
+        printf(USSR_INT_FMT, value->data.integer);
         return 0;
     }
 
@@ -1163,11 +1164,15 @@ static int vm_do_load(
         return -1;
     }
 
+    ussr_parse_begin(filename, ussr_pp_locate, &pp);
     buffer = yy_scan_string(ussr_pp_output(&pp));
-    ussr_pp_cleanup(&pp);
 
     if (buffer == NULL)
+    {
+        ussr_parse_end();
+        ussr_pp_cleanup(&pp);
         return -1;
+    }
 
     /* Parse with the parser's global program slot saved/restored,
      * exactly like eval does. */
@@ -1177,12 +1182,16 @@ static int vm_do_load(
     if (yyparse() != 0 || ussr_parsed_program == NULL)
     {
         yy_delete_buffer(buffer);
+        ussr_parse_end();
+        ussr_pp_cleanup(&pp);
         ussr_parsed_program = old_program;
         fprintf(stderr, "USSR: load: syntax error in '%s'\n", filename);
         return -1;
     }
 
     yy_delete_buffer(buffer);
+    ussr_parse_end();
+    ussr_pp_cleanup(&pp);
 
     /* Scan the loaded file's top level for process(_): name marks. */
     {
@@ -1401,11 +1410,13 @@ int vm_execute(
             case USSR_BC_LOAD_VAR:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
                 name=program->strings[ins.immediate];
-                { const ussr_value_t *v=ussr_get_variable(name); vm->registers[ins.a]=v?ussr_value_copy(v):ussr_null(); }
+                /* b: 0 by name, 1 the call's local in slot c, 2 global
+                 * (resolved by the compiler inside functions). */
+                { const ussr_value_t *v=ussr_get_variable_at(name, (ussr_var_place_t)ins.b, ins.c); vm->registers[ins.a]=v?ussr_value_copy(v):ussr_null(); }
                 break;
             case USSR_BC_STORE_VAR:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
-                if (ussr_set_variable(program->strings[ins.immediate], &vm->registers[ins.a]) != 0) { result=-1; goto done; } break;
+                if (ussr_set_variable_at(program->strings[ins.immediate], &vm->registers[ins.a], (ussr_var_place_t)ins.b, ins.c) != 0) { result=-1; goto done; } break;
             case USSR_BC_LOAD_HASH:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
                 { const ussr_value_t *v=ussr_hash_get_value(program->strings[ins.immediate]); if (!v) { fprintf(stderr,"USSR: undefined hash key '%s'\n",program->strings[ins.immediate]); result=-1; goto done; } ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=ussr_value_copy(v); } break;
@@ -1489,7 +1500,7 @@ int vm_execute(
                 break;
             case USSR_BC_RANDOM64:
                 if (ins.a >= USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
-                value = ussr_integer((long)prng64_xrp32());
+                value = ussr_integer((ussr_int_t)prng64_xrp32());
                 ussr_value_free(&vm->registers[ins.a]);
                 vm->registers[ins.a] = value;
                 break;
@@ -1504,7 +1515,7 @@ int vm_execute(
                 break;
             case USSR_BC_TIME:
                 if (ins.a >= USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
-                value = ussr_integer((long)time(NULL));
+                value = ussr_integer((ussr_int_t)time(NULL));
                 ussr_value_free(&vm->registers[ins.a]);
                 vm->registers[ins.a] = value;
                 break;
@@ -1778,7 +1789,8 @@ int vm_execute(
                  * input as UTF-8 bytes on Windows. */
                 else if (
                     strcmp(program->strings[ins.immediate], "file_exists") == 0 ||
-                    strcmp(program->strings[ins.immediate], "writefile") == 0
+                    strcmp(program->strings[ins.immediate], "writefile") == 0 ||
+                    strcmp(program->strings[ins.immediate], "finv_sqrt") == 0
                 )
                 {
                     result = ussr_execute_command(
@@ -1928,7 +1940,7 @@ int vm_execute(
             case USSR_BC_EVAL:
                 /* eval is implemented by the VM boundary: source is parsed, compiled, then executed as bytecode. */
                 if(ins.a>=USSR_VM_REGISTER_COUNT || program->strings[ins.immediate]==NULL || vm->registers[0].type!=USSR_STRING){result=-1;goto done;}
-                { YY_BUFFER_STATE b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested,0); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
+                { YY_BUFFER_STATE b; ussr_parse_begin("<eval>", NULL, NULL); b=yy_scan_string(vm->registers[0].data.string); ussr_command_list_t *old=ussr_parsed_program; ussr_parsed_program=NULL; if(!b){result=-1;goto done;} if(yyparse()!=0||ussr_parsed_program==NULL){yy_delete_buffer(b);ussr_parsed_program=old;result=-1;goto done;} yy_delete_buffer(b); ussr_bc_program_t nested; if(ussr_bc_compile(ussr_parsed_program,&nested)!=0){ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;result=-1;goto done;} ussr_vm_t nested_vm;vm_init(&nested_vm);nested_vm.running=1;result=vm_execute(&nested_vm,&nested,0); if(result==0){const ussr_value_t *v=ussr_get_variable(program->strings[ins.immediate]); value=v?ussr_value_copy(v):ussr_null();} vm_cleanup(&nested_vm);ussr_bc_program_free(&nested);ussr_command_list_free(ussr_parsed_program);ussr_parsed_program=old;if(result!=0)goto done;ussr_value_free(&vm->registers[ins.a]);vm->registers[ins.a]=value; } break;
             case USSR_BC_HALT: vm->running=0; vm->exit_code=0; break;
             default: fprintf(stderr,"USSR VM: unknown opcode 0x%02x\n",ins.opcode);result=-1;goto done;
         }
@@ -2110,7 +2122,6 @@ static int compile_source(const char *source, ussr_bc_program_t *bytecode,
 
     if (result != 0)
     {
-        fprintf(stderr, "USSR parser: syntax error");
         ussr_parsed_program = NULL;
         return -1;
     }
@@ -2121,7 +2132,6 @@ static int compile_source(const char *source, ussr_bc_program_t *bytecode,
     /* AST -> bytecode happens once. Execution starts only after compilation. */
     if (ussr_bc_compile(ussr_parsed_program, bytecode) != 0)
     {
-        fprintf(stderr, "USSR compiler: compilation failed");
         ussr_command_list_free(ussr_parsed_program);
         ussr_parsed_program = NULL;
         return -1;
@@ -2209,26 +2219,38 @@ static int run_bytecode(ussr_bc_program_t *bytecode_in,
         }
 
         main_proc->vm.registers[0] = ussr_integer(
-            argc > 0 ? (long)(argc - 1) : 0
+            argc > 0 ? (ussr_int_t)(argc - 1) : 0
         );
         main_proc->vm.registers[1] = ussr_vector_value(args_vector);
     }
 
     result = ussr_sched_run(background_ok);
 
+    /* The main process uses the default scope: drop the locals of any
+     * call it was in when it stopped (an error inside a function). */
+    ussr_locals_reset(NULL);
+
+    /* init's integer result is the exit status: 0..255 as is, any other
+     * integer means failure (1). Anything else (ret never set) is 0. */
     if (result == 0 && entry_function >= 0 && main_proc != NULL &&
         main_proc->state == USSR_PROC_ZOMBIE &&
         main_proc->result.type == USSR_INTEGER)
     {
-        long exit_value = main_proc->result.data.integer;
-        if (exit_value >= 0 && exit_value <= 255)
-            result = (int)exit_value;
+        ussr_int_t exit_value = main_proc->result.data.integer;
+        result = exit_value >= 0 && exit_value <= 255 ? (int)exit_value : 1;
     }
 
     if (result == -1)
         fprintf(stderr, "USSR VM: execution failed (status %d)", result);
 
     return result;
+}
+
+/* Process exit status for a run_bytecode/parse_and_execute result: an
+ * error (-1) is 1, otherwise the status init chose (0..255). */
+static int exit_status(int result)
+{
+    return result < 0 ? EXIT_FAILURE : result;
 }
 
 static int parse_and_execute(const char *source, int argc, char **argv, int background_ok)
@@ -2266,8 +2288,7 @@ static int run_ru_file(const char *filename, int argc, char **argv)
     if (ussr_ru_read_file(filename, &bytecode, &sites) != 0)
         return EXIT_FAILURE;
 
-    return run_bytecode(&bytecode, sites, argc, argv, 0) == 0 ?
-        EXIT_SUCCESS : EXIT_FAILURE;
+    return exit_status(run_bytecode(&bytecode, sites, argc, argv, 0));
 }
 
 /*
@@ -2326,14 +2347,17 @@ static int compile_file(const char *input, const char *output)
     if (source == NULL || source[0] == '\0')
         source = "";
 
-    if (compile_source(source, &bytecode, &ast) != 0)
+    ussr_parse_begin(input, ussr_pp_locate, &pp);
+    result = compile_source(source, &bytecode, &ast);
+    ussr_parse_end();
+    ussr_pp_cleanup(&pp);
+
+    if (result != 0)
     {
-        fprintf(stderr, "\nUSSR compile: '%s' was not written\n", output);
-        ussr_pp_cleanup(&pp);
+        fprintf(stderr, "USSR compile: '%s' was not written\n", output);
         free(default_output);
         return EXIT_FAILURE;
     }
-    ussr_pp_cleanup(&pp);
 
     if (ast == NULL)
     {
@@ -2364,9 +2388,11 @@ static int run_eval(const char *source, int argc, char **argv)
     if (source == NULL || source[0] == '\0')
         return 0;
 
+    ussr_parse_begin("<command line>", NULL, NULL);
     result = parse_and_execute(source, argc, argv, 0);
+    ussr_parse_end();
 
-    return result;
+    return exit_status(result);
 }
 
 static int run_file(const char *filename, int argc, char **argv)
@@ -2452,10 +2478,12 @@ static int run_file(const char *filename, int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    ussr_parse_begin(filename, ussr_pp_locate, &pp);
     result = parse_and_execute(ussr_pp_output(&pp), argc, argv, 0);
+    ussr_parse_end();
     ussr_pp_cleanup(&pp);
 
-    return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return exit_status(result);
 }
 
 /*
@@ -2562,6 +2590,16 @@ static char *repl_prompt(int continuation)
     return out;
 }
 
+/* Line lookup for REPL input: context points at the REPL line number of
+ * the entry's first line. */
+static int repl_locate(const void *context, int text_line,
+                       const char **file, int *line)
+{
+    *file = "<stdin>";
+    *line = *(const int *)context + text_line - 1;
+    return 0;
+}
+
 static int run_repl(void)
 {
     ussr_preprocessor_t pp;
@@ -2572,6 +2610,7 @@ static int run_repl(void)
     size_t line_length;
     int bracket_depth;
     int result;
+    int entry_line = 1;
 
     printf("USSR Unified Shell Script REPL\n");
     printf("USSR v%d.%d\n",USSR_VERSION_MAJOR, USSR_VERSION_MINOR);
@@ -2604,7 +2643,16 @@ static int run_repl(void)
 #ifdef _WIN32
         line = worstline(prompt != NULL ? prompt : "ussr> ");
 #else
-        line = bestline(prompt != NULL ? prompt : "ussr> ");
+        /* bestline prints no prompt when input is redirected; print it
+         * here so piped sessions look the same as on Windows. */
+        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+        {
+            fputs(prompt != NULL ? prompt : "ussr> ", stdout);
+            fflush(stdout);
+            line = bestline(NULL);
+        }
+        else
+            line = bestline(prompt != NULL ? prompt : "ussr> ");
 #endif
         free(prompt);
         if (line == NULL)
@@ -2657,6 +2705,9 @@ static int run_repl(void)
             continue;
         }
 
+        if (source_length == 0)
+            entry_line = pp.current_line;
+
         if (append_source(
                 &source,
                 &source_length,
@@ -2677,7 +2728,9 @@ static int run_repl(void)
         if (bracket_depth > 0)
             continue;
 
+        ussr_parse_begin("<stdin>", repl_locate, &entry_line);
         result = parse_and_execute(source, 0, NULL, 1);
+        ussr_parse_end();
 
         source_length = 0;
         if (source != NULL)
@@ -2835,12 +2888,17 @@ int main(int argc, char **argv)
         if (moscow != NULL)
         {
             char *moscow_argv[] = { (char *)"moscow.su", NULL };
+            int status;
+
             fclose(moscow);
-            if (run_file("moscow.su", 1, moscow_argv) != EXIT_SUCCESS)
+            status = run_file("moscow.su", 1, moscow_argv);
+            /* A failing (or nonzero) startup file stops ussr with its
+             * status. */
+            if (status != EXIT_SUCCESS)
             {
                 ussr_sched_cleanup();
                 ussr_cleanup();
-                return EXIT_FAILURE;
+                return status;
             }
         }
     }

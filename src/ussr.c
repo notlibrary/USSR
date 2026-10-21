@@ -57,6 +57,84 @@ extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
 extern ussr_command_list_t *ussr_parsed_program;
 
 static char *ussr_strdup(const char *src);
+
+/* Parse-location state: see ussr_parse_begin() in ussr.h. */
+static const char *ussr_parse_name = "<input>";
+static ussr_line_lookup_t ussr_parse_lookup = NULL;
+static const void *ussr_parse_context = NULL;
+
+const char *ussr_source_name_intern(const char *name)
+{
+    /* A short list: one entry per distinct file name ever parsed. */
+    static char **names = NULL;
+    static size_t count = 0;
+    char **grown;
+    size_t i;
+
+    if (name == NULL)
+        return NULL;
+
+    for (i = 0; i < count; ++i)
+        if (strcmp(names[i], name) == 0)
+            return names[i];
+
+    grown = realloc(names, (count + 1) * sizeof(*grown));
+    if (grown == NULL)
+        return NULL;
+    names = grown;
+    names[count] = ussr_strdup(name);
+    if (names[count] == NULL)
+        return NULL;
+
+    return names[count++];
+}
+
+void ussr_parse_begin(
+    const char *name,
+    ussr_line_lookup_t lookup,
+    const void *context
+)
+{
+    const char *interned = ussr_source_name_intern(
+        name != NULL ? name : "<input>");
+
+    ussr_parse_name = interned != NULL ? interned : "<input>";
+    ussr_parse_lookup = lookup;
+    ussr_parse_context = context;
+    yylineno = 1;
+}
+
+void ussr_parse_end(void)
+{
+    ussr_parse_lookup = NULL;
+    ussr_parse_context = NULL;
+}
+
+void ussr_parse_locate(int text_line, const char **file, int *line)
+{
+    const char *found_file = NULL;
+    int found_line = text_line;
+
+    if (ussr_parse_lookup == NULL ||
+        ussr_parse_lookup(
+            ussr_parse_context, text_line, &found_file, &found_line) != 0 ||
+        found_file == NULL)
+    {
+        found_file = ussr_parse_name;
+        found_line = text_line;
+    }
+    else
+    {
+        found_file = ussr_source_name_intern(found_file);
+        if (found_file == NULL)
+            found_file = ussr_parse_name;
+    }
+
+    if (file != NULL)
+        *file = found_file;
+    if (line != NULL)
+        *line = found_line;
+}
 static ussr_definition_t *ussr_find_definition(const char *name);
 int ussr_argument_evaluate(
     const ussr_argument_t *argument,
@@ -173,21 +251,169 @@ ussr_scope_t *ussr_scope_create(void)
     return calloc(1, sizeof(ussr_scope_t));
 }
 
-void ussr_scope_free(ussr_scope_t *scope)
+static void ussr_vars_free(ussr_scope_variable_t *vars, size_t count)
 {
     size_t i;
 
+    for (i = 0; i < count; ++i)
+    {
+        free(vars[i].name);
+        ussr_value_free(&vars[i].value);
+    }
+
+    free(vars);
+}
+
+/* Drops a call's values; its slot arrays stay for the next call. */
+static void ussr_locals_clear(ussr_locals_t *locals)
+{
+    size_t i;
+
+    for (i = 0; i < locals->name_count; ++i)
+    {
+        if (locals->assigned[i])
+        {
+            ussr_value_free(&locals->values[i]);
+            locals->assigned[i] = 0;
+        }
+    }
+
+    locals->names = NULL;
+    locals->name_count = 0;
+}
+
+void ussr_locals_reset(ussr_scope_t *scope)
+{
+    if (scope == NULL)
+        scope = &ussr_default_scope;
+
+    while (scope->local_depth > 0)
+        ussr_locals_clear(&scope->locals[--scope->local_depth]);
+}
+
+static void ussr_locals_free_all(ussr_scope_t *scope)
+{
+    size_t i;
+
+    ussr_locals_reset(scope);
+
+    for (i = 0; i < scope->local_capacity; ++i)
+    {
+        free(scope->locals[i].values);
+        free(scope->locals[i].assigned);
+    }
+
+    free(scope->locals);
+    scope->locals = NULL;
+    scope->local_capacity = 0;
+}
+
+void ussr_scope_free(ussr_scope_t *scope)
+{
     if (scope == NULL)
         return;
 
-    for (i = 0; i < scope->count; ++i)
+    ussr_locals_free_all(scope);
+    ussr_vars_free(scope->vars, scope->count);
+    free(scope);
+}
+
+int ussr_locals_push(char *const *names, size_t name_count)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+    ussr_locals_t *top;
+
+    if (scope->local_depth == scope->local_capacity)
     {
-        free(scope->vars[i].name);
-        ussr_value_free(&scope->vars[i].value);
+        size_t capacity = scope->local_capacity == 0
+            ? 16 : scope->local_capacity * 2;
+        ussr_locals_t *grown = realloc(
+            scope->locals, capacity * sizeof(*grown));
+
+        if (grown == NULL)
+            return -1;
+
+        memset(grown + scope->local_capacity, 0,
+               (capacity - scope->local_capacity) * sizeof(*grown));
+        scope->locals = grown;
+        scope->local_capacity = capacity;
     }
 
-    free(scope->vars);
-    free(scope);
+    top = &scope->locals[scope->local_depth];
+
+    if (top->capacity < name_count)
+    {
+        ussr_value_t *values = realloc(
+            top->values, name_count * sizeof(*values));
+        unsigned char *assigned;
+
+        if (values == NULL)
+            return -1;
+        top->values = values;
+
+        assigned = realloc(top->assigned, name_count);
+        if (assigned == NULL)
+            return -1;
+        top->assigned = assigned;
+        top->capacity = name_count;
+    }
+
+    if (name_count > 0)
+        memset(top->assigned, 0, name_count);
+    top->names = names;
+    top->name_count = name_count;
+    ++scope->local_depth;
+
+    return 0;
+}
+
+void ussr_locals_pop(void)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+
+    if (scope->local_depth > 0)
+        ussr_locals_clear(&scope->locals[--scope->local_depth]);
+}
+
+/* The innermost call's locals if `name` is local there (and its slot),
+ * else NULL. */
+static ussr_locals_t *ussr_locals_for(const char *name, size_t *slot)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+    ussr_locals_t *top;
+    size_t i;
+
+    if (scope->local_depth == 0)
+        return NULL;
+
+    top = &scope->locals[scope->local_depth - 1];
+
+    for (i = 0; i < top->name_count; ++i)
+    {
+        if (strcmp(top->names[i], name) == 0)
+        {
+            *slot = i;
+            return top;
+        }
+    }
+
+    return NULL;
+}
+
+static int ussr_locals_store(
+    ussr_locals_t *locals,
+    size_t slot,
+    const ussr_value_t *value
+)
+{
+    ussr_value_t copy = ussr_value_copy(value);
+
+    if (locals->assigned[slot])
+        ussr_value_free(&locals->values[slot]);
+    locals->values[slot] = copy;
+    locals->assigned[slot] = 1;
+
+    return 0;
 }
 
 void ussr_scope_set_current(ussr_scope_t *scope)
@@ -660,6 +886,8 @@ void ussr_cleanup(void)
     size_t i;
     ussr_scope_t *scope = &ussr_default_scope;
 
+    ussr_locals_free_all(scope);
+
     for (i = 0; i < scope->count; ++i)
     {
         free(scope->vars[i].name);
@@ -692,7 +920,7 @@ ussr_value_t ussr_null(void)
     return value;
 }
 
-ussr_value_t ussr_integer(long integer)
+ussr_value_t ussr_integer(ussr_int_t integer)
 {
     ussr_value_t value;
 
@@ -795,49 +1023,78 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
     return copy;
 }
 
-int ussr_scope_set(
-    ussr_scope_t *scope,
+static int ussr_vars_set(
+    ussr_scope_variable_t **vars,
+    size_t *count,
+    size_t *capacity,
     const char *name,
     const ussr_value_t *value
 )
 {
     size_t i;
 
-    if (scope == NULL || name == NULL || value == NULL)
-        return -1;
-
-    for (i = 0; i < scope->count; ++i)
+    for (i = 0; i < *count; ++i)
     {
-        if (strcmp(scope->vars[i].name, name) == 0)
+        if (strcmp((*vars)[i].name, name) == 0)
         {
             ussr_value_t copy = ussr_value_copy(value);
-            ussr_value_free(&scope->vars[i].value);
-            scope->vars[i].value = copy;
+            ussr_value_free(&(*vars)[i].value);
+            (*vars)[i].value = copy;
             return 0;
         }
     }
 
-    if (scope->count == scope->capacity)
+    if (*count == *capacity)
     {
-        size_t capacity = scope->capacity == 0 ? 16 : scope->capacity * 2;
+        size_t grown_capacity = *capacity == 0 ? 16 : *capacity * 2;
         ussr_scope_variable_t *new_vars;
 
-        new_vars = realloc(scope->vars, capacity * sizeof(*new_vars));
+        new_vars = realloc(*vars, grown_capacity * sizeof(*new_vars));
         if (new_vars == NULL)
             return -1;
 
-        scope->vars = new_vars;
-        scope->capacity = capacity;
+        *vars = new_vars;
+        *capacity = grown_capacity;
     }
 
-    scope->vars[scope->count].name = ussr_strdup(name);
-    if (scope->vars[scope->count].name == NULL)
+    (*vars)[*count].name = ussr_strdup(name);
+    if ((*vars)[*count].name == NULL)
         return -1;
 
-    scope->vars[scope->count].value = ussr_value_copy(value);
-    ++scope->count;
+    (*vars)[*count].value = ussr_value_copy(value);
+    ++*count;
 
     return 0;
+}
+
+static ussr_value_t *ussr_vars_get(
+    ussr_scope_variable_t *vars,
+    size_t count,
+    const char *name
+)
+{
+    size_t i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (strcmp(vars[i].name, name) == 0)
+            return &vars[i].value;
+    }
+
+    return NULL;
+}
+
+int ussr_scope_set(
+    ussr_scope_t *scope,
+    const char *name,
+    const ussr_value_t *value
+)
+{
+    if (scope == NULL || name == NULL || value == NULL)
+        return -1;
+
+    return ussr_vars_set(
+        &scope->vars, &scope->count, &scope->capacity, name, value);
 }
 
 int ussr_set_variable(
@@ -845,8 +1102,15 @@ int ussr_set_variable(
     const ussr_value_t *value
 )
 {
+    ussr_locals_t *locals;
+    size_t slot;
+
     if (name == NULL || value == NULL)
         return -1;
+
+    locals = ussr_locals_for(name, &slot);
+    if (locals != NULL)
+        return ussr_locals_store(locals, slot, value);
 
     return ussr_scope_set(ussr_active_scope(), name, value);
 }
@@ -854,20 +1118,70 @@ int ussr_set_variable(
 const ussr_value_t *ussr_get_variable(const char *name)
 {
     const ussr_scope_t *scope;
-    size_t i;
+    ussr_locals_t *locals;
+    size_t slot;
 
     if (name == NULL)
         return NULL;
 
+    locals = ussr_locals_for(name, &slot);
+    if (locals != NULL)
+        return locals->assigned[slot] ? &locals->values[slot] : NULL;
+
     scope = ussr_active_scope();
 
-    for (i = 0; i < scope->count; ++i)
+    return ussr_vars_get(scope->vars, scope->count, name);
+}
+
+const ussr_value_t *ussr_get_variable_at(
+    const char *name,
+    ussr_var_place_t place,
+    size_t slot
+)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+
+    if (name == NULL)
+        return NULL;
+
+    if (place == USSR_VAR_LOCAL && scope->local_depth > 0)
     {
-        if (strcmp(scope->vars[i].name, name) == 0)
-            return &scope->vars[i].value;
+        ussr_locals_t *top = &scope->locals[scope->local_depth - 1];
+
+        if (slot < top->name_count)
+            return top->assigned[slot] ? &top->values[slot] : NULL;
     }
 
-    return NULL;
+    if (place == USSR_VAR_GLOBAL)
+        return ussr_vars_get(scope->vars, scope->count, name);
+
+    return ussr_get_variable(name);
+}
+
+int ussr_set_variable_at(
+    const char *name,
+    const ussr_value_t *value,
+    ussr_var_place_t place,
+    size_t slot
+)
+{
+    ussr_scope_t *scope = ussr_active_scope();
+
+    if (name == NULL || value == NULL)
+        return -1;
+
+    if (place == USSR_VAR_LOCAL && scope->local_depth > 0)
+    {
+        ussr_locals_t *top = &scope->locals[scope->local_depth - 1];
+
+        if (slot < top->name_count)
+            return ussr_locals_store(top, slot, value);
+    }
+
+    if (place == USSR_VAR_GLOBAL)
+        return ussr_scope_set(scope, name, value);
+
+    return ussr_set_variable(name, value);
 }
 
 static int ussr_remove_variable(const char *name)
@@ -875,8 +1189,22 @@ static int ussr_remove_variable(const char *name)
     ussr_scope_t *scope;
     size_t i;
 
+    ussr_locals_t *locals;
+    size_t slot;
+
     if (name == NULL)
         return -1;
+
+    locals = ussr_locals_for(name, &slot);
+    if (locals != NULL)
+    {
+        if (locals->assigned[slot])
+        {
+            ussr_value_free(&locals->values[slot]);
+            locals->assigned[slot] = 0;
+        }
+        return 0;
+    }
 
     scope = ussr_active_scope();
 
@@ -986,14 +1314,28 @@ const ussr_value_t *ussr_hash_get_value(const char *name)
     return ussr_hash_get(name);
 }
 
-void ussr_runtime_mark_gc_roots(void)
+void ussr_scope_mark_gc(const ussr_scope_t *scope)
 {
-    const ussr_scope_t *scope = &ussr_default_scope;
-    ussr_hash_entry_t *variable;
     size_t i;
+    size_t depth;
+
+    if (scope == NULL)
+        return;
 
     for (i = 0; i < scope->count; ++i)
         ussr_gc_mark_value(&scope->vars[i].value);
+
+    for (depth = 0; depth < scope->local_depth; ++depth)
+        for (i = 0; i < scope->locals[depth].name_count; ++i)
+            if (scope->locals[depth].assigned[i])
+                ussr_gc_mark_value(&scope->locals[depth].values[i]);
+}
+
+void ussr_runtime_mark_gc_roots(void)
+{
+    ussr_hash_entry_t *variable;
+
+    ussr_scope_mark_gc(&ussr_default_scope);
 
     for (variable = map; variable != NULL; variable = variable->hh.next)
         ussr_gc_mark_value(&variable->value);
@@ -1014,7 +1356,7 @@ void ussr_print_value(const ussr_value_t *value)
             break;
 
         case USSR_INTEGER:
-            printf("%ld\n", value->data.integer);
+            printf(USSR_INT_FMT "\n", value->data.integer);
             break;
 
         case USSR_REAL:
@@ -1256,15 +1598,15 @@ static int ussr_expression_evaluate(
             if (left.type == USSR_INTEGER &&
                 right.type == USSR_INTEGER)
             {
-                long a = left.data.integer;
-                long b = right.data.integer;
+                ussr_int_t a = left.data.integer;
+                ussr_int_t b = right.data.integer;
 
                 if (expression->data.binary.operator == USSR_OP_ADD)
-                    *result = ussr_integer(a + b);
+                    *result = ussr_integer(ussr_int_add(a, b));
                 else if (expression->data.binary.operator == USSR_OP_SUB)
-                    *result = ussr_integer(a - b);
+                    *result = ussr_integer(ussr_int_sub(a, b));
                 else
-                    *result = ussr_integer(a * b);
+                    *result = ussr_integer(ussr_int_mul(a, b));
             }
             else
             {
@@ -1307,8 +1649,11 @@ static int ussr_expression_evaluate(
             if (left.type == USSR_INTEGER &&
                 right.type == USSR_INTEGER)
             {
+                /* MIN / -1 overflows (and traps); it wraps to MIN. */
                 *result = ussr_integer(
-                    left.data.integer / right.data.integer
+                    right.data.integer == -1
+                        ? ussr_int_sub(0, left.data.integer)
+                        : left.data.integer / right.data.integer
                 );
             }
             else
@@ -1342,7 +1687,7 @@ static int ussr_expression_evaluate(
             }
 
             *result = ussr_integer(
-                left.data.integer % right.data.integer
+                ussr_int_mod(left.data.integer, right.data.integer)
             );
             break;
 
@@ -1365,8 +1710,7 @@ static int ussr_expression_evaluate(
             if (left.type != USSR_INTEGER ||
                 right.type != USSR_INTEGER ||
                 right.data.integer < 0 ||
-                (unsigned long)right.data.integer >=
-                    sizeof(unsigned long) * 8UL)
+                right.data.integer >= 64)
             {
                 fprintf(
                     stderr,
@@ -1380,15 +1724,15 @@ static int ussr_expression_evaluate(
             if (expression->data.binary.operator == USSR_OP_SHIFT_LEFT)
             {
                 *result = ussr_integer(
-                    (long)((unsigned long)left.data.integer <<
-                           (unsigned long)right.data.integer)
+                    (ussr_int_t)((uint64_t)left.data.integer <<
+                                 right.data.integer)
                 );
             }
             else
             {
                 *result = ussr_integer(
-                    (long)((unsigned long)left.data.integer >>
-                           (unsigned long)right.data.integer)
+                    (ussr_int_t)((uint64_t)left.data.integer >>
+                                 right.data.integer)
                 );
             }
             break;
@@ -2198,7 +2542,7 @@ ussr_external_build_argv(
             switch (values[i].type)
             {
                 case USSR_INTEGER:
-                    snprintf(buffer, sizeof(buffer), "%ld", values[i].data.integer);
+                    snprintf(buffer, sizeof(buffer), USSR_INT_FMT, values[i].data.integer);
                     break;
 
                 case USSR_REAL:
@@ -2400,7 +2744,7 @@ ussr_execute_external_io(
                 argv[i + 1] = ussr_strdup(text_value);
                 break;
             case USSR_INTEGER:
-                snprintf(buffer, sizeof(buffer), "%ld", copies[i].data.integer);
+                snprintf(buffer, sizeof(buffer), USSR_INT_FMT, copies[i].data.integer);
                 argv[i + 1] = ussr_strdup(buffer);
                 break;
             case USSR_REAL:
@@ -2484,9 +2828,9 @@ ussr_execute_external_io(
     }
 
     if (WIFEXITED(status))
-        *result = ussr_integer((long)WEXITSTATUS(status));
+        *result = ussr_integer((ussr_int_t)WEXITSTATUS(status));
     else if (WIFSIGNALED(status))
-        *result = ussr_integer(128L + (long)WTERMSIG(status));
+        *result = ussr_integer(128 + (ussr_int_t)WTERMSIG(status));
     else
         *result = ussr_integer(-1);
 
@@ -2643,6 +2987,7 @@ ussr_execute_eval(
     program = ussr_parsed_program;
     ussr_parsed_program = NULL;
 
+    ussr_parse_begin("<eval>", NULL, NULL);
     buffer = yy_scan_string(source.data.string);
 
     if (buffer == NULL)
@@ -2767,8 +3112,11 @@ static int ussr_scan_parse_field(
 
     if (strncmp(type, "INT", 3) == 0)
     {
-        long n = strtol(text, &tail, 10);
-        if (tail == text || *tail != '\0')
+        ussr_int_t n;
+
+        errno = 0;
+        n = strtoll(text, &tail, 10);
+        if (tail == text || *tail != '\0' || errno == ERANGE)
         {
             free(text);
             return -1;
@@ -2983,7 +3331,7 @@ static int ussr_execute_advanced_control(
     char *input = NULL;
     char *output = NULL;
     ussr_value_t status_value;
-    long status = 0;
+    ussr_int_t status = 0;
     int chained = 0;
 
     if (return_name == NULL ||
@@ -3611,7 +3959,7 @@ int ussr_execute_command(
     {
         if (return_name == NULL || argument_count != 0)
             return -1;
-        result = ussr_integer((long)prng64_xrp32());
+        result = ussr_integer((ussr_int_t)prng64_xrp32());
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);
@@ -3647,7 +3995,7 @@ int ussr_execute_command(
     {
         if (return_name == NULL || argument_count != 0)
             return -1;
-        result = ussr_integer((long)time(NULL));
+        result = ussr_integer((ussr_int_t)time(NULL));
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);
@@ -3859,7 +4207,7 @@ int ussr_execute_command(
         if (ussr_terminal_getch(&c) != 0)
             return -1;
 
-        result = ussr_integer((long)c);
+        result = ussr_integer((ussr_int_t)c);
         if (ussr_set_variable(return_name, &result) != 0)
         {
             ussr_value_free(&result);

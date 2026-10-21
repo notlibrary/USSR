@@ -1,0 +1,7 @@
+Quadratic equation: a*x^2 + b*x + c = 0
+Enter a b c: 2
+1
+
+--- stderr ---
+
+--- exit 0 ---

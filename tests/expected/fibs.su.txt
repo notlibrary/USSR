@@ -1,0 +1,5 @@
+Enter n: INTEGER 55
+
+--- stderr ---
+
+--- exit 0 ---

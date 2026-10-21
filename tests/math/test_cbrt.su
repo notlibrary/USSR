@@ -1,4 +1,4 @@
-$include "math.su"
+$include "../../src/libs/math.su"
 cbrt(a): 0
 print(_): a
 

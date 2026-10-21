@@ -1,0 +1,21 @@
+PASS missing variable is null
+PASS setenv succeeds
+PASS getenv reads it back
+PASS setenv overwrites
+PASS empty value accepted
+PASS empty value is empty, not null
+PASS value kept byte for byte
+PASS UTF-8 value
+PASS unsetenv succeeds
+PASS unset variable is null
+PASS unsetting a missing variable succeeds
+PASS empty name refused
+PASS name with = refused
+PASS getenv of an invalid name is null
+PASS unsetenv of an invalid name refused
+PASS child process sees the variable
+PASS cleanup
+
+--- stderr ---
+
+--- exit 0 ---

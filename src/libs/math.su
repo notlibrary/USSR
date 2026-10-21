@@ -214,7 +214,6 @@ ln(r): x [
 # Cosine based on the USSR polynomial sin() implementation.
 
 cos(r): x [
-    set(pi): 3.14159265358979323846
     set(half_pi): 1.57079632679489661923
 
     set(r): {x + half_pi}
@@ -468,7 +467,6 @@ ceil(r): x [
 # give full double precision. Negative input is mirrored at the end.
 
 atan(r): x [
-    set(pi): 3.141592653589793
     set(half_pi): 1.5707963267948966
     set(sixth_pi): 0.5235987755982988
     set(tan12): 0.2679491924311228

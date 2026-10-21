@@ -1,0 +1,20 @@
+PASS 3x4 * 4x3 is a matrix
+PASS 3x4 * 4x3 has left.rows rows
+PASS 3x4 * 4x3 has right.cols columns
+PASS 3x4 * 4x3 values
+PASS 2x5 * 5x7 is a matrix
+PASS 2x5 * 5x7 has left.rows rows
+PASS 2x5 * 5x7 has right.cols columns
+PASS 2x5 * 5x7 values
+PASS 1x3 * 3x1 reals is a matrix
+PASS 1x3 * 3x1 reals has left.rows rows
+PASS 1x3 * 3x1 reals has right.cols columns
+PASS 1x3 * 3x1 reals values
+PASS identity leaves a matrix unchanged
+PASS dimension mismatch error
+PASS second mismatch error
+PASS two-digit dimensions in the error
+
+--- stderr ---
+
+--- exit 0 ---

@@ -1,0 +1,5 @@
+Enter n: INTEGER 3628800
+
+--- stderr ---
+
+--- exit 0 ---

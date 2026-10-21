@@ -46,9 +46,8 @@ typedef struct ussr_vm_frame_t
     uint8_t return_register;
     uint32_t function_index;
     ussr_value_t saved_registers[USSR_VM_REGISTER_COUNT];
-    ussr_value_t *saved_variables;
-    unsigned char *saved_variable_existed;
-    size_t saved_variable_count;
+    /* The call's local variables live in the process scope
+     * (ussr_locals_push); the frame only restores registers. */
 } ussr_vm_frame_t;
 
 typedef struct ussr_vm_t

@@ -1,0 +1,173 @@
+# Function-local variables (manual: "Variables in functions").
+# Every check prints PASS or FAIL; tests/expected/locals.su.txt holds the
+# output. Two checks read a function's local from outside on purpose;
+# they do it through eval, which the compiler's scope warnings cannot see.
+
+global(_): counter log
+
+check(_): name got want [
+    if(_): {got = want} [
+        concat(line): "PASS " name
+    ]
+    else(_): [
+        concat(line): "FAIL " name
+    ]
+    print(_): line
+]
+
+# A helper whose temporary has the same name as its caller's.
+count_to(r): n [
+    set(i): 0
+    set(r): 0
+    while(_): {i < n} [
+        add(i): i 1
+        add(r): r 1
+    ]
+]
+
+# Recursion with temporaries: each call keeps its own a and b.
+fib(r): n [
+    set(r): n
+    if(_): {n > 1} [
+        sub(m1): n 1
+        sub(m2): n 2
+        fib(a): m1
+        fib(b): m2
+        add(r): a b
+    ]
+]
+
+depth(r): n [
+    set(here): n
+    set(r): 0
+    if(_): {n > 0} [
+        sub(next): n 1
+        depth(below): next
+        add(r): below 1
+    ]
+    # here still belongs to this call after the recursive one returned
+    if(_): {here != n} [
+        set(r): {0 - 1000}
+    ]
+]
+
+# Globals: counter and log are declared at the top level.
+bump(_): step [
+    add(counter): counter step
+    concat(log): log "+"
+]
+
+# A function-level declaration: only this function writes the global.
+remember(r): value [
+    global(_): last_seen
+    set(last_seen): value
+    set(r): value
+]
+
+# Reads a global without declaring it (remember sets it).
+recall(r): suffix [
+    concat(r): last_seen suffix
+]
+
+# Parameters shadow globals of the same name.
+shadow(r): x [
+    add(x): x 100
+    set(r): x
+]
+
+# Old behavior on request: every variable of this function is global.
+legacy(r): [
+    global(_): "*"
+    set(legacy_temp): 7
+    set(r): 1
+]
+
+leak_check(r): [
+    set(only_here): 5
+    set(r): 0
+]
+
+# eval inside a function uses the function's locals.
+eval_inside(r): [
+    set(local_value): 21
+    eval(_): "mul(local_value): local_value 2"
+    set(r): local_value
+]
+
+# A process started inside a function sees that function's locals.
+spawn_child(r): [
+    set(r): 0
+    eval(_): "set(r): spawned_value"
+]
+
+spawn_inside(r): [
+    set(spawned_value): 99
+    async(p): "spawn_child"
+    await(r): p
+]
+
+nested_outer(r): [
+    set(t): 1
+    nested_inner(r): [
+        set(t): 2
+        set(r): t
+    ]
+    nested_inner(inner):
+    add(r): t inner
+]
+
+init(ret): arg_cnt arg_vec [
+    set(i): 0
+    set(total): 0
+    while(_): {i < 3} [
+        count_to(k): 4
+        add(total): total k
+        add(i): i 1
+    ]
+    check(_): "caller's loop variable survives a helper's" i 3
+    check(_): "helper result" total 12
+
+    fib(f): 15
+    check(_): "recursion keeps temporaries apart" f 610
+    depth(d): 200
+    check(_): "deep recursion" d 200
+
+    set(counter): 0
+    set(log): ""
+    bump(_): 2
+    bump(_): 3
+    check(_): "top-level global(_) is written by functions" counter 5
+    check(_): "second global" log "++"
+
+    remember(_): "x"
+    set(seen): last_seen
+    check(_): "function-level global(_)" seen "x"
+
+    recall(s): "y"
+    check(_): "globals are readable without a declaration" s "xy"
+
+    set(x): 1
+    shadow(y): 2
+    check(_): "parameter result" y 102
+    check(_): "parameter does not touch the global" x 1
+
+    legacy(_):
+    set(lt): legacy_temp
+    check(_): "global(_): \"*\" keeps the old behavior" lt 7
+
+    leak_check(_):
+    set(leaked): 1
+    eval(_): "set(leaked): only_here"
+    check(_): "locals vanish after the call" leaked null
+
+    eval_inside(e):
+    check(_): "eval inside a function sees its locals" e 42
+
+    spawn_inside(c):
+    check(_): "a spawned process sees its parent's locals" c 99
+
+    nested_outer(n):
+    check(_): "nested definitions have their own locals" n 3
+
+    set(ret): 0
+]

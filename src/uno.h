@@ -154,6 +154,10 @@ struct ussr_vector_t
 };
 
 ussr_vector_t *ussr_vector_create(const char *element_type /* may be NULL or "" for any */);
+
+/* Removes the last item and hands it to *out (the caller owns it).
+ * Returns 1, or 0 when the vector is empty. */
+int ussr_vector_pop(ussr_vector_t *vector, ussr_value_t *out);
 void ussr_vector_retain(ussr_vector_t *vector);
 void ussr_vector_release(ussr_vector_t *vector);
 

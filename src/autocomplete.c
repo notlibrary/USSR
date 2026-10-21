@@ -242,6 +242,7 @@ static const char *ac_builtin_commands[] =
     "loop",
     "while",
     "break",
+    "global",
     "continue",
     "return",
     "set",

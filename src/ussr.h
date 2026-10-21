@@ -2,8 +2,42 @@
 #define USSR_H
 
 #include <stddef.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include "process.h"
 typedef struct ussr_command_list_t ussr_command_list_t;
+
+/*
+ * USSR integers: 64-bit signed on every platform (C `long` is 32-bit on
+ * Windows). Print them with USSR_INT_FMT, parse with strtoll.
+ */
+typedef int64_t ussr_int_t;
+#define USSR_INT_MIN INT64_MIN
+#define USSR_INT_MAX INT64_MAX
+#define USSR_INT_FMT "%" PRId64
+
+/* Integer + - * and negation wrap around (two's complement) on overflow,
+ * the same on every platform, instead of being undefined behavior. */
+static inline ussr_int_t ussr_int_add(ussr_int_t a, ussr_int_t b)
+{
+    return (ussr_int_t)((uint64_t)a + (uint64_t)b);
+}
+
+static inline ussr_int_t ussr_int_sub(ussr_int_t a, ussr_int_t b)
+{
+    return (ussr_int_t)((uint64_t)a - (uint64_t)b);
+}
+
+static inline ussr_int_t ussr_int_mul(ussr_int_t a, ussr_int_t b)
+{
+    return (ussr_int_t)((uint64_t)a * (uint64_t)b);
+}
+
+/* b must not be 0; MIN % -1 (which traps in C) is 0. */
+static inline ussr_int_t ussr_int_mod(ussr_int_t a, ussr_int_t b)
+{
+    return b == -1 ? 0 : a % b;
+}
 
 typedef struct ussr_definition_t
 {
@@ -45,7 +79,7 @@ typedef struct
 
     union
     {
-        long integer;
+        ussr_int_t integer;
         double real;
         char *string;
         int boolean;
@@ -69,11 +103,31 @@ typedef struct ussr_variable_t
  */
 typedef ussr_variable_t ussr_scope_variable_t;
 
+/* The local variables of one function call: slot i holds names[i] once
+ * assigned. `names` lists the function's local names (borrowed from the
+ * compiled program); a name not in it is looked up in the globals. The
+ * slot arrays are kept and reused by later calls at the same depth. */
+typedef struct ussr_locals_t
+{
+    ussr_value_t *values;
+    unsigned char *assigned;
+    size_t capacity;
+
+    char *const *names;
+    size_t name_count;
+} ussr_locals_t;
+
 typedef struct ussr_scope_t
 {
     ussr_scope_variable_t *vars;
     size_t count;
     size_t capacity;
+
+    /* Call stack of the process using this scope: one entry per active
+     * function call, the running function's on top. */
+    ussr_locals_t *locals;
+    size_t local_depth;
+    size_t local_capacity;
 } ussr_scope_t;
 
 /* Scope lifecycle. The current scope pointer is cooperative-thread
@@ -97,6 +151,43 @@ int ussr_scope_set(
  * the global hash namespace. Process scopes are marked by the
  * scheduler. */
 void ussr_runtime_mark_gc_roots(void);
+
+/* Mark every value of a scope: globals and all call frames' locals. */
+void ussr_scope_mark_gc(const ussr_scope_t *scope);
+
+/*
+ * Function-call locals in the current scope. ussr_locals_push starts a
+ * call whose local names are `names` (they must outlive the call);
+ * ussr_get_variable/ussr_set_variable then resolve those names in the
+ * call's own table. ussr_locals_pop ends the innermost call.
+ * ussr_locals_reset drops every call of a scope (NULL = the default
+ * scope), e.g. after a program stopped inside a function.
+ */
+int ussr_locals_push(char *const *names, size_t name_count);
+
+/* Where a LOAD_VAR/STORE_VAR operand b says a name lives: decided by the
+ * compiler inside functions, by name (local first) everywhere else. For
+ * USSR_VAR_LOCAL, slot is the name's index in the function's locals. */
+typedef enum
+{
+    USSR_VAR_BY_NAME = 0,
+    USSR_VAR_LOCAL = 1,
+    USSR_VAR_GLOBAL = 2
+} ussr_var_place_t;
+
+const ussr_value_t *ussr_get_variable_at(
+    const char *name,
+    ussr_var_place_t place,
+    size_t slot
+);
+int ussr_set_variable_at(
+    const char *name,
+    const ussr_value_t *value,
+    ussr_var_place_t place,
+    size_t slot
+);
+void ussr_locals_pop(void);
+void ussr_locals_reset(ussr_scope_t *scope);
 
 typedef enum
 {
@@ -206,6 +297,12 @@ typedef struct ussr_command_t
     ussr_argument_t *arguments;
     size_t argument_count;
 
+    /* Where the command starts, for diagnostics: the source file
+     * (interned, never freed) and its 1-based line; NULL and 0 when
+     * unknown, e.g. for commands loaded from a .ru file. */
+    const char *source_file;
+    int source_line;
+
     struct ussr_command_t *next;
 } ussr_command_t;
 
@@ -238,7 +335,7 @@ void ussr_init(void);
 void ussr_cleanup(void);
 
 ussr_value_t ussr_null(void);
-ussr_value_t ussr_integer(long value);
+ussr_value_t ussr_integer(ussr_int_t value);
 ussr_value_t ussr_real(double value);
 ussr_value_t ussr_boolean(int value);
 ussr_value_t ussr_string(const char *value);
@@ -325,6 +422,32 @@ int ussr_vector_push(ussr_vector_t *vector, ussr_value_t item);
 int ussr_vector_get(const ussr_vector_t *vector, size_t index, ussr_value_t *out);
 int ussr_vector_set(ussr_vector_t *vector, size_t index, ussr_value_t item);
 size_t ussr_vector_length(const ussr_vector_t *vector);
+
+/*
+ * Source locations while parsing. Call ussr_parse_begin() before every
+ * yyparse(): it restarts the lexer's line count and tells the parser how
+ * to turn a line of the parsed text into a file and line (lookup may be
+ * NULL, then every line is reported in `name`). ussr_parse_end() forgets
+ * the lookup context. The parser stores the result in each command's
+ * source_file/source_line.
+ */
+typedef int (*ussr_line_lookup_t)(
+    const void *context,
+    int text_line,
+    const char **file,
+    int *line
+);
+
+void ussr_parse_begin(
+    const char *name,
+    ussr_line_lookup_t lookup,
+    const void *context
+);
+void ussr_parse_end(void);
+void ussr_parse_locate(int text_line, const char **file, int *line);
+
+/* Returns a copy of name that lives until the process exits. */
+const char *ussr_source_name_intern(const char *name);
 
 
 #endif

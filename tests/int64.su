@@ -1,0 +1,82 @@
+# 64-bit integers on every platform (C long is 32-bit on Windows).
+# Every check prints PASS or FAIL; tests/expected/int64.su.txt holds the
+# output, the same on Linux and Windows. stdin: tests/expected/int64.su.in.
+$include "../src/libs/strings.su"
+
+check(_): name got want [
+    if(_): {got = want} [
+        concat(line): "PASS " name
+    ]
+    else(_): [
+        concat(line): "FAIL " name
+    ]
+    print(_): line
+]
+
+init(ret): arg_cnt arg_vec [
+    struct(Big): "n:number"
+
+    set(big): 3000000000
+    print(_): big
+    check(_): "literal above 2^31" {big > 2147483647} true
+
+    set(m): 2147483647
+    add(m): m 1
+    print(_): m
+    check(_): "2147483647 + 1 does not wrap" {m > 0} true
+
+    mul(p): 3000000000 3
+    print(_): p
+    check(_): "product above 2^32" p 9000000000
+    mul(p2): 4294967296 4294967296
+    check(_): "2^32 * 2^32 wraps to 0" p2 0
+
+    set(max): 9223372036854775807
+    print(_): max
+    add(wrap): max 1
+    print(_): wrap
+    check(_): "overflow wraps around" {wrap < 0} true
+    sub(min): wrap 0
+    check(_): "minimum is -2^63" {min = 0 - 9223372036854775807 - 1} true
+    check(_): "MIN % -1 is 0" {min % (0 - 1)} 0
+
+    # Integers compare exactly, beyond the 2^53 a double holds.
+    set(a): 9007199254740993
+    set(b): 9007199254740992
+    check(_): "= is exact beyond 2^53" {a = b} false
+    check(_): "< is exact beyond 2^53" {b < a} true
+
+    check(_): "modulo of large values" {max % 10} 7
+    check(_): "1 << 62" {1 << 62} 4611686018427387904
+    check(_): "1 << 63 is the minimum" {1 << 63} min
+    check(_): "arithmetic shift right" {min >> 62} -2
+
+    str_from_int(t): 9223372036854775807
+    check(_): "str_from_int at the maximum" t "9223372036854775807"
+    str_from_number(t2): 5000000000 2
+    check(_): "str_from_number above 2^32" t2 "5000000000"
+    str_from_number(t3): 12345678901.25 2
+    check(_): "str_from_number with decimals" t3 "12345678901.25"
+    str_to_number(n): "8589934592"
+    check(_): "str_to_number above 2^32" n 8589934592
+
+    new(o): "Big" 6000000000
+    encode(u): o
+    print(_): u
+    decode(o2): u
+    getf(n2): o2 "n"
+    check(_): "UNO round trip" n2 6000000000
+
+    scan(ok): "INT;" s
+    check(_): "scan reads a 64-bit INT" s 7000000000
+
+    time(now):
+    check(_): "time is an integer of seconds" {now > 1700000000} true
+
+    vec(v): ""
+    push(_): v 1
+    len(k): v
+    check(_): "len" k 1
+
+    set(ret): 0
+]

@@ -50,8 +50,12 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) -lm $(LDLIBS)
 
-$(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.y
+# One bison run writes both files; a two-target rule would run it twice
+# under make -j, racing on the outputs.
+$(SRC_DIR)/parser.tab.c: $(SRC_DIR)/parser.y
 	bison -d -Wall -o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.y
+
+$(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.tab.c
 
 $(SRC_DIR)/lex.yy.c: $(SRC_DIR)/lexer.l $(SRC_DIR)/parser.tab.h
 	flex -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/lexer.l

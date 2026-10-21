@@ -1,4 +1,4 @@
-$include "math.su"
+$include "../../src/libs/math.su"
 
 # Moscow, Russia: 55.7558 N, 37.6173 E
 # New York, USA: 40.7128 N, 74.0060 W

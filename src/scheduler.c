@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "socket.h"
 
@@ -274,6 +275,24 @@ static ussr_scope_t *sched_scope_clone(const ussr_scope_t *source)
         }
     }
 
+    /* Spawned from inside a function: the child also sees that call's
+     * locals, as globals, like it did before functions had locals. */
+    if (source->local_depth > 0)
+    {
+        const ussr_locals_t *top =
+            &source->locals[source->local_depth - 1];
+
+        for (i = 0; i < top->name_count; ++i)
+        {
+            if (top->assigned[i] &&
+                ussr_scope_set(clone, top->names[i], &top->values[i]) != 0)
+            {
+                ussr_scope_free(clone);
+                return NULL;
+            }
+        }
+    }
+
     return clone;
 }
 
@@ -462,10 +481,6 @@ static void sched_gc_mark_vm(const ussr_vm_t *vm)
 
         for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
             ussr_gc_mark_value(&frame->saved_registers[i]);
-
-        for (i = 0; i < frame->saved_variable_count; ++i)
-            if (frame->saved_variable_existed[i])
-                ussr_gc_mark_value(&frame->saved_variables[i]);
     }
 
     if (vm->resume_pending)
@@ -486,11 +501,7 @@ static void sched_gc_collect(void)
     for (proc = sched_procs; proc != NULL; proc = proc->next_all)
     {
         if (proc->scope != NULL)
-        {
-            size_t i;
-            for (i = 0; i < proc->scope->count; ++i)
-                ussr_gc_mark_value(&proc->scope->vars[i].value);
-        }
+            ussr_scope_mark_gc(proc->scope);
 
         sched_gc_mark_vm(&proc->vm);
 
@@ -593,11 +604,17 @@ static int sched_arg_name(
     return 0;
 }
 
+/* A pid, delay or count argument; -1 when it is not a number or does
+ * not fit the scheduler's long. */
 static long sched_arg_integer(const ussr_value_t *values, size_t index)
 {
-    if (values[index].type == USSR_INTEGER)
-        return values[index].data.integer;
-    if (values[index].type == USSR_REAL)
+    if (values[index].type == USSR_INTEGER &&
+        values[index].data.integer >= LONG_MIN &&
+        values[index].data.integer <= LONG_MAX)
+        return (long)values[index].data.integer;
+    if (values[index].type == USSR_REAL &&
+        values[index].data.real > (double)LONG_MIN &&
+        values[index].data.real < (double)LONG_MAX)
         return (long)values[index].data.real;
     return -1;
 }
@@ -773,7 +790,7 @@ static int sched_do_process(
 
 static int sched_socket_handle_arg(const ussr_value_t *values, size_t index, int *handle)
 {
-    long value;
+    ussr_int_t value;
     if (values[index].type != USSR_INTEGER) return -1;
     value = values[index].data.integer;
     if (value < 1 || value > INT32_MAX) return -1;

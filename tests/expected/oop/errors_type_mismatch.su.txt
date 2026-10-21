@@ -1,0 +1,6 @@
+
+--- stderr ---
+USSR: Point.x expects type 'number'
+USSR scheduler: process 2 (init) failed
+USSR VM: execution failed (status -1)
+--- exit 1 ---

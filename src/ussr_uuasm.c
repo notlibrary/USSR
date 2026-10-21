@@ -467,7 +467,7 @@ static int uuasm_parse_constant(
 {
     uint32_t index;
     char *end;
-    long integer;
+    ussr_int_t integer;
     double real;
     ussr_value_t value;
 
@@ -485,7 +485,7 @@ static int uuasm_parse_constant(
     if (strcmp(tokens->items[2], "int") == 0)
     {
         errno = 0;
-        integer = strtol(tokens->items[3], &end, 10);
+        integer = strtoll(tokens->items[3], &end, 10);
         if (errno != 0 || *end != '\0')
             return -1;
         value = ussr_integer(integer);
@@ -853,6 +853,10 @@ cleanup_line:
                     goto cleanup;
             }
             program->functions[i].entry = entry;
+            /* UUASM text has no local declarations: parameters and the
+             * return variable are local, every other name is global. */
+            if (ussr_bc_function_default_locals(&program->functions[i]) != 0)
+                goto cleanup;
         }
     }
 

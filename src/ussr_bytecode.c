@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <stdarg.h>
 
 
 /*
@@ -32,6 +33,135 @@ typedef struct
     size_t continue_count;
     size_t continue_capacity;
 } bc_loop_t;
+
+/*
+ * Diagnostics. The first failure of a compilation is printed as
+ * "file:line: reason", at the command being compiled; later failures on
+ * the way out are not printed again. bc_error_command is the innermost
+ * command being compiled, used when a helper has no command at hand.
+ */
+static const ussr_command_t *bc_error_command = NULL;
+static int bc_error_reported = 0;
+
+static void bc_error(
+    const ussr_command_t *command,
+    const char *format,
+    ...
+)
+{
+    va_list arguments;
+
+    if (bc_error_reported)
+        return;
+
+    bc_error_reported = 1;
+
+    if (command == NULL)
+        command = bc_error_command;
+
+    if (command != NULL && command->source_file != NULL)
+        fprintf(
+            stderr,
+            "%s:%d: ",
+            command->source_file,
+            command->source_line
+        );
+    else
+        fputs("USSR compiler: ", stderr);
+
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
+}
+
+static void bc_warning(
+    const ussr_command_t *command,
+    const char *format,
+    ...
+)
+{
+    va_list arguments;
+
+    if (command != NULL && command->source_file != NULL)
+        fprintf(
+            stderr,
+            "%s:%d: warning: ",
+            command->source_file,
+            command->source_line
+        );
+    else
+        fputs("USSR compiler: warning: ", stderr);
+
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
+}
+
+/*
+ * Variable scope (manual, "Variables in functions"). Names declared with
+ * global(_) at the top level are global in every function; "*" there
+ * makes every non-parameter variable global (the old behavior).
+ * bc_code_commands remembers which command emitted each instruction,
+ * for the warnings.
+ */
+typedef struct
+{
+    char **items;
+    size_t count;
+    size_t capacity;
+} bc_names_t;
+
+static bc_names_t bc_program_globals;
+static int bc_program_all_global = 0;
+static const ussr_command_t **bc_code_commands = NULL;
+static size_t bc_code_command_capacity = 0;
+
+static int bc_names_contains(const bc_names_t *names, const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < names->count; ++i)
+        if (strcmp(names->items[i], name) == 0)
+            return 1;
+
+    return 0;
+}
+
+/* Adds a borrowed name once; the list never owns its strings. */
+static int bc_names_add(bc_names_t *names, const char *name)
+{
+    if (bc_names_contains(names, name))
+        return 0;
+
+    if (names->count == names->capacity)
+    {
+        size_t capacity = names->capacity == 0 ? 16 : names->capacity * 2;
+        char **items = realloc(names->items, capacity * sizeof(*items));
+
+        if (items == NULL)
+            return -1;
+        names->items = items;
+        names->capacity = capacity;
+    }
+
+    names->items[names->count++] = (char *)name;
+    return 0;
+}
+
+static void bc_names_free(bc_names_t *names)
+{
+    free(names->items);
+    memset(names, 0, sizeof(*names));
+}
+
+static int bc_is_variable_argument(const ussr_argument_t *argument)
+{
+    return argument->type == USSR_ARGUMENT_EXPRESSION &&
+           argument->data.expression != NULL &&
+           argument->data.expression->type == USSR_EXPR_VARIABLE;
+}
 
 static char *bc_strdup(const char *s)
 {
@@ -80,6 +210,20 @@ static int bc_emit(
         p->code = q;
         p->code_capacity = capacity;
     }
+
+    if (p->code_count >= bc_code_command_capacity)
+    {
+        size_t grown = bc_code_command_capacity == 0
+            ? 256 : bc_code_command_capacity * 2;
+        const ussr_command_t **commands = realloc(
+            (void *)bc_code_commands, grown * sizeof(*commands));
+
+        if (commands == NULL)
+            return -1;
+        bc_code_commands = commands;
+        bc_code_command_capacity = grown;
+    }
+    bc_code_commands[p->code_count] = bc_error_command;
 
     p->code[p->code_count].opcode = opcode;
     p->code[p->code_count].a = a;
@@ -230,6 +374,80 @@ static int bc_is_definition(
     return 1;
 }
 
+/* Adds the names of one global(_): declaration to names; "*" sets *all. */
+static int bc_declare_globals(
+    const ussr_command_t *command,
+    bc_names_t *names,
+    int *all
+)
+{
+    size_t i;
+
+    for (i = 0; i < command->argument_count; ++i)
+    {
+        const ussr_argument_t *a = &command->arguments[i];
+
+        if (bc_is_variable_argument(a))
+        {
+            if (bc_names_add(names, a->data.expression->data.variable) != 0)
+                return -1;
+        }
+        else if (a->type == USSR_ARGUMENT_VALUE &&
+                 a->data.value.type == USSR_STRING &&
+                 strcmp(a->data.value.data.string, "*") == 0)
+        {
+            *all = 1;
+        }
+        else
+        {
+            bc_error(
+                command,
+                "global expects variable names (or \"*\")"
+            );
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* Collects global(_) declarations in list and its blocks, not looking
+ * into function definitions (they have their own). */
+static int bc_collect_globals(
+    const ussr_command_list_t *list,
+    bc_names_t *names,
+    int *all
+)
+{
+    const ussr_command_t *command;
+    size_t i;
+
+    if (list == NULL)
+        return 0;
+
+    for (command = list->head; command != NULL; command = command->next)
+    {
+        if (bc_is_definition(command))
+            continue;
+
+        if (strcmp(command->name, "global") == 0)
+        {
+            if (bc_declare_globals(command, names, all) != 0)
+                return -1;
+            continue;
+        }
+
+        for (i = 0; i < command->argument_count; ++i)
+            if (command->arguments[i].type == USSR_ARGUMENT_COMMAND_LIST &&
+                bc_collect_globals(
+                    command->arguments[i].data.command_list,
+                    names, all) != 0)
+                return -1;
+    }
+
+    return 0;
+}
+
 static int bc_collect_functions(
     ussr_bc_program_t *p,
     const ussr_command_list_t *list
@@ -255,9 +473,9 @@ static int bc_collect_functions(
 
             if (bc_find_function(p, command->name) != NULL)
             {
-                fprintf(
-                    stderr,
-                    "USSR compiler: duplicate function '%s'\n",
+                bc_error(
+                    command,
+                    "function '%s' is defined twice",
                     command->name
                 );
                 return -1;
@@ -314,12 +532,12 @@ static int bc_collect_functions(
                         a->data.expression->type !=
                             USSR_EXPR_VARIABLE)
                     {
-                        fprintf(
-                            stderr,
-                            "USSR compiler: function '%s' "
-                            "parameter %zu must be an identifier\n",
-                            command->name,
-                            j
+                        bc_error(
+                            command,
+                            "parameter %zu of function '%s' must be a "
+                            "name",
+                            j + 1,
+                            command->name
                         );
                         return -1;
                     }
@@ -642,10 +860,7 @@ static int bc_compile_expression(
                 ) < 0 ? -1 : 0;
             }
 
-            fprintf(
-                stderr,
-                "USSR compiler: unsupported unary operator\n"
-            );
+            bc_error(NULL, "unsupported unary operator");
             return -1;
 
         case USSR_EXPR_BINARY:
@@ -654,9 +869,9 @@ static int bc_compile_expression(
 
             if (right_reg >= USSR_BC_RETURN_REG)
             {
-                fprintf(
-                    stderr,
-                    "USSR compiler: expression register pressure exceeded\n"
+                bc_error(
+                    NULL,
+                    "expression is nested too deeply; split it with set"
                 );
                 return -1;
             }
@@ -745,10 +960,7 @@ static int bc_compile_argument(
                 argument->data.expression->type !=
                     USSR_EXPR_VARIABLE)
             {
-                fprintf(
-                    stderr,
-                    "USSR compiler: hash lookup requires an identifier\n"
-                );
+                bc_error(NULL, "'?' lookup needs a variable name");
                 return -1;
             }
 
@@ -788,10 +1000,7 @@ static int bc_compile_argument(
             ) < 0 ? -1 : 0;
 
         case USSR_ARGUMENT_COMMAND_LIST:
-            fprintf(
-                stderr,
-                "USSR compiler: command block cannot be used as a value\n"
-            );
+            bc_error(NULL, "a [ ] block cannot be used as a value here");
             return -1;
 
         default:
@@ -969,7 +1178,36 @@ static int bc_compile_choose(
     const ussr_command_t **next_out
 );
 
+static int bc_compile_command_body(
+    ussr_bc_program_t *p,
+    const ussr_command_t *command,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current
+);
+
 static int bc_compile_command(
+    ussr_bc_program_t *p,
+    const ussr_command_t *command,
+    bc_loop_t *loop,
+    ussr_bc_function_t *current
+)
+{
+    const ussr_command_t *outer = bc_error_command;
+    int result;
+
+    bc_error_command = command;
+    result = bc_compile_command_body(p, command, loop, current);
+
+    /* Every failure gets a location, even one without its own message
+     * (running out of memory, for example). */
+    if (result != 0 && command != NULL)
+        bc_error(command, "cannot compile '%s'", command->name);
+
+    bc_error_command = outer;
+    return result;
+}
+
+static int bc_compile_command_body(
     ussr_bc_program_t *p,
     const ussr_command_t *command,
     bc_loop_t *loop,
@@ -994,6 +1232,10 @@ static int bc_compile_command(
     a = command->arguments;
     count = command->argument_count;
 
+    /* global(_): names... is a declaration; it emits no code. */
+    if (strcmp(command->name, "global") == 0)
+        return 0;
+
     /*
      * if(condition): [then] [else]
      *
@@ -1005,7 +1247,14 @@ static int bc_compile_command(
             a[1].type != USSR_ARGUMENT_COMMAND_LIST ||
             (count == 3 &&
              a[2].type != USSR_ARGUMENT_COMMAND_LIST))
+        {
+            bc_error(
+                command,
+                "if expects a condition and a [ ] block "
+                "(optionally followed by an else block)"
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1118,7 +1367,10 @@ if (strcmp(command->name, "do") == 0)
          */
         if (count != 2 ||
             a[1].type != USSR_ARGUMENT_COMMAND_LIST)
+        {
+            bc_error(command, "do expects a value and a [ ] body");
             return -1;
+        }
 
         loop_command = command->next;
 
@@ -1126,9 +1378,9 @@ if (strcmp(command->name, "do") == 0)
             strcmp(loop_command->name, "loop") != 0 ||
             loop_command->argument_count != 1)
         {
-            fprintf(
-                stderr,
-                "USSR compiler: do must be followed by loop(condition)\n"
+            bc_error(
+                command,
+                "do must be followed by loop(_): condition"
             );
             return -1;
         }
@@ -1262,7 +1514,10 @@ do_error:
         if (count != 2 ||
             a[1].type != USSR_ARGUMENT_COMMAND_LIST ||
             a[1].data.command_list == NULL)
+        {
+            bc_error(command, "for expects a condition and a [ ] block");
             return -1;
+        }
 
         for_body = a[1].data.command_list;
         initializer = for_body->head;
@@ -1273,9 +1528,10 @@ do_error:
          * is the body, including zero or more commands. */
         if (initializer == NULL || iterator == NULL)
         {
-            fprintf(
-                stderr,
-                "USSR compiler: for requires initializer and iterator commands\n"
+            bc_error(
+                command,
+                "for needs an initializer and an iterator command "
+                "at the start of its block"
             );
             return -1;
         }
@@ -1308,9 +1564,9 @@ do_error:
             {
                 if (next == NULL || strcmp(next->name, "loop") != 0)
                 {
-                    fprintf(
-                        stderr,
-                        "USSR compiler: do must be followed by loop(condition)\n"
+                    bc_error(
+                        body,
+                        "do must be followed by loop(_): condition"
                     );
                     goto for_error;
                 }
@@ -1321,10 +1577,7 @@ do_error:
             {
                 if (strcmp(body->name, "loop") == 0)
                 {
-                    fprintf(
-                        stderr,
-                        "USSR compiler: loop must follow do\n"
-                    );
+                    bc_error(body, "loop without a do before it");
                     goto for_error;
                 }
 
@@ -1388,7 +1641,10 @@ for_error:
 
         if (count != 2 ||
             a[1].type != USSR_ARGUMENT_COMMAND_LIST)
+        {
+            bc_error(command, "while expects a condition and a [ ] body");
             return -1;
+        }
 
         start = p->code_count;
 
@@ -1481,8 +1737,22 @@ while_error:
     {
         int jump;
 
-        if (loop == NULL || count > 1)
+        if (loop == NULL)
+        {
+            bc_error(command, "%s outside a loop", command->name);
             return -1;
+        }
+
+        if (count > 1)
+        {
+            bc_error(
+                command,
+                "%s takes at most one value, got %zu",
+                command->name,
+                count
+            );
+            return -1;
+        }
 
         if (count == 1)
         {
@@ -1531,8 +1801,17 @@ while_error:
 
 	if (strcmp(command->name, "return") == 0)
 	{
-		if (current == NULL || count != 1)
+		if (current == NULL)
+		{
+			bc_error(command, "return outside a function");
 			return -1;
+		}
+
+		if (count != 1)
+		{
+			bc_error(command, "return expects one value, got %zu", count);
+			return -1;
+		}
 
 		/*
 		 * RETURN_REG is reserved for CALL results and cannot be used
@@ -1574,18 +1853,27 @@ while_error:
     {
         if (count != function->parameter_count)
         {
-            fprintf(
-                stderr,
-                "USSR compiler: %s expects %zu parameter%s\n",
+            bc_error(
+                command,
+                "function '%s' expects %zu parameter%s, got %zu",
                 command->name,
                 function->parameter_count,
-                function->parameter_count == 1 ? "" : "s"
+                function->parameter_count == 1 ? "" : "s",
+                count
             );
             return -1;
         }
 
         if (count >= USSR_BC_RETURN_REG)
+        {
+            bc_error(
+                command,
+                "'%s' has too many parameters (at most %d)",
+                command->name,
+                USSR_BC_RETURN_REG - 1
+            );
             return -1;
+        }
 
         for (i = 0; i < count; ++i)
         {
@@ -1623,7 +1911,10 @@ while_error:
         int vector_name;
 
         if (command->return_name == NULL)
+        {
+            bc_error(command, "set(vector): index value needs a vector name");
             return -1;
+        }
 
         vector_name = bc_add_string(p, command->return_name);
         if (vector_name < 0)
@@ -1651,7 +1942,15 @@ while_error:
     {
         if (count != 1 ||
             command->return_name == NULL)
+        {
+            bc_error(
+                command,
+                "set expects one value (or an index and a value for a "
+                "vector), got %zu",
+                count
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1671,7 +1970,15 @@ while_error:
     {
         if (count != 1 ||
             command->return_name == NULL)
+        {
+            bc_error(
+                command,
+                "print expects exactly one value, got %zu "
+                "(join values with concat first)",
+                count
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1705,7 +2012,15 @@ while_error:
     {
         if (count != 2 ||
             command->return_name == NULL)
+        {
+            bc_error(
+                command,
+                "%s expects two values, got %zu",
+                command->name,
+                count
+            );
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0 ||
             bc_compile_argument(p, &a[1], 1) != 0)
@@ -1755,7 +2070,15 @@ while_error:
         if (count < 2 ||
             command->return_name == NULL ||
             count >= USSR_BC_RETURN_REG)
+        {
+            bc_error(
+                command,
+                "concat expects 2 to %d values, got %zu",
+                USSR_BC_RETURN_REG - 1,
+                count
+            );
             return -1;
+        }
 
         for (i = 0; i < count; ++i)
         {
@@ -1799,10 +2122,15 @@ while_error:
         int destination_name;
 
         if (command->return_name == NULL ||
-            a[1].type != USSR_ARGUMENT_EXPRESSION ||
-            a[1].data.expression == NULL ||
-            a[1].data.expression->type != USSR_EXPR_VARIABLE)
+            !bc_is_variable_argument(&a[1]))
+        {
+            bc_error(
+                command,
+                "get(vector): index destination needs a variable name as "
+                "the destination"
+            );
             return -1;
+        }
 
         destination = a[1].data.expression;
         vector_name = bc_add_string(p, command->return_name);
@@ -1839,10 +2167,18 @@ while_error:
         int destination_index;
 
         if (count != 1 || command->return_name == NULL ||
-            a[0].type != USSR_ARGUMENT_EXPRESSION ||
-            a[0].data.expression == NULL ||
-            a[0].data.expression->type != USSR_EXPR_VARIABLE)
+            !bc_is_variable_argument(&a[0]))
+        {
+            bc_error(
+                command,
+                count == 1
+                    ? "get(source): destination needs a variable name as "
+                      "the destination"
+                    : "get expects a destination (or an index and a "
+                      "destination for a vector)"
+            );
             return -1;
+        }
 
         expression = a[0].data.expression;
         source_index = bc_add_string(p, command->return_name);
@@ -1864,7 +2200,10 @@ while_error:
     if (strcmp(command->name, "random64") == 0)
     {
         if (count != 0 || command->return_name == NULL)
+        {
+            bc_error(command, "random64 takes no parameters");
             return -1;
+        }
         if (bc_emit(p, USSR_BC_RANDOM64, USSR_BC_RETURN_REG,
                     0, 0, 0) < 0)
             return -1;
@@ -1876,7 +2215,11 @@ while_error:
     if (strcmp(command->name, "seed_random64") == 0)
     {
         if (count != 1 || command->return_name == NULL)
+        {
+            bc_error(command, "seed_random64 expects one seed, got %zu",
+                     count);
             return -1;
+        }
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
         if (bc_emit(p, USSR_BC_SEED64, USSR_BC_RETURN_REG,
@@ -1890,7 +2233,10 @@ while_error:
     if (strcmp(command->name, "time") == 0)
     {
         if (count != 0 || command->return_name == NULL)
+        {
+            bc_error(command, "time takes no parameters");
             return -1;
+        }
         if (bc_emit(p, USSR_BC_TIME, USSR_BC_RETURN_REG,
                     0, 0, 0) < 0)
             return -1;
@@ -1907,14 +2253,25 @@ while_error:
             a[0].type != USSR_ARGUMENT_VALUE ||
             a[0].data.value.type != USSR_STRING ||
             count - 1 > 255)
+        {
+            bc_error(
+                command,
+                "scan expects a format string and 1 to 255 variables"
+            );
             return -1;
+        }
 
         for (i = 1; i < count; ++i)
         {
-            if (a[i].type != USSR_ARGUMENT_EXPRESSION ||
-                a[i].data.expression == NULL ||
-                a[i].data.expression->type != USSR_EXPR_VARIABLE)
+            if (!bc_is_variable_argument(&a[i]))
+            {
+                bc_error(
+                    command,
+                    "scan destination %zu must be a variable name",
+                    i
+                );
                 return -1;
+            }
         }
 
         index = bc_add_string(p, a[0].data.value.data.string);
@@ -1942,12 +2299,21 @@ while_error:
             a[0].type != USSR_ARGUMENT_VALUE ||
             a[0].data.value.type != USSR_STRING ||
             count - 1 > 255)
+        {
+            bc_error(
+                command,
+                "template expects a format string and 1 to 255 values"
+            );
             return -1;
+        }
 
         for (i = 1; i < count; ++i)
         {
             if (a[i].type == USSR_ARGUMENT_COMMAND_LIST)
+            {
+                bc_error(command, "template cannot take a [ ] block");
                 return -1;
+            }
 
             if (bc_compile_argument(p, &a[i], (uint8_t)(i - 1)) != 0)
                 return -1;
@@ -1969,7 +2335,10 @@ while_error:
     if (strcmp(command->name, "cd") == 0)
     {
         if (count != 1 || command->return_name == NULL)
+        {
+            bc_error(command, "cd expects one directory, got %zu", count);
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -1987,7 +2356,10 @@ while_error:
     if (strcmp(command->name, "chain") == 0)
     {
         if (count != 0 || command->return_name == NULL)
+        {
+            bc_error(command, "chain takes no parameters");
             return -1;
+        }
 
         if (bc_emit(p, USSR_BC_CHAIN, 0, 0, 0, 0) < 0)
             return -1;
@@ -1999,7 +2371,10 @@ while_error:
     if (strcmp(command->name, "file") == 0)
     {
         if (count != 1 || command->return_name == NULL)
+        {
+            bc_error(command, "file expects one file name, got %zu", count);
             return -1;
+        }
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
         if (bc_emit(p, USSR_BC_FILE, 0, 0, 0, 0) < 0)
@@ -2017,7 +2392,10 @@ while_error:
     {
         if (count != 1 ||
             command->return_name == NULL)
+        {
+            bc_error(command, "eval expects one string, got %zu", count);
             return -1;
+        }
 
         if (bc_compile_argument(p, &a[0], 0) != 0)
             return -1;
@@ -2061,7 +2439,15 @@ while_error:
      */
     if (command->return_name == NULL ||
         count >= USSR_BC_RETURN_REG)
+    {
+        bc_error(
+            command,
+            "'%s' has too many parameters (at most %d)",
+            command->name,
+            USSR_BC_RETURN_REG - 1
+        );
         return -1;
+    }
 
     for (i = 0; i < count; ++i)
     {
@@ -2153,15 +2539,26 @@ static int bc_compile_until(
     while (command != NULL && command != stop)
     {
         const ussr_command_t *next;
+        const ussr_command_t *outer = bc_error_command;
+        int failed;
+
+        /* if/choose chains are compiled here rather than through
+         * bc_compile_command: give their failures a location too. */
+        bc_error_command = command;
+        failed = 0;
 
         if (strcmp(command->name, "if") == 0 &&
             command->argument_count == 1)
         {
             if (bc_compile_conditional_chain(
                     p, command, loop, current, &next) != 0)
-                return -1;
-            command = next;
-            continue;
+                failed = 1;
+            else
+            {
+                bc_error_command = outer;
+                command = next;
+                continue;
+            }
         }
 
         /*
@@ -2178,9 +2575,13 @@ static int bc_compile_until(
         {
             if (bc_compile_block_chain(
                     p, command, loop, current, &next) != 0)
-                return -1;
-            command = next;
-            continue;
+                failed = 1;
+            else
+            {
+                bc_error_command = outer;
+                command = next;
+                continue;
+            }
         }
 
         if (strcmp(command->name, "choose") == 0 &&
@@ -2188,17 +2589,33 @@ static int bc_compile_until(
         {
             if (bc_compile_choose(
                     p, command, loop, current, &next) != 0)
-                return -1;
-            command = next;
-            continue;
+                failed = 1;
+            else
+            {
+                bc_error_command = outer;
+                command = next;
+                continue;
+            }
         }
+
+        if (failed)
+        {
+            bc_error(command, "cannot compile '%s'", command->name);
+            bc_error_command = outer;
+            return -1;
+        }
+
+        bc_error_command = outer;
 
         if (bc_is_conditional_label(command) ||
             bc_is_choose_label(command))
         {
-            fprintf(stderr,
-                    "USSR compiler: unexpected control-flow label '%s'\n",
-                    command->name);
+            bc_error(
+                command,
+                "%s without a matching %s before it",
+                command->name,
+                bc_is_choose_label(command) ? "choose" : "if"
+            );
             return -1;
         }
 
@@ -2211,8 +2628,10 @@ static int bc_compile_until(
         {
             if (next == NULL || strcmp(next->name, "loop") != 0)
             {
-                fprintf(stderr,
-                        "USSR compiler: do must be followed by loop(condition)\n");
+                bc_error(
+                    command,
+                    "do must be followed by loop(_): condition"
+                );
                 return -1;
             }
             command = next->next;
@@ -2221,8 +2640,7 @@ static int bc_compile_until(
         {
             if (strcmp(command->name, "loop") == 0)
             {
-                fprintf(stderr,
-                        "USSR compiler: loop must follow do\n");
+                bc_error(command, "loop without a do before it");
                 return -1;
             }
             command = next;
@@ -2271,7 +2689,10 @@ static int bc_compile_conditional_chain(
         if (strcmp(branch->name, "else") == 0)
         {
             if (branch->argument_count != 0)
+            {
+                bc_error(branch, "else takes no parameters here");
                 goto cleanup;
+            }
 
             if (pending_false >= 0)
             {
@@ -2283,7 +2704,10 @@ static int bc_compile_conditional_chain(
         else
         {
             if (branch->argument_count != 1)
+            {
+                bc_error(branch, "%s expects one condition", branch->name);
                 goto cleanup;
+            }
 
             if (bc_compile_argument(
                     p, &branch->arguments[0], 0) != 0)
@@ -2404,8 +2828,7 @@ static int bc_compile_block_chain(
             if (bcount != 1 ||
                 ba[0].type != USSR_ARGUMENT_COMMAND_LIST)
             {
-                fprintf(stderr,
-                        "USSR compiler: else expects a single block\n");
+                bc_error(branch, "else expects a single [ ] block");
                 goto cleanup;
             }
             body = ba[0].data.command_list;
@@ -2424,9 +2847,11 @@ static int bc_compile_block_chain(
             if (bcount != 2 ||
                 ba[1].type != USSR_ARGUMENT_COMMAND_LIST)
             {
-                fprintf(stderr,
-                        "USSR compiler: %s expects a condition and a "
-                        "block\n", branch->name);
+                bc_error(
+                    branch,
+                    "%s expects a condition and a [ ] block",
+                    branch->name
+                );
                 goto cleanup;
             }
             body = ba[1].data.command_list;
@@ -2478,8 +2903,7 @@ static int bc_compile_block_chain(
 
         if (is_else)
         {
-            fprintf(stderr,
-                    "USSR compiler: else must be the last branch\n");
+            bc_error(next, "%s after else", next->name);
             goto cleanup;
         }
 
@@ -2569,11 +2993,19 @@ static int bc_compile_choose(
         if (strcmp(label->name, "default") == 0)
         {
             if (label->argument_count != 0 || has_default)
+            {
+                bc_error(
+                    label,
+                    has_default ? "choose has a second default"
+                                : "default takes no parameters"
+                );
                 goto cleanup;
+            }
             has_default = 1;
         }
         else if (label->argument_count != 1)
         {
+            bc_error(label, "option expects one value");
             goto cleanup;
         }
 
@@ -2584,8 +3016,7 @@ static int bc_compile_choose(
 
     if (case_count == 0)
     {
-        fprintf(stderr,
-                "USSR compiler: choose requires option/default labels\n");
+        bc_error(first, "choose must be followed by option or default");
         goto cleanup;
     }
 
@@ -2663,8 +3094,13 @@ static int bc_compile_choose(
      */
     for (size_t i = 0; i < choice_loop.continue_count; ++i)
     {
-        if (outer_loop == NULL ||
-            bc_loop_add(
+        if (outer_loop == NULL)
+        {
+            bc_error(first, "continue inside choose but outside a loop");
+            goto cleanup;
+        }
+
+        if (bc_loop_add(
                 &outer_loop->continues,
                 &outer_loop->continue_count,
                 &outer_loop->continue_capacity,
@@ -2717,6 +3153,560 @@ static int bc_compile_list(
     return 0;
 }
 
+/*
+ * Works out a compiled function's local names: its parameters and return
+ * variable, plus every name its own code stores to (and scan
+ * destinations), except names declared global in it or at the top level.
+ */
+static int bc_function_locals(
+    ussr_bc_program_t *p,
+    ussr_bc_function_t *function,
+    const ussr_command_t *definition,
+    const ussr_command_list_t *body
+)
+{
+    bc_names_t locals;
+    bc_names_t globals;
+    int all_global = 0;
+    size_t i;
+    size_t k;
+    int result = -1;
+
+    memset(&locals, 0, sizeof(locals));
+    memset(&globals, 0, sizeof(globals));
+
+    if (bc_collect_globals(body, &globals, &all_global) != 0)
+        goto done;
+
+    for (i = 0; i < globals.count; ++i)
+    {
+        int is_parameter = strcmp(globals.items[i], function->return_name) == 0;
+
+        for (k = 0; k < function->parameter_count; ++k)
+            if (strcmp(globals.items[i], function->parameters[k]) == 0)
+                is_parameter = 1;
+
+        if (is_parameter)
+        {
+            bc_error(
+                definition,
+                "'%s' is a parameter or the return variable of '%s' and "
+                "cannot be global",
+                globals.items[i],
+                function->name
+            );
+            goto done;
+        }
+    }
+
+    for (k = 0; k < function->parameter_count; ++k)
+        if (bc_names_add(&locals, function->parameters[k]) != 0)
+            goto done;
+    if (bc_names_add(&locals, function->return_name) != 0)
+        goto done;
+
+    if (!all_global && !bc_program_all_global)
+    {
+        for (k = function->entry; k < function->code_end; ++k)
+        {
+            const char *name;
+
+            if (p->code[k].opcode != USSR_BC_STORE_VAR)
+                continue;
+
+            name = p->strings[p->code[k].immediate];
+
+            if (!bc_names_contains(&globals, name) &&
+                !bc_names_contains(&bc_program_globals, name) &&
+                bc_names_add(&locals, name) != 0)
+                goto done;
+        }
+
+        for (k = 0; k < p->scan_site_count; ++k)
+        {
+            const ussr_command_t *scan = p->scan_sites[k].command;
+
+            if (p->scan_sites[k].instruction < function->entry ||
+                p->scan_sites[k].instruction >= function->code_end)
+                continue;
+
+            for (i = 1; i < scan->argument_count; ++i)
+            {
+                const char *name =
+                    scan->arguments[i].data.expression->data.variable;
+
+                if (!bc_names_contains(&globals, name) &&
+                    !bc_names_contains(&bc_program_globals, name) &&
+                    bc_names_add(&locals, name) != 0)
+                    goto done;
+            }
+        }
+    }
+
+    /* Resolve the function's own variable accesses now, so the VM does
+     * not look names up at run time: b = local (slot in c) or global.
+     * Slots past 255 do not fit c and stay resolved by name. */
+    for (k = function->entry; k < function->code_end; ++k)
+    {
+        ussr_bc_instruction_t *ins = &p->code[k];
+        size_t slot;
+
+        if (ins->opcode != USSR_BC_LOAD_VAR &&
+            ins->opcode != USSR_BC_STORE_VAR)
+            continue;
+
+        for (slot = 0; slot < locals.count; ++slot)
+            if (strcmp(locals.items[slot], p->strings[ins->immediate]) == 0)
+                break;
+
+        if (slot == locals.count)
+        {
+            ins->b = USSR_VAR_GLOBAL;
+            ins->c = 0;
+        }
+        else if (slot <= UINT8_MAX)
+        {
+            ins->b = USSR_VAR_LOCAL;
+            ins->c = (uint8_t)slot;
+        }
+        else
+        {
+            ins->b = USSR_VAR_BY_NAME;
+            ins->c = 0;
+        }
+    }
+
+    function->locals = calloc(locals.count, sizeof(*function->locals));
+    if (function->locals == NULL)
+        goto done;
+
+    for (i = 0; i < locals.count; ++i)
+    {
+        function->locals[i] = bc_strdup(locals.items[i]);
+        if (function->locals[i] == NULL)
+            goto done;
+        function->local_count = i + 1;
+    }
+
+    result = 0;
+
+done:
+    bc_names_free(&locals);
+    bc_names_free(&globals);
+    return result;
+}
+
+static int bc_function_is_local(
+    const ussr_bc_function_t *function,
+    const char *name
+)
+{
+    size_t i;
+
+    for (i = 0; i < function->local_count; ++i)
+        if (strcmp(function->locals[i], name) == 0)
+            return 1;
+
+    return 0;
+}
+
+static int bc_function_is_parameter(
+    const ussr_bc_function_t *function,
+    const char *name
+)
+{
+    size_t i;
+
+    for (i = 0; i < function->parameter_count; ++i)
+        if (strcmp(function->parameters[i], name) == 0)
+            return 1;
+
+    return 0;
+}
+
+/* The string pool keeps duplicates: map each index to the first index
+ * holding the same text. */
+static const ussr_bc_program_t *bc_sort_program;
+
+static int bc_compare_string_index(const void *a, const void *b)
+{
+    size_t x = *(const size_t *)a;
+    size_t y = *(const size_t *)b;
+    int order = strcmp(bc_sort_program->strings[x],
+                       bc_sort_program->strings[y]);
+
+    if (order != 0)
+        return order;
+    return x < y ? -1 : x > y;
+}
+
+/* canon[i] is the first index with the text of string i; *sorted gets
+ * the indices in text order, for bc_lookup_string. */
+static size_t *bc_canonical_strings(
+    const ussr_bc_program_t *p,
+    size_t **sorted
+)
+{
+    size_t *order = malloc(p->string_count * sizeof(*order));
+    size_t *canon = malloc(p->string_count * sizeof(*canon));
+    size_t i;
+
+    *sorted = NULL;
+
+    if (order == NULL || canon == NULL)
+    {
+        free(order);
+        free(canon);
+        return NULL;
+    }
+
+    for (i = 0; i < p->string_count; ++i)
+        order[i] = i;
+
+    bc_sort_program = p;
+    qsort(order, p->string_count, sizeof(*order), bc_compare_string_index);
+
+    for (i = 0; i < p->string_count; ++i)
+        canon[order[i]] =
+            i > 0 && strcmp(p->strings[order[i]], p->strings[order[i - 1]]) == 0
+                ? canon[order[i - 1]]
+                : order[i];
+
+    *sorted = order;
+    return canon;
+}
+
+/* The canonical string index with this text, or (size_t)-1. */
+static size_t bc_lookup_string(
+    const ussr_bc_program_t *p,
+    const size_t *sorted,
+    const size_t *canon,
+    const char *text
+)
+{
+    size_t low = 0;
+    size_t high = p->string_count;
+
+    while (low < high)
+    {
+        size_t middle = low + (high - low) / 2;
+        int order = strcmp(p->strings[sorted[middle]], text);
+
+        if (order == 0)
+            return canon[sorted[middle]];
+        if (order < 0)
+            low = middle + 1;
+        else
+            high = middle;
+    }
+
+    return (size_t)-1;
+}
+
+/*
+ * Warns about the mistakes function locals make likely in code written
+ * before them:
+ *  - a function reads one of its locals before setting it;
+ *  - a function sets a local it never reads while other code reads that
+ *    name (a flag or result meant for the caller);
+ *  - a name is read as a global but only ever set as a local, so the
+ *    read sees nothing (state set in init but not declared global).
+ * Warnings never stop compilation.
+ */
+static void bc_scope_warnings(const ussr_bc_program_t *p)
+{
+    size_t names = p->string_count;
+    unsigned char *global_written;
+    size_t *global_read;      /* first global read + 1, or 0 */
+    size_t *local_store;      /* first local store + 1, or 0 */
+    const ussr_bc_function_t **local_owner;
+    unsigned char *seen;
+    size_t *canon;
+    size_t *sorted = NULL;
+    size_t *reads;            /* LOAD_VAR count per name, whole program */
+    size_t *local_reads;      /* ... inside the current function */
+    size_t *first_set;        /* first store in the current function + 1 */
+    size_t *touched;          /* names the current function uses */
+    size_t touched_count;
+    unsigned char *is_touched;
+    const ussr_bc_function_t **owner;  /* per instruction, NULL = top level */
+    size_t *scan_at;          /* per instruction: scan site + 1, or 0 */
+    size_t f;
+    size_t k;
+    size_t n;
+
+    if (bc_program_all_global || names == 0)
+        return;
+
+    global_written = calloc(names, 1);
+    global_read = calloc(names, sizeof(*global_read));
+    local_store = calloc(names, sizeof(*local_store));
+    local_owner = calloc(names, sizeof(*local_owner));
+    seen = calloc(names, 1);
+    canon = bc_canonical_strings(p, &sorted);
+    reads = calloc(names, sizeof(*reads));
+    local_reads = calloc(names, sizeof(*local_reads));
+    first_set = calloc(names, sizeof(*first_set));
+    touched = malloc(names * sizeof(*touched));
+    is_touched = calloc(names, 1);
+    owner = calloc(p->code_count + 1, sizeof(*owner));
+    scan_at = calloc(p->code_count + 1, sizeof(*scan_at));
+
+    if (global_written == NULL || global_read == NULL ||
+        local_store == NULL || local_owner == NULL || seen == NULL ||
+        canon == NULL || reads == NULL || local_reads == NULL ||
+        first_set == NULL || touched == NULL || is_touched == NULL ||
+        owner == NULL || scan_at == NULL)
+        goto done;
+
+    for (f = 0; f < p->function_count; ++f)
+        for (k = p->functions[f].entry; k < p->functions[f].code_end; ++k)
+            owner[k] = &p->functions[f];
+    for (k = 0; k < p->scan_site_count; ++k)
+        if (p->scan_sites[k].instruction < p->code_count)
+            scan_at[p->scan_sites[k].instruction] = k + 1;
+
+    /* Reads of a function's own parameter say nothing about a variable
+     * of the same name elsewhere. */
+    for (k = 0; k < p->code_count; ++k)
+    {
+        if (p->code[k].opcode != USSR_BC_LOAD_VAR)
+            continue;
+
+        if (owner[k] == NULL || !bc_function_is_parameter(
+                owner[k], p->strings[p->code[k].immediate]))
+            ++reads[canon[p->code[k].immediate]];
+    }
+
+    /* Locals read before they are set, in code order. */
+    for (f = 0; f < p->function_count; ++f)
+    {
+        const ussr_bc_function_t *function = &p->functions[f];
+
+        touched_count = 0;
+
+        for (k = function->entry; k < function->code_end; ++k)
+        {
+            const ussr_bc_instruction_t *ins = &p->code[k];
+            const char *name;
+
+            if (ins->opcode == USSR_BC_SCAN && scan_at[k] != 0)
+            {
+                const ussr_command_t *scan =
+                    p->scan_sites[scan_at[k] - 1].command;
+                size_t i;
+
+                for (i = 1; i < scan->argument_count; ++i)
+                {
+                    n = bc_lookup_string(p, sorted, canon, scan->arguments[i]
+                            .data.expression->data.variable);
+                    if (n == (size_t)-1)
+                        continue;
+                    if (!is_touched[n])
+                    {
+                        is_touched[n] = 1;
+                        touched[touched_count++] = n;
+                    }
+                    seen[n] = 2;
+                }
+                continue;
+            }
+
+            if (ins->opcode != USSR_BC_LOAD_VAR &&
+                ins->opcode != USSR_BC_STORE_VAR)
+                continue;
+
+            n = canon[ins->immediate];
+            name = p->strings[n];
+
+            if (ins->b == USSR_VAR_GLOBAL ||
+                (ins->b != USSR_VAR_LOCAL &&
+                 !bc_function_is_local(function, name)))
+                continue;
+
+            if (!is_touched[n])
+            {
+                is_touched[n] = 1;
+                touched[touched_count++] = n;
+            }
+
+            if (ins->opcode == USSR_BC_STORE_VAR)
+            {
+                if (first_set[n] == 0)
+                    first_set[n] = k + 1;
+                if (seen[n] == 0)
+                    seen[n] = 2;
+            }
+            else if (local_reads[n]++ == 0 && seen[n] == 0)
+            {
+                seen[n] = 1;
+                if (!bc_function_is_parameter(function, name))
+                    bc_warning(
+                        bc_code_commands[k],
+                        "'%s' is read before it is set in '%s'; it is "
+                        "local to '%s' (declare global(_): %s if it is "
+                        "shared)",
+                        name, function->name, function->name, name
+                    );
+            }
+        }
+
+        for (k = 0; k < touched_count; ++k)
+        {
+            const char *name;
+            const ussr_command_t *setter;
+
+            n = touched[k];
+            name = p->strings[n];
+
+            if (first_set[n] == 0 || local_reads[n] != 0 ||
+                reads[n] == 0 || strcmp(name, "_") == 0 ||
+                strcmp(name, function->return_name) == 0 ||
+                bc_function_is_parameter(function, name))
+                continue;
+
+            /* Status results of control flow (if(found): ...) and struct
+             * type names are routinely left unread. */
+            setter = bc_code_commands[first_set[n] - 1];
+            if (setter != NULL &&
+                (strcmp(setter->name, "struct") == 0 ||
+                 strcmp(setter->name, "if") == 0 ||
+                 strcmp(setter->name, "elif") == 0 ||
+                 strcmp(setter->name, "else") == 0 ||
+                 strcmp(setter->name, "while") == 0 ||
+                 strcmp(setter->name, "do") == 0 ||
+                 strcmp(setter->name, "for") == 0 ||
+                 strcmp(setter->name, "choose") == 0 ||
+                 strcmp(setter->name, "break") == 0 ||
+                 strcmp(setter->name, "continue") == 0))
+                continue;
+
+            bc_warning(
+                bc_code_commands[first_set[n] - 1],
+                "'%s' is set in '%s' but never read there, while other "
+                "code reads it; it is local to '%s' (declare global(_): %s "
+                "if it is shared)",
+                name, function->name, function->name, name
+            );
+        }
+
+        for (k = 0; k < touched_count; ++k)
+        {
+            n = touched[k];
+            is_touched[n] = 0;
+            seen[n] = 0;
+            local_reads[n] = 0;
+            first_set[n] = 0;
+        }
+    }
+
+    /* Global reads and writes, and where each name is set as a local. */
+    for (k = 0; k < p->code_count; ++k)
+    {
+        const ussr_bc_instruction_t *ins = &p->code[k];
+        const ussr_bc_function_t *function;
+        int local;
+
+        if (ins->opcode != USSR_BC_LOAD_VAR &&
+            ins->opcode != USSR_BC_STORE_VAR)
+            continue;
+
+        n = canon[ins->immediate];
+        function = owner[k];
+        local = function != NULL &&
+                (ins->b == USSR_VAR_LOCAL ||
+                 (ins->b != USSR_VAR_GLOBAL &&
+                  bc_function_is_local(function, p->strings[n])));
+
+        if (ins->opcode == USSR_BC_LOAD_VAR)
+        {
+            if (!local && global_read[n] == 0)
+                global_read[n] = k + 1;
+        }
+        else if (!local)
+            global_written[n] = 1;
+        else if (local_store[n] == 0)
+        {
+            local_store[n] = k + 1;
+            local_owner[n] = function;
+        }
+    }
+
+    for (k = 0; k < p->scan_site_count; ++k)
+    {
+        const ussr_command_t *scan = p->scan_sites[k].command;
+        const ussr_bc_function_t *function =
+            p->scan_sites[k].instruction < p->code_count
+                ? owner[p->scan_sites[k].instruction] : NULL;
+        size_t i;
+
+        for (i = 1; i < scan->argument_count; ++i)
+        {
+            const char *name =
+                scan->arguments[i].data.expression->data.variable;
+
+            n = bc_lookup_string(p, sorted, canon, name);
+            if (n != (size_t)-1 &&
+                (function == NULL || !bc_function_is_local(function, name)))
+                global_written[n] = 1;
+        }
+    }
+
+    /* Parameters are locals that are set by every call. */
+    for (f = 0; f < p->function_count; ++f)
+        for (k = 0; k < p->functions[f].parameter_count; ++k)
+        {
+            n = bc_lookup_string(
+                p, sorted, canon, p->functions[f].parameters[k]);
+            if (n != (size_t)-1 && local_owner[n] == NULL)
+                local_owner[n] = &p->functions[f];
+        }
+
+    for (n = 0; n < names; ++n)
+    {
+        const ussr_command_t *where;
+
+        if (canon[n] != n || global_read[n] == 0 || global_written[n] ||
+            local_owner[n] == NULL)
+            continue;
+
+        where = local_store[n] != 0 ? bc_code_commands[local_store[n] - 1]
+                                    : NULL;
+
+        if (where != NULL && where->source_file != NULL)
+            bc_warning(
+                bc_code_commands[global_read[n] - 1],
+                "'%s' is read as a global but only set as a local (in "
+                "'%s', line %d); declare global(_): %s",
+                p->strings[n], local_owner[n]->name, where->source_line,
+                p->strings[n]
+            );
+        else
+            bc_warning(
+                bc_code_commands[global_read[n] - 1],
+                "'%s' is read as a global but only set as a local (in "
+                "'%s'); declare global(_): %s",
+                p->strings[n], local_owner[n]->name, p->strings[n]
+            );
+    }
+
+done:
+    free(global_written);
+    free(global_read);
+    free(local_store);
+    free((void *)local_owner);
+    free(seen);
+    free(canon);
+    free(reads);
+    free(local_reads);
+    free(first_set);
+    free(sorted);
+    free(touched);
+    free(is_touched);
+    free((void *)owner);
+    free(scan_at);
+}
+
 static int bc_compile_functions(
     ussr_bc_program_t *p,
     const ussr_command_list_t *list
@@ -2744,7 +3734,8 @@ static int bc_compile_functions(
 
             if (function == NULL)
             {
-                fprintf(stderr, "USSR compiler error: could not find function definition for '%s'\n", command->name);
+                bc_error(command, "function '%s' was not collected",
+                         command->name);
                 return -1;
             }
 
@@ -2762,7 +3753,8 @@ static int bc_compile_functions(
                     function
                 ) != 0)
             {
-                fprintf(stderr, "USSR compiler error: failed to compile body of function '%s'\n", function->name);
+                bc_error(command, "cannot compile function '%s'",
+                         function->name);
                 return -1;
             }
 
@@ -2782,7 +3774,8 @@ static int bc_compile_functions(
 
                 if (constant < 0)
                 {
-                    fprintf(stderr, "USSR compiler error: failed to add null constant in function '%s'\n", function->name);
+                    bc_error(command, "out of memory compiling '%s'",
+                             function->name);
                     return -1;
                 }
 
@@ -2795,7 +3788,8 @@ static int bc_compile_functions(
                         (uint32_t)constant
                     ) < 0)
                 {
-                    fprintf(stderr, "USSR compiler error: failed to emit implicit return value for function '%s'\n", function->name);
+                    bc_error(command, "out of memory compiling '%s'",
+                             function->name);
                     return -1;
                 }
             }
@@ -2809,18 +3803,22 @@ static int bc_compile_functions(
                     0
                 ) < 0)
             {
-                fprintf(stderr, "USSR compiler error: failed to emit RET instruction for function '%s'\n", function->name);
+                bc_error(command, "out of memory compiling '%s'",
+                         function->name);
                 return -1;
             }
+
+            function->code_end = (uint32_t)p->code_count;
+
+            if (bc_function_locals(p, function, command, body) != 0)
+                return -1;
 
             if (bc_compile_functions(
                     p,
                     body
                 ) != 0)
             {
-                // Ошибка во вложенных функциях уже распечатает свое имя ниже, 
-                // но можно также пометить, внутри какой функции это произошло:
-                fprintf(stderr, "USSR compiler error: failed to compile nested functions inside '%s'\n", function->name);
+                /* The nested function's failure is already reported. */
                 return -1;
             }
         }
@@ -2861,6 +3859,14 @@ static int uuasm_compile_source(
 
     memset(program, 0, sizeof(*program));
     memset(&loop, 0, sizeof(loop));
+    bc_error_command = NULL;
+    bc_error_reported = 0;
+    bc_names_free(&bc_program_globals);
+    bc_program_all_global = 0;
+
+    if (bc_collect_globals(
+            source, &bc_program_globals, &bc_program_all_global) != 0)
+        return -1;
 
     /*
      * First pass over declarations creates stable function-table
@@ -2912,10 +3918,12 @@ static int uuasm_compile_source(
         return -1;
     }
 
+    /* The top level is not a loop: break/continue there is an error
+     * (it used to jump back to the start of the program). */
     if (bc_compile_list(
             program,
             source,
-            &loop,
+            NULL,
             NULL
         ) != 0)
     {
@@ -2938,6 +3946,9 @@ static int uuasm_compile_source(
         ussr_bc_program_free(program);
         return -5;
     }
+
+    bc_scope_warnings(program);
+    bc_names_free(&bc_program_globals);
 
     return 0;
 }
@@ -2978,9 +3989,8 @@ int ussr_uuasm_compile_to_bytecode(
         uint8_t opcode;
         if (ussr_uuasm_to_vm_opcode(uuasm.code[i].opcode, &opcode) != 0)
         {
-            fprintf(stderr,
-                    "USSR compiler: UUASM opcode 0x%02x has no VM mapping\n",
-                    uuasm.code[i].opcode);
+            bc_error(NULL, "UUASM opcode 0x%02x has no VM mapping",
+                     uuasm.code[i].opcode);
             free(vm_code);
             ussr_bc_program_free(&uuasm);
             return -1;
@@ -3038,6 +4048,10 @@ void ussr_bc_program_free(
         }
 
         free(program->functions[i].parameters);
+
+        for (size_t j = 0; j < program->functions[i].local_count; ++j)
+            free(program->functions[i].locals[j]);
+        free(program->functions[i].locals);
     }
 
     free(program->functions);
@@ -3045,6 +4059,33 @@ void ussr_bc_program_free(
     free(program->scan_sites);
 
     memset(program, 0, sizeof(*program));
+}
+
+int ussr_bc_function_default_locals(ussr_bc_function_t *function)
+{
+    size_t i;
+    size_t count;
+
+    if (function == NULL || function->return_name == NULL)
+        return -1;
+
+    count = function->parameter_count + 1;
+    function->locals = calloc(count, sizeof(*function->locals));
+    if (function->locals == NULL)
+        return -1;
+
+    for (i = 0; i < count; ++i)
+    {
+        function->locals[i] = bc_strdup(
+            i < function->parameter_count
+                ? function->parameters[i]
+                : function->return_name);
+        if (function->locals[i] == NULL)
+            return -1;
+        function->local_count = i + 1;
+    }
+
+    return 0;
 }
 
 static const char *bc_opcode_name(
@@ -3128,7 +4169,7 @@ static void bc_print_value(
             break;
 
         case USSR_INTEGER:
-            printf("%ld", value->data.integer);
+            printf(USSR_INT_FMT, value->data.integer);
             break;
 
         case USSR_REAL:

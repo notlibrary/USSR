@@ -105,6 +105,15 @@ typedef struct
 
     /* Bytecode offset of the function entry point. */
     uint32_t entry;
+
+    /* Names local to each call: the parameters, the return variable and
+     * every name the body assigns that is not declared global. The VM
+     * gives every call its own variables for these. */
+    char **locals;
+    size_t local_count;
+
+    /* End of the function's own code; used by the compiler only. */
+    uint32_t code_end;
 } ussr_bc_function_t;
 
 typedef struct
@@ -167,6 +176,10 @@ int ussr_bc_compile(
 
 /* Release all compiler-owned bytecode/program storage. */
 void ussr_bc_program_free(ussr_bc_program_t *program);
+
+/* Sets a function's locals to its parameters and return variable (the
+ * rule for functions written directly in UUASM text). */
+int ussr_bc_function_default_locals(ussr_bc_function_t *function);
 
 /* Human-readable bytecode disassembly for debugging. */
 void ussr_bc_dump(const ussr_bc_program_t *program);

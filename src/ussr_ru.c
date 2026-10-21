@@ -26,11 +26,37 @@ enum
     RU_CONST_BOOLEAN = 4
 };
 
+/* Call-site argument kinds. A block is stored as syntax (it is run by the
+ * interpreter, e.g. @ chaining), see ru_put_block. */
 enum
 {
     RU_ARG_VALUE = 0,
-    RU_ARG_VARIABLE = 1
+    RU_ARG_VARIABLE = 1,
+    RU_ARG_BLOCK = 2,
+    RU_ARG_ADVANCED_BLOCK = 3
 };
+
+/* Argument kinds inside a stored block (the full syntax). */
+enum
+{
+    RU_NODE_VALUE = 0,
+    RU_NODE_EXPRESSION = 1,
+    RU_NODE_LOOKUP = 2,
+    RU_NODE_UNO = 3,
+    RU_NODE_BLOCK = 4,
+    RU_NODE_ADVANCED_BLOCK = 5
+};
+
+enum
+{
+    RU_EXPR_VALUE = 0,
+    RU_EXPR_VARIABLE = 1,
+    RU_EXPR_BINARY = 2,
+    RU_EXPR_UNARY = 3
+};
+
+/* Blocks and expressions nest; deeper input is refused, not recursed. */
+#define RU_MAX_SYNTAX_DEPTH 64
 
 /* ------------------------------------------------------------- */
 /* CRC-32 (IEEE 802.3, reflected, as used by zip and PNG)          */
@@ -182,6 +208,114 @@ static int ru_put_constant(ru_buffer_t *b, const ussr_value_t *value)
     }
 }
 
+static int ru_put_block(ru_buffer_t *b, const ussr_command_list_t *list,
+                        int depth);
+
+static int ru_put_expression(ru_buffer_t *b, const ussr_expression_t *e,
+                             int depth)
+{
+    if (e == NULL || depth > RU_MAX_SYNTAX_DEPTH)
+        return -1;
+
+    switch (e->type)
+    {
+        case USSR_EXPR_VALUE:
+            ru_put_u8(b, RU_EXPR_VALUE);
+            return ru_put_constant(b, &e->data.value);
+        case USSR_EXPR_VARIABLE:
+            ru_put_u8(b, RU_EXPR_VARIABLE);
+            ru_put_string(b, e->data.variable);
+            return 0;
+        case USSR_EXPR_BINARY:
+            ru_put_u8(b, RU_EXPR_BINARY);
+            ru_put_u8(b, (unsigned)e->data.binary.operator);
+            if (ru_put_expression(b, e->data.binary.left, depth + 1) != 0)
+                return -1;
+            return ru_put_expression(b, e->data.binary.right, depth + 1);
+        case USSR_EXPR_UNARY:
+            ru_put_u8(b, RU_EXPR_UNARY);
+            ru_put_u8(b, (unsigned)e->data.unary.operator);
+            return ru_put_expression(b, e->data.unary.operand, depth + 1);
+    }
+
+    return -1;
+}
+
+/* One argument of a command inside a stored block. */
+static int ru_put_node(ru_buffer_t *b, const ussr_argument_t *argument,
+                       int depth)
+{
+    switch (argument->type)
+    {
+        case USSR_ARGUMENT_VALUE:
+            ru_put_u8(b, RU_NODE_VALUE);
+            ru_put_u8(b, argument->assignment ? 1U : 0U);
+            return ru_put_constant(b, &argument->data.value);
+        case USSR_ARGUMENT_EXPRESSION:
+        case USSR_ARGUMENT_LOOKUP:
+            ru_put_u8(b, argument->type == USSR_ARGUMENT_LOOKUP
+                             ? RU_NODE_LOOKUP : RU_NODE_EXPRESSION);
+            ru_put_u8(b, argument->assignment ? 1U : 0U);
+            return ru_put_expression(b, argument->data.expression, depth);
+        case USSR_ARGUMENT_UNO_LITERAL:
+            ru_put_u8(b, RU_NODE_UNO);
+            ru_put_u8(b, argument->assignment ? 1U : 0U);
+            ru_put_string(b, argument->data.uno_text);
+            return 0;
+        case USSR_ARGUMENT_COMMAND_LIST:
+        case USSR_ARGUMENT_ADVANCED_LIST:
+            ru_put_u8(b, argument->type == USSR_ARGUMENT_ADVANCED_LIST
+                             ? RU_NODE_ADVANCED_BLOCK : RU_NODE_BLOCK);
+            ru_put_u8(b, argument->assignment ? 1U : 0U);
+            return ru_put_block(b, argument->data.command_list, depth + 1);
+    }
+
+    return -1;
+}
+
+/*
+ * A [ ... ] block as syntax: command count, then per command its path,
+ * name, return name and arguments, each argument as a node (kind,
+ * assignment flag, payload). The interpreter runs it as it would the
+ * parsed source.
+ */
+static int ru_put_block(ru_buffer_t *b, const ussr_command_list_t *list,
+                        int depth)
+{
+    const ussr_command_t *command;
+    uint32_t count = 0;
+    size_t i;
+
+    if (depth > RU_MAX_SYNTAX_DEPTH)
+        return -1;
+
+    if (list != NULL)
+        for (command = list->head; command != NULL; command = command->next)
+            ++count;
+
+    ru_put_u32(b, count);
+
+    if (list == NULL)
+        return 0;
+
+    for (command = list->head; command != NULL; command = command->next)
+    {
+        if (command->argument_count > 255)
+            return -1;
+
+        ru_put_string(b, command->path);
+        ru_put_string(b, command->name);
+        ru_put_string(b, command->return_name);
+        ru_put_u8(b, (unsigned)command->argument_count);
+
+        for (i = 0; i < command->argument_count; ++i)
+            if (ru_put_node(b, &command->arguments[i], depth) != 0)
+                return -1;
+    }
+
+    return 0;
+}
+
 static int ru_put_site(ru_buffer_t *b, uint32_t instruction,
                        const ussr_command_t *command, const char *kind)
 {
@@ -192,22 +326,6 @@ static int ru_put_site(ru_buffer_t *b, uint32_t instruction,
         fprintf(stderr, "USSR compile: %s site without source command\n",
                 kind);
         return -1;
-    }
-
-    for (i = 0; i < command->argument_count; ++i)
-    {
-        ussr_argument_type_t type = command->arguments[i].type;
-        if (type == USSR_ARGUMENT_COMMAND_LIST ||
-            type == USSR_ARGUMENT_ADVANCED_LIST)
-        {
-            fprintf(stderr,
-                    "USSR compile: '%s' is given a [ ... ] block as "
-                    "argument %u; blocks passed to commands cannot be "
-                    "stored in a .ru file\n",
-                    command->name != NULL ? command->name : "?",
-                    (unsigned)(i + 1));
-            return -1;
-        }
     }
 
     if (command->argument_count > 255)
@@ -225,6 +343,25 @@ static int ru_put_site(ru_buffer_t *b, uint32_t instruction,
             argument->type == USSR_ARGUMENT_EXPRESSION &&
             argument->data.expression != NULL &&
             argument->data.expression->type == USSR_EXPR_VARIABLE;
+
+        if (argument->type == USSR_ARGUMENT_COMMAND_LIST ||
+            argument->type == USSR_ARGUMENT_ADVANCED_LIST)
+        {
+            ru_put_u8(b, argument->type == USSR_ARGUMENT_ADVANCED_LIST
+                             ? RU_ARG_ADVANCED_BLOCK : RU_ARG_BLOCK);
+            ru_put_u8(b, argument->assignment ? 1U : 0U);
+            if (ru_put_block(b, argument->data.command_list, 1) != 0)
+            {
+                fprintf(stderr,
+                        "USSR compile: the [ ... ] block given to '%s' "
+                        "(argument %u) is nested more than %d deep or "
+                        "holds a value that cannot be stored\n",
+                        command->name != NULL ? command->name : "?",
+                        (unsigned)(i + 1), RU_MAX_SYNTAX_DEPTH);
+                return -1;
+            }
+            continue;
+        }
 
         ru_put_u8(b, is_variable ? RU_ARG_VARIABLE : RU_ARG_VALUE);
         ru_put_u8(b, argument->assignment ? 1U : 0U);
@@ -296,6 +433,9 @@ int ussr_ru_write_file(const ussr_bc_program_t *program, const char *path)
         ru_put_u32(&b, (uint32_t)f->parameter_count);
         for (j = 0; j < f->parameter_count; ++j)
             ru_put_string(&b, f->parameters[j]);
+        ru_put_u32(&b, (uint32_t)f->local_count);
+        for (j = 0; j < f->local_count; ++j)
+            ru_put_string(&b, f->locals[j]);
     }
 
     ru_put_u32(&b, (uint32_t)program->oop_site_count);
@@ -486,6 +626,306 @@ static int ru_known_opcode(unsigned opcode)
     }
 }
 
+static int ru_get_constant(ru_reader_t *r, ussr_value_t *out)
+{
+    unsigned tag;
+
+    *out = ussr_null();
+    if (ru_get_u8(r, &tag) != 0)
+        return -1;
+
+    switch (tag)
+    {
+        case RU_CONST_NULL:
+            return 0;
+        case RU_CONST_INTEGER:
+        {
+            uint64_t bits;
+            if (ru_get_u64(r, &bits) != 0)
+                return -1;
+            *out = ussr_integer((int64_t)bits);
+            return 0;
+        }
+        case RU_CONST_REAL:
+        {
+            uint64_t bits;
+            double real;
+            if (ru_get_u64(r, &bits) != 0)
+                return -1;
+            memcpy(&real, &bits, sizeof(real));
+            *out = ussr_real(real);
+            return 0;
+        }
+        case RU_CONST_STRING:
+        {
+            char *text;
+            if (ru_get_string(r, 0, &text) != 0)
+                return -1;
+            *out = ussr_string(text);
+            free(text);
+            return 0;
+        }
+        case RU_CONST_BOOLEAN:
+        {
+            unsigned flag;
+            if (ru_get_u8(r, &flag) != 0)
+                return -1;
+            if (flag > 1)
+                return ru_fail(r, "invalid boolean constant");
+            *out = ussr_boolean((int)flag);
+            return 0;
+        }
+        default:
+            return ru_fail(r, "unknown constant type");
+    }
+}
+
+static ussr_command_list_t *ru_get_block(ru_reader_t *r, int depth);
+
+static ussr_expression_t *ru_get_expression(ru_reader_t *r, int depth)
+{
+    ussr_expression_t *e;
+    unsigned tag;
+    unsigned op;
+
+    if (depth > RU_MAX_SYNTAX_DEPTH)
+    {
+        ru_fail(r, "a stored block is nested too deeply");
+        return NULL;
+    }
+    if (ru_get_u8(r, &tag) != 0)
+        return NULL;
+
+    e = calloc(1, sizeof(*e));
+    if (e == NULL)
+    {
+        ru_fail(r, "out of memory");
+        return NULL;
+    }
+
+    switch (tag)
+    {
+        case RU_EXPR_VALUE:
+            e->type = USSR_EXPR_VALUE;
+            if (ru_get_constant(r, &e->data.value) == 0)
+                return e;
+            break;
+        case RU_EXPR_VARIABLE:
+            e->type = USSR_EXPR_VARIABLE;
+            if (ru_get_string(r, 0, &e->data.variable) == 0)
+                return e;
+            break;
+        case RU_EXPR_BINARY:
+            /* An empty value until both operands are read, so a failure
+             * frees cleanly. */
+            e->type = USSR_EXPR_VALUE;
+            e->data.value = ussr_null();
+            if (ru_get_u8(r, &op) != 0)
+                break;
+            if (op > USSR_OP_BITWISE_OR)
+            {
+                ru_fail(r, "unknown operator in a stored block");
+                break;
+            }
+            {
+                ussr_expression_t *left = ru_get_expression(r, depth + 1);
+                ussr_expression_t *right;
+
+                if (left == NULL)
+                    break;
+                right = ru_get_expression(r, depth + 1);
+                if (right == NULL)
+                {
+                    ussr_expression_free(left);
+                    break;
+                }
+                e->type = USSR_EXPR_BINARY;
+                e->data.binary.operator = (ussr_operator_t)op;
+                e->data.binary.left = left;
+                e->data.binary.right = right;
+                return e;
+            }
+        case RU_EXPR_UNARY:
+            e->type = USSR_EXPR_VALUE;
+            e->data.value = ussr_null();
+            if (ru_get_u8(r, &op) != 0)
+                break;
+            if (op > USSR_OP_BITWISE_OR)
+            {
+                ru_fail(r, "unknown operator in a stored block");
+                break;
+            }
+            {
+                ussr_expression_t *operand = ru_get_expression(r, depth + 1);
+
+                if (operand == NULL)
+                    break;
+                e->type = USSR_EXPR_UNARY;
+                e->data.unary.operator = (ussr_operator_t)op;
+                e->data.unary.operand = operand;
+                return e;
+            }
+        default:
+            ru_fail(r, "unknown expression in a stored block");
+            break;
+    }
+
+    ussr_expression_free(e);
+    return NULL;
+}
+
+/* Frees a command that is not yet linked into a list. */
+static void ru_free_command(ussr_command_t *command)
+{
+    ussr_command_list_t *holder = calloc(1, sizeof(*holder));
+
+    if (holder == NULL)
+        return;
+    holder->head = holder->tail = command;
+    ussr_command_list_free(holder);
+}
+
+static int ru_get_node(ru_reader_t *r, ussr_argument_t *argument, int depth)
+{
+    unsigned kind;
+    unsigned assignment;
+
+    argument->type = USSR_ARGUMENT_VALUE;
+    argument->data.value = ussr_null();
+
+    if (ru_get_u8(r, &kind) != 0 || ru_get_u8(r, &assignment) != 0)
+        return -1;
+    if (assignment > 1)
+        return ru_fail(r, "invalid argument flag in a stored block");
+    argument->assignment = (int)assignment;
+
+    switch (kind)
+    {
+        case RU_NODE_VALUE:
+            return ru_get_constant(r, &argument->data.value);
+        case RU_NODE_EXPRESSION:
+        case RU_NODE_LOOKUP:
+        {
+            ussr_expression_t *e = ru_get_expression(r, depth);
+
+            if (e == NULL)
+                return -1;
+            if (kind == RU_NODE_LOOKUP && e->type != USSR_EXPR_VARIABLE)
+            {
+                ussr_expression_free(e);
+                return ru_fail(r, "a stored ? lookup is not a name");
+            }
+            argument->type = kind == RU_NODE_LOOKUP
+                ? USSR_ARGUMENT_LOOKUP : USSR_ARGUMENT_EXPRESSION;
+            argument->data.expression = e;
+            return 0;
+        }
+        case RU_NODE_UNO:
+        {
+            char *text;
+
+            if (ru_get_string(r, 0, &text) != 0)
+                return -1;
+            argument->type = USSR_ARGUMENT_UNO_LITERAL;
+            argument->data.uno_text = text;
+            return 0;
+        }
+        case RU_NODE_BLOCK:
+        case RU_NODE_ADVANCED_BLOCK:
+        {
+            ussr_command_list_t *list = ru_get_block(r, depth + 1);
+
+            if (list == NULL)
+                return -1;
+            argument->type = kind == RU_NODE_ADVANCED_BLOCK
+                ? USSR_ARGUMENT_ADVANCED_LIST : USSR_ARGUMENT_COMMAND_LIST;
+            argument->data.command_list = list;
+            return 0;
+        }
+        default:
+            return ru_fail(r, "unknown argument kind in a stored block");
+    }
+}
+
+static ussr_command_list_t *ru_get_block(ru_reader_t *r, int depth)
+{
+    ussr_command_list_t *list;
+    size_t count;
+    size_t n;
+
+    if (depth > RU_MAX_SYNTAX_DEPTH)
+    {
+        ru_fail(r, "a stored block is nested too deeply");
+        return NULL;
+    }
+
+    /* path + name + return name + argument count */
+    if (ru_get_count(r, 13, &count) != 0)
+        return NULL;
+
+    list = calloc(1, sizeof(*list));
+    if (list == NULL)
+    {
+        ru_fail(r, "out of memory");
+        return NULL;
+    }
+
+    for (n = 0; n < count; ++n)
+    {
+        ussr_command_t *command = calloc(1, sizeof(*command));
+        unsigned arguments;
+        unsigned i;
+
+        if (command == NULL)
+        {
+            ru_fail(r, "out of memory");
+            goto fail;
+        }
+
+        if (ru_get_string(r, 1, &command->path) != 0 ||
+            ru_get_string(r, 0, &command->name) != 0 ||
+            ru_get_string(r, 1, &command->return_name) != 0 ||
+            ru_get_u8(r, &arguments) != 0)
+        {
+            ru_free_command(command);
+            goto fail;
+        }
+
+        if (arguments > 0)
+        {
+            command->arguments = calloc(arguments, sizeof(*command->arguments));
+            if (command->arguments == NULL)
+            {
+                ru_fail(r, "out of memory");
+                ru_free_command(command);
+                goto fail;
+            }
+        }
+
+        for (i = 0; i < arguments; ++i)
+        {
+            command->argument_count = i + 1;
+            if (ru_get_node(r, &command->arguments[i], depth) != 0)
+            {
+                ru_free_command(command);
+                goto fail;
+            }
+        }
+
+        if (list->tail != NULL)
+            list->tail->next = command;
+        else
+            list->head = command;
+        list->tail = command;
+    }
+
+    return list;
+
+fail:
+    ussr_command_list_free(list);
+    return NULL;
+}
+
 static ussr_command_t *ru_get_site(ru_reader_t *r, uint32_t *instruction)
 {
     ussr_command_t *command;
@@ -534,7 +974,17 @@ static ussr_command_t *ru_get_site(ru_reader_t *r, uint32_t *instruction)
         }
         argument->assignment = (int)assignment;
 
-        if (kind == RU_ARG_VARIABLE)
+        if (kind == RU_ARG_BLOCK || kind == RU_ARG_ADVANCED_BLOCK)
+        {
+            ussr_command_list_t *list = ru_get_block(r, 1);
+
+            if (list == NULL)
+                goto fail;
+            argument->type = kind == RU_ARG_ADVANCED_BLOCK
+                ? USSR_ARGUMENT_ADVANCED_LIST : USSR_ARGUMENT_COMMAND_LIST;
+            argument->data.command_list = list;
+        }
+        else if (kind == RU_ARG_VARIABLE)
         {
             ussr_expression_t *expression = calloc(1, sizeof(*expression));
             if (expression == NULL)
@@ -558,14 +1008,7 @@ static ussr_command_t *ru_get_site(ru_reader_t *r, uint32_t *instruction)
     return command;
 
 fail:
-    {
-        ussr_command_list_t *holder = calloc(1, sizeof(*holder));
-        if (holder != NULL)
-        {
-            holder->head = holder->tail = command;
-            ussr_command_list_free(holder);
-        }
-    }
+    ru_free_command(command);
     return NULL;
 }
 
@@ -696,59 +1139,8 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
     }
     for (i = 0; i < count; ++i)
     {
-        unsigned tag;
-        if (ru_get_u8(r, &tag) != 0)
+        if (ru_get_constant(r, &p->constants[i]) != 0)
             return -1;
-        switch (tag)
-        {
-            case RU_CONST_NULL:
-                p->constants[i] = ussr_null();
-                break;
-            case RU_CONST_INTEGER:
-            {
-                uint64_t bits;
-                int64_t value;
-                if (ru_get_u64(r, &bits) != 0)
-                    return -1;
-                value = (int64_t)bits;
-                if (value < LONG_MIN || value > LONG_MAX)
-                    return ru_fail(r, "integer constant does not fit this "
-                                   "platform's integers");
-                p->constants[i] = ussr_integer((long)value);
-                break;
-            }
-            case RU_CONST_REAL:
-            {
-                uint64_t bits;
-                double real;
-                if (ru_get_u64(r, &bits) != 0)
-                    return -1;
-                memcpy(&real, &bits, sizeof(real));
-                p->constants[i] = ussr_real(real);
-                break;
-            }
-            case RU_CONST_STRING:
-            {
-                char *text;
-                if (ru_get_string(r, 0, &text) != 0)
-                    return -1;
-                p->constants[i] = ussr_string(text);
-                free(text);
-                break;
-            }
-            case RU_CONST_BOOLEAN:
-            {
-                unsigned flag;
-                if (ru_get_u8(r, &flag) != 0)
-                    return -1;
-                if (flag > 1)
-                    return ru_fail(r, "invalid boolean constant");
-                p->constants[i] = ussr_boolean((int)flag);
-                break;
-            }
-            default:
-                return ru_fail(r, "unknown constant type");
-        }
         p->constant_count = i + 1;
     }
     p->constant_capacity = p->constant_count;
@@ -805,6 +1197,25 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
             if (ru_get_string(r, 0, &f->parameters[j]) != 0)
                 return -1;
         }
+
+        /* Local names: at least the parameters and the return variable. */
+        {
+            size_t locals;
+
+            if (ru_get_count(r, 4, &locals) != 0)
+                return -1;
+            if (locals < parameters + 1)
+                return ru_fail(r, "a function lists too few local names");
+            f->locals = calloc(locals, sizeof(*f->locals));
+            if (f->locals == NULL)
+                return ru_fail(r, "out of memory");
+            for (j = 0; j < locals; ++j)
+            {
+                f->local_count = j + 1;
+                if (ru_get_string(r, 0, &f->locals[j]) != 0)
+                    return -1;
+            }
+        }
     }
     p->function_capacity = p->function_count;
 
@@ -827,6 +1238,9 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
                     return ru_fail(r, "a function index is out of range");
                 break;
             case USSR_BC_LOAD_VAR: case USSR_BC_STORE_VAR:
+                if (ins->b > USSR_VAR_GLOBAL)
+                    return ru_fail(r, "a variable has an unknown scope");
+                /* fall through */
             case USSR_BC_LOAD_HASH: case USSR_BC_STORE_HASH:
             case USSR_BC_DECODE_UNO: case USSR_BC_OOP:
             case USSR_BC_SCAN: case USSR_BC_EXTERNAL:

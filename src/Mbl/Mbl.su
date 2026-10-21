@@ -36,6 +36,15 @@
 
 $include "../libs/strings.su"
 
+# Editor state shared by the functions below. Every other variable a
+# function sets is local to that function.
+global(_): Mbl_buf Mbl_cx Mbl_cy Mbl_top Mbl_touched Mbl_ver_next
+global(_): Mbl_pb Mbl_count Mbl_pend Mbl_pend_count Mbl_esc
+global(_): Mbl_rows Mbl_cols Mbl_mode Mbl_ub Mbl_ux Mbl_uy Mbl_uv Mbl_rb
+global(_): Mbl_rx Mbl_ry Mbl_rv Mbl_ver Mbl_saved_ver Mbl_dirty Mbl_msg
+global(_): Mbl_fe_ok Mbl_fe_yes Mbl_bom Mbl_bom_text Mbl_file
+global(_): Mbl_showname Mbl_running
+
 # ---------- terminal helpers ----------
 
 Mbl_initesc(r): [
@@ -302,22 +311,26 @@ Mbl_delete_line(r): [
 #
 # A state is the line vector, the cursor and a version number. Edits never
 # change a line vector in place (Mbl_setline, Mbl_linedel and Mbl_lineins
-# build new ones), so a state only keeps a reference to Mbl_buf. Each stack
-# is four parallel vectors plus a size; slots past the size are reused.
+# build new ones), so a state only keeps a reference to Mbl_buf. The undo
+# and redo stacks are four parallel vectors each, pushed and popped
+# together.
 # Mbl_ver numbers the text: a change gets a fresh number on its first edit,
 # and the file is unmodified while Mbl_ver equals Mbl_saved_ver.
+
+Mbl_redo_clear(r): [
+    vec(Mbl_rb): ""
+    vec(Mbl_rx): ""
+    vec(Mbl_ry): ""
+    vec(Mbl_rv): ""
+    set(r): 0
+]
 
 Mbl_undo_reset(r): [
     vec(Mbl_ub): ""
     vec(Mbl_ux): ""
     vec(Mbl_uy): ""
     vec(Mbl_uv): ""
-    set(Mbl_un): 0
-    vec(Mbl_rb): ""
-    vec(Mbl_rx): ""
-    vec(Mbl_ry): ""
-    vec(Mbl_rv): ""
-    set(Mbl_rn): 0
+    Mbl_redo_clear(_):
     set(Mbl_ver): 0
     set(Mbl_ver_next): 1
     set(Mbl_saved_ver): 0
@@ -325,31 +338,13 @@ Mbl_undo_reset(r): [
     set(r): 0
 ]
 
-# Stores the current state in slot i of the undo (which = 0) or redo stack.
-Mbl_state_put(r): which i [
-    set(r): 0
+# Pushes the current state on the undo (which = 0) or redo stack.
+Mbl_state_push(r): which [
     if(_): {which = 0} [
-        len(Mblsp_n): Mbl_ub
-        if(_): {i < Mblsp_n} [
-            set(Mbl_ub): i Mbl_buf
-            set(Mbl_ux): i Mbl_cx
-            set(Mbl_uy): i Mbl_cy
-            set(Mbl_uv): i Mbl_ver
-        ]
-        else(_): [
-            push(_): Mbl_ub Mbl_buf
-            push(_): Mbl_ux Mbl_cx
-            push(_): Mbl_uy Mbl_cy
-            push(_): Mbl_uv Mbl_ver
-        ]
-        return(_): r
-    ]
-    len(Mblsp_n): Mbl_rb
-    if(_): {i < Mblsp_n} [
-        set(Mbl_rb): i Mbl_buf
-        set(Mbl_rx): i Mbl_cx
-        set(Mbl_ry): i Mbl_cy
-        set(Mbl_rv): i Mbl_ver
+        push(_): Mbl_ub Mbl_buf
+        push(_): Mbl_ux Mbl_cx
+        push(_): Mbl_uy Mbl_cy
+        push(_): Mbl_uv Mbl_ver
     ]
     else(_): [
         push(_): Mbl_rb Mbl_buf
@@ -357,46 +352,56 @@ Mbl_state_put(r): which i [
         push(_): Mbl_ry Mbl_cy
         push(_): Mbl_rv Mbl_ver
     ]
+    set(r): 0
 ]
 
-# Makes slot i of the undo (which = 0) or redo stack the current state.
-Mbl_state_get(r): which i [
+# Pops the top of the undo (which = 0) or redo stack into the current state.
+Mbl_state_pop(r): which [
     if(_): {which = 0} [
-        at(Mbl_buf): Mbl_ub i
-        at(Mbl_cx): Mbl_ux i
-        at(Mbl_cy): Mbl_uy i
-        at(Mbl_ver): Mbl_uv i
+        pop(Mbl_buf): Mbl_ub
+        pop(Mbl_cx): Mbl_ux
+        pop(Mbl_cy): Mbl_uy
+        pop(Mbl_ver): Mbl_uv
     ]
     else(_): [
-        at(Mbl_buf): Mbl_rb i
-        at(Mbl_cx): Mbl_rx i
-        at(Mbl_cy): Mbl_ry i
-        at(Mbl_ver): Mbl_rv i
+        pop(Mbl_buf): Mbl_rb
+        pop(Mbl_cx): Mbl_rx
+        pop(Mbl_cy): Mbl_ry
+        pop(Mbl_ver): Mbl_rv
     ]
     set(Mbl_touched): 1
     set(Mbl_dirty): 0
     if(_): {Mbl_ver != Mbl_saved_ver} [
         set(Mbl_dirty): 1
     ]
-    len(Mblsg_n): Mbl_buf
-    if(_): {Mbl_cy >= Mblsg_n} [
-        set(Mbl_cy): {Mblsg_n - 1}
+    len(n): Mbl_buf
+    if(_): {Mbl_cy >= n} [
+        set(Mbl_cy): {n - 1}
     ]
     Mbl_fixcx(_):
     Mbl_scroll(_):
     set(r): 0
 ]
 
-# Called before a command that may change the text. The state saved here
-# is what u returns to. If the previous change never edited anything
-# (i then ESC), its slot is reused.
-Mbl_begin_change(r): [
-    set(Mblbc_slot): Mbl_un
-    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
-        set(Mblbc_slot): {Mbl_un - 1}
+# The newest undo entry belongs to a command that changed nothing (i then
+# ESC): drop it.
+Mbl_drop_empty(r): [
+    len(n): Mbl_ub
+    if(_): {n > 0 && Mbl_touched = 0} [
+        pop(_): Mbl_ub
+        pop(_): Mbl_ux
+        pop(_): Mbl_uy
+        pop(_): Mbl_uv
+        set(Mbl_touched): 1
     ]
-    Mbl_state_put(_): 0 Mblbc_slot
-    set(Mbl_un): {Mblbc_slot + 1}
+    set(r): 0
+]
+
+# Called before a command that may change the text. The state saved here
+# is what u returns to.
+Mbl_begin_change(r): [
+    Mbl_drop_empty(_):
+    Mbl_state_push(_): 0
     set(Mbl_touched): 0
     set(r): 0
 ]
@@ -408,7 +413,7 @@ Mbl_touch(r): [
         set(Mbl_touched): 1
         set(Mbl_ver): Mbl_ver_next
         set(Mbl_ver_next): {Mbl_ver_next + 1}
-        set(Mbl_rn): 0
+        Mbl_redo_clear(_):
     ]
     set(Mbl_dirty): 0
     if(_): {Mbl_ver != Mbl_saved_ver} [
@@ -419,35 +424,27 @@ Mbl_touch(r): [
 
 Mbl_undo(r): [
     set(r): 0
-    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
-        # the last command changed nothing: forget its empty entry
-        set(Mbl_un): {Mbl_un - 1}
-        set(Mbl_touched): 1
-    ]
-    if(_): {Mbl_un = 0} [
+    Mbl_drop_empty(_):
+    len(n): Mbl_ub
+    if(_): {n = 0} [
         set(Mbl_msg): "already at oldest change"
         return(_): r
     ]
-    Mbl_state_put(_): 1 Mbl_rn
-    set(Mbl_rn): {Mbl_rn + 1}
-    set(Mbl_un): {Mbl_un - 1}
-    Mbl_state_get(_): 0 Mbl_un
+    Mbl_state_push(_): 1
+    Mbl_state_pop(_): 0
     set(Mbl_msg): ""
 ]
 
 Mbl_redo(r): [
     set(r): 0
-    if(_): {Mbl_rn = 0} [
+    len(n): Mbl_rb
+    if(_): {n = 0} [
         set(Mbl_msg): "already at newest change"
         return(_): r
     ]
-    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
-        set(Mbl_un): {Mbl_un - 1}
-    ]
-    Mbl_state_put(_): 0 Mbl_un
-    set(Mbl_un): {Mbl_un + 1}
-    set(Mbl_rn): {Mbl_rn - 1}
-    Mbl_state_get(_): 1 Mbl_rn
+    Mbl_drop_empty(_):
+    Mbl_state_push(_): 0
+    Mbl_state_pop(_): 1
     set(Mbl_msg): ""
 ]
 

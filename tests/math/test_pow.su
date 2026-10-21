@@ -1,4 +1,4 @@
-$include "math.su"
+$include "../../src/libs/math.su"
 
 pow(a): M_E M_PI
 print(_): a

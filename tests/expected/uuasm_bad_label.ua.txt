@@ -1,0 +1,5 @@
+
+--- stderr ---
+UUASM:2: unresolved or out-of-range label 'missing'
+
+--- exit 1 ---

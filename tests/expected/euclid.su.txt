@@ -1,0 +1,5 @@
+Enter a b: INTEGER 6
+
+--- stderr ---
+
+--- exit 6 ---

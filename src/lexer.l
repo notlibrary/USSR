@@ -4,8 +4,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 extern int fileno(FILE *);
+extern int ussr_lexer_reported;
+
+/* yylineno already counts the token's own newlines here: report the line
+ * the token starts on. */
+#define YY_USER_ACTION                                  \
+    {                                                   \
+        int ussr_i;                                     \
+        yylloc.first_line = yylineno;                   \
+        for (ussr_i = 0; ussr_i < (int)yyleng; ++ussr_i) \
+            if (yytext[ussr_i] == '\n')                 \
+                --yylloc.first_line;                    \
+        yylloc.last_line = yylineno;                    \
+    }
 
 static char *ussr_strdup(const char *text);
 static char *unquote_string(const char *text);
@@ -74,7 +88,27 @@ UNO         '([^'\\\n]|\\.)*'
 }
 
 {INTEGER}                   {
-    yylval.integer = strtol(yytext, NULL, 10);
+    errno = 0;
+    yylval.integer = strtoll(yytext, NULL, 10);
+
+    if (errno == ERANGE)
+    {
+        const char *file;
+        int line;
+
+        ussr_parse_locate(yylineno, &file, &line);
+        fprintf(
+            stderr,
+            "%s:%d: integer %s is outside -9223372036854775808..9223372036854775807 (write it as a real, e.g. %s.0)\n",
+            file,
+            line,
+            yytext,
+            yytext
+        );
+        ussr_lexer_reported = 1;
+        return LEX_ERROR;
+    }
+
     return INTEGER;
 }
 
@@ -125,14 +159,20 @@ UNO         '([^'\\\n]|\\.)*'
 }
 
 .                           {
+    const char *file;
+    int line;
+
+    ussr_parse_locate(yylineno, &file, &line);
     fprintf(
         stderr,
-        "USSR: unexpected character '%s' at line %d\n",
-        yytext,
-        yylineno
+        "%s:%d: unexpected character '%s'\n",
+        file,
+        line,
+        yytext
     );
 
-    return 0;
+    ussr_lexer_reported = 1;
+    return LEX_ERROR;
 }
 
 %%

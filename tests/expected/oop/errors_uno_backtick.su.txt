@@ -1,0 +1,6 @@
+
+--- stderr ---
+USSR: cannot encode string containing '`' or a newline in UNO
+USSR scheduler: process 2 (init) failed
+USSR VM: execution failed (status -1)
+--- exit 1 ---

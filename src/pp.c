@@ -71,6 +71,102 @@ static char *pp_strndup(const char *src, size_t length)
     return copy;
 }
 
+/* Records the origin of every output line completed since the last call. */
+static int pp_map_flush(ussr_preprocessor_t *pp)
+{
+    const char *file;
+    size_t index;
+
+    if (pp->map_length >= pp->output_length)
+        return 0;
+
+    file = pp->include_depth > 0
+        ? pp->include_stack[pp->include_depth - 1]
+        : "<stdin>";
+
+    for (index = 0; index < pp->map_file_count; ++index)
+        if (strcmp(pp->map_files[index], file) == 0)
+            break;
+
+    if (index == pp->map_file_count)
+    {
+        char **files = realloc(
+            pp->map_files,
+            (pp->map_file_count + 1) * sizeof(*files)
+        );
+
+        if (files == NULL)
+            return -1;
+        pp->map_files = files;
+        files[index] = pp_strndup(file, strlen(file));
+        if (files[index] == NULL)
+            return -1;
+        ++pp->map_file_count;
+    }
+
+    for (; pp->map_length < pp->output_length; ++pp->map_length)
+    {
+        if (pp->output[pp->map_length] != '\n')
+            continue;
+
+        if (pp->line_count == pp->line_capacity)
+        {
+            size_t capacity = pp->line_capacity == 0
+                ? 256 : pp->line_capacity * 2;
+            size_t *line_files = realloc(
+                pp->line_files, capacity * sizeof(*line_files));
+            int *line_numbers;
+
+            if (line_files == NULL)
+                return -1;
+            pp->line_files = line_files;
+            line_numbers = realloc(
+                pp->line_numbers, capacity * sizeof(*line_numbers));
+            if (line_numbers == NULL)
+                return -1;
+            pp->line_numbers = line_numbers;
+            pp->line_capacity = capacity;
+        }
+
+        pp->line_files[pp->line_count] = index;
+        pp->line_numbers[pp->line_count] = pp->current_line;
+        ++pp->line_count;
+    }
+
+    return 0;
+}
+
+int ussr_pp_locate(
+    const void *context,
+    int output_line,
+    const char **file,
+    int *line
+)
+{
+    const ussr_preprocessor_t *pp = context;
+    size_t index;
+
+    if (pp == NULL || output_line < 1 || pp->line_count == 0)
+        return -1;
+
+    index = (size_t)output_line - 1;
+
+    /* An error at the very end of the text points at its last line. */
+    if (index >= pp->line_count)
+    {
+        if (index > pp->line_count)
+            return -1;
+        index = pp->line_count - 1;
+    }
+
+    if (file != NULL)
+        *file = pp->map_files[pp->line_files[index]];
+    if (line != NULL)
+        *line = pp->line_numbers[index];
+
+    return 0;
+}
+
 static const char *pp_skip_space(const char *text)
 {
     while (*text != '\0' && isspace((unsigned char)*text))
@@ -1942,6 +2038,8 @@ void ussr_pp_clear_output(
         return;
 
     pp->output_length = 0;
+    pp->map_length = 0;
+    pp->line_count = 0;
 
     if (pp->output != NULL)
         pp->output[0] = '\0';
@@ -1980,19 +2078,22 @@ void ussr_pp_cleanup(
     free(pp->include_stack);
     free(pp->output);
 
+    for (i = 0; i < pp->map_file_count; ++i)
+        free(pp->map_files[i]);
+    free(pp->map_files);
+    free(pp->line_files);
+    free(pp->line_numbers);
+
     memset(pp, 0, sizeof(*pp));
 }
 
-int ussr_pp_process_line(
+static int pp_process_line_body(
     ussr_preprocessor_t *pp,
     const char *line
 )
 {
     const char *cursor;
     int result;
-
-    if (pp == NULL || line == NULL)
-        return -1;
 
     cursor = pp_skip_space(line);
 
@@ -2024,7 +2125,30 @@ int ussr_pp_process_line(
     return 0;
 }
 
-int ussr_pp_process_file(
+int ussr_pp_process_line(
+    ussr_preprocessor_t *pp,
+    const char *line
+)
+{
+    int result;
+
+    if (pp == NULL || line == NULL)
+        return -1;
+
+    /* Lines typed or piped into the REPL are numbered here; lines of a
+     * file are numbered by ussr_pp_process_file. */
+    if (pp->include_depth == 0)
+        ++pp->current_line;
+
+    result = pp_process_line_body(pp, line);
+
+    if (pp_map_flush(pp) != 0)
+        return -1;
+
+    return result;
+}
+
+static int pp_process_file_body(
     ussr_preprocessor_t *pp,
     const char *filename
 )
@@ -2032,6 +2156,7 @@ int ussr_pp_process_file(
     FILE *file;
     char line[4096];
     int result;
+    int at_line_start = 1;
 
     if (pp == NULL || filename == NULL)
         return -1;
@@ -2070,6 +2195,13 @@ int ussr_pp_process_file(
 
     while (fgets(line, sizeof(line), file) != NULL)
     {
+        size_t length = strlen(line);
+
+        /* A line longer than the buffer arrives in several pieces. */
+        if (at_line_start)
+            ++pp->current_line;
+        at_line_start = length > 0 && line[length - 1] == '\n';
+
         result = ussr_pp_process_line(pp, line);
 
         if (result != 0)
@@ -2113,6 +2245,25 @@ int ussr_pp_process_file(
     pp_pop_include(pp);
 
     return 0;
+}
+
+int ussr_pp_process_file(
+    ussr_preprocessor_t *pp,
+    const char *filename
+)
+{
+    int saved_line;
+    int result;
+
+    if (pp == NULL || filename == NULL)
+        return -1;
+
+    saved_line = pp->current_line;
+    pp->current_line = 0;
+    result = pp_process_file_body(pp, filename);
+    pp->current_line = saved_line;
+
+    return result;
 }
 
 const char *ussr_pp_output(

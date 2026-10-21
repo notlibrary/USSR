@@ -77,6 +77,22 @@ is supported on every platform.
 On Windows, the same binary and the same `.su` scripts work
 unmodified: `ussr.exe myscript.su`.
 
+**Exit status.** When a script has `init(ret): arg_cnt arg_vec [ ... ]`,
+the integer it leaves in `ret` is the process exit status: `0` to `255`
+as is, any other integer `1`. A `ret` that is never set (or is not an
+integer) gives `0`. A compile error or a runtime error gives `1`. The same
+holds for `.ru` files and `-e`. `moscow.su` (the startup file) stops
+`ussr` with its status when that is not `0`; the REPL ignores the
+statuses of the lines it runs.
+
+```
+init(ret): arg_cnt arg_vec [
+    set(ret): 3
+]
+```
+
+exits with status 3 (`echo $?` prints `3`).
+
 Textual assembler files can also be run directly:
 
 ```
@@ -107,10 +123,10 @@ Truncated, corrupted, or incompatible files are rejected with a message and
 exit status 1. A `.ru` file runs with the same arguments, standard input,
 output, and exit status as the source it came from.
 
-Limitation: a `[ ... ]` block passed as an argument to a command (for
-example `@(r): [ ... ] [ ... ]`, command chaining) cannot be stored yet;
-`-c` reports which command it is and writes nothing. Blocks of `if`,
-`while`, `for` and function definitions are compiled normally.
+Blocks of `if`, `while`, `for` and function definitions are compiled to
+bytecode. A `[ ... ]` block passed as an argument to a command (the two
+blocks of `@` command chaining) is run by the interpreter, so `-c` stores
+it as syntax; it behaves the same from the `.ru` file.
 
 ---
 
@@ -143,7 +159,7 @@ print(_): "hello, world"
 | Kind    | Syntax                          | Notes |
 |---------|----------------------------------|-------|
 | String  | `"like this"`                    | Backslash-escapes are supported (`\"`, `\\`, etc). |
-| Integer | `42`, `-7`                        | No decimal point. |
+| Integer | `42`, `-7`                        | No decimal point. 64-bit signed on every platform: `-9223372036854775808` to `9223372036854775807` (§5). A literal outside that range is a compile error. |
 | Real    | `3.0`, `-1.5`                     | **Must** include a decimal point. `3` and `3.0` are different types — this matters once a value goes through UNO encode/decode (§8), where a real always round-trips with its `.0`, even when whole. |
 | Boolean | `true`, `false`                  | |
 | Null    | `null`                            | Every struct field and vector slot accepts `null` regardless of its declared type (§8). |
@@ -177,10 +193,19 @@ if(_): {total > 100} [
 ]
 ```
 
-Supported operators: `+ - * / %` (arithmetic), `> < >= <= == !=`
+Supported operators: `+ - * / %` (arithmetic), `> < >= <= = !=`
 (comparison), `&& ||` (logical), `<< >> ^ & |` (bitwise
 shift/xor/and/or). Both sides of a logical expression are evaluated;
 do not rely on short-circuit evaluation.
+
+Integer arithmetic is 64-bit on every platform. `+ - *` on two
+integers give an integer and wrap around on overflow (two's complement:
+`9223372036854775807 + 1` is `-9223372036854775808`); `/` always gives a
+real; `%` needs two integers, and `x % -1` is `0`. Comparisons and `=`
+between integers are exact, also beyond the 2^53 where a real stops
+holding every integer. `<<` shifts the bits (`1 << 63` is the smallest
+integer), `>>` keeps the sign; a shift count outside `0..63` stops the
+program with an error.
 
 There are also dedicated two-argument arithmetic commands that skip
 the braces entirely, useful when the operands are already named
@@ -223,7 +248,7 @@ while(_): {condition} [
 set(i): 0
 while(_): {i < 10} [
     add(i): i 1
-    if(_): {i == 5} [
+    if(_): {i = 5} [
         continue(_): ""
     ]
     print(_): i
@@ -250,13 +275,68 @@ square(y): 5
 print(_): y   # 25
 ```
 
-Recursion works correctly — each call gets its own saved copy of the
-parameter variables, restored when the call returns, so a recursive
-call doesn't clobber the outer call's parameters of the same name.
-Variables a function sets internally (not its parameters) are *not*
-isolated this way — they're plain global variables, same as anywhere
-else in the language, so name them carefully if you're writing
-recursive functions with internal temporaries.
+**Variables in functions.** Each call of a function has its own
+*local* variables, created by the call and dropped when it returns, so
+recursion and helper functions cannot overwrite each other's
+temporaries. A function's local variables are:
+
+- its parameters and its return variable;
+- every variable a command in its body assigns — the name in a command's
+  parentheses (`set(i): 0`, `add(n): n 1`, `len(k): v`, a function call's
+  result, …) and the destinations of `get` and `scan`.
+
+A name the function only reads is a *global* variable, so constants and
+configuration need no declaration. Top-level code (outside any function)
+always uses the globals. In a program with `init`, though, top-level
+commands do not run — `init` is the entry point — so there the globals
+are whatever functions set under a `global` declaration.
+
+To assign a global from inside a function, declare it with `global`:
+
+```
+global(_): count total    # at the top level: global in every function
+
+bump(_): n [
+    add(count): count 1   # updates the global count
+    add(total): total n
+]
+
+scratch(r): v [
+    global(_): last       # inside a function: global in this function only
+    len(r): v
+    set(last): r
+]
+```
+
+`global(_): names…` at the top level is the place to declare a program's
+shared state once; inside a function it applies to that function only,
+wherever in the body it is written. Parameters and the return variable
+are always local. `init` is an ordinary function: state it sets up for
+the rest of the program must be declared global.
+
+Other rules:
+
+- `!`/`?` hash variables (§13) are unaffected: one namespace shared by
+  every process.
+- `eval` code run inside a function uses that function's variables: a
+  name local to the function is its local there, anything else a global.
+- A process started inside a function (`async`, GUI callbacks) starts
+  with a copy of the globals and of the starting function's locals, as
+  its own globals, as it did before locals existed.
+- Compatibility: `global(_): "*"` makes every variable global except the
+  parameters and the return variable — the behavior of USSR before
+  locals — at the top level for the whole program, inside a function for
+  that function.
+
+The compiler warns (`file:line: warning: …`, the program still runs)
+about the two mistakes this change makes likely in older code: reading a
+local variable before the function sets it, and reading a global that
+only ever gets set as some function's local:
+
+```
+demo.su:9: warning: 'state' is read before it is set in 'show'; it is local to 'show' (declare global(_): state if it is shared)
+demo.su:14: warning: 'mode' is read as a global but only set as a local (in 'init', line 3); declare global(_): mode
+```
 
 **`elif` / `else` chains.** `elif` and `else` are ordinary commands
 placed directly after an `if` (or another `elif`) command; the `if`
@@ -329,12 +409,15 @@ push(_): items "two"
 
 len(n): items
 at(first): items 0
+pop(last): items         # "two"; items now holds only 1
 ```
 
 - `vec(var): "ElementType"` — pass `""` for an untyped vector.
 - `push(_): vector value` — append; type-checked if the vector is
   typed.
 - `at(var): vector index` — zero-based read.
+- `pop(var): vector` — remove the last item and return it; popping an
+  empty vector is a runtime error.
 - `len(var): vector` — element count.
 
 Vectors are reference types too, same aliasing behavior as structs.
@@ -533,10 +616,34 @@ bodies.
 
 ## 12. Errors
 
-A runtime error (bad argument type, division by zero, an invalid VM
-operation, a failed `struct`/`getf`/`setf`/`push`, and so on) prints a
-message to `stderr` and halts the entire script immediately — there's
-no exception/try-catch mechanism. The process exits non-zero.
+**Before anything runs**, the whole program is parsed and compiled. A
+mistake stops it there with one message on `stderr`, in the form
+`file:line: reason` (the format compilers use, so editors and terminals
+can jump to it), and exit status 1:
+
+```
+tests/demo.su:3: print expects exactly one value, got 3 (join values with concat first)
+src/libs/mylib.su:12: add expects two values, got 1
+tests/demo.su:7: syntax error
+tests/demo.su:2: unexpected character '`'
+```
+
+The line is the one the command starts on in its original file, also
+inside `$include`d files and after skipped `$if` blocks. Text that has no
+file reports a stand-in name: `<stdin>` with the REPL's input line
+number, `<eval>` for `eval` strings, `<command line>` for `-e`. Only the
+first problem is reported; fix it and run again. Typical messages: wrong
+number of values for a builtin or a function, a value where a variable
+name is needed (`get(vector): index destination`, `scan` targets),
+`break`/`continue` outside a loop, `return` outside a function, `do`
+without `loop`, `else`/`option` without `if`/`choose`, a function defined
+twice.
+
+**At run time**, an error (bad argument type, division by zero, an
+invalid VM operation, a failed `struct`/`getf`/`setf`/`push`, and so on)
+prints a message to `stderr` and halts the entire script immediately —
+there's no exception/try-catch mechanism. The process exits non-zero.
+Run-time messages do not carry a line number yet.
 
 ---
 
@@ -761,10 +868,16 @@ typeof(t): value     # "null" "integer" "real" "string" "boolean" "vector",
                      # or a struct instance's type name
 fail(_): "message"   # print "USSR: message" and stop like any runtime error
 chr(s): byte         # one-byte string for 1..255
+finv_sqrt(r): x      # approximate 1/sqrt(x), Quake III style, for x > 0
 ```
 
-Integers are the host C `long`: 64-bit on Linux/macOS, 32-bit in MSVC builds
-(at most 2147483647). `str_int_limit(m):` reports the limit.
+`finv_sqrt` converts `x` to a 32-bit float, applies the classic bit trick
+and one Newton step, so results are within about 0.2% of `1/sqrt(x)`
+(`finv_sqrt(r): 4` gives `0.499154`). Zero, negative or non-finite input is
+a runtime error.
+
+Integers are 64-bit on every platform (§5). `str_int_limit(m):` in
+`strings.su` gives `2^62`, the largest value `str_trunc` accepts.
 
 **bytes.su — memset analogs over vectors:**
 
@@ -828,3 +941,49 @@ The textual UUASM format and instruction reference are documented in
 [`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md). The current C VM instruction
 set, runtime behavior, and bytecode status are described in
 [`USSR_VM_SPEC.md`](USSR_VM_SPEC.md).
+
+---
+
+## 16. Building and testing USSR
+
+**Linux** (gcc or clang, flex, bison; GLFW and OpenGL development files
+through `pkg-config` enable the Petersburg GUI, otherwise it is left out):
+
+```
+make -f ussr-ubuntu.mk -j"$(nproc)" ussr
+```
+
+**Windows** (Visual Studio 2022 x64 developer prompt, `win_bison` and
+`win_flex` from winflexbison3). Leave out `GLFW_DIR`/`GLFW_LIB` for a build
+without Petersburg:
+
+```
+win_bison -d -o src\parser.tab.c src\parser.y
+win_flex -o src\lexer.c src\lexer.l
+nmake /f Makefile.msc PREGENERATED=1 GLFW_DIR=C:\glfw-3.5.1.bin.WIN64 GLFW_LIB=C:\glfw-3.5.1.bin.WIN64\lib-vc2022\glfw3dll.lib
+```
+
+`glfw3.dll` must be next to `ussr.exe` (or on `PATH`) to run a GLFW build.
+
+**Tests.** Run everything from the repository root:
+
+```
+sh tests/run_all.sh                    # ./ussr, or ./ussr.exe on Windows
+USSR_SKIP_GUI=1 sh tests/run_all.sh    # without a display or GLFW
+xvfb-run -a sh tests/run_all.sh        # GUI tests on a headless Linux box
+```
+
+It runs the suites in `tests/ru`, `tests/mbl`, `tests/russia`, `tests/vectors`,
+`tests/repl`, `tests/errors` and `tests/exit`; every script in `tests/`, `tests/math` and `tests/oop`,
+comparing stdout, stderr and exit status with `tests/expected/<path>.txt`
+(stdin comes from `tests/expected/<path>.in` when that file exists); and the
+GUI tests in `tests/gui`. Each check prints a `PASS` or `FAIL` line and the
+exit status is nonzero if anything failed. After an intended change in
+output, `sh tests/run_all.sh --update` rewrites the expectations; review the
+diff before committing it. Not run: the socket and HTTP tests (they need a
+free port), `tests/chain.su` and `tests/script.su` (their output is the
+host's `ps` listing, and chaining is POSIX-only), and `tests/quines`.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same script on every
+pull request and push to `main`: Ubuntu with GLFW under Xvfb, Ubuntu without
+GLFW, and Windows with MSVC and GLFW.

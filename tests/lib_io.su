@@ -1,7 +1,7 @@
 # io.su feature test: open_file/write_file/close_file/read_file
 # roundtrip through a temporary file, plus append ("a") and binary
 # ("rb") modes and a counted read.
-$include "io.su"
+$include "../src/libs/io.su"
 
 init(ret): arg_cnt arg_vec [
     open_file(h): "tests/lib_io_tmp.txt" "w"
