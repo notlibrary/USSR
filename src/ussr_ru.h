@@ -16,8 +16,9 @@
 
 #define USSR_RU_MAGIC          "\x89USSR\r\n\x1a"
 #define USSR_RU_MAGIC_SIZE     8U
-/* 2: functions list their local variable names. */
-#define USSR_RU_FORMAT_VERSION 2U
+/* 2: functions list their local variable names.
+ * 3: [ ... ] blocks given to commands are stored as syntax. */
+#define USSR_RU_FORMAT_VERSION 3U
 
 /*
  * VM ABI revision. Bump it whenever an opcode, operand meaning or

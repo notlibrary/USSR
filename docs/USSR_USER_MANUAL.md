@@ -107,10 +107,10 @@ Truncated, corrupted, or incompatible files are rejected with a message and
 exit status 1. A `.ru` file runs with the same arguments, standard input,
 output, and exit status as the source it came from.
 
-Limitation: a `[ ... ]` block passed as an argument to a command (for
-example `@(r): [ ... ] [ ... ]`, command chaining) cannot be stored yet;
-`-c` reports which command it is and writes nothing. Blocks of `if`,
-`while`, `for` and function definitions are compiled normally.
+Blocks of `if`, `while`, `for` and function definitions are compiled to
+bytecode. A `[ ... ]` block passed as an argument to a command (the two
+blocks of `@` command chaining) is run by the interpreter, so `-c` stores
+it as syntax; it behaves the same from the `.ru` file.
 
 ---
 

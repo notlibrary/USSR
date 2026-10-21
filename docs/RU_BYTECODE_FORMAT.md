@@ -4,7 +4,7 @@ A `.ru` file is a compiled USSR program: the VM instruction stream and the
 pools it refers to, as produced by `ussr -c file.su` and run by
 `ussr file.ru`. Writer and loader live in `src/ussr_ru.c`.
 
-Format version: **2**. VM ABI version: **3**.
+Format version: **3**. VM ABI version: **3**.
 
 ## Rules
 
@@ -20,7 +20,7 @@ Format version: **2**. VM ABI version: **3**.
 ```
 offset  size  field
 0       8     signature   89 55 53 53 52 0D 0A 1A   ("\x89USSR\r\n\x1A")
-8       2     format version (2)
+8       2     format version (3)
 10      2     flags (must be 0)
 12      4     VM ABI version (3)
 16      4     producer version: major << 16 | minor << 8 | patch (informational)
@@ -93,7 +93,8 @@ count  n
 n x    instruction u32, command name string (may be absent),
        return name string (may be absent), argument count u8,
        per argument: kind u8, assignment u8 (0 or 1),
-                     kind 1 only: variable name string
+                     kind 1: variable name string
+                     kind 2 or 3: block
 ```
 
 `OOP` and `SCAN` instructions look up how their call was written: which
@@ -104,9 +105,30 @@ site's instruction must be an `OOP` (section 5) or `SCAN` (section 6)
 instruction. The loader rebuilds a small command record per site so the VM
 sees the same metadata it gets from parsed source.
 
-A `[ ... ]` block passed as a command argument (for example to `@`) is
-executable syntax tree, not data; format 1 cannot store it and `-c` refuses
-such programs with a message naming the command.
+A `[ ... ]` block passed as a command argument (the two blocks of `@`
+chaining) is run by the interpreter, so it is stored as syntax: kind 2 is a
+command list, kind 3 an advanced list. A *block* is
+
+```
+count  n                          commands
+n x    path string (may be absent), name string,
+       return name string (may be absent), argument count u8,
+       per argument: node kind u8, assignment u8 (0 or 1), payload
+```
+
+| node kind | payload |
+|-----------|---------|
+| 0 value | constant (same encoding as the constant pool) |
+| 1 expression | expression |
+| 2 `name?` lookup | expression, which must be a variable |
+| 3 `'...'` UNO literal | string (the text between the quotes) |
+| 4 block, 5 advanced block | block |
+
+An *expression* is a tag u8 and its payload: 0 a constant, 1 a variable
+name string, 2 binary (operator u8, left, right), 3 unary (operator u8,
+operand). Operators are numbered in `ussr_operator_t` order (`+` 0 … `|`
+17). Blocks and expressions deeper than 64 levels are refused when writing
+and when reading.
 
 ## Validation on load
 
@@ -145,6 +167,7 @@ for `.ua` programs.
 History: format 2 / ABI 2 added function locals (local name lists, the
 `B`/`C` operands of `LOAD_VAR`/`STORE_VAR`; `CALL`/`RET` no longer save and
 restore parameter variables in the shared scope). Files from format 1 are
-rejected; rebuild them with `-c`. ABI 3: integers are 64-bit on every
+rejected; rebuild them with `-c`. Format 3 stores blocks given to
+commands (before, `-c` refused programs using `@` chaining). ABI 3: integers are 64-bit on every
 platform (integer constants are read as full 64-bit values on Windows
 too) and `+ - *` wrap around on overflow.

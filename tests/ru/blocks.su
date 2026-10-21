@@ -1,0 +1,33 @@
+# [ ... ] blocks given to commands (@ chaining), for the .ru round trip:
+# ussr -c stores them as syntax and the .ru file must behave like the
+# source. The first chain never runs; it carries syntax the second does
+# not (a UNO literal, unary minus, a comparison) so the loader has to
+# decode it. Chaining is POSIX-only: on Windows both runs stop at the
+# second chain with the same message.
+set(n): 4
+set(word): "beta"
+set(h): "from the hash"!
+set(never): false
+
+if(_): never [
+    @[
+        chain(_):
+        file(_): "never-written.txt"
+    ]
+    [
+        echo(_): 'Point{x=1,y=2}' {0 - n} {n >= 3}
+    ]
+]
+
+print(_): "before the chain"
+
+@[
+    chain(_):
+    capture(text):
+]
+[
+    echo(_): "alpha" word {n * 10 + 2} 2.5 h?
+    tr(_): "a-z" "A-Z"
+]
+
+print(_): text

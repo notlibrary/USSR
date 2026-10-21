@@ -72,6 +72,7 @@ roundtrip "environment" tests/env_test.su ''
 roundtrip "scan from stdin" tests/fac.su '6\n'
 roundtrip "async and await" tests/async.su ''
 roundtrip "function locals" tests/locals.su ''
+roundtrip "blocks given to commands (@ chaining)" tests/ru/blocks.su ''
 roundtrip "64-bit integers" tests/int64.su '7000000000\n'
 roundtrip "load with a bare entry name" tests/boot_load_entry.su ''
 roundtrip "runtime error keeps status" tests/vectors/errors/divide_by_zero.su ''
@@ -108,7 +109,6 @@ cp tests/fac.su "$tmp/named.su"
 
 printf 'print(_): "x"\nprint(_: oops\n' > "$tmp/syntax.su"
 compile_fails "syntax error" "syntax error" "$tmp/syntax.su" "$tmp/out.ru"
-compile_fails "block argument" "cannot be stored in a .ru file" tests/chain.su "$tmp/out.ru"
 compile_fails "missing input" "cannot open" "$tmp/nothing.su" "$tmp/out.ru"
 compile_fails "unwritable output" "cannot create" tests/fac.su "$tmp/no/such/dir/out.ru"
 compile_fails "input is already bytecode" "already bytecode" "$tmp/one.ru" "$tmp/out.ru"
