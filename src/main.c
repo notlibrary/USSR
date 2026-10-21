@@ -2230,19 +2230,27 @@ static int run_bytecode(ussr_bc_program_t *bytecode_in,
      * call it was in when it stopped (an error inside a function). */
     ussr_locals_reset(NULL);
 
+    /* init's integer result is the exit status: 0..255 as is, any other
+     * integer means failure (1). Anything else (ret never set) is 0. */
     if (result == 0 && entry_function >= 0 && main_proc != NULL &&
         main_proc->state == USSR_PROC_ZOMBIE &&
         main_proc->result.type == USSR_INTEGER)
     {
         ussr_int_t exit_value = main_proc->result.data.integer;
-        if (exit_value >= 0 && exit_value <= 255)
-            result = (int)exit_value;
+        result = exit_value >= 0 && exit_value <= 255 ? (int)exit_value : 1;
     }
 
     if (result == -1)
         fprintf(stderr, "USSR VM: execution failed (status %d)", result);
 
     return result;
+}
+
+/* Process exit status for a run_bytecode/parse_and_execute result: an
+ * error (-1) is 1, otherwise the status init chose (0..255). */
+static int exit_status(int result)
+{
+    return result < 0 ? EXIT_FAILURE : result;
 }
 
 static int parse_and_execute(const char *source, int argc, char **argv, int background_ok)
@@ -2280,8 +2288,7 @@ static int run_ru_file(const char *filename, int argc, char **argv)
     if (ussr_ru_read_file(filename, &bytecode, &sites) != 0)
         return EXIT_FAILURE;
 
-    return run_bytecode(&bytecode, sites, argc, argv, 0) == 0 ?
-        EXIT_SUCCESS : EXIT_FAILURE;
+    return exit_status(run_bytecode(&bytecode, sites, argc, argv, 0));
 }
 
 /*
@@ -2385,7 +2392,7 @@ static int run_eval(const char *source, int argc, char **argv)
     result = parse_and_execute(source, argc, argv, 0);
     ussr_parse_end();
 
-    return result;
+    return exit_status(result);
 }
 
 static int run_file(const char *filename, int argc, char **argv)
@@ -2476,7 +2483,7 @@ static int run_file(const char *filename, int argc, char **argv)
     ussr_parse_end();
     ussr_pp_cleanup(&pp);
 
-    return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return exit_status(result);
 }
 
 /*
@@ -2881,12 +2888,17 @@ int main(int argc, char **argv)
         if (moscow != NULL)
         {
             char *moscow_argv[] = { (char *)"moscow.su", NULL };
+            int status;
+
             fclose(moscow);
-            if (run_file("moscow.su", 1, moscow_argv) != EXIT_SUCCESS)
+            status = run_file("moscow.su", 1, moscow_argv);
+            /* A failing (or nonzero) startup file stops ussr with its
+             * status. */
+            if (status != EXIT_SUCCESS)
             {
                 ussr_sched_cleanup();
                 ussr_cleanup();
-                return EXIT_FAILURE;
+                return status;
             }
         }
     }

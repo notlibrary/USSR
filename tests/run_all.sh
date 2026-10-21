@@ -40,7 +40,8 @@ bad() {
 # --- suite runners: each prints PASS/FAIL lines and exits nonzero on failure
 for runner in tests/ru/run_ru_tests.sh tests/mbl/run_mbl_tests.sh \
               tests/russia/run_uuasm_tests.sh tests/vectors/run_vector_tests.sh \
-              tests/repl/run_repl_tests.sh tests/errors/run_error_tests.sh; do
+              tests/repl/run_repl_tests.sh tests/errors/run_error_tests.sh \
+              tests/exit/run_exit_tests.sh; do
     [ -f "$runner" ] || continue
     [ "$update" = 1 ] && continue
     if sh "$runner" "$USSR" >"$tmp/runner.out" 2>&1 &&

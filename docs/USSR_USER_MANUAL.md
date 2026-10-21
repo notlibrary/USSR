@@ -77,6 +77,22 @@ is supported on every platform.
 On Windows, the same binary and the same `.su` scripts work
 unmodified: `ussr.exe myscript.su`.
 
+**Exit status.** When a script has `init(ret): arg_cnt arg_vec [ ... ]`,
+the integer it leaves in `ret` is the process exit status: `0` to `255`
+as is, any other integer `1`. A `ret` that is never set (or is not an
+integer) gives `0`. A compile error or a runtime error gives `1`. The same
+holds for `.ru` files and `-e`. `moscow.su` (the startup file) stops
+`ussr` with its status when that is not `0`; the REPL ignores the
+statuses of the lines it runs.
+
+```
+init(ret): arg_cnt arg_vec [
+    set(ret): 3
+]
+```
+
+exits with status 3 (`echo $?` prints `3`).
+
 Textual assembler files can also be run directly:
 
 ```
@@ -958,7 +974,7 @@ xvfb-run -a sh tests/run_all.sh        # GUI tests on a headless Linux box
 ```
 
 It runs the suites in `tests/ru`, `tests/mbl`, `tests/russia`, `tests/vectors`,
-`tests/repl` and `tests/errors`; every script in `tests/`, `tests/math` and `tests/oop`,
+`tests/repl`, `tests/errors` and `tests/exit`; every script in `tests/`, `tests/math` and `tests/oop`,
 comparing stdout, stderr and exit status with `tests/expected/<path>.txt`
 (stdin comes from `tests/expected/<path>.in` when that file exists); and the
 GUI tests in `tests/gui`. Each check prints a `PASS` or `FAIL` line and the

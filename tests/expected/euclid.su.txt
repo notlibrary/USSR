@@ -2,4 +2,4 @@ Enter a b: INTEGER 6
 
 --- stderr ---
 
---- exit 1 ---
+--- exit 6 ---

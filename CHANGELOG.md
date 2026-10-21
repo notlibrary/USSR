@@ -32,6 +32,7 @@
 - `math.su`: `tan`/`ctg` guards used `==` instead of `=`.
 - REPL no longer hangs reading redirected stdin on Windows.
 - REPL on Linux and macOS prints the `PS1`/`PS2` prompts for piped input too, as on Windows and as documented.
+- `init`'s return value is the exit status: 0..255 are passed through (they all became 1), other integers give 1 (they gave 0). `-e` errors exit with 1 instead of 255. `tests/exit/run_exit_tests.sh` covers source, `.ru` and `-e`.
 - An unexpected character no longer ends the program silently at that point: the lexer reported it but the parser treated it as end of input and ran the rest.
 - `break` or `continue` outside any loop is a compile error; at the top level they jumped back to the start of the program and looped until the step limit.
 - Line numbers in syntax errors restarted from the previous parse (load, eval, the REPL) and counted lines removed by the preprocessor.
