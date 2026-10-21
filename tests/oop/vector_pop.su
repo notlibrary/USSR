@@ -1,0 +1,50 @@
+# pop(item): v removes and returns a vector's last item; an empty vector
+# is a runtime error (the last command here, so the exit status is 1).
+#
+# Run: ./ussr tests/oop/vector_pop.su
+
+vec(v): ""
+push(_): v 1
+push(_): v "two"
+push(_): v 3.5
+pop(last): v
+print(_): last       # 3.5
+len(n): v
+print(_): n          # 2
+
+# Popped values are independent of the vector.
+pop(s): v
+push(_): v "again"
+print(_): s          # two
+at(top): v 1
+print(_): top        # again
+
+# Typed vectors and structs: the item keeps its type and its references.
+struct(Point): "x:number" "y:number"
+vec(points): "Point"
+new(p): "Point" 4 5
+push(_): points p
+pop(q): points
+getf(x): q "x"
+print(_): x          # 4
+len(n): points
+print(_): n          # 0
+
+# A stack: push and pop in reverse order.
+vec(stack): ""
+set(i): 0
+while(_): {i < 5} [
+    push(_): stack i
+    add(i): i 1
+]
+set(out): 0
+len(n): stack
+while(_): {n > 0} [
+    pop(item): stack
+    set(out): {out * 10 + item}
+    len(n): stack
+]
+print(_): out        # 43210: last in, first out
+
+pop(none): stack     # error: pop() from an empty vector
+print(_): "not reached"

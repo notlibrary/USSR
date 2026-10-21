@@ -6,6 +6,7 @@
 - `ussr -c script.su [out.ru]` (`--compile`) compiles to a `.ru` bytecode file without running it; `ussr program.ru` validates and runs it (signature, format and VM ABI versions, CRC-32, bounds). Blocks passed to commands (`@` chaining) are stored as syntax (format 3) and run as from source; `tests/ru/blocks.su` round-trips one.
 - Built-in `Vec2`/`Vec3` struct types with `+ -`, scaling by `* /` and `= !=` in expressions; `src/libs/vectors.su` adds `vdot`, `vcross`, `vlen`, `vnorm`, `vlerp` and more.
 - `getenv`, `setenv` and `unsetenv` builtins (UTF-8 on Windows).
+- `pop(item): v` removes and returns a vector's last item (error on an empty vector); tests in `tests/oop/vector_pop.su`.
 - REPL prompts from `PS1` and `PS2` with `\u \h \w \W \v \$ \\` escapes; piped stdin works on every platform.
 - Builtins for apps written in USSR: `list_dir`, `is_dir`, `getcwd`, `make_dir`, `rename_path`, `remove_file`, `remove_dir`, `read_line`, `typeof`, `fail`, `chr`.
 - Preprocessor `$once` include guard and `__MAIN__` for files that are both a library and a program.
@@ -23,6 +24,7 @@
 ### Changed
 - Integers are 64-bit on every platform (they were C `long`, 32-bit on Windows: a literal like 3000000000000 was cut to 32 bits, so `tests/math/test_log_hypot.su` printed 3.037e+09 instead of 5e+12, and overflow hung `str_from_number`). `+ - *` wrap around instead of being undefined, `x % -1` no longer traps, integer `=`/`<` are exact beyond 2^53, a shift count outside 0..63 is an error, an out-of-range literal is a compile error, `random64` gives 64 bits and `time` does not stop at 2038 on Windows. `str_int_limit` returns a constant 2^62. `.ru` VM ABI 3. Tests: `tests/int64.su` (also a `.ru` round trip).
 - **Breaking:** variables assigned inside a function are local to the call unless declared with `global(_)`. Programs whose functions share state through undeclared variables need a `global(_): ...` line (the compiler warnings name the variables) or `global(_): "*"`. In a program with `init`, top-level commands still do not run, so state set up in `init` must be declared global. Mbl, russia.su (with uuasm.su) and Tula's DXF error flag were migrated this way; Tver and the libraries needed nothing.
+- Mbl's undo and redo histories are stacks built on `pop` instead of vectors with separate size counters.
 - `.ru` format 2, VM ABI 2: functions carry their local names, `LOAD_VAR`/`STORE_VAR` their resolved scope. Format 1 files are rejected; rebuild them.
 - Tver and Tula are now written in USSR (`src/tver/tver.su`, `src/tula/tula.su`); their C sources were removed. Petersburg stays native.
 

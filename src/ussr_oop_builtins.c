@@ -424,6 +424,43 @@ static int oop_do_push(
     return 0;
 }
 
+/* pop(x): v -- removes v's last item and returns it. */
+static int oop_do_pop(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t vec_v;
+    ussr_vector_t *vector;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: pop(item): v\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &vec_v) != 0)
+        return -1;
+
+    if (!oop_expect_vector(&vec_v, &vector))
+    {
+        fprintf(stderr, "USSR: pop() expects a vector\n");
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+
+    if (!ussr_vector_pop(vector, out_result))
+    {
+        fprintf(stderr, "USSR: pop() from an empty vector\n");
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+
+    ussr_value_free(&vec_v);
+    return 0;
+}
+
 static int oop_do_at(
     ussr_argument_t *arguments,
     size_t argument_count,
@@ -2481,6 +2518,8 @@ int ussr_oop_dispatch(
         status = oop_do_vec(arguments, argument_count, out_result);
     else if (strcmp(command, "push") == 0)
         status = oop_do_push(arguments, argument_count, out_result);
+    else if (strcmp(command, "pop") == 0)
+        status = oop_do_pop(arguments, argument_count, out_result);
     else if (strcmp(command, "at") == 0)
         status = oop_do_at(arguments, argument_count, out_result);
     else if (strcmp(command, "len") == 0)

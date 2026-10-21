@@ -393,12 +393,15 @@ push(_): items "two"
 
 len(n): items
 at(first): items 0
+pop(last): items         # "two"; items now holds only 1
 ```
 
 - `vec(var): "ElementType"` — pass `""` for an untyped vector.
 - `push(_): vector value` — append; type-checked if the vector is
   typed.
 - `at(var): vector index` — zero-based read.
+- `pop(var): vector` — remove the last item and return it; popping an
+  empty vector is a runtime error.
 - `len(var): vector` — element count.
 
 Vectors are reference types too, same aliasing behavior as structs.

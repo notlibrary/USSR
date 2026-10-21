@@ -912,6 +912,16 @@ int ussr_vector_push(ussr_vector_t *vector, ussr_value_t item)
     return 0;
 }
 
+int ussr_vector_pop(ussr_vector_t *vector, ussr_value_t *out)
+{
+    if (vector == NULL || vector->count == 0)
+        return 0;
+
+    /* The slot's reference moves to *out. */
+    *out = vector->items[--vector->count];
+    return 1;
+}
+
 int ussr_vector_get(const ussr_vector_t *vector, size_t index, ussr_value_t *out)
 {
     if (index >= vector->count)
