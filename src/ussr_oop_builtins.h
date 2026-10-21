@@ -27,6 +27,9 @@
  *   if (status > 0) { }             // handled, `result` is set — fall through
  *   // status == 0: not ours, continue the existing chain
  */
+/* Environment variable as malloc'd UTF-8, or NULL when not set. */
+char *ussr_env_get(const char *name);
+
 int ussr_oop_dispatch(
     const char *command,
     const char *return_name,

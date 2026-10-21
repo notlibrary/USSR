@@ -1,0 +1,7 @@
+$include "../../../src/libs/vectors.su"
+vec2(a): 1 2
+vec2(b): 3 4
+vec3(p): 1 2 3
+new(v): "Vec2" null 1
+set(c): {v + a}
+print(_): "not reached"

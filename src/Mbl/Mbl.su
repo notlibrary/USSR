@@ -8,15 +8,33 @@
 #               i         insert before cursor    a   insert after cursor
 #               o         open new line below     x   delete char
 #               d d       delete current line     :   command line
+#               w         start of next word      c w change word
+#               count     a number before a motion or command repeats it:
+#                         3l 5j 2k 4x 2dd 3w c2w 2cw 3u, and arrow keys
+#               u         undo the last change    Ctrl+R  redo
 # Commands:     :w [name] write file   :q quit   :wq write+quit   :q! quit
 #               :e [name] reload / edit another file
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
 #               (and joins lines at column 0), ESC or Ctrl+C -> normal.
 #
+# Undo: one change is one normal-mode command together with the text typed
+# in the insert mode it starts (x, dd, cw, i/a/o + typing, with their
+# counts). History is unlimited, kept until the editor exits or :e loads a
+# file; a new change after undo drops the redo history. The [+] marker
+# follows whether the text differs from the last write.
+#
+# Text is UTF-8 (Russian and other Cyrillic included): lines are byte
+# strings, the cursor Mbl_cx is a byte offset that always sits on a
+# character boundary, and movement, deletion and the screen column count
+# characters. Each character takes one screen column (wide CJK glyphs are
+# not measured). A UTF-8 byte-order mark is kept when the file is saved.
+#
 # Implementation: the terminal is put in raw mode through native USSR
-# terminal primitives. Each key is read directly; no shell commands,
+# terminal primitives.Each key is read directly; no shell commands,
 # stty, shell utilities, or POSIX-only utilities are required. The whole screen is
 # rebuilt as one string per frame and written with a single template call.
+
+$include "../libs/strings.su"
 
 # ---------- terminal helpers ----------
 
@@ -112,19 +130,31 @@ Mbl_lineins(r): idx line [
     set(r): 0
 ]
 
+# Keeps Mbl_cx on a character start inside the line; in normal mode the
+# cursor rests on the last character, in insert mode it may follow it.
 Mbl_fixcx(r): [
     at(Mblfx_l): Mbl_buf Mbl_cy
     len(Mblfx_n): Mblfx_l
+    utf8_column(Mblfx_col): Mblfx_l Mbl_cx
+    utf8_index(Mbl_cx): Mblfx_l Mblfx_col
     set(Mblfx_max): Mblfx_n
     if(_): {Mbl_mode = 0} [
-        set(Mblfx_max): {Mblfx_n - 1}
-    ]
-    if(_): {Mblfx_max < 0} [
-        set(Mblfx_max): 0
+        utf8_prev(Mblfx_max): Mblfx_l Mblfx_n
     ]
     if(_): {Mbl_cx > Mblfx_max} [
         set(Mbl_cx): Mblfx_max
     ]
+    set(r): 0
+]
+
+# Moves to line `target`, keeping the cursor's character column.
+Mbl_goto_line(r): target [
+    at(Mblgl_l): Mbl_buf Mbl_cy
+    utf8_column(Mblgl_col): Mblgl_l Mbl_cx
+    set(Mbl_cy): target
+    at(Mblgl_l): Mbl_buf Mbl_cy
+    utf8_index(Mbl_cx): Mblgl_l Mblgl_col
+    Mbl_fixcx(_):
     set(r): 0
 ]
 
@@ -142,44 +172,39 @@ Mbl_scroll(r): [
 # ---------- movement ----------
 
 Mbl_left(r): [
-    if(_): {Mbl_cx > 0} [
-        set(Mbl_cx): {Mbl_cx - 1}
-    ]
+    at(Mblm_l): Mbl_buf Mbl_cy
+    utf8_prev(Mbl_cx): Mblm_l Mbl_cx
     set(r): 0
 ]
 
 Mbl_right(r): [
     at(Mblm_l): Mbl_buf Mbl_cy
     len(Mblm_n): Mblm_l
-    set(Mblm_max): Mblm_n
-    if(_): {Mbl_mode = 0} [
-        set(Mblm_max): {Mblm_n - 1}
+    utf8_next(Mblm_next): Mblm_l Mbl_cx
+    set(Mblm_ok): {Mblm_next > Mbl_cx}
+    if(_): {Mbl_mode = 0 && Mblm_next >= Mblm_n} [
+        set(Mblm_ok): false
     ]
-    if(_): {Mblm_max < 0} [
-        set(Mblm_max): 0
-    ]
-    if(_): {Mbl_cx < Mblm_max} [
-        set(Mbl_cx): {Mbl_cx + 1}
+    if(_): Mblm_ok [
+        set(Mbl_cx): Mblm_next
     ]
     set(r): 0
 ]
 
 Mbl_up(r): [
     if(_): {Mbl_cy > 0} [
-        set(Mbl_cy): {Mbl_cy - 1}
-        Mbl_fixcx(_): 
+        Mbl_goto_line(_): {Mbl_cy - 1}
     ]
-    Mbl_scroll(_): 
+    Mbl_scroll(_):
     set(r): 0
 ]
 
 Mbl_down(r): [
     len(Mblm2_n): Mbl_buf
     if(_): {Mbl_cy < Mblm2_n - 1} [
-        set(Mbl_cy): {Mbl_cy + 1}
-        Mbl_fixcx(_): 
+        Mbl_goto_line(_): {Mbl_cy + 1}
     ]
-    Mbl_scroll(_): 
+    Mbl_scroll(_):
     set(r): 0
 ]
 
@@ -193,8 +218,9 @@ Mbl_insch(r): ch [
     concat(Mblic_a): Mblic_a ch
     concat(Mblic_a): Mblic_a Mblic_b
     Mbl_setline(_): Mbl_cy Mblic_a
-    set(Mbl_cx): {Mbl_cx + 1}
-    set(Mbl_dirty): 1
+    len(Mblic_cl): ch
+    set(Mbl_cx): {Mbl_cx + Mblic_cl}
+    Mbl_touch(_):
     set(r): 0
 ]
 
@@ -203,12 +229,14 @@ Mbl_bs(r): [
     if(_): {Mbl_cx > 0} [
         at(Mblbs_l): Mbl_buf Mbl_cy
         len(Mblbs_n): Mblbs_l
-        slice(Mblbs_a): Mblbs_l 0 {Mbl_cx - 1}
+        utf8_prev(Mblbs_start): Mblbs_l Mbl_cx
+        slice(Mblbs_a): Mblbs_l 0 Mblbs_start
         slice(Mblbs_b): Mblbs_l Mbl_cx {Mblbs_n - Mbl_cx}
         concat(Mblbs_a): Mblbs_a Mblbs_b
         Mbl_setline(_): Mbl_cy Mblbs_a
-        set(Mbl_cx): {Mbl_cx - 1}
-        set(Mbl_dirty): 1
+        set(Mbl_cx): Mblbs_start
+        Mbl_touch(_):
+        return(_): r
     ]
     if(_): {Mbl_cx = 0} [
         if(_): {Mbl_cy > 0} [
@@ -220,7 +248,7 @@ Mbl_bs(r): [
             Mbl_setline(_): {Mbl_cy - 1} Mblbs_p
             set(Mbl_cy): {Mbl_cy - 1}
             set(Mbl_cx): Mblbs_pl
-            set(Mbl_dirty): 1
+            Mbl_touch(_):
         ]
     ]
 ]
@@ -234,7 +262,7 @@ Mbl_enter(r): [
     Mbl_lineins(_): {Mbl_cy + 1} Mblen_b
     set(Mbl_cy): {Mbl_cy + 1}
     set(Mbl_cx): 0
-    set(Mbl_dirty): 1
+    Mbl_touch(_):
     Mbl_scroll(_): 
     set(r): 0
 ]
@@ -243,11 +271,12 @@ Mbl_delch(r): [
     at(Mbldc_l): Mbl_buf Mbl_cy
     len(Mbldc_n): Mbldc_l
     if(_): {Mbl_cx < Mbldc_n} [
+        utf8_next(Mbldc_end): Mbldc_l Mbl_cx
         slice(Mbldc_a): Mbldc_l 0 Mbl_cx
-        slice(Mbldc_b): Mbldc_l {Mbl_cx + 1} {Mbldc_n - Mbl_cx - 1}
+        slice(Mbldc_b): Mbldc_l Mbldc_end {Mbldc_n - Mbldc_end}
         concat(Mbldc_a): Mbldc_a Mbldc_b
         Mbl_setline(_): Mbl_cy Mbldc_a
-        set(Mbl_dirty): 1
+        Mbl_touch(_):
         Mbl_fixcx(_): 
     ]
     set(r): 0
@@ -264,9 +293,162 @@ Mbl_delete_line(r): [
         set(Mbl_cy): {Mbldel_n2 - 1}
     ]
     set(Mbl_cx): 0
-    set(Mbl_dirty): 1
+    Mbl_touch(_):
     Mbl_scroll(_): 
     set(r): 0
+]
+
+# ---------- undo ----------
+#
+# A state is the line vector, the cursor and a version number. Edits never
+# change a line vector in place (Mbl_setline, Mbl_linedel and Mbl_lineins
+# build new ones), so a state only keeps a reference to Mbl_buf. Each stack
+# is four parallel vectors plus a size; slots past the size are reused.
+# Mbl_ver numbers the text: a change gets a fresh number on its first edit,
+# and the file is unmodified while Mbl_ver equals Mbl_saved_ver.
+
+Mbl_undo_reset(r): [
+    vec(Mbl_ub): ""
+    vec(Mbl_ux): ""
+    vec(Mbl_uy): ""
+    vec(Mbl_uv): ""
+    set(Mbl_un): 0
+    vec(Mbl_rb): ""
+    vec(Mbl_rx): ""
+    vec(Mbl_ry): ""
+    vec(Mbl_rv): ""
+    set(Mbl_rn): 0
+    set(Mbl_ver): 0
+    set(Mbl_ver_next): 1
+    set(Mbl_saved_ver): 0
+    set(Mbl_touched): 1
+    set(r): 0
+]
+
+# Stores the current state in slot i of the undo (which = 0) or redo stack.
+Mbl_state_put(r): which i [
+    set(r): 0
+    if(_): {which = 0} [
+        len(Mblsp_n): Mbl_ub
+        if(_): {i < Mblsp_n} [
+            set(Mbl_ub): i Mbl_buf
+            set(Mbl_ux): i Mbl_cx
+            set(Mbl_uy): i Mbl_cy
+            set(Mbl_uv): i Mbl_ver
+        ]
+        else(_): [
+            push(_): Mbl_ub Mbl_buf
+            push(_): Mbl_ux Mbl_cx
+            push(_): Mbl_uy Mbl_cy
+            push(_): Mbl_uv Mbl_ver
+        ]
+        return(_): r
+    ]
+    len(Mblsp_n): Mbl_rb
+    if(_): {i < Mblsp_n} [
+        set(Mbl_rb): i Mbl_buf
+        set(Mbl_rx): i Mbl_cx
+        set(Mbl_ry): i Mbl_cy
+        set(Mbl_rv): i Mbl_ver
+    ]
+    else(_): [
+        push(_): Mbl_rb Mbl_buf
+        push(_): Mbl_rx Mbl_cx
+        push(_): Mbl_ry Mbl_cy
+        push(_): Mbl_rv Mbl_ver
+    ]
+]
+
+# Makes slot i of the undo (which = 0) or redo stack the current state.
+Mbl_state_get(r): which i [
+    if(_): {which = 0} [
+        at(Mbl_buf): Mbl_ub i
+        at(Mbl_cx): Mbl_ux i
+        at(Mbl_cy): Mbl_uy i
+        at(Mbl_ver): Mbl_uv i
+    ]
+    else(_): [
+        at(Mbl_buf): Mbl_rb i
+        at(Mbl_cx): Mbl_rx i
+        at(Mbl_cy): Mbl_ry i
+        at(Mbl_ver): Mbl_rv i
+    ]
+    set(Mbl_touched): 1
+    set(Mbl_dirty): 0
+    if(_): {Mbl_ver != Mbl_saved_ver} [
+        set(Mbl_dirty): 1
+    ]
+    len(Mblsg_n): Mbl_buf
+    if(_): {Mbl_cy >= Mblsg_n} [
+        set(Mbl_cy): {Mblsg_n - 1}
+    ]
+    Mbl_fixcx(_):
+    Mbl_scroll(_):
+    set(r): 0
+]
+
+# Called before a command that may change the text. The state saved here
+# is what u returns to. If the previous change never edited anything
+# (i then ESC), its slot is reused.
+Mbl_begin_change(r): [
+    set(Mblbc_slot): Mbl_un
+    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
+        set(Mblbc_slot): {Mbl_un - 1}
+    ]
+    Mbl_state_put(_): 0 Mblbc_slot
+    set(Mbl_un): {Mblbc_slot + 1}
+    set(Mbl_touched): 0
+    set(r): 0
+]
+
+# Every edit calls this: the first edit of a change numbers the new text
+# and drops the redo history.
+Mbl_touch(r): [
+    if(_): {Mbl_touched = 0} [
+        set(Mbl_touched): 1
+        set(Mbl_ver): Mbl_ver_next
+        set(Mbl_ver_next): {Mbl_ver_next + 1}
+        set(Mbl_rn): 0
+    ]
+    set(Mbl_dirty): 0
+    if(_): {Mbl_ver != Mbl_saved_ver} [
+        set(Mbl_dirty): 1
+    ]
+    set(r): 0
+]
+
+Mbl_undo(r): [
+    set(r): 0
+    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
+        # the last command changed nothing: forget its empty entry
+        set(Mbl_un): {Mbl_un - 1}
+        set(Mbl_touched): 1
+    ]
+    if(_): {Mbl_un = 0} [
+        set(Mbl_msg): "already at oldest change"
+        return(_): r
+    ]
+    Mbl_state_put(_): 1 Mbl_rn
+    set(Mbl_rn): {Mbl_rn + 1}
+    set(Mbl_un): {Mbl_un - 1}
+    Mbl_state_get(_): 0 Mbl_un
+    set(Mbl_msg): ""
+]
+
+Mbl_redo(r): [
+    set(r): 0
+    if(_): {Mbl_rn = 0} [
+        set(Mbl_msg): "already at newest change"
+        return(_): r
+    ]
+    if(_): {Mbl_un > 0 && Mbl_touched = 0} [
+        set(Mbl_un): {Mbl_un - 1}
+    ]
+    Mbl_state_put(_): 0 Mbl_un
+    set(Mbl_un): {Mbl_un + 1}
+    set(Mbl_rn): {Mbl_rn - 1}
+    Mbl_state_get(_): 1 Mbl_rn
+    set(Mbl_msg): ""
 ]
 
 # ---------- file I/O ----------
@@ -293,6 +475,7 @@ Mbl_detect(r): [
 Mbl_load(r): path [
     vec(Mbl_buf): ""
     set(Mbl_dirty): 0
+    Mbl_undo_reset(_):
     set(Mbll_go): 0
     if(_): {Mbl_fe_ok = 1} [
         file_exists(Mbll_tf): path
@@ -306,28 +489,30 @@ Mbl_load(r): path [
             set(Mbll_go): 1
         ]
     ]
+    set(Mbl_bom): 0
     if(_): {Mbll_go = 1} [
-        readfile(Mbll_d): path
-        len(Mbll_n): Mbll_d
-        set(Mbll_i): 0
-        set(Mbll_cur): ""
-        while(_): {Mbll_i < Mbll_n} [
-            byte(Mbll_b): Mbll_d Mbll_i
-            if(_): {Mbll_b = 10} [
-                push(_): Mbl_buf Mbll_cur
-                set(Mbll_cur): ""
-            ]
-            if(_): {Mbll_b != 10} [
-                if(_): {Mbll_b != 13} [
-                    slice(Mbll_ch): Mbll_d Mbll_i 1
-                    concat(Mbll_cur): Mbll_cur Mbll_ch
+        # Line by line: CRLF and LF both end a line; bytes are kept as-is,
+        # so UTF-8 text loads unchanged.
+        open_file(Mbll_h): path "rb"
+        if(_): {Mbll_h >= 0} [
+            read_line(Mbll_cur): Mbll_h
+            set(Mbll_first): 1
+            while(_): {Mbll_cur != null} [
+                if(_): {Mbll_first = 1} [
+                    set(Mbll_first): 0
+                    len(Mbll_cl): Mbll_cur
+                    if(_): {Mbll_cl >= 3} [
+                        slice(Mbll_head): Mbll_cur 0 3
+                        if(_): {Mbll_head = Mbl_bom_text} [
+                            set(Mbl_bom): 1
+                            slice(Mbll_cur): Mbll_cur 3 {Mbll_cl - 3}
+                        ]
+                    ]
                 ]
+                push(_): Mbl_buf Mbll_cur
+                read_line(Mbll_cur): Mbll_h
             ]
-            set(Mbll_i): {Mbll_i + 1}
-        ]
-        len(Mbll_cl): Mbll_cur
-        if(_): {Mbll_cl > 0} [
-            push(_): Mbl_buf Mbll_cur
+            close_file(_): Mbll_h
         ]
     ]
     len(Mbll_bn): Mbl_buf
@@ -348,6 +533,9 @@ Mbl_save(r): [
     ]
     if(_): {Mblw_fn > 0} [
         set(Mbl_payload): ""
+        if(_): {Mbl_bom = 1} [
+            set(Mbl_payload): Mbl_bom_text
+        ]
         len(Mblw_n): Mbl_buf
         set(Mblw_i): 0
         while(_): {Mblw_i < Mblw_n} [
@@ -357,6 +545,7 @@ Mbl_save(r): [
             set(Mblw_i): {Mblw_i + 1}
         ]
         writefile(Mblw_ok): Mbl_file Mbl_payload
+        set(Mbl_saved_ver): Mbl_ver
         set(Mbl_dirty): 0
         set(Mbl_msg): "written"
     ]
@@ -376,9 +565,11 @@ Mbl_render(r): [
         if(_): {Mblrn_li < Mblrn_n} [
             set(Mblrn_has): 1
             at(Mblrn_l): Mbl_buf Mblrn_li
+            # cut at Mbl_cols characters, never inside a UTF-8 sequence
+            utf8_index(Mblrn_cut): Mblrn_l Mbl_cols
             len(Mblrn_ll): Mblrn_l
-            if(_): {Mblrn_ll > Mbl_cols} [
-                slice(Mblrn_l): Mblrn_l 0 Mbl_cols
+            if(_): {Mblrn_cut < Mblrn_ll} [
+                slice(Mblrn_l): Mblrn_l 0 Mblrn_cut
             ]
             concat(Mblrn_s): Mblrn_s Mblrn_l
         ]
@@ -423,7 +614,9 @@ Mbl_render(r): [
     encode(Mblrn_y): {Mbl_cy - Mbl_top + 1}
     concat(Mblrn_s): Mblrn_s Mblrn_y
     concat(Mblrn_s): Mblrn_s ";"
-    encode(Mblrn_x): {Mbl_cx + 1}
+    at(Mblrn_cl): Mbl_buf Mbl_cy
+    utf8_column(Mblrn_col): Mblrn_cl Mbl_cx
+    encode(Mblrn_x): {Mblrn_col + 1}
     concat(Mblrn_s): Mblrn_s Mblrn_x
     concat(Mblrn_s): Mblrn_s "H"
     template(_): "STR" Mblrn_s
@@ -445,27 +638,199 @@ Mbl_next(r): [
     ]
 ]
 
+# Completes the character whose first byte is b: reads the UTF-8
+# continuation bytes and returns the whole character as a string, or ""
+# for a stray continuation byte or a control byte.
+Mbl_readchar(r): b [
+    set(r): ""
+    if(_): {b > 31 && b < 127} [
+        chr(r): b
+    ]
+    elif(_): {b >= 192 && b < 248} [
+        utf8_len(Mblrc_k): b
+        chr(r): b
+        set(Mblrc_i): 1
+        while(_): {Mblrc_i < Mblrc_k} [
+            Mbl_next(Mblrc_b):
+            if(_): {Mblrc_b >= 128 && Mblrc_b < 192} [
+                chr(Mblrc_c): Mblrc_b
+                concat(r): r Mblrc_c
+                set(Mblrc_i): {Mblrc_i + 1}
+            ]
+            else(_): [
+                # broken sequence: drop it and replay the byte
+                set(r): ""
+                if(_): {Mblrc_b > 0 - 1} [
+                    set(Mbl_pb): Mblrc_b
+                ]
+                set(Mblrc_i): Mblrc_k
+            ]
+        ]
+    ]
+]
+
+# ---------- words ----------
+
+# Character class at byte i of line: 0 blank, 1 word, 2 punctuation.
+# Word characters are ASCII letters, digits, "_" and non-ASCII letters
+# (Cyrillic included). Latin-1 symbols (U+0080..U+00BF, e.g. << >>) and
+# general punctuation (U+2000..U+206F, e.g. dashes, quotes, ellipsis) are
+# punctuation; the no-break space U+00A0 is blank.
+Mbl_class(r): line i [
+    byte(Mblcl_b): line i
+    set(r): 2
+    if(_): {Mblcl_b = 32 || Mblcl_b = 9} [
+        set(r): 0
+    ]
+    elif(_): {(Mblcl_b >= 48 && Mblcl_b <= 57) || (Mblcl_b >= 65 && Mblcl_b <= 90) || (Mblcl_b >= 97 && Mblcl_b <= 122) || Mblcl_b = 95} [
+        set(r): 1
+    ]
+    elif(_): {Mblcl_b >= 192} [
+        set(r): 1
+        len(Mblcl_n): line
+        if(_): {Mblcl_b = 194 && i + 1 < Mblcl_n} [
+            byte(Mblcl_b2): line {i + 1}
+            set(r): 2
+            if(_): {Mblcl_b2 = 160} [
+                set(r): 0
+            ]
+        ]
+        if(_): {Mblcl_b = 226 && i + 1 < Mblcl_n} [
+            byte(Mblcl_b2): line {i + 1}
+            if(_): {Mblcl_b2 = 128 || Mblcl_b2 = 129} [
+                set(r): 2
+            ]
+        ]
+    ]
+]
+
+# Byte index just past the end of `count` words starting at byte i, staying
+# inside the line. On blanks the first "word" is the run of blanks.
+Mbl_word_end(r): line i count [
+    len(Mblwe_n): line
+    set(r): i
+    set(Mblwe_k): 0
+    while(_): {Mblwe_k < count && r < Mblwe_n} [
+        if(_): {Mblwe_k > 0} [
+            set(Mblwe_go): true
+            while(_): {Mblwe_go && r < Mblwe_n} [
+                Mbl_class(Mblwe_c): line r
+                set(Mblwe_go): {Mblwe_c = 0}
+                if(_): Mblwe_go [
+                    utf8_next(r): line r
+                ]
+            ]
+        ]
+        if(_): {r < Mblwe_n} [
+            Mbl_class(Mblwe_start): line r
+            set(Mblwe_go): true
+            while(_): {Mblwe_go && r < Mblwe_n} [
+                Mbl_class(Mblwe_c): line r
+                set(Mblwe_go): {Mblwe_c = Mblwe_start}
+                if(_): Mblwe_go [
+                    utf8_next(r): line r
+                ]
+            ]
+        ]
+        set(Mblwe_k): {Mblwe_k + 1}
+    ]
+]
+
+# w: start of the next word, continuing on following lines like vi.
+Mbl_word_forward(r): [
+    at(Mblwf_l): Mbl_buf Mbl_cy
+    len(Mblwf_n): Mblwf_l
+    set(Mblwf_i): Mbl_cx
+    if(_): {Mblwf_i < Mblwf_n} [
+        Mbl_class(Mblwf_start): Mblwf_l Mblwf_i
+        if(_): {Mblwf_start != 0} [
+            Mbl_word_end(Mblwf_i): Mblwf_l Mblwf_i 1
+        ]
+    ]
+    set(Mblwf_found): false
+    while(_): {Mblwf_found = false} [
+        # skip blanks on this line
+        set(Mblwf_go): {Mblwf_i < Mblwf_n}
+        while(_): Mblwf_go [
+            Mbl_class(Mblwf_c): Mblwf_l Mblwf_i
+            set(Mblwf_go): {Mblwf_c = 0}
+            if(_): Mblwf_go [
+                utf8_next(Mblwf_i): Mblwf_l Mblwf_i
+                set(Mblwf_go): {Mblwf_i < Mblwf_n}
+            ]
+        ]
+        len(Mblwf_lines): Mbl_buf
+        if(_): {Mblwf_i < Mblwf_n} [
+            set(Mblwf_found): true
+        ]
+        elif(_): {Mbl_cy + 1 < Mblwf_lines} [
+            # an empty line counts as a word start; otherwise go on
+            set(Mbl_cy): {Mbl_cy + 1}
+            at(Mblwf_l): Mbl_buf Mbl_cy
+            len(Mblwf_n): Mblwf_l
+            set(Mblwf_i): 0
+            if(_): {Mblwf_n = 0} [
+                set(Mblwf_found): true
+            ]
+        ]
+        else(_): [
+            # end of file: rest on the last character
+            set(Mblwf_found): true
+        ]
+    ]
+    set(Mbl_cx): Mblwf_i
+    Mbl_fixcx(_):
+    Mbl_scroll(_):
+    set(r): 0
+]
+
+# cw: replaces `count` words from the cursor and enters insert mode.
+Mbl_change_word(r): count [
+    at(Mblcw_l): Mbl_buf Mbl_cy
+    len(Mblcw_n): Mblcw_l
+    set(Mbl_mode): 1
+    if(_): {Mbl_cx < Mblcw_n} [
+        Mbl_word_end(Mblcw_end): Mblcw_l Mbl_cx count
+        slice(Mblcw_a): Mblcw_l 0 Mbl_cx
+        slice(Mblcw_b): Mblcw_l Mblcw_end {Mblcw_n - Mblcw_end}
+        concat(Mblcw_a): Mblcw_a Mblcw_b
+        Mbl_setline(_): Mbl_cy Mblcw_a
+        Mbl_touch(_):
+    ]
+    set(r): 0
+]
+
 # ---------- mode handlers ----------
 
 Mbl_escape(r): [
     set(Mbl_mode): 0
     set(Mbl_pend): 0
+    set(Mbl_count): 0
     Mbl_fixcx(_): 
     set(r): 0
 ]
 
 Mbl_arrow(r): c [
-    if(_): {c = 65} [
-        Mbl_up(_): 
+    set(Mblar_n): Mbl_count
+    set(Mbl_count): 0
+    set(Mbl_pend): 0
+    if(_): {Mblar_n < 1} [
+        set(Mblar_n): 1
     ]
-    if(_): {c = 66} [
-        Mbl_down(_): 
-    ]
-    if(_): {c = 67} [
-        Mbl_right(_): 
-    ]
-    if(_): {c = 68} [
-        Mbl_left(_): 
+    while(_): {Mblar_n > 0} [
+        if(_): {c = 65} [
+            Mbl_up(_):
+        ]
+        if(_): {c = 66} [
+            Mbl_down(_):
+        ]
+        if(_): {c = 67} [
+            Mbl_right(_):
+        ]
+        if(_): {c = 68} [
+            Mbl_left(_):
+        ]
+        set(Mblar_n): {Mblar_n - 1}
     ]
     set(r): 0
 ]
@@ -487,46 +852,103 @@ Mbl_insert(r): b [
     if(_): {b = 3} [
         Mbl_escape(_): 
     ]
-    if(_): {b > 31} [
-        if(_): {b < 127} [
-            slice(Mblin_ch): Mbl_ascii {b - 32} 1
+    if(_): {b > 31 && b != 127} [
+        Mbl_readchar(Mblin_ch): b
+        if(_): {Mblin_ch != ""} [
             Mbl_insch(_): Mblin_ch
         ]
     ]
 ]
 
+# Normal mode. Digits build Mbl_count (a leading 0 is not a count); the
+# next motion or command runs that many times. d and c wait in Mbl_pend
+# (1 = d, 2 = c) with their own count in Mbl_pend_count; a count typed
+# after the operator multiplies it (2c3w changes six words).
 Mbl_normal(r): b [
     set(r): 0
-    if(_): {b != 100} [
+    if(_): {(b >= 49 && b <= 57) || (b = 48 && Mbl_count > 0)} [
+        if(_): {Mbl_count < 100000} [
+            set(Mbl_count): {Mbl_count * 10 + b - 48}
+        ]
+        return(_): r
+    ]
+    set(Mblnm_n): Mbl_count
+    set(Mbl_count): 0
+    if(_): {Mblnm_n < 1} [
+        set(Mblnm_n): 1
+    ]
+    if(_): {Mbl_pend > 0} [
+        set(Mblnm_op): Mbl_pend
         set(Mbl_pend): 0
+        set(Mblnm_n): {Mblnm_n * Mbl_pend_count}
+        if(_): {Mblnm_op = 1 && b = 100} [
+            Mbl_begin_change(_):
+            while(_): {Mblnm_n > 0} [
+                Mbl_delete_line(_):
+                set(Mblnm_n): {Mblnm_n - 1}
+            ]
+        ]
+        if(_): {Mblnm_op = 2 && b = 119} [
+            Mbl_begin_change(_):
+            Mbl_change_word(_): Mblnm_n
+        ]
+        return(_): r
     ]
-    if(_): {b = 8} [
-        Mbl_left(_): 
+    if(_): {b = 100 || b = 99} [
+        set(Mbl_pend): 1
+        if(_): {b = 99} [
+            set(Mbl_pend): 2
+        ]
+        set(Mbl_pend_count): Mblnm_n
+        return(_): r
     ]
-    if(_): {b = 127} [
-        Mbl_left(_): 
+    if(_): {b = 120 || b = 105 || b = 97 || b = 111} [
+        Mbl_begin_change(_):
     ]
-    if(_): {b = 104} [
-        Mbl_left(_): 
-    ]
-    if(_): {b = 108} [
-        Mbl_right(_): 
-    ]
-    if(_): {b = 106} [
-        Mbl_down(_): 
-    ]
-    if(_): {b = 107} [
-        Mbl_up(_): 
+    while(_): {Mblnm_n > 0} [
+        if(_): {b = 8 || b = 127 || b = 104} [
+            Mbl_left(_):
+        ]
+        elif(_): {b = 108} [
+            Mbl_right(_):
+        ]
+        elif(_): {b = 106} [
+            Mbl_down(_):
+        ]
+        elif(_): {b = 107} [
+            Mbl_up(_):
+        ]
+        elif(_): {b = 119} [
+            Mbl_word_forward(_):
+        ]
+        elif(_): {b = 117} [
+            Mbl_undo(_):
+        ]
+        elif(_): {b = 18} [
+            Mbl_redo(_):
+        ]
+        elif(_): {b = 120} [
+            # like vi, a count never deletes past the end of the line
+            at(Mblnm_l): Mbl_buf Mbl_cy
+            len(Mblnm_len): Mblnm_l
+            utf8_next(Mblnm_next): Mblnm_l Mbl_cx
+            Mbl_delch(_):
+            if(_): {Mblnm_next >= Mblnm_len} [
+                set(Mblnm_n): 1
+            ]
+        ]
+        else(_): [
+            # not a repeatable command: run it once below
+            set(Mblnm_n): 1
+        ]
+        set(Mblnm_n): {Mblnm_n - 1}
     ]
     if(_): {b = 105} [
         set(Mbl_mode): 1
     ]
     if(_): {b = 97} [
         at(Mblnm_l): Mbl_buf Mbl_cy
-        len(Mblnm_n): Mblnm_l
-        if(_): {Mbl_cx < Mblnm_n} [
-            set(Mbl_cx): {Mbl_cx + 1}
-        ]
+        utf8_next(Mbl_cx): Mblnm_l Mbl_cx
         set(Mbl_mode): 1
     ]
     if(_): {b = 111} [
@@ -534,21 +956,8 @@ Mbl_normal(r): b [
         set(Mbl_cy): {Mbl_cy + 1}
         set(Mbl_cx): 0
         set(Mbl_mode): 1
-        set(Mbl_dirty): 1
+        Mbl_touch(_):
         Mbl_scroll(_): 
-    ]
-    if(_): {b = 120} [
-        Mbl_delch(_): 
-    ]
-    if(_): {b = 100} [
-        set(Mblnm_was): Mbl_pend
-        set(Mbl_pend): 0
-        if(_): {Mblnm_was = 1} [
-            Mbl_delete_line(_): 
-        ]
-        if(_): {Mblnm_was = 0} [
-            set(Mbl_pend): 1
-        ]
     ]
     if(_): {b = 58} [
         Mbl_command(_): 
@@ -638,17 +1047,16 @@ Mbl_command(r): [
         if(_): {Mblcm_b = 127} [
             len(Mblcm_cl): Mblcm_cmd
             if(_): {Mblcm_cl > 0} [
-                slice(Mblcm_cmd): Mblcm_cmd 0 {Mblcm_cl - 1}
+                utf8_prev(Mblcm_cut): Mblcm_cmd Mblcm_cl
+                slice(Mblcm_cmd): Mblcm_cmd 0 Mblcm_cut
                 set(Mbl_msg): ":"
                 concat(Mbl_msg): Mbl_msg Mblcm_cmd
             ]
         ]
-        if(_): {Mblcm_b > 31} [
-            if(_): {Mblcm_b < 127} [
-                slice(Mblcm_ch): Mbl_ascii {Mblcm_b - 32} 1
-                concat(Mblcm_cmd): Mblcm_cmd Mblcm_ch
-                concat(Mbl_msg): Mbl_msg Mblcm_ch
-            ]
+        if(_): {Mblcm_b > 31 && Mblcm_b != 127} [
+            Mbl_readchar(Mblcm_ch): Mblcm_b
+            concat(Mblcm_cmd): Mblcm_cmd Mblcm_ch
+            concat(Mbl_msg): Mbl_msg Mblcm_ch
         ]
     ]
     set(Mbl_mode): 0
@@ -692,6 +1100,12 @@ Mbl_dispatch(r): b [
 init(ret): arg_cnt arg_vec [
     set(Mbl_file): ""
     set(Mbl_showname): "[No Name]"
+    set(Mbl_pb): {0 - 1}
+    vec(Mblit_bom): ""
+    push(_): Mblit_bom 239
+    push(_): Mblit_bom 187
+    push(_): Mblit_bom 191
+    utf8_from_bytes(Mbl_bom_text): Mblit_bom
     if(_): {arg_cnt > 0} [
         at(Mbl_file): arg_vec 0
         set(Mbl_showname): Mbl_file
@@ -709,6 +1123,8 @@ init(ret): arg_cnt arg_vec [
     set(Mbl_cy): 0
     set(Mbl_top): 0
     set(Mbl_pend): 0
+    set(Mbl_pend_count): 1
+    set(Mbl_count): 0
     set(Mbl_msg): ""
     set(Mbl_running): 1
     set(Mblit_s): Mbl_esc

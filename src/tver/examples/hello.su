@@ -4,6 +4,14 @@ key_handler(result): window key [
     tverhandlekey(_): window key
 ]
 
+key_released(result): window key [
+    tverhandlekeyup(_): window key
+]
+
+focus_changed(result): window focused [
+    tverfocus(_): window focused
+]
+
 panel_changed(result): widget [
     tveractivatepanel(_): widget
 ]
@@ -25,6 +33,8 @@ init(result): arg_count arg_values [
     grid(_): keys 2 1 false
 
     on(_): window "key" "key_handler"
+    on(_): window "keyup" "key_released"
+    on(_): window "focus" "focus_changed"
     on(_): left_files "change" "panel_changed"
     on(_): right_files "change" "panel_changed"
     tverinitialize(_): window left_path left_files right_path right_files status

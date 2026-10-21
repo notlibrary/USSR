@@ -8,12 +8,24 @@
 #   close_file(ok): h                        (stream close)
 #   write_file(n): h "text"                  (bytes written)
 #   read_file(s): h [n]                      (rest of file, or n bytes)
+#   read_line(s): h                          (next line without LF/CRLF,
+#                                             null at end of file)
+# Directory and path primitives (0 ok / 1 failed results are non-fatal):
+#   list_dir(v): "path"     names sorted without regard to case; directory
+#                           names end in "/"; null if unreadable
+#   is_dir(b): "path"       1 for a directory, 0 otherwise
+#   getcwd(s):              current working directory
+#   make_dir(ok): "path"    create one directory (fails if it exists)
+#   rename_path(ok): from to   move/rename; never replaces a destination
+#   remove_file(ok): "path" delete a file (directories are refused)
+#   remove_dir(ok): "path"  delete an empty directory
 # These are real stream operations on open handles; the whole-file
 # readfile/writefile VM builtins stay available separately.
 # Library-provided helpers:
 #   putch(ok): code                          (write one byte/char)
 #   getch(code):                             (read one char, -1 at EOF)
 # No top-level state: programs with init(...) skip top-level commands.
+$once
 
 putch(r): code [
     set(r): 0

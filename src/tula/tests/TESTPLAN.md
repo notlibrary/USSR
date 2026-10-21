@@ -1,13 +1,26 @@
 # Tula test plan
 
-- Build with and without the GLFW backend.
-- Parse and execute `examples/hello.su`; verify the window maximizes and the
-  grid canvas, tool buttons, filename field, and status are visible.
-- Click two points with Line selected and verify the displayed snapped line.
-- Click a center and radius point with Circle selected and verify the displayed
-  snapped circle.
-- Save a mixed drawing and verify the DXF contains `AC1015`, one `LINE` and one
-  `CIRCLE`, correct coordinates/radius, `$INSUNITS` 4, and `EOF`.
-- Verify empty filename, unwritable destination, zero-radius circles, repeated
-  points, and the entity limit report errors without corrupting the drawing.
-- Verify the temporary canvas is removed at interpreter cleanup.
+Automated (GLFW build and a display required):
+
+- `ussr tests/gui/tula_test.su`: tool-required message, snapped line and
+  circle input, degenerate line refusal, unknown tool refusal, the exact DXF
+  output, and the empty filename error.
+- `ussr tests/gui/tula_dxf_test.su`: loads `tests/gui/fixtures/sample.dxf`
+  (every supported entity, a `BLOCKS` section that must be ignored, and two
+  unsupported entities), checks the parsed entities and the number of shapes
+  drawn, fit, zoom about the cursor, grid spacing across 75 zoom steps, zoom
+  limits, snapping to the visible grid, pan, save/load round trip, CRLF
+  input, and refusal of missing, truncated, binary and malformed files.
+- `ussr tests/gui/tula_toolbar_test.su`: every toolbar button reaches its
+  action (tool selection and pressed state, zoom, pan, fit, load, save) and
+  the keyboard shortcuts work.
+
+Manual:
+
+- Run `examples/hello.su`; verify the window maximizes and the grid canvas,
+  toolbar, filename field, and status are visible.
+- Load `tests/gui/fixtures/sample.dxf`, zoom with the mouse wheel over
+  different points and confirm the point under the cursor stays put and the
+  grid stays aligned with the geometry.
+- Verify an unwritable destination reports an error without corrupting the
+  drawing, and that the entity limit is enforced.

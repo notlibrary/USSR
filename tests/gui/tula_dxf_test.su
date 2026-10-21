@@ -1,0 +1,237 @@
+# Tula DXF rendering, zoom and grid test. Needs a GLFW-enabled ussr and a
+# display; the window is never shown. Run from the repository root:
+#     ussr tests/gui/tula_dxf_test.su
+# Fixtures live in tests/gui/fixtures. Every check prints PASS or FAIL.
+$include "../../src/tula/tula.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+near(r): label got want [
+    set(_nr_d): {got - want}
+    if(_): {_nr_d < 0} [
+        set(_nr_d): {0 - _nr_d}
+    ]
+    check(r): label {_nr_d < 0.001} true
+]
+
+load(r): path [
+    set(_ld_box): tula_path?
+    settext(_): _ld_box path
+    tulaload(_):
+    set(_ld_status): tula_status?
+    gettext(r): _ld_status
+]
+
+# Shapes drawn for the entities alone: total minus an empty drawing's grid.
+entity_shapes(r): [
+    set(_es_canvas): tula_canvas?
+    canvascount(_es_all): _es_canvas
+    set(_es_keep): tula_entities?
+    vec(_es_none): ""
+    set(tula_entities): _es_none!
+    tula_redraw(_):
+    canvascount(_es_grid): _es_canvas
+    set(tula_entities): _es_keep!
+    tula_redraw(_):
+    set(r): {_es_all - _es_grid}
+]
+
+screen_x(r): x [
+    tula_to_screen_x(r): x
+]
+
+screen_y(r): y [
+    tula_to_screen_y(r): y
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Tula DXF test" 1100 800
+    textbox(filename): window ""
+    label(status): window ""
+    tulainitialize(canvas): window status filename
+
+    load(t): "tests/gui/fixtures/sample.dxf"
+    check(_): "load status" t "Loaded 8 object(s) from tests/gui/fixtures/sample.dxf; 2 unsupported entities skipped (SPLINE, INSERT)"
+    set(e): tula_entities?
+    len(n): e
+    check(_): "entity count" n 8
+    set(kinds): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(x): e i
+        at(k): x 0
+        concat(kinds): kinds k " "
+        set(i): {i + 1}
+    ]
+    check(_): "entity kinds in file order" kinds "LINE CIRCLE ARC POLYLINE POLYLINE POINT TEXT POLYLINE "
+    at(x): e 0
+    at(v): x 3
+    check(_): "line end from ENTITIES, not BLOCKS" v 100
+    at(x): e 2
+    at(v): x 4
+    check(_): "arc start angle" v 0
+    at(v): x 5
+    check(_): "arc end angle" v 90
+    at(x): e 3
+    at(v): x 1
+    check(_): "lwpolyline closed flag" v true
+    at(p): x 2
+    len(v): p
+    check(_): "lwpolyline vertices" v 8
+    at(x): e 4
+    at(v): x 1
+    check(_): "polyline open" v false
+    at(p): x 2
+    len(v): p
+    check(_): "polyline vertex records" v 6
+    at(x): e 6
+    at(v): x 4
+    check(_): "text value" v "TULA"
+    at(x): e 7
+    at(p): x 2
+    len(v): p
+    check(_): "ellipse sampled as 64 points" v 128
+    at(v): p 0
+    near(_): "ellipse starts at major axis x" v 90
+    at(v): p 33
+    near(_): "ellipse minor axis y" v -10
+
+    # line 1 + circle 1 + arc 1 + closed square 4 + polyline 2 + point 2
+    # + text 1 + ellipse 64
+    entity_shapes(s):
+    check(_): "shapes drawn for entities" s 76
+
+    # Fit: extents x -10..130, y -30..95 centered in the 1000x700 default.
+    screen_x(sx): 60
+    screen_y(sy): 32.5
+    near(_): "fit centers drawing x" sx 500
+    near(_): "fit centers drawing y" sy 350
+    set(view): tula_view?
+    at(scale): view 2
+    near(_): "fit scale limited by height" scale {700 / 137.5}
+
+    # Zoom about a point keeps the world point under it fixed.
+    set(view): tula_view?
+    at(ox): view 0
+    at(oy): view 1
+    at(scale): view 2
+    set(wx): {(200 - ox) / scale}
+    set(wy): {(oy - 300) / scale}
+    tulawheel(_): canvas 200 300 1
+    screen_x(sx): wx
+    screen_y(sy): wy
+    near(_): "wheel zoom keeps x under cursor" sx 200
+    near(_): "wheel zoom keeps y under cursor" sy 300
+    set(view): tula_view?
+    at(s2): view 2
+    near(_): "wheel zoom factor" s2 {scale * 1.25}
+
+    # Grid lines stay 10..100 pixels apart however far we zoom.
+    set(i): 0
+    set(ok): true
+    while(_): {i < 25} [
+        tulawheel(_): canvas 500 350 -1
+        set(view): tula_view?
+        at(s2): view 2
+        set(step): tula_step?
+        set(px): {step * s2}
+        if(_): {px < 10 || px > 100} [
+            set(ok): false
+        ]
+        set(i): {i + 1}
+    ]
+    check(_): "grid spacing usable zoomed out" ok true
+    set(i): 0
+    while(_): {i < 50} [
+        tulawheel(_): canvas 500 350 1
+        set(view): tula_view?
+        at(s2): view 2
+        set(step): tula_step?
+        set(px): {step * s2}
+        if(_): {px < 10 || px > 100} [
+            set(ok): false
+        ]
+        set(i): {i + 1}
+    ]
+    check(_): "grid spacing usable zoomed in" ok true
+    set(view): tula_view?
+    at(s2): view 2
+    near(_): "zoom clamped at maximum" s2 1000
+    tulazoom(_): 0.5
+    set(view): tula_view?
+    at(s2): view 2
+    near(_): "zoom button halves scale" s2 500
+    set(step): tula_step?
+    tula_snap(v): {step * 3.4}
+    near(_): "snap follows visible grid" v {step * 3}
+
+    tulafit(_):
+    set(view): tula_view?
+    at(ox): view 0
+    at(oy): view 1
+    tulapan(_): 10 -5
+    set(view): tula_view?
+    at(v): view 0
+    near(_): "pan x" v {ox + 10}
+    at(v): view 1
+    near(_): "pan y" v {oy - 5}
+
+    # Saving writes every kind back; loading the copy gives the same drawing.
+    settext(_): filename "tula_dxf_roundtrip.dxf"
+    tulasave(_):
+    load(t): "tula_dxf_roundtrip.dxf"
+    check(_): "round trip status" t "Loaded 8 object(s) from tula_dxf_roundtrip.dxf"
+    set(e2): tula_entities?
+    set(same): true
+    set(i): 0
+    while(_): {i < 8} [
+        at(a): e i
+        at(b): e2 i
+        at(ka): a 0
+        at(kb): b 0
+        if(_): {ka != kb} [
+            set(same): false
+        ]
+        at(va): a 1
+        at(vb): b 1
+        typeof(ta): va
+        if(_): {ta != "boolean" && ta != "string"} [
+            set(d): {va - vb}
+            if(_): {d > 0.000001 || d < -0.000001} [
+                set(same): false
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    check(_): "round trip entities" same true
+    remove_file(_): "tula_dxf_roundtrip.dxf"
+
+    load(t): "tests/gui/fixtures/sample_crlf.dxf"
+    check(_): "CRLF file" t "Loaded 8 object(s) from tests/gui/fixtures/sample_crlf.dxf; 2 unsupported entities skipped (SPLINE, INSERT)"
+    load(t): "tests/gui/fixtures/missing.dxf"
+    check(_): "missing file" t "Cannot open DXF: tests/gui/fixtures/missing.dxf"
+    load(t): "tests/gui/fixtures/truncated.dxf"
+    check(_): "truncated file" t "DXF ends in the middle of a group"
+    load(t): "tests/gui/fixtures/bad_number.dxf"
+    check(_): "malformed number" t "Malformed number in DXF"
+    load(t): "tests/gui/fixtures/binary.dxf"
+    check(_): "binary DXF refused" t "Not an ASCII DXF file (binary DXF is not supported)"
+    set(e3): tula_entities?
+    len(n): e3
+    check(_): "failed loads keep the drawing" n 8
+
+    close(_): window
+    set(result): 0
+]

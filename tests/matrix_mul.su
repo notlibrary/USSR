@@ -1,0 +1,227 @@
+# Matrix multiplication for any valid dimensions, with loops.
+# A matrix is Matrix{rows, cols, data}: data is a flat row-major vector, so
+# element (i, j) lives at i * cols + j. Dimensions come from arguments at
+# run time; nothing is unrolled by hand.
+# Expected products were computed independently (Python, see the comments)
+# and are written out as literals. Prints PASS or FAIL per check.
+#     ussr tests/matrix_mul.su
+$include "../src/libs/strings.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# rows x cols matrix of zeros
+mat_new(r): rows cols [
+    vec(_mn_data): ""
+    set(_mn_i): 0
+    while(_): {_mn_i < rows * cols} [
+        push(_): _mn_data 0
+        set(_mn_i): {_mn_i + 1}
+    ]
+    new(r): "Matrix" rows cols _mn_data
+]
+
+mat_get(r): m i j [
+    getf(_mg_cols): m "cols"
+    getf(_mg_data): m "data"
+    at(r): _mg_data {i * _mg_cols + j}
+]
+
+mat_set(r): m i j value [
+    getf(_ms_cols): m "cols"
+    getf(_ms_data): m "data"
+    set(_ms_data): {i * _ms_cols + j} value
+    set(r): m
+]
+
+# Builds a matrix from a vector of row vectors.
+mat_from_rows(r): rows [
+    len(_mf_r): rows
+    at(_mf_first): rows 0
+    len(_mf_c): _mf_first
+    mat_new(r): _mf_r _mf_c
+    set(_mf_i): 0
+    while(_): {_mf_i < _mf_r} [
+        at(_mf_row): rows _mf_i
+        set(_mf_j): 0
+        while(_): {_mf_j < _mf_c} [
+            at(_mf_v): _mf_row _mf_j
+            mat_set(_): r _mf_i _mf_j _mf_v
+            set(_mf_j): {_mf_j + 1}
+        ]
+        set(_mf_i): {_mf_i + 1}
+    ]
+]
+
+# left (n x m) times right (m x p) -> n x p, or an error string when the
+# inner dimensions differ.
+mat_mul(r): left right [
+    getf(_mm_n): left "rows"
+    getf(_mm_m): left "cols"
+    getf(_mm_m2): right "rows"
+    getf(_mm_p): right "cols"
+    if(_): {_mm_m != _mm_m2} [
+        str_dims(_mm_l): _mm_n _mm_m
+        str_dims(_mm_rd): _mm_m2 _mm_p
+        concat(r): "cannot multiply " _mm_l " by " _mm_rd ": left columns must equal right rows"
+        return(_): r
+    ]
+    mat_new(r): _mm_n _mm_p
+    set(_mm_i): 0
+    while(_): {_mm_i < _mm_n} [
+        set(_mm_j): 0
+        while(_): {_mm_j < _mm_p} [
+            set(_mm_sum): 0
+            set(_mm_k): 0
+            while(_): {_mm_k < _mm_m} [
+                mat_get(_mm_a): left _mm_i _mm_k
+                mat_get(_mm_b): right _mm_k _mm_j
+                set(_mm_sum): {_mm_sum + _mm_a * _mm_b}
+                set(_mm_k): {_mm_k + 1}
+            ]
+            mat_set(_): r _mm_i _mm_j _mm_sum
+            set(_mm_j): {_mm_j + 1}
+        ]
+        set(_mm_i): {_mm_i + 1}
+    ]
+]
+
+str_dims(r): rows cols [
+    str_from_int(_sd_r): rows
+    str_from_int(_sd_c): cols
+    concat(r): _sd_r "x" _sd_c
+]
+
+# Compares every element with tolerance eps (exact for integers).
+mat_equal(r): m expected eps [
+    set(r): true
+    getf(_me_rows): m "rows"
+    getf(_me_cols): m "cols"
+    len(_me_er): expected
+    at(_me_first): expected 0
+    len(_me_ec): _me_first
+    if(_): {_me_rows != _me_er || _me_cols != _me_ec} [
+        set(r): false
+        return(_): r
+    ]
+    set(_me_i): 0
+    while(_): {_me_i < _me_rows} [
+        at(_me_row): expected _me_i
+        set(_me_j): 0
+        while(_): {_me_j < _me_cols} [
+            mat_get(_me_v): m _me_i _me_j
+            at(_me_w): _me_row _me_j
+            set(_me_d): {_me_v - _me_w}
+            if(_): {_me_d > eps || 0 - _me_d > eps} [
+                set(r): false
+            ]
+            set(_me_j): {_me_j + 1}
+        ]
+        set(_me_i): {_me_i + 1}
+    ]
+]
+
+# Fills rows x cols by formula `kind` (see the cases below).
+mat_fill(r): rows cols kind [
+    mat_new(r): rows cols
+    set(_fl_i): 0
+    while(_): {_fl_i < rows} [
+        set(_fl_j): 0
+        while(_): {_fl_j < cols} [
+            if(_): {kind = "A"} [
+                set(_fl_v): {_fl_i * cols + _fl_j + 1}
+            ]
+            elif(_): {kind = "B"} [
+                set(_fl_v): {(_fl_i + 1) * (_fl_j + 2) - 3}
+            ]
+            elif(_): {kind = "C"} [
+                set(_fl_v): {(_fl_i - _fl_j) * 2 + 1}
+            ]
+            elif(_): {kind = "D"} [
+                set(_fl_v): {(_fl_i * 7 + _fl_j) % 5 - 2 + _fl_i * _fl_j}
+            ]
+            elif(_): {kind = "E"} [
+                set(_fl_v): {(_fl_j + 1) * 0.5}
+            ]
+            else(_): [
+                set(_fl_v): {_fl_i - 1.5}
+            ]
+            mat_set(_): r _fl_i _fl_j _fl_v
+            set(_fl_j): {_fl_j + 1}
+        ]
+        set(_fl_i): {_fl_i + 1}
+    ]
+]
+
+# Runs one product and checks its shape and values.
+run_case(r): label n m m2 p kind_left kind_right expected eps [
+    mat_fill(_rc_l): n m kind_left
+    mat_fill(_rc_r): m2 p kind_right
+    mat_mul(_rc_x): _rc_l _rc_r
+    typeof(_rc_t): _rc_x
+    concat(_rc_label): label " is a matrix"
+    check(_): _rc_label _rc_t "Matrix"
+    if(_): {_rc_t = "Matrix"} [
+        getf(_rc_rows): _rc_x "rows"
+        getf(_rc_cols): _rc_x "cols"
+        concat(_rc_label): label " has left.rows rows"
+        check(_): _rc_label _rc_rows n
+        concat(_rc_label): label " has right.cols columns"
+        check(_): _rc_label _rc_cols p
+        mat_equal(_rc_ok): _rc_x expected eps
+        concat(_rc_label): label " values"
+        check(_): _rc_label _rc_ok true
+    ]
+    set(r): _rc_x
+]
+
+init(result): arg_count arg_values [
+    struct(Matrix): "rows:number" "cols:number" "data:vector"
+
+    # Python: A[i][j] = 4i + j + 1 (3x4), B[i][j] = (i+1)(j+2) - 3 (4x3)
+    set(want1): '[[30,60,90],[62,132,202],[94,204,314]]'
+    run_case(_): "3x4 * 4x3" 3 4 4 3 "A" "B" want1 0
+
+    # Python: C[i][j] = 2(i-j) + 1 (2x5), D[i][j] = (7i+j) % 5 - 2 + ij (5x7)
+    set(want2): '[[-10,-60,-90,-150,-190,-260,-310],[-10,-40,-50,-90,-110,-160,-190]]'
+    run_case(_): "2x5 * 5x7" 2 5 5 7 "C" "D" want2 0
+
+    # Python: E = [[0.5, 1.0, 1.5]], F = [[-1.5], [-0.5], [0.5]]
+    set(want3): '[[-0.5]]'
+    run_case(_): "1x3 * 3x1 reals" 1 3 3 1 "E" "F" want3 0.000000001
+
+    # mat_from_rows and a hand-checked identity product
+    set(rows): '[[1,2],[3,4]]'
+    mat_from_rows(m): rows
+    set(id_rows): '[[1,0],[0,1]]'
+    mat_from_rows(id): id_rows
+    mat_mul(prod): m id
+    mat_equal(ok): prod rows 0
+    check(_): "identity leaves a matrix unchanged" ok true
+
+    # Incompatible dimensions: 3x4 times 3x4 is refused with a clear error.
+    mat_fill(l): 3 4 "A"
+    mat_fill(rgt): 3 4 "A"
+    mat_mul(bad): l rgt
+    check(_): "dimension mismatch error" bad "cannot multiply 3x4 by 3x4: left columns must equal right rows"
+    mat_fill(l): 2 5 "C"
+    mat_fill(rgt): 4 3 "B"
+    mat_mul(bad): l rgt
+    check(_): "second mismatch error" bad "cannot multiply 2x5 by 4x3: left columns must equal right rows"
+    mat_fill(l): 12 10 "A"
+    mat_fill(rgt): 11 3 "B"
+    mat_mul(bad): l rgt
+    check(_): "two-digit dimensions in the error" bad "cannot multiply 12x10 by 11x3: left columns must equal right rows"
+    set(result): 0
+]

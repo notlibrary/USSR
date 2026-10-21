@@ -21,11 +21,16 @@ The bootstrap currently includes the fixes for:
 
 Build the stage-0 executable using the normal project build, then run:
 
-    ./ussr src/russia.su tests/hello.su
+    ./ussr src/russia/russia.su tests/hello.su
 
-or from `src`:
+Textual UUASM runs the same way (`./ussr src/russia/russia.su prog.ua`); see
+the bootstrap section of `USSR_UUASM_SPEC.md`. The interpreted program's
+standard library is read from `src/libs/` (or `libs/`, `../libs/`, the
+current directory). `standard.su` is not `$include`d by `russia.su` itself
+because its PRNG definitions shadow host builtins.
 
-    ./../ussr russia.su ../tests/hello.su
+Known issue: interpreting the PRNG definitions now in `src/libs/standard.su`
+prints a stray `undefined variable` line before the program output.
 
 This is a bootstrap stage, not yet a replacement for every OS-facing C service.
 External process execution and some compatibility commands still belong to the

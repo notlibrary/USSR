@@ -1,0 +1,133 @@
+# Automated Tula test. Needs a GUI-enabled ussr (GLFW) and a display; the
+# window is never shown. Run from the repository root:
+#     ussr tests/gui/tula_test.su
+# Drives the CAD with injected button clicks and canvas pointer events, then
+# compares the exported DXF with the expected text. Prints PASS or FAIL.
+$include "../../src/tula/tula.su"
+
+line_tool(result): widget [
+    tulatool(_): "line"
+]
+
+circle_tool(result): widget [
+    tulatool(_): "circle"
+]
+
+canvas_input(result): canvas x y [
+    tulaclick(_): canvas x y
+]
+
+save_drawing(result): widget [
+    tulasave(_):
+]
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 60
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 200} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    if(_): {_st_idle = false} [
+        print(_): "FAIL handler did not finish"
+        uiunlock(_):
+    ]
+    set(r): 0
+]
+
+point(r): canvas x y [
+    inject(_): canvas "pointer" x y 0
+    settle(_):
+    set(r): 0
+]
+
+click(r): widget [
+    inject(_): widget "click" 0 0 0
+    settle(_):
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Tula test" 1100 800
+    button(line_button): window "Line"
+    button(circle_button): window "Circle"
+    textbox(filename): window "tula_test_out.dxf"
+    button(save_button): window "Save DXF"
+    label(status): window ""
+    on(_): line_button "click" "line_tool"
+    on(_): circle_button "click" "circle_tool"
+    on(_): save_button "click" "save_drawing"
+    tulainitialize(canvas): window status filename
+    on(_): canvas "pointer" "canvas_input"
+    pack(_): canvas true
+
+    canvascount(grid_shapes): canvas
+    check(_): "grid drawn" {grid_shapes > 100} true
+    gettext(t): status
+    check(_): "ready status" t "LINE tool: click two snapped points; CIRCLE tool: center then radius; Save exports DXF"
+
+    point(_): canvas 50 650
+    gettext(t): status
+    check(_): "tool required" t "Choose LINE or CIRCLE before drawing"
+
+    click(_): line_button
+    gettext(t): status
+    check(_): "line tool" t "LINE tool: click the first snapped endpoint"
+    point(_): canvas 50 650
+    gettext(t): status
+    check(_): "first point snapped" t "First point: 10, 10 - click next point"
+    canvascount(n): canvas
+    check(_): "anchor cross drawn" n {grid_shapes + 2}
+    point(_): canvas 151 451
+    gettext(t): status
+    check(_): "line added" t "Line added at grid snap (10, 10); 1 object(s)"
+
+    point(_): canvas 52 648
+    point(_): canvas 50 650
+    gettext(t): status
+    check(_): "degenerate line refused" t "Line endpoints must be different"
+    tulatool(_): "line"
+
+    click(_): circle_button
+    point(_): canvas 100 600
+    point(_): canvas 125 600
+    gettext(t): status
+    check(_): "circle added" t "Circle added at grid snap (20, 20); 2 object(s)"
+    canvascount(n): canvas
+    check(_): "entities drawn" n {grid_shapes + 2}
+
+    tulatool(_): "arc"
+    gettext(t): status
+    check(_): "unknown tool refused" t "Tula supports only line and circle tools"
+
+    click(_): save_button
+    gettext(t): status
+    check(_): "saved" t "Saved 2 object(s) to tula_test_out.dxf"
+    readfile(dxf): "tula_test_out.dxf"
+    check(_): "dxf content" dxf "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n10\n20\n10\n30\n0\n11\n30\n21\n50\n31\n0\n0\nCIRCLE\n8\n0\n10\n20\n20\n20\n30\n0\n40\n5\n0\nENDSEC\n0\nEOF\n"
+    remove_file(_): "tula_test_out.dxf"
+
+    settext(_): filename ""
+    click(_): save_button
+    gettext(t): status
+    check(_): "filename required" t "Enter a DXF filename before saving"
+
+    close(_): window
+    set(result): 0
+]

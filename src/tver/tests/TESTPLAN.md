@@ -1,20 +1,28 @@
 # tver test plan
 
+Automated: `ussr tests/gui/tver_test.su` (GLFW build and a display required)
+covers listing order, directory mark refusal, file marks and cursor advance,
+Tab, Enter into a directory and back to `..`, F6 moves with marks, and the
+two-step F8 delete. `ussr tests/gui/tver_repeat_test.su` covers held-arrow
+repeat: single tap, hold, release, focus loss, end of list, direction
+change, cancellation by another key, an unfocused list, and closing the
+window mid-repeat. `ussr tests/gui/tver_select_test.su` covers marking files
+and directories, `..` refusal, cursor versus mark, marks across navigation,
+refresh, entering and leaving directories, per-panel marks, F6 on marked
+directories, and F8 on empty and non-empty directories.
+
+Manual:
+
 - Package manifest parses as UNO (not JSON).
 - Example includes `tver.su` and Petersburg API and runs on a GLFW-enabled build.
-- Tab switches active panels; mouse clicks and Up/Down update selection.
-- Enter opens directories and `..` returns to the parent.
-- Insert toggles file marks, refuses directories, and preserves marks across
-  panel refreshes.
-- F6 moves files to the other panel and refuses to overwrite an existing file.
-- F8 requires a second press and deletes files only; directories are refused.
+- Mouse clicks and Up/Down update selection and activate the clicked panel.
+- F6 refuses to overwrite an existing file.
 - File names containing pipes and backslashes display and select correctly.
-- Invalid handles/arguments report errors; filesystem errors reach the status line.
-- Native filesystem operations run without invoking a shell.
-- Verify Windows and POSIX builds and exercise both filesystem adapters.
+- Filesystem errors (unreadable directories, locked files) reach the status line.
+- Verify Windows and POSIX builds (drive roots, UNC paths, `/`).
 
 ## Project-specific
 
 - Large directories, permission errors, symlink behavior, and Windows drive roots.
 - Marked-file operations that encounter a failure after a partial success.
-- Directory move/delete, copy, rename, view, and edit remain out of scope.
+- Copy, rename, view, edit and recursive delete remain out of scope.

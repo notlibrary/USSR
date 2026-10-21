@@ -1,0 +1,180 @@
+# Held-arrow navigation test for Tver. Needs a GLFW-enabled ussr and a
+# display; the window is never shown. Run from the repository root:
+#     ussr tests/gui/tver_repeat_test.su
+# Builds tver_repeat_fixture/ with 40 files, holds and releases arrow keys
+# through Petersburg's input path, and checks where the cursor ends up.
+# The run must also end on its own after the window is closed mid-repeat.
+$include "../../src/tver/tver.su"
+
+$define KEY_TAB 258
+$define KEY_DOWN 264
+$define KEY_UP 265
+
+key_handler(result): window key [
+    tverhandlekey(_): window key
+]
+
+keyup_handler(result): window key [
+    tverhandlekeyup(_): window key
+]
+
+focus_handler(result): window focused [
+    tverfocus(_): window focused
+]
+
+panel_changed(result): widget [
+    tveractivatepanel(_): widget
+]
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+down(r): window key [
+    inject(_): window "key" key 0 0
+    set(r): 0
+]
+
+up(r): window key [
+    inject(_): window "keyup" key 0 0
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    make_dir(_): "tver_repeat_fixture"
+    cd(_): "tver_repeat_fixture"
+    set(i): 10
+    while(_): {i < 50} [
+        str_from_int(n): i
+        concat(name): "f" n ".txt"
+        writefile(_): name "x"
+        set(i): {i + 1}
+    ]
+
+    createwindow(window): "Tver repeat test" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left): window ""
+    listbox(right): window ""
+    label(status): window ""
+    textbox(other): window ""
+    on(_): window "key" "key_handler"
+    on(_): window "keyup" "keyup_handler"
+    on(_): window "focus" "focus_handler"
+    on(_): left "change" "panel_changed"
+    on(_): right "change" "panel_changed"
+    tverinitialize(_): window left_path left right_path right status
+    getfocus(f): window
+    check(_): "left list focused at start" f left
+
+    # A tap moves one row and does not repeat.
+    down(_): window KEY_DOWN
+    up(_): window KEY_DOWN
+    sleep(_): 600
+    getindex(i): left
+    check(_): "single press moves one row" i 1
+
+    # Holding repeats after the delay, releasing stops at once.
+    down(_): window KEY_DOWN
+    sleep(_): 1000
+    getindex(held): left
+    check(_): "holding repeats" {held > 8 && held < 30} true
+    up(_): window KEY_DOWN
+    sleep(_): 60
+    getindex(i1): left
+    sleep(_): 400
+    getindex(i2): left
+    check(_): "release stops repeating" i2 i1
+
+    # Losing window focus stops repeating.
+    down(_): window KEY_DOWN
+    sleep(_): 500
+    inject(_): window "focus" 0 0 0
+    sleep(_): 60
+    getindex(i1): left
+    sleep(_): 400
+    getindex(i2): left
+    check(_): "focus loss stops repeating" i2 i1
+    check(_): "focus loss came after movement" {i1 > held} true
+    up(_): window KEY_DOWN
+
+    # The cursor stops at the last row (".." plus 40 files).
+    setindex(_): left 35
+    down(_): window KEY_DOWN
+    sleep(_): 1200
+    getindex(i): left
+    check(_): "repeat stops at the end" i 40
+    up(_): window KEY_DOWN
+
+    # Pressing Up while Down repeats hands over to a single Up repeater.
+    setindex(_): left 20
+    down(_): window KEY_DOWN
+    sleep(_): 500
+    getindex(turn): left
+    down(_): window KEY_UP
+    sleep(_): 450
+    getindex(a): left
+    sleep(_): 200
+    getindex(b): left
+    check(_): "direction change moves up" {a < turn} true
+    check(_): "only the newest repeater runs" {b < a} true
+    up(_): window KEY_UP
+    up(_): window KEY_DOWN
+
+    # Another key cancels the repeat.
+    setindex(_): left 5
+    down(_): window KEY_DOWN
+    sleep(_): 500
+    down(_): window KEY_TAB
+    up(_): window KEY_TAB
+    sleep(_): 60
+    getindex(i1): left
+    sleep(_): 400
+    getindex(i2): left
+    check(_): "another key cancels" i2 i1
+    down(_): window KEY_TAB
+    up(_): window KEY_TAB
+    up(_): window KEY_DOWN
+    sleep(_): 100
+
+    # Without list focus Tver takes the step itself: exactly one row.
+    setindex(_): left 10
+    setfocus(_): other
+    down(_): window KEY_DOWN
+    up(_): window KEY_DOWN
+    sleep(_): 200
+    getindex(i): left
+    check(_): "unfocused press moves exactly one row" i 11
+    getfocus(f): window
+    check(_): "unfocused press focuses the list" f left
+
+    # Close while a repeat is running; the script must still finish.
+    setindex(_): left 0
+    down(_): window KEY_DOWN
+    sleep(_): 500
+    close(_): window
+    sleep(_): 200
+
+    cd(_): ".."
+    set(i): 10
+    while(_): {i < 50} [
+        str_from_int(n): i
+        concat(name): "tver_repeat_fixture/f" n ".txt"
+        remove_file(_): name
+        set(i): {i + 1}
+    ]
+    remove_dir(gone): "tver_repeat_fixture"
+    check(_): "fixture removed" gone 0
+    print(_): "DONE"
+    set(result): 0
+]

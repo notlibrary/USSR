@@ -1,15 +1,927 @@
-# Tver native runtime API. The graphical application is assembled from
-# Petersburg widgets and the existing USSR scheduler.
+# tver.su - two-panel keyboard-driven file manager, written in USSR.
+# The window is assembled from Petersburg widgets; directory access uses the
+# io primitives list_dir/is_dir/getcwd/rename_path/remove_file. Shared state
+# lives in the !/? hash namespace because every Petersburg callback runs as
+# its own scheduler process with a private copy of ordinary variables.
+#
+# Public API (unchanged from the native version):
+#   tverinitialize(r): window left_path left_list right_path right_list status
+#   tverhandlekey(r): window key        -> window "key" callback body
+#   tveractivatepanel(r): widget        -> list "change" callback body
+#   tverhandlekeyup(r): window key      -> window "keyup" callback body
+#   tverfocus(r): window focused        -> window "focus" callback body
+#
+# Holding Up or Down repeats the cursor movement: after TVER_REPEAT_DELAY ms
+# a repeater process steps every TVER_REPEAT_RATE ms until the key is
+# released, the window loses focus or closes, another key is pressed, or the
+# cursor reaches the end of the list. Each press bumps tver_repeat_gen, and a
+# repeater only steps while the generation it started with is current, so at
+# most one repeater moves the cursor and a stop takes effect at the next step.
+#
+# Selection: Insert marks files and directories (never ".."). Marks are
+# shown with Petersburg list row marks, separate from the cursor band. They
+# survive refreshes and scrolling, and each panel remembers them per
+# directory: leaving a directory saves its marks in tver_memory and coming
+# back restores them. F6/F8 act on the current directory's marks only.
+#
+# Hash keys: tver_window tver_status tver_paths tver_lists tver_dirs tver_memory
+# tver_names tver_marks tver_active tver_pending tver_repeat_key
+# tver_repeat_gen. Handlers serialize through Petersburg's uilock.
+# Directory names in tver_names end with "/"; the parent entry is "../".
+$once
 $include "../petersburg/petersburg.su"
+$include "../libs/strings.su"
+
+$define TVER_KEY_ENTER 257
+$define TVER_KEY_TAB 258
+$define TVER_KEY_INSERT 260
+$define TVER_KEY_F6 295
+$define TVER_KEY_F8 297
+$define TVER_KEY_KP_ENTER 335
+$define TVER_KEY_DOWN 264
+$define TVER_KEY_UP 265
+$define TVER_REPEAT_DELAY 350
+$define TVER_REPEAT_RATE 50
+
+# --- paths ----------------------------------------------------------------
+tver_is_dir_name(r): name [
+    len(_tvd_n): name
+    set(r): false
+    if(_): {_tvd_n > 0} [
+        byte(_tvd_b): name {_tvd_n - 1}
+        set(r): {_tvd_b = 47}
+    ]
+]
+
+# Name without the trailing "/" that marks directories.
+tver_plain_name(r): name [
+    tver_is_dir_name(_tvp_dir): name
+    set(r): name
+    if(_): _tvp_dir [
+        len(_tvp_n): name
+        slice(r): name 0 {_tvp_n - 1}
+    ]
+]
+
+tver_is_separator(r): b [
+    set(r): {b = 47 || b = 92}
+]
+
+tver_separator(r): path [
+    str_find(_tvs_back): path "\\" 0
+    set(r): "/"
+    if(_): {_tvs_back >= 0} [
+        set(r): "\\"
+    ]
+]
+
+tver_is_root(r): path [
+    len(_tvr_n): path
+    set(r): false
+    if(_): {_tvr_n = 1} [
+        byte(_tvr_b): path 0
+        tver_is_separator(r): _tvr_b
+    ]
+    if(_): {_tvr_n = 3} [
+        byte(_tvr_b1): path 1
+        byte(_tvr_b2): path 2
+        tver_is_separator(_tvr_s): _tvr_b2
+        set(r): {_tvr_b1 = 58 && _tvr_s}
+    ]
+    # \\server\share is the root of a UNC path.
+    if(_): {_tvr_n > 2} [
+        slice(_tvr_head): path 0 2
+        if(_): {_tvr_head = "\\\\"} [
+            str_find(_tvr_a): path "\\" 2
+            set(r): {_tvr_a < 0}
+            if(_): {_tvr_a >= 0} [
+                str_find(_tvr_c): path "\\" {_tvr_a + 1}
+                set(r): {_tvr_c < 0 || _tvr_c = _tvr_n - 1}
+            ]
+        ]
+    ]
+]
+
+tver_join(r): directory name [
+    len(_tvj_n): directory
+    tver_separator(_tvj_sep): directory
+    set(_tvj_add): true
+    if(_): {_tvj_n > 0} [
+        byte(_tvj_b): directory {_tvj_n - 1}
+        tver_is_separator(_tvj_ends): _tvj_b
+        set(_tvj_add): {_tvj_ends = false}
+    ]
+    if(_): _tvj_add [
+        concat(r): directory _tvj_sep name
+    ]
+    else(_): [
+        concat(r): directory name
+    ]
+]
+
+# Parent of path, or null when path is a root.
+tver_parent(r): path [
+    set(r): null
+    tver_is_root(_tvpa_root): path
+    if(_): {_tvpa_root = false} [
+        len(_tvpa_n): path
+        # drop trailing separators
+        set(_tvpa_go): {_tvpa_n > 1}
+        while(_): _tvpa_go [
+            byte(_tvpa_b): path {_tvpa_n - 1}
+            tver_is_separator(_tvpa_go): _tvpa_b
+            if(_): _tvpa_go [
+                set(_tvpa_n): {_tvpa_n - 1}
+                set(_tvpa_go): {_tvpa_n > 1}
+            ]
+        ]
+        set(_tvpa_i): {_tvpa_n - 1}
+        set(_tvpa_found): false
+        while(_): {_tvpa_found = false && _tvpa_i >= 0} [
+            byte(_tvpa_b): path _tvpa_i
+            tver_is_separator(_tvpa_found): _tvpa_b
+            if(_): {_tvpa_found = false} [
+                set(_tvpa_i): {_tvpa_i - 1}
+            ]
+        ]
+        if(_): _tvpa_found [
+            set(_tvpa_keep): _tvpa_i
+            # "C:\x" -> "C:\" and "/x" -> "/" keep their root separator.
+            if(_): {_tvpa_i = 0} [
+                set(_tvpa_keep): 1
+            ]
+            if(_): {_tvpa_i = 2} [
+                byte(_tvpa_colon): path 1
+                if(_): {_tvpa_colon = 58} [
+                    set(_tvpa_keep): 3
+                ]
+            ]
+            slice(r): path 0 _tvpa_keep
+        ]
+    ]
+]
+
+# --- widgets --------------------------------------------------------------
+tver_set_status(r): text [
+    set(_tvst_w): tver_status?
+    settext(_): _tvst_w text
+    set(r): 0
+]
+
+tver_panel_status(r): [
+    set(_tvps_a): tver_active?
+    if(_): {_tvps_a = 0} [
+        tver_set_status(_): "LEFT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+    ]
+    else(_): [
+        tver_set_status(_): "RIGHT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+    ]
+    set(r): 0
+]
+
+# Escapes the Petersburg list separators "|" and "\".
+tver_escape(r): name [
+    str_find(_tve_bar): name "|" 0
+    str_find(_tve_bs): name "\\" 0
+    set(r): name
+    if(_): {_tve_bar >= 0 || _tve_bs >= 0} [
+        len(_tve_n): name
+        set(_tve_i): 0
+        set(_tve_out): ""
+        while(_): {_tve_i < _tve_n} [
+            at(_tve_c): name _tve_i
+            if(_): {_tve_c = "|" || _tve_c = "\\"} [
+                concat(_tve_out): _tve_out "\\"
+            ]
+            concat(_tve_out): _tve_out _tve_c
+            set(_tve_i): {_tve_i + 1}
+        ]
+        set(r): _tve_out
+    ]
+]
+
+tver_marked_count(r): marks [
+    len(_tvmc_n): marks
+    set(_tvmc_i): 0
+    set(_tvmc_c): 0
+    while(_): {_tvmc_i < _tvmc_n} [
+        at(_tvmc_m): marks _tvmc_i
+        if(_): _tvmc_m [
+            set(_tvmc_c): {_tvmc_c + 1}
+        ]
+        set(_tvmc_i): {_tvmc_i + 1}
+    ]
+    set(r): _tvmc_c
+]
+
+# Rereads panel's directory and redraws its list. Marks survive for names
+# that are still present. Returns false when the directory is unreadable.
+tver_refresh(r): panel keep_index [
+    set(_tvrf_dirs): tver_dirs?
+    set(_tvrf_all_names): tver_names?
+    set(_tvrf_all_marks): tver_marks?
+    set(_tvrf_lists): tver_lists?
+    at(_tvrf_path): _tvrf_dirs panel
+    at(_tvrf_old_names): _tvrf_all_names panel
+    at(_tvrf_old_marks): _tvrf_all_marks panel
+    at(_tvrf_list): _tvrf_lists panel
+    list_dir(_tvrf_listing): _tvrf_path
+    set(r): false
+    if(_): {_tvrf_listing != null} [
+        vec(_tvrf_names): ""
+        vec(_tvrf_marks): ""
+        tver_is_root(_tvrf_root): _tvrf_path
+        if(_): {_tvrf_root = false} [
+            push(_): _tvrf_names "../"
+        ]
+        len(_tvrf_n): _tvrf_listing
+        # directories first, then files; list_dir already sorted each group
+        set(_tvrf_pass): 0
+        while(_): {_tvrf_pass < 2} [
+            set(_tvrf_i): 0
+            while(_): {_tvrf_i < _tvrf_n} [
+                at(_tvrf_name): _tvrf_listing _tvrf_i
+                tver_is_dir_name(_tvrf_dir): _tvrf_name
+                if(_): {(_tvrf_pass = 0 && _tvrf_dir) || (_tvrf_pass = 1 && _tvrf_dir = false)} [
+                    push(_): _tvrf_names _tvrf_name
+                ]
+                set(_tvrf_i): {_tvrf_i + 1}
+            ]
+            set(_tvrf_pass): {_tvrf_pass + 1}
+        ]
+        len(_tvrf_count): _tvrf_names
+        set(_tvrf_i): 0
+        while(_): {_tvrf_i < _tvrf_count} [
+            push(_): _tvrf_marks false
+            set(_tvrf_i): {_tvrf_i + 1}
+        ]
+        # carry marks over by name
+        len(_tvrf_old_count): _tvrf_old_names
+        set(_tvrf_j): 0
+        while(_): {_tvrf_j < _tvrf_old_count} [
+            at(_tvrf_was): _tvrf_old_marks _tvrf_j
+            if(_): _tvrf_was [
+                at(_tvrf_old_name): _tvrf_old_names _tvrf_j
+                set(_tvrf_i): 0
+                while(_): {_tvrf_i < _tvrf_count} [
+                    at(_tvrf_name): _tvrf_names _tvrf_i
+                    if(_): {_tvrf_name = _tvrf_old_name} [
+                        set(_tvrf_marks): _tvrf_i true
+                        set(_tvrf_i): _tvrf_count
+                    ]
+                    set(_tvrf_i): {_tvrf_i + 1}
+                ]
+            ]
+            set(_tvrf_j): {_tvrf_j + 1}
+        ]
+        set(_tvrf_all_names): panel _tvrf_names
+        set(_tvrf_all_marks): panel _tvrf_marks
+        # list text
+        set(_tvrf_text): ""
+        set(_tvrf_i): 0
+        while(_): {_tvrf_i < _tvrf_count} [
+            at(_tvrf_name): _tvrf_names _tvrf_i
+            if(_): {_tvrf_name = "../"} [
+                set(_tvrf_name): ".."
+            ]
+            tver_escape(_tvrf_item): _tvrf_name
+            if(_): {_tvrf_i > 0} [
+                concat(_tvrf_text): _tvrf_text "|"
+            ]
+            concat(_tvrf_text): _tvrf_text _tvrf_item
+            set(_tvrf_i): {_tvrf_i + 1}
+        ]
+        settext(_): _tvrf_list _tvrf_text
+        if(_): {_tvrf_count > 0} [
+            set(_tvrf_k): keep_index
+            if(_): {_tvrf_k < 0} [
+                set(_tvrf_k): 0
+            ]
+            if(_): {_tvrf_k >= _tvrf_count} [
+                set(_tvrf_k): {_tvrf_count - 1}
+            ]
+            setindex(_): _tvrf_list _tvrf_k
+        ]
+        # settext cleared the list's row marks; mark the selected rows again
+        set(_tvrf_i): 0
+        while(_): {_tvrf_i < _tvrf_count} [
+            at(_tvrf_m): _tvrf_marks _tvrf_i
+            if(_): _tvrf_m [
+                setmark(_): _tvrf_list _tvrf_i true
+            ]
+            set(_tvrf_i): {_tvrf_i + 1}
+        ]
+        set(r): true
+    ]
+]
+
+# Saves the marked names of panel's current directory in tver_memory, which
+# holds per panel a flat vector [path, names, path, names, ...].
+tver_remember(r): panel [
+    set(_tvrm_memory): tver_memory?
+    set(_tvrm_dirs): tver_dirs?
+    set(_tvrm_all): tver_names?
+    set(_tvrm_allm): tver_marks?
+    at(_tvrm_mem): _tvrm_memory panel
+    at(_tvrm_path): _tvrm_dirs panel
+    at(_tvrm_names): _tvrm_all panel
+    at(_tvrm_marks): _tvrm_allm panel
+    vec(_tvrm_marked): ""
+    len(_tvrm_n): _tvrm_names
+    set(_tvrm_i): 0
+    while(_): {_tvrm_i < _tvrm_n} [
+        at(_tvrm_m): _tvrm_marks _tvrm_i
+        if(_): _tvrm_m [
+            at(_tvrm_name): _tvrm_names _tvrm_i
+            push(_): _tvrm_marked _tvrm_name
+        ]
+        set(_tvrm_i): {_tvrm_i + 1}
+    ]
+    # rebuild without the old entry for this path
+    vec(_tvrm_new): ""
+    len(_tvrm_mn): _tvrm_mem
+    set(_tvrm_i): 0
+    while(_): {_tvrm_i + 1 < _tvrm_mn} [
+        at(_tvrm_p): _tvrm_mem _tvrm_i
+        if(_): {_tvrm_p != _tvrm_path} [
+            at(_tvrm_v): _tvrm_mem {_tvrm_i + 1}
+            push(_): _tvrm_new _tvrm_p
+            push(_): _tvrm_new _tvrm_v
+        ]
+        set(_tvrm_i): {_tvrm_i + 2}
+    ]
+    len(_tvrm_count): _tvrm_marked
+    if(_): {_tvrm_count > 0} [
+        push(_): _tvrm_new _tvrm_path
+        push(_): _tvrm_new _tvrm_marked
+    ]
+    set(_tvrm_memory): panel _tvrm_new
+    set(r): 0
+]
+
+# Marked names remembered for path in panel, or an empty vector.
+tver_recall(r): panel path [
+    set(_tvrc_memory): tver_memory?
+    at(_tvrc_mem): _tvrc_memory panel
+    vec(r): ""
+    len(_tvrc_n): _tvrc_mem
+    set(_tvrc_i): 0
+    while(_): {_tvrc_i + 1 < _tvrc_n} [
+        at(_tvrc_p): _tvrc_mem _tvrc_i
+        if(_): {_tvrc_p = path} [
+            at(r): _tvrc_mem {_tvrc_i + 1}
+        ]
+        set(_tvrc_i): {_tvrc_i + 2}
+    ]
+]
+
+# Changes panel's directory; restores the old one if the new is unreadable.
+tver_enter(r): panel path [
+    set(_tven_dirs): tver_dirs?
+    set(_tven_paths): tver_paths?
+    set(_tven_names): tver_names?
+    set(_tven_marks): tver_marks?
+    at(_tven_old): _tven_dirs panel
+    at(_tven_old_names): _tven_names panel
+    at(_tven_old_marks): _tven_marks panel
+    tver_remember(_): panel
+    set(_tven_dirs): panel path
+    # Marks stay with their directory: restore what was marked here before.
+    tver_recall(_tven_back_names): panel path
+    vec(_tven_back_marks): ""
+    len(_tven_bn): _tven_back_names
+    set(_tven_i): 0
+    while(_): {_tven_i < _tven_bn} [
+        push(_): _tven_back_marks true
+        set(_tven_i): {_tven_i + 1}
+    ]
+    set(_tven_names): panel _tven_back_names
+    set(_tven_marks): panel _tven_back_marks
+    tver_refresh(r): panel 0
+    if(_): r [
+        at(_tven_widget): _tven_paths panel
+        settext(_): _tven_widget path
+        set(tver_pending): ""!
+    ]
+    else(_): [
+        set(_tven_dirs): panel _tven_old
+        set(_tven_names): panel _tven_old_names
+        set(_tven_marks): panel _tven_old_marks
+    ]
+]
 
 tverinitialize(result): window left_path left_list right_path right_list status [
-    tver_initialize(result): window left_path left_list right_path right_list status
+    set(tver_window): window!
+    set(tver_status): status!
+    vec(_tvi_paths): ""
+    push(_): _tvi_paths left_path
+    push(_): _tvi_paths right_path
+    set(tver_paths): _tvi_paths!
+    vec(_tvi_lists): ""
+    push(_): _tvi_lists left_list
+    push(_): _tvi_lists right_list
+    set(tver_lists): _tvi_lists!
+    getcwd(_tvi_cwd):
+    vec(_tvi_dirs): ""
+    push(_): _tvi_dirs _tvi_cwd
+    push(_): _tvi_dirs _tvi_cwd
+    set(tver_dirs): _tvi_dirs!
+    vec(_tvi_names): ""
+    vec(_tvi_marks): ""
+    set(_tvi_i): 0
+    while(_): {_tvi_i < 2} [
+        vec(_tvi_n): ""
+        vec(_tvi_m): ""
+        push(_): _tvi_names _tvi_n
+        push(_): _tvi_marks _tvi_m
+        set(_tvi_i): {_tvi_i + 1}
+    ]
+    set(tver_names): _tvi_names!
+    set(tver_marks): _tvi_marks!
+    vec(_tvi_memory): ""
+    vec(_tvi_mem0): ""
+    vec(_tvi_mem1): ""
+    push(_): _tvi_memory _tvi_mem0
+    push(_): _tvi_memory _tvi_mem1
+    set(tver_memory): _tvi_memory!
+    set(tver_active): 0!
+    set(tver_pending): ""!
+    set(tver_repeat_key): 0!
+    set(tver_repeat_gen): 0!
+    set(_tvi_i): 0
+    set(result): 0
+    while(_): {_tvi_i < 2} [
+        at(_tvi_widget): _tvi_paths _tvi_i
+        settext(_): _tvi_widget _tvi_cwd
+        tver_refresh(_tvi_ok): _tvi_i 0
+        if(_): {_tvi_ok = false} [
+            tver_set_status(_): "Tver could not read a panel directory"
+            set(result): 1
+        ]
+        set(_tvi_i): {_tvi_i + 1}
+    ]
+    if(_): {result = 0} [
+        tver_panel_status(_):
+    ]
+    setfocus(_): left_list
+]
+
+# --- held-key navigation ----------------------------------------------------
+tver_stop_repeat(r): [
+    set(_tsr_gen): tver_repeat_gen?
+    set(tver_repeat_gen): {_tsr_gen + 1}!
+    set(tver_repeat_key): 0!
+    set(r): 0
+]
+
+# Moves the active panel's cursor one row; false at either end of the list.
+tver_step(r): direction [
+    set(_tstp_active): tver_active?
+    set(_tstp_lists): tver_lists?
+    set(_tstp_all): tver_names?
+    at(_tstp_list): _tstp_lists _tstp_active
+    at(_tstp_names): _tstp_all _tstp_active
+    len(_tstp_count): _tstp_names
+    getindex(_tstp_index): _tstp_list
+    set(_tstp_next): {_tstp_index + direction}
+    set(r): {_tstp_next >= 0 && _tstp_next < _tstp_count}
+    if(_): r [
+        setindex(_): _tstp_list _tstp_next
+    ]
+]
+
+# Repeater process started by a Up/Down press.
+tver_repeat(result): window key generation [
+    set(result): 0
+    set(_trp_direction): 1
+    if(_): {key = TVER_KEY_UP} [
+        set(_trp_direction): {0 - 1}
+    ]
+    sleep(_): TVER_REPEAT_DELAY
+    set(_trp_go): true
+    while(_): _trp_go [
+        set(_trp_gen): tver_repeat_gen?
+        alive(_trp_alive): window
+        set(_trp_go): {_trp_gen = generation && _trp_alive}
+        if(_): _trp_go [
+            uilock(_):
+            # the key may have been released while we waited for the lock
+            set(_trp_gen): tver_repeat_gen?
+            set(_trp_go): {_trp_gen = generation}
+            if(_): _trp_go [
+                tver_step(_trp_go): _trp_direction
+            ]
+            uiunlock(_):
+            if(_): _trp_go [
+                sleep(_): TVER_REPEAT_RATE
+            ]
+        ]
+    ]
+]
+
+# Up/Down press: the first step is ordinary navigation; holding repeats it.
+tver_arrow(r): window key [
+    set(r): 0
+    tver_stop_repeat(_):
+    set(_tar_active): tver_active?
+    set(_tar_lists): tver_lists?
+    at(_tar_list): _tar_lists _tar_active
+    getfocus(_tar_focus): window
+    # A focused list already moved itself on the key press; otherwise take
+    # the step here and give the list focus so later presses do it natively.
+    if(_): {_tar_focus != _tar_list} [
+        setfocus(_): _tar_list
+        set(_tar_direction): 1
+        if(_): {key = TVER_KEY_UP} [
+            set(_tar_direction): {0 - 1}
+        ]
+        tver_step(_): _tar_direction
+    ]
+    set(_tar_gen): tver_repeat_gen?
+    set(tver_repeat_key): key!
+    async(_): "tver_repeat" window key _tar_gen
+]
+
+tverhandlekeyup(result): window key [
+    set(result): 0
+    set(_tku_key): tver_repeat_key?
+    if(_): {key = _tku_key} [
+        tver_stop_repeat(_):
+    ]
+]
+
+tverfocus(result): window focused [
+    set(result): 0
+    if(_): {focused = 0} [
+        tver_stop_repeat(_):
+    ]
+]
+
+# --- key commands ---------------------------------------------------------
+tver_toggle_mark(r): panel selected [
+    set(_tvtm_all): tver_names?
+    set(_tvtm_allm): tver_marks?
+    at(_tvtm_names): _tvtm_all panel
+    at(_tvtm_marks): _tvtm_allm panel
+    at(_tvtm_name): _tvtm_names selected
+    tver_is_dir_name(_tvtm_dir): _tvtm_name
+    if(_): {_tvtm_name = "../"} [
+        set(r): 0
+        return(_): r
+    ]
+    at(_tvtm_was): _tvtm_marks selected
+    set(_tvtm_marks): selected {_tvtm_was = false}
+    len(_tvtm_count): _tvtm_names
+    set(_tvtm_next): selected
+    if(_): {selected + 1 < _tvtm_count} [
+        set(_tvtm_next): {selected + 1}
+    ]
+    tver_refresh(_tvtm_ok): panel _tvtm_next
+    if(_): _tvtm_ok [
+        tver_marked_count(_tvtm_c): _tvtm_marks
+        str_from_int(_tvtm_text): _tvtm_c
+        concat(_tvtm_text): _tvtm_text " item(s) marked in this panel"
+        tver_set_status(_): _tvtm_text
+    ]
+    else(_): [
+        tver_set_status(_): "Could not refresh marked files"
+    ]
+    set(r): 0
+]
+
+tver_open(r): panel selected [
+    set(_tvo_all): tver_names?
+    set(_tvo_dirs): tver_dirs?
+    at(_tvo_names): _tvo_all panel
+    at(_tvo_name): _tvo_names selected
+    at(_tvo_path): _tvo_dirs panel
+    tver_is_dir_name(_tvo_dir): _tvo_name
+    set(r): 0
+    if(_): _tvo_dir [
+        if(_): {_tvo_name = "../"} [
+            tver_parent(_tvo_next): _tvo_path
+        ]
+        else(_): [
+            tver_plain_name(_tvo_plain): _tvo_name
+            tver_join(_tvo_next): _tvo_path _tvo_plain
+        ]
+        if(_): {_tvo_next = null} [
+            tver_set_status(_): "Cannot navigate above this directory"
+        ]
+        else(_): [
+            tver_enter(_tvo_ok): panel _tvo_next
+            if(_): {_tvo_ok = false} [
+                tver_set_status(_): "Could not open selected directory"
+            ]
+        ]
+    ]
+]
+
+# Collects the indexes F6/F8 act on: marked entries, else the cursor row.
+tver_targets(r): names marks selected [
+    vec(_tvt_out): ""
+    tver_marked_count(_tvt_marked): marks
+    len(_tvt_n): names
+    set(_tvt_i): 0
+    while(_): {_tvt_i < _tvt_n} [
+        at(_tvt_m): marks _tvt_i
+        at(_tvt_name): names _tvt_i
+        if(_): {((_tvt_marked > 0 && _tvt_m) || (_tvt_marked = 0 && _tvt_i = selected)) && _tvt_name != "../"} [
+            push(_): _tvt_out _tvt_i
+        ]
+        set(_tvt_i): {_tvt_i + 1}
+    ]
+    set(r): _tvt_out
+]
+
+# Builds "<n> <done>; <failure>" status text.
+tver_report(r): count done failure [
+    str_from_int(_tvrp_text): count
+    concat(_tvrp_text): _tvrp_text done
+    if(_): {failure != ""} [
+        if(_): {count > 0} [
+            concat(_tvrp_text): _tvrp_text "; " failure
+        ]
+        else(_): [
+            set(_tvrp_text): failure
+        ]
+    ]
+    set(r): _tvrp_text
+]
+
+tver_move(r): panel selected [
+    set(_tvmv_all): tver_names?
+    set(_tvmv_allm): tver_marks?
+    set(_tvmv_dirs): tver_dirs?
+    at(_tvmv_names): _tvmv_all panel
+    at(_tvmv_marks): _tvmv_allm panel
+    at(_tvmv_from_dir): _tvmv_dirs panel
+    at(_tvmv_to_dir): _tvmv_dirs {1 - panel}
+    set(tver_pending): ""!
+    tver_targets(_tvmv_targets): _tvmv_names _tvmv_marks selected
+    len(_tvmv_n): _tvmv_targets
+    set(r): 0
+    if(_): {_tvmv_n = 0} [
+        tver_set_status(_): "Select an item to move"
+        return(_): r
+    ]
+    set(_tvmv_moved): 0
+    set(_tvmv_failure): ""
+    set(_tvmv_i): 0
+    while(_): {_tvmv_i < _tvmv_n && _tvmv_failure = ""} [
+        at(_tvmv_index): _tvmv_targets _tvmv_i
+        at(_tvmv_name): _tvmv_names _tvmv_index
+        tver_is_dir_name(_tvmv_isdir): _tvmv_name
+        tver_plain_name(_tvmv_plain): _tvmv_name
+        tver_join(_tvmv_src): _tvmv_from_dir _tvmv_plain
+        tver_join(_tvmv_dst): _tvmv_to_dir _tvmv_plain
+        file_exists(_tvmv_e1): _tvmv_dst
+        is_dir(_tvmv_e2): _tvmv_dst
+        if(_): {_tvmv_e1 || _tvmv_e2} [
+            set(_tvmv_failure): "Move refused: destination already exists"
+        ]
+        else(_): [
+            rename_path(_tvmv_status): _tvmv_src _tvmv_dst
+            if(_): {_tvmv_status != 0} [
+                set(_tvmv_failure): "Move failed; check permissions or volume"
+            ]
+            else(_): [
+                set(_tvmv_moved): {_tvmv_moved + 1}
+                set(_tvmv_marks): _tvmv_index false
+            ]
+        ]
+        set(_tvmv_i): {_tvmv_i + 1}
+    ]
+    if(_): {_tvmv_moved > 0} [
+        tver_refresh(_tvmv_ok1): panel selected
+        tver_refresh(_tvmv_ok2): {1 - panel} 0
+        if(_): {_tvmv_ok1 = false || _tvmv_ok2 = false} [
+            tver_set_status(_): "Moved items, but refreshing a panel failed"
+            return(_): r
+        ]
+    ]
+    tver_report(_tvmv_text): _tvmv_moved " item(s) moved" _tvmv_failure
+    if(_): {_tvmv_failure != "" && _tvmv_moved > 0} [
+        tver_report(_tvmv_text): _tvmv_moved " moved" _tvmv_failure
+    ]
+    tver_set_status(_): _tvmv_text
+]
+
+tver_delete(r): panel selected [
+    set(_tvdl_all): tver_names?
+    set(_tvdl_allm): tver_marks?
+    set(_tvdl_dirs): tver_dirs?
+    at(_tvdl_names): _tvdl_all panel
+    at(_tvdl_marks): _tvdl_allm panel
+    at(_tvdl_dir): _tvdl_dirs panel
+    tver_targets(_tvdl_targets): _tvdl_names _tvdl_marks selected
+    len(_tvdl_n): _tvdl_targets
+    set(r): 0
+    if(_): {_tvdl_n = 0} [
+        tver_set_status(_): "Select an item to delete"
+        return(_): r
+    ]
+    tver_marked_count(_tvdl_marked): _tvdl_marks
+    # The first F8 arms a confirmation tied to this exact panel state.
+    set(_tvdl_pending): tver_pending?
+    set(_tvdl_active): tver_active?
+    str_from_int(_tvdl_a): _tvdl_active
+    str_from_int(_tvdl_s): selected
+    str_from_int(_tvdl_m): _tvdl_marked
+    concat(_tvdl_key): _tvdl_a "|" _tvdl_dir "|" _tvdl_s "|" _tvdl_m
+    if(_): {_tvdl_pending != _tvdl_key} [
+        set(tver_pending): _tvdl_key!
+        if(_): {_tvdl_marked > 0} [
+            concat(_tvdl_text): "Press F8 again to delete " _tvdl_m " marked item(s)"
+        ]
+        else(_): [
+            at(_tvdl_name): _tvdl_names selected
+            tver_plain_name(_tvdl_plain): _tvdl_name
+            concat(_tvdl_text): "Press F8 again to delete " _tvdl_plain
+        ]
+        tver_set_status(_): _tvdl_text
+        return(_): r
+    ]
+    set(tver_pending): ""!
+    set(_tvdl_deleted): 0
+    set(_tvdl_failure): ""
+    set(_tvdl_i): 0
+    while(_): {_tvdl_i < _tvdl_n && _tvdl_failure = ""} [
+        at(_tvdl_index): _tvdl_targets _tvdl_i
+        at(_tvdl_name): _tvdl_names _tvdl_index
+        tver_is_dir_name(_tvdl_isdir): _tvdl_name
+        tver_plain_name(_tvdl_plain): _tvdl_name
+        tver_join(_tvdl_path): _tvdl_dir _tvdl_plain
+        # Directories are removed only when empty; nothing is deleted
+        # recursively.
+        if(_): _tvdl_isdir [
+            remove_dir(_tvdl_status): _tvdl_path
+        ]
+        else(_): [
+            remove_file(_tvdl_status): _tvdl_path
+        ]
+        if(_): {_tvdl_status = 0} [
+            set(_tvdl_deleted): {_tvdl_deleted + 1}
+            set(_tvdl_marks): _tvdl_index false
+        ]
+        elif(_): _tvdl_isdir [
+            concat(_tvdl_failure): "Cannot delete " _tvdl_plain ": directory is not empty or is locked"
+        ]
+        else(_): [
+            set(_tvdl_failure): "Delete failed; check permissions or file locks"
+        ]
+        set(_tvdl_i): {_tvdl_i + 1}
+    ]
+    if(_): {_tvdl_deleted > 0} [
+        tver_refresh(_tvdl_ok): panel selected
+        if(_): {_tvdl_ok = false} [
+            tver_set_status(_): "Deleted items, but refreshing the panel failed"
+            return(_): r
+        ]
+    ]
+    tver_report(_tvdl_text): _tvdl_deleted " item(s) deleted" _tvdl_failure
+    if(_): {_tvdl_failure != "" && _tvdl_deleted > 0} [
+        tver_report(_tvdl_text): _tvdl_deleted " deleted" _tvdl_failure
+    ]
+    tver_set_status(_): _tvdl_text
+]
+
+tver_dispatch_key(r): window key [
+    set(r): 0
+    set(_tvk_window): tver_window?
+    if(_): {window != _tvk_window} [
+        return(_): r
+    ]
+    if(_): {key = TVER_KEY_UP || key = TVER_KEY_DOWN} [
+        tver_arrow(_): window key
+        return(_): r
+    ]
+    # Any other key cancels a held-arrow repeat.
+    tver_stop_repeat(_):
+    set(_tvk_active): tver_active?
+    set(_tvk_lists): tver_lists?
+    if(_): {key = TVER_KEY_TAB} [
+        set(_tvk_active): {1 - _tvk_active}
+        set(tver_active): _tvk_active!
+        set(tver_pending): ""!
+        at(_tvk_list): _tvk_lists _tvk_active
+        setfocus(_): _tvk_list
+        tver_panel_status(_):
+        return(_): r
+    ]
+    set(_tvk_handled): {key = TVER_KEY_INSERT || key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER || key = TVER_KEY_F6 || key = TVER_KEY_F8}
+    if(_): {_tvk_handled = false} [
+        return(_): r
+    ]
+    at(_tvk_list): _tvk_lists _tvk_active
+    getindex(_tvk_selected): _tvk_list
+    set(_tvk_all): tver_names?
+    at(_tvk_names): _tvk_all _tvk_active
+    len(_tvk_count): _tvk_names
+    if(_): {_tvk_selected < 0 || _tvk_selected >= _tvk_count} [
+        tver_set_status(_): "No file is selected"
+        return(_): r
+    ]
+    if(_): {key = TVER_KEY_INSERT} [
+        tver_toggle_mark(_): _tvk_active _tvk_selected
+    ]
+    elif(_): {key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER} [
+        tver_open(_): _tvk_active _tvk_selected
+    ]
+    elif(_): {key = TVER_KEY_F6} [
+        tver_move(_): _tvk_active _tvk_selected
+    ]
+    else(_): [
+        tver_delete(_): _tvk_active _tvk_selected
+    ]
 ]
 
 tverhandlekey(result): window key [
-    tver_handle_key(result): window key
+    uilock(_):
+    tver_dispatch_key(_): window key
+    uiunlock(_):
+    set(result): 0
 ]
 
 tveractivatepanel(result): widget [
-    tver_activate_panel(result): widget
+    uilock(_):
+    set(_tva_lists): tver_lists?
+    at(_tva_left): _tva_lists 0
+    at(_tva_right): _tva_lists 1
+    set(_tva_panel): {0 - 1}
+    if(_): {widget = _tva_left} [
+        set(_tva_panel): 0
+    ]
+    if(_): {widget = _tva_right} [
+        set(_tva_panel): 1
+    ]
+    if(_): {_tva_panel >= 0} [
+        set(tver_active): _tva_panel!
+        set(tver_pending): ""!
+        tver_panel_status(_):
+    ]
+    uiunlock(_):
+    set(result): 0
 ]
+
+# --- application entry ----------------------------------------------------
+# Run directly:  ussr src/tver/tver.su [directory]
+# Scripts that $include tver.su do not get this init; __MAIN__ is defined
+# only for the file ussr was started with.
+$ifdef __MAIN__
+tver_app_key(result): window key [
+    tverhandlekey(_): window key
+]
+
+tver_app_keyup(result): window key [
+    tverhandlekeyup(_): window key
+]
+
+tver_app_focus(result): window focused [
+    tverfocus(_): window focused
+]
+
+tver_app_panel(result): widget [
+    tveractivatepanel(_): widget
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    if(_): {arg_count > 1} [
+        print(_): "usage: ussr tver.su [directory]"
+        set(result): 2
+        return(_): result
+    ]
+    if(_): {arg_count = 1} [
+        at(_tva_dir): arg_values 0
+        is_dir(_tva_ok): _tva_dir
+        if(_): {_tva_ok = 0} [
+            concat(_tva_msg): "tver: not a directory: " _tva_dir
+            print(_): _tva_msg
+            set(result): 1
+            return(_): result
+        ]
+        cd(_): _tva_dir
+    ]
+    createwindow(window): "Tver - Two-panel file manager" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left_files): window ""
+    listbox(right_files): window ""
+    label(status): window ""
+    label(keys): window "TAB panel  INS mark  ENTER open  F6 move  F8 delete"
+    grid(_): left_path 0 0 false
+    grid(_): right_path 0 1 false
+    grid(_): left_files 1 0 true
+    grid(_): right_files 1 1 true
+    grid(_): status 2 0 false
+    grid(_): keys 2 1 false
+    on(_): window "key" "tver_app_key"
+    on(_): window "keyup" "tver_app_keyup"
+    on(_): window "focus" "tver_app_focus"
+    on(_): left_files "change" "tver_app_panel"
+    on(_): right_files "change" "tver_app_panel"
+    tverinitialize(_): window left_path left_files right_path right_files status
+    run(_):
+]
+$endif

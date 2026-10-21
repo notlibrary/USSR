@@ -1,0 +1,217 @@
+# vectors.su - 2D and 3D math vectors.
+#
+# The types are built into the runtime as structs, so new/getf/setf, UNO
+# literals and encode/decode work without this file:
+#   Vec2{x, y}    Vec3{x, y, z}      (number fields)
+#   new(p): "Vec2" 1 2      set(q): 'Vec3{x=1,y=2,z=3}'
+# The VM implements these operators inside { }:
+#   {a + b} {a - b}   same dimension only
+#   {v * k} {k * v} {v / k}   scaling by a number (k != 0 for /)
+#   {a = b} {a != b}  component-wise; vectors of different dimension differ
+# Anything else (adding a number, mixing Vec2 and Vec3, v * v, a < b, ...)
+# stops with an error naming both operands.
+#
+# Library-provided functions (pure USSR; errors stop the script via fail):
+#   vec2(v): x y         vec3(v): x y z          -> new vector
+#   vdim(n): v           -> 2 or 3
+#   vget(c): v i         -> component i (0 = x, 1 = y, 2 = z)
+#   vset(v): v i value   -> sets component i, returns v (vectors are shared
+#                           references, like all structs)
+#   vadd(v): a b   vsub(v): a b   vscale(v): v k   vneg(v): v
+#   vdot(n): a b         -> dot product
+#   vcross(c): a b       -> Vec3 for two Vec3; for two Vec2 the number
+#                           a.x * b.y - a.y * b.x (z of the 3D product)
+#   vlen(n): v           vdist(n): a b           vnorm(u): v (v != 0)
+#   vlerp(v): a b t      -> a + (b - a) * t
+#   vnear(b): a b eps    -> true when every component differs by <= eps
+#   vstr(s): v           -> "(1, 2)" / "(1, 2, 3)", up to 6 decimals
+$once
+$include "math.su"
+$include "strings.su"
+
+_vec_check_number(r): who value [
+    typeof(_vcn_t): value
+    if(_): {_vcn_t != "integer" && _vcn_t != "real"} [
+        concat(_vcn_msg): who ": expected a number, got " _vcn_t
+        fail(_): _vcn_msg
+    ]
+    set(r): value
+]
+
+vdim(r): v [
+    typeof(_vdm_t): v
+    set(r): 0
+    if(_): {_vdm_t = "Vec2"} [
+        set(r): 2
+    ]
+    elif(_): {_vdm_t = "Vec3"} [
+        set(r): 3
+    ]
+    else(_): [
+        concat(_vdm_msg): "vdim: expected Vec2 or Vec3, got " _vdm_t
+        fail(_): _vdm_msg
+    ]
+]
+
+# Fails unless a and b are vectors of the same dimension; returns it.
+_vec_same(r): who a b [
+    typeof(_vsm_ta): a
+    typeof(_vsm_tb): b
+    set(r): 0
+    if(_): {_vsm_ta = "Vec2" || _vsm_ta = "Vec3"} [
+        vdim(r): a
+    ]
+    if(_): {_vsm_ta != _vsm_tb || r = 0} [
+        concat(_vsm_msg): who ": needs two vectors of the same dimension, got " _vsm_ta " and " _vsm_tb
+        fail(_): _vsm_msg
+    ]
+]
+
+vec2(r): x y [
+    _vec_check_number(_): "vec2" x
+    _vec_check_number(_): "vec2" y
+    new(r): "Vec2" x y
+]
+
+vec3(r): x y z [
+    _vec_check_number(_): "vec3" x
+    _vec_check_number(_): "vec3" y
+    _vec_check_number(_): "vec3" z
+    new(r): "Vec3" x y z
+]
+
+_vec_field(r): v i [
+    vdim(_vfd_d): v
+    typeof(_vfd_t): i
+    if(_): {_vfd_t != "integer"} [
+        concat(_vfd_msg): "vector index must be an integer, got " _vfd_t
+        fail(_): _vfd_msg
+    ]
+    if(_): {i < 0 || i >= _vfd_d} [
+        str_from_int(_vfd_is): i
+        str_from_int(_vfd_ds): {_vfd_d - 1}
+        typeof(_vfd_vt): v
+        concat(_vfd_msg): _vfd_vt " index " _vfd_is " is out of range 0.." _vfd_ds
+        fail(_): _vfd_msg
+    ]
+    at(r): "xyz" i
+]
+
+vget(r): v i [
+    _vec_field(_vg_f): v i
+    getf(r): v _vg_f
+]
+
+vset(r): v i value [
+    _vec_field(_vs_f): v i
+    _vec_check_number(_): "vset" value
+    setf(_): v _vs_f value
+    set(r): v
+]
+
+vadd(r): a b [
+    _vec_same(_): "vadd" a b
+    set(r): {a + b}
+]
+
+vsub(r): a b [
+    _vec_same(_): "vsub" a b
+    set(r): {a - b}
+]
+
+vscale(r): v k [
+    vdim(_): v
+    _vec_check_number(_): "vscale" k
+    set(r): {v * k}
+]
+
+vneg(r): v [
+    vdim(_): v
+    set(r): {v * -1}
+]
+
+vdot(r): a b [
+    _vec_same(_vdt_d): "vdot" a b
+    getf(_vdt_ax): a "x"
+    getf(_vdt_ay): a "y"
+    getf(_vdt_bx): b "x"
+    getf(_vdt_by): b "y"
+    set(r): {_vdt_ax * _vdt_bx + _vdt_ay * _vdt_by}
+    if(_): {_vdt_d = 3} [
+        getf(_vdt_az): a "z"
+        getf(_vdt_bz): b "z"
+        set(r): {r + _vdt_az * _vdt_bz}
+    ]
+]
+
+vcross(r): a b [
+    _vec_same(_vcr_d): "vcross" a b
+    getf(_vcr_ax): a "x"
+    getf(_vcr_ay): a "y"
+    getf(_vcr_bx): b "x"
+    getf(_vcr_by): b "y"
+    if(_): {_vcr_d = 2} [
+        set(r): {_vcr_ax * _vcr_by - _vcr_ay * _vcr_bx}
+    ]
+    else(_): [
+        getf(_vcr_az): a "z"
+        getf(_vcr_bz): b "z"
+        new(r): "Vec3" {_vcr_ay * _vcr_bz - _vcr_az * _vcr_by} {_vcr_az * _vcr_bx - _vcr_ax * _vcr_bz} {_vcr_ax * _vcr_by - _vcr_ay * _vcr_bx}
+    ]
+]
+
+vlen(r): v [
+    vdim(_): v
+    vdot(_vln_sq): v v
+    sqrt(r): _vln_sq
+]
+
+vdist(r): a b [
+    vsub(_vds_d): a b
+    vlen(r): _vds_d
+]
+
+vnorm(r): v [
+    vlen(_vnm_len): v
+    if(_): {_vnm_len = 0} [
+        fail(_): "vnorm: cannot normalize a zero-length vector"
+    ]
+    set(r): {v / _vnm_len}
+]
+
+vlerp(r): a b t [
+    _vec_same(_): "vlerp" a b
+    _vec_check_number(_): "vlerp" t
+    set(r): {a + (b - a) * t}
+]
+
+vnear(r): a b eps [
+    _vec_same(_vnr_d): "vnear" a b
+    set(r): true
+    set(_vnr_i): 0
+    while(_): {_vnr_i < _vnr_d} [
+        vget(_vnr_a): a _vnr_i
+        vget(_vnr_b): b _vnr_i
+        set(_vnr_diff): {_vnr_a - _vnr_b}
+        if(_): {_vnr_diff > eps || 0 - _vnr_diff > eps} [
+            set(r): false
+        ]
+        set(_vnr_i): {_vnr_i + 1}
+    ]
+]
+
+vstr(r): v [
+    vdim(_vst_d): v
+    set(r): "("
+    set(_vst_i): 0
+    while(_): {_vst_i < _vst_d} [
+        vget(_vst_c): v _vst_i
+        str_from_number(_vst_s): _vst_c 6
+        if(_): {_vst_i > 0} [
+            concat(r): r ", "
+        ]
+        concat(r): r _vst_s
+        set(_vst_i): {_vst_i + 1}
+    ]
+    concat(r): r ")"
+]

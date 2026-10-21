@@ -6,6 +6,7 @@ ussr_SOURCES = \
     ussr.c \
     ussr_bytecode.c \
     ussr_uuasm.c \
+    ussr_ru.c \
     bestline.c \
     main.c \
     pp.c \
@@ -13,8 +14,6 @@ ussr_SOURCES = \
     ussr_oop_builtins.c \
     scheduler.c \
     petersburg.c \
-    tver.c \
-    tula.c \
     eventq.c \
     socket_posix.c \
     gc.c \
@@ -30,12 +29,11 @@ EXTRA_DIST = \
     ussr.h \
     ussr_bytecode.h \
     ussr_uuasm.h \
+    ussr_ru.h \
     uno.h \
     ussr_oop_builtins.h \
     scheduler.h \
     petersburg.h \
-    tver.h \
-    tula.h \
     eventq.h \
     socket.h \
     gc.h \

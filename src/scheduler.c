@@ -10,8 +10,6 @@
 #include "eventq.h"
 #include "gc.h"
 #include "petersburg.h"
-#include "tver.h"
-#include "tula.h"
 
 /*
  * Cooperative multithreading scheduler, modeled on the FreeBSD
@@ -885,16 +883,6 @@ int ussr_sched_dispatch(
     );
     if (petersburg_status != 0)
         return petersburg_status;
-    petersburg_status = ussr_tver_dispatch(
-        program, name, values, value_count, out
-    );
-    if (petersburg_status != 0)
-        return petersburg_status;
-    petersburg_status = ussr_tula_dispatch(
-        program, name, values, value_count, out
-    );
-    if (petersburg_status != 0)
-        return petersburg_status;
 
     if (strcmp(name, "async") == 0)
         return sched_do_async(program, values, value_count,
@@ -987,7 +975,8 @@ static int sched_main_exit_code(void)
     return main_proc != NULL ? main_proc->exit_code : 0;
 }
 
-static void sched_handle_events(void)
+/* allow_wait == 0 only collects events that are already due. */
+static void sched_handle_events(int allow_wait)
 {
     ussr_eq_event_t fired[USSR_EQ_MAX_FIRED];
     size_t count;
@@ -997,6 +986,8 @@ static void sched_handle_events(void)
     timeout = ussr_eq_next_timeout_ms();
     if (ussr_petersburg_running() && (timeout < 0 || timeout > 50))
         timeout = 50;
+    if (!allow_wait)
+        timeout = 0;
 
     count = ussr_eq_dispatch(
         timeout < 0 ? -1 : (int)timeout,
@@ -1061,6 +1052,11 @@ int ussr_sched_run(int background_ok)
                     failed = 1;
                     break;
                 }
+                /* The pump waited for input at most until the next timer;
+                 * wake sleepers and finished children while windows stay
+                 * open. */
+                if (ussr_eq_pending())
+                    sched_handle_events(0);
                 continue;
             }
 
@@ -1080,7 +1076,7 @@ int ussr_sched_run(int background_ok)
                 break;
             }
 
-            sched_handle_events();
+            sched_handle_events(1);
             continue;
         }
 
@@ -1152,8 +1148,6 @@ void ussr_sched_init(void)
 void ussr_sched_cleanup(void)
 {
     ussr_petersburg_cleanup();
-    ussr_tver_cleanup();
-    ussr_tula_cleanup();
     ussr_socket_cleanup();
     size_t i;
 

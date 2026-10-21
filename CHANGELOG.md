@@ -3,12 +3,32 @@
 ## [Unreleased]
 
 ### Added
+- `ussr -c script.su [out.ru]` (`--compile`) compiles to a `.ru` bytecode file without running it; `ussr program.ru` validates and runs it (signature, format and VM ABI versions, CRC-32, bounds). Blocks passed to commands (`@` chaining) cannot be stored yet and are refused with a message.
+- Built-in `Vec2`/`Vec3` struct types with `+ -`, scaling by `* /` and `= !=` in expressions; `src/libs/vectors.su` adds `vdot`, `vcross`, `vlen`, `vnorm`, `vlerp` and more.
+- `getenv`, `setenv` and `unsetenv` builtins (UTF-8 on Windows).
+- REPL prompts from `PS1` and `PS2` with `\u \h \w \W \v \$ \\` escapes; piped stdin works on every platform.
+- Builtins for apps written in USSR: `list_dir`, `is_dir`, `getcwd`, `make_dir`, `rename_path`, `remove_file`, `remove_dir`, `read_line`, `typeof`, `fail`, `chr`.
+- Preprocessor `$once` include guard and `__MAIN__` for files that are both a library and a program.
+- `src/libs/strings.su` (number/text conversion, UTF-8 helpers) and `src/libs/vectors.su`.
+- Mbl: UTF-8 (Russian) editing by character, count prefixes, `w`, `cw`, and multi-level undo `u` / redo `Ctrl+R`.
+- Tver: directory selection with Insert, held-arrow repeat, direct launch with `ussr src/tver/tver.su`.
+- Tula: DXF read/write, zoom, adaptive grid, toolbar, direct launch with `ussr src/tula/tula.su`.
+- Petersburg: canvas and toolbar widgets, `keyup`/`focus`/`wheel` events, event injection for tests, timers while the GUI runs.
+- russia.su assembles and runs textual UUASM (`.ua`).
 
 ### Changed
+- Tver and Tula are now written in USSR (`src/tver/tver.su`, `src/tula/tula.su`); their C sources were removed. Petersburg stays native.
 
 ### Fixed
+- `math.su`: `tan`/`ctg` guards used `==` instead of `=`.
+- REPL no longer hangs reading redirected stdin on Windows.
 
 ### Documentation
+- `docs/RU_BYTECODE_FORMAT.md`: `.ru` layout, validation and versioning.
+- User manual: `-c`/`.ru`, prompts, environment variables, vectors; READMEs and changelogs for Tver, Tula and Petersburg.
+
+### Maintenance
+- Test runners: `tests/ru`, `tests/mbl`, `tests/vectors`, `tests/repl`, `tests/russia`, GUI tests in `tests/gui`, `tests/matrix_mul.su`, `tests/env_test.su`, `tests/lib_strings.su`.
 
 ## [0.4.7] - 2026-10-20
 

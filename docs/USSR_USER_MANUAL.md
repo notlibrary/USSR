@@ -11,7 +11,7 @@ USSR uses three file extensions for its language and execution formats:
 |-----------|---------|-------------|
 | `.su` | USSR source script ("script user") | Run source scripts with `ussr file.su`. |
 | `.ua` | USSR Ukraine assembler, textual UUASM | Run assembler text directly with `ussr file.ua`. `.uuasm` remains a compatible legacy extension. |
-| `.ru` | Final VM binary bytecode | Reserved for serialized VM programs. The C library has a bytecode writer, but the CLI does not yet load or execute `.ru` files. |
+| `.ru` | Final VM binary bytecode | Produce with `ussr -c file.su`, run with `ussr file.ru`. Format: [RU_BYTECODE_FORMAT.md](RU_BYTECODE_FORMAT.md). |
 
 This manual documents the language and libraries in the current source
 tree. Runtime limitations that affect behavior are called out alongside
@@ -37,7 +37,34 @@ ussr>
 
 Type a command and press Enter. If you open a `[` without closing it,
 the prompt changes to `... ` and keeps reading lines until brackets
-balance, so you can write multi-line blocks interactively. Press
+balance, so you can write multi-line blocks interactively.
+
+**Prompts.** The `PS1` environment variable sets the prompt and `PS2` the
+continuation prompt; when a variable is unset or empty the defaults
+`ussr> ` and `... ` are used. Both are read again for every prompt, so
+`setenv(_): "PS1" "dev> "` inside the REPL takes effect on the next line.
+The value is only displayed, never run. These escapes are expanded:
+
+| Escape | Shows |
+|--------|-------|
+| `\u` | user name (`USERNAME`, else `USER`) |
+| `\h` | host name (`COMPUTERNAME`, else `HOSTNAME`) |
+| `\w` | current working directory |
+| `\W` | last component of the working directory |
+| `\v` | interpreter version, e.g. `0.4` |
+| `\$` | `$` |
+| `\\` | `\` |
+
+Any other backslash pair is shown as written. Terminal escape sequences in
+the prompt are passed through but not measured, so cursor placement while
+editing may be off with colored prompts.
+
+```
+PS1='\u@\h \W\$ ' ./ussr
+```
+
+When standard input is not a terminal (a pipe or a file), the REPL reads it
+line by line on every platform, printing the prompts without line editing. Press
 Ctrl-D (Ctrl-Z on Windows) on an empty line to exit. Arrow-key history
 is supported on every platform.
 
@@ -56,8 +83,34 @@ Textual assembler files can also be run directly:
 ./ussr program.ua
 ```
 
-The previous `.uuasm` spelling is still accepted. `.ru` is the planned
-binary VM-program extension; it is not yet a runnable CLI input format.
+The previous `.uuasm` spelling is still accepted.
+
+**Compiling to bytecode (`-c`):**
+
+```
+./ussr -c myscript.su              # writes myscript.ru
+./ussr -c myscript.su out/app.ru   # explicit output file
+./ussr myscript.ru arg1 arg2       # runs it like the source
+```
+
+`-c` (long form `--compile`) preprocesses and compiles the script without
+running it and without loading `moscow.su`. The output file holds only the
+binary program; nothing is printed on success. If the source does not
+compile, or the output cannot be written, a message goes to stderr, the
+exit status is 1, and no output file is left behind. Includes are resolved
+at compile time, so a `.ru` file does not need the `.su` files it was built
+from; `load(p): "file.su"` and `eval` still read source at run time.
+
+A file whose name ends in `.ru` is checked before anything runs: signature,
+format version, VM ABI version, checksum, and every section's bounds.
+Truncated, corrupted, or incompatible files are rejected with a message and
+exit status 1. A `.ru` file runs with the same arguments, standard input,
+output, and exit status as the source it came from.
+
+Limitation: a `[ ... ]` block passed as an argument to a command (for
+example `@(r): [ ... ] [ ... ]`, command chaining) cannot be stored yet;
+`-c` reports which command it is and writes nothing. Blocks of `if`,
+`while`, `for` and function definitions are compiled normally.
 
 ---
 
@@ -238,16 +291,14 @@ a string, a file, a pipe, or straight into source code.
 ### 8.1 Declaring a struct
 
 ```
-struct(_): "Point" "x:number" "y:number"
+struct(Point): "x:number" "y:number"
 ```
 
-The first argument is the type name; the rest are `"field:type"`
-specs. `type` is one of `string`, `number`, `boolean`, `null`,
-`vector`, `any`, or the name of another struct. Every field accepts
-`null` regardless of its declared type.
-
-The return-variable slot (`_` above) is unused by `struct` — write
-`_` by convention.
+The type name goes in the return-variable slot; the arguments are
+`"field:type"` specs. `type` is one of `string`, `number`, `boolean`,
+`null`, `vector`, `any`, or the name of another struct. Every field
+accepts `null` regardless of its declared type. Declaring a type twice is
+an error.
 
 ### 8.2 Creating and using an instance
 
@@ -328,7 +379,58 @@ The three quote characters never collide: `"..."` is a normal USSR
 string, `'...'` is a UNO literal, and `` `...` `` is a string *inside*
 a UNO document.
 
-### 8.5 What UNO can't represent
+### 8.5 Math vectors: Vec2 and Vec3
+
+Two struct types are built in: `Vec2{x, y}` and `Vec3{x, y, z}`, with
+`number` fields. Everything that works on structs works on them, without
+declaring them:
+
+```
+new(a): "Vec2" 1 2
+set(p): 'Vec3{x=1,y=2,z=3}'
+getf(x): a "x"
+typeof(t): p            # "Vec3"
+vec(path): "Vec2"       # a container that only holds Vec2 values
+```
+
+Inside `{ }` the VM gives them value semantics:
+
+| Expression | Result |
+|------------|--------|
+| `{a + b}`, `{a - b}` | Component-wise, both operands the same type |
+| `{v * k}`, `{k * v}`, `{v / k}` | Scaling by a number; dividing by zero is an error |
+| `{a = b}`, `{a != b}` | Component-wise comparison (`1` equals `1.0`); a `Vec2` never equals a `Vec3` or a non-vector |
+
+Components keep USSR number semantics (integer stays integer under `+ -
+*`; `/` gives reals). Every other combination stops the script with a
+message naming both operands, for example `cannot add Vec2 and Vec3`,
+`cannot add Vec2 and integer`, `cannot multiply Vec2 by Vec2 (...use
+vdot/vcross...)`, or `this operator is not defined for Vec2` for `<`, `%`
+and the bitwise operators. A null component reports
+`Vec2 component x is not a number`. Like other structs, vectors are
+shared references: `set(b): a` aliases, while operators return new
+vectors.
+
+`src/libs/vectors.su` adds functions written in USSR:
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `vec2`, `vec3` | `vec2(v): x y` | Construct; non-numbers are an error |
+| `vdim` | `vdim(n): v` | 2 or 3; anything else is an error |
+| `vget`, `vset` | `vget(c): v i`, `vset(v): v i value` | Component by index 0..dim-1; other indexes are an error |
+| `vadd`, `vsub`, `vscale`, `vneg` | `vadd(v): a b` | Same as the operators, with dimension checks |
+| `vdot` | `vdot(n): a b` | Dot product |
+| `vcross` | `vcross(c): a b` | Vec3 cross product; for two Vec2 the scalar `a.x*b.y - a.y*b.x` |
+| `vlen`, `vdist`, `vnorm` | `vlen(n): v` | Length, distance, unit vector (zero vector is an error) |
+| `vlerp` | `vlerp(v): a b t` | `a + (b - a) * t` |
+| `vnear` | `vnear(ok): a b eps` | Every component within `eps` |
+| `vstr` | `vstr(s): v` | `"(1, 2)"`, up to six decimals |
+
+Declaring `struct(Vec2): "x:number" "y:number"` yourself is accepted (it
+matches the built-in type); a different field list is the usual
+`already defined` error.
+
+### 8.6 What UNO can't represent
 
 A string containing a literal backtick or a newline can't be encoded
 — `encode()` fails rather than silently corrupting it. Keep that in
@@ -406,6 +508,22 @@ $endif
   own directory when given a relative path.
 - `$ifdef` / `$if defined(NAME)` / `$else` / `$endif` — conditional
   inclusion.
+- `$once` makes the current file a single-inclusion file: later
+  `$include`s of the same file, by any relative path, are skipped. The
+  standard library, Petersburg, Tver and Tula files use it, so a program
+  can include `strings.su` and `vectors.su` (which includes it too) without
+  duplicate definitions.
+- `__MAIN__` counts as defined only in the file `ussr` was started with,
+  never inside an `$include`d file. A library can carry its own entry point
+  without clashing with the `init` of programs that include it:
+
+  ```
+  $ifdef __MAIN__
+  init(ret): arg_cnt arg_vec [
+      ...
+  ]
+  $endif
+  ```
 
 `#`-comments are handled by the language's own lexer, not the
 preprocessor, so they work identically inside and outside `$define`
@@ -564,6 +682,90 @@ write_file(_): h "one more line\n"
 close_file(_): h
 ```
 
+`read_line(s): h` returns the next line without its LF or CRLF, or `null`
+at end of file. Prefer it to scanning a whole file byte by byte: reading a
+variable copies its string, so per-byte loops over large strings are slow.
+
+**io.su — directories and paths.** These report failure through their
+result instead of stopping the script:
+
+```
+list_dir(v): "path"        # sorted names, directories end in "/"; null if unreadable
+is_dir(b): "path"          # 1 or 0
+getcwd(s):                 # current working directory
+make_dir(ok): "path"       # 0 ok, 1 failed or already exists
+rename_path(ok): from to   # 0 ok, 1 failed; never replaces an existing destination
+remove_file(ok): "path"    # 0 ok, 1 failed; refuses directories
+remove_dir(ok): "path"     # 0 ok, 1 failed; empty directories only
+```
+
+`list_dir` omits `.` and `..` and sorts without regard to ASCII case.
+
+**strings.su — text and number conversion (pure USSR):**
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `str_from_int` | `str_from_int(s): n` | Decimal text of an integer. |
+| `str_trunc` | `str_trunc(i): x` | Integer part, toward zero. `/` always yields a real, so `str_trunc(q): {a / b}` is integer division for exact quotients. |
+| `str_from_number` | `str_from_number(s): x digits` | Rounds to `digits` decimals and drops trailing zeros; whole values print as integers. |
+| `str_to_number` | `str_to_number(n): s` | Integer or real from decimal text (sign, fraction, exponent; blanks ignored); `null` if `s` is not a number. |
+| `str_lower` | `str_lower(s): text` | ASCII lower case. |
+| `str_find` | `str_find(i): s needle from` | First index at or after `from`, or `-1`. |
+| `str_trim` | `str_trim(s): text` | Strips spaces, tabs, CR and LF at both ends. |
+| `str_repeat` | `str_repeat(s): text count` | Repeats `text`. |
+
+`concat` accepts only strings, so convert numbers with `str_from_int` or
+`str_from_number` before joining them into text.
+
+`strings.su` also steps through UTF-8 text by character (text stays a byte
+string; `len`, `byte` and `slice` count bytes):
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `utf8_count` | `utf8_count(n): s` | Number of characters. |
+| `utf8_next` / `utf8_prev` | `utf8_next(i): s i` | Byte index of the next / previous character start. |
+| `utf8_index` | `utf8_index(i): s column` | Byte index of character number `column` (or `len(s)`). |
+| `utf8_column` | `utf8_column(c): s i` | Characters before byte index `i`. |
+| `utf8_len` | `utf8_len(k): lead_byte` | Length of the sequence a lead byte starts. |
+| `utf8_from_bytes` | `utf8_from_bytes(s): v` | String from a vector of byte values. |
+
+Malformed bytes count as one character each. On every platform
+`terminal_getch` delivers keyboard input as UTF-8 bytes (Windows console
+input is converted), and `terminal_raw` switches the Windows console to
+UTF-8 output.
+
+**Environment variables (native):**
+
+```
+getenv(v): "HOME"            # value; "" when set to empty; null when not set
+setenv(ok): "MODE" "fast"    # create or overwrite; 0 ok, 1 refused
+unsetenv(ok): "MODE"         # remove; 0 ok (also when it was not set), 1 refused
+```
+
+A name must be non-empty and must not contain `=`; otherwise `setenv` and
+`unsetenv` return `1` and `getenv` returns `null`. Values are stored byte
+for byte (spaces, `=` and UTF-8 text included). Passing a non-string is a
+runtime error. Changes affect the `ussr` process and the external commands
+it starts afterwards, never the shell that started `ussr`.
+
+Platform notes: on Windows names are case-insensitive (`Path` and `PATH` are
+one variable), values are converted between UTF-8 and the Win32 Unicode
+environment, and empty values are kept rather than deleting the variable.
+On POSIX systems names are case-sensitive and the C library's `setenv`,
+`unsetenv` and `getenv` are used.
+
+**Runtime helpers (native):**
+
+```
+typeof(t): value     # "null" "integer" "real" "string" "boolean" "vector",
+                     # or a struct instance's type name
+fail(_): "message"   # print "USSR: message" and stop like any runtime error
+chr(s): byte         # one-byte string for 1..255
+```
+
+Integers are the host C `long`: 64-bit on Linux/macOS, 32-bit in MSVC builds
+(at most 2147483647). `str_int_limit(m):` reports the limit.
+
 **bytes.su — memset analogs over vectors:**
 
 ```
@@ -615,6 +817,8 @@ print(_): s
 
 **standard.su:** `random64(r):`, `seed_random64(_): seed`, and
 `time(r):`.
+
+**vectors.su:** 2D/3D vector functions; see section 8.5.
 
 ---
 

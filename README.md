@@ -18,9 +18,10 @@ Perhaps it evolves fast to something big No promises or insight unfortunately
 
 The language/toolchain uses three file extensions: `.su` is USSR source,
 `.ua` is textual UUASM (USSR Ukraine assembler), and `.ru` is the intended
-final VM binary bytecode. The CLI runs `.su` and `.ua`; `.uuasm` is retained
-as a compatibility suffix for assembler source. `.ru` writing is available
-through the C bytecode API, but the CLI does not yet load or execute `.ru`.
+final VM binary bytecode. The CLI runs all three; `.uuasm` is retained
+as a compatibility suffix for assembler source. `ussr -c script.su [out.ru]`
+compiles without running, and `ussr out.ru` runs the result (format:
+[docs/RU_BYTECODE_FORMAT.md](docs/RU_BYTECODE_FORMAT.md)).
 
 ```USSR
 	#ЗДОРОВО МОРЯЧОК
@@ -79,6 +80,14 @@ Examples: it can't print negative numbers else branches is broken e.t.c
 USSR is a neuroslopware it's created entirely by prompting an AI followed by enrichment and refining results with the next AI "centrifuge"
 
 <img width="1536" height="1024" alt="USSR Compilation Pipeline Infographic" src="https://github.com/user-attachments/assets/bd7b768f-d02b-4fc3-bde6-009b68e75875" />
+
+Desktop applications run straight from their sources with a GLFW-enabled
+build:
+
+```bash
+ussr src/tver/tver.su [directory]     # Tver, two-panel file manager
+ussr src/tula/tula.su [drawing.dxf]   # Tula, 2D CAD and DXF viewer
+```
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
 

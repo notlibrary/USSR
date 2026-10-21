@@ -171,6 +171,42 @@ static int line_set_text(ussr_line_state_t *state, const char *text)
 /* main entry point                                                 */
 /* ------------------------------------------------------------- */
 
+/* Redirected stdin (pipe or file): read one line, no editing. */
+static char *worstline_read_redirected(void)
+{
+    size_t length = 0;
+    size_t capacity = 128;
+    char *line = malloc(capacity);
+    int c;
+
+    if (line == NULL)
+        return NULL;
+    while ((c = getchar()) != EOF && c != '\n')
+    {
+        if (length + 1 >= capacity)
+        {
+            char *grown = realloc(line, capacity * 2);
+            if (grown == NULL)
+            {
+                free(line);
+                return NULL;
+            }
+            line = grown;
+            capacity *= 2;
+        }
+        line[length++] = (char)c;
+    }
+    if (c == EOF && length == 0)
+    {
+        free(line);
+        return NULL;
+    }
+    if (length > 0 && line[length - 1] == '\r')
+        --length;
+    line[length] = '\0';
+    return line;
+}
+
 char *worstline(const char *prompt)
 {
     ussr_line_state_t state;
@@ -185,6 +221,12 @@ char *worstline(const char *prompt)
     if (prompt != NULL)
         fputs(prompt, stdout);
     fflush(stdout);
+
+    {
+        DWORD input_mode;
+        if (!GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &input_mode))
+            return worstline_read_redirected();
+    }
 
     GetConsoleScreenBufferInfo(state.console_out, &csbi);
     state.origin = csbi.dwCursorPosition;

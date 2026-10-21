@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(_XOPEN_SOURCE)
+#define _XOPEN_SOURCE 700 /* realpath */
+#endif
+
 #include "pp.h"
 
 #include <stdio.h>
@@ -10,6 +14,29 @@
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
+
+#ifdef _WIN32
+#define pp_path_equal(a, b) (_stricmp((a), (b)) == 0)
+#else
+#define pp_path_equal(a, b) (strcmp((a), (b)) == 0)
+#endif
+
+/* Absolute, normalized form of path for $once bookkeeping (malloc'd). */
+static char *pp_canonical_path(const char *path)
+{
+#ifdef _WIN32
+    return _fullpath(NULL, path, 0);
+#else
+    char *full = realpath(path, NULL);
+    if (full == NULL)
+    {
+        full = malloc(strlen(path) + 1);
+        if (full != NULL)
+            strcpy(full, path);
+    }
+    return full;
+#endif
+}
 
 static char *pp_strdup(const char *src)
 {
@@ -186,6 +213,13 @@ static int pp_is_defined(
     const char *name
 )
 {
+    /*
+     * __MAIN__ is defined only while reading the file ussr was started
+     * with (include depth 1), never inside an $include'd file. A library
+     * can carry its own entry point:  $ifdef __MAIN__ ... init ... $endif
+     */
+    if (strcmp(name, "__MAIN__") == 0 && pp_find_define(pp, name) == NULL)
+        return pp->include_depth == 1;
     return pp_find_define(pp, name) != NULL;
 }
 
@@ -1836,6 +1870,33 @@ static int pp_process_directive(
         return result;
     }
 
+    /*
+     * $once: the current file is read at most once per run; a later
+     * $include of the same file (by any relative path) is skipped.
+     */
+    if (strcmp(directive, "once") == 0)
+    {
+        char *canonical;
+        char **grown;
+
+        free(directive);
+        if (!pp->current_active || pp->include_depth == 0)
+            return 0;
+        canonical = pp_canonical_path(pp->include_stack[pp->include_depth - 1]);
+        if (canonical == NULL)
+            return -1;
+        grown = realloc(pp->once_files,
+                        (pp->once_count + 1) * sizeof(*grown));
+        if (grown == NULL)
+        {
+            free(canonical);
+            return -1;
+        }
+        pp->once_files = grown;
+        pp->once_files[pp->once_count++] = canonical;
+        return 0;
+    }
+
     fprintf(
         stderr,
         "USSR: unknown preprocessor directive: $%s\n",
@@ -1912,6 +1973,9 @@ void ussr_pp_cleanup(
 
     for (i = 0; i < pp->include_depth; ++i)
         free(pp->include_stack[i]);
+    for (i = 0; i < pp->once_count; ++i)
+        free(pp->once_files[i]);
+    free(pp->once_files);
 
     free(pp->include_stack);
     free(pp->output);
@@ -1971,6 +2035,20 @@ int ussr_pp_process_file(
 
     if (pp == NULL || filename == NULL)
         return -1;
+
+    if (pp->once_count > 0)
+    {
+        char *canonical = pp_canonical_path(filename);
+        size_t i;
+        int seen = 0;
+
+        for (i = 0; canonical != NULL && i < pp->once_count; ++i)
+            if (pp_path_equal(canonical, pp->once_files[i]))
+                seen = 1;
+        free(canonical);
+        if (seen)
+            return 0;
+    }
 
     if (pp_push_include(pp, filename) != 0)
         return -1;

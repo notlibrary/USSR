@@ -1,0 +1,6 @@
+$include "../../../src/libs/vectors.su"
+vec2(a): 1 2
+vec2(b): 3 4
+vec3(p): 1 2 3
+vget(c): a 1.5
+print(_): "not reached"

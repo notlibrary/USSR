@@ -29,6 +29,10 @@ typedef struct ussr_preprocessor_t
     size_t conditional_depth;
 
     int current_active;
+
+    /* Canonical paths of files that declared $once. */
+    char **once_files;
+    size_t once_count;
 } ussr_preprocessor_t;
 
 typedef struct ussr_pp_macro_t

@@ -1,0 +1,183 @@
+# Tula toolbar test. Needs a GLFW-enabled ussr and a display; the window is
+# never shown. Run from the repository root:
+#     ussr tests/gui/tula_toolbar_test.su
+# Clicks every toolbar button through Petersburg's input path and checks the
+# action it is connected to. Prints PASS or FAIL per check.
+$include "../../src/tula/tula.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+near(r): label got want [
+    set(_nr_d): {got - want}
+    if(_): {_nr_d < 0} [
+        set(_nr_d): {0 - _nr_d}
+    ]
+    check(r): label {_nr_d < 0.001} true
+]
+
+settle(r): [
+    sleep(_): 60
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 200} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    set(r): 0
+]
+
+# Clicks the toolbar button with this label.
+press(r): label [
+    set(_pr_buttons): tula_buttons?
+    set(_pr_names): tula_button_names?
+    len(_pr_n): _pr_buttons
+    set(_pr_i): 0
+    set(r): false
+    while(_): {_pr_i < _pr_n} [
+        at(_pr_name): _pr_names _pr_i
+        if(_): {_pr_name = label} [
+            at(_pr_button): _pr_buttons _pr_i
+            inject(_): _pr_button "click" 0 0 0
+            settle(_):
+            set(r): true
+        ]
+        set(_pr_i): {_pr_i + 1}
+    ]
+]
+
+button_for(r): label [
+    set(_bf_buttons): tula_buttons?
+    set(_bf_names): tula_button_names?
+    len(_bf_n): _bf_buttons
+    set(_bf_i): 0
+    while(_): {_bf_i < _bf_n} [
+        at(_bf_name): _bf_names _bf_i
+        if(_): {_bf_name = label} [
+            at(r): _bf_buttons _bf_i
+        ]
+        set(_bf_i): {_bf_i + 1}
+    ]
+]
+
+view(r): index [
+    set(_vw_v): tula_view?
+    at(r): _vw_v index
+]
+
+status(r): [
+    set(_su_w): tula_status?
+    gettext(r): _su_w
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Tula toolbar test" 1100 800
+    textbox(filename): window ""
+    label(status_label): window ""
+    tulainitialize(canvas): window status_label filename
+    tulatoolbar(bar): window
+    on(_): window "key" "tulakey"
+
+    set(names): tula_button_names?
+    set(all): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(x): names i
+        concat(all): all x "|"
+        set(i): {i + 1}
+    ]
+    check(_): "toolbar buttons" all "Line|Circle|Load DXF|Save DXF|Zoom +|Zoom -|Fit|Left|Right|Up|Down|"
+
+    press(_): "Circle"
+    status(t):
+    check(_): "Circle button selects tool" t "CIRCLE tool: click the snapped center"
+    button_for(b): "Circle"
+    getchecked(c): b
+    check(_): "Circle button pressed" c true
+    button_for(b): "Line"
+    getchecked(c): b
+    check(_): "Line button released" c false
+    press(_): "Line"
+    getchecked(c): b
+    check(_): "Line button pressed" c true
+    status(t):
+    check(_): "Line button selects tool" t "LINE tool: click the first snapped endpoint"
+
+    view(s0): 2
+    press(_): "Zoom +"
+    view(s1): 2
+    near(_): "Zoom + scales by 1.25" s1 {s0 * 1.25}
+    press(_): "Zoom -"
+    view(s2): 2
+    near(_): "Zoom - scales back" s2 s0
+
+    view(x0): 0
+    view(y0): 1
+    press(_): "Left"
+    view(x1): 0
+    near(_): "Left shows more on the left" x1 {x0 + 100}
+    press(_): "Right"
+    view(x1): 0
+    near(_): "Right undoes Left" x1 x0
+    press(_): "Up"
+    view(y1): 1
+    near(_): "Up shows more above" y1 {y0 + 100}
+    press(_): "Down"
+    view(y1): 1
+    near(_): "Down undoes Up" y1 y0
+
+    press(_): "Fit"
+    status(t):
+    check(_): "Fit on an empty drawing" t "Nothing to fit: the drawing is empty"
+
+    settext(_): filename "tests/gui/fixtures/sample.dxf"
+    press(_): "Load DXF"
+    set(e): tula_entities?
+    len(n): e
+    check(_): "Load DXF button loads" n 8
+    press(_): "Zoom +"
+    press(_): "Fit"
+    set(v): tula_view?
+    at(sfit): v 2
+    near(_): "Fit button refits" sfit {700 / 137.5}
+
+    settext(_): filename "tula_toolbar_out.dxf"
+    press(_): "Save DXF"
+    status(t):
+    check(_): "Save DXF button saves" t "Saved 8 object(s) to tula_toolbar_out.dxf"
+    file_exists(f): "tula_toolbar_out.dxf"
+    check(_): "saved file exists" f true
+    remove_file(_): "tula_toolbar_out.dxf"
+
+    # keyboard shortcuts through the window key event
+    view(x0): 0
+    inject(_): window "key" 263 0 0
+    settle(_):
+    view(x1): 0
+    near(_): "Left arrow pans" x1 {x0 + 100}
+    view(s0): 2
+    inject(_): window "key" 61 0 0
+    settle(_):
+    view(s1): 2
+    near(_): "= key zooms in" s1 {s0 * 1.25}
+    inject(_): window "key" 70 0 0
+    settle(_):
+    view(s2): 2
+    near(_): "F key fits" s2 sfit
+
+    close(_): window
+    set(result): 0
+]
