@@ -6,6 +6,7 @@ ussr_SOURCES = \
     ussr.c \
     ussr_bytecode.c \
     ussr_uuasm.c \
+    ussr_ru.c \
     bestline.c \
     main.c \
     pp.c \
@@ -28,6 +29,7 @@ EXTRA_DIST = \
     ussr.h \
     ussr_bytecode.h \
     ussr_uuasm.h \
+    ussr_ru.h \
     uno.h \
     ussr_oop_builtins.h \
     scheduler.h \

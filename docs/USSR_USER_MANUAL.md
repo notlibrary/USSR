@@ -11,7 +11,7 @@ USSR uses three file extensions for its language and execution formats:
 |-----------|---------|-------------|
 | `.su` | USSR source script ("script user") | Run source scripts with `ussr file.su`. |
 | `.ua` | USSR Ukraine assembler, textual UUASM | Run assembler text directly with `ussr file.ua`. `.uuasm` remains a compatible legacy extension. |
-| `.ru` | Final VM binary bytecode | Reserved for serialized VM programs. The C library has a bytecode writer, but the CLI does not yet load or execute `.ru` files. |
+| `.ru` | Final VM binary bytecode | Produce with `ussr -c file.su`, run with `ussr file.ru`. Format: [RU_BYTECODE_FORMAT.md](RU_BYTECODE_FORMAT.md). |
 
 This manual documents the language and libraries in the current source
 tree. Runtime limitations that affect behavior are called out alongside
@@ -83,8 +83,34 @@ Textual assembler files can also be run directly:
 ./ussr program.ua
 ```
 
-The previous `.uuasm` spelling is still accepted. `.ru` is the planned
-binary VM-program extension; it is not yet a runnable CLI input format.
+The previous `.uuasm` spelling is still accepted.
+
+**Compiling to bytecode (`-c`):**
+
+```
+./ussr -c myscript.su              # writes myscript.ru
+./ussr -c myscript.su out/app.ru   # explicit output file
+./ussr myscript.ru arg1 arg2       # runs it like the source
+```
+
+`-c` (long form `--compile`) preprocesses and compiles the script without
+running it and without loading `moscow.su`. The output file holds only the
+binary program; nothing is printed on success. If the source does not
+compile, or the output cannot be written, a message goes to stderr, the
+exit status is 1, and no output file is left behind. Includes are resolved
+at compile time, so a `.ru` file does not need the `.su` files it was built
+from; `load(p): "file.su"` and `eval` still read source at run time.
+
+A file whose name ends in `.ru` is checked before anything runs: signature,
+format version, VM ABI version, checksum, and every section's bounds.
+Truncated, corrupted, or incompatible files are rejected with a message and
+exit status 1. A `.ru` file runs with the same arguments, standard input,
+output, and exit status as the source it came from.
+
+Limitation: a `[ ... ]` block passed as an argument to a command (for
+example `@(r): [ ... ] [ ... ]`, command chaining) cannot be stored yet;
+`-c` reports which command it is and writes nothing. Blocks of `if`,
+`while`, `for` and function definitions are compiled normally.
 
 ---
 

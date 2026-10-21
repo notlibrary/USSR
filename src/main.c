@@ -42,6 +42,7 @@ extern int ussr_argument_evaluate(
 );
 
 #include "ussr_bytecode.h"
+#include "ussr_ru.h"
 #include "uno.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
@@ -2081,19 +2082,18 @@ static int count_brackets(
     return bracket_depth;
 }
 
-static int parse_and_execute(const char *source, int argc, char **argv, int background_ok)
+/*
+ * Parse and compile source. Returns 0 with *ast set (NULL for an empty
+ * program) and bytecode filled, or -1 after printing a diagnostic.
+ */
+static int compile_source(const char *source, ussr_bc_program_t *bytecode,
+                          ussr_command_list_t **ast)
 {
     YY_BUFFER_STATE buffer;
     int result;
-    ussr_bc_program_t bytecode;
-    ussr_sched_program_t *program;
-    long main_pid;
-    ussr_proc_t *main_proc;
-    int entry_function = -1;
-    size_t fi;
 
-    if (source == NULL || source[0] == '\0')
-        return 0;
+    *ast = NULL;
+    memset(bytecode, 0, sizeof(*bytecode));
 
     buffer = yy_scan_string(source);
 
@@ -2119,7 +2119,7 @@ static int parse_and_execute(const char *source, int argc, char **argv, int back
         return 0;
 
     /* AST -> bytecode happens once. Execution starts only after compilation. */
-    if (ussr_bc_compile(ussr_parsed_program, &bytecode) != 0)
+    if (ussr_bc_compile(ussr_parsed_program, bytecode) != 0)
     {
         fprintf(stderr, "USSR compiler: compilation failed");
         ussr_command_list_free(ussr_parsed_program);
@@ -2127,16 +2127,38 @@ static int parse_and_execute(const char *source, int argc, char **argv, int back
         return -1;
     }
 
+    *ast = ussr_parsed_program;
+    ussr_parsed_program = NULL;
+    return 0;
+}
+
+/*
+ * Run compiled bytecode as the main process. Takes ownership of bytecode
+ * and ast (the syntax tree, or the site records rebuilt from a .ru file).
+ */
+static int run_bytecode(ussr_bc_program_t *bytecode_in,
+                        ussr_command_list_t *ast,
+                        int argc, char **argv, int background_ok)
+{
+    ussr_bc_program_t bytecode = *bytecode_in;
+    ussr_sched_program_t *program;
+    long main_pid;
+    ussr_proc_t *main_proc;
+    int entry_function = -1;
+    int result;
+    size_t fi;
+
     /*
      * The wrapper adopts the AST: OOP/scan metadata points into it,
      * and async-spawned processes may outlive this call frame.
      */
-    program = ussr_sched_program_wrap(&bytecode, ussr_parsed_program);
-    ussr_parsed_program = NULL;
+    program = ussr_sched_program_wrap(&bytecode, ast);
 
     if (program == NULL)
     {
         ussr_bc_program_free(&bytecode);
+        if (ast != NULL)
+            ussr_command_list_free(ast);
         return -1;
     }
 
@@ -2209,6 +2231,132 @@ static int parse_and_execute(const char *source, int argc, char **argv, int back
     return result;
 }
 
+static int parse_and_execute(const char *source, int argc, char **argv, int background_ok)
+{
+    ussr_bc_program_t bytecode;
+    ussr_command_list_t *ast;
+
+    if (source == NULL || source[0] == '\0')
+        return 0;
+
+    if (compile_source(source, &bytecode, &ast) != 0)
+        return -1;
+
+    if (ast == NULL)
+        return 0;
+
+    return run_bytecode(&bytecode, ast, argc, argv, background_ok);
+}
+
+static int has_suffix(const char *text, const char *suffix)
+{
+    size_t text_length = strlen(text);
+    size_t suffix_length = strlen(suffix);
+
+    return text_length >= suffix_length &&
+           strcmp(text + text_length - suffix_length, suffix) == 0;
+}
+
+/* Execute a .ru bytecode file produced by -c. */
+static int run_ru_file(const char *filename, int argc, char **argv)
+{
+    ussr_bc_program_t bytecode;
+    ussr_command_list_t *sites;
+
+    if (ussr_ru_read_file(filename, &bytecode, &sites) != 0)
+        return EXIT_FAILURE;
+
+    return run_bytecode(&bytecode, sites, argc, argv, 0) == 0 ?
+        EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+/*
+ * ussr -c input.su [output.ru]: preprocess and compile without running.
+ * The output defaults to the input name with its extension replaced by
+ * .ru. Only the bytecode is written to the file; diagnostics go to
+ * stderr and nothing is printed on success.
+ */
+static int compile_file(const char *input, const char *output)
+{
+    ussr_preprocessor_t pp;
+    ussr_bc_program_t bytecode;
+    ussr_command_list_t *ast;
+    char *default_output = NULL;
+    const char *source;
+    int result;
+
+    if (has_suffix(input, ".ru"))
+    {
+        fprintf(stderr, "USSR compile: '%s' is already bytecode\n", input);
+        return EXIT_FAILURE;
+    }
+
+    if (output == NULL)
+    {
+        const char *slash = strrchr(input, '/');
+        const char *back = strrchr(input, '\\');
+        const char *base = slash > back ? slash : back;
+        const char *dot = strrchr(input, '.');
+        size_t stem = (dot != NULL && (base == NULL || dot > base)) ?
+            (size_t)(dot - input) : strlen(input);
+
+        default_output = malloc(stem + 4);
+        if (default_output == NULL)
+            return EXIT_FAILURE;
+        memcpy(default_output, input, stem);
+        strcpy(default_output + stem, ".ru");
+        output = default_output;
+    }
+
+    if (ussr_pp_init(&pp) != 0)
+    {
+        fprintf(stderr, "USSR: could not initialize preprocessor\n");
+        free(default_output);
+        return EXIT_FAILURE;
+    }
+
+    if (ussr_pp_process_file(&pp, input) != 0)
+    {
+        ussr_pp_cleanup(&pp);
+        free(default_output);
+        return EXIT_FAILURE;
+    }
+
+    source = ussr_pp_output(&pp);
+    if (source == NULL || source[0] == '\0')
+        source = "";
+
+    if (compile_source(source, &bytecode, &ast) != 0)
+    {
+        fprintf(stderr, "\nUSSR compile: '%s' was not written\n", output);
+        ussr_pp_cleanup(&pp);
+        free(default_output);
+        return EXIT_FAILURE;
+    }
+    ussr_pp_cleanup(&pp);
+
+    if (ast == NULL)
+    {
+        /* An empty program still compiles to a single HALT. */
+        bytecode.code = calloc(1, sizeof(*bytecode.code));
+        if (bytecode.code == NULL)
+        {
+            free(default_output);
+            return EXIT_FAILURE;
+        }
+        bytecode.code[0].opcode = USSR_BC_HALT;
+        bytecode.code_count = bytecode.code_capacity = 1;
+    }
+
+    result = ussr_ru_write_file(&bytecode, output);
+    ussr_bc_program_free(&bytecode);
+    if (ast != NULL)
+        ussr_command_list_free(ast);
+    free(default_output);
+
+    return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
 static int run_eval(const char *source, int argc, char **argv)
 {
     int result;
@@ -2225,6 +2373,9 @@ static int run_file(const char *filename, int argc, char **argv)
 {
     ussr_preprocessor_t pp;
     int result;
+
+    if (has_suffix(filename, ".ru"))
+        return run_ru_file(filename, argc, argv);
 
     {
         size_t filename_length = strlen(filename);
@@ -2597,7 +2748,9 @@ version_long(void)
 static void
 usage(char* prog_name)
 {
-	fprintf(stderr, "Usage: %s [-v] [-e code] script.su \n", prog_name);
+	fprintf(stderr,
+	        "Usage: %s [-v] [-e code] script.su|program.ru [args...]\n"
+	        "       %s -c script.su [program.ru]\n", prog_name, prog_name);
 	exit(EXIT_SUCCESS);
 	return;
 }
@@ -2616,17 +2769,19 @@ int main(int argc, char **argv)
     static const struct option long_options[] = {
         { "version", no_argument, NULL, 'V' },
         { "eval", required_argument, NULL, 'e' },
+        { "compile", no_argument, NULL, 'c' },
         { NULL, 0, NULL, 0 }
     };
 
     int result;
     int opt;
     const char *eval_source = NULL;
+    int compile_only = 0;
 	
 	srand(time(NULL));
 	seed_xrp32(rand());
 	
-    while ((opt = getopt_long(argc, argv, "ve:", long_options, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "ve:c", long_options, NULL)) != -1)
     {
         switch (opt)
         {
@@ -2642,12 +2797,32 @@ int main(int argc, char **argv)
             eval_source = optarg;
             break;
 
+        case 'c':
+            compile_only = 1;
+            break;
+
         case '?':
 			usage(argv[0]);
 		break;
 		default:
 		break;
         }
+    }
+
+    if (compile_only)
+    {
+        /* Compile only: no moscow.su, nothing is executed. */
+        if (eval_source != NULL || optind >= argc || argc - optind > 2)
+        {
+            fprintf(stderr, "Usage: %s -c script.su [program.ru]\n",
+                    argv[0]);
+            return EXIT_FAILURE;
+        }
+        ussr_init();
+        result = compile_file(argv[optind],
+                              argc - optind == 2 ? argv[optind + 1] : NULL);
+        ussr_cleanup();
+        return result;
     }
 
     ussr_init();

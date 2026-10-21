@@ -93,9 +93,9 @@ It also compiles:
 Owns UUASM mnemonic lookup, opcode mapping validation, and textual UUASM
 assembly. `.ua` is its canonical source-file suffix (`.uuasm` is accepted as a
 compatibility suffix). `USSR_UUASM_SPEC.md` specifies syntax, operands, labels,
-pools, control flow, and the calling convention. `.ru` is reserved for final
-VM binary bytecode; the C writer exists, but no loader or CLI execution path is
-implemented yet.
+pools, control flow, and the calling convention. `.ru` is final VM binary
+bytecode, written and loaded by `ussr_ru.c` (`ussr -c`, `ussr file.ru`); see
+`RU_BYTECODE_FORMAT.md`.
 
 ### `main.c`
 

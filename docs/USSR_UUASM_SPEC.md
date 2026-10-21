@@ -89,9 +89,10 @@ input only. Text assembly does not fabricate parser-owned source metadata:
 AST-backed `OOP` and `SCAN` operations requiring such metadata must be
 generated from parsed USSR source, not written as standalone UUASM.
 
-`.ru` is reserved for the final serialized VM bytecode format. The current C
-library can write a versioned bytecode file with `ussr_bc_write_file()`, but
-there is no `.ru` reader or CLI execution path yet.
+`.ru` is the serialized VM bytecode format: `ussr -c file.su` writes it,
+including the OOP/SCAN source-site metadata that standalone UUASM cannot
+express, and `ussr file.ru` validates and runs it. See
+[`RU_BYTECODE_FORMAT.md`](RU_BYTECODE_FORMAT.md).
 
 ## Bootstrap
 

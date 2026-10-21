@@ -1,0 +1,61 @@
+# .ru round-trip program: run directly and compiled with -c, the output
+# and exit status must be identical. Touches every constant type, user
+# functions, recursion, the hash, structs, vectors, eval, async/await
+# with a bare function name, scan (stdin) and init's arguments.
+fib(r): n [
+    if(_): {n < 2} [
+        return(r): n
+    ]
+    fib(a): {n - 1}
+    fib(b): {n - 2}
+    return(r): {a + b}
+]
+
+worker(r): n [
+    sleep(_): 5
+    set(r): {n * 10}
+]
+
+init(ret): arg_cnt arg_vec [
+    print(_): arg_cnt
+    at(first): arg_vec 1
+    print(_): first
+    print(_): 42
+    print(_): -7
+    print(_): 3.25
+    print(_): true
+    print(_): "СССР ☭"
+    print(_): {7 / 2}
+    print(_): {7 % 3}
+    print(_): {1 << 4}
+    print(_): {0 || 5}
+    fib(f): 15
+    print(_): f
+    set(k): "value"!
+    print(_): k?
+    struct(Point): "x:number" "y:number"
+    set(p): 'Point{x=3,y=4}'
+    getf(px): p "x"
+    print(_): px
+    new(q): "Point" 5 6
+    getf(qy): q "y"
+    print(_): qy
+    set(v): 'Vec2{x=1.5,y=2}'
+    set(w): {v + v}
+    print(_): w
+    vec(items): ""
+    push(_): items 10
+    push(_): items 20
+    at(second): items 1
+    print(_): second
+    set(code): "set(e): 99"
+    eval(e): code
+    print(_): e
+    async(p1): "worker" 4
+    await(r1): p1
+    print(_): r1
+    scan(ok): "line: INTEGER INT; STR" num word
+    print(_): num
+    print(_): word
+    return(ret): 0
+]

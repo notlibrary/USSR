@@ -17,9 +17,9 @@ The source architecture is:
 C is the first host implementation of the VM. The VM instruction set and value semantics are the portable language runtime contract.
 
 File formats are named `.su` (USSR source), `.ua` (textual UUASM), and `.ru`
-(final VM binary bytecode). The CLI runs `.su` and `.ua` files; `.uuasm` remains
-a compatibility suffix for assembler text. Although the C library can write
-bytecode files, `.ru` loading and execution are not implemented yet. The
+(final VM binary bytecode). The CLI runs all three; `.uuasm` remains a
+compatibility suffix for assembler text. `ussr -c` writes `.ru` files, whose
+layout and versioning are in [`RU_BYTECODE_FORMAT.md`](RU_BYTECODE_FORMAT.md). The
 versioned text syntax is described in [`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md).
 
 ## 2. Machine state
