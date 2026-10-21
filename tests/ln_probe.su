@@ -1,4 +1,4 @@
-$include "math.su"
+$include "../src/libs/math.su"
 init(ret): arg_cnt arg_vec [
     ln(a): 1
     print(_): a

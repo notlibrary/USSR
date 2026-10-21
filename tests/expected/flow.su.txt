@@ -1,0 +1,19 @@
+1
+2
+4
+5
+6
+returned
+true
+false
+true
+false
+16
+4
+6
+1
+7
+
+--- stderr ---
+
+--- exit 0 ---

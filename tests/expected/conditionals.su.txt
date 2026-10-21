@@ -1,0 +1,7 @@
+USSR
+25
+A is greater than 3 but not 9
+
+--- stderr ---
+
+--- exit 0 ---

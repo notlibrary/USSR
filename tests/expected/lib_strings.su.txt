@@ -1,0 +1,48 @@
+PASS int zero
+PASS int positive
+PASS int negative
+PASS trunc positive
+PASS trunc negative
+PASS trunc large
+PASS number integer
+PASS number half
+PASS number negative fraction
+PASS number rounded
+PASS number carry
+PASS number padded fraction
+PASS number rounds to zero
+PASS parse integer
+PASS parse blanks and sign
+PASS parse real
+PASS parse negative real
+PASS parse exponent
+PASS parse negative exponent
+PASS parse leading point
+PASS reject letters
+PASS reject two points
+PASS reject empty
+PASS reject bare sign
+PASS reject bare exponent
+PASS lower
+PASS find first
+PASS find from
+PASS find missing
+PASS trim
+PASS trim blank
+PASS repeat
+PASS utf8 count mixed
+PASS utf8 byte length
+PASS utf8 next over cyrillic
+PASS utf8 prev over cyrillic
+PASS utf8 index of column
+PASS utf8 column of index
+PASS utf8 count 3 and 4 byte
+PASS utf8 next over euro
+PASS utf8 prev over emoji
+PASS utf8 index past end
+PASS utf8 from bytes
+PASS chr ascii
+
+--- stderr ---
+
+--- exit 0 ---

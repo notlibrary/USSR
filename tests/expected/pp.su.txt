@@ -1,0 +1,8 @@
+debug enabled
+also enabled
+library loaded
+main program
+
+--- stderr ---
+
+--- exit 0 ---

@@ -1,4 +1,4 @@
-$include "math.su"
+$include "../../src/libs/math.su"
 
 log2(r): 1
 print(_): r

@@ -1,0 +1,7 @@
+42
+worker done
+7
+
+--- stderr ---
+
+--- exit 0 ---

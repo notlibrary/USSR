@@ -1,0 +1,7 @@
+ussr io roundtrip
+ussr io roundtrip!
+ussr
+
+--- stderr ---
+
+--- exit 0 ---

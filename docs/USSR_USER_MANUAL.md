@@ -761,7 +761,13 @@ typeof(t): value     # "null" "integer" "real" "string" "boolean" "vector",
                      # or a struct instance's type name
 fail(_): "message"   # print "USSR: message" and stop like any runtime error
 chr(s): byte         # one-byte string for 1..255
+finv_sqrt(r): x      # approximate 1/sqrt(x), Quake III style, for x > 0
 ```
+
+`finv_sqrt` converts `x` to a 32-bit float, applies the classic bit trick
+and one Newton step, so results are within about 0.2% of `1/sqrt(x)`
+(`finv_sqrt(r): 4` gives `0.499154`). Zero, negative or non-finite input is
+a runtime error.
 
 Integers are the host C `long`: 64-bit on Linux/macOS, 32-bit in MSVC builds
 (at most 2147483647). `str_int_limit(m):` reports the limit.
@@ -828,3 +834,49 @@ The textual UUASM format and instruction reference are documented in
 [`USSR_UUASM_SPEC.md`](USSR_UUASM_SPEC.md). The current C VM instruction
 set, runtime behavior, and bytecode status are described in
 [`USSR_VM_SPEC.md`](USSR_VM_SPEC.md).
+
+---
+
+## 16. Building and testing USSR
+
+**Linux** (gcc or clang, flex, bison; GLFW and OpenGL development files
+through `pkg-config` enable the Petersburg GUI, otherwise it is left out):
+
+```
+make -f ussr-ubuntu.mk -j"$(nproc)" ussr
+```
+
+**Windows** (Visual Studio 2022 x64 developer prompt, `win_bison` and
+`win_flex` from winflexbison3). Leave out `GLFW_DIR`/`GLFW_LIB` for a build
+without Petersburg:
+
+```
+win_bison -d -o src\parser.tab.c src\parser.y
+win_flex -o src\lexer.c src\lexer.l
+nmake /f Makefile.msc PREGENERATED=1 GLFW_DIR=C:\glfw-3.5.1.bin.WIN64 GLFW_LIB=C:\glfw-3.5.1.bin.WIN64\lib-vc2022\glfw3dll.lib
+```
+
+`glfw3.dll` must be next to `ussr.exe` (or on `PATH`) to run a GLFW build.
+
+**Tests.** Run everything from the repository root:
+
+```
+sh tests/run_all.sh                    # ./ussr, or ./ussr.exe on Windows
+USSR_SKIP_GUI=1 sh tests/run_all.sh    # without a display or GLFW
+xvfb-run -a sh tests/run_all.sh        # GUI tests on a headless Linux box
+```
+
+It runs the suites in `tests/ru`, `tests/mbl`, `tests/russia`, `tests/vectors`
+and `tests/repl`; every script in `tests/`, `tests/math` and `tests/oop`,
+comparing stdout, stderr and exit status with `tests/expected/<path>.txt`
+(stdin comes from `tests/expected/<path>.in` when that file exists); and the
+GUI tests in `tests/gui`. Each check prints a `PASS` or `FAIL` line and the
+exit status is nonzero if anything failed. After an intended change in
+output, `sh tests/run_all.sh --update` rewrites the expectations; review the
+diff before committing it. Not run: the socket and HTTP tests (they need a
+free port), `tests/chain.su` and `tests/script.su` (their output is the
+host's `ps` listing, and chaining is POSIX-only), and `tests/quines`.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same script on every
+pull request and push to `main`: Ubuntu with GLFW under Xvfb, Ubuntu without
+GLFW, and Windows with MSVC and GLFW.

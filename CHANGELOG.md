@@ -15,6 +15,8 @@
 - Tula: DXF read/write, zoom, adaptive grid, toolbar, direct launch with `ussr src/tula/tula.su`.
 - Petersburg: canvas and toolbar widgets, `keyup`/`focus`/`wheel` events, event injection for tests, timers while the GUI runs.
 - russia.su assembles and runs textual UUASM (`.ua`).
+- Continuous integration (`.github/workflows/ci.yml`): Ubuntu with GLFW under Xvfb, Ubuntu without GLFW, and Windows (MSVC, GLFW 3.5.1) build and run every test on pull requests and pushes to `main`.
+- `tests/run_all.sh` runs every suite, checks each standalone test script against `tests/expected/` (stdout, stderr, exit status) and runs the GUI tests; `--update` rewrites the expectations.
 
 ### Changed
 - Tver and Tula are now written in USSR (`src/tver/tver.su`, `src/tula/tula.su`); their C sources were removed. Petersburg stays native.
@@ -22,6 +24,10 @@
 ### Fixed
 - `math.su`: `tan`/`ctg` guards used `==` instead of `=`.
 - REPL no longer hangs reading redirected stdin on Windows.
+- REPL on Linux and macOS prints the `PS1`/`PS2` prompts for piped input too, as on Windows and as documented.
+- `finv_sqrt` works again: the bytecode VM had no route to it, so every call failed.
+- `ussr-ubuntu.mk`: `make -j` no longer runs bison twice in parallel.
+- `tests/duffs_device.su` is valid USSR now (unrolled `do`/`loop` with `choose` fall-through); `tests/math/*.su`, `tests/lib_io.su`, `tests/lib_math_bytes.su` and `tests/ln_probe.su` include the libraries by their path relative to the test, so they run from any directory.
 
 ### Documentation
 - `docs/RU_BYTECODE_FORMAT.md`: `.ru` layout, validation and versioning.

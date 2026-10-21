@@ -1778,7 +1778,8 @@ int vm_execute(
                  * input as UTF-8 bytes on Windows. */
                 else if (
                     strcmp(program->strings[ins.immediate], "file_exists") == 0 ||
-                    strcmp(program->strings[ins.immediate], "writefile") == 0
+                    strcmp(program->strings[ins.immediate], "writefile") == 0 ||
+                    strcmp(program->strings[ins.immediate], "finv_sqrt") == 0
                 )
                 {
                     result = ussr_execute_command(
@@ -2604,7 +2605,16 @@ static int run_repl(void)
 #ifdef _WIN32
         line = worstline(prompt != NULL ? prompt : "ussr> ");
 #else
-        line = bestline(prompt != NULL ? prompt : "ussr> ");
+        /* bestline prints no prompt when input is redirected; print it
+         * here so piped sessions look the same as on Windows. */
+        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+        {
+            fputs(prompt != NULL ? prompt : "ussr> ", stdout);
+            fflush(stdout);
+            line = bestline(NULL);
+        }
+        else
+            line = bestline(prompt != NULL ? prompt : "ussr> ");
 #endif
         free(prompt);
         if (line == NULL)

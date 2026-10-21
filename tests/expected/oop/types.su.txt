@@ -1,0 +1,11 @@
+Nordom
+true
+hello
+42
+null
+Measurement{value=5}
+Measurement{value=3.0}
+
+--- stderr ---
+
+--- exit 0 ---

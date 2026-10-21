@@ -1,4 +1,4 @@
-$include "math.su"
+$include "../../src/libs/math.su"
 
 floor(r): 3.7
 print(_): r

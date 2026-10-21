@@ -53,3 +53,15 @@ dkms.conf
 # debug information files
 *.dwo
 .aider*
+
+# Generated parser/lexer and Windows resources
+src/parser.tab.c
+src/parser.tab.h
+src/lexer.c
+src/lex.yy.c
+ussr.res
+
+# Files the tests write
+tests/*_tmp.txt
+ps_output.txt
+.Mbl_probe.tmp
