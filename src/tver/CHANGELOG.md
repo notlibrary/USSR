@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0-alpha
+- F5 copies the item under the cursor or the marked items to the other
+  panel; directories are copied with their contents. Existing destinations
+  and copying a directory into itself are refused.
+- F7 creates a directory: a name box opens below the status line, Enter
+  creates, Esc cancels. F8 stays delete.
+- Added `tests/gui/tver_copy_mkdir_test.su`.
+
 ## 0.4.0-alpha
 - Insert marks directories as well as files. Marks are drawn as Petersburg
   row marks (amber) instead of a `* ` prefix, survive navigation and

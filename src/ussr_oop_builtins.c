@@ -1878,6 +1878,8 @@ static int oop_do_set_bytes(
 /*   getcwd(v):               -> current working directory         */
 /*   rename_path(v): from to  -> 0 ok / 1 error; never replaces    */
 /*                               an existing destination           */
+/*   copy_file(v): from to    -> 0 ok / 1 error; copies one file's */
+/*                               bytes, never replaces             */
 /*   remove_file(v): path     -> 0 ok / 1 error; files only        */
 /*   remove_dir(v): path      -> 0 ok / 1 error; empty dirs only   */
 /*   make_dir(v): path        -> 0 ok / 1 error or already exists  */
@@ -2143,7 +2145,54 @@ static int oop_do_getcwd(
     return out_result->data.string != NULL ? 0 : -1;
 }
 
-/* rename_path / remove_file / remove_dir: 0 ok, 1 refused or failed. */
+/* Copies the bytes of file from into a new file to. Fails (nonzero) when
+ * from is not a file or to already exists; a partial copy is removed. */
+static int oop_copy_file(const char *from, const char *to)
+{
+#ifdef _WIN32
+    return !oop_path_exists(from) || oop_path_is_dir(from) ||
+           oop_path_exists(to) || !CopyFileA(from, to, TRUE);
+#else
+    struct stat info;
+    FILE *in;
+    FILE *out;
+    char buffer[65536];
+    size_t got;
+    int failed = 0;
+
+    if (stat(from, &info) != 0 || !S_ISREG(info.st_mode) ||
+        oop_path_exists(to))
+        return 1;
+    in = fopen(from, "rb");
+    if (in == NULL)
+        return 1;
+    out = fopen(to, "wb");
+    if (out == NULL)
+    {
+        fclose(in);
+        return 1;
+    }
+    while ((got = fread(buffer, 1, sizeof(buffer), in)) > 0)
+        if (fwrite(buffer, 1, got, out) != got)
+        {
+            failed = 1;
+            break;
+        }
+    if (ferror(in))
+        failed = 1;
+    fclose(in);
+    if (fclose(out) != 0)
+        failed = 1;
+    if (failed)
+        remove(to);
+    else
+        chmod(to, info.st_mode & 07777);
+    return failed;
+#endif
+}
+
+/* rename_path / copy_file / remove_file / remove_dir / make_dir: 0 ok,
+ * 1 refused or failed. */
 static int oop_do_path_change(
     const char *name,
     ussr_argument_t *arguments,
@@ -2151,7 +2200,8 @@ static int oop_do_path_change(
     ussr_value_t *out_result
 )
 {
-    int renaming = strcmp(name, "rename_path") == 0;
+    int copying = strcmp(name, "copy_file") == 0;
+    int renaming = copying || strcmp(name, "rename_path") == 0;
     int making = strcmp(name, "make_dir") == 0;
     ussr_value_t first_v;
     ussr_value_t second_v;
@@ -2174,7 +2224,9 @@ static int oop_do_path_change(
         return -1;
     }
 
-    if (renaming)
+    if (copying)
+        failed = oop_copy_file(first, second);
+    else if (renaming)
         failed = !oop_path_exists(first) || oop_path_exists(second) ||
 #ifdef _WIN32
                  !MoveFileA(first, second);
@@ -2569,6 +2621,7 @@ int ussr_oop_dispatch(
     else if (strcmp(command, "getcwd") == 0)
         status = oop_do_getcwd(argument_count, out_result);
     else if (strcmp(command, "rename_path") == 0 ||
+             strcmp(command, "copy_file") == 0 ||
              strcmp(command, "remove_file") == 0 ||
              strcmp(command, "remove_dir") == 0 ||
              strcmp(command, "make_dir") == 0)

@@ -10,7 +10,7 @@ panels.
 | Command | Arguments | Behavior |
 |---|---|---|
 | `tverinitialize(r)` | Window, left path label, left list, right path label, right list, status label | Starts both panels in the current directory; `r` is `0`, or `1` if a panel could not be read |
-| `tverhandlekey(r)` | Window handle, GLFW key code | Handles Tab, Insert, Enter, keypad Enter, F6, and F8 |
+| `tverhandlekey(r)` | Window handle, GLFW key code | Handles Tab, Insert, Enter, keypad Enter, Esc, F5, F6, F7, and F8 |
 | `tveractivatepanel(r)` | Changed list handle | Makes the clicked list the active panel |
 | `tverhandlekeyup(r)` | Window handle, GLFW key code | Window `"keyup"` callback: releasing a held arrow stops repeating |
 | `tverfocus(r)` | Window handle, `1`/`0` | Window `"focus"` callback: losing focus stops repeating |
@@ -38,15 +38,25 @@ more than one argument, prints a message and exits with a non-zero status.
   of the list or the next key press.
 - Insert toggles the mark on the file or directory under the cursor and
   advances to the next row; `..` is never marked.
+- F5 copies the item under the cursor, or all marked items, into the other
+  panel. A directory is copied with all its files and subdirectories; copying
+  a directory into itself or below itself is refused. If a copy fails
+  partway, the status line names the file or directory where it stopped and
+  what was already copied stays.
 - F6 moves the item under the cursor, or all marked items, into the other
   panel (directories included, same volume).
+- F7 opens a text box below the status line for a new directory's name.
+  Enter creates the directory in the active panel and puts the cursor on
+  it; Esc closes the box without creating anything. While the box is open
+  other Tver keys are ignored. Empty names, `.`, `..`, names containing `/`
+  or `\` and existing names are refused with a status message.
 - F8 requires a second press to confirm deletion of the item under the
   cursor or the marked items. Files are deleted; directories only when empty
   (a non-empty one is reported and stays marked). The confirmation is tied to
   the panel, directory, cursor row and mark count; changing any of them
   disarms it.
-- Moves refuse to overwrite existing destinations.
-- Copy, rename, view, edit, and recursive deletion are not implemented.
+- Copies and moves refuse to overwrite existing destinations.
+- Rename, view, edit, and recursive deletion are not implemented.
 
 ## Selection
 
@@ -58,7 +68,7 @@ more than one argument, prints a message and exits with a non-zero status.
 - Each panel remembers marks per directory. Entering a directory shows that
   directory's own marks (none the first time); going back restores the
   marks you left. The two panels keep separate marks.
-- F6 and F8 use the marks of the current directory only. Items that are moved
-  or deleted lose their marks; items that fail keep them.
+- F5, F6 and F8 use the marks of the current directory only. Items that are
+  copied, moved or deleted lose their marks; items that fail keep them.
 - The status line reports `N item(s) marked in this panel` after each
   Insert.

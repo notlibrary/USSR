@@ -274,6 +274,7 @@ static const char *ac_builtin_commands[] =
     "getcwd",
     "make_dir",
     "rename_path",
+    "copy_file",
     "remove_file",
     "remove_dir",
     NULL

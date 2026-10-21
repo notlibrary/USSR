@@ -17,6 +17,8 @@
 #   getcwd(s):              current working directory
 #   make_dir(ok): "path"    create one directory (fails if it exists)
 #   rename_path(ok): from to   move/rename; never replaces a destination
+#   copy_file(ok): from to     copy one file's bytes; never replaces a
+#                              destination; directories are refused
 #   remove_file(ok): "path" delete a file (directories are refused)
 #   remove_dir(ok): "path"  delete an empty directory
 # These are real stream operations on open handles; the whole-file
