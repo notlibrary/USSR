@@ -1,6 +1,7 @@
 # tver.su - two-panel keyboard-driven file manager, written in USSR.
 # The window is assembled from Petersburg widgets; directory access uses the
-# io primitives list_dir/is_dir/getcwd/rename_path/remove_file. Shared state
+# io primitives list_dir/is_dir/getcwd/make_dir/rename_path/copy_file/
+# remove_file/remove_dir. Shared state
 # lives in the !/? hash namespace because every Petersburg callback runs as
 # its own scheduler process with a private copy of ordinary variables.
 #
@@ -22,11 +23,16 @@
 # shown with Petersburg list row marks, separate from the cursor band. They
 # survive refreshes and scrolling, and each panel remembers them per
 # directory: leaving a directory saves its marks in tver_memory and coming
-# back restores them. F6/F8 act on the current directory's marks only.
+# back restores them. F5/F6/F8 act on the current directory's marks only.
+#
+# F5 copies the marked entries (or the cursor row) into the other panel's
+# directory; directories are copied with everything in them. F7 asks for a
+# name in a text box below the status line and creates that directory: ENTER
+# creates it, ESC cancels, and other Tver keys are ignored meanwhile.
 #
 # Hash keys: tver_window tver_status tver_paths tver_lists tver_dirs tver_memory
 # tver_names tver_marks tver_active tver_pending tver_repeat_key
-# tver_repeat_gen. Handlers serialize through Petersburg's uilock.
+# tver_repeat_gen tver_prompt. Handlers serialize through Petersburg's uilock.
 # Directory names in tver_names end with "/"; the parent entry is "../".
 $once
 $include "../petersburg/petersburg.su"
@@ -34,8 +40,11 @@ $include "../libs/strings.su"
 
 $define TVER_KEY_ENTER 257
 $define TVER_KEY_TAB 258
+$define TVER_KEY_ESCAPE 256
 $define TVER_KEY_INSERT 260
+$define TVER_KEY_F5 294
 $define TVER_KEY_F6 295
+$define TVER_KEY_F7 296
 $define TVER_KEY_F8 297
 $define TVER_KEY_KP_ENTER 335
 $define TVER_KEY_DOWN 264
@@ -171,10 +180,10 @@ tver_set_status(r): text [
 tver_panel_status(r): [
     set(_tvps_a): tver_active?
     if(_): {_tvps_a = 0} [
-        tver_set_status(_): "LEFT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+        tver_set_status(_): "LEFT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
     ]
     else(_): [
-        tver_set_status(_): "RIGHT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+        tver_set_status(_): "RIGHT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
     ]
     set(r): 0
 ]
@@ -448,6 +457,7 @@ tverinitialize(result): window left_path left_list right_path right_list status 
     set(tver_pending): ""!
     set(tver_repeat_key): 0!
     set(tver_repeat_gen): 0!
+    set(tver_prompt): 0!
     set(_tvi_i): 0
     set(result): 0
     while(_): {_tvi_i < 2} [
@@ -617,7 +627,7 @@ tver_open(r): panel selected [
     ]
 ]
 
-# Collects the indexes F6/F8 act on: marked entries, else the cursor row.
+# Collects the indexes F5/F6/F8 act on: marked entries, else the cursor row.
 tver_targets(r): names marks selected [
     vec(_tvt_out): ""
     tver_marked_count(_tvt_marked): marks
@@ -707,6 +717,216 @@ tver_move(r): panel selected [
     tver_set_status(_): _tvmv_text
 ]
 
+# True when path is inside directory (or is it).
+tver_inside(r): path directory [
+    set(r): {path = directory}
+    if(_): {r = false} [
+        tver_join(_tvin_prefix): directory ""
+        len(_tvin_n): _tvin_prefix
+        len(_tvin_m): path
+        if(_): {_tvin_m > _tvin_n} [
+            slice(_tvin_head): path 0 _tvin_n
+            set(r): {_tvin_head = _tvin_prefix}
+        ]
+    ]
+]
+
+# Copies directory src and everything in it to the new directory dst.
+# Returns "" or the reason it stopped. Pending directories are kept on a
+# stack of (source, destination) pairs instead of recursing.
+tver_copy_dir(r): src dst [
+    set(r): ""
+    vec(_tvcd_from): ""
+    vec(_tvcd_to): ""
+    push(_): _tvcd_from src
+    push(_): _tvcd_to dst
+    len(_tvcd_left): _tvcd_from
+    while(_): {_tvcd_left > 0 && r = ""} [
+        pop(_tvcd_s): _tvcd_from
+        pop(_tvcd_d): _tvcd_to
+        set(_tvcd_n): 0
+        list_dir(_tvcd_list): _tvcd_s
+        if(_): {_tvcd_list = null} [
+            concat(r): "Copy stopped: cannot read " _tvcd_s
+        ]
+        else(_): [
+            make_dir(_tvcd_status): _tvcd_d
+            if(_): {_tvcd_status != 0} [
+                concat(r): "Copy stopped: cannot create " _tvcd_d
+            ]
+            else(_): [
+                len(_tvcd_n): _tvcd_list
+            ]
+        ]
+        set(_tvcd_i): 0
+        while(_): {_tvcd_i < _tvcd_n && r = ""} [
+            at(_tvcd_name): _tvcd_list _tvcd_i
+            tver_is_dir_name(_tvcd_isdir): _tvcd_name
+            tver_plain_name(_tvcd_plain): _tvcd_name
+            tver_join(_tvcd_from_path): _tvcd_s _tvcd_plain
+            tver_join(_tvcd_to_path): _tvcd_d _tvcd_plain
+            if(_): _tvcd_isdir [
+                push(_): _tvcd_from _tvcd_from_path
+                push(_): _tvcd_to _tvcd_to_path
+            ]
+            else(_): [
+                copy_file(_tvcd_status): _tvcd_from_path _tvcd_to_path
+                if(_): {_tvcd_status != 0} [
+                    concat(r): "Copy stopped: cannot copy " _tvcd_from_path
+                ]
+            ]
+            set(_tvcd_i): {_tvcd_i + 1}
+        ]
+        len(_tvcd_left): _tvcd_from
+    ]
+]
+
+tver_copy(r): panel selected [
+    set(_tvcp_all): tver_names?
+    set(_tvcp_allm): tver_marks?
+    set(_tvcp_dirs): tver_dirs?
+    at(_tvcp_names): _tvcp_all panel
+    at(_tvcp_marks): _tvcp_allm panel
+    at(_tvcp_from_dir): _tvcp_dirs panel
+    at(_tvcp_to_dir): _tvcp_dirs {1 - panel}
+    set(tver_pending): ""!
+    tver_targets(_tvcp_targets): _tvcp_names _tvcp_marks selected
+    len(_tvcp_n): _tvcp_targets
+    set(r): 0
+    if(_): {_tvcp_n = 0} [
+        tver_set_status(_): "Select an item to copy"
+        return(_): r
+    ]
+    set(_tvcp_copied): 0
+    set(_tvcp_failure): ""
+    set(_tvcp_i): 0
+    while(_): {_tvcp_i < _tvcp_n && _tvcp_failure = ""} [
+        at(_tvcp_index): _tvcp_targets _tvcp_i
+        at(_tvcp_name): _tvcp_names _tvcp_index
+        tver_is_dir_name(_tvcp_isdir): _tvcp_name
+        tver_plain_name(_tvcp_plain): _tvcp_name
+        tver_join(_tvcp_src): _tvcp_from_dir _tvcp_plain
+        tver_join(_tvcp_dst): _tvcp_to_dir _tvcp_plain
+        file_exists(_tvcp_e1): _tvcp_dst
+        is_dir(_tvcp_e2): _tvcp_dst
+        if(_): _tvcp_isdir [
+            tver_inside(_tvcp_loop): _tvcp_to_dir _tvcp_src
+        ]
+        else(_): [
+            set(_tvcp_loop): false
+        ]
+        if(_): {_tvcp_e1 || _tvcp_e2} [
+            set(_tvcp_failure): "Copy refused: destination already exists"
+        ]
+        elif(_): _tvcp_loop [
+            set(_tvcp_failure): "Copy refused: cannot copy a directory into itself"
+        ]
+        elif(_): _tvcp_isdir [
+            tver_copy_dir(_tvcp_failure): _tvcp_src _tvcp_dst
+        ]
+        else(_): [
+            copy_file(_tvcp_status): _tvcp_src _tvcp_dst
+            if(_): {_tvcp_status != 0} [
+                set(_tvcp_failure): "Copy failed; check permissions or free space"
+            ]
+        ]
+        if(_): {_tvcp_failure = ""} [
+            set(_tvcp_copied): {_tvcp_copied + 1}
+            set(_tvcp_marks): _tvcp_index false
+        ]
+        set(_tvcp_i): {_tvcp_i + 1}
+    ]
+    # A failed directory copy may have left part of the tree, so the
+    # destination panel is reread whenever anything was attempted.
+    tver_refresh(_tvcp_ok1): panel selected
+    tver_refresh(_tvcp_ok2): {1 - panel} 0
+    if(_): {_tvcp_ok1 = false || _tvcp_ok2 = false} [
+        tver_set_status(_): "Copied items, but refreshing a panel failed"
+        return(_): r
+    ]
+    tver_report(_tvcp_text): _tvcp_copied " item(s) copied" _tvcp_failure
+    if(_): {_tvcp_failure != "" && _tvcp_copied > 0} [
+        tver_report(_tvcp_text): _tvcp_copied " copied" _tvcp_failure
+    ]
+    tver_set_status(_): _tvcp_text
+]
+
+# F7: opens the name prompt below the status line.
+tver_mkdir_begin(r): panel [
+    set(r): 0
+    set(_tvmb_window): tver_window?
+    set(tver_pending): ""!
+    textbox(_tvmb_box): _tvmb_window ""
+    grid(_): _tvmb_box 3 0 false
+    setfocus(_): _tvmb_box
+    set(tver_prompt): _tvmb_box!
+    tver_set_status(_): "New directory name: ENTER creates, ESC cancels"
+]
+
+# Closes the name prompt; creates the directory when create is true.
+tver_mkdir_finish(r): panel create [
+    set(r): 0
+    set(_tvmf_box): tver_prompt?
+    gettext(_tvmf_name): _tvmf_box
+    destroy(_): _tvmf_box
+    set(tver_prompt): 0!
+    set(_tvmf_lists): tver_lists?
+    at(_tvmf_list): _tvmf_lists panel
+    setfocus(_): _tvmf_list
+    if(_): {create = false} [
+        tver_panel_status(_):
+        return(_): r
+    ]
+    str_find(_tvmf_slash): _tvmf_name "/" 0
+    str_find(_tvmf_back): _tvmf_name "\\" 0
+    if(_): {_tvmf_name = "" || _tvmf_name = "." || _tvmf_name = ".."} [
+        tver_set_status(_): "New directory needs a name"
+        return(_): r
+    ]
+    if(_): {_tvmf_slash >= 0 || _tvmf_back >= 0} [
+        tver_set_status(_): "A directory name cannot contain / or \\"
+        return(_): r
+    ]
+    set(_tvmf_dirs): tver_dirs?
+    at(_tvmf_dir): _tvmf_dirs panel
+    at(_tvmf_other): _tvmf_dirs {1 - panel}
+    tver_join(_tvmf_path): _tvmf_dir _tvmf_name
+    file_exists(_tvmf_e1): _tvmf_path
+    is_dir(_tvmf_e2): _tvmf_path
+    if(_): {_tvmf_e1 || _tvmf_e2} [
+        concat(_tvmf_text): "Cannot create " _tvmf_name ": it already exists"
+        tver_set_status(_): _tvmf_text
+        return(_): r
+    ]
+    make_dir(_tvmf_status): _tvmf_path
+    if(_): {_tvmf_status != 0} [
+        tver_set_status(_): "Could not create the directory; check permissions"
+        return(_): r
+    ]
+    # Put the cursor on the new directory.
+    tver_refresh(_tvmf_ok): panel 0
+    set(_tvmf_all): tver_names?
+    at(_tvmf_names): _tvmf_all panel
+    concat(_tvmf_entry): _tvmf_name "/"
+    len(_tvmf_n): _tvmf_names
+    set(_tvmf_i): 0
+    while(_): {_tvmf_i < _tvmf_n} [
+        at(_tvmf_e): _tvmf_names _tvmf_i
+        if(_): {_tvmf_e = _tvmf_entry} [
+            setindex(_): _tvmf_list _tvmf_i
+            set(_tvmf_i): _tvmf_n
+        ]
+        set(_tvmf_i): {_tvmf_i + 1}
+    ]
+    if(_): {_tvmf_other = _tvmf_dir} [
+        at(_tvmf_other_list): _tvmf_lists {1 - panel}
+        getindex(_tvmf_keep): _tvmf_other_list
+        tver_refresh(_): {1 - panel} _tvmf_keep
+    ]
+    concat(_tvmf_text): "Created directory " _tvmf_name
+    tver_set_status(_): _tvmf_text
+]
+
 tver_delete(r): panel selected [
     set(_tvdl_all): tver_names?
     set(_tvdl_allm): tver_marks?
@@ -792,6 +1012,18 @@ tver_dispatch_key(r): window key [
     if(_): {window != _tvk_window} [
         return(_): r
     ]
+    # The F7 name prompt takes ENTER and ESC; typing goes to its text box.
+    set(_tvk_prompt): tver_prompt?
+    if(_): {_tvk_prompt != 0} [
+        set(_tvk_active): tver_active?
+        if(_): {key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER} [
+            tver_mkdir_finish(_): _tvk_active true
+        ]
+        if(_): {key = TVER_KEY_ESCAPE} [
+            tver_mkdir_finish(_): _tvk_active false
+        ]
+        return(_): r
+    ]
     if(_): {key = TVER_KEY_UP || key = TVER_KEY_DOWN} [
         tver_arrow(_): window key
         return(_): r
@@ -809,7 +1041,11 @@ tver_dispatch_key(r): window key [
         tver_panel_status(_):
         return(_): r
     ]
-    set(_tvk_handled): {key = TVER_KEY_INSERT || key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER || key = TVER_KEY_F6 || key = TVER_KEY_F8}
+    if(_): {key = TVER_KEY_F7} [
+        tver_mkdir_begin(_): _tvk_active
+        return(_): r
+    ]
+    set(_tvk_handled): {key = TVER_KEY_INSERT || key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER || key = TVER_KEY_F5 || key = TVER_KEY_F6 || key = TVER_KEY_F8}
     if(_): {_tvk_handled = false} [
         return(_): r
     ]
@@ -827,6 +1063,9 @@ tver_dispatch_key(r): window key [
     ]
     elif(_): {key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER} [
         tver_open(_): _tvk_active _tvk_selected
+    ]
+    elif(_): {key = TVER_KEY_F5} [
+        tver_copy(_): _tvk_active _tvk_selected
     ]
     elif(_): {key = TVER_KEY_F6} [
         tver_move(_): _tvk_active _tvk_selected
@@ -855,7 +1094,9 @@ tveractivatepanel(result): widget [
     if(_): {widget = _tva_right} [
         set(_tva_panel): 1
     ]
-    if(_): {_tva_panel >= 0} [
+    # The F7 prompt keeps the panel it was opened in.
+    set(_tva_prompt): tver_prompt?
+    if(_): {_tva_panel >= 0 && _tva_prompt = 0} [
         set(tver_active): _tva_panel!
         set(tver_pending): ""!
         tver_panel_status(_):
@@ -909,7 +1150,7 @@ init(result): arg_count arg_values [
     listbox(left_files): window ""
     listbox(right_files): window ""
     label(status): window ""
-    label(keys): window "TAB panel  INS mark  ENTER open  F6 move  F8 delete"
+    label(keys): window "TAB panel  INS mark  ENTER open  F5 copy  F6 move  F7 mkdir  F8 delete"
     grid(_): left_path 0 0 false
     grid(_): right_path 0 1 false
     grid(_): left_files 1 0 true

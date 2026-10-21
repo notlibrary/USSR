@@ -802,6 +802,7 @@ is_dir(b): "path"          # 1 or 0
 getcwd(s):                 # current working directory
 make_dir(ok): "path"       # 0 ok, 1 failed or already exists
 rename_path(ok): from to   # 0 ok, 1 failed; never replaces an existing destination
+copy_file(ok): from to     # 0 ok, 1 failed; copies one file, never replaces a destination
 remove_file(ok): "path"    # 0 ok, 1 failed; refuses directories
 remove_dir(ok): "path"     # 0 ok, 1 failed; empty directories only
 ```

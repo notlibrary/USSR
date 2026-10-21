@@ -1,0 +1,256 @@
+# Automated test of Tver's F5 copy and F7 new-directory commands. Needs a
+# GUI-enabled ussr (GLFW) and a display; the window is never shown. Run from
+# the repository root:
+#     ussr tests/gui/tver_copy_mkdir_test.su
+# Builds tver_copy_fixture/ in the current directory, drives Tver with
+# injected key events, and removes the fixture again. Every check prints
+# PASS or FAIL.
+$include "../../src/tver/tver.su"
+
+$define KEY_ESCAPE 256
+$define KEY_ENTER 257
+$define KEY_TAB 258
+$define KEY_INSERT 260
+$define KEY_F5 294
+$define KEY_F7 296
+$define KEY_F8 297
+
+key_handler(result): window key [
+    tverhandlekey(_): window key
+]
+
+panel_changed(result): widget [
+    tveractivatepanel(_): widget
+]
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# Lets the scheduler deliver queued events and finish their handlers.
+# Gives up after about two seconds so a failed handler cannot hang the test.
+settle(r): [
+    sleep(_): 60
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 200} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    if(_): {_st_idle = false} [
+        print(_): "FAIL handler did not finish"
+        uiunlock(_):
+    ]
+    set(r): 0
+]
+
+press(r): window key [
+    inject(_): window "key" key 0 0
+    inject(_): window "keyup" key 0 0
+    settle(_):
+    set(r): 0
+]
+
+# Opens the F7 prompt, types name into it and presses key (ENTER or ESC).
+new_dir(r): window name key [
+    press(_): window KEY_F7
+    set(_nd_box): tver_prompt?
+    settext(_): _nd_box name
+    press(_): window key
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    make_dir(_): "tver_copy_fixture"
+    cd(_): "tver_copy_fixture"
+    make_dir(_): "src"
+    make_dir(_): "dst"
+    writefile(_): "src/a.txt" "alpha"
+    writefile(_): "src/b.txt" "beta"
+    make_dir(_): "src/tree"
+    make_dir(_): "src/tree/deep"
+    writefile(_): "src/tree/top.txt" "top"
+    writefile(_): "src/tree/deep/leaf.txt" "leaf"
+
+    createwindow(window): "Tver copy test" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left_files): window ""
+    listbox(right_files): window ""
+    label(status): window ""
+    grid(_): left_path 0 0 false
+    grid(_): right_path 0 1 false
+    grid(_): left_files 1 0 true
+    grid(_): right_files 1 1 true
+    grid(_): status 2 0 false
+    on(_): window "key" "key_handler"
+    on(_): left_files "change" "panel_changed"
+    on(_): right_files "change" "panel_changed"
+    tverinitialize(ok): window left_path left_files right_path right_files status
+    check(_): "initialize" ok 0
+
+    # left panel in src/, right panel in dst/
+    gettext(t): left_files
+    check(_): "fixture listing" t "..|dst/|src/"
+    setindex(_): left_files 2
+    press(_): window KEY_ENTER
+    press(_): window KEY_TAB
+    setindex(_): right_files 1
+    press(_): window KEY_ENTER
+    press(_): window KEY_TAB
+    gettext(t): left_files
+    check(_): "left in src" t "..|tree/|a.txt|b.txt"
+    gettext(t): right_files
+    check(_): "right in dst" t ".."
+
+    # --- F5 copies the cursor row
+    setindex(_): left_files 2
+    press(_): window KEY_F5
+    gettext(t): status
+    check(_): "copy cursor file" t "1 item(s) copied"
+    gettext(t): right_files
+    check(_): "copy appears in other panel" t "..|a.txt"
+    gettext(t): left_files
+    check(_): "source kept" t "..|tree/|a.txt|b.txt"
+    readfile(t): "dst/a.txt"
+    check(_): "copied content" t "alpha"
+
+    # an existing destination is refused, not replaced
+    writefile(_): "src/a.txt" "changed"
+    setindex(_): left_files 2
+    press(_): window KEY_F5
+    gettext(t): status
+    check(_): "existing destination refused" t "Copy refused: destination already exists"
+    readfile(t): "dst/a.txt"
+    check(_): "destination untouched" t "alpha"
+
+    # --- F5 copies marked entries, directories with their contents
+    setindex(_): left_files 1
+    press(_): window KEY_INSERT
+    setindex(_): left_files 3
+    press(_): window KEY_INSERT
+    press(_): window KEY_F5
+    gettext(t): status
+    check(_): "copy marked" t "2 item(s) copied"
+    gettext(t): right_files
+    check(_): "marked copies listed" t "..|tree/|a.txt|b.txt"
+    getmark(m): left_files 1
+    check(_): "copied directory unmarked" m false
+    getmark(m): left_files 3
+    check(_): "copied file unmarked" m false
+    readfile(t): "dst/b.txt"
+    check(_): "marked file content" t "beta"
+    readfile(t): "dst/tree/top.txt"
+    check(_): "tree file copied" t "top"
+    readfile(t): "dst/tree/deep/leaf.txt"
+    check(_): "nested file copied" t "leaf"
+    readfile(t): "src/tree/deep/leaf.txt"
+    check(_): "source tree kept" t "leaf"
+
+    # a directory cannot be copied into itself: right panel in src/tree,
+    # copy src/tree from the left
+    press(_): window KEY_TAB
+    setindex(_): right_files 0
+    press(_): window KEY_ENTER
+    setindex(_): right_files 2
+    press(_): window KEY_ENTER
+    setindex(_): right_files 1
+    press(_): window KEY_ENTER
+    gettext(t): right_files
+    check(_): "right in src/tree" t "..|deep/|top.txt"
+    press(_): window KEY_TAB
+    setindex(_): left_files 1
+    press(_): window KEY_F5
+    gettext(t): status
+    check(_): "copy into itself refused" t "Copy refused: cannot copy a directory into itself"
+    is_dir(d): "src/tree/tree"
+    check(_): "nothing created inside" d 0
+
+    # --- F7 creates a directory in the active panel
+    new_dir(_): window "made" KEY_ENTER
+    gettext(t): status
+    check(_): "mkdir status" t "Created directory made"
+    is_dir(d): "src/made"
+    check(_): "directory exists" d 1
+    gettext(t): left_files
+    check(_): "new directory listed" t "..|made/|tree/|a.txt|b.txt"
+    getindex(i): left_files
+    check(_): "cursor on new directory" i 1
+    set(p): tver_prompt?
+    check(_): "prompt closed" p 0
+
+    # ESC cancels
+    new_dir(_): window "skipped" KEY_ESCAPE
+    is_dir(d): "src/skipped"
+    check(_): "escape creates nothing" d 0
+    gettext(t): status
+    check(_): "escape restores status" t "LEFT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
+
+    # other Tver keys do nothing while the prompt is open
+    press(_): window KEY_F7
+    gettext(t): status
+    check(_): "prompt status" t "New directory name: ENTER creates, ESC cancels"
+    press(_): window KEY_F8
+    press(_): window KEY_TAB
+    set(a): tver_active?
+    check(_): "tab ignored in prompt" a 0
+    tveractivatepanel(_): right_files
+    set(a): tver_active?
+    check(_): "panel click ignored in prompt" a 0
+    gettext(t): status
+    check(_): "f8 ignored in prompt" t "New directory name: ENTER creates, ESC cancels"
+    press(_): window KEY_ESCAPE
+
+    # bad names
+    new_dir(_): window "" KEY_ENTER
+    gettext(t): status
+    check(_): "empty name refused" t "New directory needs a name"
+    new_dir(_): window "a/b" KEY_ENTER
+    gettext(t): status
+    check(_): "separator refused" t "A directory name cannot contain / or \\"
+    new_dir(_): window "made" KEY_ENTER
+    gettext(t): status
+    check(_): "existing name refused" t "Cannot create made: it already exists"
+
+    # F7 works in an empty directory too
+    setindex(_): left_files 1
+    press(_): window KEY_ENTER
+    gettext(t): left_files
+    check(_): "inside empty directory" t ".."
+    new_dir(_): window "inner" KEY_ENTER
+    gettext(t): left_files
+    check(_): "mkdir in empty directory" t "..|inner/"
+
+    close(_): window
+    remove_dir(_): "src/made/inner"
+    remove_dir(_): "src/made"
+    remove_file(_): "dst/tree/deep/leaf.txt"
+    remove_dir(_): "dst/tree/deep"
+    remove_file(_): "dst/tree/top.txt"
+    remove_dir(_): "dst/tree"
+    remove_file(_): "dst/a.txt"
+    remove_file(_): "dst/b.txt"
+    remove_dir(_): "dst"
+    remove_file(_): "src/tree/deep/leaf.txt"
+    remove_dir(_): "src/tree/deep"
+    remove_file(_): "src/tree/top.txt"
+    remove_dir(_): "src/tree"
+    remove_file(_): "src/a.txt"
+    remove_file(_): "src/b.txt"
+    remove_dir(_): "src"
+    cd(_): ".."
+    remove_dir(gone): "tver_copy_fixture"
+    check(_): "fixture removed" gone 0
+    set(result): 0
+]

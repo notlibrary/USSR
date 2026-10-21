@@ -96,7 +96,7 @@ init(result): arg_count arg_values [
     gettext(t): left_files
     check(_): "left listing" t "..|sub/|a.txt|b.txt"
     gettext(t): status
-    check(_): "left panel status" t "LEFT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+    check(_): "left panel status" t "LEFT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
 
     setindex(_): left_files 1
     press(_): window KEY_INSERT
@@ -120,7 +120,7 @@ init(result): arg_count arg_values [
 
     press(_): window KEY_TAB
     gettext(t): status
-    check(_): "tab to right" t "RIGHT PANEL | TAB switches | INS marks | F6 moves | F8 deletes"
+    check(_): "tab to right" t "RIGHT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
 
     setindex(_): right_files 1
     press(_): window KEY_ENTER
