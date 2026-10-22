@@ -4,7 +4,7 @@ while(_): {counter < 10} [
     set(counter): {counter + 1}
 ]
 
-if(_): {value == 1} [
+if(_): {value = 1} [
     print(_): "one"
 ]
 

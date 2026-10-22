@@ -225,7 +225,7 @@ static void ussr_parser_set_location(ussr_command_t *command, int text_line)
 %type <arguments> argument_list
 %type <argument> argument argument_base block_argument
 %type <command> command_line advanced_control
-%type <value> literal
+%type <value> literal unsigned_literal
 %type <expression> expression logical_or_expression logical_and_expression
 %type <expression> bitwise_or_expression bitwise_xor_expression bitwise_and_expression
 %type <expression> comparison_expression shift_expression additive_expression
@@ -234,16 +234,11 @@ static void ussr_parser_set_location(ussr_command_t *command, int text_line)
 %%
 
 program
-    : command_lines trailing_newlines
+    : command_lines
       {
           ussr_parsed_program = $1;
           $$ = $1;
       }
-    ;
-
-trailing_newlines
-    : %empty
-    | trailing_newlines NEWLINE
     ;
 
 command_lines
@@ -269,20 +264,17 @@ command_lines
       }
     ;
 
+/*
+ * A NEWLINE is an empty command line of its own, so the newline that
+ * ends a command is not part of it: that keeps a command's terminator
+ * and a blank line from being two parses of the same token.
+ */
 command_line
     : NEWLINE
       {
           $$ = NULL;
       }
-    | command NEWLINE
-      {
-          $$ = $1;
-      }
     | command
-      {
-          $$ = $1;
-      }
-    | advanced_control NEWLINE
       {
           $$ = $1;
       }
@@ -608,7 +600,26 @@ block_argument
       }
     ;
 
+/* A negative number is one literal in an argument (add: x -1:) but
+ * unary minus inside {}, where MINUS is also an operator. */
 literal
+    : unsigned_literal
+      {
+          $$ = $1;
+      }
+    | MINUS INTEGER
+      {
+          $$.type = USSR_INTEGER;
+          $$.data.integer = -$2;
+      }
+    | MINUS REAL
+      {
+          $$.type = USSR_REAL;
+          $$.data.real = -$2;
+      }
+    ;
+
+unsigned_literal
     : STRING
       {
           $$.type = USSR_STRING;
@@ -619,20 +630,10 @@ literal
           $$.type = USSR_INTEGER;
           $$.data.integer = $1;
       }
-    | MINUS INTEGER
-      {
-          $$.type = USSR_INTEGER;
-          $$.data.integer = -$2;
-      }
     | REAL
       {
           $$.type = USSR_REAL;
           $$.data.real = $1;
-      }
-    | MINUS REAL
-      {
-          $$.type = USSR_REAL;
-          $$.data.real = -$2;
       }
     | BOOLEAN
       {
@@ -866,17 +867,34 @@ unary_expression
       }
     | MINUS unary_expression
       {
-          $$ = malloc(sizeof(*$$));
-          if ($$ == NULL)
-              YYABORT;
-          $$->type = USSR_EXPR_UNARY;
-          $$->data.unary.operator = USSR_OP_SUB;
-          $$->data.unary.operand = $2;
+          /* Fold -<number> into a negative literal, the value the
+           * argument form -1 gives. */
+          if ($2->type == USSR_EXPR_VALUE &&
+              $2->data.value.type == USSR_INTEGER)
+          {
+              $2->data.value.data.integer = -$2->data.value.data.integer;
+              $$ = $2;
+          }
+          else if ($2->type == USSR_EXPR_VALUE &&
+                   $2->data.value.type == USSR_REAL)
+          {
+              $2->data.value.data.real = -$2->data.value.data.real;
+              $$ = $2;
+          }
+          else
+          {
+              $$ = malloc(sizeof(*$$));
+              if ($$ == NULL)
+                  YYABORT;
+              $$->type = USSR_EXPR_UNARY;
+              $$->data.unary.operator = USSR_OP_SUB;
+              $$->data.unary.operand = $2;
+          }
       }
     ;
 
 primary_expression
-    : literal
+    : unsigned_literal
       {
           $$ = malloc(sizeof(*$$));
           if ($$ == NULL)

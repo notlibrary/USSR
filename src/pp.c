@@ -526,6 +526,8 @@ static int pp_condition_push(
         parent_active && condition;
 
     pp->conditional_seen_else[pp->conditional_depth] = 0;
+    pp->conditional_taken[pp->conditional_depth] =
+        pp->conditional_active[pp->conditional_depth];
 
     ++pp->conditional_depth;
 
@@ -576,7 +578,61 @@ static int pp_condition_else(
 
     pp->conditional_active[index] =
         parent_active &&
-        !pp->conditional_active[index];
+        !pp->conditional_taken[index];
+
+    pp->conditional_taken[index] = 1;
+
+    pp->current_active =
+        pp->conditional_active[index];
+
+    return 0;
+}
+
+/* $elif: taken when condition holds and no earlier branch of the
+ * chain was. */
+static int pp_condition_elif(
+    ussr_preprocessor_t *pp,
+    int condition
+)
+{
+    size_t index;
+    int parent_active;
+
+    if (pp->conditional_depth == 0)
+    {
+        fprintf(
+            stderr,
+            "USSR: unexpected $elif\n"
+        );
+
+        return -1;
+    }
+
+    index = pp->conditional_depth - 1;
+
+    if (pp->conditional_seen_else[index])
+    {
+        fprintf(
+            stderr,
+            "USSR: $elif after $else\n"
+        );
+
+        return -1;
+    }
+
+    if (index == 0)
+        parent_active = 1;
+    else
+        parent_active =
+            pp->conditional_active[index - 1];
+
+    pp->conditional_active[index] =
+        parent_active &&
+        !pp->conditional_taken[index] &&
+        condition;
+
+    if (pp->conditional_active[index])
+        pp->conditional_taken[index] = 1;
 
     pp->current_active =
         pp->conditional_active[index];
@@ -621,6 +677,7 @@ static int pp_parse_defined(
     char *name;
     size_t length;
     int result;
+    int parenthesized;
 
     cursor = pp_skip_space(text);
 
@@ -635,20 +692,26 @@ static int pp_parse_defined(
     }
 
     cursor += 7;
+    start = cursor;
     cursor = pp_skip_space(cursor);
 
-    if (*cursor != '(')
+    /* defined(NAME) or defined NAME */
+    parenthesized = *cursor == '(';
+
+    if (parenthesized)
+    {
+        ++cursor;
+        cursor = pp_skip_space(cursor);
+    }
+    else if (cursor == start)
     {
         fprintf(
             stderr,
-            "USSR: expected '(' after defined\n"
+            "USSR: expected '(' or a name after defined\n"
         );
 
         return -1;
     }
-
-    ++cursor;
-    cursor = pp_skip_space(cursor);
 
     start = cursor;
 
@@ -678,7 +741,7 @@ static int pp_parse_defined(
 
     cursor = pp_skip_space(cursor);
 
-    if (*cursor != ')')
+    if (parenthesized && *cursor != ')')
     {
         fprintf(
             stderr,
@@ -1938,6 +2001,25 @@ static int pp_process_directive(
         }
 
         result = pp_condition_push(pp, condition);
+
+        free(directive);
+
+        return result;
+    }
+
+    if (strcmp(directive, "elif") == 0)
+    {
+        int result;
+
+        condition = pp_parse_defined(pp, cursor);
+
+        if (condition < 0)
+        {
+            free(directive);
+            return -1;
+        }
+
+        result = pp_condition_elif(pp, condition);
 
         free(directive);
 

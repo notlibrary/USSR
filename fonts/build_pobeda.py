@@ -1,15 +1,28 @@
 """Build the Pobeda monospace TrueType font (requires FontTools)."""
 
+import sys
 from math import cos, pi, sin, sqrt
 from pathlib import Path
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib import newTable
+from fontTools.ttLib.tables._g_l_y_f import flagOverlapSimple
+from fontTools.ttLib.tables.O_S_2f_2 import Panose
 
 
-OUTPUT = Path("/mnt/agents/output/fonts/pobeda.ttf")
+VERSION = "3.5"
+# Written next to this script unless a path is given: python build_pobeda.py out.ttf
+OUTPUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name("pobeda.ttf")
 ADVANCE = 740
 STROKE = 92
+
+# One line box from descent to ascent, shared by every metric table, so
+# box drawing and block characters touch the cells above and below.
+ASCENT = 900
+DESCENT = -250
+# Centre of the box-drawing lines: half way up a capital (y=3.5 on the grid).
+BOX_Y = 130 + 3.5 * 86
 
 # Stroke paths use a compact character grid: x=0..4, baseline y=0, cap y=7.
 CAPS = {
@@ -88,7 +101,7 @@ EXTRA = {
     "И": [[(0, 0), (0, 7)], [(0, 0), (4, 7)], [(4, 0), (4, 7)]], "Й": [[(0, 0), (0, 7)], [(0, 0), (4, 7)], [(4, 0), (4, 7)], [(1, 8), (2, 8.5), (3, 8)]],
     "К": CAPS["K"], "Л": [[(0, 0), (1, 7), (3, 7), (4, 0)]], "М": CAPS["M"], "Н": CAPS["H"],
     "О": CAPS["O"], "П": [[(0, 0), (0, 7), (4, 7), (4, 0)]], "Р": CAPS["P"],
-    "С": CAPS["C"], "Т": CAPS["T"], "У": [[(0, 7), (2, 3.5), (4, 7)], [(2, 3.5), (.5, 0)]], "Ф": [[(2, 7), (2, 0)], [(2, 6), (0, 5), (0, 2), (2, 1), (4, 2), (4, 5), (2, 6)]],
+    "С": CAPS["C"], "У": [[(0, 7), (2, 3.5), (4, 7)], [(2, 3.5), (.5, 0)]], "Ф": [[(2, 7), (2, 0)], [(2, 6), (0, 5), (0, 2), (2, 1), (4, 2), (4, 5), (2, 6)]],
     "Х": CAPS["X"], "Ц": [[(0, 7), (0, 0), (3, 0), (4, 1), (4, 7)], [(4, 1), (4, -1)]],
     "Ч": [[(0, 7), (0, 4), (1, 3), (4, 3)], [(4, 7), (4, 0)]],
     "Ш": [[(0, 7), (0, 0), (4, 0), (4, 7)], [(2, 7), (2, 0)]], "Щ": [[(0, 7), (0, 0), (3, 0), (4, 1), (4, 7)], [(2, 7), (2, 0)], [(4, 1), (4, -1)]],
@@ -126,16 +139,52 @@ CYRILLIC_LOWER = {
     "я": [[(4, 0), (4, 5), (1, 5), (0, 4), (0, 3), (1, 2.5), (4, 2.5)], [(2.5, 2.5), (0, 0)]],
 }
 
+# Punctuation and signs common in Russian text and console output.
+TEXT_EXTRA = {
+    0x00A0: [],                                                     # no-break space
+    0x00AB: [[(2, 4.5), (.5, 2.5), (2, .5)], [(4, 4.5), (2.5, 2.5), (4, .5)]],    # «
+    0x00BB: [[(0, 4.5), (1.5, 2.5), (0, .5)], [(2, 4.5), (3.5, 2.5), (2, .5)]],   # »
+    0x00B0: [[(2, 7), (1.2, 6.4), (1.2, 5.6), (2, 5), (2.8, 5.6), (2.8, 6.4), (2, 7)]],  # °
+    0x00B1: [[(0, 4), (4, 4)], [(2, 6), (2, 2)], [(0, .5), (4, .5)]],  # ±
+    0x00B2: [[(1, 6.8), (1.5, 7.3), (2.7, 7.3), (3.2, 6.8), (3.2, 6.3), (1, 4.5), (3.2, 4.5)]],  # ²
+    0x00D7: [[(.5, 5), (3.5, 1)], [(3.5, 5), (.5, 1)]],             # ×
+    0x2013: [[(.5, 3), (3.5, 3)]],                                  # –
+    0x2018: [[(2.2, 5.6), (1.8, 7)]],                               # ‘
+    0x2019: [[(2.2, 7), (1.8, 5.6)]],                               # ’
+    0x201C: [[(1.2, 5.6), (.8, 7)], [(3.2, 5.6), (2.8, 7)]],        # “
+    0x201D: [[(1.2, 7), (.8, 5.6)], [(3.2, 7), (2.8, 5.6)]],        # ”
+    0x201E: [[(1.2, 1), (.8, -.4)], [(3.2, 1), (2.8, -.4)]],        # „
+    0x2026: [[(.3, 0), (.35, 0)], [(2, 0), (2.05, 0)], [(3.7, 0), (3.75, 0)]],  # …
+    0x2116: [[(0, 0), (0, 7), (2.4, 0), (2.4, 7)],                  # №
+             [(3.7, 5.5), (3.1, 5), (3.1, 3.5), (3.7, 3), (4.3, 3.5), (4.3, 5), (3.7, 5.5)],
+             [(3.1, 1.6), (4.3, 1.6)]],
+    0x2248: [[(0, 4.2), (1, 5), (3, 3.4), (4, 4.2)], [(0, 1.8), (1, 2.6), (3, 1), (4, 1.8)]],  # ≈
+}
+
 
 def path_points(points):
     return [(90 + x * 82 * 1.30, 130 + y * 86) for x, y in points]
 
 
 def rounded_node(pen, x, y, radius):
-    pen.moveTo((round(x + radius), round(y)))
-    for i in range(1, 64):
-        angle = 2 * pi * i / 64
-        pen.lineTo((round(x + radius * cos(angle)), round(y + radius * sin(angle))))
+    # A circle as eight quadratic arcs: all points off-curve, the on-curve
+    # points implied half way between them. Clockwise like every other
+    # contour, so overlapping parts never cancel under the nonzero rule.
+    reach = radius / cos(pi / 8)
+    pen.qCurveTo(*[(round(x + reach * cos(-2 * pi * i / 8)),
+                    round(y + reach * sin(-2 * pi * i / 8))) for i in range(8)], None)
+    pen.closePath()
+
+
+def polygon(pen, points):
+    """Draws a closed polygon clockwise, whatever order the points are in."""
+    area = sum(x1 * y2 - x2 * y1
+               for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1]))
+    if area > 0:
+        points = points[::-1]
+    pen.moveTo(points[0])
+    for point in points[1:]:
+        pen.lineTo(point)
     pen.closePath()
 
 
@@ -146,12 +195,92 @@ def stroke_path(pen, points, radius=STROKE / 2):
     for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
         dx, dy = x2 - x1, y2 - y1
         length = sqrt(dx * dx + dy * dy)
+        if length == 0:
+            continue
         nx, ny = -dy * radius / length, dx * radius / length
-        pen.moveTo((round(x1 - nx), round(y1 - ny)))
-        pen.lineTo((round(x2 - nx), round(y2 - ny)))
-        pen.lineTo((round(x2 + nx), round(y2 + ny)))
-        pen.lineTo((round(x1 + nx), round(y1 + ny)))
-        pen.closePath()
+        polygon(pen, [(round(x1 - nx), round(y1 - ny)), (round(x2 - nx), round(y2 - ny)),
+                      (round(x2 + nx), round(y2 + ny)), (round(x1 + nx), round(y1 + ny))])
+
+
+def rect(pen, x1, y1, x2, y2):
+    polygon(pen, [(round(x1), round(y1)), (round(x1), round(y2)),
+                  (round(x2), round(y2)), (round(x2), round(y1))])
+
+
+# Box drawing (U+2500...) and blocks (U+2580...) fill the whole cell and
+# are not centred. A box entry lists the arms leaving the centre: lowercase
+# l r u d for light lines, uppercase for double lines.
+BOX = {
+    0x2500: "lr", 0x2502: "ud", 0x250C: "rd", 0x2510: "ld", 0x2514: "ru",
+    0x2518: "lu", 0x251C: "rud", 0x2524: "lud", 0x252C: "lrd", 0x2534: "lru",
+    0x253C: "lrud",
+    0x2550: "LR", 0x2551: "UD", 0x2554: "RD", 0x2557: "LD", 0x255A: "RU",
+    0x255D: "LU", 0x2560: "RUD", 0x2563: "LUD", 0x2566: "LRD", 0x2569: "LRU",
+    0x256C: "LRUD",
+}
+MIDDLE = (ASCENT + DESCENT) / 2
+BLOCKS = {
+    0x2580: (0, MIDDLE, ADVANCE, ASCENT),            # upper half
+    0x2584: (0, DESCENT, ADVANCE, MIDDLE),           # lower half
+    0x2588: (0, DESCENT, ADVANCE, ASCENT),           # full block
+    0x258C: (0, DESCENT, ADVANCE / 2, ASCENT),       # left half
+    0x2590: (ADVANCE / 2, DESCENT, ADVANCE, ASCENT),  # right half
+}
+SHADES = {0x2591: 1, 0x2592: 2, 0x2593: 3}  # light, medium, dark
+
+
+def draw_box(pen, arms):
+    cx, cy = ADVANCE / 2, BOX_Y
+    edge = {"l": 0, "r": ADVANCE, "u": ASCENT, "d": DESCENT}
+    if arms.islower():
+        half = STROKE / 2
+        for arm in arms:
+            if arm in "lr":
+                rect(pen, edge[arm], cy - half, cx + (half if arm == "l" else -half), cy + half)
+            else:
+                rect(pen, cx - half, edge[arm], cx + half, cy + (half if arm == "d" else -half))
+        return
+
+    # Double lines: each arm is two rails, m either side of the centre line.
+    # A rail stops at the rail of a neighbouring arm on its side (an inner
+    # corner), runs straight through when the opposite arm continues it, and
+    # otherwise turns the outer corner at -m.
+    arms = arms.lower()
+    w = STROKE * 0.55
+    m = STROKE * 0.75
+    caps = w / 2
+    for arm in arms:
+        sign = 1 if arm in "ru" else -1
+        opposite = {"l": "r", "r": "l", "u": "d", "d": "u"}[arm]
+        sides = (("u", 1), ("d", -1)) if arm in "lr" else (("r", 1), ("l", -1))
+        for side, side_sign in sides:
+            if side in arms:
+                stop = m
+            elif opposite in arms:
+                stop = 0
+            else:
+                stop = -m
+            offset = side_sign * m
+            # At a corner the rail runs on by half its width to fill the
+            # joint; a straight-through rail meets the other half exactly.
+            centre = cx if arm in "lr" else cy
+            end = centre + sign * stop - (sign * caps if stop else 0)
+            if arm in "lr":
+                rect(pen, edge[arm], cy + offset - caps, end, cy + offset + caps)
+            else:
+                rect(pen, cx + offset - caps, edge[arm], cx + offset + caps, end)
+
+
+def draw_shade(pen, level):
+    # A 4x8 grid per glyph with `level` cells of every 2x2 group filled;
+    # the pattern repeats exactly across neighbouring glyphs.
+    cols, rows = 4, 8
+    cw, ch = ADVANCE / cols, (ASCENT - DESCENT) / rows
+    lit = [(0, 0), (1, 1), (1, 0)][:level]
+    for i in range(cols):
+        for j in range(rows):
+            if (i % 2, j % 2) in lit:
+                rect(pen, i * cw, DESCENT + j * ch, (i + 1) * cw, DESCENT + (j + 1) * ch)
 
 
 def center_glyph(glyph):
@@ -200,7 +329,8 @@ def glyph_id(codepoint):
 
 def build():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    unicodes = list(range(32, 127)) + [0x2014, 0x0401, 0x0451] + list(range(0x0410, 0x0450))
+    unicodes = (list(range(32, 127)) + [0x2014, 0x0401, 0x0451] + list(range(0x0410, 0x0450))
+                + sorted(TEXT_EXTRA) + sorted(BOX) + sorted(BLOCKS) + sorted(SHADES))
     glyph_names = [".notdef"] + [glyph_id(code) for code in unicodes]
     fb = FontBuilder(1000, isTTF=True)
     fb.setupGlyphOrder(glyph_names)
@@ -211,9 +341,22 @@ def build():
     notdef_paths = [[(0, 0), (0, 7), (4, 7), (4, 0), (0, 0)],
                     [(0, 0), (4, 7)], [(4, 0), (0, 7)]]
     outlines = {".notdef": draw_glyph(".notdef", notdef_paths)}
+    full_cell = set()
     for code in unicodes:
         char = chr(code)
-        if char == " ":
+        if code in BOX or code in BLOCKS or code in SHADES:
+            pen = TTGlyphPen(None)
+            if code in BOX:
+                draw_box(pen, BOX[code])
+            elif code in BLOCKS:
+                rect(pen, *BLOCKS[code])
+            else:
+                draw_shade(pen, SHADES[code])
+            outlines[glyph_id(code)] = pen.glyph()
+            full_cell.add(glyph_id(code))
+        elif code in TEXT_EXTRA:
+            outlines[glyph_id(code)] = draw_glyph(glyph_id(code), TEXT_EXTRA[code])
+        elif char == " ":
             outlines[glyph_id(code)] = draw_glyph(glyph_id(code), [], "space")
         elif char == ":":
             outlines[glyph_id(code)] = draw_glyph(glyph_id(code), [], "colon")
@@ -271,36 +414,63 @@ def build():
             }
             outlines[glyph_id(code)] = draw_glyph(glyph_id(code), punctuation.get(char, []))
 
-    for glyph in outlines.values():
-        center_glyph(glyph)
+    for name, glyph in outlines.items():
+        if name not in full_cell:
+            center_glyph(glyph)
+        # Strokes overlap by design; tell rasterizers (notably macOS) so
+        # they do not draw seams where they cross.
+        if glyph.numberOfContours > 0:
+            glyph.flags[0] |= flagOverlapSimple
 
     fb.setupGlyf(outlines)
     fb.setupHorizontalMetrics({
         name: (ADVANCE, min(x for x, _ in glyph.coordinates) if glyph.coordinates else 0)
         for name, glyph in outlines.items()
     })
-    fb.setupHorizontalHeader(ascent=820, descent=-220)
-    fb.font["head"].fontRevision = 3.4
+    # hhea, OS/2 typo and OS/2 win metrics all describe the same line, so
+    # every platform uses the same line height and box drawing joins up.
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    fb.font["head"].fontRevision = float(VERSION)
     fb.setupOS2(
-        sTypoAscender=820, sTypoDescender=-220, sTypoLineGap=100,
-        usWinAscent=900, usWinDescent=250, sxHeight=560, sCapHeight=732,
-        usWeightClass=400, usWidthClass=5, achVendID="USSR",
+        sTypoAscender=ASCENT, sTypoDescender=DESCENT, sTypoLineGap=0,
+        usWinAscent=ASCENT, usWinDescent=-DESCENT, sxHeight=560, sCapHeight=732,
+        version=4, usWeightClass=400, usWidthClass=5, achVendID="USSR",
+        xAvgCharWidth=ADVANCE,
+        fsSelection=0x40 | 0x80,  # REGULAR | USE_TYPO_METRICS
+        # Latin 1, Cyrillic.
+        ulCodePageRange1=(1 << 0) | (1 << 2),
+        panose=_panose_monospace(),
     )
     fb.setupNameTable({
-        "familyName": "Pobeda 3.4",
+        # The family name carries no version, so an update replaces the
+        # installed font instead of appearing as a second family.
+        "familyName": "Pobeda",
         "styleName": "Regular",
-        "uniqueFontIdentifier": "USSR Pobeda Regular 3.4 Hatches",
-        "fullName": "Pobeda 3.4 Regular",
-        "psName": "Pobeda-3-4-Regular",
-        "version": "Version 3.4",
+        "uniqueFontIdentifier": f"USSR;Pobeda-Regular;{VERSION}",
+        "fullName": "Pobeda Regular",
+        "psName": "Pobeda-Regular",
+        "version": f"Version {VERSION}",
         "manufacturer": "USSR",
         "designer": "USSR",
         "description": "Monospaced steel-office type for code, with Cyrillic support.",
     })
-    fb.setupPost()
+    # isFixedPitch is what terminals and editors check to offer the font
+    # in their monospace font lists.
+    fb.setupPost(isFixedPitch=1, underlinePosition=-150, underlineThickness=STROKE)
     fb.setupMaxp()
+    # Smooth at every size: the outlines carry no hinting instructions.
+    gasp = newTable("gasp")
+    gasp.gaspRange = {0xFFFF: 0x000A}  # GRIDFIT_OFF | DOGRAY | SYMMETRIC_SMOOTHING
+    fb.font["gasp"] = gasp
     fb.save(OUTPUT)
-    print(f"Created {OUTPUT} ({OUTPUT.stat().st_size:,} bytes)")
+    print(f"Created {OUTPUT} ({OUTPUT.stat().st_size:,} bytes, {len(unicodes)} characters)")
+
+
+def _panose_monospace():
+    panose = Panose()
+    panose.bFamilyType = 2   # Latin text
+    panose.bProportion = 9   # monospaced
+    return panose
 
 
 if __name__ == "__main__":

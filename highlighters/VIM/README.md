@@ -49,16 +49,20 @@ autocmd FileType ussr setlocal foldmethod=syntax
   only recognized within a `'...'` region, matching the language's actual
   three-quote-level design
 - Numbers, `true`/`false`/`null`
-- Control flow (`if`, `else`, `while`, `break`, `continue`, `return`)
+- Control flow and block commands (`if`, `elif`, `else`, `while`, `do`,
+  `each`, `map`, `filter`, `method`, `break`, `continue`, `return`) and the
+  scheduler commands (`async`, `await`, `sleep`, `yield`, `gc`, `load`)
 - Builtins (`set`, `print`, `struct`, `new`, `getf`, `setf`, `vec`, `push`,
   `at`, `len`, `encode`, `decode`, `get`, `scan`, `time`, `random64`,
-  `seed_random64`, `cd`, the arithmetic commands, `concat`, `eval`)
+  `seed_random64`, `cd`, `chain`, `file`, `template`, `global`, the
+  arithmetic commands, `concat`, `eval`)
 - The `name(return_var)` slot of every command call — the command name and
   the return variable each get their own highlight, uniformly, whether the
   command is a builtin, a user-defined function, or an external process
 - `?`/`!` hash-lookup/assignment sigils
-- `$define`/`$include`/`$ifdef`/`$if`/`$else`/`$endif` directive lines, and
-  `defined(NAME)` inside a `$if`
+- `$define`/`$include`/`$once`/`$ifdef`/`$if`/`$elif`/`$else`/`$endif`
+  directive lines, and `defined(NAME)` / `defined NAME` inside `$if`/`$elif`
+- Command heads with a path (`./tools/run(_):`) and `@[...]` advanced control
 
 ## Notes on accuracy
 

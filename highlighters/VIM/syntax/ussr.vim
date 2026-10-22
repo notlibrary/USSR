@@ -16,11 +16,13 @@ syn keyword ussrTodo contained TODO FIXME XXX NOTE
 syn match   ussrComment "#.*$" contains=ussrTodo,@Spell
 
 " ---------------------------------------------------------------
-" Preprocessor: $define / $include / $ifdef / $if defined(...) / $else / $endif
+" Preprocessor: $define / $include / $once / $ifdef NAME /
+" $if defined(NAME) / $elif defined NAME / $else / $endif
 " ---------------------------------------------------------------
-syn match ussrPreCondit "^\s*\$\(define\|include\|ifdef\|if\|else\|endif\)\>"
+syn match ussrPreCondit "^\s*\$\(define\|include\|once\|ifdef\|if\|elif\|else\|endif\)\>"
 syn match ussrDefined   "\<defined\>"
-syn match ussrPreParen  "defined(\zs[A-Za-z_][A-Za-z0-9_]*\ze)"
+syn match ussrPreParen  "\(\<defined\s*(\=\s*\)\@<=\h\w*"
+syn match ussrPreParen  "\(^\s*\$ifdef\s\+\)\@<=\h\w*"
 
 " ---------------------------------------------------------------
 " Strings: "..." (ordinary), '...' (UNO literal), `...` (UNO-internal
@@ -36,41 +38,49 @@ syn region ussrUnoLiteral start=/'/ end=/'/ contains=ussrUnoString,ussrNumber,us
 " ---------------------------------------------------------------
 " Numbers, booleans, null
 " ---------------------------------------------------------------
-syn match   ussrNumber  "\<-\?\d\+\(\.\d\+\)\?\>"
+syn match   ussrNumber  "\<\d\+\(\.\d\+\)\=\>"
 syn keyword ussrBoolean true false
 syn keyword ussrNull    null
 
 " ---------------------------------------------------------------
-" Control flow (compiled to jumps/CALL-RET -- see the VM spec) and
-" the "hash" sigils
-" ---------------------------------------------------------------
-syn keyword ussrConditional if else
-syn keyword ussrRepeat      while
-syn keyword ussrStatement   break continue return
-syn match   ussrHashSigil   "[?!]"
-
-" ---------------------------------------------------------------
-" Builtin commands
-" ---------------------------------------------------------------
-syn keyword ussrBuiltin set print concat add sub mul div mod eval
-syn keyword ussrBuiltin get scan time random64 seed_random64 cd
-syn keyword ussrOOP     struct new getf setf vec push at len encode decode
-
-" ---------------------------------------------------------------
 " Command call syntax: name(return_var): args...
 " Every command -- builtin, user-defined, or external -- uses this
-" same shape, so this highlights the name and return slot uniformly;
-" the keyword groups above take priority for the reserved names.
+" same shape. The head is the lexer's COMMAND_HEAD: any run of
+" [A-Za-z0-9_./\:-] directly followed by "(", so a path such as
+" ./tools/run( is one name.
 " ---------------------------------------------------------------
-syn match ussrCommandName "\<\h\w*\>\ze\s*("
-syn match ussrReturnVar   "(\zs\s*[A-Za-z_][A-Za-z0-9_]*\s*\ze)"
+syn match ussrCommandName "[A-Za-z0-9_./\:-]\@1<![A-Za-z0-9_./\:-]\+\ze("
+syn match ussrReturnVar   "\((\s*\)\@<=[A-Za-z_][A-Za-z0-9_]*\ze\s*)"
+
+" ---------------------------------------------------------------
+" Reserved command names, only as command heads (a variable named
+" map stays a variable). Defined after ussrCommandName so they win.
+" Control flow is compiled to jumps/CALL-RET -- see the VM spec.
+" ---------------------------------------------------------------
+syn match ussrConditional "\<\(if\|elif\|else\)\ze("
+syn match ussrRepeat      "\<\(while\|do\|each\|map\|filter\)\ze("
+syn match ussrStatement   "\<\(break\|continue\|return\|method\)\ze("
+syn match ussrScheduler   "\<\(async\|await\|sleep\|yield\|gc\|load\)\ze("
+syn match ussrBuiltin     "\<\(set\|print\|concat\|add\|sub\|mul\|div\|mod\|eval\)\ze("
+syn match ussrBuiltin     "\<\(get\|scan\|time\|random64\|seed_random64\|cd\|chain\|file\|template\|global\)\ze("
+syn match ussrOOP         "\<\(struct\|new\|getf\|setf\|vec\|push\|at\|len\|encode\|decode\)\ze("
+
+" @[ ... ] [ ... ] advanced control, and the hash sigils: NAME? reads
+" a hash variable, ARG! stores into one.
+syn match ussrAdvanced    "@\ze\s*\["
+syn match ussrHashSigil   "[?!]"
 
 " ---------------------------------------------------------------
 " Operators / delimiters
 " ---------------------------------------------------------------
-syn match ussrOperator  "&&\|||\|==\|!=\|>=\|<=\|<<\|>>"
-syn match ussrOperator  "[-+*/%<>&|^~]"
-syn match ussrDelimiter "[(){}\[\]:;,]"
+" Exactly the lexer's operators: "=" is equality, there is no "==".
+syn match ussrOperator  "&&\|||\|!=\|>=\|<=\|<<\|>>"
+syn match ussrOperator  "[-+*/%<>=&|^]"
+syn match ussrDelimiter "[(){}\[\]:]"
+
+" A leading "-" is part of the number in argument position (after
+" whitespace or the ':'); defined after the operators so it wins there.
+syn match ussrNumber    "\([[:space:]:]\)\@1<=-\d\+\(\.\d\+\)\=\>"
 
 " ---------------------------------------------------------------
 " Folding: [ ... ] blocks (loop/function bodies, and optionally the
@@ -97,6 +107,8 @@ hi def link ussrConditional Conditional
 hi def link ussrRepeat      Repeat
 hi def link ussrStatement   Statement
 hi def link ussrHashSigil   Special
+hi def link ussrAdvanced    Keyword
+hi def link ussrScheduler   Keyword
 hi def link ussrBuiltin     Function
 hi def link ussrOOP         Function
 hi def link ussrCommandName Function

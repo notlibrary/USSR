@@ -579,6 +579,8 @@ $endif
 
 $if defined(DEBUG)
 print(_): "verbose"
+$elif defined TRACE
+print(_): "tracing"
 $else
 print(_): "quiet"
 $endif
@@ -589,8 +591,11 @@ $endif
 - `$include "file.su"` (or a bareword path) — inlines another file's
   content at that point, resolved relative to the *including* file's
   own directory when given a relative path.
-- `$ifdef` / `$if defined(NAME)` / `$else` / `$endif` — conditional
-  inclusion.
+- `$ifdef NAME` / `$if defined(NAME)` / `$elif defined(NAME)` /
+  `$else` / `$endif` — conditional inclusion. The first branch whose
+  name is defined is kept and the rest of the chain is skipped; `$else`
+  is kept only when no branch was. `defined NAME` without parentheses
+  works too. `$elif` after `$else` is an error.
 - `$once` makes the current file a single-inclusion file: later
   `$include`s of the same file, by any relative path, are skipped. The
   standard library, Petersburg, Tver and Tula files use it, so a program
