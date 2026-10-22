@@ -31,7 +31,7 @@ PETERSBURG_LIBS = $(GLFW_LIB) opengl32.lib gdi32.lib shell32.lib winmm.lib imm32
 CFLAGS  = /nologo /W3 /Zi /Od /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN) $(PETERSBURG_CFLAGS)
 RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
-LIBS    = user32.lib ws2_32.lib $(PETERSBURG_LIBS)
+LIBS    = user32.lib ws2_32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO
 
 TARGET  = ussr.exe
 
@@ -66,7 +66,7 @@ $(TARGET): $(OBJS)
 
 # --- resources --------------------------------------------------------
 
-ussr.res: ussr.rc ussr.ico
+ussr.res: ussr.rc ussr.ico ussr.manifest
 	$(RC) $(RCFLAGS) /fo ussr.res ussr.rc
 
 # --- generated parser/lexer ------------------------------------------
