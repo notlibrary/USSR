@@ -30,6 +30,14 @@ target_link_libraries(ural_core PUBLIC
 add_executable(ural native/ural.c)
 target_link_libraries(ural PRIVATE ural_core)
 
+# Windows: embed the mountain icon (ural.ico, made by icon.py) in ural.exe.
+if(WIN32)
+    enable_language(RC)
+    target_sources(ural PRIVATE ural.rc)
+    set_source_files_properties(ural.rc PROPERTIES
+        OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ural.ico)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(test_ural_db tests/test_db.c)
