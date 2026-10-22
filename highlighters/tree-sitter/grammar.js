@@ -3,7 +3,11 @@
  *
  * Derived from the current Flex lexer and Bison grammar:
  *   src/lexer.l
- *   src/parser.y / generated parser.tab.c
+ *   src/parser.y (conflict-free) and docs/grammar.bnf
+ *
+ * Preprocessor lines ($define, $include, $if ... $endif) are removed by
+ * src/pp.c before the Bison parser runs; here they are parsed as their
+ * own line items so editors can highlight them.
  */
 module.exports = grammar({
   name: 'ussr',
@@ -16,28 +20,24 @@ module.exports = grammar({
   word: $ => $.identifier,
 
   rules: {
-    source_file: $ => seq(
-      repeat($.newline),
-      optional($.command_sequence),
-      repeat($.newline),
-    ),
+    // program ::= command_lines, where a newline is an empty command line
+    // of its own (see parser.y's command_line).
+    source_file: $ => repeat($._line_item),
 
-    command_sequence: $ => seq(
-      $.command_line,
-      repeat(seq($.newline, $.command_line)),
-    ),
-
-    command_line: $ => choice(
+    _line_item: $ => choice(
+      $.newline,
       $.command,
       $.advanced_control,
+      $.preprocessor,
     ),
 
-    // The Flex lexer recognizes COMMAND_HEAD as everything up to and
-    // including the opening parenthesis. Keeping that as one token avoids
-    // lexical ambiguity between command names and ordinary identifiers.
+    // The Flex lexer recognizes COMMAND_HEAD as everything up to the
+    // opening parenthesis, which must follow without a space. Keeping
+    // that as one token avoids lexical ambiguity between command names
+    // and ordinary identifiers.
     command: $ => seq(
-      $.command_head,
-      $.identifier,
+      field('name', $.command_head),
+      field('result', $.identifier),
       ')',
       $.command_tail,
     ),
@@ -70,102 +70,80 @@ module.exports = grammar({
 
     block_argument: $ => seq(
       '[',
-      repeat($.command_line_with_newline),
-      optional($.newline),
+      repeat($._line_item),
       ']',
     ),
 
-    command_line_with_newline: $ => seq(
-      $.command_line,
-      $.newline,
-    ),
-
-    // The @ form is a syntactically distinct command-list pipeline:
-    //
     // @[ control commands ]
     // [ target commands ]
     //
     // The separator may contain zero or more newlines.
     advanced_control: $ => seq(
       '@',
-      $.block_contents,
+      $.block_argument,
       repeat($.newline),
-      $.block_contents,
-    ),
-
-    block_contents: $ => seq(
-      '[',
-      repeat($.command_line_with_newline),
-      optional($.newline),
-      ']',
+      $.block_argument,
     ),
 
     expression: $ => seq(
       '{',
-      $.logical_or_expression,
+      $._expression,
       '}',
     ),
 
-    logical_or_expression: $ => prec.left(1, seq(
-      $.logical_and_expression,
-      repeat(seq('||', $.logical_and_expression)),
-    )),
-
-    logical_and_expression: $ => prec.left(2, seq(
-      $.bitwise_or_expression,
-      repeat(seq('&&', $.bitwise_or_expression)),
-    )),
-
-    bitwise_or_expression: $ => prec.left(3, seq(
-      $.bitwise_xor_expression,
-      repeat(seq('|', $.bitwise_xor_expression)),
-    )),
-
-    bitwise_xor_expression: $ => prec.left(4, seq(
-      $.bitwise_and_expression,
-      repeat(seq('^', $.bitwise_and_expression)),
-    )),
-
-    bitwise_and_expression: $ => prec.left(5, seq(
-      $.comparison_expression,
-      repeat(seq('&', $.comparison_expression)),
-    )),
-
-    comparison_expression: $ => prec.left(6, seq(
-      $.shift_expression,
-      repeat(seq(
-        choice('>', '<', '>=', '<=', '=', '!='),
-        $.shift_expression,
-      )),
-    )),
-
-    shift_expression: $ => prec.left(7, seq(
-      $.additive_expression,
-      repeat(seq(choice('<<', '>>'), $.additive_expression)),
-    )),
-
-    additive_expression: $ => prec.left(8, seq(
-      $.multiplicative_expression,
-      repeat(seq(choice('+', '-'), $.multiplicative_expression)),
-    )),
-
-    multiplicative_expression: $ => prec.left(9, seq(
+    // Precedence mirrors the nonterminal chain in parser.y, lowest first.
+    // Comparisons do not chain there, so they are prec.left with a
+    // single operand on each side.
+    _expression: $ => choice(
+      $.binary_expression,
       $.unary_expression,
-      repeat(seq(choice('*', '/', '%'), $.unary_expression)),
+      $._primary_expression,
+    ),
+
+    binary_expression: $ => {
+      const table = [
+        [1, '||'],
+        [2, '&&'],
+        [3, '|'],
+        [4, '^'],
+        [5, '&'],
+        [6, choice('>', '<', '>=', '<=', '=', '!=')],
+        [7, choice('<<', '>>')],
+        [8, choice('+', '-')],
+        [9, choice('*', '/', '%')],
+      ];
+
+      return choice(...table.map(([level, operator]) =>
+        prec.left(level, seq(
+          field('left', $._expression),
+          field('operator', operator),
+          field('right', $._expression),
+        ))));
+    },
+
+    unary_expression: $ => prec(10, seq(
+      field('operator', '-'),
+      field('operand', $._expression),
     )),
 
-    unary_expression: $ => choice(
-      $.primary_expression,
-      prec(10, seq('-', $.unary_expression)),
-    ),
-
-    primary_expression: $ => choice(
-      $.literal,
+    _primary_expression: $ => choice(
+      $._unsigned_literal,
       $.identifier,
-      seq('(', $.logical_or_expression, ')'),
+      $.parenthesized_expression,
     ),
 
+    parenthesized_expression: $ => seq('(', $._expression, ')'),
+
+    // A negative number is one literal in argument position; inside {...}
+    // "-" is unary minus instead.
     literal: $ => choice(
+      $._unsigned_literal,
+      $.negative_number,
+    ),
+
+    negative_number: $ => seq('-', choice($.integer, $.real)),
+
+    _unsigned_literal: $ => choice(
       $.string,
       $.integer,
       $.real,
@@ -175,11 +153,16 @@ module.exports = grammar({
 
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
 
-    string: $ => token(seq(
+    string: $ => seq(
       '"',
-      repeat(choice(/[^"\\\n]/, /\\./)),
-      '"',
-    )),
+      repeat(choice(
+        token.immediate(prec(1, /[^"\\\n]+/)),
+        $.escape_sequence,
+      )),
+      token.immediate('"'),
+    ),
+
+    escape_sequence: $ => token.immediate(/\\./),
 
     uno_literal: $ => token(seq(
       "'",
@@ -195,5 +178,19 @@ module.exports = grammar({
     newline: $ => /\n/,
 
     comment: $ => token(seq('#', /[^\r\n]*/)),
+
+    // $define NAME value / $include "file" / $once
+    // $ifdef NAME / $if defined(NAME) / $elif defined NAME / $else / $endif
+    preprocessor: $ => seq(
+      field('directive', $.preprocessor_directive),
+      optional(field('argument', $.preprocessor_argument)),
+    ),
+
+    preprocessor_directive: $ => token(seq(
+      '$',
+      choice('define', 'include', 'once', 'ifdef', 'if', 'elif', 'else', 'endif'),
+    )),
+
+    preprocessor_argument: $ => token(prec(-1, /[^\r\n]+/)),
   },
 });

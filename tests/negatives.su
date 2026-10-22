@@ -21,3 +21,12 @@ template(_): "REAL;" a
 set(a): { 1.5 - 100.3 }
 print(_): a
 template(_): "REAL;" a
+
+#Negative numbers and unary minus inside expressions
+set(a): { -4 + -2 }
+print(_): a
+set(a): { 3 - -2.5 }
+print(_): a
+set(b): 7
+set(a): { -b * - (2) }
+print(_): a

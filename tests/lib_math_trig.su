@@ -1,0 +1,20 @@
+# math.su inverse-trig test: asin/acos/atan/atan2.
+# Expected: 0.785398 0.523599 1.0472 2.35619 1.5708 1.47113
+$include "../src/libs/math.su"
+
+init(ret): arg_cnt arg_vec [
+    atan(a1): 1
+    print(_): a1
+    asin(a2): 0.5
+    print(_): a2
+    acos(a3): 0.5
+    print(_): a3
+    set(neg1): {0 - 1}
+    atan2(a4): 1 neg1
+    print(_): a4
+    atan2(a5): 1 0
+    print(_): a5
+    atan(a6): 10
+    print(_): a6
+    set(ret): 0
+]

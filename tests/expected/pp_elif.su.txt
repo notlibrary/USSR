@@ -1,0 +1,8 @@
+linux
+fallback
+first
+nested elif
+
+--- stderr ---
+
+--- exit 0 ---

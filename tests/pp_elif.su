@@ -1,0 +1,45 @@
+# $if / $elif / $else chains: the first true branch wins
+$define LINUX
+
+$if defined(WINDOWS)
+print(_): "windows"
+$elif defined LINUX
+print(_): "linux"
+$elif defined(LINUX)
+print(_): "second linux branch must not run"
+$else
+print(_): "other"
+$endif
+
+$if defined WINDOWS
+print(_): "windows"
+$elif defined(MACOS)
+print(_): "macos"
+$else
+print(_): "fallback"
+$endif
+
+$ifdef LINUX
+print(_): "first"
+$elif defined(LINUX)
+print(_): "elif after a taken $ifdef must not run"
+$else
+print(_): "else after a taken $ifdef must not run"
+$endif
+
+# A chain nested in a skipped block stays skipped
+$if defined(NOPE)
+$if defined(LINUX)
+print(_): "nested if must not run"
+$elif defined(LINUX)
+print(_): "nested elif must not run"
+$else
+print(_): "nested else must not run"
+$endif
+$elif defined(LINUX)
+$if defined(NOPE)
+print(_): "nope"
+$elif defined(LINUX)
+print(_): "nested elif"
+$endif
+$endif

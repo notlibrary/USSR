@@ -1,3 +1,3 @@
 (block_argument) @fold
-(block_contents) @fold
+(advanced_control) @fold
 (expression) @fold

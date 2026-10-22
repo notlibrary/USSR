@@ -20,16 +20,21 @@ Import dialog.)
 - **UNO-internal strings** (`` `...` ``) — brown, distinct again, since these are
   a third, separate quoting level (see the language manual's §8.4)
 - **Numbers** — orange
-- **Control flow** (`if`, `while`, `break`, `continue`, `return`) — bold blue
+- **Control flow and block commands** (`if`, `elif`, `else`, `while`, `do`,
+  `each`, `map`, `filter`, `method`, `break`, `continue`, `return`) — bold blue
 - **Builtins** (`set`, `print`, `struct`, `new`, `getf`, `setf`, `vec`, `push`,
   `at`, `len`, `encode`, `decode`, `scan`, `get`, `time`, `random64`,
-  `seed_random64`, `cd`, and the arithmetic/`concat`/`eval` commands) — purple
+  `seed_random64`, `cd`, `chain`, `file`, `template`, `global`, and the
+  arithmetic/`concat`/`eval` commands) — purple
+- **Scheduler commands** (`async`, `await`, `sleep`, `yield`, `gc`, `load`) —
+  light blue
 - **`true`/`false`/`null`** — bold teal
-- **Preprocessor directive words** (`define`, `include`, `ifdef`, `else`,
-  `endif`, `defined`) — grey italic. The `$` itself is colored as an operator
-  rather than specially, since `$define` tokenizes as `$` + `define` either
-  way — no special "prefix" handling was needed.
-- **Operators/punctuation** — dark red
+- **Preprocessor directives** (`$define`, `$include`, `$once`, `$ifdef`,
+  `$if`, `$elif`, `$else`, `$endif`, and `defined`) — grey italic. `$` is not
+  in the operator list, so each directive is one whole word and `$else` is
+  told apart from the `else(...)` command.
+- **Operators/punctuation** — dark red: exactly the lexer's set (`=` is
+  equality; there is no `==`, `~`, `;` or `,`), plus `@` for `@[...]`
 - Folding on `[...]` blocks, matching the language's actual block syntax
 
 ## A few notes on scope

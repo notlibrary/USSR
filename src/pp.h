@@ -26,6 +26,8 @@ typedef struct ussr_preprocessor_t
 
     int conditional_active[USSR_PP_MAX_INCLUDE_DEPTH];
     int conditional_seen_else[USSR_PP_MAX_INCLUDE_DEPTH];
+    /* Some branch of the $if/$elif chain at this depth has been taken. */
+    int conditional_taken[USSR_PP_MAX_INCLUDE_DEPTH];
     size_t conditional_depth;
 
     int current_active;

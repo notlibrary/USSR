@@ -5,8 +5,10 @@
 `name(ret): args`, `[ ]` blocks, `{ }` expressions, `@[]` advanced
 control blocks, strings/chars/numbers, `true`/`false`/`null`, the
 `M_PI`/`M_E` macros, `!`/`?` hash sigils, preprocessor directives
-(`$define` `$include` `$ifdef` `$if` `$else` `$endif`, `defined(...)`),
-control flow (`if`/`elif`/`else`/`while`/`do`/`loop`/`for`/`choose`/
+(`$define` `$include` `$once` `$ifdef` `$if` `$elif` `$else` `$endif`,
+`defined(NAME)` / `defined NAME`),
+control flow (`if`/`elif`/`else`/`while`/`do`/`each`/`map`/`filter`/
+`method`/`loop`/`for`/`choose`/
 `option`/`default`/`break`/`continue`/`return`), the scheduler commands
 (`async`/`await`/`sleep`/`yield`/`gc`/`process`/`load`), the io/bytes
 primitives, and the math commands.

@@ -1,7 +1,7 @@
 # USSR Unified Shell Script REPL (USSR) grammar
 #
-# Updated from the previous grammar.bnf to match src/parser.y and
-# src/lexer.l in the supplied project archive.
+# Matches src/parser.y (conflict-free: bison reports no shift/reduce or
+# reduce/reduce conflicts) and src/lexer.l.
 #
 # Notation:
 #   ::=       production
@@ -13,40 +13,54 @@
 #
 # The lexer discards spaces/tabs/carriage returns and # comments.
 # Newline tokens remain significant between command lines.
-# Preprocessor directives ($define, $ifdef, etc.) are processed before
-# the lexer/parser and are intentionally not part of this grammar.
+# Preprocessor directives ($define, $if, ...) are processed before the
+# lexer/parser; their syntax is summarised at the end of this file.
 
-<program> ::= <command-lines> <trailing-newlines>
+# ---------------------------------------------------------------------
+# Program structure
+# ---------------------------------------------------------------------
 
-<trailing-newlines> ::= { <newline> }
+<program> ::= <command-lines>
 
 <command-lines> ::= <empty>
                   | <command-lines> <command-line>
 
 <command-line> ::= <newline>
-                 | <command> <newline>
                  | <command>
-                 | <advanced-control> <newline>
                  | <advanced-control>
+# A newline is an empty command line of its own: the newline that ends a
+# command is not part of the command, so blank lines, the line break
+# after a command and trailing newlines at the end of the file all parse
+# the same way.
 
 <command> ::= <command-head> "(" <identifier> ")" <command-tail>
+# The identifier in parentheses names the variable that receives the
+# command's result; "_" discards it.
 
 <command-head> ::= REGEX([A-Za-z0-9_./\\:-]+ followed by "(")
-# The lexer returns the matched command head without its opening parenthesis.
-# A slash or backslash separates an optional path from the command name.
-# Whether a command may have trailing [] blocks is checked semantically.
+# The lexer returns the matched command head without its opening
+# parenthesis. A slash or backslash separates an optional path from the
+# command name. Whether a command may have trailing [] blocks is checked
+# semantically: blocks must come last, and built-ins such as set, print,
+# add or return cannot take one. Any other command name with a block is a
+# user-defined function declaration.
+# Because "-" is a command-head character, "-(" inside {...} lexes as a
+# command head; write "- (" for unary minus before a parenthesis.
 
 <command-tail> ::= ":"
                  | ":" <argument-list>
 
 <argument-list> ::= <argument>
                   | <argument-list> <argument>
-# Arguments are separated by one or more lexer-discarded whitespace
-# characters; there are no comma separators in the current grammar.
+# Arguments are separated by lexer-discarded whitespace; there are no
+# comma separators.
 
 <argument> ::= <argument-base>
              | <identifier> "?"
              | <argument-base> "!"
+# Hash-variable sigils (one namespace shared by every process):
+# NAME?  reads NAME from the hash variables.
+# ARG!   stores the result into the hash variables instead.
 
 <argument-base> ::= <literal>
                   | <identifier>
@@ -57,15 +71,33 @@
 <block-argument> ::= "[" <command-lines> "]"
 
 <advanced-control> ::= "@" "[" <command-lines> "]"
-                       { <newline> }
+                       <advanced-control-separator>
                        "[" <command-lines> "]"
-# This two-block form is used by the parser for advanced control flow.
+# Two-block form used for advanced control flow (the "@" command).
 
-<literal> ::= <string>
-            | <integer>
-            | <real>
-            | <boolean>
-            | <null>
+<advanced-control-separator> ::= { <newline> }
+
+# ---------------------------------------------------------------------
+# Literals
+# ---------------------------------------------------------------------
+
+<literal> ::= <unsigned-literal>
+            | "-" <integer>
+            | "-" <real>
+# A negative number is a single literal in argument position
+# (add(x): x -1). Inside {...} "-" is an operator, so there the same text
+# is parsed as unary minus; the parser folds -<number> back into a
+# negative literal, giving the same value.
+
+<unsigned-literal> ::= <string>
+                     | <integer>
+                     | <real>
+                     | <boolean>
+                     | <null>
+
+# ---------------------------------------------------------------------
+# Expressions (only inside {...})
+# ---------------------------------------------------------------------
 
 <expression> ::= "{" <logical-or-expression> "}"
 
@@ -73,75 +105,73 @@
                           | <logical-or-expression> "||" <logical-and-expression>
 
 <logical-and-expression> ::= <bitwise-or-expression>
-                            | <logical-and-expression> "&&" <bitwise-or-expression>
+                           | <logical-and-expression> "&&" <bitwise-or-expression>
 
 <bitwise-or-expression> ::= <bitwise-xor-expression>
-                           | <bitwise-or-expression> "|" <bitwise-xor-expression>
+                          | <bitwise-or-expression> "|" <bitwise-xor-expression>
 
 <bitwise-xor-expression> ::= <bitwise-and-expression>
-                            | <bitwise-xor-expression> "^" <bitwise-and-expression>
+                           | <bitwise-xor-expression> "^" <bitwise-and-expression>
 
 <bitwise-and-expression> ::= <comparison-expression>
-                            | <bitwise-and-expression> "&" <comparison-expression>
+                           | <bitwise-and-expression> "&" <comparison-expression>
 
 <comparison-expression> ::= <shift-expression>
-                           | <shift-expression> ">" <shift-expression>
-                           | <shift-expression> "<" <shift-expression>
-                           | <shift-expression> ">=" <shift-expression>
-                           | <shift-expression> "<=" <shift-expression>
-                           | <shift-expression> "=" <shift-expression>
-                           | <shift-expression> "!=" <shift-expression>
+                          | <shift-expression> ">" <shift-expression>
+                          | <shift-expression> "<" <shift-expression>
+                          | <shift-expression> ">=" <shift-expression>
+                          | <shift-expression> "<=" <shift-expression>
+                          | <shift-expression> "=" <shift-expression>
+                          | <shift-expression> "!=" <shift-expression>
+# Comparisons do not chain: {a < b < c} is a syntax error.
 
 <shift-expression> ::= <additive-expression>
-                      | <shift-expression> "<<" <additive-expression>
-                      | <shift-expression> ">>" <additive-expression>
+                     | <shift-expression> "<<" <additive-expression>
+                     | <shift-expression> ">>" <additive-expression>
 
 <additive-expression> ::= <multiplicative-expression>
-                         | <additive-expression> "+" <multiplicative-expression>
-                         | <additive-expression> "-" <multiplicative-expression>
+                        | <additive-expression> "+" <multiplicative-expression>
+                        | <additive-expression> "-" <multiplicative-expression>
 
 <multiplicative-expression> ::= <unary-expression>
-                               | <multiplicative-expression> "*" <unary-expression>
-                               | <multiplicative-expression> "/" <unary-expression>
-                               | <multiplicative-expression> "%" <unary-expression>
+                              | <multiplicative-expression> "*" <unary-expression>
+                              | <multiplicative-expression> "/" <unary-expression>
+                              | <multiplicative-expression> "%" <unary-expression>
 
 <unary-expression> ::= <primary-expression>
-                      | "-" <unary-expression>
-# Unary minus is currently the only unary operator in parser.y.
+                     | "-" <unary-expression>
+# Unary minus is the only unary operator.
 
-<primary-expression> ::= <literal>
-                        | <identifier>
-                        | "(" <logical-or-expression> ")"
+<primary-expression> ::= <unsigned-literal>
+                       | <identifier>
+                       | "(" <logical-or-expression> ")"
 
-<uno-literal> ::= REGEX('([^'\\\n]|\\.)*')
-# UNO literals use single quotes and are stored as deferred raw text.
+# ---------------------------------------------------------------------
+# Tokens (src/lexer.l)
+# ---------------------------------------------------------------------
 
-<identifier> ::= REGEX([a-zA-Z_] [a-zA-Z_0-9]*)
-
-<command-name> ::= <identifier>
-# Actual command heads are broader than identifiers: see <command-head>.
-
-<return-variable> ::= <identifier>
-
-<variable-reference> ::= <identifier>
+<identifier> ::= REGEX([a-zA-Z_][a-zA-Z_0-9]*)
 
 <boolean> ::= "true" | "false"
 
 <null> ::= "null"
 
 <integer> ::= REGEX([0-9]+)
+# Must fit in a signed 64-bit integer; a larger one is a lexer error
+# (write it as a real instead).
 
 <real> ::= REGEX([0-9]+ "." [0-9]+)
-# Numeric tokens are unsigned. Negative values are expressed using unary
-# minus inside {...}, for example {0 - 5} or {-5}.
 
 <string> ::= "\"" { <string-character> | <escape-sequence> } "\""
 
 <string-character> ::= any character except quote, backslash, or newline
 
 <escape-sequence> ::= "\\" ("n" | "t" | "r" | "\\" | "\"" | any other character)
-# The lexer decodes \n, \t, \r, \\, and \"; for other escaped
-# characters it keeps the character following the backslash.
+# The lexer decodes \n, \t, \r, \\ and \"; for other escaped characters
+# it keeps the character following the backslash.
+
+<uno-literal> ::= REGEX('([^'\\\n]|\\.)*')
+# UNO literals use single quotes and are stored as deferred raw text.
 
 <comment> ::= "#" { any character except carriage return or newline }
 # Comments are discarded by the lexer; the newline after a comment is kept.
@@ -155,4 +185,35 @@
              | ">" | "<" | ">=" | "<=" | "=" | "!="
              | "&&" | "||" | "<<" | ">>" | "^" | "&" | "|"
 
+<punctuation> ::= "(" | ")" | "[" | "]" | "{" | "}" | ":" | "@" | "?" | "!"
+
+# Any other character is a lexer error.
+
 <empty> ::= epsilon
+
+# ---------------------------------------------------------------------
+# Preprocessor (src/pp.c) - applied line by line before lexing
+# ---------------------------------------------------------------------
+
+<directive-line> ::= "$" <directive>
+
+<directive> ::= "define" <name> [ <text> ]
+              | "define" <name> "(" [ <name> { "," <name> } ] ")" <text>
+              | "include" ( <string> | <path> )
+              | "once"
+              | "ifdef" <name>
+              | "if" <defined-test>
+              | "elif" <defined-test>
+              | "else"
+              | "endif"
+
+<defined-test> ::= "defined" "(" <name> ")"
+                 | "defined" <name>
+
+<conditional> ::= ( "$ifdef" <name> | "$if" <defined-test> ) <lines>
+                  { "$elif" <defined-test> <lines> }
+                  [ "$else" <lines> ]
+                  "$endif"
+# The first branch whose test holds is kept, the rest are skipped; $else
+# is kept only when no earlier branch was. __MAIN__ is defined only in
+# the file ussr was started with.

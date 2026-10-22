@@ -1,3 +1,4 @@
-(command_line) @indent
-(block_contents) @indent
-"]" @outdent
+(block_argument) @indent.begin
+(expression) @indent.begin
+"]" @indent.branch @indent.end
+"}" @indent.branch @indent.end
