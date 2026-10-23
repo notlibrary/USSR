@@ -18,9 +18,9 @@ concurrency:
 
 # Seconds one russia.su run may take before it counts as hung. russia.su
 # interprets the program inside ussr, so big programs (the Tula GUI tests)
-# need far longer than the wrapper's 30-second default on a CI runner.
+# can take minutes on a CI runner.
 env:
-  USSR_RUSSIA_TIMEOUT: "120"
+  USSR_RUSSIA_TIMEOUT: "300"
 
 jobs:
   linux:

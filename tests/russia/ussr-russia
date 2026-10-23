@@ -4,7 +4,8 @@
 # tests/run_all.sh passes it to every suite runner as their "ussr", so each
 # test exercises russia.su exactly the way it exercises ussr.
 # USSR_HOST is the real binary (default ./ussr, then ./ussr.exe); a run
-# longer than USSR_RUSSIA_TIMEOUT seconds (default 30) is killed.
+# longer than USSR_RUSSIA_TIMEOUT seconds (default 300: the Tula GUI tests
+# take over a minute through russia.su) is killed.
 # "--" keeps the host's own options (-c, -e) from taking russia.su's.
 # Where /bin/sh is bash (Git for Windows, macOS) the caller's PS1 and PS2
 # never reach russia.su: bash unsets both in every non-interactive shell,
@@ -15,6 +16,6 @@ host=${USSR_HOST:-./ussr}
 [ -x "$host" ] || host=./ussr.exe
 russia=$here/../../src/russia/russia.su
 if command -v timeout >/dev/null 2>&1; then
-    exec timeout --foreground "${USSR_RUSSIA_TIMEOUT:-30}" "$host" -- "$russia" "$@"
+    exec timeout --foreground "${USSR_RUSSIA_TIMEOUT:-300}" "$host" -- "$russia" "$@"
 fi
 exec "$host" -- "$russia" "$@"

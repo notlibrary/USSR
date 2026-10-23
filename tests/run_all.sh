@@ -17,7 +17,7 @@
 #
 # The exit status reflects the ussr pass only, so CI stays green while
 # russia.su catches up; set USSR_RUSSIA_STRICT=1 to fail on russia gaps too.
-# USSR_RUSSIA_TIMEOUT (seconds, default 30) bounds each russia.su run.
+# USSR_RUSSIA_TIMEOUT (seconds, default 300) bounds each russia.su run.
 #
 # A standalone script's expectation is tests/expected/<path>.txt: its stdout,
 # then its stderr and exit status under marker lines. If <path>.in exists
