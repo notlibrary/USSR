@@ -1962,6 +1962,50 @@ static int oop_do_read_bytes(
     return 0;
 }
 
+/* text_bytes(v): "text" -> vector of the string's bytes (0..255): a
+ * scanner indexes it in O(1), where byte() on a long string costs a
+ * copy of the string per call. */
+static int oop_do_text_bytes(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t text_v;
+    const char *text;
+    ussr_vector_t *vector;
+    size_t i;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: text_bytes(v): \"text\"\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &text_v) != 0)
+        return -1;
+    if (!oop_expect_string(&text_v, &text))
+    {
+        fprintf(stderr, "USSR: text_bytes expects a string\n");
+        ussr_value_free(&text_v);
+        return -1;
+    }
+    vector = ussr_vector_create(NULL);
+    for (i = 0; vector != NULL && text[i] != '\0'; ++i)
+    {
+        if (ussr_vector_push(vector,
+                ussr_integer((ussr_int_t)(unsigned char)text[i])) != 0)
+        {
+            ussr_vector_release(vector);
+            vector = NULL;
+        }
+    }
+    ussr_value_free(&text_v);
+    if (vector == NULL)
+        return -1;
+    *out_result = ussr_vector_value(vector);
+    return 0;
+}
+
 static int oop_do_write_bytes(
     ussr_argument_t *arguments,
     size_t argument_count,
@@ -2781,6 +2825,8 @@ int ussr_oop_dispatch(
         status = oop_do_read_bytes(arguments, argument_count, out_result);
     else if (strcmp(command, "write_bytes") == 0)
         status = oop_do_write_bytes(arguments, argument_count, out_result);
+    else if (strcmp(command, "text_bytes") == 0)
+        status = oop_do_text_bytes(arguments, argument_count, out_result);
     else if (strcmp(command, "file_exists") == 0)
         status = oop_do_file_exists(arguments, argument_count, out_result);
     else if (strcmp(command, "typeof") == 0)

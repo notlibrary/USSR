@@ -280,6 +280,7 @@ static const char *ac_builtin_commands[] =
     "write_stderr",
     "read_bytes",
     "write_bytes",
+    "text_bytes",
     NULL
 };
 

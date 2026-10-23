@@ -7,6 +7,7 @@
 #                               unreadable); NUL bytes are kept
 #   write_bytes(n): "path" vec -> write exactly vec's bytes 0..255;
 #                               bytes written, or -1 if it cannot
+#   text_bytes(v): "text"    -> the string's bytes as a vector
 # serialize(v): value "INT"    -> v becomes 8 little-endian bytes of value
 # deserialize(v): bytes "INT"  -> v becomes the integer stored in bytes
 # Only "INT" is supported; other tags return null.

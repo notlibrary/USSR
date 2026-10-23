@@ -895,6 +895,7 @@ set_bytes(v): value bytes     # every item of bytes := value (0..255)
 clear_bytes(v): bytes         # set_bytes with value 0
 read_bytes(v): "path"         # the file's bytes 0..255 (null if unreadable)
 write_bytes(n): "path" bytes  # write exactly these bytes; count, or -1
+text_bytes(v): "text"         # the string's bytes 0..255
 ```
 
 **math.su — mathematical functions:**
