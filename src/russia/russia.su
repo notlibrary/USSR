@@ -28,7 +28,7 @@ global(_): cv_names cv_consts cv_lps cv_funcs cv_ent vm_av
 global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
-global(_): rt_conly rt_coout rt_cosrc
+global(_): rt_conly rt_coout rt_cosrc rt_crctab
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -2488,6 +2488,8 @@ rt_is_host(r): nm [
     if(_): {nm = "terminal_getch"} [ set(r): 1 ]
     if(_): {nm = "terminal_size"} [ set(r): 1 ]
     if(_): {nm = "write_stderr"} [ set(r): 1 ]
+    if(_): {nm = "read_bytes"} [ set(r): 1 ]
+    if(_): {nm = "write_bytes"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
 ]
 # A host builtin call in the tree walker: nm is one and the program has
@@ -2605,6 +2607,14 @@ rt_host(r): nm vals [
     if(_): {nm = "write_stderr"} [
         if(_): {rt_hn = 1} [ write_stderr(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "read_bytes"} [
+        if(_): {rt_hn = 1} [ read_bytes(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "write_bytes"} [
+        if(_): {rt_hn = 2} [ write_bytes(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn != 2} [ rt_fatal(_): ]
     ]
     if(_): {nm = "finv_sqrt"} [
         if(_): {rt_hn = 1} [ finv_sqrt(r): rt_ha0 ]
@@ -4987,9 +4997,55 @@ cv_warnings(r): [
     # LOAD_VAR count per name, the whole program (reads of a function's
     # own parameter excepted)
     cv_w_zeros(cw_reads): cw_nn
+    # cw_acc[k]: instruction k is an access; cw_ord: the instructions of
+    # function 0, then of function 1, ... in code order (counting sort on
+    # the owner), function f's from cw_beg[f] to cw_beg[f + 1]
+    vec(cw_acc): ""
+    cv_w_zeros(cw_beg): {cw_fn + 1}
     set(cw_k): 0
     while(_): {cw_k < cw_cn} [
         cv_w_access(cw_ok): cw_k
+        push(_): cw_acc cw_ok
+        at(cw_ow): cv_own cw_k
+        if(_): {cw_ow >= 0 && cw_ok = 1} [
+            at(cw_bc): cw_beg {cw_ow + 1}
+            set(cw_beg): {cw_ow + 1} {cw_bc + 1}
+        ]
+        add(cw_k): cw_k 1
+    ]
+    set(cw_f): 0
+    while(_): {cw_f < cw_fn} [
+        at(cw_b0): cw_beg cw_f
+        at(cw_b1): cw_beg {cw_f + 1}
+        set(cw_beg): {cw_f + 1} {cw_b0 + cw_b1}
+        add(cw_f): cw_f 1
+    ]
+    at(cw_on): cw_beg cw_fn
+    cv_w_zeros(cw_ord): cw_on
+    vec(cw_fill): ""
+    set(cw_f): 0
+    while(_): {cw_f < cw_fn} [
+        at(cw_b0): cw_beg cw_f
+        push(_): cw_fill cw_b0
+        add(cw_f): cw_f 1
+    ]
+    set(cw_k): 0
+    while(_): {cw_k < cw_cn} [
+        at(cw_ow): cv_own cw_k
+        at(cw_ok): cw_acc cw_k
+        if(_): {cw_ow >= 0 && cw_ok = 1} [
+            at(cw_fp): cw_fill cw_ow
+            set(cw_ord): cw_fp cw_k
+            set(cw_fill): cw_ow {cw_fp + 1}
+        ]
+        add(cw_k): cw_k 1
+    ]
+    cv_w_zeros(cw_seen): cw_nn
+    cv_w_zeros(cw_lr): cw_nn
+    cv_w_zeros(cw_fs): cw_nn
+    set(cw_k): 0
+    while(_): {cw_k < cw_cn} [
+        at(cw_ok): cw_acc cw_k
         at(cw_in): cv_code cw_k
         getf(cw_op): cw_in "op"
         if(_): {cw_ok = 1 && cw_op = 2} [
@@ -5014,17 +5070,15 @@ cv_warnings(r): [
         at(cw_fd): cv_funcs cw_f
         getf(cw_fname): cw_fd "name"
         getf(cw_fret): cw_fd "retname"
-        cv_w_zeros(cw_seen): cw_nn
-        cv_w_zeros(cw_lr): cw_nn
-        cv_w_zeros(cw_fs): cw_nn
         vec(cw_touch): ""
-        set(cw_k): 0
-        while(_): {cw_k < cw_cn} [
-            at(cw_ow): cv_own cw_k
-            cv_w_access(cw_ok): cw_k
+        at(cw_oi): cw_beg cw_f
+        at(cw_oe): cw_beg {cw_f + 1}
+        while(_): {cw_oi < cw_oe} [
+            at(cw_k): cw_ord cw_oi
+            add(cw_oi): cw_oi 1
             at(cw_in): cv_code cw_k
             getf(cw_c): cw_in "c"
-            if(_): {cw_ow = cw_f && cw_ok = 1 && cw_c > 0} [
+            if(_): {cw_c > 0} [
                 getf(cw_op): cw_in "op"
                 getf(cw_im): cw_in "imm"
                 at(cw_nm): cv_names cw_im
@@ -5057,7 +5111,6 @@ cv_warnings(r): [
                     ]
                 ]
             ]
-            add(cw_k): cw_k 1
         ]
         len(cw_tn): cw_touch
         set(cw_t): 0
@@ -5092,6 +5145,15 @@ cv_warnings(r): [
             ]
             add(cw_t): cw_t 1
         ]
+        # the next function starts from zeros again
+        set(cw_t): 0
+        while(_): {cw_t < cw_tn} [
+            at(cw_im): cw_touch cw_t
+            set(cw_seen): cw_im 0
+            set(cw_lr): cw_im 0
+            set(cw_fs): cw_im 0
+            add(cw_t): cw_t 1
+        ]
         add(cw_f): cw_f 1
     ]
     # global reads and writes, and where each name is set as a local
@@ -5106,7 +5168,7 @@ cv_warnings(r): [
     ]
     set(cw_k): 0
     while(_): {cw_k < cw_cn} [
-        cv_w_access(cw_ok): cw_k
+        at(cw_ok): cw_acc cw_k
         if(_): {cw_ok = 1} [
             at(cw_in): cv_code cw_k
             getf(cw_op): cw_in "op"
@@ -6946,11 +7008,16 @@ vm_init_i(r): i [
 # it could not be read or parsed.
 # ---------- -c and .ru ----------
 # russia.su -c script.su [program.ru] checks script.su exactly as ussr -c
-# does (same diagnostics, nothing written on error) and writes russia's
-# own .ru: a "#russia-ru 1" line, the line map's length, its file/line
-# pairs one per line, then the preprocessed source. Running a .ru skips
-# the preprocessor. (ussr's .ru is its binary bytecode; neither reads the
-# other's.)
+# does (same diagnostics and warnings, nothing written on error) and
+# writes a .ru in ussr's container (docs/RU_BYTECODE_FORMAT.md): the
+# signature, format version 3, flags 0, a VM ABI, the producer version,
+# the payload length, the payload and a CRC-32 of everything before it,
+# all little-endian. The payload is russia's own: the number of line-map
+# runs, each run's file, first line and line count one per line, then
+# the preprocessed source. Its
+# ABI (rt_ru_abi) is not ussr's, so each rejects the other's .ru as an
+# ABI mismatch; every other check, and its message, is ussr's. Running a
+# .ru skips the preprocessor.
 
 # 1 when s ends with suffix.
 rt_has_suffix(r): s suffix [
@@ -7021,25 +7088,186 @@ rt_compile_only(r): cnt avec [
 ]
 # Write the checked program (rt_cosrc, line map pp_mapf/pp_mapl) to
 # rt_coout as a russia .ru.
+# russia's payload ABI ("RU", 3): never ussr's USSR_RU_VM_ABI.
+rt_ru_abi(r): [ set(r): 1381302275 ]
+
+# Append the n-byte little-endian form of value to vector v.
+rt_le(r): v value n [
+    set(rle_x): value
+    set(rle_i): 0
+    while(_): {rle_i < n} [
+        push(_): v {rle_x & 255}
+        set(rle_x): {rle_x >> 8}
+        add(rle_i): rle_i 1
+    ]
+]
+# The n-byte little-endian integer at v[at].
+rt_le_get(r): v at n [
+    set(r): 0
+    set(rlg_i): {n - 1}
+    while(_): {rlg_i >= 0} [
+        at(rlg_b): v {at + rlg_i}
+        set(r): {(r << 8) | rlg_b}
+        sub(rlg_i): rlg_i 1
+    ]
+]
+# CRC-32 (IEEE, reflected, as zip and PNG, and ussr's ru_crc32) of
+# v[0..n-1].
+rt_crc32(r): v n [
+    if(_): {rt_crctab = null} [
+        vec(rt_crctab): ""
+        set(rcc_i): 0
+        while(_): {rcc_i < 256} [
+            set(rcc_c): rcc_i
+            set(rcc_k): 0
+            while(_): {rcc_k < 8} [
+                if(_): {(rcc_c & 1) = 1} [ set(rcc_c): {(rcc_c >> 1) ^ 3988292384} ]
+                else(_): [ set(rcc_c): {rcc_c >> 1} ]
+                add(rcc_k): rcc_k 1
+            ]
+            push(_): rt_crctab rcc_c
+            add(rcc_i): rcc_i 1
+        ]
+    ]
+    set(r): 4294967295
+    set(rcc_j): 0
+    while(_): {rcc_j < n} [
+        at(rcc_b): v rcc_j
+        at(rcc_t): rt_crctab {(r ^ rcc_b) & 255}
+        set(r): {rcc_t ^ (r >> 8)}
+        add(rcc_j): rcc_j 1
+    ]
+    set(r): {r ^ 4294967295}
+]
+# The text of bytes v[from..to-1] (no NUL among them): 64-byte pieces,
+# then joined pairwise, so long payloads do not copy quadratically.
+rt_bytes_text(r): v from to [
+    vec(rbt_p): ""
+    set(rbt_i): from
+    while(_): {rbt_i < to} [
+        set(rbt_s): ""
+        set(rbt_e): {rbt_i + 64}
+        if(_): {rbt_e > to} [ set(rbt_e): to ]
+        while(_): {rbt_i < rbt_e} [
+            at(rbt_b): v rbt_i
+            chr(rbt_c): rbt_b
+            concat(rbt_s): rbt_s rbt_c
+            add(rbt_i): rbt_i 1
+        ]
+        push(_): rbt_p rbt_s
+    ]
+    len(rbt_n): rbt_p
+    while(_): {rbt_n > 1} [
+        vec(rbt_q): ""
+        set(rbt_k): 0
+        while(_): {rbt_k < rbt_n} [
+            at(rbt_a): rbt_p rbt_k
+            if(_): {rbt_k + 1 < rbt_n} [
+                at(rbt_z): rbt_p {rbt_k + 1}
+                concat(rbt_a): rbt_a rbt_z
+            ]
+            push(_): rbt_q rbt_a
+            add(rbt_k): rbt_k 2
+        ]
+        set(rbt_p): rbt_q
+        len(rbt_n): rbt_p
+    ]
+    set(r): ""
+    if(_): {rbt_n = 1} [ at(r): rbt_p 0 ]
+]
+
+# Write the checked program (rt_cosrc, line map pp_mapf/pp_mapl) to
+# rt_coout as a .ru; 1 (after saying why) when it cannot be written.
+# Append the bytes of text t to vector v.
+rt_push_text(r): v t [
+    len(rpt_n): t
+    set(rpt_i): 0
+    while(_): {rpt_i < rpt_n} [
+        byte(rpt_b): t rpt_i
+        push(_): v rpt_b
+        add(rpt_i): rpt_i 1
+    ]
+]
+rt_push_line(r): v t [
+    rt_push_text(_): v t
+    push(_): v 10
+]
 rt_conly_write(r): [
+    set(r): 0
+    # the line map as runs of consecutive lines of one file
+    vec(rco_rf): ""
+    vec(rco_rl): ""
+    vec(rco_rc): ""
     len(rco_n): pp_mapl
-    encode(rco_ns): rco_n
-    concat(rco_t): "#russia-ru 1\n" rco_ns
-    concat(rco_t): rco_t "\n"
     set(rco_i): 0
+    set(rco_lf): ""
+    set(rco_ll): 0
     while(_): {rco_i < rco_n} [
         at(rco_f): pp_mapf rco_i
         at(rco_l): pp_mapl rco_i
-        encode(rco_ls): rco_l
-        concat(rco_t): rco_t rco_f
-        concat(rco_t): rco_t "\n"
-        concat(rco_t): rco_t rco_ls
-        concat(rco_t): rco_t "\n"
+        len(rco_rn): rco_rc
+        if(_): {rco_rn > 0 && rco_f = rco_lf && rco_l = rco_ll + 1} [
+            at(rco_c): rco_rc {rco_rn - 1}
+            set(rco_rc): {rco_rn - 1} {rco_c + 1}
+        ]
+        else(_): [
+            push(_): rco_rf rco_f
+            push(_): rco_rl rco_l
+            push(_): rco_rc 1
+        ]
+        set(rco_lf): rco_f
+        set(rco_ll): rco_l
         add(rco_i): rco_i 1
     ]
-    concat(rco_t): rco_t rt_cosrc
-    writefile(rco_w): rt_coout rco_t
-    set(r): 0
+    vec(rco_v): ""
+    push(_): rco_v 137
+    push(_): rco_v 85
+    push(_): rco_v 83
+    push(_): rco_v 83
+    push(_): rco_v 82
+    push(_): rco_v 13
+    push(_): rco_v 10
+    push(_): rco_v 26
+    rt_le(_): rco_v 3 2
+    rt_le(_): rco_v 0 2
+    rt_ru_abi(rco_abi):
+    rt_le(_): rco_v rco_abi 4
+    # producer: ussr 0.4.7, the version russia.su follows
+    rt_le(_): rco_v 1031 4
+    rt_le(_): rco_v 0 4
+    len(rco_rn): rco_rc
+    encode(rco_rns): rco_rn
+    rt_push_line(_): rco_v rco_rns
+    set(rco_i): 0
+    while(_): {rco_i < rco_rn} [
+        at(rco_f): rco_rf rco_i
+        at(rco_l): rco_rl rco_i
+        at(rco_c): rco_rc rco_i
+        encode(rco_ls): rco_l
+        encode(rco_cs): rco_c
+        rt_push_line(_): rco_v rco_f
+        rt_push_line(_): rco_v rco_ls
+        rt_push_line(_): rco_v rco_cs
+        add(rco_i): rco_i 1
+    ]
+    rt_push_text(_): rco_v rt_cosrc
+    # the payload length (offset 20) now that the payload is known
+    len(rco_vn0): rco_v
+    set(rco_pl): {rco_vn0 - 24}
+    set(rco_v): 20 {rco_pl & 255}
+    set(rco_v): 21 {(rco_pl >> 8) & 255}
+    set(rco_v): 22 {(rco_pl >> 16) & 255}
+    set(rco_v): 23 {(rco_pl >> 24) & 255}
+    len(rco_vn): rco_v
+    rt_crc32(rco_crc): rco_v rco_vn
+    rt_le(_): rco_v rco_crc 4
+    write_bytes(rco_w): rt_coout rco_v
+    if(_): {rco_w < 0} [
+        concat(rco_m): "USSR compile: cannot create '" rt_coout
+        concat(rco_m): rco_m "'\n"
+        write_stderr(_): rco_m
+        set(r): 1
+    ]
 ]
 
 # The next line of t from rru_at on (without its LF); moves rru_at past it.
@@ -7059,36 +7287,88 @@ rt_ru_line(r): t [
 
 # A russia .ru file's source, with pp_mapf/pp_mapl set from its line map;
 # null (after reporting why) when it cannot be read.
+# A .ru file's source, with pp_mapf/pp_mapl set from its line map; null
+# (after reporting why, as ussr_ru_read_file words it) when it cannot be
+# read or is not a valid russia .ru.
 rt_ru_read(r): path [
     global(_): rru_at
     set(r): null
-    file_exists(rr_ex): path
-    if(_): {rr_ex = false} [
+    read_bytes(rr_v): path
+    if(_): {rr_v = null} [
         concat(rr_m): "USSR: cannot open '" path
         concat(rr_m): rr_m "'\n"
         write_stderr(_): rr_m
         return(_): r
     ]
-    readfile(rr_t): path
-    set(rru_at): 0
-    rt_ru_line(rr_h): rr_t
-    if(_): {rr_h != "#russia-ru 1"} [
+    len(rr_n): rr_v
+    set(rr_why): ""
+    set(rr_sig): 1
+    if(_): {rr_n < 8} [ set(rr_sig): 0 ]
+    else(_): [
+        vec(rr_magic): ""
+        push(_): rr_magic 137
+        push(_): rr_magic 85
+        push(_): rr_magic 83
+        push(_): rr_magic 83
+        push(_): rr_magic 82
+        push(_): rr_magic 13
+        push(_): rr_magic 10
+        push(_): rr_magic 26
+        set(rr_i): 0
+        while(_): {rr_i < 8} [
+            at(rr_a): rr_v rr_i
+            at(rr_b): rr_magic rr_i
+            if(_): {rr_a != rr_b} [ set(rr_sig): 0 ]
+            add(rr_i): rr_i 1
+        ]
+    ]
+    if(_): {rr_sig = 0} [ set(rr_why): "not a USSR bytecode file (bad signature)" ]
+    if(_): {rr_why = "" && rr_n < 28} [ set(rr_why): "file is truncated" ]
+    if(_): {rr_why = ""} [
+        rt_le_get(rr_ver): rr_v 8 2
+        at(rr_f0): rr_v 10
+        at(rr_f1): rr_v 11
+        rt_le_get(rr_abi): rr_v 12 4
+        rt_le_get(rr_pl): rr_v 20 4
+        rt_ru_abi(rr_myabi):
+        if(_): {rr_ver != 3} [ set(rr_why): "unsupported .ru format version" ]
+        if(_): {rr_why = "" && (rr_f0 != 0 || rr_f1 != 0)} [ set(rr_why): "unsupported .ru flags" ]
+        if(_): {rr_why = "" && rr_abi != rr_myabi} [ set(rr_why): "compiled for an incompatible VM (ABI mismatch)" ]
+        if(_): {rr_why = "" && rr_pl > rr_n - 28} [ set(rr_why): "file is truncated" ]
+        if(_): {rr_why = "" && rr_pl < rr_n - 28} [ set(rr_why): "unexpected data after the end of the program" ]
+    ]
+    if(_): {rr_why = ""} [
+        rt_le_get(rr_crc): rr_v {rr_n - 4} 4
+        rt_crc32(rr_crc2): rr_v {rr_n - 4}
+        if(_): {rr_crc != rr_crc2} [ set(rr_why): "checksum mismatch (file is corrupted)" ]
+    ]
+    if(_): {rr_why != ""} [
         concat(rr_m2): "USSR: '" path
-        concat(rr_m2): rr_m2 "': not a russia.su bytecode file (bad signature)\n"
+        concat(rr_m2): rr_m2 "': "
+        concat(rr_m2): rr_m2 rr_why
+        concat(rr_m2): rr_m2 "\n"
         write_stderr(_): rr_m2
         return(_): r
     ]
+    rt_bytes_text(rr_t): rr_v 24 {rr_n - 4}
+    set(rru_at): 0
     rt_ru_line(rr_ns): rr_t
-    decode(rr_n): rr_ns
+    decode(rr_mn): rr_ns
     vec(pp_mapf): ""
     vec(pp_mapl): ""
     set(rr_i): 0
-    while(_): {rr_i < rr_n} [
+    while(_): {rr_i < rr_mn} [
         rt_ru_line(rr_f): rr_t
         rt_ru_line(rr_ls): rr_t
+        rt_ru_line(rr_cs): rr_t
         decode(rr_l): rr_ls
-        push(_): pp_mapf rr_f
-        push(_): pp_mapl rr_l
+        decode(rr_c): rr_cs
+        set(rr_j): 0
+        while(_): {rr_j < rr_c} [
+            push(_): pp_mapf rr_f
+            push(_): pp_mapl {rr_l + rr_j}
+            add(rr_j): rr_j 1
+        ]
         add(rr_i): rr_i 1
     ]
     len(rr_tn): rr_t
@@ -7169,6 +7449,7 @@ init(ret): arg_cnt arg_vec [
     struct(lx_Tok): "kind:number" "text:string" "line:number"
     set(ps_nddef): 0
     set(rt_conly): 0
+    set(rt_crctab): null
     if(_): {arg_cnt > 0} [
         at(init_c): arg_vec 0
         if(_): {init_c = "-c"} [
@@ -7246,8 +7527,8 @@ init(ret): arg_cnt arg_vec [
         cv_predecl(_): ps_root
         cv_stmt(_): ps_root
         cv_warnings(_):
-        rt_conly_write(_):
-        return(_): 0
+        rt_conly_write(init_cw):
+        return(_): init_cw
     ]
     if(_): {rt_repl = 1} [
         repl(_): 

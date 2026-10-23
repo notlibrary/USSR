@@ -278,6 +278,8 @@ static const char *ac_builtin_commands[] =
     "remove_file",
     "remove_dir",
     "write_stderr",
+    "read_bytes",
+    "write_bytes",
     NULL
 };
 

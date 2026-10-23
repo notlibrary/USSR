@@ -3,6 +3,10 @@
 #   set_bytes(v): value vec  -> every item of vec := value (0..255),
 #                               like memset(vec, value, sizeof vec)
 #   clear_bytes(v): vec      -> set_bytes with value 0
+#   read_bytes(v): "path"    -> the file's bytes as a vector (null if
+#                               unreadable); NUL bytes are kept
+#   write_bytes(n): "path" vec -> write exactly vec's bytes 0..255;
+#                               bytes written, or -1 if it cannot
 # serialize(v): value "INT"    -> v becomes 8 little-endian bytes of value
 # deserialize(v): bytes "INT"  -> v becomes the integer stored in bytes
 # Only "INT" is supported; other tags return null.
