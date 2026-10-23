@@ -76,6 +76,9 @@ lx_emit(r): kind text tline [
 # ---- scan a whole source string ----
 lx_scan(r): s [
     set(lx_src): s
+    # bytes are read from a vector: byte() on the whole source costs a
+    # copy of it per call
+    text_bytes(lx_sb): lx_src
     len(lx_n): lx_src
     set(lx_pos): 0
     set(lx_ln): 1
@@ -83,7 +86,7 @@ lx_scan(r): s [
     set(lx_failed): 0
     while(_): {lx_pos < lx_n} [
         set(lx_b): {0 - 1}
-        byte(lx_b): lx_src lx_pos
+        at(lx_b): lx_sb lx_pos
         set(lx_adv): 0
         # LF
         if(_): {lx_b = 10} [
@@ -123,7 +126,7 @@ lx_scan(r): s [
                     ]
                     if(_): {lx_cdone = 0} [
                         set(lx_cb): {0 - 1}
-                        byte(lx_cb): lx_src lx_pos
+                        at(lx_cb): lx_sb lx_pos
                         if(_): {lx_cb = 10} [
                             set(lx_cdone): 1
                         ]
@@ -146,7 +149,7 @@ lx_scan(r): s [
                     ]
                     if(_): {lx_pdone = 0} [
                         set(lx_pb): {0 - 1}
-                        byte(lx_pb): lx_src lx_pos
+                        at(lx_pb): lx_sb lx_pos
                         if(_): {lx_pb = 10} [
                             set(lx_pdone): 1
                         ]
@@ -178,7 +181,7 @@ lx_scan(r): s [
                 while(_): {lx_more = 1} [
                     set(lx_c2): {0 - 1}
                     if(_): {lx_pos < lx_n} [
-                        byte(lx_c2): lx_src lx_pos
+                        at(lx_c2): lx_sb lx_pos
                     ]
                     if(_): {lx_c2 = -1} [
                         set(lx_more): 0
@@ -223,18 +226,18 @@ lx_scan(r): s [
                     set(lx_pos): {lx_pos + 1}
                     set(lx_c2): {0 - 1}
                     if(_): {lx_pos < lx_n} [
-                        byte(lx_c2): lx_src lx_pos
+                        at(lx_c2): lx_sb lx_pos
                     ]
                     lx_digit_p(lx_dp): lx_c2
                 ]
                 set(lx_k): 2
                 set(lx_dot): {0 - 1}
                 if(_): {lx_pos < lx_n} [
-                    byte(lx_dot): lx_src lx_pos
+                    at(lx_dot): lx_sb lx_pos
                 ]
                 set(lx_c2): {0 - 1}
                 if(_): {lx_pos + 1 < lx_n} [
-                    byte(lx_c2): lx_src {lx_pos + 1}
+                    at(lx_c2): lx_sb {lx_pos + 1}
                 ]
                 lx_digit_p(lx_dp2): lx_c2
                 if(_): {lx_dot = 46} [
@@ -245,7 +248,7 @@ lx_scan(r): s [
                             set(lx_pos): {lx_pos + 1}
                             set(lx_c2): {0 - 1}
                             if(_): {lx_pos < lx_n} [
-                                byte(lx_c2): lx_src lx_pos
+                                at(lx_c2): lx_sb lx_pos
                             ]
                             lx_digit_p(lx_dp): lx_c2
                         ]
@@ -271,7 +274,7 @@ lx_scan(r): s [
                     ]
                     if(_): {lx_sdone = 0} [
                         set(lx_cb): {0 - 1}
-                        byte(lx_cb): lx_src lx_pos
+                        at(lx_cb): lx_sb lx_pos
                         if(_): {lx_cb = 34} [
                             set(lx_pos): {lx_pos + 1}
                             set(lx_sdone): 1
@@ -283,7 +286,7 @@ lx_scan(r): s [
                                 set(lx_pos): {lx_pos + 1}
                                 set(lx_eb): {0 - 1}
                                 if(_): {lx_pos < lx_n} [
-                                    byte(lx_eb): lx_src lx_pos
+                                    at(lx_eb): lx_sb lx_pos
                                 ]
                                 set(lx_ec): ""
                                 if(_): {lx_eb = 110} [
@@ -338,7 +341,7 @@ lx_scan(r): s [
                     ]
                     if(_): {lx_udone = 0} [
                         set(lx_ub): {0 - 1}
-                        byte(lx_ub): lx_src lx_pos
+                        at(lx_ub): lx_sb lx_pos
                         if(_): {lx_ub = 39} [
                             set(lx_udone): 1
                         ]
@@ -418,7 +421,7 @@ lx_scan(r): s [
             set(lx_hasop): 0
             set(lx_p1): {0 - 1}
             if(_): {lx_pos + 1 < lx_n} [
-                byte(lx_p1): lx_src {lx_pos + 1}
+                at(lx_p1): lx_sb {lx_pos + 1}
             ]
             if(_): {lx_b = 43} [
                 set(lx_hasop): 1
@@ -2500,6 +2503,7 @@ rt_is_host(r): nm [
     if(_): {nm = "terminal_size"} [ set(r): 1 ]
     if(_): {nm = "write_stderr"} [ set(r): 1 ]
     if(_): {nm = "read_bytes"} [ set(r): 1 ]
+    if(_): {nm = "text_bytes"} [ set(r): 1 ]
     if(_): {nm = "write_bytes"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
 ]
@@ -2621,6 +2625,10 @@ rt_host(r): nm vals [
     ]
     if(_): {nm = "read_bytes"} [
         if(_): {rt_hn = 1} [ read_bytes(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "text_bytes"} [
+        if(_): {rt_hn = 1} [ text_bytes(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
     ]
     if(_): {nm = "write_bytes"} [
@@ -4115,6 +4123,15 @@ cv_stmt_go(r): items idx m [
         cv_stmt_i(r): items cv_after
     ]
 ]
+# 1 when name is one of ussr's control-flow commands, which a function
+# can never be (bc_is_definition's list, plus global); any other name
+# defined as a function in the program means that function, builtin or not.
+cv_reserved(r): name [
+    set(r): 0
+    if(_): {name = "@" || name = "if" || name = "elif" || name = "else" || name = "choose" || name = "option" || name = "default"} [ set(r): 1 ]
+    elif(_): {name = "for" || name = "while" || name = "break" || name = "continue" || name = "return" || name = "do" || name = "loop"} [ set(r): 1 ]
+    elif(_): {name = "method" || name = "each" || name = "map" || name = "filter" || name = "global"} [ set(r): 1 ]
+]
 cv_cmd(r): nd [
     if(_): {ps_stop = 0} [
         getf(cv_cn): nd "s1"
@@ -4122,7 +4139,11 @@ cv_cmd(r): nd [
         set(cv_svc): cv_curc
         getf(cv_curl): nd "n1"
         set(cv_curc): cv_cn
-        cv_cmd_n(r): nd cv_cn
+        cv_reserved(cv_rsv): cv_cn
+        set(cv_usr): {0 - 1}
+        if(_): {cv_rsv = 0} [ cv_findf2(cv_usr): cv_cn ]
+        if(_): {cv_usr >= 0} [ cv_defcall2(r): nd cv_cn ]
+        else(_): [ cv_cmd_n(r): nd cv_cn ]
         set(cv_curl): cv_svl
         set(cv_curc): cv_svc
     ]
@@ -4835,7 +4856,8 @@ cv_predecl(r): prog [
         getf(cv_pdt): cv_pdc "tag"
         if(_): {cv_pdt = 2} [
             getf(cv_pdnm): cv_pdc "s1"
-            cv_known(cv_pdkn): cv_pdnm
+            # a block makes it a definition unless the name is reserved
+            cv_reserved(cv_pdkn): cv_pdnm
             cv_hasblk(cv_pdhb): cv_pdc
             if(_): {cv_pdkn = 0 && cv_pdhb = 1} [
                 cv_findf2(cv_pdf): cv_pdnm
@@ -4913,7 +4935,7 @@ cv_gnames(r): list names [
         if(_): {cv_gnt = 2} [
             getf(cv_gnm): cv_gnc "s1"
             cv_hasblk(cv_gnb): cv_gnc
-            cv_known(cv_gnkn): cv_gnm
+            cv_reserved(cv_gnkn): cv_gnm
             set(cv_gndef): 0
             if(_): {cv_gnb = 1 && cv_gnkn = 0} [ set(cv_gndef): 1 ]
             getf(cv_gnargs): cv_gnc "kids"
@@ -5952,7 +5974,8 @@ vm_step(r): cur op [
         getf(vm_ta): cur "a"
         getf(vm_tt): cur "imm"
         vm_reg(vm_tv): vm_ta
-        if(_): {vm_tv = true} [
+        # the host's if decides: null, false, 0, 0.0, "" and [] are false
+        if(_): vm_tv [
             sub(vm_tt2): vm_tt 1
             set(vm_ip): vm_tt2
         ]
@@ -5961,7 +5984,9 @@ vm_step(r): cur op [
         getf(vm_fa): cur "a"
         getf(vm_ft): cur "imm"
         vm_reg(vm_fv): vm_fa
-        if(_): {vm_fv = false} [
+        set(vm_ftr): 1
+        if(_): vm_fv [ set(vm_ftr): 0 ]
+        if(_): {vm_ftr = 1} [
             sub(vm_ft2): vm_ft 1
             set(vm_ip): vm_ft2
         ]

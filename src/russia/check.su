@@ -142,6 +142,8 @@ ck_op1_p(r): b [
 # Tokens of text into ck_toks, ending with EOF, or with ERR (its message
 # in s) at the first character the lexer rejects.
 ck_lex(r): text [
+    # bytes from a vector: byte() on the whole text copies it per call
+    text_bytes(ck_xtb): text
     set(r): 0
     vec(ck_toks): "ck_Tok"
     set(ck_lasttl): 1
@@ -150,14 +152,14 @@ ck_lex(r): text [
     set(ck_xl): 1
     set(ck_xerr): 0
     while(_): {ck_xerr = 0 && ck_xp < ck_xn} [
-        byte(ck_xb): text ck_xp
+        at(ck_xb): ck_xtb ck_xp
         set(ck_xdone): 0
         if(_): {ck_xb = 32 || ck_xb = 9 || ck_xb = 13} [
             # the whole run of blanks at once
             add(ck_xp): ck_xp 1
             set(ck_xws): 1
             while(_): {ck_xws = 1 && ck_xp < ck_xn} [
-                byte(ck_xwb): text ck_xp
+                at(ck_xwb): ck_xtb ck_xp
                 if(_): {ck_xwb = 32 || ck_xwb = 9 || ck_xwb = 13} [ add(ck_xp): ck_xp 1 ]
                 else(_): [ set(ck_xws): 0 ]
             ]
@@ -166,7 +168,7 @@ ck_lex(r): text [
         if(_): {ck_xdone = 0 && ck_xb = 35} [
             set(ck_xgo): 1
             while(_): {ck_xgo = 1 && ck_xp < ck_xn} [
-                byte(ck_xcb): text ck_xp
+                at(ck_xcb): ck_xtb ck_xp
                 if(_): {ck_xcb = 10 || ck_xcb = 13} [ set(ck_xgo): 0 ]
                 else(_): [ add(ck_xp): ck_xp 1 ]
             ]
@@ -183,14 +185,14 @@ ck_lex(r): text [
             set(ck_xq): ck_xp
             set(ck_xgo2): 1
             while(_): {ck_xgo2 = 1 && ck_xq < ck_xn} [
-                byte(ck_xhb): text ck_xq
+                at(ck_xhb): ck_xtb ck_xq
                 at(ck_xcl): ck_cls ck_xhb
                 set(ck_xgo2): 0
                 if(_): {(ck_xcl & 7) > 0} [ set(ck_xgo2): 1 ]
                 if(_): {ck_xgo2 = 1} [ add(ck_xq): ck_xq 1 ]
             ]
             if(_): {ck_xq > ck_xp && ck_xq < ck_xn} [
-                byte(ck_xhp): text ck_xq
+                at(ck_xhp): ck_xtb ck_xq
                 if(_): {ck_xhp = 40} [
                     slice(ck_xhead): text ck_xp {ck_xq - ck_xp}
                     ck_tok(_): "HEAD" ck_xhead ck_xl
@@ -205,11 +207,11 @@ ck_lex(r): text [
             set(ck_xend): {0 - 1}
             set(ck_xgo3): 1
             while(_): {ck_xgo3 = 1 && ck_xq2 < ck_xn} [
-                byte(ck_xsb): text ck_xq2
+                at(ck_xsb): ck_xtb ck_xq2
                 if(_): {ck_xsb = 10} [ set(ck_xgo3): 0 ]
                 elif(_): {ck_xsb = 92} [
                     set(ck_xsb2): 10
-                    if(_): {ck_xq2 + 1 < ck_xn} [ byte(ck_xsb2): text {ck_xq2 + 1} ]
+                    if(_): {ck_xq2 + 1 < ck_xn} [ at(ck_xsb2): ck_xtb {ck_xq2 + 1} ]
                     if(_): {ck_xsb2 = 10} [ set(ck_xgo3): 0 ]
                     else(_): [ add(ck_xq2): ck_xq2 2 ]
                 ]
@@ -237,7 +239,7 @@ ck_lex(r): text [
                 set(ck_xq3): ck_xp
                 set(ck_xgo4): 1
                 while(_): {ck_xgo4 = 1 && ck_xq3 < ck_xn} [
-                    byte(ck_xdb): text ck_xq3
+                    at(ck_xdb): ck_xtb ck_xq3
                     at(ck_xcl): ck_cls ck_xdb
                     set(ck_xgo4): 0
                     if(_): {(ck_xcl & 1) > 0} [ set(ck_xgo4): 1 ]
@@ -245,8 +247,8 @@ ck_lex(r): text [
                 ]
                 set(ck_xreal): 0
                 if(_): {ck_xq3 + 1 < ck_xn} [
-                    byte(ck_xdot): text ck_xq3
-                    byte(ck_xd2): text {ck_xq3 + 1}
+                    at(ck_xdot): ck_xtb ck_xq3
+                    at(ck_xd2): ck_xtb {ck_xq3 + 1}
                     at(ck_xcl): ck_cls ck_xd2
                     set(ck_xd2d): 0
                     if(_): {(ck_xcl & 1) > 0} [ set(ck_xd2d): 1 ]
@@ -256,7 +258,7 @@ ck_lex(r): text [
                     add(ck_xq3): ck_xq3 1
                     set(ck_xgo5): 1
                     while(_): {ck_xgo5 = 1 && ck_xq3 < ck_xn} [
-                        byte(ck_xdb2): text ck_xq3
+                        at(ck_xdb2): ck_xtb ck_xq3
                         at(ck_xcl): ck_cls ck_xdb2
                         set(ck_xgo5): 0
                         if(_): {(ck_xcl & 1) > 0} [ set(ck_xgo5): 1 ]
@@ -291,7 +293,7 @@ ck_lex(r): text [
                 set(ck_xq4): ck_xp
                 set(ck_xgo6): 1
                 while(_): {ck_xgo6 = 1 && ck_xq4 < ck_xn} [
-                    byte(ck_xib): text ck_xq4
+                    at(ck_xib): ck_xtb ck_xq4
                     at(ck_xcl): ck_cls ck_xib
                     set(ck_xgo6): 0
                     if(_): {(ck_xcl & 3) > 0} [ set(ck_xgo6): 1 ]
