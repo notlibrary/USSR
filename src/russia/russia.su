@@ -29,7 +29,7 @@ global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
 global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
-global(_): rt_hint cv_gcache cv_nkind
+global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -5662,8 +5662,13 @@ vm_ext(r): nb [
     set(r): vm_xrv
 ]
 # The innermost function call's frame (eval frames hold no locals), or
-# null at the top level.
+# null at the top level. Kept in vm_ffcache until vm_frames changes
+# (vm_ffok = 0 wherever it does).
 vm_func_frame(r): [
+    if(_): {vm_ffok = 1} [
+        set(r): vm_ffcache
+        return(_): r
+    ]
     set(r): null
     len(vm_ffn): vm_frames
     set(vm_ffi): {vm_ffn - 1}
@@ -5674,6 +5679,8 @@ vm_func_frame(r): [
         if(_): {vm_ffc > 0} [ set(r): vm_fff ]
         sub(vm_ffi): vm_ffi 1
     ]
+    set(vm_ffcache): r
+    set(vm_ffok): 1
 ]
 # The locals of the innermost call (the frame the code runs in).
 vm_frame_loc(r): [
@@ -5839,6 +5846,7 @@ vm_step(r): cur op [
         ]
         new(vm_fr): "vm_fr" vm_rp vm_sv vm_crt vm_loc vm_locs
         push(_): vm_frames vm_fr
+        set(vm_ffok): 0
         add(vm_sp): vm_sp 1
         getf(vm_ent): vm_fd "entry"
         # Flat dispatch: ip = entry - 1 so the caller's vm_loop
@@ -5856,6 +5864,7 @@ vm_step(r): cur op [
         # would be found by the next call's RET (vm_frames is indexed
         # by depth) and send it back to an earlier call site.
         pop(vm_fr2): vm_frames
+        set(vm_ffok): 0
         getf(vm_rvb): cur "b"
         if(_): {vm_rvb = 1} [
             vm_setreg(_): 31 rt_rv
@@ -5899,6 +5908,7 @@ vm_step(r): cur op [
         vec(vm_eloc): ""
         new(vm_efr): "vm_fr" vm_erp vm_esv "" vm_eloc vm_eloc
         push(_): vm_frames vm_efr
+        set(vm_ffok): 0
         add(vm_sp): vm_sp 1
         set(vm_ip): {vm_eent - 1}
     ]
@@ -6696,6 +6706,7 @@ sc_run(r): [
                 getf(vm_sp): sc_pr "sp"
                 getf(vm_regs): sc_pr "regs"
                 getf(vm_frames): sc_pr "frames"
+                set(vm_ffok): 0
                 getf(rt_store): sc_pr "store"
                 set(vm_flow): 0
                 set(vm_suspend): 0
@@ -7588,6 +7599,8 @@ init(ret): arg_cnt arg_vec [
     set(cv_pall): 0
     vec(cv_lps): "cv_lp"
     vec(vm_frames): "vm_fr"
+    set(vm_ffok): 0
+    set(vm_ffcache): null
     vec(vm_regs): "vm_rv"
     set(vm_ip): 0
     set(vm_flow): 0
