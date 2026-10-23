@@ -17,12 +17,12 @@ $include "uuasm.su"
 # Interpreter state shared across the stages (lx_ lexer, ps_ parser, rt_
 # tree runtime, cv_ compiler, vm_ VM, sc_ scheduler); every other variable
 # a function sets is local to it.
-global(_): ps_i ps_nddef rt_flow vm_suspend vm_ip vm_qleft vm_sp
-global(_): vm_scanbuf vm_scanpos sc_runq sc_tick lx_tokens ps_stop
+global(_): cv_regpush ps_quiet ps_errline ps_i ps_nddef rt_flow vm_suspend vm_ip vm_qleft vm_sp
+global(_): sc_runq sc_tick lx_tokens ps_stop
 global(_): ps_root rt_store rt_fdefs rt_rv rt_tn rt_xrv vm_flow cv_code
-global(_): cv_names cv_consts cv_lps cv_funcs cv_ent cv_sdefs vm_av
+global(_): cv_names cv_consts cv_lps cv_funcs cv_ent vm_av
 global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
-global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks
+global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -568,12 +568,15 @@ ps_istok(r): s [
 ps_fail(r): msg [
     set(ps_stop): 1
     set(ps_err): msg
-    print(_): msg
     ps_at(ps_ftk): 0
     getf(ps_fk): ps_ftk "kind"
     getf(ps_fx): ps_ftk "text"
     getf(ps_fl): ps_ftk "line"
-    template(_): "INT;STR;INT;STR" ps_fk ps_fx ps_fl "\n"
+    set(ps_errline): ps_fl
+    if(_): {ps_quiet = 0} [
+        print(_): msg
+        template(_): "INT;STR;INT;STR" ps_fk ps_fx ps_fl "\n"
+    ]
     set(r): 1
 ]
 
@@ -1104,6 +1107,29 @@ ps_par(r): [
                 ]
             ]
         ]
+        # A minus before a number is one negative literal in an argument
+        # (add(x): y -1), as in ussr; inside {} it stays unary minus.
+        if(_): {ps_par_m = 0} [
+            if(_): {ps_par_k = 20} [
+                ps_txt(ps_par_op): 0
+                ps_at(ps_par_nx): 1
+                getf(ps_par_nk): ps_par_nx "kind"
+                getf(ps_par_ns): ps_par_nx "text"
+                concat(ps_par_neg): "-" ps_par_ns
+                if(_): {ps_par_op = "-" && ps_par_nk = 2} [
+                    ps_adv(_): 0
+                    ps_adv(_): 0
+                    nd_new(r): 5 ps_par_neg "" 0 ""
+                    set(ps_par_m): 1
+                ]
+                if(_): {ps_par_op = "-" && ps_par_nk = 3} [
+                    ps_adv(_): 0
+                    ps_adv(_): 0
+                    nd_new(r): 6 ps_par_neg "" 0 ""
+                    set(ps_par_m): 1
+                ]
+            ]
+        ]
         if(_): {ps_par_m = 0} [
             ps_fail(ps_par_f): "bad parameter"
         ]
@@ -1432,11 +1458,13 @@ rt_write(r): nm val [
     ]
     set(r): 0
 ]
+# An undefined name reads as null, as a bare command argument does in
+# ussr; rt_undef tells callers that must fail on it (expressions).
 rt_read(r): nm [
     rt_find(rt_ri): nm
-    set(r): 0
+    set(r): null
     if(_): {rt_ri < 0} [
-        print(_): "undefined variable"
+        set(rt_undef): 1
     ]
     if(_): {rt_ri + 1 > 0} [
         at(rt_rp): rt_store rt_ri
@@ -1452,6 +1480,44 @@ rt_read(r): nm [
             rt_read(r): rt_rt
         ]
     ]
+]
+
+# eval(r): src parses src as a program of its own. 0 when it parsed (the
+# tree is in ps_root); otherwise the host is made to report the failure
+# the way ussr does ("<eval>:LINE: syntax error", then a failed process).
+rt_eval_parse(r): src [
+    set(r): 1
+    typeof(rt_ept): src
+    if(_): {rt_ept != "string"} [
+        rt_fatal(_):
+    ]
+    set(rt_epq): ps_quiet
+    set(ps_quiet): 1
+    set(ps_errline): 1
+    vec(lx_tokens): "lx_Tok"
+    lx_scan(rt_epl): src
+    if(_): {rt_epl = 0} [
+        ps_parse(r): src
+    ]
+    set(ps_quiet): rt_epq
+    if(_): {r != 0} [
+        set(rt_eps): ""
+        set(rt_epi): 1
+        while(_): {rt_epi < ps_errline} [
+            concat(rt_eps): rt_eps "\n"
+            add(rt_epi): rt_epi 1
+        ]
+        concat(rt_eps): rt_eps "("
+        eval(_): rt_eps
+        rt_fatal(_):
+    ]
+]
+
+# Fail the interpreted program the way ussr fails it: the host reports
+# "USSR scheduler: process 2 (init) failed" and exits 1, the exact output
+# ussr gives for the same error (russia.su itself runs as that process).
+rt_fatal(r): [
+    set(r): {__russia_fatal_error + 0}
 ]
 
 # expression evaluation: node -> value in r
@@ -1659,7 +1725,18 @@ rt_call(r): fd args cret [
     vec(rt_sv): ""
     getf(rt_cp): fd "prm"
     len(rt_cn): rt_cp
-    ex_bind(r): fd args rt_cp rt_sv 0 rt_cn
+    # Evaluate every argument before binding any parameter, as ussr does:
+    # f(r): b a with parameters a b must not see the freshly bound a.
+    vec(rt_avals): ""
+    getf(rt_cak): args "kids"
+    set(rt_cai): 0
+    while(_): {rt_cai < rt_cn} [
+        at(rt_can): rt_cak rt_cai
+        ex_val(rt_cav): rt_can
+        push(_): rt_avals rt_cav
+        add(rt_cai): rt_cai 1
+    ]
+    ex_bind(r): fd rt_avals rt_cp rt_sv 0 rt_cn
     ex_alias(r): fd cret rt_sv
     getf(rt_cb): fd "body"
     ex_block(_): rt_cb
@@ -1671,13 +1748,11 @@ rt_call(r): fd args cret [
     ex_rest(r): rt_sv 0 rt_cn1
     set(r): 0
 ]
-ex_bind(r): fd args prm sv i n [
+ex_bind(r): fd avals prm sv i n [
     if(_): {i < n} [
         at(rt_bn): prm i
         getf(rt_bnm): rt_bn "s1"
-        getf(rt_ak): args "kids"
-        at(rt_an): rt_ak i
-        ex_val(rt_av): rt_an
+        at(rt_av): avals i
         rt_find(rt_bi): rt_bnm
         new(rt_sp2): "rt_sv" rt_bnm 0 0 ""
         setf(_): rt_sp2 "n" rt_bnm
@@ -1697,7 +1772,7 @@ ex_bind(r): fd args prm sv i n [
         push(_): sv rt_sp2
         rt_write(_): rt_bnm rt_av
         add(rt_bi2): i 1
-        ex_bind(r): fd args prm sv rt_bi2 n
+        ex_bind(r): fd avals prm sv rt_bi2 n
     ]
     if(_): {i = n} [
         set(r): 0
@@ -1867,6 +1942,9 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "len"} [
             ex_oop(r): nd nm
         ]
+        if(_): {nm = "typeof"} [
+            ex_oop(r): nd nm
+        ]
         if(_): {nm = "getf"} [
             ex_oop(r): nd nm
         ]
@@ -1897,12 +1975,18 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "readfile"} [
             ex_oop(r): nd nm
         ]
+        # The evaluated program shares the caller's variables; its
+        # result is the result variable's value afterwards (null if unset).
         if(_): {nm = "eval"} [
             getf(rt_ek2): nd "kids"
             at(rt_e0): rt_ek2 0
             ex_val(rt_es): rt_e0
-            eval(rt_evr): rt_es
+            rt_eval_parse(_): rt_es
+            getf(rt_eroot): ps_root "kids"
+            ex_block_h(_): rt_eroot 0
+            set(rt_flow): 0
             getf(rt_en): nd "s2"
+            rt_read(rt_evr): rt_en
             rt_write(_): rt_en rt_evr
         ]
         if(_): {nm = "random64"} [
@@ -1988,6 +2072,7 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "push"} [ set(rt_unk): 0 ]
         if(_): {nm = "at"} [ set(rt_unk): 0 ]
         if(_): {nm = "len"} [ set(rt_unk): 0 ]
+        if(_): {nm = "typeof"} [ set(rt_unk): 0 ]
         if(_): {nm = "getf"} [ set(rt_unk): 0 ]
         if(_): {nm = "vec"} [ set(rt_unk): 0 ]
         if(_): {nm = "encode"} [ set(rt_unk): 0 ]
@@ -2096,69 +2181,136 @@ ex_tout(r): s [
     set(r): 0
 ]
 
-ex_tval(r): v [
-    encode(rt_tve): v
-    ex_tout(r): rt_tve
+# ---- template: one engine for the tree walker and the VM ----
+# Mirrors ussr's template exactly: a slot is STR, INT, REAL or BOOL at the
+# start or after a space, tab or ';', ending the format or followed by ';',
+# space or tab (one ';' after it is consumed); ";;" prints ';' and every
+# other byte is printed as is, so output streams up to the first bad value.
+# Numbers and booleans are printed by the host's own one-slot template,
+# which formats them (REAL is %.17g) and rejects a wrong type with ussr's
+# own error; strings go out byte by byte (see ex_tout).
+rt_tpl(r): fmt vals [
+    set(r): {1 = 1}
+    len(rt_tpn): fmt
+    len(rt_tpc): vals
+    set(rt_tpp): 0
+    set(rt_tpv): 0
+    while(_): {rt_tpp < rt_tpn} [
+        byte(rt_tpb): fmt rt_tpp
+        set(rt_tpdone): 0
+        if(_): {rt_tpb = 59 && rt_tpp + 1 < rt_tpn} [
+            byte(rt_tpb2): fmt {rt_tpp + 1}
+            if(_): {rt_tpb2 = 59} [
+                putch(_): 59
+                add(rt_tpp): rt_tpp 2
+                set(rt_tpdone): 1
+            ]
+        ]
+        if(_): {rt_tpdone = 0} [
+            set(rt_tpst): 0
+            if(_): {rt_tpp = 0} [ set(rt_tpst): 1 ]
+            if(_): {rt_tpp > 0} [
+                byte(rt_tppr): fmt {rt_tpp - 1}
+                if(_): {rt_tppr = 32 || rt_tppr = 9 || rt_tppr = 59} [
+                    set(rt_tpst): 1
+                ]
+            ]
+            set(rt_tpty): ""
+            if(_): {rt_tpst = 1} [
+                rt_tpl_slot(rt_tpty): fmt rt_tpp rt_tpn
+            ]
+            if(_): {rt_tpty != ""} [
+                if(_): {rt_tpv >= rt_tpc} [
+                    rt_tpl_fail(_):
+                ]
+                at(rt_tpval): vals rt_tpv
+                rt_tpl_emit(_): rt_tpty rt_tpval
+                add(rt_tpv): rt_tpv 1
+                len(rt_tptl): rt_tpty
+                add(rt_tpp): rt_tpp rt_tptl
+                if(_): {rt_tpp < rt_tpn} [
+                    byte(rt_tpb3): fmt rt_tpp
+                    if(_): {rt_tpb3 = 59} [
+                        add(rt_tpp): rt_tpp 1
+                    ]
+                ]
+                set(rt_tpdone): 1
+            ]
+        ]
+        if(_): {rt_tpdone = 0} [
+            putch(_): rt_tpb
+            add(rt_tpp): rt_tpp 1
+        ]
+    ]
+    if(_): {rt_tpv != rt_tpc} [
+        rt_tpl_fail(_):
+    ]
+]
+# The slot type starting at p, or "" when none starts there.
+rt_tpl_slot(r): fmt p n [
+    set(r): ""
+    vec(rt_tsl): ""
+    push(_): rt_tsl "STR"
+    push(_): rt_tsl "INT"
+    push(_): rt_tsl "REAL"
+    push(_): rt_tsl "BOOL"
+    set(rt_tsi): 0
+    while(_): {rt_tsi < 4 && r = ""} [
+        at(rt_tst): rt_tsl rt_tsi
+        len(rt_tsn): rt_tst
+        if(_): {p + rt_tsn <= n} [
+            slice(rt_tss): fmt p rt_tsn
+            if(_): {rt_tss = rt_tst} [
+                set(rt_tsok): 1
+                if(_): {p + rt_tsn < n} [
+                    byte(rt_tsb): fmt {p + rt_tsn}
+                    set(rt_tsok): 0
+                    if(_): {rt_tsb = 59 || rt_tsb = 32 || rt_tsb = 9} [
+                        set(rt_tsok): 1
+                    ]
+                ]
+                if(_): {rt_tsok = 1} [
+                    set(r): rt_tst
+                ]
+            ]
+        ]
+        add(rt_tsi): rt_tsi 1
+    ]
+]
+rt_tpl_emit(r): ty v [
+    set(r): 0
+    if(_): {ty = "STR"} [
+        typeof(rt_tet): v
+        if(_): {rt_tet != "string"} [
+            rt_tpl_fail(_):
+        ]
+        ex_tout(_): v
+    ]
+    if(_): {ty = "INT"} [ template(_): "INT;" v ]
+    if(_): {ty = "REAL"} [ template(_): "REAL;" v ]
+    if(_): {ty = "BOOL"} [ template(_): "BOOL;" v ]
+]
+# Too few or too many values: let the host fail the template the same way.
+rt_tpl_fail(r): [
+    template(r): "INT;" "russia: template arguments do not match format"
 ]
 
 ex_template(r): nd [
     getf(rt_tk): nd "kids"
     at(rt_tf0): rt_tk 0
     ex_val(rt_fmt): rt_tf0
-    set(rt_tslot): ""
-    set(rt_targ): 0
-    set(rt_tp): 0
-    len(rt_tfl): rt_fmt
-    while(_): {rt_tp < rt_tfl} [
-        byte(rt_tb): rt_fmt rt_tp
-        set(rt_tnom): 1
-        if(_): {rt_tb = 59} [
-            ex_tflush(_): rt_tslot rt_targ nd
-            set(rt_tslot): ""
-            add(rt_targ): rt_targ 1
-            add(rt_tp): rt_tp 1
-            set(rt_tnom): 0
-        ]
-        if(_): {rt_tb = 92} [
-            add(rt_tp): rt_tp 1
-            byte(rt_tb2): rt_fmt rt_tp
-            if(_): {rt_tb2 = 110} [ putch(_): 10 ]
-            if(_): {rt_tb2 = 116} [ putch(_): 9 ]
-            if(_): {rt_tb2 = 59} [ putch(_): 59 ]
-            if(_): {rt_tb2 = 92} [ putch(_): 92 ]
-            add(rt_tp): rt_tp 1
-            set(rt_tnom): 0
-        ]
-        if(_): {rt_tnom = 1} [
-            slice(rt_tch): rt_fmt rt_tp 1
-            concat(rt_tslot): rt_tslot rt_tch
-            add(rt_tp): rt_tp 1
-        ]
+    len(rt_tkn): rt_tk
+    vec(rt_tvals): ""
+    set(rt_tki): 1
+    while(_): {rt_tki < rt_tkn} [
+        at(rt_tkv): rt_tk rt_tki
+        ex_val(rt_tkx): rt_tkv
+        push(_): rt_tvals rt_tkx
+        add(rt_tki): rt_tki 1
     ]
-    ex_tflush(_): rt_tslot rt_targ nd
+    rt_tpl(rt_tr2): rt_fmt rt_tvals
     getf(rt_tr): nd "s2"
-    rt_write(_): rt_tr 1
-    set(r): 0
-]
-
-ex_targ(r): nd k [
-    getf(rt_tk2): nd "kids"
-    add(rt_tkk): k 1
-    at(rt_tn): rt_tk2 rt_tkk
-    ex_val(r): rt_tn
-]
-
-ex_tflush(r): slot aidx nd [
-    if(_): {slot = "STR"} [
-        ex_targ(rt_tsv): nd aidx
-        ex_tout(_): rt_tsv
-    ]
-    if(_): {slot != "STR"} [
-        if(_): {slot != ""} [
-            ex_targ(rt_tiv): nd aidx
-            ex_tval(_): rt_tiv
-        ]
-    ]
+    rt_write(_): rt_tr rt_tr2
     set(r): 0
 ]
 
@@ -2180,6 +2332,12 @@ ex_oop(r): nd nm [
         ex_val(rt_ov2): rt_o2
         at(rt_rv2): rt_ov1 rt_ov2
         rt_write(_): rt_or rt_rv2
+    ]
+    if(_): {nm = "typeof"} [
+        at(rt_o1): rt_ok2 0
+        ex_val(rt_ov1): rt_o1
+        typeof(rt_rv3t): rt_ov1
+        rt_write(_): rt_or rt_rv3t
     ]
     if(_): {nm = "len"} [
         at(rt_o1): rt_ok2 0
@@ -2250,59 +2408,154 @@ ex_oop(r): nd nm [
         ex_new(r): nd
     ]
     if(_): {nm = "struct"} [
-        print(_): "struct not supported yet"
+        getf(rt_stk): nd "kids"
+        vec(rt_stv): ""
+        len(rt_stn): rt_stk
+        set(rt_sti): 0
+        while(_): {rt_sti < rt_stn} [
+            at(rt_stc): rt_stk rt_sti
+            ex_val(rt_stx): rt_stc
+            push(_): rt_stv rt_stx
+            add(rt_sti): rt_sti 1
+        ]
+        getf(rt_stnm): nd "s2"
+        rt_struct_decl(_): rt_stnm rt_stv
     ]
 ]
 # ---- blocks, chains, loops ----
+# ---- structs and objects: real host structs ----
+# struct(Name): "field:type" ... declares Name on the host itself (through
+# eval: the host's struct takes literal text), so new, getf, setf, vec,
+# encode, decode and typeof work on host objects with ussr's own checks
+# and error messages.
+rt_struct_decl(r): name specs [
+    set(rt_sds): "struct("
+    concat(rt_sds): rt_sds name
+    concat(rt_sds): rt_sds "):"
+    len(rt_sdn): specs
+    set(rt_sdi): 0
+    while(_): {rt_sdi < rt_sdn} [
+        at(rt_sdp): specs rt_sdi
+        ex_scape(rt_sde): rt_sdp
+        concat(rt_sds): rt_sds " \""
+        concat(rt_sds): rt_sds rt_sde
+        concat(rt_sds): rt_sds "\""
+        add(rt_sdi): rt_sdi 1
+    ]
+    eval(r): rt_sds
+]
+# new(o): tn v1 ... with the values in vals (up to 10 of them).
+rt_new(r): tn vals [
+    set(r): null
+    len(rt_nwn): vals
+    if(_): {rt_nwn = 0} [
+        new(r): tn
+    ]
+    if(_): {rt_nwn = 1} [
+        at(rt_nw0): vals 0
+        new(r): tn rt_nw0
+    ]
+    if(_): {rt_nwn = 2} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        new(r): tn rt_nw0 rt_nw1
+    ]
+    if(_): {rt_nwn = 3} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        new(r): tn rt_nw0 rt_nw1 rt_nw2
+    ]
+    if(_): {rt_nwn = 4} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3
+    ]
+    if(_): {rt_nwn = 5} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        at(rt_nw4): vals 4
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3 rt_nw4
+    ]
+    if(_): {rt_nwn = 6} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        at(rt_nw4): vals 4
+        at(rt_nw5): vals 5
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3 rt_nw4 rt_nw5
+    ]
+    if(_): {rt_nwn = 7} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        at(rt_nw4): vals 4
+        at(rt_nw5): vals 5
+        at(rt_nw6): vals 6
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3 rt_nw4 rt_nw5 rt_nw6
+    ]
+    if(_): {rt_nwn = 8} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        at(rt_nw4): vals 4
+        at(rt_nw5): vals 5
+        at(rt_nw6): vals 6
+        at(rt_nw7): vals 7
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3 rt_nw4 rt_nw5 rt_nw6 rt_nw7
+    ]
+    if(_): {rt_nwn = 9} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        at(rt_nw4): vals 4
+        at(rt_nw5): vals 5
+        at(rt_nw6): vals 6
+        at(rt_nw7): vals 7
+        at(rt_nw8): vals 8
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3 rt_nw4 rt_nw5 rt_nw6 rt_nw7 rt_nw8
+    ]
+    if(_): {rt_nwn = 10} [
+        at(rt_nw0): vals 0
+        at(rt_nw1): vals 1
+        at(rt_nw2): vals 2
+        at(rt_nw3): vals 3
+        at(rt_nw4): vals 4
+        at(rt_nw5): vals 5
+        at(rt_nw6): vals 6
+        at(rt_nw7): vals 7
+        at(rt_nw8): vals 8
+        at(rt_nw9): vals 9
+        new(r): tn rt_nw0 rt_nw1 rt_nw2 rt_nw3 rt_nw4 rt_nw5 rt_nw6 rt_nw7 rt_nw8 rt_nw9
+    ]
+    if(_): {rt_nwn > 10} [
+        rt_fatal(_):
+    ]
+]
 ex_new(r): nd [
     getf(rt_nk): nd "kids"
     len(rt_nn): rt_nk
     at(rt_n0): rt_nk 0
-    ex_val(rt_tn): rt_n0
-    ex_new_f(r): nd rt_nk rt_nn
-]
-ex_new_f(r): nd nk nn [
-    set(r): 0
-    if(_): {nn = 2} [
-        at(rt_f1): nk 1
-        ex_val(rt_v1): rt_f1
-        new(rt_o): rt_tn rt_v1
-        ex_new_w(r): nd rt_o
+    ex_val(rt_ntn): rt_n0
+    vec(rt_nvals): ""
+    set(rt_ni): 1
+    while(_): {rt_ni < rt_nn} [
+        at(rt_nkv): rt_nk rt_ni
+        ex_val(rt_nkx): rt_nkv
+        push(_): rt_nvals rt_nkx
+        add(rt_ni): rt_ni 1
     ]
-    if(_): {nn = 3} [
-        at(rt_f1): nk 1
-        ex_val(rt_v1): rt_f1
-        at(rt_f2): nk 2
-        ex_val(rt_v2): rt_f2
-        new(rt_o): rt_tn rt_v1 rt_v2
-        ex_new_w(r): nd rt_o
-    ]
-    if(_): {nn = 4} [
-        at(rt_f1): nk 1
-        ex_val(rt_v1): rt_f1
-        at(rt_f2): nk 2
-        ex_val(rt_v2): rt_f2
-        at(rt_f3): nk 3
-        ex_val(rt_v3): rt_f3
-        new(rt_o): rt_tn rt_v1 rt_v2 rt_v3
-        ex_new_w(r): nd rt_o
-    ]
-    if(_): {nn = 5} [
-        at(rt_f1): nk 1
-        ex_val(rt_v1): rt_f1
-        at(rt_f2): nk 2
-        ex_val(rt_v2): rt_f2
-        at(rt_f3): nk 3
-        ex_val(rt_v3): rt_f3
-        at(rt_f4): nk 4
-        ex_val(rt_v4): rt_f4
-        new(rt_o): rt_tn rt_v1 rt_v2 rt_v3 rt_v4
-        ex_new_w(r): nd rt_o
-    ]
-]
-ex_new_w(r): nd obj [
-    getf(rt_nw): nd "s2"
-    rt_write(_): rt_nw obj
+    rt_new(rt_nob): rt_ntn rt_nvals
+    getf(rt_nr): nd "s2"
+    rt_write(_): rt_nr rt_nob
     set(r): 0
 ]
 ex_defcall(r): nd nm [
@@ -2706,20 +2959,24 @@ ex_do(r): items idx [
         ex_block_h(r): items rt_donx2
     ]
 ]
+# Iterates in place: recursing per pass made every level run the rest of
+# the enclosing block on the way out, repeating it once per iteration.
 ex_do_go(r): items idx body cond [
     set(r): 0
-    ex_block(_): body
-    set(rt_dcont): 0
-    if(_): {rt_flow = 0} [ set(rt_dcont): 1 ]
-    if(_): {rt_flow = 2} [
-        set(rt_flow): 0
-        set(rt_dcont): 1
-    ]
-    if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
-    if(_): {rt_dcont = 1} [
-        ex_val(rt_dcv): cond
-        if(_): {rt_dcv = true} [
-            if(_): {rt_flow = 0} [ ex_do_go(r): items idx body cond ]
+    set(rt_dgo): 1
+    while(_): {rt_dgo = 1} [
+        set(rt_dgo): 0
+        ex_block(_): body
+        set(rt_dcont): 0
+        if(_): {rt_flow = 0} [ set(rt_dcont): 1 ]
+        if(_): {rt_flow = 2} [
+            set(rt_flow): 0
+            set(rt_dcont): 1
+        ]
+        if(_): {rt_flow = 1} [ set(rt_flow): 0 ]
+        if(_): {rt_dcont = 1} [
+            ex_val(rt_dcv): cond
+            if(_): {rt_dcv = true} [ set(rt_dgo): 1 ]
         ]
     ]
     if(_): {rt_flow = 0} [
@@ -3258,12 +3515,17 @@ rt_run(r): prog acnt avec [
             rt_write(_): rt_p0n acnt
             rt_write(_): rt_p1n avec
         ]
+        set(rt_initret): null
+        rt_write(_): "rt_initret" null
         ex_alias(_): rt_fd3 "rt_initret" rt_sv2
         getf(rt_cb3): rt_fd3 "body"
         ex_block(_): rt_cb3
         if(_): {rt_flow = 3} [
             set(rt_flow): 0
+            rt_write(_): "rt_initret" rt_rv
         ]
+        rt_read(rt_irv): "rt_initret"
+        rt_exitcode(r): rt_irv
         ex_rest(_): rt_sv2 0 1
     ]
     if(_): {rt_fi < 0} [
@@ -3306,6 +3568,7 @@ ua_to_vm(r): op [
     if(_): {op = 27} [ set(r): 31 ]
     if(_): {op = 28} [ set(r): 32 ]
     if(_): {op = 29} [ set(r): 21 ]
+    if(_): {op = 30} [ set(r): 69 ]
 ]
 ua_to_bootstrap(r): op [
     set(r): {0 - 1}
@@ -3339,6 +3602,7 @@ ua_to_bootstrap(r): op [
     if(_): {op = 31} [ set(r): 27 ]
     if(_): {op = 32} [ set(r): 28 ]
     if(_): {op = 21} [ set(r): 29 ]
+    if(_): {op = 69} [ set(r): 30 ]
 ]
 ua_name(r): op [
     set(r): "INVALID"
@@ -3372,6 +3636,7 @@ ua_name(r): op [
     if(_): {op = 31} [ set(r): "BAND" ]
     if(_): {op = 32} [ set(r): "BOR" ]
     if(_): {op = 21} [ set(r): "NEG" ]
+    if(_): {op = 69} [ set(r): "EVAL" ]
 ]
 ua_emit(r): op a b c imm [
     ua_name(cv_mnemonic): op
@@ -3431,10 +3696,12 @@ cv_e(r): nd tgt [
 ]
 cv_e_t(r): nd tgt t [
     set(r): 0
+    # LOAD_VAR b=1 (inside an operator) fails on an undefined name;
+    # b=0 (a bare argument) reads it as null.
     if(_): {t = 4} [
         getf(cv_s1): nd "s1"
         cv_name(cv_ni3): cv_s1
-        cv_emit(_): 2 tgt 0 0 cv_ni3
+        cv_emit(_): 2 tgt cv_strict 0 cv_ni3
     ]
     if(_): {t = 5} [
         getf(cv_s1): nd "s1"
@@ -3473,6 +3740,8 @@ cv_e_t(r): nd tgt t [
         cv_emit(_): 1 tgt 0 0 cv_ci
     ]
     if(_): {t = 12} [
+        set(cv_strict_was): cv_strict
+        set(cv_strict): 1
         getf(cv_kd): nd "kids"
         at(cv_kr): cv_kd 1
         cv_e(r): cv_kr tgt
@@ -3480,6 +3749,7 @@ cv_e_t(r): nd tgt t [
         at(cv_kl): cv_kd 0
         add(cv_t2): tgt 1
         cv_e(r): cv_kl cv_t2
+        set(cv_strict): cv_strict_was
         getf(cv_op): nd "s1"
         set(cv_opc): 0
         if(_): {cv_op = "+"} [ set(cv_opc): 10 ]
@@ -3503,10 +3773,13 @@ cv_e_t(r): nd tgt t [
         cv_emit(_): cv_opc tgt cv_t2 tgt 0
     ]
     if(_): {t = 13} [
+        set(cv_strict_was): cv_strict
+        set(cv_strict): 1
         getf(cv_kd): nd "kids"
         at(cv_kc): cv_kd 0
         add(cv_t3): tgt 1
         cv_e(r): cv_kc cv_t3
+        set(cv_strict): cv_strict_was
         getf(cv_op): nd "s1"
         set(cv_zc): 0
         cv_const(cv_zi): cv_zc
@@ -3617,6 +3890,7 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "push"} [ cv_native2(r): nd nm ]
         if(_): {nm = "at"} [ cv_native2(r): nd nm ]
         if(_): {nm = "len"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "typeof"} [ cv_native2(r): nd nm ]
         if(_): {nm = "getf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "setf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "vec"} [ cv_native2(r): nd nm ]
@@ -3628,8 +3902,10 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "slice"} [ cv_native2(r): nd nm ]
         if(_): {nm = "readfile"} [ cv_native2(r): nd nm ]
         if(_): {nm = "random64"} [ cv_native2(r): nd nm ]
+        if(_): {nm = "time"} [ cv_native2(r): nd nm ]
         if(_): {nm = "seed_random64"} [ cv_native2(r): nd nm ]
         if(_): {nm = "scan"} [ cv_scanc(r): nd ]
+        if(_): {nm = "eval"} [ cv_eval(r): nd ]
         if(_): {nm = "do"} [ cv_do(r): nd ]
         if(_): {nm = "struct"} [ cv_struct2(r): nd ]
         if(_): {nm = "await"} [ cv_native2(r): nd nm ]
@@ -3645,51 +3921,8 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "read_file"} [ cv_native2(r): nd nm ]
         if(_): {nm = "set_bytes"} [ cv_native2(r): nd nm ]
         if(_): {nm = "clear_bytes"} [ cv_native2(r): nd nm ]
-        set(cv_kn): 1
-        if(_): {nm = "set"} [ set(cv_kn): 0 ]
-        if(_): {nm = "print"} [ set(cv_kn): 0 ]
-        if(_): {nm = "add"} [ set(cv_kn): 0 ]
-        if(_): {nm = "sub"} [ set(cv_kn): 0 ]
-        if(_): {nm = "mul"} [ set(cv_kn): 0 ]
-        if(_): {nm = "div"} [ set(cv_kn): 0 ]
-        if(_): {nm = "mod"} [ set(cv_kn): 0 ]
-        if(_): {nm = "concat"} [ set(cv_kn): 0 ]
-        if(_): {nm = "break"} [ set(cv_kn): 0 ]
-        if(_): {nm = "continue"} [ set(cv_kn): 0 ]
-        if(_): {nm = "return"} [ set(cv_kn): 0 ]
-        if(_): {nm = "while"} [ set(cv_kn): 0 ]
-        if(_): {nm = "for"} [ set(cv_kn): 0 ]
-        if(_): {nm = "push"} [ set(cv_kn): 0 ]
-        if(_): {nm = "at"} [ set(cv_kn): 0 ]
-        if(_): {nm = "len"} [ set(cv_kn): 0 ]
-        if(_): {nm = "getf"} [ set(cv_kn): 0 ]
-        if(_): {nm = "setf"} [ set(cv_kn): 0 ]
-        if(_): {nm = "vec"} [ set(cv_kn): 0 ]
-        if(_): {nm = "encode"} [ set(cv_kn): 0 ]
-        if(_): {nm = "decode"} [ set(cv_kn): 0 ]
-        if(_): {nm = "new"} [ set(cv_kn): 0 ]
-        if(_): {nm = "template"} [ set(cv_kn): 0 ]
-        if(_): {nm = "byte"} [ set(cv_kn): 0 ]
-        if(_): {nm = "slice"} [ set(cv_kn): 0 ]
-        if(_): {nm = "readfile"} [ set(cv_kn): 0 ]
-        if(_): {nm = "random64"} [ set(cv_kn): 0 ]
-        if(_): {nm = "seed_random64"} [ set(cv_kn): 0 ]
-        if(_): {nm = "scan"} [ set(cv_kn): 0 ]
-        if(_): {nm = "do"} [ set(cv_kn): 0 ]
-        if(_): {nm = "struct"} [ set(cv_kn): 0 ]
-        if(_): {nm = "await"} [ set(cv_kn): 0 ]
-        if(_): {nm = "sleep"} [ set(cv_kn): 0 ]
-        if(_): {nm = "yield"} [ set(cv_kn): 0 ]
-        if(_): {nm = "gc"} [ set(cv_kn): 0 ]
-        if(_): {nm = "async"} [ set(cv_kn): 0 ]
-        if(_): {nm = "process"} [ set(cv_kn): 0 ]
-        if(_): {nm = "load"} [ set(cv_kn): 0 ]
-        if(_): {nm = "open_file"} [ set(cv_kn): 0 ]
-        if(_): {nm = "close_file"} [ set(cv_kn): 0 ]
-        if(_): {nm = "write_file"} [ set(cv_kn): 0 ]
-        if(_): {nm = "read_file"} [ set(cv_kn): 0 ]
-        if(_): {nm = "set_bytes"} [ set(cv_kn): 0 ]
-        if(_): {nm = "clear_bytes"} [ set(cv_kn): 0 ]
+        cv_known(cv_kn0): nm
+        set(cv_kn): {1 - cv_kn0}
         if(_): {cv_kn = 1} [
             cv_defcall2(r): nd nm
         ]
@@ -3817,18 +4050,37 @@ cv_next(r): items nexti p1 ends [
             if(_): {cv_ni5n = "else"} [ set(cv_nm2): 2 ]
         ]
     ]
+    # The chain resumes after the else: past its block, or past the one
+    # command that is its body when it has none.
     set(cv_nx5): nexti
     if(_): {cv_nm2 = 2} [
         add(cv_nx5): nexti 1
+        getf(cv_nek): cv_ni5 "kids"
+        len(cv_nekl): cv_nek
+        set(cv_neb): 0
+        set(cv_nei): 0
+        while(_): {cv_nei < cv_nekl} [
+            at(cv_nek0): cv_nek cv_nei
+            getf(cv_nek0t): cv_nek0 "tag"
+            if(_): {cv_nek0t = 3} [ set(cv_neb): 1 ]
+            add(cv_nei): cv_nei 1
+        ]
+        if(_): {cv_neb = 0} [
+            add(cv_nx5): nexti 2
+        ]
     ]
     cv_next2(r): items nexti p1 ends cv_nm2 cv_nx5
 ]
 cv_next2(r): items nexti p1 ends nm2 nx5 [
+    # A taken branch jumps to the end of the chain; the previous test's
+    # false jump lands after that jump, on the next elif/else.
+    if(_): {nm2 > 0} [
+        cv_emit(cv_je): 7 0 0 0 0
+        push(_): ends cv_je
+    ]
     len(cv_here): cv_code
     cv_patch(_): cv_code p1 {0 - 1} cv_here
     if(_): {nm2 = 1} [
-        cv_emit(cv_je): 7 0 0 0 0
-        push(_): ends cv_je
         cv_chain2(r): items nexti ends
     ]
     set(cv_nm3): 0
@@ -3836,8 +4088,6 @@ cv_next2(r): items nexti p1 ends nm2 nx5 [
     if(_): {nm2 = 2} [ set(cv_nm3): 1 ]
     if(_): {cv_nm3 = 1} [
         if(_): {nm2 = 2} [
-            cv_emit(cv_je): 7 0 0 0 0
-            push(_): ends cv_je
             cv_else2(r): items nexti
         ]
         cv_endpatch(r): items nx5 ends
@@ -4172,33 +4422,133 @@ cv_findf2_i(r): nm i [
 cv_findf2(r): nm [
     cv_findf2_i(r): nm 0
 ]
+# 1 when the compiler handles nm itself (a builtin or control command),
+# 0 when nm is a user function call or definition.
+cv_known(r): nm [
+    set(r): 0
+    if(_): {nm = "set"} [ set(r): 1 ]
+    if(_): {nm = "print"} [ set(r): 1 ]
+    if(_): {nm = "add"} [ set(r): 1 ]
+    if(_): {nm = "sub"} [ set(r): 1 ]
+    if(_): {nm = "mul"} [ set(r): 1 ]
+    if(_): {nm = "div"} [ set(r): 1 ]
+    if(_): {nm = "mod"} [ set(r): 1 ]
+    if(_): {nm = "concat"} [ set(r): 1 ]
+    if(_): {nm = "break"} [ set(r): 1 ]
+    if(_): {nm = "continue"} [ set(r): 1 ]
+    if(_): {nm = "return"} [ set(r): 1 ]
+    if(_): {nm = "while"} [ set(r): 1 ]
+    if(_): {nm = "for"} [ set(r): 1 ]
+    if(_): {nm = "push"} [ set(r): 1 ]
+    if(_): {nm = "at"} [ set(r): 1 ]
+    if(_): {nm = "len"} [ set(r): 1 ]
+    if(_): {nm = "typeof"} [ set(r): 1 ]
+    if(_): {nm = "getf"} [ set(r): 1 ]
+    if(_): {nm = "setf"} [ set(r): 1 ]
+    if(_): {nm = "vec"} [ set(r): 1 ]
+    if(_): {nm = "encode"} [ set(r): 1 ]
+    if(_): {nm = "decode"} [ set(r): 1 ]
+    if(_): {nm = "new"} [ set(r): 1 ]
+    if(_): {nm = "template"} [ set(r): 1 ]
+    if(_): {nm = "byte"} [ set(r): 1 ]
+    if(_): {nm = "slice"} [ set(r): 1 ]
+    if(_): {nm = "readfile"} [ set(r): 1 ]
+    if(_): {nm = "random64"} [ set(r): 1 ]
+    if(_): {nm = "time"} [ set(r): 1 ]
+    if(_): {nm = "eval"} [ set(r): 1 ]
+    if(_): {nm = "seed_random64"} [ set(r): 1 ]
+    if(_): {nm = "scan"} [ set(r): 1 ]
+    if(_): {nm = "do"} [ set(r): 1 ]
+    if(_): {nm = "struct"} [ set(r): 1 ]
+    if(_): {nm = "await"} [ set(r): 1 ]
+    if(_): {nm = "sleep"} [ set(r): 1 ]
+    if(_): {nm = "yield"} [ set(r): 1 ]
+    if(_): {nm = "gc"} [ set(r): 1 ]
+    if(_): {nm = "async"} [ set(r): 1 ]
+    if(_): {nm = "process"} [ set(r): 1 ]
+    if(_): {nm = "load"} [ set(r): 1 ]
+    if(_): {nm = "open_file"} [ set(r): 1 ]
+    if(_): {nm = "close_file"} [ set(r): 1 ]
+    if(_): {nm = "write_file"} [ set(r): 1 ]
+    if(_): {nm = "read_file"} [ set(r): 1 ]
+    if(_): {nm = "set_bytes"} [ set(r): 1 ]
+    if(_): {nm = "clear_bytes"} [ set(r): 1 ]
+    if(_): {nm = "if"} [ set(r): 1 ]
+    if(_): {nm = "elif"} [ set(r): 1 ]
+    if(_): {nm = "else"} [ set(r): 1 ]
+    if(_): {nm = "choose"} [ set(r): 1 ]
+    if(_): {nm = "option"} [ set(r): 1 ]
+    if(_): {nm = "loop"} [ set(r): 1 ]
+]
+# A command with a trailing block defines nm (ussr's rule: a builtin
+# cannot take a block); without one it calls nm. Calling an unknown name
+# fails the process when it runs, as in ussr.
 cv_defcall2(r): nd nm [
-    cv_findf2(cv_df): nm
-    set(cv_dc): 0
-    if(_): {cv_df + 1 > 0} [
-        set(cv_dc): 1
+    cv_hasblk(cv_hb): nd
+    if(_): {cv_hb = 1} [
+        cv_regdef(r): nd nm
     ]
-    if(_): {cv_dc = 1} [
-        cv_call(r): nd cv_df
+    if(_): {cv_hb = 0} [
+        cv_findf2(cv_df): nm
+        if(_): {cv_df + 1 > 0} [
+            cv_call(r): nd cv_df
+        ]
+        if(_): {cv_df < 0} [
+            cv_name(cv_dun): "__russia_unknown_command"
+            cv_emit(_): 2 16 1 0 cv_dun
+        ]
     ]
-    if(_): {cv_dc = 0} [
-        getf(cv_dk): nd "kids"
-        len(cv_dk2): cv_dk
-        set(cv_hb): 0
-        if(_): {cv_dk2 > 0} [
-            sub(cv_dl): cv_dk2 1
-            at(cv_dl2): cv_dk cv_dl
-            getf(cv_dl3): cv_dl2 "tag"
-            if(_): {cv_dl3 = 3} [
-                set(cv_hb): 1
+]
+cv_hasblk(r): nd [
+    set(r): 0
+    getf(cv_hk): nd "kids"
+    len(cv_hkl): cv_hk
+    if(_): {cv_hkl > 0} [
+        at(cv_hkn): cv_hk {cv_hkl - 1}
+        getf(cv_hkt): cv_hkn "tag"
+        if(_): {cv_hkt = 3} [ set(r): 1 ]
+    ]
+]
+# Register every top-level definition before compiling, so a call may
+# come before the definition (as ussr allows). Entries are filled in by
+# cv_regdef when the body is compiled.
+cv_predecl(r): prog [
+    set(r): 0
+    getf(cv_pdk): prog "kids"
+    len(cv_pdn): cv_pdk
+    set(cv_pdi): 0
+    while(_): {cv_pdi < cv_pdn} [
+        at(cv_pdc): cv_pdk cv_pdi
+        getf(cv_pdt): cv_pdc "tag"
+        if(_): {cv_pdt = 2} [
+            getf(cv_pdnm): cv_pdc "s1"
+            cv_known(cv_pdkn): cv_pdnm
+            cv_hasblk(cv_pdhb): cv_pdc
+            if(_): {cv_pdkn = 0 && cv_pdhb = 1} [
+                cv_findf2(cv_pdf): cv_pdnm
+                if(_): {cv_pdf < 0} [
+                    vec(cv_pdprm): ""
+                    new(cv_pdfd): "cv_fd2" "" 0 0 "" cv_pdprm
+                    setf(_): cv_pdfd "name" cv_pdnm
+                    setf(_): cv_pdfd "entry" {0 - 1}
+                    getf(cv_pdkids): cv_pdc "kids"
+                    len(cv_pdkl): cv_pdkids
+                    sub(cv_pdnp): cv_pdkl 1
+                    setf(_): cv_pdfd "nparams" cv_pdnp
+                    getf(cv_pdrt): cv_pdc "s2"
+                    setf(_): cv_pdfd "retname" cv_pdrt
+                    set(cv_pdj): 0
+                    while(_): {cv_pdj < cv_pdnp} [
+                        at(cv_pdp): cv_pdkids cv_pdj
+                        push(_): cv_pdprm cv_pdp
+                        add(cv_pdj): cv_pdj 1
+                    ]
+                    setf(_): cv_pdfd "prm" cv_pdprm
+                    push(_): cv_funcs cv_pdfd
+                ]
             ]
         ]
-        if(_): {cv_hb = 1} [
-            cv_regdef(r): nd nm
-        ]
-        if(_): {cv_hb = 0} [
-            print(_): "unknown command"
-        ]
+        add(cv_pdi): cv_pdi 1
     ]
 ]
 cv_regdef(r): nd nm [
@@ -4225,15 +4575,24 @@ cv_regdef_i(r): nd prm i blim [
         cv_regdef_i(r): nd prm cv_ri2 blim
     ]
     if(_): {i = blim} [
-        new(cv_fd): "cv_fd2" "" 0 0 "" prm
+        # Fill in the record cv_predecl made (or an earlier definition of
+        # the same name: the last one wins), else add a new one.
         getf(cv_nm5): nd "s1"
-        setf(_): cv_fd "name" cv_nm5
+        cv_findf2(cv_rfi): cv_nm5
+        if(_): {cv_regpush = 1} [ set(cv_rfi): {0 - 1} ]
+        if(_): {cv_rfi < 0} [
+            new(cv_fd): "cv_fd2" "" 0 0 "" prm
+            setf(_): cv_fd "name" cv_nm5
+            push(_): cv_funcs cv_fd
+        ]
+        if(_): {cv_rfi + 1 > 0} [
+            at(cv_fd): cv_funcs cv_rfi
+        ]
         setf(_): cv_fd "entry" cv_ent
         setf(_): cv_fd "nparams" blim
         getf(cv_rt5): nd "s2"
         setf(_): cv_fd "retname" cv_rt5
         setf(_): cv_fd "prm" prm
-        push(_): cv_funcs cv_fd
         getf(cv_rk5): nd "kids"
         at(cv_bd): cv_rk5 blim
         cv_stmt(r): cv_bd
@@ -4259,116 +4618,46 @@ cv_call_i(r): nd kids idx fi [
         cv_emit(_): 5 16 cv_cn cv_crn fi
     ]
 ]
-cv_fldname(r): s [
-    len(cv_fl3): s
-    set(cv_fp): 0
-    set(cv_ff): 0
-    while(_): {cv_fp < cv_fl3} [
-        if(_): {cv_ff = 0} [
-            byte(cv_fb): s cv_fp
-            if(_): {cv_fb = 58} [
-                set(cv_ff): 1
-            ]
-            if(_): {cv_ff = 0} [
-                add(cv_fp): cv_fp 1
-            ]
-        ]
-        if(_): {cv_ff = 1} [
-            set(cv_fp): cv_fl3
-        ]
-    ]
-    slice(r): s 0 cv_fp
+# eval(r): src -> EVAL compiles src at run time and runs it like a call;
+# the result is r's value afterwards (null when unset), as in ussr.
+cv_eval(r): nd [
+    getf(cv_evk): nd "kids"
+    at(cv_ev0): cv_evk 0
+    cv_e(_): cv_ev0 16
+    getf(cv_evr): nd "s2"
+    cv_name(cv_evri): cv_evr
+    cv_emit(_): 30 16 0 0 cv_evri
+    cv_emit(_): 2 16 0 0 cv_evri
+    cv_emit(_): 3 16 0 0 cv_evri
+    set(r): 0
 ]
+# struct(Name): specs... runs at run time, declaring Name on the host.
 cv_struct2(r): nd [
     getf(cv_stn): nd "s2"
-    getf(cv_sk2): nd "kids"
-    vec(cv_fn2): ""
-    cv_fld_i(r): cv_sk2 0 cv_fn2
-    new(cv_sp3): "rt_sp" cv_stn cv_fn2 ""
-    push(_): cv_sdefs cv_sp3
-    set(r): 0
-]
-cv_fld_i(r): specs idx fn [
-    len(cv_fil): specs
-    set(r): 0
-    if(_): {idx < cv_fil} [
-        at(cv_sp4): specs idx
-        getf(cv_fs4): cv_sp4 "s1"
-        cv_fldname(cv_fn3): cv_fs4
-        push(_): fn cv_fn3
-        add(cv_fi5): idx 1
-        cv_fld_i(r): specs cv_fi5 fn
+    cv_const(cv_stc): cv_stn
+    cv_emit(_): 1 16 0 0 cv_stc
+    getf(cv_stk): nd "kids"
+    len(cv_stl): cv_stk
+    set(cv_sti): 0
+    while(_): {cv_sti < cv_stl} [
+        at(cv_stx): cv_stk cv_sti
+        add(cv_str): 17 cv_sti
+        cv_e(_): cv_stx cv_str
+        add(cv_sti): cv_sti 1
     ]
-]
-vm_newobj(r): nb [
-    vec(vm_av): ""
-    if(_): {nb > 1} [ push(_): vm_av rt_na1 ]
-    if(_): {nb > 2} [ push(_): vm_av rt_na2 ]
-    if(_): {nb > 3} [ push(_): vm_av rt_na3 ]
-    if(_): {nb > 4} [ push(_): vm_av rt_na4 ]
-    if(_): {nb > 5} [ push(_): vm_av rt_na5 ]
-    vec(vm_fs2): ""
-    new(vm_ob): "rt_obj" rt_na0 vm_fs2
-    rt_find(vm_ni2): rt_na0
-    if(_): {vm_ni2 + 1 > 0} [
-        at(vm_sd): cv_sdefs vm_ni2
-        getf(vm_sfn): vm_sd "v"
-        vm_no_i(r): vm_sfn 0 vm_fs2
-    ]
-    set(r): vm_ob
-]
-vm_no_i(r): sfn i fs [
-    len(vm_nol): sfn
+    cv_name(cv_stni): "struct"
+    cv_emit(_): 4 16 {cv_stl + 1} 16 cv_stni
     set(r): 0
-    if(_): {i < vm_nol} [
-        at(vm_fn4): sfn i
-        at(vm_vl): vm_av i
-        new(vm_pr): "rt_sp" vm_fn4 vm_vl ""
-        push(_): fs vm_pr
-        add(vm_ni3): i 1
-        vm_no_i(r): sfn vm_ni3 fs
-    ]
 ]
-vm_getf(r): ob nm [
-    getf(vm_gfs): ob "fields"
-    vm_gf_i(r): vm_gfs 0 nm
-]
-vm_gf_i(r): fs i nm [
-    len(vm_gfl): fs
-    set(r): 0
-    if(_): {i < vm_gfl} [
-        at(vm_gp): fs i
-        getf(vm_gn): vm_gp "n"
-        if(_): {vm_gn = nm} [
-            getf(r): vm_gp "v"
-        ]
-        set(vm_gm): 0
-        if(_): {vm_gn = nm} [ set(vm_gm): 1 ]
-        if(_): {vm_gm = 0} [
-            add(vm_gi): i 1
-            vm_gf_i(r): fs vm_gi nm
-        ]
-    ]
-]
-vm_setf(r): ob nm val [
-    getf(vm_sfs): ob "fields"
-    vm_sf_i(r): vm_sfs 0 nm val
-]
-vm_sf_i(r): fs i nm val [
-    len(vm_sfl): fs
-    set(r): 0
-    if(_): {i < vm_sfl} [
-        at(vm_sp5): fs i
-        getf(vm_sn): vm_sp5 "n"
-        if(_): {vm_sn = nm} [
-            setf(_): vm_sp5 "v" val
-        ]
-        set(vm_sm): 0
-        if(_): {vm_sn = nm} [ set(vm_sm): 1 ]
-        if(_): {vm_sm = 0} [
-            add(vm_si): i 1
-            vm_sf_i(r): fs vm_si nm val
-        ]
+# Native values 1..nb-1 (after the first), from the argument registers.
+vm_restv(r): nb [
+    vec(r): ""
+    set(vm_rvi): 1
+    while(_): {vm_rvi < nb} [
+        add(vm_rvk): vm_nbase vm_rvi
+        vm_reg(vm_rvx): vm_rvk
+        push(_): r vm_rvx
+        add(vm_rvi): vm_rvi 1
     ]
 ]
 cv_scanc(r): nd [
@@ -4381,6 +4670,9 @@ cv_scanc(r): nd [
     len(cv_scn2): cv_scl2
     cv_name(cv_sci): "scan"
     cv_emit(_): 4 16 cv_scn2 16 cv_sci
+    getf(cv_scr): nd "s2"
+    cv_name(cv_scri): cv_scr
+    cv_emit(_): 3 16 0 0 cv_scri
     set(r): 0
 ]
 cv_scargs(r): nd i [
@@ -4568,7 +4860,14 @@ vm_step(r): cur op [
         getf(vm_nx): cur "imm"
         getf(vm_d2): cur "a"
         at(vm_nm3): cv_names vm_nx
+        set(rt_undef): 0
         rt_read(vm_rv2): vm_nm3
+        getf(vm_lds): cur "b"
+        if(_): {vm_lds = 1} [
+            if(_): {rt_undef = 1} [
+                rt_fatal(_):
+            ]
+        ]
         vm_setreg(_): vm_d2 vm_rv2
     ]
     if(_): {op = 3} [
@@ -4584,6 +4883,7 @@ vm_step(r): cur op [
         getf(vm_nc): cur "c"
         getf(vm_ni): cur "imm"
         at(vm_nm5): cv_names vm_ni
+        set(vm_nbase): vm_na
         if(_): {vm_nb > 0} [ add(vm_i0): vm_na 0
             vm_reg(rt_na0): vm_i0 ]
         if(_): {vm_nb > 1} [ add(vm_i1): vm_na 1
@@ -4626,7 +4926,10 @@ vm_step(r): cur op [
         getf(vm_ra): cur "a"
         vm_reg(rt_rv): vm_ra
         sub(vm_lx): vm_sp 1
-        at(vm_fr2): vm_frames vm_lx
+        # Pop the frame too: CALL pushes one, so a frame left behind
+        # would be found by the next call's RET (vm_frames is indexed
+        # by depth) and send it back to an earlier call site.
+        pop(vm_fr2): vm_frames
         getf(vm_sv3): vm_fr2 "sv"
         len(vm_sv3l): vm_sv3
         ex_rest(_): vm_sv3 0 vm_sv3l
@@ -4638,10 +4941,27 @@ vm_step(r): cur op [
         getf(vm_rp2): vm_fr2 "rip"
         sub(vm_ip2): vm_rp2 1
         set(vm_ip): vm_ip2
+        # Returning to depth 0 needs no stop here: init and spawned
+        # processes are called from a CALL+HALT trampoline, and top-level
+        # code (no init) keeps running after its own calls return.
         sub(vm_sp): vm_sp 1
-        if(_): {vm_sp = 0} [
-            set(vm_flow): 1
-        ]
+    ]
+    # EVAL: compile the source onto the end of the code and enter it
+    # like a call (an empty frame, no result); its RET comes back here.
+    if(_): {op = 30} [
+        getf(vm_ea): cur "a"
+        vm_reg(vm_esrc): vm_ea
+        rt_eval_parse(_): vm_esrc
+        len(vm_eent): cv_code
+        cv_predecl(_): ps_root
+        cv_stmt(_): ps_root
+        cv_emit(_): 6 16 0 0 0
+        vec(vm_esv): ""
+        add(vm_erp): vm_ip 1
+        new(vm_efr): "vm_fr" vm_erp vm_esv ""
+        push(_): vm_frames vm_efr
+        add(vm_sp): vm_sp 1
+        set(vm_ip): {vm_eent - 1}
     ]
     if(_): {op = 7} [
         getf(vm_jt): cur "imm"
@@ -4876,11 +5196,13 @@ vm_native_c(r): name dst nb [
     if(_): {name = "push"} [ push(_): rt_na0 rt_na1 ]
     if(_): {name = "at"} [ at(r): rt_na0 rt_na1 ]
     if(_): {name = "len"} [ len(r): rt_na0 ]
-    if(_): {name = "getf"} [ vm_getf(r): rt_na0 rt_na1 ]
-    if(_): {name = "setf"} [ vm_setf(r): rt_na0 rt_na1 rt_na2 ]
-    if(_): {name = "vec"} [
-        if(_): {rt_na0 = ""} [ vec(r): "" ]
-        if(_): {rt_na0 != ""} [ vec(r): "rt_obj" ]
+    if(_): {name = "typeof"} [ typeof(r): rt_na0 ]
+    if(_): {name = "getf"} [ getf(r): rt_na0 rt_na1 ]
+    if(_): {name = "setf"} [ setf(r): rt_na0 rt_na1 rt_na2 ]
+    if(_): {name = "vec"} [ vec(r): rt_na0 ]
+    if(_): {name = "struct"} [
+        vm_restv(vm_stv): nb
+        rt_struct_decl(r): rt_na0 vm_stv
     ]
     if(_): {name = "encode"} [ encode(r): rt_na0 ]
     if(_): {name = "decode"} [ decode(r): rt_na0 ]
@@ -4888,116 +5210,59 @@ vm_native_c(r): name dst nb [
     if(_): {name = "push"} [ set(vm_m3): 1 ]
     if(_): {name = "at"} [ set(vm_m3): 1 ]
     if(_): {name = "len"} [ set(vm_m3): 1 ]
+    if(_): {name = "typeof"} [ set(vm_m3): 1 ]
     if(_): {name = "getf"} [ set(vm_m3): 1 ]
     if(_): {name = "setf"} [ set(vm_m3): 1 ]
     if(_): {name = "vec"} [ set(vm_m3): 1 ]
+    if(_): {name = "struct"} [ set(vm_m3): 1 ]
     if(_): {name = "encode"} [ set(vm_m3): 1 ]
     if(_): {name = "decode"} [ set(vm_m3): 1 ]
     if(_): {vm_m3 = 0} [
         vm_native_d(r): name dst nb
     ]
 ]
+# Template value k (0-based, after the format), straight from the native
+# call's argument registers.
 vm_targ(r): k [
-    set(r): rt_na1
-    if(_): {k = 1} [ set(r): rt_na2 ]
-    if(_): {k = 2} [ set(r): rt_na3 ]
-    if(_): {k = 3} [ set(r): rt_na4 ]
-    if(_): {k = 4} [ set(r): rt_na5 ]
-    if(_): {k = 5} [ set(r): rt_na6 ]
-]
-vm_tflush(r): slot aidx out [
-    set(r): out
-    if(_): {slot = "INT"} [
-        vm_targ(rt_ta): aidx
-        encode(rt_ts): rt_ta
-        concat(r): out rt_ts
-    ]
-    if(_): {slot = "STR"} [
-        vm_targ(rt_ta2): aidx
-        concat(r): out rt_ta2
-    ]
-    if(_): {slot = "REAL"} [
-        vm_targ(rt_ta3): aidx
-        encode(rt_ts2): rt_ta3
-        concat(r): out rt_ts2
-    ]
-    if(_): {slot = "BOOL"} [
-        vm_targ(rt_ta4): aidx
-        encode(rt_ts3): rt_ta4
-        concat(r): out rt_ts3
-    ]
+    add(vm_tk): vm_nbase {k + 1}
+    vm_reg(r): vm_tk
 ]
 vm_template(r): nb [
-    set(vm_tf): rt_na0
-    len(vm_tfl): vm_tf
-    set(vm_tp): 0
-    set(vm_tout): ""
-    set(vm_tslot): ""
-    set(vm_ta): 0
-    while(_): {vm_tp < vm_tfl} [
-        byte(vm_tb): vm_tf vm_tp
-        if(_): {vm_tb = 59} [
-            vm_tflush(vm_tout): vm_tslot vm_ta vm_tout
-            set(vm_tslot): ""
-            add(vm_ta): vm_ta 1
-            add(vm_tp): vm_tp 1
-        ]
-        if(_): {vm_tb = 92} [
-            add(vm_tp): vm_tp 1
-            byte(vm_tb2): vm_tf vm_tp
-            if(_): {vm_tb2 = 110} [
-                concat(vm_tout): vm_tout "\n"
-            ]
-            if(_): {vm_tb2 = 116} [
-                concat(vm_tout): vm_tout "\t"
-            ]
-            if(_): {vm_tb2 = 59} [
-                concat(vm_tout): vm_tout ";"
-            ]
-            if(_): {vm_tb2 = 92} [
-                concat(vm_tout): vm_tout "\\"
-            ]
-            add(vm_tp): vm_tp 1
-        ]
-        set(vm_tnom): 1
-        if(_): {vm_tb = 59} [ set(vm_tnom): 0 ]
-        if(_): {vm_tb = 92} [ set(vm_tnom): 0 ]
-        if(_): {vm_tnom = 1} [
-            slice(vm_tch): vm_tf vm_tp 1
-            concat(vm_tslot): vm_tslot vm_tch
-            add(vm_tp): vm_tp 1
-        ]
+    vec(vm_tvals): ""
+    set(vm_tvi): 1
+    while(_): {vm_tvi < nb} [
+        add(vm_tvk): vm_nbase vm_tvi
+        vm_reg(vm_tvx): vm_tvk
+        push(_): vm_tvals vm_tvx
+        add(vm_tvi): vm_tvi 1
     ]
-	vm_tflush(vm_tfin): vm_tslot vm_ta vm_tout
-	len(vm_tfin_len): vm_tfin
-	set(vm_tfin_i): 0
-	while(_): {vm_tfin_i < vm_tfin_len} [
-		byte(vm_tfin_ch): vm_tfin vm_tfin_i
-		putch(_): vm_tfin_ch
-		add(vm_tfin_i): vm_tfin_i 1
-	]
-	set(r): ""
+    rt_tpl(r): rt_na0 vm_tvals
 ]
+# scan(ok): "FORMAT" v1 ... : the host's own scan does the reading, so
+# prompts, formats and stdin handling are exactly ussr's (the host needs a
+# literal format, hence the eval). Up to five variables, like the walker.
 vm_scanN(r): nb [
-    len(vm_sbl): vm_scanbuf
-    if(_): {vm_sbl = 0} [
-        readfile(vm_scanbuf): "/dev/stdin"
-        set(vm_scanpos): 0
-    ]
-    set(vm_k): 1
-    set(r): 0
-    while(_): {vm_k < nb} [
-        vm_nexttok(vm_tk): 
-        decode(vm_tv2): vm_tk
-        if(_): {vm_k = 1} [ set(r): vm_tv2 ]
-        if(_): {vm_k = 1} [ vm_targ2(_): rt_na1 vm_tv2 ]
-        if(_): {vm_k = 2} [ vm_targ2(_): rt_na2 vm_tv2 ]
-        if(_): {vm_k = 3} [ vm_targ2(_): rt_na3 vm_tv2 ]
-        if(_): {vm_k = 4} [ vm_targ2(_): rt_na4 vm_tv2 ]
-        if(_): {vm_k = 5} [ vm_targ2(_): rt_na5 vm_tv2 ]
-        if(_): {vm_k = 6} [ vm_targ2(_): rt_na6 vm_tv2 ]
-        add(vm_k): vm_k 1
-    ]
+    set(rt_hsc1): null
+    set(rt_hsc2): null
+    set(rt_hsc3): null
+    set(rt_hsc4): null
+    set(rt_hsc5): null
+    ex_scape(vm_sfe): rt_na0
+    set(vm_sev): "scan(rt_hok): \""
+    concat(vm_sev): vm_sev vm_sfe
+    concat(vm_sev): vm_sev "\""
+    if(_): {nb > 1} [ concat(vm_sev): vm_sev " rt_hsc1" ]
+    if(_): {nb > 2} [ concat(vm_sev): vm_sev " rt_hsc2" ]
+    if(_): {nb > 3} [ concat(vm_sev): vm_sev " rt_hsc3" ]
+    if(_): {nb > 4} [ concat(vm_sev): vm_sev " rt_hsc4" ]
+    if(_): {nb > 5} [ concat(vm_sev): vm_sev " rt_hsc5" ]
+    eval(_): vm_sev
+    if(_): {nb > 1} [ vm_targ2(_): rt_na1 rt_hsc1 ]
+    if(_): {nb > 2} [ vm_targ2(_): rt_na2 rt_hsc2 ]
+    if(_): {nb > 3} [ vm_targ2(_): rt_na3 rt_hsc3 ]
+    if(_): {nb > 4} [ vm_targ2(_): rt_na4 rt_hsc4 ]
+    if(_): {nb > 5} [ vm_targ2(_): rt_na5 rt_hsc5 ]
+    set(r): {1 = 1}
 ]
 vm_targ2(r): nm val [
     if(_): {nm = ""} [
@@ -5008,141 +5273,23 @@ vm_targ2(r): nm val [
         set(r): 0
     ]
 ]
-vm_nexttok(r): [
-    len(vm_sbl2): vm_scanbuf
-    set(vm_sdone): 0
-    while(_): {vm_sdone = 0} [
-        if(_): {vm_scanpos + 1 > vm_sbl2} [
-            set(vm_sdone): 1
-        ]
-        if(_): {vm_scanpos < vm_sbl2} [
-            byte(vm_sch): vm_scanbuf vm_scanpos
-            set(vm_sws): 0
-            if(_): {vm_sch = 32} [ set(vm_sws): 1 ]
-            if(_): {vm_sch = 9} [ set(vm_sws): 1 ]
-            if(_): {vm_sch = 10} [ set(vm_sws): 1 ]
-            if(_): {vm_sch = 13} [ set(vm_sws): 1 ]
-            if(_): {vm_sws = 1} [
-                add(vm_scanpos): vm_scanpos 1
-            ]
-            if(_): {vm_sws = 0} [
-                set(vm_sdone): 1
-            ]
-        ]
-    ]
-    set(vm_sstart): vm_scanpos
-    set(vm_tdone): 0
-    while(_): {vm_tdone = 0} [
-        if(_): {vm_scanpos + 1 > vm_sbl2} [
-            set(vm_tdone): 1
-        ]
-        if(_): {vm_scanpos < vm_sbl2} [
-            byte(vm_sch2): vm_scanbuf vm_scanpos
-            set(vm_sws2): 0
-            if(_): {vm_sch2 = 32} [ set(vm_sws2): 1 ]
-            if(_): {vm_sch2 = 9} [ set(vm_sws2): 1 ]
-            if(_): {vm_sch2 = 10} [ set(vm_sws2): 1 ]
-            if(_): {vm_sch2 = 13} [ set(vm_sws2): 1 ]
-            if(_): {vm_sws2 = 0} [
-                add(vm_scanpos): vm_scanpos 1
-            ]
-            if(_): {vm_sws2 = 1} [
-                set(vm_tdone): 1
-            ]
-        ]
-    ]
-    slice(r): vm_scanbuf vm_sstart {vm_scanpos - vm_sstart}
-]
-vm_scan2(r): fmt [
-    len(vm_sbl): vm_scanbuf
-    if(_): {vm_sbl = 0} [
-        readfile(vm_scanbuf): "/dev/stdin"
-        set(vm_scanpos): 0
-    ]
-    len(vm_sbl2): vm_scanbuf
-    set(vm_sdone): 0
-    while(_): {vm_sdone = 0} [
-        if(_): {vm_scanpos + 1 > vm_sbl2} [
-            set(vm_sdone): 1
-        ]
-        if(_): {vm_scanpos < vm_sbl2} [
-            byte(vm_sch): vm_scanbuf vm_scanpos
-            set(vm_sws): 0
-            if(_): {vm_sch = 32} [ set(vm_sws): 1 ]
-            if(_): {vm_sch = 9} [ set(vm_sws): 1 ]
-            if(_): {vm_sch = 10} [ set(vm_sws): 1 ]
-            if(_): {vm_sch = 13} [ set(vm_sws): 1 ]
-            if(_): {vm_sws = 1} [
-                add(vm_scanpos): vm_scanpos 1
-            ]
-            if(_): {vm_sws = 0} [
-                set(vm_sdone): 1
-            ]
-        ]
-    ]
-    set(vm_sstart): vm_scanpos
-    set(vm_sdot): 0
-    set(vm_tdone): 0
-    while(_): {vm_tdone = 0} [
-        if(_): {vm_scanpos + 1 > vm_sbl2} [
-            set(vm_tdone): 1
-        ]
-        if(_): {vm_scanpos < vm_sbl2} [
-            byte(vm_sch2): vm_scanbuf vm_scanpos
-            set(vm_sws2): 0
-            if(_): {vm_sch2 = 32} [ set(vm_sws2): 1 ]
-            if(_): {vm_sch2 = 9} [ set(vm_sws2): 1 ]
-            if(_): {vm_sch2 = 10} [ set(vm_sws2): 1 ]
-            if(_): {vm_sch2 = 13} [ set(vm_sws2): 1 ]
-            if(_): {vm_sws2 = 0} [
-                if(_): {vm_sch2 = 46} [ set(vm_sdot): 1 ]
-                add(vm_scanpos): vm_scanpos 1
-            ]
-            if(_): {vm_sws2 = 1} [
-                set(vm_tdone): 1
-            ]
-        ]
-    ]
-    slice(vm_tok): vm_scanbuf vm_sstart {vm_scanpos - vm_sstart}
-    set(r): vm_tok
-    set(vm_sstr): 0
-    if(_): {fmt = "STR"} [ set(vm_sstr): 1 ]
-    set(vm_snum): 0
-    if(_): {fmt = "INT"} [ set(vm_snum): 1 ]
-    if(_): {fmt = "REAL"} [ set(vm_snum): 1 ]
-    if(_): {vm_snum = 0} [
-        if(_): {vm_sstr = 0} [
-            set(vm_sreal): 0
-            set(vm_fp3): 0
-            len(vm_fl4): fmt
-            while(_): {vm_fp3 + 4 <= vm_fl4} [
-                slice(vm_fs4): fmt vm_fp3 4
-                if(_): {vm_fs4 = "REAL"} [ set(vm_sreal): 1 ]
-                add(vm_fp3): vm_fp3 1
-            ]
-            if(_): {vm_sreal = 1} [ set(vm_snum): 1 ]
-            if(_): {vm_sreal = 0} [ set(vm_snum): 1 ]
-        ]
-    ]
-    if(_): {vm_snum = 1} [
-        decode(r): vm_tok
-    ]
-]
-# read_file's second argument (byte count) is optional; the host
-# command must be called with exactly as many arguments as given.
 vm_readfileN(r): nb [
     if(_): {nb = 1} [ read_file(r): rt_na0 ]
     if(_): {nb > 1} [ read_file(r): rt_na0 rt_na1 ]
 ]
 vm_native_d(r): name dst nb [
     set(r): 0
-    if(_): {name = "new"} [ vm_newobj(r): nb ]
+    if(_): {name = "new"} [
+        vm_restv(vm_nwv): nb
+        rt_new(r): rt_na0 vm_nwv
+    ]
     if(_): {name = "template"} [ vm_template(r): nb ]
     if(_): {name = "scan"} [ vm_scanN(r): nb ]
     if(_): {name = "byte"} [ byte(r): rt_na0 rt_na1 ]
     if(_): {name = "slice"} [ slice(r): rt_na0 rt_na1 rt_na2 ]
     if(_): {name = "readfile"} [ readfile(r): rt_na0 ]
     if(_): {name = "random64"} [ random64(r): ]
+    if(_): {name = "time"} [ time(r): ]
     if(_): {name = "seed_random64"} [ seed_random64(r): rt_na0 ]
     # io.su stream primitives: real host file operations with C-style
     # modes ("r" "w" "a" "rb" "wb" ...), not the whole-file VM
@@ -5163,6 +5310,7 @@ vm_native_d(r): name dst nb [
     if(_): {name = "slice"} [ set(vm_m4): 1 ]
     if(_): {name = "readfile"} [ set(vm_m4): 1 ]
     if(_): {name = "random64"} [ set(vm_m4): 1 ]
+    if(_): {name = "time"} [ set(vm_m4): 1 ]
     if(_): {name = "seed_random64"} [ set(vm_m4): 1 ]
     if(_): {name = "open_file"} [ set(vm_m4): 1 ]
     if(_): {name = "close_file"} [ set(vm_m4): 1 ]
@@ -5175,6 +5323,18 @@ vm_native_d(r): name dst nb [
     ]
 ]
 # ---- VM driver ----
+# init's result as a process exit status, as ussr maps it: an integer
+# 0..255 as is, any other integer means failure (1), anything else 0.
+rt_exitcode(r): v [
+    set(r): 0
+    typeof(rt_xty): v
+    if(_): {rt_xty = "integer"} [
+        set(r): 1
+        if(_): {v >= 0 && v <= 255} [
+            set(r): v
+        ]
+    ]
+]
 cv_dump(r): [
     set(cv_i): 0
     len(cv_dl): cv_code
@@ -5544,8 +5704,12 @@ sc_regfile(r): kids [
             if(_): {sc_rhb = 1} [
                 if(_): {sc_rctl = 0} [ set(sc_rdo): 1 ]
             ]
+            # A loaded file keeps its own records even when a name (init)
+            # collides with the main file's: it is spawned by table index.
             if(_): {sc_rdo = 1} [
+                set(cv_regpush): 1
                 cv_regdef(_): sc_rfd sc_rfn
+                set(cv_regpush): 0
             ]
         ]
         add(sc_ri3): sc_ri3 1
@@ -5790,8 +5954,9 @@ cv_driver(r): prog acnt avec [
     ]
     if(_): {rt_need_ast = 1} [
         rt_run(r): prog acnt avec
-        return(r): 0
+        return(_): r
     ]
+    cv_predecl(_): prog
     cv_stmt(r): prog
     cv_findf2(cv_mi): "init"
     rt_has_template(rt_has_tpl): prog
@@ -5803,7 +5968,7 @@ cv_driver(r): prog acnt avec [
             if(_): {rt_has_wh = 0} [ set(cv_tree): 1 ]
             if(_): {cv_tree = 1} [
                 rt_run(r): prog acnt avec
-                return(r): 0
+                return(_): r
             ]
         ]
     ]
@@ -5825,6 +5990,11 @@ cv_driver(r): prog acnt avec [
     # Every VM program runs under the scheduler; main is pid 1.
     sc_boot(_):
     sc_run(r):
+    if(_): {r = 0 && cv_mi + 1 > 0} [
+        at(cv_mp): sc_procs 0
+        getf(cv_mres): cv_mp "result"
+        rt_exitcode(r): cv_mres
+    ]
 ]
 vm_init_i(r): i [
     if(_): {i < 32} [
@@ -5873,12 +6043,14 @@ init_src(r): avec [
     # Prepend the plain-source standard library to the interpreted program.
     # The host preprocessor handles the interpreter's own $include above;
     # target programs are read raw, so they receive the library text here.
-    init_lib(ussr_std_standard): "standard.su"
+    # standard.su is left out: it only defines random64/seed_random64,
+    # which ussr refuses to redefine and this interpreter runs as natives
+    # (compiling its seed_random64 definition called the native on an
+    # unbound "seed" and printed "undefined variable" for every program).
     init_lib(ussr_std_io): "io.su"
     init_lib(ussr_std_math): "math.su"
     init_lib(ussr_std_bytes): "bytes.su"
     set(ussr_std_src): ""
-    concat(ussr_std_src): ussr_std_src ussr_std_standard
     concat(ussr_std_src): ussr_std_src ussr_std_io
     concat(ussr_std_src): ussr_std_src ussr_std_math
     concat(ussr_std_src): ussr_std_src ussr_std_bytes
@@ -5933,8 +6105,6 @@ init(ret): arg_cnt arg_vec [
     vec(cv_names): ""
     vec(cv_funcs): "cv_fd2"
     vec(cv_lps): "cv_lp"
-    vec(cv_sdefs): "rt_sp"
-    struct(rt_obj): "tname:string" "fields:vector"
     vec(vm_frames): "vm_fr"
     vec(vm_regs): "vm_rv"
     set(vm_ip): 0
@@ -5947,8 +6117,6 @@ init(ret): arg_cnt arg_vec [
     set(rt_na4): 0
     set(rt_na5): 0
     set(rt_na6): 0
-    set(vm_scanbuf): ""
-    set(vm_scanpos): 0
     vm_init_i(_): 0
     struct(rt_sp): "n:string" "v:any" "t:string"
     struct(rt_sv): "n:string" "had:number" "v:any" "t:string"
@@ -5956,6 +6124,12 @@ init(ret): arg_cnt arg_vec [
     vec(rt_store): "rt_sp"
     vec(rt_fdefs): "rt_fd"
     set(rt_flow): 0
+    set(rt_undef): 0
+    set(cv_strict): 0
+    set(ps_quiet): 0
+    set(ps_errline): 0
+    set(cv_regpush): 0
+    set(vm_nbase): 16
     # Scheduler state: process table, run queue, process(_) marks,
     # current pid and the logical tick (one VM slice is one tick).
     struct(sc_pr): "pid:number" "name:string" "state:number" "ip:number" "sp:number" "regs:vector" "frames:vector" "store:vector" "wake_at:number" "wait_pid:number" "wreg:number" "result:any"
@@ -6007,14 +6181,14 @@ init(ret): arg_cnt arg_vec [
         ]
         len(rt_acnt): rt_argv
         if(_): {rt_md = 2} [
-            rt_run(_): ps_root rt_acnt rt_argv
+            rt_run(ret): ps_root rt_acnt rt_argv
         ]
         if(_): {rt_md = 3} [
             cv_stmt(_): ps_root
             cv_dump(_): 
         ]
         if(_): {rt_md = 0} [
-            cv_driver(_): ps_root rt_acnt rt_argv
+            cv_driver(ret): ps_root rt_acnt rt_argv
         ]
     ]
 ]

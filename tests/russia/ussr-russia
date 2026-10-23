@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stand-in for the ussr binary that runs everything through the self-hosted
+# interpreter instead:  ussr-russia ARGS...  ==  $USSR_HOST russia.su ARGS...
+# tests/run_all.sh passes it to every suite runner as their "ussr", so each
+# test exercises russia.su exactly the way it exercises ussr.
+# USSR_HOST is the real binary (default ./ussr, then ./ussr.exe); a run
+# longer than USSR_RUSSIA_TIMEOUT seconds (default 30) is killed.
+here=$(dirname "$0")
+host=${USSR_HOST:-./ussr}
+[ -x "$host" ] || host=./ussr.exe
+russia=$here/../../src/russia/russia.su
+if command -v timeout >/dev/null 2>&1; then
+    exec timeout --foreground "${USSR_RUSSIA_TIMEOUT:-30}" "$host" "$russia" "$@"
+fi
+exec "$host" "$russia" "$@"
