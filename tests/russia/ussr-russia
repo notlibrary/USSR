@@ -5,6 +5,11 @@
 # test exercises russia.su exactly the way it exercises ussr.
 # USSR_HOST is the real binary (default ./ussr, then ./ussr.exe); a run
 # longer than USSR_RUSSIA_TIMEOUT seconds (default 30) is killed.
+# "--" keeps the host's own options (-c, -e) from taking russia.su's.
+# Where /bin/sh is bash (Git for Windows, macOS) the caller's PS1 and PS2
+# never reach russia.su: bash unsets both in every non-interactive shell,
+# so the REPL prompt tests that set them can only pass where sh is not
+# bash (dash on Linux CI).
 here=$(dirname "$0")
 host=${USSR_HOST:-./ussr}
 [ -x "$host" ] || host=./ussr.exe

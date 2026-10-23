@@ -1906,6 +1906,185 @@ static int oop_do_set_bytes(
     return 0;
 }
 
+/* read_bytes(v): "path"      -> vector of the file's bytes (0..255),
+ *                               null (non-fatal) when unreadable
+ * write_bytes(n): "path" vec -> the file holds exactly vec's bytes;
+ *                               bytes written, or -1 (non-fatal) when
+ *                               it cannot be created or written
+ * Unlike readfile/writefile these keep every byte, NUL included. */
+static int oop_path_argument(
+    const char *name,
+    ussr_argument_t *arguments,
+    size_t index,
+    ussr_value_t *value,
+    const char **path
+);
+
+static int oop_do_read_bytes(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+    ussr_vector_t *vector;
+    FILE *input;
+    int c;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: read_bytes(v): \"path\"\n");
+        return -1;
+    }
+    if (!oop_path_argument("read_bytes", arguments, 0, &path_v, &path))
+        return -1;
+    input = fopen(path, "rb");
+    ussr_value_free(&path_v);
+    if (input == NULL)
+    {
+        *out_result = ussr_null();
+        return 0;
+    }
+    vector = ussr_vector_create(NULL);
+    while (vector != NULL && (c = fgetc(input)) != EOF)
+    {
+        if (ussr_vector_push(vector, ussr_integer(c)) != 0)
+        {
+            ussr_vector_release(vector);
+            vector = NULL;
+        }
+    }
+    fclose(input);
+    if (vector == NULL)
+        return -1;
+    *out_result = ussr_vector_value(vector);
+    return 0;
+}
+
+/* text_bytes(v): "text" -> vector of the string's bytes (0..255): a
+ * scanner indexes it in O(1), where byte() on a long string costs a
+ * copy of the string per call. */
+static int oop_do_text_bytes(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t text_v;
+    const char *text;
+    ussr_vector_t *vector;
+    size_t i;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: text_bytes(v): \"text\"\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &text_v) != 0)
+        return -1;
+    if (!oop_expect_string(&text_v, &text))
+    {
+        fprintf(stderr, "USSR: text_bytes expects a string\n");
+        ussr_value_free(&text_v);
+        return -1;
+    }
+    vector = ussr_vector_create(NULL);
+    for (i = 0; vector != NULL && text[i] != '\0'; ++i)
+    {
+        if (ussr_vector_push(vector,
+                ussr_integer((ussr_int_t)(unsigned char)text[i])) != 0)
+        {
+            ussr_vector_release(vector);
+            vector = NULL;
+        }
+    }
+    ussr_value_free(&text_v);
+    if (vector == NULL)
+        return -1;
+    *out_result = ussr_vector_value(vector);
+    return 0;
+}
+
+static int oop_do_write_bytes(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    ussr_value_t vec_v;
+    const char *path;
+    ussr_vector_t *vector;
+    unsigned char *data;
+    size_t count;
+    size_t i;
+    FILE *output;
+    int written;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: write_bytes(n): \"path\" vec\n");
+        return -1;
+    }
+    if (!oop_path_argument("write_bytes", arguments, 0, &path_v, &path))
+        return -1;
+    if (oop_eval(&arguments[1], &vec_v) != 0)
+    {
+        ussr_value_free(&path_v);
+        return -1;
+    }
+    if (!oop_expect_vector(&vec_v, &vector))
+    {
+        fprintf(stderr, "USSR: write_bytes expects a vector\n");
+        ussr_value_free(&path_v);
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    count = ussr_vector_length(vector);
+    data = malloc(count > 0 ? count : 1);
+    if (data == NULL)
+    {
+        ussr_value_free(&path_v);
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    for (i = 0; i < count; ++i)
+    {
+        ussr_value_t item;
+        ussr_int_t byte = -1;
+
+        if (!ussr_vector_get(vector, i, &item) ||
+            !oop_expect_integer(&item, &byte) || byte < 0 || byte > 255)
+        {
+            fprintf(stderr, "USSR: write_bytes: item %u is not a byte "
+                    "0..255\n", (unsigned)i);
+            free(data);
+            ussr_value_free(&path_v);
+            ussr_value_free(&vec_v);
+            return -1;
+        }
+        data[i] = (unsigned char)byte;
+        ussr_value_free(&item);
+    }
+    ussr_value_free(&vec_v);
+
+    output = fopen(path, "wb");
+    ussr_value_free(&path_v);
+    if (output == NULL)
+    {
+        free(data);
+        *out_result = ussr_integer(-1);
+        return 0;
+    }
+    written = fwrite(data, 1, count, output) == count;
+    if (fclose(output) != 0)
+        written = 0;
+    free(data);
+    *out_result = ussr_integer(written ? (ussr_int_t)count : -1);
+    return 0;
+}
+
 /* ------------------------------------------------------------- */
 /* Directory and path primitives (io.su):                          */
 /*   list_dir(v): path        -> vector of names, sorted without   */
@@ -2642,6 +2821,12 @@ int ussr_oop_dispatch(
         status = oop_do_set_bytes(arguments, argument_count, 0, out_result);
     else if (strcmp(command, "clear_bytes") == 0)
         status = oop_do_set_bytes(arguments, argument_count, 1, out_result);
+    else if (strcmp(command, "read_bytes") == 0)
+        status = oop_do_read_bytes(arguments, argument_count, out_result);
+    else if (strcmp(command, "write_bytes") == 0)
+        status = oop_do_write_bytes(arguments, argument_count, out_result);
+    else if (strcmp(command, "text_bytes") == 0)
+        status = oop_do_text_bytes(arguments, argument_count, out_result);
     else if (strcmp(command, "file_exists") == 0)
         status = oop_do_file_exists(arguments, argument_count, out_result);
     else if (strcmp(command, "typeof") == 0)

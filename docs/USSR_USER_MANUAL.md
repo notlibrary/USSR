@@ -888,11 +888,14 @@ a runtime error.
 Integers are 64-bit on every platform (§5). `str_int_limit(m):` in
 `strings.su` gives `2^62`, the largest value `str_trunc` accepts.
 
-**bytes.su — memset analogs over vectors:**
+**bytes.su — memset analogs over vectors, and binary files:**
 
 ```
 set_bytes(v): value bytes     # every item of bytes := value (0..255)
 clear_bytes(v): bytes         # set_bytes with value 0
+read_bytes(v): "path"         # the file's bytes 0..255 (null if unreadable)
+write_bytes(n): "path" bytes  # write exactly these bytes; count, or -1
+text_bytes(v): "text"         # the string's bytes 0..255
 ```
 
 **math.su — mathematical functions:**

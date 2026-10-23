@@ -62,6 +62,12 @@ suite() {
 
     # --- suite runners: each prints PASS/FAIL lines and exits nonzero on
     # failure. The UUASM runner already compares russia with the C VM.
+    # They run at the same time (each in its own temporary directory),
+    # alongside the standalone scripts below, which report as they go;
+    # each runner is reported, in this order, as soon as it is done.
+    runners=
+    pids=
+    n=0
     for runner in tests/ru/run_ru_tests.sh tests/mbl/run_mbl_tests.sh \
                   tests/russia/run_uuasm_tests.sh tests/vectors/run_vector_tests.sh \
                   tests/repl/run_repl_tests.sh tests/errors/run_error_tests.sh \
@@ -70,14 +76,14 @@ suite() {
         [ "$update" = 1 ] && continue
         [ "$label" = russia ] && [ "$runner" = tests/russia/run_uuasm_tests.sh ] &&
             continue
-        if sh "$runner" "$ussr" >"$tmp/runner.out" 2>&1 &&
-           ! grep -q '^FAIL' "$tmp/runner.out"; then
-            ok "$runner ($(tail -n 1 "$tmp/runner.out"))"
-        else
-            bad "$runner" "$(grep -A 8 '^FAIL' "$tmp/runner.out" | head -n 60)
-$(tail -n 1 "$tmp/runner.out")"
-        fi
+        n=$((n + 1))
+        runners="$runners $runner"
+        { sh "$runner" "$ussr" >"$tmp/runner$n.out" 2>&1
+          echo $? >"$tmp/runner$n.status"; } &
+        pids="$pids $!"
     done
+    [ "$n" -gt 0 ] &&
+        echo "($n suite runners started in the background; standalone scripts first)"
 
     # --- standalone scripts against tests/expected/
     # Not checked here: network tests (need sockets and a free port), chain.su
@@ -91,12 +97,12 @@ $(tail -n 1 "$tmp/runner.out")"
         input="tests/expected/${f#tests/}.in"
         [ -f "$input" ] || input=/dev/null
         "$ussr" "$f" <"$input" >"$tmp/out" 2>"$tmp/err"
-        status=$?
+        got_status=$?
         {
             cat "$tmp/out"
             printf '\n--- stderr ---\n'
             cat "$tmp/err"
-            printf '\n--- exit %s ---\n' "$status"
+            printf '\n--- exit %s ---\n' "$got_status"
         } | tr -d '\r' >"$tmp/got"
         if [ "$update" = 1 ]; then
             mkdir -p "$(dirname "$want")"
@@ -112,6 +118,22 @@ $(tail -n 1 "$tmp/runner.out")"
         fi
     done
 
+    [ "$n" -gt 0 ] && echo "(waiting for the suite runners)"
+    n=0
+    set -- $pids
+    for runner in $runners; do
+        n=$((n + 1))
+        wait "$1"
+        shift
+        if [ "$(cat "$tmp/runner$n.status")" = 0 ] &&
+           ! grep -q '^FAIL' "$tmp/runner$n.out"; then
+            ok "$runner ($(tail -n 1 "$tmp/runner$n.out"))"
+        else
+            bad "$runner" "$(grep -A 8 '^FAIL' "$tmp/runner$n.out" | head -n 60)
+$(tail -n 1 "$tmp/runner$n.out")"
+        fi
+    done
+
     [ "$update" = 1 ] && return
 
     # --- GUI tests: need a GLFW-enabled ussr and a display (xvfb-run on Linux)
@@ -120,12 +142,12 @@ $(tail -n 1 "$tmp/runner.out")"
     else
         for f in tests/gui/*.su; do
             "$ussr" "$f" </dev/null >"$tmp/gui.out" 2>&1
-            status=$?
-            if [ "$status" -eq 0 ] && grep -q '^PASS' "$tmp/gui.out" &&
+            got_status=$?
+            if [ "$got_status" -eq 0 ] && grep -q '^PASS' "$tmp/gui.out" &&
                ! grep -q '^FAIL' "$tmp/gui.out"; then
                 ok "$f ($(grep -c '^PASS' "$tmp/gui.out") checks)"
             else
-                bad "$f" "exit $status
+                bad "$f" "exit $got_status
 $(grep -v '^PASS' "$tmp/gui.out" | head -n 30)"
             fi
         done

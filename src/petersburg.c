@@ -1938,6 +1938,75 @@ static int petersburg_inject(
 
 #endif
 
+#ifdef USSR_WITH_GLFW
+/*
+ * petersburg_take_events(v): for a program that runs USSR code of its
+ * own (russia.su): from the first call on, queued events are no longer
+ * spawned as callbacks of the running program but kept for this call,
+ * which hands them over and empties the queue. v is a vector: 1 while a
+ * Petersburg run is going (petersburg_run or show, and a window left)
+ * else 0, then one vector per event, oldest first: the callback name,
+ * the widget handle and the event's integer values.
+ */
+static int petersburg_events_delegated;
+
+static int petersburg_take_events(size_t value_count, ussr_value_t *out)
+{
+    ussr_vector_t *all;
+    size_t i;
+    size_t j;
+
+    if (!petersburg_arity("petersburg_take_events", value_count, 0))
+        return -1;
+    petersburg_events_delegated = 1;
+    all = ussr_vector_create(NULL);
+    if (all == NULL ||
+        ussr_vector_push(all, ussr_integer(ussr_petersburg_running())) != 0)
+    {
+        if (all != NULL)
+            ussr_vector_release(all);
+        return -1;
+    }
+    for (i = 0; i < petersburg_event_count; ++i)
+    {
+        const petersburg_event_t *event = &petersburg_events[
+            (petersburg_event_head + i) %
+            (sizeof(petersburg_events) / sizeof(petersburg_events[0]))
+        ];
+        ussr_vector_t *one = ussr_vector_create(NULL);
+        ussr_value_t name_value;
+        int failed;
+
+        if (one == NULL)
+        {
+            ussr_vector_release(all);
+            return -1;
+        }
+        name_value = ussr_string(event->callback);
+        failed = name_value.data.string == NULL ||
+                 ussr_vector_push(one, name_value) != 0 ||
+                 ussr_vector_push(one, ussr_integer(event->widget_id)) != 0;
+        ussr_value_free(&name_value);
+        for (j = 0; !failed && j < event->value_count; ++j)
+            failed = ussr_vector_push(one, ussr_integer(event->values[j])) != 0;
+        if (!failed)
+            failed = ussr_vector_push(all, ussr_vector_value(one)) != 0;
+        ussr_vector_release(one);
+        if (failed)
+        {
+            ussr_vector_release(all);
+            return -1;
+        }
+    }
+    petersburg_event_head =
+        (petersburg_event_head + petersburg_event_count) %
+        (sizeof(petersburg_events) / sizeof(petersburg_events[0]));
+    petersburg_event_count = 0;
+    *out = ussr_vector_value(all);
+    return 1;
+}
+#endif
+
 int ussr_petersburg_dispatch(
     ussr_sched_program_t *program,
     const char *name,
@@ -2274,6 +2343,8 @@ int ussr_petersburg_dispatch(
         *out = ussr_integer(0);
         return 1;
     }
+    if (strcmp(name, "petersburg_take_events") == 0)
+        return petersburg_take_events(value_count, out);
     if (strcmp(name, "petersburg_run") == 0)
     {
         if (!petersburg_arity(name, value_count, 0))
@@ -2475,7 +2546,8 @@ int ussr_petersburg_pump(
     if (petersburg_last_error)
         return -1;
 
-    for (i = 0; i < petersburg_event_count; ++i)
+    /* petersburg_take_events collects them instead */
+    for (i = 0; !petersburg_events_delegated && i < petersburg_event_count; ++i)
     {
         petersburg_event_t *event = &petersburg_events[
             (petersburg_event_head + i) %
@@ -2506,10 +2578,13 @@ int ussr_petersburg_pump(
             return -1;
         }
     }
-    petersburg_event_head =
-        (petersburg_event_head + petersburg_event_count) %
-        (sizeof(petersburg_events) / sizeof(petersburg_events[0]));
-    petersburg_event_count = 0;
+    if (!petersburg_events_delegated)
+    {
+        petersburg_event_head =
+            (petersburg_event_head + petersburg_event_count) %
+            (sizeof(petersburg_events) / sizeof(petersburg_events[0]));
+        petersburg_event_count = 0;
+    }
     if (petersburg_run_requested)
     {
         for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
@@ -2547,5 +2622,6 @@ void ussr_petersburg_cleanup(void)
     petersburg_event_count = 0;
     petersburg_focus = NULL;
     petersburg_last_error = 0;
+    petersburg_events_delegated = 0;
 #endif
 }

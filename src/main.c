@@ -459,13 +459,27 @@ static int vm_push_frame(
     frame->return_ip = vm->ip;
     frame->return_register = ins->c;
     frame->function_index = ins->immediate;
+    /* The registers move into the frame (the callee starts with empty
+     * ones and RET moves them back): copying them, strings and all, on
+     * every call made calls cost as much as the text they held. */
     for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
-        frame->saved_registers[i] = ussr_value_copy(&vm->registers[i]);
+    {
+        frame->saved_registers[i] = vm->registers[i];
+        vm->registers[i] = ussr_null();
+    }
 
     /* Fresh locals: parameters, the return variable and everything the
      * function assigns that is not declared global. */
     if (ussr_locals_push(function->locals, function->local_count) != 0)
-    { vm_frame_free(frame); return -1; }
+    {
+        for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i)
+        {
+            vm->registers[i] = frame->saved_registers[i];
+            frame->saved_registers[i] = ussr_null();
+        }
+        vm_frame_free(frame);
+        return -1;
+    }
     ++vm->frame_count;
     return 0;
 }
@@ -484,13 +498,13 @@ static int vm_call(
     f = &program->functions[ins->immediate];
     if (vm_push_frame(vm, f, ins) != 0)
         return -1;
+    /* the arguments are in the caller's registers, now in the frame */
     for (i = 0; i < f->parameter_count; ++i)
     {
-        ussr_value_t v = ussr_value_copy(&vm->registers[ins->a + i]);
-        if (ussr_set_variable(f->parameters[i], &v) != 0) { ussr_value_free(&v); return -1; }
-        ussr_value_free(&v);
+        const ussr_value_t *argument =
+            &vm->frames[vm->frame_count - 1].saved_registers[ins->a + i];
+        if (ussr_set_variable(f->parameters[i], argument) != 0) return -1;
     }
-    for (i = 0; i < USSR_VM_REGISTER_COUNT; ++i) { ussr_value_free(&vm->registers[i]); vm->registers[i] = ussr_null(); }
     vm->ip = f->entry;
     return 0;
 }
@@ -577,6 +591,23 @@ static void vm_free_values(ussr_value_t *values, size_t count)
     free(values);
 }
 
+/* strlen(text), but at most max: the bytes before any NUL, scanning no
+ * further than max (strnlen is POSIX, not ISO C). */
+static size_t vm_text_reach(const char *text, size_t max)
+{
+    size_t n = 0;
+
+    while (n < max && text[n] != '\0')
+        ++n;
+    return n;
+}
+
+/*
+ * Sites are recorded as their instructions are emitted, so they are in
+ * instruction order: binary search, with the linear scan kept for a
+ * site it does not find (a builtin call runs this every time, and big
+ * programs have thousands of sites).
+ */
 static const ussr_command_t *vm_find_oop_site(
     const ussr_bc_program_t *program,
     uint32_t instruction
@@ -587,6 +618,22 @@ static const ussr_command_t *vm_find_oop_site(
     if (program == NULL)
         return NULL;
 
+    {
+        size_t low = 0;
+        size_t high = program->oop_site_count;
+
+        while (low < high)
+        {
+            size_t middle = low + (high - low) / 2;
+
+            if (program->oop_sites[middle].instruction == instruction)
+                return program->oop_sites[middle].command;
+            if (program->oop_sites[middle].instruction < instruction)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+    }
     for (i = 0; i < program->oop_site_count; ++i)
     {
         if (program->oop_sites[i].instruction == instruction)
@@ -605,6 +652,22 @@ static const ussr_command_t *vm_find_scan_site(
     if (program == NULL)
         return NULL;
 
+    {
+        size_t low = 0;
+        size_t high = program->scan_site_count;
+
+        while (low < high)
+        {
+            size_t middle = low + (high - low) / 2;
+
+            if (program->scan_sites[middle].instruction == instruction)
+                return program->scan_sites[middle].command;
+            if (program->scan_sites[middle].instruction < instruction)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+    }
     for (i = 0; i < program->scan_site_count; ++i)
     {
         if (program->scan_sites[i].instruction == instruction)
@@ -1639,6 +1702,81 @@ int vm_execute(
                 }
 
                 argument_count = ins.b;
+
+                /*
+                 * byte, len and slice on a string read it in place:
+                 * programs that scan text call them once per byte, and
+                 * the general path copies every argument twice (and
+                 * byte measures the whole string), which made scanning
+                 * a string quadratic in its length. Only the ordinary
+                 * success case is handled here; anything else takes the
+                 * general path, which reports it as before.
+                 */
+                {
+                    const char *fast_name = program->strings[ins.immediate];
+                    const ussr_value_t *r0 = &vm->registers[0];
+                    int fast = 0;
+
+                    value = ussr_null();
+                    if (r0->type == USSR_STRING && r0->data.string != NULL)
+                    {
+                        const char *text = r0->data.string;
+                        const ussr_value_t *r1 = &vm->registers[1];
+                        const ussr_value_t *r2 = &vm->registers[2];
+
+                        if (argument_count == 2 &&
+                            strcmp(fast_name, "byte") == 0 &&
+                            r1->type == USSR_INTEGER &&
+                            r1->data.integer >= 0 &&
+                            (ussr_int_t)vm_text_reach(
+                                text, (size_t)r1->data.integer + 1) >
+                                r1->data.integer)
+                        {
+                            value = ussr_integer((ussr_int_t)(unsigned char)
+                                text[r1->data.integer]);
+                            fast = 1;
+                        }
+                        else if (argument_count == 1 &&
+                                 strcmp(fast_name, "len") == 0)
+                        {
+                            value = ussr_integer((ussr_int_t)strlen(text));
+                            fast = 1;
+                        }
+                        else if (argument_count == 3 &&
+                                 strcmp(fast_name, "slice") == 0 &&
+                                 r1->type == USSR_INTEGER &&
+                                 r2->type == USSR_INTEGER &&
+                                 r1->data.integer >= 0 &&
+                                 r2->data.integer >= 0 &&
+                                 r1->data.integer <=
+                                     INT64_MAX - r2->data.integer &&
+                                 (ussr_int_t)vm_text_reach(
+                                     text, (size_t)(r1->data.integer +
+                                                    r2->data.integer)) ==
+                                     r1->data.integer + r2->data.integer)
+                        {
+                            char *piece = malloc(
+                                (size_t)r2->data.integer + 1);
+
+                            if (piece != NULL)
+                            {
+                                memcpy(piece, text + r1->data.integer,
+                                       (size_t)r2->data.integer);
+                                piece[r2->data.integer] = '\0';
+                                value = ussr_string(piece);
+                                free(piece);
+                                fast = value.type == USSR_STRING;
+                            }
+                        }
+                    }
+                    if (fast)
+                    {
+                        ussr_value_free(&vm->registers[ins.a]);
+                        vm->registers[ins.a] = value;
+                        break;
+                    }
+                }
+
                 source_command = vm_find_oop_site(
                     program,
                     vm->ip - 1

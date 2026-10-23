@@ -21,7 +21,7 @@
 # errors can be reported where ussr reports them.
 
 global(_): pp_defs pp_sdef pp_inc pp_once pp_cact pp_cse pp_ctk pp_act
-global(_): pp_out pp_failed pp_msg pp_win pp_sigp pp_xargs pp_xafter
+global(_): pp_out pp_outv pp_failed pp_msg pp_win pp_sigp pp_xargs pp_xafter
 global(_): pp_mapf pp_mapl pp_curline
 
 # ---- bytes ----
@@ -731,8 +731,32 @@ pp_file(r): fname [
     ]
 ]
 # Every line of a file's text, in order (a line keeps its "\n").
+# The pieces of v joined, pairwise so the copying stays O(n log n).
+pp_join(r): v [
+    set(pjn_p): v
+    len(pjn_n): pjn_p
+    while(_): {pjn_n > 1} [
+        vec(pjn_q): ""
+        set(pjn_k): 0
+        while(_): {pjn_k < pjn_n} [
+            at(pjn_a): pjn_p pjn_k
+            if(_): {pjn_k + 1 < pjn_n} [
+                at(pjn_z): pjn_p {pjn_k + 1}
+                concat(pjn_a): pjn_a pjn_z
+            ]
+            push(_): pjn_q pjn_a
+            add(pjn_k): pjn_k 2
+        ]
+        set(pjn_p): pjn_q
+        len(pjn_n): pjn_p
+    ]
+    set(r): ""
+    if(_): {pjn_n = 1} [ at(r): pjn_p 0 ]
+]
 pp_text(r): src [
     set(r): 0
+    # bytes from a vector: byte() on the whole file copies it per call
+    text_bytes(pp_txv): src
     len(pp_txn): src
     set(pp_txs): 0
     set(pp_txline): 0
@@ -741,7 +765,7 @@ pp_text(r): src [
         set(pp_txe): pp_txs
         set(pp_txgo): 1
         while(_): {pp_txgo = 1 && pp_txe < pp_txn} [
-            byte(pp_txb): src pp_txe
+            at(pp_txb): pp_txv pp_txe
             add(pp_txe): pp_txe 1
             if(_): {pp_txb = 10} [ set(pp_txgo): 0 ]
         ]
@@ -767,13 +791,13 @@ pp_line(r): line [
             at(pp_lnfile): pp_inc {pp_lnd - 1}
             push(_): pp_mapf pp_lnfile
             push(_): pp_mapl pp_curline
-            concat(pp_out): pp_out pp_lnx
+            push(_): pp_outv pp_lnx
             set(pp_lnnl): 1
             if(_): {pp_lnn > 0} [
                 byte(pp_lnlast): line {pp_lnn - 1}
                 if(_): {pp_lnlast = 10} [ set(pp_lnnl): 0 ]
             ]
-            if(_): {pp_lnnl = 1} [ concat(pp_out): pp_out "\n" ]
+            if(_): {pp_lnnl = 1} [ push(_): pp_outv "\n" ]
         ]
     ]
 ]
@@ -962,6 +986,7 @@ pp_run(r): path [
     vec(pp_ctk): ""
     set(pp_act): 1
     set(pp_out): ""
+    vec(pp_outv): ""
     vec(pp_mapf): ""
     vec(pp_mapl): ""
     set(pp_curline): 0
@@ -971,5 +996,6 @@ pp_run(r): path [
     getenv(pp_os): "OS"
     if(_): {pp_os = "Windows_NT"} [ set(pp_win): 1 ]
     pp_file(_): path
+    pp_join(pp_out): pp_outv
     set(r): pp_out
 ]
