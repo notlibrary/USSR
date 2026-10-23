@@ -1,0 +1,41 @@
+# Hash sigils: name? reads the shared hash before the command runs,
+# an argument marked ! stores the command's result in the hash (under the
+# return name) after it runs. One hash for every process and function.
+twice(r): x [
+    mul(r): x 2
+]
+keep(r): x [
+    # return(_): v! stores v under the function's return name (r); the
+    # call itself still returns r as a variable
+    return(r): x!
+]
+worker(_): [
+    add(shared): base? 1!
+]
+init(ret): arg_cnt arg_vec [
+    set(base): 10!
+    print(_): base?
+    add(sum): base? 5!
+    print(_): sum?
+    sub(diff): base? 9!
+    print(_): diff?
+    concat(word): "ab" "cd"!
+    print(_): word?
+    len(n): "hello"!
+    print(_): n?
+    twice(t): base?
+    print(_): t
+    keep(k): 7
+    print(_): k
+    print(_): r?
+    # the hash and the variables are separate namespaces
+    set(base): 1
+    print(_): base
+    print(_): base?
+    async(p): "worker"
+    await(_): p
+    print(_): shared?
+    # commands may share a line; ! and ? work there too
+    set(a): 3! add(b): a? 1! print(_): b?
+    set(ret): 0
+]
