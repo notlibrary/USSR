@@ -7698,6 +7698,84 @@ repl_exec(r): src first [
     set(r): 0
 ]
 
+# The prompt, as ussr's repl_prompt makes it: PS1 (PS2 while brackets
+# are open), read again for every prompt so setenv takes effect at once;
+# unset or empty gives "ussr> " / "... ". The text is only shown, never
+# run. Escapes: \u user, \h host, \w working directory, \W its last
+# component, \v version, \$ "$", \\ backslash; any other backslash pair
+# is shown as written.
+repl_prompt(r): cont [
+    set(rpp_var): "PS1"
+    set(rpp_def): "ussr> "
+    if(_): {cont = 1} [
+        set(rpp_var): "PS2"
+        set(rpp_def): "... "
+    ]
+    getenv(rpp_f): rpp_var
+    if(_): {rpp_f = null} [ set(rpp_f): "" ]
+    if(_): {rpp_f = ""} [ set(rpp_f): rpp_def ]
+    set(r): ""
+    len(rpp_n): rpp_f
+    set(rpp_i): 0
+    while(_): {rpp_i < rpp_n} [
+        slice(rpp_c): rpp_f rpp_i 1
+        if(_): {rpp_c != "\\" || rpp_i + 1 = rpp_n} [
+            concat(r): r rpp_c
+        ]
+        else(_): [
+            add(rpp_i): rpp_i 1
+            slice(rpp_e): rpp_f rpp_i 1
+            set(rpp_done): 0
+            if(_): {rpp_e = "u" || rpp_e = "h"} [
+                set(rpp_a): "USERNAME"
+                set(rpp_b): "USER"
+                if(_): {rpp_e = "h"} [
+                    set(rpp_a): "COMPUTERNAME"
+                    set(rpp_b): "HOSTNAME"
+                ]
+                getenv(rpp_v): rpp_a
+                if(_): {rpp_v = null} [ getenv(rpp_v): rpp_b ]
+                if(_): {rpp_v = null} [ set(rpp_v): "?" ]
+                concat(r): r rpp_v
+                set(rpp_done): 1
+            ]
+            if(_): {rpp_e = "w" || rpp_e = "W"} [
+                getcwd(rpp_w):
+                if(_): {rpp_w = null} [ set(rpp_w): "?" ]
+                if(_): {rpp_e = "W"} [
+                    # the part after the last / or \, unless that is empty
+                    len(rpp_wn): rpp_w
+                    set(rpp_wl): {0 - 1}
+                    set(rpp_wi): 0
+                    while(_): {rpp_wi < rpp_wn} [
+                        byte(rpp_wb): rpp_w rpp_wi
+                        if(_): {rpp_wb = 47 || rpp_wb = 92} [ set(rpp_wl): rpp_wi ]
+                        add(rpp_wi): rpp_wi 1
+                    ]
+                    if(_): {rpp_wl >= 0 && rpp_wl + 1 < rpp_wn} [
+                        slice(rpp_w): rpp_w {rpp_wl + 1} {rpp_wn - rpp_wl - 1}
+                    ]
+                ]
+                concat(r): r rpp_w
+                set(rpp_done): 1
+            ]
+            if(_): {rpp_e = "v"} [
+                concat(r): r "0.4"
+                set(rpp_done): 1
+            ]
+            if(_): {rpp_e = "$" || rpp_e = "\\"} [
+                concat(r): r rpp_e
+                set(rpp_done): 1
+            ]
+            if(_): {rpp_done = 0} [
+                concat(r): r "\\"
+                concat(r): r rpp_e
+            ]
+        ]
+        add(rpp_i): rpp_i 1
+    ]
+]
+
 repl(r): [
     global(_): rp_eof
     print(_): "USSR Unified Shell Script REPL"
@@ -7710,12 +7788,10 @@ repl(r): [
     set(rp_lines): 0
     set(rp_first): 1
     while(_): {rp_eof = 0} [
-        if(_): {rp_dep = 0} [
-            template(_): "STR" "ussr> "
-        ]
-        if(_): {rp_dep > 0} [
-            template(_): "STR" "... "
-        ]
+        set(rp_cont): 0
+        if(_): {rp_dep > 0} [ set(rp_cont): 1 ]
+        repl_prompt(rp_pr): rp_cont
+        template(_): "STR" rp_pr
         repl_rd(rp_line): 
         len(rp_ll): rp_line
         if(_): {rp_eof = 0 && rp_ll > 0} [
