@@ -2215,15 +2215,11 @@ ex_concat_i(r): kids idx acc [
     ]
 ]
 ex_tout(r): s [
-    # Write each byte directly. Using template("STR" s) can alter the
-    # final byte/newline when this interpreter is running under bootstrap.
+    # The host's one-slot template writes the string exactly, every byte
+    # (escapes, UTF-8) included; io.su's putch knows only tab, newline,
+    # CR and printable ASCII and dropped the rest.
     len(rt_tout_len): s
-    set(rt_tout_i): 0
-    while(_): {rt_tout_i < rt_tout_len} [
-        byte(rt_tout_ch): s rt_tout_i
-        putch(_): rt_tout_ch
-        add(rt_tout_i): rt_tout_i 1
-    ]
+    if(_): {rt_tout_len > 0} [ template(_): "STR" s ]
     set(r): 0
 ]
 
@@ -2247,7 +2243,7 @@ rt_tpl(r): fmt vals [
         if(_): {rt_tpb = 59 && rt_tpp + 1 < rt_tpn} [
             byte(rt_tpb2): fmt {rt_tpp + 1}
             if(_): {rt_tpb2 = 59} [
-                putch(_): 59
+                template(_): "STR" ";"
                 add(rt_tpp): rt_tpp 2
                 set(rt_tpdone): 1
             ]
@@ -2284,7 +2280,9 @@ rt_tpl(r): fmt vals [
             ]
         ]
         if(_): {rt_tpdone = 0} [
-            putch(_): rt_tpb
+            # a literal byte of the format, as is
+            chr(rt_tpch): rt_tpb
+            template(_): "STR" rt_tpch
             add(rt_tpp): rt_tpp 1
         ]
     ]
@@ -3511,7 +3509,8 @@ ex_scan_prompt(r): fmt [
             ]
             if(_): {rt_sdone = 0} [
                 byte(rt_spch): fmt rt_sp
-                putch(_): rt_spch
+                chr(rt_spc): rt_spch
+                template(_): "STR" rt_spc
                 add(rt_sp): rt_sp 1
             ]
         ]
