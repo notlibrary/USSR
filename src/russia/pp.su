@@ -1,0 +1,960 @@
+# USSR preprocessor in USSR: the textual pass ussr runs before parsing,
+# ported from src/pp.c with its exact behavior and messages.
+#
+#     pp_run(text): path    -> preprocessed source of the file at path
+#
+# Directives (a line whose first non-blank byte is '$'):
+#   $include "file" | file   resolved against the including file's directory
+#   $define NAME value       object-like macro (redefining replaces it)
+#   $define NAME(a, b) body  function-like macro, expanded at NAME(...)
+#   $ifdef NAME / $if defined(NAME) / $elif defined NAME / $else / $endif
+#   $once                    the current file is read at most once
+# __MAIN__ is defined only in the file ussr was started with.
+#
+# Directive lines produce no output; every other active line is copied
+# with its macros expanded (strings are left alone). On an error pp_failed
+# is 1 and pp_msg holds ussr's message without its "USSR: " prefix ("" for
+# the errors ussr reports silently); nothing more is processed.
+
+global(_): pp_defs pp_sdef pp_inc pp_once pp_cact pp_cse pp_ctk pp_act
+global(_): pp_out pp_failed pp_msg pp_win pp_sigp pp_xargs pp_xafter
+
+# ---- bytes ----
+pp_space_p(r): b [
+    set(r): 0
+    if(_): {b = 32 || (b > 8 && b < 14)} [ set(r): 1 ]
+]
+pp_alpha_p(r): b [
+    set(r): 0
+    if(_): {(b > 64 && b < 91) || (b > 96 && b < 123)} [ set(r): 1 ]
+]
+pp_digit_p(r): b [
+    set(r): 0
+    if(_): {b > 47 && b < 58} [ set(r): 1 ]
+]
+pp_idstart_p(r): b [
+    pp_alpha_p(r): b
+    if(_): {b = 95} [ set(r): 1 ]
+]
+pp_idchar_p(r): b [
+    pp_idstart_p(r): b
+    if(_): {r = 0} [ pp_digit_p(r): b ]
+]
+# First index at or after i in s that is not white space.
+pp_skip(r): s i [
+    len(pp_skn): s
+    set(r): i
+    set(pp_skgo): 1
+    while(_): {pp_skgo = 1 && r < pp_skn} [
+        byte(pp_skb): s r
+        pp_space_p(pp_sks): pp_skb
+        set(pp_skgo): pp_sks
+        if(_): {pp_sks = 1} [ add(r): r 1 ]
+    ]
+]
+# End of the identifier (alnum or _) run starting at i.
+pp_idend(r): s i [
+    len(pp_ien): s
+    set(r): i
+    set(pp_iego): 1
+    while(_): {pp_iego = 1 && r < pp_ien} [
+        byte(pp_ieb): s r
+        pp_idchar_p(pp_iego): pp_ieb
+        if(_): {pp_iego = 1} [ add(r): r 1 ]
+    ]
+]
+# s[i..j) as a string.
+pp_cut(r): s i j [
+    set(r): ""
+    if(_): {j > i} [ slice(r): s i {j - i} ]
+]
+# s from i to its end.
+pp_rest(r): s i [
+    len(pp_rsn): s
+    pp_cut(r): s i pp_rsn
+]
+# s without white space at either end.
+pp_trim(r): s [
+    len(pp_trn): s
+    pp_skip(pp_tri): s 0
+    set(pp_trj): pp_trn
+    set(pp_trgo): 1
+    while(_): {pp_trgo = 1 && pp_trj > pp_tri} [
+        byte(pp_trb): s {pp_trj - 1}
+        pp_space_p(pp_trgo): pp_trb
+        if(_): {pp_trgo = 1} [ sub(pp_trj): pp_trj 1 ]
+    ]
+    pp_cut(r): s pp_tri pp_trj
+]
+# Index just past the "..." string literal opening at i (escape-aware;
+# the end of s when it never closes).
+pp_strend(r): s i [
+    len(pp_sen): s
+    add(r): i 1
+    set(pp_seesc): 0
+    set(pp_sego): 1
+    while(_): {pp_sego = 1 && r < pp_sen} [
+        byte(pp_seb): s r
+        add(r): r 1
+        if(_): {pp_seesc = 1} [
+            set(pp_seesc): 0
+        ]
+        elif(_): {pp_seb = 92} [
+            set(pp_seesc): 1
+        ]
+        elif(_): {pp_seb = 34} [
+            set(pp_sego): 0
+        ]
+    ]
+]
+pp_fail(r): msg [
+    set(pp_failed): 1
+    set(pp_msg): msg
+    set(r): 0
+]
+
+# ---- defines ----
+# pp_defs holds pp_Def records {n: name or signature, v: value}.
+pp_dname(r): i [
+    at(pp_dnr): pp_defs i
+    getf(r): pp_dnr "n"
+]
+pp_dvalue(r): i [
+    at(pp_dvr): pp_defs i
+    getf(r): pp_dvr "v"
+]
+# Index of the define called exactly name (most recent first), else -1.
+pp_find(r): name [
+    len(pp_fdn): pp_defs
+    set(r): {0 - 1}
+    set(pp_fdi): {pp_fdn - 1}
+    while(_): {r < 0 && pp_fdi >= 0} [
+        pp_dname(pp_fdx): pp_fdi
+        if(_): {pp_fdx = name} [ set(r): pp_fdi ]
+        sub(pp_fdi): pp_fdi 1
+    ]
+]
+pp_define(r): name value [
+    set(r): 0
+    pp_find(pp_dfi): name
+    if(_): {pp_dfi >= 0} [
+        at(pp_dfr): pp_defs pp_dfi
+        setf(_): pp_dfr "v" value
+    ]
+    if(_): {pp_dfi < 0} [
+        new(pp_dfn): "pp_Def" name value
+        push(_): pp_defs pp_dfn
+    ]
+]
+# Replace the top item of a stack vector.
+pp_settop(r): v x [
+    pop(pp_sto): v
+    push(_): v x
+    set(r): 0
+]
+pp_isdef(r): name [
+    pp_find(pp_idi): name
+    set(r): 0
+    if(_): {pp_idi >= 0} [ set(r): 1 ]
+    if(_): {name = "__MAIN__" && pp_idi < 0} [
+        len(pp_idd): pp_inc
+        if(_): {pp_idd = 1} [ set(r): 1 ]
+    ]
+]
+# Function-like signature sig ("NAME(a, b)") against name: 1 when it is
+# name's, 0 when not (or malformed in the ways ussr treats as "not"),
+# -1 (reported) when its parameter list is invalid. Parameters land in
+# pp_sigp.
+pp_sig(r): sig name [
+    vec(pp_sigp): ""
+    set(r): 0
+    len(pp_sgn): sig
+    set(pp_sgo): {0 - 1}
+    set(pp_sgi): 0
+    while(_): {pp_sgo < 0 && pp_sgi < pp_sgn} [
+        byte(pp_sgb): sig pp_sgi
+        if(_): {pp_sgb = 40} [ set(pp_sgo): pp_sgi ]
+        add(pp_sgi): pp_sgi 1
+    ]
+    set(pp_sgm): 0
+    if(_): {pp_sgo >= 0} [
+        slice(pp_sgpre): sig 0 pp_sgo
+        if(_): {pp_sgpre = name} [ set(pp_sgm): 1 ]
+    ]
+    if(_): {pp_sgm = 1} [
+        pp_skip(pp_sgc): sig {pp_sgo + 1}
+        set(pp_sgch): 0
+        if(_): {pp_sgc < pp_sgn} [ byte(pp_sgch): sig pp_sgc ]
+        if(_): {pp_sgch = 41} [
+            if(_): {pp_sgc + 1 = pp_sgn} [ set(r): 1 ]
+        ]
+        if(_): {pp_sgch != 41} [
+            set(pp_sggo): 1
+            while(_): {pp_sggo = 1} [
+                pp_idend(pp_sge): sig pp_sgc
+                if(_): {pp_sge = pp_sgc} [
+                    set(pp_sggo): 0
+                    set(r): {0 - 1}
+                ]
+                if(_): {pp_sggo = 1} [
+                    pp_cut(pp_sgpar): sig pp_sgc pp_sge
+                    push(_): pp_sigp pp_sgpar
+                    pp_skip(pp_sgc): sig pp_sge
+                    set(pp_sgch2): 0
+                    if(_): {pp_sgc < pp_sgn} [ byte(pp_sgch2): sig pp_sgc ]
+                    if(_): {pp_sgch2 = 41} [
+                        set(pp_sggo): 0
+                        set(r): {0 - 1}
+                        if(_): {pp_sgc + 1 = pp_sgn} [ set(r): 1 ]
+                    ]
+                    if(_): {pp_sggo = 1 && pp_sgch2 != 44} [
+                        set(pp_sggo): 0
+                        set(r): {0 - 1}
+                    ]
+                    if(_): {pp_sggo = 1} [
+                        pp_skip(pp_sgc): sig {pp_sgc + 1}
+                    ]
+                ]
+            ]
+            if(_): {r < 0} [
+                concat(pp_sgmsg): "invalid macro parameter list: " sig
+                pp_fail(_): pp_sgmsg
+            ]
+        ]
+    ]
+]
+# The most recent function-like define for name: its index (parameters
+# in pp_sigp), else -1.
+pp_ffind(r): name [
+    len(pp_ffn): pp_defs
+    set(r): {0 - 1}
+    set(pp_ffi): {pp_ffn - 1}
+    set(pp_ffgo): 1
+    while(_): {pp_ffgo = 1 && pp_ffi >= 0} [
+        pp_dname(pp_ffx): pp_ffi
+        pp_has_paren(pp_ffp): pp_ffx
+        if(_): {pp_ffp = 1} [
+            pp_sig(pp_ffs): pp_ffx name
+            if(_): {pp_ffs = 1} [
+                set(r): pp_ffi
+                set(pp_ffgo): 0
+            ]
+            if(_): {pp_ffs < 0} [ set(pp_ffgo): 0 ]
+        ]
+        sub(pp_ffi): pp_ffi 1
+    ]
+]
+pp_has_paren(r): s [
+    len(pp_hpn): s
+    set(r): 0
+    set(pp_hpi): 0
+    while(_): {r = 0 && pp_hpi < pp_hpn} [
+        byte(pp_hpb): s pp_hpi
+        if(_): {pp_hpb = 40} [ set(r): 1 ]
+        add(pp_hpi): pp_hpi 1
+    ]
+]
+
+# ---- macro expansion ----
+# Arguments of the invocation whose '(' is at open: pp_xargs, and pp_xafter
+# just past its ')'. 0, or 1 when it never closes on this line.
+pp_args(r): s open [
+    vec(pp_xargs): ""
+    set(pp_xafter): 0
+    len(pp_xn): s
+    add(pp_xc): open 1
+    set(pp_xst): pp_xc
+    set(pp_xpd): 0
+    set(pp_xbd): 0
+    set(r): 1
+    set(pp_xgo): 1
+    while(_): {pp_xgo = 1 && pp_xc < pp_xn} [
+        byte(pp_xb): s pp_xc
+        if(_): {pp_xb = 34} [
+            pp_strend(pp_xc): s pp_xc
+        ]
+        elif(_): {pp_xb = 40} [
+            add(pp_xpd): pp_xpd 1
+            add(pp_xc): pp_xc 1
+        ]
+        elif(_): {pp_xb = 41 && pp_xpd > 0} [
+            sub(pp_xpd): pp_xpd 1
+            add(pp_xc): pp_xc 1
+        ]
+        elif(_): {pp_xb = 41} [
+            set(pp_xgo): 0
+            if(_): {pp_xbd = 0} [
+                len(pp_xcount): pp_xargs
+                if(_): {pp_xc > pp_xst || pp_xcount > 0} [
+                    pp_cut(pp_xa): s pp_xst pp_xc
+                    pp_trim(pp_xa2): pp_xa
+                    push(_): pp_xargs pp_xa2
+                ]
+                add(pp_xafter): pp_xc 1
+                set(r): 0
+            ]
+        ]
+        elif(_): {pp_xb = 123} [
+            add(pp_xbd): pp_xbd 1
+            add(pp_xc): pp_xc 1
+        ]
+        elif(_): {pp_xb = 125 && pp_xbd > 0} [
+            sub(pp_xbd): pp_xbd 1
+            add(pp_xc): pp_xc 1
+        ]
+        elif(_): {pp_xb = 44 && pp_xpd = 0 && pp_xbd = 0} [
+            pp_cut(pp_xa3): s pp_xst pp_xc
+            pp_trim(pp_xa4): pp_xa3
+            push(_): pp_xargs pp_xa4
+            add(pp_xc): pp_xc 1
+            set(pp_xst): pp_xc
+        ]
+        else(_): [
+            add(pp_xc): pp_xc 1
+        ]
+    ]
+    if(_): {r = 1} [
+        pp_fail(_): "unterminated macro invocation"
+    ]
+]
+# body with each parameter identifier replaced by its argument.
+pp_subst(r): body params args [
+    set(r): ""
+    len(pp_sbn): body
+    len(pp_sbpc): params
+    set(pp_sbc): 0
+    while(_): {pp_sbc < pp_sbn} [
+        byte(pp_sbb): body pp_sbc
+        pp_idstart_p(pp_sbid): pp_sbb
+        if(_): {pp_sbb = 34} [
+            pp_strend(pp_sbe): body pp_sbc
+            pp_cut(pp_sbs): body pp_sbc pp_sbe
+            concat(r): r pp_sbs
+            set(pp_sbc): pp_sbe
+        ]
+        elif(_): {pp_sbid = 1} [
+            pp_idend(pp_sbe2): body pp_sbc
+            pp_cut(pp_sbname): body pp_sbc pp_sbe2
+            set(pp_sbk): 0
+            set(pp_sbhit): {0 - 1}
+            while(_): {pp_sbhit < 0 && pp_sbk < pp_sbpc} [
+                at(pp_sbp): params pp_sbk
+                if(_): {pp_sbp = pp_sbname} [ set(pp_sbhit): pp_sbk ]
+                add(pp_sbk): pp_sbk 1
+            ]
+            if(_): {pp_sbhit >= 0} [
+                at(pp_sbarg): args pp_sbhit
+                concat(r): r pp_sbarg
+            ]
+            if(_): {pp_sbhit < 0} [
+                concat(r): r pp_sbname
+            ]
+            set(pp_sbc): pp_sbe2
+        ]
+        else(_): [
+            slice(pp_sbch): body pp_sbc 1
+            concat(r): r pp_sbch
+            add(pp_sbc): pp_sbc 1
+        ]
+    ]
+]
+# text with its macros expanded.
+pp_expand(r): text depth [
+    set(r): ""
+    len(pp_exnd): pp_defs
+    if(_): {depth > 64} [
+        pp_fail(_): "macro expansion too deep"
+    ]
+    if(_): {pp_failed = 0 && pp_exnd = 0} [
+        set(r): text
+    ]
+    if(_): {pp_failed = 0 && pp_exnd > 0} [
+        len(pp_exn): text
+        set(pp_exc): 0
+        while(_): {pp_failed = 0 && pp_exc < pp_exn} [
+            byte(pp_exb): text pp_exc
+            pp_idstart_p(pp_exid): pp_exb
+            if(_): {pp_exb = 34} [
+                pp_strend(pp_exe): text pp_exc
+                pp_cut(pp_exs): text pp_exc pp_exe
+                concat(r): r pp_exs
+                set(pp_exc): pp_exe
+            ]
+            elif(_): {pp_exid = 0} [
+                # copy the whole run up to the next identifier or string
+                set(pp_exe2): pp_exc
+                set(pp_exgo): 1
+                while(_): {pp_exgo = 1 && pp_exe2 < pp_exn} [
+                    byte(pp_exb2): text pp_exe2
+                    pp_idstart_p(pp_exid2): pp_exb2
+                    if(_): {pp_exid2 = 1 || pp_exb2 = 34} [ set(pp_exgo): 0 ]
+                    if(_): {pp_exgo = 1} [ add(pp_exe2): pp_exe2 1 ]
+                ]
+                pp_cut(pp_exrun): text pp_exc pp_exe2
+                concat(r): r pp_exrun
+                set(pp_exc): pp_exe2
+            ]
+            else(_): [
+                pp_idend(pp_exe3): text pp_exc
+                pp_cut(pp_exname): text pp_exc pp_exe3
+                set(pp_exc): pp_exe3
+                set(pp_exdone): 0
+                pp_skip(pp_exla): text pp_exe3
+                set(pp_exlb): 0
+                if(_): {pp_exla < pp_exn} [ byte(pp_exlb): text pp_exla ]
+                if(_): {pp_exlb = 40} [
+                    pp_ffind(pp_exfi): pp_exname
+                    if(_): {pp_exfi >= 0} [
+                        set(pp_exprm): pp_sigp
+                        pp_args(pp_exar): text pp_exla
+                        if(_): {pp_failed = 0} [
+                            set(pp_exargs): pp_xargs
+                            set(pp_exafter): pp_xafter
+                            len(pp_exna): pp_exargs
+                            len(pp_exnp): pp_exprm
+                            if(_): {pp_exna != pp_exnp} [
+                                set(pp_exs2): "s"
+                                if(_): {pp_exnp = 1} [ set(pp_exs2): "" ]
+                                concat(pp_exmsg): "macro '" pp_exname
+                                concat(pp_exmsg): pp_exmsg "' expects "
+                                encode(pp_exnps): pp_exnp
+                                concat(pp_exmsg): pp_exmsg pp_exnps
+                                concat(pp_exmsg): pp_exmsg " argument"
+                                concat(pp_exmsg): pp_exmsg pp_exs2
+                                concat(pp_exmsg): pp_exmsg ", got "
+                                encode(pp_exnas): pp_exna
+                                concat(pp_exmsg): pp_exmsg pp_exnas
+                                pp_fail(_): pp_exmsg
+                            ]
+                            if(_): {pp_failed = 0} [
+                                pp_dvalue(pp_exbody): pp_exfi
+                                pp_subst(pp_exsub): pp_exbody pp_exprm pp_exargs
+                                pp_expand(pp_exx): pp_exsub {depth + 1}
+                                concat(r): r pp_exx
+                                set(pp_exc): pp_exafter
+                            ]
+                        ]
+                        set(pp_exdone): 1
+                    ]
+                ]
+                if(_): {pp_exdone = 0} [
+                    pp_find(pp_exoi): pp_exname
+                    if(_): {pp_exoi >= 0} [
+                        pp_dvalue(pp_exov): pp_exoi
+                        pp_expand(pp_exox): pp_exov {depth + 1}
+                        concat(r): r pp_exox
+                    ]
+                    if(_): {pp_exoi < 0} [
+                        concat(r): r pp_exname
+                    ]
+                ]
+            ]
+        ]
+    ]
+]
+
+# ---- conditionals ----
+pp_cpush(r): cond [
+    set(r): 0
+    len(pp_cpd): pp_cact
+    if(_): {pp_cpd >= 32} [
+        pp_fail(_): "conditional nesting too deep"
+    ]
+    if(_): {pp_failed = 0} [
+        set(pp_cpa): 0
+        if(_): {pp_act = 1 && cond = 1} [ set(pp_cpa): 1 ]
+        push(_): pp_cact pp_cpa
+        push(_): pp_cse 0
+        push(_): pp_ctk pp_cpa
+        set(pp_act): pp_cpa
+    ]
+]
+# Whether the conditional enclosing the innermost one is active.
+pp_cparent(r): [
+    len(pp_cpn): pp_cact
+    set(r): 1
+    if(_): {pp_cpn > 1} [ at(r): pp_cact {pp_cpn - 2} ]
+]
+pp_celse(r): [
+    set(r): 0
+    len(pp_cen): pp_cact
+    if(_): {pp_cen = 0} [ pp_fail(_): "unexpected $else" ]
+    if(_): {pp_failed = 0} [
+        sub(pp_cei): pp_cen 1
+        at(pp_ces): pp_cse pp_cei
+        if(_): {pp_ces = 1} [ pp_fail(_): "duplicate $else" ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_settop(_): pp_cse 1
+        pp_cparent(pp_cep):
+        at(pp_cet): pp_ctk pp_cei
+        set(pp_cea): 0
+        if(_): {pp_cep = 1 && pp_cet = 0} [ set(pp_cea): 1 ]
+        pp_settop(_): pp_cact pp_cea
+        pp_settop(_): pp_ctk 1
+        set(pp_act): pp_cea
+    ]
+]
+pp_celif(r): cond [
+    set(r): 0
+    len(pp_cln): pp_cact
+    if(_): {pp_cln = 0} [ pp_fail(_): "unexpected $elif" ]
+    if(_): {pp_failed = 0} [
+        sub(pp_cli): pp_cln 1
+        at(pp_cls): pp_cse pp_cli
+        if(_): {pp_cls = 1} [ pp_fail(_): "$elif after $else" ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_cparent(pp_clp):
+        at(pp_clt): pp_ctk pp_cli
+        set(pp_cla): 0
+        if(_): {pp_clp = 1 && pp_clt = 0 && cond = 1} [ set(pp_cla): 1 ]
+        pp_settop(_): pp_cact pp_cla
+        if(_): {pp_cla = 1} [ pp_settop(_): pp_ctk 1 ]
+        set(pp_act): pp_cla
+    ]
+]
+pp_cpop(r): [
+    set(r): 0
+    len(pp_con): pp_cact
+    if(_): {pp_con = 0} [ pp_fail(_): "unexpected $endif" ]
+    if(_): {pp_failed = 0} [
+        pop(_): pp_cact
+        pop(_): pp_cse
+        pop(_): pp_ctk
+        set(pp_act): 1
+        if(_): {pp_con > 1} [ at(pp_act): pp_cact {pp_con - 2} ]
+    ]
+]
+# $if/$elif operand: defined(NAME) or defined NAME -> 1/0 (or a failure).
+pp_defexpr(r): s [
+    set(r): 0
+    pp_skip(pp_dxc): s 0
+    len(pp_dxn): s
+    set(pp_dxw): ""
+    if(_): {pp_dxc + 7 <= pp_dxn} [ slice(pp_dxw): s pp_dxc 7 ]
+    if(_): {pp_dxw != "defined"} [ pp_fail(_): "expected defined(...)" ]
+    if(_): {pp_failed = 0} [
+        add(pp_dxst): pp_dxc 7
+        pp_skip(pp_dxc): s pp_dxst
+        set(pp_dxb): 0
+        if(_): {pp_dxc < pp_dxn} [ byte(pp_dxb): s pp_dxc ]
+        set(pp_dxpar): 0
+        if(_): {pp_dxb = 40} [
+            set(pp_dxpar): 1
+            pp_skip(pp_dxc): s {pp_dxc + 1}
+        ]
+        elif(_): {pp_dxc = pp_dxst} [
+            pp_fail(_): "expected '(' or a name after defined"
+        ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_idend(pp_dxe): s pp_dxc
+        if(_): {pp_dxe = pp_dxc} [
+            pp_fail(_): "expected identifier in defined(...)"
+        ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_cut(pp_dxname): s pp_dxc pp_dxe
+        pp_skip(pp_dxc2): s pp_dxe
+        set(pp_dxb2): 0
+        if(_): {pp_dxc2 < pp_dxn} [ byte(pp_dxb2): s pp_dxc2 ]
+        if(_): {pp_dxpar = 1 && pp_dxb2 != 41} [
+            pp_fail(_): "expected ')' after defined identifier"
+        ]
+    ]
+    if(_): {pp_failed = 0} [ pp_isdef(r): pp_dxname ]
+]
+
+# ---- files ----
+# Absolute, normalized form of a path for $once (case-folded on Windows,
+# where ussr compares these paths case-insensitively).
+pp_canon(r): path [
+    len(pp_cnn): path
+    set(pp_cnabs): 0
+    if(_): {pp_cnn > 0} [
+        byte(pp_cnb0): path 0
+        if(_): {pp_cnb0 = 47 || pp_cnb0 = 92} [ set(pp_cnabs): 1 ]
+    ]
+    if(_): {pp_cnn > 2} [
+        byte(pp_cnb1): path 1
+        byte(pp_cnb2): path 2
+        if(_): {pp_cnb1 = 58 && (pp_cnb2 = 47 || pp_cnb2 = 92)} [ set(pp_cnabs): 1 ]
+    ]
+    set(pp_cnp): path
+    if(_): {pp_cnabs = 0} [
+        getcwd(pp_cnd):
+        concat(pp_cnd): pp_cnd "/"
+        concat(pp_cnp): pp_cnd path
+    ]
+    # split on / and \, drop "." segments, let ".." remove the previous
+    len(pp_cnl): pp_cnp
+    vec(pp_cnseg): ""
+    set(pp_cncur): ""
+    set(pp_cni): 0
+    while(_): {pp_cni <= pp_cnl} [
+        set(pp_cnch): 47
+        if(_): {pp_cni < pp_cnl} [ byte(pp_cnch): pp_cnp pp_cni ]
+        if(_): {pp_cnch = 47 || pp_cnch = 92} [
+            if(_): {pp_cncur = ".."} [
+                len(pp_cnsl): pp_cnseg
+                if(_): {pp_cnsl > 1} [ pop(_): pp_cnseg ]
+            ]
+            elif(_): {pp_cncur != "." && pp_cncur != ""} [
+                push(_): pp_cnseg pp_cncur
+            ]
+            elif(_): {pp_cni = 0} [
+                push(_): pp_cnseg ""
+            ]
+            set(pp_cncur): ""
+        ]
+        else(_): [
+            slice(pp_cnc1): pp_cnp pp_cni 1
+            concat(pp_cncur): pp_cncur pp_cnc1
+        ]
+        add(pp_cni): pp_cni 1
+    ]
+    set(r): ""
+    len(pp_cnsn): pp_cnseg
+    set(pp_cnk): 0
+    while(_): {pp_cnk < pp_cnsn} [
+        at(pp_cnsg): pp_cnseg pp_cnk
+        if(_): {pp_cnk > 0} [ concat(r): r "/" ]
+        concat(r): r pp_cnsg
+        add(pp_cnk): pp_cnk 1
+    ]
+    if(_): {pp_win = 1} [ pp_lower(r): r ]
+]
+pp_lower(r): s [
+    set(r): ""
+    len(pp_lwn): s
+    set(pp_lwi): 0
+    while(_): {pp_lwi < pp_lwn} [
+        byte(pp_lwb): s pp_lwi
+        if(_): {pp_lwb > 64 && pp_lwb < 91} [
+            chr(pp_lwc): {pp_lwb + 32}
+        ]
+        else(_): [
+            slice(pp_lwc): s pp_lwi 1
+        ]
+        concat(r): r pp_lwc
+        add(pp_lwi): pp_lwi 1
+    ]
+]
+# filename resolved against the directory of the including file.
+pp_resolve(r): filename [
+    set(r): filename
+    len(pp_rvn): filename
+    set(pp_rvabs): 0
+    if(_): {pp_rvn > 0} [
+        byte(pp_rvb0): filename 0
+        if(_): {pp_rvb0 = 47 || pp_rvb0 = 92} [ set(pp_rvabs): 1 ]
+    ]
+    if(_): {pp_rvn > 2} [
+        byte(pp_rvb0b): filename 0
+        byte(pp_rvb1): filename 1
+        byte(pp_rvb2): filename 2
+        pp_alpha_p(pp_rval): pp_rvb0b
+        if(_): {pp_rval = 1 && pp_rvb1 = 58 && (pp_rvb2 = 47 || pp_rvb2 = 92)} [
+            set(pp_rvabs): 1
+        ]
+    ]
+    len(pp_rvd): pp_inc
+    if(_): {pp_rvabs = 0 && pp_rvd > 0} [
+        at(pp_rvinc): pp_inc {pp_rvd - 1}
+        len(pp_rvil): pp_rvinc
+        set(pp_rvsep): {0 - 1}
+        set(pp_rvi): 0
+        while(_): {pp_rvi < pp_rvil} [
+            byte(pp_rvb): pp_rvinc pp_rvi
+            if(_): {pp_rvb = 47 || pp_rvb = 92} [ set(pp_rvsep): pp_rvi ]
+            add(pp_rvi): pp_rvi 1
+        ]
+        if(_): {pp_rvsep >= 0} [
+            slice(pp_rvdir): pp_rvinc 0 {pp_rvsep + 1}
+            concat(r): pp_rvdir filename
+        ]
+    ]
+]
+pp_file(r): fname [
+    set(r): 0
+    pp_canon(pp_flc): fname
+    set(pp_flseen): 0
+    len(pp_flon): pp_once
+    set(pp_fli): 0
+    while(_): {pp_fli < pp_flon} [
+        at(pp_flo): pp_once pp_fli
+        if(_): {pp_flo = pp_flc} [ set(pp_flseen): 1 ]
+        add(pp_fli): pp_fli 1
+    ]
+    if(_): {pp_flseen = 0} [
+        len(pp_fld): pp_inc
+        if(_): {pp_fld >= 32} [
+            concat(pp_flm): "maximum include depth exceeded: " fname
+            pp_fail(_): pp_flm
+        ]
+        set(pp_flj): 0
+        while(_): {pp_failed = 0 && pp_flj < pp_fld} [
+            at(pp_fli2): pp_inc pp_flj
+            if(_): {pp_fli2 = fname} [
+                concat(pp_flm2): "recursive include detected: " fname
+                pp_fail(_): pp_flm2
+            ]
+            add(pp_flj): pp_flj 1
+        ]
+        if(_): {pp_failed = 0} [
+            push(_): pp_inc fname
+            file_exists(pp_flex): fname
+            if(_): {pp_flex = false} [
+                concat(pp_flm3): "cannot open included file '" fname
+                concat(pp_flm3): pp_flm3 "'"
+                pp_fail(_): pp_flm3
+            ]
+        ]
+        if(_): {pp_failed = 0} [
+            readfile(pp_flsrc): fname
+            pp_text(_): pp_flsrc
+        ]
+        if(_): {pp_failed = 0} [
+            len(pp_flcd): pp_cact
+            len(pp_fld2): pp_inc
+            if(_): {pp_flcd != 0 && pp_fld2 = 1} [
+                pp_fail(_): "unterminated conditional directive"
+            ]
+        ]
+        if(_): {pp_failed = 0} [ pop(_): pp_inc ]
+    ]
+]
+# Every line of a file's text, in order (a line keeps its "\n").
+pp_text(r): src [
+    set(r): 0
+    len(pp_txn): src
+    set(pp_txs): 0
+    while(_): {pp_failed = 0 && pp_txs < pp_txn} [
+        set(pp_txe): pp_txs
+        set(pp_txgo): 1
+        while(_): {pp_txgo = 1 && pp_txe < pp_txn} [
+            byte(pp_txb): src pp_txe
+            add(pp_txe): pp_txe 1
+            if(_): {pp_txb = 10} [ set(pp_txgo): 0 ]
+        ]
+        pp_cut(pp_txl): src pp_txs pp_txe
+        pp_line(_): pp_txl
+        set(pp_txs): pp_txe
+    ]
+]
+pp_line(r): line [
+    set(r): 0
+    pp_skip(pp_lnc): line 0
+    len(pp_lnn): line
+    set(pp_lnb): 0
+    if(_): {pp_lnc < pp_lnn} [ byte(pp_lnb): line pp_lnc ]
+    if(_): {pp_lnb = 36} [
+        pp_directive(_): line {pp_lnc + 1}
+    ]
+    elif(_): {pp_act = 1} [
+        pp_expand(pp_lnx): line 0
+        if(_): {pp_failed = 0} [
+            concat(pp_out): pp_out pp_lnx
+            set(pp_lnnl): 1
+            if(_): {pp_lnn > 0} [
+                byte(pp_lnlast): line {pp_lnn - 1}
+                if(_): {pp_lnlast = 10} [ set(pp_lnnl): 0 ]
+            ]
+            if(_): {pp_lnnl = 1} [ concat(pp_out): pp_out "\n" ]
+        ]
+    ]
+]
+pp_directive(r): line p [
+    set(r): 0
+    pp_idend(pp_dre): line p
+    pp_cut(pp_drn): line p pp_dre
+    pp_skip(pp_drc): line pp_dre
+    pp_rest(pp_drt): line pp_drc
+    set(pp_drk): 0
+    if(_): {pp_drn = ""} [
+        pp_fail(_): "invalid preprocessor directive"
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "define"} [
+        pp_pdefine(_): pp_drt
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "include"} [
+        if(_): {pp_act = 1} [ pp_pinclude(_): pp_drt ]
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "ifdef"} [
+        pp_idend(pp_dre2): pp_drt 0
+        if(_): {pp_dre2 = 0} [ pp_fail(_): "$ifdef requires a name" ]
+        if(_): {pp_failed = 0} [
+            pp_cut(pp_drname): pp_drt 0 pp_dre2
+            pp_isdef(pp_drcond): pp_drname
+            pp_cpush(_): pp_drcond
+        ]
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "if"} [
+        pp_defexpr(pp_drc2): pp_drt
+        if(_): {pp_failed = 0} [ pp_cpush(_): pp_drc2 ]
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "elif"} [
+        pp_defexpr(pp_drc3): pp_drt
+        if(_): {pp_failed = 0} [ pp_celif(_): pp_drc3 ]
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "else"} [
+        pp_celse(_):
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "endif"} [
+        pp_cpop(_):
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drn = "once"} [
+        len(pp_drd): pp_inc
+        if(_): {pp_act = 1 && pp_drd > 0} [
+            at(pp_drcur): pp_inc {pp_drd - 1}
+            pp_canon(pp_drcn): pp_drcur
+            push(_): pp_once pp_drcn
+        ]
+        set(pp_drk): 1
+    ]
+    if(_): {pp_drk = 0} [
+        concat(pp_drm): "unknown preprocessor directive: $" pp_drn
+        pp_fail(_): pp_drm
+    ]
+]
+pp_pinclude(r): s [
+    set(r): 0
+    pp_skip(pp_pic): s 0
+    len(pp_pin): s
+    set(pp_pib): 0
+    if(_): {pp_pic < pp_pin} [ byte(pp_pib): s pp_pic ]
+    if(_): {pp_pib = 34} [
+        add(pp_pist): pp_pic 1
+        set(pp_pie): pp_pist
+        set(pp_pigo): 1
+        while(_): {pp_pigo = 1 && pp_pie < pp_pin} [
+            byte(pp_pib2): s pp_pie
+            if(_): {pp_pib2 = 34} [ set(pp_pigo): 0 ]
+            if(_): {pp_pigo = 1} [ add(pp_pie): pp_pie 1 ]
+        ]
+        if(_): {pp_pie >= pp_pin} [
+            pp_fail(_): "unterminated $include filename"
+        ]
+        if(_): {pp_failed = 0} [
+            pp_cut(pp_pifn): s pp_pist pp_pie
+            pp_resolve(pp_pipath): pp_pifn
+            pp_file(_): pp_pipath
+        ]
+    ]
+    if(_): {pp_pib != 34} [
+        set(pp_pie2): pp_pic
+        set(pp_pigo2): 1
+        while(_): {pp_pigo2 = 1 && pp_pie2 < pp_pin} [
+            byte(pp_pib3): s pp_pie2
+            pp_space_p(pp_pisp): pp_pib3
+            if(_): {pp_pisp = 1} [ set(pp_pigo2): 0 ]
+            if(_): {pp_pigo2 = 1} [ add(pp_pie2): pp_pie2 1 ]
+        ]
+        if(_): {pp_pie2 = pp_pic} [
+            pp_fail(_): "$include requires a filename"
+        ]
+        if(_): {pp_failed = 0} [
+            pp_cut(pp_pifn2): s pp_pic pp_pie2
+            pp_resolve(pp_pipath2): pp_pifn2
+            pp_file(_): pp_pipath2
+        ]
+    ]
+]
+pp_pdefine(r): s [
+    set(r): 0
+    pp_skip(pp_pdns): s 0
+    len(pp_pdn): s
+    set(pp_pdb): 0
+    if(_): {pp_pdns < pp_pdn} [ byte(pp_pdb): s pp_pdns ]
+    pp_idstart_p(pp_pdid): pp_pdb
+    if(_): {pp_pdid = 0} [ pp_fail(_): "$define requires a name" ]
+    if(_): {pp_failed = 0} [
+        pp_idend(pp_pdne): s {pp_pdns + 1}
+        pp_skip(pp_pdc): s pp_pdne
+        set(pp_pdb2): 0
+        if(_): {pp_pdc < pp_pdn} [ byte(pp_pdb2): s pp_pdc ]
+        set(pp_pdname): ""
+        if(_): {pp_pdb2 = 40} [
+            # the parameter list, string-aware, up to its matching ')'
+            set(pp_pdsc): pp_pdc
+            set(pp_pdep): 0
+            set(pp_pdend): {0 - 1}
+            while(_): {pp_pdend < 0 && pp_pdsc < pp_pdn} [
+                byte(pp_pdch): s pp_pdsc
+                if(_): {pp_pdch = 34} [
+                    pp_strend(pp_pdsc): s pp_pdsc
+                ]
+                else(_): [
+                    if(_): {pp_pdch = 40} [ add(pp_pdep): pp_pdep 1 ]
+                    if(_): {pp_pdch = 41} [
+                        sub(pp_pdep): pp_pdep 1
+                        if(_): {pp_pdep = 0} [ set(pp_pdend): pp_pdsc ]
+                    ]
+                    add(pp_pdsc): pp_pdsc 1
+                ]
+            ]
+            if(_): {pp_pdend < 0} [
+                pp_fail(_): "unterminated $define parameter list"
+            ]
+            if(_): {pp_failed = 0} [
+                pp_cut(pp_pdname): s pp_pdns {pp_pdend + 1}
+                pp_cut(pp_pdbase): s pp_pdns pp_pdne
+                pp_sig(pp_pdsig): pp_pdname pp_pdbase
+                # 0 (the name is followed by space before '(') fails
+                # without a message in ussr too
+                if(_): {pp_pdsig = 0} [ pp_fail(_): "" ]
+                pp_skip(pp_pdc): s {pp_pdend + 1}
+            ]
+        ]
+        else(_): [
+            pp_cut(pp_pdname): s pp_pdns pp_pdne
+        ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_rest(pp_pdval): s pp_pdc
+        len(pp_pdvl): pp_pdval
+        set(pp_pdgo): 1
+        while(_): {pp_pdgo = 1 && pp_pdvl > 0} [
+            byte(pp_pdlast): pp_pdval {pp_pdvl - 1}
+            set(pp_pdgo): 0
+            if(_): {pp_pdlast = 10 || pp_pdlast = 13} [
+                set(pp_pdgo): 1
+                sub(pp_pdvl): pp_pdvl 1
+                slice(pp_pdval): pp_pdval 0 pp_pdvl
+            ]
+        ]
+        pp_define(_): pp_pdname pp_pdval
+    ]
+]
+
+# Preprocess the file at path as ussr does with the file it was started on.
+pp_run(r): path [
+    if(_): {pp_sdef != 1} [
+        struct(pp_Def): "n:string" "v:string"
+        set(pp_sdef): 1
+    ]
+    vec(pp_defs): "pp_Def"
+    vec(pp_inc): ""
+    vec(pp_once): ""
+    vec(pp_cact): ""
+    vec(pp_cse): ""
+    vec(pp_ctk): ""
+    set(pp_act): 1
+    set(pp_out): ""
+    set(pp_failed): 0
+    set(pp_msg): ""
+    set(pp_win): 0
+    getenv(pp_os): "OS"
+    if(_): {pp_os = "Windows_NT"} [ set(pp_win): 1 ]
+    pp_file(_): path
+    set(r): pp_out
+]

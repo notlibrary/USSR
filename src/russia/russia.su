@@ -13,6 +13,8 @@ $include "../libs/bytes.su"
 $include "../libs/strings.su"
 # Textual UUASM (.ua/.uuasm): assembler, disassembler and C-ABI executor.
 $include "uuasm.su"
+# The preprocessor for target programs (pp.c ported).
+$include "pp.su"
 
 # Interpreter state shared across the stages (lx_ lexer, ps_ parser, rt_
 # tree runtime, cv_ compiler, vm_ VM, sc_ scheduler); every other variable
@@ -1945,6 +1947,22 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "typeof"} [
             ex_oop(r): nd nm
         ]
+        rt_host_call(rt_ish): nd nm
+        if(_): {rt_ish = 1} [
+            getf(rt_hk): nd "kids"
+            vec(rt_hv): ""
+            len(rt_hkn): rt_hk
+            set(rt_hki): 0
+            while(_): {rt_hki < rt_hkn} [
+                at(rt_hkc): rt_hk rt_hki
+                ex_val(rt_hkx): rt_hkc
+                push(_): rt_hv rt_hkx
+                add(rt_hki): rt_hki 1
+            ]
+            rt_host(rt_hres): nm rt_hv
+            getf(rt_hr): nd "s2"
+            rt_write(_): rt_hr rt_hres
+        ]
         if(_): {nm = "getf"} [
             ex_oop(r): nd nm
         ]
@@ -2073,6 +2091,8 @@ ex_cmd_n(r): nd nm [
         if(_): {nm = "at"} [ set(rt_unk): 0 ]
         if(_): {nm = "len"} [ set(rt_unk): 0 ]
         if(_): {nm = "typeof"} [ set(rt_unk): 0 ]
+        rt_host_call(rt_ish2): nd nm
+        if(_): {rt_ish2 = 1} [ set(rt_unk): 0 ]
         if(_): {nm = "getf"} [ set(rt_unk): 0 ]
         if(_): {nm = "vec"} [ set(rt_unk): 0 ]
         if(_): {nm = "encode"} [ set(rt_unk): 0 ]
@@ -2423,6 +2443,151 @@ ex_oop(r): nd nm [
     ]
 ]
 # ---- blocks, chains, loops ----
+# ---- host builtins ----
+# Builtins this interpreter runs by calling the host's own command with
+# the same arguments, so results and errors are exactly ussr's. Each takes
+# one argument count; any other fails the process.
+rt_is_host(r): nm [
+    set(r): 0
+    if(_): {nm = "pop"} [ set(r): 1 ]
+    if(_): {nm = "read_line"} [ set(r): 1 ]
+    if(_): {nm = "sin"} [ set(r): 1 ]
+    if(_): {nm = "ln"} [ set(r): 1 ]
+    if(_): {nm = "file_exists"} [ set(r): 1 ]
+    if(_): {nm = "getenv"} [ set(r): 1 ]
+    if(_): {nm = "setenv"} [ set(r): 1 ]
+    if(_): {nm = "unsetenv"} [ set(r): 1 ]
+    if(_): {nm = "chr"} [ set(r): 1 ]
+    if(_): {nm = "fail"} [ set(r): 1 ]
+    if(_): {nm = "list_dir"} [ set(r): 1 ]
+    if(_): {nm = "is_dir"} [ set(r): 1 ]
+    if(_): {nm = "getcwd"} [ set(r): 1 ]
+    if(_): {nm = "rename_path"} [ set(r): 1 ]
+    if(_): {nm = "copy_file"} [ set(r): 1 ]
+    if(_): {nm = "remove_file"} [ set(r): 1 ]
+    if(_): {nm = "remove_dir"} [ set(r): 1 ]
+    if(_): {nm = "make_dir"} [ set(r): 1 ]
+    if(_): {nm = "writefile"} [ set(r): 1 ]
+    if(_): {nm = "terminal_escape"} [ set(r): 1 ]
+    if(_): {nm = "terminal_raw"} [ set(r): 1 ]
+    if(_): {nm = "terminal_sane"} [ set(r): 1 ]
+    if(_): {nm = "terminal_getch"} [ set(r): 1 ]
+    if(_): {nm = "terminal_size"} [ set(r): 1 ]
+]
+# A host builtin call in the tree walker: nm is one and the program has
+# no function of that name (programs may shadow these, as math.su does).
+rt_host_call(r): nd nm [
+    rt_is_host(r): nm
+    if(_): {r = 1} [
+        rt_findf(rt_hcf): nm
+        cv_hasblk(rt_hcb): nd
+        if(_): {rt_hcf >= 0 || rt_hcb = 1} [ set(r): 0 ]
+    ]
+]
+rt_host(r): nm vals [
+    set(r): null
+    len(rt_hn): vals
+    if(_): {rt_hn > 0} [ at(rt_ha0): vals 0 ]
+    if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
+    if(_): {rt_hn > 2} [ rt_fatal(_): ]
+    if(_): {nm = "pop"} [
+        if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "read_line"} [
+        if(_): {rt_hn = 1} [ read_line(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "sin"} [
+        if(_): {rt_hn = 1} [ sin(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "ln"} [
+        if(_): {rt_hn = 1} [ ln(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "file_exists"} [
+        if(_): {rt_hn = 1} [ file_exists(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "getenv"} [
+        if(_): {rt_hn = 1} [ getenv(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "setenv"} [
+        if(_): {rt_hn = 2} [ setenv(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn != 2} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "unsetenv"} [
+        if(_): {rt_hn = 1} [ unsetenv(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "chr"} [
+        if(_): {rt_hn = 1} [ chr(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "fail"} [
+        if(_): {rt_hn = 1} [ fail(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "list_dir"} [
+        if(_): {rt_hn = 1} [ list_dir(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "is_dir"} [
+        if(_): {rt_hn = 1} [ is_dir(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "getcwd"} [
+        if(_): {rt_hn = 0} [ getcwd(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "rename_path"} [
+        if(_): {rt_hn = 2} [ rename_path(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn != 2} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "copy_file"} [
+        if(_): {rt_hn = 2} [ copy_file(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn != 2} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "remove_file"} [
+        if(_): {rt_hn = 1} [ remove_file(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "remove_dir"} [
+        if(_): {rt_hn = 1} [ remove_dir(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "make_dir"} [
+        if(_): {rt_hn = 1} [ make_dir(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "writefile"} [
+        if(_): {rt_hn = 2} [ writefile(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn != 2} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "terminal_escape"} [
+        if(_): {rt_hn = 0} [ terminal_escape(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "terminal_raw"} [
+        if(_): {rt_hn = 0} [ terminal_raw(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "terminal_sane"} [
+        if(_): {rt_hn = 0} [ terminal_sane(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "terminal_getch"} [
+        if(_): {rt_hn = 0} [ terminal_getch(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "terminal_size"} [
+        if(_): {rt_hn = 0} [ terminal_size(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+]
+
 # ---- structs and objects: real host structs ----
 # struct(Name): "field:type" ... declares Name on the host itself (through
 # eval: the host's struct takes literal text), so new, getf, setf, vec,
@@ -3891,6 +4056,13 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "at"} [ cv_native2(r): nd nm ]
         if(_): {nm = "len"} [ cv_native2(r): nd nm ]
         if(_): {nm = "typeof"} [ cv_native2(r): nd nm ]
+        rt_is_host(cv_ish): nm
+        if(_): {cv_ish = 1} [
+            cv_findf2(cv_ishf): nm
+            cv_hasblk(cv_ishb): nd
+            if(_): {cv_ishf >= 0 || cv_ishb = 1} [ set(cv_ish): 0 ]
+        ]
+        if(_): {cv_ish = 1} [ cv_native2(r): nd nm ]
         if(_): {nm = "getf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "setf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "vec"} [ cv_native2(r): nd nm ]
@@ -3923,6 +4095,7 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "clear_bytes"} [ cv_native2(r): nd nm ]
         cv_known(cv_kn0): nm
         set(cv_kn): {1 - cv_kn0}
+        if(_): {cv_ish = 1} [ set(cv_kn): 0 ]
         if(_): {cv_kn = 1} [
             cv_defcall2(r): nd nm
         ]
@@ -5161,10 +5334,22 @@ vm_step(r): cur op [
 ]
 vm_native(r): name dst nb [
     set(vm_nr): 0
+    rt_is_host(vm_ish): name
+    if(_): {vm_ish = 1} [
+        vec(vm_hv): ""
+        set(vm_hi): 0
+        while(_): {vm_hi < nb} [
+            add(vm_hk): vm_nbase vm_hi
+            vm_reg(vm_hx): vm_hk
+            push(_): vm_hv vm_hx
+            add(vm_hi): vm_hi 1
+        ]
+        rt_host(vm_nr): name vm_hv
+    ]
     if(_): {name = "print"} [
         print(_): rt_na0
     ]
-    if(_): {name != "print"} [
+    if(_): {name != "print" && vm_ish = 0} [
         vm_native_b(vm_nr): name dst nb
     ]
     vm_setreg(_): dst vm_nr
@@ -5947,8 +6132,8 @@ cv_driver(r): prog acnt avec [
     rt_ast_needed(rt_need_ast): prog
     rt_has_choose(rt_has_ch): prog
     # Scheduler commands need resumable VM state: force the bytecode
-    # route even when the program (or the prepended library) would
-    # otherwise require the tree walker.
+    # route even when the program would otherwise require the tree
+    # walker.
     if(_): {rt_nvm = 1} [
         set(rt_need_ast): 0
     ]
@@ -6008,53 +6193,22 @@ vm_init_i(r): i [
     ]
 ]
 # ---- entry point ----
-# Reads one standard-library file for the interpreted program. The library
-# lives in src/libs; try the layouts russia.su is commonly started from.
-init_lib(r): name [
-    vec(il_dirs): ""
-    push(_): il_dirs "src/libs/"
-    push(_): il_dirs "libs/"
-    push(_): il_dirs "../libs/"
-    push(_): il_dirs "../src/libs/"
-    push(_): il_dirs ""
-    set(r): ""
-    set(il_i): 0
-    set(il_found): 0
-    while(_): {il_i < 5 && il_found = 0} [
-        at(il_d): il_dirs il_i
-        concat(il_p): il_d name
-        file_exists(il_e): il_p
-        if(_): il_e [
-            readfile(r): il_p
-            set(il_found): 1
-        ]
-        set(il_i): {il_i + 1}
-    ]
-    if(_): {il_found = 0} [
-        concat(il_msg): "russia: cannot find standard library file " name
-        print(_): il_msg
-    ]
-]
+# Reads the target program through the preprocessor, exactly as ussr reads
+# the file it is started on ($include, $define, $if..., $once). r = 1 when
+# it could not be read or parsed.
 init_src(r): avec [
     set(r): 0
     at(lx_path): avec 0
-    readfile(lx_src): lx_path
-
-    # Prepend the plain-source standard library to the interpreted program.
-    # The host preprocessor handles the interpreter's own $include above;
-    # target programs are read raw, so they receive the library text here.
-    # standard.su is left out: it only defines random64/seed_random64,
-    # which ussr refuses to redefine and this interpreter runs as natives
-    # (compiling its seed_random64 definition called the native on an
-    # unbound "seed" and printed "undefined variable" for every program).
-    init_lib(ussr_std_io): "io.su"
-    init_lib(ussr_std_math): "math.su"
-    init_lib(ussr_std_bytes): "bytes.su"
-    set(ussr_std_src): ""
-    concat(ussr_std_src): ussr_std_src ussr_std_io
-    concat(ussr_std_src): ussr_std_src ussr_std_math
-    concat(ussr_std_src): ussr_std_src ussr_std_bytes
-    concat(lx_src): ussr_std_src lx_src
+    pp_run(lx_src): lx_path
+    if(_): {pp_failed = 1} [
+        # ussr reports a preprocessor error on stderr and exits 1; fail(_)
+        # is the only way to stderr here, and it adds the scheduler lines.
+        if(_): {pp_msg != ""} [
+            fail(_): pp_msg
+        ]
+        set(r): 1
+        return(_): r
+    ]
 
     vec(lx_tokens): "lx_Tok"
     lx_scan(lx_status): lx_src
