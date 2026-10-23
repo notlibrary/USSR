@@ -123,6 +123,12 @@ typedef struct ussr_scope_t
     size_t count;
     size_t capacity;
 
+    /* Hash index over vars: index_size slots (a power of two, or 0 when
+     * there is no index yet), each a vars position + 1 or 0 for empty.
+     * Rebuilt on demand; removing a variable drops it. */
+    size_t *index;
+    size_t index_size;
+
     /* Call stack of the process using this scope: one entry per active
      * function call, the running function's on top. */
     ussr_locals_t *locals;

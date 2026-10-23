@@ -251,6 +251,8 @@ ussr_scope_t *ussr_scope_create(void)
     return calloc(1, sizeof(ussr_scope_t));
 }
 
+static void ussr_scope_index_drop(ussr_scope_t *scope);
+
 static void ussr_vars_free(ussr_scope_variable_t *vars, size_t count)
 {
     size_t i;
@@ -315,6 +317,7 @@ void ussr_scope_free(ussr_scope_t *scope)
 
     ussr_locals_free_all(scope);
     ussr_vars_free(scope->vars, scope->count);
+    ussr_scope_index_drop(scope);
     free(scope);
 }
 
@@ -895,6 +898,7 @@ void ussr_cleanup(void)
     }
 
     free(scope->vars);
+    ussr_scope_index_drop(scope);
     memset(&ussr_default_scope, 0, sizeof(ussr_default_scope));
     ussr_current_scope_ptr = NULL;
 
@@ -1067,21 +1071,97 @@ static int ussr_vars_set(
     return 0;
 }
 
-static ussr_value_t *ussr_vars_get(
-    ussr_scope_variable_t *vars,
-    size_t count,
-    const char *name
-)
+/*
+ * The scope's name index: open addressing over vars positions, so a
+ * global read or write does not compare against every global (programs
+ * with hundreds of them paid that on each access).
+ */
+static size_t ussr_scope_name_hash(const char *name)
+{
+    size_t hash = 2166136261u;
+
+    while (*name != '\0')
+    {
+        hash ^= (unsigned char)*name++;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static void ussr_scope_index_drop(ussr_scope_t *scope)
+{
+    free(scope->index);
+    scope->index = NULL;
+    scope->index_size = 0;
+}
+
+static void ussr_scope_index_put(ussr_scope_t *scope, size_t position)
+{
+    size_t mask = scope->index_size - 1;
+    size_t at = ussr_scope_name_hash(scope->vars[position].name) & mask;
+
+    while (scope->index[at] != 0)
+        at = (at + 1) & mask;
+    scope->index[at] = position + 1;
+}
+
+/* Make the index cover every variable with at most half its slots used;
+ * 0 when it does. On failure there is no index and lookups fall back to
+ * the linear scan. */
+static int ussr_scope_index_ready(ussr_scope_t *scope)
+{
+    size_t size;
+    size_t i;
+
+    if (scope->index != NULL && scope->count * 2 < scope->index_size)
+        return 0;
+
+    size = scope->index_size == 0 ? 64 : scope->index_size;
+    while (scope->count * 2 >= size)
+        size *= 2;
+
+    ussr_scope_index_drop(scope);
+    scope->index = calloc(size, sizeof(*scope->index));
+    if (scope->index == NULL)
+        return -1;
+    scope->index_size = size;
+    for (i = 0; i < scope->count; ++i)
+        ussr_scope_index_put(scope, i);
+    return 0;
+}
+
+/* name's position in scope->vars, or (size_t)-1 */
+static size_t ussr_scope_position(ussr_scope_t *scope, const char *name)
 {
     size_t i;
 
-    for (i = 0; i < count; ++i)
+    if (ussr_scope_index_ready(scope) == 0)
     {
-        if (strcmp(vars[i].name, name) == 0)
-            return &vars[i].value;
+        size_t mask = scope->index_size - 1;
+        size_t at = ussr_scope_name_hash(name) & mask;
+
+        while (scope->index[at] != 0)
+        {
+            size_t position = scope->index[at] - 1;
+
+            if (strcmp(scope->vars[position].name, name) == 0)
+                return position;
+            at = (at + 1) & mask;
+        }
+        return (size_t)-1;
     }
 
-    return NULL;
+    for (i = 0; i < scope->count; ++i)
+        if (strcmp(scope->vars[i].name, name) == 0)
+            return i;
+    return (size_t)-1;
+}
+
+static ussr_value_t *ussr_scope_lookup(ussr_scope_t *scope, const char *name)
+{
+    size_t position = ussr_scope_position(scope, name);
+
+    return position == (size_t)-1 ? NULL : &scope->vars[position].value;
 }
 
 int ussr_scope_set(
@@ -1090,11 +1170,28 @@ int ussr_scope_set(
     const ussr_value_t *value
 )
 {
+    size_t position;
+
     if (scope == NULL || name == NULL || value == NULL)
         return -1;
 
-    return ussr_vars_set(
-        &scope->vars, &scope->count, &scope->capacity, name, value);
+    position = ussr_scope_position(scope, name);
+    if (position != (size_t)-1)
+    {
+        ussr_value_t copy = ussr_value_copy(value);
+        ussr_value_free(&scope->vars[position].value);
+        scope->vars[position].value = copy;
+        return 0;
+    }
+
+    if (ussr_vars_set(
+            &scope->vars, &scope->count, &scope->capacity, name, value) != 0)
+        return -1;
+    if (scope->index != NULL && scope->count * 2 < scope->index_size)
+        ussr_scope_index_put(scope, scope->count - 1);
+    else
+        ussr_scope_index_drop(scope);
+    return 0;
 }
 
 int ussr_set_variable(
@@ -1117,7 +1214,7 @@ int ussr_set_variable(
 
 const ussr_value_t *ussr_get_variable(const char *name)
 {
-    const ussr_scope_t *scope;
+    ussr_scope_t *scope;
     ussr_locals_t *locals;
     size_t slot;
 
@@ -1130,7 +1227,7 @@ const ussr_value_t *ussr_get_variable(const char *name)
 
     scope = ussr_active_scope();
 
-    return ussr_vars_get(scope->vars, scope->count, name);
+    return ussr_scope_lookup(scope, name);
 }
 
 const ussr_value_t *ussr_get_variable_at(
@@ -1153,7 +1250,7 @@ const ussr_value_t *ussr_get_variable_at(
     }
 
     if (place == USSR_VAR_GLOBAL)
-        return ussr_vars_get(scope->vars, scope->count, name);
+        return ussr_scope_lookup(scope, name);
 
     return ussr_get_variable(name);
 }
@@ -1223,6 +1320,7 @@ static int ussr_remove_variable(const char *name)
                 );
 
             --scope->count;
+            ussr_scope_index_drop(scope);
             return 0;
         }
     }
