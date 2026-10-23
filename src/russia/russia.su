@@ -21,7 +21,7 @@ $include "check.su"
 # Interpreter state shared across the stages (lx_ lexer, ps_ parser, rt_
 # tree runtime, cv_ compiler, vm_ VM, sc_ scheduler); every other variable
 # a function sets is local to it.
-global(_): cv_regpush ps_quiet ps_errline ps_i ps_nddef rt_flow vm_suspend vm_ip vm_qleft vm_sp
+global(_): rt_hash cv_own cv_pglob cv_pall cv_gall cv_regpush ps_quiet ps_errline ps_i ps_nddef rt_flow vm_suspend vm_ip vm_qleft vm_sp
 global(_): sc_runq sc_tick lx_tokens ps_stop
 global(_): ps_root rt_store rt_fdefs rt_rv rt_tn rt_xrv vm_flow cv_code
 global(_): cv_names cv_consts cv_lps cv_funcs cv_ent vm_av
@@ -1889,7 +1889,7 @@ ex_cmd_n(r): nd nm [
                 at(rt_g0): rt_gk 0
                 ex_val(rt_gidx): rt_g0
                 rt_read(rt_gvec): rt_gv2
-                at(rt_gval2): rt_gvec rt_gidx
+                get(rt_gvec): rt_gidx rt_gval2
                 at(rt_g1): rt_gk 1
                 getf(rt_gdn2): rt_g1 "s1"
                 rt_write(_): rt_gdn2 rt_gval2
@@ -2483,6 +2483,7 @@ rt_is_host(r): nm [
     if(_): {nm = "terminal_getch"} [ set(r): 1 ]
     if(_): {nm = "terminal_size"} [ set(r): 1 ]
     if(_): {nm = "write_stderr"} [ set(r): 1 ]
+    if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
 ]
 # A host builtin call in the tree walker: nm is one and the program has
 # no function of that name (programs may shadow these, as math.su does).
@@ -2598,6 +2599,10 @@ rt_host(r): nm vals [
     ]
     if(_): {nm = "write_stderr"} [
         if(_): {rt_hn = 1} [ write_stderr(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "finv_sqrt"} [
+        if(_): {rt_hn = 1} [ finv_sqrt(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
     ]
 ]
@@ -3748,6 +3753,8 @@ ua_to_vm(r): op [
     if(_): {op = 28} [ set(r): 32 ]
     if(_): {op = 29} [ set(r): 21 ]
     if(_): {op = 30} [ set(r): 69 ]
+    if(_): {op = 31} [ set(r): 4 ]
+    if(_): {op = 32} [ set(r): 5 ]
 ]
 ua_to_bootstrap(r): op [
     set(r): {0 - 1}
@@ -3782,6 +3789,8 @@ ua_to_bootstrap(r): op [
     if(_): {op = 32} [ set(r): 28 ]
     if(_): {op = 21} [ set(r): 29 ]
     if(_): {op = 69} [ set(r): 30 ]
+    if(_): {op = 4} [ set(r): 31 ]
+    if(_): {op = 5} [ set(r): 32 ]
 ]
 ua_name(r): op [
     set(r): "INVALID"
@@ -3816,6 +3825,8 @@ ua_name(r): op [
     if(_): {op = 32} [ set(r): "BOR" ]
     if(_): {op = 21} [ set(r): "NEG" ]
     if(_): {op = 69} [ set(r): "EVAL" ]
+    if(_): {op = 4} [ set(r): "LOAD_HASH" ]
+    if(_): {op = 5} [ set(r): "STORE_HASH" ]
 ]
 ua_emit(r): op a b c imm [
     ua_name(cv_mnemonic): op
@@ -3827,6 +3838,7 @@ ua_emit(r): op a b c imm [
     ]
     new(cv_in): "In" op a b c imm cv_mnemonic
     push(_): cv_code cv_in
+    push(_): cv_own {0 - 1}
     len(cv_el): cv_code
     sub(r): cv_el 1
 ]
@@ -3880,7 +3892,9 @@ cv_e_t(r): nd tgt t [
     if(_): {t = 4} [
         getf(cv_s1): nd "s1"
         cv_name(cv_ni3): cv_s1
-        cv_emit(_): 2 tgt cv_strict 0 cv_ni3
+        getf(cv_s4h): nd "s2"
+        if(_): {cv_s4h = "hashref"} [ cv_emit(_): 31 tgt 0 0 cv_ni3 ]
+        else(_): [ cv_emit(_): 2 tgt cv_strict 0 cv_ni3 ]
     ]
     if(_): {t = 5} [
         getf(cv_s1): nd "s1"
@@ -3912,11 +3926,14 @@ cv_e_t(r): nd tgt t [
         cv_const(cv_ci): null
         cv_emit(_): 1 tgt 0 0 cv_ci
     ]
+    # a 'UNO' literal is decoded when it runs (its struct types may be
+    # declared by then), as in ussr
     if(_): {t = 10} [
         getf(cv_s1): nd "s1"
-        decode(cv_cv): cv_s1
-        cv_const(cv_ci): cv_cv
+        cv_const(cv_ci): cv_s1
         cv_emit(_): 1 tgt 0 0 cv_ci
+        cv_name(cv_dni): "decode"
+        cv_emit(_): 4 tgt 1 tgt cv_dni
     ]
     if(_): {t = 12} [
         set(cv_strict_was): cv_strict
@@ -4045,15 +4062,47 @@ cv_cmd_n(r): nd nm [
     if(_): {ps_stop = 0} [
         if(_): {nm = "set"} [
             getf(cv_sk): nd "kids"
-            at(cv_s0): cv_sk 0
-            cv_e(_): cv_s0 16
+            len(cv_skn): cv_sk
             getf(cv_dn): nd "s2"
             cv_name(cv_di): cv_dn
-            cv_emit(_): 3 16 0 0 cv_di
+            if(_): {cv_skn = 1} [
+                at(cv_s0): cv_sk 0
+                cv_e(_): cv_s0 16
+                cv_store(_): 16 nd
+            ]
+            # set(vector): index value updates the vector in place
+            if(_): {cv_skn = 2} [
+                cv_emit(_): 2 16 0 0 cv_di
+                at(cv_s0): cv_sk 0
+                cv_e(_): cv_s0 17
+                at(cv_s1): cv_sk 1
+                cv_e(_): cv_s1 18
+                cv_name(cv_vsn): "__vset"
+                cv_emit(_): 4 16 3 16 cv_vsn
+            ]
+        ]
+        # get(a): b copies a into b; get(vector): index b copies one item
+        if(_): {nm = "get"} [
+            getf(cv_gk): nd "kids"
+            len(cv_gkn): cv_gk
+            getf(cv_gsrc): nd "s2"
+            cv_name(cv_gsi): cv_gsrc
+            cv_emit(_): 2 16 0 0 cv_gsi
+            at(cv_gdst): cv_gk {cv_gkn - 1}
+            getf(cv_gdn): cv_gdst "s1"
+            cv_name(cv_gdi): cv_gdn
+            if(_): {cv_gkn = 2} [
+                at(cv_g0): cv_gk 0
+                cv_e(_): cv_g0 17
+                cv_name(cv_vgn): "__vget"
+                cv_emit(_): 4 16 2 16 cv_vgn
+            ]
+            cv_emit(_): 3 16 0 0 cv_gdi
         ]
         if(_): {nm = "print"} [
             getf(cv_pk): nd "kids"
             cv_pr_i(r): cv_pk 0
+            cv_store(_): 16 nd
         ]
         if(_): {nm = "add"} [ cv_arith(r): nd nm ]
         if(_): {nm = "sub"} [ cv_arith(r): nd nm ]
@@ -4092,6 +4141,7 @@ cv_cmd_n(r): nd nm [
         if(_): {nm = "seed_random64"} [ cv_native2(r): nd nm ]
         if(_): {nm = "scan"} [ cv_scanc(r): nd ]
         if(_): {nm = "eval"} [ cv_eval(r): nd ]
+        if(_): {nm = "global"} [ set(r): 0 ]
         if(_): {nm = "do"} [ cv_do(r): nd ]
         if(_): {nm = "struct"} [ cv_struct2(r): nd ]
         if(_): {nm = "await"} [ cv_native2(r): nd nm ]
@@ -4122,7 +4172,7 @@ cv_pr_i(r): kids idx [
         at(cv_pn): kids idx
         cv_e(_): cv_pn 16
         cv_name(cv_pni): "print"
-        cv_emit(_): 4 16 1 16 cv_pni
+        cv_emit(_): 4 16 1 17 cv_pni
         add(cv_pi): idx 1
         cv_pr_i(r): kids cv_pi
     ]
@@ -4137,9 +4187,7 @@ cv_arith(r): nd nm [
     cv_e(_): cv_a1b 17
     cv_name(cv_ani): nm
     cv_emit(_): 4 16 2 18 cv_ani
-    getf(cv_ar): nd "s2"
-    cv_name(cv_ari): cv_ar
-    cv_emit(_): 3 18 0 0 cv_ari
+    cv_store(_): 18 nd
     set(r): 0
 ]
 cv_concat2(r): nd [
@@ -4149,9 +4197,7 @@ cv_concat2(r): nd [
     cv_cc_i(r): cv_ck 1
     # Store the accumulated concatenation in the command's destination.
     # Without this write, concat(dst): ... leaves dst unchanged in VM mode.
-    getf(cv_cr): nd "s2"
-    cv_name(cv_cri): cv_cr
-    cv_emit(_): 3 16 0 0 cv_cri
+    cv_store(_): 16 nd
 ]
 cv_cc_i(r): kids idx [
     len(cv_ccn): kids
@@ -4181,10 +4227,8 @@ cv_nat_i(r): nd kids nm idx [
     ]
     if(_): {idx = cv_nn} [
         cv_name(cv_nni): nm
-        getf(cv_nr): nd "s2"
-        cv_name(cv_nri): cv_nr
         cv_emit(_): 4 16 cv_nn 16 cv_nni
-        cv_emit(_): 3 16 0 0 cv_nri
+        cv_store(_): 16 nd
     ]
 ]
 # ---- if-chains (ends-vec as shared param) ----
@@ -4643,6 +4687,8 @@ cv_known(r): nm [
     if(_): {nm = "random64"} [ set(r): 1 ]
     if(_): {nm = "time"} [ set(r): 1 ]
     if(_): {nm = "eval"} [ set(r): 1 ]
+    if(_): {nm = "get"} [ set(r): 1 ]
+    if(_): {nm = "global"} [ set(r): 1 ]
     if(_): {nm = "seed_random64"} [ set(r): 1 ]
     if(_): {nm = "scan"} [ set(r): 1 ]
     if(_): {nm = "do"} [ set(r): 1 ]
@@ -4680,9 +4726,22 @@ cv_defcall2(r): nd nm [
         if(_): {cv_df + 1 > 0} [
             cv_call(r): nd cv_df
         ]
+        # anything else is an external command, run by the host as ussr
+        # runs it (a program that does not exist fails the process)
         if(_): {cv_df < 0} [
-            cv_name(cv_dun): "__russia_unknown_command"
-            cv_emit(_): 2 16 1 0 cv_dun
+            cv_const(cv_xnc): nm
+            cv_emit(_): 1 16 0 0 cv_xnc
+            getf(cv_xk): nd "kids"
+            len(cv_xn): cv_xk
+            set(cv_xi): 0
+            while(_): {cv_xi < cv_xn} [
+                at(cv_xa): cv_xk cv_xi
+                cv_e(_): cv_xa {17 + cv_xi}
+                add(cv_xi): cv_xi 1
+            ]
+            cv_name(cv_xni): "__ext"
+            cv_emit(_): 4 16 {cv_xn + 1} 16 cv_xni
+            cv_store(_): 16 nd
         ]
     ]
 ]
@@ -4715,7 +4774,8 @@ cv_predecl(r): prog [
                 cv_findf2(cv_pdf): cv_pdnm
                 if(_): {cv_pdf < 0} [
                     vec(cv_pdprm): ""
-                    new(cv_pdfd): "cv_fd2" "" 0 0 "" cv_pdprm
+                    vec(cv_pdlocs): ""
+                    new(cv_pdfd): "cv_fd2" "" 0 0 "" cv_pdprm cv_pdlocs
                     setf(_): cv_pdfd "name" cv_pdnm
                     setf(_): cv_pdfd "entry" {0 - 1}
                     getf(cv_pdkids): cv_pdc "kids"
@@ -4747,11 +4807,146 @@ cv_regdef(r): nd nm [
     len(cv_ent): cv_code
     vec(cv_prm): ""
     set(cv_ri): 0
+    set(cv_rent): cv_ent
     cv_regdef_i(r): nd cv_prm cv_ri cv_rb
-    cv_emit(_): 6 16 0 0 0
+    cv_name(cv_rrn): cv_rr
+    cv_emit(_): 2 16 0 0 cv_rrn
+    cv_emit(_): 6 16 1 0 0
+    getf(cv_rnm): nd "s1"
+    cv_findf2(cv_rfx): cv_rnm
+    if(_): {cv_regpush = 1} [
+        len(cv_rfl): cv_funcs
+        set(cv_rfx): {cv_rfl - 1}
+    ]
+    getf(cv_rbk): nd "kids"
+    at(cv_rbody): cv_rbk cv_rb
+    cv_locals(_): cv_rfx cv_rent cv_rbody
     len(cv_la2): cv_code
     cv_patch(_): cv_code cv_jx {0 - 1} cv_la2
     set(r): 0
+]
+# The top level's global(_) declarations for the program being compiled.
+cv_progglobals(r): prog [
+    set(cv_gall): 0
+    vec(cv_pglob): ""
+    cv_gnames(r): prog cv_pglob
+    set(cv_pall): cv_gall
+]
+# global(_) names declared in list and its blocks, not inside the
+# definitions there (they have their own); "*" sets cv_gall.
+cv_gnames(r): list names [
+    set(r): 0
+    getf(cv_gnk): list "kids"
+    len(cv_gnn): cv_gnk
+    set(cv_gni): 0
+    while(_): {cv_gni < cv_gnn} [
+        at(cv_gnc): cv_gnk cv_gni
+        getf(cv_gnt): cv_gnc "tag"
+        if(_): {cv_gnt = 3} [ cv_gnames(_): cv_gnc names ]
+        if(_): {cv_gnt = 2} [
+            getf(cv_gnm): cv_gnc "s1"
+            cv_hasblk(cv_gnb): cv_gnc
+            cv_known(cv_gnkn): cv_gnm
+            set(cv_gndef): 0
+            if(_): {cv_gnb = 1 && cv_gnkn = 0} [ set(cv_gndef): 1 ]
+            getf(cv_gnargs): cv_gnc "kids"
+            len(cv_gnan): cv_gnargs
+            set(cv_gnj): 0
+            while(_): {cv_gndef = 0 && cv_gnj < cv_gnan} [
+                at(cv_gna): cv_gnargs cv_gnj
+                getf(cv_gnat): cv_gna "tag"
+                if(_): {cv_gnm = "global" && cv_gnat = 4} [
+                    getf(cv_gnas): cv_gna "s1"
+                    push(_): names cv_gnas
+                ]
+                if(_): {cv_gnm = "global" && cv_gnat = 7} [
+                    getf(cv_gnas2): cv_gna "s1"
+                    if(_): {cv_gnas2 = "*"} [ set(cv_gall): 1 ]
+                ]
+                if(_): {cv_gnm != "global" && cv_gnat = 3} [ cv_gnames(_): cv_gna names ]
+                add(cv_gnj): cv_gnj 1
+            ]
+        ]
+        add(cv_gni): cv_gni 1
+    ]
+]
+cv_inlist(r): v x [
+    set(r): 0
+    len(cv_iln): v
+    set(cv_ili): 0
+    while(_): {r = 0 && cv_ili < cv_iln} [
+        at(cv_ilx): v cv_ili
+        if(_): {cv_ilx = x} [ set(r): 1 ]
+        add(cv_ili): cv_ili 1
+    ]
+]
+# bc_function_locals: function fi's locals are its parameters, its return
+# variable and every name its own code (from entry on, not its nested
+# functions') stores to, except names declared global in it or at the top
+# level ("*" makes all of those global). Its LOAD_VAR/STORE_VAR of a local
+# get the slot + 1 in c; c = 0 means global.
+cv_locals(r): fi entry body [
+    set(r): 0
+    set(cv_gall): 0
+    vec(cv_lglob): ""
+    cv_gnames(_): body cv_lglob
+    at(cv_lfd): cv_funcs fi
+    getf(cv_lprm): cv_lfd "prm"
+    vec(cv_lnames): ""
+    len(cv_lpn): cv_lprm
+    set(cv_lpi): 0
+    while(_): {cv_lpi < cv_lpn} [
+        at(cv_lpx): cv_lprm cv_lpi
+        getf(cv_lps1): cv_lpx "s1"
+        push(_): cv_lnames cv_lps1
+        add(cv_lpi): cv_lpi 1
+    ]
+    getf(cv_lret): cv_lfd "retname"
+    push(_): cv_lnames cv_lret
+    len(cv_lend): cv_code
+    set(cv_lk): entry
+    while(_): {cv_lk < cv_lend} [
+        at(cv_lo): cv_own cv_lk
+        if(_): {cv_lo < 0} [
+            set(cv_own): cv_lk fi
+            at(cv_lin): cv_code cv_lk
+            getf(cv_lop): cv_lin "op"
+            if(_): {cv_lop = 3 && cv_gall = 0 && cv_pall = 0} [
+                getf(cv_lim): cv_lin "imm"
+                at(cv_lnm): cv_names cv_lim
+                cv_inlist(cv_lg1): cv_lglob cv_lnm
+                cv_inlist(cv_lg2): cv_pglob cv_lnm
+                cv_inlist(cv_lg3): cv_lnames cv_lnm
+                if(_): {cv_lg1 = 0 && cv_lg2 = 0 && cv_lg3 = 0} [
+                    push(_): cv_lnames cv_lnm
+                ]
+            ]
+        ]
+        add(cv_lk): cv_lk 1
+    ]
+    set(cv_lk): entry
+    while(_): {cv_lk < cv_lend} [
+        at(cv_lo2): cv_own cv_lk
+        if(_): {cv_lo2 = fi} [
+            at(cv_lin2): cv_code cv_lk
+            getf(cv_lop2): cv_lin2 "op"
+            if(_): {cv_lop2 = 2 || cv_lop2 = 3} [
+                getf(cv_lim2): cv_lin2 "imm"
+                at(cv_lnm2): cv_names cv_lim2
+                len(cv_lnn): cv_lnames
+                set(cv_ls): 0
+                set(cv_lslot): 0
+                while(_): {cv_lslot = 0 && cv_ls < cv_lnn} [
+                    at(cv_lsx): cv_lnames cv_ls
+                    if(_): {cv_lsx = cv_lnm2} [ set(cv_lslot): {cv_ls + 1} ]
+                    add(cv_ls): cv_ls 1
+                ]
+                setf(_): cv_lin2 "c" cv_lslot
+            ]
+        ]
+        add(cv_lk): cv_lk 1
+    ]
+    setf(_): cv_lfd "locs" cv_lnames
 ]
 cv_regdef_i(r): nd prm i blim [
     if(_): {i < blim} [
@@ -4768,7 +4963,8 @@ cv_regdef_i(r): nd prm i blim [
         cv_findf2(cv_rfi): cv_nm5
         if(_): {cv_regpush = 1} [ set(cv_rfi): {0 - 1} ]
         if(_): {cv_rfi < 0} [
-            new(cv_fd): "cv_fd2" "" 0 0 "" prm
+            vec(cv_fdlocs): ""
+            new(cv_fd): "cv_fd2" "" 0 0 "" prm cv_fdlocs
             setf(_): cv_fd "name" cv_nm5
             push(_): cv_funcs cv_fd
         ]
@@ -4803,7 +4999,27 @@ cv_call_i(r): nd kids idx fi [
         getf(cv_cr5): nd "s2"
         cv_name(cv_crn): cv_cr5
         cv_emit(_): 5 16 cv_cn cv_crn fi
+        cv_emit(_): 3 31 0 0 cv_crn
     ]
+]
+# Store register reg as command nd's result: in the shared hash when one
+# of its arguments is marked ! (ussr's assignment flag), else in the
+# variable.
+cv_store(r): reg nd [
+    getf(cv_stn2): nd "s2"
+    cv_name(cv_sti2): cv_stn2
+    getf(cv_stk2): nd "kids"
+    len(cv_stkn): cv_stk2
+    set(cv_sth): 0
+    set(cv_stj): 0
+    while(_): {cv_stj < cv_stkn} [
+        at(cv_stx2): cv_stk2 cv_stj
+        getf(cv_stx2s): cv_stx2 "s2"
+        if(_): {cv_stx2s = "hash"} [ set(cv_sth): 1 ]
+        add(cv_stj): cv_stj 1
+    ]
+    if(_): {cv_sth = 1} [ cv_emit(r): 32 reg 0 0 cv_sti2 ]
+    else(_): [ cv_emit(r): 3 reg 0 0 cv_sti2 ]
 ]
 # eval(r): src -> EVAL compiles src at run time and runs it like a call;
 # the result is r's value afterwards (null when unset), as in ussr.
@@ -4860,6 +5076,14 @@ cv_scanc(r): nd [
     getf(cv_scr): nd "s2"
     cv_name(cv_scri): cv_scr
     cv_emit(_): 3 16 0 0 cv_scri
+    set(cv_sdi): 1
+    while(_): {cv_sdi < cv_scn2} [
+        at(cv_sdn): cv_scl2 cv_sdi
+        getf(cv_sdnm): cv_sdn "s1"
+        cv_name(cv_sdx): cv_sdnm
+        cv_emit(_): 3 {16 + cv_sdi} 0 0 cv_sdx
+        add(cv_sdi): cv_sdi 1
+    ]
     set(r): 0
 ]
 cv_scargs(r): nd i [
@@ -4994,6 +5218,69 @@ vm_bind_i(r): prm sv ab i n [
         set(r): 0
     ]
 ]
+# An external command: name (rt_na0) and up to six values from the
+# argument registers, run through the host's eval of the same call (its
+# argument variables are this function's locals, which eval sees).
+vm_ext(r): nb [
+    set(vm_xa1): null
+    set(vm_xa2): null
+    set(vm_xa3): null
+    set(vm_xa4): null
+    set(vm_xa5): null
+    set(vm_xa6): null
+    if(_): {nb > 1} [ vm_reg(vm_xa1): {vm_nbase + 1} ]
+    if(_): {nb > 2} [ vm_reg(vm_xa2): {vm_nbase + 2} ]
+    if(_): {nb > 3} [ vm_reg(vm_xa3): {vm_nbase + 3} ]
+    if(_): {nb > 4} [ vm_reg(vm_xa4): {vm_nbase + 4} ]
+    if(_): {nb > 5} [ vm_reg(vm_xa5): {vm_nbase + 5} ]
+    if(_): {nb > 6} [ vm_reg(vm_xa6): {vm_nbase + 6} ]
+    if(_): {nb > 7} [ rt_fatal(_): ]
+    set(vm_xrv): null
+    concat(vm_xs): rt_na0 "(vm_xrv):"
+    if(_): {nb > 1} [ concat(vm_xs): vm_xs " vm_xa1" ]
+    if(_): {nb > 2} [ concat(vm_xs): vm_xs " vm_xa2" ]
+    if(_): {nb > 3} [ concat(vm_xs): vm_xs " vm_xa3" ]
+    if(_): {nb > 4} [ concat(vm_xs): vm_xs " vm_xa4" ]
+    if(_): {nb > 5} [ concat(vm_xs): vm_xs " vm_xa5" ]
+    if(_): {nb > 6} [ concat(vm_xs): vm_xs " vm_xa6" ]
+    eval(vm_xer): vm_xs
+    set(r): vm_xrv
+]
+# The innermost function call's frame (eval frames hold no locals), or
+# null at the top level.
+vm_func_frame(r): [
+    set(r): null
+    len(vm_ffn): vm_frames
+    set(vm_ffi): {vm_ffn - 1}
+    while(_): {r = null && vm_ffi >= 0} [
+        at(vm_fff): vm_frames vm_ffi
+        getf(vm_ffl): vm_fff "ln"
+        len(vm_ffc): vm_ffl
+        if(_): {vm_ffc > 0} [ set(r): vm_fff ]
+        sub(vm_ffi): vm_ffi 1
+    ]
+]
+# The locals of the innermost call (the frame the code runs in).
+vm_frame_loc(r): [
+    vm_func_frame(vm_flf):
+    getf(r): vm_flf "loc"
+]
+# For eval text: name's slot + 1 among the calling function's locals, or
+# 0 when it is a global there.
+vm_named_slot(r): name [
+    set(r): 0
+    vm_func_frame(vm_nsf):
+    if(_): {vm_nsf != null} [
+        getf(vm_nsl): vm_nsf "ln"
+        len(vm_nsn): vm_nsl
+        set(vm_nsi): 0
+        while(_): {r = 0 && vm_nsi < vm_nsn} [
+            at(vm_nsx): vm_nsl vm_nsi
+            if(_): {vm_nsx = name} [ set(r): {vm_nsi + 1} ]
+            add(vm_nsi): vm_nsi 1
+        ]
+    ]
+]
 vm_alias2(r): rnm crt sv [
     rt_find(vm_ai): rnm
     new(vm_as): "rt_sv" vm_rnm 0 0 ""
@@ -5043,16 +5330,29 @@ vm_step(r): cur op [
         at(vm_cv): cv_consts vm_ci
         vm_setreg(_): vm_d vm_cv
     ]
+    # LOAD_VAR/STORE_VAR: c > 0 is local slot c - 1 of the current call
     if(_): {op = 2} [
         getf(vm_nx): cur "imm"
         getf(vm_d2): cur "a"
-        at(vm_nm3): cv_names vm_nx
-        set(rt_undef): 0
-        rt_read(vm_rv2): vm_nm3
-        getf(vm_lds): cur "b"
-        if(_): {vm_lds = 1} [
-            if(_): {rt_undef = 1} [
-                rt_fatal(_):
+        getf(vm_lc): cur "c"
+        if(_): {vm_lc < 0} [
+            getf(vm_nxe): cur "imm"
+            at(vm_nme): cv_names vm_nxe
+            vm_named_slot(vm_lc): vm_nme
+        ]
+        if(_): {vm_lc > 0} [
+            vm_frame_loc(vm_lloc):
+            at(vm_rv2): vm_lloc {vm_lc - 1}
+        ]
+        if(_): {vm_lc = 0} [
+            at(vm_nm3): cv_names vm_nx
+            set(rt_undef): 0
+            rt_read(vm_rv2): vm_nm3
+            getf(vm_lds): cur "b"
+            if(_): {vm_lds = 1} [
+                if(_): {rt_undef = 1} [
+                    rt_fatal(_):
+                ]
             ]
         ]
         vm_setreg(_): vm_d2 vm_rv2
@@ -5060,9 +5360,20 @@ vm_step(r): cur op [
     if(_): {op = 3} [
         getf(vm_nx2): cur "imm"
         getf(vm_s): cur "a"
-        at(vm_nm4): cv_names vm_nx2
+        getf(vm_sc): cur "c"
         vm_reg(vm_rv3): vm_s
-        rt_write(_): vm_nm4 vm_rv3
+        if(_): {vm_sc < 0} [
+            at(vm_nmse): cv_names vm_nx2
+            vm_named_slot(vm_sc): vm_nmse
+        ]
+        if(_): {vm_sc > 0} [
+            vm_frame_loc(vm_sloc):
+            set(vm_sloc): {vm_sc - 1} vm_rv3
+        ]
+        if(_): {vm_sc = 0} [
+            at(vm_nm4): cv_names vm_nx2
+            rt_write(_): vm_nm4 vm_rv3
+        ]
     ]
     if(_): {op = 4} [
         getf(vm_na): cur "a"
@@ -5094,14 +5405,24 @@ vm_step(r): cur op [
         vec(vm_sv): ""
         add(vm_rp): vm_ip 1
         at(vm_crt): cv_names vm_cc2
-        new(vm_fr): "vm_fr" vm_rp vm_sv vm_crt
+        # a fresh frame of locals: the arguments, then null for the rest
+        getf(vm_locs): vm_fd "locs"
+        getf(vm_npp): vm_fd "nparams"
+        len(vm_nloc): vm_locs
+        vec(vm_loc): ""
+        set(vm_li): 0
+        while(_): {vm_li < vm_nloc} [
+            set(vm_lv): null
+            if(_): {vm_li < vm_npp} [
+                add(vm_lr): vm_ab vm_li
+                vm_reg(vm_lv): vm_lr
+            ]
+            push(_): vm_loc vm_lv
+            add(vm_li): vm_li 1
+        ]
+        new(vm_fr): "vm_fr" vm_rp vm_sv vm_crt vm_loc vm_locs
         push(_): vm_frames vm_fr
         add(vm_sp): vm_sp 1
-        getf(vm_prm): vm_fd "prm"
-        getf(vm_npp): vm_fd "nparams"
-        vm_bind_i(_): vm_prm vm_sv vm_ab 0 vm_npp
-        getf(vm_rnn): vm_fd "retname"
-        vm_alias2(_): vm_rnn vm_crt vm_sv
         getf(vm_ent): vm_fd "entry"
         # Flat dispatch: ip = entry - 1 so the caller's vm_loop
         # advances to entry. No recursive vm_loop here — machine
@@ -5109,21 +5430,18 @@ vm_step(r): cur op [
         # scheduler suspend a process at any instruction boundary.
         set(vm_ip): {vm_ent - 1}
     ]
+    # RET: b = 1 returns register a's value in register 31, where the
+    # caller's STORE_VAR picks it up; the frame and its locals go away.
     if(_): {op = 6} [
         getf(vm_ra): cur "a"
         vm_reg(rt_rv): vm_ra
-        sub(vm_lx): vm_sp 1
         # Pop the frame too: CALL pushes one, so a frame left behind
         # would be found by the next call's RET (vm_frames is indexed
         # by depth) and send it back to an earlier call site.
         pop(vm_fr2): vm_frames
-        getf(vm_sv3): vm_fr2 "sv"
-        len(vm_sv3l): vm_sv3
-        ex_rest(_): vm_sv3 0 vm_sv3l
-        getf(vm_crt2): vm_fr2 "crt"
         getf(vm_rvb): cur "b"
         if(_): {vm_rvb = 1} [
-            rt_write(_): vm_crt2 rt_rv
+            vm_setreg(_): 31 rt_rv
         ]
         getf(vm_rp2): vm_fr2 "rip"
         sub(vm_ip2): vm_rp2 1
@@ -5140,15 +5458,63 @@ vm_step(r): cur op [
         vm_reg(vm_esrc): vm_ea
         rt_eval_parse(_): vm_esrc
         len(vm_eent): cv_code
+        set(vm_epg): cv_pglob
+        set(vm_epa): cv_pall
+        cv_progglobals(_): ps_root
         cv_predecl(_): ps_root
         cv_stmt(_): ps_root
+        set(cv_pglob): vm_epg
+        set(cv_pall): vm_epa
+        len(vm_eend): cv_code
+        set(vm_ek): vm_eent
+        while(_): {vm_ek < vm_eend} [
+            at(vm_eo): cv_own vm_ek
+            if(_): {vm_eo < 0} [
+                at(vm_ein): cv_code vm_ek
+                getf(vm_eop): vm_ein "op"
+                if(_): {vm_eop = 2 || vm_eop = 3} [ setf(_): vm_ein "c" {0 - 1} ]
+            ]
+            add(vm_ek): vm_ek 1
+        ]
         cv_emit(_): 6 16 0 0 0
         vec(vm_esv): ""
         add(vm_erp): vm_ip 1
-        new(vm_efr): "vm_fr" vm_erp vm_esv ""
+        vec(vm_eloc): ""
+        new(vm_efr): "vm_fr" vm_erp vm_esv "" vm_eloc vm_eloc
         push(_): vm_frames vm_efr
         add(vm_sp): vm_sp 1
         set(vm_ip): {vm_eent - 1}
+    ]
+    # LOAD_HASH / STORE_HASH: the hash every process shares
+    if(_): {op = 31} [
+        getf(vm_hx): cur "imm"
+        getf(vm_ha): cur "a"
+        at(vm_hnm): cv_names vm_hx
+        set(vm_hf): {0 - 1}
+        len(vm_hn): rt_hash
+        set(vm_hi): 0
+        while(_): {vm_hf < 0 && vm_hi < vm_hn} [
+            at(vm_he): rt_hash vm_hi
+            getf(vm_hen): vm_he "n"
+            if(_): {vm_hen = vm_hnm} [ set(vm_hf): vm_hi ]
+            add(vm_hi): vm_hi 1
+        ]
+        if(_): {vm_hf < 0} [
+            concat(vm_hm): "USSR: undefined hash key '" vm_hnm
+            concat(vm_hm): vm_hm "'\n"
+            write_stderr(_): vm_hm
+            rt_fatal(_):
+        ]
+        at(vm_he2): rt_hash vm_hf
+        getf(vm_hv): vm_he2 "v"
+        vm_setreg(_): vm_ha vm_hv
+    ]
+    if(_): {op = 32} [
+        getf(vm_hx2): cur "imm"
+        getf(vm_ha2): cur "a"
+        at(vm_hnm2): cv_names vm_hx2
+        vm_reg(vm_hv2): vm_ha2
+        sc_store_put(_): rt_hash vm_hnm2 vm_hv2
     ]
     if(_): {op = 7} [
         getf(vm_jt): cur "imm"
@@ -5348,6 +5714,21 @@ vm_step(r): cur op [
 ]
 vm_native(r): name dst nb [
     set(vm_nr): 0
+    # vector item access through the host's own set/get, for its checks
+    # and messages
+    if(_): {name = "__vset"} [
+        set(vm_vsv): rt_na0
+        set(vm_vsv): rt_na1 rt_na2
+        set(vm_nr): vm_vsv
+    ]
+    if(_): {name = "__ext"} [
+        vm_ext(vm_nr): nb
+    ]
+    if(_): {name = "__vget"} [
+        set(vm_vgv): rt_na0
+        get(vm_vgv): rt_na1 vm_vgd
+        set(vm_nr): vm_vgd
+    ]
     rt_is_host(vm_ish): name
     if(_): {vm_ish = 1} [
         vec(vm_hv): ""
@@ -5363,7 +5744,9 @@ vm_native(r): name dst nb [
     if(_): {name = "print"} [
         print(_): rt_na0
     ]
-    if(_): {name != "print" && vm_ish = 0} [
+    set(vm_isv): 0
+    if(_): {name = "__vset" || name = "__vget" || name = "__ext"} [ set(vm_isv): 1 ]
+    if(_): {name != "print" && vm_ish = 0 && vm_isv = 0} [
         vm_native_b(vm_nr): name dst nb
     ]
     vm_setreg(_): dst vm_nr
@@ -5456,11 +5839,11 @@ vm_scanN(r): nb [
     if(_): {nb > 4} [ concat(vm_sev): vm_sev " rt_hsc4" ]
     if(_): {nb > 5} [ concat(vm_sev): vm_sev " rt_hsc5" ]
     eval(_): vm_sev
-    if(_): {nb > 1} [ vm_targ2(_): rt_na1 rt_hsc1 ]
-    if(_): {nb > 2} [ vm_targ2(_): rt_na2 rt_hsc2 ]
-    if(_): {nb > 3} [ vm_targ2(_): rt_na3 rt_hsc3 ]
-    if(_): {nb > 4} [ vm_targ2(_): rt_na4 rt_hsc4 ]
-    if(_): {nb > 5} [ vm_targ2(_): rt_na5 rt_hsc5 ]
+    if(_): {nb > 1} [ vm_setreg(_): {vm_nbase + 1} rt_hsc1 ]
+    if(_): {nb > 2} [ vm_setreg(_): {vm_nbase + 2} rt_hsc2 ]
+    if(_): {nb > 3} [ vm_setreg(_): {vm_nbase + 3} rt_hsc3 ]
+    if(_): {nb > 4} [ vm_setreg(_): {vm_nbase + 4} rt_hsc4 ]
+    if(_): {nb > 5} [ vm_setreg(_): {vm_nbase + 5} rt_hsc5 ]
     set(r): {1 = 1}
 ]
 vm_targ2(r): nm val [
@@ -5619,6 +6002,27 @@ sc_store_ci(r): src dst i n [
         sc_store_ci(r): src dst sc_si2 n
     ]
 ]
+# Set name to value in store (a vector of rt_sp entries).
+sc_store_put(r): store name value [
+    set(r): 0
+    len(sc_spn): store
+    set(sc_spi): 0
+    set(sc_spf): 0
+    while(_): {sc_spf = 0 && sc_spi < sc_spn} [
+        at(sc_spe): store sc_spi
+        getf(sc_spen): sc_spe "n"
+        if(_): {sc_spen = name} [
+            setf(_): sc_spe "v" value
+            setf(_): sc_spe "t" ""
+            set(sc_spf): 1
+        ]
+        add(sc_spi): sc_spi 1
+    ]
+    if(_): {sc_spf = 0} [
+        new(sc_spx): "rt_sp" name value ""
+        push(_): store sc_spx
+    ]
+]
 sc_store_clone(r): src [
     vec(r): "rt_sp"
     len(sc_sl): src
@@ -5668,9 +6072,10 @@ sc_spawn_i(r): fi fname args fork [
         len(sc_al): args
         cv_name(sc_rni): "__sc_result"
         cv_emit(_): 5 16 sc_al sc_rni fi
+        cv_emit(_): 3 31 0 0 sc_rni
         cv_emit(_): 15 0 0 0 0
         len(sc_tl): cv_code
-        sub(sc_ti): sc_tl 2
+        sub(sc_ti): sc_tl 3
         vec(sc_newregs): "vm_rv"
         sc_regs_i(_): sc_newregs 0
         sc_args_i(_): sc_newregs args 0 sc_al
@@ -5678,6 +6083,19 @@ sc_spawn_i(r): fi fname args fork [
         vec(sc_newstore): "rt_sp"
         if(_): {fork = 1} [
             sc_store_clone(sc_cl): rt_store
+            vm_func_frame(sc_cff):
+            if(_): {sc_cff != null} [
+                getf(sc_cfn): sc_cff "ln"
+                getf(sc_cfv): sc_cff "loc"
+                len(sc_cfc): sc_cfn
+                set(sc_cfi): 0
+                while(_): {sc_cfi < sc_cfc} [
+                    at(sc_cfx): sc_cfn sc_cfi
+                    at(sc_cfy): sc_cfv sc_cfi
+                    sc_store_put(_): sc_cl sc_cfx sc_cfy
+                    add(sc_cfi): sc_cfi 1
+                ]
+            ]
             set(sc_newstore): sc_cl
         ]
         len(sc_pl2): sc_procs
@@ -6170,35 +6588,12 @@ rt_need_vm_i(r): items i [
     ]
 ]
 cv_driver(r): prog acnt avec [
-    rt_need_vm(rt_nvm): prog
-    rt_ast_needed(rt_need_ast): prog
-    rt_has_choose(rt_has_ch): prog
-    # Scheduler commands need resumable VM state: force the bytecode
-    # route even when the program would otherwise require the tree
-    # walker.
-    if(_): {rt_nvm = 1} [
-        set(rt_need_ast): 0
-    ]
-    if(_): {rt_need_ast = 1} [
-        rt_run(r): prog acnt avec
-        return(_): r
-    ]
+    # Every program runs on the bytecode VM, as in ussr (the tree walker
+    # stays available as the "walk" mode).
+    cv_progglobals(_): prog
     cv_predecl(_): prog
     cv_stmt(r): prog
     cv_findf2(cv_mi): "init"
-    rt_has_template(rt_has_tpl): prog
-    rt_has_while(rt_has_wh): prog
-    if(_): {cv_mi < 0 && rt_nvm = 0} [
-        if(_): {rt_has_ch = 0} [
-            set(cv_tree): 0
-            if(_): {rt_has_tpl = 0} [ set(cv_tree): 1 ]
-            if(_): {rt_has_wh = 0} [ set(cv_tree): 1 ]
-            if(_): {cv_tree = 1} [
-                rt_run(r): prog acnt avec
-                return(_): r
-            ]
-        ]
-    ]
     set(r): 0
     if(_): {cv_mi + 1 > 0} [
         cv_const(cv_mc1): acnt
@@ -6209,6 +6604,7 @@ cv_driver(r): prog acnt avec [
         # where sc_zombify picks it up as the process result.
         cv_name(cv_mn): "__sc_result"
         cv_emit(_): 5 0 2 cv_mn cv_mi
+        cv_emit(_): 3 31 0 0 cv_mn
     ]
     cv_emit(_): 15 0 0 0 0
     set(vm_ip): 0
@@ -6297,13 +6693,17 @@ init(ret): arg_cnt arg_vec [
     ]
     struct(In): "op:number" "a:number" "b:number" "c:number" "imm:number" "mnemonic:string"
     struct(vm_rv): "v:any"
-    struct(vm_fr): "rip:number" "sv:vector" "crt:string"
+    struct(vm_fr): "rip:number" "sv:vector" "crt:string" "loc:vector" "ln:vector"
     struct(cv_lp): "top:number" "brk:vector" "cnt:vector" "done:number"
-    struct(cv_fd2): "name:string" "entry:number" "nparams:number" "retname:string" "prm:vector"
+    struct(cv_fd2): "name:string" "entry:number" "nparams:number" "retname:string" "prm:vector" "locs:vector"
     vec(cv_code): "In"
     vec(cv_consts): ""
     vec(cv_names): ""
     vec(cv_funcs): "cv_fd2"
+    vec(cv_own): ""
+    vec(rt_hash): "rt_sp"
+    vec(cv_pglob): ""
+    set(cv_pall): 0
     vec(cv_lps): "cv_lp"
     vec(vm_frames): "vm_fr"
     vec(vm_regs): "vm_rv"

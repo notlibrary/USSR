@@ -70,6 +70,11 @@ typedef struct ussr_vm_t
     /* Voluntary reschedule requested by the yield(_) command. */
     int yield_request;
 
+    /* Set for the VM an eval runs its text in: it runs to completion
+     * inside one instruction of its caller, so it cannot suspend, and
+     * external commands there run synchronously. */
+    int nested;
+
     /*
      * Block resume protocol. When a process blocks on await/sleep/a
      * child process, the VM suspends mid-instruction and the

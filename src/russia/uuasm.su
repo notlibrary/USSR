@@ -1259,8 +1259,13 @@ uq_is_assembly(r): path [
 # runs it. Returns the process status.
 uq_main(r): path mode [
     uq_assemble(_uqm_err): path
+    # An assembly error is reported as ussr reports it: the message alone
+    # on stderr and exit status 1.
     if(_): {_uqm_err != ""} [
-        fail(_): _uqm_err
+        concat(_uqm_line): _uqm_err "\n"
+        write_stderr(_): _uqm_line
+        set(r): 1
+        return(_): r
     ]
     if(_): {mode = "dump"} [
         uq_dump(_):
