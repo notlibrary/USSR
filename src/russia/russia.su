@@ -29,7 +29,7 @@ global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
 global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
-global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache
+global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -2473,6 +2473,7 @@ ex_oop(r): nd nm [
 # one argument count; any other fails the process.
 rt_is_host(r): nm [
     set(r): 0
+    rt_is_pb(r): nm
     if(_): {nm = "pop"} [ set(r): 1 ]
     if(_): {nm = "read_line"} [ set(r): 1 ]
     if(_): {nm = "sin"} [ set(r): 1 ]
@@ -6143,7 +6144,9 @@ vm_step(r): cur op [
 # vm_native_b..e chains.
 vm_native_kind(r): name [
     set(r): 7
+    rt_is_pb(vnk_pb): name
     if(_): {name = "__vset" || name = "__vget" || name = "__ext"} [ set(r): 1 ]
+    elif(_): {vnk_pb = 1} [ set(r): 8 ]
     else(_): [
         rt_is_host(vnk_h): name
         if(_): {vnk_h = 1} [ set(r): 2 ]
@@ -6174,6 +6177,10 @@ vm_native(r): name dst nb ni [
     ]
     elif(_): {vm_nk = 7} [
         vm_native_e(vm_nr): name dst nb
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 8} [
+        vm_petersburg(vm_nr): name nb
         vm_setreg(_): dst vm_nr
     ]
     else(_): [ vm_native_a(_): name dst nb vm_nk ]
@@ -6652,6 +6659,7 @@ sc_idle(r): [
     set(r): 0
     set(sc_live): 0
     set(sc_minw): 0
+    set(sc_gstep): 0
     set(sc_hasw): 0
     len(sc_in): sc_procs
     set(sc_ii): 0
@@ -6675,6 +6683,28 @@ sc_idle(r): [
         ]
         add(sc_ii): sc_ii 1
     ]
+    if(_): {rt_gui = 1} [
+        # real time, in steps of at most 50 ms, while the host's event
+        # pump runs (ussr sleeps the same way with a window open)
+        set(sc_gstep): 10
+        if(_): {sc_hasw = 1} [
+            set(sc_gstep): {sc_minw - sc_tick}
+            if(_): {sc_gstep > 50} [ set(sc_gstep): 50 ]
+            if(_): {sc_gstep < 1} [ set(sc_gstep): 1 ]
+        ]
+        sc_gui_poll(sc_grun):
+        len(sc_gq): sc_runq
+        if(_): {sc_gq = 0 && (sc_live > 0 || sc_grun = 1)} [
+            sleep(_): sc_gstep
+            add(sc_tick): sc_tick sc_gstep
+            sc_fire(_):
+        ]
+        len(sc_gq2): sc_runq
+        if(_): {sc_gq2 > 0 || sc_grun = 1 || sc_hasw = 1} [
+            set(r): 1
+            return(_): r
+        ]
+    ]
     if(_): {sc_live > 0} [
         if(_): {sc_hasw = 1} [
             set(sc_tick): sc_minw
@@ -6687,6 +6717,258 @@ sc_idle(r): [
         ]
     ]
 ]
+# ---------- Petersburg (GUI) ----------
+# 1 when nm is one of Petersburg's natives (petersburg_...).
+rt_is_pb(r): nm [
+    set(r): 0
+    len(rpb_n): nm
+    if(_): {rpb_n > 11} [
+        slice(rpb_p): nm 0 11
+        if(_): {rpb_p = "petersburg_"} [ set(r): 1 ]
+    ]
+]
+# A Petersburg native, called on the host with the call's nb argument
+# registers (up to seven; each native takes a fixed number). Once one has
+# been used, the scheduler also delivers the window events (sc_gui_poll).
+vm_petersburg(r): name nb [
+    set(rt_gui): 1
+    set(r): null
+    set(vpb_0): null
+    set(vpb_1): null
+    set(vpb_2): null
+    set(vpb_3): null
+    set(vpb_4): null
+    set(vpb_5): null
+    set(vpb_6): null
+    if(_): {nb > 0} [ vm_reg(vpb_0): {vm_nbase + 0} ]
+    if(_): {nb > 1} [ vm_reg(vpb_1): {vm_nbase + 1} ]
+    if(_): {nb > 2} [ vm_reg(vpb_2): {vm_nbase + 2} ]
+    if(_): {nb > 3} [ vm_reg(vpb_3): {vm_nbase + 3} ]
+    if(_): {nb > 4} [ vm_reg(vpb_4): {vm_nbase + 4} ]
+    if(_): {nb > 5} [ vm_reg(vpb_5): {vm_nbase + 5} ]
+    if(_): {nb > 6} [ vm_reg(vpb_6): {vm_nbase + 6} ]
+    set(vpb_done): 0
+    if(_): {name = "petersburg_alive" && nb = 1} [
+        petersburg_alive(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_arc" && nb = 7} [
+        petersburg_canvas_arc(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4 vpb_5 vpb_6
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_circle" && nb = 5} [
+        petersburg_canvas_circle(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_clear" && nb = 2} [
+        petersburg_canvas_clear(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_count" && nb = 1} [
+        petersburg_canvas_count(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_fill" && nb = 6} [
+        petersburg_canvas_fill(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4 vpb_5
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_line" && nb = 6} [
+        petersburg_canvas_line(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4 vpb_5
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_rect" && nb = 6} [
+        petersburg_canvas_rect(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4 vpb_5
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_canvas_text" && nb = 5} [
+        petersburg_canvas_text(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_close" && nb = 1} [
+        petersburg_close(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_button" && nb = 2} [
+        petersburg_create_button(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_canvas" && nb = 1} [
+        petersburg_create_canvas(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_checkbox" && nb = 2} [
+        petersburg_create_checkbox(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_combobox" && nb = 2} [
+        petersburg_create_combobox(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_image" && nb = 2} [
+        petersburg_create_image(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_label" && nb = 2} [
+        petersburg_create_label(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_list" && nb = 2} [
+        petersburg_create_list(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_textbox" && nb = 2} [
+        petersburg_create_textbox(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_toolbar" && nb = 2} [
+        petersburg_create_toolbar(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_create_window" && nb = 3} [
+        petersburg_create_window(r): vpb_0 vpb_1 vpb_2
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_destroy" && nb = 1} [
+        petersburg_destroy(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_checked" && nb = 1} [
+        petersburg_get_checked(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_focus" && nb = 1} [
+        petersburg_get_focus(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_height" && nb = 1} [
+        petersburg_get_height(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_index" && nb = 1} [
+        petersburg_get_index(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_mark" && nb = 2} [
+        petersburg_get_mark(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_selection" && nb = 1} [
+        petersburg_get_selection(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_text" && nb = 1} [
+        petersburg_get_text(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_get_width" && nb = 1} [
+        petersburg_get_width(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_grid" && nb = 4} [
+        petersburg_grid(r): vpb_0 vpb_1 vpb_2 vpb_3
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_inject" && nb = 5} [
+        petersburg_inject(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_maximize" && nb = 1} [
+        petersburg_maximize(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_message_box" && nb = 2} [
+        petersburg_message_box(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_on" && nb = 3} [
+        petersburg_on(r): vpb_0 vpb_1 vpb_2
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_pack" && nb = 2} [
+        petersburg_pack(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_reload_image" && nb = 2} [
+        petersburg_reload_image(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_run" && nb = 0} [
+        petersburg_run(r):
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_set_checked" && nb = 2} [
+        petersburg_set_checked(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_set_focus" && nb = 1} [
+        petersburg_set_focus(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_set_index" && nb = 2} [
+        petersburg_set_index(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_set_mark" && nb = 3} [
+        petersburg_set_mark(r): vpb_0 vpb_1 vpb_2
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_set_text" && nb = 2} [
+        petersburg_set_text(r): vpb_0 vpb_1
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_show" && nb = 1} [
+        petersburg_show(r): vpb_0
+        set(vpb_done): 1
+    ]
+    # any other name or argument count: the host reports it as ussr does
+    if(_): {vpb_done = 0} [ rt_fatal(_): ]
+]
+# Deliver the window events the host queued: each becomes a process
+# running its callback in the program (with a copy of the main process's
+# variables, as ussr spawns them), oldest first. 1 while a Petersburg run
+# is going (a window left), else 0.
+sc_gui_poll(r): [
+    petersburg_take_events(sgp_v):
+    at(r): sgp_v 0
+    len(sgp_n): sgp_v
+    set(sgp_i): 1
+    while(_): {sgp_i < sgp_n} [
+        at(sgp_e): sgp_v sgp_i
+        at(sgp_cb): sgp_e 0
+        cv_findf2(sgp_fi): sgp_cb
+        if(_): {sgp_fi < 0} [
+            concat(sgp_m): "USSR: Petersburg callback '" sgp_cb
+            concat(sgp_m): sgp_m "' is not a definition\n"
+            write_stderr(_): sgp_m
+            rt_fatal(_):
+        ]
+        vec(sgp_args): ""
+        len(sgp_en): sgp_e
+        set(sgp_j): 1
+        while(_): {sgp_j < sgp_en} [
+            at(sgp_x): sgp_e sgp_j
+            push(_): sgp_args sgp_x
+            add(sgp_j): sgp_j 1
+        ]
+        sc_spawn_cb(_): sgp_fi sgp_cb sgp_args
+        add(sgp_i): sgp_i 1
+    ]
+]
+# A callback process: like sc_spawn_i with fork, but from the main
+# process's variables.
+sc_spawn_cb(r): fi fname args [
+    set(scb_save): rt_store
+    at(scb_main): sc_procs 0
+    getf(rt_store): scb_main "store"
+    set(scb_ff): vm_ffok
+    set(scb_fc): vm_ffcache
+    set(vm_ffok): 1
+    set(vm_ffcache): null
+    sc_spawn_i(r): fi fname args 1
+    set(rt_store): scb_save
+    set(vm_ffok): scb_ff
+    set(vm_ffcache): scb_fc
+]
 # The scheduler loop: dequeue a runnable process, swap the global VM
 # state to its slice, run one quantum, swap back and requeue. The
 # register/frame/store vectors are owned by the process, so only the
@@ -6695,6 +6977,7 @@ sc_run(r): [
     set(r): 0
     set(sc_done): 0
     while(_): {sc_done = 0} [
+        if(_): {rt_gui = 1} [ sc_gui_poll(sc_gpr): ]
         sc_dequeue(sc_pid):
         if(_): {sc_pid > 0} [
             sub(sc_pi): sc_pid 1
@@ -7575,6 +7858,7 @@ init(ret): arg_cnt arg_vec [
     vec(cv_consts): ""
     vec(cv_names): ""
     vec(cv_nkind): ""
+    set(rt_gui): 0
     vec(cv_funcs): "cv_fd2"
     rt_hbuckets(cv_nhash):
     rt_hbuckets(cv_fhash):
