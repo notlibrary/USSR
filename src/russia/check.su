@@ -1,0 +1,1681 @@
+# Compile-time diagnostics in USSR: the errors ussr reports before it runs
+# a program, with its messages and locations ("file:line: reason").
+#
+#     ck_run(failed): text name mapf mapl
+#
+# text is preprocessed source; mapf/mapl map its lines back to files and
+# lines (pp_mapf/pp_mapl; empty vectors mean name and the raw line, as for
+# eval text). On failure ck_msg holds the one line ussr prints on stderr
+# and ck_stage says where it failed: 1 lexing/parsing, 2 compiling.
+#
+# Three stages, each ported from ussr:
+#   ck_lex      src/lexer.l    tokens with their lines; a bad character or
+#                              an out-of-range integer stops the scan
+#   ck_parse    src/parser.y   the grammar, failing at the first token that
+#                              cannot continue it ("syntax error"), plus the
+#                              checks its command rule makes
+#   ck_compile  src/ussr_bytecode.c   the compiler's checks, in its order:
+#                              globals, function table, function bodies,
+#                              then the top level
+# This module only reports; russia.su's own parser builds what it runs.
+
+global(_): ck_toks ck_ti ck_failed ck_msg ck_name ck_mapf ck_mapl ck_sdef
+global(_): ck_fns ck_ecmd ck_ccont ck_lasttl ck_stage
+
+# ---------- reporting ----------
+# "file:line: " for a line of the checked text (ussr_parse_locate).
+ck_loc(r): tl [
+    set(ck_lf): ck_name
+    set(ck_ll): tl
+    len(ck_lc): ck_mapl
+    set(ck_lidx): {tl - 1}
+    if(_): {ck_lc > 0 && ck_lidx >= 0 && ck_lidx <= ck_lc} [
+        if(_): {ck_lidx = ck_lc} [ set(ck_lidx): {ck_lc - 1} ]
+        at(ck_lf): ck_mapf ck_lidx
+        at(ck_ll): ck_mapl ck_lidx
+    ]
+    encode(ck_lls): ck_ll
+    concat(r): ck_lf ":"
+    concat(r): r ck_lls
+    concat(r): r ": "
+]
+# Report msg at text line tl, unless an error is already reported.
+ck_at(r): tl msg [
+    set(r): 1
+    if(_): {ck_failed = 0} [
+        ck_loc(ck_atl): tl
+        concat(ck_msg): ck_atl msg
+        concat(ck_msg): ck_msg "\n"
+        set(ck_failed): 1
+    ]
+]
+# Report msg at command cmd (null: the command being compiled; none: the
+# compiler's own prefix), as bc_error does.
+ck_err(r): cmd msg [
+    set(r): 1
+    set(ck_ec): cmd
+    if(_): {ck_ec = null} [ set(ck_ec): ck_ecmd ]
+    if(_): {ck_ec = null && ck_failed = 0} [
+        concat(ck_msg): "USSR compiler: " msg
+        concat(ck_msg): ck_msg "\n"
+        set(ck_failed): 1
+    ]
+    if(_): {ck_ec != null} [
+        getf(ck_ecl): ck_ec "line"
+        ck_at(_): ck_ecl msg
+    ]
+]
+ck_num(r): n [
+    encode(r): n
+]
+
+# ---------- lexer ----------
+ck_digit_p(r): b [
+    set(r): 0
+    if(_): {b > 47 && b < 58} [ set(r): 1 ]
+]
+ck_idstart_p(r): b [
+    set(r): 0
+    if(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95} [ set(r): 1 ]
+]
+ck_idchar_p(r): b [
+    ck_idstart_p(r): b
+    if(_): {r = 0} [ ck_digit_p(r): b ]
+]
+# A byte of a command head: [A-Za-z0-9_./\:-]
+ck_headchar_p(r): b [
+    ck_idchar_p(r): b
+    if(_): {b = 46 || b = 47 || b = 92 || b = 58 || b = 45} [ set(r): 1 ]
+]
+ck_tok(r): k s line [
+    new(ck_tk): "ck_Tok" k s line
+    push(_): ck_toks ck_tk
+    set(ck_lasttl): line
+    set(r): 0
+]
+# The decimal digits s as a 64-bit integer literal: 1 when out of range.
+ck_too_big(r): s [
+    set(r): 0
+    len(ck_tbn): s
+    set(ck_tbi): 0
+    set(ck_tbgo): 1
+    while(_): {ck_tbgo = 1 && ck_tbi < ck_tbn - 1} [
+        byte(ck_tbb): s ck_tbi
+        if(_): {ck_tbb = 48} [ add(ck_tbi): ck_tbi 1 ]
+        else(_): [ set(ck_tbgo): 0 ]
+    ]
+    slice(ck_tbd): s ck_tbi {ck_tbn - ck_tbi}
+    len(ck_tbl): ck_tbd
+    if(_): {ck_tbl > 19} [ set(r): 1 ]
+    if(_): {ck_tbl = 19} [
+        set(ck_tbmax): "9223372036854775807"
+        set(ck_tbj): 0
+        set(ck_tbgo2): 1
+        while(_): {ck_tbgo2 = 1 && ck_tbj < 19} [
+            byte(ck_tbx): ck_tbd ck_tbj
+            byte(ck_tby): ck_tbmax ck_tbj
+            if(_): {ck_tbx > ck_tby} [
+                set(r): 1
+                set(ck_tbgo2): 0
+            ]
+            if(_): {ck_tbx < ck_tby} [ set(ck_tbgo2): 0 ]
+            add(ck_tbj): ck_tbj 1
+        ]
+    ]
+]
+# A two-byte operator at p, or "".
+ck_op2(r): s p n [
+    set(r): ""
+    if(_): {p + 1 < n} [
+        slice(ck_o2): s p 2
+        if(_): {ck_o2 = ">=" || ck_o2 = "<=" || ck_o2 = "!=" || ck_o2 = "&&"} [ set(r): ck_o2 ]
+        if(_): {ck_o2 = "||" || ck_o2 = "<<" || ck_o2 = ">>"} [ set(r): ck_o2 ]
+    ]
+]
+ck_op1_p(r): b [
+    set(r): 0
+    if(_): {b = 61 || b = 62 || b = 60 || b = 94 || b = 38 || b = 124} [ set(r): 1 ]
+    if(_): {b = 43 || b = 45 || b = 42 || b = 47 || b = 37 || b = 63} [ set(r): 1 ]
+    if(_): {b = 33 || b = 91 || b = 64 || b = 93 || b = 123 || b = 125} [ set(r): 1 ]
+    if(_): {b = 40 || b = 41 || b = 58} [ set(r): 1 ]
+]
+# Tokens of text into ck_toks, ending with EOF, or with ERR (its message
+# in s) at the first character the lexer rejects.
+ck_lex(r): text [
+    set(r): 0
+    vec(ck_toks): "ck_Tok"
+    set(ck_lasttl): 1
+    len(ck_xn): text
+    set(ck_xp): 0
+    set(ck_xl): 1
+    set(ck_xerr): 0
+    while(_): {ck_xerr = 0 && ck_xp < ck_xn} [
+        byte(ck_xb): text ck_xp
+        set(ck_xdone): 0
+        if(_): {ck_xb = 32 || ck_xb = 9 || ck_xb = 13} [
+            add(ck_xp): ck_xp 1
+            set(ck_xdone): 1
+        ]
+        if(_): {ck_xdone = 0 && ck_xb = 35} [
+            set(ck_xgo): 1
+            while(_): {ck_xgo = 1 && ck_xp < ck_xn} [
+                byte(ck_xcb): text ck_xp
+                if(_): {ck_xcb = 10 || ck_xcb = 13} [ set(ck_xgo): 0 ]
+                else(_): [ add(ck_xp): ck_xp 1 ]
+            ]
+            set(ck_xdone): 1
+        ]
+        if(_): {ck_xdone = 0 && ck_xb = 10} [
+            ck_tok(_): "NL" "" ck_xl
+            add(ck_xl): ck_xl 1
+            add(ck_xp): ck_xp 1
+            set(ck_xdone): 1
+        ]
+        # a command head: the longest [A-Za-z0-9_./\:-]+ directly before '('
+        if(_): {ck_xdone = 0} [
+            set(ck_xq): ck_xp
+            set(ck_xgo2): 1
+            while(_): {ck_xgo2 = 1 && ck_xq < ck_xn} [
+                byte(ck_xhb): text ck_xq
+                ck_headchar_p(ck_xgo2): ck_xhb
+                if(_): {ck_xgo2 = 1} [ add(ck_xq): ck_xq 1 ]
+            ]
+            if(_): {ck_xq > ck_xp && ck_xq < ck_xn} [
+                byte(ck_xhp): text ck_xq
+                if(_): {ck_xhp = 40} [
+                    slice(ck_xhead): text ck_xp {ck_xq - ck_xp}
+                    ck_tok(_): "HEAD" ck_xhead ck_xl
+                    set(ck_xp): ck_xq
+                    set(ck_xdone): 1
+                ]
+            ]
+        ]
+        # "string" or 'uno' (closed on the same line)
+        if(_): {ck_xdone = 0 && (ck_xb = 34 || ck_xb = 39)} [
+            add(ck_xq2): ck_xp 1
+            set(ck_xend): {0 - 1}
+            set(ck_xgo3): 1
+            while(_): {ck_xgo3 = 1 && ck_xq2 < ck_xn} [
+                byte(ck_xsb): text ck_xq2
+                if(_): {ck_xsb = 10} [ set(ck_xgo3): 0 ]
+                elif(_): {ck_xsb = 92} [
+                    set(ck_xsb2): 10
+                    if(_): {ck_xq2 + 1 < ck_xn} [ byte(ck_xsb2): text {ck_xq2 + 1} ]
+                    if(_): {ck_xsb2 = 10} [ set(ck_xgo3): 0 ]
+                    else(_): [ add(ck_xq2): ck_xq2 2 ]
+                ]
+                elif(_): {ck_xsb = ck_xb} [
+                    set(ck_xend): {ck_xq2 + 1}
+                    set(ck_xgo3): 0
+                ]
+                else(_): [ add(ck_xq2): ck_xq2 1 ]
+            ]
+            if(_): {ck_xend > 0} [
+                slice(ck_xstr): text {ck_xp + 1} {ck_xend - ck_xp - 2}
+                set(ck_xsk): "STR"
+                if(_): {ck_xb = 39} [ set(ck_xsk): "UNO" ]
+                ck_tok(_): ck_xsk ck_xstr ck_xl
+                set(ck_xp): ck_xend
+                set(ck_xdone): 1
+            ]
+        ]
+        # numbers: REAL is digits.digits, else INTEGER
+        if(_): {ck_xdone = 0} [
+            ck_digit_p(ck_xdg): ck_xb
+            if(_): {ck_xdg = 1} [
+                set(ck_xq3): ck_xp
+                set(ck_xgo4): 1
+                while(_): {ck_xgo4 = 1 && ck_xq3 < ck_xn} [
+                    byte(ck_xdb): text ck_xq3
+                    ck_digit_p(ck_xgo4): ck_xdb
+                    if(_): {ck_xgo4 = 1} [ add(ck_xq3): ck_xq3 1 ]
+                ]
+                set(ck_xreal): 0
+                if(_): {ck_xq3 + 1 < ck_xn} [
+                    byte(ck_xdot): text ck_xq3
+                    byte(ck_xd2): text {ck_xq3 + 1}
+                    ck_digit_p(ck_xd2d): ck_xd2
+                    if(_): {ck_xdot = 46 && ck_xd2d = 1} [ set(ck_xreal): 1 ]
+                ]
+                if(_): {ck_xreal = 1} [
+                    add(ck_xq3): ck_xq3 1
+                    set(ck_xgo5): 1
+                    while(_): {ck_xgo5 = 1 && ck_xq3 < ck_xn} [
+                        byte(ck_xdb2): text ck_xq3
+                        ck_digit_p(ck_xgo5): ck_xdb2
+                        if(_): {ck_xgo5 = 1} [ add(ck_xq3): ck_xq3 1 ]
+                    ]
+                    slice(ck_xnum): text ck_xp {ck_xq3 - ck_xp}
+                    ck_tok(_): "REAL" ck_xnum ck_xl
+                ]
+                if(_): {ck_xreal = 0} [
+                    slice(ck_xnum2): text ck_xp {ck_xq3 - ck_xp}
+                    ck_too_big(ck_xbig): ck_xnum2
+                    if(_): {ck_xbig = 1} [
+                        concat(ck_xm): "integer " ck_xnum2
+                        concat(ck_xm): ck_xm " is outside -9223372036854775808..9223372036854775807 (write it as a real, e.g. "
+                        concat(ck_xm): ck_xm ck_xnum2
+                        concat(ck_xm): ck_xm ".0)"
+                        ck_tok(_): "ERR" ck_xm ck_xl
+                        set(ck_xerr): 1
+                    ]
+                    if(_): {ck_xbig = 0} [ ck_tok(_): "INT" ck_xnum2 ck_xl ]
+                ]
+                set(ck_xp): ck_xq3
+                set(ck_xdone): 1
+            ]
+        ]
+        # identifiers and the true/false/null keywords
+        if(_): {ck_xdone = 0} [
+            ck_idstart_p(ck_xid): ck_xb
+            if(_): {ck_xid = 1} [
+                set(ck_xq4): ck_xp
+                set(ck_xgo6): 1
+                while(_): {ck_xgo6 = 1 && ck_xq4 < ck_xn} [
+                    byte(ck_xib): text ck_xq4
+                    ck_idchar_p(ck_xgo6): ck_xib
+                    if(_): {ck_xgo6 = 1} [ add(ck_xq4): ck_xq4 1 ]
+                ]
+                slice(ck_xword): text ck_xp {ck_xq4 - ck_xp}
+                set(ck_xwk): "IDENT"
+                if(_): {ck_xword = "true" || ck_xword = "false"} [ set(ck_xwk): "BOOL" ]
+                if(_): {ck_xword = "null"} [ set(ck_xwk): "NULL" ]
+                ck_tok(_): ck_xwk ck_xword ck_xl
+                set(ck_xp): ck_xq4
+                set(ck_xdone): 1
+            ]
+        ]
+        if(_): {ck_xdone = 0} [
+            ck_op2(ck_xo2): text ck_xp ck_xn
+            if(_): {ck_xo2 != ""} [
+                ck_tok(_): ck_xo2 ck_xo2 ck_xl
+                add(ck_xp): ck_xp 2
+                set(ck_xdone): 1
+            ]
+        ]
+        if(_): {ck_xdone = 0} [
+            ck_op1_p(ck_xo1): ck_xb
+            slice(ck_xch): text ck_xp 1
+            if(_): {ck_xo1 = 1} [
+                ck_tok(_): ck_xch ck_xch ck_xl
+            ]
+            if(_): {ck_xo1 = 0} [
+                concat(ck_xm2): "unexpected character '" ck_xch
+                concat(ck_xm2): ck_xm2 "'"
+                ck_tok(_): "ERR" ck_xm2 ck_xl
+                set(ck_xerr): 1
+            ]
+            add(ck_xp): ck_xp 1
+        ]
+    ]
+    if(_): {ck_xerr = 0} [
+        ck_tok(_): "EOF" "" ck_lasttl
+    ]
+]
+
+# ---------- parser ----------
+ck_cur(r): [
+    at(r): ck_toks ck_ti
+]
+ck_k(r): [
+    at(ck_kt): ck_toks ck_ti
+    getf(r): ck_kt "k"
+]
+ck_adv(r): [
+    add(ck_ti): ck_ti 1
+    set(r): 0
+]
+# The parse stops at the current token: ussr's lexer message when that is
+# the rejected character, else a syntax error there.
+ck_syntax(r): [
+    set(r): 1
+    ck_cur(ck_st):
+    getf(ck_stk): ck_st "k"
+    getf(ck_stl): ck_st "line"
+    set(ck_stm): "syntax error"
+    if(_): {ck_stk = "ERR"} [ getf(ck_stm): ck_st "s" ]
+    ck_at(_): ck_stl ck_stm
+]
+ck_expect(r): k [
+    set(r): 0
+    ck_k(ck_ek):
+    if(_): {ck_ek = k} [ ck_adv(_): ]
+    else(_): [ ck_syntax(r): ]
+]
+ck_arg_new(r): kind s vt [
+    new(r): "ck_Arg" kind s vt 0 null null
+]
+ck_ex_new(r): op l rr [
+    new(r): "ck_E" op l rr
+]
+# command_lines: until a token that cannot start a command line.
+ck_lines(r): [
+    vec(r): "ck_Cmd"
+    set(ck_lgo): 1
+    while(_): {ck_lgo = 1 && ck_failed = 0} [
+        ck_k(ck_lk):
+        if(_): {ck_lk = "NL"} [ ck_adv(_): ]
+        elif(_): {ck_lk = "HEAD"} [
+            ck_command(ck_lc):
+            if(_): {ck_failed = 0} [ push(_): r ck_lc ]
+        ]
+        elif(_): {ck_lk = "@"} [
+            ck_advanced(ck_lc2):
+            if(_): {ck_failed = 0} [ push(_): r ck_lc2 ]
+        ]
+        else(_): [ set(ck_lgo): 0 ]
+    ]
+]
+ck_block(r): [
+    set(r): null
+    ck_adv(_):
+    ck_lines(ck_blines):
+    if(_): {ck_failed = 0} [ ck_expect(_): "]" ]
+    if(_): {ck_failed = 0} [ set(r): ck_blines ]
+]
+# @[ lines ] (newlines) [ lines ]
+ck_advanced(r): [
+    ck_cur(ck_avt):
+    getf(ck_avl): ck_avt "line"
+    set(r): null
+    ck_adv(_):
+    ck_k(ck_avk):
+    if(_): {ck_avk != "["} [ ck_syntax(_): ]
+    if(_): {ck_failed = 0} [ ck_block(ck_av1): ]
+    if(_): {ck_failed = 0} [
+        set(ck_avgo): 1
+        while(_): {ck_avgo = 1} [
+            ck_k(ck_avk2):
+            if(_): {ck_avk2 = "NL"} [ ck_adv(_): ]
+            else(_): [ set(ck_avgo): 0 ]
+        ]
+        ck_k(ck_avk3):
+        if(_): {ck_avk3 != "["} [ ck_syntax(_): ]
+    ]
+    if(_): {ck_failed = 0} [ ck_block(ck_av2): ]
+    if(_): {ck_failed = 0} [
+        vec(ck_avargs): "ck_Arg"
+        ck_arg_new(ck_ava1): "block" "" ""
+        setf(_): ck_ava1 "blk" ck_av1
+        push(_): ck_avargs ck_ava1
+        ck_arg_new(ck_ava2): "block" "" ""
+        setf(_): ck_ava2 "blk" ck_av2
+        push(_): ck_avargs ck_ava2
+        new(r): "ck_Cmd" "@" "_" ck_avl ck_avargs
+    ]
+]
+# Command name after the last / or \ of a head (the rest is its path).
+ck_headname(r): head [
+    set(r): head
+    len(ck_hnn): head
+    set(ck_hns): {0 - 1}
+    set(ck_hni): 0
+    while(_): {ck_hni < ck_hnn} [
+        byte(ck_hnb): head ck_hni
+        if(_): {ck_hnb = 47 || ck_hnb = 92} [ set(ck_hns): ck_hni ]
+        add(ck_hni): ck_hni 1
+    ]
+    if(_): {ck_hns >= 0} [
+        slice(r): head {ck_hns + 1} {ck_hnn - ck_hns - 1}
+    ]
+]
+ck_block_allowed(r): name [
+    set(r): 1
+    if(_): {name = "break" || name = "continue" || name = "return" || name = "set"} [ set(r): 0 ]
+    if(_): {name = "print" || name = "add" || name = "sub" || name = "mul"} [ set(r): 0 ]
+    if(_): {name = "div" || name = "mod" || name = "concat" || name = "eval"} [ set(r): 0 ]
+    if(_): {name = "get" || name = "random64" || name = "seed_random64" || name = "scan"} [ set(r): 0 ]
+    if(_): {name = "time" || name = "cd" || name = "chain" || name = "file"} [ set(r): 0 ]
+]
+# COMMAND_HEAD ( IDENTIFIER ) : argument*
+ck_command(r): [
+    set(r): null
+    ck_cur(ck_cmt):
+    getf(ck_cmhead): ck_cmt "s"
+    getf(ck_cmline): ck_cmt "line"
+    ck_adv(_):
+    ck_expect(_): "("
+    set(ck_cmret): ""
+    if(_): {ck_failed = 0} [
+        ck_cur(ck_cmrt):
+        getf(ck_cmret): ck_cmrt "s"
+        ck_expect(_): "IDENT"
+    ]
+    if(_): {ck_failed = 0} [ ck_expect(_): ")" ]
+    if(_): {ck_failed = 0} [ ck_expect(_): ":" ]
+    vec(ck_cmargs): "ck_Arg"
+    set(ck_cmgo): 1
+    while(_): {ck_cmgo = 1 && ck_failed = 0} [
+        ck_argument(ck_cma):
+        if(_): {ck_cma = null} [ set(ck_cmgo): 0 ]
+        else(_): [ push(_): ck_cmargs ck_cma ]
+    ]
+    if(_): {ck_failed = 0} [
+        ck_headname(ck_cmname): ck_cmhead
+        # the checks of parser.y's command rule, made on its reduction
+        len(ck_cmn): ck_cmargs
+        set(ck_cmblocks): 0
+        set(ck_cmtrail): 1
+        set(ck_cmi): 0
+        while(_): {ck_cmi < ck_cmn} [
+            at(ck_cmx): ck_cmargs ck_cmi
+            getf(ck_cmxk): ck_cmx "kind"
+            if(_): {ck_cmxk = "block"} [
+                add(ck_cmblocks): ck_cmblocks 1
+                if(_): {ck_cmi + 1 < ck_cmn} [ set(ck_cmtrail): 0 ]
+            ]
+            add(ck_cmi): ck_cmi 1
+        ]
+        if(_): {ck_cmtrail = 0} [
+            ck_cur(ck_cmla):
+            getf(ck_cmlak): ck_cmla "k"
+            if(_): {ck_cmlak = "ERR"} [ ck_syntax(_): ]
+            else(_): [
+                getf(ck_cmlal): ck_cmla "line"
+                ck_at(_): ck_cmlal "[] blocks must be trailing command blocks"
+            ]
+        ]
+        if(_): {ck_failed = 0 && ck_cmblocks > 0} [
+            ck_block_allowed(ck_cmok): ck_cmname
+            if(_): {ck_cmok = 0} [
+                concat(ck_cmm): "command '" ck_cmname
+                concat(ck_cmm): ck_cmm "' cannot have a [] block"
+                ck_at(_): ck_cmline ck_cmm
+            ]
+        ]
+        if(_): {ck_failed = 0} [
+            new(r): "ck_Cmd" ck_cmname ck_cmret ck_cmline ck_cmargs
+        ]
+    ]
+]
+# One argument, or null (without consuming) when none starts here.
+ck_argument(r): [
+    set(r): null
+    ck_cur(ck_agt):
+    getf(ck_agk): ck_agt "k"
+    getf(ck_ags): ck_agt "s"
+    if(_): {ck_agk = "STR"} [
+        ck_adv(_):
+        ck_arg_new(r): "value" ck_ags "string"
+    ]
+    elif(_): {ck_agk = "INT" || ck_agk = "REAL" || ck_agk = "BOOL" || ck_agk = "NULL"} [
+        ck_adv(_):
+        ck_arg_new(r): "value" ck_ags ck_agk
+    ]
+    elif(_): {ck_agk = "-"} [
+        ck_adv(_):
+        ck_k(ck_agk2):
+        if(_): {ck_agk2 = "INT" || ck_agk2 = "REAL"} [
+            ck_adv(_):
+            ck_arg_new(r): "value" "" ck_agk2
+        ]
+        else(_): [ ck_syntax(_): ]
+    ]
+    elif(_): {ck_agk = "IDENT"} [
+        ck_adv(_):
+        ck_k(ck_agk3):
+        if(_): {ck_agk3 = "?"} [
+            ck_adv(_):
+            ck_arg_new(r): "lookup" ck_ags ""
+        ]
+        else(_): [
+            ck_arg_new(r): "var" ck_ags ""
+            ck_ex_new(ck_agvx): "var" null null
+            setf(_): r "ex" ck_agvx
+        ]
+    ]
+    elif(_): {ck_agk = "{"} [
+        ck_adv(_):
+        ck_or(ck_agex):
+        if(_): {ck_failed = 0} [ ck_expect(_): "}" ]
+        if(_): {ck_failed = 0} [
+            ck_arg_new(r): "expr" "" ""
+            setf(_): r "ex" ck_agex
+        ]
+    ]
+    elif(_): {ck_agk = "["} [
+        ck_block(ck_agb):
+        if(_): {ck_failed = 0} [
+            ck_arg_new(r): "block" "" ""
+            setf(_): r "blk" ck_agb
+        ]
+    ]
+    elif(_): {ck_agk = "UNO"} [
+        ck_adv(_):
+        ck_arg_new(r): "uno" ck_ags ""
+    ]
+    # argument_base ! (assignment); a '?' lookup takes none
+    if(_): {r != null && ck_failed = 0} [
+        getf(ck_agkind): r "kind"
+        if(_): {ck_agkind != "lookup"} [
+            ck_k(ck_agk4):
+            if(_): {ck_agk4 = "!"} [
+                ck_adv(_):
+                setf(_): r "asg" 1
+            ]
+        ]
+    ]
+    if(_): {ck_failed = 1} [ set(r): null ]
+]
+# ---- expressions (inside {}) ----
+ck_or(r): [
+    ck_and(r):
+    set(ck_orgo): 1
+    while(_): {ck_orgo = 1 && ck_failed = 0} [
+        ck_k(ck_ork):
+        if(_): {ck_ork = "||"} [
+            ck_adv(_):
+            ck_and(ck_orr):
+            ck_ex_new(r): "or" r ck_orr
+        ]
+        else(_): [ set(ck_orgo): 0 ]
+    ]
+]
+ck_and(r): [
+    ck_bor(r):
+    set(ck_ango): 1
+    while(_): {ck_ango = 1 && ck_failed = 0} [
+        ck_k(ck_ank):
+        if(_): {ck_ank = "&&"} [
+            ck_adv(_):
+            ck_bor(ck_anr):
+            ck_ex_new(r): "and" r ck_anr
+        ]
+        else(_): [ set(ck_ango): 0 ]
+    ]
+]
+ck_bor(r): [
+    ck_bxor(r):
+    set(ck_bogo): 1
+    while(_): {ck_bogo = 1 && ck_failed = 0} [
+        ck_k(ck_bok):
+        if(_): {ck_bok = "|"} [
+            ck_adv(_):
+            ck_bxor(ck_bor2):
+            ck_ex_new(r): "bin" r ck_bor2
+        ]
+        else(_): [ set(ck_bogo): 0 ]
+    ]
+]
+ck_bxor(r): [
+    ck_band(r):
+    set(ck_bxgo): 1
+    while(_): {ck_bxgo = 1 && ck_failed = 0} [
+        ck_k(ck_bxk):
+        if(_): {ck_bxk = "^"} [
+            ck_adv(_):
+            ck_band(ck_bxr):
+            ck_ex_new(r): "bin" r ck_bxr
+        ]
+        else(_): [ set(ck_bxgo): 0 ]
+    ]
+]
+ck_band(r): [
+    ck_cmp(r):
+    set(ck_bago): 1
+    while(_): {ck_bago = 1 && ck_failed = 0} [
+        ck_k(ck_bak):
+        if(_): {ck_bak = "&"} [
+            ck_adv(_):
+            ck_cmp(ck_bar):
+            ck_ex_new(r): "bin" r ck_bar
+        ]
+        else(_): [ set(ck_bago): 0 ]
+    ]
+]
+# comparisons do not chain: at most one per operand pair
+ck_cmp(r): [
+    ck_shift(r):
+    if(_): {ck_failed = 0} [
+        ck_k(ck_cpk):
+        if(_): {ck_cpk = ">" || ck_cpk = "<" || ck_cpk = ">=" || ck_cpk = "<=" || ck_cpk = "=" || ck_cpk = "!="} [
+            ck_adv(_):
+            ck_shift(ck_cpr):
+            ck_ex_new(r): "bin" r ck_cpr
+        ]
+    ]
+]
+ck_shift(r): [
+    ck_add(r):
+    set(ck_shgo): 1
+    while(_): {ck_shgo = 1 && ck_failed = 0} [
+        ck_k(ck_shk):
+        if(_): {ck_shk = "<<" || ck_shk = ">>"} [
+            ck_adv(_):
+            ck_add(ck_shr):
+            ck_ex_new(r): "bin" r ck_shr
+        ]
+        else(_): [ set(ck_shgo): 0 ]
+    ]
+]
+ck_add(r): [
+    ck_mul(r):
+    set(ck_adgo): 1
+    while(_): {ck_adgo = 1 && ck_failed = 0} [
+        ck_k(ck_adk):
+        if(_): {ck_adk = "+" || ck_adk = "-"} [
+            ck_adv(_):
+            ck_mul(ck_adr):
+            ck_ex_new(r): "bin" r ck_adr
+        ]
+        else(_): [ set(ck_adgo): 0 ]
+    ]
+]
+ck_mul(r): [
+    ck_unary(r):
+    set(ck_mugo): 1
+    while(_): {ck_mugo = 1 && ck_failed = 0} [
+        ck_k(ck_muk):
+        if(_): {ck_muk = "*" || ck_muk = "/" || ck_muk = "%"} [
+            ck_adv(_):
+            ck_unary(ck_mur):
+            ck_ex_new(r): "bin" r ck_mur
+        ]
+        else(_): [ set(ck_mugo): 0 ]
+    ]
+]
+ck_unary(r): [
+    set(r): null
+    ck_k(ck_unk):
+    if(_): {ck_unk = "-"} [
+        ck_adv(_):
+        ck_unary(ck_uno):
+        ck_ex_new(r): "neg" ck_uno null
+    ]
+    else(_): [ ck_primary(r): ]
+]
+ck_primary(r): [
+    set(r): null
+    ck_k(ck_prk):
+    if(_): {ck_prk = "STR" || ck_prk = "INT" || ck_prk = "REAL" || ck_prk = "BOOL" || ck_prk = "NULL"} [
+        ck_adv(_):
+        ck_ex_new(r): "val" null null
+    ]
+    elif(_): {ck_prk = "IDENT"} [
+        ck_adv(_):
+        ck_ex_new(r): "var" null null
+    ]
+    elif(_): {ck_prk = "("} [
+        ck_adv(_):
+        ck_or(r):
+        if(_): {ck_failed = 0} [ ck_expect(_): ")" ]
+    ]
+    else(_): [ ck_syntax(_): ]
+]
+# program: command_lines EOF
+ck_parse(r): [
+    set(ck_ti): 0
+    ck_lines(r):
+    if(_): {ck_failed = 0} [
+        ck_k(ck_pk):
+        if(_): {ck_pk != "EOF"} [ ck_syntax(_): ]
+    ]
+]
+
+# ---------- compiler checks ----------
+ck_argc(r): cmd [
+    getf(ck_acv): cmd "args"
+    len(r): ck_acv
+]
+ck_arg(r): cmd i [
+    getf(ck_agv): cmd "args"
+    at(r): ck_agv i
+]
+ck_argkind(r): cmd i [
+    ck_arg(ck_akx): cmd i
+    getf(r): ck_akx "kind"
+]
+ck_name_of(r): cmd [
+    getf(r): cmd "name"
+]
+# bc_is_definition: a trailing block on anything but a control command
+ck_is_def(r): cmd [
+    set(r): 0
+    ck_argc(ck_idn): cmd
+    if(_): {ck_idn > 0} [
+        ck_argkind(ck_idk): cmd {ck_idn - 1}
+        if(_): {ck_idk = "block"} [ set(r): 1 ]
+    ]
+    if(_): {r = 1} [
+        getf(ck_idnm): cmd "name"
+        if(_): {ck_idnm = "@" || ck_idnm = "if" || ck_idnm = "elif" || ck_idnm = "else"} [ set(r): 0 ]
+        if(_): {ck_idnm = "choose" || ck_idnm = "option" || ck_idnm = "default" || ck_idnm = "for"} [ set(r): 0 ]
+        if(_): {ck_idnm = "while" || ck_idnm = "break" || ck_idnm = "continue" || ck_idnm = "return"} [ set(r): 0 ]
+        if(_): {ck_idnm = "do" || ck_idnm = "loop" || ck_idnm = "method" || ck_idnm = "each"} [ set(r): 0 ]
+        if(_): {ck_idnm = "map" || ck_idnm = "filter"} [ set(r): 0 ]
+    ]
+]
+ck_body_of(r): cmd [
+    ck_argc(ck_bon): cmd
+    ck_arg(ck_boa): cmd {ck_bon - 1}
+    getf(r): ck_boa "blk"
+]
+# global(_) names in list and its blocks (not inside definitions) into
+# names; a value other than a name or "*" is an error.
+ck_globals(r): list names [
+    set(r): 0
+    len(ck_gln): list
+    set(ck_gli): 0
+    while(_): {r = 0 && ck_gli < ck_gln} [
+        at(ck_glc): list ck_gli
+        ck_is_def(ck_gld): ck_glc
+        getf(ck_glnm): ck_glc "name"
+        if(_): {ck_gld = 0 && ck_glnm = "global"} [
+            ck_argc(ck_glac): ck_glc
+            set(ck_glj): 0
+            while(_): {r = 0 && ck_glj < ck_glac} [
+                ck_arg(ck_gla): ck_glc ck_glj
+                getf(ck_glak): ck_gla "kind"
+                getf(ck_glas): ck_gla "s"
+                getf(ck_glvt): ck_gla "vt"
+                if(_): {ck_glak = "var"} [ push(_): names ck_glas ]
+                elif(_): {ck_glak = "value" && ck_glvt = "string" && ck_glas = "*"} [ set(ck_glall): 1 ]
+                else(_): [
+                    ck_err(r): ck_glc "global expects variable names (or \"*\")"
+                ]
+                add(ck_glj): ck_glj 1
+            ]
+        ]
+        if(_): {ck_gld = 0 && ck_glnm != "global"} [
+            ck_argc(ck_glac2): ck_glc
+            set(ck_glk): 0
+            while(_): {r = 0 && ck_glk < ck_glac2} [
+                ck_arg(ck_gla2): ck_glc ck_glk
+                getf(ck_glak2): ck_gla2 "kind"
+                if(_): {ck_glak2 = "block"} [
+                    getf(ck_glb): ck_gla2 "blk"
+                    ck_globals(r): ck_glb names
+                ]
+                add(ck_glk): ck_glk 1
+            ]
+        ]
+        add(ck_gli): ck_gli 1
+    ]
+]
+ck_find_fn(r): name [
+    set(r): null
+    len(ck_ffn): ck_fns
+    set(ck_ffi): 0
+    while(_): {r = null && ck_ffi < ck_ffn} [
+        at(ck_ffx): ck_fns ck_ffi
+        getf(ck_ffnm): ck_ffx "name"
+        if(_): {ck_ffnm = name} [ set(r): ck_ffx ]
+        add(ck_ffi): ck_ffi 1
+    ]
+]
+# bc_collect_functions: the function table, with its duplicate and
+# parameter checks.
+ck_collect(r): list [
+    set(r): 0
+    len(ck_cln): list
+    set(ck_cli): 0
+    while(_): {r = 0 && ck_cli < ck_cln} [
+        at(ck_clc): list ck_cli
+        ck_is_def(ck_cld): ck_clc
+        if(_): {ck_cld = 1} [
+            getf(ck_clnm): ck_clc "name"
+            ck_find_fn(ck_clex): ck_clnm
+            if(_): {ck_clex != null} [
+                concat(ck_clm): "function '" ck_clnm
+                concat(ck_clm): ck_clm "' is defined twice"
+                ck_err(r): ck_clc ck_clm
+            ]
+            if(_): {r = 0} [
+                ck_argc(ck_cln2): ck_clc
+                sub(ck_clnp): ck_cln2 1
+                vec(ck_clprm): ""
+                set(ck_clj): 0
+                while(_): {r = 0 && ck_clj < ck_clnp} [
+                    ck_arg(ck_clp): ck_clc ck_clj
+                    getf(ck_clpk): ck_clp "kind"
+                    if(_): {ck_clpk != "var"} [
+                        ck_num(ck_clpn): {ck_clj + 1}
+                        concat(ck_clm2): "parameter " ck_clpn
+                        concat(ck_clm2): ck_clm2 " of function '"
+                        concat(ck_clm2): ck_clm2 ck_clnm
+                        concat(ck_clm2): ck_clm2 "' must be a name"
+                        ck_err(r): ck_clc ck_clm2
+                    ]
+                    if(_): {r = 0} [
+                        getf(ck_clps): ck_clp "s"
+                        push(_): ck_clprm ck_clps
+                    ]
+                    add(ck_clj): ck_clj 1
+                ]
+            ]
+            if(_): {r = 0} [
+                getf(ck_clret): ck_clc "ret"
+                new(ck_clfn): "ck_Fn" ck_clnm ck_clnp ck_clprm ck_clret
+                push(_): ck_fns ck_clfn
+                ck_body_of(ck_clbody): ck_clc
+                ck_collect(r): ck_clbody
+            ]
+        ]
+        if(_): {ck_cld = 0} [
+            ck_argc(ck_cln3): ck_clc
+            set(ck_clk): 0
+            while(_): {r = 0 && ck_clk < ck_cln3} [
+                ck_arg(ck_cla): ck_clc ck_clk
+                getf(ck_clak): ck_cla "kind"
+                if(_): {ck_clak = "block"} [
+                    getf(ck_clb): ck_cla "blk"
+                    ck_collect(r): ck_clb
+                ]
+                add(ck_clk): ck_clk 1
+            ]
+        ]
+        add(ck_cli): ck_cli 1
+    ]
+]
+# ---- expressions and arguments (register depth as the compiler uses) ----
+ck_short(r): e dst [
+    set(r): 0
+    getf(ck_shop): e "op"
+    if(_): {ck_shop = "and" || ck_shop = "or"} [
+        getf(ck_shl): e "l"
+        getf(ck_shr2): e "r"
+        ck_short(r): ck_shl dst
+        if(_): {r = 0} [ ck_short(r): ck_shr2 dst ]
+    ]
+    else(_): [ ck_expr(r): e dst ]
+]
+ck_expr(r): e dst [
+    set(r): 0
+    if(_): {dst >= 31} [ set(r): 1 ]
+    if(_): {r = 0} [
+        getf(ck_exop): e "op"
+        if(_): {ck_exop = "neg"} [
+            getf(ck_exl): e "l"
+            ck_expr(r): ck_exl dst
+        ]
+        if(_): {ck_exop = "bin" || ck_exop = "and" || ck_exop = "or"} [
+            if(_): {dst + 2 >= 31} [
+                ck_err(r): null "expression is nested too deeply; split it with set"
+            ]
+            if(_): {r = 0} [
+                if(_): {ck_exop = "bin"} [
+                    getf(ck_exl2): e "l"
+                    getf(ck_exr2): e "r"
+                    ck_expr(r): ck_exl2 {dst + 1}
+                    if(_): {r = 0} [ ck_expr(r): ck_exr2 {dst + 2} ]
+                ]
+                else(_): [ ck_short(r): e dst ]
+            ]
+        ]
+    ]
+]
+ck_argument_ok(r): a dst [
+    set(r): 0
+    if(_): {dst > 31} [ set(r): 1 ]
+    if(_): {r = 0} [
+        getf(ck_aok): a "kind"
+        if(_): {ck_aok = "var" || ck_aok = "expr"} [
+            getf(ck_aoe): a "ex"
+            ck_short(r): ck_aoe dst
+        ]
+        if(_): {ck_aok = "block"} [
+            ck_err(r): null "a [ ] block cannot be used as a value here"
+        ]
+    ]
+]
+ck_cmd_arg(r): cmd i dst [
+    ck_arg(ck_caa): cmd i
+    ck_argument_ok(r): ck_caa dst
+]
+ck_list(r): list loop cur [
+    len(ck_lln): list
+    ck_until(r): list 0 ck_lln loop cur
+]
+ck_label_p(r): cmd [
+    getf(ck_lpn): cmd "name"
+    set(r): 0
+    if(_): {ck_lpn = "elif" || ck_lpn = "else"} [ set(r): 1 ]
+]
+ck_choose_label_p(r): cmd [
+    getf(ck_clpn): cmd "name"
+    set(r): 0
+    if(_): {ck_clpn = "option" || ck_clpn = "default"} [ set(r): 1 ]
+]
+# bc_compile_until: commands start..stop of list (chains and do/loop
+# pairs consume their followers).
+ck_until(r): list start stop loop cur [
+    set(r): 0
+    len(ck_utn): list
+    set(ck_uti): start
+    while(_): {r = 0 && ck_uti < stop && ck_uti < ck_utn} [
+        at(ck_utc): list ck_uti
+        getf(ck_utnm): ck_utc "name"
+        ck_argc(ck_utac): ck_utc
+        set(ck_utouter): ck_ecmd
+        set(ck_ecmd): ck_utc
+        set(ck_utnext): {0 - 1}
+        set(ck_uttried): 0
+        if(_): {ck_utnm = "if" && ck_utac = 1} [
+            set(ck_uttried): 1
+            ck_cchain(ck_utnext): list ck_uti loop cur
+        ]
+        if(_): {ck_uttried = 0 && ck_utnm = "if" && ck_utac = 2 && ck_uti + 1 < ck_utn} [
+            ck_argkind(ck_utk1): ck_utc 1
+            at(ck_utnx): list {ck_uti + 1}
+            ck_label_p(ck_utlab): ck_utnx
+            if(_): {ck_utk1 = "block" && ck_utlab = 1} [
+                set(ck_uttried): 1
+                ck_bchain(ck_utnext): list ck_uti loop cur
+            ]
+        ]
+        if(_): {ck_uttried = 0 && ck_utnm = "choose" && ck_utac = 1} [
+            set(ck_uttried): 1
+            ck_choose(ck_utnext): list ck_uti loop cur
+        ]
+        if(_): {ck_uttried = 1} [
+            if(_): {ck_utnext < 0} [
+                concat(ck_utm): "cannot compile '" ck_utnm
+                concat(ck_utm): ck_utm "'"
+                ck_err(r): ck_utc ck_utm
+            ]
+            set(ck_ecmd): ck_utouter
+            set(ck_uti): ck_utnext
+        ]
+        if(_): {ck_uttried = 0} [
+            set(ck_ecmd): ck_utouter
+            ck_label_p(ck_utl1): ck_utc
+            ck_choose_label_p(ck_utl2): ck_utc
+            if(_): {ck_utl1 = 1 || ck_utl2 = 1} [
+                set(ck_utwant): "if"
+                if(_): {ck_utl2 = 1} [ set(ck_utwant): "choose" ]
+                concat(ck_utm2): ck_utnm " without a matching "
+                concat(ck_utm2): ck_utm2 ck_utwant
+                concat(ck_utm2): ck_utm2 " before it"
+                ck_err(r): ck_utc ck_utm2
+            ]
+            if(_): {r = 0} [ ck_command_c(r): list ck_uti loop cur ]
+            if(_): {r = 0} [
+                if(_): {ck_utnm = "do"} [
+                    set(ck_utdl): 0
+                    if(_): {ck_uti + 1 < ck_utn} [
+                        at(ck_utdn): list {ck_uti + 1}
+                        getf(ck_utdnm): ck_utdn "name"
+                        if(_): {ck_utdnm = "loop"} [ set(ck_utdl): 1 ]
+                    ]
+                    if(_): {ck_utdl = 0} [
+                        ck_err(r): ck_utc "do must be followed by loop(_): condition"
+                    ]
+                    add(ck_uti): ck_uti 2
+                ]
+                else(_): [
+                    if(_): {ck_utnm = "loop"} [
+                        ck_err(r): ck_utc "loop without a do before it"
+                    ]
+                    add(ck_uti): ck_uti 1
+                ]
+            ]
+        ]
+    ]
+]
+# if(_): c (block-less chain): returns the index after it, -1 on error.
+ck_cchain(r): list first loop cur [
+    set(r): {0 - 1}
+    len(ck_ccn): list
+    set(ck_ccb): first
+    set(ck_ccok): 1
+    set(ck_ccgo): 1
+    while(_): {ck_ccok = 1 && ck_ccgo = 1} [
+        set(ck_ccgo): 0
+        if(_): {ck_ccb < ck_ccn} [
+            at(ck_ccc): list ck_ccb
+            ck_label_p(ck_cclab): ck_ccc
+            if(_): {ck_ccb = first || ck_cclab = 1} [ set(ck_ccgo): 1 ]
+        ]
+        if(_): {ck_ccgo = 1} [
+            add(ck_ccstop): ck_ccb 1
+            set(ck_ccsgo): 1
+            while(_): {ck_ccsgo = 1 && ck_ccstop < ck_ccn} [
+                at(ck_ccs): list ck_ccstop
+                ck_label_p(ck_ccsl): ck_ccs
+                if(_): {ck_ccsl = 1} [ set(ck_ccsgo): 0 ]
+                else(_): [ add(ck_ccstop): ck_ccstop 1 ]
+            ]
+            getf(ck_ccnm): ck_ccc "name"
+            ck_argc(ck_ccac): ck_ccc
+            if(_): {ck_ccnm = "else"} [
+                if(_): {ck_ccac != 0} [
+                    ck_err(_): ck_ccc "else takes no parameters here"
+                    set(ck_ccok): 0
+                ]
+            ]
+            else(_): [
+                if(_): {ck_ccac != 1} [
+                    concat(ck_ccm): ck_ccnm " expects one condition"
+                    ck_err(_): ck_ccc ck_ccm
+                    set(ck_ccok): 0
+                ]
+                if(_): {ck_ccok = 1} [
+                    ck_cmd_arg(ck_ccr): ck_ccc 0 0
+                    if(_): {ck_ccr != 0} [ set(ck_ccok): 0 ]
+                ]
+            ]
+            if(_): {ck_ccok = 1} [
+                ck_until(ck_ccr2): list {ck_ccb + 1} ck_ccstop loop cur
+                if(_): {ck_ccr2 != 0} [ set(ck_ccok): 0 ]
+            ]
+            set(ck_ccb): ck_ccstop
+        ]
+    ]
+    if(_): {ck_ccok = 1} [ set(r): ck_ccb ]
+]
+# if(_): c [ ] elif(_): c [ ] else(_): [ ]: index after it, -1 on error.
+ck_bchain(r): list first loop cur [
+    set(r): {0 - 1}
+    len(ck_bcn): list
+    set(ck_bcb): first
+    set(ck_bcok): 1
+    set(ck_bcgo): 1
+    while(_): {ck_bcok = 1 && ck_bcgo = 1} [
+        at(ck_bcc): list ck_bcb
+        getf(ck_bcnm): ck_bcc "name"
+        ck_argc(ck_bcac): ck_bcc
+        set(ck_bcelse): 0
+        if(_): {ck_bcnm = "else"} [ set(ck_bcelse): 1 ]
+        if(_): {ck_bcelse = 1} [
+            set(ck_bcbad): 1
+            if(_): {ck_bcac = 1} [
+                ck_argkind(ck_bck0): ck_bcc 0
+                if(_): {ck_bck0 = "block"} [ set(ck_bcbad): 0 ]
+            ]
+            if(_): {ck_bcbad = 1} [
+                ck_err(_): ck_bcc "else expects a single [ ] block"
+                set(ck_bcok): 0
+            ]
+            if(_): {ck_bcok = 1} [
+                ck_arg(ck_bca0): ck_bcc 0
+                getf(ck_bcbody): ck_bca0 "blk"
+            ]
+        ]
+        if(_): {ck_bcelse = 0} [
+            set(ck_bcbad2): 1
+            if(_): {ck_bcac = 2} [
+                ck_argkind(ck_bck1): ck_bcc 1
+                if(_): {ck_bck1 = "block"} [ set(ck_bcbad2): 0 ]
+            ]
+            if(_): {ck_bcbad2 = 1} [
+                concat(ck_bcm): ck_bcnm " expects a condition and a [ ] block"
+                ck_err(_): ck_bcc ck_bcm
+                set(ck_bcok): 0
+            ]
+            if(_): {ck_bcok = 1} [
+                ck_arg(ck_bca1): ck_bcc 1
+                getf(ck_bcbody): ck_bca1 "blk"
+                ck_cmd_arg(ck_bcr): ck_bcc 0 0
+                if(_): {ck_bcr != 0} [ set(ck_bcok): 0 ]
+            ]
+        ]
+        if(_): {ck_bcok = 1} [
+            ck_list(ck_bcr2): ck_bcbody loop cur
+            if(_): {ck_bcr2 != 0} [ set(ck_bcok): 0 ]
+        ]
+        if(_): {ck_bcok = 1} [
+            add(ck_bcnx): ck_bcb 1
+            set(ck_bcnl): 0
+            if(_): {ck_bcnx < ck_bcn} [
+                at(ck_bcnc): list ck_bcnx
+                ck_label_p(ck_bcnl): ck_bcnc
+            ]
+            if(_): {ck_bcnl = 0} [
+                set(ck_bcb): ck_bcnx
+                set(ck_bcgo): 0
+            ]
+            if(_): {ck_bcnl = 1 && ck_bcelse = 1} [
+                getf(ck_bcnn): ck_bcnc "name"
+                concat(ck_bcm2): ck_bcnn " after else"
+                ck_err(_): ck_bcnc ck_bcm2
+                set(ck_bcok): 0
+            ]
+            if(_): {ck_bcnl = 1 && ck_bcelse = 0} [ set(ck_bcb): ck_bcnx ]
+        ]
+    ]
+    if(_): {ck_bcok = 1} [ set(r): ck_bcb ]
+]
+# choose(_): v / option(_): x / default(_):  -> index after it, -1 on error.
+# loop: 0 none, 1 a loop, 2 a choose (break leaves it; continue belongs
+# to the loop around it).
+ck_choose(r): list first loop cur [
+    set(r): {0 - 1}
+    len(ck_chn): list
+    at(ck_chf): list first
+    ck_cmd_arg(ck_chr): ck_chf 0 0
+    set(ck_chok): 1
+    if(_): {ck_chr != 0} [ set(ck_chok): 0 ]
+    vec(ck_chlab): ""
+    vec(ck_chstop): ""
+    set(ck_chdef): 0
+    set(ck_chl): {first + 1}
+    set(ck_chgo): 1
+    while(_): {ck_chok = 1 && ck_chgo = 1} [
+        set(ck_chgo): 0
+        if(_): {ck_chl < ck_chn} [
+            at(ck_chlc): list ck_chl
+            ck_choose_label_p(ck_chgo): ck_chlc
+        ]
+        if(_): {ck_chgo = 1} [
+            add(ck_chcur): ck_chl 1
+            set(ck_chsgo): 1
+            while(_): {ck_chsgo = 1 && ck_chcur < ck_chn} [
+                at(ck_chcc): list ck_chcur
+                ck_choose_label_p(ck_chsl): ck_chcc
+                if(_): {ck_chsl = 1} [ set(ck_chsgo): 0 ]
+                else(_): [ add(ck_chcur): ck_chcur 1 ]
+            ]
+            push(_): ck_chlab ck_chl
+            push(_): ck_chstop ck_chcur
+            getf(ck_chlnm): ck_chlc "name"
+            ck_argc(ck_chlac): ck_chlc
+            if(_): {ck_chlnm = "default"} [
+                if(_): {ck_chlac != 0 || ck_chdef = 1} [
+                    set(ck_chm): "default takes no parameters"
+                    if(_): {ck_chdef = 1} [ set(ck_chm): "choose has a second default" ]
+                    ck_err(_): ck_chlc ck_chm
+                    set(ck_chok): 0
+                ]
+                set(ck_chdef): 1
+            ]
+            elif(_): {ck_chlac != 1} [
+                ck_err(_): ck_chlc "option expects one value"
+                set(ck_chok): 0
+            ]
+            set(ck_chl): ck_chcur
+        ]
+    ]
+    len(ck_chcount): ck_chlab
+    if(_): {ck_chok = 1 && ck_chcount = 0} [
+        ck_err(_): ck_chf "choose must be followed by option or default"
+        set(ck_chok): 0
+    ]
+    set(ck_chi): 0
+    while(_): {ck_chok = 1 && ck_chi < ck_chcount} [
+        at(ck_chli): ck_chlab ck_chi
+        at(ck_chlx): list ck_chli
+        getf(ck_chlxn): ck_chlx "name"
+        if(_): {ck_chlxn = "option"} [
+            ck_cmd_arg(ck_chr2): ck_chlx 0 1
+            if(_): {ck_chr2 != 0} [ set(ck_chok): 0 ]
+        ]
+        add(ck_chi): ck_chi 1
+    ]
+    set(ck_chsaved): ck_ccont
+    set(ck_ccont): 0
+    set(ck_chj): 0
+    while(_): {ck_chok = 1 && ck_chj < ck_chcount} [
+        at(ck_chlj): ck_chlab ck_chj
+        at(ck_chsj): ck_chstop ck_chj
+        ck_until(ck_chr3): list {ck_chlj + 1} ck_chsj 2 cur
+        if(_): {ck_chr3 != 0} [ set(ck_chok): 0 ]
+        add(ck_chj): ck_chj 1
+    ]
+    if(_): {ck_chok = 1 && ck_ccont > 0} [
+        if(_): {loop = 0} [
+            ck_err(_): ck_chf "continue inside choose but outside a loop"
+            set(ck_chok): 0
+        ]
+    ]
+    # continues the enclosing choose must account for in turn
+    if(_): {loop = 2} [ add(ck_ccont): ck_chsaved ck_ccont ]
+    else(_): [ set(ck_ccont): ck_chsaved ]
+    if(_): {ck_chok = 1} [ set(r): ck_chl ]
+]
+# bc_compile_command: a failure without its own message is reported as
+# "cannot compile 'name'".
+ck_command_c(r): list i loop cur [
+    at(ck_ccmd): list i
+    set(ck_ccouter): ck_ecmd
+    set(ck_ecmd): ck_ccmd
+    ck_body(r): list i loop cur
+    if(_): {r != 0} [
+        getf(ck_ccnm2): ck_ccmd "name"
+        concat(ck_ccm3): "cannot compile '" ck_ccnm2
+        concat(ck_ccm3): ck_ccm3 "'"
+        ck_err(_): ck_ccmd ck_ccm3
+    ]
+    set(ck_ecmd): ck_ccouter
+]
+# "<name> expects ..., got N"-style message helper
+ck_got(r): head n tail [
+    ck_num(ck_gtn): n
+    concat(r): head ck_gtn
+    concat(r): r tail
+]
+ck_is_string_value(r): cmd i [
+    ck_arg(ck_isa): cmd i
+    getf(ck_isk): ck_isa "kind"
+    getf(ck_isv): ck_isa "vt"
+    set(r): 0
+    if(_): {ck_isk = "value" && ck_isv = "string"} [ set(r): 1 ]
+]
+# bc_compile_command_body, in its order of cases
+ck_body(r): list i loop cur [
+    set(r): 0
+    at(c): list i
+    getf(nm): c "name"
+    ck_argc(n): c
+    ck_is_def(isdef): c
+    set(done): isdef
+    if(_): {done = 0 && nm = "global"} [ set(done): 1 ]
+    if(_): {done = 0 && nm = "if"} [
+        set(done): 1
+        set(bad): 0
+        if(_): {n < 2 || n > 3} [ set(bad): 1 ]
+        if(_): {bad = 0} [
+            ck_argkind(k1): c 1
+            if(_): {k1 != "block"} [ set(bad): 1 ]
+            if(_): {n = 3} [
+                ck_argkind(k2): c 2
+                if(_): {k2 != "block"} [ set(bad): 1 ]
+            ]
+        ]
+        if(_): {bad = 1} [
+            ck_err(r): c "if expects a condition and a [ ] block (optionally followed by an else block)"
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+        if(_): {r = 0} [
+            ck_arg(b1): c 1
+            getf(l1): b1 "blk"
+            ck_list(r): l1 loop cur
+        ]
+        if(_): {r = 0 && n = 3} [
+            ck_arg(b2): c 2
+            getf(l2): b2 "blk"
+            ck_list(r): l2 loop cur
+        ]
+    ]
+    if(_): {done = 0 && nm = "do"} [
+        set(done): 1
+        set(bad): 1
+        if(_): {n = 2} [
+            ck_argkind(k1): c 1
+            if(_): {k1 = "block"} [ set(bad): 0 ]
+        ]
+        if(_): {bad = 1} [ ck_err(r): c "do expects a value and a [ ] body" ]
+        if(_): {r = 0} [
+            len(ln): list
+            set(lbad): 1
+            if(_): {i + 1 < ln} [
+                at(lc): list {i + 1}
+                getf(lnm): lc "name"
+                ck_argc(lac): lc
+                if(_): {lnm = "loop" && lac = 1} [ set(lbad): 0 ]
+            ]
+            if(_): {lbad = 1} [ ck_err(r): c "do must be followed by loop(_): condition" ]
+        ]
+        if(_): {r = 0} [
+            ck_arg(b1): c 1
+            getf(l1): b1 "blk"
+            ck_list(r): l1 1 cur
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): lc 0 0 ]
+    ]
+    if(_): {done = 0 && nm = "for"} [
+        set(done): 1
+        set(bad): 1
+        if(_): {n = 2} [
+            ck_argkind(k1): c 1
+            if(_): {k1 = "block"} [ set(bad): 0 ]
+        ]
+        if(_): {bad = 1} [ ck_err(r): c "for expects a condition and a [ ] block" ]
+        if(_): {r = 0} [
+            ck_arg(b1): c 1
+            getf(fb): b1 "blk"
+            len(fbn): fb
+            if(_): {fbn < 2} [
+                ck_err(r): c "for needs an initializer and an iterator command at the start of its block"
+            ]
+        ]
+        if(_): {r = 0} [ ck_command_c(r): fb 0 loop cur ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+        set(bi): 2
+        while(_): {r = 0 && bi < fbn} [
+            ck_command_c(r): fb bi 1 cur
+            if(_): {r = 0} [
+                at(bc): fb bi
+                getf(bnm): bc "name"
+                if(_): {bnm = "do"} [
+                    set(dl): 0
+                    if(_): {bi + 1 < fbn} [
+                        at(bnx): fb {bi + 1}
+                        getf(bnxn): bnx "name"
+                        if(_): {bnxn = "loop"} [ set(dl): 1 ]
+                    ]
+                    if(_): {dl = 0} [ ck_err(r): bc "do must be followed by loop(_): condition" ]
+                    add(bi): bi 2
+                ]
+                else(_): [
+                    if(_): {bnm = "loop"} [ ck_err(r): bc "loop without a do before it" ]
+                    add(bi): bi 1
+                ]
+            ]
+        ]
+        if(_): {r = 0} [ ck_command_c(r): fb 1 1 cur ]
+    ]
+    if(_): {done = 0 && nm = "while"} [
+        set(done): 1
+        set(bad): 1
+        if(_): {n = 2} [
+            ck_argkind(k1): c 1
+            if(_): {k1 = "block"} [ set(bad): 0 ]
+        ]
+        if(_): {bad = 1} [ ck_err(r): c "while expects a condition and a [ ] body" ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+        if(_): {r = 0} [
+            ck_arg(b1): c 1
+            getf(l1): b1 "blk"
+            ck_list(r): l1 1 cur
+        ]
+    ]
+    if(_): {done = 0 && (nm = "break" || nm = "continue")} [
+        set(done): 1
+        if(_): {loop = 0} [
+            concat(m): nm " outside a loop"
+            ck_err(r): c m
+        ]
+        if(_): {r = 0 && n > 1} [
+            concat(m2): nm " takes at most one value, got "
+            ck_got(m3): m2 n ""
+            ck_err(r): c m3
+        ]
+        if(_): {r = 0 && n = 1} [ ck_cmd_arg(r): c 0 0 ]
+        if(_): {r = 0 && loop = 2 && nm = "continue"} [ add(ck_ccont): ck_ccont 1 ]
+    ]
+    if(_): {done = 0 && nm = "return"} [
+        set(done): 1
+        if(_): {cur = 0} [ ck_err(r): c "return outside a function" ]
+        if(_): {r = 0 && n != 1} [
+            ck_got(m): "return expects one value, got " n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    if(_): {done = 0} [
+        ck_find_fn(fn): nm
+        if(_): {fn != null} [
+            set(done): 1
+            getf(np): fn "np"
+            if(_): {n != np} [
+                set(pl): "s"
+                if(_): {np = 1} [ set(pl): "" ]
+                concat(m): "function '" nm
+                concat(m): m "' expects "
+                ck_num(nps): np
+                concat(m): m nps
+                concat(m): m " parameter"
+                concat(m): m pl
+                concat(m): m ", got "
+                ck_num(ns): n
+                concat(m): m ns
+                ck_err(r): c m
+            ]
+            if(_): {r = 0 && n >= 31} [
+                concat(m): "'" nm
+                concat(m): m "' has too many parameters (at most 30)"
+                ck_err(r): c m
+            ]
+            set(ai): 0
+            while(_): {r = 0 && ai < n} [
+                ck_cmd_arg(r): c ai ai
+                add(ai): ai 1
+            ]
+        ]
+    ]
+    if(_): {done = 0 && nm = "set" && n = 2} [
+        set(done): 1
+        ck_cmd_arg(r): c 0 1
+        if(_): {r = 0} [ ck_cmd_arg(r): c 1 2 ]
+    ]
+    if(_): {done = 0 && nm = "set"} [
+        set(done): 1
+        if(_): {n != 1} [
+            ck_got(m): "set expects one value (or an index and a value for a vector), got " n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    if(_): {done = 0 && nm = "print"} [
+        set(done): 1
+        if(_): {n != 1} [
+            ck_got(m): "print expects exactly one value, got " n " (join values with concat first)"
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    if(_): {done = 0 && (nm = "add" || nm = "sub" || nm = "mul" || nm = "div" || nm = "mod")} [
+        set(done): 1
+        if(_): {n != 2} [
+            concat(m): nm " expects two values, got "
+            ck_got(m): m n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 1 1 ]
+    ]
+    if(_): {done = 0 && nm = "concat"} [
+        set(done): 1
+        if(_): {n < 2 || n >= 31} [
+            ck_got(m): "concat expects 2 to 30 values, got " n ""
+            ck_err(r): c m
+        ]
+        set(ai): 0
+        while(_): {r = 0 && ai < n} [
+            ck_cmd_arg(r): c ai ai
+            add(ai): ai 1
+        ]
+    ]
+    if(_): {done = 0 && nm = "get" && n = 2} [
+        set(done): 1
+        ck_argkind(k1): c 1
+        if(_): {k1 != "var"} [
+            ck_err(r): c "get(vector): index destination needs a variable name as the destination"
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 1 ]
+    ]
+    if(_): {done = 0 && nm = "get"} [
+        set(done): 1
+        set(bad): 1
+        if(_): {n = 1} [
+            ck_argkind(k0): c 0
+            if(_): {k0 = "var"} [ set(bad): 0 ]
+        ]
+        if(_): {bad = 1} [
+            set(m): "get expects a destination (or an index and a destination for a vector)"
+            if(_): {n = 1} [ set(m): "get(source): destination needs a variable name as the destination" ]
+            ck_err(r): c m
+        ]
+    ]
+    if(_): {done = 0 && nm = "random64"} [
+        set(done): 1
+        if(_): {n != 0} [ ck_err(r): c "random64 takes no parameters" ]
+    ]
+    if(_): {done = 0 && nm = "seed_random64"} [
+        set(done): 1
+        if(_): {n != 1} [
+            ck_got(m): "seed_random64 expects one seed, got " n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    if(_): {done = 0 && nm = "time"} [
+        set(done): 1
+        if(_): {n != 0} [ ck_err(r): c "time takes no parameters" ]
+    ]
+    if(_): {done = 0 && nm = "scan"} [
+        set(done): 1
+        set(bad): 0
+        if(_): {n < 2 || n - 1 > 255} [ set(bad): 1 ]
+        if(_): {bad = 0} [
+            ck_is_string_value(sv): c 0
+            if(_): {sv = 0} [ set(bad): 1 ]
+        ]
+        if(_): {bad = 1} [ ck_err(r): c "scan expects a format string and 1 to 255 variables" ]
+        set(ai): 1
+        while(_): {r = 0 && ai < n} [
+            ck_argkind(ka): c ai
+            if(_): {ka != "var"} [
+                ck_got(m): "scan destination " ai " must be a variable name"
+                ck_err(r): c m
+            ]
+            add(ai): ai 1
+        ]
+    ]
+    if(_): {done = 0 && nm = "template"} [
+        set(done): 1
+        set(bad): 0
+        if(_): {n < 2 || n - 1 > 255} [ set(bad): 1 ]
+        if(_): {bad = 0} [
+            ck_is_string_value(sv): c 0
+            if(_): {sv = 0} [ set(bad): 1 ]
+        ]
+        if(_): {bad = 1} [ ck_err(r): c "template expects a format string and 1 to 255 values" ]
+        set(ai): 1
+        while(_): {r = 0 && ai < n} [
+            ck_argkind(ka): c ai
+            if(_): {ka = "block"} [ ck_err(r): c "template cannot take a [ ] block" ]
+            if(_): {r = 0} [ ck_cmd_arg(r): c ai {ai - 1} ]
+            add(ai): ai 1
+        ]
+    ]
+    if(_): {done = 0 && nm = "cd"} [
+        set(done): 1
+        if(_): {n != 1} [
+            ck_got(m): "cd expects one directory, got " n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    if(_): {done = 0 && nm = "chain"} [
+        set(done): 1
+        if(_): {n != 0} [ ck_err(r): c "chain takes no parameters" ]
+    ]
+    if(_): {done = 0 && nm = "file"} [
+        set(done): 1
+        if(_): {n != 1} [
+            ck_got(m): "file expects one file name, got " n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    if(_): {done = 0 && nm = "eval"} [
+        set(done): 1
+        if(_): {n != 1} [
+            ck_got(m): "eval expects one string, got " n ""
+            ck_err(r): c m
+        ]
+        if(_): {r = 0} [ ck_cmd_arg(r): c 0 0 ]
+    ]
+    # anything else is a native/external command
+    if(_): {done = 0} [
+        if(_): {n >= 31} [
+            concat(m): "'" nm
+            concat(m): m "' has too many parameters (at most 30)"
+            ck_err(r): c m
+        ]
+        set(ai): 0
+        while(_): {r = 0 && ai < n} [
+            ck_argkind(ka): c ai
+            if(_): {ka != "block"} [ ck_cmd_arg(r): c ai ai ]
+            add(ai): ai 1
+        ]
+    ]
+]
+# bc_function_locals' check: a parameter or the return variable cannot be
+# declared global.
+ck_fn_locals(r): def fn body [
+    vec(ck_flg): ""
+    ck_globals(r): body ck_flg
+    len(ck_fln): ck_flg
+    set(ck_fli): 0
+    getf(ck_flret): fn "ret"
+    getf(ck_flprm): fn "prm"
+    getf(ck_flname): fn "name"
+    len(ck_flpn): ck_flprm
+    while(_): {r = 0 && ck_fli < ck_fln} [
+        at(ck_flx): ck_flg ck_fli
+        set(ck_flis): 0
+        if(_): {ck_flx = ck_flret} [ set(ck_flis): 1 ]
+        set(ck_flj): 0
+        while(_): {ck_flj < ck_flpn} [
+            at(ck_flp): ck_flprm ck_flj
+            if(_): {ck_flp = ck_flx} [ set(ck_flis): 1 ]
+            add(ck_flj): ck_flj 1
+        ]
+        if(_): {ck_flis = 1} [
+            concat(ck_flm): "'" ck_flx
+            concat(ck_flm): ck_flm "' is a parameter or the return variable of '"
+            concat(ck_flm): ck_flm ck_flname
+            concat(ck_flm): ck_flm "' and cannot be global"
+            ck_err(r): def ck_flm
+        ]
+        add(ck_fli): ck_fli 1
+    ]
+]
+# bc_compile_functions: every function body, in source order.
+ck_functions(r): list [
+    set(r): 0
+    len(ck_fun): list
+    set(ck_fui): 0
+    while(_): {r = 0 && ck_fui < ck_fun} [
+        at(ck_fuc): list ck_fui
+        ck_is_def(ck_fud): ck_fuc
+        if(_): {ck_fud = 1} [
+            getf(ck_funm): ck_fuc "name"
+            ck_find_fn(ck_fufn): ck_funm
+            ck_body_of(ck_fubody): ck_fuc
+            ck_list(r): ck_fubody 0 1
+            if(_): {r = 0} [ ck_fn_locals(r): ck_fuc ck_fufn ck_fubody ]
+            if(_): {r = 0} [ ck_functions(r): ck_fubody ]
+        ]
+        if(_): {ck_fud = 0} [
+            ck_argc(ck_fuac): ck_fuc
+            set(ck_fuk): 0
+            while(_): {r = 0 && ck_fuk < ck_fuac} [
+                ck_arg(ck_fua): ck_fuc ck_fuk
+                getf(ck_fuak): ck_fua "kind"
+                if(_): {ck_fuak = "block"} [
+                    getf(ck_fub): ck_fua "blk"
+                    ck_functions(r): ck_fub
+                ]
+                add(ck_fuk): ck_fuk 1
+            ]
+        ]
+        add(ck_fui): ck_fui 1
+    ]
+]
+ck_compile(r): prog [
+    vec(ck_fns): "ck_Fn"
+    set(ck_ecmd): null
+    set(ck_ccont): 0
+    vec(ck_pglob): ""
+    ck_globals(r): prog ck_pglob
+    if(_): {r = 0} [ ck_collect(r): prog ]
+    if(_): {r = 0} [ ck_functions(r): prog ]
+    if(_): {r = 0} [ ck_list(r): prog 0 0 ]
+]
+
+ck_run(r): text name mapf mapl [
+    if(_): {ck_sdef != 1} [
+        struct(ck_Tok): "k:string" "s:string" "line:number"
+        struct(ck_Arg): "kind:string" "s:string" "vt:string" "asg:number" "blk:any" "ex:any"
+        struct(ck_E): "op:string" "l:any" "r:any"
+        struct(ck_Cmd): "name:string" "ret:string" "line:number" "args:vector"
+        struct(ck_Fn): "name:string" "np:number" "prm:vector" "ret:string"
+        set(ck_sdef): 1
+    ]
+    set(ck_failed): 0
+    set(ck_msg): ""
+    set(ck_name): name
+    set(ck_mapf): mapf
+    set(ck_mapl): mapl
+    set(ck_stage): 1
+    ck_lex(_): text
+    ck_parse(ck_prog):
+    if(_): {ck_failed = 0} [
+        set(ck_stage): 2
+        ck_compile(_): ck_prog
+    ]
+    set(r): ck_failed
+]

@@ -15,6 +15,8 @@ $include "../libs/strings.su"
 $include "uuasm.su"
 # The preprocessor for target programs (pp.c ported).
 $include "pp.su"
+# Compile-time diagnostics, reported as ussr reports them.
+$include "check.su"
 
 # Interpreter state shared across the stages (lx_ lexer, ps_ parser, rt_
 # tree runtime, cv_ compiler, vm_ VM, sc_ scheduler); every other variable
@@ -1485,33 +1487,40 @@ rt_read(r): nm [
 ]
 
 # eval(r): src parses src as a program of its own. 0 when it parsed (the
-# tree is in ps_root); otherwise the host is made to report the failure
-# the way ussr does ("<eval>:LINE: syntax error", then a failed process).
+# tree is in ps_root); a lexer, grammar or compiler error is reported as
+# ussr reports it ("<eval>:LINE: reason" on stderr) and fails the process.
 rt_eval_parse(r): src [
     set(r): 1
     typeof(rt_ept): src
     if(_): {rt_ept != "string"} [
         rt_fatal(_):
     ]
+    vec(rt_epnone): ""
+    ck_run(rt_epck): src "<eval>" rt_epnone rt_epnone
+    if(_): {rt_epck = 1} [
+        write_stderr(_): ck_msg
+        rt_fatal(_):
+    ]
     set(rt_epq): ps_quiet
     set(ps_quiet): 1
-    set(ps_errline): 1
     vec(lx_tokens): "lx_Tok"
     lx_scan(rt_epl): src
     if(_): {rt_epl = 0} [
         ps_parse(r): src
     ]
     set(ps_quiet): rt_epq
-    if(_): {r != 0} [
-        set(rt_eps): ""
-        set(rt_epi): 1
-        while(_): {rt_epi < ps_errline} [
-            concat(rt_eps): rt_eps "\n"
-            add(rt_epi): rt_epi 1
-        ]
-        concat(rt_eps): rt_eps "("
-        eval(_): rt_eps
-        rt_fatal(_):
+    # the checker accepted it: a parse failure here is this parser's own
+    if(_): {r != 0} [ rt_fatal(_): ]
+]
+
+# A preprocessor error on stderr as ussr prints it ("USSR: reason"; some
+# fail without a message).
+rt_pp_report(r): [
+    set(r): 0
+    if(_): {pp_msg != ""} [
+        concat(rt_ppm): "USSR: " pp_msg
+        concat(rt_ppm): rt_ppm "\n"
+        write_stderr(_): rt_ppm
     ]
 ]
 
@@ -2473,6 +2482,7 @@ rt_is_host(r): nm [
     if(_): {nm = "terminal_sane"} [ set(r): 1 ]
     if(_): {nm = "terminal_getch"} [ set(r): 1 ]
     if(_): {nm = "terminal_size"} [ set(r): 1 ]
+    if(_): {nm = "write_stderr"} [ set(r): 1 ]
 ]
 # A host builtin call in the tree walker: nm is one and the program has
 # no function of that name (programs may shadow these, as math.su does).
@@ -2585,6 +2595,10 @@ rt_host(r): nm vals [
     if(_): {nm = "terminal_size"} [
         if(_): {rt_hn = 0} [ terminal_size(r): ]
         if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "write_stderr"} [
+        if(_): {rt_hn = 1} [ write_stderr(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
     ]
 ]
 
@@ -5938,8 +5952,31 @@ sc_firstmark(r): kids [
 # dead after compilation, so clobbering lx_tokens/ps_root is safe),
 # register its definitions, pick the entry (explicit argument, else
 # first process(_) mark, else init) and spawn it with exec semantics.
+# "USSR: load: a b c" on stderr, then the loading process fails.
+sc_load_fail(r): a b c [
+    concat(sc_lfm): "USSR: load: " a
+    concat(sc_lfm): sc_lfm b
+    concat(sc_lfm): sc_lfm c
+    concat(sc_lfm): sc_lfm "\n"
+    write_stderr(_): sc_lfm
+    rt_fatal(r):
+]
 sc_n_load(r): path pname hasp [
-    readfile(sc_lsrc): path
+    # The file is preprocessed and checked like a main file (__MAIN__ is
+    # defined in it); an error there fails the loading process.
+    pp_run(sc_lsrc): path
+    if(_): {pp_failed = 1} [
+        rt_pp_report(_):
+        sc_load_fail(_): "cannot read '" path "'"
+    ]
+    ck_run(sc_lck): sc_lsrc path pp_mapf pp_mapl
+    if(_): {sc_lck = 1} [
+        write_stderr(_): ck_msg
+        if(_): {ck_stage = 1} [
+            sc_load_fail(_): "syntax error in '" path "'"
+        ]
+        sc_load_fail(_): "compilation failed for '" path "'"
+    ]
     vec(lx_tokens): "lx_Tok"
     lx_scan(sc_ls): sc_lsrc
     set(r): {0 - 1}
@@ -5960,6 +5997,11 @@ sc_n_load(r): path pname hasp [
                 ]
             ]
             cv_findf2_i(sc_lfi): sc_lent sc_fbase
+            if(_): {sc_lfi < 0} [
+                concat(sc_lnm): "'" path
+                concat(sc_lnm): sc_lnm "' has no process entry '"
+                sc_load_fail(_): sc_lnm sc_lent "'"
+            ]
             if(_): {sc_lfi + 1 > 0} [
                 at(sc_lfd): cv_funcs sc_lfi
                 getf(sc_lnp): sc_lfd "nparams"
@@ -6146,7 +6188,7 @@ cv_driver(r): prog acnt avec [
     cv_findf2(cv_mi): "init"
     rt_has_template(rt_has_tpl): prog
     rt_has_while(rt_has_wh): prog
-    if(_): {cv_mi < 0} [
+    if(_): {cv_mi < 0 && rt_nvm = 0} [
         if(_): {rt_has_ch = 0} [
             set(cv_tree): 0
             if(_): {rt_has_tpl = 0} [ set(cv_tree): 1 ]
@@ -6201,11 +6243,15 @@ init_src(r): avec [
     at(lx_path): avec 0
     pp_run(lx_src): lx_path
     if(_): {pp_failed = 1} [
-        # ussr reports a preprocessor error on stderr and exits 1; fail(_)
-        # is the only way to stderr here, and it adds the scheduler lines.
-        if(_): {pp_msg != ""} [
-            fail(_): pp_msg
-        ]
+        rt_pp_report(_):
+        set(r): 1
+        return(_): r
+    ]
+    # Lexer, grammar and compiler errors: one "file:line: reason" line on
+    # stderr and exit status 1, before anything runs.
+    ck_run(lx_ckf): lx_src lx_path pp_mapf pp_mapl
+    if(_): {lx_ckf = 1} [
+        write_stderr(_): ck_msg
         set(r): 1
         return(_): r
     ]

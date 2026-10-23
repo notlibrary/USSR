@@ -15,9 +15,14 @@
 # with its macros expanded (strings are left alone). On an error pp_failed
 # is 1 and pp_msg holds ussr's message without its "USSR: " prefix ("" for
 # the errors ussr reports silently); nothing more is processed.
+#
+# pp_mapf/pp_mapl give, for each line of the output, the file (as ussr
+# names it: the path it was opened by) and line it came from, so parse
+# errors can be reported where ussr reports them.
 
 global(_): pp_defs pp_sdef pp_inc pp_once pp_cact pp_cse pp_ctk pp_act
 global(_): pp_out pp_failed pp_msg pp_win pp_sigp pp_xargs pp_xafter
+global(_): pp_mapf pp_mapl pp_curline
 
 # ---- bytes ----
 pp_space_p(r): b [
@@ -730,7 +735,9 @@ pp_text(r): src [
     set(r): 0
     len(pp_txn): src
     set(pp_txs): 0
+    set(pp_txline): 0
     while(_): {pp_failed = 0 && pp_txs < pp_txn} [
+        add(pp_txline): pp_txline 1
         set(pp_txe): pp_txs
         set(pp_txgo): 1
         while(_): {pp_txgo = 1 && pp_txe < pp_txn} [
@@ -739,6 +746,7 @@ pp_text(r): src [
             if(_): {pp_txb = 10} [ set(pp_txgo): 0 ]
         ]
         pp_cut(pp_txl): src pp_txs pp_txe
+        set(pp_curline): pp_txline
         pp_line(_): pp_txl
         set(pp_txs): pp_txe
     ]
@@ -755,6 +763,10 @@ pp_line(r): line [
     elif(_): {pp_act = 1} [
         pp_expand(pp_lnx): line 0
         if(_): {pp_failed = 0} [
+            len(pp_lnd): pp_inc
+            at(pp_lnfile): pp_inc {pp_lnd - 1}
+            push(_): pp_mapf pp_lnfile
+            push(_): pp_mapl pp_curline
             concat(pp_out): pp_out pp_lnx
             set(pp_lnnl): 1
             if(_): {pp_lnn > 0} [
@@ -950,6 +962,9 @@ pp_run(r): path [
     vec(pp_ctk): ""
     set(pp_act): 1
     set(pp_out): ""
+    vec(pp_mapf): ""
+    vec(pp_mapl): ""
+    set(pp_curline): 0
     set(pp_failed): 0
     set(pp_msg): ""
     set(pp_win): 0
