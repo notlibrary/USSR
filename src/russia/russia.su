@@ -27,6 +27,8 @@ global(_): ps_root rt_store rt_fdefs rt_rv rt_tn rt_xrv vm_flow cv_code
 global(_): cv_names cv_consts cv_lps cv_funcs cv_ent vm_av
 global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
+global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
+global(_): rt_conly rt_coout rt_cosrc
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -1142,6 +1144,8 @@ ps_par(r): [
 # ---------- parser: command / block / program ----------
 ps_cmd(r): [
     if(_): {ps_stop = 0} [
+        ps_at(ps_cmtk): 0
+        getf(ps_cml): ps_cmtk "line"
         ps_txt(ps_cn): 0
         ps_adv(_): 0
         set(ps_cr): ""
@@ -1167,6 +1171,7 @@ ps_cmd(r): [
                 ps_adv(_): 0
                 vec(ps_cp): ""
                 ps_cmd_params(r): ps_cn ps_cr ps_cp
+                if(_): {ps_stop = 0} [ setf(_): r "n1" ps_cml ]
             ]
         ]
     ]
@@ -3839,6 +3844,8 @@ ua_emit(r): op a b c imm [
     new(cv_in): "In" op a b c imm cv_mnemonic
     push(_): cv_code cv_in
     push(_): cv_own {0 - 1}
+    push(_): cv_iline cv_curl
+    push(_): cv_icmd cv_curc
     len(cv_el): cv_code
     sub(r): cv_el 1
 ]
@@ -4054,7 +4061,13 @@ cv_stmt_go(r): items idx m [
 cv_cmd(r): nd [
     if(_): {ps_stop = 0} [
         getf(cv_cn): nd "s1"
+        set(cv_svl): cv_curl
+        set(cv_svc): cv_curc
+        getf(cv_curl): nd "n1"
+        set(cv_curc): cv_cn
         cv_cmd_n(r): nd cv_cn
+        set(cv_curl): cv_svl
+        set(cv_curc): cv_svc
     ]
 ]
 cv_cmd_n(r): nd nm [
@@ -4885,6 +4898,302 @@ cv_inlist(r): v x [
 # functions') stores to, except names declared global in it or at the top
 # level ("*" makes all of those global). Its LOAD_VAR/STORE_VAR of a local
 # get the slot + 1 in c; c = 0 means global.
+# ---------- scope warnings (bc_scope_warnings) ----------
+# The mistakes function locals make likely, warned about on stderr after
+# compiling (never stopping it), worded exactly as ussr words them:
+#  - a function reads one of its locals before setting it;
+#  - a function sets a local it never reads while other code reads that
+#    name (a flag or result meant for the caller);
+#  - a name is read as a global but only ever set as a local.
+# A function's closing LOAD of its return variable (before RET), and the
+# LOAD after an EVAL, are not reads: ussr has neither.
+
+# 1 when name is one of function fi's parameters.
+cv_w_isparam(r): fi name [
+    set(r): 0
+    at(cwp_fd): cv_funcs fi
+    getf(cwp_prm): cwp_fd "prm"
+    len(cwp_n): cwp_prm
+    set(cwp_i): 0
+    while(_): {r = 0 && cwp_i < cwp_n} [
+        at(cwp_x): cwp_prm cwp_i
+        getf(cwp_xs): cwp_x "s1"
+        if(_): {cwp_xs = name} [ set(r): 1 ]
+        add(cwp_i): cwp_i 1
+    ]
+]
+# 1 when instruction k is a LOAD_VAR/STORE_VAR that counts as an access.
+cv_w_access(r): k [
+    set(r): 0
+    at(cwa_in): cv_code k
+    getf(cwa_op): cwa_in "op"
+    if(_): {cwa_op = 3} [ set(r): 1 ]
+    if(_): {cwa_op = 2} [
+        set(r): 1
+        # eval's result is read back after EVAL; ussr's EVAL reads it
+        # itself
+        if(_): {k > 0} [
+            at(cwa_pv): cv_code {k - 1}
+            getf(cwa_pop): cwa_pv "op"
+            if(_): {cwa_pop = 69} [ set(r): 0 ]
+        ]
+        len(cwa_n): cv_code
+        if(_): {k + 1 < cwa_n} [
+            at(cwa_nx): cv_code {k + 1}
+            getf(cwa_nop): cwa_nx "op"
+            getf(cwa_nb): cwa_nx "b"
+            at(cwa_ow): cv_own k
+            if(_): {cwa_nop = 81 && cwa_nb = 1 && cwa_ow >= 0} [
+                getf(cwa_im): cwa_in "imm"
+                at(cwa_nm): cv_names cwa_im
+                at(cwa_fd): cv_funcs cwa_ow
+                getf(cwa_ret): cwa_fd "retname"
+                if(_): {cwa_nm = cwa_ret} [ set(r): 0 ]
+            ]
+        ]
+    ]
+]
+# "file:line: warning: " for instruction k's command, or ussr's
+# "USSR compiler: warning: " when it has no line.
+cv_w_at(r): k [
+    at(cwt_l): cv_iline k
+    set(r): "USSR compiler: warning: "
+    if(_): {cwt_l > 0} [
+        ck_loc(r): cwt_l
+        concat(r): r "warning: "
+    ]
+]
+cv_w_say(r): k msg [
+    cv_w_at(cws_p): k
+    concat(cws_m): cws_p msg
+    concat(cws_m): cws_m "\n"
+    write_stderr(r): cws_m
+]
+# A vector of n zeros.
+cv_w_zeros(r): n [
+    vec(r): ""
+    set(cwz_i): 0
+    while(_): {cwz_i < n} [
+        push(_): r 0
+        add(cwz_i): cwz_i 1
+    ]
+]
+cv_warnings(r): [
+    set(r): 0
+    if(_): {cv_pall = 1} [ return(_): r ]
+    len(cw_nn): cv_names
+    len(cw_cn): cv_code
+    len(cw_fn): cv_funcs
+    # LOAD_VAR count per name, the whole program (reads of a function's
+    # own parameter excepted)
+    cv_w_zeros(cw_reads): cw_nn
+    set(cw_k): 0
+    while(_): {cw_k < cw_cn} [
+        cv_w_access(cw_ok): cw_k
+        at(cw_in): cv_code cw_k
+        getf(cw_op): cw_in "op"
+        if(_): {cw_ok = 1 && cw_op = 2} [
+            getf(cw_im): cw_in "imm"
+            at(cw_nm): cv_names cw_im
+            at(cw_ow): cv_own cw_k
+            set(cw_cnt): 1
+            if(_): {cw_ow >= 0} [
+                cv_w_isparam(cw_ip): cw_ow cw_nm
+                if(_): {cw_ip = 1} [ set(cw_cnt): 0 ]
+            ]
+            if(_): {cw_cnt = 1} [
+                at(cw_rv): cw_reads cw_im
+                set(cw_reads): cw_im {cw_rv + 1}
+            ]
+        ]
+        add(cw_k): cw_k 1
+    ]
+    # per function: locals read before set, and locals set but never read
+    set(cw_f): 0
+    while(_): {cw_f < cw_fn} [
+        at(cw_fd): cv_funcs cw_f
+        getf(cw_fname): cw_fd "name"
+        getf(cw_fret): cw_fd "retname"
+        cv_w_zeros(cw_seen): cw_nn
+        cv_w_zeros(cw_lr): cw_nn
+        cv_w_zeros(cw_fs): cw_nn
+        vec(cw_touch): ""
+        set(cw_k): 0
+        while(_): {cw_k < cw_cn} [
+            at(cw_ow): cv_own cw_k
+            cv_w_access(cw_ok): cw_k
+            at(cw_in): cv_code cw_k
+            getf(cw_c): cw_in "c"
+            if(_): {cw_ow = cw_f && cw_ok = 1 && cw_c > 0} [
+                getf(cw_op): cw_in "op"
+                getf(cw_im): cw_in "imm"
+                at(cw_nm): cv_names cw_im
+                at(cw_sn): cw_seen cw_im
+                at(cw_lrn): cw_lr cw_im
+                at(cw_fsn): cw_fs cw_im
+                if(_): {cw_sn = 0 && cw_lrn = 0 && cw_fsn = 0} [
+                    push(_): cw_touch cw_im
+                ]
+                if(_): {cw_op = 3} [
+                    if(_): {cw_fsn = 0} [ set(cw_fs): cw_im {cw_k + 1} ]
+                    if(_): {cw_sn = 0} [ set(cw_seen): cw_im 2 ]
+                ]
+                if(_): {cw_op = 2} [
+                    set(cw_lr): cw_im {cw_lrn + 1}
+                    if(_): {cw_lrn = 0 && cw_sn = 0} [
+                        set(cw_seen): cw_im 1
+                        cv_w_isparam(cw_ip): cw_f cw_nm
+                        if(_): {cw_ip = 0} [
+                            concat(cw_m): "'" cw_nm
+                            concat(cw_m): cw_m "' is read before it is set in '"
+                            concat(cw_m): cw_m cw_fname
+                            concat(cw_m): cw_m "'; it is local to '"
+                            concat(cw_m): cw_m cw_fname
+                            concat(cw_m): cw_m "' (declare global(_): "
+                            concat(cw_m): cw_m cw_nm
+                            concat(cw_m): cw_m " if it is shared)"
+                            cv_w_say(_): cw_k cw_m
+                        ]
+                    ]
+                ]
+            ]
+            add(cw_k): cw_k 1
+        ]
+        len(cw_tn): cw_touch
+        set(cw_t): 0
+        while(_): {cw_t < cw_tn} [
+            at(cw_im): cw_touch cw_t
+            at(cw_nm): cv_names cw_im
+            at(cw_fsn): cw_fs cw_im
+            at(cw_lrn): cw_lr cw_im
+            at(cw_rdn): cw_reads cw_im
+            cv_w_isparam(cw_ip): cw_f cw_nm
+            set(cw_go): 1
+            if(_): {cw_fsn = 0 || cw_lrn != 0 || cw_rdn = 0} [ set(cw_go): 0 ]
+            if(_): {cw_nm = "_" || cw_nm = cw_fret || cw_ip = 1} [ set(cw_go): 0 ]
+            if(_): {cw_go = 1} [
+                # status results of control flow and struct type names are
+                # routinely left unread
+                at(cw_sc): cv_icmd {cw_fsn - 1}
+                if(_): {cw_sc = "struct" || cw_sc = "if" || cw_sc = "elif" || cw_sc = "else"} [ set(cw_go): 0 ]
+                if(_): {cw_sc = "while" || cw_sc = "do" || cw_sc = "for" || cw_sc = "choose"} [ set(cw_go): 0 ]
+                if(_): {cw_sc = "break" || cw_sc = "continue"} [ set(cw_go): 0 ]
+            ]
+            if(_): {cw_go = 1} [
+                concat(cw_m): "'" cw_nm
+                concat(cw_m): cw_m "' is set in '"
+                concat(cw_m): cw_m cw_fname
+                concat(cw_m): cw_m "' but never read there, while other code reads it; it is local to '"
+                concat(cw_m): cw_m cw_fname
+                concat(cw_m): cw_m "' (declare global(_): "
+                concat(cw_m): cw_m cw_nm
+                concat(cw_m): cw_m " if it is shared)"
+                cv_w_say(_): {cw_fsn - 1} cw_m
+            ]
+            add(cw_t): cw_t 1
+        ]
+        add(cw_f): cw_f 1
+    ]
+    # global reads and writes, and where each name is set as a local
+    cv_w_zeros(cw_gw): cw_nn
+    cv_w_zeros(cw_gr): cw_nn
+    cv_w_zeros(cw_ls): cw_nn
+    vec(cw_lo): ""
+    set(cw_k): 0
+    while(_): {cw_k < cw_nn} [
+        push(_): cw_lo {0 - 1}
+        add(cw_k): cw_k 1
+    ]
+    set(cw_k): 0
+    while(_): {cw_k < cw_cn} [
+        cv_w_access(cw_ok): cw_k
+        if(_): {cw_ok = 1} [
+            at(cw_in): cv_code cw_k
+            getf(cw_op): cw_in "op"
+            getf(cw_im): cw_in "imm"
+            getf(cw_c): cw_in "c"
+            at(cw_ow): cv_own cw_k
+            set(cw_loc): 0
+            if(_): {cw_ow >= 0 && cw_c > 0} [ set(cw_loc): 1 ]
+            if(_): {cw_op = 2 && cw_loc = 0} [
+                at(cw_grn): cw_gr cw_im
+                if(_): {cw_grn = 0} [ set(cw_gr): cw_im {cw_k + 1} ]
+            ]
+            if(_): {cw_op = 3 && cw_loc = 0} [ set(cw_gw): cw_im 1 ]
+            if(_): {cw_op = 3 && cw_loc = 1} [
+                at(cw_lsn): cw_ls cw_im
+                if(_): {cw_lsn = 0} [
+                    set(cw_ls): cw_im {cw_k + 1}
+                    set(cw_lo): cw_im cw_ow
+                ]
+            ]
+        ]
+        add(cw_k): cw_k 1
+    ]
+    # parameters are locals set by every call
+    set(cw_f): 0
+    while(_): {cw_f < cw_fn} [
+        at(cw_fd): cv_funcs cw_f
+        getf(cw_prm): cw_fd "prm"
+        len(cw_pn): cw_prm
+        set(cw_pi): 0
+        while(_): {cw_pi < cw_pn} [
+            at(cw_px): cw_prm cw_pi
+            getf(cw_ps): cw_px "s1"
+            cv_name_i(cw_pix): cw_ps 0
+            if(_): {cw_pix >= 0} [
+                at(cw_lon): cw_lo cw_pix
+                if(_): {cw_lon < 0} [ set(cw_lo): cw_pix cw_f ]
+            ]
+            add(cw_pi): cw_pi 1
+        ]
+        add(cw_f): cw_f 1
+    ]
+    set(cw_n): 0
+    while(_): {cw_n < cw_nn} [
+        at(cw_grn): cw_gr cw_n
+        at(cw_gwn): cw_gw cw_n
+        at(cw_lon): cw_lo cw_n
+        if(_): {cw_grn > 0 && cw_gwn = 0 && cw_lon >= 0} [
+            at(cw_nm): cv_names cw_n
+            at(cw_ofd): cv_funcs cw_lon
+            getf(cw_onm): cw_ofd "name"
+            at(cw_lsn): cw_ls cw_n
+            set(cw_wl): 0
+            if(_): {cw_lsn > 0} [ at(cw_wl): cv_iline {cw_lsn - 1} ]
+            concat(cw_m): "'" cw_nm
+            concat(cw_m): cw_m "' is read as a global but only set as a local (in '"
+            concat(cw_m): cw_m cw_onm
+            if(_): {cw_wl > 0} [
+                ck_loc(cw_wloc): cw_wl
+                # ck_loc gives "file:line: "; ussr names the line alone
+                rt_w_line(cw_wls): cw_wloc
+                concat(cw_m): cw_m "', line "
+                concat(cw_m): cw_m cw_wls
+                concat(cw_m): cw_m ")"
+            ]
+            else(_): [ concat(cw_m): cw_m "')" ]
+            concat(cw_m): cw_m "; declare global(_): "
+            concat(cw_m): cw_m cw_nm
+            cv_w_say(_): {cw_grn - 1} cw_m
+        ]
+        add(cw_n): cw_n 1
+    ]
+]
+# The line number in a "file:line: " prefix.
+rt_w_line(r): loc [
+    len(rwl_n): loc
+    set(rwl_e): {rwl_n - 2}
+    set(rwl_b): rwl_e
+    set(rwl_go): 1
+    while(_): {rwl_go = 1 && rwl_b > 0} [
+        byte(rwl_c): loc {rwl_b - 1}
+        if(_): {rwl_c = 58} [ set(rwl_go): 0 ]
+        else(_): [ sub(rwl_b): rwl_b 1 ]
+    ]
+    slice(r): loc rwl_b {rwl_e - rwl_b}
+]
+
 cv_locals(r): fi entry body [
     set(r): 0
     set(cv_gall): 0
@@ -6593,6 +6902,7 @@ cv_driver(r): prog acnt avec [
     cv_progglobals(_): prog
     cv_predecl(_): prog
     cv_stmt(r): prog
+    if(_): {rt_nowarn = 0} [ cv_warnings(_): ]
     cv_findf2(cv_mi): "init"
     set(r): 0
     if(_): {cv_mi + 1 > 0} [
@@ -6634,14 +6944,191 @@ vm_init_i(r): i [
 # Reads the target program through the preprocessor, exactly as ussr reads
 # the file it is started on ($include, $define, $if..., $once). r = 1 when
 # it could not be read or parsed.
-init_src(r): avec [
+# ---------- -c and .ru ----------
+# russia.su -c script.su [program.ru] checks script.su exactly as ussr -c
+# does (same diagnostics, nothing written on error) and writes russia's
+# own .ru: a "#russia-ru 1" line, the line map's length, its file/line
+# pairs one per line, then the preprocessed source. Running a .ru skips
+# the preprocessor. (ussr's .ru is its binary bytecode; neither reads the
+# other's.)
+
+# 1 when s ends with suffix.
+rt_has_suffix(r): s suffix [
     set(r): 0
-    at(lx_path): avec 0
-    pp_run(lx_src): lx_path
+    len(rhs_n): s
+    len(rhs_k): suffix
+    if(_): {rhs_n >= rhs_k} [
+        slice(rhs_t): s {rhs_n - rhs_k} rhs_k
+        if(_): {rhs_t = suffix} [ set(r): 1 ]
+    ]
+]
+
+# input with its extension (after the last path separator) replaced by .ru
+rt_ru_default(r): input [
+    len(rrd_n): input
+    set(rrd_stem): rrd_n
+    set(rrd_i): {rrd_n - 1}
+    set(rrd_go): 1
+    while(_): {rrd_go = 1 && rrd_i >= 0} [
+        byte(rrd_b): input rrd_i
+        if(_): {rrd_b = 47 || rrd_b = 92} [ set(rrd_go): 0 ]
+        if(_): {rrd_b = 46} [
+            set(rrd_stem): rrd_i
+            set(rrd_go): 0
+        ]
+        sub(rrd_i): rrd_i 1
+    ]
+    slice(r): input 0 rrd_stem
+    concat(r): r ".ru"
+]
+
+rt_compile_only(r): cnt avec [
+    set(r): 1
+    if(_): {cnt < 2 || cnt > 3} [
+        write_stderr(_): "Usage: russia.su -c script.su [program.ru]\n"
+        return(_): r
+    ]
+    at(rco_in): avec 1
+    rt_has_suffix(rco_isru): rco_in ".ru"
+    if(_): {rco_isru = 1} [
+        concat(rco_m): "USSR compile: '" rco_in
+        concat(rco_m): rco_m "' is already bytecode\n"
+        write_stderr(_): rco_m
+        return(_): r
+    ]
+    if(_): {cnt = 3} [ at(rco_out): avec 2 ]
+    else(_): [ rt_ru_default(rco_out): rco_in ]
+    pp_run(rco_src): rco_in
     if(_): {pp_failed = 1} [
         rt_pp_report(_):
-        set(r): 1
         return(_): r
+    ]
+    ck_run(rco_ck): rco_src rco_in pp_mapf pp_mapl
+    if(_): {rco_ck = 1} [
+        write_stderr(_): ck_msg
+        concat(rco_m2): "USSR compile: '" rco_out
+        concat(rco_m2): rco_m2 "' was not written\n"
+        write_stderr(_): rco_m2
+        return(_): r
+    ]
+    vec(lx_tokens): "lx_Tok"
+    lx_scan(rco_ls): rco_src
+    if(_): {rco_ls = 0} [ ps_parse(rco_ls): rco_src ]
+    if(_): {rco_ls != 0} [ return(_): r ]
+    set(rt_cosrc): rco_src
+    set(rt_coout): rco_out
+    set(r): 0
+]
+# Write the checked program (rt_cosrc, line map pp_mapf/pp_mapl) to
+# rt_coout as a russia .ru.
+rt_conly_write(r): [
+    len(rco_n): pp_mapl
+    encode(rco_ns): rco_n
+    concat(rco_t): "#russia-ru 1\n" rco_ns
+    concat(rco_t): rco_t "\n"
+    set(rco_i): 0
+    while(_): {rco_i < rco_n} [
+        at(rco_f): pp_mapf rco_i
+        at(rco_l): pp_mapl rco_i
+        encode(rco_ls): rco_l
+        concat(rco_t): rco_t rco_f
+        concat(rco_t): rco_t "\n"
+        concat(rco_t): rco_t rco_ls
+        concat(rco_t): rco_t "\n"
+        add(rco_i): rco_i 1
+    ]
+    concat(rco_t): rco_t rt_cosrc
+    writefile(rco_w): rt_coout rco_t
+    set(r): 0
+]
+
+# The next line of t from rru_at on (without its LF); moves rru_at past it.
+rt_ru_line(r): t [
+    global(_): rru_at
+    len(rrl_n): t
+    set(rrl_j): rru_at
+    set(rrl_go): 1
+    while(_): {rrl_go = 1 && rrl_j < rrl_n} [
+        byte(rrl_b): t rrl_j
+        if(_): {rrl_b = 10} [ set(rrl_go): 0 ]
+        else(_): [ add(rrl_j): rrl_j 1 ]
+    ]
+    slice(r): t rru_at {rrl_j - rru_at}
+    set(rru_at): {rrl_j + 1}
+]
+
+# A russia .ru file's source, with pp_mapf/pp_mapl set from its line map;
+# null (after reporting why) when it cannot be read.
+rt_ru_read(r): path [
+    global(_): rru_at
+    set(r): null
+    file_exists(rr_ex): path
+    if(_): {rr_ex = false} [
+        concat(rr_m): "USSR: cannot open '" path
+        concat(rr_m): rr_m "'\n"
+        write_stderr(_): rr_m
+        return(_): r
+    ]
+    readfile(rr_t): path
+    set(rru_at): 0
+    rt_ru_line(rr_h): rr_t
+    if(_): {rr_h != "#russia-ru 1"} [
+        concat(rr_m2): "USSR: '" path
+        concat(rr_m2): rr_m2 "': not a russia.su bytecode file (bad signature)\n"
+        write_stderr(_): rr_m2
+        return(_): r
+    ]
+    rt_ru_line(rr_ns): rr_t
+    decode(rr_n): rr_ns
+    vec(pp_mapf): ""
+    vec(pp_mapl): ""
+    set(rr_i): 0
+    while(_): {rr_i < rr_n} [
+        rt_ru_line(rr_f): rr_t
+        rt_ru_line(rr_ls): rr_t
+        decode(rr_l): rr_ls
+        push(_): pp_mapf rr_f
+        push(_): pp_mapl rr_l
+        add(rr_i): rr_i 1
+    ]
+    len(rr_tn): rr_t
+    set(r): ""
+    if(_): {rru_at < rr_tn} [ slice(r): rr_t rru_at {rr_tn - rru_at} ]
+]
+
+init_src(r): avec [
+    set(r): 0
+    set(rt_nowarn): 0
+    set(rt_eflag): 0
+    at(lx_path): avec 0
+    rt_has_suffix(lx_isru): lx_path ".ru"
+    # -e code [args...]: run code as ussr -e does (no preprocessor, named
+    # "<command line>")
+    if(_): {lx_path = "-e"} [
+        set(rt_eflag): 1
+        set(lx_isru): 2
+        set(lx_src): ""
+        len(lx_ac): avec
+        if(_): {lx_ac > 1} [ at(lx_src): avec 1 ]
+        set(lx_path): "<command line>"
+        vec(pp_mapf): ""
+        vec(pp_mapl): ""
+    ]
+    if(_): {lx_isru = 1} [
+        set(rt_nowarn): 1
+        rt_ru_read(lx_src): lx_path
+        if(_): {lx_src = null} [
+            set(r): 1
+            return(_): r
+        ]
+    ]
+    if(_): {lx_isru = 0} [
+        pp_run(lx_src): lx_path
+        if(_): {pp_failed = 1} [
+            rt_pp_report(_):
+            set(r): 1
+            return(_): r
+        ]
     ]
     # Lexer, grammar and compiler errors: one "file:line: reason" line on
     # stderr and exit status 1, before anything runs.
@@ -6681,11 +7168,20 @@ init(ret): arg_cnt arg_vec [
     ]
     struct(lx_Tok): "kind:number" "text:string" "line:number"
     set(ps_nddef): 0
+    set(rt_conly): 0
+    if(_): {arg_cnt > 0} [
+        at(init_c): arg_vec 0
+        if(_): {init_c = "-c"} [
+            rt_compile_only(init_cst): arg_cnt arg_vec
+            if(_): {init_cst != 0} [ return(_): 1 ]
+            set(rt_conly): 1
+        ]
+    ]
     set(rt_repl): 0
     if(_): {arg_cnt = 0} [
         set(rt_repl): 1
     ]
-    if(_): {rt_repl = 0} [
+    if(_): {rt_repl = 0 && rt_conly = 0} [
         init_src(init_st): arg_vec
         if(_): {init_st = 1} [
             return(_): 1
@@ -6701,6 +7197,10 @@ init(ret): arg_cnt arg_vec [
     vec(cv_names): ""
     vec(cv_funcs): "cv_fd2"
     vec(cv_own): ""
+    vec(cv_iline): ""
+    vec(cv_icmd): ""
+    set(cv_curl): 0
+    set(cv_curc): ""
     vec(rt_hash): "rt_sp"
     vec(cv_pglob): ""
     set(cv_pall): 0
@@ -6740,11 +7240,21 @@ init(ret): arg_cnt arg_vec [
     set(sc_tick): 0
     set(vm_suspend): 0
     set(vm_qleft): 0
+    if(_): {rt_conly = 1} [
+        set(rt_nowarn): 0
+        cv_progglobals(_): ps_root
+        cv_predecl(_): ps_root
+        cv_stmt(_): ps_root
+        cv_warnings(_):
+        rt_conly_write(_):
+        return(_): 0
+    ]
     if(_): {rt_repl = 1} [
         repl(_): 
         return(_): 0
     ]
     at(ps_mode): arg_vec {arg_cnt - 1}
+    if(_): {rt_eflag = 1} [ set(ps_mode): "" ]
     if(_): {ps_mode = "tokens"} [
         set(lx_i): 0
         len(lx_cnt): lx_tokens
@@ -6770,6 +7280,8 @@ init(ret): arg_cnt arg_vec [
         # host convention where programs see only their own arguments.
         vec(rt_argv): ""
         set(rt_ai): 1
+        # -e: the code and the argument after it are not the program's
+        if(_): {rt_eflag = 1} [ set(rt_ai): 3 ]
         set(rt_aend): arg_cnt
         if(_): {rt_md > 0} [
             set(rt_aend): {arg_cnt - 1}
@@ -6795,20 +7307,36 @@ init(ret): arg_cnt arg_vec [
 
 # ---------- REPL ----------
 # Read-eval-print loop, entered when russia.su itself runs with no target
-# program (./ussr russia.su). Each line is read through the host one at a
-# time (Enter-terminated, no Ctrl-D needed): a nested eval runs head -1
-# and captures its stdout through the chain machinery into a scratch file.
-# Input accumulates until square brackets balance (string-aware, like the
-# host REPL), then the buffered command list is lexed, parsed and executed
-# by the tree walker against the persistent rt_store/rt_fdefs, so
-# variables and function definitions survive between lines. Ctrl-D (an
-# empty read) exits the loop.
+# program (./ussr russia.su), like ussr's run_repl. Lines are read from
+# standard input a byte at a time (terminal_getch, -1 at end of input).
+# Empty lines are skipped and not counted; input accumulates until square
+# brackets balance (string-aware), then the entry is checked like a file
+# named <stdin> (its lines numbered from the entry's first one), reported
+# as ussr reports it, and otherwise run by the tree walker against the
+# persistent rt_store/rt_fdefs, so variables and function definitions
+# survive between entries. End of input exits the loop.
 
+# One line without its line ending; sets rp_eof at end of input.
 repl_rd(r): [
-    set(rrd_h1): null
-    set(rrd_src): "head(rrd_h1): \"-1\"\nchain(_):\nfile(_): \"/tmp/ussr_repl_line.txt\"\n"
-    eval(rrd_ok): rrd_src
-    readfile(r): "/tmp/ussr_repl_line.txt"
+    global(_): rp_eof
+    set(r): ""
+    set(rrd_go): 1
+    set(rrd_any): 0
+    while(_): {rrd_go = 1} [
+        terminal_getch(rrd_c):
+        if(_): {rrd_c < 0} [ set(rrd_go): 0 ]
+        if(_): {rrd_c = 10} [
+            set(rrd_go): 0
+            set(rrd_any): 1
+        ]
+        if(_): {rrd_c > 0 && rrd_c != 10 && rrd_c != 13} [
+            set(rrd_any): 1
+            chr(rrd_ch): rrd_c
+            concat(r): r rrd_ch
+        ]
+        if(_): {rrd_c = 13} [ set(rrd_any): 1 ]
+    ]
+    if(_): {rrd_any = 0} [ set(rp_eof): 1 ]
 ]
 
 repl_dep(r): s d [
@@ -6853,14 +7381,36 @@ repl_dep(r): s d [
     set(r): rd_d
 ]
 
-repl_exec(r): src [
-    vec(lx_tokens): "lx_Tok"
-    lx_scan(rex_ls): src
-    if(_): {rex_ls = 0} [
-        ps_parse(rex_ps): src
-        if(_): {rex_ps = 0} [
-            getf(rex_kids): ps_root "kids"
-            ex_block_h(_): rex_kids 0
+repl_exec(r): src first [
+    vec(rex_mf): ""
+    vec(rex_ml): ""
+    len(rex_n): src
+    set(rex_i): 0
+    set(rex_ln): first
+    push(_): rex_mf "<stdin>"
+    push(_): rex_ml rex_ln
+    while(_): {rex_i < rex_n} [
+        byte(rex_b): src rex_i
+        if(_): {rex_b = 10} [
+            add(rex_ln): rex_ln 1
+            push(_): rex_mf "<stdin>"
+            push(_): rex_ml rex_ln
+        ]
+        add(rex_i): rex_i 1
+    ]
+    ck_run(rex_ck): src "<stdin>" rex_mf rex_ml
+    if(_): {rex_ck = 1} [
+        write_stderr(_): ck_msg
+    ]
+    if(_): {rex_ck = 0} [
+        vec(lx_tokens): "lx_Tok"
+        lx_scan(rex_ls): src
+        if(_): {rex_ls = 0} [
+            ps_parse(rex_ps): src
+            if(_): {rex_ps = 0} [
+                getf(rex_kids): ps_root "kids"
+                ex_block_h(_): rex_kids 0
+            ]
         ]
     ]
     set(rt_flow): 0
@@ -6868,6 +7418,7 @@ repl_exec(r): src [
 ]
 
 repl(r): [
+    global(_): rp_eof
     print(_): "USSR Unified Shell Script REPL"
     print(_): "USSR v0.4"
     print(_): "Enter a command list or press Ctrl-D to exit."
@@ -6875,6 +7426,8 @@ repl(r): [
     set(rp_buf): ""
     set(rp_dep): 0
     set(rp_eof): 0
+    set(rp_lines): 0
+    set(rp_first): 1
     while(_): {rp_eof = 0} [
         if(_): {rp_dep = 0} [
             template(_): "STR" "ussr> "
@@ -6884,14 +7437,15 @@ repl(r): [
         ]
         repl_rd(rp_line): 
         len(rp_ll): rp_line
-        if(_): {rp_ll = 0} [
-            set(rp_eof): 1
-        ]
-        if(_): {rp_eof = 0} [
+        if(_): {rp_eof = 0 && rp_ll > 0} [
+            add(rp_lines): rp_lines 1
+            len(rp_bl): rp_buf
+            if(_): {rp_bl = 0} [ set(rp_first): rp_lines ]
             concat(rp_buf): rp_buf rp_line
+            concat(rp_buf): rp_buf "\n"
             repl_dep(rp_dep): rp_line rp_dep
             if(_): {rp_dep < 1} [
-                repl_exec(_): rp_buf
+                repl_exec(_): rp_buf rp_first
                 set(rp_buf): ""
                 set(rp_dep): 0
             ]

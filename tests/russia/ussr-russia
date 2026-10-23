@@ -10,6 +10,6 @@ host=${USSR_HOST:-./ussr}
 [ -x "$host" ] || host=./ussr.exe
 russia=$here/../../src/russia/russia.su
 if command -v timeout >/dev/null 2>&1; then
-    exec timeout --foreground "${USSR_RUSSIA_TIMEOUT:-30}" "$host" "$russia" "$@"
+    exec timeout --foreground "${USSR_RUSSIA_TIMEOUT:-30}" "$host" -- "$russia" "$@"
 fi
-exec "$host" "$russia" "$@"
+exec "$host" -- "$russia" "$@"
