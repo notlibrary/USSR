@@ -63,9 +63,10 @@ suite() {
     # --- suite runners: each prints PASS/FAIL lines and exits nonzero on
     # failure. The UUASM runner already compares russia with the C VM.
     # They run at the same time (each in its own temporary directory),
-    # alongside the standalone scripts below, and are reported in this
-    # order once they are all done.
+    # alongside the standalone scripts below, which report as they go;
+    # each runner is reported, in this order, as soon as it is done.
     runners=
+    pids=
     n=0
     for runner in tests/ru/run_ru_tests.sh tests/mbl/run_mbl_tests.sh \
                   tests/russia/run_uuasm_tests.sh tests/vectors/run_vector_tests.sh \
@@ -79,11 +80,12 @@ suite() {
         runners="$runners $runner"
         { sh "$runner" "$ussr" >"$tmp/runner$n.out" 2>&1
           echo $? >"$tmp/runner$n.status"; } &
+        pids="$pids $!"
     done
+    [ "$n" -gt 0 ] &&
+        echo "($n suite runners started in the background; standalone scripts first)"
 
-    # --- standalone scripts against tests/expected/ (their PASS/FAIL
-    # lines are held back until the runners are reported)
-    exec 3>&1 >"$tmp/standalone.log"
+    # --- standalone scripts against tests/expected/
     # Not checked here: network tests (need sockets and a free port), chain.su
     # and script.su (output of the host's ps; chaining is POSIX-only), and the
     # quine attempts in tests/quines (none of them is a quine yet).
@@ -115,12 +117,14 @@ suite() {
             bad "$f" "$(tr -d '\r' <"$want" | diff - "$tmp/got" | head -n 40)"
         fi
     done
-    exec 1>&3 3>&-
 
-    wait
+    [ "$n" -gt 0 ] && echo "(waiting for the suite runners)"
     n=0
+    set -- $pids
     for runner in $runners; do
         n=$((n + 1))
+        wait "$1"
+        shift
         if [ "$(cat "$tmp/runner$n.status")" = 0 ] &&
            ! grep -q '^FAIL' "$tmp/runner$n.out"; then
             ok "$runner ($(tail -n 1 "$tmp/runner$n.out"))"
@@ -129,7 +133,6 @@ suite() {
 $(tail -n 1 "$tmp/runner$n.out")"
         fi
     done
-    cat "$tmp/standalone.log"
 
     [ "$update" = 1 ] && return
 
