@@ -28,7 +28,8 @@ global(_): cv_names cv_consts cv_lps cv_funcs cv_ent vm_av
 global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
-global(_): rt_conly rt_coout rt_cosrc rt_crctab
+global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
+global(_): rt_hint cv_gcache
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -1423,24 +1424,35 @@ ps_parse(r): src [
 rt_find_i(r): nm i [
     len(rt_fl): rt_store
     set(r): {0 - 1}
-    if(_): {i < rt_fl} [
-        at(rt_fp): rt_store i
+    set(rt_fj): i
+    while(_): {r < 0 && rt_fj < rt_fl} [
+        at(rt_fp): rt_store rt_fj
         getf(rt_fn): rt_fp "n"
-        set(rt_fok): 0
-        if(_): {rt_fn = nm} [
-            set(rt_fok): 1
-        ]
-        if(_): {rt_fok = 1} [
-            set(r): i
-        ]
-        if(_): {rt_fok = 0} [
-            add(rt_fi2): i 1
-            rt_find_i(r): nm rt_fi2
-        ]
+        if(_): {rt_fn = nm} [ set(r): rt_fj ]
+        add(rt_fj): rt_fj 1
     ]
 ]
+# nm's index in rt_store, or -1. With rt_hint set (the VM's current
+# instruction) the slot that instruction found last time is tried first;
+# it is checked by name, so a different process's store or a moved entry
+# only costs the full search.
 rt_find(r): nm [
-    rt_find_i(r): nm 0
+    set(r): {0 - 1}
+    set(rfh_k): rt_hint
+    set(rt_hint): {0 - 1}
+    if(_): {rfh_k >= 0} [
+        at(rfh_c): cv_gcache rfh_k
+        len(rfh_n): rt_store
+        if(_): {rfh_c >= 0 && rfh_c < rfh_n} [
+            at(rfh_e): rt_store rfh_c
+            getf(rfh_nm): rfh_e "n"
+            if(_): {rfh_nm = nm} [ set(r): rfh_c ]
+        ]
+    ]
+    if(_): {r < 0} [
+        rt_find_i(r): nm 0
+        if(_): {rfh_k >= 0 && r >= 0} [ set(cv_gcache): rfh_k r ]
+    ]
 ]
 rt_write(r): nm val [
     rt_find(rt_wi): nm
@@ -3856,6 +3868,7 @@ ua_emit(r): op a b c imm [
     push(_): cv_own {0 - 1}
     push(_): cv_iline cv_curl
     push(_): cv_icmd cv_curc
+    push(_): cv_gcache {0 - 1}
     len(cv_el): cv_code
     sub(r): cv_el 1
 ]
@@ -3863,31 +3876,64 @@ cv_emit(r): op a b c imm [
     ua_to_vm(cv_vmop): op
     ua_emit(r): cv_vmop a b c imm
 ]
-cv_name_i(r): s i [
-    len(cv_nl): cv_names
+# Name and function lookups go through 1024-bucket hash tables (vectors
+# of index vectors, in insertion order), so the first match is the one a
+# linear scan would find.
+rt_shash(r): s [
+    set(r): 0
+    len(rsh_n): s
+    set(rsh_i): 0
+    while(_): {rsh_i < rsh_n} [
+        byte(rsh_b): s rsh_i
+        set(r): {((r * 31) + rsh_b) & 1048575}
+        add(rsh_i): rsh_i 1
+    ]
+    set(r): {r & 1023}
+]
+# 1024 empty buckets
+rt_hbuckets(r): [
+    vec(r): ""
+    set(rhb_i): 0
+    while(_): {rhb_i < 1024} [
+        vec(rhb_b): ""
+        push(_): r rhb_b
+        add(rhb_i): rhb_i 1
+    ]
+]
+# s's index in cv_names, or -1
+cv_name_find(r): s [
     set(r): {0 - 1}
-    if(_): {i < cv_nl} [
-        at(cv_nx): cv_names i
-        set(cv_nok): 0
-        if(_): {cv_nx = s} [
-            set(cv_nok): 1
-        ]
-        if(_): {cv_nok = 1} [
-            set(r): i
-        ]
-        if(_): {cv_nok = 0} [
-            add(cv_ni2): i 1
-            cv_name_i(r): s cv_ni2
-        ]
+    rt_shash(cnf_h): s
+    at(cnf_b): cv_nhash cnf_h
+    len(cnf_n): cnf_b
+    set(cnf_i): 0
+    while(_): {r < 0 && cnf_i < cnf_n} [
+        at(cnf_x): cnf_b cnf_i
+        at(cnf_s): cv_names cnf_x
+        if(_): {cnf_s = s} [ set(r): cnf_x ]
+        add(cnf_i): cnf_i 1
     ]
 ]
 cv_name(r): s [
-    cv_name_i(r): s 0
+    cv_name_find(r): s
     if(_): {r < 0} [
         push(_): cv_names s
         len(cv_nj): cv_names
         sub(r): cv_nj 1
+        rt_shash(cv_nh): s
+        at(cv_nb): cv_nhash cv_nh
+        push(_): cv_nb r
     ]
+]
+# Add function record fd (its name set) to cv_funcs.
+cv_addfunc(r): fd [
+    push(_): cv_funcs fd
+    len(caf_n): cv_funcs
+    getf(caf_nm): fd "name"
+    rt_shash(caf_h): caf_nm
+    at(caf_b): cv_fhash caf_h
+    push(_): caf_b {caf_n - 1}
+    set(r): {caf_n - 1}
 ]
 cv_const(r): v [
     push(_): cv_consts v
@@ -4654,27 +4700,24 @@ cv_return(r): nd [
 ]
 
 # ---- definitions and calls ----
-cv_findf2_i(r): nm i [
-    len(cv_ffl): cv_funcs
-    set(r): {0 - 1}
-    if(_): {i < cv_ffl} [
-        at(cv_ffp): cv_funcs i
-        getf(cv_ffn): cv_ffp "name"
-        set(cv_ffok): 0
-        if(_): {cv_ffn = nm} [
-            set(cv_ffok): 1
-        ]
-        if(_): {cv_ffok = 1} [
-            set(r): i
-        ]
-        if(_): {cv_ffok = 0} [
-            add(cv_ffi2): i 1
-            cv_findf2_i(r): nm cv_ffi2
-        ]
-    ]
-]
+# nm's first index in cv_funcs, or -1
 cv_findf2(r): nm [
     cv_findf2_i(r): nm 0
+]
+# nm's first index in cv_funcs from i on, or -1
+cv_findf2_i(r): nm i [
+    set(r): {0 - 1}
+    rt_shash(cff_h): nm
+    at(cff_b): cv_fhash cff_h
+    len(cff_n): cff_b
+    set(cff_i): 0
+    while(_): {r < 0 && cff_i < cff_n} [
+        at(cff_x): cff_b cff_i
+        at(cff_fd): cv_funcs cff_x
+        getf(cff_nm): cff_fd "name"
+        if(_): {cff_nm = nm && cff_x >= i} [ set(r): cff_x ]
+        add(cff_i): cff_i 1
+    ]
 ]
 # 1 when the compiler handles nm itself (a builtin or control command),
 # 0 when nm is a user function call or definition.
@@ -4814,7 +4857,7 @@ cv_predecl(r): prog [
                         add(cv_pdj): cv_pdj 1
                     ]
                     setf(_): cv_pdfd "prm" cv_pdprm
-                    push(_): cv_funcs cv_pdfd
+                    cv_addfunc(_): cv_pdfd
                 ]
             ]
         ]
@@ -5202,7 +5245,7 @@ cv_warnings(r): [
         while(_): {cw_pi < cw_pn} [
             at(cw_px): cw_prm cw_pi
             getf(cw_ps): cw_px "s1"
-            cv_name_i(cw_pix): cw_ps 0
+            cv_name_find(cw_pix): cw_ps
             if(_): {cw_pix >= 0} [
                 at(cw_lon): cw_lo cw_pix
                 if(_): {cw_lon < 0} [ set(cw_lo): cw_pix cw_f ]
@@ -5337,7 +5380,7 @@ cv_regdef_i(r): nd prm i blim [
             vec(cv_fdlocs): ""
             new(cv_fd): "cv_fd2" "" 0 0 "" prm cv_fdlocs
             setf(_): cv_fd "name" cv_nm5
-            push(_): cv_funcs cv_fd
+            cv_addfunc(_): cv_fd
         ]
         if(_): {cv_rfi + 1 > 0} [
             at(cv_fd): cv_funcs cv_rfi
@@ -5688,7 +5731,7 @@ vm_alias2(r): rnm crt sv [
 ]
 vm_step(r): cur op [
     set(r): 0
-    ua_to_bootstrap(vm_backend_opcode): op
+    at(vm_backend_opcode): rt_bopt op
     if(_): {vm_backend_opcode < 0} [
         print(_): "UUASM opcode has no bootstrap VM mapping"
         set(vm_flow): 1
@@ -5702,7 +5745,7 @@ vm_step(r): cur op [
         vm_setreg(_): vm_d vm_cv
     ]
     # LOAD_VAR/STORE_VAR: c > 0 is local slot c - 1 of the current call
-    if(_): {op = 2} [
+    elif(_): {op = 2} [
         getf(vm_nx): cur "imm"
         getf(vm_d2): cur "a"
         getf(vm_lc): cur "c"
@@ -5718,6 +5761,7 @@ vm_step(r): cur op [
         if(_): {vm_lc = 0} [
             at(vm_nm3): cv_names vm_nx
             set(rt_undef): 0
+            set(rt_hint): vm_ip
             rt_read(vm_rv2): vm_nm3
             getf(vm_lds): cur "b"
             if(_): {vm_lds = 1} [
@@ -5728,7 +5772,7 @@ vm_step(r): cur op [
         ]
         vm_setreg(_): vm_d2 vm_rv2
     ]
-    if(_): {op = 3} [
+    elif(_): {op = 3} [
         getf(vm_nx2): cur "imm"
         getf(vm_s): cur "a"
         getf(vm_sc): cur "c"
@@ -5743,10 +5787,11 @@ vm_step(r): cur op [
         ]
         if(_): {vm_sc = 0} [
             at(vm_nm4): cv_names vm_nx2
+            set(rt_hint): vm_ip
             rt_write(_): vm_nm4 vm_rv3
         ]
     ]
-    if(_): {op = 4} [
+    elif(_): {op = 4} [
         getf(vm_na): cur "a"
         getf(vm_nb): cur "b"
         getf(vm_nc): cur "c"
@@ -5767,7 +5812,7 @@ vm_step(r): cur op [
             vm_reg(rt_na5): vm_i5 ]
         vm_native(r): vm_nm5 vm_nc vm_nb
     ]
-    if(_): {op = 5} [
+    elif(_): {op = 5} [
         getf(vm_fi): cur "imm"
         getf(vm_ab): cur "a"
         getf(vm_bc): cur "b"
@@ -5803,7 +5848,7 @@ vm_step(r): cur op [
     ]
     # RET: b = 1 returns register a's value in register 31, where the
     # caller's STORE_VAR picks it up; the frame and its locals go away.
-    if(_): {op = 6} [
+    elif(_): {op = 6} [
         getf(vm_ra): cur "a"
         vm_reg(rt_rv): vm_ra
         # Pop the frame too: CALL pushes one, so a frame left behind
@@ -5824,7 +5869,7 @@ vm_step(r): cur op [
     ]
     # EVAL: compile the source onto the end of the code and enter it
     # like a call (an empty frame, no result); its RET comes back here.
-    if(_): {op = 30} [
+    elif(_): {op = 30} [
         getf(vm_ea): cur "a"
         vm_reg(vm_esrc): vm_ea
         rt_eval_parse(_): vm_esrc
@@ -5857,7 +5902,7 @@ vm_step(r): cur op [
         set(vm_ip): {vm_eent - 1}
     ]
     # LOAD_HASH / STORE_HASH: the hash every process shares
-    if(_): {op = 31} [
+    elif(_): {op = 31} [
         getf(vm_hx): cur "imm"
         getf(vm_ha): cur "a"
         at(vm_hnm): cv_names vm_hx
@@ -5880,19 +5925,19 @@ vm_step(r): cur op [
         getf(vm_hv): vm_he2 "v"
         vm_setreg(_): vm_ha vm_hv
     ]
-    if(_): {op = 32} [
+    elif(_): {op = 32} [
         getf(vm_hx2): cur "imm"
         getf(vm_ha2): cur "a"
         at(vm_hnm2): cv_names vm_hx2
         vm_reg(vm_hv2): vm_ha2
         sc_store_put(_): rt_hash vm_hnm2 vm_hv2
     ]
-    if(_): {op = 7} [
+    elif(_): {op = 7} [
         getf(vm_jt): cur "imm"
         sub(vm_jt2): vm_jt 1
         set(vm_ip): vm_jt2
     ]
-    if(_): {op = 8} [
+    elif(_): {op = 8} [
         getf(vm_ta): cur "a"
         getf(vm_tt): cur "imm"
         vm_reg(vm_tv): vm_ta
@@ -5901,7 +5946,7 @@ vm_step(r): cur op [
             set(vm_ip): vm_tt2
         ]
     ]
-    if(_): {op = 9} [
+    elif(_): {op = 9} [
         getf(vm_fa): cur "a"
         getf(vm_ft): cur "imm"
         vm_reg(vm_fv): vm_fa
@@ -5910,7 +5955,7 @@ vm_step(r): cur op [
             set(vm_ip): vm_ft2
         ]
     ]
-    if(_): {op = 10} [
+    elif(_): {op = 10} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5919,7 +5964,7 @@ vm_step(r): cur op [
         add(vm_vr): vm_vb vm_vc
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 11} [
+    elif(_): {op = 11} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5928,7 +5973,7 @@ vm_step(r): cur op [
         sub(vm_vr): vm_vb vm_vc
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 12} [
+    elif(_): {op = 12} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5937,7 +5982,7 @@ vm_step(r): cur op [
         mul(vm_vr): vm_vb vm_vc
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 13} [
+    elif(_): {op = 13} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_vc2): cur "c"
@@ -5946,7 +5991,7 @@ vm_step(r): cur op [
         div(vm_vr): vm_vb2 vm_vc3
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 14} [
+    elif(_): {op = 14} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc3): cur "c"
@@ -5955,7 +6000,7 @@ vm_step(r): cur op [
         mod(vm_vr): vm_vb3 vm_vc4
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 16} [
+    elif(_): {op = 16} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5964,7 +6009,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb = vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 17} [
+    elif(_): {op = 17} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5973,7 +6018,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb != vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 18} [
+    elif(_): {op = 18} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5982,7 +6027,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb < vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 19} [
+    elif(_): {op = 19} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -5991,7 +6036,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb <= vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 20} [
+    elif(_): {op = 20} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6000,7 +6045,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb > vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 21} [
+    elif(_): {op = 21} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6009,7 +6054,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb >= vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 22} [
+    elif(_): {op = 22} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6018,7 +6063,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb && vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 23} [
+    elif(_): {op = 23} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6027,7 +6072,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb || vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 24} [
+    elif(_): {op = 24} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6036,7 +6081,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb << vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 25} [
+    elif(_): {op = 25} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6045,7 +6090,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb >> vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 26} [
+    elif(_): {op = 26} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6054,7 +6099,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb ^ vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 27} [
+    elif(_): {op = 27} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6063,7 +6108,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb & vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 28} [
+    elif(_): {op = 28} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
@@ -6072,14 +6117,14 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb | vm_vc}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 29} [
+    elif(_): {op = 29} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         vm_reg(vm_vb): vm_xb
         set(vm_vr): {vm_vb = false}
         vm_setreg(_): vm_xa vm_vr
     ]
-    if(_): {op = 15} [
+    elif(_): {op = 15} [
         set(vm_flow): 1
     ]
 ]
@@ -7477,9 +7522,21 @@ init(ret): arg_cnt arg_vec [
     vec(cv_consts): ""
     vec(cv_names): ""
     vec(cv_funcs): "cv_fd2"
+    rt_hbuckets(cv_nhash):
+    rt_hbuckets(cv_fhash):
+    # ua_to_bootstrap for every opcode byte, looked up per instruction
+    vec(rt_bopt): ""
+    set(init_bi): 0
+    while(_): {init_bi < 256} [
+        ua_to_bootstrap(init_bo): init_bi
+        push(_): rt_bopt init_bo
+        add(init_bi): init_bi 1
+    ]
     vec(cv_own): ""
     vec(cv_iline): ""
     vec(cv_icmd): ""
+    vec(cv_gcache): ""
+    set(rt_hint): {0 - 1}
     set(cv_curl): 0
     set(cv_curc): ""
     vec(rt_hash): "rt_sp"

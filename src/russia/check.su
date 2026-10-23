@@ -19,7 +19,7 @@
 #                              then the top level
 # This module only reports; russia.su's own parser builds what it runs.
 
-global(_): ck_toks ck_ti ck_failed ck_msg ck_name ck_mapf ck_mapl ck_sdef
+global(_): ck_toks ck_ti ck_failed ck_msg ck_name ck_mapf ck_mapl ck_sdef ck_cls
 global(_): ck_fns ck_ecmd ck_ccont ck_lasttl ck_stage
 
 # ---------- reporting ----------
@@ -153,7 +153,14 @@ ck_lex(r): text [
         byte(ck_xb): text ck_xp
         set(ck_xdone): 0
         if(_): {ck_xb = 32 || ck_xb = 9 || ck_xb = 13} [
+            # the whole run of blanks at once
             add(ck_xp): ck_xp 1
+            set(ck_xws): 1
+            while(_): {ck_xws = 1 && ck_xp < ck_xn} [
+                byte(ck_xwb): text ck_xp
+                if(_): {ck_xwb = 32 || ck_xwb = 9 || ck_xwb = 13} [ add(ck_xp): ck_xp 1 ]
+                else(_): [ set(ck_xws): 0 ]
+            ]
             set(ck_xdone): 1
         ]
         if(_): {ck_xdone = 0 && ck_xb = 35} [
@@ -177,7 +184,9 @@ ck_lex(r): text [
             set(ck_xgo2): 1
             while(_): {ck_xgo2 = 1 && ck_xq < ck_xn} [
                 byte(ck_xhb): text ck_xq
-                ck_headchar_p(ck_xgo2): ck_xhb
+                at(ck_xcl): ck_cls ck_xhb
+                set(ck_xgo2): 0
+                if(_): {(ck_xcl & 7) > 0} [ set(ck_xgo2): 1 ]
                 if(_): {ck_xgo2 = 1} [ add(ck_xq): ck_xq 1 ]
             ]
             if(_): {ck_xq > ck_xp && ck_xq < ck_xn} [
@@ -221,20 +230,26 @@ ck_lex(r): text [
         ]
         # numbers: REAL is digits.digits, else INTEGER
         if(_): {ck_xdone = 0} [
-            ck_digit_p(ck_xdg): ck_xb
+            at(ck_xcl): ck_cls ck_xb
+            set(ck_xdg): 0
+            if(_): {(ck_xcl & 1) > 0} [ set(ck_xdg): 1 ]
             if(_): {ck_xdg = 1} [
                 set(ck_xq3): ck_xp
                 set(ck_xgo4): 1
                 while(_): {ck_xgo4 = 1 && ck_xq3 < ck_xn} [
                     byte(ck_xdb): text ck_xq3
-                    ck_digit_p(ck_xgo4): ck_xdb
+                    at(ck_xcl): ck_cls ck_xdb
+                    set(ck_xgo4): 0
+                    if(_): {(ck_xcl & 1) > 0} [ set(ck_xgo4): 1 ]
                     if(_): {ck_xgo4 = 1} [ add(ck_xq3): ck_xq3 1 ]
                 ]
                 set(ck_xreal): 0
                 if(_): {ck_xq3 + 1 < ck_xn} [
                     byte(ck_xdot): text ck_xq3
                     byte(ck_xd2): text {ck_xq3 + 1}
-                    ck_digit_p(ck_xd2d): ck_xd2
+                    at(ck_xcl): ck_cls ck_xd2
+                    set(ck_xd2d): 0
+                    if(_): {(ck_xcl & 1) > 0} [ set(ck_xd2d): 1 ]
                     if(_): {ck_xdot = 46 && ck_xd2d = 1} [ set(ck_xreal): 1 ]
                 ]
                 if(_): {ck_xreal = 1} [
@@ -242,7 +257,9 @@ ck_lex(r): text [
                     set(ck_xgo5): 1
                     while(_): {ck_xgo5 = 1 && ck_xq3 < ck_xn} [
                         byte(ck_xdb2): text ck_xq3
-                        ck_digit_p(ck_xgo5): ck_xdb2
+                        at(ck_xcl): ck_cls ck_xdb2
+                        set(ck_xgo5): 0
+                        if(_): {(ck_xcl & 1) > 0} [ set(ck_xgo5): 1 ]
                         if(_): {ck_xgo5 = 1} [ add(ck_xq3): ck_xq3 1 ]
                     ]
                     slice(ck_xnum): text ck_xp {ck_xq3 - ck_xp}
@@ -267,13 +284,17 @@ ck_lex(r): text [
         ]
         # identifiers and the true/false/null keywords
         if(_): {ck_xdone = 0} [
-            ck_idstart_p(ck_xid): ck_xb
+            at(ck_xcl): ck_cls ck_xb
+            set(ck_xid): 0
+            if(_): {(ck_xcl & 2) > 0} [ set(ck_xid): 1 ]
             if(_): {ck_xid = 1} [
                 set(ck_xq4): ck_xp
                 set(ck_xgo6): 1
                 while(_): {ck_xgo6 = 1 && ck_xq4 < ck_xn} [
                     byte(ck_xib): text ck_xq4
-                    ck_idchar_p(ck_xgo6): ck_xib
+                    at(ck_xcl): ck_cls ck_xib
+                    set(ck_xgo6): 0
+                    if(_): {(ck_xcl & 3) > 0} [ set(ck_xgo6): 1 ]
                     if(_): {ck_xgo6 = 1} [ add(ck_xq4): ck_xq4 1 ]
                 ]
                 slice(ck_xword): text ck_xp {ck_xq4 - ck_xp}
@@ -1663,6 +1684,18 @@ ck_run(r): text name mapf mapl [
         struct(ck_E): "op:string" "l:any" "r:any"
         struct(ck_Cmd): "name:string" "ret:string" "line:number" "args:vector"
         struct(ck_Fn): "name:string" "np:number" "prm:vector" "ret:string"
+        # byte classes for ck_lex: 1 digit, 2 identifier start
+        # [A-Za-z_], 4 the other command-head bytes [./\:-]
+        vec(ck_cls): ""
+        set(ck_ci): 0
+        while(_): {ck_ci < 256} [
+            set(ck_cc): 0
+            if(_): {ck_ci > 47 && ck_ci < 58} [ set(ck_cc): 1 ]
+            if(_): {(ck_ci > 64 && ck_ci < 91) || (ck_ci > 96 && ck_ci < 123) || ck_ci = 95} [ set(ck_cc): 2 ]
+            if(_): {ck_ci = 46 || ck_ci = 47 || ck_ci = 92 || ck_ci = 58 || ck_ci = 45} [ set(ck_cc): 4 ]
+            push(_): ck_cls ck_cc
+            add(ck_ci): ck_ci 1
+        ]
         set(ck_sdef): 1
     ]
     set(ck_failed): 0
