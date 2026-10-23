@@ -591,6 +591,17 @@ static void vm_free_values(ussr_value_t *values, size_t count)
     free(values);
 }
 
+/* strlen(text), but at most max: the bytes before any NUL, scanning no
+ * further than max (strnlen is POSIX, not ISO C). */
+static size_t vm_text_reach(const char *text, size_t max)
+{
+    size_t n = 0;
+
+    while (n < max && text[n] != '\0')
+        ++n;
+    return n;
+}
+
 /*
  * Sites are recorded as their instructions are emitted, so they are in
  * instruction order: binary search, with the linear scan kept for a
@@ -1717,7 +1728,7 @@ int vm_execute(
                             strcmp(fast_name, "byte") == 0 &&
                             r1->type == USSR_INTEGER &&
                             r1->data.integer >= 0 &&
-                            (ussr_int_t)strnlen(
+                            (ussr_int_t)vm_text_reach(
                                 text, (size_t)r1->data.integer + 1) >
                                 r1->data.integer)
                         {
@@ -1739,7 +1750,7 @@ int vm_execute(
                                  r2->data.integer >= 0 &&
                                  r1->data.integer <=
                                      INT64_MAX - r2->data.integer &&
-                                 (ussr_int_t)strnlen(
+                                 (ussr_int_t)vm_text_reach(
                                      text, (size_t)(r1->data.integer +
                                                     r2->data.integer)) ==
                                      r1->data.integer + r2->data.integer)
