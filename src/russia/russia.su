@@ -29,7 +29,7 @@ global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
 global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
-global(_): rt_hint cv_gcache
+global(_): rt_hint cv_gcache cv_nkind
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -3918,6 +3918,7 @@ cv_name(r): s [
     cv_name_find(r): s
     if(_): {r < 0} [
         push(_): cv_names s
+        push(_): cv_nkind 0
         len(cv_nj): cv_names
         sub(r): cv_nj 1
         rt_shash(cv_nh): s
@@ -5810,7 +5811,7 @@ vm_step(r): cur op [
             vm_reg(rt_na4): vm_i4 ]
         if(_): {vm_nb > 5} [ add(vm_i5): vm_na 5
             vm_reg(rt_na5): vm_i5 ]
-        vm_native(r): vm_nm5 vm_nc vm_nb
+        vm_native(r): vm_nm5 vm_nc vm_nb vm_ni
     ]
     elif(_): {op = 5} [
         getf(vm_fi): cur "imm"
@@ -6128,7 +6129,48 @@ vm_step(r): cur op [
         set(vm_flow): 1
     ]
 ]
-vm_native(r): name dst nb [
+# Which path native name takes (cached per name in cv_nkind): 1 the
+# __vset/__vget/__ext helpers, 2 a host builtin, 3 print, 4..7 the
+# vm_native_b..e chains.
+vm_native_kind(r): name [
+    set(r): 7
+    if(_): {name = "__vset" || name = "__vget" || name = "__ext"} [ set(r): 1 ]
+    else(_): [
+        rt_is_host(vnk_h): name
+        if(_): {vnk_h = 1} [ set(r): 2 ]
+        elif(_): {name = "print"} [ set(r): 3 ]
+        elif(_): {name = "add" || name = "sub" || name = "mul" || name = "div" || name = "mod" || name = "concat"} [ set(r): 4 ]
+        elif(_): {name = "push" || name = "at" || name = "len" || name = "typeof" || name = "getf" || name = "setf" || name = "vec" || name = "struct" || name = "encode" || name = "decode"} [ set(r): 5 ]
+        elif(_): {name = "new" || name = "template" || name = "scan" || name = "byte" || name = "slice" || name = "readfile" || name = "random64" || name = "time" || name = "seed_random64"} [ set(r): 6 ]
+        elif(_): {name = "open_file" || name = "close_file" || name = "write_file" || name = "read_file" || name = "set_bytes" || name = "clear_bytes"} [ set(r): 6 ]
+    ]
+]
+vm_native(r): name dst nb ni [
+    at(vm_nk): cv_nkind ni
+    if(_): {vm_nk = 0} [
+        vm_native_kind(vm_nk): name
+        set(cv_nkind): ni vm_nk
+    ]
+    if(_): {vm_nk = 4} [
+        vm_native_b(vm_nr): name dst nb
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 5} [
+        vm_native_c(vm_nr): name dst nb
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 6} [
+        vm_native_d(vm_nr): name dst nb
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 7} [
+        vm_native_e(vm_nr): name dst nb
+        vm_setreg(_): dst vm_nr
+    ]
+    else(_): [ vm_native_a(_): name dst nb vm_nk ]
+    set(r): 0
+]
+vm_native_a(r): name dst nb kind [
     set(vm_nr): 0
     # vector item access through the host's own set/get, for its checks
     # and messages
@@ -6145,7 +6187,8 @@ vm_native(r): name dst nb [
         get(vm_vgv): rt_na1 vm_vgd
         set(vm_nr): vm_vgd
     ]
-    rt_is_host(vm_ish): name
+    set(vm_ish): 0
+    if(_): {kind = 2} [ set(vm_ish): 1 ]
     if(_): {vm_ish = 1} [
         vec(vm_hv): ""
         set(vm_hi): 0
@@ -7521,6 +7564,7 @@ init(ret): arg_cnt arg_vec [
     vec(cv_code): "In"
     vec(cv_consts): ""
     vec(cv_names): ""
+    vec(cv_nkind): ""
     vec(cv_funcs): "cv_fd2"
     rt_hbuckets(cv_nhash):
     rt_hbuckets(cv_fhash):
