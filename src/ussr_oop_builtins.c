@@ -1572,6 +1572,44 @@ static int oop_do_write_file(
     return 0;
 }
 
+/* write_stderr(n): "text" -> bytes written to standard error, unchanged
+ * (no prefix, no newline added). Lets a program report errors on stderr
+ * the way ussr itself does; the self-hosted russia.su relies on it. */
+static int oop_do_write_stderr(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t text_v;
+    const char *text;
+    size_t written;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: write_stderr(n): \"text\"\n");
+        return -1;
+    }
+
+    if (oop_eval(&arguments[0], &text_v) != 0)
+        return -1;
+
+    if (!oop_expect_string(&text_v, &text))
+    {
+        fprintf(stderr, "USSR: write_stderr expects a string\n");
+        ussr_value_free(&text_v);
+        return -1;
+    }
+
+    written = fwrite(text, 1, strlen(text), stderr);
+    fflush(stderr);
+
+    ussr_value_free(&text_v);
+
+    *out_result = ussr_integer((ussr_int_t)written);
+    return 0;
+}
+
 static int oop_do_read_file(
     ussr_argument_t *arguments,
     size_t argument_count,
@@ -2590,6 +2628,8 @@ int ussr_oop_dispatch(
         status = oop_do_close_file(arguments, argument_count, out_result);
     else if (strcmp(command, "write_file") == 0)
         status = oop_do_write_file(arguments, argument_count, out_result);
+    else if (strcmp(command, "write_stderr") == 0)
+        status = oop_do_write_stderr(arguments, argument_count, out_result);
     else if (strcmp(command, "read_file") == 0)
         status = oop_do_read_file(arguments, argument_count, out_result);
     else if (strcmp(command, "read_line") == 0)

@@ -1,6 +1,10 @@
 name: CI
 
-# Builds USSR on Linux and Windows and runs every test (tests/run_all.sh).
+# Builds USSR on Linux and Windows and runs every test (tests/run_all.sh)
+# twice, side by side: with the ussr binary and with the self-hosted
+# src/russia/russia.su. A russia.su failure is a parity gap with ussr: it is
+# listed in the job summary but does not fail the job yet (the ussr pass
+# does). Once russia.su reaches parity, set USSR_RUSSIA_STRICT=1 here.
 
 on:
   push:

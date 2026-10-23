@@ -794,6 +794,9 @@ write_file(_): h "one more line\n"
 close_file(_): h
 ```
 
+`write_stderr(n): "text"` writes text to standard error exactly as given (no
+prefix, no added newline) and returns the bytes written.
+
 `read_line(s): h` returns the next line without its LF or CRLF, or `null`
 at end of file. Prefer it to scanning a whole file byte by byte: reading a
 variable copies its string, so per-byte loops over large strings are slow.

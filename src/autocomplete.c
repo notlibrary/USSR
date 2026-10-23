@@ -277,6 +277,7 @@ static const char *ac_builtin_commands[] =
     "copy_file",
     "remove_file",
     "remove_dir",
+    "write_stderr",
     NULL
 };
 

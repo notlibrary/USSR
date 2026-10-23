@@ -10,6 +10,8 @@
 #   read_file(s): h [n]                      (rest of file, or n bytes)
 #   read_line(s): h                          (next line without LF/CRLF,
 #                                             null at end of file)
+#   write_stderr(n): "text"                  (text to standard error as
+#                                             is, bytes written)
 # Directory and path primitives (0 ok / 1 failed results are non-fatal):
 #   list_dir(v): "path"     names sorted without regard to case; directory
 #                           names end in "/"; null if unreadable
