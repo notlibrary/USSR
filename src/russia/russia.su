@@ -29,7 +29,7 @@ global(_): rt_na1 rt_na2 rt_na3 rt_na4 rt_na5 rt_na0 vm_regs vm_frames
 global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
 global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
-global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui
+global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui cv_fnret
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -1195,6 +1195,8 @@ ps_cmd_params(r): nm rt pv [
     if(_): {ps_ip_k = 13} [
         set(ps_ip_m): 2
     ]
+    ps_nextcmd(ps_ip_nc): ps_ip_k
+    if(_): {ps_ip_nc = 1} [ set(ps_ip_m): 2 ]
     ps_cmd_iter(r): nm rt pv ps_ip_k ps_ip_m
 ]
 ps_cmd_iter(r): nm rt pv k mode [
@@ -1238,6 +1240,8 @@ ps_cmd_iter(r): nm rt pv k mode [
             if(_): {ps_it_k2 = 13} [
                 set(ps_it_m2): 2
             ]
+            ps_nextcmd(ps_it_nc): ps_it_k2
+            if(_): {ps_it_nc = 1} [ set(ps_it_m2): 2 ]
             # A block is the last element of a command: after one,
             # only another block (inline else) may continue it.
             if(_): {mode = 1} [
@@ -1247,6 +1251,16 @@ ps_cmd_iter(r): nm rt pv k mode [
             ]
             ps_cmd_iter(r): nm rt pv ps_it_k2 ps_it_m2
         ]
+    ]
+]
+# 1 when the current token (of kind k) starts the next command, name(:
+# a command's arguments end there even on the same line, as in ussr.
+ps_nextcmd(r): k [
+    set(r): 0
+    if(_): {k = 1} [
+        ps_at(ps_nc_t): 1
+        getf(ps_nc_k): ps_nc_t "kind"
+        if(_): {ps_nc_k = 14} [ set(r): 1 ]
     ]
 ]
 ps_block(r): [
@@ -4713,9 +4727,19 @@ cv_findlp(r): i [
 cv_return(r): nd [
     getf(cv_rk2): nd "kids"
     len(cv_rl2): cv_rk2
+    set(cv_rh): 0
     if(_): {cv_rl2 = 1} [
         at(cv_r0): cv_rk2 0
         cv_e(_): cv_r0 16
+        getf(cv_r0s): cv_r0 "s2"
+        if(_): {cv_r0s = "hash" && cv_fnret != null} [ set(cv_rh): 1 ]
+    ]
+    if(_): {cv_rh = 1} [
+        # return(_): v! (ussr): v goes to the hash under the function's
+        # return name, and the call returns the return variable as it is
+        cv_name(cv_rhi): cv_fnret
+        cv_emit(_): 32 16 0 0 cv_rhi
+        cv_emit(_): 2 16 0 0 cv_rhi
     ]
     cv_emit(_): 6 16 1 0 0
     set(r): 0
@@ -5415,7 +5439,10 @@ cv_regdef_i(r): nd prm i blim [
         setf(_): cv_fd "prm" prm
         getf(cv_rk5): nd "kids"
         at(cv_bd): cv_rk5 blim
+        set(cv_fnsave): cv_fnret
+        set(cv_fnret): cv_rt5
         cv_stmt(r): cv_bd
+        set(cv_fnret): cv_fnsave
     ]
 ]
 cv_call(r): nd fi [
@@ -6281,7 +6308,22 @@ vm_native_c(r): name dst nb [
     if(_): {name = "typeof"} [ typeof(r): rt_na0 ]
     if(_): {name = "getf"} [ getf(r): rt_na0 rt_na1 ]
     if(_): {name = "setf"} [ setf(r): rt_na0 rt_na1 rt_na2 ]
-    if(_): {name = "vec"} [ vec(r): rt_na0 ]
+    if(_): {name = "vec"} [
+        # vec(v): or vec(v): "Type", as ussr checks it
+        if(_): {nb > 1} [
+            chr(vm_vecq): 34
+            chr(vm_vecn): 10
+            concat(vm_vecm): "USSR: vec(v): [" vm_vecq
+            concat(vm_vecm): vm_vecm "ElementType"
+            concat(vm_vecm): vm_vecm vm_vecq
+            concat(vm_vecm): vm_vecm "]"
+            concat(vm_vecm): vm_vecm vm_vecn
+            write_stderr(_): vm_vecm
+            rt_fatal(_):
+        ]
+        elif(_): {nb = 0} [ vec(r): ]
+        else(_): [ vec(r): rt_na0 ]
+    ]
     if(_): {name = "struct"} [
         vm_restv(vm_stv): nb
         rt_struct_decl(r): rt_na0 vm_stv
@@ -7883,6 +7925,7 @@ init(ret): arg_cnt arg_vec [
     vec(cv_consts): ""
     vec(cv_names): ""
     vec(cv_nkind): ""
+    set(cv_fnret): null
     set(rt_gui): 0
     vec(cv_funcs): "cv_fd2"
     rt_hbuckets(cv_nhash):

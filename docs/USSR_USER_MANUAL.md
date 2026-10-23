@@ -757,7 +757,8 @@ it has just dropped a large structure.
   definition in a loaded file that reuses a main-file name is
   shadowed by the main-file version (the entry point itself is
   resolved correctly among the loaded definitions).
-- The `russia.su` bootstrap does not implement the `!`/`?` hash sigils.
+- `!`/`?` hash sigils behave the same under `russia.su`: one hash
+  shared by every process there too.
 
 ---
 
