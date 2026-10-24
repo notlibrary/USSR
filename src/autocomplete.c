@@ -282,6 +282,7 @@ static const char *ac_builtin_commands[] =
     "write_bytes",
     "text_bytes",
     "alias",
+    "try",
     "keybind",
     "keybind_match",
     "prompt",

@@ -1387,6 +1387,89 @@ static int vm_do_load(
     return 1;
 }
 
+/* try(failed): "function" args ...
+ * Calls one of the program's functions with args in a nested VM, in this
+ * process (it shares the globals), and catches its failure: failed is 1
+ * when the call failed, its error already reported, else 0. The call's
+ * result is not kept. Lets a REPL written in USSR (russia.su) carry on
+ * after an error in an entry, as ussr's own REPL does. */
+static int vm_try_call(
+    const ussr_bc_program_t *program,
+    const ussr_argument_t *av,
+    size_t argument_count,
+    ussr_value_t *out)
+{
+    const char *name;
+    size_t index;
+    size_t i;
+    size_t depth;
+    ussr_vm_t nested;
+    ussr_bc_instruction_t call;
+    int status;
+
+    if (argument_count < 1 || av[0].type != USSR_ARGUMENT_VALUE ||
+        av[0].data.value.type != USSR_STRING)
+    {
+        fprintf(stderr, "USSR: try(failed): \"function\" args ...\n");
+        return -1;
+    }
+    name = av[0].data.value.data.string;
+    for (index = 0; index < program->function_count; ++index)
+    {
+        if (strcmp(program->functions[index].name, name) == 0)
+            break;
+    }
+    if (index == program->function_count)
+    {
+        fprintf(stderr, "USSR: try: no function '%s'\n", name);
+        return -1;
+    }
+    if (program->functions[index].parameter_count != argument_count - 1 ||
+        argument_count - 1 > USSR_VM_RETURN_REG || program->code_count == 0)
+    {
+        fprintf(stderr, "USSR: try: '%s' takes %zu arguments\n", name,
+                program->functions[index].parameter_count);
+        return -1;
+    }
+    for (i = 1; i < argument_count; ++i)
+    {
+        if (av[i].type != USSR_ARGUMENT_VALUE)
+        {
+            fprintf(stderr, "USSR: try: arguments must be values\n");
+            return -1;
+        }
+    }
+
+    vm_init(&nested);
+    nested.running = 1;
+    nested.nested = 1;
+    for (i = 1; i < argument_count; ++i)
+        nested.registers[i - 1] = ussr_value_copy(&av[i].data.value);
+
+    memset(&call, 0, sizeof(call));
+    call.opcode = USSR_BC_CALL;
+    call.a = 0;
+    call.b = (uint8_t)(argument_count - 1);
+    call.c = USSR_VM_RETURN_REG;
+    call.immediate = (uint32_t)index;
+
+    /* Return straight to the program's final HALT, as init does. */
+    depth = ussr_locals_depth();
+    nested.ip = (uint32_t)(program->code_count - 1);
+    status = vm_call(&nested, program, &call);
+    if (status == 0)
+        status = vm_execute(&nested, program, 0);
+
+    /* A failure leaves the calls it was in (and any eval inside them)
+     * on the locals stack: unwind to where the call started. */
+    while (ussr_locals_depth() > depth)
+        ussr_locals_pop();
+    vm_cleanup(&nested);
+
+    *out = ussr_integer(status == USSR_VM_STATUS_DONE ? 0 : 1);
+    return 0;
+}
+
 int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program,
@@ -1924,6 +2007,13 @@ int vm_execute(
                         if (stored != NULL)
                             value = ussr_value_copy(stored);
                     }
+                }
+                /* try needs this program's functions: see vm_try_call */
+                else if (strcmp(program->strings[ins.immediate], "try") == 0)
+                {
+                    result = vm_try_call(program, av, argument_count, &value);
+                    if (result == 0)
+                        native_handled = 1;
                 }
                 /* terminal_* go through ussr_oop_dispatch: those versions
                  * also work on redirected stdin/stdout and deliver console

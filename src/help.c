@@ -49,6 +49,9 @@ static const help_entry_t g_help[] = {
     { "continue", "control", "continue(_): \"\"",
       "next iteration of the innermost loop" },
     { "return", "control", "return(_): value", "return from a function" },
+    { "try", "control", "try(failed): \"function\" arg ...",
+      "call a function; an error in it ends the call, not the program: "
+      "failed is 1 then (the error is still reported), else 0" },
 
     /* strings */
     { "concat", "strings", "concat(s): a b ...", "join strings" },

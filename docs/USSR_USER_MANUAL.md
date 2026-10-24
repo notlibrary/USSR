@@ -743,9 +743,33 @@ twice.
 
 **At run time**, an error (bad argument type, division by zero, an
 invalid VM operation, a failed `struct`/`getf`/`setf`/`push`, and so on)
-prints a message to `stderr` and halts the entire script immediately —
-there's no exception/try-catch mechanism. The process exits non-zero.
-Run-time messages do not carry a line number yet.
+prints a message to `stderr` and halts the entire script immediately.
+The process exits non-zero. Run-time messages do not carry a line number
+yet. At the REPL an error ends only the entry it happened in; variables
+and the session carry on.
+
+`try(failed): "function" arg ...` contains an error: it calls one of the
+program's functions, and an error inside that call ends the call instead
+of the program. `failed` is `1` then (the message is still printed),
+else `0`. The call's result is not kept, and whatever the function did
+before the error stays done; pass results back through globals.
+
+```
+global(_): saved
+save(r): path [
+    writefile(r): path "data"
+    set(saved): 1
+]
+init(result): c v [
+    set(saved): 0
+    try(failed): "save" "/no/such/dir/x.txt"
+    if(_): {failed = 1} [ print(_): "could not save" ]
+    set(result): 0
+]
+```
+
+`try` is not available yet in scripts run by the self-hosted
+interpreter (russia.su), which uses it itself to keep its REPL going.
 
 ---
 

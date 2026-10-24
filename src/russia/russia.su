@@ -8445,6 +8445,7 @@ repl_dep(r): s d [
 ]
 
 repl_exec(r): src first [
+    global(_): rp_pid
     vec(rex_mf): ""
     vec(rex_ml): ""
     len(rex_n): src
@@ -8471,6 +8472,8 @@ repl_exec(r): src first [
         if(_): {rex_ls = 0} [
             ps_parse(rex_ps): src
             if(_): {rex_ps = 0} [
+                # each entry that runs is a new process in ussr
+                add(rp_pid): rp_pid 1
                 # typed lines only, as in ussr's REPL
                 ps_alias(_): ps_root
                 getf(rex_kids): ps_root "kids"
@@ -8478,6 +8481,21 @@ repl_exec(r): src first [
             ]
         ]
     ]
+    set(rt_flow): 0
+    set(r): 0
+]
+
+# After an entry failed (its error already reported): ussr's two lines
+# for a failed entry, and a clean slate for the next one. rp_pid counts
+# the entries run, which is ussr's process number when no startup file
+# ran (each moscow.su is a process of its own in ussr).
+repl_failed(r): [
+    global(_): rp_pid
+    encode(rpf_n): rp_pid
+    concat(rpf_m): "USSR scheduler: process " rpf_n " (init) failed"
+    chr(rpf_nl): 10
+    concat(rpf_m): rpf_m rpf_nl "USSR VM: execution failed (status -1)"
+    write_stderr(_): rpf_m
     set(rt_flow): 0
     set(r): 0
 ]
@@ -8561,7 +8579,7 @@ repl_prompt(r): cont [
 ]
 
 repl(r): [
-    global(_): rp_eof rp_tty
+    global(_): rp_eof rp_tty rp_pid
     print(_): "USSR Unified Shell Script REPL"
     print(_): "USSR v0.4"
     print(_): "Enter a command list or press Ctrl-D to exit."
@@ -8570,6 +8588,7 @@ repl(r): [
     set(rp_dep): 0
     set(rp_eof): 0
     set(rp_lines): 0
+    set(rp_pid): 0
     set(rp_first): 1
     # terminal_raw succeeds (0) only on a terminal: there lines are read
     # in raw mode so key bindings fire as the key is pressed
@@ -8592,7 +8611,9 @@ repl(r): [
             concat(rp_buf): rp_buf "\n"
             repl_dep(rp_dep): rp_line rp_dep
             if(_): {rp_dep < 1} [
-                repl_exec(_): rp_buf rp_first
+                # an error in the entry ends the entry, not the REPL
+                try(rp_bad): "repl_exec" rp_buf rp_first
+                if(_): {rp_bad = 1} [ repl_failed(_): ]
                 set(rp_buf): ""
                 set(rp_dep): 0
             ]
