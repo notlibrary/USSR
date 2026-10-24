@@ -2002,7 +2002,8 @@ ex_cmd_n(r): nd nm [
                 push(_): rt_hv rt_hkx
                 add(rt_hki): rt_hki 1
             ]
-            rt_host(rt_hres): nm rt_hv
+            rt_host_name(rt_hnm): nd nm
+            rt_host(rt_hres): rt_hnm rt_hv
             getf(rt_hr): nd "s2"
             rt_write(_): rt_hr rt_hres
         ]
@@ -2510,6 +2511,7 @@ rt_is_host(r): nm [
     if(_): {nm = "remove_dir"} [ set(r): 1 ]
     if(_): {nm = "keybind"} [ set(r): 1 ]
     if(_): {nm = "prompt"} [ set(r): 1 ]
+    if(_): {nm = "__prompt_print"} [ set(r): 1 ]
     if(_): {nm = "help"} [ set(r): 1 ]
     if(_): {nm = "make_dir"} [ set(r): 1 ]
     if(_): {nm = "writefile"} [ set(r): 1 ]
@@ -2523,6 +2525,39 @@ rt_is_host(r): nm [
     if(_): {nm = "text_bytes"} [ set(r): 1 ]
     if(_): {nm = "write_bytes"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
+]
+# The host name to call for builtin nm at node nd: prompt(_) prints its
+# reply in ussr, so it becomes __prompt_print, which rt_prompt prints.
+rt_host_name(r): nd nm [
+    set(r): nm
+    if(_): {nm = "prompt"} [
+        getf(rhn_ret): nd "s2"
+        if(_): {rhn_ret = "_"} [ set(r): "__prompt_print" ]
+    ]
+]
+# prompt with its arguments joined by spaces, as ussr joins them;
+# __prompt_print also prints the reply (one line ending, like ussr).
+rt_prompt(r): nm vals [
+    len(rpr_n): vals
+    if(_): {rpr_n = 0} [ rt_fatal(_): ]
+    at(rpr_q): vals 0
+    set(rpr_i): 1
+    while(_): {rpr_i < rpr_n} [
+        at(rpr_a): vals rpr_i
+        concat(rpr_q): rpr_q " " rpr_a
+        add(rpr_i): rpr_i 1
+    ]
+    prompt(r): rpr_q
+    if(_): {nm = "__prompt_print"} [
+        set(rpr_p): r
+        len(rpr_l): rpr_p
+        if(_): {rpr_l > 0} [
+            sub(rpr_last): rpr_l 1
+            byte(rpr_b): rpr_p rpr_last
+            if(_): {rpr_b = 10} [ slice(rpr_p): rpr_p 0 rpr_last ]
+        ]
+        print(_): rpr_p
+    ]
 ]
 # A host builtin call in the tree walker: nm is one and the program has
 # no function of that name (programs may shadow these, as math.su does).
@@ -2539,7 +2574,7 @@ rt_host(r): nm vals [
     len(rt_hn): vals
     if(_): {rt_hn > 0} [ at(rt_ha0): vals 0 ]
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
-    if(_): {rt_hn > 2} [ rt_fatal(_): ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2613,10 +2648,8 @@ rt_host(r): nm vals [
         if(_): {rt_hn = 1} [ keybind(r): rt_ha0 ]
         if(_): {rt_hn = 2} [ keybind(r): rt_ha0 rt_ha1 ]
     ]
-    if(_): {nm = "prompt"} [
-        if(_): {rt_hn = 0} [ rt_fatal(_): ]
-        if(_): {rt_hn = 1} [ prompt(r): rt_ha0 ]
-        if(_): {rt_hn = 2} [ prompt(r): rt_ha0 rt_ha1 ]
+    if(_): {nm = "prompt" || nm = "__prompt_print"} [
+        rt_prompt(r): nm vals
     ]
     if(_): {nm = "help"} [
         if(_): {rt_hn = 0} [ help(r): ]
@@ -4248,7 +4281,10 @@ cv_cmd_n(r): nd nm [
             cv_hasblk(cv_ishb): nd
             if(_): {cv_ishf >= 0 || cv_ishb = 1} [ set(cv_ish): 0 ]
         ]
-        if(_): {cv_ish = 1} [ cv_native2(r): nd nm ]
+        if(_): {cv_ish = 1} [
+            rt_host_name(cv_hnm): nd nm
+            cv_native2(r): nd cv_hnm
+        ]
         if(_): {nm = "getf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "setf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "vec"} [ cv_native2(r): nd nm ]

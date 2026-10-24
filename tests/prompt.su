@@ -38,12 +38,13 @@ init(result): arg_count arg_values [
     chr(nl): 10
     concat(want): "That is the question." nl "Whether ’tis nobler in the \"mind\""
     check(_): "anthropic text blocks joined" answer want
+    prompt(_): "prompt(_) prints the reply"
 
     setenv(_): "USSR_AI_PROVIDER" "openai"
     setenv(_): "USSR_AI_MODEL" "test-model"
     fixture(url): "openai.json"
     setenv(_): "USSR_AI_URL" url
-    prompt(answer): "To be" "or not to be?"
+    prompt(answer): "To be" "or not" "to be?"
     check(_): "openai content, UTF-8 and surrogate pairs" answer "To be. 😀 Да"
 
     unsetenv(_): "USSR_AI_PROVIDER"
