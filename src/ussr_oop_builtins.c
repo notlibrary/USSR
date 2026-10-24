@@ -6,6 +6,7 @@
 #include "ussr_oop_builtins.h"
 #include "uno.h"
 #include "ai.h"
+#include "alias.h"
 #include "help.h"
 #include "keybind.h"
 
@@ -2890,6 +2891,127 @@ static int oop_do_keybind(
     return 0;
 }
 
+/* text as a USSR string literal, quotes included */
+static void oop_print_quoted(const char *text)
+{
+    putchar('"');
+    for (; *text != '\0'; ++text)
+    {
+        if (*text == '"' || *text == '\\')
+            putchar('\\');
+        putchar(*text);
+    }
+    putchar('"');
+}
+
+/* alias(_): "ll" "ls" "-l"   ll(_): x then runs ls(_): "-l" x
+ * alias(_): "ll" ""          remove it
+ * alias(words): "ll"         its words as a vector, or null
+ * alias(n):                  print every alias as the command that makes
+ *                            it, n = count */
+static int oop_do_alias(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t *values = NULL;
+    char error[160];
+
+    if (oop_string_arguments("alias", arguments, argument_count,
+                             &values) != 0)
+        return -1;
+
+    if (argument_count == 0)
+    {
+        size_t i;
+        const char *name;
+        const char *const *words;
+        size_t count;
+
+        for (i = 0; (name = ussr_alias_at(i, &words, &count)) != NULL; ++i)
+        {
+            size_t j;
+
+            printf("alias(_): ");
+            oop_print_quoted(name);
+            for (j = 0; j < count; ++j)
+            {
+                putchar(' ');
+                oop_print_quoted(words[j]);
+            }
+            putchar('\n');
+        }
+        fflush(stdout);
+        *out_result = ussr_integer((ussr_int_t)i);
+    }
+    else if (argument_count == 1)
+    {
+        size_t count;
+        const char *const *words =
+            ussr_alias_find(values[0].data.string, &count);
+
+        if (words == NULL)
+            *out_result = ussr_null();
+        else
+        {
+            ussr_vector_t *vector = ussr_vector_create(NULL);
+            size_t j;
+
+            if (vector == NULL)
+            {
+                oop_free_values(values, argument_count);
+                return -1;
+            }
+            for (j = 0; j < count; ++j)
+            {
+                ussr_value_t word = ussr_string(words[j]);
+                int failed = word.data.string == NULL ||
+                             ussr_vector_push(vector, word) != 0;
+
+                ussr_value_free(&word);
+                if (failed)
+                {
+                    ussr_vector_release(vector);
+                    oop_free_values(values, argument_count);
+                    return -1;
+                }
+            }
+            *out_result = ussr_vector_value(vector);
+        }
+    }
+    else
+    {
+        const char **words = malloc((argument_count - 1) * sizeof(*words));
+        size_t count = argument_count - 1;
+        size_t j;
+        int status;
+
+        if (words == NULL)
+        {
+            oop_free_values(values, argument_count);
+            return -1;
+        }
+        for (j = 0; j < count; ++j)
+            words[j] = values[j + 1].data.string;
+        /* alias(_): "ll" "" removes the alias */
+        if (count == 1 && words[0][0] == '\0')
+            count = 0;
+        status = ussr_alias_set(values[0].data.string, words, count,
+                                error, sizeof(error));
+        free(words);
+        if (status != 0)
+        {
+            fprintf(stderr, "USSR: alias: %s\n", error);
+            oop_free_values(values, argument_count);
+            return -1;
+        }
+        *out_result = ussr_integer(0);
+    }
+    oop_free_values(values, argument_count);
+    return 0;
+}
+
 /* keybind_match(line): bytes   the line bound to the key that sends
  * these bytes (a terminal's sequence, as terminal_getch delivers it), or
  * null: lets a REPL written in USSR fire key bindings. */
@@ -3111,6 +3233,8 @@ int ussr_oop_dispatch(
         status = oop_do_decode(arguments, argument_count, out_result);
     else if (strcmp(command, "keybind") == 0)
         status = oop_do_keybind(arguments, argument_count, out_result);
+    else if (strcmp(command, "alias") == 0)
+        status = oop_do_alias(arguments, argument_count, out_result);
     else if (strcmp(command, "keybind_match") == 0)
         status = oop_do_keybind_match(arguments, argument_count, out_result);
     else if (strcmp(command, "prompt") == 0)

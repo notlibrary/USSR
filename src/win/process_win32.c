@@ -290,6 +290,11 @@ int ussr_process_run(
     if (process->stdout_data != NULL)
         *process->stdout_data = NULL;
 
+    /* The child writes to the same stdout: what ussr printed so far
+     * must come out first, also when stdout is a pipe or file. */
+    fflush(stdout);
+    fflush(stderr);
+
     memset(&startup, 0, sizeof(startup));
     memset(&child, 0, sizeof(child));
     memset(&security, 0, sizeof(security));
@@ -458,6 +463,11 @@ int ussr_process_spawn(
         return -1;
 
     child->handle = NULL;
+
+    /* The child writes to the same stdout: what ussr printed so far
+     * must come out first, also when stdout is a pipe or file. */
+    fflush(stdout);
+    fflush(stderr);
 
     command_line = build_command_line(argv);
     if (command_line == NULL)

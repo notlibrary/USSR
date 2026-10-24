@@ -113,6 +113,11 @@ int ussr_process_run(
     if (process->stdout_data != NULL)
         *process->stdout_data = NULL;
 
+    /* The child writes to the same stdout: what ussr printed so far
+     * must come out first, also when stdout is a pipe or file. */
+    fflush(stdout);
+    fflush(stderr);
+
     input_file = NULL;
     output_file = NULL;
 
@@ -224,6 +229,11 @@ int ussr_process_spawn(
         return -1;
 
     child->pid = -1;
+
+    /* The child writes to the same stdout: what ussr printed so far
+     * must come out first, also when stdout is a pipe or file. */
+    fflush(stdout);
+    fflush(stderr);
 
     pid = fork();
 

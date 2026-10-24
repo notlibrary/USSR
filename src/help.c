@@ -92,6 +92,10 @@ static const help_entry_t g_help[] = {
     { "getenv", "shell", "getenv(v): name", "environment variable, or null" },
     { "setenv", "shell", "setenv(r): name value", "set an environment variable" },
     { "unsetenv", "shell", "unsetenv(r): name", "remove an environment variable" },
+    { "alias", "shell", "alias(_): \"ll\" \"ls\" \"-l\"",
+      "ll(_): x then runs ls(_): \"-l\" x; \"\" removes it, one argument "
+      "gives its words, none lists them. Expanded in lines typed at "
+      "the REPL only, never in scripts; put them in moscow.su" },
     { "keybind", "shell", "keybind(_): \"Alt+F1\" \"help(_):\"",
       "bind a REPL key to a line; \"\" unbinds; one argument reads a "
       "binding, none lists them. Keys: Ctrl/Alt(Mod)/Shift + a..z, 0..9, "

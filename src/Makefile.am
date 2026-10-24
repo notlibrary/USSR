@@ -21,6 +21,7 @@ ussr_SOURCES = \
     prng64_xrp32.c \
 	autocomplete.c \
 	keybind.c \
+	alias.c \
 	ai.c \
 	help.c \
 	completion_fs_posix.c
@@ -47,6 +48,7 @@ EXTRA_DIST = \
 	prng64_xrp32.h \
 	autocomplete.h \
 	keybind.h \
+	alias.h \
 	ai.h \
 	help.h \
     process.h \

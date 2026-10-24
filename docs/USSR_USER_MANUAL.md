@@ -101,6 +101,30 @@ sequence to `keybind_match(line): bytes`, which returns the bound line or
 `terminal_getch` delivers F-keys and Alt chords as the bytes an xterm
 sends (`ESC [1;3P` for Alt+F1, `ESC x` for Alt+x), as on Linux.
 
+**Aliases.** `alias(_): "name" "command" "word" ...` gives a command a
+short name: afterwards `name(r): x` runs `command(r): "word" ... x`, the
+alias's words in front of the call's own arguments. The command may be a
+program, a builtin or a function, and may be another alias.
+
+```
+alias(_): "ll" "ls" "-l"       # ll(_): "/tmp"  runs  ls(_): "-l" "/tmp"
+alias(_): "say" "print"
+alias(_): "ls" "ls" "-F"       # an alias may use its own name once
+alias(words): "ll"             # its words as a vector, or null
+alias(n):                      # prints every alias; n is how many
+alias(_): "ll" ""              # remove it
+```
+
+As in an interactive shell, aliases apply only to lines typed at the REPL
+(the ussr REPL and russia.su's). Scripts, libraries, and code a typed line
+loads or `eval`s never see them, so a personal alias cannot change how a
+program behaves; that makes the home `moscow.su` the place for them. Not
+rewritten: a command with an explicit path (`./ll(_):`), a command whose
+last argument is a block (a function definition or control flow), and a
+name already rewritten on the way. Names are letters, digits and `_`; the
+control words (`if`, `while`, `return`, ...) and `alias` cannot be
+aliases.
+
 **Asking an AI.** `prompt(answer): "To be or not to be?"` sends the question
 (several arguments are joined with spaces) to a chat model and stores the
 text of its reply; `prompt(_): "..."` prints the reply instead. The request
@@ -149,6 +173,14 @@ integer) gives `0`. A compile error or a runtime error gives `1`. The same
 holds for `.ru` files and `-e`. `moscow.su` (the startup file) stops
 `ussr` with its status when that is not `0`; the REPL ignores the
 statuses of the lines it runs.
+
+**Startup files.** Before a script, `-e` code or the REPL, `ussr` runs
+`moscow.su` from your home folder (`HOME`, else `USERPROFILE` on Windows)
+for settings you want everywhere (aliases, key bindings, `PS1`), and then
+`moscow.su` from the current folder for the project at hand, unless the two
+are the same file. Either may be missing. `USSR_MOSCOW` overrides both: it
+names the only startup file to run, and set but empty it runs none
+(`USSR_MOSCOW= ussr script.su`). `-c` runs no startup file.
 
 ```
 init(ret): arg_cnt arg_vec [

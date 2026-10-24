@@ -30,6 +30,8 @@ global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
 global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
 global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui cv_fnret
+# a program's arguments: set by ex_ext_ev, read by ex_ext_b's eval
+global(_): rt_xa1 rt_xa2 rt_xa3 rt_xa4 rt_xa5 rt_xa6
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -1437,6 +1439,83 @@ ps_parse(r): src [
         set(r): 1
     ]
 ]
+# REPL entries only (repl_exec): aliases made with alias(_) (in moscow.su,
+# or an earlier REPL line)
+# rewrite commands as ussr's compiler does: the name becomes the
+# alias's first word and its other words go in front of the arguments.
+# Not rewritten: commands whose last argument is a block (definitions,
+# control flow) and a name already expanded on the way (ls -> ls -F).
+ps_alias(r): nd [
+    getf(pa_k): nd "kids"
+    typeof(pa_kt): pa_k
+    if(_): {pa_kt = "vector"} [
+        len(pa_n): pa_k
+        set(pa_i): 0
+        while(_): {pa_i < pa_n} [
+            at(pa_c): pa_k pa_i
+            ps_alias(_): pa_c
+            add(pa_i): pa_i 1
+        ]
+    ]
+    getf(pa_t): nd "tag"
+    if(_): {pa_t = 2} [ ps_alias_cmd(_): nd ]
+    set(r): 0
+]
+ps_alias_cmd(r): nd [
+    set(r): 0
+    getf(pac_k): nd "kids"
+    len(pac_n): pac_k
+    set(pac_go): 1
+    if(_): {pac_n > 0} [
+        sub(pac_l): pac_n 1
+        at(pac_last): pac_k pac_l
+        getf(pac_lt): pac_last "tag"
+        if(_): {pac_lt = 3} [ set(pac_go): 0 ]
+    ]
+    vec(pac_seen): ""
+    set(pac_depth): 0
+    while(_): {pac_go = 1} [
+        getf(pac_nm): nd "s1"
+        alias(pac_w): pac_nm
+        typeof(pac_wt): pac_w
+        set(pac_rep): 0
+        len(pac_sn): pac_seen
+        set(pac_si): 0
+        while(_): {pac_si < pac_sn} [
+            at(pac_sv): pac_seen pac_si
+            if(_): {pac_sv = pac_nm} [ set(pac_rep): 1 ]
+            add(pac_si): pac_si 1
+        ]
+        if(_): {pac_wt != "vector" || pac_rep = 1 || pac_depth >= 16} [
+            set(pac_go): 0
+        ]
+        else(_): [
+            push(_): pac_seen pac_nm
+            add(pac_depth): pac_depth 1
+            getf(pac_line): nd "n1"
+            getf(pac_k): nd "kids"
+            vec(pac_nk): ""
+            len(pac_wn): pac_w
+            set(pac_wi): 1
+            while(_): {pac_wi < pac_wn} [
+                at(pac_word): pac_w pac_wi
+                nd_new(pac_lit): 7 pac_word "" pac_line ""
+                push(_): pac_nk pac_lit
+                add(pac_wi): pac_wi 1
+            ]
+            len(pac_n): pac_k
+            set(pac_ki): 0
+            while(_): {pac_ki < pac_n} [
+                at(pac_kv): pac_k pac_ki
+                push(_): pac_nk pac_kv
+                add(pac_ki): pac_ki 1
+            ]
+            at(pac_first): pac_w 0
+            setf(_): nd "s1" pac_first
+            setf(_): nd "kids" pac_nk
+        ]
+    ]
+]
 # store pair: n=name v=value t=alias-target
 rt_find_i(r): nm i [
     len(rt_fl): rt_store
@@ -2511,6 +2590,7 @@ rt_is_host(r): nm [
     if(_): {nm = "remove_dir"} [ set(r): 1 ]
     if(_): {nm = "keybind"} [ set(r): 1 ]
     if(_): {nm = "keybind_match"} [ set(r): 1 ]
+    if(_): {nm = "alias"} [ set(r): 1 ]
     if(_): {nm = "prompt"} [ set(r): 1 ]
     if(_): {nm = "__prompt_print"} [ set(r): 1 ]
     if(_): {nm = "help"} [ set(r): 1 ]
@@ -2575,7 +2655,7 @@ rt_host(r): nm vals [
     len(rt_hn): vals
     if(_): {rt_hn > 0} [ at(rt_ha0): vals 0 ]
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
-    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print"} [ rt_fatal(_): ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2648,6 +2728,11 @@ rt_host(r): nm vals [
         if(_): {rt_hn = 0} [ keybind(r): ]
         if(_): {rt_hn = 1} [ keybind(r): rt_ha0 ]
         if(_): {rt_hn = 2} [ keybind(r): rt_ha0 rt_ha1 ]
+    ]
+    if(_): {nm = "alias"} [
+        if(_): {rt_hn = 0} [ alias(r): ]
+        if(_): {rt_hn = 1} [ alias(r): rt_ha0 ]
+        if(_): {rt_hn > 1} [ rt_alias_set(r): vals ]
     ]
     if(_): {nm = "keybind_match"} [
         if(_): {rt_hn = 1} [ keybind_match(r): rt_ha0 ]
@@ -2731,6 +2816,23 @@ rt_struct_decl(r): name specs [
         add(rt_sdi): rt_sdi 1
     ]
     eval(r): rt_sds
+]
+# alias(_): name word ... on the host, through eval: host calls here
+# take at most two arguments, an alias any number of words.
+rt_alias_set(r): vals [
+    set(rt_als): "alias(rt_alr):"
+    len(rt_aln): vals
+    set(rt_ali): 0
+    while(_): {rt_ali < rt_aln} [
+        at(rt_alv): vals rt_ali
+        typeof(rt_alt): rt_alv
+        if(_): {rt_alt != "string"} [ rt_fatal(_): ]
+        ex_scape(rt_ale): rt_alv
+        concat(rt_als): rt_als " \"" rt_ale "\""
+        add(rt_ali): rt_ali 1
+    ]
+    eval(_): rt_als
+    set(r): 0
 ]
 # new(o): tn v1 ... with the values in vals (up to 10 of them).
 rt_new(r): tn vals [
@@ -8369,6 +8471,8 @@ repl_exec(r): src first [
         if(_): {rex_ls = 0} [
             ps_parse(rex_ps): src
             if(_): {rex_ps = 0} [
+                # typed lines only, as in ussr's REPL
+                ps_alias(_): ps_root
                 getf(rex_kids): ps_root "kids"
                 ex_block_h(_): rex_kids 0
             ]

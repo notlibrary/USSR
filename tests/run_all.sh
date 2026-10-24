@@ -44,6 +44,11 @@ RUSSIA=tests/russia/ussr-russia
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# Your own ~/moscow.su (aliases, key bindings) must not change results:
+# ussr reads moscow.su from HOME, so point HOME at an empty folder.
+mkdir "$tmp/home"
+HOME=$tmp/home
+export HOME
 
 # suite LABEL USSR: runs every test with USSR as the interpreter, printing
 # "PASS|FAIL LABEL test"; sets pass, fail and failed for that label.
@@ -71,7 +76,7 @@ suite() {
     for runner in tests/ru/run_ru_tests.sh tests/mbl/run_mbl_tests.sh \
                   tests/russia/run_uuasm_tests.sh tests/vectors/run_vector_tests.sh \
                   tests/repl/run_repl_tests.sh tests/errors/run_error_tests.sh \
-                  tests/exit/run_exit_tests.sh; do
+                  tests/exit/run_exit_tests.sh tests/shell/run_shell_tests.sh; do
         [ -f "$runner" ] || continue
         [ "$update" = 1 ] && continue
         [ "$label" = russia ] && [ "$runner" = tests/russia/run_uuasm_tests.sh ] &&
