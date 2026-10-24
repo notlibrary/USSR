@@ -75,7 +75,7 @@ static const help_entry_t g_help[] = {
     /* files */
     { "readfile", "files", "readfile(v): path", "whole file as a string" },
     { "writefile", "files", "writefile(v): path data", "replace a file" },
-    { "file_exists", "files", "file_exists(v): path", "1 if the path exists" },
+    { "file_exists", "files", "file_exists(v): path", "true if the path exists" },
     { "open_file", "files", "open_file(h): path mode", "open a file; -1 on error" },
     { "read_file", "files", "read_file(s): h [n]", "read from a handle" },
     { "read_line", "files", "read_line(s): h", "read one line" },
@@ -186,7 +186,7 @@ static void help_keys(void)
 {
     printf("REPL keys\n"
            "  Tab           complete commands, variables and paths\n"
-           "  Up / Down     history\n"
+           "  Up / Down     history, kept in ~/.ussr_history\n"
            "  Ctrl-D        exit on an empty line (Ctrl-Z on Windows)\n"
 #ifndef _WIN32
            "  Ctrl-R        search history\n"

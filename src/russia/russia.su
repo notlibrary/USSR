@@ -8237,13 +8237,21 @@ repl_rd(r): [
 # UTF-8 character, Ctrl-C drops the line, Ctrl-D or Ctrl-Z on an empty
 # line ends input.
 repl_rd_tty(r): [
-    global(_): rp_eof
+    global(_): rp_eof rp_hist
     set(r): ""
     set(rrt_n): 0
     set(rrt_need): 0
     set(rrt_pend): ""
     chr(rrt_bs): 8
     chr(rrt_esc): 27
+    # history position: len(rp_hist) is the line being typed, kept in
+    # rrt_live while Up shows older entries
+    len(rrt_hi): rp_hist
+    set(rrt_live): ""
+    concat(rrt_up): rrt_esc "[A"
+    concat(rrt_up2): rrt_esc "OA"
+    concat(rrt_dn): rrt_esc "[B"
+    concat(rrt_dn2): rrt_esc "OB"
     terminal_raw(_):
     set(rrt_go): 1
     while(_): {rrt_go = 1} [
@@ -8310,6 +8318,28 @@ repl_rd_tty(r): [
                 set(r): ""
                 set(rrt_go): 0
             ]
+            elif(_): {rrt_key = rrt_up || rrt_key = rrt_up2} [
+                len(rrt_hn): rp_hist
+                if(_): {rrt_hi > 0} [
+                    if(_): {rrt_hi = rrt_hn} [ set(rrt_live): r ]
+                    sub(rrt_hi): rrt_hi 1
+                    at(rrt_shown): rp_hist rrt_hi
+                    repl_replace(r): rrt_n rrt_shown
+                    repl_nchars(rrt_n): r
+                    set(rrt_need): 0
+                ]
+            ]
+            elif(_): {rrt_key = rrt_dn || rrt_key = rrt_dn2} [
+                len(rrt_hn): rp_hist
+                if(_): {rrt_hi < rrt_hn} [
+                    add(rrt_hi): rrt_hi 1
+                    set(rrt_shown): rrt_live
+                    if(_): {rrt_hi < rrt_hn} [ at(rrt_shown): rp_hist rrt_hi ]
+                    repl_replace(r): rrt_n rrt_shown
+                    repl_nchars(rrt_n): r
+                    set(rrt_need): 0
+                ]
+            ]
             elif(_): {rrt_c = 4 || rrt_c = 26} [
                 len(rrt_l): r
                 if(_): {rrt_l = 0} [
@@ -8321,6 +8351,152 @@ repl_rd_tty(r): [
     ]
     terminal_sane(_):
     print(_): ""
+]
+
+# Replace the n characters typed on this line with text on the screen;
+# returns text.
+repl_replace(r): n text [
+    chr(rrp_bs): 8
+    chr(rrp_esc): 27
+    set(rrp_er): ""
+    set(rrp_i): 0
+    while(_): {rrp_i < n} [
+        concat(rrp_er): rrp_er rrp_bs
+        add(rrp_i): rrp_i 1
+    ]
+    concat(rrp_er): rrp_er rrp_esc "[K" text
+    template(_): "STR" rrp_er
+    set(r): text
+]
+
+# How many UTF-8 characters s holds.
+repl_nchars(r): s [
+    len(rnc_l): s
+    set(r): 0
+    set(rnc_i): 0
+    while(_): {rnc_i < rnc_l} [
+        byte(rnc_b): s rnc_i
+        if(_): {rnc_b < 128 || rnc_b >= 192} [ add(r): r 1 ]
+        add(rnc_i): rnc_i 1
+    ]
+]
+
+# The history file, as ussr keeps it (src/history.c): USSR_HISTFILE, else
+# .ussr_history in the home folder (HOME, else USERPROFILE); set but empty
+# keeps none. USSR_HISTSIZE entries (default 1000) are loaded and kept.
+# One entry per line, oldest first; only a REPL on a terminal uses it.
+repl_hist_load(r): [
+    global(_): rp_hist rp_hpath
+    set(r): 0
+    vec(rp_hist): ""
+    set(rp_hpath): ""
+    set(rhl_size): 1000
+    getenv(rhl_sz): "USSR_HISTSIZE"
+    typeof(rhl_szt): rhl_sz
+    if(_): {rhl_szt = "string"} [
+        repl_digits(rhl_ok): rhl_sz
+        if(_): {rhl_ok = 1} [ decode(rhl_size): rhl_sz ]
+    ]
+    getenv(rhl_f): "USSR_HISTFILE"
+    typeof(rhl_ft): rhl_f
+    if(_): {rhl_ft = "string"} [ set(rp_hpath): rhl_f ]
+    else(_): [
+        getenv(rhl_home): "HOME"
+        typeof(rhl_ht): rhl_home
+        if(_): {rhl_ht != "string"} [ set(rhl_home): "" ]
+        if(_): {rhl_home = ""} [
+            getenv(rhl_home): "USERPROFILE"
+            typeof(rhl_ht): rhl_home
+            if(_): {rhl_ht != "string"} [ set(rhl_home): "" ]
+        ]
+        len(rhl_hl): rhl_home
+        if(_): {rhl_hl > 0} [
+            sub(rhl_last): rhl_hl 1
+            byte(rhl_lb): rhl_home rhl_last
+            set(rhl_sep): "/"
+            if(_): {rhl_lb = 47 || rhl_lb = 92} [ set(rhl_sep): "" ]
+            concat(rp_hpath): rhl_home rhl_sep ".ussr_history"
+        ]
+    ]
+    if(_): {rhl_size = 0} [ set(rp_hpath): "" ]
+    file_exists(rhl_e): rp_hpath
+    if(_): {rp_hpath != "" && rhl_e = true} [
+        readfile(rhl_t): rp_hpath
+        vec(rhl_all): ""
+        len(rhl_n): rhl_t
+        set(rhl_i): 0
+        set(rhl_s): 0
+        while(_): {rhl_i <= rhl_n} [
+            set(rhl_b): 10
+            if(_): {rhl_i < rhl_n} [ byte(rhl_b): rhl_t rhl_i ]
+            if(_): {rhl_b = 10} [
+                sub(rhl_k): rhl_i rhl_s
+                if(_): {rhl_k > 0} [
+                    sub(rhl_lst): rhl_i 1
+                    byte(rhl_cr): rhl_t rhl_lst
+                    if(_): {rhl_cr = 13} [ sub(rhl_k): rhl_k 1 ]
+                ]
+                if(_): {rhl_k > 0} [
+                    slice(rhl_line): rhl_t rhl_s rhl_k
+                    push(_): rhl_all rhl_line
+                ]
+                add(rhl_s): rhl_i 1
+            ]
+            add(rhl_i): rhl_i 1
+        ]
+        len(rhl_c): rhl_all
+        set(rhl_first): 0
+        if(_): {rhl_c > rhl_size} [ sub(rhl_first): rhl_c rhl_size ]
+        set(rhl_j): rhl_first
+        set(rhl_kept): ""
+        chr(rhl_nl): 10
+        while(_): {rhl_j < rhl_c} [
+            at(rhl_line): rhl_all rhl_j
+            push(_): rp_hist rhl_line
+            concat(rhl_kept): rhl_kept rhl_line rhl_nl
+            add(rhl_j): rhl_j 1
+        ]
+        if(_): {rhl_first > 0} [ writefile(_): rp_hpath rhl_kept ]
+    ]
+]
+
+# 1 when s is a non-empty run of decimal digits.
+repl_digits(r): s [
+    len(rdg_n): s
+    set(r): 0
+    if(_): {rdg_n > 0 && rdg_n < 8} [ set(r): 1 ]
+    set(rdg_i): 0
+    while(_): {rdg_i < rdg_n} [
+        byte(rdg_b): s rdg_i
+        if(_): {rdg_b < 48 || rdg_b > 57} [ set(r): 0 ]
+        add(rdg_i): rdg_i 1
+    ]
+]
+
+# Record a typed line: in memory for Up/Down, and appended to the file.
+# A repeat of the previous entry is skipped, as ussr skips it.
+repl_hist_add(r): line [
+    global(_): rp_hist rp_hpath
+    set(r): 0
+    len(rha_n): rp_hist
+    set(rha_dup): 0
+    if(_): {rha_n > 0} [
+        sub(rha_l): rha_n 1
+        at(rha_prev): rp_hist rha_l
+        if(_): {rha_prev = line} [ set(rha_dup): 1 ]
+    ]
+    if(_): {rha_dup = 0} [
+        push(_): rp_hist line
+        if(_): {rp_hpath != ""} [
+            open_file(rha_h): rp_hpath "a"
+            if(_): {rha_h >= 0} [
+                chr(rha_nl): 10
+                concat(rha_out): line rha_nl
+                write_file(_): rha_h rha_out
+                close_file(_): rha_h
+            ]
+        ]
+    ]
 ]
 
 # s without its last UTF-8 character.
@@ -8579,7 +8755,7 @@ repl_prompt(r): cont [
 ]
 
 repl(r): [
-    global(_): rp_eof rp_tty rp_pid
+    global(_): rp_eof rp_tty rp_pid rp_hist
     print(_): "USSR Unified Shell Script REPL"
     print(_): "USSR v0.4"
     print(_): "Enter a command list or press Ctrl-D to exit."
@@ -8596,6 +8772,8 @@ repl(r): [
     terminal_sane(_):
     set(rp_tty): 0
     if(_): {rp_rawp = 0} [ set(rp_tty): 1 ]
+    vec(rp_hist): ""
+    if(_): {rp_tty = 1} [ repl_hist_load(_): ]
     while(_): {rp_eof = 0} [
         set(rp_cont): 0
         if(_): {rp_dep > 0} [ set(rp_cont): 1 ]
@@ -8603,6 +8781,7 @@ repl(r): [
         template(_): "STR" rp_pr
         repl_rd(rp_line): 
         len(rp_ll): rp_line
+        if(_): {rp_tty = 1 && rp_ll > 0} [ repl_hist_add(_): rp_line ]
         if(_): {rp_eof = 0 && rp_ll > 0} [
             add(rp_lines): rp_lines 1
             len(rp_bl): rp_buf

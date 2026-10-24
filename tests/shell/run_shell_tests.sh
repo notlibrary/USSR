@@ -107,6 +107,21 @@ script" "$out"
 esac
 rm -f "$home/moscow.su" "$work/moscow.su"
 
+# --- history file -----------------------------------------------------------
+
+# Only a REPL on a terminal keeps history (checked by hand in a pty: Up
+# recalls entries saved by an earlier session, USSR_HISTSIZE trims the
+# file). Piped input, like every test here, must leave no trace.
+rm -f "$home/.ussr_history"
+(cd "$work" && printf 'print(_): 1\n' | "$USSR" >/dev/null 2>&1)
+(cd "$work" && printf 'print(_): 2\n' |
+    USSR_HISTFILE="$tmp/explicit_history" "$USSR" >/dev/null 2>&1)
+if [ -e "$home/.ussr_history" ] || [ -e "$tmp/explicit_history" ]; then
+    bad "a piped REPL session writes no history file"
+else
+    ok "a piped REPL session writes no history file"
+fi
+
 # --- aliases ----------------------------------------------------------------
 
 # As in an interactive shell, aliases apply to typed REPL lines only; they
