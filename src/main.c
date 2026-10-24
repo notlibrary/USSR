@@ -7,6 +7,7 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#include <io.h>
 #define ussr_chdir _chdir
 #else
 #include <sys/stat.h>
@@ -49,6 +50,7 @@ extern int ussr_argument_evaluate(
 #include "ussr_oop_builtins.h"
 #include "keybind.h"
 #include "alias.h"
+#include "history.h"
 #include "vm.h"
 #include "scheduler.h"
 #include "eventq.h"
@@ -2894,7 +2896,6 @@ static int run_startup_file(const char *path)
 static int run_startup_files(void)
 {
     char *chosen = ussr_env_get("USSR_MOSCOW");
-    char *home;
     char *home_moscow = NULL;
     int status = EXIT_SUCCESS;
 
@@ -2914,33 +2915,12 @@ static int run_startup_files(void)
         return status;
     }
 
-    home = ussr_env_get("HOME");
-#ifdef _WIN32
-    if (home == NULL || home[0] == '\0')
+    home_moscow = ussr_home_file("moscow.su");
+    if (home_moscow != NULL && !file_readable(home_moscow))
     {
-        free(home);
-        home = ussr_env_get("USERPROFILE");
+        free(home_moscow);
+        home_moscow = NULL;
     }
-#endif
-    if (home != NULL && home[0] != '\0')
-    {
-        size_t length = strlen(home);
-
-        home_moscow = malloc(length + sizeof("/moscow.su"));
-        if (home_moscow != NULL)
-        {
-            int slash = length > 0 &&
-                        (home[length - 1] == '/' || home[length - 1] == '\\');
-
-            sprintf(home_moscow, "%s%smoscow.su", home, slash ? "" : "/");
-            if (!file_readable(home_moscow))
-            {
-                free(home_moscow);
-                home_moscow = NULL;
-            }
-        }
-    }
-    free(home);
 
     if (home_moscow != NULL)
         status = run_startup_file(home_moscow);
@@ -2949,6 +2929,27 @@ static int run_startup_files(void)
         status = run_startup_file("moscow.su");
     free(home_moscow);
     return status;
+}
+
+/* A loaded history entry goes where a typed line goes: the line
+ * editor's Up/Down history and history-based completion. */
+static void repl_history_add(const char *line)
+{
+#ifdef _WIN32
+    worstlineHistoryAdd(line);
+#else
+    bestlineHistoryAdd(line);
+#endif
+    ussr_autocomplete_record_history(line);
+}
+
+static int repl_interactive(void)
+{
+#ifdef _WIN32
+    return _isatty(_fileno(stdin));
+#else
+    return isatty(STDIN_FILENO);
+#endif
 }
 
 static int run_repl(void)
@@ -2962,6 +2963,7 @@ static int run_repl(void)
     int bracket_depth;
     int result;
     int entry_line = 1;
+    int interactive;
 
     printf("USSR Unified Shell Script REPL\n");
     printf("USSR v%d.%d\n",USSR_VERSION_MAJOR, USSR_VERSION_MINOR);
@@ -2975,6 +2977,12 @@ static int run_repl(void)
 	bestlineSetCompletionCallback(ussr_autocomplete_callback);
 	bestlineSetKeyCallback(repl_key_binding);
 #endif
+
+    /* The history file is for people typing: a piped session neither
+     * reads nor writes it. */
+    interactive = repl_interactive();
+    if (interactive)
+        ussr_history_load(repl_history_add);
 
     if (ussr_pp_init(&pp) != 0)
     {
@@ -3022,13 +3030,9 @@ static int run_repl(void)
 #endif
             continue;
         }
-#ifdef _WIN32
-		worstlineHistoryAdd(line);
-#else
-        bestlineHistoryAdd(line);
-#endif
-		
-        ussr_autocomplete_record_history(line);
+        repl_history_add(line);
+        if (interactive)
+            ussr_history_append(line);
 
         result = ussr_pp_process_line(&pp, line);
 #ifdef _WIN32

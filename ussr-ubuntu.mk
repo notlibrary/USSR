@@ -38,6 +38,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/prng64_xrp32.o \
        $(SRC_DIR)/keybind.o \
        $(SRC_DIR)/alias.o \
+       $(SRC_DIR)/history.o \
        $(SRC_DIR)/ai.o \
        $(SRC_DIR)/help.o \
        $(SRC_DIR)/autocomplete.o		  
@@ -91,7 +92,7 @@ $(SRC_DIR)/completion_fs_posix.o: $(SRC_DIR)/completion_fs_posix.c $(SRC_DIR)/co
 $(SRC_DIR)/completion_fs_win32.o: $(SRC_DIR)/completion_fs_win32.c $(SRC_DIR)/completion_fs.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h $(SRC_DIR)/keybind.h $(SRC_DIR)/alias.h
+$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h $(SRC_DIR)/keybind.h $(SRC_DIR)/alias.h $(SRC_DIR)/history.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/keybind.o: $(SRC_DIR)/keybind.c $(SRC_DIR)/keybind.h
@@ -101,6 +102,9 @@ $(SRC_DIR)/ai.o: $(SRC_DIR)/ai.c $(SRC_DIR)/ai.h $(SRC_DIR)/process.h $(SRC_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/alias.o: $(SRC_DIR)/alias.c $(SRC_DIR)/alias.h $(SRC_DIR)/ussr.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/history.o: $(SRC_DIR)/history.c $(SRC_DIR)/history.h $(SRC_DIR)/ussr_oop_builtins.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/help.o: $(SRC_DIR)/help.c $(SRC_DIR)/help.h
