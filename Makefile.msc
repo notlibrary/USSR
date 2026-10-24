@@ -52,6 +52,9 @@ OBJS = \
     $(SRC)\lexer.obj \
     $(SRC)\prng64_xrp32.obj \
 	$(SRC)\autocomplete.obj \
+	$(SRC)\keybind.obj \
+	$(SRC)\ai.obj \
+	$(SRC)\help.obj \
 	$(SRC)\completion_fs_win32.obj \
 	$(SRC)\socket_win32.obj \
 	$(WIN)\process_win32.obj \
@@ -88,13 +91,13 @@ $(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)
 $(SRC)\pp.obj: $(SRC)\pp.c $(SRC)\pp.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\pp.obj $(SRC)\pp.c
 
-$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\ussr_ru.h $(SRC)\vm.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h
+$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\ussr_ru.h $(SRC)\vm.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h $(SRC)\keybind.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\main.obj $(SRC)\main.c
 
 $(SRC)\uno.obj: $(SRC)\uno.c $(SRC)\uno.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\uno.obj $(SRC)\uno.c
 
-$(SRC)\ussr_oop_builtins.obj: $(SRC)\ussr_oop_builtins.c $(SRC)\ussr_oop_builtins.h $(SRC)\uno.h $(SRC)\ussr.h
+$(SRC)\ussr_oop_builtins.obj: $(SRC)\ussr_oop_builtins.c $(SRC)\ussr_oop_builtins.h $(SRC)\uno.h $(SRC)\ussr.h $(SRC)\ai.h $(SRC)\help.h $(SRC)\keybind.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_oop_builtins.obj $(SRC)\ussr_oop_builtins.c
 
 $(SRC)\ussr_bytecode.obj: $(SRC)\ussr_bytecode.c $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\ussr.h
@@ -129,6 +132,17 @@ $(SRC)\lexer.obj: $(SRC)\lexer.c $(SRC)\parser.tab.h
 
 $(SRC)\prng64_xrp32.obj: $(SRC)\prng64_xrp32.c $(SRC)\prng64_xrp32.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\prng64_xrp32.obj $(SRC)\prng64_xrp32.c
+
+# --- REPL keys, AI prompt, help --------------------------------------
+
+$(SRC)\keybind.obj: $(SRC)\keybind.c $(SRC)\keybind.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\keybind.obj $(SRC)\keybind.c
+
+$(SRC)\ai.obj: $(SRC)\ai.c $(SRC)\ai.h $(SRC)\process.h $(SRC)\ussr_oop_builtins.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ai.obj $(SRC)\ai.c
+
+$(SRC)\help.obj: $(SRC)\help.c $(SRC)\help.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\help.obj $(SRC)\help.c
 
 # --- autocomplete ----------------------------------------------------
 

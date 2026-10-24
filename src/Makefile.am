@@ -20,6 +20,9 @@ ussr_SOURCES = \
 	process_posix.c \
     prng64_xrp32.c \
 	autocomplete.c \
+	keybind.c \
+	ai.c \
+	help.c \
 	completion_fs_posix.c
 	
 AM_CPPFLAGS = -I$(srcdir) $(PETERSBURG_CPPFLAGS)
@@ -43,6 +46,9 @@ EXTRA_DIST = \
     uthash.h \
 	prng64_xrp32.h \
 	autocomplete.h \
+	keybind.h \
+	ai.h \
+	help.h \
     process.h \
 	petersburg/petersburg.su \
 	petersburg/box.uno \

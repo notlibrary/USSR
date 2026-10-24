@@ -1,0 +1,1 @@
+{"id":"chatcmpl-test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"To be. 😀 Да"},"finish_reason":"stop"}]}

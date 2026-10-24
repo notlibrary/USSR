@@ -5,6 +5,9 @@
 
 #include "ussr_oop_builtins.h"
 #include "uno.h"
+#include "ai.h"
+#include "help.h"
+#include "keybind.h"
 
 #include <errno.h>
 #include <math.h>
@@ -2761,6 +2764,202 @@ static int oop_do_fail(
     return -1;
 }
 
+static void oop_free_values(ussr_value_t *values, size_t count);
+
+/* Evaluate every argument as a string; on success the caller frees
+ * values[0..count) and the array. */
+static int oop_string_arguments(
+    const char *usage,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t **out_values
+)
+{
+    ussr_value_t *values;
+    size_t i;
+
+    values = calloc(argument_count ? argument_count : 1, sizeof(*values));
+    if (values == NULL)
+        return -1;
+    for (i = 0; i < argument_count; ++i)
+    {
+        if (oop_eval(&arguments[i], &values[i]) != 0 ||
+            values[i].type != USSR_STRING || values[i].data.string == NULL)
+        {
+            if (values[i].type != USSR_STRING)
+                fprintf(stderr, "USSR: %s: arguments must be strings\n", usage);
+            oop_free_values(values, i + 1);
+            return -1;
+        }
+    }
+    *out_values = values;
+    return 0;
+}
+
+static void oop_free_values(ussr_value_t *values, size_t count)
+{
+    size_t i;
+
+    for (i = 0; i < count; ++i)
+        ussr_value_free(&values[i]);
+    free(values);
+}
+
+/* keybind(_): "Alt+F1" "help(_):"   bind (an empty line unbinds)
+ * keybind(line): "Alt+F1"           the bound line, or null
+ * keybind(n):                       print every binding, n = count */
+static int oop_do_keybind(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t *values = NULL;
+    char error[160];
+
+    if (argument_count > 2)
+    {
+        fprintf(stderr, "USSR: keybind(_): \"Alt+F1\" \"help(_):\"\n");
+        return -1;
+    }
+    if (oop_string_arguments("keybind", arguments, argument_count,
+                             &values) != 0)
+        return -1;
+
+    if (argument_count == 0)
+    {
+        size_t i;
+        int mods;
+        int key;
+        const char *line;
+
+        for (i = 0; (line = ussr_keybind_at(i, &mods, &key)) != NULL; ++i)
+        {
+            char name[32];
+
+            ussr_keybind_name(mods, key, name, sizeof(name));
+            printf("%-14s %s\n", name, line);
+        }
+        *out_result = ussr_integer((ussr_int_t)i);
+    }
+    else if (argument_count == 1)
+    {
+        int mods;
+        int key;
+        const char *line;
+
+        if (ussr_keybind_parse(values[0].data.string, &mods, &key,
+                               error, sizeof(error)) != 0)
+        {
+            fprintf(stderr, "USSR: keybind: %s\n", error);
+            oop_free_values(values, argument_count);
+            return -1;
+        }
+        line = ussr_keybind_find(mods, key);
+        *out_result = line != NULL ? ussr_string(line) : ussr_null();
+    }
+    else
+    {
+        if (ussr_keybind_set(values[0].data.string, values[1].data.string,
+                             error, sizeof(error)) != 0)
+        {
+            fprintf(stderr, "USSR: keybind: %s\n", error);
+            oop_free_values(values, argument_count);
+            return -1;
+        }
+        *out_result = ussr_integer(0);
+    }
+    oop_free_values(values, argument_count);
+    return 0;
+}
+
+/* prompt(answer): "question" ...   arguments are joined with spaces;
+ * prompt(_) prints the answer instead of storing it. */
+static int oop_do_prompt(
+    const char *return_name,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t *values = NULL;
+    char *question;
+    char *answer;
+    char error[512];
+    size_t length = 1;
+    size_t i;
+
+    if (argument_count == 0)
+    {
+        fprintf(stderr, "USSR: prompt(answer): \"question\"\n");
+        return -1;
+    }
+    if (oop_string_arguments("prompt", arguments, argument_count,
+                             &values) != 0)
+        return -1;
+    for (i = 0; i < argument_count; ++i)
+        length += strlen(values[i].data.string) + 1;
+    question = malloc(length);
+    if (question == NULL)
+    {
+        oop_free_values(values, argument_count);
+        return -1;
+    }
+    question[0] = '\0';
+    for (i = 0; i < argument_count; ++i)
+    {
+        if (i > 0)
+            strcat(question, " ");
+        strcat(question, values[i].data.string);
+    }
+    oop_free_values(values, argument_count);
+
+    answer = ussr_ai_prompt(question, error, sizeof(error));
+    free(question);
+    if (answer == NULL)
+    {
+        fprintf(stderr, "USSR: prompt: %s\n", error);
+        return -1;
+    }
+    if (return_name == NULL || strcmp(return_name, "_") == 0)
+    {
+        size_t answer_length = strlen(answer);
+
+        fputs(answer, stdout);
+        if (answer_length == 0 || answer[answer_length - 1] != '\n')
+            fputc('\n', stdout);
+        fflush(stdout);
+    }
+    *out_result = ussr_string(answer);
+    free(answer);
+    return out_result->data.string != NULL ? 0 : -1;
+}
+
+/* help(_):  or  help(_): "name" */
+static int oop_do_help(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t *values = NULL;
+    int found;
+
+    if (argument_count > 1)
+    {
+        fprintf(stderr, "USSR: help(_): [\"name\"]\n");
+        return -1;
+    }
+    if (oop_string_arguments("help", arguments, argument_count,
+                             &values) != 0)
+        return -1;
+    found = ussr_help_print(argument_count ? values[0].data.string : NULL);
+    fflush(stdout);
+    oop_free_values(values, argument_count);
+    *out_result = ussr_integer(found == 0 ? 0 : 1);
+    return 0;
+}
+
 /* ------------------------------------------------------------- */
 /* dispatch                                                         */
 /* ------------------------------------------------------------- */
@@ -2866,6 +3065,13 @@ int ussr_oop_dispatch(
         status = oop_do_encode(arguments, argument_count, out_result);
     else if (strcmp(command, "decode") == 0)
         status = oop_do_decode(arguments, argument_count, out_result);
+    else if (strcmp(command, "keybind") == 0)
+        status = oop_do_keybind(arguments, argument_count, out_result);
+    else if (strcmp(command, "prompt") == 0)
+        status = oop_do_prompt(return_name, arguments, argument_count,
+                               out_result);
+    else if (strcmp(command, "help") == 0)
+        status = oop_do_help(arguments, argument_count, out_result);
     else
         return 0; /* not ours */
 

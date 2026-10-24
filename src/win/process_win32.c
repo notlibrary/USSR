@@ -126,6 +126,7 @@ static int make_temp_file(
 )
 {
     char temp_path[MAX_PATH];
+    SECURITY_ATTRIBUTES inherit;
     UINT result;
 
     if (handle == NULL || path == NULL || path_size == 0 ||
@@ -139,11 +140,17 @@ static int make_temp_file(
     if (result == 0)
         return -1;
 
+    /* The child gets this handle as its stdin or stdout, which
+     * CreateProcess only passes on when it is inheritable. */
+    memset(&inherit, 0, sizeof(inherit));
+    inherit.nLength = sizeof(inherit);
+    inherit.bInheritHandle = TRUE;
+
     *handle = CreateFileA(
         path,
         GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        NULL,
+        &inherit,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_TEMPORARY,
         NULL

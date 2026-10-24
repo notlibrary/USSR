@@ -36,6 +36,9 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
        $(SRC_DIR)/prng64_xrp32.o \
+       $(SRC_DIR)/keybind.o \
+       $(SRC_DIR)/ai.o \
+       $(SRC_DIR)/help.o \
        $(SRC_DIR)/autocomplete.o		  
 
 ifeq ($(OS),Windows_NT)
@@ -87,7 +90,16 @@ $(SRC_DIR)/completion_fs_posix.o: $(SRC_DIR)/completion_fs_posix.c $(SRC_DIR)/co
 $(SRC_DIR)/completion_fs_win32.o: $(SRC_DIR)/completion_fs_win32.c $(SRC_DIR)/completion_fs.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h
+$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h $(SRC_DIR)/keybind.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/keybind.o: $(SRC_DIR)/keybind.c $(SRC_DIR)/keybind.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/ai.o: $(SRC_DIR)/ai.c $(SRC_DIR)/ai.h $(SRC_DIR)/process.h $(SRC_DIR)/ussr_oop_builtins.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/help.o: $(SRC_DIR)/help.c $(SRC_DIR)/help.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/pp.o: $(SRC_DIR)/pp.c $(SRC_DIR)/pp.h
@@ -96,7 +108,7 @@ $(SRC_DIR)/pp.o: $(SRC_DIR)/pp.c $(SRC_DIR)/pp.h
 $(SRC_DIR)/uno.o: $(SRC_DIR)/uno.c $(SRC_DIR)/uno.h $(SRC_DIR)/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ussr_oop_builtins.o: $(SRC_DIR)/ussr_oop_builtins.c $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/ussr.h $(SRC_DIR)/uno.h
+$(SRC_DIR)/ussr_oop_builtins.o: $(SRC_DIR)/ussr_oop_builtins.c $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/ussr.h $(SRC_DIR)/uno.h $(SRC_DIR)/ai.h $(SRC_DIR)/help.h $(SRC_DIR)/keybind.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/bestline.o: $(SRC_DIR)/bestline.c $(SRC_DIR)/bestline.h

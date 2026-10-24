@@ -68,6 +68,63 @@ line by line on every platform, printing the prompts without line editing. Press
 Ctrl-D (Ctrl-Z on Windows) on an empty line to exit. Arrow-key history
 is supported on every platform.
 
+**Help.** `help(_):` lists every builtin by group; `help(_): "name"` shows
+one command's usage, and the topics `"syntax"`, `"keys"` and `"ai"` cover
+the language at a glance, the REPL keys and `prompt`'s settings.
+
+**Key bindings.** `keybind(_): "chord" "line"` makes a key run a line of
+USSR at the prompt: pressing it replaces whatever was typed with that line
+and runs it, as if it had been typed and Enter pressed.
+
+```
+keybind(_): "Mod+F1" "help(_):"
+keybind(_): "Ctrl+G" "ls(_): \"-l\""
+keybind(line): "Alt+F1"        # the bound line, or null
+keybind(n):                    # prints every binding; n is how many
+keybind(_): "Alt+F1" ""        # unbind
+```
+
+A chord is modifiers and one key joined by `+` or `-`, in any case:
+`Ctrl` (`Control`, `C`), `Alt` (`Meta`, `Mod`, `M`), `Shift` (`S`), and a
+key `a`..`z`, `0`..`9` or `F1`..`F12`. Terminals never see the
+Super/Windows key, so `Mod` means Alt. Chords a terminal cannot tell from
+editing keys are refused with a reason: a letter without Ctrl or Alt,
+Ctrl+H/I/J/M (Backspace, Tab, Enter), Ctrl with a digit, and Shift with a
+letter or digit. Put bindings in `moscow.su` to have them in every
+session.
+
+**Asking an AI.** `prompt(answer): "To be or not to be?"` sends the question
+(several arguments are joined with spaces) to a chat model and stores the
+text of its reply; `prompt(_): "..."` prints the reply instead. The request
+goes through the `curl` program (shipped with Windows 10 and later and with
+nearly every Linux and macOS), so `ussr` links no HTTP or TLS library. The
+API key is passed to curl on its standard input, never on its command line.
+Everything is set with environment variables, which `setenv` changes for
+the next call:
+
+| Variable | Meaning |
+|----------|---------|
+| `USSR_AI_PROVIDER` | `anthropic` (default) or `openai`; `openai` also means any OpenAI-compatible server (Ollama, LM Studio, OpenRouter, vLLM, llama.cpp) |
+| `USSR_AI_URL` | endpoint URL; defaults to `https://api.anthropic.com/v1/messages` or `https://api.openai.com/v1/chat/completions` |
+| `USSR_AI_MODEL` | model name; `anthropic` defaults to `claude-sonnet-5-5`, `openai` needs one |
+| `USSR_AI_KEY` | API key, else `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; may be unset for a local server |
+| `USSR_AI_SYSTEM` | optional system prompt |
+| `USSR_AI_MAX_TOKENS` | reply length limit (`anthropic` default 1024) |
+| `USSR_AI_TIMEOUT` | seconds to wait, default 120 |
+| `USSR_AI_CURL` | path of curl when it is not on `PATH` |
+
+```
+# a local model through Ollama
+setenv(_): "USSR_AI_PROVIDER" "openai"
+setenv(_): "USSR_AI_URL" "http://localhost:11434/v1/chat/completions"
+setenv(_): "USSR_AI_MODEL" "llama3.2"
+prompt(_): "Name three Soviet cities"
+```
+
+A provider's error (bad key, unknown model) stops the command with that
+provider's message. On Windows curl reads its configuration through a
+temporary file that is deleted when the call returns.
+
 **As a script file:**
 
 ```

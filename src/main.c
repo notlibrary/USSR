@@ -46,6 +46,7 @@ extern int ussr_argument_evaluate(
 #include "uno.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
+#include "keybind.h"
 #include "vm.h"
 #include "scheduler.h"
 #include "eventq.h"
@@ -2738,6 +2739,14 @@ static int repl_locate(const void *context, int text_line,
     return 0;
 }
 
+#ifndef _WIN32
+/* bestline hands over each key's bytes; keybind(_) decides. */
+static const char *repl_key_binding(const char *seq, unsigned long length)
+{
+    return ussr_keybind_match_sequence(seq, (size_t)length);
+}
+#endif
+
 static int run_repl(void)
 {
     ussr_preprocessor_t pp;
@@ -2757,8 +2766,10 @@ static int run_repl(void)
     ussr_autocomplete_init();
 #ifdef _WIN32	
 	worstlineSetCompletionCallback(ussr_autocomplete_callback);	
+	worstlineSetKeyCallback(ussr_keybind_match_getch);
 #else
 	bestlineSetCompletionCallback(ussr_autocomplete_callback);
+	bestlineSetKeyCallback(repl_key_binding);
 #endif
 
     if (ussr_pp_init(&pp) != 0)

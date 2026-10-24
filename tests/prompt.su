@@ -1,0 +1,54 @@
+# prompt: asks an AI model through curl. No network here: USSR_AI_URL
+# points curl at canned file:// responses in tests/ai/, one per provider
+# shape. Run from the repository root:
+#     ussr tests/prompt.su
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# file:// URL of a fixture: file:///C:\... on Windows, file:///home/... else
+fixture(url): name [
+    getcwd(d):
+    byte(b): d 0
+    set(u): "file:///"
+    if(_): {b = 47} [ set(u): "file://" ]
+    concat(url): u d "/tests/ai/" name
+]
+
+init(result): arg_count arg_values [
+    setenv(_): "USSR_AI_KEY" "test-key"
+    unsetenv(_): "USSR_AI_SYSTEM"
+    unsetenv(_): "USSR_AI_MODEL"
+
+    setenv(_): "USSR_AI_PROVIDER" "anthropic"
+    fixture(url): "anthropic.json"
+    setenv(_): "USSR_AI_URL" url
+    prompt(answer): "To be or not to be?"
+    chr(nl): 10
+    concat(want): "That is the question." nl "Whether ’tis nobler in the \"mind\""
+    check(_): "anthropic text blocks joined" answer want
+
+    setenv(_): "USSR_AI_PROVIDER" "openai"
+    setenv(_): "USSR_AI_MODEL" "test-model"
+    fixture(url): "openai.json"
+    setenv(_): "USSR_AI_URL" url
+    prompt(answer): "To be" "or not to be?"
+    check(_): "openai content, UTF-8 and surrogate pairs" answer "To be. 😀 Да"
+
+    unsetenv(_): "USSR_AI_PROVIDER"
+    unsetenv(_): "USSR_AI_URL"
+    unsetenv(_): "USSR_AI_MODEL"
+    unsetenv(_): "USSR_AI_KEY"
+    set(result): 0
+]

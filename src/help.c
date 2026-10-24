@@ -1,0 +1,284 @@
+#include "help.h"
+
+#include <stdio.h>
+#include <string.h>
+
+typedef struct
+{
+    const char *name;
+    const char *group;
+    const char *usage;
+    const char *text;
+} help_entry_t;
+
+static const help_entry_t g_help[] = {
+    /* values and variables */
+    { "set", "values", "set(x): value", "store a value in x" },
+    { "print", "values", "print(_): value", "print a value and a newline" },
+    { "typeof", "values", "typeof(t): value", "type name of a value" },
+    { "global", "values", "global(_): name ...",
+      "make names global (top level: in every function)" },
+    { "eval", "values", "eval(x): \"source\"", "run USSR code from a string" },
+    { "fail", "values", "fail(_): \"message\"", "stop with an error message" },
+
+    /* arithmetic */
+    { "add", "math", "add(sum): a b", "a + b" },
+    { "sub", "math", "sub(diff): a b", "a - b" },
+    { "mul", "math", "mul(product): a b", "a * b" },
+    { "div", "math", "div(quotient): a b", "a / b, always a real" },
+    { "mod", "math", "mod(remainder): a b", "a % b for integers" },
+    { "sin", "math", "sin(y): x", "sine, radians" },
+    { "ln", "math", "ln(y): x", "natural logarithm" },
+    { "random64", "math", "random64(r):", "random 64-bit integer" },
+    { "seed_random64", "math", "seed_random64(_): seed",
+      "seed the random generator" },
+    { "time", "math", "time(now):", "current time" },
+
+    /* control flow */
+    { "if", "control", "if(_): {condition} [ ... ]",
+      "run the block when the condition holds; elif/else may follow" },
+    { "elif", "control", "elif(_): {condition} [ ... ]",
+      "next test of an if chain" },
+    { "else", "control", "else(_): [ ... ]", "last branch of an if chain" },
+    { "while", "control", "while(_): {condition} [ ... ]",
+      "repeat the block while the condition holds" },
+    { "do", "control", "do(_): 1 [ ... ]  loop(_): {condition}",
+      "run the block, then repeat while loop's condition holds" },
+    { "loop", "control", "loop(_): {condition}", "the test after a do block" },
+    { "break", "control", "break(_): \"\"", "leave the innermost loop" },
+    { "continue", "control", "continue(_): \"\"",
+      "next iteration of the innermost loop" },
+    { "return", "control", "return(_): value", "return from a function" },
+
+    /* strings */
+    { "concat", "strings", "concat(s): a b ...", "join strings" },
+    { "len", "strings", "len(n): v", "length of a string or vector" },
+    { "byte", "strings", "byte(b): s i", "byte at index i" },
+    { "slice", "strings", "slice(t): s i n", "n bytes of s from index i" },
+    { "chr", "strings", "chr(s): byte", "one-byte string for 1..255" },
+
+    /* structs, vectors, UNO */
+    { "struct", "data", "struct(Name): \"field:type\" ...", "declare a struct" },
+    { "new", "data", "new(x): \"Name\" value ...", "make a struct instance" },
+    { "getf", "data", "getf(v): obj field", "read a field" },
+    { "setf", "data", "setf(_): obj field value", "write a field" },
+    { "vec", "data", "vec(v): \"\"", "make a vector" },
+    { "push", "data", "push(_): v item", "append to a vector" },
+    { "pop", "data", "pop(item): v", "remove the last item" },
+    { "at", "data", "at(item): v index", "item at index" },
+    { "encode", "data", "encode(s): obj", "value to UNO text" },
+    { "decode", "data", "decode(obj): s", "UNO text to value" },
+
+    /* files */
+    { "readfile", "files", "readfile(v): path", "whole file as a string" },
+    { "writefile", "files", "writefile(v): path data", "replace a file" },
+    { "file_exists", "files", "file_exists(v): path", "1 if the path exists" },
+    { "open_file", "files", "open_file(h): path mode", "open a file; -1 on error" },
+    { "read_file", "files", "read_file(s): h [n]", "read from a handle" },
+    { "read_line", "files", "read_line(s): h", "read one line" },
+    { "write_file", "files", "write_file(n): h data", "write to a handle" },
+    { "close_file", "files", "close_file(ok): h", "close a handle" },
+    { "list_dir", "files", "list_dir(v): path", "directory entries" },
+    { "is_dir", "files", "is_dir(v): path", "1 if path is a directory" },
+    { "getcwd", "files", "getcwd(d):", "current directory" },
+    { "cd", "files", "cd(_): path", "change directory" },
+    { "make_dir", "files", "make_dir(r): path", "create a directory" },
+    { "rename_path", "files", "rename_path(r): from to", "rename or move" },
+    { "copy_file", "files", "copy_file(r): from to", "copy a file" },
+    { "remove_file", "files", "remove_file(r): path", "delete a file" },
+    { "remove_dir", "files", "remove_dir(r): path", "delete an empty directory" },
+
+    /* environment and shell */
+    { "getenv", "shell", "getenv(v): name", "environment variable, or null" },
+    { "setenv", "shell", "setenv(r): name value", "set an environment variable" },
+    { "unsetenv", "shell", "unsetenv(r): name", "remove an environment variable" },
+    { "keybind", "shell", "keybind(_): \"Alt+F1\" \"help(_):\"",
+      "bind a REPL key to a line; \"\" unbinds; one argument reads a "
+      "binding, none lists them. Keys: Ctrl/Alt(Mod)/Shift + a..z, 0..9, "
+      "F1..F12" },
+    { "prompt", "shell", "prompt(answer): \"question\" ...",
+      "ask an AI model; with prompt(_) the answer is printed. "
+      "Configure with USSR_AI_* variables: help(_): \"ai\"" },
+    { "help", "shell", "help(_): [\"name\"]", "this help" },
+
+    /* processes */
+    { "async", "processes", "async(p): \"name\" arg ...",
+      "start a definition as a process" },
+    { "await", "processes", "await(r): pid", "wait for a process's result" },
+    { "sleep", "processes", "sleep(_): milliseconds", "pause this process" },
+    { "process", "processes", "process(_): name", "start a definition as a process" },
+    { "load", "processes", "load(p): \"script.su\"", "run a script as a process" },
+    { NULL, NULL, NULL, NULL }
+};
+
+static const char *const g_groups[] = {
+    "values", "math", "control", "strings", "data",
+    "files", "shell", "processes", NULL
+};
+
+/* text word-wrapped to 78 columns, every line indented by two */
+static void help_wrap(const char *text)
+{
+    int column = 0;
+
+    while (*text != '\0')
+    {
+        size_t word = strcspn(text, " ");
+
+        if (column > 2 && column + 1 + (int)word > 78)
+        {
+            printf("\n");
+            column = 0;
+        }
+        column += printf(column == 0 ? "  %.*s" : " %.*s", (int)word, text);
+        text += word;
+        while (*text == ' ')
+            ++text;
+    }
+    printf("\n");
+}
+
+static void help_overview(void)
+{
+    size_t g;
+
+    printf("USSR: every line is a command\n"
+           "    name(result): argument argument ...\n"
+           "  _ discards the result; {a + b} computes; [ ... ] is a block;\n"
+           "  any other name runs a program: ls(_): \"-l\"\n\n");
+    for (g = 0; g_groups[g] != NULL; ++g)
+    {
+        size_t i;
+        int column = printf("  %-10s", g_groups[g]);
+
+        for (i = 0; g_help[i].name != NULL; ++i)
+        {
+            size_t width;
+
+            if (strcmp(g_help[i].group, g_groups[g]) != 0)
+                continue;
+            width = strlen(g_help[i].name) + 1;
+            if (column + (int)width > 78)
+            {
+                printf("\n%12s", "");
+                column = 12;
+            }
+            column += printf(" %s", g_help[i].name);
+        }
+        printf("\n");
+    }
+    printf("\nhelp(_): \"name\" for one command; topics: \"syntax\", "
+           "\"keys\", \"ai\"\n"
+           "The manual: docs/USSR_USER_MANUAL.md\n");
+}
+
+static void help_keys(void)
+{
+    printf("REPL keys\n"
+           "  Tab           complete commands, variables and paths\n"
+           "  Up / Down     history\n"
+           "  Ctrl-D        exit on an empty line (Ctrl-Z on Windows)\n"
+#ifndef _WIN32
+           "  Ctrl-R        search history\n"
+           "  Ctrl-A / E    start / end of line\n"
+           "  Ctrl-K / U    cut to end / start of line\n"
+           "  Ctrl-W        cut the word before the cursor\n"
+#endif
+           "\nYour own keys run a line when pressed:\n"
+           "  keybind(_): \"Alt+F1\" \"help(_):\"\n"
+           "  keybind(_): \"Ctrl+G\" \"ls(_):\"\n"
+           "  keybind(_): \"Alt+F1\" \"\"        remove it\n"
+           "  keybind(_):                     list them\n"
+           "Mod means Alt: terminals never see the Super/Windows key.\n"
+           "Put bindings in moscow.su to have them in every session.\n");
+}
+
+static void help_ai(void)
+{
+    printf("prompt(answer): \"To be or not to be?\"\n"
+           "  asks a chat model through the curl program.\n\n"
+           "  USSR_AI_PROVIDER    anthropic (default) or openai\n"
+           "                      (openai also means any OpenAI-compatible\n"
+           "                      server: Ollama, LM Studio, OpenRouter ...)\n"
+           "  USSR_AI_URL         endpoint; default is the provider's API\n"
+           "  USSR_AI_MODEL       model; anthropic default claude-sonnet-5-5\n"
+           "  USSR_AI_KEY         API key (or ANTHROPIC_API_KEY / OPENAI_API_KEY)\n"
+           "  USSR_AI_SYSTEM      system prompt\n"
+           "  USSR_AI_MAX_TOKENS  answer length limit\n"
+           "  USSR_AI_TIMEOUT     seconds, default 120\n"
+           "  USSR_AI_CURL        curl program, when not on PATH\n\n"
+           "Local Ollama example:\n"
+           "  setenv(_): \"USSR_AI_PROVIDER\" \"openai\"\n"
+           "  setenv(_): \"USSR_AI_URL\" "
+           "\"http://localhost:11434/v1/chat/completions\"\n"
+           "  setenv(_): \"USSR_AI_MODEL\" \"llama3.2\"\n");
+}
+
+static void help_syntax(void)
+{
+    printf("name(result): arg arg ...   one command per line\n"
+           "  \"text\"  42  -1.5  true  null    values\n"
+           "  x                              a variable\n"
+           "  {x * 2 > y && z != 0}          an expression\n"
+           "  [ ... ]                        a block of commands\n"
+           "  # comment\n"
+           "  f(r): a b [ mul(r): a b ]      defines function f\n"
+           "  name?  / name!                 read / write the shared hash\n"
+           "  $include \"file.su\"  $define  preprocessor\n");
+}
+
+int ussr_help_print(const char *topic)
+{
+    size_t i;
+    size_t length;
+    int shown = 0;
+
+    if (topic == NULL || topic[0] == '\0')
+    {
+        help_overview();
+        return 0;
+    }
+    if (strcmp(topic, "keys") == 0)
+    {
+        help_keys();
+        return 0;
+    }
+    if (strcmp(topic, "ai") == 0)
+    {
+        help_ai();
+        return 0;
+    }
+    if (strcmp(topic, "syntax") == 0)
+    {
+        help_syntax();
+        return 0;
+    }
+
+    for (i = 0; g_help[i].name != NULL; ++i)
+    {
+        if (strcmp(g_help[i].name, topic) == 0)
+        {
+            printf("%s\n", g_help[i].usage);
+            help_wrap(g_help[i].text);
+            if (strcmp(topic, "keybind") == 0)
+                printf("  more: help(_): \"keys\"\n");
+            return 0;
+        }
+    }
+
+    length = strlen(topic);
+    for (i = 0; g_help[i].name != NULL; ++i)
+    {
+        if (strncmp(g_help[i].name, topic, length) == 0)
+        {
+            printf("%s%s", shown ? " " : "did you mean: ", g_help[i].name);
+            shown = 1;
+        }
+    }
+    if (shown)
+        printf("\n");
+    else
+        printf("no help for '%s'; it may be a program: try %s(_): \"--help\"\n",
+               topic, topic);
+    return -1;
+}

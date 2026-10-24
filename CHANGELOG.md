@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- `keybind(_): "Mod+F1" "help(_):"` binds a REPL key (Ctrl/Alt/Shift with a..z, 0..9, F1..F12; Mod is Alt) to a line that runs when the key is pressed; one argument reads a binding, none lists them, an empty line unbinds. Works in bestline (xterm, VT220, rxvt, Linux console sequences) and the Windows console editor. Test: `tests/keybind.su`.
+- `prompt(answer): "To be or not to be?"` asks an AI model through the `curl` program, Anthropic Messages or OpenAI-compatible Chat Completions, configured with `USSR_AI_PROVIDER`, `USSR_AI_URL`, `USSR_AI_MODEL`, `USSR_AI_KEY` and friends; `prompt(_)` prints the answer. The key never appears on a command line. Test: `tests/prompt.su` with canned responses in `tests/ai/`.
+- `help(_):` lists the builtins; `help(_): "name"` shows one command's usage; topics `syntax`, `keys`, `ai`.
 - `ussr -c script.su [out.ru]` (`--compile`) compiles to a `.ru` bytecode file without running it; `ussr program.ru` validates and runs it (signature, format and VM ABI versions, CRC-32, bounds). Blocks passed to commands (`@` chaining) are stored as syntax (format 3) and run as from source; `tests/ru/blocks.su` round-trips one.
 - Built-in `Vec2`/`Vec3` struct types with `+ -`, scaling by `* /` and `= !=` in expressions; `src/libs/vectors.su` adds `vdot`, `vcross`, `vlen`, `vnorm`, `vlerp` and more.
 - `getenv`, `setenv` and `unsetenv` builtins (UTF-8 on Windows).
@@ -34,6 +37,7 @@
 - Tver and Tula are now written in USSR (`src/tver/tver.su`, `src/tula/tula.su`); their C sources were removed. Petersburg stays native.
 
 ### Fixed
+- Windows `ussr_process_run`: the temporary files for a child's stdin and captured stdout were opened non-inheritable, so the child never saw them (no caller used either until `prompt`).
 - `math.su`: `tan`/`ctg` guards used `==` instead of `=`.
 - REPL no longer hangs reading redirected stdin on Windows.
 - REPL on Linux and macOS prints the `PS1`/`PS2` prompts for piped input too, as on Windows and as documented.

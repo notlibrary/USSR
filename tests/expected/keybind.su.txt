@@ -1,0 +1,24 @@
+PASS no bindings at start
+PASS bind Mod+F1
+PASS Mod is Alt
+PASS chords ignore case and take -
+PASS rebinding replaces
+PASS unbound chord is null
+Alt+F1         help(_):
+Ctrl+G         getcwd(d):
+PASS list counts bindings
+PASS unbind succeeds
+PASS unbound after unbind
+keybind(_): "Alt+F1" "help(_):"
+  bind a REPL key to a line; "" unbinds; one argument reads a binding, none
+  lists them. Keys: Ctrl/Alt(Mod)/Shift + a..z, 0..9, F1..F12
+  more: help(_): "keys"
+PASS help knows keybind
+prompt(answer): "question" ...
+  ask an AI model; with prompt(_) the answer is printed. Configure with
+  USSR_AI_* variables: help(_): "ai"
+PASS help knows prompt
+
+--- stderr ---
+
+--- exit 0 ---

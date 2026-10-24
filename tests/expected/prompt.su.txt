@@ -1,0 +1,6 @@
+PASS anthropic text blocks joined
+PASS openai content, UTF-8 and surrogate pairs
+
+--- stderr ---
+
+--- exit 0 ---

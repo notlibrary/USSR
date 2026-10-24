@@ -2508,6 +2508,9 @@ rt_is_host(r): nm [
     if(_): {nm = "copy_file"} [ set(r): 1 ]
     if(_): {nm = "remove_file"} [ set(r): 1 ]
     if(_): {nm = "remove_dir"} [ set(r): 1 ]
+    if(_): {nm = "keybind"} [ set(r): 1 ]
+    if(_): {nm = "prompt"} [ set(r): 1 ]
+    if(_): {nm = "help"} [ set(r): 1 ]
     if(_): {nm = "make_dir"} [ set(r): 1 ]
     if(_): {nm = "writefile"} [ set(r): 1 ]
     if(_): {nm = "terminal_escape"} [ set(r): 1 ]
@@ -2604,6 +2607,21 @@ rt_host(r): nm vals [
     if(_): {nm = "remove_dir"} [
         if(_): {rt_hn = 1} [ remove_dir(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "keybind"} [
+        if(_): {rt_hn = 0} [ keybind(r): ]
+        if(_): {rt_hn = 1} [ keybind(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ keybind(r): rt_ha0 rt_ha1 ]
+    ]
+    if(_): {nm = "prompt"} [
+        if(_): {rt_hn = 0} [ rt_fatal(_): ]
+        if(_): {rt_hn = 1} [ prompt(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ prompt(r): rt_ha0 rt_ha1 ]
+    ]
+    if(_): {nm = "help"} [
+        if(_): {rt_hn = 0} [ help(r): ]
+        if(_): {rt_hn = 1} [ help(r): rt_ha0 ]
+        if(_): {rt_hn > 1} [ rt_fatal(_): ]
     ]
     if(_): {nm = "make_dir"} [
         if(_): {rt_hn = 1} [ make_dir(r): rt_ha0 ]
