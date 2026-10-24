@@ -1161,6 +1161,23 @@ static int oop_do_terminal_getch(
                     return 0;
                 }
 
+                /* F-keys and Alt chords as the bytes an xterm sends */
+                {
+                    char sequence[16];
+                    int length = ussr_keybind_getch_sequence(
+                        c, c2, sequence, sizeof(sequence));
+
+                    if (length > 1 &&
+                        (size_t)(length - 1) <= sizeof(term_pushback))
+                    {
+                        memcpy(term_pushback, sequence + 1,
+                               (size_t)(length - 1));
+                        term_pushback_count = length - 1;
+                        *out_result = ussr_integer(27);
+                        return 0;
+                    }
+                }
+
                 continue; /* ignore other special keys */
             }
 
@@ -2873,6 +2890,33 @@ static int oop_do_keybind(
     return 0;
 }
 
+/* keybind_match(line): bytes   the line bound to the key that sends
+ * these bytes (a terminal's sequence, as terminal_getch delivers it), or
+ * null: lets a REPL written in USSR fire key bindings. */
+static int oop_do_keybind_match(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t *values = NULL;
+    const char *line;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: keybind_match(line): bytes\n");
+        return -1;
+    }
+    if (oop_string_arguments("keybind_match", arguments, argument_count,
+                             &values) != 0)
+        return -1;
+    line = ussr_keybind_match_sequence(values[0].data.string,
+                                       strlen(values[0].data.string));
+    *out_result = line != NULL ? ussr_string(line) : ussr_null();
+    oop_free_values(values, argument_count);
+    return 0;
+}
+
 /* prompt(answer): "question" ...   arguments are joined with spaces;
  * prompt(_) prints the answer instead of storing it. */
 static int oop_do_prompt(
@@ -3067,6 +3111,8 @@ int ussr_oop_dispatch(
         status = oop_do_decode(arguments, argument_count, out_result);
     else if (strcmp(command, "keybind") == 0)
         status = oop_do_keybind(arguments, argument_count, out_result);
+    else if (strcmp(command, "keybind_match") == 0)
+        status = oop_do_keybind_match(arguments, argument_count, out_result);
     else if (strcmp(command, "prompt") == 0)
         status = oop_do_prompt(return_name, arguments, argument_count,
                                out_result);

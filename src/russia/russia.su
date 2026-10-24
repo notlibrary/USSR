@@ -2510,6 +2510,7 @@ rt_is_host(r): nm [
     if(_): {nm = "remove_file"} [ set(r): 1 ]
     if(_): {nm = "remove_dir"} [ set(r): 1 ]
     if(_): {nm = "keybind"} [ set(r): 1 ]
+    if(_): {nm = "keybind_match"} [ set(r): 1 ]
     if(_): {nm = "prompt"} [ set(r): 1 ]
     if(_): {nm = "__prompt_print"} [ set(r): 1 ]
     if(_): {nm = "help"} [ set(r): 1 ]
@@ -2647,6 +2648,10 @@ rt_host(r): nm vals [
         if(_): {rt_hn = 0} [ keybind(r): ]
         if(_): {rt_hn = 1} [ keybind(r): rt_ha0 ]
         if(_): {rt_hn = 2} [ keybind(r): rt_ha0 rt_ha1 ]
+    ]
+    if(_): {nm = "keybind_match"} [
+        if(_): {rt_hn = 1} [ keybind_match(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
     ]
     if(_): {nm = "prompt" || nm = "__prompt_print"} [
         rt_prompt(r): nm vals
@@ -8118,6 +8123,162 @@ init(ret): arg_cnt arg_vec [
 
 # One line without its line ending; sets rp_eof at end of input.
 repl_rd(r): [
+    global(_): rp_tty
+    if(_): {rp_tty = 1} [ repl_rd_tty(r): ]
+    else(_): [ repl_rd_pipe(r): ]
+]
+
+# A line typed at a terminal, read in raw mode and echoed here, so that a
+# key bound with keybind fires when pressed: its bytes (a control key or a
+# whole escape sequence) go to keybind_match, and a bound line replaces
+# what was typed, as ussr's line editor does. Backspace removes a whole
+# UTF-8 character, Ctrl-C drops the line, Ctrl-D or Ctrl-Z on an empty
+# line ends input.
+repl_rd_tty(r): [
+    global(_): rp_eof
+    set(r): ""
+    set(rrt_n): 0
+    set(rrt_need): 0
+    set(rrt_pend): ""
+    chr(rrt_bs): 8
+    chr(rrt_esc): 27
+    terminal_raw(_):
+    set(rrt_go): 1
+    while(_): {rrt_go = 1} [
+        terminal_getch(rrt_c):
+        set(rrt_key): ""
+        if(_): {rrt_c < 0} [
+            set(rrt_go): 0
+            len(rrt_l): r
+            if(_): {rrt_l = 0} [ set(rp_eof): 1 ]
+        ]
+        elif(_): {rrt_c = 13 || rrt_c = 10} [ set(rrt_go): 0 ]
+        elif(_): {rrt_c = 127 || rrt_c = 8} [
+            if(_): {rrt_n > 0} [
+                repl_rubout(r): r
+                sub(rrt_n): rrt_n 1
+                concat(rrt_er): rrt_bs " " rrt_bs
+                template(_): "STR" rrt_er
+            ]
+        ]
+        elif(_): {rrt_c = 27} [ repl_esc(rrt_key): ]
+        elif(_): {rrt_c > 0 && rrt_c < 32 && rrt_c != 9} [ chr(rrt_key): rrt_c ]
+        elif(_): {rrt_c > 0} [
+            chr(rrt_ch): rrt_c
+            if(_): {rrt_c >= 128 && rrt_c < 192} [
+                if(_): {rrt_need > 0} [
+                    concat(rrt_pend): rrt_pend rrt_ch
+                    sub(rrt_need): rrt_need 1
+                    if(_): {rrt_need = 0} [
+                        concat(r): r rrt_pend
+                        template(_): "STR" rrt_pend
+                        add(rrt_n): rrt_n 1
+                    ]
+                ]
+            ]
+            elif(_): {rrt_c >= 192} [
+                set(rrt_pend): rrt_ch
+                set(rrt_need): 1
+                if(_): {rrt_c >= 224} [ set(rrt_need): 2 ]
+                if(_): {rrt_c >= 240} [ set(rrt_need): 3 ]
+            ]
+            else(_): [
+                concat(r): r rrt_ch
+                template(_): "STR" rrt_ch
+                add(rrt_n): rrt_n 1
+            ]
+        ]
+        len(rrt_kl): rrt_key
+        if(_): {rrt_kl > 0} [
+            keybind_match(rrt_bound): rrt_key
+            typeof(rrt_bt): rrt_bound
+            if(_): {rrt_bt = "string"} [
+                set(rrt_er): ""
+                set(rrt_i): 0
+                while(_): {rrt_i < rrt_n} [
+                    concat(rrt_er): rrt_er rrt_bs
+                    add(rrt_i): rrt_i 1
+                ]
+                set(r): rrt_bound
+                concat(rrt_er): rrt_er rrt_esc "[K" r
+                template(_): "STR" rrt_er
+                set(rrt_go): 0
+            ]
+            elif(_): {rrt_c = 3} [
+                set(r): ""
+                set(rrt_go): 0
+            ]
+            elif(_): {rrt_c = 4 || rrt_c = 26} [
+                len(rrt_l): r
+                if(_): {rrt_l = 0} [
+                    set(rp_eof): 1
+                    set(rrt_go): 0
+                ]
+            ]
+        ]
+    ]
+    terminal_sane(_):
+    print(_): ""
+]
+
+# s without its last UTF-8 character.
+repl_rubout(r): s [
+    len(rru_i): s
+    set(rru_go): 1
+    while(_): {rru_go = 1 && rru_i > 0} [
+        sub(rru_i): rru_i 1
+        byte(rru_b): s rru_i
+        if(_): {rru_b < 128 || rru_b >= 192} [ set(rru_go): 0 ]
+    ]
+    slice(r): s 0 rru_i
+]
+
+# The rest of an escape sequence whose ESC was just read, ESC included:
+# ESC x (Alt+x), ESC [ ... final (CSI, also ESC [ [ A Linux console F-keys),
+# ESC O [digits] x (SS3), each possibly after a second ESC (Alt).
+repl_esc(r): [
+    chr(r): 27
+    terminal_getch(re_c):
+    if(_): {re_c = 27} [
+        concat(r): r r
+        terminal_getch(re_c):
+    ]
+    if(_): {re_c > 0} [
+        chr(re_ch): re_c
+        concat(r): r re_ch
+        if(_): {re_c = 91} [
+            set(re_go): 1
+            set(re_k): 0
+            while(_): {re_go = 1} [
+                terminal_getch(re_d):
+                if(_): {re_d < 1} [ set(re_go): 0 ]
+                else(_): [
+                    chr(re_dh): re_d
+                    concat(r): r re_dh
+                    add(re_k): re_k 1
+                    if(_): {re_d >= 64 && re_d <= 126} [
+                        if(_): {re_d != 91 || re_k > 1} [ set(re_go): 0 ]
+                    ]
+                ]
+            ]
+        ]
+        elif(_): {re_c = 79} [
+            set(re_go): 1
+            while(_): {re_go = 1} [
+                terminal_getch(re_d):
+                if(_): {re_d < 1} [ set(re_go): 0 ]
+                else(_): [
+                    chr(re_dh): re_d
+                    concat(r): r re_dh
+                    if(_): {re_d < 48 || re_d > 57} [ set(re_go): 0 ]
+                ]
+            ]
+        ]
+    ]
+]
+
+# A piped or redirected line, byte by byte.
+repl_rd_pipe(r): [
     global(_): rp_eof
     set(r): ""
     set(rrd_go): 1
@@ -8296,7 +8457,7 @@ repl_prompt(r): cont [
 ]
 
 repl(r): [
-    global(_): rp_eof
+    global(_): rp_eof rp_tty
     print(_): "USSR Unified Shell Script REPL"
     print(_): "USSR v0.4"
     print(_): "Enter a command list or press Ctrl-D to exit."
@@ -8306,6 +8467,12 @@ repl(r): [
     set(rp_eof): 0
     set(rp_lines): 0
     set(rp_first): 1
+    # terminal_raw succeeds (0) only on a terminal: there lines are read
+    # in raw mode so key bindings fire as the key is pressed
+    terminal_raw(rp_rawp):
+    terminal_sane(_):
+    set(rp_tty): 0
+    if(_): {rp_rawp = 0} [ set(rp_tty): 1 ]
     while(_): {rp_eof = 0} [
         set(rp_cont): 0
         if(_): {rp_dep > 0} [ set(rp_cont): 1 ]

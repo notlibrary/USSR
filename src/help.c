@@ -96,6 +96,9 @@ static const help_entry_t g_help[] = {
       "bind a REPL key to a line; \"\" unbinds; one argument reads a "
       "binding, none lists them. Keys: Ctrl/Alt(Mod)/Shift + a..z, 0..9, "
       "F1..F12" },
+    { "keybind_match", "shell", "keybind_match(line): bytes",
+      "the line bound to the key that sends these bytes, or null "
+      "(for REPLs written in USSR)" },
     { "prompt", "shell", "prompt(answer): \"question\" ...",
       "ask an AI model; with prompt(_) the answer is printed. "
       "Configure with USSR_AI_* variables: help(_): \"ai\"" },

@@ -7,6 +7,10 @@ PASS unbound chord is null
 Alt+F1         help(_):
 Ctrl+G         getcwd(d):
 PASS list counts bindings
+PASS xterm Alt+F1 bytes match
+PASS ESC-prefixed Alt+F1 bytes match
+PASS Ctrl+G byte matches
+PASS unbound key bytes are null
 PASS unbind succeeds
 PASS unbound after unbind
 keybind(_): "Alt+F1" "help(_):"

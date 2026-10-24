@@ -53,4 +53,11 @@ const char *ussr_keybind_match_sequence(const char *seq, size_t length);
  * key (code is the byte after it). Returns the bound line, or NULL. */
 const char *ussr_keybind_match_getch(int prefix, int code);
 
+/* The bytes an xterm sends for the same extended _getch() key (F1..F12
+ * with modifiers, Alt+letter, Alt+digit), so Windows console input reads
+ * like a terminal's. Returns the length written to out, or 0 for a key
+ * with no such form. */
+int ussr_keybind_getch_sequence(int prefix, int code,
+                                char *out, size_t size);
+
 #endif /* USSR_KEYBIND_H */

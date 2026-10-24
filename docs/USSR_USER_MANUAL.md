@@ -93,6 +93,14 @@ Ctrl+H/I/J/M (Backspace, Tab, Enter), Ctrl with a digit, and Shift with a
 letter or digit. Put bindings in `moscow.su` to have them in every
 session.
 
+Bindings also fire in the REPL of the self-hosted interpreter
+(`ussr src/russia/russia.su`), which reads keys itself: on a terminal it
+reads each line in raw mode and passes every control key and escape
+sequence to `keybind_match(line): bytes`, which returns the bound line or
+`null`. A REPL or editor written in USSR can do the same. On Windows,
+`terminal_getch` delivers F-keys and Alt chords as the bytes an xterm
+sends (`ESC [1;3P` for Alt+F1, `ESC x` for Alt+x), as on Linux.
+
 **Asking an AI.** `prompt(answer): "To be or not to be?"` sends the question
 (several arguments are joined with spaces) to a chat model and stores the
 text of its reply; `prompt(_): "..."` prints the reply instead. The request

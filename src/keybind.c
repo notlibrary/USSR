@@ -476,21 +476,12 @@ static int keybind_scan_letter(int code)
     return 0;
 }
 
-const char *ussr_keybind_match_getch(int prefix, int code)
+/* Chord of one extended _getch() key (after its 0x00/0xE0 prefix). */
+static int keybind_getch_decode(int prefix, int code, int *mods_out,
+                                int *key_out)
 {
     int mods = 0;
     int key = 0;
-
-    if (g_binding_count == 0)
-        return NULL;
-
-    if (prefix != 0x00 && prefix != 0xE0)
-    {
-        /* plain character: only Ctrl+letter can be bound */
-        if (code < 1 || code > 26)
-            return NULL;
-        return ussr_keybind_find(USSR_KEY_CTRL, 'a' + code - 1);
-    }
 
     if (code >= 59 && code <= 68)
         key = USSR_KEY_F(code - 58);
@@ -521,7 +512,64 @@ const char *ussr_keybind_match_getch(int prefix, int code)
         key = keybind_scan_letter(code);
     }
     else
+        return 0;
+
+    *mods_out = mods;
+    *key_out = key;
+    return 1;
+}
+
+const char *ussr_keybind_match_getch(int prefix, int code)
+{
+    int mods;
+    int key;
+
+    if (g_binding_count == 0)
         return NULL;
 
+    if (prefix != 0x00 && prefix != 0xE0)
+    {
+        /* plain character: only Ctrl+letter can be bound */
+        if (code < 1 || code > 26)
+            return NULL;
+        return ussr_keybind_find(USSR_KEY_CTRL, 'a' + code - 1);
+    }
+    if (!keybind_getch_decode(prefix, code, &mods, &key))
+        return NULL;
     return ussr_keybind_find(mods, key);
+}
+
+int ussr_keybind_getch_sequence(int prefix, int code,
+                                char *out, size_t size)
+{
+    static const int tilde[12] = { 11, 12, 13, 14, 15, 17,
+                                   18, 19, 20, 21, 23, 24 };
+    int mods;
+    int key;
+    int parameter;
+    int n;
+
+    if (!keybind_getch_decode(prefix, code, &mods, &key))
+        return 0;
+
+    if (key < USSR_KEY_F(1))
+        n = snprintf(out, size, "\033%c", key); /* only Alt+key decodes */
+    else
+    {
+        int f = key - USSR_KEY_F(0);
+
+        /* xterm: 1 + Shift 1 | Alt 2 | Ctrl 4 */
+        parameter = 1 + ((mods & USSR_KEY_SHIFT) ? 1 : 0) +
+                    ((mods & USSR_KEY_ALT) ? 2 : 0) +
+                    ((mods & USSR_KEY_CTRL) ? 4 : 0);
+        if (f <= 4 && parameter == 1)
+            n = snprintf(out, size, "\033O%c", 'P' + f - 1);
+        else if (f <= 4)
+            n = snprintf(out, size, "\033[1;%d%c", parameter, 'P' + f - 1);
+        else if (parameter == 1)
+            n = snprintf(out, size, "\033[%d~", tilde[f - 1]);
+        else
+            n = snprintf(out, size, "\033[%d;%d~", tilde[f - 1], parameter);
+    }
+    return n > 0 && (size_t)n < size ? n : 0;
 }

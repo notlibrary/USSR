@@ -39,6 +39,21 @@ init(result): arg_count arg_values [
     keybind(n):
     check(_): "list counts bindings" n 2
 
+    # keybind_match: the raw bytes a terminal sends for a key
+    chr(esc): 27
+    concat(seq): esc "[1;3P"
+    keybind_match(line): seq
+    check(_): "xterm Alt+F1 bytes match" line "help(_):"
+    concat(seq): esc esc "OP"
+    keybind_match(line): seq
+    check(_): "ESC-prefixed Alt+F1 bytes match" line "help(_):"
+    chr(seq): 7
+    keybind_match(line): seq
+    check(_): "Ctrl+G byte matches" line "getcwd(d):"
+    concat(seq): esc "[A"
+    keybind_match(line): seq
+    check(_): "unbound key bytes are null" line null
+
     keybind(r): "Alt+F1" ""
     check(_): "unbind succeeds" r 0
     keybind(line): "Alt+F1"
