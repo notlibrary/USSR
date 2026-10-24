@@ -36,6 +36,7 @@ OBJECTS = \
     src/ussr_oop_builtins.o \
     src/keybind.o \
     src/alias.o \
+    src/history.o \
     src/ai.o \
     src/help.o \
     src/scheduler.o \
@@ -87,6 +88,9 @@ src/ai.o: src/ai.c src/ai.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/alias.o: src/alias.c src/alias.h src/ussr.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/history.o: src/history.c src/history.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/help.o: src/help.c src/help.h

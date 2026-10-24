@@ -22,6 +22,7 @@ ussr_SOURCES = \
 	autocomplete.c \
 	keybind.c \
 	alias.c \
+	history.c \
 	ai.c \
 	help.c \
 	completion_fs_posix.c
@@ -49,6 +50,7 @@ EXTRA_DIST = \
 	autocomplete.h \
 	keybind.h \
 	alias.h \
+	history.h \
 	ai.h \
 	help.h \
     process.h \

@@ -68,6 +68,18 @@ line by line on every platform, printing the prompts without line editing. Press
 Ctrl-D (Ctrl-Z on Windows) on an empty line to exit. Arrow-key history
 is supported on every platform.
 
+**History file.** The REPL keeps its history across sessions in
+`.ussr_history` in your home folder (`HOME`, else `USERPROFILE` on
+Windows): one entry per line, oldest first. Every line you type is added
+at once, so a closed window loses nothing; Up and Down reach entries from
+earlier sessions, and Tab completion learns from them. `USSR_HISTFILE`
+names another file, set but empty it keeps none; `USSR_HISTSIZE` (default
+1000) is how many entries are loaded and kept, the file being trimmed to
+that many when the REPL starts. A repeat of the previous entry is not
+saved. Only a REPL reading a terminal uses the file, so piped input and
+test runs never touch your history. ussr and the self-hosted
+interpreter's REPL (`ussr src/russia/russia.su`) share the same file.
+
 **Help.** `help(_):` lists every builtin by group; `help(_): "name"` shows
 one command's usage, and the topics `"syntax"`, `"keys"` and `"ai"` cover
 the language at a glance, the REPL keys and `prompt`'s settings.
