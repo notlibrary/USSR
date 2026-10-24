@@ -9,6 +9,7 @@
 #include <direct.h>
 #define ussr_chdir _chdir
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #define ussr_chdir chdir
 #endif
@@ -46,6 +47,8 @@ extern int ussr_argument_evaluate(
 #include "uno.h"
 #include "uno.h"
 #include "ussr_oop_builtins.h"
+#include "keybind.h"
+#include "alias.h"
 #include "vm.h"
 #include "scheduler.h"
 #include "eventq.h"
@@ -1384,6 +1387,89 @@ static int vm_do_load(
     return 1;
 }
 
+/* try(failed): "function" args ...
+ * Calls one of the program's functions with args in a nested VM, in this
+ * process (it shares the globals), and catches its failure: failed is 1
+ * when the call failed, its error already reported, else 0. The call's
+ * result is not kept. Lets a REPL written in USSR (russia.su) carry on
+ * after an error in an entry, as ussr's own REPL does. */
+static int vm_try_call(
+    const ussr_bc_program_t *program,
+    const ussr_argument_t *av,
+    size_t argument_count,
+    ussr_value_t *out)
+{
+    const char *name;
+    size_t index;
+    size_t i;
+    size_t depth;
+    ussr_vm_t nested;
+    ussr_bc_instruction_t call;
+    int status;
+
+    if (argument_count < 1 || av[0].type != USSR_ARGUMENT_VALUE ||
+        av[0].data.value.type != USSR_STRING)
+    {
+        fprintf(stderr, "USSR: try(failed): \"function\" args ...\n");
+        return -1;
+    }
+    name = av[0].data.value.data.string;
+    for (index = 0; index < program->function_count; ++index)
+    {
+        if (strcmp(program->functions[index].name, name) == 0)
+            break;
+    }
+    if (index == program->function_count)
+    {
+        fprintf(stderr, "USSR: try: no function '%s'\n", name);
+        return -1;
+    }
+    if (program->functions[index].parameter_count != argument_count - 1 ||
+        argument_count - 1 > USSR_VM_RETURN_REG || program->code_count == 0)
+    {
+        fprintf(stderr, "USSR: try: '%s' takes %zu arguments\n", name,
+                program->functions[index].parameter_count);
+        return -1;
+    }
+    for (i = 1; i < argument_count; ++i)
+    {
+        if (av[i].type != USSR_ARGUMENT_VALUE)
+        {
+            fprintf(stderr, "USSR: try: arguments must be values\n");
+            return -1;
+        }
+    }
+
+    vm_init(&nested);
+    nested.running = 1;
+    nested.nested = 1;
+    for (i = 1; i < argument_count; ++i)
+        nested.registers[i - 1] = ussr_value_copy(&av[i].data.value);
+
+    memset(&call, 0, sizeof(call));
+    call.opcode = USSR_BC_CALL;
+    call.a = 0;
+    call.b = (uint8_t)(argument_count - 1);
+    call.c = USSR_VM_RETURN_REG;
+    call.immediate = (uint32_t)index;
+
+    /* Return straight to the program's final HALT, as init does. */
+    depth = ussr_locals_depth();
+    nested.ip = (uint32_t)(program->code_count - 1);
+    status = vm_call(&nested, program, &call);
+    if (status == 0)
+        status = vm_execute(&nested, program, 0);
+
+    /* A failure leaves the calls it was in (and any eval inside them)
+     * on the locals stack: unwind to where the call started. */
+    while (ussr_locals_depth() > depth)
+        ussr_locals_pop();
+    vm_cleanup(&nested);
+
+    *out = ussr_integer(status == USSR_VM_STATUS_DONE ? 0 : 1);
+    return 0;
+}
+
 int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program,
@@ -1922,6 +2008,13 @@ int vm_execute(
                             value = ussr_value_copy(stored);
                     }
                 }
+                /* try needs this program's functions: see vm_try_call */
+                else if (strcmp(program->strings[ins.immediate], "try") == 0)
+                {
+                    result = vm_try_call(program, av, argument_count, &value);
+                    if (result == 0)
+                        native_handled = 1;
+                }
                 /* terminal_* go through ussr_oop_dispatch: those versions
                  * also work on redirected stdin/stdout and deliver console
                  * input as UTF-8 bytes on Windows. */
@@ -2236,9 +2329,16 @@ static int count_brackets(
  * Parse and compile source. Returns 0 with *ast set (NULL for an empty
  * program) and bytecode filled, or -1 after printing a diagnostic.
  */
+/* Set by the REPL for the entry it is about to run: as in an interactive
+ * shell, aliases apply to typed lines only, never to scripts, libraries
+ * or code an entry loads or evals. compile_source clears it. */
+static int repl_expand_aliases = 0;
+
 static int compile_source(const char *source, ussr_bc_program_t *bytecode,
                           ussr_command_list_t **ast)
 {
+    int expand_aliases = repl_expand_aliases;
+
     YY_BUFFER_STATE buffer;
     int result;
 
@@ -2254,6 +2354,7 @@ static int compile_source(const char *source, ussr_bc_program_t *bytecode,
         return -1;
     }
 
+    repl_expand_aliases = 0;
     ussr_parsed_program = NULL;
     result = yyparse();
     yy_delete_buffer(buffer);
@@ -2268,7 +2369,8 @@ static int compile_source(const char *source, ussr_bc_program_t *bytecode,
         return 0;
 
     /* AST -> bytecode happens once. Execution starts only after compilation. */
-    if (ussr_bc_compile(ussr_parsed_program, bytecode) != 0)
+    if ((expand_aliases && ussr_alias_expand(ussr_parsed_program) != 0) ||
+        ussr_bc_compile(ussr_parsed_program, bytecode) != 0)
     {
         ussr_command_list_free(ussr_parsed_program);
         ussr_parsed_program = NULL;
@@ -2738,6 +2840,117 @@ static int repl_locate(const void *context, int text_line,
     return 0;
 }
 
+#ifndef _WIN32
+/* bestline hands over each key's bytes; keybind(_) decides. */
+static const char *repl_key_binding(const char *seq, unsigned long length)
+{
+    return ussr_keybind_match_sequence(seq, (size_t)length);
+}
+#endif
+
+static int file_readable(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+
+    if (file == NULL)
+        return 0;
+    fclose(file);
+    return 1;
+}
+
+/* Whether two existing paths name the same file. */
+static int same_file(const char *a, const char *b)
+{
+#ifdef _WIN32
+    char full_a[_MAX_PATH];
+    char full_b[_MAX_PATH];
+
+    return _fullpath(full_a, a, sizeof(full_a)) != NULL &&
+           _fullpath(full_b, b, sizeof(full_b)) != NULL &&
+           _stricmp(full_a, full_b) == 0;
+#else
+    struct stat sa;
+    struct stat sb;
+
+    return stat(a, &sa) == 0 && stat(b, &sb) == 0 &&
+           sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+}
+
+static int run_startup_file(const char *path)
+{
+    char *startup_argv[2];
+
+    startup_argv[0] = (char *)path;
+    startup_argv[1] = NULL;
+    return run_file(path, 1, startup_argv);
+}
+
+/* Startup files: USSR_MOSCOW names the only one to load ("" loads none);
+ * otherwise moscow.su in the home folder (HOME, else USERPROFILE on
+ * Windows) runs first, for settings wanted everywhere, then moscow.su in
+ * the current folder, for the project at hand, unless it is the same
+ * file. Each is optional. */
+static int run_startup_files(void)
+{
+    char *chosen = ussr_env_get("USSR_MOSCOW");
+    char *home;
+    char *home_moscow = NULL;
+    int status = EXIT_SUCCESS;
+
+    if (chosen != NULL)
+    {
+        if (chosen[0] != '\0')
+        {
+            if (file_readable(chosen))
+                status = run_startup_file(chosen);
+            else
+            {
+                fprintf(stderr, "USSR: USSR_MOSCOW: cannot read %s\n", chosen);
+                status = EXIT_FAILURE;
+            }
+        }
+        free(chosen);
+        return status;
+    }
+
+    home = ussr_env_get("HOME");
+#ifdef _WIN32
+    if (home == NULL || home[0] == '\0')
+    {
+        free(home);
+        home = ussr_env_get("USERPROFILE");
+    }
+#endif
+    if (home != NULL && home[0] != '\0')
+    {
+        size_t length = strlen(home);
+
+        home_moscow = malloc(length + sizeof("/moscow.su"));
+        if (home_moscow != NULL)
+        {
+            int slash = length > 0 &&
+                        (home[length - 1] == '/' || home[length - 1] == '\\');
+
+            sprintf(home_moscow, "%s%smoscow.su", home, slash ? "" : "/");
+            if (!file_readable(home_moscow))
+            {
+                free(home_moscow);
+                home_moscow = NULL;
+            }
+        }
+    }
+    free(home);
+
+    if (home_moscow != NULL)
+        status = run_startup_file(home_moscow);
+    if (status == EXIT_SUCCESS && file_readable("moscow.su") &&
+        (home_moscow == NULL || !same_file(home_moscow, "moscow.su")))
+        status = run_startup_file("moscow.su");
+    free(home_moscow);
+    return status;
+}
+
 static int run_repl(void)
 {
     ussr_preprocessor_t pp;
@@ -2757,8 +2970,10 @@ static int run_repl(void)
     ussr_autocomplete_init();
 #ifdef _WIN32	
 	worstlineSetCompletionCallback(ussr_autocomplete_callback);	
+	worstlineSetKeyCallback(ussr_keybind_match_getch);
 #else
 	bestlineSetCompletionCallback(ussr_autocomplete_callback);
+	bestlineSetKeyCallback(repl_key_binding);
 #endif
 
     if (ussr_pp_init(&pp) != 0)
@@ -2867,6 +3082,7 @@ static int run_repl(void)
             continue;
 
         ussr_parse_begin("<stdin>", repl_locate, &entry_line);
+        repl_expand_aliases = 1;
         result = parse_and_execute(source, 0, NULL, 1);
         ussr_parse_end();
 
@@ -3020,24 +3236,15 @@ int main(int argc, char **argv)
     ussr_sched_init();
 
     /* moscow.su is the USSR shell startup file, analogous to a shell rc.
-     * It is optional and is loaded from the current working directory. */
+     * A failing (or nonzero) startup file stops ussr with its status. */
     {
-        FILE *moscow = fopen("moscow.su", "rb");
-        if (moscow != NULL)
-        {
-            char *moscow_argv[] = { (char *)"moscow.su", NULL };
-            int status;
+        int status = run_startup_files();
 
-            fclose(moscow);
-            status = run_file("moscow.su", 1, moscow_argv);
-            /* A failing (or nonzero) startup file stops ussr with its
-             * status. */
-            if (status != EXIT_SUCCESS)
-            {
-                ussr_sched_cleanup();
-                ussr_cleanup();
-                return status;
-            }
+        if (status != EXIT_SUCCESS)
+        {
+            ussr_sched_cleanup();
+            ussr_cleanup();
+            return status;
         }
     }
 

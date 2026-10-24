@@ -52,5 +52,17 @@ expect "unsetenv restores the default" 'setenv(_): "PS1" "new> "\nunsetenv(_): "
 expect "commands still run under a custom prompt" 'set(a): 6\nmul(b): a 7\nprint(_): b\n' '42' 'PS1=x '
 reject "PS1 text is never executed" 'print(_): 1\n' 'EXECUTED' 'PS1=print(_): "EXECUTED"'
 
+# A runtime error ends its entry, not the REPL; variables survive it.
+# No startup files (USSR_MOSCOW=): ussr numbers a process for each one,
+# which russia.su, running inside the host, cannot see.
+expect "an error ends the entry, not the REPL" \
+    'set(a): 5\nfail(_): "boom"\nprint(_): a\n' \
+    'USSR VM: execution failed (status -1)ussr> 5' -u PS1 USSR_MOSCOW=
+expect "a failed entry is reported like ussr's" \
+    'set(a): 5\nfail(_): "boom"\n' 'process 2 (init) failed' -u PS1 USSR_MOSCOW=
+expect "the REPL carries on after several errors" \
+    'set(n): {1 / 0}\nfail(_): "again"\nprint(_): "still here"\n' \
+    'ussr> still here' -u PS1 USSR_MOSCOW=
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -34,6 +34,10 @@ OBJECTS = \
     src/pp.o \
     src/uno.o \
     src/ussr_oop_builtins.o \
+    src/keybind.o \
+    src/alias.o \
+    src/ai.o \
+    src/help.o \
     src/scheduler.o \
     src/eventq.o \
     src/gc.o \
@@ -73,7 +77,19 @@ src/pp.o: src/pp.c src/pp.h
 src/uno.o: src/uno.c src/uno.h src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-src/ussr_oop_builtins.o: src/ussr_oop_builtins.c src/ussr_oop_builtins.h src/ussr.h src/uno.h
+src/ussr_oop_builtins.o: src/ussr_oop_builtins.c src/ussr_oop_builtins.h src/ussr.h src/uno.h src/ai.h src/help.h src/keybind.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/keybind.o: src/keybind.c src/keybind.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/ai.o: src/ai.c src/ai.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/alias.o: src/alias.c src/alias.h src/ussr.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/help.o: src/help.c src/help.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/scheduler.o: src/scheduler.c src/scheduler.h src/vm.h src/eventq.h src/gc.h

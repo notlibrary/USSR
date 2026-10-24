@@ -1,0 +1,58 @@
+# try(failed): "function" args: an error in the call ends the call, not the
+# program. Prints PASS or FAIL per check; the errors themselves still go to
+# stderr.
+#     ussr tests/try.su
+
+global(_): count
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+bump(r): n [
+    add(count): count n
+    set(r): count
+]
+
+boom(r): n [
+    add(count): count n
+    fail(_): "boom"
+    add(count): count 1000
+]
+
+deep(r): n [
+    if(_): {n = 0} [ fail(_): "bottom of the recursion" ]
+    sub(m): n 1
+    deep(r): m
+]
+
+init(result): arg_count arg_values [
+    set(count): 0
+    set(mine): "kept"
+
+    try(failed): "bump" 5
+    check(_): "a call that works gives 0" failed 0
+    check(_): "its effects stay" count 5
+
+    try(failed): "boom" 100
+    check(_): "a call that fails gives 1" failed 1
+    check(_): "effects before the error stay, the rest never ran" count 105
+
+    try(failed): "deep" 40
+    check(_): "an error 40 calls deep is caught" failed 1
+    check(_): "the caller's locals are intact" mine "kept"
+
+    try(failed): "bump" 1
+    check(_): "calls work after a failure" count 106
+    set(result): 0
+]

@@ -68,6 +68,95 @@ line by line on every platform, printing the prompts without line editing. Press
 Ctrl-D (Ctrl-Z on Windows) on an empty line to exit. Arrow-key history
 is supported on every platform.
 
+**Help.** `help(_):` lists every builtin by group; `help(_): "name"` shows
+one command's usage, and the topics `"syntax"`, `"keys"` and `"ai"` cover
+the language at a glance, the REPL keys and `prompt`'s settings.
+
+**Key bindings.** `keybind(_): "chord" "line"` makes a key run a line of
+USSR at the prompt: pressing it replaces whatever was typed with that line
+and runs it, as if it had been typed and Enter pressed.
+
+```
+keybind(_): "Mod+F1" "help(_):"
+keybind(_): "Ctrl+G" "ls(_): \"-l\""
+keybind(line): "Alt+F1"        # the bound line, or null
+keybind(n):                    # prints every binding; n is how many
+keybind(_): "Alt+F1" ""        # unbind
+```
+
+A chord is modifiers and one key joined by `+` or `-`, in any case:
+`Ctrl` (`Control`, `C`), `Alt` (`Meta`, `Mod`, `M`), `Shift` (`S`), and a
+key `a`..`z`, `0`..`9` or `F1`..`F12`. Terminals never see the
+Super/Windows key, so `Mod` means Alt. Chords a terminal cannot tell from
+editing keys are refused with a reason: a letter without Ctrl or Alt,
+Ctrl+H/I/J/M (Backspace, Tab, Enter), Ctrl with a digit, and Shift with a
+letter or digit. Put bindings in `moscow.su` to have them in every
+session.
+
+Bindings also fire in the REPL of the self-hosted interpreter
+(`ussr src/russia/russia.su`), which reads keys itself: on a terminal it
+reads each line in raw mode and passes every control key and escape
+sequence to `keybind_match(line): bytes`, which returns the bound line or
+`null`. A REPL or editor written in USSR can do the same. On Windows,
+`terminal_getch` delivers F-keys and Alt chords as the bytes an xterm
+sends (`ESC [1;3P` for Alt+F1, `ESC x` for Alt+x), as on Linux.
+
+**Aliases.** `alias(_): "name" "command" "word" ...` gives a command a
+short name: afterwards `name(r): x` runs `command(r): "word" ... x`, the
+alias's words in front of the call's own arguments. The command may be a
+program, a builtin or a function, and may be another alias.
+
+```
+alias(_): "ll" "ls" "-l"       # ll(_): "/tmp"  runs  ls(_): "-l" "/tmp"
+alias(_): "say" "print"
+alias(_): "ls" "ls" "-F"       # an alias may use its own name once
+alias(words): "ll"             # its words as a vector, or null
+alias(n):                      # prints every alias; n is how many
+alias(_): "ll" ""              # remove it
+```
+
+As in an interactive shell, aliases apply only to lines typed at the REPL
+(the ussr REPL and russia.su's). Scripts, libraries, and code a typed line
+loads or `eval`s never see them, so a personal alias cannot change how a
+program behaves; that makes the home `moscow.su` the place for them. Not
+rewritten: a command with an explicit path (`./ll(_):`), a command whose
+last argument is a block (a function definition or control flow), and a
+name already rewritten on the way. Names are letters, digits and `_`; the
+control words (`if`, `while`, `return`, ...) and `alias` cannot be
+aliases.
+
+**Asking an AI.** `prompt(answer): "To be or not to be?"` sends the question
+(several arguments are joined with spaces) to a chat model and stores the
+text of its reply; `prompt(_): "..."` prints the reply instead. The request
+goes through the `curl` program (shipped with Windows 10 and later and with
+nearly every Linux and macOS), so `ussr` links no HTTP or TLS library. The
+API key is passed to curl on its standard input, never on its command line.
+Everything is set with environment variables, which `setenv` changes for
+the next call:
+
+| Variable | Meaning |
+|----------|---------|
+| `USSR_AI_PROVIDER` | `anthropic` (default) or `openai`; `openai` also means any OpenAI-compatible server (Ollama, LM Studio, OpenRouter, vLLM, llama.cpp) |
+| `USSR_AI_URL` | endpoint URL; defaults to `https://api.anthropic.com/v1/messages` or `https://api.openai.com/v1/chat/completions` |
+| `USSR_AI_MODEL` | model name; `anthropic` defaults to `claude-sonnet-5-5`, `openai` needs one |
+| `USSR_AI_KEY` | API key, else `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; may be unset for a local server |
+| `USSR_AI_SYSTEM` | optional system prompt |
+| `USSR_AI_MAX_TOKENS` | reply length limit (`anthropic` default 1024) |
+| `USSR_AI_TIMEOUT` | seconds to wait, default 120 |
+| `USSR_AI_CURL` | path of curl when it is not on `PATH` |
+
+```
+# a local model through Ollama
+setenv(_): "USSR_AI_PROVIDER" "openai"
+setenv(_): "USSR_AI_URL" "http://localhost:11434/v1/chat/completions"
+setenv(_): "USSR_AI_MODEL" "llama3.2"
+prompt(_): "Name three Soviet cities"
+```
+
+A provider's error (bad key, unknown model) stops the command with that
+provider's message. On Windows curl reads its configuration through a
+temporary file that is deleted when the call returns.
+
 **As a script file:**
 
 ```
@@ -84,6 +173,14 @@ integer) gives `0`. A compile error or a runtime error gives `1`. The same
 holds for `.ru` files and `-e`. `moscow.su` (the startup file) stops
 `ussr` with its status when that is not `0`; the REPL ignores the
 statuses of the lines it runs.
+
+**Startup files.** Before a script, `-e` code or the REPL, `ussr` runs
+`moscow.su` from your home folder (`HOME`, else `USERPROFILE` on Windows)
+for settings you want everywhere (aliases, key bindings, `PS1`), and then
+`moscow.su` from the current folder for the project at hand, unless the two
+are the same file. Either may be missing. `USSR_MOSCOW` overrides both: it
+names the only startup file to run, and set but empty it runs none
+(`USSR_MOSCOW= ussr script.su`). `-c` runs no startup file.
 
 ```
 init(ret): arg_cnt arg_vec [
@@ -646,9 +743,33 @@ twice.
 
 **At run time**, an error (bad argument type, division by zero, an
 invalid VM operation, a failed `struct`/`getf`/`setf`/`push`, and so on)
-prints a message to `stderr` and halts the entire script immediately —
-there's no exception/try-catch mechanism. The process exits non-zero.
-Run-time messages do not carry a line number yet.
+prints a message to `stderr` and halts the entire script immediately.
+The process exits non-zero. Run-time messages do not carry a line number
+yet. At the REPL an error ends only the entry it happened in; variables
+and the session carry on.
+
+`try(failed): "function" arg ...` contains an error: it calls one of the
+program's functions, and an error inside that call ends the call instead
+of the program. `failed` is `1` then (the message is still printed),
+else `0`. The call's result is not kept, and whatever the function did
+before the error stays done; pass results back through globals.
+
+```
+global(_): saved
+save(r): path [
+    writefile(r): path "data"
+    set(saved): 1
+]
+init(result): c v [
+    set(saved): 0
+    try(failed): "save" "/no/such/dir/x.txt"
+    if(_): {failed = 1} [ print(_): "could not save" ]
+    set(result): 0
+]
+```
+
+`try` is not available yet in scripts run by the self-hosted
+interpreter (russia.su), which uses it itself to keep its REPL going.
 
 ---
 

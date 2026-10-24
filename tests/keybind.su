@@ -1,0 +1,67 @@
+# REPL key bindings and help: keybind binds, reads back, lists and
+# unbinds; help prints usage. Pressing the keys needs a terminal, so this
+# checks the table the line editors read.
+#     ussr tests/keybind.su
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    keybind(n):
+    check(_): "no bindings at start" n 0
+
+    keybind(r): "Mod+F1" "help(_):"
+    check(_): "bind Mod+F1" r 0
+    keybind(line): "Alt+F1"
+    check(_): "Mod is Alt" line "help(_):"
+    keybind(line): "alt-f1"
+    check(_): "chords ignore case and take -" line "help(_):"
+
+    keybind(_): "Ctrl+G" "ls(_):"
+    keybind(_): "Ctrl+G" "getcwd(d):"
+    keybind(line): "ctrl+g"
+    check(_): "rebinding replaces" line "getcwd(d):"
+
+    keybind(line): "F5"
+    check(_): "unbound chord is null" line null
+
+    keybind(n):
+    check(_): "list counts bindings" n 2
+
+    # keybind_match: the raw bytes a terminal sends for a key
+    chr(esc): 27
+    concat(seq): esc "[1;3P"
+    keybind_match(line): seq
+    check(_): "xterm Alt+F1 bytes match" line "help(_):"
+    concat(seq): esc esc "OP"
+    keybind_match(line): seq
+    check(_): "ESC-prefixed Alt+F1 bytes match" line "help(_):"
+    chr(seq): 7
+    keybind_match(line): seq
+    check(_): "Ctrl+G byte matches" line "getcwd(d):"
+    concat(seq): esc "[A"
+    keybind_match(line): seq
+    check(_): "unbound key bytes are null" line null
+
+    keybind(r): "Alt+F1" ""
+    check(_): "unbind succeeds" r 0
+    keybind(line): "Alt+F1"
+    check(_): "unbound after unbind" line null
+
+    help(r): "keybind"
+    check(_): "help knows keybind" r 0
+    help(r): "prompt"
+    check(_): "help knows prompt" r 0
+    set(result): 0
+]

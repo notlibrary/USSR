@@ -251,6 +251,7 @@ static bestlineXlatCallback *xlatCallback;
 static bestlineHintsCallback *hintsCallback;
 static bestlineFreeHintsCallback *freeHintsCallback;
 static bestlineCompletionCallback *completionCallback;
+static bestlineKeyCallback *keyCallback;
 
 static void bestlineAtExit(void);
 static void bestlineRefreshLine(struct bestlineState *);
@@ -3389,6 +3390,18 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt, con
         if (l.dirty)
             bestlineRefreshLineForce(&l);
         rc = bestlineRead(l.ifd, seq, sizeof(seq), &l);
+        if (rc > 0 && keyCallback && !pastemode) {
+            const char *bound = keyCallback(seq, rc);
+            if (bound) {
+                l.len = 0;
+                l.pos = 0;
+                l.buf[0] = 0;
+                bestlineEditInsert(&l, bound, strlen(bound));
+                seq[0] = '\r';
+                seq[1] = 0;
+                rc = 1;
+            }
+        }
         if (rc > 0) {
             if (seq[0] == Ctrl('R')) {
                 rc = bestlineSearch(&l, seq, sizeof(seq));
@@ -3939,6 +3952,10 @@ void bestlineSetCompletionCallback(bestlineCompletionCallback *fn) {
  * Register a hits function to be called to show hits to the user at the
  * right of the prompt.
  */
+void bestlineSetKeyCallback(bestlineKeyCallback *fn) {
+    keyCallback = fn;
+}
+
 void bestlineSetHintsCallback(bestlineHintsCallback *fn) {
     hintsCallback = fn;
 }

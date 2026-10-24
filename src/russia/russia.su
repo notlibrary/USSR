@@ -30,6 +30,8 @@ global(_): rt_na6 sc_procs sc_cur sc_lhas sc_marks rt_undef cv_strict vm_nbase
 global(_): cv_iline cv_icmd cv_curl cv_curc rt_nowarn rt_eflag
 global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
 global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui cv_fnret
+# a program's arguments: set by ex_ext_ev, read by ex_ext_b's eval
+global(_): rt_xa1 rt_xa2 rt_xa3 rt_xa4 rt_xa5 rt_xa6
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -1437,6 +1439,83 @@ ps_parse(r): src [
         set(r): 1
     ]
 ]
+# REPL entries only (repl_exec): aliases made with alias(_) (in moscow.su,
+# or an earlier REPL line)
+# rewrite commands as ussr's compiler does: the name becomes the
+# alias's first word and its other words go in front of the arguments.
+# Not rewritten: commands whose last argument is a block (definitions,
+# control flow) and a name already expanded on the way (ls -> ls -F).
+ps_alias(r): nd [
+    getf(pa_k): nd "kids"
+    typeof(pa_kt): pa_k
+    if(_): {pa_kt = "vector"} [
+        len(pa_n): pa_k
+        set(pa_i): 0
+        while(_): {pa_i < pa_n} [
+            at(pa_c): pa_k pa_i
+            ps_alias(_): pa_c
+            add(pa_i): pa_i 1
+        ]
+    ]
+    getf(pa_t): nd "tag"
+    if(_): {pa_t = 2} [ ps_alias_cmd(_): nd ]
+    set(r): 0
+]
+ps_alias_cmd(r): nd [
+    set(r): 0
+    getf(pac_k): nd "kids"
+    len(pac_n): pac_k
+    set(pac_go): 1
+    if(_): {pac_n > 0} [
+        sub(pac_l): pac_n 1
+        at(pac_last): pac_k pac_l
+        getf(pac_lt): pac_last "tag"
+        if(_): {pac_lt = 3} [ set(pac_go): 0 ]
+    ]
+    vec(pac_seen): ""
+    set(pac_depth): 0
+    while(_): {pac_go = 1} [
+        getf(pac_nm): nd "s1"
+        alias(pac_w): pac_nm
+        typeof(pac_wt): pac_w
+        set(pac_rep): 0
+        len(pac_sn): pac_seen
+        set(pac_si): 0
+        while(_): {pac_si < pac_sn} [
+            at(pac_sv): pac_seen pac_si
+            if(_): {pac_sv = pac_nm} [ set(pac_rep): 1 ]
+            add(pac_si): pac_si 1
+        ]
+        if(_): {pac_wt != "vector" || pac_rep = 1 || pac_depth >= 16} [
+            set(pac_go): 0
+        ]
+        else(_): [
+            push(_): pac_seen pac_nm
+            add(pac_depth): pac_depth 1
+            getf(pac_line): nd "n1"
+            getf(pac_k): nd "kids"
+            vec(pac_nk): ""
+            len(pac_wn): pac_w
+            set(pac_wi): 1
+            while(_): {pac_wi < pac_wn} [
+                at(pac_word): pac_w pac_wi
+                nd_new(pac_lit): 7 pac_word "" pac_line ""
+                push(_): pac_nk pac_lit
+                add(pac_wi): pac_wi 1
+            ]
+            len(pac_n): pac_k
+            set(pac_ki): 0
+            while(_): {pac_ki < pac_n} [
+                at(pac_kv): pac_k pac_ki
+                push(_): pac_nk pac_kv
+                add(pac_ki): pac_ki 1
+            ]
+            at(pac_first): pac_w 0
+            setf(_): nd "s1" pac_first
+            setf(_): nd "kids" pac_nk
+        ]
+    ]
+]
 # store pair: n=name v=value t=alias-target
 rt_find_i(r): nm i [
     len(rt_fl): rt_store
@@ -2002,7 +2081,8 @@ ex_cmd_n(r): nd nm [
                 push(_): rt_hv rt_hkx
                 add(rt_hki): rt_hki 1
             ]
-            rt_host(rt_hres): nm rt_hv
+            rt_host_name(rt_hnm): nd nm
+            rt_host(rt_hres): rt_hnm rt_hv
             getf(rt_hr): nd "s2"
             rt_write(_): rt_hr rt_hres
         ]
@@ -2508,6 +2588,12 @@ rt_is_host(r): nm [
     if(_): {nm = "copy_file"} [ set(r): 1 ]
     if(_): {nm = "remove_file"} [ set(r): 1 ]
     if(_): {nm = "remove_dir"} [ set(r): 1 ]
+    if(_): {nm = "keybind"} [ set(r): 1 ]
+    if(_): {nm = "keybind_match"} [ set(r): 1 ]
+    if(_): {nm = "alias"} [ set(r): 1 ]
+    if(_): {nm = "prompt"} [ set(r): 1 ]
+    if(_): {nm = "__prompt_print"} [ set(r): 1 ]
+    if(_): {nm = "help"} [ set(r): 1 ]
     if(_): {nm = "make_dir"} [ set(r): 1 ]
     if(_): {nm = "writefile"} [ set(r): 1 ]
     if(_): {nm = "terminal_escape"} [ set(r): 1 ]
@@ -2520,6 +2606,39 @@ rt_is_host(r): nm [
     if(_): {nm = "text_bytes"} [ set(r): 1 ]
     if(_): {nm = "write_bytes"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
+]
+# The host name to call for builtin nm at node nd: prompt(_) prints its
+# reply in ussr, so it becomes __prompt_print, which rt_prompt prints.
+rt_host_name(r): nd nm [
+    set(r): nm
+    if(_): {nm = "prompt"} [
+        getf(rhn_ret): nd "s2"
+        if(_): {rhn_ret = "_"} [ set(r): "__prompt_print" ]
+    ]
+]
+# prompt with its arguments joined by spaces, as ussr joins them;
+# __prompt_print also prints the reply (one line ending, like ussr).
+rt_prompt(r): nm vals [
+    len(rpr_n): vals
+    if(_): {rpr_n = 0} [ rt_fatal(_): ]
+    at(rpr_q): vals 0
+    set(rpr_i): 1
+    while(_): {rpr_i < rpr_n} [
+        at(rpr_a): vals rpr_i
+        concat(rpr_q): rpr_q " " rpr_a
+        add(rpr_i): rpr_i 1
+    ]
+    prompt(r): rpr_q
+    if(_): {nm = "__prompt_print"} [
+        set(rpr_p): r
+        len(rpr_l): rpr_p
+        if(_): {rpr_l > 0} [
+            sub(rpr_last): rpr_l 1
+            byte(rpr_b): rpr_p rpr_last
+            if(_): {rpr_b = 10} [ slice(rpr_p): rpr_p 0 rpr_last ]
+        ]
+        print(_): rpr_p
+    ]
 ]
 # A host builtin call in the tree walker: nm is one and the program has
 # no function of that name (programs may shadow these, as math.su does).
@@ -2536,7 +2655,7 @@ rt_host(r): nm vals [
     len(rt_hn): vals
     if(_): {rt_hn > 0} [ at(rt_ha0): vals 0 ]
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
-    if(_): {rt_hn > 2} [ rt_fatal(_): ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2604,6 +2723,28 @@ rt_host(r): nm vals [
     if(_): {nm = "remove_dir"} [
         if(_): {rt_hn = 1} [ remove_dir(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "keybind"} [
+        if(_): {rt_hn = 0} [ keybind(r): ]
+        if(_): {rt_hn = 1} [ keybind(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ keybind(r): rt_ha0 rt_ha1 ]
+    ]
+    if(_): {nm = "alias"} [
+        if(_): {rt_hn = 0} [ alias(r): ]
+        if(_): {rt_hn = 1} [ alias(r): rt_ha0 ]
+        if(_): {rt_hn > 1} [ rt_alias_set(r): vals ]
+    ]
+    if(_): {nm = "keybind_match"} [
+        if(_): {rt_hn = 1} [ keybind_match(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "prompt" || nm = "__prompt_print"} [
+        rt_prompt(r): nm vals
+    ]
+    if(_): {nm = "help"} [
+        if(_): {rt_hn = 0} [ help(r): ]
+        if(_): {rt_hn = 1} [ help(r): rt_ha0 ]
+        if(_): {rt_hn > 1} [ rt_fatal(_): ]
     ]
     if(_): {nm = "make_dir"} [
         if(_): {rt_hn = 1} [ make_dir(r): rt_ha0 ]
@@ -2675,6 +2816,23 @@ rt_struct_decl(r): name specs [
         add(rt_sdi): rt_sdi 1
     ]
     eval(r): rt_sds
+]
+# alias(_): name word ... on the host, through eval: host calls here
+# take at most two arguments, an alias any number of words.
+rt_alias_set(r): vals [
+    set(rt_als): "alias(rt_alr):"
+    len(rt_aln): vals
+    set(rt_ali): 0
+    while(_): {rt_ali < rt_aln} [
+        at(rt_alv): vals rt_ali
+        typeof(rt_alt): rt_alv
+        if(_): {rt_alt != "string"} [ rt_fatal(_): ]
+        ex_scape(rt_ale): rt_alv
+        concat(rt_als): rt_als " \"" rt_ale "\""
+        add(rt_ali): rt_ali 1
+    ]
+    eval(_): rt_als
+    set(r): 0
 ]
 # new(o): tn v1 ... with the values in vals (up to 10 of them).
 rt_new(r): tn vals [
@@ -4230,7 +4388,10 @@ cv_cmd_n(r): nd nm [
             cv_hasblk(cv_ishb): nd
             if(_): {cv_ishf >= 0 || cv_ishb = 1} [ set(cv_ish): 0 ]
         ]
-        if(_): {cv_ish = 1} [ cv_native2(r): nd nm ]
+        if(_): {cv_ish = 1} [
+            rt_host_name(cv_hnm): nd nm
+            cv_native2(r): nd cv_hnm
+        ]
         if(_): {nm = "getf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "setf"} [ cv_native2(r): nd nm ]
         if(_): {nm = "vec"} [ cv_native2(r): nd nm ]
@@ -8064,6 +8225,162 @@ init(ret): arg_cnt arg_vec [
 
 # One line without its line ending; sets rp_eof at end of input.
 repl_rd(r): [
+    global(_): rp_tty
+    if(_): {rp_tty = 1} [ repl_rd_tty(r): ]
+    else(_): [ repl_rd_pipe(r): ]
+]
+
+# A line typed at a terminal, read in raw mode and echoed here, so that a
+# key bound with keybind fires when pressed: its bytes (a control key or a
+# whole escape sequence) go to keybind_match, and a bound line replaces
+# what was typed, as ussr's line editor does. Backspace removes a whole
+# UTF-8 character, Ctrl-C drops the line, Ctrl-D or Ctrl-Z on an empty
+# line ends input.
+repl_rd_tty(r): [
+    global(_): rp_eof
+    set(r): ""
+    set(rrt_n): 0
+    set(rrt_need): 0
+    set(rrt_pend): ""
+    chr(rrt_bs): 8
+    chr(rrt_esc): 27
+    terminal_raw(_):
+    set(rrt_go): 1
+    while(_): {rrt_go = 1} [
+        terminal_getch(rrt_c):
+        set(rrt_key): ""
+        if(_): {rrt_c < 0} [
+            set(rrt_go): 0
+            len(rrt_l): r
+            if(_): {rrt_l = 0} [ set(rp_eof): 1 ]
+        ]
+        elif(_): {rrt_c = 13 || rrt_c = 10} [ set(rrt_go): 0 ]
+        elif(_): {rrt_c = 127 || rrt_c = 8} [
+            if(_): {rrt_n > 0} [
+                repl_rubout(r): r
+                sub(rrt_n): rrt_n 1
+                concat(rrt_er): rrt_bs " " rrt_bs
+                template(_): "STR" rrt_er
+            ]
+        ]
+        elif(_): {rrt_c = 27} [ repl_esc(rrt_key): ]
+        elif(_): {rrt_c > 0 && rrt_c < 32 && rrt_c != 9} [ chr(rrt_key): rrt_c ]
+        elif(_): {rrt_c > 0} [
+            chr(rrt_ch): rrt_c
+            if(_): {rrt_c >= 128 && rrt_c < 192} [
+                if(_): {rrt_need > 0} [
+                    concat(rrt_pend): rrt_pend rrt_ch
+                    sub(rrt_need): rrt_need 1
+                    if(_): {rrt_need = 0} [
+                        concat(r): r rrt_pend
+                        template(_): "STR" rrt_pend
+                        add(rrt_n): rrt_n 1
+                    ]
+                ]
+            ]
+            elif(_): {rrt_c >= 192} [
+                set(rrt_pend): rrt_ch
+                set(rrt_need): 1
+                if(_): {rrt_c >= 224} [ set(rrt_need): 2 ]
+                if(_): {rrt_c >= 240} [ set(rrt_need): 3 ]
+            ]
+            else(_): [
+                concat(r): r rrt_ch
+                template(_): "STR" rrt_ch
+                add(rrt_n): rrt_n 1
+            ]
+        ]
+        len(rrt_kl): rrt_key
+        if(_): {rrt_kl > 0} [
+            keybind_match(rrt_bound): rrt_key
+            typeof(rrt_bt): rrt_bound
+            if(_): {rrt_bt = "string"} [
+                set(rrt_er): ""
+                set(rrt_i): 0
+                while(_): {rrt_i < rrt_n} [
+                    concat(rrt_er): rrt_er rrt_bs
+                    add(rrt_i): rrt_i 1
+                ]
+                set(r): rrt_bound
+                concat(rrt_er): rrt_er rrt_esc "[K" r
+                template(_): "STR" rrt_er
+                set(rrt_go): 0
+            ]
+            elif(_): {rrt_c = 3} [
+                set(r): ""
+                set(rrt_go): 0
+            ]
+            elif(_): {rrt_c = 4 || rrt_c = 26} [
+                len(rrt_l): r
+                if(_): {rrt_l = 0} [
+                    set(rp_eof): 1
+                    set(rrt_go): 0
+                ]
+            ]
+        ]
+    ]
+    terminal_sane(_):
+    print(_): ""
+]
+
+# s without its last UTF-8 character.
+repl_rubout(r): s [
+    len(rru_i): s
+    set(rru_go): 1
+    while(_): {rru_go = 1 && rru_i > 0} [
+        sub(rru_i): rru_i 1
+        byte(rru_b): s rru_i
+        if(_): {rru_b < 128 || rru_b >= 192} [ set(rru_go): 0 ]
+    ]
+    slice(r): s 0 rru_i
+]
+
+# The rest of an escape sequence whose ESC was just read, ESC included:
+# ESC x (Alt+x), ESC [ ... final (CSI, also ESC [ [ A Linux console F-keys),
+# ESC O [digits] x (SS3), each possibly after a second ESC (Alt).
+repl_esc(r): [
+    chr(r): 27
+    terminal_getch(re_c):
+    if(_): {re_c = 27} [
+        concat(r): r r
+        terminal_getch(re_c):
+    ]
+    if(_): {re_c > 0} [
+        chr(re_ch): re_c
+        concat(r): r re_ch
+        if(_): {re_c = 91} [
+            set(re_go): 1
+            set(re_k): 0
+            while(_): {re_go = 1} [
+                terminal_getch(re_d):
+                if(_): {re_d < 1} [ set(re_go): 0 ]
+                else(_): [
+                    chr(re_dh): re_d
+                    concat(r): r re_dh
+                    add(re_k): re_k 1
+                    if(_): {re_d >= 64 && re_d <= 126} [
+                        if(_): {re_d != 91 || re_k > 1} [ set(re_go): 0 ]
+                    ]
+                ]
+            ]
+        ]
+        elif(_): {re_c = 79} [
+            set(re_go): 1
+            while(_): {re_go = 1} [
+                terminal_getch(re_d):
+                if(_): {re_d < 1} [ set(re_go): 0 ]
+                else(_): [
+                    chr(re_dh): re_d
+                    concat(r): r re_dh
+                    if(_): {re_d < 48 || re_d > 57} [ set(re_go): 0 ]
+                ]
+            ]
+        ]
+    ]
+]
+
+# A piped or redirected line, byte by byte.
+repl_rd_pipe(r): [
     global(_): rp_eof
     set(r): ""
     set(rrd_go): 1
@@ -8128,6 +8445,7 @@ repl_dep(r): s d [
 ]
 
 repl_exec(r): src first [
+    global(_): rp_pid
     vec(rex_mf): ""
     vec(rex_ml): ""
     len(rex_n): src
@@ -8154,11 +8472,30 @@ repl_exec(r): src first [
         if(_): {rex_ls = 0} [
             ps_parse(rex_ps): src
             if(_): {rex_ps = 0} [
+                # each entry that runs is a new process in ussr
+                add(rp_pid): rp_pid 1
+                # typed lines only, as in ussr's REPL
+                ps_alias(_): ps_root
                 getf(rex_kids): ps_root "kids"
                 ex_block_h(_): rex_kids 0
             ]
         ]
     ]
+    set(rt_flow): 0
+    set(r): 0
+]
+
+# After an entry failed (its error already reported): ussr's two lines
+# for a failed entry, and a clean slate for the next one. rp_pid counts
+# the entries run, which is ussr's process number when no startup file
+# ran (each moscow.su is a process of its own in ussr).
+repl_failed(r): [
+    global(_): rp_pid
+    encode(rpf_n): rp_pid
+    concat(rpf_m): "USSR scheduler: process " rpf_n " (init) failed"
+    chr(rpf_nl): 10
+    concat(rpf_m): rpf_m rpf_nl "USSR VM: execution failed (status -1)"
+    write_stderr(_): rpf_m
     set(rt_flow): 0
     set(r): 0
 ]
@@ -8242,7 +8579,7 @@ repl_prompt(r): cont [
 ]
 
 repl(r): [
-    global(_): rp_eof
+    global(_): rp_eof rp_tty rp_pid
     print(_): "USSR Unified Shell Script REPL"
     print(_): "USSR v0.4"
     print(_): "Enter a command list or press Ctrl-D to exit."
@@ -8251,7 +8588,14 @@ repl(r): [
     set(rp_dep): 0
     set(rp_eof): 0
     set(rp_lines): 0
+    set(rp_pid): 0
     set(rp_first): 1
+    # terminal_raw succeeds (0) only on a terminal: there lines are read
+    # in raw mode so key bindings fire as the key is pressed
+    terminal_raw(rp_rawp):
+    terminal_sane(_):
+    set(rp_tty): 0
+    if(_): {rp_rawp = 0} [ set(rp_tty): 1 ]
     while(_): {rp_eof = 0} [
         set(rp_cont): 0
         if(_): {rp_dep > 0} [ set(rp_cont): 1 ]
@@ -8267,7 +8611,9 @@ repl(r): [
             concat(rp_buf): rp_buf "\n"
             repl_dep(rp_dep): rp_line rp_dep
             if(_): {rp_dep < 1} [
-                repl_exec(_): rp_buf rp_first
+                # an error in the entry ends the entry, not the REPL
+                try(rp_bad): "repl_exec" rp_buf rp_first
+                if(_): {rp_bad = 1} [ repl_failed(_): ]
                 set(rp_buf): ""
                 set(rp_dep): 0
             ]

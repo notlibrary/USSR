@@ -13,8 +13,12 @@ typedef void(bestlineCompletionCallback)(const char *, int,
 typedef char *(bestlineHintsCallback)(const char *, const char **, const char **);
 typedef void(bestlineFreeHintsCallback)(void *);
 typedef unsigned(bestlineXlatCallback)(unsigned);
+/* Gets each key's raw bytes; a non-NULL result replaces the line and
+ * is submitted at once (REPL key bindings). */
+typedef const char *(bestlineKeyCallback)(const char *, unsigned long);
 
 void bestlineSetCompletionCallback(bestlineCompletionCallback *);
+void bestlineSetKeyCallback(bestlineKeyCallback *);
 void bestlineSetHintsCallback(bestlineHintsCallback *);
 void bestlineSetFreeHintsCallback(bestlineFreeHintsCallback *);
 void bestlineAddCompletion(bestlineCompletions *, const char *);

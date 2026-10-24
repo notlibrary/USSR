@@ -1,0 +1,13 @@
+PASS a call that works gives 0
+PASS its effects stay
+PASS a call that fails gives 1
+PASS effects before the error stay, the rest never ran
+PASS an error 40 calls deep is caught
+PASS the caller's locals are intact
+PASS calls work after a failure
+
+--- stderr ---
+USSR: boom
+USSR: bottom of the recursion
+
+--- exit 0 ---

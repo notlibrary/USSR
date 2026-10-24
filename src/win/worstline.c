@@ -32,6 +32,12 @@ static size_t g_history_count = 0;
 static size_t g_history_capacity = 0;
 
 static worstlineCompletionCallback *g_completion_callback = NULL;
+static worstlineKeyCallback *g_key_callback = NULL;
+
+void worstlineSetKeyCallback(worstlineKeyCallback *callback)
+{
+    g_key_callback = callback;
+}
 
 void worstlineSetCompletionCallback(
     worstlineCompletionCallback *callback
@@ -240,6 +246,30 @@ char *worstline(const char *prompt)
     for (;;)
     {
         int c = _getch();
+        int c2 = -1;
+        const char *bound = NULL;
+
+        if (c == 0 || c == 0xE0)
+            c2 = _getch();
+
+        /* A key binding replaces the line and submits it. */
+        if (g_key_callback != NULL)
+        {
+            if (c2 >= 0)
+                bound = g_key_callback(c, c2);
+            else if (c >= 1 && c <= 26)
+                bound = g_key_callback(-1, c);
+        }
+        if (bound != NULL)
+        {
+            history_index = g_history_count;
+            if (line_set_text(&state, bound) == 0)
+            {
+                putchar('\n');
+                break;
+            }
+            continue;
+        }
 
         if (c == '\t')
         {
@@ -318,10 +348,8 @@ char *worstline(const char *prompt)
             continue;
         }
 
-        if (c == 0 || c == 0xE0) /* extended-key prefix */
+        if (c2 >= 0) /* extended key, read after its prefix above */
         {
-            int c2 = _getch();
-
             switch (c2)
             {
             case 75: /* Left */

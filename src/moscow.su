@@ -1,6 +1,10 @@
 # USSR startup configuration.
-# This file is loaded automatically before a script or the REPL.
-# Put persistent shell setup commands here.
-# Example:
+# ussr runs moscow.su from your home folder, then the one in the current
+# folder (unless it is the same file), before a script or the REPL.
+# USSR_MOSCOW names the only one to run instead; empty runs none.
+# Put persistent shell setup commands here. Examples:
 # set(home): "/home/user"
 # cd(_): home
+# alias(_): "ll" "ls" "-l"
+# keybind(_): "Mod+F1" "help(_):"
+# setenv(_): "PS1" "\u@\h \W\$ "

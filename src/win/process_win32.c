@@ -126,6 +126,7 @@ static int make_temp_file(
 )
 {
     char temp_path[MAX_PATH];
+    SECURITY_ATTRIBUTES inherit;
     UINT result;
 
     if (handle == NULL || path == NULL || path_size == 0 ||
@@ -139,11 +140,17 @@ static int make_temp_file(
     if (result == 0)
         return -1;
 
+    /* The child gets this handle as its stdin or stdout, which
+     * CreateProcess only passes on when it is inheritable. */
+    memset(&inherit, 0, sizeof(inherit));
+    inherit.nLength = sizeof(inherit);
+    inherit.bInheritHandle = TRUE;
+
     *handle = CreateFileA(
         path,
         GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        NULL,
+        &inherit,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_TEMPORARY,
         NULL
@@ -282,6 +289,11 @@ int ussr_process_run(
 
     if (process->stdout_data != NULL)
         *process->stdout_data = NULL;
+
+    /* The child writes to the same stdout: what ussr printed so far
+     * must come out first, also when stdout is a pipe or file. */
+    fflush(stdout);
+    fflush(stderr);
 
     memset(&startup, 0, sizeof(startup));
     memset(&child, 0, sizeof(child));
@@ -451,6 +463,11 @@ int ussr_process_spawn(
         return -1;
 
     child->handle = NULL;
+
+    /* The child writes to the same stdout: what ussr printed so far
+     * must come out first, also when stdout is a pipe or file. */
+    fflush(stdout);
+    fflush(stderr);
 
     command_line = build_command_line(argv);
     if (command_line == NULL)

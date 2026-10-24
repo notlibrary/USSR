@@ -193,6 +193,8 @@ int ussr_set_variable_at(
     size_t slot
 );
 void ussr_locals_pop(void);
+/* How many calls' locals are active (for unwinding after an error). */
+size_t ussr_locals_depth(void);
 void ussr_locals_reset(ussr_scope_t *scope);
 
 typedef enum

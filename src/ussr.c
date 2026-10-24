@@ -378,6 +378,11 @@ void ussr_locals_pop(void)
         ussr_locals_clear(&scope->locals[--scope->local_depth]);
 }
 
+size_t ussr_locals_depth(void)
+{
+    return ussr_active_scope()->local_depth;
+}
+
 /* The innermost call's locals if `name` is local there (and its slot),
  * else NULL. */
 static ussr_locals_t *ussr_locals_for(const char *name, size_t *slot)

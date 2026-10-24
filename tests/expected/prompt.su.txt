@@ -1,0 +1,8 @@
+PASS anthropic text blocks joined
+That is the question.
+Whether ’tis nobler in the "mind"
+PASS openai content, UTF-8 and surrogate pairs
+
+--- stderr ---
+
+--- exit 0 ---
