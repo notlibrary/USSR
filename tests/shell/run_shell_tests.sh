@@ -103,6 +103,17 @@ case "$(uname -s 2>/dev/null)" in
 "profile moscow
 work moscow
 script" "$out"
+        # one folder, two spellings: HOME as an 8.3 short path (as CI
+        # runners have it, C:\Users\RUNNER~1) and the current folder long
+        short=$(cygpath -d "$home" 2>/dev/null)
+        if [ -n "$short" ]; then
+            printf 'print(_): "script"\n' >"$home/s.su"
+            out=$(cd "$home" && HOME="$short" "$USSR" s.su </dev/null 2>&1)
+            expect "Windows: a short-path HOME is the same folder" \
+"profile moscow
+script" "$out"
+            rm -f "$home/s.su"
+        fi
         ;;
 esac
 rm -f "$home/moscow.su" "$work/moscow.su"
