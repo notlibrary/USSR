@@ -1,10 +1,16 @@
 CC      = gcc
 CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic
+# The Petersburg GUI is built in whenever pkg-config finds GLFW and OpenGL
+# (libglfw3-dev, libgl1-mesa-dev); PETERSBURG_BUNDLE=1 requires them.
+# The GUI build compiles petersburg.c to its own object, so installing or
+# removing GLFW between builds never links an object built the other way.
 PETERSBURG_CFLAGS := $(shell pkg-config --cflags glfw3 gl 2>/dev/null)
 PETERSBURG_LIBS := $(shell pkg-config --libs glfw3 gl 2>/dev/null)
+PETERSBURG_OBJ = $(SRC_DIR)/petersburg.o
 ifneq ($(strip $(PETERSBURG_LIBS)),)
 CFLAGS += -DUSSR_WITH_GLFW $(PETERSBURG_CFLAGS)
 LDLIBS += $(PETERSBURG_LIBS)
+PETERSBURG_OBJ = $(SRC_DIR)/petersburg_glfw.o
 endif
 ifneq ($(PETERSBURG_BUNDLE),)
 ifeq ($(strip $(PETERSBURG_LIBS)),)
@@ -32,7 +38,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/ussr_uuasm.o \
        $(SRC_DIR)/ussr_ru.o \
        $(SRC_DIR)/scheduler.o \
-       $(SRC_DIR)/petersburg.o \
+       $(PETERSBURG_OBJ) \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
        $(SRC_DIR)/prng64_xrp32.o \
@@ -131,7 +137,7 @@ $(SRC_DIR)/win/process_win32.o: $(SRC_DIR)/win/process_win32.c $(SRC_DIR)/proces
 $(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/petersburg.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/petersburg.o: $(SRC_DIR)/petersburg.c $(SRC_DIR)/petersburg.h $(SRC_DIR)/scheduler.h $(SRC_DIR)/eventq.h
+$(PETERSBURG_OBJ): $(SRC_DIR)/petersburg.c $(SRC_DIR)/petersburg.h $(SRC_DIR)/scheduler.h $(SRC_DIR)/eventq.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/eventq.o: $(SRC_DIR)/eventq.c $(SRC_DIR)/eventq.h $(SRC_DIR)/process.h $(SRC_DIR)/socket.h

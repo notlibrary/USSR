@@ -7,6 +7,8 @@ on:
 
 env:
   APP_NAME: ussr-win-bin-amd64
+  # The GLFW release the Windows build links and ships (same as ci.yml)
+  GLFW_VERSION: 3.5.1
 
 jobs:
   create-release:
@@ -31,6 +33,11 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
+      # Test sources and expectations are LF; keep them that way (as ci.yml).
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -58,8 +65,8 @@ jobs:
           & "$vcpkgRoot\vcpkg.exe" install 'sqlite3' 'curl[openssl]' 'openssl' 'zlib' --triplet x64-windows-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force build | Out-Null
-          $glfwArchive = Join-Path $PWD 'build\glfw-3.4.bin.WIN64.zip'
-          Invoke-WebRequest 'https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip' -OutFile $glfwArchive
+          $glfwArchive = Join-Path $PWD "build\glfw-$env:GLFW_VERSION.bin.WIN64.zip"
+          Invoke-WebRequest "https://github.com/glfw/glfw/releases/download/$env:GLFW_VERSION/glfw-$env:GLFW_VERSION.bin.WIN64.zip" -OutFile $glfwArchive
           Expand-Archive $glfwArchive -DestinationPath build\glfw -Force
           
           cmake -S src/ural -B build/ural `
@@ -83,16 +90,31 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          win_bison -d -Wall src\parser.y -o src\parser.tab.c
-          win_flex -o src\lex.yy.c src\lexer.l
-          
-          $glfwRoot = Join-Path $PWD 'build\glfw\glfw-3.4.bin.WIN64'
-          nmake -e /f Makefile.msc GLFW_DIR=$glfwRoot GLFW_LIB=$glfwRoot\lib-vc2022\glfw3dll.lib ussr.exe
+          win_bison -d -o src\parser.tab.c src\parser.y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          win_flex -o src\lexer.c src\lexer.l
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Links glfw3dll.lib (Makefile.msc's default with GLFW_DIR); the
+          # matching glfw3.dll ships next to ussr.exe.
+          $glfwRoot = Join-Path $PWD "build\glfw\glfw-$env:GLFW_VERSION.bin.WIN64"
+          nmake /nologo /f Makefile.msc PREGENERATED=1 GLFW_DIR=$glfwRoot ussr.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $glfwDll = Join-Path $glfwRoot 'lib-vc2022\glfw3.dll'
           if (-not (Test-Path $glfwDll)) { throw "GLFW runtime DLL not found at $glfwDll" }
           Copy-Item $glfwDll .\glfw3.dll -Force
-          
+
+      - name: Test on Windows (without GUI)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          USSR_SKIP_GUI: "1"
+        run: sh tests/run_all.sh --native ./ussr.exe
+
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
           New-Item -ItemType Directory -Force ussr-win-bin
           Copy-Item ussr.exe ussr-win-bin\ -Force
           Copy-Item glfw3.dll ussr-win-bin\ -Force
@@ -128,14 +150,24 @@ jobs:
           cmake --build build/ural --parallel
           ctest --test-dir build/ural --output-on-failure
 
+      # ussr-ubuntu.mk runs bison and flex itself; PETERSBURG_BUNDLE=1 fails
+      # without GLFW and ships libglfw.so.3 in lib/ next to ussr.
       - name: Build on Linux
         if: runner.os != 'Windows'
         shell: bash
-        run: |
-          bison -d -Wall src/parser.y
-          flex src/lexer.l
-          make -f ussr-ubuntu.mk PETERSBURG_BUNDLE=1 ussr
-          make -f ussr-ubuntu.mk PETERSBURG_BUNDLE=1 dist VERSION=${{ github.ref_name }}
+        run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 ussr
+
+      - name: Test on Linux (without GUI)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          USSR_SKIP_GUI: "1"
+        run: sh tests/run_all.sh --native ./ussr
+
+      - name: Package for Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: make -f ussr-ubuntu.mk PETERSBURG_BUNDLE=1 dist VERSION=${{ github.ref_name }}
 
       - name: Upload to Release Linux
         if: runner.os != 'Windows'
@@ -148,11 +180,16 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          # objects of the ussr-ubuntu.mk build share names with automake's
+          rm -f ussr src/*.o src/parser.tab.c src/parser.tab.h src/lex.yy.c
           autoreconf -ivf
           ./configure --enable-petersburg
           make -j"$(nproc)"
-          make dist
-          mv ussr-${{ github.ref_name }}.tar.gz ussr-unix-tarball-amd64-${{ github.ref_name }}.tar.gz
+          # distcheck builds the tarball's own sources: a file missing from
+          # EXTRA_DIST fails the release instead of the people building it
+          make distcheck
+          version=$(awk -F'[][]' '/^AC_INIT/ { print $4; exit }' configure.ac)
+          mv "ussr-$version.tar.gz" ussr-unix-tarball-amd64-${{ github.ref_name }}.tar.gz
 
       - name: Upload Unix tarball to Release
         if: runner.os != 'Windows'
