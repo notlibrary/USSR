@@ -17,6 +17,10 @@
 /* path of name in the home folder, malloc'd, or NULL without one */
 char *ussr_home_file(const char *name);
 
+/* Whether two existing paths name the same file (on Windows by volume
+ * and file index, so short 8.3 and long spellings match). */
+int ussr_same_file(const char *a, const char *b);
+
 /* Load the history: calls add with each entry, oldest first, and trims
  * the file to USSR_HISTSIZE entries. Remembers the file for
  * ussr_history_append. Returns how many entries were loaded. */

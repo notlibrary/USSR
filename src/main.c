@@ -10,7 +10,6 @@
 #include <io.h>
 #define ussr_chdir _chdir
 #else
-#include <sys/stat.h>
 #include <unistd.h>
 #define ussr_chdir chdir
 #endif
@@ -2860,25 +2859,6 @@ static int file_readable(const char *path)
     return 1;
 }
 
-/* Whether two existing paths name the same file. */
-static int same_file(const char *a, const char *b)
-{
-#ifdef _WIN32
-    char full_a[_MAX_PATH];
-    char full_b[_MAX_PATH];
-
-    return _fullpath(full_a, a, sizeof(full_a)) != NULL &&
-           _fullpath(full_b, b, sizeof(full_b)) != NULL &&
-           _stricmp(full_a, full_b) == 0;
-#else
-    struct stat sa;
-    struct stat sb;
-
-    return stat(a, &sa) == 0 && stat(b, &sb) == 0 &&
-           sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
-#endif
-}
-
 static int run_startup_file(const char *path)
 {
     char *startup_argv[2];
@@ -2925,7 +2905,7 @@ static int run_startup_files(void)
     if (home_moscow != NULL)
         status = run_startup_file(home_moscow);
     if (status == EXIT_SUCCESS && file_readable("moscow.su") &&
-        (home_moscow == NULL || !same_file(home_moscow, "moscow.su")))
+        (home_moscow == NULL || !ussr_same_file(home_moscow, "moscow.su")))
         status = run_startup_file("moscow.su");
     free(home_moscow);
     return status;

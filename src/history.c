@@ -6,6 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
 #define HISTORY_DEFAULT_SIZE 1000
 
 static char *g_history_path = NULL;
@@ -43,6 +50,46 @@ char *ussr_home_file(const char *name)
     }
     free(home);
     return path;
+}
+
+#ifdef _WIN32
+/* volume and file index of an existing file, as one comparable key */
+static int file_identity(const char *path, BY_HANDLE_FILE_INFORMATION *info)
+{
+    HANDLE file = CreateFileA(path, 0,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                  FILE_SHARE_DELETE,
+                              NULL, OPEN_EXISTING,
+                              FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    int ok;
+
+    if (file == INVALID_HANDLE_VALUE)
+        return 0;
+    ok = GetFileInformationByHandle(file, info) != 0;
+    CloseHandle(file);
+    return ok;
+}
+#endif
+
+int ussr_same_file(const char *a, const char *b)
+{
+#ifdef _WIN32
+    /* By identity, not by name: one folder can be spelled as a short
+     * 8.3 path (C:\Users\RUNNER~1) and a long one, or with other case. */
+    BY_HANDLE_FILE_INFORMATION ia;
+    BY_HANDLE_FILE_INFORMATION ib;
+
+    return file_identity(a, &ia) && file_identity(b, &ib) &&
+           ia.dwVolumeSerialNumber == ib.dwVolumeSerialNumber &&
+           ia.nFileIndexHigh == ib.nFileIndexHigh &&
+           ia.nFileIndexLow == ib.nFileIndexLow;
+#else
+    struct stat sa;
+    struct stat sb;
+
+    return stat(a, &sa) == 0 && stat(b, &sb) == 0 &&
+           sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
 }
 
 static int history_size(void)
