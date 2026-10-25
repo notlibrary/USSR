@@ -647,3 +647,269 @@ Let it have circles and lines and visual grid to snap to it
 Save drawing to .dxf format run it in maximum size window
 
 Here's the ural.su USSR package manager can you do that pack and upload commands worked recursively e.g. pack searched box.uno files from repository root . and then upload .ural archives and *-box.uno metadata to the server from the same repository . directories visited recursively
+
+Could you please refine clarify this prompt and make it more precise:
+
+Welcome abroad
+
+Here's USSR project current tasks
+- Make petersburg.su tver.su tula.su use more USSR and less C
+Ideal options no need to build tula.c tver.c only petersburg.su is builded inside ussr.exe
+- Add support of UUASM to russia.su
+- Add Russian language utf-8 support to Mbl.su
+- Add actual .dxf rendering and visible zoomable grid to tula.su
+- Add toolbar to tula.su
+- Add scrolling dirs by holding arrow button to tver.su
+- Make tver.su and tula.su running from tver.su tula.su not test/example/hello.su
+- Add selecting dirs with ins to tver.su highlight selected item
+- Add numeric parameter movement and `cw` change word command to Mbl.su
+- Add language support for 2,3 dimensional vectors
+- Add an arbitrary dimensions matrix multiplication test
+- Add language support for set get env var
+- Add shell prompt customize through PS1 
+- Add -c option to output .ru raw bytecode bin exec files
+- Add add ability to execute .ru files
+
+Do them all one by one and pull them into github.com/notlibrary/USSR
+Use single separate branch for them all not 1 branch per task
+ 
+ 
+ # USSR Project — Implementation Roadmap
+
+Welcome aboard!
+
+Your task is to implement the following improvements in the USSR project:
+
+**Repository:** https://github.com/notlibrary/USSR
+
+Work through the tasks **one by one**, in the order listed below. Implement, test, and commit each task before proceeding to the next. All tasks must be developed on **one dedicated feature branch**. Do not create a separate branch for each task.
+
+## General requirements
+
+1. Inspect the current repository, its architecture, existing code, build system, tests, and documentation before making changes.
+2. Reuse existing USSR language features and libraries wherever possible. Prefer implementing functionality in `.su` files rather than C.
+3. Minimize C code. Ideally, `tula.su` and `tver.su` should not require separate `tula.c` or `tver.c` files. Their functionality should be implemented in USSR itself.
+4. Ideally, only `petersburg.su` should require compilation or integration into `ussr.exe`, with `tver.su` and `tula.su` implemented on top of the available USSR functionality.
+5. Preserve backward compatibility unless a change is necessary. Avoid breaking existing commands, scripts, packages, or applications.
+6. Follow the project's existing coding conventions, naming conventions, memory-management practices, and error-handling patterns.
+7. Add or update tests and documentation for each feature. Do not mark a task complete until its implementation and relevant tests pass.
+8. Work incrementally. Keep each commit focused on one task or a logically inseparable group of changes.
+9. Use the same feature branch for every task and every commit. Do not create additional task-specific branches.
+10. Do not claim that a feature works, a test passes, or a build succeeds unless it has actually been verified. Document any limitations or blocked tests.
+
+## Implementation tasks
+
+### 1. Reduce C dependencies in the GUI libraries
+
+Refactor `petersburg.su`, `tver.su`, and `tula.su` to use more USSR code and less C code.
+
+- Move application-level logic, state management, event handling, and reusable behavior into `.su` files wherever possible.
+- Keep C code limited to functionality that genuinely requires native integration.
+- Prefer `petersburg.su` as the only GUI library requiring native compilation or integration into `ussr.exe`.
+- Eliminate the need to build separate `tver.c` and `tula.c` files if the existing architecture permits it.
+- Preserve the public interfaces and existing functionality of all three libraries.
+
+### 2. Add UUASM support to `russia.su`
+
+- Integrate UUASM support into `russia.su`.
+- Inspect the existing UUASM implementation, syntax, and execution model before designing the integration.
+- Support the applicable UUASM operations, operands, labels, and control-flow behavior defined by the project's specification.
+- Add tests covering representative instructions, execution, invalid input, and error handling.
+
+### 3. Add UTF-8 Russian language support to `Mbl.su`
+
+- Ensure `Mbl.su` can process Russian text encoded in UTF-8.
+- Preserve Cyrillic characters correctly during input, parsing, editing, navigation, and output, as applicable.
+- Avoid assumptions that one character always occupies one byte.
+- Test Russian words, mixed Cyrillic and Latin text, punctuation, and multibyte UTF-8 characters.
+
+### 4. Implement DXF rendering and a zoomable grid in `tula.su`
+
+- Implement actual rendering of DXF drawing files rather than placeholder output.
+- Support the DXF entities and file variants appropriate to the project's existing design; document any unsupported entities.
+- Display a visible grid in the drawing viewport.
+- Implement interactive zooming while keeping the grid and drawing aligned.
+- Ensure that grid spacing and visibility remain usable at different zoom levels.
+- Add test files and a repeatable way to verify rendering.
+
+### 5. Add a toolbar to `tula.su`
+
+- Add a visible toolbar to the Tula application.
+- Provide controls for the application's main operations, including file operations and viewport navigation where supported.
+- Connect each control to its actual action.
+- Keep the toolbar consistent with the existing Petersburg GUI conventions.
+
+### 6. Implement continuous directory navigation in `tver.su`
+
+- Allow directory navigation to repeat while the user holds an arrow button.
+- Stop repeated navigation immediately when the button is released, the window loses focus, or navigation is otherwise cancelled.
+- Avoid duplicate event processing and excessive CPU usage.
+- Preserve ordinary single-press navigation behavior.
+
+### 7. Make Tver and Tula launchable applications
+
+- Make `tver.su` and `tula.su` runnable directly through the project's normal USSR execution mechanism.
+- Do not require users to launch `test/example/hello.su` or another example script to start either application.
+- Provide a clear, documented way to launch each application from the repository root or through its intended executable/script entry point.
+
+### 8. Add directory selection to `tver.su`
+
+- Support selecting directory entries using the `Insert` key.
+- Visually highlight selected entries.
+- Define and preserve selection behavior when navigating, scrolling, entering a directory, or leaving a directory.
+- Ensure selection is distinguishable from keyboard focus and the current navigation cursor.
+
+### 9. Add numeric parameter movement and the `cw` command to `Mbl.su`
+
+- Implement numeric parameter movement, following the movement conventions already used by Mbl.
+- Implement `cw` (change word) as a word-oriented editing command.
+- Define word boundaries consistently and handle punctuation, whitespace, end-of-line positions, and end-of-file.
+- Preserve expected editing behavior and ensure changes can be undone if undo support already exists.
+- Add tests for ordinary words, punctuation, empty lines, and boundary cases.
+
+### 10. Add two-dimensional and three-dimensional vector support
+
+- Extend the USSR language to support 2D and 3D vectors.
+- Define their representation, construction, element access, and supported operations consistently with the existing type system.
+- Provide appropriate arithmetic and equality operations where compatible with the language's existing semantics.
+- Handle invalid dimensions, invalid access, and incompatible operations explicitly.
+- Add examples and tests for both vector dimensions.
+
+### 11. Add an arbitrary-dimension matrix multiplication test
+
+- Add a `.su` test demonstrating matrix multiplication with dimensions determined at runtime or supplied as parameters.
+- Store matrix elements in a representation that supports arbitrary valid dimensions.
+- Implement multiplication using loops rather than manually expanding individual element calculations.
+- Validate that the number of columns in the left matrix equals the number of rows in the right matrix.
+- Produce a result with dimensions `left.rows × right.cols`.
+- Test at least:
+  - A `3 × 4` matrix multiplied by a `4 × 3` matrix, producing a `3 × 3` result.
+  - A rectangular case with different output dimensions, such as `2 × 5` multiplied by `5 × 7`.
+  - An invalid-dimension case that produces a clear error.
+- Verify numerical results against independently calculated expected values.
+
+### 12. Add environment-variable access
+
+- Add language support for reading and setting environment variables.
+- Follow existing command naming and return-value conventions.
+- Define behavior for missing variables, empty values, invalid names, and setting or overwriting values.
+- Ensure changes affect the intended process environment and are handled safely.
+- Document platform-specific limitations.
+
+### 13. Support the `PS1` shell prompt variable
+
+- Allow users to customize the interactive shell prompt through `PS1`.
+- Read the configured value when displaying the prompt.
+- Define and document the default prompt when `PS1` is unset or empty.
+- Ensure prompt customization works with environment-variable support and does not interfere with command execution.
+
+### 14. Add the `-c` option for raw bytecode output
+
+- Add a `-c` command-line option to compile supported USSR source input into a `.ru` raw-bytecode file without executing the program.
+- Define the exact option syntax based on the existing CLI conventions.
+- Write the binary output byte-for-byte, without text formatting, logging, or other data mixed into the bytecode file.
+- Handle invalid source, output-file errors, and compilation failures with appropriate exit codes and diagnostics.
+- Document the bytecode format and any versioning or compatibility requirements.
+
+### 15. Add execution of `.ru` bytecode files
+
+- Implement execution of `.ru` files through the normal USSR command-line interface.
+- Ensure the bytecode format is compatible with the output produced by the `-c` option.
+- Validate the file format before executing it.
+- Reject malformed, truncated, incompatible, or unsupported bytecode safely.
+- Preserve normal source-file execution behavior.
+- Add round-trip tests that compile source to `.ru` and execute the resulting bytecode, comparing its behavior with direct source execution.
+
+## Workflow and Git requirements
+
+1. Create one dedicated feature branch from the appropriate base branch, using a descriptive name such as `feature/ussr-language-and-apps`.
+2. Keep every implementation task and its commits on that branch.
+3. Complete tasks in the order listed above.
+4. After each task:
+   - Run the relevant tests and build checks.
+   - Fix regressions before proceeding.
+   - Update documentation as needed.
+   - Commit the verified changes with a descriptive commit message.
+5. Keep the branch reasonably buildable throughout development.
+6. Do not merge unrelated upstream changes or overwrite existing project work without checking first.
+7. Push the completed feature branch to `github.com/notlibrary/USSR`.
+8. Open a pull request targeting the project's appropriate integration branch, unless repository policy explicitly requires a different delivery method. Do not merge it without authorization.
+
+## Final deliverables
+
+When all tasks are complete, provide:
+
+- The feature branch name and remote branch URL.
+- A summary of each implemented task.
+- The commits associated with the tasks.
+- Build and test commands executed, with their actual results.
+- Any remaining limitations, unsupported cases, or deferred work.
+- Instructions for launching Tver and Tula, compiling `.ru` files, and executing bytecode.
+- Updated documentation and test locations.
+
+**Definition of done:** All fifteen tasks have been implemented in the shared feature branch, relevant tests have been run, the results have been reported honestly, and the branch has been pushed to the specified GitHub repository. If a task is blocked, document the reason and continue with independent tasks where possible; do not falsely report the entire roadmap as complete.
+
+Good process to tasks 14,15 then add to Mbl.su undo function then report and do pull request 
+Do not forget to add CHANGELOG.md
+
+Also at the Starting of the conservation you somehow had +20000 changes this all were trash autogen files
+(like Makefile.in and dozens others) in USSR folder
+to check if the file is needed see github.com/notlibrary/USSR repository
+Perhaps you asked me about it on the start of session but I misunderstood the question
+Drop this files(if any) from staging area
+Also library directory is \src\libs do not fall into libraries files that are copied
+Also ignore trash files in USSR folder the trash is everything that is not in the GitHub repository github.com/notlibrary/USSR 
+use git rm on them if this issue is real
+
+Tweaks for USSR
+1. Check if it's possible for grammar to produce less conflicts
+src/parser.y: warning: 3 shift/reduce conflicts [-Wconflicts-sr]
+src/parser.y: warning: 40 reduce/reduce conflicts [-Wconflicts-rr]
+
+2. Generate a mountain .ico icon for ural.su using python
+
+3. Update docs/grammar.bnf using new lexer.l and parser.y
+
+4. Update all highlighters using new lexer.l and parser.y
+vim notepad++ treesitter textmate
+
+5. Add `$if defined $elif defined $else` instructions to preprocessor 
+
+Hey Claude I've got toughest challenge for you
+russia.su must behave the same as ussr.exe
+I mean everything global variables 64 bit integers error messages parser/lexer everything we did
+we must test it side by side with USSR in CI/CD pipeline
+e.g run_all.sh must run tests both for ussr.exe and russia.su
+it will show difference that we eventually mitigate russia.su must behave exactly as ussr.exe
+Good Luck
+
+Now let's finish strategic parity job we need now suites
+suite by suite 1 by 1 REPL ru Mbl suites
+Here is failed action to get more info what tests **actually** failing
+https://github.com/notlibrary/USSR/actions/runs/39921389688
+
+This is all suites we must check with russia.su
+# PASS ussr tests/ru/run_ru_tests.sh (33 passed, 0 failed)
+# PASS ussr tests/mbl/run_mbl_tests.sh (77 passed, 0 failed)
+PASS ussr tests/russia/run_uuasm_tests.sh (64 passed, 0 failed)
+PASS ussr tests/vectors/run_vector_tests.sh (56 passed, 0 failed)
+# PASS ussr tests/repl/run_repl_tests.sh (15 passed, 0 failed)
+PASS ussr tests/errors/run_error_tests.sh (29 passed, 0 failed)
+PASS ussr tests/exit/run_exit_tests.sh (22 passed, 0 failed)
+
+Do not interrupt me in between I go for a walk for 2 hours
+make commit and continue the best possible option
+
+Now let's make hash sigils working in russia.su
+`command(_) parameter?` looks up parameter in hash table
+works *before* running command
+
+`command(key) parameter!` sets key to parameter value 
+works *after* running command
+
+I've got 2 issues concerning USSR usability as shell
+1. Keybinding with `keybind(_): "Mod+F1" "help(_):"`
+2. Prompting AI using `prompt(answer): "To be or not to be?"`
+Customizing API endpoint URL; AI model AI provider; and api key is done through environmental variables
+
+Also share your practical advice to improve USSR usability  

@@ -90,6 +90,8 @@ ussr src/tula/tula.su [drawing.dxf]   # Tula, 2D CAD and DXF viewer
 ```
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
+If you want to add 3rd party USSR package project create a repo then add the box.uno then pack and upload it 
+to the trusted mountain(ftp server) using ural 
 
 I am far beyond postneuroslopware coder now I owned the WHOLE LOOP and found literally nothingness in the end on the other side
 dreadful emptiness the machine asking for the next prompt the guy with dozens anime-avatar accounts is following me
