@@ -372,6 +372,9 @@ char *ussr_text_new(const char *text, size_t len);
 char *ussr_text_dup(const char *text);
 char *ussr_text_retain(char *text);
 void ussr_text_release(char *text);
+/* strlen of a string value's text, in O(1) after the first call (the
+ * text never changes, so the header caches it). */
+size_t ussr_text_length(const char *text);
 
 int ussr_set_variable(
     const char *name,

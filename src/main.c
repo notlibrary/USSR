@@ -612,17 +612,6 @@ static void vm_free_values(ussr_value_t *values, size_t count)
     free(values);
 }
 
-/* strlen(text), but at most max: the bytes before any NUL, scanning no
- * further than max (strnlen is POSIX, not ISO C). */
-static size_t vm_text_reach(const char *text, size_t max)
-{
-    size_t n = 0;
-
-    while (n < max && text[n] != '\0')
-        ++n;
-    return n;
-}
-
 /*
  * Sites are recorded as their instructions are emitted, so they are in
  * instruction order: binary search, with the linear scan kept for a
@@ -2000,12 +1989,15 @@ int vm_execute(
                         const ussr_value_t *r1 = &vm->registers[1];
                         const ussr_value_t *r2 = &vm->registers[2];
 
+                        /* The length comes from the text's header
+                         * (docs/OPTIMIZATIONS.md, O16): measuring the
+                         * text on every call made a byte-by-byte scan
+                         * quadratic in its length. */
                         if (argument_count == 2 &&
                             strcmp(fast_name, "byte") == 0 &&
                             r1->type == USSR_INTEGER &&
                             r1->data.integer >= 0 &&
-                            (ussr_int_t)vm_text_reach(
-                                text, (size_t)r1->data.integer + 1) >
+                            (ussr_int_t)ussr_text_length(text) >
                                 r1->data.integer)
                         {
                             value = ussr_integer((ussr_int_t)(unsigned char)
@@ -2015,7 +2007,8 @@ int vm_execute(
                         else if (argument_count == 1 &&
                                  strcmp(fast_name, "len") == 0)
                         {
-                            value = ussr_integer((ussr_int_t)strlen(text));
+                            value = ussr_integer(
+                                (ussr_int_t)ussr_text_length(text));
                             fast = 1;
                         }
                         else if (argument_count == 3 &&
@@ -2026,9 +2019,7 @@ int vm_execute(
                                  r2->data.integer >= 0 &&
                                  r1->data.integer <=
                                      INT64_MAX - r2->data.integer &&
-                                 (ussr_int_t)vm_text_reach(
-                                     text, (size_t)(r1->data.integer +
-                                                    r2->data.integer)) ==
+                                 (ussr_int_t)ussr_text_length(text) >=
                                      r1->data.integer + r2->data.integer)
                         {
                             char *piece = malloc(

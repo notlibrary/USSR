@@ -964,7 +964,11 @@ ussr_value_t ussr_boolean(int boolean)
 
 typedef union
 {
-    size_t refs;
+    struct
+    {
+        size_t refs;
+        size_t len;      /* strlen of the text, or (size_t)-1: not known yet */
+    } h;
     double align;
 } ussr_text_head_t;
 
@@ -976,7 +980,8 @@ char *ussr_text_alloc(size_t len)
 
     if (head == NULL)
         return NULL;
-    head->refs = 1;
+    head->h.refs = 1;
+    head->h.len = (size_t)-1; /* the caller writes the text */
     return (char *)(head + 1);
 }
 
@@ -988,6 +993,7 @@ char *ussr_text_new(const char *text, size_t len)
         return NULL;
     memcpy(copy, text, len);
     copy[len] = '\0';
+    USSR_TEXT_HEAD(copy)->h.len = strlen(copy);
     return copy;
 }
 
@@ -999,14 +1005,26 @@ char *ussr_text_dup(const char *text)
 char *ussr_text_retain(char *text)
 {
     if (text != NULL)
-        USSR_TEXT_HEAD(text)->refs++;
+        USSR_TEXT_HEAD(text)->h.refs++;
     return text;
 }
 
 void ussr_text_release(char *text)
 {
-    if (text != NULL && --USSR_TEXT_HEAD(text)->refs == 0)
+    if (text != NULL && --USSR_TEXT_HEAD(text)->h.refs == 0)
         free(USSR_TEXT_HEAD(text));
+}
+
+size_t ussr_text_length(const char *text)
+{
+    ussr_text_head_t *head;
+
+    if (text == NULL)
+        return 0;
+    head = USSR_TEXT_HEAD((char *)text);
+    if (head->h.len == (size_t)-1)
+        head->h.len = strlen(text);
+    return head->h.len;
 }
 
 ussr_value_t ussr_string(const char *string)
