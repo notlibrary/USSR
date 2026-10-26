@@ -110,6 +110,15 @@ int ussr_struct_get_field(
  * declared type. Returns 0 on success, -1 on unknown field or type
  * mismatch. Releases/retains as needed for reference-typed fields.
  */
+/* ussr_struct_set_field without the messages: 1 when the field exists,
+ * takes the value's type and now holds a copy of it, else 0 and nothing
+ * changed (the VM's setf fast path, docs/OPTIMIZATIONS.md O5). */
+int ussr_struct_try_set_field(
+    ussr_struct_instance_t *instance,
+    const char *field_name,
+    const ussr_value_t *value
+);
+
 int ussr_struct_set_field(
     ussr_struct_instance_t *instance,
     const char *field_name,

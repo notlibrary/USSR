@@ -6494,7 +6494,7 @@ vm_step(r): cur op [
 ]
 # Which path native name takes (cached per name in cv_nkind): 1 the
 # __vset/__vget/__ext helpers, 2 a host builtin, 3 print, 4..7 the
-# vm_native_b..e chains, 8 Petersburg, 9 getf, 10 at.
+# vm_native_b..e chains, 8 Petersburg, 9 getf, 10 at, 11 setf, 12 len.
 vm_native_kind(r): name [
     set(r): 7
     rt_is_pb(vnk_pb): name
@@ -6507,6 +6507,8 @@ vm_native_kind(r): name [
         # (docs/OPTIMIZATIONS.md, O2), not after vm_native_c's name chain
         elif(_): {name = "getf"} [ set(r): 9 ]
         elif(_): {name = "at"} [ set(r): 10 ]
+        elif(_): {name = "setf"} [ set(r): 11 ]
+        elif(_): {name = "len"} [ set(r): 12 ]
         elif(_): {name = "print"} [ set(r): 3 ]
         elif(_): {name = "add" || name = "sub" || name = "mul" || name = "div" || name = "mod" || name = "concat"} [ set(r): 4 ]
         elif(_): {name = "push" || name = "at" || name = "len" || name = "typeof" || name = "getf" || name = "setf" || name = "vec" || name = "struct" || name = "encode" || name = "decode"} [ set(r): 5 ]
@@ -6526,6 +6528,14 @@ vm_native(r): name dst nb ni [
     ]
     elif(_): {vm_nk = 10} [
         at(vm_nr): rt_na0 rt_na1
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 11} [
+        setf(vm_nr): rt_na0 rt_na1 rt_na2
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 12} [
+        len(vm_nr): rt_na0
         vm_setreg(_): dst vm_nr
     ]
     elif(_): {vm_nk = 4} [

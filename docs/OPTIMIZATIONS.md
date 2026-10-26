@@ -30,8 +30,8 @@ They are ordered from the simplest to the hardest and done in that order.
 | O1 | 4 | Constant folding: arithmetic, comparison and bitwise operators and unary minus on literal operands become one constant | done | done | loop 0.107 → 0.080 s, russia loop 0.559 → 0.45 s |
 | O2 | 7 | Fast paths for the `getf` (struct field) and `at` (vector item) builtins, skipping argument marshalling and the name chains | done | done | fields 0.168 → 0.086 s, russia loop 0.45 → 0.34 s, russia fields 0.51 → 0.45 s (russia side alone) |
 | O3 | build | Whole-program optimization: MSVC `/GL` + `/LTCG`, gcc `-flto=auto`, so the VM inlines the value helpers of `ussr.c` / `uno.c` (`ussr_null`, `ussr_value_free`, ...) | done | done (runs on ussr) | call 0.19 → 0.11 s, loop 0.085 → 0.066 s, fields 0.083 → 0.062 s, russia loop 0.33 → 0.24 s, russia fields 0.46 → 0.32 s |
-| O4 | 6 | CALL/RET: save and restore only the registers a function can touch (compiler-known high-water mark) instead of all 32 | planned | planned | |
-| O5 | 7 | Fast path for `setf` and `len` on vectors (`setf` needs a silent field/type check first) | planned | planned | |
+| O4 | 6 | CALL/RET: save and restore only the registers a function can touch (compiler-known high-water mark) instead of all 32 | dropped | n/a | no measurable gain after O3: with the value helpers inlined, moving 32 mostly null registers is cheap |
+| O5 | 7 | Fast paths for `setf` (through a silent `ussr_struct_try_set_field`) and `len` on vectors | done | done | setf 0.124 → 0.074 s, russia loop 0.24 → 0.22 s, russia setf 0.317 → 0.30 s (russia side alone) |
 | O6 | 4 | Dead branch elimination: `if` / `while` on a constant condition | planned | planned | |
 | O7 | 5 | Peephole: jump-to-jump threading, NOP removal | planned | planned | |
 | O8 | 6 | Integer fast path for `+ - * < <= > >= =` without the generic `vm_binary` call | planned | planned | |
@@ -107,3 +107,19 @@ out-of-line calls. `/GL` with `/LTCG` (gcc: `-flto=auto`) lets the
 compiler inline them across files. `OPT=/Od LTCG=` gives the old debug
 build. Function calls got 40% cheaper, which is most of russia.su's gain:
 its VM makes about 50 calls per instruction it runs.
+
+### O4 (dropped)
+
+Implemented and measured: the compiler recorded the highest register each
+function names, CALL and RET moved only those. No benchmark moved outside
+the noise. After O3 the cost of RET is the locals and the result copy,
+not the register loop.
+
+### O5
+
+After O3 the profile of russia.su put `setf` (~970 cycles a call) and
+`len` (~480) at the top of the builtins. `setf` could not take the
+fast path as it was, because `ussr_struct_set_field` prints its errors and
+the general path would report them again; `ussr_struct_try_set_field`
+does the same work silently and returns 0 for anything the general path
+must handle. russia.su gives `setf` and `len` their own kinds (11, 12).

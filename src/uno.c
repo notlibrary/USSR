@@ -724,6 +724,26 @@ int ussr_struct_get_field(
     return uno_store_value(out, instance->fields[index]) == 0;
 }
 
+int ussr_struct_try_set_field(
+    ussr_struct_instance_t *instance,
+    const char *field_name,
+    const ussr_value_t *value
+)
+{
+    size_t index;
+    const char *field_type;
+    ussr_value_t stored;
+
+    if (!uno_field_locate(instance->type, field_name, &index, &field_type) ||
+        !uno_type_matches(field_type, value) ||
+        uno_store_value(&stored, *value) != 0)
+        return 0;
+
+    uno_release_value(&instance->fields[index]);
+    instance->fields[index] = stored;
+    return 1;
+}
+
 int ussr_struct_set_field(
     ussr_struct_instance_t *instance,
     const char *field_name,

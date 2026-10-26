@@ -1990,6 +1990,7 @@ int vm_execute(
                      * (docs/OPTIMIZATIONS.md, O2): russia.su's VM calls
                      * them for every instruction it runs. A missing field
                      * or an index out of range takes the general path.
+                     * setf and the length of a vector too (O5).
                      */
                     else if (argument_count == 2 &&
                              r0->type == USSR_STRUCT &&
@@ -2013,6 +2014,27 @@ int vm_execute(
                             r0->data.vector,
                             (size_t)vm->registers[1].data.integer,
                             &value);
+                    }
+                    else if (argument_count == 3 &&
+                             r0->type == USSR_STRUCT &&
+                             r0->data.instance != NULL &&
+                             vm->registers[1].type == USSR_STRING &&
+                             strcmp(fast_name, "setf") == 0)
+                    {
+                        /* value stays null: setf's result */
+                        fast = ussr_struct_try_set_field(
+                            r0->data.instance,
+                            vm->registers[1].data.string,
+                            &vm->registers[2]);
+                    }
+                    else if (argument_count == 1 &&
+                             r0->type == USSR_VECTOR &&
+                             r0->data.vector != NULL &&
+                             strcmp(fast_name, "len") == 0)
+                    {
+                        value = ussr_integer((ussr_int_t)
+                            ussr_vector_length(r0->data.vector));
+                        fast = 1;
                     }
                     if (fast)
                     {
