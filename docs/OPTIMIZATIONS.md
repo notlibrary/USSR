@@ -43,8 +43,9 @@ They are ordered from the simplest to the hardest and done in that order.
 | O14 | 6 | russia: order `vm_step` cases by how often programs run them (loads and stores, jumps, `+`, builtins, `=`, `<`, `-`, CALL, RET first) | n/a | done | russia loop 0.196 → 0.187 s, elif 0.68 → 0.66 s |
 | O15 | 1 | Preprocessor: cache included files by path | dropped | dropped | nothing to cache: `$once` already keeps a file from being read twice, and russia.su includes seven distinct files |
 | O16 | 7 | String length in the text header (O13), so the `byte`, `slice` and `len` fast paths check bounds in O(1); they used to measure the text up to the index, which made scanning a text quadratic. Replaces the planned russia lexer character table: `lx_alpha_p` / `lx_digit_p` are under 0.1% of a compile | done | done (runs on ussr) | russia compiling Mbl.su 2.9 → 2.4 s, lexbench 0.53 → 0.36 s |
-| O17 | 6 | Computed-goto dispatch where the compiler supports it (gcc/clang) | planned | n/a | |
-| O18 | 1-4 | Startup: preprocessing (~10 ms), parsing (~11 ms) and compiling (~16 ms, 6 of them the scope warnings) russia.su itself, before a program runs | planned | n/a | |
+| O17 | 6 | Computed-goto dispatch where the compiler supports it (gcc/clang) | dropped | n/a | O9 to O11 showed dispatch is not the C VM's cost (removing a tenth of the dispatches changed nothing), and MSVC, the main build, has no computed goto |
+| O18 | 1-4 | Startup: preprocessing (~10 ms), parsing (~11 ms) and compiling (~16 ms, 6 of them the scope warnings) russia.su itself, before a program runs | dropped | n/a | no single hot spot: the scope warnings' per-instruction local-name scans (quadratic in big functions) were replaced by a mark array with identical warnings and bytecode, and startup did not move (0.075 s) |
+| O19 | 7 | End a call by clearing only the locals it assigned (a dirty-slot list) instead of every local slot | dropped | n/a | russia 2-3% faster, native calls ~3% slower: inside the noise either way; D1 re-measured with it, still no gain |
 | D1 | 6 | Bind CALL parameters and read the RET value by local slot instead of by name | dropped | n/a | no measurable gain: names are found in the first slots |
 | D2 | 7 | O(1) GC registry unlink (doubly linked list) | dropped | n/a | no measurable gain: freed objects sit near the list head |
 | D3 | 6 | russia: precomputed backend opcode instead of the `rt_bopt` lookup | dropped | n/a | it is already one vector read per step |
@@ -203,3 +204,25 @@ is byte for byte the same.
 
 The planned russia lexer character table (the old O16) is not worth
 doing: the same profile has `lx_alpha_p` and `lx_digit_p` under 0.1%.
+
+### Where the cycle stands
+
+Every item on the list has been tried, most of them built and measured.
+Kept: O0, O1, O2, O3, O5, O8, O11 (russia), O13, O14, O16, plus the
+`LOAD_VAR` leak fix. Against the `/Od` build the cycle started from:
+
+| Benchmark | Before | After |
+|-----------|--------|-------|
+| `loop.su` | 0.457 s | 0.066 s |
+| `call.su` | 1.337 s | 0.113 s |
+| `fields.su` | 0.422 s | 0.055 s |
+| `setf.su` | | 0.055 s |
+| `loop_small.su` through russia.su | 2.015 s | 0.187 s |
+| russia.su compiling Mbl.su | | 2.35 s (2.9 s before O16) |
+
+What is left in a profile is the work itself: variable lookup and value
+copies in `LOAD_VAR` / `LOAD_CONST` / `STORE_VAR`, and the locals and
+result copy of RET. The next real gains need structural changes:
+resolving global variables to slots at compile time (instead of by name
+in a hash), and in russia.su a VM whose instructions are not structs read
+field by field with `getf`.
