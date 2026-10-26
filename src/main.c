@@ -1985,6 +1985,35 @@ int vm_execute(
                             }
                         }
                     }
+                    /*
+                     * getf on a struct and at on a vector, likewise
+                     * (docs/OPTIMIZATIONS.md, O2): russia.su's VM calls
+                     * them for every instruction it runs. A missing field
+                     * or an index out of range takes the general path.
+                     */
+                    else if (argument_count == 2 &&
+                             r0->type == USSR_STRUCT &&
+                             r0->data.instance != NULL &&
+                             vm->registers[1].type == USSR_STRING &&
+                             strcmp(fast_name, "getf") == 0)
+                    {
+                        fast = ussr_struct_get_field(
+                            r0->data.instance,
+                            vm->registers[1].data.string,
+                            &value);
+                    }
+                    else if (argument_count == 2 &&
+                             r0->type == USSR_VECTOR &&
+                             r0->data.vector != NULL &&
+                             vm->registers[1].type == USSR_INTEGER &&
+                             vm->registers[1].data.integer >= 0 &&
+                             strcmp(fast_name, "at") == 0)
+                    {
+                        fast = ussr_vector_get(
+                            r0->data.vector,
+                            (size_t)vm->registers[1].data.integer,
+                            &value);
+                    }
                     if (fast)
                     {
                         ussr_value_free(&vm->registers[ins.a]);

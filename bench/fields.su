@@ -1,0 +1,20 @@
+# Struct field and vector item reads: getf and at in a loop.
+init(ret): arg_cnt arg_vec [
+    struct(P): "x:number" "y:number"
+    new(p): "P" 3 4
+    vec(v): ""
+    push(_): v 5
+    push(_): v 6
+    set(sum): 0
+    set(i): 0
+    while(_): {i < 100000} [
+        set(i): {i + 1}
+        getf(x): p "x"
+        getf(y): p "y"
+        at(a): v 0
+        at(b): v 1
+        set(sum): {sum + x + y + a + b}
+    ]
+    print(_): sum
+    return(ret): 0
+]

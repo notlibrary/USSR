@@ -6494,7 +6494,7 @@ vm_step(r): cur op [
 ]
 # Which path native name takes (cached per name in cv_nkind): 1 the
 # __vset/__vget/__ext helpers, 2 a host builtin, 3 print, 4..7 the
-# vm_native_b..e chains.
+# vm_native_b..e chains, 8 Petersburg, 9 getf, 10 at.
 vm_native_kind(r): name [
     set(r): 7
     rt_is_pb(vnk_pb): name
@@ -6503,6 +6503,10 @@ vm_native_kind(r): name [
     else(_): [
         rt_is_host(vnk_h): name
         if(_): {vnk_h = 1} [ set(r): 2 ]
+        # getf and at get kinds of their own so vm_native runs them first
+        # (docs/OPTIMIZATIONS.md, O2), not after vm_native_c's name chain
+        elif(_): {name = "getf"} [ set(r): 9 ]
+        elif(_): {name = "at"} [ set(r): 10 ]
         elif(_): {name = "print"} [ set(r): 3 ]
         elif(_): {name = "add" || name = "sub" || name = "mul" || name = "div" || name = "mod" || name = "concat"} [ set(r): 4 ]
         elif(_): {name = "push" || name = "at" || name = "len" || name = "typeof" || name = "getf" || name = "setf" || name = "vec" || name = "struct" || name = "encode" || name = "decode"} [ set(r): 5 ]
@@ -6516,7 +6520,15 @@ vm_native(r): name dst nb ni [
         vm_native_kind(vm_nk): name
         set(cv_nkind): ni vm_nk
     ]
-    if(_): {vm_nk = 4} [
+    if(_): {vm_nk = 9} [
+        getf(vm_nr): rt_na0 rt_na1
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 10} [
+        at(vm_nr): rt_na0 rt_na1
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 4} [
         vm_native_b(vm_nr): name dst nb
         vm_setreg(_): dst vm_nr
     ]
