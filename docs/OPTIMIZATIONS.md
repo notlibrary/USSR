@@ -39,7 +39,7 @@ They are ordered from the simplest to the hardest and done in that order.
 | O10 | 6 | Verify register / constant / string indices once at load and drop the per-instruction checks | dropped | n/a | removing the checks of the hottest opcodes outright gained at most 2%, inside the noise, so a load-time verifier is not worth it |
 | O11 | 6 | Superinstructions without a format change: a comparison followed by `JMP_TRUE` / `JMP_FALSE` on its register takes the jump in the same dispatch | dropped | done | ussr: no change (a C dispatch is cheap); russia: elif_small 0.78 → 0.74 s |
 | O12 | 4 | Copy propagation: a `LOAD_VAR x` into the register a `STORE_VAR x` just stored from, when nothing jumps there, becomes a NOP | dropped | n/a | no gain once the `LOAD_VAR` leak was fixed (see the note); russia would still dispatch the NOP |
-| O13 | 7 | Shared immutable strings (refcount) instead of `strdup` on every register load | planned | planned | |
+| O13 | 7 | Shared immutable strings: the text of a string value carries a reference count, so copying a value (every register load, store, `getf`, `at`) retains it instead of `strdup` | done | done (runs on ussr) | setf 0.072 → 0.055 s, fields 0.061 → 0.055 s, russia loop 0.205 → 0.191 s, russia elif 0.76 → 0.69 s |
 | O14 | 6 | russia: order `vm_step` cases by frequency / split the chain into ranges | n/a | planned | |
 | O15 | 1 | Preprocessor: cache included files by path | planned | planned | |
 | O16 | 2 | russia lexer: character class table instead of comparison chains | n/a | planned | |
@@ -171,3 +171,20 @@ which the next write then had to free. Printing a string variable four
 million times peaked at 186.7 MB; with `LOAD_VAR` freeing the old value it
 stays at 4.4 MB. The fix costs about 3% on the benchmarks and is kept;
 against the fixed VM the copy propagation gained nothing.
+
+### O13
+
+`data.string` stays a plain `char *`, so the hundreds of places that read
+string values are unchanged. What changed is who owns the bytes: the text
+is allocated by `ussr_text_alloc` / `ussr_text_new` / `ussr_text_dup` with
+a reference count in front of it, `ussr_value_copy` (and uno's
+`uno_store_value`) retains it, and `ussr_value_free` (and uno's release
+and destroy paths) releases it. Only five places build a string value
+themselves (`ussr_string`, the parser's string literal, the UNO decoder,
+the concat builtin, uno's store); all now go through these functions.
+String values must never be modified in place or passed to `free()`.
+
+Checked with the normal suites (ussr 78/78, russia 75/77 as before) and an
+AddressSanitizer build (`"OPT=/Od /fsanitize=address" LTCG=`): all 78
+native tests and a sample of 13 programs through russia.su ran with no
+reports.

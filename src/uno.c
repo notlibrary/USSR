@@ -90,7 +90,7 @@ static int uno_store_value(ussr_value_t *dst, ussr_value_t src)
     {
     case USSR_STRING:
         dst->type = USSR_STRING;
-        dst->data.string = uno_strdup(src.data.string);
+        dst->data.string = ussr_text_retain(src.data.string);
         return dst->data.string != NULL ? 0 : -1;
 
     case USSR_VECTOR:
@@ -114,7 +114,7 @@ static void uno_release_value(ussr_value_t *v)
     switch (v->type)
     {
     case USSR_STRING:
-        free(v->data.string);
+        ussr_text_release(v->data.string);
         break;
     case USSR_VECTOR:
         ussr_vector_release(v->data.vector);
@@ -213,7 +213,7 @@ void ussr_uno_vector_destroy_raw(ussr_vector_t *vector)
      * children are left alone (the collector fixed up refcounts). */
     for (i = 0; i < vector->count; ++i)
         if (vector->items[i].type == USSR_STRING)
-            free(vector->items[i].data.string);
+            ussr_text_release(vector->items[i].data.string);
 
     free(vector->items);
     free(vector->element_type);
@@ -229,7 +229,7 @@ void ussr_uno_instance_destroy_raw(ussr_struct_instance_t *instance)
 
     for (i = 0; i < instance->field_count; ++i)
         if (instance->fields[i].type == USSR_STRING)
-            free(instance->fields[i].data.string);
+            ussr_text_release(instance->fields[i].data.string);
 
     free(instance->fields);
     free(instance);
@@ -1201,7 +1201,7 @@ static int uno_read_string(uno_reader_t *r, ussr_value_t *out)
     }
 
     out->type = USSR_STRING;
-    out->data.string = uno_strndup(start, (size_t)(r->cursor - start));
+    out->data.string = ussr_text_new(start, (size_t)(r->cursor - start));
     r->cursor++; /* closing backtick */
 
     return out->data.string != NULL ? 0 : -1;

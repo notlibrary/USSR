@@ -962,13 +962,60 @@ ussr_value_t ussr_boolean(int boolean)
     return value;
 }
 
+typedef union
+{
+    size_t refs;
+    double align;
+} ussr_text_head_t;
+
+#define USSR_TEXT_HEAD(text) ((ussr_text_head_t *)(void *)(text) - 1)
+
+char *ussr_text_alloc(size_t len)
+{
+    ussr_text_head_t *head = malloc(sizeof(*head) + len + 1);
+
+    if (head == NULL)
+        return NULL;
+    head->refs = 1;
+    return (char *)(head + 1);
+}
+
+char *ussr_text_new(const char *text, size_t len)
+{
+    char *copy = ussr_text_alloc(len);
+
+    if (copy == NULL)
+        return NULL;
+    memcpy(copy, text, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+char *ussr_text_dup(const char *text)
+{
+    return text != NULL ? ussr_text_new(text, strlen(text)) : NULL;
+}
+
+char *ussr_text_retain(char *text)
+{
+    if (text != NULL)
+        USSR_TEXT_HEAD(text)->refs++;
+    return text;
+}
+
+void ussr_text_release(char *text)
+{
+    if (text != NULL && --USSR_TEXT_HEAD(text)->refs == 0)
+        free(USSR_TEXT_HEAD(text));
+}
+
 ussr_value_t ussr_string(const char *string)
 {
     ussr_value_t value;
 
     memset(&value, 0, sizeof(value));
     value.type = USSR_STRING;
-    value.data.string = ussr_strdup(string);
+    value.data.string = ussr_text_dup(string);
 
     return value;
 }
@@ -979,7 +1026,7 @@ void ussr_value_free(ussr_value_t *value)
         return;
 
     if (value->type == USSR_STRING)
-        free(value->data.string);
+        ussr_text_release(value->data.string);
     else if (value->type == USSR_VECTOR)
         ussr_vector_release(value->data.vector);
     else if (value->type == USSR_STRUCT)
@@ -1015,7 +1062,7 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
             break;
 
         case USSR_STRING:
-            copy.data.string = ussr_strdup(value->data.string);
+            copy.data.string = ussr_text_retain(value->data.string);
             break;
 
         case USSR_VECTOR:
@@ -4600,7 +4647,7 @@ int ussr_execute_command(
             total_length += strlen(values[i].data.string);
         }
 
-        string = malloc(total_length + 1);
+        string = ussr_text_alloc(total_length);
 
         if (string == NULL)
         {

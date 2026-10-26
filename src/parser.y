@@ -623,7 +623,8 @@ unsigned_literal
     : STRING
       {
           $$.type = USSR_STRING;
-          $$.data.string = $1;
+          $$.data.string = ussr_text_dup($1);
+          free($1);
       }
     | INTEGER
       {
