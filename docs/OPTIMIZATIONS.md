@@ -38,7 +38,7 @@ They are ordered from the simplest to the hardest and done in that order.
 | O9 | 6 | One "slow path" test for the yield and resume checks at the top of the dispatch loop | dropped | n/a | built and measured: no change, the compiler already keeps these checks cheap |
 | O10 | 6 | Verify register / constant / string indices once at load and drop the per-instruction checks | dropped | n/a | removing the checks of the hottest opcodes outright gained at most 2%, inside the noise, so a load-time verifier is not worth it |
 | O11 | 6 | Superinstructions without a format change: a comparison followed by `JMP_TRUE` / `JMP_FALSE` on its register takes the jump in the same dispatch | dropped | done | ussr: no change (a C dispatch is cheap); russia: elif_small 0.78 → 0.74 s |
-| O12 | 4 | Copy propagation: compute straight into the target instead of a temp register plus `STORE_VAR` | planned | planned | |
+| O12 | 4 | Copy propagation: a `LOAD_VAR x` into the register a `STORE_VAR x` just stored from, when nothing jumps there, becomes a NOP | dropped | n/a | no gain once the `LOAD_VAR` leak was fixed (see the note); russia would still dispatch the NOP |
 | O13 | 7 | Shared immutable strings (refcount) instead of `strdup` on every register load | planned | planned | |
 | O14 | 6 | russia: order `vm_step` cases by frequency / split the chain into ranges | n/a | planned | |
 | O15 | 1 | Preprocessor: cache included files by path | planned | planned | |
@@ -159,3 +159,15 @@ russia.su is the opposite: one of its dispatches is a whole `vm_loop` pass
 with several user function calls, so the fused compare-and-branch
 (`vm_fuse`, after the `= != < <= > >=` steps) saves real work there.
 Opcodes are unchanged; UUASM, `.ru` files and the C VM need nothing.
+
+### O12 (dropped) and the LOAD_VAR leak
+
+The pass was built (`STORE_VAR x` then `LOAD_VAR x` into the same
+register, not a jump target, function entry or CALL return point) and was
+*slower*. The reason was a bug: `LOAD_VAR` overwrote its register without
+freeing the old value, so every reload of a string leaked a copy and every
+reload of a vector or struct leaked a reference. A NOP kept the old value,
+which the next write then had to free. Printing a string variable four
+million times peaked at 186.7 MB; with `LOAD_VAR` freeing the old value it
+stays at 4.4 MB. The fix costs about 3% on the benchmarks and is kept;
+against the fixed VM the copy propagation gained nothing.

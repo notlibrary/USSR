@@ -1724,7 +1724,7 @@ int vm_execute(
                 name=program->strings[ins.immediate];
                 /* b: 0 by name, 1 the call's local in slot c, 2 global
                  * (resolved by the compiler inside functions). */
-                { const ussr_value_t *v=ussr_get_variable_at(name, (ussr_var_place_t)ins.b, ins.c); vm->registers[ins.a]=v?ussr_value_copy(v):ussr_null(); }
+                { const ussr_value_t *v=ussr_get_variable_at(name, (ussr_var_place_t)ins.b, ins.c); value=v?ussr_value_copy(v):ussr_null(); ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=value; }
                 break;
             case USSR_BC_STORE_VAR:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
