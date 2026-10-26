@@ -41,13 +41,16 @@ PETERSBURG_LIBS = $(GLFW_LIB) opengl32.lib gdi32.lib shell32.lib winmm.lib imm32
 PETERSBURG_OBJ = $(SRC)\petersburg_glfw.obj
 !ENDIF
 
-# Optimized for speed by default; OPT=/Od gives a debugger-friendly build.
-OPT     = /O2
+# Optimized for speed by default, with whole-program optimization so the
+# VM inlines the value helpers in ussr.c; OPT=/Od LTCG= gives a
+# debugger-friendly build.
+OPT     = /O2 /GL
+LTCG    = /LTCG
 
 CFLAGS  = /nologo /W3 /Zi $(OPT) /DSTATIC_GETOPT /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN) $(PETERSBURG_CFLAGS)
 RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
-LIBS    = user32.lib ws2_32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO
+LIBS    = user32.lib ws2_32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO $(LTCG)
 
 TARGET  = ussr.exe
 

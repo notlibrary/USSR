@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -std=c11 -O2 -Wall -Wextra -Wpedantic
+CFLAGS  = -std=c11 -O2 -flto=auto -Wall -Wextra -Wpedantic
 # The Petersburg GUI is built in whenever pkg-config finds GLFW and OpenGL
 # (libglfw3-dev, libgl1-mesa-dev); PETERSBURG_BUNDLE=1 requires them.
 # The GUI build compiles petersburg.c to its own object, so installing or

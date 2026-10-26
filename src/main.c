@@ -1490,7 +1490,7 @@ static int vm_try_call(
 
 #ifdef USSR_PROFILE
 /*
- * Build with -DUSSR_PROFILE (nmake ... OPT="/O2 /DUSSR_PROFILE") to get a
+ * Build with -DUSSR_PROFILE (nmake ... "OPT=/O2 /GL /DUSSR_PROFILE") to get a
  * profile on stderr at exit: cycles and counts per opcode and per called
  * name (user functions for CALL, builtins for OOP). Cycles are charged to
  * an instruction up to the start of the next one, so a CALL's own cost
