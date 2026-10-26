@@ -1,0 +1,1652 @@
+# klin.su - a small desktop calculator for USSR on a Petersburg canvas,
+# with casual, scientific and programmer modes.
+#
+#     ussr src/klin/klin.su
+#
+# The engine (entry, evaluation, formatting, bases, byte swaps) is plain
+# USSR that works without a window; the GUI draws the display and the
+# keypad on one canvas and turns clicks and keys into the same key names.
+#
+# Public API:
+#   klinreset(r): mode        -> "casual", "sci" or "prog"; clears everything
+#                                (angles back to degrees, base to 10)
+#   klinmode(r): mode         -> switches mode, keeping the current value
+#   klinpress(r): key         -> one key, by its label: "7", "+", "SIN",
+#                                "HEX", "SW32", "=", "AC", "<-", ...
+#   klindisplay(r):           -> the main display text
+#   klinexpr(r):              -> the expression line
+#   klinvalue(r):             -> the current value as a number
+#   klinbasetext(r): v base   -> v in base 16, 10, 8 or 2 (two's complement
+#                                64-bit for 16, 8 and 2)
+#   klininitialize(canvas): window -> the mode toolbar and the canvas
+#   klindraw(r):              -> redraws the canvas
+#   klinclick(r): canvas x y  -> canvas "pointer" callback body
+#   klinkey(r): window key    -> window "key" callback body
+#   klinkeyup(r): window key  -> window "keyup" callback body
+#
+# Callbacks are separate processes, so the state lives in the hash
+# namespace: klin_mode klin_base klin_angle klin_toks (the expression:
+# numbers and operator names) klin_entry (digits being typed) klin_cur
+# klin_hascur (a value from a result, function or constant) klin_hist
+# (the last "expr =" line) klin_err klin_open (open parentheses), and for
+# the GUI klin_window klin_canvas klin_hits klin_modebuttons klin_shift.
+$once
+$include "../petersburg/petersburg.su"
+$include "../libs/strings.su"
+$include "../libs/math.su"
+
+$define KLIN_WIDTH 360
+$define KLIN_HEIGHT 500
+$define KLIN_BG 2632756
+$define KLIN_PANEL 1250325
+$define KLIN_SEG 10092441
+$define KLIN_SEG_OFF 1975341
+$define KLIN_SMALL 9083540
+$define KLIN_KEY 4210752
+$define KLIN_KEY_DIGIT 5263440
+$define KLIN_KEY_OP 3825755
+$define KLIN_KEY_EQ 12603469
+$define KLIN_KEY_ON 14524485
+$define KLIN_KEY_TEXT 15790320
+$define KLIN_KEY_DIM 7368816
+$define KLIN_INT_MAX 9223372036854775807
+
+# --- small helpers ----------------------------------------------------------
+
+klin_is_number(r): v [
+    typeof(_kn_t): v
+    set(r): {_kn_t = "integer" || _kn_t = "real"}
+]
+
+klin_abs(r): x [
+    set(r): x
+    if(_): {x < 0} [ set(r): {0 - x} ]
+]
+
+klin_zeros(r): n [
+    set(r): ""
+    set(_kz_i): 0
+    while(_): {_kz_i < n} [
+        concat(r): r "0"
+        set(_kz_i): {_kz_i + 1}
+    ]
+]
+
+# Text without its trailing "0" characters.
+klin_trim_zeros(r): s [
+    len(_ktz_n): s
+    set(_ktz_go): {_ktz_n > 0}
+    while(_): _ktz_go [
+        set(_ktz_last): {_ktz_n - 1}
+        byte(_ktz_b): s _ktz_last
+        if(_): {_ktz_b = 48} [
+            set(_ktz_n): _ktz_last
+            set(_ktz_go): {_ktz_n > 0}
+        ]
+        else(_): [ set(_ktz_go): false ]
+    ]
+    slice(r): s 0 _ktz_n
+]
+
+# Integer part of a real toward zero, for |x| below 2^62.
+klin_trunc(r): x [
+    str_trunc(r): x
+]
+
+klin_is_integral(r): x [
+    typeof(_kii_t): x
+    set(r): {_kii_t = "integer"}
+    if(_): {_kii_t = "real"} [
+        klin_abs(_kii_a): x
+        set(r): false
+        if(_): {_kii_a < 1000000000000000000.0} [
+            klin_trunc(_kii_i): x
+            set(r): {_kii_i = x}
+        ]
+    ]
+]
+
+# --- formatting -------------------------------------------------------------
+
+# x with at most 12 significant digits: fixed notation from 1e-7 to below
+# 1e12, otherwise mantissa "E" exponent.
+klin_fmt(r): x [
+    typeof(_kf_t): x
+    if(_): {_kf_t = "integer"} [
+        str_from_int(r): x
+    ]
+    elif(_): {x != x} [
+        set(r): "Error"
+    ]
+    elif(_): {x = 0} [
+        set(r): "0"
+    ]
+    else(_): [
+        set(_kf_neg): {x < 0}
+        klin_abs(_kf_ax): x
+        # the exponent e and p = 10^|e| built exactly, then one division,
+        # so the mantissa is rounded once
+        set(_kf_e): 0
+        set(_kf_p): 1.0
+        if(_): {_kf_ax >= 10} [
+            while(_): {_kf_ax >= _kf_p * 10} [
+                set(_kf_p): {_kf_p * 10}
+                set(_kf_e): {_kf_e + 1}
+            ]
+            set(_kf_m): {_kf_ax / _kf_p}
+        ]
+        elif(_): {_kf_ax < 1} [
+            while(_): {_kf_ax * _kf_p < 1} [
+                set(_kf_p): {_kf_p * 10}
+                set(_kf_e): {_kf_e - 1}
+            ]
+            set(_kf_m): {_kf_ax * _kf_p}
+        ]
+        else(_): [ set(_kf_m): _kf_ax ]
+        klin_trunc(_kf_mi): {_kf_m * 100000000000.0 + 0.5}
+        if(_): {_kf_mi >= 1000000000000} [
+            set(_kf_mi): 100000000000
+            set(_kf_e): {_kf_e + 1}
+        ]
+        str_from_int(_kf_ds): _kf_mi
+        if(_): {_kf_e >= 0 - 7 && _kf_e < 12} [
+            if(_): {_kf_e >= 0} [
+                set(_kf_il): {_kf_e + 1}
+                if(_): {_kf_il >= 12} [
+                    klin_zeros(_kf_z): {_kf_il - 12}
+                    concat(_kf_ip): _kf_ds _kf_z
+                    set(_kf_fp): ""
+                ]
+                else(_): [
+                    slice(_kf_ip): _kf_ds 0 _kf_il
+                    slice(_kf_fp): _kf_ds _kf_il {12 - _kf_il}
+                ]
+            ]
+            else(_): [
+                set(_kf_ip): "0"
+                klin_zeros(_kf_z): {0 - _kf_e - 1}
+                concat(_kf_fp): _kf_z _kf_ds
+            ]
+            klin_trim_zeros(_kf_fp): _kf_fp
+            set(r): _kf_ip
+            if(_): {_kf_fp != ""} [ concat(r): _kf_ip "." _kf_fp ]
+        ]
+        else(_): [
+            slice(_kf_lead): _kf_ds 0 1
+            slice(_kf_fp): _kf_ds 1 11
+            klin_trim_zeros(_kf_fp): _kf_fp
+            set(r): _kf_lead
+            if(_): {_kf_fp != ""} [ concat(r): _kf_lead "." _kf_fp ]
+            str_from_int(_kf_et): _kf_e
+            concat(r): r "E" _kf_et
+        ]
+        if(_): _kf_neg [ concat(r): "-" r ]
+    ]
+]
+
+klin_digit_bits(r): base [
+    set(r): 0
+    if(_): {base = 16} [ set(r): 4 ]
+    if(_): {base = 8} [ set(r): 3 ]
+    if(_): {base = 2} [ set(r): 1 ]
+]
+
+# v in base 16, 8 or 2 as the unsigned 64-bit two's complement pattern, or
+# signed in base 10.
+klinbasetext(r): v base [
+    if(_): {base = 10} [
+        str_from_int(r): v
+    ]
+    else(_): [
+        klin_digit_bits(_kbt_k): base
+        set(_kbt_mask): {(1 << _kbt_k) - 1}
+        set(r): ""
+        set(_kbt_shift): 0
+        set(_kbt_lead): ""
+        while(_): {_kbt_shift < 64} [
+            if(_): {_kbt_shift + _kbt_k > 64} [
+                # base 8's top digit holds the single bit 63
+                set(_kbt_d): {(v >> 63) & 1}
+            ]
+            else(_): [
+                set(_kbt_d): {(v >> _kbt_shift) & _kbt_mask}
+            ]
+            at(_kbt_c): "0123456789ABCDEF" _kbt_d
+            concat(r): _kbt_c r
+            set(_kbt_shift): {_kbt_shift + _kbt_k}
+        ]
+        # drop leading zeros, keep one digit
+        len(_kbt_n): r
+        set(_kbt_i): 0
+        set(_kbt_go): true
+        while(_): {_kbt_go && _kbt_i < _kbt_n - 1} [
+            byte(_kbt_b): r _kbt_i
+            if(_): {_kbt_b = 48} [ set(_kbt_i): {_kbt_i + 1} ]
+            else(_): [ set(_kbt_go): false ]
+        ]
+        slice(r): r _kbt_i {_kbt_n - _kbt_i}
+    ]
+]
+
+# Digit value of byte b (0-9, A-F, a-f), or -1.
+klin_digit_value(r): b [
+    set(r): {0 - 1}
+    if(_): {b >= 48 && b <= 57} [ set(r): {b - 48} ]
+    if(_): {b >= 65 && b <= 70} [ set(r): {b - 55} ]
+    if(_): {b >= 97 && b <= 102} [ set(r): {b - 87} ]
+]
+
+# An entry as typed: digits in the base, an optional leading "-", and for
+# real modes an optional point. Programmer mode gives a 64-bit integer.
+klin_parse_entry(r): s prog base [
+    len(_kpe_n): s
+    set(_kpe_i): 0
+    set(_kpe_neg): false
+    if(_): {_kpe_n > 0} [
+        byte(_kpe_b): s 0
+        if(_): {_kpe_b = 45} [
+            set(_kpe_neg): true
+            set(_kpe_i): 1
+        ]
+    ]
+    set(_kpe_v): 0
+    set(_kpe_frac): 0
+    set(_kpe_point): false
+    klin_digit_bits(_kpe_k): base
+    while(_): {_kpe_i < _kpe_n} [
+        byte(_kpe_b): s _kpe_i
+        if(_): {_kpe_b = 46} [
+            set(_kpe_point): true
+        ]
+        else(_): [
+            klin_digit_value(_kpe_d): _kpe_b
+            if(_): {prog && _kpe_k > 0} [
+                set(_kpe_v): {(_kpe_v << _kpe_k) | _kpe_d}
+            ]
+            else(_): [
+                set(_kpe_v): {_kpe_v * 10 + _kpe_d}
+                if(_): _kpe_point [ set(_kpe_frac): {_kpe_frac + 1} ]
+            ]
+        ]
+        set(_kpe_i): {_kpe_i + 1}
+    ]
+    if(_): prog [
+        set(r): _kpe_v
+    ]
+    else(_): [
+        set(_kpe_p): 1
+        set(_kpe_j): 0
+        while(_): {_kpe_j < _kpe_frac} [
+            set(_kpe_p): {_kpe_p * 10}
+            set(_kpe_j): {_kpe_j + 1}
+        ]
+        set(r): {_kpe_v * 1.0 / _kpe_p}
+    ]
+    if(_): _kpe_neg [ set(r): {0 - r} ]
+]
+
+# --- math -------------------------------------------------------------------
+
+# Sine and cosine to double precision: reduce to [-pi/4, pi/4] and sum
+# the Taylor series (math.su's fitted polynomials stop near 1e-9, which
+# a 10-digit display shows).
+klin_sincos(r): x want_cos [
+    set(_ksc_tau): 6.283185307179586
+    set(_ksc_hp): 1.5707963267948966
+    # k = nearest integer to x / (pi/2)
+    set(_ksc_q): {x / _ksc_hp}
+    if(_): {_ksc_q >= 0} [ klin_trunc(_ksc_k): {_ksc_q + 0.5} ]
+    else(_): [ klin_trunc(_ksc_k): {_ksc_q - 0.5} ]
+    set(_ksc_y): {x - _ksc_k * 1.5707963267948966 - _ksc_k * 0.00000000000000006123233995736766}
+    set(_ksc_m): {_ksc_k % 4}
+    if(_): {_ksc_m < 0} [ set(_ksc_m): {_ksc_m + 4} ]
+    if(_): want_cos [ set(_ksc_m): {(_ksc_m + 1) % 4} ]
+    # m: 0 sin y, 1 cos y, 2 -sin y, 3 -cos y
+    set(_ksc_y2): {_ksc_y * _ksc_y}
+    if(_): {_ksc_m = 0 || _ksc_m = 2} [
+        set(_ksc_term): _ksc_y
+        set(_ksc_sum): _ksc_y
+        set(_ksc_n): 1
+    ]
+    else(_): [
+        set(_ksc_term): 1.0
+        set(_ksc_sum): 1.0
+        set(_ksc_n): 0
+    ]
+    set(_ksc_i): 0
+    while(_): {_ksc_i < 12} [
+        set(_ksc_term): {0 - _ksc_term * _ksc_y2 / ((_ksc_n + 1) * (_ksc_n + 2))}
+        set(_ksc_sum): {_ksc_sum + _ksc_term}
+        set(_ksc_n): {_ksc_n + 2}
+        set(_ksc_i): {_ksc_i + 1}
+    ]
+    set(r): _ksc_sum
+    if(_): {_ksc_m >= 2} [ set(r): {0 - _ksc_sum} ]
+]
+
+# x^y: exact repeated squaring for integral exponents, exp(y ln x) for a
+# positive base, an error message (a string) otherwise.
+klin_pow(r): x y [
+    klin_is_integral(_kp_int): y
+    klin_abs(_kp_ay): y
+    if(_): {_kp_int && _kp_ay <= 4096} [
+        klin_trunc(_kp_n): _kp_ay
+        set(_kp_b): {x * 1.0}
+        set(r): 1.0
+        while(_): {_kp_n > 0} [
+            if(_): {(_kp_n & 1) = 1} [ set(r): {r * _kp_b} ]
+            set(_kp_b): {_kp_b * _kp_b}
+            set(_kp_n): {_kp_n >> 1}
+        ]
+        if(_): {y < 0} [
+            if(_): {r = 0} [ set(r): "Cannot divide by zero" ]
+            else(_): [ set(r): {1.0 / r} ]
+        ]
+    ]
+    elif(_): {x > 0} [
+        ln(_kp_l): x
+        set(_kp_e): {y * _kp_l}
+        if(_): {_kp_e > 709} [ set(r): "Overflow" ]
+        else(_): [ exp(r): _kp_e ]
+    ]
+    elif(_): {x = 0 && y > 0} [
+        set(r): 0.0
+    ]
+    else(_): [
+        set(r): "Invalid input"
+    ]
+]
+
+# Unsigned a < b on 64-bit patterns: flipping the sign bit (1 << 63)
+# turns unsigned order into signed order.
+klin_ult(r): a b [
+    set(r): {(a ^ (1 << 63)) < (b ^ (1 << 63))}
+]
+
+# a / b truncated toward zero, exactly, on 64-bit integers (b != 0).
+klin_idiv(r): a b [
+    set(_kd_neg): {(a < 0) != (b < 0)}
+    set(_kd_n): a
+    if(_): {a < 0} [ set(_kd_n): {0 - a} ]
+    set(_kd_d): b
+    if(_): {b < 0} [ set(_kd_d): {0 - b} ]
+    set(_kd_q): 0
+    set(_kd_rem): 0
+    set(_kd_i): 63
+    while(_): {_kd_i >= 0} [
+        set(_kd_rem): {(_kd_rem << 1) | ((_kd_n >> _kd_i) & 1)}
+        klin_ult(_kd_lt): _kd_rem _kd_d
+        if(_): {_kd_lt = false} [
+            set(_kd_rem): {_kd_rem - _kd_d}
+            set(_kd_q): {_kd_q | (1 << _kd_i)}
+        ]
+        set(_kd_i): {_kd_i - 1}
+    ]
+    set(r): _kd_q
+    if(_): _kd_neg [ set(r): {0 - _kd_q} ]
+]
+
+# The low `bytes` bytes of v in reverse order (endianness conversion).
+klin_swap(r): v bytes [
+    set(r): 0
+    set(_ks_i): 0
+    while(_): {_ks_i < bytes} [
+        set(_ks_b): {(v >> (8 * _ks_i)) & 255}
+        set(r): {r | (_ks_b << (8 * (bytes - 1 - _ks_i)))}
+        set(_ks_i): {_ks_i + 1}
+    ]
+]
+
+klin_factorial(r): x [
+    klin_is_integral(_kfa_int): x
+    if(_): {_kfa_int = false || x < 0 || x > 170} [
+        set(r): "Invalid input"
+    ]
+    else(_): [
+        klin_trunc(_kfa_n): x
+        # exact up to 20! (the largest that fits 64 bits), real above
+        set(r): 1
+        if(_): {_kfa_n > 20} [ set(r): 1.0 ]
+        set(_kfa_i): 2
+        while(_): {_kfa_i <= _kfa_n} [
+            set(r): {r * _kfa_i}
+            set(_kfa_i): {_kfa_i + 1}
+        ]
+    ]
+]
+
+klin_to_radians(r): x [
+    set(r): x
+    set(_ktr_a): klin_angle?
+    if(_): {_ktr_a = "DEG"} [ set(r): {x * 3.141592653589793 / 180} ]
+]
+
+klin_from_radians(r): x [
+    set(r): x
+    set(_kfr_a): klin_angle?
+    if(_): {_kfr_a = "DEG"} [ set(r): {x * 180 / 3.141592653589793} ]
+]
+
+# A function key applied to x: the result, or an error message (a string).
+klin_unary(r): op x prog [
+    set(r): x
+    if(_): prog [
+        if(_): {op = "NOT"} [ set(r): {x ^ (0 - 1)} ]
+        elif(_): {op = "+/-"} [ set(r): {0 - x} ]
+        elif(_): {op = "SW16"} [ klin_swap(r): x 2 ]
+        elif(_): {op = "SW32"} [ klin_swap(r): x 4 ]
+        elif(_): {op = "SW64"} [ klin_swap(r): x 8 ]
+        elif(_): {op = "ROL"} [ set(r): {(x << 1) | ((x >> 63) & 1)} ]
+        elif(_): {op = "ROR"} [ set(r): {((x >> 1) & KLIN_INT_MAX) | ((x & 1) << 63)} ]
+    ]
+    elif(_): {op = "+/-"} [ set(r): {0 - x} ]
+    elif(_): {op = "%"} [ set(r): {x / 100} ]
+    elif(_): {op = "X^2"} [ set(r): {x * x * 1.0} ]
+    elif(_): {op = "SQRT"} [
+        if(_): {x < 0} [ set(r): "Invalid input" ]
+        else(_): [ sqrt(r): x ]
+    ]
+    elif(_): {op = "1/X"} [
+        if(_): {x = 0} [ set(r): "Cannot divide by zero" ]
+        else(_): [ set(r): {1.0 / x} ]
+    ]
+    elif(_): {op = "N!"} [ klin_factorial(r): x ]
+    elif(_): {op = "|X|"} [ klin_abs(r): x ]
+    elif(_): {op = "LN" || op = "LOG"} [
+        if(_): {x <= 0} [ set(r): "Invalid input" ]
+        else(_): [
+            ln(r): x
+            if(_): {op = "LOG"} [ set(r): {r / 2.302585092994046} ]
+        ]
+    ]
+    elif(_): {op = "E^X"} [
+        if(_): {x > 709} [ set(r): "Overflow" ]
+        else(_): [ exp(r): x ]
+    ]
+    elif(_): {op = "10^X"} [ klin_pow(r): 10 x ]
+    elif(_): {op = "SIN" || op = "COS" || op = "TAN"} [
+        klin_to_radians(_ku_a): x
+        klin_sincos(_ku_s): _ku_a false
+        klin_sincos(_ku_c): _ku_a true
+        if(_): {op = "SIN"} [ set(r): _ku_s ]
+        if(_): {op = "COS"} [ set(r): _ku_c ]
+        if(_): {op = "TAN"} [
+            klin_abs(_ku_ac): _ku_c
+            if(_): {_ku_ac < 0.0000000000001} [ set(r): "Invalid input" ]
+            else(_): [ set(r): {_ku_s / _ku_c} ]
+        ]
+        # exact zeros instead of 1e-17 leftovers
+        if(_): {op != "TAN" || _ku_c != 0} [
+            klin_is_number(_ku_num): r
+            if(_): _ku_num [
+                klin_abs(_ku_ar): r
+                if(_): {_ku_ar < 0.000000000000001} [ set(r): 0.0 ]
+            ]
+        ]
+    ]
+    elif(_): {op = "ASIN" || op = "ACOS"} [
+        if(_): {x < 0 - 1 || x > 1} [ set(r): "Invalid input" ]
+        else(_): [
+            asin(_ku_v): x
+            if(_): {op = "ACOS"} [ set(_ku_v): {1.5707963267948966 - _ku_v} ]
+            klin_from_radians(r): _ku_v
+        ]
+    ]
+    elif(_): {op = "ATAN"} [
+        atan(_ku_v): x
+        klin_from_radians(r): _ku_v
+    ]
+    # infinite and undefined results are errors, not "inf"
+    klin_is_number(_ku_isn): r
+    if(_): {_ku_isn && prog = false} [
+        if(_): {r != r} [ set(r): "Invalid input" ]
+        elif(_): {r * 0.0 != 0.0} [ set(r): "Overflow" ]
+    ]
+]
+
+# --- the expression ---------------------------------------------------------
+
+klin_prec(r): op [
+    set(r): 0
+    if(_): {op = "OR"} [ set(r): 1 ]
+    elif(_): {op = "XOR"} [ set(r): 2 ]
+    elif(_): {op = "AND"} [ set(r): 3 ]
+    elif(_): {op = "SHL" || op = "SHR"} [ set(r): 4 ]
+    elif(_): {op = "+" || op = "-"} [ set(r): 5 ]
+    elif(_): {op = "*" || op = "/" || op = "MOD"} [ set(r): 6 ]
+    elif(_): {op = "^"} [ set(r): 7 ]
+]
+
+# a op b, or an error message (a string).
+klin_binary(r): op a b prog [
+    set(r): "Invalid input"
+    if(_): prog [
+        if(_): {op = "+"} [ set(r): {a + b} ]
+        elif(_): {op = "-"} [ set(r): {a - b} ]
+        elif(_): {op = "*"} [ set(r): {a * b} ]
+        elif(_): {op = "/" || op = "MOD"} [
+            if(_): {b = 0} [ set(r): "Cannot divide by zero" ]
+            else(_): [
+                klin_idiv(_kb_q): a b
+                set(r): _kb_q
+                if(_): {op = "MOD"} [ set(r): {a - _kb_q * b} ]
+            ]
+        ]
+        elif(_): {op = "AND"} [ set(r): {a & b} ]
+        elif(_): {op = "OR"} [ set(r): {a | b} ]
+        elif(_): {op = "XOR"} [ set(r): {a ^ b} ]
+        elif(_): {op = "SHL" || op = "SHR"} [
+            if(_): {b < 0 || b > 63} [ set(r): "Shift out of range" ]
+            elif(_): {op = "SHL"} [ set(r): {a << b} ]
+            else(_): [ set(r): {a >> b} ]
+        ]
+    ]
+    else(_): [
+        if(_): {op = "+"} [ set(r): {a + b * 1.0} ]
+        elif(_): {op = "-"} [ set(r): {a - b * 1.0} ]
+        elif(_): {op = "*"} [ set(r): {a * b * 1.0} ]
+        elif(_): {op = "/"} [
+            if(_): {b = 0} [ set(r): "Cannot divide by zero" ]
+            else(_): [ set(r): {a / b} ]
+        ]
+        elif(_): {op = "^"} [ klin_pow(r): a b ]
+        klin_is_number(_kb_isn): r
+        if(_): _kb_isn [
+            if(_): {r != r} [ set(r): "Invalid input" ]
+            elif(_): {r * 0.0 != 0.0} [ set(r): "Overflow" ]
+        ]
+    ]
+]
+
+# Precedence climbing over ev = [tokens, position, error, prog]: the value
+# of the expression whose operators bind at least as tightly as minprec.
+klin_parse(r): ev minprec [
+    klin_operand(r): ev
+    set(_kpa_go): true
+    while(_): _kpa_go [
+        at(_kpa_err): ev 2
+        at(_kpa_toks): ev 0
+        at(_kpa_pos): ev 1
+        len(_kpa_n): _kpa_toks
+        set(_kpa_go): false
+        if(_): {_kpa_err = "" && _kpa_pos < _kpa_n} [
+            at(_kpa_op): _kpa_toks _kpa_pos
+            klin_is_number(_kpa_isn): _kpa_op
+            set(_kpa_p): 0
+            if(_): {_kpa_isn = false} [ klin_prec(_kpa_p): _kpa_op ]
+            if(_): {_kpa_p > 0 && _kpa_p >= minprec} [
+                set(ev): 1 {_kpa_pos + 1}
+                set(_kpa_next): {_kpa_p + 1}
+                # ^ is right-associative
+                if(_): {_kpa_op = "^"} [ set(_kpa_next): _kpa_p ]
+                klin_parse(_kpa_rhs): ev _kpa_next
+                at(_kpa_err): ev 2
+                if(_): {_kpa_err = ""} [
+                    at(_kpa_prog): ev 3
+                    klin_binary(_kpa_v): _kpa_op r _kpa_rhs _kpa_prog
+                    klin_is_number(_kpa_ok): _kpa_v
+                    if(_): _kpa_ok [
+                        set(r): _kpa_v
+                        set(_kpa_go): true
+                    ]
+                    else(_): [ set(ev): 2 _kpa_v ]
+                ]
+            ]
+        ]
+    ]
+]
+
+klin_operand(r): ev [
+    set(r): 0
+    at(_ko_toks): ev 0
+    at(_ko_pos): ev 1
+    len(_ko_n): _ko_toks
+    if(_): {_ko_pos >= _ko_n} [
+        set(ev): 2 "Invalid input"
+    ]
+    else(_): [
+        at(_ko_t): _ko_toks _ko_pos
+        set(ev): 1 {_ko_pos + 1}
+        klin_is_number(_ko_isn): _ko_t
+        if(_): _ko_isn [
+            set(r): _ko_t
+        ]
+        elif(_): {_ko_t = "("} [
+            klin_parse(r): ev 1
+            at(_ko_pos): ev 1
+            # a missing ")" at the end is fine
+            if(_): {_ko_pos < _ko_n} [
+                at(_ko_close): _ko_toks _ko_pos
+                if(_): {_ko_close = ")"} [ set(ev): 1 {_ko_pos + 1} ]
+            ]
+        ]
+        else(_): [
+            set(ev): 2 "Invalid input"
+        ]
+    ]
+]
+
+# The value of the token vector, or an error message (a string).
+klin_evaluate(r): toks prog [
+    vec(_ke_ev): ""
+    push(_): _ke_ev toks
+    push(_): _ke_ev 0
+    push(_): _ke_ev ""
+    push(_): _ke_ev prog
+    klin_parse(_ke_v): _ke_ev 1
+    at(_ke_err): _ke_ev 2
+    at(_ke_pos): _ke_ev 1
+    len(_ke_n): toks
+    set(r): _ke_v
+    if(_): {_ke_err != ""} [ set(r): _ke_err ]
+    elif(_): {_ke_pos < _ke_n} [ set(r): "Invalid input" ]
+]
+
+# --- state and keys ---------------------------------------------------------
+
+klinreset(r): mode [
+    set(klin_mode): mode!
+    set(klin_base): 10!
+    set(klin_angle): "DEG"!
+    vec(_kr_toks): ""
+    set(klin_toks): _kr_toks!
+    set(klin_entry): ""!
+    set(klin_cur): 0!
+    set(klin_hascur): false!
+    set(klin_hist): ""!
+    set(klin_err): ""!
+    set(klin_open): 0!
+    set(r): 0
+]
+
+klin_prog(r): [
+    set(_kpg_m): klin_mode?
+    set(r): {_kpg_m = "prog"}
+]
+
+# The value on the display: the entry being typed, else the last result.
+klinvalue(r): [
+    set(_kv_e): klin_entry?
+    klin_prog(_kv_prog):
+    set(_kv_base): klin_base?
+    set(r): 0
+    if(_): {_kv_prog = false} [ set(r): 0.0 ]
+    if(_): {_kv_e != "" && _kv_e != "-"} [
+        klin_parse_entry(r): _kv_e _kv_prog _kv_base
+    ]
+    else(_): [
+        set(_kv_has): klin_hascur?
+        if(_): _kv_has [ set(r): klin_cur? ]
+    ]
+]
+
+klin_text_of(r): v [
+    klin_prog(_kto_prog):
+    if(_): _kto_prog [
+        set(_kto_base): klin_base?
+        klinbasetext(r): v _kto_base
+    ]
+    else(_): [
+        klin_fmt(r): v
+    ]
+]
+
+klindisplay(r): [
+    set(_kdi_err): klin_err?
+    set(_kdi_e): klin_entry?
+    set(_kdi_has): klin_hascur?
+    if(_): {_kdi_err != ""} [ set(r): "Error" ]
+    elif(_): {_kdi_e != ""} [ set(r): _kdi_e ]
+    elif(_): _kdi_has [
+        set(_kdi_v): klin_cur?
+        klin_text_of(r): _kdi_v
+    ]
+    else(_): [ set(r): "0" ]
+]
+
+klin_op_text(r): t [
+    set(r): t
+    if(_): {t = "^"} [ set(r): "**" ]
+]
+
+klinexpr(r): [
+    set(_kx_err): klin_err?
+    set(_kx_toks): klin_toks?
+    len(_kx_n): _kx_toks
+    if(_): {_kx_err != ""} [
+        set(r): _kx_err
+    ]
+    elif(_): {_kx_n = 0} [
+        set(r): klin_hist?
+    ]
+    else(_): [
+        set(r): ""
+        set(_kx_i): 0
+        while(_): {_kx_i < _kx_n} [
+            at(_kx_t): _kx_toks _kx_i
+            klin_is_number(_kx_isn): _kx_t
+            if(_): _kx_isn [ klin_text_of(_kx_s): _kx_t ]
+            else(_): [ klin_op_text(_kx_s): _kx_t ]
+            if(_): {r = ""} [ set(r): _kx_s ]
+            else(_): [ concat(r): r " " _kx_s ]
+            set(_kx_i): {_kx_i + 1}
+        ]
+    ]
+]
+
+klin_last_tok(r): [
+    set(_klt_toks): klin_toks?
+    len(_klt_n): _klt_toks
+    set(r): ""
+    if(_): {_klt_n > 0} [ at(r): _klt_toks {_klt_n - 1} ]
+]
+
+# Pushes the current operand (the entry or the last result) onto the
+# expression; false when there is none.
+klin_push_operand(r): [
+    set(_kpo_e): klin_entry?
+    set(_kpo_has): klin_hascur?
+    set(_kpo_toks): klin_toks?
+    set(r): false
+    if(_): {_kpo_e != "" && _kpo_e != "-"} [
+        klinvalue(_kpo_v):
+        push(_): _kpo_toks _kpo_v
+        set(klin_entry): ""!
+        set(r): true
+    ]
+    elif(_): _kpo_has [
+        set(_kpo_v): klin_cur?
+        push(_): _kpo_toks _kpo_v
+        set(r): true
+    ]
+    set(klin_hascur): false!
+]
+
+klin_fail(r): message [
+    set(klin_err): message!
+    vec(_kfl_toks): ""
+    set(klin_toks): _kfl_toks!
+    set(klin_entry): ""!
+    set(klin_hascur): false!
+    set(klin_open): 0!
+    set(r): 0
+]
+
+# Sets the current value (a function result or a constant).
+klin_set_current(r): v [
+    klin_is_number(_ksc_ok): v
+    if(_): _ksc_ok [
+        set(klin_cur): v!
+        set(klin_hascur): true!
+        set(klin_entry): ""!
+    ]
+    else(_): [ klin_fail(_): v ]
+    set(r): 0
+]
+
+klin_is_binary(r): key [
+    klin_prec(_kib_p): key
+    set(r): {_kib_p > 0}
+    if(_): {key = "X^Y"} [ set(r): true ]
+]
+
+klin_digit_ok(r): key [
+    set(r): false
+    len(_kdo_n): key
+    if(_): {_kdo_n = 1} [
+        byte(_kdo_b): key 0
+        klin_digit_value(_kdo_d): _kdo_b
+        set(_kdo_base): klin_base?
+        klin_prog(_kdo_prog):
+        if(_): {_kdo_prog = false} [ set(_kdo_base): 10 ]
+        set(r): {_kdo_d >= 0 && _kdo_d < _kdo_base}
+        # A-F are not digits outside programmer mode (E is Euler's number)
+        if(_): {_kdo_prog = false && _kdo_d > 9} [ set(r): false ]
+    ]
+]
+
+# Most digits an entry may hold in the current mode and base.
+klin_entry_limit(r): [
+    klin_prog(_kel_prog):
+    set(r): 16
+    if(_): _kel_prog [
+        set(_kel_base): klin_base?
+        if(_): {_kel_base = 10} [ set(r): 18 ]
+        if(_): {_kel_base = 8} [ set(r): 22 ]
+        if(_): {_kel_base = 2} [ set(r): 64 ]
+    ]
+]
+
+klin_type(r): key [
+    set(_kt_e): klin_entry?
+    set(_kt_has): klin_hascur?
+    klin_last_tok(_kt_last):
+    # a new number after "=" starts a new calculation
+    if(_): {_kt_e = "" && _kt_has} [
+        set(klin_hascur): false!
+        set(_kt_toks): klin_toks?
+        len(_kt_tn): _kt_toks
+        if(_): {_kt_tn = 0} [ set(klin_hist): ""! ]
+    ]
+    if(_): {_kt_e = "" && _kt_last = ")"} [
+        set(_kt_toks): klin_toks?
+        push(_): _kt_toks "*"
+    ]
+    len(_kt_n): _kt_e
+    set(_kt_digits): _kt_n
+    if(_): {_kt_n > 0} [
+        byte(_kt_b0): _kt_e 0
+        if(_): {_kt_b0 = 45} [ set(_kt_digits): {_kt_n - 1} ]
+    ]
+    klin_entry_limit(_kt_lim):
+    if(_): {key = "."} [
+        str_find(_kt_dot): _kt_e "." 0
+        if(_): {_kt_dot < 0} [
+            if(_): {_kt_digits = 0} [ concat(_kt_e): _kt_e "0." ]
+            else(_): [ concat(_kt_e): _kt_e "." ]
+        ]
+    ]
+    elif(_): {_kt_digits < _kt_lim} [
+        # no leading zeros
+        if(_): {_kt_e = "0"} [ set(_kt_e): "" ]
+        if(_): {_kt_e = "-0"} [ set(_kt_e): "-" ]
+        concat(_kt_e): _kt_e key
+    ]
+    set(klin_entry): _kt_e!
+    set(r): 0
+]
+
+klin_backspace(r): [
+    set(_kbs_e): klin_entry?
+    len(_kbs_n): _kbs_e
+    if(_): {_kbs_n > 0} [
+        slice(_kbs_e): _kbs_e 0 {_kbs_n - 1}
+        if(_): {_kbs_e = "-"} [ set(_kbs_e): "" ]
+        set(klin_entry): _kbs_e!
+    ]
+    set(r): 0
+]
+
+klin_negate(r): [
+    set(_kng_e): klin_entry?
+    klin_prog(_kng_prog):
+    if(_): {_kng_e != ""} [
+        set(_kng_base): klin_base?
+        byte(_kng_b): _kng_e 0
+        if(_): {_kng_b = 45} [
+            len(_kng_n): _kng_e
+            slice(_kng_e): _kng_e 1 {_kng_n - 1}
+        ]
+        elif(_): {_kng_prog && _kng_base != 10} [
+            # two's complement entries negate by value
+            klinvalue(_kng_v):
+            klinbasetext(_kng_e): {0 - _kng_v} _kng_base
+        ]
+        else(_): [ concat(_kng_e): "-" _kng_e ]
+        set(klin_entry): _kng_e!
+    ]
+    else(_): [
+        klinvalue(_kng_v):
+        klin_unary(_kng_r): "+/-" _kng_v _kng_prog
+        klin_set_current(_): _kng_r
+    ]
+    set(r): 0
+]
+
+klin_equals(r): [
+    klin_push_operand(_keq_had):
+    klin_last_tok(_keq_last):
+    set(_keq_toks): klin_toks?
+    len(_keq_n): _keq_toks
+    if(_): {_keq_n > 0} [
+        klin_is_number(_keq_num): _keq_last
+        klin_prec(_keq_p): _keq_last
+        # a trailing operator is dropped
+        if(_): {_keq_num = false && _keq_p > 0} [
+            pop(_): _keq_toks
+        ]
+        set(_keq_open): klin_open?
+        while(_): {_keq_open > 0} [
+            push(_): _keq_toks ")"
+            set(_keq_open): {_keq_open - 1}
+        ]
+        klinexpr(_keq_text):
+        klin_prog(_keq_prog):
+        klin_evaluate(_keq_v): _keq_toks _keq_prog
+        vec(_keq_fresh): ""
+        set(klin_toks): _keq_fresh!
+        set(klin_open): 0!
+        klin_is_number(_keq_ok): _keq_v
+        if(_): _keq_ok [
+            concat(_keq_hist): _keq_text " ="
+            set(klin_hist): _keq_hist!
+        ]
+        klin_set_current(_): _keq_v
+    ]
+    set(r): 0
+]
+
+klin_binary_key(r): key [
+    set(_kbk_op): key
+    if(_): {key = "X^Y"} [ set(_kbk_op): "^" ]
+    klin_push_operand(_kbk_had):
+    klin_last_tok(_kbk_last):
+    set(_kbk_toks): klin_toks?
+    klin_is_number(_kbk_num): _kbk_last
+    klin_prec(_kbk_p): _kbk_last
+    if(_): _kbk_had [
+        push(_): _kbk_toks _kbk_op
+    ]
+    elif(_): {_kbk_num = false && _kbk_p > 0} [
+        # a second operator replaces the first
+        pop(_): _kbk_toks
+        push(_): _kbk_toks _kbk_op
+    ]
+    elif(_): {_kbk_last = ")"} [
+        push(_): _kbk_toks _kbk_op
+    ]
+    elif(_): {_kbk_last = "" || _kbk_last = "("} [
+        # nothing typed yet: the operand is the 0 on the display
+        klin_prog(_kbk_prog):
+        set(_kbk_zero): 0
+        if(_): {_kbk_prog = false} [ set(_kbk_zero): 0.0 ]
+        push(_): _kbk_toks _kbk_zero
+        push(_): _kbk_toks _kbk_op
+    ]
+    set(klin_hist): ""!
+    set(r): 0
+]
+
+klin_open_paren(r): [
+    klin_push_operand(_kop_had):
+    set(_kop_toks): klin_toks?
+    if(_): _kop_had [ push(_): _kop_toks "*" ]
+    klin_last_tok(_kop_last):
+    if(_): {_kop_last = ")"} [ push(_): _kop_toks "*" ]
+    push(_): _kop_toks "("
+    set(_kop_open): klin_open?
+    set(klin_open): {_kop_open + 1}!
+    set(klin_hist): ""!
+    set(r): 0
+]
+
+klin_close_paren(r): [
+    set(_kcp_open): klin_open?
+    if(_): {_kcp_open > 0} [
+        klin_push_operand(_kcp_had):
+        klin_last_tok(_kcp_last):
+        set(_kcp_toks): klin_toks?
+        if(_): {_kcp_last = "("} [
+            # "()" is empty: drop it
+            pop(_): _kcp_toks
+        ]
+        else(_): [
+            klin_prec(_kcp_p): _kcp_last
+            klin_is_number(_kcp_num): _kcp_last
+            if(_): {_kcp_num = false && _kcp_p > 0} [ pop(_): _kcp_toks ]
+            push(_): _kcp_toks ")"
+        ]
+        set(klin_open): {_kcp_open - 1}!
+    ]
+    set(r): 0
+]
+
+# Programmer mode: show the operand being typed in another base.
+klin_set_base(r): base [
+    set(_ksb_e): klin_entry?
+    if(_): {_ksb_e != "" && _ksb_e != "-"} [
+        klinvalue(_ksb_v):
+        set(klin_base): base!
+        klinbasetext(_ksb_t): _ksb_v base
+        set(klin_entry): _ksb_t!
+    ]
+    else(_): [ set(klin_base): base! ]
+    set(r): 0
+]
+
+klin_is_function(r): key [
+    set(r): false
+    if(_): {key = "SIN" || key = "COS" || key = "TAN" || key = "ASIN" || key = "ACOS" || key = "ATAN"} [ set(r): true ]
+    if(_): {key = "LN" || key = "LOG" || key = "E^X" || key = "10^X" || key = "X^2" || key = "SQRT"} [ set(r): true ]
+    if(_): {key = "1/X" || key = "N!" || key = "|X|" || key = "%"} [ set(r): true ]
+    if(_): {key = "NOT" || key = "SW16" || key = "SW32" || key = "SW64" || key = "ROL" || key = "ROR"} [ set(r): true ]
+]
+
+klinpress(r): key [
+    set(r): 0
+    klin_prog(_kp_prog):
+    set(_kp_err): klin_err?
+    # any key but AC clears an error first
+    if(_): {_kp_err != ""} [
+        set(klin_err): ""!
+        set(klin_hist): ""!
+    ]
+    klin_digit_ok(_kp_digit): key
+    if(_): {key = "AC"} [
+        set(_kp_mode): klin_mode?
+        set(_kp_base): klin_base?
+        set(_kp_angle): klin_angle?
+        klinreset(_): _kp_mode
+        set(klin_base): _kp_base!
+        set(klin_angle): _kp_angle!
+    ]
+    elif(_): _kp_digit [ klin_type(_): key ]
+    elif(_): {key = "." && _kp_prog = false} [ klin_type(_): key ]
+    elif(_): {key = "<-"} [ klin_backspace(_): ]
+    elif(_): {key = "+/-"} [ klin_negate(_): ]
+    elif(_): {key = "="} [ klin_equals(_): ]
+    elif(_): {key = "("} [ klin_open_paren(_): ]
+    elif(_): {key = ")"} [ klin_close_paren(_): ]
+    elif(_): {key = "DEG"} [
+        set(_kp_a): klin_angle?
+        if(_): {_kp_a = "DEG"} [ set(klin_angle): "RAD"! ]
+        else(_): [ set(klin_angle): "DEG"! ]
+    ]
+    elif(_): {key = "HEX" && _kp_prog} [ klin_set_base(_): 16 ]
+    elif(_): {key = "DEC" && _kp_prog} [ klin_set_base(_): 10 ]
+    elif(_): {key = "OCT" && _kp_prog} [ klin_set_base(_): 8 ]
+    elif(_): {key = "BIN" && _kp_prog} [ klin_set_base(_): 2 ]
+    elif(_): {key = "PI" && _kp_prog = false} [ klin_set_current(_): 3.141592653589793 ]
+    elif(_): {key = "E" && _kp_prog = false} [ klin_set_current(_): 2.718281828459045 ]
+    elif(_): {key = "^" && _kp_prog = false} [ klin_binary_key(_): "X^Y" ]
+    else(_): [
+        klin_is_binary(_kp_bin): key
+        klin_is_function(_kp_fun): key
+        if(_): {_kp_bin && (key = "^" || key = "X^Y") && _kp_prog} [ set(_kp_bin): false ]
+        if(_): {_kp_bin && (key = "AND" || key = "OR" || key = "XOR" || key = "SHL" || key = "SHR" || key = "MOD") && _kp_prog = false} [ set(_kp_bin): false ]
+        if(_): _kp_bin [ klin_binary_key(_): key ]
+        elif(_): _kp_fun [
+            klinvalue(_kp_v):
+            klin_unary(_kp_res): key _kp_v _kp_prog
+            klin_set_current(_): _kp_res
+        ]
+    ]
+]
+
+# Switches mode and keeps the value on the display.
+klinmode(r): mode [
+    klinvalue(_km_v):
+    set(_km_err): klin_err?
+    set(_km_angle): klin_angle?
+    klinreset(_): mode
+    set(klin_angle): _km_angle!
+    if(_): {_km_err = "" && _km_v != 0} [
+        if(_): {mode = "prog"} [
+            klin_abs(_km_a): _km_v
+            klin_is_number(_km_ok): _km_v
+            if(_): {_km_a < 4000000000000000000.0} [
+                klin_trunc(_km_i): _km_v
+                klin_set_current(_): _km_i
+            ]
+        ]
+        else(_): [
+            klin_set_current(_): {_km_v * 1.0}
+        ]
+    ]
+    set(r): 0
+]
+
+# --- the GUI ----------------------------------------------------------------
+
+klin_rows(r): mode [
+    vec(r): ""
+    if(_): {mode = "casual"} [
+        push(_): r "AC <- % /"
+        push(_): r "7 8 9 *"
+        push(_): r "4 5 6 -"
+        push(_): r "1 2 3 +"
+        push(_): r "+/- 0 . ="
+    ]
+    elif(_): {mode = "sci"} [
+        push(_): r "DEG ( ) <- AC"
+        push(_): r "SIN COS TAN X^2 X^Y"
+        push(_): r "ASIN ACOS ATAN SQRT 1/X"
+        push(_): r "LN LOG E^X 10^X N!"
+        push(_): r "PI 7 8 9 /"
+        push(_): r "E 4 5 6 *"
+        push(_): r "|X| 1 2 3 -"
+        push(_): r "+/- 0 . = +"
+    ]
+    else(_): [
+        push(_): r "HEX DEC OCT BIN <- AC"
+        push(_): r "AND OR XOR NOT SHL SHR"
+        push(_): r "SW16 SW32 SW64 MOD ( )"
+        push(_): r "A B 7 8 9 /"
+        push(_): r "C D 4 5 6 *"
+        push(_): r "E F 1 2 3 -"
+        push(_): r "ROL ROR 0 +/- = +"
+    ]
+]
+
+# Words of a row ("7 8 9 *") as a vector.
+klin_words(r): line [
+    vec(r): ""
+    len(_kw_n): line
+    set(_kw_i): 0
+    set(_kw_w): ""
+    while(_): {_kw_i <= _kw_n} [
+        set(_kw_b): 32
+        if(_): {_kw_i < _kw_n} [ byte(_kw_b): line _kw_i ]
+        if(_): {_kw_b = 32} [
+            if(_): {_kw_w != ""} [ push(_): r _kw_w ]
+            set(_kw_w): ""
+        ]
+        else(_): [
+            chr(_kw_c): _kw_b
+            concat(_kw_w): _kw_w _kw_c
+        ]
+        set(_kw_i): {_kw_i + 1}
+    ]
+]
+
+# Seven-segment bits: a=1 b=2 c=4 d=8 e=16 f=32 g=64.
+klin_segments(r): c [
+    set(r): 0
+    if(_): {c = "0" || c = "O"} [ set(r): 63 ]
+    elif(_): {c = "1"} [ set(r): 6 ]
+    elif(_): {c = "2"} [ set(r): 91 ]
+    elif(_): {c = "3"} [ set(r): 79 ]
+    elif(_): {c = "4"} [ set(r): 102 ]
+    elif(_): {c = "5"} [ set(r): 109 ]
+    elif(_): {c = "6"} [ set(r): 125 ]
+    elif(_): {c = "7"} [ set(r): 7 ]
+    elif(_): {c = "8"} [ set(r): 127 ]
+    elif(_): {c = "9"} [ set(r): 111 ]
+    elif(_): {c = "A"} [ set(r): 119 ]
+    elif(_): {c = "B"} [ set(r): 124 ]
+    elif(_): {c = "C"} [ set(r): 57 ]
+    elif(_): {c = "D"} [ set(r): 94 ]
+    elif(_): {c = "E"} [ set(r): 121 ]
+    elif(_): {c = "F"} [ set(r): 113 ]
+    elif(_): {c = "-"} [ set(r): 64 ]
+    elif(_): {c = "r"} [ set(r): 80 ]
+    elif(_): {c = "o"} [ set(r): 92 ]
+]
+
+# Seven-segment text, right-aligned to x_right, digits w wide.
+klin_draw_segments(r): canvas text x_right y w [
+    set(_kds_h): {w * 2}
+    set(_kds_t): {w / 6}
+    if(_): {_kds_t < 2} [ set(_kds_t): 2 ]
+    set(_kds_cell): {w + w / 3}
+    set(_kds_dotw): {w / 2}
+    # width first, to right-align
+    len(_kds_n): text
+    set(_kds_total): 0
+    set(_kds_i): 0
+    while(_): {_kds_i < _kds_n} [
+        slice(_kds_c): text _kds_i 1
+        if(_): {_kds_c = "."} [ set(_kds_total): {_kds_total + _kds_dotw} ]
+        else(_): [ set(_kds_total): {_kds_total + _kds_cell} ]
+        set(_kds_i): {_kds_i + 1}
+    ]
+    set(_kds_x): {x_right - _kds_total}
+    set(_kds_i): 0
+    while(_): {_kds_i < _kds_n} [
+        slice(_kds_c): text _kds_i 1
+        if(_): {_kds_c = "."} [
+            canvasfill(_): canvas {_kds_x + _kds_t} {y + _kds_h - _kds_t} _kds_t _kds_t KLIN_SEG
+            set(_kds_x): {_kds_x + _kds_dotw}
+        ]
+        else(_): [
+            klin_segments(_kds_s): _kds_c
+            set(_kds_hh): {_kds_h / 2}
+            set(_kds_len): {w - 2 * _kds_t}
+            # a top, g middle, d bottom
+            if(_): {(_kds_s & 1) != 0} [ canvasfill(_): canvas {_kds_x + _kds_t} y _kds_len _kds_t KLIN_SEG ]
+            if(_): {(_kds_s & 64) != 0} [ canvasfill(_): canvas {_kds_x + _kds_t} {y + _kds_hh - _kds_t / 2} _kds_len _kds_t KLIN_SEG ]
+            if(_): {(_kds_s & 8) != 0} [ canvasfill(_): canvas {_kds_x + _kds_t} {y + _kds_h - _kds_t} _kds_len _kds_t KLIN_SEG ]
+            # f upper left, b upper right, e lower left, c lower right
+            set(_kds_vl): {_kds_hh - _kds_t}
+            if(_): {(_kds_s & 32) != 0} [ canvasfill(_): canvas _kds_x {y + _kds_t / 2} _kds_t _kds_vl KLIN_SEG ]
+            if(_): {(_kds_s & 2) != 0} [ canvasfill(_): canvas {_kds_x + w - _kds_t} {y + _kds_t / 2} _kds_t _kds_vl KLIN_SEG ]
+            if(_): {(_kds_s & 16) != 0} [ canvasfill(_): canvas _kds_x {y + _kds_hh + _kds_t / 2} _kds_t _kds_vl KLIN_SEG ]
+            if(_): {(_kds_s & 4) != 0} [ canvasfill(_): canvas {_kds_x + w - _kds_t} {y + _kds_hh + _kds_t / 2} _kds_t _kds_vl KLIN_SEG ]
+            set(_kds_x): {_kds_x + _kds_cell}
+        ]
+        set(_kds_i): {_kds_i + 1}
+    ]
+    set(r): 0
+]
+
+# The last `chars` characters of text (the end of a long expression).
+klin_tail(r): text chars [
+    len(_ktl_n): text
+    set(r): text
+    if(_): {_ktl_n > chars && chars > 2} [
+        slice(_ktl_s): text {_ktl_n - chars + 2} {chars - 2}
+        concat(r): ".." _ktl_s
+    ]
+]
+
+# Width in pixels of a key label: "X^2" draws the part after ^ raised.
+klin_label_width(r): label [
+    len(_klw_n): label
+    str_find(_klw_c): label "^" 0
+    if(_): {_klw_c >= 0} [ set(_klw_n): {_klw_n - 1} ]
+    set(r): {_klw_n * 7 - 2}
+    if(_): {label = "<-"} [ set(r): 14 ]
+    if(_): {label = "%"} [ set(r): 7 ]
+]
+
+klin_draw_label(r): canvas label x y color [
+    str_find(_kdl_c): label "^" 0
+    if(_): {label = "<-"} [
+        # backspace: an arrow pointing left
+        canvasline(_): canvas x {y + 3} {x + 13} {y + 3} color
+        canvasline(_): canvas x {y + 3} {x + 4} {y - 1} color
+        canvasline(_): canvas x {y + 3} {x + 4} {y + 7} color
+    ]
+    elif(_): {label = "%"} [
+        canvasfill(_): canvas x y 2 2 color
+        canvasline(_): canvas {x + 6} y x {y + 7} color
+        canvasfill(_): canvas {x + 4} {y + 5} 2 2 color
+    ]
+    elif(_): {_kdl_c >= 0} [
+        slice(_kdl_base): label 0 _kdl_c
+        len(_kdl_n): label
+        slice(_kdl_up): label {_kdl_c + 1} {_kdl_n - _kdl_c - 1}
+        canvastext(_): canvas x y _kdl_base color
+        len(_kdl_bn): _kdl_base
+        canvastext(_): canvas {x + _kdl_bn * 7} {y - 4} _kdl_up color
+    ]
+    else(_): [
+        canvastext(_): canvas x y label color
+    ]
+    set(r): 0
+]
+
+klin_key_enabled(r): label [
+    set(r): true
+    klin_prog(_kke_prog):
+    if(_): _kke_prog [
+        len(_kke_n): label
+        if(_): {_kke_n = 1} [
+            byte(_kke_b): label 0
+            klin_digit_value(_kke_d): _kke_b
+            if(_): {_kke_d >= 0} [ klin_digit_ok(r): label ]
+        ]
+    ]
+]
+
+klin_key_active(r): label [
+    set(r): false
+    klin_prog(_kka_prog):
+    set(_kka_base): klin_base?
+    if(_): _kka_prog [
+        if(_): {label = "HEX" && _kka_base = 16} [ set(r): true ]
+        if(_): {label = "DEC" && _kka_base = 10} [ set(r): true ]
+        if(_): {label = "OCT" && _kka_base = 8} [ set(r): true ]
+        if(_): {label = "BIN" && _kka_base = 2} [ set(r): true ]
+    ]
+]
+
+klin_key_color(r): label [
+    set(r): KLIN_KEY
+    len(_kkc_n): label
+    if(_): {_kkc_n = 1} [
+        byte(_kkc_b): label 0
+        klin_digit_value(_kkc_d): _kkc_b
+        if(_): {_kkc_d >= 0} [ set(r): KLIN_KEY_DIGIT ]
+    ]
+    if(_): {label = "." || label = "+/-"} [ set(r): KLIN_KEY_DIGIT ]
+    if(_): {label = "+" || label = "-" || label = "*" || label = "/"} [ set(r): KLIN_KEY_OP ]
+    if(_): {label = "="} [ set(r): KLIN_KEY_EQ ]
+    klin_key_active(_kkc_on): label
+    if(_): _kkc_on [ set(r): KLIN_KEY_ON ]
+]
+
+klin_canvas_size(r): [
+    set(_kcs_c): klin_canvas?
+    getwidth(_kcs_w): _kcs_c
+    getheight(_kcs_h): _kcs_c
+    if(_): {_kcs_w < 100 || _kcs_h < 100} [
+        set(_kcs_w): KLIN_WIDTH
+        set(_kcs_h): {KLIN_HEIGHT - 40}
+    ]
+    vec(r): ""
+    push(_): r _kcs_w
+    push(_): r _kcs_h
+]
+
+klin_draw_display(r): canvas w top_h [
+    canvasfill(_): canvas 6 6 {w - 12} {top_h - 8} KLIN_PANEL
+    set(_kdd_chars): {(w - 28) / 7}
+    klin_trunc(_kdd_chars): _kdd_chars
+    klinexpr(_kdd_x):
+    klin_tail(_kdd_x): _kdd_x {_kdd_chars - 4}
+    canvastext(_): canvas 14 14 _kdd_x KLIN_SMALL
+    set(_kdd_mode): klin_mode?
+    set(_kdd_tag): ""
+    if(_): {_kdd_mode = "sci"} [ set(_kdd_tag): klin_angle? ]
+    if(_): {_kdd_mode = "prog"} [
+        set(_kdd_b): klin_base?
+        if(_): {_kdd_b = 16} [ set(_kdd_tag): "HEX" ]
+        if(_): {_kdd_b = 10} [ set(_kdd_tag): "DEC" ]
+        if(_): {_kdd_b = 8} [ set(_kdd_tag): "OCT" ]
+        if(_): {_kdd_b = 2} [ set(_kdd_tag): "BIN" ]
+    ]
+    set(_kdd_open): klin_open?
+    if(_): {_kdd_open > 0} [
+        str_from_int(_kdd_ot): _kdd_open
+        concat(_kdd_tag): "( " _kdd_ot "  " _kdd_tag
+    ]
+    len(_kdd_tl): _kdd_tag
+    canvastext(_): canvas {w - 14 - _kdd_tl * 7} 14 _kdd_tag KLIN_SMALL
+    # the main number: 7-segment digits, smaller when it is long
+    # ("Error" is E r r o r in segments)
+    klindisplay(_kdd_t):
+    len(_kdd_n): _kdd_t
+    set(_kdd_dw): 16
+    set(_kdd_room): {w - 34}
+    while(_): {_kdd_dw > 4 && _kdd_n * (_kdd_dw + _kdd_dw / 3) > _kdd_room} [
+        set(_kdd_dw): {_kdd_dw - 1}
+    ]
+    set(_kdd_y): {30 + (32 - _kdd_dw * 2)}
+    klin_draw_segments(_): canvas _kdd_t {w - 16} _kdd_y _kdd_dw
+    if(_): {_kdd_mode = "prog"} [
+        klinvalue(_kdd_v):
+        set(_kdd_y): 72
+        klinbasetext(_kdd_h): _kdd_v 16
+        concat(_kdd_l): "HEX " _kdd_h
+        canvastext(_): canvas 14 _kdd_y _kdd_l KLIN_SMALL
+        klinbasetext(_kdd_d): _kdd_v 10
+        concat(_kdd_l): "DEC " _kdd_d
+        canvastext(_): canvas 14 {_kdd_y + 11} _kdd_l KLIN_SMALL
+        klinbasetext(_kdd_o): _kdd_v 8
+        concat(_kdd_l): "OCT " _kdd_o
+        canvastext(_): canvas 14 {_kdd_y + 22} _kdd_l KLIN_SMALL
+        klinbasetext(_kdd_bi): _kdd_v 2
+        klin_group_bits(_kdd_rows): _kdd_bi
+        len(_kdd_rn): _kdd_rows
+        set(_kdd_ri): 0
+        while(_): {_kdd_ri < _kdd_rn} [
+            at(_kdd_rt): _kdd_rows _kdd_ri
+            set(_kdd_lab): "    "
+            if(_): {_kdd_ri = 0} [ set(_kdd_lab): "BIN " ]
+            concat(_kdd_l): _kdd_lab _kdd_rt
+            canvastext(_): canvas 14 {_kdd_y + 33 + 11 * _kdd_ri} _kdd_l KLIN_SMALL
+            set(_kdd_ri): {_kdd_ri + 1}
+        ]
+    ]
+    set(r): 0
+]
+
+# A binary string in rows of up to 32 bits, grouped by 4 from the right.
+klin_group_bits(r): bits [
+    vec(r): ""
+    len(_kgb_n): bits
+    # pad to whole nibbles
+    set(_kgb_pad): {(4 - _kgb_n % 4) % 4}
+    klin_zeros(_kgb_z): _kgb_pad
+    concat(_kgb_s): _kgb_z bits
+    len(_kgb_n): _kgb_s
+    # the first row takes what is left over after the full 32-bit rows
+    set(_kgb_first): {_kgb_n % 32}
+    if(_): {_kgb_first = 0} [ set(_kgb_first): 32 ]
+    set(_kgb_i): 0
+    set(_kgb_rowlen): _kgb_first
+    while(_): {_kgb_i < _kgb_n} [
+        slice(_kgb_row): _kgb_s _kgb_i _kgb_rowlen
+        set(_kgb_out): ""
+        len(_kgb_rl): _kgb_row
+        set(_kgb_j): 0
+        while(_): {_kgb_j < _kgb_rl} [
+            slice(_kgb_nib): _kgb_row _kgb_j 4
+            if(_): {_kgb_out = ""} [ set(_kgb_out): _kgb_nib ]
+            else(_): [ concat(_kgb_out): _kgb_out " " _kgb_nib ]
+            set(_kgb_j): {_kgb_j + 4}
+        ]
+        push(_): r _kgb_out
+        set(_kgb_i): {_kgb_i + _kgb_rowlen}
+        set(_kgb_rowlen): 32
+    ]
+]
+
+klindraw(r): [
+    set(_kdr_c): klin_canvas?
+    klin_canvas_size(_kdr_size):
+    at(_kdr_w): _kdr_size 0
+    at(_kdr_h): _kdr_size 1
+    canvasclear(_): _kdr_c KLIN_BG
+    set(_kdr_mode): klin_mode?
+    set(_kdr_top): 74
+    if(_): {_kdr_mode = "prog"} [ set(_kdr_top): 128 ]
+    klin_draw_display(_): _kdr_c _kdr_w _kdr_top
+    klin_rows(_kdr_rows): _kdr_mode
+    len(_kdr_rn): _kdr_rows
+    at(_kdr_r0): _kdr_rows 0
+    klin_words(_kdr_w0): _kdr_r0
+    len(_kdr_cn): _kdr_w0
+    set(_kdr_gap): 4
+    set(_kdr_x0): 6
+    set(_kdr_y0): {_kdr_top + 2}
+    set(_kdr_bw): {(_kdr_w - 12 - _kdr_gap * (_kdr_cn - 1)) / _kdr_cn}
+    set(_kdr_bh): {(_kdr_h - _kdr_y0 - 6 - _kdr_gap * (_kdr_rn - 1)) / _kdr_rn}
+    klin_trunc(_kdr_bw): _kdr_bw
+    klin_trunc(_kdr_bh): _kdr_bh
+    vec(_kdr_hits): ""
+    set(_kdr_ri): 0
+    while(_): {_kdr_ri < _kdr_rn} [
+        at(_kdr_line): _kdr_rows _kdr_ri
+        klin_words(_kdr_keys): _kdr_line
+        len(_kdr_kn): _kdr_keys
+        set(_kdr_ki): 0
+        while(_): {_kdr_ki < _kdr_kn} [
+            at(_kdr_label): _kdr_keys _kdr_ki
+            set(_kdr_x): {_kdr_x0 + _kdr_ki * (_kdr_bw + _kdr_gap)}
+            set(_kdr_y): {_kdr_y0 + _kdr_ri * (_kdr_bh + _kdr_gap)}
+            klin_key_color(_kdr_col): _kdr_label
+            klin_key_enabled(_kdr_on): _kdr_label
+            set(_kdr_ink): KLIN_KEY_TEXT
+            if(_): {_kdr_on = false} [
+                set(_kdr_col): KLIN_KEY
+                set(_kdr_ink): KLIN_KEY_DIM
+            ]
+            canvasfill(_): _kdr_c _kdr_x _kdr_y _kdr_bw _kdr_bh _kdr_col
+            # the angle key shows the current unit
+            set(_kdr_text): _kdr_label
+            if(_): {_kdr_label = "DEG"} [ set(_kdr_text): klin_angle? ]
+            klin_label_width(_kdr_lw): _kdr_text
+            set(_kdr_tx): {_kdr_x + (_kdr_bw - _kdr_lw) / 2}
+            set(_kdr_ty): {_kdr_y + (_kdr_bh - 7) / 2}
+            klin_trunc(_kdr_tx): _kdr_tx
+            klin_trunc(_kdr_ty): _kdr_ty
+            klin_draw_label(_): _kdr_c _kdr_text _kdr_tx _kdr_ty _kdr_ink
+            vec(_kdr_hit): ""
+            push(_): _kdr_hit _kdr_x
+            push(_): _kdr_hit _kdr_y
+            push(_): _kdr_hit _kdr_bw
+            push(_): _kdr_hit _kdr_bh
+            push(_): _kdr_hit _kdr_label
+            push(_): _kdr_hits _kdr_hit
+            set(_kdr_ki): {_kdr_ki + 1}
+        ]
+        set(_kdr_ri): {_kdr_ri + 1}
+    ]
+    set(klin_hits): _kdr_hits!
+    klin_mark_mode(_):
+    set(r): 0
+]
+
+klin_mark_mode(r): [
+    set(_kmm_buttons): klin_modebuttons?
+    set(_kmm_mode): klin_mode?
+    set(r): 0
+    klin_is_number(_kmm_none): _kmm_buttons
+    if(_): {_kmm_buttons != null && _kmm_none = false} [
+        at(_kmm_b): _kmm_buttons 0
+        setchecked(_): _kmm_b {_kmm_mode = "casual"}
+        at(_kmm_b): _kmm_buttons 1
+        setchecked(_): _kmm_b {_kmm_mode = "sci"}
+        at(_kmm_b): _kmm_buttons 2
+        setchecked(_): _kmm_b {_kmm_mode = "prog"}
+    ]
+]
+
+# The key label under canvas point (x, y), or "".
+klin_hit(r): x y [
+    set(r): ""
+    set(_kh_hits): klin_hits?
+    len(_kh_n): _kh_hits
+    set(_kh_i): 0
+    while(_): {_kh_i < _kh_n} [
+        at(_kh_h): _kh_hits _kh_i
+        at(_kh_x): _kh_h 0
+        at(_kh_y): _kh_h 1
+        at(_kh_w): _kh_h 2
+        at(_kh_hh): _kh_h 3
+        if(_): {x >= _kh_x && x < _kh_x + _kh_w && y >= _kh_y && y < _kh_y + _kh_hh} [
+            at(r): _kh_h 4
+        ]
+        set(_kh_i): {_kh_i + 1}
+    ]
+]
+
+klinclick(r): canvas x y [
+    uilock(_):
+    klin_hit(_kc_key): x y
+    set(r): _kc_key
+    if(_): {_kc_key != ""} [
+        klin_key_enabled(_kc_on): _kc_key
+        if(_): _kc_on [
+            klinpress(_): _kc_key
+            klindraw(_):
+        ]
+    ]
+    uiunlock(_):
+]
+
+# GLFW key codes to key names; "" for keys klin ignores.
+klin_key_name(r): key shift [
+    set(r): ""
+    klin_prog(_kkn_prog):
+    if(_): {key >= 48 && key <= 57} [
+        chr(r): key
+        if(_): shift [
+            if(_): {key = 56} [ set(r): "*" ]
+            elif(_): {key = 57} [ set(r): "(" ]
+            elif(_): {key = 48} [ set(r): ")" ]
+            elif(_): {key = 54} [ set(r): "^" ]
+            elif(_): {key = 53} [ set(r): "%" ]
+            else(_): [ set(r): "" ]
+        ]
+    ]
+    elif(_): {key >= 320 && key <= 329} [ chr(r): {key - 272} ]
+    elif(_): {key >= 65 && key <= 70 && _kkn_prog} [ chr(r): key ]
+    elif(_): {key = 330 || key = 46} [ set(r): "." ]
+    elif(_): {key = 331 || key = 47} [ set(r): "/" ]
+    elif(_): {key = 332} [ set(r): "*" ]
+    elif(_): {key = 333 || key = 45} [ set(r): "-" ]
+    elif(_): {key = 334} [ set(r): "+" ]
+    elif(_): {key = 61} [
+        set(r): "="
+        if(_): shift [ set(r): "+" ]
+    ]
+    elif(_): {key = 335 || key = 257} [ set(r): "=" ]
+    elif(_): {key = 259} [ set(r): "<-" ]
+    elif(_): {key = 256 || key = 261} [ set(r): "AC" ]
+]
+
+klinkey(r): window key [
+    uilock(_):
+    set(r): 0
+    if(_): {key = 340 || key = 344} [
+        set(klin_shift): true!
+    ]
+    else(_): [
+        set(_kk_shift): klin_shift?
+        if(_): {_kk_shift != true} [ set(_kk_shift): false ]
+        klin_key_name(_kk_name): key _kk_shift
+        if(_): {_kk_name != ""} [
+            klin_key_enabled(_kk_on): _kk_name
+            if(_): _kk_on [
+                klinpress(_): _kk_name
+                klindraw(_):
+            ]
+        ]
+    ]
+    uiunlock(_):
+]
+
+klinkeyup(r): window key [
+    if(_): {key = 340 || key = 344} [ set(klin_shift): false! ]
+    set(r): 0
+]
+
+klin_mode_click(r): button [
+    uilock(_):
+    set(_kmc_buttons): klin_modebuttons?
+    at(_kmc_0): _kmc_buttons 0
+    at(_kmc_1): _kmc_buttons 1
+    at(_kmc_2): _kmc_buttons 2
+    if(_): {button = _kmc_0} [ klinmode(_): "casual" ]
+    if(_): {button = _kmc_1} [ klinmode(_): "sci" ]
+    if(_): {button = _kmc_2} [ klinmode(_): "prog" ]
+    klindraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+# Builds the mode toolbar and the canvas in window; returns the canvas.
+klininitialize(canvas): window [
+    klinreset(_): "casual"
+    set(klin_shift): false!
+    set(klin_window): window!
+    toolbar(_kin_bar): window
+    vec(_kin_buttons): ""
+    button(_kin_b): _kin_bar "CASUAL"
+    on(_): _kin_b "click" "klin_mode_click"
+    push(_): _kin_buttons _kin_b
+    button(_kin_b): _kin_bar "SCI"
+    on(_): _kin_b "click" "klin_mode_click"
+    push(_): _kin_buttons _kin_b
+    button(_kin_b): _kin_bar "PROG"
+    on(_): _kin_b "click" "klin_mode_click"
+    push(_): _kin_buttons _kin_b
+    set(klin_modebuttons): _kin_buttons!
+    canvas(canvas): window
+    set(klin_canvas): canvas!
+    pack(_): canvas true
+    klindraw(_):
+]
+
+# `ussr src/klin/klin.su` runs the calculator; scripts that $include
+# klin.su (the tests) keep their own init.
+$ifdef __MAIN__
+klin_app_pointer(result): canvas x y [
+    klinclick(_): canvas x y
+]
+
+klin_app_key(result): window key [
+    klinkey(_): window key
+]
+
+klin_app_keyup(result): window key [
+    klinkeyup(_): window key
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    set(_kla_mode): "casual"
+    if(_): {arg_count = 1} [ at(_kla_mode): arg_values 0 ]
+    if(_): {arg_count > 1 || (_kla_mode != "casual" && _kla_mode != "sci" && _kla_mode != "prog")} [
+        print(_): "usage: ussr klin.su [casual|sci|prog]"
+        set(result): 2
+        return(_): result
+    ]
+    createwindow(window): "Klin" KLIN_WIDTH KLIN_HEIGHT
+    klininitialize(canvas): window
+    klinmode(_): _kla_mode
+    on(_): canvas "pointer" "klin_app_pointer"
+    on(_): window "key" "klin_app_key"
+    on(_): window "keyup" "klin_app_keyup"
+    show(_): window
+    run(_):
+    # redraw once the canvas has its real size
+    sleep(_): 150
+    uilock(_):
+    klindraw(_):
+    uiunlock(_):
+]
+$endif

@@ -1,0 +1,24 @@
+$include "../klin.su"
+
+pointer(result): canvas x y [
+    klinclick(_): canvas x y
+]
+
+key(result): window k [
+    klinkey(_): window k
+]
+
+keyup(result): window k [
+    klinkeyup(_): window k
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Klin" KLIN_WIDTH KLIN_HEIGHT
+    klininitialize(canvas): window
+    klinmode(_): "sci"
+    on(_): canvas "pointer" "pointer"
+    on(_): window "key" "key"
+    on(_): window "keyup" "keyup"
+    show(_): window
+    run(_):
+]

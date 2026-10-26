@@ -1,0 +1,161 @@
+# Klin calculator engine: key sequences in every mode and what the display
+# shows. No window is needed. Prints PASS or FAIL per check.
+$include "../src/klin/klin.su"
+
+# Presses the keys of a space-separated sequence.
+keys(r): sequence [
+    klin_words(_ks_w): sequence
+    len(_ks_n): _ks_w
+    set(_ks_i): 0
+    while(_): {_ks_i < _ks_n} [
+        at(_ks_k): _ks_w _ks_i
+        klinpress(_): _ks_k
+        set(_ks_i): {_ks_i + 1}
+    ]
+    set(r): 0
+]
+
+check(r): label want [
+    klindisplay(_ck_got):
+    if(_): {_ck_got = want} [
+        concat(_ck_line): "PASS " label
+    ]
+    else(_): [
+        concat(_ck_line): "FAIL " label ": got " _ck_got ", want " want
+    ]
+    print(_): _ck_line
+    set(r): 0
+]
+
+# Resets to mode, presses the keys, checks the display.
+calc(r): mode sequence want [
+    klinreset(_): mode
+    keys(_): sequence
+    concat(_cl_label): mode ": " sequence
+    check(r): _cl_label want
+]
+
+init(ret): arg_cnt arg_vec [
+    # casual
+    calc(_): "casual" "1 2 + 3 4 =" "46"
+    calc(_): "casual" "2 + 3 * 4 =" "14"
+    calc(_): "casual" "7 / 2 =" "3.5"
+    calc(_): "casual" "1 / 3 =" "0.333333333333"
+    calc(_): "casual" "2 / 3 =" "0.666666666667"
+    calc(_): "casual" "0 . 1 + 0 . 2 =" "0.3"
+    calc(_): "casual" "5 / 0 =" "Error"
+    calc(_): "casual" "5 / 0 = 7" "7"
+    calc(_): "casual" "9 +/-" "-9"
+    calc(_): "casual" "9 +/- * 2 =" "-18"
+    calc(_): "casual" "2 0 0 %" "2"
+    calc(_): "casual" "1 2 3 <- <-" "1"
+    calc(_): "casual" "3 + * 4 =" "12"
+    calc(_): "casual" "8 - =" "8"
+    calc(_): "casual" "2 + 3 = * 4 =" "20"
+    calc(_): "casual" "2 + 3 = 9" "9"
+    calc(_): "casual" ". 5 + 1 =" "1.5"
+    calc(_): "casual" "9 9 9 9 9 9 * 9 9 9 9 9 9 =" "999998000001"
+    calc(_): "casual" "1 2 3 4 5 6 7 8 * 1 0 0 0 0 0 =" "1.2345678E12"
+    calc(_): "casual" "1 / 1 2 3 4 5 6 7 8 9 =" "8.10000007371E-9"
+    calc(_): "casual" "AC" "0"
+    klinreset(_): "casual"
+    keys(_): "1 2 + 3 4"
+    klinexpr(_x):
+    if(_): {_x = "12 +"} [ print(_): "PASS casual: expression line" ]
+    else(_): [ print(_): "FAIL casual: expression line" ]
+    keys(_): "="
+    klinexpr(_x):
+    if(_): {_x = "12 + 34 ="} [ print(_): "PASS casual: history line" ]
+    else(_): [ print(_): "FAIL casual: history line" ]
+
+    # scientific
+    set(klin_angle): "DEG"!
+    calc(_): "sci" "3 0 SIN" "0.5"
+    calc(_): "sci" "6 0 COS" "0.5"
+    calc(_): "sci" "4 5 TAN" "1"
+    calc(_): "sci" "1 8 0 SIN" "0"
+    calc(_): "sci" "9 0 TAN" "Error"
+    calc(_): "sci" "0 . 5 ASIN" "30"
+    calc(_): "sci" "1 ATAN" "45"
+    calc(_): "sci" "2 ASIN" "Error"
+    calc(_): "sci" "DEG PI SIN" "0"
+    calc(_): "sci" "DEG PI 2 COS" "-0.416146836547"
+    set(klin_angle): "DEG"!
+    calc(_): "sci" "1 0 0 0 LOG" "3"
+    calc(_): "sci" "E LN" "1"
+    calc(_): "sci" "1 E^X" "2.71828182846"
+    calc(_): "sci" "3 10^X" "1000"
+    calc(_): "sci" "2 SQRT" "1.41421356237"
+    calc(_): "sci" "9 +/- SQRT" "Error"
+    calc(_): "sci" "1 2 X^2" "144"
+    calc(_): "sci" "2 X^Y 1 0 =" "1024"
+    calc(_): "sci" "2 X^Y 3 X^Y 2 =" "512"
+    calc(_): "sci" "2 X^Y 0 . 5 =" "1.41421356237"
+    calc(_): "sci" "4 1/X" "0.25"
+    calc(_): "sci" "0 1/X" "Error"
+    calc(_): "sci" "5 N!" "120"
+    calc(_): "sci" "2 0 N!" "2432902008176640000"
+    calc(_): "sci" "1 7 1 N!" "Error"
+    calc(_): "sci" "7 +/- |X|" "7"
+    calc(_): "sci" "( 2 + 3 ) * 4 =" "20"
+    calc(_): "sci" "2 * ( 3 + 4 =" "14"
+    calc(_): "sci" "2 ( 3 + 4 ) =" "14"
+    calc(_): "sci" "( 1 + 2 ) ( 3 + 4 ) =" "21"
+    calc(_): "sci" "PI * 2 =" "6.28318530718"
+    calc(_): "sci" "1 E^X LN" "1"
+    calc(_): "sci" "1 0 0 0 E^X" "Error"
+
+    # programmer
+    calc(_): "prog" "1 2 + 3 4 =" "46"
+    calc(_): "prog" "7 / 2 =" "3"
+    calc(_): "prog" "7 +/- / 2 =" "-3"
+    calc(_): "prog" "7 MOD 3 =" "1"
+    calc(_): "prog" "7 +/- MOD 3 =" "-1"
+    calc(_): "prog" "1 / 0 =" "Error"
+    calc(_): "prog" "2 5 5 HEX" "FF"
+    calc(_): "prog" "2 5 5 OCT" "377"
+    calc(_): "prog" "2 5 5 BIN" "11111111"
+    calc(_): "prog" "HEX F F DEC" "255"
+    calc(_): "prog" "HEX F F + 1 =" "100"
+    calc(_): "prog" "HEX A B C D SW16" "CDAB"
+    calc(_): "prog" "HEX 1 2 3 4 5 6 7 8 SW32" "78563412"
+    calc(_): "prog" "HEX 1 2 3 4 5 6 7 8 SW64" "7856341200000000"
+    calc(_): "prog" "HEX 7 8 5 6 3 4 1 2 0 0 0 0 0 0 0 0 SW64" "12345678"
+    calc(_): "prog" "1 +/- HEX" "FFFFFFFFFFFFFFFF"
+    calc(_): "prog" "HEX F F F F F F F F F F F F F F F F DEC" "-1"
+    calc(_): "prog" "1 2 AND 1 0 =" "8"
+    calc(_): "prog" "1 2 OR 3 =" "15"
+    calc(_): "prog" "1 2 XOR 1 0 =" "6"
+    calc(_): "prog" "0 NOT" "-1"
+    calc(_): "prog" "1 SHL 4 =" "16"
+    calc(_): "prog" "2 5 6 SHR 4 =" "16"
+    calc(_): "prog" "1 SHL 6 4 =" "Error"
+    calc(_): "prog" "1 + 2 SHL 3 =" "24"
+    calc(_): "prog" "1 OR 2 AND 3 =" "3"
+    calc(_): "prog" "1 ROR HEX" "8000000000000000"
+    calc(_): "prog" "HEX 8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ROL" "1"
+    calc(_): "prog" "9 2 2 3 3 7 2 0 3 6 8 5 4 7 7 5 8 0 7" "922337203685477580"
+    calc(_): "prog" "BIN 1 0 2 1" "101"
+    calc(_): "prog" "HEX F F +/-" "FFFFFFFFFFFFFF01"
+    calc(_): "prog" "OCT 1 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 DEC" "-1"
+
+    # mode switches keep the value
+    klinreset(_): "casual"
+    keys(_): "7 . 9"
+    klinmode(_): "prog"
+    check(_): "casual -> prog truncates" "7"
+    keys(_): "HEX F F"
+    klinmode(_): "sci"
+    check(_): "prog -> sci" "255"
+
+    # base text helpers
+    klinbasetext(_bt): -2 2
+    len(_btn): _bt
+    if(_): {_btn = 64} [ print(_): "PASS -2 in binary is 64 bits" ]
+    else(_): [ print(_): "FAIL -2 in binary is 64 bits" ]
+    klin_group_bits(_gb): "10111"
+    at(_gb0): _gb 0
+    if(_): {_gb0 = "0001 0111"} [ print(_): "PASS binary grouping" ]
+    else(_): [ print(_): "FAIL binary grouping" ]
+    set(ret): 0
+]

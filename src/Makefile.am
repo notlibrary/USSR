@@ -88,7 +88,13 @@ EXTRA_DIST = \
 	tula/examples/hello.su \
 	tula/tests/TESTPLAN.md \
 	kgb/box.uno \
+	klin/klin.su \
 	klin/box.uno \
+	klin/README.md \
+	klin/CHANGELOG.md \
+	klin/docs/API.md \
+	klin/examples/hello.su \
+	klin/tests/TESTPLAN.md \
 	kremlin/box.uno \
 	novgorod/box.uno \
 	ryazan/box.uno \

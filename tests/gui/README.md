@@ -12,5 +12,6 @@ windows (most never show them), feed input through `inject`, and print one
     ussr tests/gui/tula_test.su
     ussr tests/gui/tula_dxf_test.su
     ussr tests/gui/tula_toolbar_test.su
+    ussr tests/gui/klin_test.su
 
 A run is clean when no line starts with `FAIL`.
