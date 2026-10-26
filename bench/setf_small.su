@@ -1,0 +1,20 @@
+# Struct field writes and vector lengths: setf and len in a loop.
+init(ret): arg_cnt arg_vec [
+    struct(P): "x:number" "y:number"
+    new(p): "P" 0 0
+    vec(v): ""
+    push(_): v 5
+    push(_): v 6
+    set(sum): 0
+    set(i): 0
+    while(_): {i < 2000} [
+        set(i): {i + 1}
+        setf(_): p "x" i
+        setf(_): p "y" {i * 2}
+        len(n): v
+        getf(x): p "x"
+        set(sum): {sum + x + n}
+    ]
+    print(_): sum
+    return(ret): 0
+]

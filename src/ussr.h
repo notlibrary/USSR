@@ -359,6 +359,23 @@ ussr_value_t ussr_struct_value(ussr_struct_instance_t *instance);
 void ussr_value_free(ussr_value_t *value);
 ussr_value_t ussr_value_copy(const ussr_value_t *value);
 
+/*
+ * String values share their text (docs/OPTIMIZATIONS.md, O13): the
+ * characters of a USSR_STRING are preceded by a reference count, so
+ * copying a value retains it instead of duplicating it. Never modify the
+ * text of a string value, and never free() it: release it (or let
+ * ussr_value_free do it). ussr_text_alloc returns room for len bytes plus
+ * the NUL, count 1; the others accept NULL.
+ */
+char *ussr_text_alloc(size_t len);
+char *ussr_text_new(const char *text, size_t len);
+char *ussr_text_dup(const char *text);
+char *ussr_text_retain(char *text);
+void ussr_text_release(char *text);
+/* strlen of a string value's text, in O(1) after the first call (the
+ * text never changes, so the header caches it). */
+size_t ussr_text_length(const char *text);
+
 int ussr_set_variable(
     const char *name,
     const ussr_value_t *value

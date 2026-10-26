@@ -612,17 +612,6 @@ static void vm_free_values(ussr_value_t *values, size_t count)
     free(values);
 }
 
-/* strlen(text), but at most max: the bytes before any NUL, scanning no
- * further than max (strnlen is POSIX, not ISO C). */
-static size_t vm_text_reach(const char *text, size_t max)
-{
-    size_t n = 0;
-
-    while (n < max && text[n] != '\0')
-        ++n;
-    return n;
-}
-
 /*
  * Sites are recorded as their instructions are emitted, so they are in
  * instruction order: binary search, with the linear scan kept for a
@@ -1509,6 +1498,11 @@ static vm_prof_t vm_prof_names[VM_PROF_NAMES];
 static int vm_prof_registered;
 static vm_prof_t *vm_prof_last_op, *vm_prof_last_name;
 static unsigned long long vm_prof_t0;
+/* opcode pairs (superinstruction and peephole candidates) and jumps whose
+ * target is another JMP (jump threading candidates) */
+static unsigned long long vm_prof_pairs[256][256];
+static unsigned long long vm_prof_jump_to_jump;
+static int vm_prof_prev = -1;
 
 static vm_prof_t *vm_prof_slot(const char *name)
 {
@@ -1558,6 +1552,26 @@ static void vm_prof_dump(void)
         fprintf(stderr, "%-24s %10.1f %12llu %5.1f\n", sorted[i].name,
                 sorted[i].cycles / 1e6, sorted[i].count,
                 total ? 100.0 * sorted[i].cycles / total : 0.0);
+    fprintf(stderr, "== opcode pairs (count)\n");
+    for (n = 0; n < 20; ++n)
+    {
+        size_t a, b, best_a = 0, best_b = 0;
+        unsigned long long best = 0;
+        for (a = 0; a < 256; ++a)
+            for (b = 0; b < 256; ++b)
+                if (vm_prof_pairs[a][b] > best)
+                {
+                    best = vm_prof_pairs[a][b];
+                    best_a = a;
+                    best_b = b;
+                }
+        if (best == 0)
+            break;
+        fprintf(stderr, "0x%02x 0x%02x %12llu\n", (unsigned)best_a,
+                (unsigned)best_b, best);
+        vm_prof_pairs[best_a][best_b] = 0;
+    }
+    fprintf(stderr, "== jumps to a JMP: %llu\n", vm_prof_jump_to_jump);
 }
 
 static void vm_prof_step(const ussr_bc_program_t *program,
@@ -1585,6 +1599,14 @@ static void vm_prof_step(const ussr_bc_program_t *program,
         op->name = labels[ins->opcode];
     }
     op->count++;
+    if (vm_prof_prev >= 0)
+        vm_prof_pairs[vm_prof_prev][ins->opcode]++;
+    vm_prof_prev = ins->opcode;
+    if ((ins->opcode == USSR_BC_JMP || ins->opcode == USSR_BC_JMP_TRUE ||
+         ins->opcode == USSR_BC_JMP_FALSE) &&
+        ins->immediate < program->code_count &&
+        program->code[ins->immediate].opcode == USSR_BC_JMP)
+        vm_prof_jump_to_jump++;
     vm_prof_last_op = op;
     vm_prof_last_name = NULL;
     if (ins->opcode == USSR_BC_CALL && ins->immediate < program->function_count)
@@ -1691,7 +1713,7 @@ int vm_execute(
                 name=program->strings[ins.immediate];
                 /* b: 0 by name, 1 the call's local in slot c, 2 global
                  * (resolved by the compiler inside functions). */
-                { const ussr_value_t *v=ussr_get_variable_at(name, (ussr_var_place_t)ins.b, ins.c); vm->registers[ins.a]=v?ussr_value_copy(v):ussr_null(); }
+                { const ussr_value_t *v=ussr_get_variable_at(name, (ussr_var_place_t)ins.b, ins.c); value=v?ussr_value_copy(v):ussr_null(); ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=value; }
                 break;
             case USSR_BC_STORE_VAR:
                 if (ins.a >= USSR_VM_REGISTER_COUNT || ins.immediate >= program->string_count) { result=-1; goto done; }
@@ -1771,7 +1793,34 @@ int vm_execute(
             case USSR_BC_ADD: case USSR_BC_SUB: case USSR_BC_MUL: case USSR_BC_DIV: case USSR_BC_MOD:
             case USSR_BC_EQ: case USSR_BC_NE: case USSR_BC_LT: case USSR_BC_LE: case USSR_BC_GT: case USSR_BC_GE:
             case USSR_BC_LAND: case USSR_BC_LOR: case USSR_BC_XOR: case USSR_BC_BAND: case USSR_BC_BOR: case USSR_BC_SHL: case USSR_BC_SHR:
-                if (ins.a>=USSR_VM_REGISTER_COUNT || ins.b>=USSR_VM_REGISTER_COUNT || ins.c>=USSR_VM_REGISTER_COUNT || vm_binary(ins.opcode,&vm->registers[ins.b],&vm->registers[ins.c],&temp)!=0) { result=-1; goto done; }
+                if (ins.a>=USSR_VM_REGISTER_COUNT || ins.b>=USSR_VM_REGISTER_COUNT || ins.c>=USSR_VM_REGISTER_COUNT) { result=-1; goto done; }
+                /* integer operands: the common case, without the generic
+                 * vm_binary (docs/OPTIMIZATIONS.md, O8); same results */
+                if (vm->registers[ins.b].type == USSR_INTEGER &&
+                    vm->registers[ins.c].type == USSR_INTEGER)
+                {
+                    ussr_int_t x = vm->registers[ins.b].data.integer;
+                    ussr_int_t y = vm->registers[ins.c].data.integer;
+                    int handled = 1;
+                    switch (ins.opcode)
+                    {
+                        case USSR_BC_ADD: temp = ussr_integer(ussr_int_add(x, y)); break;
+                        case USSR_BC_SUB: temp = ussr_integer(ussr_int_sub(x, y)); break;
+                        case USSR_BC_MUL: temp = ussr_integer(ussr_int_mul(x, y)); break;
+                        case USSR_BC_EQ: temp = ussr_boolean(x == y); break;
+                        case USSR_BC_NE: temp = ussr_boolean(x != y); break;
+                        case USSR_BC_LT: temp = ussr_boolean(x < y); break;
+                        case USSR_BC_LE: temp = ussr_boolean(x <= y); break;
+                        case USSR_BC_GT: temp = ussr_boolean(x > y); break;
+                        case USSR_BC_GE: temp = ussr_boolean(x >= y); break;
+                        default: handled = 0; break;
+                    }
+                    if (handled)
+                    {
+                        ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=temp; break;
+                    }
+                }
+                if (vm_binary(ins.opcode,&vm->registers[ins.b],&vm->registers[ins.c],&temp)!=0) { result=-1; goto done; }
                 ussr_value_free(&vm->registers[ins.a]); vm->registers[ins.a]=temp; break;
             case USSR_BC_JMP: case USSR_BC_JMP_TRUE: case USSR_BC_JMP_FALSE:
                 if (ins.immediate >= program->code_count || (ins.opcode != USSR_BC_JMP && ins.a >= USSR_VM_REGISTER_COUNT)) { result=-1; goto done; }
@@ -1940,12 +1989,15 @@ int vm_execute(
                         const ussr_value_t *r1 = &vm->registers[1];
                         const ussr_value_t *r2 = &vm->registers[2];
 
+                        /* The length comes from the text's header
+                         * (docs/OPTIMIZATIONS.md, O16): measuring the
+                         * text on every call made a byte-by-byte scan
+                         * quadratic in its length. */
                         if (argument_count == 2 &&
                             strcmp(fast_name, "byte") == 0 &&
                             r1->type == USSR_INTEGER &&
                             r1->data.integer >= 0 &&
-                            (ussr_int_t)vm_text_reach(
-                                text, (size_t)r1->data.integer + 1) >
+                            (ussr_int_t)ussr_text_length(text) >
                                 r1->data.integer)
                         {
                             value = ussr_integer((ussr_int_t)(unsigned char)
@@ -1955,7 +2007,8 @@ int vm_execute(
                         else if (argument_count == 1 &&
                                  strcmp(fast_name, "len") == 0)
                         {
-                            value = ussr_integer((ussr_int_t)strlen(text));
+                            value = ussr_integer(
+                                (ussr_int_t)ussr_text_length(text));
                             fast = 1;
                         }
                         else if (argument_count == 3 &&
@@ -1966,9 +2019,7 @@ int vm_execute(
                                  r2->data.integer >= 0 &&
                                  r1->data.integer <=
                                      INT64_MAX - r2->data.integer &&
-                                 (ussr_int_t)vm_text_reach(
-                                     text, (size_t)(r1->data.integer +
-                                                    r2->data.integer)) ==
+                                 (ussr_int_t)ussr_text_length(text) >=
                                      r1->data.integer + r2->data.integer)
                         {
                             char *piece = malloc(
@@ -1990,6 +2041,7 @@ int vm_execute(
                      * (docs/OPTIMIZATIONS.md, O2): russia.su's VM calls
                      * them for every instruction it runs. A missing field
                      * or an index out of range takes the general path.
+                     * setf and the length of a vector too (O5).
                      */
                     else if (argument_count == 2 &&
                              r0->type == USSR_STRUCT &&
@@ -2013,6 +2065,27 @@ int vm_execute(
                             r0->data.vector,
                             (size_t)vm->registers[1].data.integer,
                             &value);
+                    }
+                    else if (argument_count == 3 &&
+                             r0->type == USSR_STRUCT &&
+                             r0->data.instance != NULL &&
+                             vm->registers[1].type == USSR_STRING &&
+                             strcmp(fast_name, "setf") == 0)
+                    {
+                        /* value stays null: setf's result */
+                        fast = ussr_struct_try_set_field(
+                            r0->data.instance,
+                            vm->registers[1].data.string,
+                            &vm->registers[2]);
+                    }
+                    else if (argument_count == 1 &&
+                             r0->type == USSR_VECTOR &&
+                             r0->data.vector != NULL &&
+                             strcmp(fast_name, "len") == 0)
+                    {
+                        value = ussr_integer((ussr_int_t)
+                            ussr_vector_length(r0->data.vector));
+                        fast = 1;
                     }
                     if (fast)
                     {
