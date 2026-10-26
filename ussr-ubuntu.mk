@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic
+CFLAGS  = -std=c11 -O2 -Wall -Wextra -Wpedantic
 # The Petersburg GUI is built in whenever pkg-config finds GLFW and OpenGL
 # (libglfw3-dev, libgl1-mesa-dev); PETERSBURG_BUNDLE=1 requires them.
 # The GUI build compiles petersburg.c to its own object, so installing or
@@ -80,7 +80,7 @@ $(SRC_DIR)/lex.yy.o: $(SRC_DIR)/lex.yy.c $(SRC_DIR)/ussr.h
 $(SRC_DIR)/ussr.o: $(SRC_DIR)/ussr.c $(SRC_DIR)/ussr.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/uthash.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ussr_bytecode.o: $(SRC_DIR)/ussr_bytecode.c $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/ussr.h
+$(SRC_DIR)/ussr_bytecode.o: $(SRC_DIR)/ussr_bytecode.c $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/ussr.h $(SRC_DIR)/vm.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/ussr_ru.o: $(SRC_DIR)/ussr_ru.c $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr.h

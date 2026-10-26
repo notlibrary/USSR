@@ -1,5 +1,6 @@
 #include "ussr_bytecode.h"
 #include "ussr_uuasm.h"
+#include "vm.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -644,6 +645,96 @@ static void bc_loop_free(bc_loop_t *loop)
     memset(loop, 0, sizeof(*loop));
 }
 
+/* The VM opcode of a binary operator, or 0 when there is none. */
+static uint8_t bc_binary_opcode(ussr_operator_t op)
+{
+    switch (op)
+    {
+        case USSR_OP_ADD:          return USSR_BC_ADD;
+        case USSR_OP_SUB:          return USSR_BC_SUB;
+        case USSR_OP_MUL:          return USSR_BC_MUL;
+        case USSR_OP_DIV:          return USSR_BC_DIV;
+        case USSR_OP_MOD:          return USSR_BC_MOD;
+        case USSR_OP_EQ:           return USSR_BC_EQ;
+        case USSR_OP_NE:           return USSR_BC_NE;
+        case USSR_OP_LT:           return USSR_BC_LT;
+        case USSR_OP_LE:           return USSR_BC_LE;
+        case USSR_OP_GT:           return USSR_BC_GT;
+        case USSR_OP_GE:           return USSR_BC_GE;
+        case USSR_OP_LOGICAL_AND:  return USSR_BC_LAND;
+        case USSR_OP_LOGICAL_OR:   return USSR_BC_LOR;
+        case USSR_OP_SHIFT_LEFT:   return USSR_BC_SHL;
+        case USSR_OP_SHIFT_RIGHT:  return USSR_BC_SHR;
+        case USSR_OP_BITWISE_XOR:  return USSR_BC_XOR;
+        case USSR_OP_BITWISE_AND:  return USSR_BC_BAND;
+        case USSR_OP_BITWISE_OR:   return USSR_BC_BOR;
+        default:                   return 0;
+    }
+}
+
+/*
+ * Constant folding (docs/OPTIMIZATIONS.md, O1): an expression made only of
+ * literals, operators and unary minus is computed here with the VM's own
+ * operators, so it runs as one LOAD_CONST. Returns 0 with *out set, or -1
+ * (nothing to free) when it is not constant or would fail at run time;
+ * the VM then reports that failure where it always did. && and || are
+ * left alone: they short-circuit and yield an operand, not a boolean.
+ */
+static int bc_fold(const ussr_expression_t *expression, ussr_value_t *out)
+{
+    ussr_value_t left;
+    ussr_value_t right;
+    uint8_t opcode;
+    int status;
+
+    switch (expression->type)
+    {
+        case USSR_EXPR_VALUE:
+            if (expression->data.value.type != USSR_INTEGER &&
+                expression->data.value.type != USSR_REAL &&
+                expression->data.value.type != USSR_BOOLEAN &&
+                expression->data.value.type != USSR_STRING)
+                return -1;
+            *out = ussr_value_copy(&expression->data.value);
+            return 0;
+
+        case USSR_EXPR_UNARY:
+            if (expression->data.unary.operator != USSR_OP_SUB ||
+                bc_fold(expression->data.unary.operand, &left) != 0)
+                return -1;
+            if (left.type == USSR_INTEGER)
+                *out = ussr_integer(-left.data.integer);
+            else if (left.type == USSR_REAL)
+                *out = ussr_real(-left.data.real);
+            else
+            {
+                ussr_value_free(&left);
+                return -1;
+            }
+            return 0;
+
+        case USSR_EXPR_BINARY:
+            opcode = bc_binary_opcode(expression->data.binary.operator);
+            if (opcode == 0 ||
+                opcode == USSR_BC_LAND ||
+                opcode == USSR_BC_LOR ||
+                bc_fold(expression->data.binary.left, &left) != 0)
+                return -1;
+            if (bc_fold(expression->data.binary.right, &right) != 0)
+            {
+                ussr_value_free(&left);
+                return -1;
+            }
+            status = vm_fold_binary(opcode, &left, &right, out);
+            ussr_value_free(&left);
+            ussr_value_free(&right);
+            return status;
+
+        default:
+            return -1;
+    }
+}
+
 static int bc_emit_binary(
     ussr_bc_program_t *p,
     ussr_operator_t op,
@@ -652,31 +743,10 @@ static int bc_emit_binary(
     uint8_t right
 )
 {
-    uint8_t opcode;
+    uint8_t opcode = bc_binary_opcode(op);
 
-    switch (op)
-    {
-        case USSR_OP_ADD:          opcode = USSR_BC_ADD;  break;
-        case USSR_OP_SUB:          opcode = USSR_BC_SUB;  break;
-        case USSR_OP_MUL:          opcode = USSR_BC_MUL;  break;
-        case USSR_OP_DIV:          opcode = USSR_BC_DIV;  break;
-        case USSR_OP_MOD:          opcode = USSR_BC_MOD;  break;
-        case USSR_OP_EQ:           opcode = USSR_BC_EQ;   break;
-        case USSR_OP_NE:           opcode = USSR_BC_NE;   break;
-        case USSR_OP_LT:           opcode = USSR_BC_LT;   break;
-        case USSR_OP_LE:           opcode = USSR_BC_LE;   break;
-        case USSR_OP_GT:           opcode = USSR_BC_GT;   break;
-        case USSR_OP_GE:           opcode = USSR_BC_GE;   break;
-        case USSR_OP_LOGICAL_AND:  opcode = USSR_BC_LAND; break;
-        case USSR_OP_LOGICAL_OR:   opcode = USSR_BC_LOR;  break;
-        case USSR_OP_SHIFT_LEFT:   opcode = USSR_BC_SHL;  break;
-        case USSR_OP_SHIFT_RIGHT:  opcode = USSR_BC_SHR;  break;
-        case USSR_OP_BITWISE_XOR:  opcode = USSR_BC_XOR;  break;
-        case USSR_OP_BITWISE_AND:  opcode = USSR_BC_BAND; break;
-        case USSR_OP_BITWISE_OR:   opcode = USSR_BC_BOR;  break;
-        default:
-            return -1;
-    }
+    if (opcode == 0)
+        return -1;
 
     return bc_emit(
         p,
@@ -800,6 +870,30 @@ static int bc_compile_expression(
         expression == NULL ||
         dst >= USSR_BC_RETURN_REG)
         return -1;
+
+    if (expression->type == USSR_EXPR_BINARY ||
+        expression->type == USSR_EXPR_UNARY)
+    {
+        ussr_value_t folded;
+
+        if (bc_fold(expression, &folded) == 0)
+        {
+            index = bc_add_constant(p, &folded);
+            ussr_value_free(&folded);
+
+            if (index < 0)
+                return -1;
+
+            return bc_emit(
+                p,
+                USSR_BC_LOAD_CONST,
+                dst,
+                0,
+                0,
+                (uint32_t)index
+            ) < 0 ? -1 : 0;
+        }
+    }
 
     switch (expression->type)
     {

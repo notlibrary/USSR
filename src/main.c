@@ -397,6 +397,23 @@ static int vm_binary(
     return -1;
 }
 
+int vm_fold_binary(
+    uint8_t opcode,
+    const ussr_value_t *left,
+    const ussr_value_t *right,
+    ussr_value_t *out)
+{
+    if (left->type == USSR_STRUCT || left->type == USSR_VECTOR ||
+        right->type == USSR_STRUCT || right->type == USSR_VECTOR)
+        return -1;
+    /* vm_binary reports a bad shift count; the VM should, at run time. */
+    if ((opcode == USSR_BC_SHL || opcode == USSR_BC_SHR) &&
+        right->type == USSR_INTEGER &&
+        (right->data.integer < 0 || right->data.integer > 63))
+        return -1;
+    return vm_binary(opcode, left, right, out);
+}
+
 static void vm_frame_free(ussr_vm_frame_t *frame);
 
 void vm_init(ussr_vm_t *vm)

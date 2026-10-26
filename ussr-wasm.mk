@@ -63,7 +63,7 @@ src/lex.yy.o: src/lex.yy.c src/ussr.h
 src/ussr.o: src/ussr.c src/ussr.h src/uno.h src/ussr_oop_builtins.h src/uthash.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-src/ussr_bytecode.o: src/ussr_bytecode.c src/ussr_bytecode.h src/ussr.h
+src/ussr_bytecode.o: src/ussr_bytecode.c src/ussr_bytecode.h src/ussr.h src/vm.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/bestline.o: src/bestline.c src/bestline.h

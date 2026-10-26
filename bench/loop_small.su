@@ -1,0 +1,11 @@
+# Tight arithmetic loop: integer add/compare/branch, constant subexpressions.
+init(ret): arg_cnt arg_vec [
+    set(sum): 0
+    for(_): {i < 3000} [
+        set(i): 0
+        set(i): {i + 1}
+        set(sum): {sum + i * (2 + 3) - (60 * 60) / 3600}
+    ]
+    print(_): sum
+    return(ret): 0
+]
