@@ -35,9 +35,9 @@ They are ordered from the simplest to the hardest and done in that order.
 | O6 | 4 | Dead branch elimination: `if` / `while` on a constant condition | dropped | dropped | constant conditions are rare (`LOAD_CONST` → `JMP_FALSE` is not among the common pairs) and a constant branch saves no work without removing code |
 | O7 | 5 | Peephole: jump-to-jump threading, NOP removal | dropped | dropped | about 250 jumps land on a JMP in a run of millions of instructions |
 | O8 | 6 | Integer fast path for `+ - * = != < <= > >=` without the generic `vm_binary` call; russia: jumps and arithmetic read and write registers inline instead of calling `vm_reg` / `vm_setreg` | done | done | elif 0.265 → 0.242 s, loop 0.066 → 0.063 s, russia loop 0.22 → 0.20 s (russia side alone) |
-| O9 | 6 | One "slow path" flag for quantum, yield and resume checks at the top of the dispatch loop | planned | planned | |
-| O10 | 6 | Verify register / constant / string indices once at load and drop the per-instruction checks | planned | n/a | |
-| O11 | 6 | Superinstructions: compare-and-branch, add-immediate | planned | planned | |
+| O9 | 6 | One "slow path" test for the yield and resume checks at the top of the dispatch loop | dropped | n/a | built and measured: no change, the compiler already keeps these checks cheap |
+| O10 | 6 | Verify register / constant / string indices once at load and drop the per-instruction checks | dropped | n/a | removing the checks of the hottest opcodes outright gained at most 2%, inside the noise, so a load-time verifier is not worth it |
+| O11 | 6 | Superinstructions without a format change: a comparison followed by `JMP_TRUE` / `JMP_FALSE` on its register takes the jump in the same dispatch | dropped | done | ussr: no change (a C dispatch is cheap); russia: elif_small 0.78 → 0.74 s |
 | O12 | 4 | Copy propagation: compute straight into the target instead of a temp register plus `STORE_VAR` | planned | planned | |
 | O13 | 7 | Shared immutable strings (refcount) instead of `strdup` on every register load | planned | planned | |
 | O14 | 6 | russia: order `vm_step` cases by frequency / split the chain into ranges | n/a | planned | |
@@ -144,3 +144,18 @@ has no such dispatch of its own (its VM uses the host's operators), so its
 part of O8 is the matching overhead there: `vm_step`'s jumps, arithmetic
 and comparisons read and write `vm_regs` inline instead of through
 `vm_reg` / `vm_setreg`, three user function calls per instruction.
+
+### O9 to O11: dispatch overhead
+
+Three attempts at the C VM's per-instruction overhead, all built and
+measured, none outside the noise: merging the yield/resume tests (O9),
+deleting the bounds checks of `LOAD_CONST`, `LOAD_VAR`, `STORE_VAR` and the
+jumps (the best case for O10), and fusing compare-and-branch (O11). A
+C-level dispatch is cheap; the ~30 cycles of a `LOAD_VAR` or `LOAD_CONST`
+are the variable lookup and the value copy (a `strdup` for every string),
+which is what O12 and O13 address.
+
+russia.su is the opposite: one of its dispatches is a whole `vm_loop` pass
+with several user function calls, so the fused compare-and-branch
+(`vm_fuse`, after the `= != < <= > >=` steps) saves real work there.
+Opcodes are unchanged; UUASM, `.ru` files and the C VM need nothing.

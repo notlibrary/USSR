@@ -6087,6 +6087,37 @@ vm_alias2(r): rnm crt sv [
     ]
     set(r): 0
 ]
+# Compare-and-branch fusion (docs/OPTIMIZATIONS.md, O11): a comparison
+# whose next instruction is JMP_TRUE / JMP_FALSE (bootstrap 8 / 9) on the
+# register it wrote takes that jump too, saving a whole vm_loop pass. The
+# register keeps the result, so the program sees what both would do.
+vm_fuse(r): reg val [
+    set(r): 0
+    add(vfu_i): vm_ip 1
+    len(vfu_n): cv_code
+    if(_): {vfu_i < vfu_n} [
+        at(vfu_in): cv_code vfu_i
+        getf(vfu_op): vfu_in "op"
+        at(vfu_bo): rt_bopt vfu_op
+        if(_): {vfu_bo = 8 || vfu_bo = 9} [
+            getf(vfu_a): vfu_in "a"
+            if(_): {vfu_a = reg} [
+                set(vfu_t): 0
+                if(_): val [ set(vfu_t): 1 ]
+                getf(vfu_to): vfu_in "imm"
+                # vm_loop adds 1 after the step: land on the jump target
+                # or on the instruction after the jump
+                set(vm_ip): vfu_i
+                if(_): {vfu_bo = 8} [
+                    if(_): {vfu_t = 1} [ set(vm_ip): {vfu_to - 1} ]
+                ]
+                if(_): {vfu_bo = 9} [
+                    if(_): {vfu_t = 0} [ set(vm_ip): {vfu_to - 1} ]
+                ]
+            ]
+        ]
+    ]
+]
 vm_step(r): cur op [
     set(r): 0
     at(vm_backend_opcode): rt_bopt op
@@ -6394,6 +6425,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb = vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
     ]
     elif(_): {op = 17} [
         getf(vm_xa): cur "a"
@@ -6406,6 +6438,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb != vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
     ]
     elif(_): {op = 18} [
         getf(vm_xa): cur "a"
@@ -6418,6 +6451,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb < vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
     ]
     elif(_): {op = 19} [
         getf(vm_xa): cur "a"
@@ -6430,6 +6464,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb <= vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
     ]
     elif(_): {op = 20} [
         getf(vm_xa): cur "a"
@@ -6442,6 +6477,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb > vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
     ]
     elif(_): {op = 21} [
         getf(vm_xa): cur "a"
@@ -6454,6 +6490,7 @@ vm_step(r): cur op [
         set(vm_vr): {vm_vb >= vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
     ]
     elif(_): {op = 22} [
         getf(vm_xa): cur "a"
