@@ -40,7 +40,7 @@ They are ordered from the simplest to the hardest and done in that order.
 | O11 | 6 | Superinstructions without a format change: a comparison followed by `JMP_TRUE` / `JMP_FALSE` on its register takes the jump in the same dispatch | dropped | done | ussr: no change (a C dispatch is cheap); russia: elif_small 0.78 → 0.74 s |
 | O12 | 4 | Copy propagation: a `LOAD_VAR x` into the register a `STORE_VAR x` just stored from, when nothing jumps there, becomes a NOP | dropped | n/a | no gain once the `LOAD_VAR` leak was fixed (see the note); russia would still dispatch the NOP |
 | O13 | 7 | Shared immutable strings: the text of a string value carries a reference count, so copying a value (every register load, store, `getf`, `at`) retains it instead of `strdup` | done | done (runs on ussr) | setf 0.072 → 0.055 s, fields 0.061 → 0.055 s, russia loop 0.205 → 0.191 s, russia elif 0.76 → 0.69 s |
-| O14 | 6 | russia: order `vm_step` cases by frequency / split the chain into ranges | n/a | planned | |
+| O14 | 6 | russia: order `vm_step` cases by how often programs run them (loads and stores, jumps, `+`, builtins, `=`, `<`, `-`, CALL, RET first) | n/a | done | russia loop 0.196 → 0.187 s, elif 0.68 → 0.66 s |
 | O15 | 1 | Preprocessor: cache included files by path | planned | planned | |
 | O16 | 2 | russia lexer: character class table instead of comparison chains | n/a | planned | |
 | O17 | 6 | Computed-goto dispatch where the compiler supports it (gcc/clang) | planned | n/a | |

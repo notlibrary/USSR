@@ -6127,6 +6127,8 @@ vm_step(r): cur op [
         return(r): 0
     ]
     set(op): vm_backend_opcode
+    # cases in order of how often programs run them (docs/OPTIMIZATIONS.md,
+    # O14): each one tested is a comparison every instruction pays for
     if(_): {op = 1} [
         getf(vm_ci): cur "imm"
         getf(vm_d): cur "a"
@@ -6180,6 +6182,37 @@ vm_step(r): cur op [
             rt_write(_): vm_nm4 vm_rv3
         ]
     ]
+    elif(_): {op = 9} [
+        getf(vm_fa): cur "a"
+        getf(vm_ft): cur "imm"
+        at(vm_fv): vm_regs vm_fa
+        getf(vm_fv): vm_fv "v"
+        set(vm_ftr): 1
+        if(_): vm_fv [ set(vm_ftr): 0 ]
+        if(_): {vm_ftr = 1} [
+            sub(vm_ft2): vm_ft 1
+            set(vm_ip): vm_ft2
+        ]
+    ]
+    # jumps, arithmetic and comparisons read and write registers inline,
+    # not through vm_reg / vm_setreg calls (docs/OPTIMIZATIONS.md, O8)
+    elif(_): {op = 7} [
+        getf(vm_jt): cur "imm"
+        sub(vm_jt2): vm_jt 1
+        set(vm_ip): vm_jt2
+    ]
+    elif(_): {op = 10} [
+        getf(vm_xa): cur "a"
+        getf(vm_xb): cur "b"
+        getf(vm_xc): cur "c"
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
+        add(vm_vr): vm_vb vm_vc
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
+    ]
     elif(_): {op = 4} [
         getf(vm_na): cur "a"
         getf(vm_nb): cur "b"
@@ -6200,6 +6233,44 @@ vm_step(r): cur op [
         if(_): {vm_nb > 5} [ add(vm_i5): vm_na 5
             vm_reg(rt_na5): vm_i5 ]
         vm_native(r): vm_nm5 vm_nc vm_nb vm_ni
+    ]
+    elif(_): {op = 16} [
+        getf(vm_xa): cur "a"
+        getf(vm_xb): cur "b"
+        getf(vm_xc): cur "c"
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
+        set(vm_vr): {vm_vb = vm_vc}
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
+    ]
+    elif(_): {op = 18} [
+        getf(vm_xa): cur "a"
+        getf(vm_xb): cur "b"
+        getf(vm_xc): cur "c"
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
+        set(vm_vr): {vm_vb < vm_vc}
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
+        vm_fuse(_): vm_xa vm_vr
+    ]
+    elif(_): {op = 11} [
+        getf(vm_xa): cur "a"
+        getf(vm_xb): cur "b"
+        getf(vm_xc): cur "c"
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
+        sub(vm_vr): vm_vb vm_vc
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 5} [
         getf(vm_fi): cur "imm"
@@ -6257,6 +6328,29 @@ vm_step(r): cur op [
         # processes are called from a CALL+HALT trampoline, and top-level
         # code (no init) keeps running after its own calls return.
         sub(vm_sp): vm_sp 1
+    ]
+    elif(_): {op = 8} [
+        getf(vm_ta): cur "a"
+        getf(vm_tt): cur "imm"
+        at(vm_tv): vm_regs vm_ta
+        getf(vm_tv): vm_tv "v"
+        # the host's if decides: null, false, 0, 0.0, "" and [] are false
+        if(_): vm_tv [
+            sub(vm_tt2): vm_tt 1
+            set(vm_ip): vm_tt2
+        ]
+    ]
+    elif(_): {op = 12} [
+        getf(vm_xa): cur "a"
+        getf(vm_xb): cur "b"
+        getf(vm_xc): cur "c"
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
+        mul(vm_vr): vm_vb vm_vc
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     # EVAL: compile the source onto the end of the code and enter it
     # like a call (an empty frame, no result); its RET comes back here.
@@ -6324,72 +6418,6 @@ vm_step(r): cur op [
         vm_reg(vm_hv2): vm_ha2
         sc_store_put(_): rt_hash vm_hnm2 vm_hv2
     ]
-    # jumps, arithmetic and comparisons read and write registers inline,
-    # not through vm_reg / vm_setreg calls (docs/OPTIMIZATIONS.md, O8)
-    elif(_): {op = 7} [
-        getf(vm_jt): cur "imm"
-        sub(vm_jt2): vm_jt 1
-        set(vm_ip): vm_jt2
-    ]
-    elif(_): {op = 8} [
-        getf(vm_ta): cur "a"
-        getf(vm_tt): cur "imm"
-        at(vm_tv): vm_regs vm_ta
-        getf(vm_tv): vm_tv "v"
-        # the host's if decides: null, false, 0, 0.0, "" and [] are false
-        if(_): vm_tv [
-            sub(vm_tt2): vm_tt 1
-            set(vm_ip): vm_tt2
-        ]
-    ]
-    elif(_): {op = 9} [
-        getf(vm_fa): cur "a"
-        getf(vm_ft): cur "imm"
-        at(vm_fv): vm_regs vm_fa
-        getf(vm_fv): vm_fv "v"
-        set(vm_ftr): 1
-        if(_): vm_fv [ set(vm_ftr): 0 ]
-        if(_): {vm_ftr = 1} [
-            sub(vm_ft2): vm_ft 1
-            set(vm_ip): vm_ft2
-        ]
-    ]
-    elif(_): {op = 10} [
-        getf(vm_xa): cur "a"
-        getf(vm_xb): cur "b"
-        getf(vm_xc): cur "c"
-        at(vm_vb): vm_regs vm_xb
-        getf(vm_vb): vm_vb "v"
-        at(vm_vc): vm_regs vm_xc
-        getf(vm_vc): vm_vc "v"
-        add(vm_vr): vm_vb vm_vc
-        at(vm_sr): vm_regs vm_xa
-        setf(_): vm_sr "v" vm_vr
-    ]
-    elif(_): {op = 11} [
-        getf(vm_xa): cur "a"
-        getf(vm_xb): cur "b"
-        getf(vm_xc): cur "c"
-        at(vm_vb): vm_regs vm_xb
-        getf(vm_vb): vm_vb "v"
-        at(vm_vc): vm_regs vm_xc
-        getf(vm_vc): vm_vc "v"
-        sub(vm_vr): vm_vb vm_vc
-        at(vm_sr): vm_regs vm_xa
-        setf(_): vm_sr "v" vm_vr
-    ]
-    elif(_): {op = 12} [
-        getf(vm_xa): cur "a"
-        getf(vm_xb): cur "b"
-        getf(vm_xc): cur "c"
-        at(vm_vb): vm_regs vm_xb
-        getf(vm_vb): vm_vb "v"
-        at(vm_vc): vm_regs vm_xc
-        getf(vm_vc): vm_vc "v"
-        mul(vm_vr): vm_vb vm_vc
-        at(vm_sr): vm_regs vm_xa
-        setf(_): vm_sr "v" vm_vr
-    ]
     elif(_): {op = 13} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
@@ -6414,19 +6442,6 @@ vm_step(r): cur op [
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
     ]
-    elif(_): {op = 16} [
-        getf(vm_xa): cur "a"
-        getf(vm_xb): cur "b"
-        getf(vm_xc): cur "c"
-        at(vm_vb): vm_regs vm_xb
-        getf(vm_vb): vm_vb "v"
-        at(vm_vc): vm_regs vm_xc
-        getf(vm_vc): vm_vc "v"
-        set(vm_vr): {vm_vb = vm_vc}
-        at(vm_sr): vm_regs vm_xa
-        setf(_): vm_sr "v" vm_vr
-        vm_fuse(_): vm_xa vm_vr
-    ]
     elif(_): {op = 17} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
@@ -6436,19 +6451,6 @@ vm_step(r): cur op [
         at(vm_vc): vm_regs vm_xc
         getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb != vm_vc}
-        at(vm_sr): vm_regs vm_xa
-        setf(_): vm_sr "v" vm_vr
-        vm_fuse(_): vm_xa vm_vr
-    ]
-    elif(_): {op = 18} [
-        getf(vm_xa): cur "a"
-        getf(vm_xb): cur "b"
-        getf(vm_xc): cur "c"
-        at(vm_vb): vm_regs vm_xb
-        getf(vm_vb): vm_vb "v"
-        at(vm_vc): vm_regs vm_xc
-        getf(vm_vc): vm_vc "v"
-        set(vm_vr): {vm_vb < vm_vc}
         at(vm_sr): vm_regs vm_xa
         setf(_): vm_sr "v" vm_vr
         vm_fuse(_): vm_xa vm_vr
