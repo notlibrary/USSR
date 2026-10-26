@@ -63,6 +63,18 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
+Planned subprojects (each has a `box.uno` in `src/<name>/`, code not written yet):
+
+- kgb.su - Knowledge Giga Base, Markdown knowledge base manager
+- klin.su - GUI calculator, programmer, scientific and casual in one
+- kremlin.su - GUI desktop manager
+- novgorod.su - HTTP forum script
+- ryazan.su - secure crypto socket library
+- siberia.su - office package, spreadsheet tables and document editor
+- stalin.su - hard disk formatting manager
+- usa.su - C compiler written in USSR
+- sochi.su - desktop preference game
+
 ```USSR
 $include "ural.su"
 instsall(code): "ukraine russia"

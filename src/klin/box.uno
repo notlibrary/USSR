@@ -1,0 +1,1 @@
+'Package{name=`klin`,version=`0.1.0`,description=`GUI calculator, programmer, scientific and casual modes in one`,entry=`klin.su`,dependencies=[`petersburg`,`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
