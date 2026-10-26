@@ -6,6 +6,7 @@
 #include <limits.h>
 
 #include "socket.h"
+#include "ryazan.h"
 
 
 #include "eventq.h"
@@ -839,7 +840,172 @@ static int sched_do_socket(const char *name, const ussr_value_t *values,
     }
     if (strcmp(name, "socket_close") == 0) {
         if(count!=1 || sched_socket_handle_arg(values,0,&h)!=0)return -1;
+        (void)ryazan_tls_close(h);
         *out=ussr_integer(ussr_socket_close(h)); return 1;
+    }
+    if (strcmp(name, "socket_connect") == 0) {
+        /* socket_connect(ok): socket host port [timeout_ms] */
+        long timeout = 30000;
+        if ((count != 3 && count != 4) || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type!=USSR_STRING || values[2].type!=USSR_INTEGER ||
+            values[2].data.integer<1 || values[2].data.integer>65535) return -1;
+        if (count == 4) {
+            if (values[3].type!=USSR_INTEGER || values[3].data.integer<1 ||
+                values[3].data.integer>INT_MAX) return -1;
+            timeout = (long)values[3].data.integer;
+        }
+        *out=ussr_integer(ussr_socket_connect(h,values[1].data.string,
+                                              (unsigned short)values[2].data.integer,(int)timeout));
+        return 1;
+    }
+    return 0;
+}
+
+/* Header lines from a script, "\n" or "\r\n" separated with the last
+ * one optionally unterminated; returned with each line ending in "\r\n". */
+static char *sched_crlf_lines(const char *text)
+{
+    size_t length = strlen(text);
+    char *lines = malloc(length * 2 + 3);
+    size_t out = 0;
+    size_t i;
+
+    if (lines == NULL)
+        return NULL;
+    for (i = 0; i < length; ++i) {
+        if (text[i] == '\r')
+            continue;
+        if (text[i] == '\n') {
+            if (out > 0 && lines[out - 1] != '\n') {
+                lines[out++] = '\r';
+                lines[out++] = '\n';
+            }
+            continue;
+        }
+        lines[out++] = text[i];
+    }
+    if (out > 0 && lines[out - 1] != '\n') {
+        lines[out++] = '\r';
+        lines[out++] = '\n';
+    }
+    lines[out] = '\0';
+    return lines;
+}
+
+/*
+ * Ryazan TLS builtins; a session is named by its socket handle. See
+ * src/ryazan.h for the semantics and src/ryazan/ryazan.su for the
+ * script library built on them.
+ */
+static int sched_do_tls(const char *name, const ussr_value_t *values,
+                        size_t count, ussr_value_t *out)
+{
+    int h;
+    if (strcmp(name, "tls_backend") == 0) {
+        if (count != 0) return -1;
+        *out = ussr_string(ryazan_backend()); return 1;
+    }
+    if (strcmp(name, "tls_error") == 0) {
+        if (count != 0) return -1;
+        *out = ussr_string(ryazan_last_error()); return 1;
+    }
+    if (strcmp(name, "tls_client") == 0) {
+        if (count != 2 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type != USSR_STRING) return -1;
+        *out = ussr_integer(ryazan_tls_client(h, values[1].data.string)); return 1;
+    }
+    if (strcmp(name, "tls_server") == 0) {
+        if ((count != 2 && count != 3) || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type != USSR_STRING ||
+            (count == 3 && values[2].type != USSR_STRING)) return -1;
+        *out = ussr_integer(ryazan_tls_server(h, values[1].data.string,
+                                              count == 3 ? values[2].data.string : ""));
+        return 1;
+    }
+    if (strcmp(name, "tls_handshake") == 0) {
+        if (count != 1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out = ussr_integer(ryazan_tls_handshake(h)); return 1;
+    }
+    if (strcmp(name, "tls_recv") == 0) {
+        /* text; "" once the peer closed or on error; null: wait_readable */
+        char *buffer; long got; size_t cap;
+        if (count != 2 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type != USSR_INTEGER || values[1].data.integer < 1 ||
+            values[1].data.integer > 65536) return -1;
+        cap = (size_t)values[1].data.integer; buffer = malloc(cap + 1); if (!buffer) return -1;
+        got = ryazan_tls_recv(h, buffer, cap);
+        if (got == RYAZAN_RECV_WANT_READ) { free(buffer); *out = ussr_null(); return 1; }
+        if (got < 0) got = 0;
+        buffer[got] = '\0'; *out = ussr_string(buffer); free(buffer); return 1;
+    }
+    if (strcmp(name, "tls_send") == 0) {
+        if (count != 2 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type != USSR_STRING) return -1;
+        *out = ussr_integer(ryazan_tls_send(h, values[1].data.string,
+                                            strlen(values[1].data.string)));
+        return 1;
+    }
+    if (strcmp(name, "tls_flush") == 0) {
+        if (count != 1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out = ussr_integer(ryazan_tls_flush(h)); return 1;
+    }
+    if (strcmp(name, "tls_info") == 0) {
+        if (count != 1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out = ussr_string(ryazan_tls_info(h)); return 1;
+    }
+    if (strcmp(name, "tls_pending") == 0) {
+        if (count != 1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out = ussr_integer((ussr_int_t)ryazan_tls_pending(h)); return 1;
+    }
+    if (strcmp(name, "tls_close") == 0) {
+        if (count != 1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        *out = ussr_integer(ryazan_tls_close(h)); return 1;
+    }
+    if (strcmp(name, "tls_request") == 0) {
+        /* tls_request(response): method url [headers [body [timeout_s]]]
+         * response: head, blank line, decoded body; null on failure */
+        ryazan_response_t response;
+        char error[512];
+        char *headers = NULL;
+        const char *body = NULL;
+        long timeout = 60;
+        size_t i;
+        int status;
+        if (count < 2 || count > 5) return -1;
+        for (i = 0; i < count && i < 4; ++i)
+            if (values[i].type != USSR_STRING) return -1;
+        if (count == 5) {
+            if (values[4].type != USSR_INTEGER || values[4].data.integer < 1 ||
+                values[4].data.integer > 3600) return -1;
+            timeout = (long)values[4].data.integer;
+        }
+        if (count >= 3 && values[2].data.string[0] != '\0') {
+            headers = sched_crlf_lines(values[2].data.string);
+            if (headers == NULL) return -1;
+        }
+        if (count >= 4 && values[3].data.string[0] != '\0')
+            body = values[3].data.string;
+        status = ryazan_http_request(values[0].data.string, values[1].data.string,
+                                     headers, body, body ? strlen(body) : 0,
+                                     (int)timeout, &response, error, sizeof(error));
+        free(headers);
+        if (status != 0) {
+            ryazan_set_error(error);
+            *out = ussr_null();
+            return 1;
+        }
+        {
+            size_t head_length = strlen(response.head);
+            char *text = malloc(head_length + 2 + response.body_length + 1);
+            if (text == NULL) { ryazan_response_free(&response); return -1; }
+            memcpy(text, response.head, head_length);
+            memcpy(text + head_length, "\r\n", 2);
+            memcpy(text + head_length + 2, response.body, response.body_length + 1);
+            *out = ussr_string(text);
+            free(text);
+        }
+        ryazan_response_free(&response);
+        return 1;
     }
     return 0;
 }
@@ -931,6 +1097,13 @@ int ussr_sched_dispatch(
         int socket_result = sched_do_socket(name, values, value_count, out);
         if (socket_result != 0)
             return socket_result;
+    }
+
+    if (strncmp(name, "tls_", 4) == 0)
+    {
+        int tls_result = sched_do_tls(name, values, value_count, out);
+        if (tls_result != 0)
+            return tls_result;
     }
 
     if (strcmp(name, "wait_readable") == 0)
@@ -1165,6 +1338,7 @@ void ussr_sched_init(void)
 void ussr_sched_cleanup(void)
 {
     ussr_petersburg_cleanup();
+    ryazan_cleanup();
     ussr_socket_cleanup();
     size_t i;
 

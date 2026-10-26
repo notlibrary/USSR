@@ -18,6 +18,19 @@ $(error PETERSBURG_BUNDLE=1 requires GLFW and OpenGL development files discovera
 endif
 LDFLAGS += -Wl,-rpath,'$$ORIGIN/lib'
 endif
+# Ryazan TLS: Schannel on Windows; elsewhere OpenSSL whenever pkg-config
+# finds it (libssl-dev), otherwise https:// and tls_* report "no TLS".
+# RYAZAN_REQUIRE_TLS=1 makes a missing OpenSSL an error.
+ifneq ($(OS),Windows_NT)
+RYAZAN_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+RYAZAN_LIBS := $(shell pkg-config --libs openssl 2>/dev/null)
+ifneq ($(strip $(RYAZAN_LIBS)),)
+CFLAGS += -DUSSR_TLS_OPENSSL $(RYAZAN_CFLAGS)
+LDLIBS += $(RYAZAN_LIBS)
+else ifneq ($(RYAZAN_REQUIRE_TLS),)
+$(error RYAZAN_REQUIRE_TLS=1 requires OpenSSL development files discoverable through pkg-config)
+endif
+endif
 TARGET  = ussr
 PREFIX  = /usr
 SRC_DIR = src
@@ -46,12 +59,15 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/alias.o \
        $(SRC_DIR)/history.o \
        $(SRC_DIR)/ai.o \
+       $(SRC_DIR)/ryazan.o \
+       $(SRC_DIR)/ryazan_openssl.o \
+       $(SRC_DIR)/ryazan_schannel.o \
        $(SRC_DIR)/help.o \
        $(SRC_DIR)/autocomplete.o		  
 
 ifeq ($(OS),Windows_NT)
 OBJS += $(SRC_DIR)/completion_fs_win32.o $(SRC_DIR)/socket_win32.o $(SRC_DIR)/win/process_win32.o
-LDLIBS += -lws2_32
+LDLIBS += -lws2_32 -lsecur32 -lcrypt32 -lncrypt -ladvapi32
 else
 OBJS += $(SRC_DIR)/completion_fs_posix.o $(SRC_DIR)/socket_posix.o $(SRC_DIR)/process_posix.o
 endif
@@ -104,7 +120,16 @@ $(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SR
 $(SRC_DIR)/keybind.o: $(SRC_DIR)/keybind.c $(SRC_DIR)/keybind.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ai.o: $(SRC_DIR)/ai.c $(SRC_DIR)/ai.h $(SRC_DIR)/process.h $(SRC_DIR)/ussr_oop_builtins.h
+$(SRC_DIR)/ryazan.o: $(SRC_DIR)/ryazan.c $(SRC_DIR)/ryazan.h $(SRC_DIR)/ryazan_backend.h $(SRC_DIR)/socket.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/ryazan_openssl.o: $(SRC_DIR)/ryazan_openssl.c $(SRC_DIR)/ryazan_backend.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/ryazan_schannel.o: $(SRC_DIR)/ryazan_schannel.c $(SRC_DIR)/ryazan_backend.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/ai.o: $(SRC_DIR)/ai.c $(SRC_DIR)/ai.h $(SRC_DIR)/process.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/ryazan.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/alias.o: $(SRC_DIR)/alias.c $(SRC_DIR)/alias.h $(SRC_DIR)/ussr.h

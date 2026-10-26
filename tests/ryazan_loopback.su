@@ -1,0 +1,104 @@
+# Ryazan TLS over loopback: a server task with the test certificate in
+# tests/ryazan/ (tests only: its private key is public) and clients that
+# trust only that certificate. Prints PASS/FAIL lines; the exit status is
+# the number of failures. Run from the repository root:
+#     ussr tests/ryazan_loopback.su
+$include "../src/ryazan/ryazan.su"
+
+global(_): rz_failures
+
+rz_check(r): label ok [
+    if(_): ok [
+        concat(_rzt_line): "PASS " label
+    ]
+    else(_): [
+        concat(_rzt_line): "FAIL " label
+        set(rz_failures): {rz_failures + 1}
+    ]
+    print(_): _rzt_line
+    set(r): 0
+]
+
+# Serves one connection: echoes the first message back after "echo: ".
+rz_test_serve(result): listener credential secret [
+    set(result): 1
+    wait_readable(ready): listener
+    socket_accept(client): listener
+    ryazan_accept(shaken): client credential secret
+    if(_): {shaken != 0} [
+        socket_close(_): client
+        return(result): result
+    ]
+    ryazan_read(request): client 1024
+    concat(reply): "echo: " request
+    ryazan_write(sent): client reply
+    ryazan_close(_): client
+    set(result): sent
+]
+
+# One trusted round trip against a server using credential/secret.
+rz_round(r): listener label credential secret [
+    async(server): "rz_test_serve" listener credential secret
+    ryazan_connect(conn): "localhost" 18993
+    concat(_rzt_label): label " handshake"
+    rz_check(_): _rzt_label {conn > 0}
+    if(_): {conn > 0} [
+        tls_info(info): conn
+        len(info_len): info
+        concat(_rzt_label): label " session is encrypted"
+        rz_check(_): _rzt_label {info_len > 8}
+        ryazan_write(_): conn "hello over ryazan"
+        ryazan_read_all(answer): conn
+        concat(_rzt_label): label " echo"
+        rz_check(_): _rzt_label {answer = "echo: hello over ryazan"}
+        ryazan_close(_): conn
+    ]
+    else(_): [
+        ryazan_error(why):
+        print(_): why
+    ]
+    await(served): server
+    concat(_rzt_label): label " server side"
+    rz_check(_): _rzt_label {served = 0}
+    set(r): 0
+]
+
+init(result): arg_cnt arg_vec [
+    set(rz_failures): 0
+    tls_backend(backend):
+    if(_): {backend = "none"} [
+        print(_): "SKIP ussr was built without TLS"
+        set(result): 0
+        return(result): result
+    ]
+    socket_tcp(listener):
+    socket_bind(bound): listener "127.0.0.1" 18993
+    socket_listen(listening): listener 4
+    rz_check(_): "listen" {bound = 0 && listening = 0}
+
+    # the self-signed test certificate is not in the system's roots
+    unsetenv(_): "RYAZAN_CA_FILE"
+    async(server): "rz_test_serve" listener "tests/ryazan/localhost.p12" "ryazan-test"
+    ryazan_connect(refused): "localhost" 18993
+    rz_check(_): "untrusted certificate refused" {refused < 0}
+    await(served): server
+
+    setenv(_): "RYAZAN_CA_FILE" "tests/ryazan/localhost.cert.pem"
+    rz_round(_): listener "PKCS#12" "tests/ryazan/localhost.p12" "ryazan-test"
+    if(_): {backend = "openssl"} [
+        rz_round(_): listener "PEM" "tests/ryazan/localhost.cert.pem" "tests/ryazan/localhost.key.pem"
+    ]
+
+    # plain text on a TLS port is turned away at once
+    async(server): "rz_test_serve" listener "tests/ryazan/localhost.p12" "ryazan-test"
+    socket_tcp(plain):
+    socket_connect(plain_ok): plain "127.0.0.1" 18993
+    socket_send(_): plain "GET / HTTP/1.1\r\n\r\n"
+    await(served): server
+    rz_check(_): "plain HTTP refused" {served != 0}
+    socket_close(_): plain
+
+    socket_close(_): listener
+    unsetenv(_): "RYAZAN_CA_FILE"
+    set(result): rz_failures
+]

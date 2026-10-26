@@ -1,0 +1,40 @@
+# Fetches a page over HTTPS, then opens a TLS session by hand to show the
+# protocol and cipher it negotiated. Run from the repository root:
+#     ussr src/ryazan/examples/hello.su [host]
+$include "../ryazan.su"
+
+init(result): arg_cnt arg_vec [
+    set(host): "example.com"
+    if(_): {arg_cnt > 0} [
+        at(host): arg_vec 0
+    ]
+    tls_backend(backend):
+    concat(line): "backend: " backend
+    print(_): line
+
+    concat(url): "https://" host "/"
+    ryazan_request(resp): "GET" url "" ""
+    if(_): {resp = null} [
+        ryazan_error(why):
+        print(_): why
+        set(result): 1
+        return(result): result
+    ]
+    ryazan_status(code): resp
+    ryazan_header(type): resp "content-type"
+    ryazan_body(body): resp
+    len(size): body
+    str_from_int(code_text): code
+    str_from_int(size_text): size
+    concat(line): "GET " url " -> " code_text " " type ", " size_text " bytes"
+    print(_): line
+
+    ryazan_connect(socket): host 443
+    if(_): {socket > 0} [
+        tls_info(info): socket
+        concat(line): "session: " info
+        print(_): line
+        ryazan_close(_): socket
+    ]
+    set(result): 0
+]

@@ -1,0 +1,18 @@
+# Minimal ukraine.su HTTPS app on the ryazan test certificate. Run from the
+# repository root:
+#   ussr tests/ukraine_https.su
+#   curl --cacert tests/ryazan/localhost.cert.pem https://localhost:18996/
+# The certificate in tests/ryazan/ is for tests only: its private key is public.
+$include "../src/ukraine/ukraine.su"
+
+uk_route(result): method target raw_request [
+    if(_): {method = "GET" && target = "/"} [
+        uk_response(result): "200 OK" "text/plain; charset=utf-8" "Ukraine over Ryazan TLS\n"
+        return(result): result
+    ]
+    uk_response(result): "404 Not Found" "text/plain; charset=utf-8" "Not Found\n"
+]
+
+init(result): arg_cnt arg_vec [
+    uk_server_tls(result): "127.0.0.1" 18996 "tests/ryazan/localhost.p12" "ryazan-test"
+]

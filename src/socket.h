@@ -30,6 +30,14 @@ long ussr_socket_recv(ussr_socket_handle_t handle, void *buffer, size_t capacity
 /* send returns bytes written, or -1 for would-block/error. */
 long ussr_socket_send(ussr_socket_handle_t handle, const void *buffer, size_t length);
 int ussr_socket_close(ussr_socket_handle_t handle);
+/* Connects to host (an IPv4 address or a DNS name) and port, waiting at
+ * most timeout_ms. Returns 0, or -1 with ussr_socket_last_error set. The
+ * socket stays nonblocking. */
+int ussr_socket_connect(ussr_socket_handle_t handle, const char *host,
+                        unsigned short port, int timeout_ms);
+/* 1 when the last failed recv/send only would have blocked, 0 when it
+ * was a real error (reset, invalid handle, ...). */
+int ussr_socket_would_block(void);
 /* Portable readiness wait. Returns ready count, 0 timeout, or -1 on error. */
 int ussr_socket_poll(ussr_socket_pollfd_t *fds, size_t count, int timeout_ms);
 const char *ussr_socket_last_error(void);

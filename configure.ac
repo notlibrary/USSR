@@ -33,5 +33,28 @@ AS_IF([test "x$enable_petersburg" = xno], [
 ])
 AC_SUBST([PETERSBURG_CPPFLAGS])
 AC_SUBST([PETERSBURG_LIBS])
+RYAZAN_CPPFLAGS=
+RYAZAN_LIBS=
+AC_ARG_WITH([openssl],
+    [AS_HELP_STRING([--without-openssl],
+                    [build without Ryazan TLS (no https:// or tls_* builtins)])],
+    [],
+    [with_openssl=check])
+AS_IF([test "x$with_openssl" != xno], [
+    AC_CHECK_HEADER([openssl/ssl.h], [ryazan_have_header=yes],
+                    [ryazan_have_header=no])
+    AC_CHECK_LIB([ssl], [SSL_CTX_new], [ryazan_have_ssl=yes],
+                 [ryazan_have_ssl=no], [-lcrypto])
+    AS_IF([test "x$ryazan_have_header" = xyes && test "x$ryazan_have_ssl" = xyes], [
+        RYAZAN_CPPFLAGS="-DUSSR_TLS_OPENSSL"
+        RYAZAN_LIBS="-lssl -lcrypto"
+    ], [test "x$with_openssl" = xyes], [
+        AC_MSG_ERROR([Ryazan TLS requires OpenSSL development files; install libssl-dev, or configure with --without-openssl])
+    ], [
+        AC_MSG_WARN([OpenSSL not found: building without Ryazan TLS])
+    ])
+])
+AC_SUBST([RYAZAN_CPPFLAGS])
+AC_SUBST([RYAZAN_LIBS])
 AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT

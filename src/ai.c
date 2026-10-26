@@ -14,6 +14,7 @@
 
 #ifndef __wasi__
 #include "process.h"
+#include "ryazan.h"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -526,6 +527,7 @@ char *ussr_ai_prompt(const char *question, char *error, size_t error_size)
     long max_tokens = 1024;
     long timeout = 120;
     int anthropic;
+    int native = 0;
     int exit_code = 0;
     char number[64];
 
@@ -593,15 +595,6 @@ char *ussr_ai_prompt(const char *question, char *error, size_t error_size)
         goto done;
     }
 
-    curl = ai_find_curl();
-    if (curl == NULL)
-    {
-        snprintf(error, error_size,
-                 "the curl program is needed; put it on PATH "
-                 "or set USSR_AI_CURL to its path");
-        goto done;
-    }
-
     /* request body */
     ai_adds(&body, "{\"model\":");
     ai_add_json_string(&body, model);
@@ -625,6 +618,70 @@ char *ussr_ai_prompt(const char *question, char *error, size_t error_size)
     ai_adds(&body, "{\"role\":\"user\",\"content\":");
     ai_add_json_string(&body, question);
     ai_adds(&body, "}]}");
+
+    /* http(s) goes through ryazan unless USSR_AI_CURL asks for curl;
+     * other schemes (file:// in the tests) and TLS-less builds use curl */
+    {
+        char *curl_setting = ai_setting("USSR_AI_CURL", NULL);
+        int https = strncmp(url, "https://", 8) == 0;
+
+        native = curl_setting == NULL &&
+                 (strncmp(url, "http://", 7) == 0 ||
+                  (https && strcmp(ryazan_backend(), "none") != 0));
+        free(curl_setting);
+    }
+    if (native)
+    {
+        ai_buffer_t headers = { NULL, 0, 0, 0 };
+        ryazan_response_t response;
+        long status;
+
+        if (body.failed || body.data == NULL)
+        {
+            snprintf(error, error_size, "out of memory");
+            goto done;
+        }
+        ai_adds(&headers, "content-type: application/json\r\n");
+        if (anthropic)
+            ai_adds(&headers, "anthropic-version: 2023-06-01\r\n");
+        if (key != NULL)
+        {
+            ai_adds(&headers, anthropic ? "x-api-key: " : "Authorization: Bearer ");
+            ai_adds(&headers, key);
+            ai_adds(&headers, "\r\n");
+        }
+        if (headers.failed)
+        {
+            free(headers.data);
+            snprintf(error, error_size, "out of memory");
+            goto done;
+        }
+        status = ryazan_http_request("POST", url, headers.data, body.data, body.length,
+                                     (int)(timeout > 86400 ? 86400 : timeout),
+                                     &response, error, error_size);
+        /* the headers hold the API key: wipe them before freeing */
+        memset(headers.data, 0, headers.capacity);
+        free(headers.data);
+        if (status != 0)
+            goto done;
+        status = response.status;
+        answer = ai_parse_answer(response.body, anthropic, error, error_size);
+        if (answer == NULL && status >= 400 &&
+            strncmp(error, "AI provider error", 17) != 0)
+            snprintf(error, error_size, "HTTP %ld from %s: %.200s",
+                     status, url, response.body);
+        ryazan_response_free(&response);
+        goto done;
+    }
+
+    curl = ai_find_curl();
+    if (curl == NULL)
+    {
+        snprintf(error, error_size,
+                 "the curl program is needed for %.40s; put it on PATH "
+                 "or set USSR_AI_CURL to its path", url);
+        goto done;
+    }
 
     /* curl config, read from stdin so the key stays off the command line */
     ai_adds(&config, "silent\nshow-error\n");

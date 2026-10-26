@@ -30,6 +30,15 @@ scheduler task for each accepted connection. Each response closes its
 connection; handlers can run concurrently while the scheduler waits for socket
 readiness.
 
+For HTTPS, call `uk_server_tls(result): host port certificate secret`
+instead: each connection is wrapped in TLS by ryazan.su (src/ryazan/), with
+the certificate given as a PKCS#12 file and its password (OpenSSL builds
+also take a PEM certificate chain plus the PEM key file). Clients that do
+not speak TLS are dropped. `tests/ukraine_https.su` serves the test
+certificate in tests/ryazan/ on port 18996:
+
+  curl --cacert tests/ryazan/localhost.cert.pem https://localhost:18996/
+
 See `tests/ukraine_http.su` for a runnable example and
 `tests/ukraine_unit.su` for helper checks. The existing
 `tests/socket_smoke.su` and `tests/socket_echo.su` exercise the lower-level
@@ -38,6 +47,6 @@ socket API.
 The socket API returns small integer handles, not native descriptors. The
 current HTTP layer is intentionally small: IPv4 TCP, one request per
 connection, a 16 KiB request-header limit, and application-defined routing.
-It does not yet parse request bodies, implement TLS, or provide DNS/IPv6.
+It does not yet parse request bodies or provide IPv6; TLS comes from ryazan.
 Keep the server on trusted networks until those features and production-grade
 timeouts/limits are added.

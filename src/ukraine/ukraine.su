@@ -4,6 +4,12 @@
 #   uk_route(result): method target raw_request [ ... uk_response(result): ... ]
 # The server owns a nonblocking listener. Each accepted connection is handled
 # by a USSR scheduler task; this module does not spawn operating-system tasks.
+#
+#   uk_server(result): host port                      plain HTTP
+#   uk_server_tls(result): host port cert secret      HTTPS through ryazan.su;
+#       cert is a PKCS#12 file (.p12/.pfx) and secret its password (with
+#       OpenSSL also a PEM certificate chain and the PEM key file)
+$include "../ryazan/ryazan.su"
 
 uk_find(result): text needle start [
     len(uk_find_text_len): text
@@ -23,13 +29,23 @@ uk_find(result): text needle start [
     ]
 ]
 
-uk_read_request(result): client [
+# One chunk of the request: text, "" once the peer closed, null on error.
+uk_recv(result): client tls [
+    if(_): {tls = 0} [
+        wait_readable(uk_recv_ready): client
+        socket_recv(result): client 4096
+    ]
+    else(_): [
+        ryazan_read(result): client 4096
+    ]
+]
+
+uk_read_request(result): client tls [
     set(result): ""
     set(uk_read_done): 0
     set(uk_read_failed): 0
     while(_): {uk_read_done = 0} [
-        wait_readable(uk_read_ready): client
-        socket_recv(uk_read_chunk): client 4096
+        uk_recv(uk_read_chunk): client tls
         if(_): {uk_read_chunk = null} [
             set(uk_read_failed): 1
             set(uk_read_done): 1
@@ -100,7 +116,11 @@ uk_response(result): status_line content_type body [
     concat(result): result body
 ]
 
-uk_send_all(result): client response [
+uk_send_all(result): client response tls [
+    if(_): {tls != 0} [
+        ryazan_write(result): client response
+        return(result): result
+    ]
     len(uk_send_total): response
     set(uk_send_offset): 0
     set(uk_send_retries): 0
@@ -130,7 +150,22 @@ uk_send_all(result): client response [
 ]
 
 uk_client(result): client [
-    uk_read_request(uk_client_request): client
+    uk_connection(result): client 0
+]
+
+uk_client_tls(result): client credential secret [
+    ryazan_accept(uk_client_shaken): client credential secret
+    if(_): {uk_client_shaken != 0} [
+        # not TLS, an untrusted client certificate check, ...: drop it
+        socket_close(uk_client_closed): client
+        set(result): {0 - 1}
+        return(result): result
+    ]
+    uk_connection(result): client 1
+]
+
+uk_connection(result): client tls [
+    uk_read_request(uk_client_request): client tls
     len(uk_client_request_len): uk_client_request
     if(_): {uk_client_request_len > 0} [
         uk_request_method(uk_client_method): uk_client_request
@@ -146,13 +181,32 @@ uk_client(result): client [
                 uk_route(uk_client_response): uk_client_method uk_client_target uk_client_request
             ]
         ]
-        uk_send_all(uk_client_sent): client uk_client_response
+        uk_send_all(uk_client_sent): client uk_client_response tls
     ]
-    socket_close(uk_client_closed): client
+    if(_): {tls != 0} [
+        ryazan_close(uk_client_closed): client
+    ]
+    else(_): [
+        socket_close(uk_client_closed): client
+    ]
     set(result): 0
 ]
 
 uk_server(result): host port [
+    uk_serve(result): host port "" ""
+]
+
+uk_server_tls(result): host port credential secret [
+    tls_backend(uk_tls_backend):
+    if(_): {uk_tls_backend = "none"} [
+        print(_): "ukraine: this ussr was built without TLS\n"
+        set(result): {0 - 1}
+        return(result): result
+    ]
+    uk_serve(result): host port credential secret
+]
+
+uk_serve(result): host port credential secret [
     socket_tcp(uk_listener):
     if(_): {uk_listener < 1} [
         print(_): "ukraine: could not create TCP socket\n"
@@ -174,13 +228,21 @@ uk_server(result): host port [
         return(result): result
     ]
     set(uk_listening_message): "ukraine: listening on "
+    if(_): {credential != ""} [
+        set(uk_listening_message): "ukraine: listening (HTTPS) on "
+    ]
     concat(uk_listening_message): uk_listening_message host "\n"
     print(_): uk_listening_message
     while(_): {true} [
         wait_readable(uk_accept_ready): uk_listener
         socket_accept(uk_client_socket): uk_listener
         if(_): {uk_client_socket > 0} [
-            async(uk_client_pid): "uk_client" uk_client_socket
+            if(_): {credential = ""} [
+                async(uk_client_pid): "uk_client" uk_client_socket
+            ]
+            else(_): [
+                async(uk_client_pid): "uk_client_tls" uk_client_socket credential secret
+            ]
             if(_): {uk_client_pid < 0} [
                 socket_close(uk_rejected_client): uk_client_socket
                 print(_): "ukraine: could not schedule client handler\n"

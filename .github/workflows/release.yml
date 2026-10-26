@@ -155,7 +155,7 @@ jobs:
       - name: Build on Linux
         if: runner.os != 'Windows'
         shell: bash
-        run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 ussr
+        run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 RYAZAN_REQUIRE_TLS=1 ussr
 
       - name: Test on Linux (without GUI)
         if: runner.os != 'Windows'
