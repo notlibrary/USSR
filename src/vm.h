@@ -89,6 +89,18 @@ typedef struct ussr_vm_t
 } ussr_vm_t;
 
 void vm_init(ussr_vm_t *vm);
+
+/*
+ * left `opcode` right with the VM's operator semantics, for the compiler's
+ * constant folding. 0 with *out set; -1, silently, for anything that is
+ * not plain integer/real/boolean/string arithmetic or would fail at run time.
+ */
+int vm_fold_binary(
+    uint8_t opcode,
+    const ussr_value_t *left,
+    const ussr_value_t *right,
+    ussr_value_t *out
+);
 void vm_cleanup(ussr_vm_t *vm);
 
 /* Run up to `quantum` instructions (0 = unlimited). */

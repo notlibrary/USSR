@@ -86,4 +86,13 @@ EXTRA_DIST = \
 	tula/CHANGELOG.md \
 	tula/docs/API.md \
 	tula/examples/hello.su \
-	tula/tests/TESTPLAN.md
+	tula/tests/TESTPLAN.md \
+	kgb/box.uno \
+	klin/box.uno \
+	kremlin/box.uno \
+	novgorod/box.uno \
+	ryazan/box.uno \
+	siberia/box.uno \
+	stalin/box.uno \
+	usa/box.uno \
+	sochi/box.uno

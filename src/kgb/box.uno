@@ -1,0 +1,1 @@
+'Package{name=`kgb`,version=`0.1.0`,description=`Knowledge Giga Base: Markdown knowledge base manager`,entry=`kgb.su`,dependencies=[`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

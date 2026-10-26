@@ -1,0 +1,1 @@
+'Package{name=`siberia`,version=`0.1.0`,description=`Office package: spreadsheet tables and document editor`,entry=`siberia.su`,dependencies=[`petersburg`,`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

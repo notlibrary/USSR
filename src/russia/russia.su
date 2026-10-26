@@ -32,6 +32,8 @@ global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
 global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui cv_fnret
 # a program's arguments: set by ex_ext_ev, read by ex_ext_b's eval
 global(_): rt_xa1 rt_xa2 rt_xa3 rt_xa4 rt_xa5 rt_xa6
+# a folded constant: set by cf_fold and its helpers, read by cv_e_t
+global(_): cf_v
 
 # Almost impossible programming task
 # Write USSR interpreter in USSR
@@ -4122,6 +4124,130 @@ cv_const(r): v [
     sub(r): cv_cl 1
 ]
 
+# ---- constant folding (docs/OPTIMIZATIONS.md, O1) ----
+# cf_fold returns 1 with the value of a literal-only operator expression
+# in cf_v, else 0; cv_e_t then emits one LOAD_CONST. The values come from
+# ex_bin_do, the same host operators the VM steps run. Like ussr it leaves
+# && and || alone and anything that would fail at run time (wrong types,
+# division by zero, shift counts outside 0..63), so the error stays there.
+cf_fold(r): nd [
+    getf(cf_t): nd "tag"
+    cf_fold_t(r): nd cf_t
+]
+cf_fold_t(r): nd t [
+    set(r): 0
+    if(_): {t = 5} [
+        getf(cf_s): nd "s1"
+        decode(cf_v): cf_s
+        set(r): 1
+    ]
+    elif(_): {t = 6} [
+        getf(cf_s): nd "s1"
+        decode(cf_v): cf_s
+        set(r): 1
+    ]
+    elif(_): {t = 7} [
+        getf(cf_v): nd "s1"
+        set(r): 1
+    ]
+    elif(_): {t = 8} [
+        getf(cf_s): nd "s1"
+        set(cf_v): {cf_s = "true"}
+        set(r): 1
+    ]
+    elif(_): {t = 12} [
+        getf(cf_k): nd "kids"
+        at(cf_l): cf_k 0
+        cf_fold(cf_ok): cf_l
+        if(_): {cf_ok = 1} [
+            cf_fold_r(r): nd cf_v
+        ]
+    ]
+    elif(_): {t = 13} [
+        getf(cf_o): nd "s1"
+        if(_): {cf_o = "-"} [
+            getf(cf_k): nd "kids"
+            at(cf_l): cf_k 0
+            cf_fold(cf_ok): cf_l
+            if(_): {cf_ok = 1} [
+                cf_neg(r): cf_v
+            ]
+        ]
+    ]
+]
+# the left operand lv is a parameter: folding the right one reuses cf_v
+cf_fold_r(r): nd lv [
+    set(r): 0
+    getf(cf_k2): nd "kids"
+    at(cf_rn): cf_k2 1
+    cf_fold(cf_ok2): cf_rn
+    if(_): {cf_ok2 = 1} [
+        getf(cf_op): nd "s1"
+        cf_do(r): cf_op lv cf_v
+    ]
+]
+cf_num(r): v [
+    typeof(cf_ty): v
+    set(r): 0
+    if(_): {cf_ty = "integer"} [ set(r): 2 ]
+    if(_): {cf_ty = "real"} [ set(r): 1 ]
+]
+cf_neg(r): v [
+    cf_num(cf_n): v
+    set(r): 0
+    if(_): {cf_n > 0} [
+        sub(cf_v): 0 v
+        set(r): 1
+    ]
+]
+cf_do(r): op lv rv [
+    set(r): 0
+    cf_num(cf_ln): lv
+    cf_num(cf_rnm): rv
+    set(cf_go): 0
+    # numbers on both sides
+    if(_): {cf_ln > 0} [
+        if(_): {cf_rnm > 0} [
+            if(_): {op = "+"} [ set(cf_go): 1 ]
+            if(_): {op = "-"} [ set(cf_go): 1 ]
+            if(_): {op = "*"} [ set(cf_go): 1 ]
+            if(_): {op = "<"} [ set(cf_go): 1 ]
+            if(_): {op = "<="} [ set(cf_go): 1 ]
+            if(_): {op = ">"} [ set(cf_go): 1 ]
+            if(_): {op = ">="} [ set(cf_go): 1 ]
+            if(_): {op = "/"} [
+                if(_): {rv != 0} [ set(cf_go): 1 ]
+            ]
+        ]
+    ]
+    # integers on both sides
+    if(_): {cf_ln = 2} [
+        if(_): {cf_rnm = 2} [
+            if(_): {op = "%"} [
+                if(_): {rv != 0} [ set(cf_go): 1 ]
+            ]
+            if(_): {op = "^"} [ set(cf_go): 1 ]
+            if(_): {op = "&"} [ set(cf_go): 1 ]
+            if(_): {op = "|"} [ set(cf_go): 1 ]
+            if(_): {op = "<<"} [
+                if(_): {rv >= 0} [
+                    if(_): {rv <= 63} [ set(cf_go): 1 ]
+                ]
+            ]
+            if(_): {op = ">>"} [
+                if(_): {rv >= 0} [
+                    if(_): {rv <= 63} [ set(cf_go): 1 ]
+                ]
+            ]
+        ]
+    ]
+    if(_): {op = "="} [ set(cf_go): 1 ]
+    if(_): {op = "!="} [ set(cf_go): 1 ]
+    if(_): {cf_go = 1} [
+        ex_bin_do(cf_v): op lv rv
+        set(r): 1
+    ]
+]
 # ---- expression compiler: node -> register tgt ----
 cv_e(r): nd tgt [
     if(_): {ps_stop = 0} [
@@ -4180,56 +4306,70 @@ cv_e_t(r): nd tgt t [
         cv_emit(_): 4 tgt 1 tgt cv_dni
     ]
     if(_): {t = 12} [
-        set(cv_strict_was): cv_strict
-        set(cv_strict): 1
-        getf(cv_kd): nd "kids"
-        at(cv_kr): cv_kd 1
-        cv_e(r): cv_kr tgt
-        getf(cv_kd): nd "kids"
-        at(cv_kl): cv_kd 0
-        add(cv_t2): tgt 1
-        cv_e(r): cv_kl cv_t2
-        set(cv_strict): cv_strict_was
-        getf(cv_op): nd "s1"
-        set(cv_opc): 0
-        if(_): {cv_op = "+"} [ set(cv_opc): 10 ]
-        if(_): {cv_op = "-"} [ set(cv_opc): 11 ]
-        if(_): {cv_op = "*"} [ set(cv_opc): 12 ]
-        if(_): {cv_op = "/"} [ set(cv_opc): 13 ]
-        if(_): {cv_op = "%"} [ set(cv_opc): 14 ]
-        if(_): {cv_op = "="} [ set(cv_opc): 16 ]
-        if(_): {cv_op = "!="} [ set(cv_opc): 17 ]
-        if(_): {cv_op = "<"} [ set(cv_opc): 18 ]
-        if(_): {cv_op = "<="} [ set(cv_opc): 19 ]
-        if(_): {cv_op = ">"} [ set(cv_opc): 20 ]
-        if(_): {cv_op = ">="} [ set(cv_opc): 21 ]
-        if(_): {cv_op = "&&"} [ set(cv_opc): 22 ]
-        if(_): {cv_op = "||"} [ set(cv_opc): 23 ]
-        if(_): {cv_op = "<<"} [ set(cv_opc): 24 ]
-        if(_): {cv_op = ">>"} [ set(cv_opc): 25 ]
-        if(_): {cv_op = "^"} [ set(cv_opc): 26 ]
-        if(_): {cv_op = "&"} [ set(cv_opc): 27 ]
-        if(_): {cv_op = "|"} [ set(cv_opc): 28 ]
-        cv_emit(_): cv_opc tgt cv_t2 tgt 0
+        cf_fold(cf_hit): nd
+        if(_): {cf_hit = 1} [
+            cv_const(cv_ci): cf_v
+            cv_emit(_): 1 tgt 0 0 cv_ci
+        ]
+        else(_): [
+            set(cv_strict_was): cv_strict
+            set(cv_strict): 1
+            getf(cv_kd): nd "kids"
+            at(cv_kr): cv_kd 1
+            cv_e(r): cv_kr tgt
+            getf(cv_kd): nd "kids"
+            at(cv_kl): cv_kd 0
+            add(cv_t2): tgt 1
+            cv_e(r): cv_kl cv_t2
+            set(cv_strict): cv_strict_was
+            getf(cv_op): nd "s1"
+            set(cv_opc): 0
+            if(_): {cv_op = "+"} [ set(cv_opc): 10 ]
+            if(_): {cv_op = "-"} [ set(cv_opc): 11 ]
+            if(_): {cv_op = "*"} [ set(cv_opc): 12 ]
+            if(_): {cv_op = "/"} [ set(cv_opc): 13 ]
+            if(_): {cv_op = "%"} [ set(cv_opc): 14 ]
+            if(_): {cv_op = "="} [ set(cv_opc): 16 ]
+            if(_): {cv_op = "!="} [ set(cv_opc): 17 ]
+            if(_): {cv_op = "<"} [ set(cv_opc): 18 ]
+            if(_): {cv_op = "<="} [ set(cv_opc): 19 ]
+            if(_): {cv_op = ">"} [ set(cv_opc): 20 ]
+            if(_): {cv_op = ">="} [ set(cv_opc): 21 ]
+            if(_): {cv_op = "&&"} [ set(cv_opc): 22 ]
+            if(_): {cv_op = "||"} [ set(cv_opc): 23 ]
+            if(_): {cv_op = "<<"} [ set(cv_opc): 24 ]
+            if(_): {cv_op = ">>"} [ set(cv_opc): 25 ]
+            if(_): {cv_op = "^"} [ set(cv_opc): 26 ]
+            if(_): {cv_op = "&"} [ set(cv_opc): 27 ]
+            if(_): {cv_op = "|"} [ set(cv_opc): 28 ]
+            cv_emit(_): cv_opc tgt cv_t2 tgt 0
+        ]
     ]
     if(_): {t = 13} [
-        set(cv_strict_was): cv_strict
-        set(cv_strict): 1
-        getf(cv_kd): nd "kids"
-        at(cv_kc): cv_kd 0
-        add(cv_t3): tgt 1
-        cv_e(r): cv_kc cv_t3
-        set(cv_strict): cv_strict_was
-        getf(cv_op): nd "s1"
-        set(cv_zc): 0
-        cv_const(cv_zi): cv_zc
-        add(cv_t4): tgt 2
-        cv_emit(_): 1 cv_t4 0 0 cv_zi
-        if(_): {cv_op = "-"} [
-            cv_emit(_): 11 tgt cv_t4 cv_t3 0
+        cf_fold(cf_hit): nd
+        if(_): {cf_hit = 1} [
+            cv_const(cv_ci): cf_v
+            cv_emit(_): 1 tgt 0 0 cv_ci
         ]
-        if(_): {cv_op = "!"} [
-            cv_emit(_): 29 tgt cv_t3 0 0
+        else(_): [
+            set(cv_strict_was): cv_strict
+            set(cv_strict): 1
+            getf(cv_kd): nd "kids"
+            at(cv_kc): cv_kd 0
+            add(cv_t3): tgt 1
+            cv_e(r): cv_kc cv_t3
+            set(cv_strict): cv_strict_was
+            getf(cv_op): nd "s1"
+            set(cv_zc): 0
+            cv_const(cv_zi): cv_zc
+            add(cv_t4): tgt 2
+            cv_emit(_): 1 cv_t4 0 0 cv_zi
+            if(_): {cv_op = "-"} [
+                cv_emit(_): 11 tgt cv_t4 cv_t3 0
+            ]
+            if(_): {cv_op = "!"} [
+                cv_emit(_): 29 tgt cv_t3 0 0
+            ]
         ]
     ]
 ]
@@ -6354,7 +6494,7 @@ vm_step(r): cur op [
 ]
 # Which path native name takes (cached per name in cv_nkind): 1 the
 # __vset/__vget/__ext helpers, 2 a host builtin, 3 print, 4..7 the
-# vm_native_b..e chains.
+# vm_native_b..e chains, 8 Petersburg, 9 getf, 10 at.
 vm_native_kind(r): name [
     set(r): 7
     rt_is_pb(vnk_pb): name
@@ -6363,6 +6503,10 @@ vm_native_kind(r): name [
     else(_): [
         rt_is_host(vnk_h): name
         if(_): {vnk_h = 1} [ set(r): 2 ]
+        # getf and at get kinds of their own so vm_native runs them first
+        # (docs/OPTIMIZATIONS.md, O2), not after vm_native_c's name chain
+        elif(_): {name = "getf"} [ set(r): 9 ]
+        elif(_): {name = "at"} [ set(r): 10 ]
         elif(_): {name = "print"} [ set(r): 3 ]
         elif(_): {name = "add" || name = "sub" || name = "mul" || name = "div" || name = "mod" || name = "concat"} [ set(r): 4 ]
         elif(_): {name = "push" || name = "at" || name = "len" || name = "typeof" || name = "getf" || name = "setf" || name = "vec" || name = "struct" || name = "encode" || name = "decode"} [ set(r): 5 ]
@@ -6376,7 +6520,15 @@ vm_native(r): name dst nb ni [
         vm_native_kind(vm_nk): name
         set(cv_nkind): ni vm_nk
     ]
-    if(_): {vm_nk = 4} [
+    if(_): {vm_nk = 9} [
+        getf(vm_nr): rt_na0 rt_na1
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 10} [
+        at(vm_nr): rt_na0 rt_na1
+        vm_setreg(_): dst vm_nr
+    ]
+    elif(_): {vm_nk = 4} [
         vm_native_b(vm_nr): name dst nb
         vm_setreg(_): dst vm_nr
     ]
