@@ -1,0 +1,225 @@
+# Klin calculator GUI test. Needs a GLFW-enabled ussr and a display; the
+# window is never shown. Run from the repository root:
+#     ussr tests/gui/klin_test.su
+# Clicks keys on the canvas, types on the keyboard and switches modes with
+# the toolbar, all through Petersburg's input path. Prints PASS or FAIL per
+# check.
+$include "../../src/klin/klin.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 40
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 300} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    sleep(_): 20
+    set(r): 0
+]
+
+# Clicks the middle of the key with this label; false when there is none.
+click(r): label [
+    set(r): false
+    set(_cl_hits): klin_hits?
+    set(_cl_canvas): klin_canvas?
+    len(_cl_n): _cl_hits
+    set(_cl_i): 0
+    while(_): {_cl_i < _cl_n} [
+        at(_cl_h): _cl_hits _cl_i
+        at(_cl_label): _cl_h 4
+        if(_): {_cl_label = label && r = false} [
+            at(_cl_x): _cl_h 0
+            at(_cl_y): _cl_h 1
+            at(_cl_w): _cl_h 2
+            at(_cl_hh): _cl_h 3
+            klin_trunc(_cl_px): {_cl_x + _cl_w / 2}
+            klin_trunc(_cl_py): {_cl_y + _cl_hh / 2}
+            inject(_): _cl_canvas "pointer" _cl_px _cl_py 0
+            settle(_):
+            set(r): true
+        ]
+        set(_cl_i): {_cl_i + 1}
+    ]
+]
+
+clicks(r): sequence [
+    klin_words(_cs_w): sequence
+    len(_cs_n): _cs_w
+    set(_cs_i): 0
+    set(r): true
+    while(_): {_cs_i < _cs_n} [
+        at(_cs_k): _cs_w _cs_i
+        click(_cs_ok): _cs_k
+        if(_): {_cs_ok = false} [
+            concat(_cs_line): "FAIL no key " _cs_k
+            print(_): _cs_line
+            set(r): false
+        ]
+        set(_cs_i): {_cs_i + 1}
+    ]
+]
+
+key(r): code [
+    set(_ky_w): klin_window?
+    inject(_): _ky_w "key" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+mode_button(r): index [
+    set(_mb_b): klin_modebuttons?
+    at(_mb_x): _mb_b index
+    inject(_): _mb_x "click" 0 0 0
+    settle(_):
+    set(r): 0
+]
+
+display(r): [
+    klindisplay(r):
+]
+
+test_pointer(result): canvas x y [
+    klinclick(_): canvas x y
+]
+
+test_key(result): window k [
+    klinkey(_): window k
+]
+
+test_keyup(result): window k [
+    klinkeyup(_): window k
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Klin test" KLIN_WIDTH KLIN_HEIGHT
+    klininitialize(canvas): window
+    on(_): canvas "pointer" "test_pointer"
+    on(_): window "key" "test_key"
+    on(_): window "keyup" "test_keyup"
+    run(_):
+
+    set(hits): klin_hits?
+    len(n): hits
+    check(_): "casual keypad has 20 keys" n 20
+    clicks(_): "1 2 + 3 4 ="
+    display(d):
+    check(_): "clicks 12 + 34 =" d "46"
+    canvascount(shapes): canvas
+    # 20 keys with labels, the panel, the expression line and the digits
+    check(_): "the display and keys are drawn" {shapes > 45} true
+    clicks(_): "AC 7 / 2 ="
+    display(d):
+    check(_): "clicks 7 / 2 =" d "3.5"
+    clicks(_): "AC 1 2 3 <-"
+    display(d):
+    check(_): "backspace key" d "12"
+
+    # keyboard: digits, keypad operators, Enter, Escape, Backspace
+    key(_): 256
+    key(_): 50
+    key(_): 334
+    key(_): 323
+    key(_): 257
+    display(d):
+    check(_): "keyboard 2 + 3 Enter" d "5"
+    key(_): 256
+    key(_): 57
+    key(_): 340
+    key(_): 56
+    set(w): klin_window?
+    inject(_): w "keyup" 340 0 0
+    settle(_):
+    key(_): 52
+    key(_): 61
+    display(d):
+    check(_): "keyboard 9 Shift+8 4 =" d "36"
+    key(_): 259
+    display(d):
+    check(_): "Escape then Backspace leaves 0" {d = "36" || d = "3" || d = "0"} true
+
+    # scientific mode from the toolbar
+    mode_button(_): 1
+    set(m): klin_mode?
+    check(_): "SCI button switches mode" m "sci"
+    set(b): klin_modebuttons?
+    at(sb): b 1
+    getchecked(on): sb
+    check(_): "SCI button is pressed" on true
+    at(cb): b 0
+    getchecked(on): cb
+    check(_): "CASUAL button is released" on false
+    set(hits): klin_hits?
+    len(n): hits
+    check(_): "sci keypad has 40 keys" n 40
+    clicks(_): "AC 3 0 SIN"
+    display(d):
+    check(_): "30 SIN in degrees" d "0.5"
+    clicks(_): "DEG PI COS"
+    display(d):
+    check(_): "PI COS in radians" d "-1"
+    set(a): klin_angle?
+    check(_): "angle key toggles to RAD" a "RAD"
+    clicks(_): "AC ( 2 + 3 ) * 4 ="
+    display(d):
+    check(_): "parentheses" d "20"
+    clicks(_): "2 X^Y 1 0 ="
+    display(d):
+    check(_): "X^Y" d "1024"
+
+    # programmer mode: bases and endianness
+    mode_button(_): 2
+    set(hits): klin_hits?
+    len(n): hits
+    check(_): "prog keypad has 42 keys" n 42
+    clicks(_): "AC HEX 1 2 3 4"
+    display(d):
+    check(_): "hex entry" d "1234"
+    clicks(_): "SW16"
+    display(d):
+    check(_): "SW16 swaps the bytes" d "3412"
+    clicks(_): "DEC"
+    display(d):
+    check(_): "DEC shows it in decimal" d "13330"
+    clicks(_): "BIN"
+    display(d):
+    check(_): "BIN" d "11010000010010"
+    # A is not a digit in base 2: clicking it changes nothing
+    clicks(_): "A"
+    display(d):
+    check(_): "disabled digit key" d "11010000010010"
+    clicks(_): "OCT"
+    display(d):
+    check(_): "OCT" d "32022"
+    clicks(_): "AC HEX F F AND 0 F ="
+    display(d):
+    check(_): "FF AND 0F" d "F"
+    # hex letters from the keyboard
+    key(_): 256
+    key(_): 65
+    key(_): 66
+    display(d):
+    check(_): "keyboard hex digits" d "AB"
+
+    # back to casual keeps the value
+    mode_button(_): 0
+    display(d):
+    check(_): "PROG -> CASUAL keeps the value" d "171"
+    close(_): window
+    set(result): 0
+]
