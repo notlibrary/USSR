@@ -32,9 +32,9 @@ They are ordered from the simplest to the hardest and done in that order.
 | O3 | build | Whole-program optimization: MSVC `/GL` + `/LTCG`, gcc `-flto=auto`, so the VM inlines the value helpers of `ussr.c` / `uno.c` (`ussr_null`, `ussr_value_free`, ...) | done | done (runs on ussr) | call 0.19 → 0.11 s, loop 0.085 → 0.066 s, fields 0.083 → 0.062 s, russia loop 0.33 → 0.24 s, russia fields 0.46 → 0.32 s |
 | O4 | 6 | CALL/RET: save and restore only the registers a function can touch (compiler-known high-water mark) instead of all 32 | dropped | n/a | no measurable gain after O3: with the value helpers inlined, moving 32 mostly null registers is cheap |
 | O5 | 7 | Fast paths for `setf` (through a silent `ussr_struct_try_set_field`) and `len` on vectors | done | done | setf 0.124 → 0.074 s, russia loop 0.24 → 0.22 s, russia setf 0.317 → 0.30 s (russia side alone) |
-| O6 | 4 | Dead branch elimination: `if` / `while` on a constant condition | planned | planned | |
-| O7 | 5 | Peephole: jump-to-jump threading, NOP removal | planned | planned | |
-| O8 | 6 | Integer fast path for `+ - * < <= > >= =` without the generic `vm_binary` call | planned | planned | |
+| O6 | 4 | Dead branch elimination: `if` / `while` on a constant condition | dropped | dropped | constant conditions are rare (`LOAD_CONST` → `JMP_FALSE` is not among the common pairs) and a constant branch saves no work without removing code |
+| O7 | 5 | Peephole: jump-to-jump threading, NOP removal | dropped | dropped | about 250 jumps land on a JMP in a run of millions of instructions |
+| O8 | 6 | Integer fast path for `+ - * = != < <= > >=` without the generic `vm_binary` call; russia: jumps and arithmetic read and write registers inline instead of calling `vm_reg` / `vm_setreg` | done | done | elif 0.265 → 0.242 s, loop 0.066 → 0.063 s, russia loop 0.22 → 0.20 s (russia side alone) |
 | O9 | 6 | One "slow path" flag for quantum, yield and resume checks at the top of the dispatch loop | planned | planned | |
 | O10 | 6 | Verify register / constant / string indices once at load and drop the per-instruction checks | planned | n/a | |
 | O11 | 6 | Superinstructions: compare-and-branch, add-immediate | planned | planned | |
@@ -58,7 +58,8 @@ more than once.
 
 `nmake /f Makefile.msc "OPT=/O2 /GL /DUSSR_PROFILE"` builds a profiling
 `ussr` that prints cycles and counts per opcode and per called function or
-builtin at exit. From Git Bash, run nmake through a `.bat` file: MSYS
+builtin at exit, the most frequent opcode pairs and how many jumps landed
+on another JMP. From Git Bash, run nmake through a `.bat` file: MSYS
 rewrites a bare `/O2` argument into a path and the build silently drops to
 no optimization.
 
@@ -123,3 +124,23 @@ fast path as it was, because `ussr_struct_set_field` prints its errors and
 the general path would report them again; `ussr_struct_try_set_field`
 does the same work silently and returns 0 for anything the general path
 must handle. russia.su gives `setf` and `len` their own kinds (11, 12).
+
+### O6 and O7 (dropped)
+
+The profiler's opcode pairs decided both before any code was written. In
+russia.su running a loop (about 10 million instructions) only ~250 jumps
+landed on a JMP, and a constant `if` condition (`LOAD_CONST` then
+`JMP_FALSE`) is not among the common pairs. The common ones are
+`LOAD_VAR LOAD_CONST EQ JMP_FALSE` (russia's `elif(_): {op = N}` chains,
+~665,000 times) and `STORE_VAR` followed by `LOAD_VAR` (~1,080,000): the
+targets of O10 and O11.
+
+### O8
+
+Each instruction costs about 30 cycles, so the call into `vm_binary` and
+its type dispatch were a visible share of an `ADD` or `EQ`. Two integers
+now take an inline switch using the same `ussr_int_*` helpers. russia.su
+has no such dispatch of its own (its VM uses the host's operators), so its
+part of O8 is the matching overhead there: `vm_step`'s jumps, arithmetic
+and comparisons read and write `vm_regs` inline instead of through
+`vm_reg` / `vm_setreg`, three user function calls per instruction.

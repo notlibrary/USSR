@@ -6293,6 +6293,8 @@ vm_step(r): cur op [
         vm_reg(vm_hv2): vm_ha2
         sc_store_put(_): rt_hash vm_hnm2 vm_hv2
     ]
+    # jumps, arithmetic and comparisons read and write registers inline,
+    # not through vm_reg / vm_setreg calls (docs/OPTIMIZATIONS.md, O8)
     elif(_): {op = 7} [
         getf(vm_jt): cur "imm"
         sub(vm_jt2): vm_jt 1
@@ -6301,7 +6303,8 @@ vm_step(r): cur op [
     elif(_): {op = 8} [
         getf(vm_ta): cur "a"
         getf(vm_tt): cur "imm"
-        vm_reg(vm_tv): vm_ta
+        at(vm_tv): vm_regs vm_ta
+        getf(vm_tv): vm_tv "v"
         # the host's if decides: null, false, 0, 0.0, "" and [] are false
         if(_): vm_tv [
             sub(vm_tt2): vm_tt 1
@@ -6311,7 +6314,8 @@ vm_step(r): cur op [
     elif(_): {op = 9} [
         getf(vm_fa): cur "a"
         getf(vm_ft): cur "imm"
-        vm_reg(vm_fv): vm_fa
+        at(vm_fv): vm_regs vm_fa
+        getf(vm_fv): vm_fv "v"
         set(vm_ftr): 1
         if(_): vm_fv [ set(vm_ftr): 0 ]
         if(_): {vm_ftr = 1} [
@@ -6323,170 +6327,226 @@ vm_step(r): cur op [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         add(vm_vr): vm_vb vm_vc
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 11} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         sub(vm_vr): vm_vb vm_vc
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 12} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         mul(vm_vr): vm_vb vm_vc
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 13} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_vc2): cur "c"
-        vm_reg(vm_vb2): vm_xb
-        vm_reg(vm_vc3): vm_vc2
+        at(vm_vb2): vm_regs vm_xb
+        getf(vm_vb2): vm_vb2 "v"
+        at(vm_vc3): vm_regs vm_vc2
+        getf(vm_vc3): vm_vc3 "v"
         div(vm_vr): vm_vb2 vm_vc3
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 14} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc3): cur "c"
-        vm_reg(vm_vb3): vm_xb
-        vm_reg(vm_vc4): vm_xc3
+        at(vm_vb3): vm_regs vm_xb
+        getf(vm_vb3): vm_vb3 "v"
+        at(vm_vc4): vm_regs vm_xc3
+        getf(vm_vc4): vm_vc4 "v"
         mod(vm_vr): vm_vb3 vm_vc4
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 16} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb = vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 17} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb != vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 18} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb < vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 19} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb <= vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 20} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb > vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 21} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb >= vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 22} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb && vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 23} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb || vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 24} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb << vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 25} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb >> vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 26} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb ^ vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 27} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb & vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 28} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
         getf(vm_xc): cur "c"
-        vm_reg(vm_vb): vm_xb
-        vm_reg(vm_vc): vm_xc
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
+        at(vm_vc): vm_regs vm_xc
+        getf(vm_vc): vm_vc "v"
         set(vm_vr): {vm_vb | vm_vc}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 29} [
         getf(vm_xa): cur "a"
         getf(vm_xb): cur "b"
-        vm_reg(vm_vb): vm_xb
+        at(vm_vb): vm_regs vm_xb
+        getf(vm_vb): vm_vb "v"
         set(vm_vr): {vm_vb = false}
-        vm_setreg(_): vm_xa vm_vr
+        at(vm_sr): vm_regs vm_xa
+        setf(_): vm_sr "v" vm_vr
     ]
     elif(_): {op = 15} [
         set(vm_flow): 1
