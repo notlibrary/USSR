@@ -140,9 +140,11 @@ aliases.
 **Asking an AI.** `prompt(answer): "To be or not to be?"` sends the question
 (several arguments are joined with spaces) to a chat model and stores the
 text of its reply; `prompt(_): "..."` prints the reply instead. The request
-goes through the `curl` program (shipped with Windows 10 and later and with
-nearly every Linux and macOS), so `ussr` links no HTTP or TLS library. The
-API key is passed to curl on its standard input, never on its command line.
+goes over HTTPS through ryazan, ussr's TLS library (Schannel on Windows,
+OpenSSL elsewhere; see `src/ryazan/README.md`), which checks the provider's
+certificate. Setting `USSR_AI_CURL`, a URL other than `http://`/`https://`,
+or a build without TLS sends it through the `curl` program instead; the API
+key then reaches curl on its standard input, never on its command line.
 Everything is set with environment variables, which `setenv` changes for
 the next call:
 
@@ -155,7 +157,7 @@ the next call:
 | `USSR_AI_SYSTEM` | optional system prompt |
 | `USSR_AI_MAX_TOKENS` | reply length limit (`anthropic` default 1024) |
 | `USSR_AI_TIMEOUT` | seconds to wait, default 120 |
-| `USSR_AI_CURL` | path of curl when it is not on `PATH` |
+| `USSR_AI_CURL` | use the curl program at this path instead of ryazan |
 
 ```
 # a local model through Ollama
@@ -166,8 +168,8 @@ prompt(_): "Name three Soviet cities"
 ```
 
 A provider's error (bad key, unknown model) stops the command with that
-provider's message. On Windows curl reads its configuration through a
-temporary file that is deleted when the call returns.
+provider's message. When curl is used on Windows, it reads its configuration
+through a temporary file that is deleted when the call returns.
 
 **As a script file:**
 

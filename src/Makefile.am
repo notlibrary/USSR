@@ -16,6 +16,9 @@ ussr_SOURCES = \
     petersburg.c \
     eventq.c \
     socket_posix.c \
+    ryazan.c \
+    ryazan_openssl.c \
+    ryazan_schannel.c \
     gc.c \
 	process_posix.c \
     prng64_xrp32.c \
@@ -27,8 +30,8 @@ ussr_SOURCES = \
 	help.c \
 	completion_fs_posix.c
 	
-AM_CPPFLAGS = -I$(srcdir) $(PETERSBURG_CPPFLAGS)
-ussr_LDADD = $(PETERSBURG_LIBS) -lm
+AM_CPPFLAGS = -I$(srcdir) $(PETERSBURG_CPPFLAGS) $(RYAZAN_CPPFLAGS)
+ussr_LDADD = $(PETERSBURG_LIBS) $(RYAZAN_LIBS) -lm
 
 # lexer.l includes parser.tab.h (bison's name, as ussr-ubuntu.mk and
 # Makefile.msc generate it); automake's yacc rules write parser.h, so the
@@ -50,6 +53,8 @@ EXTRA_DIST = \
     petersburg.h \
     eventq.h \
     socket.h \
+    ryazan.h \
+    ryazan_backend.h \
     gc.h \
     vm.h \
     pp.h \
@@ -98,6 +103,12 @@ EXTRA_DIST = \
 	kremlin/box.uno \
 	novgorod/box.uno \
 	ryazan/box.uno \
+	ryazan/ryazan.su \
+	ryazan/README.md \
+	ryazan/CHANGELOG.md \
+	ryazan/docs/API.md \
+	ryazan/examples/hello.su \
+	ryazan/tests/TESTPLAN.md \
 	siberia/box.uno \
 	stalin/box.uno \
 	usa/box.uno \

@@ -32,11 +32,14 @@ jobs:
       - name: Install build and GUI dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison pkg-config \
+          sudo apt-get install -y flex bison pkg-config libssl-dev \
             libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth
 
       - name: Build
-        run: make -f ussr-ubuntu.mk -j"$(nproc)" ussr
+        run: make -f ussr-ubuntu.mk -j"$(nproc)" RYAZAN_REQUIRE_TLS=1 ussr
+
+      - name: Ryazan TLS loopback (OpenSSL)
+        run: timeout 120 ./ussr tests/ryazan_loopback.su
 
       - name: Test (GUI tests on a virtual display)
         env:
@@ -103,6 +106,10 @@ jobs:
         env:
           USSR_SKIP_GUI: "1"
         run: sh tests/run_all.sh ./ussr.exe
+
+      - name: Ryazan TLS loopback (Schannel)
+        shell: bash
+        run: timeout 120 ./ussr.exe tests/ryazan_loopback.su
 
       # Hosted runners only have GDI's OpenGL 1.1 and Petersburg asks for
       # 2.1, so the GUI tests use Mesa's software opengl32.dll (llvmpipe).

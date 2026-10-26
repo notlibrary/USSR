@@ -50,7 +50,7 @@ LTCG    = /LTCG
 CFLAGS  = /nologo /W3 /Zi $(OPT) /DSTATIC_GETOPT /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN) $(PETERSBURG_CFLAGS)
 RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
-LIBS    = user32.lib ws2_32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO $(LTCG)
+LIBS    = user32.lib ws2_32.lib secur32.lib crypt32.lib ncrypt.lib advapi32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO $(LTCG)
 
 TARGET  = ussr.exe
 
@@ -78,6 +78,8 @@ OBJS = \
 	$(SRC)\help.obj \
 	$(SRC)\completion_fs_win32.obj \
 	$(SRC)\socket_win32.obj \
+	$(SRC)\ryazan.obj \
+	$(SRC)\ryazan_schannel.obj \
 	$(WIN)\process_win32.obj \
     $(WIN)\worstline.obj \
     $(WIN)\getopt.obj \
@@ -130,7 +132,7 @@ $(SRC)\ussr_uuasm.obj: $(SRC)\ussr_uuasm.c $(SRC)\ussr_uuasm.h $(SRC)\ussr_bytec
 $(SRC)\ussr_ru.obj: $(SRC)\ussr_ru.c $(SRC)\ussr_ru.h $(SRC)\ussr_bytecode.h $(SRC)\ussr.h $(SRC)\ussr_version.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_ru.obj $(SRC)\ussr_ru.c
 
-$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h
+$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h $(SRC)\ryazan.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
 
 $(PETERSBURG_OBJ): $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\scheduler.h $(SRC)\eventq.h
@@ -159,8 +161,14 @@ $(SRC)\prng64_xrp32.obj: $(SRC)\prng64_xrp32.c $(SRC)\prng64_xrp32.h
 $(SRC)\keybind.obj: $(SRC)\keybind.c $(SRC)\keybind.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\keybind.obj $(SRC)\keybind.c
 
-$(SRC)\ai.obj: $(SRC)\ai.c $(SRC)\ai.h $(SRC)\process.h $(SRC)\ussr_oop_builtins.h
+$(SRC)\ai.obj: $(SRC)\ai.c $(SRC)\ai.h $(SRC)\process.h $(SRC)\ussr_oop_builtins.h $(SRC)\ryazan.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ai.obj $(SRC)\ai.c
+
+$(SRC)\ryazan.obj: $(SRC)\ryazan.c $(SRC)\ryazan.h $(SRC)\ryazan_backend.h $(SRC)\socket.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ryazan.obj $(SRC)\ryazan.c
+
+$(SRC)\ryazan_schannel.obj: $(SRC)\ryazan_schannel.c $(SRC)\ryazan_backend.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ryazan_schannel.obj $(SRC)\ryazan_schannel.c
 
 $(SRC)\alias.obj: $(SRC)\alias.c $(SRC)\alias.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\alias.obj $(SRC)\alias.c

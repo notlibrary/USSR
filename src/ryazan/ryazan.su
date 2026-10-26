@@ -1,0 +1,229 @@
+# ryazan.su - secure socket library: TLS clients and servers, HTTPS requests.
+#
+# The handshake authenticates the server by its certificate (asymmetric
+# cryptography: RSA/ECDSA signatures, ECDHE key agreement); the session
+# then travels under a symmetric AEAD cipher (AES-GCM or ChaCha20-Poly1305).
+# The cryptography is the operating system's: Schannel on Windows, OpenSSL
+# elsewhere. tls_backend(b): says which, "none" when ussr was built without.
+#
+# Sessions ride on ordinary socket handles, so wait_readable/wait_writable
+# work on them. The waiting helpers below must run inside a USSR scheduler
+# process (init or an async task), like the rest of the socket API.
+#
+#   ryazan_connect(s): host port         -> TLS client socket, or -1
+#   ryazan_accept(r): socket cert secret -> 0 when the server handshake on an
+#                                           accepted socket succeeded, else -1
+#   ryazan_read(t): socket max           -> up to max bytes of text; "" once the
+#                                           peer closed (or on error)
+#   ryazan_read_all(t): socket           -> everything until the peer closes
+#   ryazan_write(r): socket text         -> 0 when all of text was sent, else -1
+#   ryazan_close(r): socket              -> close_notify, then closes the socket
+#   ryazan_request(resp): method url headers body
+#                                        -> raw response (head, blank line,
+#                                           body) or null; http:// works too
+#   ryazan_get(body): url                -> body of a 2xx response, or null
+#   ryazan_post(body): url content_type data
+#                                        -> body of a 2xx response, or null
+#   ryazan_status(code): resp            -> HTTP status code (0 if unparsable)
+#   ryazan_body(body): resp              -> the body of a raw response
+#   ryazan_header(value): resp name      -> header value ("" when absent);
+#                                           the name is case-insensitive
+#   ryazan_error(msg):                   -> why the last call failed
+#
+# Clients check the certificate chain against the system's trusted roots and
+# its name against the host; RYAZAN_CA_FILE (a PEM file) replaces the roots.
+# Servers take a PKCS#12 file (.p12/.pfx) with its password; with OpenSSL a
+# PEM certificate chain plus the PEM key file work too.
+#
+# Text is NUL-terminated like all USSR strings: binary bodies end at their
+# first zero byte. ryazan_request blocks the interpreter while it runs; use
+# ryazan_connect/ryazan_write/ryazan_read inside async tasks to overlap work.
+$once
+$include "../libs/strings.su"
+
+ryazan_error(r): [
+    tls_error(r):
+]
+
+# Drives the handshake to the end, waiting on the socket as needed.
+ryazan_handshake(r): socket [
+    set(_rzh_state): 0
+    set(_rzh_rounds): 0
+    while(_): {_rzh_state != 1 && _rzh_state >= 0} [
+        tls_handshake(_rzh_state): socket
+        if(_): {_rzh_state = 0} [
+            wait_readable(_rzh_ready): socket
+        ]
+        if(_): {_rzh_state = 2} [
+            wait_writable(_rzh_ready): socket
+        ]
+        set(_rzh_rounds): {_rzh_rounds + 1}
+        if(_): {_rzh_rounds > 1000} [
+            set(_rzh_state): {0 - 1}
+        ]
+    ]
+    set(r): {0 - 1}
+    if(_): {_rzh_state = 1} [
+        set(r): 0
+    ]
+]
+
+ryazan_connect(r): host port [
+    set(r): {0 - 1}
+    socket_tcp(_rzc_socket):
+    if(_): {_rzc_socket < 1} [
+        return(r): r
+    ]
+    socket_connect(_rzc_connected): _rzc_socket host port
+    if(_): {_rzc_connected = 0} [
+        tls_client(_rzc_client): _rzc_socket host
+        if(_): {_rzc_client = 0} [
+            ryazan_handshake(_rzc_shaken): _rzc_socket
+            if(_): {_rzc_shaken = 0} [
+                set(r): _rzc_socket
+                return(r): r
+            ]
+        ]
+    ]
+    socket_close(_rzc_closed): _rzc_socket
+]
+
+ryazan_accept(r): socket credential secret [
+    tls_server(_rza_ok): socket credential secret
+    set(r): {0 - 1}
+    if(_): {_rza_ok = 0} [
+        ryazan_handshake(r): socket
+    ]
+]
+
+ryazan_read(r): socket max [
+    set(r): null
+    while(_): {r = null} [
+        tls_recv(r): socket max
+        if(_): {r = null} [
+            wait_readable(_rzr_ready): socket
+        ]
+    ]
+]
+
+ryazan_read_all(r): socket [
+    set(r): ""
+    set(_rzra_more): true
+    while(_): _rzra_more [
+        ryazan_read(_rzra_chunk): socket 16384
+        len(_rzra_n): _rzra_chunk
+        if(_): {_rzra_n = 0} [
+            set(_rzra_more): false
+        ]
+        else(_): [
+            concat(r): r _rzra_chunk
+        ]
+    ]
+]
+
+ryazan_write(r): socket text [
+    len(_rzw_total): text
+    set(_rzw_offset): 0
+    set(r): 0
+    while(_): {r = 0 && _rzw_offset < _rzw_total} [
+        slice(_rzw_piece): text _rzw_offset {_rzw_total - _rzw_offset}
+        tls_send(_rzw_sent): socket _rzw_piece
+        if(_): {_rzw_sent < 0} [
+            set(r): {0 - 1}
+        ]
+        if(_): {_rzw_sent = 0} [
+            wait_writable(_rzw_ready): socket
+        ]
+        if(_): {_rzw_sent > 0} [
+            set(_rzw_offset): {_rzw_offset + _rzw_sent}
+        ]
+    ]
+    # the last records may still be queued
+    set(_rzw_flushed): 2
+    while(_): {r = 0 && _rzw_flushed = 2} [
+        tls_flush(_rzw_flushed): socket
+        if(_): {_rzw_flushed = 2} [
+            wait_writable(_rzw_ready): socket
+        ]
+        if(_): {_rzw_flushed < 0} [
+            set(r): {0 - 1}
+        ]
+    ]
+]
+
+ryazan_close(r): socket [
+    tls_close(_rzx_tls): socket
+    socket_close(r): socket
+]
+
+ryazan_request(r): method url headers body [
+    tls_request(r): method url headers body
+]
+
+ryazan_status(r): resp [
+    set(r): 0
+    if(_): {resp != null} [
+        len(_rzs_n): resp
+        if(_): {_rzs_n >= 12} [
+            slice(_rzs_code): resp 9 3
+            str_to_number(r): _rzs_code
+            if(_): {r = null} [
+                set(r): 0
+            ]
+        ]
+    ]
+]
+
+ryazan_body(r): resp [
+    set(r): ""
+    if(_): {resp != null} [
+        str_find(_rzb_at): resp "\r\n\r\n" 0
+        if(_): {_rzb_at >= 0} [
+            len(_rzb_n): resp
+            slice(r): resp {_rzb_at + 4} {_rzb_n - _rzb_at - 4}
+        ]
+    ]
+]
+
+ryazan_header(r): resp name [
+    set(r): ""
+    if(_): {resp != null} [
+        str_find(_rzhd_end): resp "\r\n\r\n" 0
+        if(_): {_rzhd_end >= 0} [
+            slice(_rzhd_head): resp 0 {_rzhd_end + 2}
+            str_lower(_rzhd_lower): _rzhd_head
+            str_lower(_rzhd_name): name
+            concat(_rzhd_key): "\r\n" _rzhd_name ":"
+            str_find(_rzhd_at): _rzhd_lower _rzhd_key 0
+            if(_): {_rzhd_at >= 0} [
+                len(_rzhd_keylen): _rzhd_key
+                set(_rzhd_from): {_rzhd_at + _rzhd_keylen}
+                str_find(_rzhd_stop): _rzhd_head "\r\n" _rzhd_from
+                slice(_rzhd_value): _rzhd_head _rzhd_from {_rzhd_stop - _rzhd_from}
+                str_trim(r): _rzhd_value
+            ]
+        ]
+    ]
+]
+
+# body of a 2xx response, else null (the reason is in ryazan_error)
+_ryazan_ok_body(r): resp [
+    set(r): null
+    if(_): {resp != null} [
+        ryazan_status(_rzok_code): resp
+        if(_): {_rzok_code >= 200 && _rzok_code < 300} [
+            ryazan_body(r): resp
+        ]
+    ]
+]
+
+ryazan_get(r): url [
+    tls_request(_rzg_resp): "GET" url
+    _ryazan_ok_body(r): _rzg_resp
+]
+
+ryazan_post(r): url content_type data [
+    concat(_rzp_headers): "Content-Type: " content_type
+    tls_request(_rzp_resp): "POST" url _rzp_headers data
+    _ryazan_ok_body(r): _rzp_resp
+]

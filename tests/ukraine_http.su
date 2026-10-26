@@ -1,6 +1,6 @@
 # Minimal ukraine.su app. Run from the repository root:
 #   ussr tests/ukraine_http.su
-$include "src/ukraine/ukraine.su"
+$include "../src/ukraine/ukraine.su"
 
 uk_route(result): method target raw_request [
     if(_): {method = "GET"} [

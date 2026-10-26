@@ -206,7 +206,7 @@ static void help_keys(void)
 static void help_ai(void)
 {
     printf("prompt(answer): \"To be or not to be?\"\n"
-           "  asks a chat model through the curl program.\n\n"
+           "  asks a chat model over HTTPS (ryazan TLS).\n\n"
            "  USSR_AI_PROVIDER    anthropic (default) or openai\n"
            "                      (openai also means any OpenAI-compatible\n"
            "                      server: Ollama, LM Studio, OpenRouter ...)\n"
@@ -216,7 +216,7 @@ static void help_ai(void)
            "  USSR_AI_SYSTEM      system prompt\n"
            "  USSR_AI_MAX_TOKENS  answer length limit\n"
            "  USSR_AI_TIMEOUT     seconds, default 120\n"
-           "  USSR_AI_CURL        curl program, when not on PATH\n\n"
+           "  USSR_AI_CURL        use this curl program instead of ryazan\n\n"
            "Local Ollama example:\n"
            "  setenv(_): \"USSR_AI_PROVIDER\" \"openai\"\n"
            "  setenv(_): \"USSR_AI_URL\" "

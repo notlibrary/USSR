@@ -1,5 +1,5 @@
 # Smoke-test the HTTP helpers without opening a listening socket.
-$include "src/ukraine/ukraine.su"
+$include "../src/ukraine/ukraine.su"
 
 uk_route(result): method target raw_request [
     uk_response(result): "200 OK" "text/plain" "ok"
