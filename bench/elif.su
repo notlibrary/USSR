@@ -1,0 +1,31 @@
+# A 20-way elif dispatch chain, the shape of russia.su's vm_step.
+init(ret): arg_cnt arg_vec [
+    set(hits): 0
+    set(i): 0
+    while(_): {i < 300000} [
+        set(i): {i + 1}
+        set(op): 20
+        if(_): {op = 1} [ set(hits): {hits + 1} ]
+        elif(_): {op = 2} [ set(hits): {hits + 1} ]
+        elif(_): {op = 3} [ set(hits): {hits + 1} ]
+        elif(_): {op = 4} [ set(hits): {hits + 1} ]
+        elif(_): {op = 5} [ set(hits): {hits + 1} ]
+        elif(_): {op = 6} [ set(hits): {hits + 1} ]
+        elif(_): {op = 7} [ set(hits): {hits + 1} ]
+        elif(_): {op = 8} [ set(hits): {hits + 1} ]
+        elif(_): {op = 9} [ set(hits): {hits + 1} ]
+        elif(_): {op = 10} [ set(hits): {hits + 1} ]
+        elif(_): {op = 11} [ set(hits): {hits + 1} ]
+        elif(_): {op = 12} [ set(hits): {hits + 1} ]
+        elif(_): {op = 13} [ set(hits): {hits + 1} ]
+        elif(_): {op = 14} [ set(hits): {hits + 1} ]
+        elif(_): {op = 15} [ set(hits): {hits + 1} ]
+        elif(_): {op = 16} [ set(hits): {hits + 1} ]
+        elif(_): {op = 17} [ set(hits): {hits + 1} ]
+        elif(_): {op = 18} [ set(hits): {hits + 1} ]
+        elif(_): {op = 19} [ set(hits): {hits + 1} ]
+        elif(_): {op = 20} [ set(hits): {hits + 1} ]
+    ]
+    print(_): hits
+    return(ret): 0
+]

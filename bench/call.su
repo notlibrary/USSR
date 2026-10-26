@@ -1,0 +1,15 @@
+# Function call overhead: one small user function per iteration.
+id(r): x [
+    set(r): x
+]
+init(ret): arg_cnt arg_vec [
+    set(sum): 0
+    for(_): {i < 300000} [
+        set(i): 0
+        set(i): {i + 1}
+        id(v): i
+        set(sum): {sum + v}
+    ]
+    print(_): sum
+    return(ret): 0
+]
