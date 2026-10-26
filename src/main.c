@@ -1488,6 +1488,115 @@ static int vm_try_call(
     return 0;
 }
 
+#ifdef USSR_PROFILE
+/*
+ * Build with -DUSSR_PROFILE (nmake ... OPT="/O2 /DUSSR_PROFILE") to get a
+ * profile on stderr at exit: cycles and counts per opcode and per called
+ * name (user functions for CALL, builtins for OOP). Cycles are charged to
+ * an instruction up to the start of the next one, so a CALL's own cost
+ * excludes its body. Used by the optimization cycle (docs/OPTIMIZATIONS.md).
+ */
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
+#define VM_PROF_NAMES 4096
+typedef struct { const char *name; unsigned long long count, cycles; } vm_prof_t;
+static vm_prof_t vm_prof_ops[256];
+static vm_prof_t vm_prof_names[VM_PROF_NAMES];
+static int vm_prof_registered;
+static vm_prof_t *vm_prof_last_op, *vm_prof_last_name;
+static unsigned long long vm_prof_t0;
+
+static vm_prof_t *vm_prof_slot(const char *name)
+{
+    /* one bucket per distinct string; collisions probe linearly */
+    size_t h = 0, i;
+    const char *c;
+    for (c = name; *c != '\0'; ++c)
+        h = h * 31 + (unsigned char)*c;
+    for (i = 0; i < VM_PROF_NAMES; ++i)
+    {
+        vm_prof_t *e = &vm_prof_names[(h + i) % VM_PROF_NAMES];
+        /* copied: the program and its strings are gone by atexit */
+        /* copied: the program and its strings are gone by atexit */
+        if (e->name == NULL) { e->name = _strdup(name); return e; }
+        if (strcmp(e->name, name) == 0) return e;
+    }
+    return NULL;
+}
+
+static int vm_prof_cmp(const void *a, const void *b)
+{
+    const vm_prof_t *x = a, *y = b;
+    return x->cycles < y->cycles ? 1 : x->cycles > y->cycles ? -1 : 0;
+}
+
+static void vm_prof_dump(void)
+{
+    static vm_prof_t sorted[VM_PROF_NAMES];
+    unsigned long long total = 0;
+    size_t i, n = 0;
+
+    for (i = 0; i < 256; ++i)
+        total += vm_prof_ops[i].cycles;
+    fprintf(stderr, "\n== USSR profile: opcodes (Mcycles, count, %%)\n");
+    memcpy(sorted, vm_prof_ops, sizeof(vm_prof_ops));
+    qsort(sorted, 256, sizeof(*sorted), vm_prof_cmp);
+    for (i = 0; i < 256 && sorted[i].count != 0; ++i)
+        fprintf(stderr, "%-16s %10.1f %12llu %5.1f\n", sorted[i].name,
+                sorted[i].cycles / 1e6, sorted[i].count,
+                total ? 100.0 * sorted[i].cycles / total : 0.0);
+    for (i = 0; i < VM_PROF_NAMES; ++i)
+        if (vm_prof_names[i].name != NULL)
+            sorted[n++] = vm_prof_names[i];
+    qsort(sorted, n, sizeof(*sorted), vm_prof_cmp);
+    fprintf(stderr, "== names (Mcycles, count, %%)\n");
+    for (i = 0; i < n && i < 60; ++i)
+        fprintf(stderr, "%-24s %10.1f %12llu %5.1f\n", sorted[i].name,
+                sorted[i].cycles / 1e6, sorted[i].count,
+                total ? 100.0 * sorted[i].cycles / total : 0.0);
+}
+
+static void vm_prof_step(const ussr_bc_program_t *program,
+                         const ussr_bc_instruction_t *ins)
+{
+    unsigned long long now = __rdtsc();
+    vm_prof_t *op;
+
+    if (!vm_prof_registered)
+    {
+        vm_prof_registered = 1;
+        atexit(vm_prof_dump);
+    }
+    if (vm_prof_last_op != NULL)
+    {
+        vm_prof_last_op->cycles += now - vm_prof_t0;
+        if (vm_prof_last_name != NULL)
+            vm_prof_last_name->cycles += now - vm_prof_t0;
+    }
+    op = &vm_prof_ops[ins->opcode];
+    if (op->name == NULL)
+    {
+        static char labels[256][8];
+        sprintf(labels[ins->opcode], "op 0x%02x", (unsigned)ins->opcode);
+        op->name = labels[ins->opcode];
+    }
+    op->count++;
+    vm_prof_last_op = op;
+    vm_prof_last_name = NULL;
+    if (ins->opcode == USSR_BC_CALL && ins->immediate < program->function_count)
+        vm_prof_last_name = vm_prof_slot(program->functions[ins->immediate].name);
+    else if (ins->opcode == USSR_BC_OOP && ins->immediate < program->string_count)
+        vm_prof_last_name = vm_prof_slot(program->strings[ins->immediate]);
+    if (vm_prof_last_name != NULL)
+        vm_prof_last_name->count++;
+    vm_prof_t0 = __rdtsc();
+}
+#endif
+
 int vm_execute(
     ussr_vm_t *vm,
     const ussr_bc_program_t *program,
@@ -1567,6 +1676,9 @@ int vm_execute(
         if (vm->ip >= program->code_count) { result = -1; goto done; }
         if (++vm->steps > USSR_VM_MAX_STEPS) { fprintf(stderr, "USSR VM: execution step limit exceeded\n"); result = -1; goto done; }
         ins = program->code[vm->ip++];
+#ifdef USSR_PROFILE
+        vm_prof_step(program, &ins);
+#endif
 
         switch (ins.opcode)
         {
