@@ -1,1 +1,1 @@
-'Package{name=`kremlin`,version=`0.1.0`,description=`GUI desktop manager`,entry=`kremlin.su`,dependencies=[`petersburg`,`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`kremlin`,version=`0.1.0`,description=`Lightweight full-screen desktop: the folder ~/kremlin as icons, launchers, a panel with pins, a clock and a calendar`,entry=`kremlin.su`,dependencies=[`petersburg`,`library`],files=[`kremlin.su`,`README.md`,`CHANGELOG.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

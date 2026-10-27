@@ -1,0 +1,23 @@
+# Hex integer literals: 0x or 0X, then 1 to 16 hex digits in either case,
+# read as the 64-bit pattern (two's complement).
+set(a): 0xCAFEBABE
+print(_): a
+set(b): 0xdeadbeef
+print(_): b
+print(_): 0X1f
+print(_): 0x0
+print(_): 0x7FFFFFFFFFFFFFFF
+print(_): 0xFFFFFFFFFFFFFFFF
+print(_): 0x8000000000000000
+print(_): 0x00000000000000000000FF
+print(_): -0x10
+typeof(t): 0xA
+print(_): t
+# in expressions, next to decimal numbers and the bit operators
+print(_): {0xFF + 1}
+print(_): {0xCAFEBABE & 0xFFFF}
+print(_): {(0xDEADBEEF >> 16) = 0xDEAD}
+print(_): {0xF0 | 0x0F}
+print(_): {0x10 * 0x10 - 256}
+set(c): {0xDEADBEEF ^ 0xCAFEBABE}
+print(_): c

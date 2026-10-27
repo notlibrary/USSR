@@ -61,6 +61,8 @@ typedef struct petersburg_widget
     char *keyup_callback;
     char *focus_callback;
     char *wheel_callback;
+    char *menu_callback;
+    char *double_callback;
     int x;
     int y;
     int width;
@@ -84,6 +86,7 @@ typedef struct petersburg_widget
     size_t shape_count;
     size_t shape_capacity;
     unsigned long background;
+    int edge_to_edge; /* a fullscreen window: no margin around widgets */
     struct petersburg_widget *next;
 } petersburg_widget_t;
 
@@ -301,6 +304,40 @@ static void petersburg_queue_pointer(
     petersburg_queue(widget, widget->click_callback, 2, x, y, 0);
 }
 
+/* A second left press on the same canvas within this many seconds and
+ * pixels of the first is a double click. */
+#define PETERSBURG_DOUBLE_SECONDS 0.45
+#define PETERSBURG_DOUBLE_PIXELS 5
+static long petersburg_last_press_id;
+static double petersburg_last_press_time = -10.0;
+static int petersburg_last_press_x;
+static int petersburg_last_press_y;
+
+/* Left press on a canvas: "pointer" always, then "double" when it is the
+ * second press of a double click (a third press starts over). */
+static void petersburg_canvas_press(
+    petersburg_widget_t *widget,
+    int x,
+    int y,
+    double now
+)
+{
+    petersburg_queue_pointer(widget, x, y);
+    if (petersburg_last_press_id == widget->id &&
+        now - petersburg_last_press_time <= PETERSBURG_DOUBLE_SECONDS &&
+        abs(x - petersburg_last_press_x) <= PETERSBURG_DOUBLE_PIXELS &&
+        abs(y - petersburg_last_press_y) <= PETERSBURG_DOUBLE_PIXELS)
+    {
+        petersburg_queue(widget, widget->double_callback, 2, x, y, 0);
+        petersburg_last_press_time = -10.0;
+        return;
+    }
+    petersburg_last_press_id = widget->id;
+    petersburg_last_press_time = now;
+    petersburg_last_press_x = x;
+    petersburg_last_press_y = y;
+}
+
 static void petersburg_queue_key(
     petersburg_widget_t *window,
     int key
@@ -398,6 +435,39 @@ static unsigned char petersburg_glyph(char character, int row)
     return glyphs[index][row];
 }
 
+/* Bitmap text, each font pixel drawn as a scale x scale square. */
+static void petersburg_text_scaled(
+    float x,
+    float y,
+    const char *text,
+    float red,
+    float green,
+    float blue,
+    int max_width,
+    int scale
+)
+{
+    size_t i;
+    float k = (float)scale;
+    glColor3f(red, green, blue);
+    for (i = 0; text != NULL && text[i] != '\0' &&
+                (int)(i * 7) * scale < max_width; ++i)
+    {
+        int row;
+        for (row = 0; row < 7; ++row)
+        {
+            unsigned char bits = petersburg_glyph(text[i], row);
+            int column;
+            for (column = 0; column < 5; ++column)
+            {
+                if ((bits & (1u << (4 - column))) != 0)
+                    petersburg_rect(x + (float)(i * 7 + column) * k,
+                                    y + row * k, k, k);
+            }
+        }
+    }
+}
+
 static void petersburg_text(
     float x,
     float y,
@@ -408,24 +478,7 @@ static void petersburg_text(
     int max_width
 )
 {
-    size_t i;
-    glColor3f(red, green, blue);
-    for (i = 0; text != NULL && text[i] != '\0' &&
-                (int)(i * 7) < max_width; ++i)
-    {
-        int row;
-        for (row = 0; row < 7; ++row)
-        {
-            unsigned char bits = petersburg_glyph(text[i], row);
-            int column;
-            for (column = 0; column < 5; ++column)
-            {
-                if ((bits & (1u << (4 - column))) != 0)
-                    petersburg_rect(x + (float)(i * 7 + column),
-                                    y + row, 1.0f, 1.0f);
-            }
-        }
-    }
+    petersburg_text_scaled(x, y, text, red, green, blue, max_width, 1);
 }
 
 static void petersburg_layout_flow(petersburg_widget_t *window, int top)
@@ -442,7 +495,7 @@ static void petersburg_layout_flow(petersburg_widget_t *window, int top)
     int max_grid_row = -1;
     int has_grid = 0;
     int gap = 8;
-    int margin = 16;
+    int margin = window->edge_to_edge ? 0 : 16;
     int available;
     int extra;
     int y = top;
@@ -566,7 +619,7 @@ static void petersburg_layout_flow(petersburg_widget_t *window, int top)
 static void petersburg_layout(petersburg_widget_t *window)
 {
     petersburg_widget_t *widget;
-    int margin = 16;
+    int margin = window->edge_to_edge ? 0 : 16;
     int gap = 8;
     int top = margin;
 
@@ -828,12 +881,14 @@ static void petersburg_render_canvas(
                             (float)v[2], (float)v[3]);
             break;
         case PETERSBURG_SHAPE_TEXT:
-            petersburg_text((float)(ox + v[0]), (float)(oy + v[1]),
-                            shape->text,
-                            (float)((shape->color >> 16) & 255) / 255.0f,
-                            (float)((shape->color >> 8) & 255) / 255.0f,
-                            (float)(shape->color & 255) / 255.0f,
-                            canvas->width);
+            /* v[2] is the scale of canvastextscale, 0 for canvastext */
+            petersburg_text_scaled((float)(ox + v[0]), (float)(oy + v[1]),
+                                   shape->text,
+                                   (float)((shape->color >> 16) & 255) / 255.0f,
+                                   (float)((shape->color >> 8) & 255) / 255.0f,
+                                   (float)(shape->color & 255) / 255.0f,
+                                   canvas->width,
+                                   v[2] >= 1.0 ? (int)v[2] : 1);
             break;
         }
     }
@@ -1044,8 +1099,9 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
     double mouse_y;
     (void)modifiers;
 
-    if (window == NULL || button != GLFW_MOUSE_BUTTON_LEFT ||
-        action != GLFW_PRESS)
+    if (window == NULL || action != GLFW_PRESS ||
+        (button != GLFW_MOUSE_BUTTON_LEFT &&
+         button != GLFW_MOUSE_BUTTON_RIGHT))
         return;
     glfwGetCursorPos(native, &mouse_x, &mouse_y);
     {
@@ -1067,6 +1123,15 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             mouse_x < widget->x || mouse_x >= widget->x + widget->width ||
             mouse_y < widget->y || mouse_y >= widget->y + widget->height)
             continue;
+        if (button == GLFW_MOUSE_BUTTON_RIGHT)
+        {
+            /* only canvases take the right button: their "menu" event */
+            if (widget->type == PETERSBURG_CANVAS)
+                petersburg_queue(widget, widget->menu_callback, 2,
+                                 (long)(mouse_x - widget->x),
+                                 (long)(mouse_y - widget->y), 0);
+            return;
+        }
         if (widget->type == PETERSBURG_TEXTBOX ||
             widget->type == PETERSBURG_LIST)
             petersburg_focus = widget;
@@ -1122,9 +1187,10 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
                 }
         }
         else if (widget->type == PETERSBURG_CANVAS)
-            petersburg_queue_pointer(widget,
-                                     (int)(mouse_x - widget->x),
-                                     (int)(mouse_y - widget->y));
+            petersburg_canvas_press(widget,
+                                    (int)(mouse_x - widget->x),
+                                    (int)(mouse_y - widget->y),
+                                    glfwGetTime());
         else if (widget->type == PETERSBURG_IMAGE)
         {
             int local_x = (int)((mouse_x - widget->x) *
@@ -1394,6 +1460,8 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->keyup_callback);
     free(widget->focus_callback);
     free(widget->wheel_callback);
+    free(widget->menu_callback);
+    free(widget->double_callback);
     free(widget);
 }
 
@@ -1623,6 +1691,12 @@ static int petersburg_set_callback(
     else if (strcmp(event_name, "wheel") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         slot = &widget->wheel_callback;
+    else if (strcmp(event_name, "menu") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        slot = &widget->menu_callback;
+    else if (strcmp(event_name, "double") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        slot = &widget->double_callback;
     else if (strcmp(event_name, "key") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         slot = &widget->key_callback;
@@ -1635,7 +1709,7 @@ static int petersburg_set_callback(
     else
     {
         fprintf(stderr,
-                "USSR: Petersburg event must be click/change on a widget, pointer on an image or canvas, wheel on a canvas, or key/keyup/focus on a window\n");
+                "USSR: Petersburg event must be click/change on a widget, pointer on an image or canvas, wheel/menu/double on a canvas, or key/keyup/focus on a window\n");
         return -1;
     }
     copy = petersburg_strdup(callback);
@@ -1922,6 +1996,12 @@ static int petersburg_inject(
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->wheel_callback, 3, a, b,
                          c > 0 ? 1 : -1);
+    else if (strcmp(event_name, "menu") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        petersburg_queue(widget, widget->menu_callback, 2, a, b, 0);
+    else if (strcmp(event_name, "double") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        petersburg_queue(widget, widget->double_callback, 2, a, b, 0);
     else if (strcmp(event_name, "click") == 0 &&
              widget->type != PETERSBURG_WINDOW)
         petersburg_queue_event(widget, 0);
@@ -2048,6 +2128,44 @@ int ussr_petersburg_dispatch(
             return -1;
         }
         glfwMaximizeWindow(widget->native_window);
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_fullscreen") == 0)
+    {
+        /* A borderless window over the whole primary monitor; it stays an
+         * ordinary window, so programs started from it open on top. 1 when
+         * there is no monitor to cover and the window was maximized. */
+        GLFWmonitor *monitor;
+        const GLFWvidmode *mode;
+        int mx = 0;
+        int my = 0;
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_WINDOW)
+        {
+            fprintf(stderr, "USSR: petersburg_fullscreen expects a window handle\n");
+            return -1;
+        }
+        monitor = glfwGetPrimaryMonitor();
+        mode = monitor != NULL ? glfwGetVideoMode(monitor) : NULL;
+        if (mode == NULL)
+        {
+            glfwMaximizeWindow(widget->native_window);
+            *out = ussr_integer(1);
+            return 1;
+        }
+        glfwGetMonitorPos(monitor, &mx, &my);
+        widget->edge_to_edge = 1;
+        /* started minimized (a shortcut set so): the desktop must show */
+        glfwRestoreWindow(widget->native_window);
+        glfwSetWindowAttrib(widget->native_window, GLFW_DECORATED, GLFW_FALSE);
+        glfwSetWindowPos(widget->native_window, mx, my);
+        /* One row taller than the monitor: Windows still treats it as full
+         * screen (the taskbar hides), but an exact match is shown by
+         * independent flip, which screenshots and recorders read stale. */
+        glfwSetWindowSize(widget->native_window, mode->width, mode->height + 1);
         *out = ussr_integer(0);
         return 1;
     }
@@ -2410,6 +2528,29 @@ int ussr_petersburg_dispatch(
     if (strcmp(name, "petersburg_canvas_text") == 0)
         return petersburg_canvas_shape(name, PETERSBURG_SHAPE_TEXT, 2, 1,
                                        values, value_count, out);
+    if (strcmp(name, "petersburg_canvas_text_scaled") == 0)
+    {
+        /* canvas x y text color scale: text whose font pixels are scale
+         * pixels square; the scale is kept in the shape's v[2] */
+        long scale;
+        int status;
+        if (!petersburg_arity(name, value_count, 6) ||
+            !petersburg_expect_integer(values, 5, &scale) ||
+            scale < 1 || scale > 16)
+        {
+            fprintf(stderr,
+                    "USSR: %s expects canvas, x, y, text, color, scale 1..16\n",
+                    name);
+            return -1;
+        }
+        status = petersburg_canvas_shape(name, PETERSBURG_SHAPE_TEXT, 2, 1,
+                                         values, 5, out);
+        if (status > 0 && petersburg_expect_integer(values, 0, &id) &&
+            (widget = petersburg_find(id)) != NULL &&
+            widget->shape_count > 0)
+            widget->shapes[widget->shape_count - 1].v[2] = (double)scale;
+        return status;
+    }
     if (strcmp(name, "petersburg_canvas_count") == 0)
     {
         if (!petersburg_arity(name, value_count, 1) ||

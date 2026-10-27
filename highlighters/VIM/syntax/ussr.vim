@@ -39,6 +39,7 @@ syn region ussrUnoLiteral start=/'/ end=/'/ contains=ussrUnoString,ussrNumber,us
 " Numbers, booleans, null
 " ---------------------------------------------------------------
 syn match   ussrNumber  "\<\d\+\(\.\d\+\)\=\>"
+syn match   ussrNumber  "\<0[xX]\x\+\>"
 syn keyword ussrBoolean true false
 syn keyword ussrNull    null
 

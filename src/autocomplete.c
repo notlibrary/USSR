@@ -264,6 +264,8 @@ static const char *ac_builtin_commands[] =
     "eval",
     "getenv",
     "setenv",
+    "launch",
+    "localtime",
     "unsetenv",
     "typeof",
     "fail",

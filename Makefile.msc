@@ -50,7 +50,7 @@ LTCG    = /LTCG
 CFLAGS  = /nologo /W3 /Zi $(OPT) /DSTATIC_GETOPT /D_CRT_SECURE_NO_WARNINGS /DYY_NO_UNISTD_H /D_WIN32_WINNT=0x0600 /I$(SRC) /I$(WIN) $(PETERSBURG_CFLAGS)
 RCFLAGS = /nologo
 LDFLAGS = /nologo /Zi /Fe:ussr.exe
-LIBS    = user32.lib ws2_32.lib secur32.lib crypt32.lib ncrypt.lib advapi32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO $(LTCG)
+LIBS    = user32.lib ws2_32.lib secur32.lib crypt32.lib ncrypt.lib advapi32.lib shell32.lib $(PETERSBURG_LIBS) /link /MANIFEST:NO $(LTCG)
 
 TARGET  = ussr.exe
 

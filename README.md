@@ -63,11 +63,11 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin and Ryazan have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan and Kremlin have code so far):
 
 - kgb.su - Knowledge Giga Base, Markdown knowledge base manager
 - klin.su - GUI calculator, programmer, scientific and casual in one (working: `src/klin`)
-- kremlin.su - GUI desktop manager
+- kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
 - novgorod.su - HTTP forum script
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
 - siberia.su - office package, spreadsheet tables and document editor
@@ -100,6 +100,7 @@ build:
 ussr src/tver/tver.su [directory]     # Tver, two-panel file manager
 ussr src/tula/tula.su [drawing.dxf]   # Tula, 2D CAD and DXF viewer
 ussr src/klin/klin.su [sci|prog]      # Klin, calculator
+ussr src/kremlin/kremlin.su [--window] # Kremlin, desktop on ~/kremlin
 ```
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder

@@ -1,0 +1,3674 @@
+# kremlin.su - Kremlin, a lightweight full-screen desktop for USSR on one
+# Petersburg canvas. The desktop is a folder, ~/kremlin (C:\Users\<name>\kremlin
+# on Windows): its files and folders are icons, its .kl files are launchers
+# that start programs, and a panel at the bottom holds the KREMLIN menu,
+# pinned items, messages and a clock with a calendar.
+#
+#     ussr src/kremlin/kremlin.su [--window] [--detach] [folder]
+#     ussr src/kremlin/kremlin.su --autostart on|off
+#
+# The engine (paths, listing, launchers, settings, layout, keyboard
+# navigation, file operations, dates) works without a window and is what
+# tests/kremlin_test.su checks; the GUI draws everything on one canvas and
+# turns clicks and keys into the same actions.
+#
+# Public API:
+#   kremlinreset(r): root      -> the desktop folder root (created with a
+#                                 starter set of launchers when missing);
+#                                 loads root/.kremlin and lists root
+#   kremlinopen(r): dir        -> shows folder dir
+#   kremlinup(r):              -> back to the folder above (not above root)
+#   kremlinrefresh(r):         -> lists the folder again, keeping the selection
+#   kremlinitems(r):           -> the names shown, folders end with "/"
+#   kremlinselected(r):        -> the selected name, or ""
+#   kremlinselect(r): name     -> selects name; false when it is not shown
+#   kremlinnewfolder(r): name  -> "" or the reason it failed; the same for
+#   kremlinnewfile(r): name       an empty file, a launcher, a rename (old
+#   kremlinnewlauncher(r): name command console    is a listed name), a
+#   kremlinrename(r): old new     delete (folders only when empty) and a
+#   kremlindelete(r): name        copy next to the original
+#   kremlinduplicate(r): name
+#   kremlinpin(r): name / kremlinunpin(r): name -> panel pins, saved
+#   kremlinplan(r): name       -> what opening name does: [action target
+#                                 params hidden], action "folder", "launch"
+#                                 or "error"
+#   kremlinautostart(r): on    -> starts Kremlin at sign-in or stops it;
+#                                 returns a message
+#   kremlininitialize(canvas): window -> the canvas in window, drawn
+#   kremlindraw(r):            -> redraws the canvas
+#   kremlinclick/kremlindouble/kremlinmenu(r): x y -> canvas "pointer",
+#                                 "double" and "menu" callback bodies
+#   kremlinwheel(r): direction, kremlinkey(r): key, kremlinkeyup(r): key,
+#   kremlinfocus(r): focused   -> the other callback bodies
+#
+# Callbacks are separate processes, so the state lives in the hash
+# namespace: km_root km_dir km_items km_raw km_sel km_scroll (first column
+# shown), settings km_scale km_wall km_sort km_pins km_ussr km_source,
+# km_status km_status_time, the menu km_popup km_popup_x km_popup_y
+# km_popup_items km_popup_sel km_popup_target, the calendar km_cal_y
+# km_cal_m, the dialog km_dialog km_dlg_title km_dlg_text km_dlg_value
+# km_dlg_action km_dlg_arg km_dlg_error, keys km_shift km_ctrl km_alt
+# km_typed km_typed_time, and for the GUI km_window km_canvas km_hits
+# km_metrics km_bands km_bands_for km_clock_shown km_size_shown km_tick_gen
+# km_tick_count. km_dryrun records launches in km_launched instead of
+# starting programs (the tests).
+$once
+$include "../petersburg/petersburg.su"
+$include "../libs/strings.su"
+
+$define KM_KEY_SPACE 32
+$define KM_KEY_ESCAPE 256
+$define KM_KEY_ENTER 257
+$define KM_KEY_TAB 258
+$define KM_KEY_BACKSPACE 259
+$define KM_KEY_DELETE 261
+$define KM_KEY_RIGHT 262
+$define KM_KEY_LEFT 263
+$define KM_KEY_DOWN 264
+$define KM_KEY_UP 265
+$define KM_KEY_PAGE_UP 266
+$define KM_KEY_PAGE_DOWN 267
+$define KM_KEY_HOME 268
+$define KM_KEY_END 269
+$define KM_KEY_F1 290
+$define KM_KEY_F2 291
+$define KM_KEY_F5 294
+$define KM_KEY_F10 299
+$define KM_KEY_KP_ENTER 335
+$define KM_KEY_LSHIFT 340
+$define KM_KEY_LCTRL 341
+$define KM_KEY_LALT 342
+$define KM_KEY_LSUPER 343
+$define KM_KEY_RSHIFT 344
+$define KM_KEY_RCTRL 345
+$define KM_KEY_RALT 346
+$define KM_KEY_RSUPER 347
+$define KM_KEY_MENU 348
+
+$define KM_WIDTH 1024
+$define KM_HEIGHT 700
+$define KM_WALLS 5
+$define KM_PANEL 0x1C1D21
+$define KM_PANEL_LINE 0x3A3D44
+$define KM_BUTTON 0x2C2E34
+$define KM_START 0xB3261E
+$define KM_START_ON 0xD8402F
+$define KM_GOLD 0xF2C14E
+$define KM_TEXT 0xF0F0F0
+$define KM_DIM 0x9AA0A6
+$define KM_SHADOW 0x000000
+$define KM_SELECT 0x2D5A8C
+$define KM_SELECT_LINE 0x8DB4E2
+$define KM_MENU 0x2B2D31
+$define KM_MENU_LINE 0x50545C
+$define KM_MENU_SEP 0x44474E
+$define KM_HILITE 0x3D6FB6
+$define KM_FIELD 0x121316
+$define KM_ERROR 0xFF8A80
+$define KM_BAR 0x16171A
+$define KM_FOLDER 0xE9B949
+$define KM_FOLDER_TAB 0xC99A2E
+$define KM_FOLDER_LIP 0xF6D47F
+$define KM_PAGE 0xF2F2F2
+$define KM_PAGE_FOLD 0xBDBDBD
+$define KM_PAGE_LINE 0xB0B0B0
+$define KM_WINDOW 0x2B2F36
+$define KM_PROMPT 0x7CD67C
+$define KM_WHITE 0xFFFFFF
+
+# --- text -------------------------------------------------------------------
+
+km_div(r): a b [
+    str_trunc(r): {a / b}
+]
+
+km_min(r): a b [
+    set(r): a
+    if(_): {b < a} [ set(r): b ]
+]
+
+km_max(r): a b [
+    set(r): a
+    if(_): {b > a} [ set(r): b ]
+]
+
+km_quote(r): s [
+    chr(_kqu_q): 34
+    concat(r): _kqu_q s _kqu_q
+]
+
+# s with every backslash turned into "/".
+km_slashes(r): s [
+    set(r): ""
+    len(_ksl_n): s
+    set(_ksl_from): 0
+    set(_ksl_i): 0
+    while(_): {_ksl_i < _ksl_n} [
+        byte(_ksl_b): s _ksl_i
+        if(_): {_ksl_b = 92} [
+            slice(_ksl_part): s _ksl_from {_ksl_i - _ksl_from}
+            concat(r): r _ksl_part "/"
+            set(_ksl_from): {_ksl_i + 1}
+        ]
+        set(_ksl_i): {_ksl_i + 1}
+    ]
+    slice(_ksl_part): s _ksl_from {_ksl_n - _ksl_from}
+    concat(r): r _ksl_part
+]
+
+# s with every "/" turned into a backslash (paths for Windows programs).
+km_backslashes(r): s [
+    set(r): ""
+    chr(_kbs_bs): 92
+    len(_kbs_n): s
+    set(_kbs_from): 0
+    set(_kbs_i): 0
+    while(_): {_kbs_i < _kbs_n} [
+        byte(_kbs_b): s _kbs_i
+        if(_): {_kbs_b = 47} [
+            slice(_kbs_part): s _kbs_from {_kbs_i - _kbs_from}
+            concat(r): r _kbs_part _kbs_bs
+            set(_kbs_from): {_kbs_i + 1}
+        ]
+        set(_kbs_i): {_kbs_i + 1}
+    ]
+    slice(_kbs_part): s _kbs_from {_kbs_n - _kbs_from}
+    concat(r): r _kbs_part
+]
+
+# Index of the last byte b in s, or -1.
+km_last_byte(r): s b [
+    len(_klb_i): s
+    set(_klb_i): {_klb_i - 1}
+    set(r): {0 - 1}
+    while(_): {_klb_i >= 0 && r < 0} [
+        byte(_klb_c): s _klb_i
+        if(_): {_klb_c = b} [ set(r): _klb_i ]
+        set(_klb_i): {_klb_i - 1}
+    ]
+]
+
+km_starts_with(r): s head [
+    len(_ksw_n): s
+    len(_ksw_h): head
+    set(r): false
+    if(_): {_ksw_h <= _ksw_n} [
+        slice(_ksw_s): s 0 _ksw_h
+        set(r): {_ksw_s = head}
+    ]
+]
+
+km_ends_with(r): s tail [
+    len(_kew_n): s
+    len(_kew_t): tail
+    set(r): false
+    if(_): {_kew_t <= _kew_n} [
+        slice(_kew_e): s {_kew_n - _kew_t} _kew_t
+        set(r): {_kew_e = tail}
+    ]
+]
+
+# word is one of the blank-separated words of list.
+km_in(r): word list [
+    concat(_kin_w): " " word " "
+    concat(_kin_l): " " list " "
+    str_find(_kin_i): _kin_l _kin_w 0
+    set(r): {_kin_i >= 0 && word != ""}
+]
+
+# Parts of s between the bytes sep, as a vector (empty parts kept).
+km_split(r): s sep [
+    vec(r): ""
+    len(_ksp_n): s
+    set(_ksp_from): 0
+    set(_ksp_i): 0
+    while(_): {_ksp_i <= _ksp_n} [
+        set(_ksp_b): sep
+        if(_): {_ksp_i < _ksp_n} [ byte(_ksp_b): s _ksp_i ]
+        if(_): {_ksp_b = sep} [
+            slice(_ksp_part): s _ksp_from {_ksp_i - _ksp_from}
+            push(_): r _ksp_part
+            set(_ksp_from): {_ksp_i + 1}
+        ]
+        set(_ksp_i): {_ksp_i + 1}
+    ]
+]
+
+# Lines of text without their LF or CRLF.
+km_lines(r): text [
+    km_split(_kln_parts): text 10
+    vec(r): ""
+    len(_kln_n): _kln_parts
+    set(_kln_i): 0
+    while(_): {_kln_i < _kln_n} [
+        at(_kln_l): _kln_parts _kln_i
+        len(_kln_ln): _kln_l
+        if(_): {_kln_ln > 0} [
+            byte(_kln_last): _kln_l {_kln_ln - 1}
+            if(_): {_kln_last = 13} [ slice(_kln_l): _kln_l 0 {_kln_ln - 1} ]
+        ]
+        push(_): r _kln_l
+        set(_kln_i): {_kln_i + 1}
+    ]
+]
+
+km_words(r): line [
+    vec(r): ""
+    km_split(_kwo_parts): line 32
+    len(_kwo_n): _kwo_parts
+    set(_kwo_i): 0
+    while(_): {_kwo_i < _kwo_n} [
+        at(_kwo_w): _kwo_parts _kwo_i
+        if(_): {_kwo_w != ""} [ push(_): r _kwo_w ]
+        set(_kwo_i): {_kwo_i + 1}
+    ]
+]
+
+# text cut to at most max characters, ending in ".." when cut.
+km_fit(r): text max [
+    len(_kft_n): text
+    set(r): text
+    if(_): {_kft_n > max} [
+        if(_): {max > 2} [
+            slice(_kft_s): text 0 {max - 2}
+            concat(r): _kft_s ".."
+        ]
+        else(_): [ slice(r): text 0 max ]
+    ]
+]
+
+# The last max characters of text, starting with ".." when cut.
+km_tail(r): text max [
+    len(_ktl_n): text
+    set(r): text
+    if(_): {_ktl_n > max && max > 2} [
+        slice(_ktl_s): text {_ktl_n - max + 2} {max - 2}
+        concat(r): ".." _ktl_s
+    ]
+]
+
+# An icon label in at most two lines of max characters: the first breaks
+# after a blank, "-", "_" or "." when there is one in its second half.
+km_wrap_label(r): text max [
+    vec(r): ""
+    len(_kwl_n): text
+    if(_): {_kwl_n <= max} [
+        push(_): r text
+    ]
+    else(_): [
+        set(_kwl_cut): max
+        set(_kwl_p): max
+        set(_kwl_found): false
+        while(_): {_kwl_found = false && _kwl_p * 2 > max} [
+            byte(_kwl_b): text {_kwl_p - 1}
+            if(_): {_kwl_b = 32 || _kwl_b = 45 || _kwl_b = 95 || _kwl_b = 46} [
+                set(_kwl_found): true
+                set(_kwl_cut): _kwl_p
+            ]
+            set(_kwl_p): {_kwl_p - 1}
+        ]
+        slice(_kwl_first): text 0 _kwl_cut
+        str_trim(_kwl_first): _kwl_first
+        slice(_kwl_rest): text _kwl_cut {_kwl_n - _kwl_cut}
+        str_trim(_kwl_rest): _kwl_rest
+        km_fit(_kwl_rest): _kwl_rest max
+        push(_): r _kwl_first
+        push(_): r _kwl_rest
+    ]
+]
+
+# Paragraphs of text (split at LF) wrapped at blanks to lines of at most
+# max characters; longer words are cut.
+km_wrap_text(r): text max [
+    vec(r): ""
+    km_lines(_kwt_paras): text
+    len(_kwt_pn): _kwt_paras
+    set(_kwt_p): 0
+    while(_): {_kwt_p < _kwt_pn} [
+        at(_kwt_para): _kwt_paras _kwt_p
+        km_words(_kwt_words): _kwt_para
+        len(_kwt_wn): _kwt_words
+        set(_kwt_line): ""
+        if(_): {_kwt_wn = 0} [ push(_): r "" ]
+        set(_kwt_i): 0
+        while(_): {_kwt_i < _kwt_wn} [
+            at(_kwt_w): _kwt_words _kwt_i
+            km_fit(_kwt_w): _kwt_w max
+            len(_kwt_ll): _kwt_line
+            len(_kwt_wl): _kwt_w
+            if(_): {_kwt_line = ""} [ set(_kwt_line): _kwt_w ]
+            elif(_): {_kwt_ll + 1 + _kwt_wl <= max} [ concat(_kwt_line): _kwt_line " " _kwt_w ]
+            else(_): [
+                push(_): r _kwt_line
+                set(_kwt_line): _kwt_w
+            ]
+            set(_kwt_i): {_kwt_i + 1}
+        ]
+        if(_): {_kwt_line != ""} [ push(_): r _kwt_line ]
+        set(_kwt_p): {_kwt_p + 1}
+    ]
+]
+
+# Text the bitmap font can draw: Cyrillic letters (UTF-8) in Latin
+# transliteration, any other non-ASCII character as "?".
+km_display(r): s [
+    len(_kdy_n): s
+    set(_kdy_i): 0
+    set(_kdy_plain): true
+    while(_): {_kdy_i < _kdy_n && _kdy_plain} [
+        byte(_kdy_b): s _kdy_i
+        if(_): {_kdy_b >= 128} [ set(_kdy_plain): false ]
+        set(_kdy_i): {_kdy_i + 1}
+    ]
+    set(r): s
+    if(_): {_kdy_plain = false} [
+        km_words(_kdy_tab): "A B V G D E ZH Z I Y K L M N O P R S T U F KH TS CH SH SHCH ' Y ' E YU YA"
+        set(r): ""
+        set(_kdy_i): 0
+        while(_): {_kdy_i < _kdy_n} [
+            byte(_kdy_b): s _kdy_i
+            set(_kdy_i): {_kdy_i + 1}
+            if(_): {_kdy_b < 128} [
+                chr(_kdy_c): _kdy_b
+                concat(r): r _kdy_c
+            ]
+            else(_): [
+                set(_kdy_cp): 0
+                if(_): {(_kdy_b = 208 || _kdy_b = 209) && _kdy_i < _kdy_n} [
+                    byte(_kdy_b2): s _kdy_i
+                    set(_kdy_cp): {((_kdy_b & 31) << 6) | (_kdy_b2 & 63)}
+                ]
+                if(_): {_kdy_cp >= 1040 && _kdy_cp <= 1103} [
+                    at(_kdy_t): _kdy_tab {(_kdy_cp - 1040) % 32}
+                    # the hard and soft signs have no letter of their own
+                    if(_): {_kdy_t != "'"} [ concat(r): r _kdy_t ]
+                ]
+                elif(_): {_kdy_cp = 1025 || _kdy_cp = 1105} [ concat(r): r "YO" ]
+                else(_): [ concat(r): r "?" ]
+                # skip the rest of this character
+                set(_kdy_more): true
+                while(_): {_kdy_more && _kdy_i < _kdy_n} [
+                    byte(_kdy_b2): s _kdy_i
+                    set(_kdy_more): {_kdy_b2 >= 128 && _kdy_b2 < 192}
+                    if(_): _kdy_more [ set(_kdy_i): {_kdy_i + 1} ]
+                ]
+            ]
+        ]
+    ]
+]
+
+km_two(r): n [
+    str_from_int(r): n
+    if(_): {n < 10} [ concat(r): "0" r ]
+]
+
+# --- paths ------------------------------------------------------------------
+
+km_windows(r): [
+    getenv(_kwi_os): "OS"
+    set(r): {_kwi_os = "Windows_NT"}
+]
+
+# The user's home folder with "/" separators.
+km_home(r): [
+    km_windows(_kho_win):
+    set(_kho_h): null
+    if(_): _kho_win [ getenv(_kho_h): "USERPROFILE" ]
+    if(_): {_kho_h = null} [ getenv(_kho_h): "HOME" ]
+    if(_): {_kho_h = null} [ getcwd(_kho_h): ]
+    km_slashes(r): _kho_h
+    km_strip_slash(r): r
+]
+
+# ~/kremlin (C:/Users/<name>/kremlin on Windows).
+km_default_root(r): [
+    km_home(_kdr_h):
+    km_join(r): _kdr_h "kremlin"
+]
+
+km_is_dir_name(r): name [
+    km_ends_with(r): name "/"
+]
+
+# name without a trailing "/" (list_dir marks folders with one); "C:/" and
+# "/" keep theirs.
+km_strip_slash(r): name [
+    set(r): name
+    km_ends_with(_kss_d): name "/"
+    len(_kss_n): name
+    if(_): {_kss_d && _kss_n > 1} [
+        slice(r): name 0 {_kss_n - 1}
+        if(_): {_kss_n = 3} [
+            byte(_kss_b): name 1
+            if(_): {_kss_b = 58} [ set(r): name ]
+        ]
+    ]
+]
+
+km_join(r): dir name [
+    km_ends_with(_kj_s): dir "/"
+    if(_): _kj_s [ concat(r): dir name ]
+    else(_): [ concat(r): dir "/" name ]
+]
+
+# The folder holding path: "C:/a/b" -> "C:/a", "C:/a" -> "C:/", "/a" -> "/".
+km_parent(r): path [
+    km_strip_slash(_kpa_p): path
+    km_last_byte(_kpa_i): _kpa_p 47
+    set(r): _kpa_p
+    if(_): {_kpa_i = 0} [ set(r): "/" ]
+    elif(_): {_kpa_i > 0} [
+        slice(r): _kpa_p 0 _kpa_i
+        len(_kpa_n): r
+        if(_): {_kpa_n = 2} [
+            byte(_kpa_b): r 1
+            if(_): {_kpa_b = 58} [ concat(r): r "/" ]
+        ]
+    ]
+]
+
+# Last part of a path, without a trailing "/".
+km_base(r): path [
+    km_strip_slash(_kba_p): path
+    km_last_byte(_kba_i): _kba_p 47
+    len(_kba_n): _kba_p
+    slice(r): _kba_p {_kba_i + 1} {_kba_n - _kba_i - 1}
+]
+
+km_is_absolute(r): path [
+    set(r): false
+    len(_kab_n): path
+    if(_): {_kab_n > 0} [
+        byte(_kab_b): path 0
+        if(_): {_kab_b = 47} [ set(r): true ]
+    ]
+    if(_): {_kab_n > 1} [
+        byte(_kab_b): path 1
+        if(_): {_kab_b = 58} [ set(r): true ]
+    ]
+]
+
+# Lower-case extension of a file name without the dot; "" for folders and
+# names without one (".profile" has none).
+km_ext(r): name [
+    set(r): ""
+    km_is_dir_name(_ke_d): name
+    if(_): {_ke_d = false} [
+        km_last_byte(_ke_i): name 46
+        km_last_byte(_ke_s): name 47
+        if(_): {_ke_i > 0 && _ke_i > _ke_s + 1} [
+            len(_ke_n): name
+            slice(_ke_e): name {_ke_i + 1} {_ke_n - _ke_i - 1}
+            str_lower(r): _ke_e
+        ]
+    ]
+]
+
+# --- kinds, labels and the listing ------------------------------------------
+
+# What a listed name is: folder launcher program code text document image
+# audio video archive web, or file.
+km_kind(r): name [
+    km_is_dir_name(_kk_dir): name
+    km_ext(_kk_e): name
+    set(r): "file"
+    if(_): _kk_dir [ set(r): "folder" ]
+    elif(_): {_kk_e = "kl"} [ set(r): "launcher" ]
+    elif(_): {_kk_e != ""} [
+        km_in(_kk_t): _kk_e "exe msi com bat cmd lnk appimage app sh ps1 run"
+        if(_): _kk_t [ set(r): "program" ]
+        km_in(_kk_t): _kk_e "su ua ru c h cpp hpp py js ts go rs java lua pl rb asm"
+        if(_): _kk_t [ set(r): "code" ]
+        km_in(_kk_t): _kk_e "txt md log ini cfg conf json xml csv yaml yml uno toml"
+        if(_): _kk_t [ set(r): "text" ]
+        km_in(_kk_t): _kk_e "png jpg jpeg gif bmp ppm pgm svg webp ico tif tiff"
+        if(_): _kk_t [ set(r): "image" ]
+        km_in(_kk_t): _kk_e "pdf doc docx odt rtf xls xlsx ods ppt pptx odp dxf epub"
+        if(_): _kk_t [ set(r): "document" ]
+        km_in(_kk_t): _kk_e "mp3 wav ogg flac m4a aac opus mid"
+        if(_): _kk_t [ set(r): "audio" ]
+        km_in(_kk_t): _kk_e "mp4 mkv avi mov webm wmv m4v"
+        if(_): _kk_t [ set(r): "video" ]
+        km_in(_kk_t): _kk_e "zip 7z rar tar gz tgz xz bz2 zst cab iso"
+        if(_): _kk_t [ set(r): "archive" ]
+        km_in(_kk_t): _kk_e "html htm url webloc"
+        if(_): _kk_t [ set(r): "web" ]
+    ]
+]
+
+# The name an icon shows: no trailing "/", launchers without ".kl".
+km_label(r): name [
+    km_strip_slash(r): name
+    km_ext(_kla_e): name
+    if(_): {_kla_e = "kl"} [
+        len(_kla_n): r
+        if(_): {_kla_n > 3} [ slice(r): r 0 {_kla_n - 3} ]
+    ]
+]
+
+# Names the desktop never shows: dot files and the system's folder files.
+km_hidden(r): name [
+    set(r): true
+    len(_khi_n): name
+    if(_): {_khi_n > 0} [
+        byte(_khi_b): name 0
+        str_lower(_khi_l): name
+        set(r): {_khi_b = 46 || _khi_l = "desktop.ini" || _khi_l = "thumbs.db"}
+    ]
+]
+
+# The names in dir the desktop shows, folders first; sort "type" also
+# groups the files by kind. null when dir cannot be read.
+km_listing(r): dir sort [
+    list_dir(_kli_all): dir
+    typeof(_kli_t): _kli_all
+    set(r): null
+    if(_): {_kli_t = "vector"} [
+        vec(_kli_names): ""
+        vec(_kli_kinds): ""
+        len(_kli_n): _kli_all
+        set(_kli_i): 0
+        while(_): {_kli_i < _kli_n} [
+            at(_kli_name): _kli_all _kli_i
+            km_hidden(_kli_h): _kli_name
+            if(_): {_kli_h = false} [
+                km_kind(_kli_k): _kli_name
+                push(_): _kli_names _kli_name
+                push(_): _kli_kinds _kli_k
+            ]
+            set(_kli_i): {_kli_i + 1}
+        ]
+        set(_kli_order): "folder other"
+        if(_): {sort = "type"} [
+            set(_kli_order): "folder launcher program code text document image audio video archive web file"
+        ]
+        km_words(_kli_passes): _kli_order
+        len(_kli_pn): _kli_passes
+        len(_kli_n): _kli_names
+        vec(r): ""
+        set(_kli_p): 0
+        while(_): {_kli_p < _kli_pn} [
+            at(_kli_pass): _kli_passes _kli_p
+            set(_kli_i): 0
+            while(_): {_kli_i < _kli_n} [
+                at(_kli_k): _kli_kinds _kli_i
+                set(_kli_take): {_kli_k = _kli_pass}
+                if(_): {_kli_pass = "other" && _kli_k != "folder"} [ set(_kli_take): true ]
+                if(_): _kli_take [
+                    at(_kli_name): _kli_names _kli_i
+                    push(_): r _kli_name
+                ]
+                set(_kli_i): {_kli_i + 1}
+            ]
+            set(_kli_p): {_kli_p + 1}
+        ]
+    ]
+]
+
+# list_dir of dir as one string, to notice changes cheaply.
+km_raw_listing(r): dir [
+    list_dir(_krl_all): dir
+    typeof(_krl_t): _krl_all
+    set(r): ""
+    if(_): {_krl_t = "vector"} [
+        len(_krl_n): _krl_all
+        set(_krl_i): 0
+        while(_): {_krl_i < _krl_n} [
+            at(_krl_name): _krl_all _krl_i
+            concat(r): r _krl_name "|"
+            set(_krl_i): {_krl_i + 1}
+        ]
+    ]
+]
+
+# --- dates ------------------------------------------------------------------
+
+km_leap(r): y [
+    set(r): {(y % 4 = 0 && y % 100 != 0) || y % 400 = 0}
+]
+
+km_month_days(r): y m [
+    set(r): 31
+    if(_): {m = 4 || m = 6 || m = 9 || m = 11} [ set(r): 30 ]
+    if(_): {m = 2} [
+        km_leap(_kmd_l): y
+        set(r): 28
+        if(_): _kmd_l [ set(r): 29 ]
+    ]
+]
+
+# Day of the week of y-m-d: 0 Sunday .. 6 Saturday (Sakamoto's method).
+km_weekday(r): y m d [
+    byte(_kwd_t): "032503514624" {m - 1}
+    set(_kwd_y): y
+    if(_): {m < 3} [ set(_kwd_y): {y - 1} ]
+    km_div(_kwd_a): _kwd_y 4
+    km_div(_kwd_b): _kwd_y 100
+    km_div(_kwd_c): _kwd_y 400
+    set(r): {(_kwd_y + _kwd_a - _kwd_b + _kwd_c + _kwd_t - 48 + d) % 7}
+]
+
+km_month_name(r): m [
+    slice(r): "JanFebMarAprMayJunJulAugSepOctNovDec" {(m - 1) * 3} 3
+]
+
+km_month_long(r): m [
+    km_words(_kml_w): "January February March April May June July August September October November December"
+    at(r): _kml_w {m - 1}
+]
+
+km_day_name(r): wd [
+    slice(r): "SunMonTueWedThuFriSat" {wd * 3} 3
+]
+
+# "10:47" from a localtime vector.
+km_clock_text(r): t [
+    at(_kct_h): t 3
+    at(_kct_m): t 4
+    km_two(_kct_hs): _kct_h
+    km_two(_kct_ms): _kct_m
+    concat(r): _kct_hs ":" _kct_ms
+]
+
+# "Tue 27 Oct" from a localtime vector.
+km_date_text(r): t [
+    at(_kdt_d): t 2
+    at(_kdt_m): t 1
+    at(_kdt_w): t 6
+    km_day_name(_kdt_dn): _kdt_w
+    km_month_name(_kdt_mn): _kdt_m
+    str_from_int(_kdt_ds): _kdt_d
+    concat(r): _kdt_dn " " _kdt_ds " " _kdt_mn
+]
+
+# The 42 cells of a month page, weeks starting on Monday: day numbers, 0
+# for the cells before the 1st and after the last day.
+km_calendar(r): y m [
+    km_weekday(_kca_first): y m 1
+    set(_kca_offset): {(_kca_first + 6) % 7}
+    km_month_days(_kca_days): y m
+    vec(r): ""
+    set(_kca_i): 0
+    while(_): {_kca_i < 42} [
+        set(_kca_d): {_kca_i - _kca_offset + 1}
+        if(_): {_kca_d < 1 || _kca_d > _kca_days} [ set(_kca_d): 0 ]
+        push(_): r _kca_d
+        set(_kca_i): {_kca_i + 1}
+    ]
+]
+
+# --- settings ---------------------------------------------------------------
+
+km_config_defaults(r): [
+    set(km_scale): 0!
+    set(km_wall): 0!
+    set(km_sort): "name"!
+    vec(_kcd_p): ""
+    set(km_pins): _kcd_p!
+    set(km_ussr): "ussr"!
+    set(km_source): ""!
+    set(r): 0
+]
+
+# Applies the key=value lines of a settings file; unknown keys, comments
+# and bad values are skipped.
+km_config_apply(r): text [
+    km_lines(_kcf_lines): text
+    len(_kcf_n): _kcf_lines
+    set(_kcf_i): 0
+    while(_): {_kcf_i < _kcf_n} [
+        at(_kcf_line): _kcf_lines _kcf_i
+        str_trim(_kcf_line): _kcf_line
+        str_find(_kcf_eq): _kcf_line "=" 0
+        km_starts_with(_kcf_comment): _kcf_line "#"
+        if(_): {_kcf_eq > 0 && _kcf_comment = false} [
+            slice(_kcf_key): _kcf_line 0 _kcf_eq
+            str_trim(_kcf_key): _kcf_key
+            str_lower(_kcf_key): _kcf_key
+            len(_kcf_ln): _kcf_line
+            slice(_kcf_val): _kcf_line {_kcf_eq + 1} {_kcf_ln - _kcf_eq - 1}
+            str_trim(_kcf_val): _kcf_val
+            str_to_number(_kcf_num): _kcf_val
+            typeof(_kcf_nt): _kcf_num
+            set(_kcf_int): {_kcf_nt = "integer"}
+            if(_): {_kcf_key = "scale" && _kcf_int} [
+                if(_): {_kcf_num >= 0 && _kcf_num <= 4} [ set(km_scale): _kcf_num! ]
+            ]
+            elif(_): {_kcf_key = "wallpaper" && _kcf_int} [
+                if(_): {_kcf_num >= 0 && _kcf_num < KM_WALLS} [ set(km_wall): _kcf_num! ]
+            ]
+            elif(_): {_kcf_key = "sort"} [
+                if(_): {_kcf_val = "name" || _kcf_val = "type"} [ set(km_sort): _kcf_val! ]
+            ]
+            elif(_): {_kcf_key = "pins"} [
+                km_split(_kcf_parts): _kcf_val 124
+                vec(_kcf_pins): ""
+                len(_kcf_pn): _kcf_parts
+                set(_kcf_j): 0
+                while(_): {_kcf_j < _kcf_pn} [
+                    at(_kcf_pin): _kcf_parts _kcf_j
+                    str_trim(_kcf_pin): _kcf_pin
+                    if(_): {_kcf_pin != ""} [ push(_): _kcf_pins _kcf_pin ]
+                    set(_kcf_j): {_kcf_j + 1}
+                ]
+                set(km_pins): _kcf_pins!
+            ]
+            elif(_): {_kcf_key = "ussr" && _kcf_val != ""} [ set(km_ussr): _kcf_val! ]
+            elif(_): {_kcf_key = "source"} [ set(km_source): _kcf_val! ]
+        ]
+        set(_kcf_i): {_kcf_i + 1}
+    ]
+    set(r): 0
+]
+
+km_config_text(r): [
+    set(r): "# Kremlin desktop settings (key=value; the desktop rewrites this file)\n"
+    set(_kct_v): km_scale?
+    str_from_int(_kct_s): _kct_v
+    concat(r): r "# scale: 0 automatic, 1 to 4 text and icon size\nscale=" _kct_s "\n"
+    set(_kct_v): km_wall?
+    str_from_int(_kct_s): _kct_v
+    concat(r): r "wallpaper=" _kct_s "\n"
+    set(_kct_v): km_sort?
+    concat(r): r "sort=" _kct_v "\n"
+    set(_kct_pins): km_pins?
+    len(_kct_n): _kct_pins
+    set(_kct_s): ""
+    set(_kct_i): 0
+    while(_): {_kct_i < _kct_n} [
+        at(_kct_p): _kct_pins _kct_i
+        if(_): {_kct_i > 0} [ concat(_kct_s): _kct_s "|" ]
+        concat(_kct_s): _kct_s _kct_p
+        set(_kct_i): {_kct_i + 1}
+    ]
+    concat(r): r "# pins: panel items, paths from this folder, separated by |\npins=" _kct_s "\n"
+    set(_kct_v): km_ussr?
+    concat(r): r "# the interpreter and USSR's src folder, for launchers and autostart\nussr=" _kct_v "\n"
+    set(_kct_v): km_source?
+    concat(r): r "source=" _kct_v "\n"
+]
+
+km_config_path(r): [
+    set(_kcp_root): km_root?
+    km_join(r): _kcp_root ".kremlin"
+]
+
+km_save_config(r): [
+    km_config_path(_ksc_path):
+    km_config_text(_ksc_text):
+    writefile(r): _ksc_path _ksc_text
+]
+
+km_load_config(r): [
+    km_config_path(_klc_path):
+    file_exists(_klc_e): _klc_path
+    set(r): false
+    if(_): _klc_e [
+        readfile(_klc_text): _klc_path
+        km_config_apply(_): _klc_text
+        set(r): true
+    ]
+]
+
+# Finds USSR's src folder and interpreter: USSR_HOME, else the working
+# directory when it is the repository root or src/kremlin.
+km_detect(r): [
+    set(r): false
+    set(_kde_repo): ""
+    getenv(_kde_home): "USSR_HOME"
+    if(_): {_kde_home != null} [
+        km_slashes(_kde_home): _kde_home
+        km_strip_slash(_kde_home): _kde_home
+        km_join(_kde_probe): _kde_home "src/kremlin/kremlin.su"
+        file_exists(_kde_ok): _kde_probe
+        if(_): _kde_ok [ set(_kde_repo): _kde_home ]
+    ]
+    if(_): {_kde_repo = ""} [
+        getcwd(_kde_cwd):
+        km_slashes(_kde_cwd): _kde_cwd
+        km_strip_slash(_kde_cwd): _kde_cwd
+        km_join(_kde_probe): _kde_cwd "src/kremlin/kremlin.su"
+        file_exists(_kde_ok): _kde_probe
+        if(_): _kde_ok [ set(_kde_repo): _kde_cwd ]
+        else(_): [
+            km_join(_kde_probe): _kde_cwd "kremlin.su"
+            km_base(_kde_b): _kde_cwd
+            file_exists(_kde_ok): _kde_probe
+            if(_): {_kde_ok && _kde_b = "kremlin"} [
+                km_parent(_kde_src): _kde_cwd
+                km_parent(_kde_repo): _kde_src
+            ]
+        ]
+    ]
+    if(_): {_kde_repo != ""} [
+        km_join(_kde_src): _kde_repo "src"
+        set(km_source): _kde_src!
+        km_windows(_kde_win):
+        km_join(_kde_exe): _kde_repo "ussr"
+        if(_): _kde_win [ concat(_kde_exe): _kde_exe ".exe" ]
+        file_exists(_kde_ok): _kde_exe
+        is_dir(_kde_isdir): _kde_exe
+        if(_): {_kde_ok && _kde_isdir = 0} [ set(km_ussr): _kde_exe! ]
+        set(r): true
+    ]
+]
+
+# --- launchers --------------------------------------------------------------
+
+# A launcher's text -> [name command console]. Lines are "name: ...",
+# "command: ..." and "console: yes|no"; a line that is none of these is the
+# command when there is no other.
+km_launcher_parse(r): text [
+    km_lines(_klp_lines): text
+    set(_klp_name): ""
+    set(_klp_cmd): ""
+    set(_klp_console): true
+    len(_klp_n): _klp_lines
+    set(_klp_i): 0
+    while(_): {_klp_i < _klp_n} [
+        at(_klp_line): _klp_lines _klp_i
+        str_trim(_klp_line): _klp_line
+        km_starts_with(_klp_comment): _klp_line "#"
+        if(_): {_klp_line != "" && _klp_comment = false} [
+            str_find(_klp_colon): _klp_line ":" 0
+            set(_klp_key): ""
+            if(_): {_klp_colon > 0} [
+                slice(_klp_key): _klp_line 0 _klp_colon
+                str_trim(_klp_key): _klp_key
+                str_lower(_klp_key): _klp_key
+                len(_klp_ln): _klp_line
+                slice(_klp_val): _klp_line {_klp_colon + 1} {_klp_ln - _klp_colon - 1}
+                str_trim(_klp_val): _klp_val
+            ]
+            if(_): {_klp_key = "name"} [ set(_klp_name): _klp_val ]
+            elif(_): {_klp_key = "command"} [ set(_klp_cmd): _klp_val ]
+            elif(_): {_klp_key = "console"} [
+                str_lower(_klp_v): _klp_val
+                set(_klp_console): {_klp_v != "no" && _klp_v != "false" && _klp_v != "0"}
+            ]
+            elif(_): {_klp_cmd = ""} [ set(_klp_cmd): _klp_line ]
+        ]
+        set(_klp_i): {_klp_i + 1}
+    ]
+    vec(r): ""
+    push(_): r _klp_name
+    push(_): r _klp_cmd
+    push(_): r _klp_console
+]
+
+km_launcher_text(r): name command console [
+    set(_klt_c): "no"
+    if(_): console [ set(_klt_c): "yes" ]
+    concat(r): "# Kremlin launcher: double-click it on the desktop to run the command\nname: " name "\ncommand: " command "\nconsole: " _klt_c "\n"
+]
+
+# A command line -> [program params]; a program with blanks is quoted.
+km_split_command(r): line [
+    str_trim(_kcm_l): line
+    len(_kcm_n): _kcm_l
+    set(_kcm_prog): _kcm_l
+    set(_kcm_rest): ""
+    if(_): {_kcm_n > 0} [
+        byte(_kcm_b): _kcm_l 0
+        if(_): {_kcm_b = 34} [
+            chr(_kcm_q): 34
+            str_find(_kcm_end): _kcm_l _kcm_q 1
+            if(_): {_kcm_end < 0} [
+                slice(_kcm_prog): _kcm_l 1 {_kcm_n - 1}
+            ]
+            else(_): [
+                slice(_kcm_prog): _kcm_l 1 {_kcm_end - 1}
+                slice(_kcm_rest): _kcm_l {_kcm_end + 1} {_kcm_n - _kcm_end - 1}
+            ]
+        ]
+        else(_): [
+            str_find(_kcm_sp): _kcm_l " " 0
+            if(_): {_kcm_sp >= 0} [
+                slice(_kcm_prog): _kcm_l 0 _kcm_sp
+                slice(_kcm_rest): _kcm_l {_kcm_sp + 1} {_kcm_n - _kcm_sp - 1}
+            ]
+        ]
+    ]
+    str_trim(_kcm_rest): _kcm_rest
+    vec(r): ""
+    push(_): r _kcm_prog
+    push(_): r _kcm_rest
+]
+
+km_plan(r): action target params hidden [
+    vec(r): ""
+    push(_): r action
+    push(_): r target
+    push(_): r params
+    push(_): r hidden
+]
+
+# What opening the file or folder at path does (see kremlinplan).
+km_path_plan(r): path [
+    is_dir(_kpp_isdir): path
+    file_exists(_kpp_exists): path
+    km_ext(_kpp_e): path
+    set(_kpp_ussr): km_ussr?
+    set(_kpp_src): km_source?
+    if(_): {_kpp_isdir = 1} [
+        km_plan(r): "folder" path "" false
+    ]
+    elif(_): {_kpp_exists = false} [
+        km_base(_kpp_b): path
+        concat(_kpp_msg): "Cannot find " _kpp_b
+        km_plan(r): "error" _kpp_msg "" false
+    ]
+    elif(_): {_kpp_e = "kl"} [
+        readfile(_kpp_text): path
+        km_launcher_parse(_kpp_l): _kpp_text
+        at(_kpp_cmd): _kpp_l 1
+        at(_kpp_console): _kpp_l 2
+        if(_): {_kpp_cmd = ""} [
+            km_plan(r): "error" "This launcher has no command: right-click it and choose Edit command" "" false
+        ]
+        else(_): [
+            km_split_command(_kpp_parts): _kpp_cmd
+            at(_kpp_prog): _kpp_parts 0
+            at(_kpp_params): _kpp_parts 1
+            # a program next to the launcher may be named without a path
+            km_is_absolute(_kpp_abs): _kpp_prog
+            km_parent(_kpp_dir): path
+            km_join(_kpp_near): _kpp_dir _kpp_prog
+            file_exists(_kpp_hasnear): _kpp_near
+            if(_): {_kpp_abs = false && _kpp_hasnear} [ set(_kpp_prog): _kpp_near ]
+            km_plan(r): "launch" _kpp_prog _kpp_params {_kpp_console = false}
+        ]
+    ]
+    elif(_): {_kpp_e = "su"} [
+        km_quote(_kpp_q): path
+        km_plan(r): "launch" _kpp_ussr _kpp_q false
+    ]
+    elif(_): {_kpp_e = "dxf" && _kpp_src != ""} [
+        km_join(_kpp_tula): _kpp_src "tula/tula.su"
+        km_quote(_kpp_q1): _kpp_tula
+        km_quote(_kpp_q2): path
+        concat(_kpp_params): _kpp_q1 " " _kpp_q2
+        km_plan(r): "launch" _kpp_ussr _kpp_params true
+    ]
+    else(_): [
+        km_plan(r): "launch" path "" false
+    ]
+]
+
+# --- state ------------------------------------------------------------------
+
+km_say(r): text [
+    set(km_status): text!
+    time(_ksy_now):
+    set(km_status_time): _ksy_now!
+    set(r): 0
+]
+
+kremlinitems(r): [
+    set(r): km_items?
+]
+
+kremlinselected(r): [
+    set(r): ""
+    set(_ksd_sel): km_sel?
+    set(_ksd_items): km_items?
+    len(_ksd_n): _ksd_items
+    if(_): {_ksd_sel >= 0 && _ksd_sel < _ksd_n} [ at(r): _ksd_items _ksd_sel ]
+]
+
+# Index of name in the listing, or -1.
+km_index_of(r): name [
+    set(r): {0 - 1}
+    set(_kio_items): km_items?
+    len(_kio_n): _kio_items
+    set(_kio_i): 0
+    while(_): {_kio_i < _kio_n && r < 0} [
+        at(_kio_name): _kio_items _kio_i
+        if(_): {_kio_name = name} [ set(r): _kio_i ]
+        set(_kio_i): {_kio_i + 1}
+    ]
+]
+
+kremlinselect(r): name [
+    km_index_of(_ksl_i): name
+    set(r): {_ksl_i >= 0}
+    if(_): r [ set(km_sel): _ksl_i! ]
+]
+
+kremlinrefresh(r): [
+    set(_krf_dir): km_dir?
+    set(_krf_sort): km_sort?
+    kremlinselected(_krf_name):
+    km_listing(_krf_items): _krf_dir _krf_sort
+    typeof(_krf_t): _krf_items
+    if(_): {_krf_t != "vector"} [
+        vec(_krf_items): ""
+        km_base(_krf_b): _krf_dir
+        concat(_krf_msg): "Cannot read the folder " _krf_b
+        km_say(_): _krf_msg
+    ]
+    set(km_items): _krf_items!
+    km_raw_listing(_krf_raw): _krf_dir
+    set(km_raw): _krf_raw!
+    set(km_sel): {0 - 1}!
+    if(_): {_krf_name != ""} [ kremlinselect(_): _krf_name ]
+    set(r): 0
+]
+
+kremlinopen(r): dir [
+    km_slashes(_kop_d): dir
+    km_strip_slash(_kop_d): _kop_d
+    set(km_dir): _kop_d!
+    set(km_sel): {0 - 1}!
+    set(km_scroll): 0!
+    kremlinrefresh(_):
+    set(r): 0
+]
+
+# Back to the folder above; the folder left is selected. false at the root.
+kremlinup(r): [
+    set(_kup_dir): km_dir?
+    set(_kup_root): km_root?
+    set(r): false
+    km_parent(_kup_p): _kup_dir
+    if(_): {_kup_dir != _kup_root && _kup_p != _kup_dir} [
+        km_base(_kup_b): _kup_dir
+        kremlinopen(_): _kup_p
+        concat(_kup_name): _kup_b "/"
+        kremlinselect(_): _kup_name
+        set(r): true
+    ]
+]
+
+# "" when name can be a file or folder name, else why not.
+km_valid_name(r): name [
+    set(r): ""
+    str_trim(_kvn_t): name
+    if(_): {_kvn_t = ""} [ set(r): "Type a name" ]
+    elif(_): {_kvn_t != name} [ set(r): "A name cannot start or end with a blank" ]
+    elif(_): {name = "." || name = ".."} [ set(r): "That name is taken by the system" ]
+    else(_): [
+        len(_kvn_n): name
+        set(_kvn_i): 0
+        while(_): {_kvn_i < _kvn_n && r = ""} [
+            byte(_kvn_b): name _kvn_i
+            if(_): {_kvn_b < 32 || _kvn_b = 47 || _kvn_b = 92 || _kvn_b = 58 || _kvn_b = 42 || _kvn_b = 63 || _kvn_b = 34 || _kvn_b = 60 || _kvn_b = 62 || _kvn_b = 124} [
+                set(r): "A name cannot contain slashes, colons, quotes or any of * ? < > |"
+            ]
+            set(_kvn_i): {_kvn_i + 1}
+        ]
+    ]
+]
+
+# Path of a new item called name in the shown folder, or "" (and the
+# reason in km_last_error) when the name is bad or taken.
+km_new_path(r): name [
+    set(r): ""
+    km_valid_name(_knp_err): name
+    if(_): {_knp_err = ""} [
+        set(_knp_dir): km_dir?
+        km_join(_knp_p): _knp_dir name
+        file_exists(_knp_e): _knp_p
+        if(_): _knp_e [ set(_knp_err): "Something with that name is already here" ]
+        else(_): [ set(r): _knp_p ]
+    ]
+    set(km_last_error): _knp_err!
+]
+
+kremlinnewfolder(r): name [
+    km_new_path(_knf_p): name
+    set(r): km_last_error?
+    if(_): {_knf_p != ""} [
+        make_dir(_knf_ok): _knf_p
+        if(_): {_knf_ok != 0} [ set(r): "Could not create the folder" ]
+        else(_): [
+            kremlinrefresh(_):
+            concat(_knf_n): name "/"
+            kremlinselect(_): _knf_n
+        ]
+    ]
+]
+
+kremlinnewfile(r): name [
+    km_new_path(_knt_p): name
+    set(r): km_last_error?
+    if(_): {_knt_p != ""} [
+        writefile(_): _knt_p ""
+        file_exists(_knt_ok): _knt_p
+        if(_): {_knt_ok = false} [ set(r): "Could not create the file" ]
+        else(_): [
+            kremlinrefresh(_):
+            kremlinselect(_): name
+        ]
+    ]
+]
+
+# A launcher name.kl that runs command (console: whether it gets a
+# console window on Windows).
+kremlinnewlauncher(r): name command console [
+    km_ends_with(_knl_has): name ".kl"
+    set(_knl_file): name
+    if(_): {_knl_has = false} [ concat(_knl_file): name ".kl" ]
+    str_trim(_knl_cmd): command
+    if(_): {_knl_cmd = ""} [
+        set(r): "Type the command the launcher runs"
+    ]
+    else(_): [
+        km_new_path(_knl_p): _knl_file
+        set(r): km_last_error?
+        if(_): {_knl_p != ""} [
+            km_label(_knl_label): _knl_file
+            km_launcher_text(_knl_text): _knl_label _knl_cmd console
+            writefile(_): _knl_p _knl_text
+            file_exists(_knl_ok): _knl_p
+            if(_): {_knl_ok = false} [ set(r): "Could not create the launcher" ]
+            else(_): [
+                kremlinrefresh(_):
+                kremlinselect(_): _knl_file
+            ]
+        ]
+    ]
+]
+
+# Rewrites the command of the launcher name.
+km_edit_launcher(r): name command console [
+    set(_kel_dir): km_dir?
+    km_join(_kel_p): _kel_dir name
+    str_trim(_kel_cmd): command
+    set(r): ""
+    if(_): {_kel_cmd = ""} [ set(r): "Type the command the launcher runs" ]
+    else(_): [
+        km_label(_kel_label): name
+        km_launcher_text(_kel_text): _kel_label _kel_cmd console
+        writefile(_): _kel_p _kel_text
+    ]
+]
+
+# The pin for a listed name: its path from the root when it is inside it.
+km_pin_for(r): name [
+    set(_kpf_dir): km_dir?
+    set(_kpf_root): km_root?
+    km_strip_slash(_kpf_n): name
+    km_join(r): _kpf_dir _kpf_n
+    km_join(_kpf_prefix): _kpf_root ""
+    km_starts_with(_kpf_in): r _kpf_prefix
+    if(_): _kpf_in [
+        len(_kpf_pl): _kpf_prefix
+        len(_kpf_rl): r
+        slice(r): r _kpf_pl {_kpf_rl - _kpf_pl}
+    ]
+]
+
+# The full path of a pin.
+km_pin_path(r): pin [
+    km_is_absolute(_kpt_abs): pin
+    set(r): pin
+    if(_): {_kpt_abs = false} [
+        set(_kpt_root): km_root?
+        km_join(r): _kpt_root pin
+    ]
+]
+
+# Index of the pin for name, or -1.
+km_pin_index(r): name [
+    km_pin_for(_kpx_pin): name
+    set(_kpx_pins): km_pins?
+    len(_kpx_n): _kpx_pins
+    set(r): {0 - 1}
+    set(_kpx_i): 0
+    while(_): {_kpx_i < _kpx_n} [
+        at(_kpx_p): _kpx_pins _kpx_i
+        if(_): {_kpx_p = _kpx_pin} [ set(r): _kpx_i ]
+        set(_kpx_i): {_kpx_i + 1}
+    ]
+]
+
+kremlinpin(r): name [
+    km_pin_index(_kpn_i): name
+    set(r): ""
+    if(_): {_kpn_i < 0} [
+        km_pin_for(_kpn_pin): name
+        set(_kpn_pins): km_pins?
+        push(_): _kpn_pins _kpn_pin
+        set(km_pins): _kpn_pins!
+        km_save_config(_):
+    ]
+]
+
+km_unpin_at(r): index [
+    set(_kua_pins): km_pins?
+    vec(_kua_new): ""
+    len(_kua_n): _kua_pins
+    set(_kua_i): 0
+    while(_): {_kua_i < _kua_n} [
+        at(_kua_p): _kua_pins _kua_i
+        if(_): {_kua_i != index} [ push(_): _kua_new _kua_p ]
+        set(_kua_i): {_kua_i + 1}
+    ]
+    set(km_pins): _kua_new!
+    km_save_config(_):
+    set(r): ""
+]
+
+kremlinunpin(r): name [
+    km_pin_index(_kup_i): name
+    set(r): ""
+    if(_): {_kup_i >= 0} [ km_unpin_at(_): _kup_i ]
+]
+
+# Renames old (a listed name) to new; a launcher keeps its ".kl".
+kremlinrename(r): old new [
+    km_kind(_krn_k): old
+    set(_krn_new): new
+    km_ends_with(_krn_has): new ".kl"
+    if(_): {_krn_k = "launcher" && _krn_has = false} [ concat(_krn_new): new ".kl" ]
+    km_strip_slash(_krn_old): old
+    if(_): {_krn_new = _krn_old} [
+        set(r): ""
+    ]
+    else(_): [
+        km_new_path(_krn_to): _krn_new
+        set(r): km_last_error?
+        if(_): {_krn_to != ""} [
+            set(_krn_dir): km_dir?
+            km_join(_krn_from): _krn_dir _krn_old
+            km_pin_index(_krn_pin): old
+            rename_path(_krn_ok): _krn_from _krn_to
+            if(_): {_krn_ok != 0} [ set(r): "Could not rename it (is it open in a program?)" ]
+            else(_): [
+                # a pinned item stays pinned under its new name
+                if(_): {_krn_pin >= 0} [
+                    km_unpin_at(_): _krn_pin
+                    set(_krn_pn): _krn_new
+                    if(_): {_krn_k = "folder"} [ concat(_krn_pn): _krn_new "/" ]
+                    kremlinpin(_): _krn_pn
+                ]
+                kremlinrefresh(_):
+                set(_krn_sel): _krn_new
+                if(_): {_krn_k = "folder"} [ concat(_krn_sel): _krn_new "/" ]
+                kremlinselect(_): _krn_sel
+            ]
+        ]
+    ]
+]
+
+# Deletes a file, or a folder when it is empty; nothing is deleted
+# recursively.
+kremlindelete(r): name [
+    set(_kdl_dir): km_dir?
+    km_strip_slash(_kdl_n): name
+    km_join(_kdl_p): _kdl_dir _kdl_n
+    km_is_dir_name(_kdl_isdir): name
+    set(r): ""
+    km_pin_index(_kdl_pin): name
+    if(_): _kdl_isdir [
+        list_dir(_kdl_inside): _kdl_p
+        len(_kdl_count): _kdl_inside
+        if(_): {_kdl_count > 0} [
+            set(r): "The folder is not empty: open it and delete what is inside first"
+        ]
+        else(_): [
+            remove_dir(_kdl_ok): _kdl_p
+            if(_): {_kdl_ok != 0} [ set(r): "Could not delete the folder" ]
+        ]
+    ]
+    else(_): [
+        remove_file(_kdl_ok): _kdl_p
+        if(_): {_kdl_ok != 0} [ set(r): "Could not delete it (is it open in a program?)" ]
+    ]
+    if(_): {r = ""} [
+        if(_): {_kdl_pin >= 0} [ km_unpin_at(_): _kdl_pin ]
+        set(_kdl_sel): km_sel?
+        kremlinrefresh(_):
+        set(_kdl_items): km_items?
+        len(_kdl_left): _kdl_items
+        # the next icon takes the selection
+        if(_): {_kdl_sel >= _kdl_left} [ set(_kdl_sel): {_kdl_left - 1} ]
+        set(km_sel): _kdl_sel!
+    ]
+]
+
+# Copies a file to "name copy.ext" ("name copy 2.ext", ...).
+kremlinduplicate(r): name [
+    km_is_dir_name(_kdu_isdir): name
+    set(r): ""
+    if(_): _kdu_isdir [
+        set(r): "Folders cannot be duplicated here; use Files (Tver) to copy them"
+    ]
+    else(_): [
+        km_ext(_kdu_e): name
+        len(_kdu_n): name
+        set(_kdu_stem): name
+        set(_kdu_tail): ""
+        if(_): {_kdu_e != ""} [
+            len(_kdu_el): _kdu_e
+            slice(_kdu_stem): name 0 {_kdu_n - _kdu_el - 1}
+            slice(_kdu_tail): name {_kdu_n - _kdu_el - 1} {_kdu_el + 1}
+        ]
+        set(_kdu_dir): km_dir?
+        set(_kdu_i): 1
+        set(_kdu_new): ""
+        while(_): {_kdu_new = "" && _kdu_i < 100} [
+            concat(_kdu_try): _kdu_stem " copy"
+            if(_): {_kdu_i > 1} [
+                str_from_int(_kdu_is): _kdu_i
+                concat(_kdu_try): _kdu_try " " _kdu_is
+            ]
+            concat(_kdu_try): _kdu_try _kdu_tail
+            km_join(_kdu_p): _kdu_dir _kdu_try
+            file_exists(_kdu_e2): _kdu_p
+            if(_): {_kdu_e2 = false} [ set(_kdu_new): _kdu_try ]
+            set(_kdu_i): {_kdu_i + 1}
+        ]
+        km_join(_kdu_from): _kdu_dir name
+        km_join(_kdu_to): _kdu_dir _kdu_new
+        copy_file(_kdu_ok): _kdu_from _kdu_to
+        if(_): {_kdu_ok != 0} [ set(r): "Could not copy the file" ]
+        else(_): [
+            kremlinrefresh(_):
+            kremlinselect(_): _kdu_new
+        ]
+    ]
+]
+
+kremlinplan(r): name [
+    set(_kpl_dir): km_dir?
+    km_strip_slash(_kpl_n): name
+    km_join(_kpl_p): _kpl_dir _kpl_n
+    km_path_plan(r): _kpl_p
+]
+
+# Starts what a plan says, or records it when km_dryrun is set; "" or why
+# it failed.
+km_execute(r): plan label [
+    at(_kex_action): plan 0
+    at(_kex_target): plan 1
+    at(_kex_params): plan 2
+    at(_kex_hidden): plan 3
+    set(r): ""
+    if(_): {_kex_action = "error"} [
+        set(r): _kex_target
+    ]
+    elif(_): {_kex_action = "launch"} [
+        set(_kex_dry): km_dryrun?
+        if(_): {_kex_dry = true} [
+            set(_kex_log): km_launched?
+            push(_): _kex_log plan
+            set(km_launched): _kex_log!
+            set(_kex_ok): 0
+        ]
+        else(_): [
+            launch(_kex_ok): _kex_target _kex_params _kex_hidden
+        ]
+        if(_): {_kex_ok = 0} [
+            concat(_kex_msg): "Starting " label
+            km_say(_): _kex_msg
+        ]
+        else(_): [
+            concat(r): "Could not start " _kex_target
+            if(_): {_kex_params != ""} [ concat(r): r " " _kex_params ]
+        ]
+    ]
+]
+
+# Opens a listed name: shows a folder, starts the rest. "" or an error.
+kremlinopenname(r): name [
+    kremlinplan(_kon_plan): name
+    at(_kon_action): _kon_plan 0
+    at(_kon_target): _kon_plan 1
+    set(r): ""
+    if(_): {_kon_action = "folder"} [ kremlinopen(_): _kon_target ]
+    else(_): [
+        km_label(_kon_label): name
+        km_execute(r): _kon_plan _kon_label
+    ]
+]
+
+# Opens a listed name with the program the system has for it.
+km_open_system(r): name [
+    set(_kos_dir): km_dir?
+    km_strip_slash(_kos_n): name
+    km_join(_kos_p): _kos_dir _kos_n
+    km_plan(_kos_plan): "launch" _kos_p "" false
+    km_label(_kos_label): name
+    km_execute(r): _kos_plan _kos_label
+]
+
+# Runs a typed command line: a folder or file opens, anything else starts
+# as a program with its arguments.
+km_run(r): line [
+    str_trim(_krr_l): line
+    set(r): ""
+    if(_): {_krr_l != ""} [
+        km_slashes(_krr_path): _krr_l
+        file_exists(_krr_exists): _krr_path
+        km_is_absolute(_krr_abs): _krr_path
+        if(_): {_krr_exists && _krr_abs} [
+            km_path_plan(_krr_plan): _krr_path
+            at(_krr_action): _krr_plan 0
+            if(_): {_krr_action = "folder"} [
+                km_plan(_krr_plan): "launch" _krr_path "" false
+            ]
+        ]
+        else(_): [
+            km_split_command(_krr_parts): _krr_l
+            at(_krr_prog): _krr_parts 0
+            at(_krr_params): _krr_parts 1
+            km_plan(_krr_plan): "launch" _krr_prog _krr_params false
+        ]
+        km_execute(r): _krr_plan _krr_l
+    ]
+]
+
+# --- first run --------------------------------------------------------------
+
+km_write_launcher(r): dir file name command console [
+    km_join(_kwl2_p): dir file
+    km_launcher_text(_kwl2_t): name command console
+    writefile(r): _kwl2_p _kwl2_t
+]
+
+# A new desktop: Welcome.txt, Apps with launchers for USSR's programs and
+# the home folder, and Documents; the first launchers are pinned.
+km_seed(r): root [
+    make_dir(_ksd_ok): root
+    km_join(_ksd_apps): root "Apps"
+    make_dir(_): _ksd_apps
+    km_join(_ksd_docs): root "Documents"
+    make_dir(_): _ksd_docs
+    set(_ksd_ussr): km_ussr?
+    set(_ksd_src): km_source?
+    km_quote(_ksd_qu): _ksd_ussr
+    km_home(_ksd_home):
+    km_windows(_ksd_win):
+    vec(_ksd_pins): ""
+    if(_): _ksd_win [
+        km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" _ksd_qu true
+    ]
+    else(_): [
+        concat(_ksd_term): "x-terminal-emulator -e " _ksd_qu
+        km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" _ksd_term false
+    ]
+    push(_): _ksd_pins "Apps/Terminal.kl"
+    km_quote(_ksd_qh): _ksd_home
+    km_write_launcher(_): _ksd_apps "Home.kl" "Home" _ksd_qh true
+    if(_): {_ksd_src != ""} [
+        km_join(_ksd_s): _ksd_src "tver/tver.su"
+        km_quote(_ksd_qs): _ksd_s
+        concat(_ksd_cmd): _ksd_qu " " _ksd_qs " " _ksd_qh
+        km_write_launcher(_): _ksd_apps "Files.kl" "Files" _ksd_cmd false
+        push(_): _ksd_pins "Apps/Files.kl"
+        km_join(_ksd_s): _ksd_src "klin/klin.su"
+        km_quote(_ksd_qs): _ksd_s
+        concat(_ksd_cmd): _ksd_qu " " _ksd_qs
+        km_write_launcher(_): _ksd_apps "Calculator.kl" "Calculator" _ksd_cmd false
+        push(_): _ksd_pins "Apps/Calculator.kl"
+        km_join(_ksd_s): _ksd_src "tula/tula.su"
+        km_quote(_ksd_qs): _ksd_s
+        concat(_ksd_cmd): _ksd_qu " " _ksd_qs
+        km_write_launcher(_): _ksd_apps "Drawing.kl" "Drawing" _ksd_cmd false
+    ]
+    push(_): _ksd_pins "Apps/Home.kl"
+    set(km_pins): _ksd_pins!
+    km_join(_ksd_w): root "Welcome.txt"
+    concat(_ksd_text): "Welcome to Kremlin, the USSR desktop.\n\nThis folder is your desktop: " root "\nWhat you put here shows up as icons. Files open with the program\nyour system has for them; folders open on the desktop.\n\n"
+    concat(_ksd_text): _ksd_text "Launchers are small text files ending in .kl:\n\n    name: Calculator\n    command: ussr src/klin/klin.su\n    console: no\n\n"
+    concat(_ksd_text): _ksd_text "Right-click anything (or press the Menu key) to see what you can do;\npress F1 on the desktop for all the keys. Settings are in .kremlin.\n"
+    writefile(_): _ksd_w _ksd_text
+    km_save_config(_):
+    set(r): _ksd_ok
+]
+
+kremlinreset(r): root [
+    km_slashes(_krs_root): root
+    km_strip_slash(_krs_root): _krs_root
+    set(km_root): _krs_root!
+    set(km_dir): _krs_root!
+    km_config_defaults(_):
+    km_detect(_):
+    set(_krs_src): km_source?
+    set(_krs_ussr): km_ussr?
+    set(km_sel): {0 - 1}!
+    set(km_scroll): 0!
+    set(km_popup): ""!
+    set(km_dialog): ""!
+    set(km_status): ""!
+    set(km_status_time): 0!
+    set(km_typed): ""!
+    set(km_typed_time): 0!
+    set(km_shift): false!
+    set(km_ctrl): false!
+    set(km_alt): false!
+    set(km_last_error): ""!
+    # every key a handler reads exists from the start (reading a missing
+    # hash key stops the process)
+    vec(_krs_empty): ""
+    set(km_items): _krs_empty!
+    set(km_raw): ""!
+    vec(_krs_hits): ""
+    set(km_hits): _krs_hits!
+    vec(_krs_log): ""
+    set(km_launched): _krs_log!
+    set(km_dryrun): false!
+    set(km_pin_time): 0!
+    set(km_pin_last): {0 - 1}!
+    set(km_window): null!
+    set(km_bands_for): {0 - 1}!
+    set(km_clock_shown): ""!
+    set(km_size_shown): ""!
+    set(km_tick_count): 0!
+    set(km_tick_gen): 0!
+    set(km_cal_y): 2026!
+    set(km_cal_m): 1!
+    km_metrics(_krs_m): KM_WIDTH KM_HEIGHT 1 false
+    set(km_metrics): _krs_m!
+    is_dir(_krs_exists): _krs_root
+    if(_): {_krs_exists = 0} [
+        km_seed(_):  _krs_root
+    ]
+    else(_): [
+        km_load_config(_):
+        # a moved checkout: settings that point nowhere give way to what
+        # was detected
+        set(_krs_cfg): km_source?
+        km_join(_krs_probe): _krs_cfg "kremlin/kremlin.su"
+        file_exists(_krs_ok): _krs_probe
+        if(_): {_krs_ok = false && _krs_src != ""} [
+            set(km_source): _krs_src!
+            set(km_ussr): _krs_ussr!
+        ]
+    ]
+    kremlinrefresh(_):
+    set(r): 0
+]
+
+# --- autostart --------------------------------------------------------------
+
+# Where the system looks for programs to start at sign-in.
+km_autostart_file(r): [
+    km_windows(_kaf_win):
+    if(_): _kaf_win [
+        getenv(_kaf_app): "APPDATA"
+        set(r): ""
+        if(_): {_kaf_app != null} [
+            km_slashes(_kaf_app): _kaf_app
+            km_join(r): _kaf_app "Microsoft/Windows/Start Menu/Programs/Startup/kremlin.vbs"
+        ]
+    ]
+    else(_): [
+        km_home(_kaf_home):
+        km_join(r): _kaf_home ".config/autostart/kremlin.desktop"
+    ]
+]
+
+km_autostart_on(r): [
+    km_autostart_file(_kao_f):
+    set(r): false
+    if(_): {_kao_f != ""} [ file_exists(r): _kao_f ]
+]
+
+# The autostart file: Windows runs a script that starts Kremlin with
+# --detach, which starts it again without a console window.
+km_autostart_text(r): [
+    set(_kat_src): km_source?
+    set(_kat_ussr): km_ussr?
+    set(_kat_root): km_root?
+    km_default_root(_kat_def):
+    km_join(_kat_script): _kat_src "kremlin/kremlin.su"
+    km_windows(_kat_win):
+    if(_): _kat_win [
+        km_backslashes(_kat_u): _kat_ussr
+        km_backslashes(_kat_s): _kat_script
+        chr(_kat_q): 34
+        concat(_kat_line): _kat_q _kat_q _kat_u _kat_q _kat_q " " _kat_q _kat_q _kat_s _kat_q _kat_q " --detach"
+        if(_): {_kat_root != _kat_def} [
+            km_backslashes(_kat_rt): _kat_root
+            concat(_kat_line): _kat_line " " _kat_q _kat_q _kat_rt _kat_q _kat_q
+        ]
+        concat(r): "' Kremlin desktop, started at sign-in; delete this file to stop it\r\nCreateObject(" _kat_q "WScript.Shell" _kat_q ").Run " _kat_q _kat_line _kat_q ", 0, False\r\n"
+    ]
+    else(_): [
+        km_quote(_kat_qu): _kat_ussr
+        km_quote(_kat_qs): _kat_script
+        concat(_kat_exec): _kat_qu " " _kat_qs
+        if(_): {_kat_root != _kat_def} [
+            km_quote(_kat_qr): _kat_root
+            concat(_kat_exec): _kat_exec " " _kat_qr
+        ]
+        concat(r): "[Desktop Entry]\nType=Application\nName=Kremlin\nComment=USSR desktop\nExec=" _kat_exec "\nX-GNOME-Autostart-enabled=true\n"
+    ]
+]
+
+kremlinautostart(r): on [
+    km_autostart_file(_kas_f):
+    set(_kas_src): km_source?
+    if(_): {_kas_f = ""} [
+        set(r): "This system has no place for programs started at sign-in"
+    ]
+    elif(_): on [
+        if(_): {_kas_src = ""} [
+            km_config_path(_kas_cfg):
+            concat(r): "Kremlin does not know where USSR is: set source= in " _kas_cfg
+        ]
+        else(_): [
+            km_parent(_kas_dir): _kas_f
+            make_dir(_): _kas_dir
+            km_autostart_text(_kas_text):
+            writefile(_): _kas_f _kas_text
+            file_exists(_kas_ok): _kas_f
+            if(_): _kas_ok [ set(r): "Kremlin will start when you sign in" ]
+            else(_): [ concat(r): "Could not write " _kas_f ]
+        ]
+    ]
+    else(_): [
+        file_exists(_kas_e): _kas_f
+        set(r): "Kremlin will not start when you sign in"
+        if(_): _kas_e [
+            remove_file(_kas_ok): _kas_f
+            if(_): {_kas_ok != 0} [ concat(r): "Could not remove " _kas_f ]
+        ]
+    ]
+]
+
+# --- layout and keyboard ----------------------------------------------------
+
+# Interface scale for a canvas w pixels wide: the setting, or by width.
+km_scale_for(r): w [
+    set(r): km_scale?
+    if(_): {r < 1} [
+        set(r): 1
+        if(_): {w >= 1800} [ set(r): 2 ]
+        if(_): {w >= 3400} [ set(r): 3 ]
+    ]
+]
+
+# Layout of a w x h canvas at scale s: [s cellw cellh x0 y0 rows cols panel
+# top w h]; top is the height of the location bar (0 on the desktop).
+km_metrics(r): w h s indir [
+    set(_kme_panel): {30 * s}
+    set(_kme_top): 0
+    if(_): indir [ set(_kme_top): {24 * s} ]
+    set(_kme_cw): {96 * s}
+    set(_kme_ch): {80 * s}
+    set(_kme_x0): {8 * s}
+    set(_kme_y0): {_kme_top + 8 * s}
+    set(_kme_rows): 1
+    set(_kme_cols): 1
+    if(_): {h - _kme_panel - _kme_y0 > _kme_ch} [ km_div(_kme_rows): {h - _kme_panel - _kme_y0} _kme_ch ]
+    if(_): {w - 2 * _kme_x0 > _kme_cw} [ km_div(_kme_cols): {w - 2 * _kme_x0} _kme_cw ]
+    vec(r): ""
+    push(_): r s
+    push(_): r _kme_cw
+    push(_): r _kme_ch
+    push(_): r _kme_x0
+    push(_): r _kme_y0
+    push(_): r _kme_rows
+    push(_): r _kme_cols
+    push(_): r _kme_panel
+    push(_): r _kme_top
+    push(_): r w
+    push(_): r h
+]
+
+# The icon index under (x, y), or -1.
+km_icon_at(r): x y m scroll count [
+    set(r): {0 - 1}
+    at(_kia_cw): m 1
+    at(_kia_ch): m 2
+    at(_kia_x0): m 3
+    at(_kia_y0): m 4
+    at(_kia_rows): m 5
+    at(_kia_cols): m 6
+    if(_): {x >= _kia_x0 && y >= _kia_y0} [
+        km_div(_kia_col): {x - _kia_x0} _kia_cw
+        km_div(_kia_row): {y - _kia_y0} _kia_ch
+        if(_): {_kia_row < _kia_rows && _kia_col < _kia_cols} [
+            set(_kia_i): {(_kia_col + scroll) * _kia_rows + _kia_row}
+            if(_): {_kia_i < count} [ set(r): _kia_i ]
+        ]
+    ]
+]
+
+# Top-left corner [x y] of icon i's cell.
+km_cell(r): i m scroll [
+    at(_kce_cw): m 1
+    at(_kce_ch): m 2
+    at(_kce_x0): m 3
+    at(_kce_y0): m 4
+    at(_kce_rows): m 5
+    km_div(_kce_col): i _kce_rows
+    set(_kce_row): {i % _kce_rows}
+    vec(r): ""
+    push(_): r {_kce_x0 + (_kce_col - scroll) * _kce_cw}
+    push(_): r {_kce_y0 + _kce_row * _kce_ch}
+]
+
+# The selection after an arrow, Home, End, Page Up or Page Down key. Icons
+# run down the columns, columns left to right.
+km_nav(r): i key count rows cols [
+    set(r): i
+    if(_): {count = 0} [ set(r): {0 - 1} ]
+    elif(_): {i < 0} [ set(r): 0 ]
+    else(_): [
+        set(_knv_row): {i % rows}
+        km_div(_knv_col): i rows
+        km_div(_knv_last): {count - 1} rows
+        if(_): {key = KM_KEY_DOWN} [
+            if(_): {_knv_row < rows - 1 && i + 1 < count} [ set(r): {i + 1} ]
+        ]
+        elif(_): {key = KM_KEY_UP} [
+            if(_): {_knv_row > 0} [ set(r): {i - 1} ]
+        ]
+        elif(_): {key = KM_KEY_RIGHT} [
+            if(_): {i + rows < count} [ set(r): {i + rows} ]
+            elif(_): {_knv_col < _knv_last} [ set(r): {count - 1} ]
+        ]
+        elif(_): {key = KM_KEY_LEFT} [
+            if(_): {i >= rows} [ set(r): {i - rows} ]
+        ]
+        elif(_): {key = KM_KEY_HOME} [ set(r): 0 ]
+        elif(_): {key = KM_KEY_END} [ set(r): {count - 1} ]
+        elif(_): {key = KM_KEY_PAGE_DOWN} [
+            set(r): {i + rows * cols}
+            if(_): {r >= count} [ set(r): {count - 1} ]
+        ]
+        elif(_): {key = KM_KEY_PAGE_UP} [
+            set(r): {i - rows * cols}
+            if(_): {r < 0} [ set(r): 0 ]
+        ]
+    ]
+]
+
+# The first column to show so that icon i is in view and no columns are
+# wasted past the last one.
+km_scroll_for(r): i scroll count rows cols [
+    set(r): scroll
+    if(_): {i >= 0} [
+        km_div(_ksf_col): i rows
+        if(_): {_ksf_col < r} [ set(r): _ksf_col ]
+        if(_): {_ksf_col >= r + cols} [ set(r): {_ksf_col - cols + 1} ]
+    ]
+    set(_ksf_max): 0
+    if(_): {count > 0} [
+        km_div(_ksf_last): {count - 1} rows
+        set(_ksf_max): {_ksf_last - cols + 1}
+        if(_): {_ksf_max < 0} [ set(_ksf_max): 0 ]
+    ]
+    if(_): {r > _ksf_max} [ set(r): _ksf_max ]
+    if(_): {r < 0} [ set(r): 0 ]
+]
+
+km_shift_digit(r): d [
+    byte(_ksd2_b): ")!@#$%^&*(" d
+    chr(r): _ksd2_b
+]
+
+# The character a key types (US layout), or "".
+km_key_char(r): key shift [
+    set(r): ""
+    if(_): {key >= 65 && key <= 90} [
+        if(_): shift [ chr(r): key ]
+        else(_): [ chr(r): {key + 32} ]
+    ]
+    elif(_): {key >= 48 && key <= 57} [
+        if(_): shift [ km_shift_digit(r): {key - 48} ]
+        else(_): [ chr(r): key ]
+    ]
+    elif(_): {key >= 320 && key <= 329} [ chr(r): {key - 272} ]
+    elif(_): {key = 32} [ set(r): " " ]
+    elif(_): {key = 330} [ set(r): "." ]
+    elif(_): {key = 331} [ set(r): "/" ]
+    elif(_): {key = 332} [ set(r): "*" ]
+    elif(_): {key = 333} [ set(r): "-" ]
+    elif(_): {key = 334} [ set(r): "+" ]
+    else(_): [
+        # ' , - . / ; = [ \ ] ` and their shifted forms
+        set(_kkc_plain): "39 44 45 46 47 59 61 91 92 93 96"
+        str_from_int(_kkc_ks): key
+        km_in(_kkc_known): _kkc_ks _kkc_plain
+        if(_): _kkc_known [
+            set(_kkc_code): key
+            if(_): shift [
+                if(_): {key = 39} [ set(_kkc_code): 34 ]
+                if(_): {key = 44} [ set(_kkc_code): 60 ]
+                if(_): {key = 45} [ set(_kkc_code): 95 ]
+                if(_): {key = 46} [ set(_kkc_code): 62 ]
+                if(_): {key = 47} [ set(_kkc_code): 63 ]
+                if(_): {key = 59} [ set(_kkc_code): 58 ]
+                if(_): {key = 61} [ set(_kkc_code): 43 ]
+                if(_): {key = 91} [ set(_kkc_code): 123 ]
+                if(_): {key = 92} [ set(_kkc_code): 124 ]
+                if(_): {key = 93} [ set(_kkc_code): 125 ]
+                if(_): {key = 96} [ set(_kkc_code): 126 ]
+            ]
+            chr(r): _kkc_code
+        ]
+    ]
+]
+
+# Type-to-find: the next icon at or after from whose label starts with
+# prefix (any case), wrapping around; -1 when none does.
+km_find_prefix(r): prefix from [
+    set(r): {0 - 1}
+    str_lower(_kfp_p): prefix
+    set(_kfp_items): km_items?
+    len(_kfp_n): _kfp_items
+    set(_kfp_k): 0
+    while(_): {_kfp_k < _kfp_n && r < 0} [
+        set(_kfp_i): {(from + _kfp_k) % _kfp_n}
+        at(_kfp_name): _kfp_items _kfp_i
+        km_label(_kfp_l): _kfp_name
+        str_lower(_kfp_l): _kfp_l
+        km_starts_with(_kfp_ok): _kfp_l _kfp_p
+        if(_): _kfp_ok [ set(r): _kfp_i ]
+        set(_kfp_k): {_kfp_k + 1}
+    ]
+]
+
+# A typed character on the desktop: within a second of the last one it
+# extends the search, else starts a new one (a repeated single letter
+# steps through the names starting with it).
+km_type_ahead(r): ch [
+    time(_kta_now):
+    set(_kta_last): km_typed_time?
+    set(_kta_typed): km_typed?
+    if(_): {_kta_now - _kta_last > 1} [ set(_kta_typed): "" ]
+    set(_kta_sel): km_sel?
+    if(_): {_kta_sel < 0} [ set(_kta_sel): 0 ]
+    set(_kta_from): _kta_sel
+    if(_): {_kta_typed = ch} [
+        # the same letter again: the next name with it
+        set(_kta_from): {_kta_sel + 1}
+    ]
+    else(_): [ concat(_kta_typed): _kta_typed ch ]
+    km_find_prefix(_kta_i): _kta_typed _kta_from
+    if(_): {_kta_i < 0} [
+        # no name goes on like that: start over with this character
+        set(_kta_typed): ch
+        km_find_prefix(_kta_i): ch {_kta_sel + 1}
+    ]
+    if(_): {_kta_i >= 0} [ set(km_sel): _kta_i! ]
+    set(km_typed): _kta_typed!
+    set(km_typed_time): _kta_now!
+    set(r): _kta_i
+]
+
+# --- menus ------------------------------------------------------------------
+
+km_item(r): label keys action [
+    vec(r): ""
+    push(_): r label
+    push(_): r keys
+    push(_): r action
+]
+
+km_wall_name(r): i [
+    km_words(_kwn_w): "Steppe Kremlin White-nights Birch Graphite"
+    at(r): _kwn_w i
+]
+
+# [top bottom] colors of wallpaper i.
+km_wall_colors(r): i [
+    vec(r): ""
+    if(_): {i = 1} [
+        push(_): r 0x8C1C13
+        push(_): r 0x3B0A06
+    ]
+    elif(_): {i = 2} [
+        push(_): r 0x4A5D7E
+        push(_): r 0x1A2233
+    ]
+    elif(_): {i = 3} [
+        push(_): r 0x6B8F71
+        push(_): r 0x24352A
+    ]
+    elif(_): {i = 4} [
+        push(_): r 0x3A3D44
+        push(_): r 0x141518
+    ]
+    else(_): [
+        push(_): r 0x2E5E73
+        push(_): r 0x0F2733
+    ]
+]
+
+# The KREMLIN menu: the Apps launchers, places, settings and exit.
+km_start_items(r): [
+    vec(r): ""
+    set(_ksi_root): km_root?
+    km_join(_ksi_apps): _ksi_root "Apps"
+    km_listing(_ksi_names): _ksi_apps "name"
+    typeof(_ksi_t): _ksi_names
+    if(_): {_ksi_t = "vector"} [
+        len(_ksi_n): _ksi_names
+        set(_ksi_i): 0
+        while(_): {_ksi_i < _ksi_n} [
+            at(_ksi_name): _ksi_names _ksi_i
+            km_kind(_ksi_k): _ksi_name
+            if(_): {_ksi_k = "launcher"} [
+                km_label(_ksi_l): _ksi_name
+                km_join(_ksi_p): _ksi_apps _ksi_name
+                concat(_ksi_act): "path:" _ksi_p
+                km_item(_ksi_item): _ksi_l "" _ksi_act
+                push(_): r _ksi_item
+            ]
+            set(_ksi_i): {_ksi_i + 1}
+        ]
+        if(_): {_ksi_n > 0} [
+            km_item(_ksi_item): "-" "" ""
+            push(_): r _ksi_item
+        ]
+    ]
+    km_item(_ksi_item): "Desktop" "" "desktop"
+    push(_): r _ksi_item
+    km_item(_ksi_item): "Run..." "Ctrl+R" "run"
+    push(_): r _ksi_item
+    km_item(_ksi_item): "-" "" ""
+    push(_): r _ksi_item
+    set(_ksi_w): km_wall?
+    km_wall_name(_ksi_wn): _ksi_w
+    concat(_ksi_label): "Wallpaper: " _ksi_wn
+    km_item(_ksi_item): _ksi_label "" "wallpaper"
+    push(_): r _ksi_item
+    set(_ksi_s): km_scale?
+    set(_ksi_sn): "Auto"
+    if(_): {_ksi_s > 0} [
+        str_from_int(_ksi_sn): _ksi_s
+        concat(_ksi_sn): _ksi_sn "x"
+    ]
+    concat(_ksi_label): "Size: " _ksi_sn
+    km_item(_ksi_item): _ksi_label "" "scale"
+    push(_): r _ksi_item
+    km_autostart_on(_ksi_on):
+    set(_ksi_label): "Start at sign-in: Off"
+    if(_): _ksi_on [ set(_ksi_label): "Start at sign-in: On" ]
+    km_item(_ksi_item): _ksi_label "" "autostart"
+    push(_): r _ksi_item
+    km_item(_ksi_item): "-" "" ""
+    push(_): r _ksi_item
+    km_item(_ksi_item): "Help" "F1" "help"
+    push(_): r _ksi_item
+    km_item(_ksi_item): "Exit Kremlin" "Ctrl+Q" "exit"
+    push(_): r _ksi_item
+]
+
+# What can be done with a listed name.
+km_item_menu(r): name [
+    vec(r): ""
+    km_kind(_kim_k): name
+    km_item(_kim_i): "Open" "Enter" "open"
+    push(_): r _kim_i
+    km_item(_kim_i): "Open with system" "Shift+Enter" "system"
+    push(_): r _kim_i
+    if(_): {_kim_k = "launcher"} [
+        km_item(_kim_i): "Edit command" "" "edit"
+        push(_): r _kim_i
+    ]
+    km_item(_kim_i): "-" "" ""
+    push(_): r _kim_i
+    km_item(_kim_i): "Rename" "F2" "rename"
+    push(_): r _kim_i
+    if(_): {_kim_k != "folder"} [
+        km_item(_kim_i): "Duplicate" "Ctrl+D" "duplicate"
+        push(_): r _kim_i
+    ]
+    km_pin_index(_kim_p): name
+    if(_): {_kim_p < 0} [ km_item(_kim_i): "Pin to panel" "Ctrl+P" "pin" ]
+    else(_): [ km_item(_kim_i): "Unpin from panel" "Ctrl+P" "pin" ]
+    push(_): r _kim_i
+    km_item(_kim_i): "Properties" "Alt+Enter" "properties"
+    push(_): r _kim_i
+    km_item(_kim_i): "-" "" ""
+    push(_): r _kim_i
+    km_item(_kim_i): "Delete" "Del" "delete"
+    push(_): r _kim_i
+]
+
+# What can be done in the folder itself.
+km_folder_menu(r): [
+    vec(r): ""
+    km_item(_kfm_i): "New folder" "Ctrl+N" "newfolder"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "New text file" "Ctrl+Shift+N" "newfile"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "New launcher" "Ctrl+L" "newlauncher"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "-" "" ""
+    push(_): r _kfm_i
+    set(_kfm_sort): km_sort?
+    set(_kfm_label): "Sort by type"
+    if(_): {_kfm_sort = "type"} [ set(_kfm_label): "Sort by name" ]
+    km_item(_kfm_i): _kfm_label "" "sort"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "Refresh" "F5" "refresh"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "Open in system" "" "folder-system"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "Run..." "Ctrl+R" "run"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "-" "" ""
+    push(_): r _kfm_i
+    km_item(_kfm_i): "Help" "F1" "help"
+    push(_): r _kfm_i
+]
+
+km_pin_menu(r): [
+    vec(r): ""
+    km_item(_kpm_i): "Open" "" "pin-open"
+    push(_): r _kpm_i
+    km_item(_kpm_i): "Show in its folder" "" "pin-show"
+    push(_): r _kpm_i
+    km_item(_kpm_i): "Unpin from panel" "" "pin-remove"
+    push(_): r _kpm_i
+]
+
+# --- dialogs and actions ----------------------------------------------------
+
+km_close_popup(r): [
+    set(km_popup): ""!
+    set(r): 0
+]
+
+# Opens a menu of items at (x, y); sel is the highlighted item (-1 none).
+km_open_popup(r): kind x y items target sel [
+    set(km_popup): kind!
+    set(km_popup_x): x!
+    set(km_popup_y): y!
+    set(km_popup_items): items!
+    set(km_popup_target): target!
+    set(km_popup_sel): sel!
+    set(r): 0
+]
+
+# A dialog: kind "input" (with value), "confirm" or "message".
+km_dialog_open(r): kind title text value action arg [
+    set(km_popup): ""!
+    set(km_dialog): kind!
+    set(km_dlg_title): title!
+    set(km_dlg_text): text!
+    set(km_dlg_value): value!
+    set(km_dlg_action): action!
+    set(km_dlg_arg): arg!
+    set(km_dlg_error): ""!
+    set(r): 0
+]
+
+km_dialog_close(r): [
+    set(km_dialog): ""!
+    set(r): 0
+]
+
+km_message(r): title text [
+    km_dialog_open(r): "message" title text "" "" ""
+]
+
+km_help_text(r): [
+    set(_khl_root): km_root?
+    concat(r): "Your desktop is the folder " _khl_root ". Click selects, double-click opens, right-click shows what you can do; .kl files are launchers.\n\n"
+    concat(r): r "Arrows, Home, End, PgUp, PgDn  move\nEnter  open      Shift+Enter  open with system\nBackspace  back to the folder above\n"
+    concat(r): r "F2  rename      Del  delete      Ctrl+D  duplicate\nCtrl+P  pin or unpin on the panel\n"
+    concat(r): r "Ctrl+N  new folder      Ctrl+Shift+N  new text file\nCtrl+L  new launcher    Ctrl+R  run a command\n"
+    concat(r): r "F5  refresh      F10 or Win  KREMLIN menu\nMenu key or Shift+F10  actions for the selection\nletters  jump to a name      Ctrl+Q  exit"
+]
+
+km_properties(r): name [
+    set(_kpr_dir): km_dir?
+    km_strip_slash(_kpr_n): name
+    km_join(_kpr_p): _kpr_dir _kpr_n
+    km_kind(_kpr_k): name
+    concat(r): "Name: " _kpr_n "\nKind: " _kpr_k "\nWhere: " _kpr_dir
+    if(_): {_kpr_k = "folder"} [
+        list_dir(_kpr_in): _kpr_p
+        typeof(_kpr_t): _kpr_in
+        if(_): {_kpr_t = "vector"} [
+            len(_kpr_c): _kpr_in
+            str_from_int(_kpr_cs): _kpr_c
+            concat(r): r "\nInside: " _kpr_cs " items"
+        ]
+    ]
+    if(_): {_kpr_k = "launcher"} [
+        readfile(_kpr_text): _kpr_p
+        km_launcher_parse(_kpr_l): _kpr_text
+        at(_kpr_cmd): _kpr_l 1
+        at(_kpr_con): _kpr_l 2
+        set(_kpr_cn): "no"
+        if(_): _kpr_con [ set(_kpr_cn): "yes" ]
+        concat(r): r "\nCommand: " _kpr_cmd "\nConsole window: " _kpr_cn
+    ]
+]
+
+# Shows the result of an action: errors in a message box.
+km_report(r): err [
+    if(_): {err != ""} [ km_message(_): "Kremlin" err ]
+    set(r): 0
+]
+
+km_cycle_wallpaper(r): [
+    set(_kcw_w): km_wall?
+    set(_kcw_w): {(_kcw_w + 1) % KM_WALLS}
+    set(km_wall): _kcw_w!
+    km_save_config(_):
+    km_wall_name(_kcw_n): _kcw_w
+    concat(_kcw_msg): "Wallpaper: " _kcw_n
+    km_say(_): _kcw_msg
+    set(r): 0
+]
+
+km_cycle_scale(r): [
+    set(_kcs_s): km_scale?
+    set(_kcs_s): {(_kcs_s + 1) % 4}
+    set(km_scale): _kcs_s!
+    set(km_scroll): 0!
+    km_save_config(_):
+    set(r): 0
+]
+
+km_toggle_sort(r): [
+    set(_kts_s): km_sort?
+    if(_): {_kts_s = "name"} [ set(km_sort): "type"! ]
+    else(_): [ set(km_sort): "name"! ]
+    km_save_config(_):
+    kremlinrefresh(_):
+    set(r): 0
+]
+
+# Does a menu or key action; target is the name, pin index or path it is
+# for.
+kremlinaction(r): action target [
+    set(r): ""
+    km_starts_with(_kac_path): action "path:"
+    if(_): _kac_path [
+        len(_kac_n): action
+        slice(_kac_p): action 5 {_kac_n - 5}
+        km_path_plan(_kac_plan): _kac_p
+        km_label(_kac_l): _kac_p
+        km_base(_kac_l): _kac_l
+        km_execute(r): _kac_plan _kac_l
+    ]
+    elif(_): {action = "open"} [ kremlinopenname(r): target ]
+    elif(_): {action = "system"} [ km_open_system(r): target ]
+    elif(_): {action = "edit"} [
+        set(_kac_dir): km_dir?
+        km_join(_kac_p): _kac_dir target
+        readfile(_kac_text): _kac_p
+        km_launcher_parse(_kac_l): _kac_text
+        at(_kac_cmd): _kac_l 1
+        km_label(_kac_label): target
+        concat(_kac_title): "Edit " _kac_label
+        km_dialog_open(_): "input" _kac_title "The command this launcher runs, for example:\nussr C:/USSR/src/klin/klin.su" _kac_cmd "edit" target
+    ]
+    elif(_): {action = "rename"} [
+        km_label(_kac_l): target
+        km_kind(_kac_k): target
+        km_strip_slash(_kac_v): target
+        if(_): {_kac_k = "launcher"} [ set(_kac_v): _kac_l ]
+        concat(_kac_title): "Rename " _kac_l
+        km_dialog_open(_): "input" _kac_title "New name:" _kac_v "rename" target
+    ]
+    elif(_): {action = "duplicate"} [ kremlinduplicate(r): target ]
+    elif(_): {action = "pin"} [
+        km_pin_index(_kac_i): target
+        km_label(_kac_l): target
+        if(_): {_kac_i < 0} [
+            kremlinpin(r): target
+            concat(_kac_msg): "Pinned " _kac_l " to the panel"
+        ]
+        else(_): [
+            km_unpin_at(r): _kac_i
+            concat(_kac_msg): "Unpinned " _kac_l
+        ]
+        km_say(_): _kac_msg
+    ]
+    elif(_): {action = "properties"} [
+        km_properties(_kac_text): target
+        km_label(_kac_l): target
+        km_message(_): _kac_l _kac_text
+    ]
+    elif(_): {action = "delete"} [
+        km_label(_kac_l): target
+        km_is_dir_name(_kac_d): target
+        concat(_kac_q): "Delete " _kac_l "? This cannot be undone."
+        if(_): _kac_d [ concat(_kac_q): "Delete the empty folder " _kac_l "?" ]
+        km_dialog_open(_): "confirm" "Delete" _kac_q "" "delete" target
+    ]
+    elif(_): {action = "newfolder"} [
+        km_dialog_open(_): "input" "New folder" "Name of the new folder:" "New folder" "newfolder" ""
+    ]
+    elif(_): {action = "newfile"} [
+        km_dialog_open(_): "input" "New text file" "Name of the new file:" "New file.txt" "newfile" ""
+    ]
+    elif(_): {action = "newlauncher"} [
+        km_dialog_open(_): "input" "New launcher" "Name shown under the icon:" "" "launcher-name" ""
+    ]
+    elif(_): {action = "sort"} [ km_toggle_sort(_): ]
+    elif(_): {action = "refresh"} [
+        kremlinrefresh(_):
+        km_say(_): "Refreshed"
+    ]
+    elif(_): {action = "folder-system"} [
+        set(_kac_dir): km_dir?
+        km_plan(_kac_plan): "launch" _kac_dir "" false
+        km_base(_kac_l): _kac_dir
+        km_execute(r): _kac_plan _kac_l
+    ]
+    elif(_): {action = "run"} [
+        km_dialog_open(_): "input" "Run" "A program and its arguments, or a file, folder or web address:" "" "run" ""
+    ]
+    elif(_): {action = "desktop"} [
+        set(_kac_root): km_root?
+        kremlinopen(_): _kac_root
+    ]
+    elif(_): {action = "wallpaper"} [ km_cycle_wallpaper(_): ]
+    elif(_): {action = "scale"} [ km_cycle_scale(_): ]
+    elif(_): {action = "autostart"} [
+        km_autostart_on(_kac_on):
+        kremlinautostart(_kac_msg): {_kac_on = false}
+        km_say(_): _kac_msg
+    ]
+    elif(_): {action = "help"} [
+        km_help_text(_kac_text):
+        km_message(_): "Kremlin keys" _kac_text
+    ]
+    elif(_): {action = "exit"} [
+        km_dialog_open(_): "confirm" "Exit Kremlin" "Close the desktop? Programs you started keep running." "" "exit" ""
+    ]
+    elif(_): {action = "pin-open"} [
+        set(_kac_pins): km_pins?
+        at(_kac_pin): _kac_pins target
+        km_pin_path(_kac_p): _kac_pin
+        km_path_plan(_kac_plan): _kac_p
+        at(_kac_a): _kac_plan 0
+        if(_): {_kac_a = "folder"} [ kremlinopen(_): _kac_p ]
+        else(_): [
+            km_label(_kac_l): _kac_pin
+            km_base(_kac_l): _kac_l
+            km_execute(r): _kac_plan _kac_l
+        ]
+    ]
+    elif(_): {action = "pin-show"} [
+        set(_kac_pins): km_pins?
+        at(_kac_pin): _kac_pins target
+        km_pin_path(_kac_p): _kac_pin
+        km_parent(_kac_dir): _kac_p
+        kremlinopen(_): _kac_dir
+        km_base(_kac_b): _kac_p
+        is_dir(_kac_isd): _kac_p
+        if(_): {_kac_isd = 1} [ concat(_kac_b): _kac_b "/" ]
+        kremlinselect(_): _kac_b
+    ]
+    elif(_): {action = "pin-remove"} [ km_unpin_at(r): target ]
+]
+
+# OK in the dialog: an error keeps it open with the reason shown.
+km_dialog_ok(r): [
+    set(_kdo_kind): km_dialog?
+    set(_kdo_action): km_dlg_action?
+    set(_kdo_value): km_dlg_value?
+    set(_kdo_arg): km_dlg_arg?
+    set(_kdo_err): ""
+    km_dialog_close(_):
+    if(_): {_kdo_action = "rename"} [ kremlinrename(_kdo_err): _kdo_arg _kdo_value ]
+    elif(_): {_kdo_action = "newfolder"} [ kremlinnewfolder(_kdo_err): _kdo_value ]
+    elif(_): {_kdo_action = "newfile"} [ kremlinnewfile(_kdo_err): _kdo_value ]
+    elif(_): {_kdo_action = "launcher-name"} [
+        km_valid_name(_kdo_err): _kdo_value
+        if(_): {_kdo_err = ""} [
+            concat(_kdo_title): "New launcher " _kdo_value
+            km_dialog_open(_): "input" _kdo_title "The command it runs, for example:\nussr C:/USSR/src/klin/klin.su" "" "launcher-command" _kdo_value
+        ]
+    ]
+    elif(_): {_kdo_action = "launcher-command"} [
+        kremlinnewlauncher(_kdo_err): _kdo_arg _kdo_value true
+    ]
+    elif(_): {_kdo_action = "edit"} [
+        set(_kdo_dir): km_dir?
+        km_join(_kdo_p): _kdo_dir _kdo_arg
+        readfile(_kdo_text): _kdo_p
+        km_launcher_parse(_kdo_l): _kdo_text
+        at(_kdo_con): _kdo_l 2
+        km_edit_launcher(_kdo_err): _kdo_arg _kdo_value _kdo_con
+    ]
+    elif(_): {_kdo_action = "run"} [
+        km_run(_kdo_err): _kdo_value
+        if(_): {_kdo_err != ""} [
+            km_message(_): "Run" _kdo_err
+            set(_kdo_err): ""
+        ]
+    ]
+    elif(_): {_kdo_action = "delete"} [
+        kremlindelete(_kdo_err): _kdo_arg
+        if(_): {_kdo_err != ""} [
+            km_message(_): "Delete" _kdo_err
+            set(_kdo_err): ""
+        ]
+    ]
+    elif(_): {_kdo_action = "exit"} [
+        set(_kdo_win): km_window?
+        set(km_tick_gen): {0 - 1}!
+        if(_): {_kdo_win != null} [ close(_): _kdo_win ]
+    ]
+    if(_): {_kdo_err != ""} [
+        # back to the same dialog, with the reason
+        set(km_dialog): _kdo_kind!
+        set(km_dlg_error): _kdo_err!
+    ]
+    set(r): _kdo_err
+]
+
+# --- drawing ----------------------------------------------------------------
+
+km_text(r): canvas x y text color s [
+    km_display(_ktx_t): text
+    canvastextscale(r): canvas x y _ktx_t color s
+]
+
+km_text_width(r): text s [
+    km_display(_ktw_t): text
+    len(_ktw_n): _ktw_t
+    set(r): {(_ktw_n * 7 - 2) * s}
+    if(_): {_ktw_n = 0} [ set(r): 0 ]
+]
+
+km_hit_add(r): hits x y w h tag [
+    vec(_kha_h): ""
+    push(_): _kha_h x
+    push(_): _kha_h y
+    push(_): _kha_h w
+    push(_): _kha_h h
+    push(_): _kha_h tag
+    push(_): hits _kha_h
+    set(r): 0
+]
+
+# The tag of the topmost hit area under (x, y), or "".
+km_hit(r): x y [
+    set(r): ""
+    set(_kht_hits): km_hits?
+    typeof(_kht_t): _kht_hits
+    if(_): {_kht_t = "vector"} [
+        len(_kht_i): _kht_hits
+        set(_kht_i): {_kht_i - 1}
+        while(_): {_kht_i >= 0 && r = ""} [
+            at(_kht_h): _kht_hits _kht_i
+            at(_kht_x): _kht_h 0
+            at(_kht_y): _kht_h 1
+            at(_kht_w): _kht_h 2
+            at(_kht_hh): _kht_h 3
+            if(_): {x >= _kht_x && x < _kht_x + _kht_w && y >= _kht_y && y < _kht_y + _kht_hh} [
+                at(r): _kht_h 4
+            ]
+            set(_kht_i): {_kht_i - 1}
+        ]
+    ]
+]
+
+# color with each channel moved by delta (clamped to 0..255).
+km_shade(r): color delta [
+    set(r): 0
+    set(_ksh_shift): 16
+    while(_): {_ksh_shift >= 0} [
+        set(_ksh_c): {((color >> _ksh_shift) & 255) + delta}
+        if(_): {_ksh_c < 0} [ set(_ksh_c): 0 ]
+        if(_): {_ksh_c > 255} [ set(_ksh_c): 255 ]
+        set(r): {r | (_ksh_c << _ksh_shift)}
+        set(_ksh_shift): {_ksh_shift - 8}
+    ]
+]
+
+# n colors from top to bottom.
+km_gradient(r): top bottom n [
+    vec(r): ""
+    set(_kgr_i): 0
+    while(_): {_kgr_i < n} [
+        set(_kgr_c): 0
+        set(_kgr_shift): 16
+        while(_): {_kgr_shift >= 0} [
+            set(_kgr_a): {(top >> _kgr_shift) & 255}
+            set(_kgr_b): {(bottom >> _kgr_shift) & 255}
+            km_div(_kgr_v): {_kgr_a * (n - 1 - _kgr_i) + _kgr_b * _kgr_i} {n - 1}
+            set(_kgr_c): {_kgr_c | (_kgr_v << _kgr_shift)}
+            set(_kgr_shift): {_kgr_shift - 8}
+        ]
+        push(_): r _kgr_c
+        set(_kgr_i): {_kgr_i + 1}
+    ]
+]
+
+# A five-pointed star (outline) centered at (cx, cy).
+km_star(r): canvas cx cy radius color [
+    vec(_kst_x): ""
+    vec(_kst_y): ""
+    push(_): _kst_x 0.0
+    push(_): _kst_y {0 - 1.0}
+    push(_): _kst_x 0.9511
+    push(_): _kst_y {0 - 0.309}
+    push(_): _kst_x 0.5878
+    push(_): _kst_y 0.809
+    push(_): _kst_x {0 - 0.5878}
+    push(_): _kst_y 0.809
+    push(_): _kst_x {0 - 0.9511}
+    push(_): _kst_y {0 - 0.309}
+    set(_kst_k): 0
+    while(_): {_kst_k < 5} [
+        set(_kst_a): {(_kst_k * 2) % 5}
+        set(_kst_b): {(_kst_k * 2 + 2) % 5}
+        at(_kst_ax): _kst_x _kst_a
+        at(_kst_ay): _kst_y _kst_a
+        at(_kst_bx): _kst_x _kst_b
+        at(_kst_by): _kst_y _kst_b
+        canvasline(_): canvas {cx + _kst_ax * radius} {cy + _kst_ay * radius} {cx + _kst_bx * radius} {cy + _kst_by * radius} color
+        set(_kst_k): {_kst_k + 1}
+    ]
+    set(r): 0
+]
+
+km_kind_color(r): kind [
+    set(r): 0x4B5563
+    if(_): {kind = "code"} [ set(r): 0x2E8B57 ]
+    if(_): {kind = "text"} [ set(r): 0x6B7280 ]
+    if(_): {kind = "image"} [ set(r): 0x8E44AD ]
+    if(_): {kind = "document"} [ set(r): 0x2B6CB0 ]
+    if(_): {kind = "audio"} [ set(r): 0xD97706 ]
+    if(_): {kind = "video"} [ set(r): 0xC0392B ]
+    if(_): {kind = "archive"} [ set(r): 0x8B5E3C ]
+    if(_): {kind = "web"} [ set(r): 0x0E7490 ]
+    if(_): {kind = "folder"} [ set(r): 0xE9B949 ]
+    if(_): {kind = "program"} [ set(r): 0x3D6FB6 ]
+]
+
+# A launcher's tile color, picked by its name.
+km_name_color(r): text [
+    len(_knc_n): text
+    set(_knc_sum): 0
+    set(_knc_i): 0
+    while(_): {_knc_i < _knc_n} [
+        byte(_knc_b): text _knc_i
+        set(_knc_sum): {_knc_sum + _knc_b}
+        set(_knc_i): {_knc_i + 1}
+    ]
+    set(_knc_k): {_knc_sum % 6}
+    set(r): 0xC0392B
+    if(_): {_knc_k = 1} [ set(r): 0x2B6CB0 ]
+    if(_): {_knc_k = 2} [ set(r): 0x2E8B57 ]
+    if(_): {_knc_k = 3} [ set(r): 0xD97706 ]
+    if(_): {_knc_k = 4} [ set(r): 0x8E44AD ]
+    if(_): {_knc_k = 5} [ set(r): 0x0E7490 ]
+]
+
+# A 40 x 40 icon (times u) for kind at (x, y).
+km_draw_icon(r): canvas kind name x y u [
+    set(r): 0
+    if(_): {kind = "folder"} [
+        canvasfill(_): canvas {x + 2 * u} {y + 6 * u} {15 * u} {5 * u} KM_FOLDER_TAB
+        canvasfill(_): canvas {x + 2 * u} {y + 10 * u} {36 * u} {25 * u} KM_FOLDER
+        canvasfill(_): canvas {x + 2 * u} {y + 14 * u} {36 * u} {2 * u} KM_FOLDER_LIP
+    ]
+    elif(_): {kind = "launcher"} [
+        km_label(_kdi_l): name
+        km_name_color(_kdi_c): _kdi_l
+        canvasfill(_): canvas {x + 4 * u} {y + 3 * u} {32 * u} {32 * u} _kdi_c
+        km_shade(_kdi_light): _kdi_c 40
+        canvasfill(_): canvas {x + 4 * u} {y + 3 * u} {32 * u} {2 * u} _kdi_light
+        slice(_kdi_first): _kdi_l 0 1
+        canvastextscale(_): canvas {x + 13 * u} {y + 9 * u} _kdi_first KM_WHITE {3 * u}
+        # the shortcut arrow
+        canvasfill(_): canvas {x + 4 * u} {y + 26 * u} {9 * u} {9 * u} KM_WHITE
+        canvasline(_): canvas {x + 6 * u} {y + 33 * u} {x + 11 * u} {y + 28 * u} KM_SHADOW
+        canvasline(_): canvas {x + 7 * u} {y + 28 * u} {x + 11 * u} {y + 28 * u} KM_SHADOW
+        canvasline(_): canvas {x + 11 * u} {y + 28 * u} {x + 11 * u} {y + 32 * u} KM_SHADOW
+    ]
+    elif(_): {kind = "program"} [
+        canvasfill(_): canvas {x + 3 * u} {y + 6 * u} {34 * u} {27 * u} KM_WINDOW
+        canvasfill(_): canvas {x + 3 * u} {y + 6 * u} {34 * u} {5 * u} KM_HILITE
+        canvastextscale(_): canvas {x + 7 * u} {y + 17 * u} ">_" KM_PROMPT u
+    ]
+    else(_): [
+        canvasfill(_): canvas {x + 8 * u} {y + 2 * u} {24 * u} {33 * u} KM_PAGE
+        canvasfill(_): canvas {x + 26 * u} {y + 2 * u} {6 * u} {6 * u} KM_PAGE_FOLD
+        if(_): {kind = "image"} [
+            canvasfill(_): canvas {x + 11 * u} {y + 8 * u} {18 * u} {11 * u} 0x7DB3E0
+            canvasfill(_): canvas {x + 11 * u} {y + 15 * u} {18 * u} {4 * u} 0x4E9A5B
+        ]
+        else(_): [
+            canvasfill(_): canvas {x + 12 * u} {y + 9 * u} {14 * u} u KM_PAGE_LINE
+            canvasfill(_): canvas {x + 12 * u} {y + 13 * u} {16 * u} u KM_PAGE_LINE
+            canvasfill(_): canvas {x + 12 * u} {y + 17 * u} {12 * u} u KM_PAGE_LINE
+        ]
+        km_kind_color(_kdi_band): kind
+        canvasfill(_): canvas {x + 4 * u} {y + 22 * u} {32 * u} {10 * u} _kdi_band
+        km_ext(_kdi_e): name
+        km_fit(_kdi_e): _kdi_e 4
+        if(_): {_kdi_e = ""} [ set(_kdi_e): "FILE" ]
+        km_text_width(_kdi_ew): _kdi_e u
+        km_div(_kdi_ex): {40 * u - _kdi_ew} 2
+        canvastextscale(_): canvas {x + _kdi_ex} {y + 24 * u} _kdi_e KM_WHITE u
+    ]
+]
+
+km_wallpaper(r): canvas w h s [
+    set(_kwp_wall): km_wall?
+    set(_kwp_for): km_bands_for?
+    if(_): {_kwp_for != _kwp_wall} [
+        km_wall_colors(_kwp_c): _kwp_wall
+        at(_kwp_top): _kwp_c 0
+        at(_kwp_bot): _kwp_c 1
+        km_gradient(_kwp_bands): _kwp_top _kwp_bot 24
+        set(km_bands): _kwp_bands!
+        set(km_bands_for): _kwp_wall!
+    ]
+    set(_kwp_bands): km_bands?
+    km_div(_kwp_bh): h 24
+    set(_kwp_bh): {_kwp_bh + 1}
+    set(_kwp_i): 0
+    while(_): {_kwp_i < 24} [
+        at(_kwp_c): _kwp_bands _kwp_i
+        canvasfill(_): canvas 0 {_kwp_i * _kwp_bh} w _kwp_bh _kwp_c
+        set(_kwp_i): {_kwp_i + 1}
+    ]
+    # the emblem: a faint star in the corner
+    at(_kwp_last): _kwp_bands 23
+    km_shade(_kwp_star): _kwp_last 26
+    km_star(_): canvas {w - 110 * s} {h - 140 * s} {70 * s} _kwp_star
+    set(r): 0
+]
+
+km_draw_location(r): canvas m hits [
+    at(_kdl2_s): m 0
+    at(_kdl2_top): m 8
+    at(_kdl2_w): m 9
+    canvasfill(_): canvas 0 0 _kdl2_w _kdl2_top KM_BAR
+    set(_kdl2_bh): {_kdl2_top - 6 * _kdl2_s}
+    canvasfill(_): canvas {4 * _kdl2_s} {3 * _kdl2_s} {72 * _kdl2_s} _kdl2_bh KM_BUTTON
+    km_div(_kdl2_ty): {_kdl2_top - 7 * _kdl2_s} 2
+    km_text(_): canvas {12 * _kdl2_s} _kdl2_ty "< Back" KM_TEXT _kdl2_s
+    km_hit_add(_): hits {4 * _kdl2_s} {3 * _kdl2_s} {72 * _kdl2_s} _kdl2_bh "back"
+    set(_kdl2_dir): km_dir?
+    set(_kdl2_root): km_root?
+    len(_kdl2_rl): _kdl2_root
+    len(_kdl2_dl): _kdl2_dir
+    km_join(_kdl2_prefix): _kdl2_root ""
+    km_starts_with(_kdl2_in): _kdl2_dir _kdl2_prefix
+    set(_kdl2_path): _kdl2_dir
+    if(_): _kdl2_in [
+        slice(_kdl2_rest): _kdl2_dir _kdl2_rl {_kdl2_dl - _kdl2_rl}
+        concat(_kdl2_path): "Desktop" _kdl2_rest
+    ]
+    km_display(_kdl2_path): _kdl2_path
+    km_div(_kdl2_room): {_kdl2_w - 100 * _kdl2_s} {7 * _kdl2_s}
+    km_tail(_kdl2_path): _kdl2_path _kdl2_room
+    km_text(_): canvas {88 * _kdl2_s} _kdl2_ty _kdl2_path KM_DIM _kdl2_s
+    set(r): 0
+]
+
+km_draw_icons(r): canvas m hits [
+    at(_kdc_s): m 0
+    at(_kdc_cw): m 1
+    at(_kdc_ch): m 2
+    at(_kdc_y0): m 4
+    at(_kdc_rows): m 5
+    at(_kdc_cols): m 6
+    at(_kdc_panel): m 7
+    at(_kdc_w): m 9
+    at(_kdc_h): m 10
+    set(_kdc_items): km_items?
+    set(_kdc_sel): km_sel?
+    set(_kdc_scroll): km_scroll?
+    len(_kdc_n): _kdc_items
+    set(_kdc_first): {_kdc_scroll * _kdc_rows}
+    set(_kdc_end): {(_kdc_scroll + _kdc_cols) * _kdc_rows}
+    if(_): {_kdc_end > _kdc_n} [ set(_kdc_end): _kdc_n ]
+    km_div(_kdc_max): {_kdc_cw - 6 * _kdc_s} {7 * _kdc_s}
+    set(_kdc_i): _kdc_first
+    while(_): {_kdc_i < _kdc_end} [
+        km_cell(_kdc_xy): _kdc_i m _kdc_scroll
+        at(_kdc_x): _kdc_xy 0
+        at(_kdc_y): _kdc_xy 1
+        at(_kdc_name): _kdc_items _kdc_i
+        km_kind(_kdc_kind): _kdc_name
+        km_label(_kdc_label): _kdc_name
+        km_display(_kdc_label): _kdc_label
+        if(_): {_kdc_i = _kdc_sel} [
+            canvasfill(_): canvas {_kdc_x + 2 * _kdc_s} {_kdc_y + _kdc_s} {_kdc_cw - 4 * _kdc_s} {_kdc_ch - 2 * _kdc_s} KM_SELECT
+            canvasrect(_): canvas {_kdc_x + 2 * _kdc_s} {_kdc_y + _kdc_s} {_kdc_cw - 4 * _kdc_s} {_kdc_ch - 2 * _kdc_s} KM_SELECT_LINE
+        ]
+        km_div(_kdc_ix): {_kdc_cw - 40 * _kdc_s} 2
+        km_draw_icon(_): canvas _kdc_kind _kdc_name {_kdc_x + _kdc_ix} {_kdc_y + 4 * _kdc_s} _kdc_s
+        km_wrap_label(_kdc_lines): _kdc_label _kdc_max
+        len(_kdc_ln): _kdc_lines
+        set(_kdc_li): 0
+        while(_): {_kdc_li < _kdc_ln} [
+            at(_kdc_line): _kdc_lines _kdc_li
+            km_text_width(_kdc_tw): _kdc_line _kdc_s
+            km_div(_kdc_tx): {_kdc_cw - _kdc_tw} 2
+            set(_kdc_tx): {_kdc_x + _kdc_tx}
+            set(_kdc_ty): {_kdc_y + 49 * _kdc_s + _kdc_li * 11 * _kdc_s}
+            km_text(_): canvas {_kdc_tx + _kdc_s} {_kdc_ty + _kdc_s} _kdc_line KM_SHADOW _kdc_s
+            km_text(_): canvas _kdc_tx _kdc_ty _kdc_line KM_TEXT _kdc_s
+            set(_kdc_li): {_kdc_li + 1}
+        ]
+        set(_kdc_i): {_kdc_i + 1}
+    ]
+    set(_kdc_area): {_kdc_h - _kdc_panel}
+    if(_): {_kdc_n = 0} [
+        set(_kdc_hint): "Empty folder: right-click to create something"
+        km_text_width(_kdc_tw): _kdc_hint _kdc_s
+        km_div(_kdc_tx): {_kdc_w - _kdc_tw} 2
+        km_div(_kdc_ty): {_kdc_area + _kdc_y0} 2
+        km_text(_): canvas _kdc_tx _kdc_ty _kdc_hint KM_DIM _kdc_s
+    ]
+    # more columns to the left or right: arrow buttons
+    km_div(_kdc_my): {_kdc_area - 40 * _kdc_s} 2
+    if(_): {_kdc_scroll > 0} [
+        canvasfill(_): canvas 0 _kdc_my {7 * _kdc_s} {40 * _kdc_s} KM_BUTTON
+        km_text(_): canvas _kdc_s {_kdc_my + 16 * _kdc_s} "<" KM_TEXT _kdc_s
+        km_hit_add(_): hits 0 _kdc_my {7 * _kdc_s} {40 * _kdc_s} "scroll-left"
+    ]
+    if(_): {_kdc_end < _kdc_n} [
+        set(_kdc_ax): {_kdc_w - 7 * _kdc_s}
+        canvasfill(_): canvas _kdc_ax _kdc_my {7 * _kdc_s} {40 * _kdc_s} KM_BUTTON
+        km_text(_): canvas {_kdc_ax + _kdc_s} {_kdc_my + 16 * _kdc_s} ">" KM_TEXT _kdc_s
+        km_hit_add(_): hits _kdc_ax _kdc_my {7 * _kdc_s} {40 * _kdc_s} "scroll-right"
+    ]
+    set(r): 0
+]
+
+km_draw_panel(r): canvas m hits [
+    at(_kdp_s): m 0
+    at(_kdp_p): m 7
+    at(_kdp_w): m 9
+    at(_kdp_h): m 10
+    set(_kdp_py): {_kdp_h - _kdp_p}
+    canvasfill(_): canvas 0 _kdp_py _kdp_w _kdp_p KM_PANEL
+    canvasfill(_): canvas 0 _kdp_py _kdp_w _kdp_s KM_PANEL_LINE
+    set(_kdp_by): {_kdp_py + 4 * _kdp_s}
+    set(_kdp_bh): {_kdp_p - 7 * _kdp_s}
+    km_div(_kdp_ty): {_kdp_bh - 7 * _kdp_s} 2
+    set(_kdp_ty): {_kdp_by + _kdp_ty}
+    # the KREMLIN button
+    set(_kdp_popup): km_popup?
+    set(_kdp_col): KM_START
+    if(_): {_kdp_popup = "start"} [ set(_kdp_col): KM_START_ON ]
+    set(_kdp_bw): {84 * _kdp_s}
+    canvasfill(_): canvas {3 * _kdp_s} _kdp_by _kdp_bw _kdp_bh _kdp_col
+    km_div(_kdp_cy): _kdp_bh 2
+    km_star(_): canvas {13 * _kdp_s} {_kdp_by + _kdp_cy} {7 * _kdp_s} KM_GOLD
+    km_star(_): canvas {13 * _kdp_s + 1} {_kdp_by + _kdp_cy} {7 * _kdp_s} KM_GOLD
+    km_text(_): canvas {24 * _kdp_s} _kdp_ty "KREMLIN" KM_TEXT _kdp_s
+    km_hit_add(_): hits {3 * _kdp_s} _kdp_by _kdp_bw _kdp_bh "start"
+    # the clock, right-aligned
+    localtime(_kdp_t):
+    km_clock_text(_kdp_clock): _kdp_t
+    km_date_text(_kdp_date): _kdp_t
+    set(km_clock_shown): _kdp_clock!
+    concat(_kdp_ct): _kdp_date "  " _kdp_clock
+    km_text_width(_kdp_cw): _kdp_ct _kdp_s
+    set(_kdp_cx): {_kdp_w - _kdp_cw - 10 * _kdp_s}
+    if(_): {_kdp_popup = "calendar"} [
+        canvasfill(_): canvas {_kdp_cx - 6 * _kdp_s} _kdp_by {_kdp_cw + 12 * _kdp_s} _kdp_bh KM_BUTTON
+    ]
+    km_text_width(_kdp_dw): _kdp_date _kdp_s
+    km_text(_): canvas _kdp_cx _kdp_ty _kdp_date KM_DIM _kdp_s
+    km_text(_): canvas {_kdp_cx + _kdp_dw + 14 * _kdp_s} _kdp_ty _kdp_clock KM_TEXT _kdp_s
+    km_hit_add(_): hits {_kdp_cx - 6 * _kdp_s} _kdp_by {_kdp_cw + 12 * _kdp_s} _kdp_bh "clock"
+    # pinned items, as long as they fit
+    set(_kdp_x): {_kdp_bw + 10 * _kdp_s}
+    set(_kdp_limit): {_kdp_cx - 16 * _kdp_s}
+    set(_kdp_pins): km_pins?
+    len(_kdp_n): _kdp_pins
+    set(_kdp_i): 0
+    set(_kdp_room): true
+    while(_): {_kdp_i < _kdp_n && _kdp_room} [
+        at(_kdp_pin): _kdp_pins _kdp_i
+        km_pin_path(_kdp_full): _kdp_pin
+        km_base(_kdp_base): _kdp_pin
+        is_dir(_kdp_isd): _kdp_full
+        set(_kdp_kname): _kdp_base
+        if(_): {_kdp_isd = 1} [ concat(_kdp_kname): _kdp_base "/" ]
+        km_kind(_kdp_kind): _kdp_kname
+        km_label(_kdp_label): _kdp_kname
+        km_display(_kdp_label): _kdp_label
+        km_fit(_kdp_label): _kdp_label 12
+        km_text_width(_kdp_lw): _kdp_label _kdp_s
+        set(_kdp_pw): {_kdp_lw + 22 * _kdp_s}
+        if(_): {_kdp_x + _kdp_pw > _kdp_limit} [ set(_kdp_room): false ]
+        else(_): [
+            canvasfill(_): canvas _kdp_x _kdp_by _kdp_pw _kdp_bh KM_BUTTON
+            set(_kdp_dot): 0
+            if(_): {_kdp_kind = "launcher"} [ km_name_color(_kdp_dot): _kdp_label ]
+            else(_): [ km_kind_color(_kdp_dot): _kdp_kind ]
+            km_div(_kdp_dy): {_kdp_bh - 8 * _kdp_s} 2
+            canvasfill(_): canvas {_kdp_x + 5 * _kdp_s} {_kdp_by + _kdp_dy} {8 * _kdp_s} {8 * _kdp_s} _kdp_dot
+            km_text(_): canvas {_kdp_x + 17 * _kdp_s} _kdp_ty _kdp_label KM_TEXT _kdp_s
+            str_from_int(_kdp_is): _kdp_i
+            concat(_kdp_tag): "pin:" _kdp_is
+            km_hit_add(_): hits _kdp_x _kdp_by _kdp_pw _kdp_bh _kdp_tag
+            set(_kdp_x): {_kdp_x + _kdp_pw + 4 * _kdp_s}
+        ]
+        set(_kdp_i): {_kdp_i + 1}
+    ]
+    # the latest message in what is left
+    set(_kdp_msg): km_status?
+    if(_): {_kdp_msg != ""} [
+        km_div(_kdp_chars): {_kdp_limit - _kdp_x - 8 * _kdp_s} {7 * _kdp_s}
+        if(_): {_kdp_chars > 3} [
+            km_fit(_kdp_msg): _kdp_msg _kdp_chars
+            km_text(_): canvas {_kdp_x + 8 * _kdp_s} _kdp_ty _kdp_msg KM_GOLD _kdp_s
+        ]
+    ]
+    set(r): 0
+]
+
+# Size [w h] of the menu's items at scale s.
+km_menu_size(r): items s [
+    len(_kms_n): items
+    set(_kms_wide): 0
+    set(_kms_h): {4 * s}
+    set(_kms_i): 0
+    while(_): {_kms_i < _kms_n} [
+        at(_kms_it): items _kms_i
+        at(_kms_l): _kms_it 0
+        at(_kms_k): _kms_it 1
+        len(_kms_ll): _kms_l
+        len(_kms_kl): _kms_k
+        set(_kms_c): _kms_ll
+        if(_): {_kms_kl > 0} [ set(_kms_c): {_kms_ll + _kms_kl + 3} ]
+        if(_): {_kms_c > _kms_wide} [ set(_kms_wide): _kms_c ]
+        if(_): {_kms_l = "-"} [ set(_kms_h): {_kms_h + 7 * s} ]
+        else(_): [ set(_kms_h): {_kms_h + 18 * s} ]
+        set(_kms_i): {_kms_i + 1}
+    ]
+    vec(r): ""
+    push(_): r {(_kms_wide * 7 + 28) * s}
+    push(_): r _kms_h
+]
+
+km_draw_menu(r): canvas m hits [
+    at(_kdm_s): m 0
+    at(_kdm_p): m 7
+    at(_kdm_w): m 9
+    at(_kdm_h): m 10
+    set(_kdm_kind): km_popup?
+    set(_kdm_items): km_popup_items?
+    set(_kdm_sel): km_popup_sel?
+    set(_kdm_x): km_popup_x?
+    set(_kdm_y): km_popup_y?
+    km_menu_size(_kdm_size): _kdm_items _kdm_s
+    at(_kdm_mw): _kdm_size 0
+    at(_kdm_mh): _kdm_size 1
+    set(_kdm_bottom): {_kdm_h - _kdm_p}
+    if(_): {_kdm_kind = "start"} [
+        set(_kdm_x): {3 * _kdm_s}
+        set(_kdm_y): {_kdm_bottom - _kdm_mh - 2 * _kdm_s}
+    ]
+    if(_): {_kdm_x + _kdm_mw > _kdm_w} [ set(_kdm_x): {_kdm_w - _kdm_mw - 2 * _kdm_s} ]
+    if(_): {_kdm_y + _kdm_mh > _kdm_bottom} [ set(_kdm_y): {_kdm_y - _kdm_mh} ]
+    if(_): {_kdm_y < 0} [ set(_kdm_y): 0 ]
+    if(_): {_kdm_x < 0} [ set(_kdm_x): 0 ]
+    canvasfill(_): canvas {_kdm_x + 4 * _kdm_s} {_kdm_y + 4 * _kdm_s} _kdm_mw _kdm_mh KM_SHADOW
+    canvasfill(_): canvas _kdm_x _kdm_y _kdm_mw _kdm_mh KM_MENU
+    canvasrect(_): canvas _kdm_x _kdm_y _kdm_mw _kdm_mh KM_MENU_LINE
+    # clicks inside the menu but not on an item keep it open
+    km_hit_add(_): hits _kdm_x _kdm_y _kdm_mw _kdm_mh "menu-body"
+    len(_kdm_n): _kdm_items
+    set(_kdm_iy): {_kdm_y + 2 * _kdm_s}
+    set(_kdm_i): 0
+    while(_): {_kdm_i < _kdm_n} [
+        at(_kdm_it): _kdm_items _kdm_i
+        at(_kdm_l): _kdm_it 0
+        at(_kdm_k): _kdm_it 1
+        if(_): {_kdm_l = "-"} [
+            canvasfill(_): canvas {_kdm_x + 8 * _kdm_s} {_kdm_iy + 3 * _kdm_s} {_kdm_mw - 16 * _kdm_s} _kdm_s KM_MENU_SEP
+            set(_kdm_iy): {_kdm_iy + 7 * _kdm_s}
+        ]
+        else(_): [
+            if(_): {_kdm_i = _kdm_sel} [
+                canvasfill(_): canvas {_kdm_x + 2 * _kdm_s} _kdm_iy {_kdm_mw - 4 * _kdm_s} {18 * _kdm_s} KM_HILITE
+            ]
+            km_text(_): canvas {_kdm_x + 12 * _kdm_s} {_kdm_iy + 6 * _kdm_s} _kdm_l KM_TEXT _kdm_s
+            if(_): {_kdm_k != ""} [
+                km_text_width(_kdm_kw): _kdm_k _kdm_s
+                km_text(_): canvas {_kdm_x + _kdm_mw - _kdm_kw - 12 * _kdm_s} {_kdm_iy + 6 * _kdm_s} _kdm_k KM_DIM _kdm_s
+            ]
+            str_from_int(_kdm_is): _kdm_i
+            concat(_kdm_tag): "item:" _kdm_is
+            km_hit_add(_): hits _kdm_x _kdm_iy _kdm_mw {18 * _kdm_s} _kdm_tag
+            set(_kdm_iy): {_kdm_iy + 18 * _kdm_s}
+        ]
+        set(_kdm_i): {_kdm_i + 1}
+    ]
+    set(r): 0
+]
+
+km_draw_calendar(r): canvas m hits [
+    at(_kdk_s): m 0
+    at(_kdk_p): m 7
+    at(_kdk_w): m 9
+    at(_kdk_h): m 10
+    set(_kdk_y): km_cal_y?
+    set(_kdk_m): km_cal_m?
+    set(_kdk_cell): {30 * _kdk_s}
+    set(_kdk_cw): {7 * _kdk_cell + 16 * _kdk_s}
+    set(_kdk_chh): {24 * _kdk_s + 16 * _kdk_s + 6 * 18 * _kdk_s + 24 * _kdk_s}
+    set(_kdk_x): {_kdk_w - _kdk_cw - 4 * _kdk_s}
+    set(_kdk_top): {_kdk_h - _kdk_p - _kdk_chh - 4 * _kdk_s}
+    canvasfill(_): canvas {_kdk_x + 4 * _kdk_s} {_kdk_top + 4 * _kdk_s} _kdk_cw _kdk_chh KM_SHADOW
+    canvasfill(_): canvas _kdk_x _kdk_top _kdk_cw _kdk_chh KM_MENU
+    canvasrect(_): canvas _kdk_x _kdk_top _kdk_cw _kdk_chh KM_MENU_LINE
+    km_hit_add(_): hits _kdk_x _kdk_top _kdk_cw _kdk_chh "menu-body"
+    # title with the month arrows
+    canvasfill(_): canvas _kdk_x _kdk_top _kdk_cw {22 * _kdk_s} KM_START
+    km_month_long(_kdk_mn): _kdk_m
+    str_from_int(_kdk_ys): _kdk_y
+    concat(_kdk_title): _kdk_mn " " _kdk_ys
+    km_text_width(_kdk_tw): _kdk_title _kdk_s
+    km_div(_kdk_tx): {_kdk_cw - _kdk_tw} 2
+    km_text(_): canvas {_kdk_x + _kdk_tx} {_kdk_top + 8 * _kdk_s} _kdk_title KM_TEXT _kdk_s
+    km_text(_): canvas {_kdk_x + 10 * _kdk_s} {_kdk_top + 8 * _kdk_s} "<" KM_TEXT _kdk_s
+    km_hit_add(_): hits _kdk_x _kdk_top {28 * _kdk_s} {22 * _kdk_s} "cal-prev"
+    km_text(_): canvas {_kdk_x + _kdk_cw - 16 * _kdk_s} {_kdk_top + 8 * _kdk_s} ">" KM_TEXT _kdk_s
+    km_hit_add(_): hits {_kdk_x + _kdk_cw - 28 * _kdk_s} _kdk_top {28 * _kdk_s} {22 * _kdk_s} "cal-next"
+    # weekday names, Monday first
+    km_words(_kdk_names): "Mo Tu We Th Fr Sa Su"
+    set(_kdk_gx): {_kdk_x + 8 * _kdk_s}
+    set(_kdk_hy): {_kdk_top + 30 * _kdk_s}
+    set(_kdk_i): 0
+    while(_): {_kdk_i < 7} [
+        at(_kdk_dn): _kdk_names _kdk_i
+        set(_kdk_c): KM_DIM
+        if(_): {_kdk_i >= 5} [ set(_kdk_c): KM_ERROR ]
+        km_text(_): canvas {_kdk_gx + _kdk_i * _kdk_cell + 8 * _kdk_s} _kdk_hy _kdk_dn _kdk_c _kdk_s
+        set(_kdk_i): {_kdk_i + 1}
+    ]
+    localtime(_kdk_now):
+    at(_kdk_ty): _kdk_now 0
+    at(_kdk_tm): _kdk_now 1
+    at(_kdk_td): _kdk_now 2
+    km_calendar(_kdk_cells): _kdk_y _kdk_m
+    set(_kdk_dy0): {_kdk_top + 46 * _kdk_s}
+    set(_kdk_i): 0
+    while(_): {_kdk_i < 42} [
+        at(_kdk_d): _kdk_cells _kdk_i
+        if(_): {_kdk_d > 0} [
+            set(_kdk_col): {_kdk_i % 7}
+            km_div(_kdk_row): _kdk_i 7
+            set(_kdk_cx): {_kdk_gx + _kdk_col * _kdk_cell}
+            set(_kdk_cy): {_kdk_dy0 + _kdk_row * 18 * _kdk_s}
+            if(_): {_kdk_d = _kdk_td && _kdk_m = _kdk_tm && _kdk_y = _kdk_ty} [
+                canvasfill(_): canvas {_kdk_cx + 2 * _kdk_s} {_kdk_cy - 4 * _kdk_s} {_kdk_cell - 4 * _kdk_s} {16 * _kdk_s} KM_START
+            ]
+            str_from_int(_kdk_ds): _kdk_d
+            km_text_width(_kdk_dw): _kdk_ds _kdk_s
+            set(_kdk_c): KM_TEXT
+            if(_): {_kdk_col >= 5} [ set(_kdk_c): KM_ERROR ]
+            if(_): {_kdk_d = _kdk_td && _kdk_m = _kdk_tm && _kdk_y = _kdk_ty} [ set(_kdk_c): KM_WHITE ]
+            km_div(_kdk_dx): {_kdk_cell - _kdk_dw} 2
+            km_text(_): canvas {_kdk_cx + _kdk_dx} _kdk_cy _kdk_ds _kdk_c _kdk_s
+        ]
+        set(_kdk_i): {_kdk_i + 1}
+    ]
+    # back to today
+    set(_kdk_fy): {_kdk_top + _kdk_chh - 20 * _kdk_s}
+    km_date_text(_kdk_today): _kdk_now
+    str_from_int(_kdk_tys): _kdk_ty
+    concat(_kdk_today): "Today: " _kdk_today " " _kdk_tys
+    km_text(_): canvas {_kdk_x + 12 * _kdk_s} {_kdk_fy + 6 * _kdk_s} _kdk_today KM_GOLD _kdk_s
+    km_hit_add(_): hits _kdk_x _kdk_fy _kdk_cw {20 * _kdk_s} "cal-today"
+    set(r): 0
+]
+
+km_draw_dialog(r): canvas m hits [
+    at(_kdg_s): m 0
+    at(_kdg_w): m 9
+    at(_kdg_h): m 10
+    set(_kdg_kind): km_dialog?
+    set(_kdg_title): km_dlg_title?
+    set(_kdg_text): km_dlg_text?
+    set(_kdg_err): km_dlg_error?
+    set(_kdg_dw): {480 * _kdg_s}
+    if(_): {_kdg_dw > _kdg_w - 20} [ set(_kdg_dw): {_kdg_w - 20} ]
+    km_div(_kdg_max): {_kdg_dw - 24 * _kdg_s} {7 * _kdg_s}
+    km_wrap_text(_kdg_lines): _kdg_text _kdg_max
+    if(_): {_kdg_err != ""} [
+        km_wrap_text(_kdg_elines): _kdg_err _kdg_max
+    ]
+    else(_): [ vec(_kdg_elines): "" ]
+    len(_kdg_ln): _kdg_lines
+    len(_kdg_en): _kdg_elines
+    set(_kdg_dh): {22 * _kdg_s + 12 * _kdg_s + (_kdg_ln + _kdg_en) * 11 * _kdg_s + 36 * _kdg_s}
+    if(_): {_kdg_kind = "input"} [ set(_kdg_dh): {_kdg_dh + 28 * _kdg_s} ]
+    km_div(_kdg_x): {_kdg_w - _kdg_dw} 2
+    km_div(_kdg_y): {_kdg_h - _kdg_dh} 2
+    canvasfill(_): canvas {_kdg_x + 6 * _kdg_s} {_kdg_y + 6 * _kdg_s} _kdg_dw _kdg_dh KM_SHADOW
+    canvasfill(_): canvas _kdg_x _kdg_y _kdg_dw _kdg_dh KM_MENU
+    canvasrect(_): canvas _kdg_x _kdg_y _kdg_dw _kdg_dh KM_MENU_LINE
+    km_hit_add(_): hits _kdg_x _kdg_y _kdg_dw _kdg_dh "dialog-body"
+    canvasfill(_): canvas _kdg_x _kdg_y _kdg_dw {22 * _kdg_s} KM_START
+    km_fit(_kdg_title): _kdg_title _kdg_max
+    km_text(_): canvas {_kdg_x + 10 * _kdg_s} {_kdg_y + 8 * _kdg_s} _kdg_title KM_TEXT _kdg_s
+    set(_kdg_ty): {_kdg_y + 34 * _kdg_s}
+    set(_kdg_i): 0
+    while(_): {_kdg_i < _kdg_ln} [
+        at(_kdg_line): _kdg_lines _kdg_i
+        km_text(_): canvas {_kdg_x + 12 * _kdg_s} _kdg_ty _kdg_line KM_TEXT _kdg_s
+        set(_kdg_ty): {_kdg_ty + 11 * _kdg_s}
+        set(_kdg_i): {_kdg_i + 1}
+    ]
+    if(_): {_kdg_kind = "input"} [
+        set(_kdg_fy): {_kdg_ty + 4 * _kdg_s}
+        canvasfill(_): canvas {_kdg_x + 12 * _kdg_s} _kdg_fy {_kdg_dw - 24 * _kdg_s} {20 * _kdg_s} KM_FIELD
+        canvasrect(_): canvas {_kdg_x + 12 * _kdg_s} _kdg_fy {_kdg_dw - 24 * _kdg_s} {20 * _kdg_s} KM_HILITE
+        set(_kdg_val): km_dlg_value?
+        km_tail(_kdg_shown): _kdg_val {_kdg_max - 2}
+        km_text(_): canvas {_kdg_x + 18 * _kdg_s} {_kdg_fy + 7 * _kdg_s} _kdg_shown KM_WHITE _kdg_s
+        km_text_width(_kdg_vw): _kdg_shown _kdg_s
+        canvasfill(_): canvas {_kdg_x + 20 * _kdg_s + _kdg_vw} {_kdg_fy + 5 * _kdg_s} {2 * _kdg_s} {11 * _kdg_s} KM_GOLD
+        set(_kdg_ty): {_kdg_ty + 28 * _kdg_s}
+    ]
+    set(_kdg_i): 0
+    while(_): {_kdg_i < _kdg_en} [
+        at(_kdg_line): _kdg_elines _kdg_i
+        km_text(_): canvas {_kdg_x + 12 * _kdg_s} _kdg_ty _kdg_line KM_ERROR _kdg_s
+        set(_kdg_ty): {_kdg_ty + 11 * _kdg_s}
+        set(_kdg_i): {_kdg_i + 1}
+    ]
+    # buttons, OK on the right
+    set(_kdg_bw): {84 * _kdg_s}
+    set(_kdg_bh): {20 * _kdg_s}
+    set(_kdg_by): {_kdg_y + _kdg_dh - _kdg_bh - 8 * _kdg_s}
+    set(_kdg_bx): {_kdg_x + _kdg_dw - _kdg_bw - 10 * _kdg_s}
+    set(_kdg_ok): "OK"
+    if(_): {_kdg_kind = "confirm"} [
+        set(_kdg_action): km_dlg_action?
+        set(_kdg_ok): "Yes"
+        if(_): {_kdg_action = "delete"} [ set(_kdg_ok): "Delete" ]
+        if(_): {_kdg_action = "exit"} [ set(_kdg_ok): "Exit" ]
+    ]
+    canvasfill(_): canvas _kdg_bx _kdg_by _kdg_bw _kdg_bh KM_HILITE
+    km_text_width(_kdg_tw): _kdg_ok _kdg_s
+    km_div(_kdg_tx): {_kdg_bw - _kdg_tw} 2
+    km_text(_): canvas {_kdg_bx + _kdg_tx} {_kdg_by + 7 * _kdg_s} _kdg_ok KM_WHITE _kdg_s
+    km_hit_add(_): hits _kdg_bx _kdg_by _kdg_bw _kdg_bh "dialog-ok"
+    if(_): {_kdg_kind != "message"} [
+        set(_kdg_cx): {_kdg_bx - _kdg_bw - 8 * _kdg_s}
+        canvasfill(_): canvas _kdg_cx _kdg_by _kdg_bw _kdg_bh KM_BUTTON
+        km_text_width(_kdg_tw): "Cancel" _kdg_s
+        km_div(_kdg_tx): {_kdg_bw - _kdg_tw} 2
+        km_text(_): canvas {_kdg_cx + _kdg_tx} {_kdg_by + 7 * _kdg_s} "Cancel" KM_TEXT _kdg_s
+        km_hit_add(_): hits _kdg_cx _kdg_by _kdg_bw _kdg_bh "dialog-cancel"
+    ]
+    set(r): 0
+]
+
+km_canvas_size(r): [
+    set(_kcz_c): km_canvas?
+    getwidth(_kcz_w): _kcz_c
+    getheight(_kcz_h): _kcz_c
+    if(_): {_kcz_w < 200 || _kcz_h < 150} [
+        set(_kcz_w): KM_WIDTH
+        set(_kcz_h): KM_HEIGHT
+    ]
+    vec(r): ""
+    push(_): r _kcz_w
+    push(_): r _kcz_h
+]
+
+# The layout for the canvas as it is now (and the scroll fixed to it).
+km_layout(r): [
+    km_canvas_size(_kly_size):
+    at(_kly_w): _kly_size 0
+    at(_kly_h): _kly_size 1
+    km_scale_for(_kly_s): _kly_w
+    set(_kly_dir): km_dir?
+    set(_kly_root): km_root?
+    km_metrics(r): _kly_w _kly_h _kly_s {_kly_dir != _kly_root}
+    set(km_metrics): r!
+    at(_kly_rows): r 5
+    at(_kly_cols): r 6
+    set(_kly_items): km_items?
+    len(_kly_n): _kly_items
+    set(_kly_sel): km_sel?
+    set(_kly_scroll): km_scroll?
+    km_scroll_for(_kly_scroll): _kly_sel _kly_scroll _kly_n _kly_rows _kly_cols
+    set(km_scroll): _kly_scroll!
+]
+
+kremlindraw(r): [
+    set(_kdw_c): km_canvas?
+    km_layout(_kdw_m):
+    at(_kdw_s): _kdw_m 0
+    at(_kdw_w): _kdw_m 9
+    at(_kdw_h): _kdw_m 10
+    at(_kdw_top): _kdw_m 8
+    canvasclear(_): _kdw_c KM_SHADOW
+    km_wallpaper(_): _kdw_c _kdw_w _kdw_h _kdw_s
+    vec(_kdw_hits): ""
+    if(_): {_kdw_top > 0} [ km_draw_location(_): _kdw_c _kdw_m _kdw_hits ]
+    km_draw_icons(_): _kdw_c _kdw_m _kdw_hits
+    km_draw_panel(_): _kdw_c _kdw_m _kdw_hits
+    set(_kdw_popup): km_popup?
+    if(_): {_kdw_popup = "calendar"} [ km_draw_calendar(_): _kdw_c _kdw_m _kdw_hits ]
+    elif(_): {_kdw_popup != ""} [ km_draw_menu(_): _kdw_c _kdw_m _kdw_hits ]
+    set(_kdw_dialog): km_dialog?
+    if(_): {_kdw_dialog != ""} [ km_draw_dialog(_): _kdw_c _kdw_m _kdw_hits ]
+    set(km_hits): _kdw_hits!
+    str_from_int(_kdw_shown_a): _kdw_w
+    str_from_int(_kdw_shown_b): _kdw_h
+    concat(_kdw_shown): _kdw_shown_a "x" _kdw_shown_b
+    set(km_size_shown): _kdw_shown!
+    set(r): 0
+]
+
+# --- input ------------------------------------------------------------------
+
+km_open_start(r): keyboard [
+    km_start_items(_kos2_items):
+    set(_kos2_sel): {0 - 1}
+    if(_): keyboard [ set(_kos2_sel): 0 ]
+    km_open_popup(_): "start" 0 0 _kos2_items "" _kos2_sel
+    set(r): 0
+]
+
+km_open_calendar(r): [
+    localtime(_koc_t):
+    at(_koc_y): _koc_t 0
+    at(_koc_m): _koc_t 1
+    set(km_cal_y): _koc_y!
+    set(km_cal_m): _koc_m!
+    vec(_koc_none): ""
+    km_open_popup(_): "calendar" 0 0 _koc_none "" 0
+    set(r): 0
+]
+
+km_cal_shift(r): delta [
+    set(_kcl_y): km_cal_y?
+    set(_kcl_m): km_cal_m?
+    set(_kcl_m): {_kcl_m + delta}
+    if(_): {_kcl_m < 1} [
+        set(_kcl_m): 12
+        set(_kcl_y): {_kcl_y - 1}
+    ]
+    if(_): {_kcl_m > 12} [
+        set(_kcl_m): 1
+        set(_kcl_y): {_kcl_y + 1}
+    ]
+    set(km_cal_y): _kcl_y!
+    set(km_cal_m): _kcl_m!
+    set(r): 0
+]
+
+# The context menu at (x, y) for the selection, or for the folder.
+km_open_context(r): x y keyboard [
+    kremlinselected(_kcx_name):
+    set(_kcx_sel): {0 - 1}
+    if(_): keyboard [ set(_kcx_sel): 0 ]
+    if(_): {_kcx_name != ""} [
+        km_item_menu(_kcx_items): _kcx_name
+        km_open_popup(_): "item" x y _kcx_items _kcx_name _kcx_sel
+    ]
+    else(_): [
+        km_folder_menu(_kcx_items):
+        km_open_popup(_): "folder" x y _kcx_items "" _kcx_sel
+    ]
+    set(r): 0
+]
+
+# Runs menu item index of the open menu.
+km_menu_pick(r): index [
+    set(_kmp_items): km_popup_items?
+    set(_kmp_target): km_popup_target?
+    len(_kmp_n): _kmp_items
+    set(r): ""
+    if(_): {index >= 0 && index < _kmp_n} [
+        at(_kmp_it): _kmp_items index
+        at(_kmp_action): _kmp_it 2
+        km_close_popup(_):
+        if(_): {_kmp_action != ""} [
+            kremlinaction(_kmp_err): _kmp_action _kmp_target
+            km_report(_): _kmp_err
+            set(r): _kmp_action
+        ]
+    ]
+]
+
+kremlinclick(r): x y [
+    uilock(_):
+    km_hit(_kcl2_tag): x y
+    set(_kcl2_dialog): km_dialog?
+    set(_kcl2_popup): km_popup?
+    km_starts_with(_kcl2_item): _kcl2_tag "item:"
+    km_starts_with(_kcl2_pin): _kcl2_tag "pin:"
+    if(_): {_kcl2_dialog != ""} [
+        if(_): {_kcl2_tag = "dialog-ok"} [ km_dialog_ok(_): ]
+        elif(_): {_kcl2_tag = "dialog-cancel"} [ km_dialog_close(_): ]
+    ]
+    elif(_): {_kcl2_popup != ""} [
+        if(_): _kcl2_item [
+            len(_kcl2_n): _kcl2_tag
+            slice(_kcl2_is): _kcl2_tag 5 {_kcl2_n - 5}
+            str_to_number(_kcl2_i): _kcl2_is
+            km_menu_pick(_): _kcl2_i
+        ]
+        elif(_): {_kcl2_tag = "cal-prev"} [ km_cal_shift(_): {0 - 1} ]
+        elif(_): {_kcl2_tag = "cal-next"} [ km_cal_shift(_): 1 ]
+        elif(_): {_kcl2_tag = "cal-today"} [ km_open_calendar(_): ]
+        elif(_): {_kcl2_tag != "menu-body"} [ km_close_popup(_): ]
+    ]
+    elif(_): {_kcl2_tag = "start"} [ km_open_start(_): false ]
+    elif(_): {_kcl2_tag = "clock"} [ km_open_calendar(_): ]
+    elif(_): {_kcl2_tag = "back"} [ kremlinup(_): ]
+    elif(_): {_kcl2_tag = "scroll-left"} [ kremlinwheelbody(_): 1 ]
+    elif(_): {_kcl2_tag = "scroll-right"} [ kremlinwheelbody(_): {0 - 1} ]
+    elif(_): _kcl2_pin [
+        len(_kcl2_n): _kcl2_tag
+        slice(_kcl2_is): _kcl2_tag 4 {_kcl2_n - 4}
+        str_to_number(_kcl2_i): _kcl2_is
+        time(_kcl2_now):
+        set(_kcl2_last): km_pin_time?
+        set(_kcl2_lastpin): km_pin_last?
+        if(_): {_kcl2_lastpin != _kcl2_i || _kcl2_now - _kcl2_last > 1} [
+            set(km_pin_time): _kcl2_now!
+            set(km_pin_last): _kcl2_i!
+            kremlinaction(_kcl2_err): "pin-open" _kcl2_i
+            km_report(_): _kcl2_err
+        ]
+    ]
+    else(_): [
+        set(_kcl2_m): km_metrics?
+        set(_kcl2_scroll): km_scroll?
+        set(_kcl2_items): km_items?
+        len(_kcl2_count): _kcl2_items
+        km_icon_at(_kcl2_i): x y _kcl2_m _kcl2_scroll _kcl2_count
+        set(km_sel): _kcl2_i!
+    ]
+    kremlindraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+kremlindouble(r): x y [
+    uilock(_):
+    set(_kdb_dialog): km_dialog?
+    set(_kdb_popup): km_popup?
+    km_hit(_kdb_tag): x y
+    if(_): {_kdb_dialog = "" && _kdb_popup = "" && _kdb_tag = ""} [
+        set(_kdb_m): km_metrics?
+        set(_kdb_scroll): km_scroll?
+        set(_kdb_items): km_items?
+        len(_kdb_count): _kdb_items
+        km_icon_at(_kdb_i): x y _kdb_m _kdb_scroll _kdb_count
+        if(_): {_kdb_i >= 0} [
+            set(km_sel): _kdb_i!
+            at(_kdb_name): _kdb_items _kdb_i
+            kremlinopenname(_kdb_err): _kdb_name
+            km_report(_): _kdb_err
+        ]
+    ]
+    kremlindraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+kremlinmenu(r): x y [
+    uilock(_):
+    set(_kmn_dialog): km_dialog?
+    if(_): {_kmn_dialog = ""} [
+        km_close_popup(_):
+        km_hit(_kmn_tag): x y
+        km_starts_with(_kmn_pin): _kmn_tag "pin:"
+        if(_): _kmn_pin [
+            len(_kmn_n): _kmn_tag
+            slice(_kmn_is): _kmn_tag 4 {_kmn_n - 4}
+            str_to_number(_kmn_i): _kmn_is
+            km_pin_menu(_kmn_items):
+            km_open_popup(_): "pin" x y _kmn_items _kmn_i {0 - 1}
+        ]
+        elif(_): {_kmn_tag = ""} [
+            set(_kmn_m): km_metrics?
+            set(_kmn_scroll): km_scroll?
+            set(_kmn_items): km_items?
+            len(_kmn_count): _kmn_items
+            km_icon_at(_kmn_i): x y _kmn_m _kmn_scroll _kmn_count
+            set(km_sel): _kmn_i!
+            km_open_context(_): x y false
+        ]
+    ]
+    kremlindraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+# Scrolls the icon columns; direction > 0 shows earlier columns.
+kremlinwheelbody(r): direction [
+    set(_kwb_scroll): km_scroll?
+    set(_kwb_m): km_metrics?
+    at(_kwb_rows): _kwb_m 5
+    at(_kwb_cols): _kwb_m 6
+    set(_kwb_items): km_items?
+    len(_kwb_n): _kwb_items
+    set(_kwb_scroll): {_kwb_scroll - direction}
+    km_scroll_for(_kwb_scroll): {0 - 1} _kwb_scroll _kwb_n _kwb_rows _kwb_cols
+    set(km_scroll): _kwb_scroll!
+    # keep the selection in view: it would scroll back otherwise
+    set(_kwb_sel): km_sel?
+    if(_): {_kwb_sel >= 0} [
+        km_div(_kwb_col): _kwb_sel _kwb_rows
+        if(_): {_kwb_col < _kwb_scroll || _kwb_col >= _kwb_scroll + _kwb_cols} [ set(km_sel): {0 - 1}! ]
+    ]
+    set(r): 0
+]
+
+kremlinwheel(r): direction [
+    uilock(_):
+    set(_kwh_popup): km_popup?
+    set(_kwh_dialog): km_dialog?
+    if(_): {_kwh_popup = "calendar"} [ km_cal_shift(_): {0 - direction} ]
+    elif(_): {_kwh_popup = "" && _kwh_dialog = ""} [ kremlinwheelbody(_): direction ]
+    kremlindraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+km_dialog_key(r): key [
+    set(_kdk2_kind): km_dialog?
+    set(_kdk2_shift): km_shift?
+    set(_kdk2_ctrl): km_ctrl?
+    if(_): {key = KM_KEY_ENTER || key = KM_KEY_KP_ENTER} [ km_dialog_ok(_): ]
+    elif(_): {key = KM_KEY_ESCAPE} [ km_dialog_close(_): ]
+    elif(_): {_kdk2_kind = "input"} [
+        set(_kdk2_v): km_dlg_value?
+        if(_): {key = KM_KEY_BACKSPACE} [
+            len(_kdk2_n): _kdk2_v
+            if(_): _kdk2_ctrl [ set(_kdk2_v): "" ]
+            elif(_): {_kdk2_n > 0} [ slice(_kdk2_v): _kdk2_v 0 {_kdk2_n - 1} ]
+        ]
+        elif(_): {_kdk2_ctrl && key = 85} [ set(_kdk2_v): "" ]
+        elif(_): {_kdk2_ctrl = false} [
+            km_key_char(_kdk2_c): key _kdk2_shift
+            len(_kdk2_n): _kdk2_v
+            if(_): {_kdk2_c != "" && _kdk2_n < 400} [ concat(_kdk2_v): _kdk2_v _kdk2_c ]
+        ]
+        set(km_dlg_value): _kdk2_v!
+        set(km_dlg_error): ""!
+    ]
+    set(r): 0
+]
+
+# The next item of the menu from i in direction step, skipping separators.
+km_menu_step(r): i step [
+    set(_kst2_items): km_popup_items?
+    len(_kst2_n): _kst2_items
+    set(r): i
+    set(_kst2_k): 0
+    set(_kst2_found): false
+    set(_kst2_j): i
+    while(_): {_kst2_k < _kst2_n && _kst2_found = false} [
+        set(_kst2_j): {(_kst2_j + step + _kst2_n) % _kst2_n}
+        at(_kst2_it): _kst2_items _kst2_j
+        at(_kst2_l): _kst2_it 0
+        if(_): {_kst2_l != "-"} [
+            set(_kst2_found): true
+            set(r): _kst2_j
+        ]
+        set(_kst2_k): {_kst2_k + 1}
+    ]
+]
+
+km_popup_key(r): key [
+    set(_kpk_kind): km_popup?
+    set(_kpk_sel): km_popup_sel?
+    if(_): {key = KM_KEY_ESCAPE || key = KM_KEY_F10 || key = KM_KEY_LSUPER || key = KM_KEY_RSUPER} [
+        km_close_popup(_):
+    ]
+    elif(_): {_kpk_kind = "calendar"} [
+        if(_): {key = KM_KEY_LEFT || key = KM_KEY_UP || key = KM_KEY_PAGE_UP} [ km_cal_shift(_): {0 - 1} ]
+        elif(_): {key = KM_KEY_RIGHT || key = KM_KEY_DOWN || key = KM_KEY_PAGE_DOWN} [ km_cal_shift(_): 1 ]
+        elif(_): {key = KM_KEY_HOME} [ km_open_calendar(_): ]
+        elif(_): {key = KM_KEY_ENTER} [ km_close_popup(_): ]
+    ]
+    elif(_): {key = KM_KEY_DOWN || key = KM_KEY_TAB} [
+        km_menu_step(_kpk_sel): _kpk_sel 1
+        set(km_popup_sel): _kpk_sel!
+    ]
+    elif(_): {key = KM_KEY_UP} [
+        if(_): {_kpk_sel < 0} [ set(_kpk_sel): 0 ]
+        km_menu_step(_kpk_sel): _kpk_sel {0 - 1}
+        set(km_popup_sel): _kpk_sel!
+    ]
+    elif(_): {key = KM_KEY_ENTER || key = KM_KEY_KP_ENTER || key = KM_KEY_SPACE} [
+        km_menu_pick(_): _kpk_sel
+    ]
+    else(_): [
+        # a letter picks the next item that starts with it
+        km_key_char(_kpk_c): key false
+        if(_): {_kpk_c != ""} [
+            set(_kpk_items): km_popup_items?
+            len(_kpk_n): _kpk_items
+            set(_kpk_k): 1
+            set(_kpk_done): false
+            while(_): {_kpk_k <= _kpk_n && _kpk_done = false} [
+                set(_kpk_j): {(_kpk_sel + _kpk_k + _kpk_n) % _kpk_n}
+                at(_kpk_it): _kpk_items _kpk_j
+                at(_kpk_l): _kpk_it 0
+                str_lower(_kpk_l): _kpk_l
+                km_starts_with(_kpk_ok): _kpk_l _kpk_c
+                if(_): {_kpk_ok && _kpk_l != "-"} [
+                    set(km_popup_sel): _kpk_j!
+                    set(_kpk_done): true
+                ]
+                set(_kpk_k): {_kpk_k + 1}
+            ]
+        ]
+    ]
+    set(r): 0
+]
+
+# Where a keyboard-opened context menu goes: next to the selected icon.
+km_context_point(r): [
+    set(_kcp_m): km_metrics?
+    set(_kcp_sel): km_sel?
+    set(_kcp_scroll): km_scroll?
+    vec(r): ""
+    if(_): {_kcp_sel >= 0} [
+        km_cell(_kcp_xy): _kcp_sel _kcp_m _kcp_scroll
+        at(_kcp_cw): _kcp_m 1
+        at(_kcp_x): _kcp_xy 0
+        at(_kcp_y): _kcp_xy 1
+        push(_): r {_kcp_x + _kcp_cw}
+        push(_): r _kcp_y
+    ]
+    else(_): [
+        push(_): r 40
+        push(_): r 40
+    ]
+]
+
+km_desktop_key(r): key [
+    set(_kdk3_shift): km_shift?
+    set(_kdk3_ctrl): km_ctrl?
+    set(_kdk3_alt): km_alt?
+    kremlinselected(_kdk3_name):
+    set(_kdk3_err): ""
+    set(_kdk3_m): km_metrics?
+    at(_kdk3_rows): _kdk3_m 5
+    at(_kdk3_cols): _kdk3_m 6
+    set(_kdk3_items): km_items?
+    len(_kdk3_n): _kdk3_items
+    set(_kdk3_sel): km_sel?
+    set(_kdk3_nav): {key = KM_KEY_RIGHT || key = KM_KEY_LEFT || key = KM_KEY_DOWN || key = KM_KEY_UP || key = KM_KEY_HOME || key = KM_KEY_END || key = KM_KEY_PAGE_UP || key = KM_KEY_PAGE_DOWN}
+    if(_): {_kdk3_alt && (key = KM_KEY_UP || key = KM_KEY_LEFT)} [ kremlinup(_): ]
+    elif(_): _kdk3_nav [
+        km_nav(_kdk3_sel): _kdk3_sel key _kdk3_n _kdk3_rows _kdk3_cols
+        set(km_sel): _kdk3_sel!
+    ]
+    elif(_): {_kdk3_alt && (key = KM_KEY_ENTER || key = KM_KEY_KP_ENTER)} [
+        if(_): {_kdk3_name != ""} [ kremlinaction(_kdk3_err): "properties" _kdk3_name ]
+    ]
+    elif(_): {key = KM_KEY_ENTER || key = KM_KEY_KP_ENTER} [
+        if(_): {_kdk3_name != "" && _kdk3_shift} [ km_open_system(_kdk3_err): _kdk3_name ]
+        elif(_): {_kdk3_name != ""} [ kremlinopenname(_kdk3_err): _kdk3_name ]
+    ]
+    elif(_): {key = KM_KEY_BACKSPACE} [ kremlinup(_): ]
+    elif(_): {key = KM_KEY_ESCAPE} [ set(km_sel): {0 - 1}! ]
+    elif(_): {key = KM_KEY_F1} [ kremlinaction(_): "help" "" ]
+    elif(_): {key = KM_KEY_F2} [
+        if(_): {_kdk3_name != ""} [ kremlinaction(_): "rename" _kdk3_name ]
+    ]
+    elif(_): {key = KM_KEY_F5} [ kremlinaction(_): "refresh" "" ]
+    elif(_): {key = KM_KEY_DELETE} [
+        if(_): {_kdk3_name != ""} [ kremlinaction(_): "delete" _kdk3_name ]
+    ]
+    elif(_): {key = KM_KEY_MENU || (key = KM_KEY_F10 && _kdk3_shift)} [
+        km_context_point(_kdk3_pt):
+        at(_kdk3_px): _kdk3_pt 0
+        at(_kdk3_py): _kdk3_pt 1
+        km_open_context(_): _kdk3_px _kdk3_py true
+    ]
+    elif(_): {key = KM_KEY_F10 || key = KM_KEY_LSUPER || key = KM_KEY_RSUPER} [ km_open_start(_): true ]
+    elif(_): _kdk3_ctrl [
+        if(_): {key = 78 && _kdk3_shift} [ kremlinaction(_): "newfile" "" ]
+        elif(_): {key = 78} [ kremlinaction(_): "newfolder" "" ]
+        elif(_): {key = 76} [ kremlinaction(_): "newlauncher" "" ]
+        elif(_): {key = 82} [ kremlinaction(_): "run" "" ]
+        elif(_): {key = 81} [ kremlinaction(_): "exit" "" ]
+        elif(_): {key = 68 && _kdk3_name != ""} [ kremlinaction(_kdk3_err): "duplicate" _kdk3_name ]
+        elif(_): {key = 80 && _kdk3_name != ""} [ kremlinaction(_kdk3_err): "pin" _kdk3_name ]
+    ]
+    elif(_): {_kdk3_alt = false} [
+        km_key_char(_kdk3_c): key false
+        if(_): {_kdk3_c != "" && _kdk3_c != " "} [ km_type_ahead(_): _kdk3_c ]
+    ]
+    km_report(_): _kdk3_err
+    set(r): 0
+]
+
+km_modifier(r): key down [
+    set(r): true
+    if(_): {key = KM_KEY_LSHIFT || key = KM_KEY_RSHIFT} [ set(km_shift): down! ]
+    elif(_): {key = KM_KEY_LCTRL || key = KM_KEY_RCTRL} [ set(km_ctrl): down! ]
+    elif(_): {key = KM_KEY_LALT || key = KM_KEY_RALT} [ set(km_alt): down! ]
+    else(_): [ set(r): false ]
+]
+
+# One key press, without the lock and the redraw (the tests call it).
+kremlinkeybody(r): key [
+    km_modifier(r): key true
+    if(_): {r = false} [
+        set(_kkb_dialog): km_dialog?
+        set(_kkb_popup): km_popup?
+        if(_): {_kkb_dialog != ""} [ km_dialog_key(_): key ]
+        elif(_): {_kkb_popup != ""} [ km_popup_key(_): key ]
+        else(_): [ km_desktop_key(_): key ]
+    ]
+]
+
+kremlinkey(r): key [
+    uilock(_):
+    kremlinkeybody(_kky_mod): key
+    if(_): {_kky_mod = false} [ kremlindraw(_): ]
+    uiunlock(_):
+    set(r): 0
+]
+
+kremlinkeyup(r): key [
+    km_modifier(_): key false
+    set(r): 0
+]
+
+# Modifier keys released while another window had the focus never reach
+# us: forget them when the focus moves.
+kremlinfocus(r): focused [
+    set(km_shift): false!
+    set(km_ctrl): false!
+    set(km_alt): false!
+    set(r): 0
+]
+
+# Once a second: the clock, messages that are old, the canvas size, and
+# every three seconds changes to the folder made by other programs.
+km_tick_once(r): [
+    set(_kto_redraw): false
+    localtime(_kto_t):
+    km_clock_text(_kto_clock): _kto_t
+    set(_kto_shown): km_clock_shown?
+    if(_): {_kto_clock != _kto_shown} [ set(_kto_redraw): true ]
+    set(_kto_msg): km_status?
+    set(_kto_when): km_status_time?
+    time(_kto_now):
+    if(_): {_kto_msg != "" && _kto_now - _kto_when >= 6} [
+        set(km_status): ""!
+        set(_kto_redraw): true
+    ]
+    km_canvas_size(_kto_size):
+    at(_kto_w): _kto_size 0
+    at(_kto_h): _kto_size 1
+    str_from_int(_kto_sz_a): _kto_w
+    str_from_int(_kto_sz_b): _kto_h
+    concat(_kto_sz): _kto_sz_a "x" _kto_sz_b
+    set(_kto_szs): km_size_shown?
+    if(_): {_kto_sz != _kto_szs} [ set(_kto_redraw): true ]
+    set(_kto_count): km_tick_count?
+    set(km_tick_count): {_kto_count + 1}!
+    if(_): {_kto_count % 3 = 0} [
+        set(_kto_dir): km_dir?
+        km_raw_listing(_kto_raw): _kto_dir
+        set(_kto_old): km_raw?
+        if(_): {_kto_raw != _kto_old} [
+            kremlinrefresh(_):
+            set(_kto_redraw): true
+        ]
+    ]
+    if(_): _kto_redraw [ kremlindraw(_): ]
+    set(r): _kto_redraw
+]
+
+km_tick(result): window generation [
+    set(result): 0
+    set(_ktk_go): true
+    while(_): _ktk_go [
+        sleep(_): 1000
+        alive(_ktk_alive): window
+        set(_ktk_gen): km_tick_gen?
+        set(_ktk_go): {_ktk_alive && _ktk_gen = generation}
+        if(_): _ktk_go [
+            uilock(_):
+            km_tick_once(_):
+            uiunlock(_):
+        ]
+    ]
+]
+
+# The canvas in window, drawn; returns it.
+kremlininitialize(canvas): window [
+    set(km_window): window!
+    set(km_tick_count): 0!
+    set(km_bands_for): {0 - 1}!
+    set(km_clock_shown): ""!
+    set(km_size_shown): ""!
+    canvas(canvas): window
+    set(km_canvas): canvas!
+    pack(_): canvas true
+    kremlindraw(_):
+]
+
+# Starts Kremlin again without a console window (Windows autostart);
+# false when it cannot, and Kremlin runs here instead.
+km_detach(r): args [
+    set(_kdt2_src): km_source?
+    set(_kdt2_ussr): km_ussr?
+    set(r): false
+    if(_): {_kdt2_src != ""} [
+        km_join(_kdt2_script): _kdt2_src "kremlin/kremlin.su"
+        km_quote(_kdt2_params): _kdt2_script
+        concat(_kdt2_params): _kdt2_params " " args
+        launch(_kdt2_ok): _kdt2_ussr _kdt2_params true
+        set(r): {_kdt2_ok = 0}
+    ]
+]
+
+# `ussr src/kremlin/kremlin.su` runs the desktop; scripts that $include
+# kremlin.su (the tests) keep their own init.
+$ifdef __MAIN__
+kremlin_app_pointer(result): canvas x y [
+    kremlinclick(_): x y
+]
+
+kremlin_app_double(result): canvas x y [
+    kremlindouble(_): x y
+]
+
+kremlin_app_menu(result): canvas x y [
+    kremlinmenu(_): x y
+]
+
+kremlin_app_wheel(result): canvas x y direction [
+    kremlinwheel(_): direction
+]
+
+kremlin_app_key(result): window key [
+    kremlinkey(_): key
+]
+
+kremlin_app_keyup(result): window key [
+    kremlinkeyup(_): key
+]
+
+kremlin_app_focus(result): window focused [
+    kremlinfocus(_): focused
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    set(_kin_window): false
+    set(_kin_detach): false
+    set(_kin_auto): ""
+    set(_kin_root): ""
+    set(_kin_bad): false
+    set(_kin_i): 0
+    while(_): {_kin_i < arg_count} [
+        at(_kin_a): arg_values _kin_i
+        if(_): {_kin_a = "--window"} [ set(_kin_window): true ]
+        elif(_): {_kin_a = "--detach"} [ set(_kin_detach): true ]
+        elif(_): {_kin_a = "--autostart" && _kin_i + 1 < arg_count} [
+            at(_kin_auto): arg_values {_kin_i + 1}
+            set(_kin_i): {_kin_i + 1}
+            if(_): {_kin_auto != "on" && _kin_auto != "off"} [ set(_kin_bad): true ]
+        ]
+        else(_): [
+            km_starts_with(_kin_opt): _kin_a "-"
+            if(_): {_kin_opt || _kin_root != ""} [ set(_kin_bad): true ]
+            else(_): [ set(_kin_root): _kin_a ]
+        ]
+        set(_kin_i): {_kin_i + 1}
+    ]
+    if(_): _kin_bad [
+        print(_): "usage: ussr kremlin.su [--window] [--detach] [folder]"
+        print(_): "       ussr kremlin.su --autostart on|off [folder]"
+        set(result): 2
+        return(_): result
+    ]
+    if(_): {_kin_root = ""} [ km_default_root(_kin_root): ]
+    else(_): [
+        # a folder given relative to where Kremlin was started
+        km_slashes(_kin_root): _kin_root
+        km_is_absolute(_kin_abs): _kin_root
+        if(_): {_kin_abs = false} [
+            getcwd(_kin_cwd):
+            km_slashes(_kin_cwd): _kin_cwd
+            km_join(_kin_root): _kin_cwd _kin_root
+        ]
+    ]
+    kremlinreset(_): _kin_root
+    if(_): {_kin_auto != ""} [
+        kremlinautostart(_kin_msg): {_kin_auto = "on"}
+        print(_): _kin_msg
+        return(_): result
+    ]
+    if(_): _kin_detach [
+        set(_kin_rest): ""
+        if(_): _kin_window [ set(_kin_rest): "--window " ]
+        km_quote(_kin_qr): _kin_root
+        concat(_kin_rest): _kin_rest _kin_qr
+        km_detach(_kin_gone): _kin_rest
+        if(_): _kin_gone [ return(_): result ]
+    ]
+    createwindow(window): "Kremlin" KM_WIDTH KM_HEIGHT
+    kremlininitialize(canvas): window
+    on(_): canvas "pointer" "kremlin_app_pointer"
+    on(_): canvas "double" "kremlin_app_double"
+    on(_): canvas "menu" "kremlin_app_menu"
+    on(_): canvas "wheel" "kremlin_app_wheel"
+    on(_): window "key" "kremlin_app_key"
+    on(_): window "keyup" "kremlin_app_keyup"
+    on(_): window "focus" "kremlin_app_focus"
+    if(_): {_kin_window = false} [ fullscreen(_): window ]
+    show(_): window
+    set(km_tick_gen): 1!
+    async(_): "km_tick" window 1
+    run(_):
+    # redraw once the canvas has its real size
+    sleep(_): 150
+    uilock(_):
+    kremlindraw(_):
+    uiunlock(_):
+]
+$endif

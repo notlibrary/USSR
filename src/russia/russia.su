@@ -67,6 +67,14 @@ lx_digit_p(r): b [
     ]
 ]
 
+# Value of hex digit byte b (0-9, a-f, A-F), or -1.
+lx_hex_value(r): b [
+    set(r): {0 - 1}
+    if(_): {b >= 48 && b <= 57} [ set(r): {b - 48} ]
+    if(_): {b >= 97 && b <= 102} [ set(r): {b - 87} ]
+    if(_): {b >= 65 && b <= 70} [ set(r): {b - 55} ]
+]
+
 # ---- emit one token: kind text line ----
 lx_emit(r): kind text tline [
     new(lx_t): "lx_Tok" 0 "" 0
@@ -218,6 +226,46 @@ lx_scan(r): s [
                     set(lx_k): 7
                 ]
                 lx_emit(_): lx_k lx_txt lx_ln
+                set(lx_adv): 1
+            ]
+        ]
+        # hex number: 0x then up to 16 significant digits, read as the
+        # 64-bit pattern; emitted as an integer token in decimal
+        if(_): {lx_adv = 0 && lx_b = 48 && lx_pos + 2 < lx_n + 1} [
+            set(lx_hx): {0 - 1}
+            set(lx_hd): {0 - 1}
+            if(_): {lx_pos + 1 < lx_n} [ at(lx_hx): lx_sb {lx_pos + 1} ]
+            if(_): {lx_pos + 2 < lx_n} [
+                at(lx_hb): lx_sb {lx_pos + 2}
+                lx_hex_value(lx_hd): lx_hb
+            ]
+            if(_): {(lx_hx = 120 || lx_hx = 88) && lx_hd >= 0} [
+                set(lx_start): lx_pos
+                set(lx_pos): {lx_pos + 2}
+                set(lx_hv): 0
+                set(lx_hn): 0
+                set(lx_hmore): 1
+                while(_): {lx_hmore = 1} [
+                    set(lx_hd): {0 - 1}
+                    if(_): {lx_pos < lx_n} [
+                        at(lx_hb): lx_sb lx_pos
+                        lx_hex_value(lx_hd): lx_hb
+                    ]
+                    if(_): {lx_hd < 0} [ set(lx_hmore): 0 ]
+                    else(_): [
+                        set(lx_hv): {(lx_hv << 4) | lx_hd}
+                        # leading zeros do not count
+                        if(_): {lx_hn > 0 || lx_hd > 0} [ set(lx_hn): {lx_hn + 1} ]
+                        set(lx_pos): {lx_pos + 1}
+                    ]
+                ]
+                slice(lx_tmp): lx_src lx_start {lx_pos - lx_start}
+                if(_): {lx_hn > 16} [
+                    set(lx_failed): 1
+                    concat(lx_err): "hex integer " lx_tmp " has more than 16 digits (64 bits)"
+                ]
+                encode(lx_htxt): lx_hv
+                lx_emit(_): 2 lx_htxt lx_ln
                 set(lx_adv): 1
             ]
         ]
@@ -1130,6 +1178,11 @@ ps_par(r): [
                 getf(ps_par_nk): ps_par_nx "kind"
                 getf(ps_par_ns): ps_par_nx "text"
                 concat(ps_par_neg): "-" ps_par_ns
+                slice(ps_par_n0): ps_par_ns 0 1
+                if(_): {ps_par_n0 = "-"} [
+                    len(ps_par_nl): ps_par_ns
+                    slice(ps_par_neg): ps_par_ns 1 {ps_par_nl - 1}
+                ]
                 if(_): {ps_par_op = "-" && ps_par_nk = 2} [
                     ps_adv(_): 0
                     ps_adv(_): 0
@@ -2581,6 +2634,8 @@ rt_is_host(r): nm [
     if(_): {nm = "getenv"} [ set(r): 1 ]
     if(_): {nm = "setenv"} [ set(r): 1 ]
     if(_): {nm = "unsetenv"} [ set(r): 1 ]
+    if(_): {nm = "launch"} [ set(r): 1 ]
+    if(_): {nm = "localtime"} [ set(r): 1 ]
     if(_): {nm = "chr"} [ set(r): 1 ]
     if(_): {nm = "fail"} [ set(r): 1 ]
     if(_): {nm = "list_dir"} [ set(r): 1 ]
@@ -2657,7 +2712,8 @@ rt_host(r): nm vals [
     len(rt_hn): vals
     if(_): {rt_hn > 0} [ at(rt_ha0): vals 0 ]
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
-    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias"} [ rt_fatal(_): ]
+    if(_): {rt_hn > 2} [ at(rt_ha2): vals 2 ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2689,6 +2745,17 @@ rt_host(r): nm vals [
     if(_): {nm = "unsetenv"} [
         if(_): {rt_hn = 1} [ unsetenv(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "launch"} [
+        if(_): {rt_hn = 1} [ launch(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ launch(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn = 3} [ launch(r): rt_ha0 rt_ha1 rt_ha2 ]
+        if(_): {rt_hn < 1 || rt_hn > 3} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "localtime"} [
+        if(_): {rt_hn = 0} [ localtime(r): ]
+        if(_): {rt_hn = 1} [ localtime(r): rt_ha0 ]
+        if(_): {rt_hn > 1} [ rt_fatal(_): ]
     ]
     if(_): {nm = "chr"} [
         if(_): {rt_hn = 1} [ chr(r): rt_ha0 ]
@@ -7273,6 +7340,10 @@ vm_petersburg(r): name nb [
         petersburg_canvas_text(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4
         set(vpb_done): 1
     ]
+    elif(_): {name = "petersburg_canvas_text_scaled" && nb = 6} [
+        petersburg_canvas_text_scaled(r): vpb_0 vpb_1 vpb_2 vpb_3 vpb_4 vpb_5
+        set(vpb_done): 1
+    ]
     elif(_): {name = "petersburg_close" && nb = 1} [
         petersburg_close(r): vpb_0
         set(vpb_done): 1
@@ -7363,6 +7434,10 @@ vm_petersburg(r): name nb [
     ]
     elif(_): {name = "petersburg_maximize" && nb = 1} [
         petersburg_maximize(r): vpb_0
+        set(vpb_done): 1
+    ]
+    elif(_): {name = "petersburg_fullscreen" && nb = 1} [
+        petersburg_fullscreen(r): vpb_0
         set(vpb_done): 1
     ]
     elif(_): {name = "petersburg_message_box" && nb = 2} [

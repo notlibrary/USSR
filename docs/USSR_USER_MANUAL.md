@@ -204,6 +204,10 @@ init(ret): arg_cnt arg_vec [
 
 exits with status 3 (`echo $?` prints `3`).
 
+`ussr`'s own options (`-v`, `-e`, `-c`) come before the script name;
+everything after it, dashes included, is the script's (`ussr
+src/kremlin/kremlin.su --window` passes `--window` to Kremlin).
+
 Textual assembler files can also be run directly:
 
 ```
@@ -270,10 +274,26 @@ print(_): "hello, world"
 | Kind    | Syntax                          | Notes |
 |---------|----------------------------------|-------|
 | String  | `"like this"`                    | Backslash-escapes are supported (`\"`, `\\`, etc). |
-| Integer | `42`, `-7`                        | No decimal point. 64-bit signed on every platform: `-9223372036854775808` to `9223372036854775807` (§5). A literal outside that range is a compile error. |
+| Integer | `42`, `-7`, `0xCAFEBABE`          | No decimal point. 64-bit signed on every platform: `-9223372036854775808` to `9223372036854775807` (§5). A literal outside that range is a compile error. Hexadecimal: `0x` or `0X`, then up to 16 hex digits in either case (see below). |
 | Real    | `3.0`, `-1.5`                     | **Must** include a decimal point. `3` and `3.0` are different types — this matters once a value goes through UNO encode/decode (§8), where a real always round-trips with its `.0`, even when whole. |
 | Boolean | `true`, `false`                  | |
 | Null    | `null`                            | Every struct field and vector slot accepts `null` regardless of its declared type (§8). |
+
+**Hexadecimal integers.** `0xCAFEBABE` is 3405691582 and `0xDEADBEEF` is
+3735928559: a hex literal is an ordinary integer, written in base 16, and
+works anywhere a decimal one does, in arguments and inside `{...}`:
+
+```
+set(color): 0xB3261E                 # a 0xRRGGBB color
+set(low): {0xCAFEBABE & 0xFFFF}      # 47806 (0xBABE)
+set(hi): {(0xDEADBEEF >> 16) = 0xDEAD}  # true
+```
+
+Up to 16 digits count (leading zeros do not), and they are read as the
+64-bit two's complement pattern: `0x7FFFFFFFFFFFFFFF` is the largest
+integer, `0x8000000000000000` the smallest and `0xFFFFFFFFFFFFFFFF` is
+`-1`. More than 16 digits is a compile error. Numbers always print in
+decimal.
 
 ---
 
@@ -1005,6 +1025,32 @@ one variable), values are converted between UTF-8 and the Win32 Unicode
 environment, and empty values are kept rather than deleting the variable.
 On POSIX systems names are case-sensitive and the C library's `setenv`,
 `unsetenv` and `getenv` are used.
+
+**Starting programs and local time (native):**
+
+```
+launch(ok): "notes.txt"                  # open with the system's program
+launch(ok): "https://example.org"        # a URL opens in the browser
+launch(ok): "notepad" "notes.txt"        # a program and its arguments
+launch(ok): "ussr" "klin.su" true        # no console window (Windows)
+localtime(t):                            # now: [2026,10,27,9,5,0,2,300]
+localtime(t): 0                          # a time(s): value
+```
+
+Unlike an external command (§9), `launch` does not wait: the program keeps
+running on its own, and `ok` is `0` when it started, `1` when it could not
+(no such program, nothing to open the file with). The first argument is a
+program (by name on `PATH`, or a path to it) or a file, folder or URL, which
+opens with the program the system has for it: `ShellExecute` on Windows,
+`xdg-open` on Linux, `open` on macOS. The optional second argument is the
+argument string (on POSIX split at blanks, `"double quotes"` grouping
+words); the third, when true, starts a program without a console window on
+Windows (a GUI script run by `ussr`), and on POSIX sends its output to
+`/dev/null`.
+
+`localtime` gives the local date and time as
+`[year month day hour minute second weekday yearday]`: month 1-12, weekday
+0 (Sunday) to 6, yearday 1-366.
 
 **Runtime helpers (native):**
 

@@ -10,6 +10,7 @@ a diagnostic.
 |---|---|---|
 | `createwindow(title, width, height)` | String, positive integers (160..8192 by 120..8192) | Window handle |
 | `maximize(window)` | Window handle | Zero; requests a maximized window |
+| `fullscreen(window)` | Window handle | Zero; makes the window a borderless window covering the primary monitor, with widgets edge to edge (no margin); `1` when there is no monitor and it was maximized instead |
 | `label(window, text)` | Window handle, string | Label handle |
 | `button(parent, text)` | Window or toolbar handle, string | Button handle |
 | `toolbar(window)` | Window handle | Toolbar handle; docks at the top of the window, its buttons laid out left to right |
@@ -38,6 +39,7 @@ a diagnostic.
 | `canvasarc(canvas, cx, cy, radius, start, end, color)` | Canvas, five numbers, color | Zero; appends an arc from `start` to `end` degrees |
 | `canvasrect(canvas, x, y, width, height, color)` / `canvasfill(...)` | Canvas, four numbers, color | Zero; appends a rectangle outline / filled rectangle |
 | `canvastext(canvas, x, y, text, color)` | Canvas, two numbers, string, color | Zero; appends bitmap-font text |
+| `canvastextscale(canvas, x, y, text, color, scale)` | As `canvastext`, then an integer 1..16 | Zero; bitmap-font text with each font pixel `scale` pixels square (a character cell is `7 * scale` wide) |
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
@@ -55,6 +57,8 @@ a diagnostic.
 | `"pointer"` | Image | image, x, y in source-image pixels |
 | `"pointer"` | Canvas | canvas, x, y in canvas pixels |
 | `"wheel"` | Canvas | canvas, x, y, direction (`1` away from the user, `-1` toward) |
+| `"double"` | Canvas | canvas, x, y of the second press of a double click (within 0.45 s and 5 pixels; its `"pointer"` event comes first) |
+| `"menu"` | Canvas | canvas, x, y of a right-button press |
 | `"key"` | Window | window, GLFW key code (key press) |
 | `"keyup"` | Window | window, GLFW key code (key release) |
 | `"focus"` | Window | window, `1` when focused, `0` when focus is lost |

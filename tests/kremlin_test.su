@@ -1,0 +1,564 @@
+# Kremlin desktop engine: paths, kinds, labels, dates, launchers, settings,
+# layout, keyboard navigation and the file operations on a scratch desktop
+# in tests/kremlin_tmp. No window is needed and nothing is started
+# (km_dryrun). Prints PASS or FAIL per check.
+$include "../src/kremlin/kremlin.su"
+
+eq(r): label got want [
+    if(_): {got = want} [
+        concat(_eq_line): "PASS " label
+    ]
+    else(_): [
+        typeof(_eq_gt): got
+        typeof(_eq_wt): want
+        if(_): {_eq_gt != "string"} [ encode(got): got ]
+        if(_): {_eq_wt != "string"} [ encode(want): want ]
+        concat(_eq_line): "FAIL " label ": got " got ", want " want
+    ]
+    print(_): _eq_line
+    set(r): 0
+]
+
+# The strings of v joined by "|".
+joined(r): v [
+    set(r): ""
+    len(_jn_n): v
+    set(_jn_i): 0
+    while(_): {_jn_i < _jn_n} [
+        at(_jn_x): v _jn_i
+        typeof(_jn_t): _jn_x
+        if(_): {_jn_t != "string"} [ encode(_jn_x): _jn_x ]
+        if(_): {_jn_i > 0} [ concat(r): r "|" ]
+        concat(r): r _jn_x
+        set(_jn_i): {_jn_i + 1}
+    ]
+]
+
+contains(r): s needle [
+    str_find(_ct_i): s needle 0
+    set(r): {_ct_i >= 0}
+]
+
+# Removes dir and everything in it (files, then folders deepest first).
+remove_tree(r): dir [
+    vec(_rt_dirs): ""
+    push(_): _rt_dirs dir
+    set(_rt_i): 0
+    set(_rt_n): 1
+    while(_): {_rt_i < _rt_n} [
+        at(_rt_d): _rt_dirs _rt_i
+        list_dir(_rt_names): _rt_d
+        typeof(_rt_t): _rt_names
+        if(_): {_rt_t = "vector"} [
+            len(_rt_k): _rt_names
+            set(_rt_j): 0
+            while(_): {_rt_j < _rt_k} [
+                at(_rt_name): _rt_names _rt_j
+                km_strip_slash(_rt_plain): _rt_name
+                km_join(_rt_p): _rt_d _rt_plain
+                km_is_dir_name(_rt_isd): _rt_name
+                if(_): _rt_isd [ push(_): _rt_dirs _rt_p ]
+                else(_): [ remove_file(_): _rt_p ]
+                set(_rt_j): {_rt_j + 1}
+            ]
+        ]
+        len(_rt_n): _rt_dirs
+        set(_rt_i): {_rt_i + 1}
+    ]
+    set(_rt_i): {_rt_n - 1}
+    while(_): {_rt_i >= 0} [
+        at(_rt_d): _rt_dirs _rt_i
+        remove_dir(_): _rt_d
+        set(_rt_i): {_rt_i - 1}
+    ]
+    set(r): 0
+]
+
+# --- paths and names
+test_paths_and_names(r): [
+    km_slashes(_v): "C:\\Users\\ivan\\kremlin"
+    eq(_): "backslashes" _v "C:/Users/ivan/kremlin"
+    km_parent(_v): "C:/Users/ivan"
+    eq(_): "parent" _v "C:/Users"
+    km_parent(_v): "C:/Users"
+    eq(_): "parent of a top folder" _v "C:/"
+    km_parent(_v): "C:/"
+    eq(_): "parent of a drive" _v "C:/"
+    km_parent(_v): "/home"
+    eq(_): "parent of /home" _v "/"
+    km_base(_v): "C:/Users/ivan/Apps/"
+    eq(_): "base" _v "Apps"
+    km_join(_v): "C:/" "kremlin"
+    eq(_): "join at a drive" _v "C:/kremlin"
+    km_join(_v): "/home/ivan" "kremlin"
+    eq(_): "join" _v "/home/ivan/kremlin"
+    km_strip_slash(_v): "Apps/"
+    eq(_): "strip slash" _v "Apps"
+    km_ext(_v): "Report.PDF"
+    eq(_): "extension" _v "pdf"
+    km_ext(_v): ".profile"
+    eq(_): "dot file has no extension" _v ""
+    km_ext(_v): "archive.tar.gz"
+    eq(_): "last extension" _v "gz"
+    km_ext(_v): "photos.2024/"
+    eq(_): "folders have no extension" _v ""
+    km_is_absolute(_v): "C:/x"
+    eq(_): "absolute drive path" _v true
+    km_is_absolute(_v): "Apps/Klin.kl"
+    eq(_): "relative path" _v false
+
+    km_kind(_v): "Apps/"
+    eq(_): "kind folder" _v "folder"
+    km_kind(_v): "Klin.kl"
+    eq(_): "kind launcher" _v "launcher"
+    km_kind(_v): "setup.EXE"
+    eq(_): "kind program" _v "program"
+    km_kind(_v): "game.su"
+    eq(_): "kind code" _v "code"
+    km_kind(_v): "notes.txt"
+    eq(_): "kind text" _v "text"
+    km_kind(_v): "cat.jpeg"
+    eq(_): "kind image" _v "image"
+    km_kind(_v): "plan.dxf"
+    eq(_): "kind document" _v "document"
+    km_kind(_v): "song.flac"
+    eq(_): "kind audio" _v "audio"
+    km_kind(_v): "backup.zip"
+    eq(_): "kind archive" _v "archive"
+    km_kind(_v): "README"
+    eq(_): "kind file" _v "file"
+    km_label(_v): "Calculator.kl"
+    eq(_): "launcher label" _v "Calculator"
+    km_label(_v): "Documents/"
+    eq(_): "folder label" _v "Documents"
+    km_hidden(_v): ".kremlin"
+    eq(_): "settings file is hidden" _v true
+    km_hidden(_v): "desktop.ini"
+    eq(_): "desktop.ini is hidden" _v true
+    km_hidden(_v): "Welcome.txt"
+    eq(_): "files are shown" _v false
+
+    set(r): 0
+]
+
+# --- text
+test_text(r): [
+    km_wrap_label(_v): "Calculator" 12
+    joined(_v): _v
+    eq(_): "short label, one line" _v "Calculator"
+    km_wrap_label(_v): "Quarterly report final.txt" 12
+    joined(_v): _v
+    eq(_): "label breaks at a blank" _v "Quarterly|report fin.."
+    km_wrap_label(_v): "abcdefghijklmnopq" 12
+    joined(_v): _v
+    eq(_): "label without blanks is cut" _v "abcdefghijkl|mnopq"
+    km_fit(_v): "Programmer" 6
+    eq(_): "fit" _v "Prog.."
+    km_tail(_v): "Desktop/Apps/Games" 10
+    eq(_): "tail" _v "..ps/Games"
+    km_wrap_text(_v): "one two three four\n\nfive" 9
+    joined(_v): _v
+    eq(_): "wrap text" _v "one two|three|four||five"
+    km_display(_v): "Привет, Ёлка.txt"
+    eq(_): "Cyrillic is shown in Latin letters" _v "PRIVET, YOLKA.txt"
+    km_display(_v): "Октябрь"
+    eq(_): "soft signs drop out" _v "OKTYABR"
+    km_display(_v): "café"
+    eq(_): "other characters show as ?" _v "caf?"
+    km_split(_v): "a||b" 124
+    joined(_v): _v
+    eq(_): "split keeps empty parts" _v "a||b"
+
+    set(r): 0
+]
+
+# --- dates
+test_dates(r): [
+    km_weekday(_v): 2026 10 27
+    eq(_): "27 Oct 2026 is a Tuesday" _v 2
+    km_weekday(_v): 2000 1 1
+    eq(_): "1 Jan 2000 is a Saturday" _v 6
+    km_leap(_v): 2024
+    eq(_): "2024 is a leap year" _v true
+    km_leap(_v): 1900
+    eq(_): "1900 is not" _v false
+    km_leap(_v): 2000
+    eq(_): "2000 is" _v true
+    km_month_days(_v): 2026 2
+    eq(_): "February 2026" _v 28
+    km_month_days(_v): 2024 2
+    eq(_): "February 2024" _v 29
+    km_calendar(_cal): 2026 10
+    at(_v): _cal 3
+    eq(_): "October 2026 starts on Thursday" _v 1
+    at(_v): _cal 2
+    eq(_): "cells before the 1st are empty" _v 0
+    at(_v): _cal 33
+    eq(_): "31 October" _v 31
+    at(_v): _cal 34
+    eq(_): "cells after the last day are empty" _v 0
+    vec(_t): ""
+    push(_): _t 2026
+    push(_): _t 10
+    push(_): _t 27
+    push(_): _t 9
+    push(_): _t 5
+    push(_): _t 0
+    push(_): _t 2
+    push(_): _t 300
+    km_clock_text(_v): _t
+    eq(_): "clock" _v "09:05"
+    km_date_text(_v): _t
+    eq(_): "date" _v "Tue 27 Oct"
+    km_month_long(_v): 12
+    eq(_): "month name" _v "December"
+    localtime(_now):
+    len(_v): _now
+    eq(_): "localtime has eight fields" _v 8
+    localtime(_v): 0
+    at(_v): _v 0
+    if(_): {_v = 1969} [ set(_v): 1970 ]
+    eq(_): "localtime of 0" _v 1970
+
+    set(r): 0
+]
+
+# --- launchers
+test_launchers(r): [
+    km_launcher_parse(_l): "# a launcher\nname: Klin\ncommand: ussr src/klin/klin.su\nconsole: no\n"
+    joined(_v): _l
+    eq(_): "parse launcher" _v "Klin|ussr src/klin/klin.su|false"
+    km_launcher_parse(_l): "notepad.exe notes.txt\r\n"
+    joined(_v): _l
+    eq(_): "a plain line is the command" _v "|notepad.exe notes.txt|true"
+    km_launcher_parse(_l): "C:/Tools/app.exe --fast"
+    at(_v): _l 1
+    eq(_): "a drive path is not a key" _v "C:/Tools/app.exe --fast"
+    km_launcher_text(_txt): "Klin" "ussr klin.su" false
+    km_launcher_parse(_l): _txt
+    joined(_v): _l
+    eq(_): "launcher text round trip" _v "Klin|ussr klin.su|false"
+    km_split_command(_v): "ussr src/klin/klin.su sci"
+    joined(_v): _v
+    eq(_): "split command" _v "ussr|src/klin/klin.su sci"
+    km_split_command(_v): "\"C:/Program Files/App/app.exe\"  -x \"a b\""
+    joined(_v): _v
+    eq(_): "split quoted command" _v "C:/Program Files/App/app.exe|-x \"a b\""
+    km_split_command(_v): "notepad"
+    joined(_v): _v
+    eq(_): "command without arguments" _v "notepad|"
+
+    set(r): 0
+]
+
+# --- settings
+test_settings(r): [
+    km_config_defaults(_):
+    km_config_apply(_): "# c\nscale = 2\nwallpaper=3\nsort=type\npins=Apps/Klin.kl| Documents |\nussr=/usr/bin/ussr\nsource=/opt/ussr/src\nbogus=1\nscale=9\n"
+    set(_v): km_scale?
+    eq(_): "settings: scale (and a bad one ignored)" _v 2
+    set(_v): km_wall?
+    eq(_): "settings: wallpaper" _v 3
+    set(_v): km_sort?
+    eq(_): "settings: sort" _v "type"
+    set(_v): km_pins?
+    joined(_v): _v
+    eq(_): "settings: pins" _v "Apps/Klin.kl|Documents"
+    set(_v): km_ussr?
+    eq(_): "settings: ussr" _v "/usr/bin/ussr"
+    km_config_text(_txt):
+    km_config_defaults(_):
+    km_config_apply(_): _txt
+    set(_v): km_pins?
+    joined(_v): _v
+    eq(_): "settings round trip" _v "Apps/Klin.kl|Documents"
+    set(_v): km_source?
+    eq(_): "settings round trip source" _v "/opt/ussr/src"
+
+    set(r): 0
+]
+
+# --- keys
+test_keys(r): [
+    km_key_char(_v): 65 false
+    eq(_): "key a" _v "a"
+    km_key_char(_v): 65 true
+    eq(_): "key A" _v "A"
+    km_key_char(_v): 49 true
+    eq(_): "key !" _v "!"
+    km_key_char(_v): 51 true
+    eq(_): "key #" _v "#"
+    km_key_char(_v): 47 true
+    eq(_): "key ?" _v "?"
+    km_key_char(_v): 46 false
+    eq(_): "key ." _v "."
+    km_key_char(_v): 45 true
+    eq(_): "key _" _v "_"
+    km_key_char(_v): 324 false
+    eq(_): "keypad 4" _v "4"
+    km_key_char(_v): 290 false
+    eq(_): "F1 types nothing" _v ""
+
+    set(r): 0
+]
+
+# --- layout and navigation
+test_layout_and_navigation(r): [
+    km_metrics(_m): 1024 700 1 false
+    at(_v): _m 5
+    eq(_): "rows" _v 8
+    at(_v): _m 6
+    eq(_): "columns" _v 10
+    km_metrics(_m2): 2048 1400 2 true
+    at(_v): _m2 4
+    eq(_): "location bar moves the grid down" _v 64
+    km_icon_at(_v): 109 173 _m 0 20
+    eq(_): "icon under a point" _v 10
+    km_icon_at(_v): 109 173 _m 1 20
+    eq(_): "icon under a point, scrolled" _v 18
+    km_icon_at(_v): 109 173 _m 0 5
+    eq(_): "no icon past the last" _v {0 - 1}
+    km_icon_at(_v): 3 3 _m 0 20
+    eq(_): "no icon in the margin" _v {0 - 1}
+    km_cell(_v): 10 _m 0
+    joined(_v): _v
+    eq(_): "cell corner" _v "104|168"
+    km_nav(_v): 7 KM_KEY_DOWN 20 8 10
+    eq(_): "down stops at the column end" _v 7
+    km_nav(_v): 3 KM_KEY_DOWN 20 8 10
+    eq(_): "down" _v 4
+    km_nav(_v): 0 KM_KEY_UP 20 8 10
+    eq(_): "up stops at the top" _v 0
+    km_nav(_v): 0 KM_KEY_RIGHT 20 8 10
+    eq(_): "right" _v 8
+    km_nav(_v): 12 KM_KEY_RIGHT 20 8 10
+    eq(_): "right into a short column" _v 19
+    km_nav(_v): 17 KM_KEY_RIGHT 20 8 10
+    eq(_): "right stops at the last column" _v 17
+    km_nav(_v): 9 KM_KEY_LEFT 20 8 10
+    eq(_): "left" _v 1
+    km_nav(_v): 5 KM_KEY_END 20 8 10
+    eq(_): "end" _v 19
+    km_nav(_v): {0 - 1} KM_KEY_DOWN 20 8 10
+    eq(_): "first arrow selects the first icon" _v 0
+    km_nav(_v): 0 KM_KEY_DOWN 0 8 10
+    eq(_): "nothing to select" _v {0 - 1}
+    km_scroll_for(_v): 95 0 100 8 10
+    eq(_): "scroll to show an icon" _v 2
+    km_scroll_for(_v): 3 2 100 8 10
+    eq(_): "scroll back" _v 0
+    km_scroll_for(_v): {0 - 1} 9 100 8 10
+    eq(_): "scroll stops at the last column" _v 3
+
+    set(r): 0
+]
+
+# --- a scratch desktop
+test_a_scratch_desktop(r): [
+    set(_root): "tests/kremlin_tmp"
+    remove_tree(_): _root
+    getcwd(_cwd):
+    km_slashes(_cwd): _cwd
+    km_join(_root): _cwd _root
+    kremlinreset(_): _root
+    set(km_dryrun): true!
+    kremlinitems(_v):
+    joined(_v): _v
+    eq(_): "first run makes a desktop" _v "Apps/|Documents/|Welcome.txt"
+    km_join(_cfg): _root ".kremlin"
+    file_exists(_v): _cfg
+    eq(_): "first run saves the settings" _v true
+    set(_v): km_source?
+    km_ends_with(_v): _v "/src"
+    eq(_): "the USSR source folder is found" _v true
+    set(_pins): km_pins?
+    joined(_v): _pins
+    eq(_): "first run pins" _v "Apps/Terminal.kl|Apps/Files.kl|Apps/Calculator.kl|Apps/Home.kl"
+    km_start_items(_menu):
+    at(_v): _menu 0
+    at(_v): _v 0
+    eq(_): "the menu lists the apps" _v "Calculator"
+
+    kremlinnewfolder(_v): "Projects"
+    eq(_): "new folder" _v ""
+    kremlinselected(_v):
+    eq(_): "new folder is selected" _v "Projects/"
+    kremlinnewfolder(_v): "Projects"
+    eq(_): "new folder: name taken" _v "Something with that name is already here"
+    kremlinnewfolder(_v): "a/b"
+    eq(_): "new folder: bad name" _v "A name cannot contain slashes, colons, quotes or any of * ? < > |"
+    kremlinnewfolder(_v): " "
+    eq(_): "new folder: blank name" _v "Type a name"
+    kremlinnewfile(_v): "notes.txt"
+    eq(_): "new file" _v ""
+    kremlinduplicate(_v): "notes.txt"
+    eq(_): "duplicate" _v ""
+    kremlinselected(_v):
+    eq(_): "the copy is selected" _v "notes copy.txt"
+    kremlinduplicate(_v): "notes.txt"
+    kremlinselected(_v):
+    eq(_): "second copy" _v "notes copy 2.txt"
+    kremlinduplicate(_v): "Projects/"
+    contains(_v): _v "cannot be duplicated"
+    eq(_): "folders are not duplicated" _v true
+    kremlinrename(_v): "notes copy.txt" "draft.txt"
+    eq(_): "rename" _v ""
+    kremlinselected(_v):
+    eq(_): "renamed file is selected" _v "draft.txt"
+    kremlinrename(_v): "draft.txt" "notes.txt"
+    eq(_): "rename onto a name in use" _v "Something with that name is already here"
+    kremlinitems(_v):
+    joined(_v): _v
+    eq(_): "listing, folders first" _v "Apps/|Documents/|Projects/|draft.txt|notes copy 2.txt|notes.txt|Welcome.txt"
+
+    kremlinnewlauncher(_v): "Editor" "notepad notes.txt" false
+    eq(_): "new launcher" _v ""
+    kremlinselected(_v):
+    eq(_): "launcher file" _v "Editor.kl"
+    kremlinplan(_v): "Editor.kl"
+    joined(_v): _v
+    eq(_): "launcher plan" _v "launch|notepad|notes.txt|true"
+    kremlinnewlauncher(_v): "Empty" "  " true
+    eq(_): "launcher needs a command" _v "Type the command the launcher runs"
+    kremlinrename(_v): "Editor.kl" "Writer"
+    eq(_): "rename a launcher" _v ""
+    kremlinselected(_v):
+    eq(_): "a launcher keeps .kl" _v "Writer.kl"
+    km_edit_launcher(_v): "Writer.kl" "wordpad" true
+    kremlinplan(_v): "Writer.kl"
+    joined(_v): _v
+    eq(_): "edited launcher" _v "launch|wordpad||false"
+
+    kremlinpin(_): "Writer.kl"
+    kremlinpin(_): "Writer.kl"
+    set(_pins): km_pins?
+    len(_v): _pins
+    eq(_): "pin once" _v 5
+    at(_v): _pins 4
+    eq(_): "pins are paths in the desktop" _v "Writer.kl"
+    readfile(_txt): _cfg
+    contains(_v): _txt "|Writer.kl"
+    eq(_): "pins are saved" _v true
+    kremlinpin(_): "Projects/"
+    kremlinrename(_v): "Projects/" "Work"
+    set(_pins): km_pins?
+    at(_v): _pins 5
+    eq(_): "a renamed folder stays pinned" _v "Work"
+    kremlinselected(_v):
+    eq(_): "renamed folder is selected" _v "Work/"
+    kremlinunpin(_): "Writer.kl"
+    set(_pins): km_pins?
+    joined(_v): _pins
+    contains(_v): _v "Writer"
+    eq(_): "unpin" _v false
+
+    kremlinplan(_p): "Work/"
+    at(_v): _p 0
+    eq(_): "a folder opens on the desktop" _v "folder"
+    kremlinopenname(_v): "Work/"
+    set(_v): km_dir?
+    km_ends_with(_v): _v "/kremlin_tmp/Work"
+    eq(_): "open a folder" _v true
+    kremlinitems(_v):
+    len(_v): _v
+    eq(_): "it is empty" _v 0
+    kremlinup(_v):
+    eq(_): "back" _v true
+    kremlinselected(_v):
+    eq(_): "back selects the folder left" _v "Work/"
+    kremlinup(_v):
+    eq(_): "no back from the desktop" _v false
+
+    km_join(_su): _root "hello.su"
+    writefile(_): _su "print(_): 1\n"
+    kremlinrefresh(_):
+    kremlinplan(_p): "hello.su"
+    at(_v): _p 0
+    eq(_): "a script is started" _v "launch"
+    at(_v): _p 2
+    km_quote(_q): _su
+    eq(_): "with its path" _v _q
+    kremlinplan(_p): "notes.txt"
+    at(_v): _p 1
+    km_join(_txt): _root "notes.txt"
+    eq(_): "a document opens with the system" _v _txt
+    kremlinplan(_p): "missing.txt"
+    at(_v): _p 0
+    eq(_): "a missing file is an error" _v "error"
+    kremlinopenname(_v): "Writer.kl"
+    eq(_): "open a launcher" _v ""
+    set(_log): km_launched?
+    at(_v): _log 0
+    joined(_v): _v
+    eq(_): "it was started" _v "launch|wordpad||false"
+    set(_v): km_status?
+    eq(_): "and the panel says so" _v "Starting Writer"
+    km_run(_v): "calc.exe /x \"a b\""
+    set(_log): km_launched?
+    at(_v): _log 1
+    joined(_v): _v
+    eq(_): "run a command" _v "launch|calc.exe|/x \"a b\"|false"
+
+    kremlinselect(_): "Welcome.txt"
+    km_type_ahead(_v): "d"
+    kremlinselected(_v):
+    eq(_): "typing jumps to a name" _v "Documents/"
+    km_type_ahead(_v): "r"
+    kremlinselected(_v):
+    eq(_): "typing more narrows it" _v "draft.txt"
+
+    km_toggle_sort(_):
+    kremlinitems(_v):
+    joined(_v): _v
+    eq(_): "sort by type" _v "Apps/|Documents/|Work/|Writer.kl|hello.su|draft.txt|notes copy 2.txt|notes.txt|Welcome.txt"
+    km_toggle_sort(_):
+
+    kremlindelete(_v): "Apps/"
+    contains(_v): _v "not empty"
+    eq(_): "a full folder is not deleted" _v true
+    kremlinselect(_): "Work/"
+    kremlindelete(_v): "Work/"
+    eq(_): "delete an empty folder" _v ""
+    set(_pins): km_pins?
+    joined(_v): _pins
+    contains(_v): _v "Work"
+    eq(_): "deleting unpins" _v false
+    kremlinselected(_v):
+    eq(_): "the next icon is selected" _v "draft.txt"
+    kremlindelete(_v): "draft.txt"
+    eq(_): "delete a file" _v ""
+    km_index_of(_v): "draft.txt"
+    eq(_): "it is gone" _v {0 - 1}
+
+    km_autostart_text(_txt):
+    contains(_v): _txt "kremlin/kremlin.su"
+    km_windows(_win):
+    if(_): _win [ contains(_v): _txt "kremlin\\kremlin.su" ]
+    eq(_): "autostart runs kremlin.su" _v true
+    contains(_v): _txt "kremlin_tmp"
+    eq(_): "autostart opens this desktop" _v true
+
+    km_cycle_wallpaper(_):
+    set(_v): km_wall?
+    eq(_): "next wallpaper" _v 1
+    kremlinreset(_): _root
+    set(_v): km_wall?
+    eq(_): "settings survive a restart" _v 1
+
+    remove_tree(_): _root
+    file_exists(_v): _root
+    eq(_): "scratch desktop removed" _v false
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    test_paths_and_names(_):
+    test_text(_):
+    test_dates(_):
+    test_launchers(_):
+    test_settings(_):
+    test_keys(_):
+    test_layout_and_navigation(_):
+    test_a_scratch_desktop(_):
+    set(ret): 0
+]

@@ -171,7 +171,7 @@ module.exports = grammar({
     )),
 
     real: $ => /[0-9]+\.[0-9]+/,
-    integer: $ => /[0-9]+/,
+    integer: $ => /0[xX][0-9a-fA-F]+|[0-9]+/,
     boolean: $ => choice('true', 'false'),
     null: $ => 'null',
 
