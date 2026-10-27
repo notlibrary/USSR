@@ -63,8 +63,9 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin and Novgorod have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod and Dubna have code so far):
 
+- dubna.su - PostgreSQL client: protocol 3.0, TLS, SCRAM-SHA-256, parameterised queries (working: `src/dubna`)
 - kgb.su - Knowledge Giga Base, Markdown knowledge base manager
 - klin.su - GUI calculator, programmer, scientific and casual in one (working: `src/klin`)
 - kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
@@ -76,10 +77,12 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin 
 - sochi.su - desktop preference game
 
 The **RUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
-(HTTP) under Novgorod (the forum), with Dubna (a PostgreSQL driver) to come.
+(HTTP) under Novgorod (the forum), with Dubna (the PostgreSQL client) under
+Novgorod's `--db`.
 
 ```bash
 ussr src/novgorod/novgorod.su          # Novgorod on https://localhost:8443/
+ussr src/novgorod/novgorod.su --db "postgres://forum:secret@localhost/forum"
 ```
 
 ```USSR

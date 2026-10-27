@@ -6,6 +6,9 @@
 #     --host 127.0.0.1    --port 8443      address to listen on
 #     --data DIR          posts and images (default novgorod-data)
 #     --static DIR        novgorod.css and novgorod.js (default: found)
+#     --db CONNINFO       keep posts in PostgreSQL through Dubna (a
+#                         conninfo string or postgres:// URL; images and
+#                         boards.txt stay in the data folder)
 #     --cert FILE --secret PASS            server certificate (PKCS#12);
 #                         without one the public test certificate is used
 #     --http              plain HTTP instead of HTTPS
@@ -21,8 +24,9 @@
 $once
 $include "../ukraine/ukraine.su"
 $include "markup.su"
+$include "../dubna/dubna.su"
 
-global(_): uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
+global(_): nv_db nv_db_table uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
 global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_max_thumb
 
 # ---------------------------------------------------------------- setup
@@ -50,6 +54,8 @@ nv_setup(r): [
     set(nv_max_thumb): 80000
     set(uk_max_body): 2600000
     set(nv_hsts): false
+    set(nv_db): ""
+    set(nv_db_table): "novgorod_posts"
     set(nv_tls): true
     set(nv_css): ""
     set(nv_js): ""
@@ -455,6 +461,10 @@ nv_open(r): dir [
         nv_default_boards(text):
         nv_load_boards(count): text
     ]
+    if(_): {nv_db != ""} [
+        nv_db_load(r):
+        return(r): r
+    ]
     list_dir(names): posts_dir
     vec(loaded): ""
     len(n): names
@@ -553,6 +563,10 @@ nv_attach(r): p [
 # number); the number, or -1.
 nv_store(r): p [
     set(r): {0 - 1}
+    if(_): {nv_db != ""} [
+        nv_db_store(r): p
+        return(r): r
+    ]
     len(sn): nv_seq
     at(no): nv_seq {sn - 1}
     random64(tag):
@@ -584,6 +598,11 @@ nv_store(r): p [
 
 nv_remove_thread(r): thread [
     setf(_): thread "alive" false
+    if(_): {nv_db != ""} [
+        getf(op): thread "op"
+        getf(op_no): op "no"
+        nv_db_delete_thread(_): op_no
+    ]
     getf(posts): thread "posts"
     len(n): posts
     set(i): 0
@@ -604,6 +623,152 @@ nv_remove_thread(r): thread [
         add(i): i 1
     ]
     set(r): n
+]
+
+# ---------------------------------------------------------------- PostgreSQL
+
+# With --db, posts live in a PostgreSQL table through Dubna; boards.txt and
+# the images stay in the data folder. Each write opens its own connection,
+# so request tasks never share one.
+
+nv_db_connect(r): [
+    dubna_connect(r): nv_db
+    if(_): {r = null} [
+        dubna_error(why):
+        concat(msg): "novgorod: " why "\n"
+        write_stderr(_): msg
+    ]
+]
+
+nv_db_check(r): res what [
+    dubna_ok(r): res
+    if(_): {r = false} [
+        getf(why): res "error"
+        concat(msg): "novgorod: " what ": " why "\n"
+        write_stderr(_): msg
+    ]
+]
+
+# Creates the table when needed and loads every post; the count, or -1.
+nv_db_load(r): [
+    set(r): {0 - 1}
+    dubna_init(_):
+    nv_db_connect(c):
+    if(_): {c = null} [
+        return(r): r
+    ]
+    concat(sql): "create table if not exists " nv_db_table " (no bigserial primary key, board text not null, thread bigint not null default 0, time bigint not null, subject text not null default '', body text not null default '', image text not null default '', iw integer not null default 0, ih integer not null default 0, tw integer not null default 0, th integer not null default 0); create index if not exists " nv_db_table "_thread on " nv_db_table " (thread)"
+    dubna_query(res): c sql
+    nv_db_check(ok): res "creating the table"
+    if(_): {ok = false} [
+        dubna_close(_): c
+        return(r): r
+    ]
+    concat(sql): "select no, board, thread, time, subject, body, image, iw, ih, tw, th from " nv_db_table " order by no"
+    dubna_query(res): c sql
+    dubna_close(_): c
+    nv_db_check(ok): res "loading posts"
+    if(_): {ok = false} [
+        return(r): r
+    ]
+    getf(rows): res "rows"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        vec(nums): ""
+        set(k): 0
+        while(_): {k < 11} [
+            at(cell): row k
+            if(_): {cell = null} [
+                set(cell): ""
+            ]
+            push(_): nums cell
+            add(k): k 1
+        ]
+        at(x): nums 0
+        nv_int(no): x
+        at(board): nums 1
+        at(x): nums 2
+        nv_int(thread): x
+        at(x): nums 3
+        nv_int(t): x
+        at(subject): nums 4
+        at(text): nums 5
+        at(image): nums 6
+        at(x): nums 7
+        nv_int(iw): x
+        at(x): nums 8
+        nv_int(ih): x
+        at(x): nums 9
+        nv_int(tw): x
+        at(x): nums 10
+        nv_int(th): x
+        if(_): {no != null && thread != null && t != null && iw != null && ih != null && tw != null && th != null} [
+            nv_new_post(p): no board thread t subject text image iw ih tw th
+            nv_attach(_): p
+        ]
+        add(i): i 1
+    ]
+    len(r): nv_posts
+]
+
+nv_db_store(r): p [
+    set(r): {0 - 1}
+    nv_db_connect(c):
+    if(_): {c = null} [
+        return(r): r
+    ]
+    vec(params): ""
+    getf(x): p "board"
+    push(_): params x
+    getf(x): p "thread"
+    push(_): params x
+    getf(x): p "time"
+    push(_): params x
+    getf(x): p "subject"
+    push(_): params x
+    getf(x): p "text"
+    push(_): params x
+    getf(x): p "image"
+    push(_): params x
+    getf(x): p "iw"
+    push(_): params x
+    getf(x): p "ih"
+    push(_): params x
+    getf(x): p "tw"
+    push(_): params x
+    getf(x): p "th"
+    push(_): params x
+    concat(sql): "insert into " nv_db_table " (board, thread, time, subject, body, image, iw, ih, tw, th) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning no"
+    dubna_exec(res): c sql params
+    dubna_close(_): c
+    nv_db_check(ok): res "saving a post"
+    if(_): ok [
+        dubna_value(v): res 0 0
+        nv_int(no): v
+        if(_): {no != null} [
+            setf(_): p "no" no
+            set(r): no
+        ]
+    ]
+]
+
+nv_db_delete_thread(r): op_no [
+    set(r): {0 - 1}
+    nv_db_connect(c):
+    if(_): {c = null} [
+        return(r): r
+    ]
+    vec(params): ""
+    push(_): params op_no
+    concat(sql): "delete from " nv_db_table " where no = $1 or thread = $1"
+    dubna_exec(res): c sql params
+    dubna_close(_): c
+    nv_db_check(ok): res "pruning a thread"
+    if(_): ok [
+        dubna_count(r): res
+    ]
 ]
 
 # Live threads of a board, most recently bumped first.
@@ -1701,6 +1866,10 @@ init(ret): arg_cnt arg_vec [
             set(data): v
             add(i): i 1
         ]
+        elif(_): {a = "--db"} [
+            set(nv_db): v
+            add(i): i 1
+        ]
         elif(_): {a = "--static"} [
             set(static_dir): v
             add(i): i 1
@@ -1746,6 +1915,11 @@ init(ret): arg_cnt arg_vec [
         return(ret): ret
     ]
     nv_open(count): data
+    if(_): {count < 0} [
+        write_stderr(_): "novgorod: could not open the database\n"
+        set(ret): 1
+        return(ret): ret
+    ]
     nv_s(cs): count
     concat(msg): "novgorod: " cs " posts in " data "\n"
     print(_): msg

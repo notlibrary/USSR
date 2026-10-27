@@ -2031,6 +2031,572 @@ static int oop_do_text_bytes(
     return 0;
 }
 
+int ussr_value_bytes(const ussr_value_t *v, unsigned char **data,
+                     size_t *length)
+{
+    size_t count;
+    size_t i;
+    unsigned char *buffer;
+
+    if (v->type == USSR_STRING)
+    {
+        count = strlen(v->data.string);
+        buffer = malloc(count + 1);
+        if (buffer == NULL)
+            return -1;
+        memcpy(buffer, v->data.string, count + 1);
+        *data = buffer;
+        *length = count;
+        return 0;
+    }
+    if (v->type != USSR_VECTOR)
+        return -1;
+    count = ussr_vector_length(v->data.vector);
+    buffer = malloc(count + 1);
+    if (buffer == NULL)
+        return -1;
+    for (i = 0; i < count; ++i)
+    {
+        ussr_value_t item;
+        ussr_int_t byte = -1;
+
+        if (!ussr_vector_get(v->data.vector, i, &item))
+        {
+            free(buffer);
+            return -1;
+        }
+        if (!oop_expect_integer(&item, &byte) || byte < 0 || byte > 255)
+        {
+            ussr_value_free(&item);
+            free(buffer);
+            return -1;
+        }
+        buffer[i] = (unsigned char)byte;
+    }
+    buffer[count] = '\0';
+    *data = buffer;
+    *length = count;
+    return 0;
+}
+
+int ussr_bytes_value(const unsigned char *data, size_t length,
+                     ussr_value_t *out)
+{
+    ussr_vector_t *vector = ussr_vector_create(NULL);
+    size_t i;
+
+    for (i = 0; vector != NULL && i < length; ++i)
+    {
+        if (ussr_vector_push(vector, ussr_integer((ussr_int_t)data[i])) != 0)
+        {
+            ussr_vector_release(vector);
+            vector = NULL;
+        }
+    }
+    if (vector == NULL)
+        return -1;
+    *out = ussr_vector_value(vector);
+    return 0;
+}
+
+/* ------------------------------------------------------------- */
+/* hashes for Dubna's PostgreSQL authentication: SHA-256 (FIPS 180-4), */
+/* HMAC (RFC 2104), PBKDF2 (RFC 8018) and MD5 (RFC 1321). These    */
+/* authenticate a login; nothing here encrypts.                      */
+/* ------------------------------------------------------------- */
+
+typedef struct
+{
+    uint32_t state[8];
+    uint64_t length;
+    unsigned char block[64];
+    size_t used;
+} oop_sha256_t;
+
+static const uint32_t oop_sha256_k[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+};
+
+#define OOP_ROTR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+
+static void oop_sha256_block(oop_sha256_t *ctx, const unsigned char *p)
+{
+    uint32_t w[64];
+    uint32_t a, b, c, d, e, f, g, h;
+    int i;
+
+    for (i = 0; i < 16; ++i)
+        w[i] = ((uint32_t)p[4 * i] << 24) | ((uint32_t)p[4 * i + 1] << 16) |
+               ((uint32_t)p[4 * i + 2] << 8) | (uint32_t)p[4 * i + 3];
+    for (i = 16; i < 64; ++i)
+    {
+        uint32_t s0 = OOP_ROTR(w[i - 15], 7) ^ OOP_ROTR(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        uint32_t s1 = OOP_ROTR(w[i - 2], 17) ^ OOP_ROTR(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
+    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
+    for (i = 0; i < 64; ++i)
+    {
+        uint32_t s1 = OOP_ROTR(e, 6) ^ OOP_ROTR(e, 11) ^ OOP_ROTR(e, 25);
+        uint32_t ch = (e & f) ^ (~e & g);
+        uint32_t t1 = h + s1 + ch + oop_sha256_k[i] + w[i];
+        uint32_t s0 = OOP_ROTR(a, 2) ^ OOP_ROTR(a, 13) ^ OOP_ROTR(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t t2 = s0 + maj;
+        h = g; g = f; f = e; e = d + t1;
+        d = c; c = b; b = a; a = t1 + t2;
+    }
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void oop_sha256_init(oop_sha256_t *ctx)
+{
+    static const uint32_t start[8] = {
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+    };
+    memcpy(ctx->state, start, sizeof(start));
+    ctx->length = 0;
+    ctx->used = 0;
+}
+
+static void oop_sha256_update(oop_sha256_t *ctx, const unsigned char *data,
+                              size_t length)
+{
+    ctx->length += length;
+    while (length > 0)
+    {
+        size_t take = 64 - ctx->used;
+        if (take > length)
+            take = length;
+        memcpy(ctx->block + ctx->used, data, take);
+        ctx->used += take;
+        data += take;
+        length -= take;
+        if (ctx->used == 64)
+        {
+            oop_sha256_block(ctx, ctx->block);
+            ctx->used = 0;
+        }
+    }
+}
+
+static void oop_sha256_final(oop_sha256_t *ctx, unsigned char out[32])
+{
+    uint64_t bits = ctx->length * 8;
+    unsigned char pad = 0x80;
+    unsigned char zero = 0;
+    unsigned char tail[8];
+    int i;
+
+    oop_sha256_update(ctx, &pad, 1);
+    while (ctx->used != 56)
+        oop_sha256_update(ctx, &zero, 1);
+    for (i = 0; i < 8; ++i)
+        tail[i] = (unsigned char)(bits >> (56 - 8 * i));
+    oop_sha256_update(ctx, tail, 8);
+    for (i = 0; i < 8; ++i)
+    {
+        out[4 * i] = (unsigned char)(ctx->state[i] >> 24);
+        out[4 * i + 1] = (unsigned char)(ctx->state[i] >> 16);
+        out[4 * i + 2] = (unsigned char)(ctx->state[i] >> 8);
+        out[4 * i + 3] = (unsigned char)ctx->state[i];
+    }
+}
+
+static void oop_sha256(const unsigned char *data, size_t length,
+                       unsigned char out[32])
+{
+    oop_sha256_t ctx;
+    oop_sha256_init(&ctx);
+    oop_sha256_update(&ctx, data, length);
+    oop_sha256_final(&ctx, out);
+}
+
+/* HMAC-SHA-256 of a message given in two pieces (b may be empty). */
+static void oop_hmac_sha256(const unsigned char *key, size_t key_length,
+                            const unsigned char *a, size_t a_length,
+                            const unsigned char *b, size_t b_length,
+                            unsigned char out[32])
+{
+    unsigned char k[64];
+    unsigned char pad[64];
+    unsigned char inner[32];
+    oop_sha256_t ctx;
+    int i;
+
+    memset(k, 0, sizeof(k));
+    if (key_length > 64)
+        oop_sha256(key, key_length, k);
+    else if (key_length > 0)
+        memcpy(k, key, key_length);
+    for (i = 0; i < 64; ++i)
+        pad[i] = k[i] ^ 0x36;
+    oop_sha256_init(&ctx);
+    oop_sha256_update(&ctx, pad, 64);
+    oop_sha256_update(&ctx, a, a_length);
+    oop_sha256_update(&ctx, b, b_length);
+    oop_sha256_final(&ctx, inner);
+    for (i = 0; i < 64; ++i)
+        pad[i] = k[i] ^ 0x5c;
+    oop_sha256_init(&ctx);
+    oop_sha256_update(&ctx, pad, 64);
+    oop_sha256_update(&ctx, inner, 32);
+    oop_sha256_final(&ctx, out);
+}
+
+typedef struct
+{
+    uint32_t state[4];
+    uint64_t length;
+    unsigned char block[64];
+    size_t used;
+} oop_md5_t;
+
+#define OOP_ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+static void oop_md5_block(oop_md5_t *ctx, const unsigned char *p)
+{
+    static const uint32_t k[64] = {
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a,
+        0xa8304613, 0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340,
+        0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8,
+        0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92,
+        0xffeff47d, 0x85845dd1, 0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
+        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
+    };
+    static const int r[64] = {
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+        5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+    };
+    uint32_t m[16];
+    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
+    int i;
+
+    for (i = 0; i < 16; ++i)
+        m[i] = (uint32_t)p[4 * i] | ((uint32_t)p[4 * i + 1] << 8) |
+               ((uint32_t)p[4 * i + 2] << 16) | ((uint32_t)p[4 * i + 3] << 24);
+    for (i = 0; i < 64; ++i)
+    {
+        uint32_t f;
+        int g;
+        if (i < 16) { f = (b & c) | (~b & d); g = i; }
+        else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) % 16; }
+        else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) % 16; }
+        else { f = c ^ (b | ~d); g = (7 * i) % 16; }
+        f = f + a + k[i] + m[g];
+        a = d; d = c; c = b;
+        b = b + OOP_ROTL(f, r[i]);
+    }
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+}
+
+static void oop_md5(const unsigned char *data, size_t length,
+                    unsigned char out[16])
+{
+    oop_md5_t ctx;
+    uint64_t bits = (uint64_t)length * 8;
+    unsigned char tail[72];
+    size_t rest;
+    size_t tail_length;
+    int i;
+
+    ctx.state[0] = 0x67452301; ctx.state[1] = 0xefcdab89;
+    ctx.state[2] = 0x98badcfe; ctx.state[3] = 0x10325476;
+    while (length >= 64)
+    {
+        oop_md5_block(&ctx, data);
+        data += 64;
+        length -= 64;
+    }
+    rest = length;
+    memset(tail, 0, sizeof(tail));
+    memcpy(tail, data, rest);
+    tail[rest] = 0x80;
+    tail_length = rest + 1 + 8 <= 64 ? 64 : 128;
+    for (i = 0; i < 8; ++i)
+        tail[tail_length - 8 + i] = (unsigned char)(bits >> (8 * i));
+    oop_md5_block(&ctx, tail);
+    if (tail_length == 128)
+        oop_md5_block(&ctx, tail + 64);
+    for (i = 0; i < 4; ++i)
+    {
+        out[4 * i] = (unsigned char)ctx.state[i];
+        out[4 * i + 1] = (unsigned char)(ctx.state[i] >> 8);
+        out[4 * i + 2] = (unsigned char)(ctx.state[i] >> 16);
+        out[4 * i + 3] = (unsigned char)(ctx.state[i] >> 24);
+    }
+}
+
+/* The i-th argument as bytes: a string or a vector of 0..255. */
+static int oop_bytes_argument(const char *name, ussr_argument_t *arguments,
+                              size_t i, unsigned char **data, size_t *length)
+{
+    ussr_value_t v;
+    int status;
+
+    if (oop_eval(&arguments[i], &v) != 0)
+        return -1;
+    status = ussr_value_bytes(&v, data, length);
+    ussr_value_free(&v);
+    if (status != 0)
+        fprintf(stderr, "USSR: %s expects a string or a vector of bytes "
+                "0..255\n", name);
+    return status;
+}
+
+/* sha256(v): data, md5(v): data, hmac_sha256(v): key data,
+ * pbkdf2_sha256(v): password salt iterations [length]: digests as byte
+ * vectors; data, keys, passwords and salts are strings or byte vectors. */
+static int oop_do_hash(const char *command, ussr_argument_t *arguments,
+                       size_t argument_count, ussr_value_t *out_result)
+{
+    unsigned char *a = NULL;
+    unsigned char *b = NULL;
+    size_t a_length = 0;
+    size_t b_length = 0;
+    unsigned char digest[32];
+    int status = -1;
+
+    if (strcmp(command, "sha256") == 0 || strcmp(command, "md5") == 0)
+    {
+        if (argument_count != 1)
+        {
+            fprintf(stderr, "USSR: %s(v): data\n", command);
+            return -1;
+        }
+        if (oop_bytes_argument(command, arguments, 0, &a, &a_length) != 0)
+            return -1;
+        if (command[0] == 's')
+        {
+            oop_sha256(a, a_length, digest);
+            status = ussr_bytes_value(digest, 32, out_result);
+        }
+        else
+        {
+            oop_md5(a, a_length, digest);
+            status = ussr_bytes_value(digest, 16, out_result);
+        }
+        free(a);
+        return status;
+    }
+    if (strcmp(command, "hmac_sha256") == 0)
+    {
+        if (argument_count != 2)
+        {
+            fprintf(stderr, "USSR: hmac_sha256(v): key data\n");
+            return -1;
+        }
+        if (oop_bytes_argument(command, arguments, 0, &a, &a_length) != 0)
+            return -1;
+        if (oop_bytes_argument(command, arguments, 1, &b, &b_length) != 0)
+        {
+            free(a);
+            return -1;
+        }
+        oop_hmac_sha256(a, a_length, b, b_length, NULL, 0, digest);
+        status = ussr_bytes_value(digest, 32, out_result);
+        free(a);
+        free(b);
+        return status;
+    }
+    /* pbkdf2_sha256 */
+    {
+        ussr_value_t v;
+        ussr_int_t iterations = 0;
+        ussr_int_t want = 32;
+        unsigned char *derived;
+        unsigned char *salt_block;
+        uint32_t block;
+        ussr_int_t done = 0;
+
+        if (argument_count != 3 && argument_count != 4)
+        {
+            fprintf(stderr, "USSR: pbkdf2_sha256(v): password salt iterations [length]\n");
+            return -1;
+        }
+        if (oop_eval(&arguments[2], &v) != 0)
+            return -1;
+        if (!oop_expect_integer(&v, &iterations) || iterations < 1 ||
+            iterations > 10000000)
+        {
+            ussr_value_free(&v);
+            fprintf(stderr, "USSR: pbkdf2_sha256 takes 1 to 10000000 iterations\n");
+            return -1;
+        }
+        ussr_value_free(&v);
+        if (argument_count == 4)
+        {
+            if (oop_eval(&arguments[3], &v) != 0)
+                return -1;
+            if (!oop_expect_integer(&v, &want) || want < 1 || want > 1024)
+            {
+                ussr_value_free(&v);
+                fprintf(stderr, "USSR: pbkdf2_sha256 length is 1 to 1024 bytes\n");
+                return -1;
+            }
+            ussr_value_free(&v);
+        }
+        if (oop_bytes_argument(command, arguments, 0, &a, &a_length) != 0)
+            return -1;
+        if (oop_bytes_argument(command, arguments, 1, &b, &b_length) != 0)
+        {
+            free(a);
+            return -1;
+        }
+        derived = malloc((size_t)want);
+        salt_block = malloc(b_length + 4);
+        if (derived == NULL || salt_block == NULL)
+        {
+            free(derived);
+            free(salt_block);
+            free(a);
+            free(b);
+            return -1;
+        }
+        memcpy(salt_block, b, b_length);
+        for (block = 1; done < want; ++block)
+        {
+            unsigned char u[32];
+            unsigned char t[32];
+            ussr_int_t i;
+            int j;
+            ussr_int_t take;
+
+            salt_block[b_length] = (unsigned char)(block >> 24);
+            salt_block[b_length + 1] = (unsigned char)(block >> 16);
+            salt_block[b_length + 2] = (unsigned char)(block >> 8);
+            salt_block[b_length + 3] = (unsigned char)block;
+            oop_hmac_sha256(a, a_length, salt_block, b_length + 4, NULL, 0, u);
+            memcpy(t, u, 32);
+            for (i = 1; i < iterations; ++i)
+            {
+                oop_hmac_sha256(a, a_length, u, 32, NULL, 0, u);
+                for (j = 0; j < 32; ++j)
+                    t[j] ^= u[j];
+            }
+            take = want - done < 32 ? want - done : 32;
+            memcpy(derived + done, t, (size_t)take);
+            done += take;
+        }
+        status = ussr_bytes_value(derived, (size_t)want, out_result);
+        free(derived);
+        free(salt_block);
+        free(a);
+        free(b);
+        return status;
+    }
+}
+
+/* bytes_text(s): bytes [from [count]] -> the string those bytes spell, or
+ * null when one of them is 0 (a USSR string ends at a zero byte). */
+static int oop_do_bytes_text(ussr_argument_t *arguments,
+                             size_t argument_count, ussr_value_t *out_result)
+{
+    ussr_value_t vec_v;
+    ussr_value_t v;
+    ussr_vector_t *vector;
+    ussr_int_t from = 0;
+    ussr_int_t count;
+    ussr_int_t total;
+    char *text;
+    ussr_int_t i;
+
+    if (argument_count < 1 || argument_count > 3)
+    {
+        fprintf(stderr, "USSR: bytes_text(s): bytes [from [count]]\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &vec_v) != 0)
+        return -1;
+    if (!oop_expect_vector(&vec_v, &vector))
+    {
+        fprintf(stderr, "USSR: bytes_text expects a vector of bytes\n");
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    total = (ussr_int_t)ussr_vector_length(vector);
+    count = total;
+    if (argument_count >= 2)
+    {
+        if (oop_eval(&arguments[1], &v) != 0 || !oop_expect_integer(&v, &from))
+        {
+            fprintf(stderr, "USSR: bytes_text: from must be an integer\n");
+            ussr_value_free(&vec_v);
+            return -1;
+        }
+        count = total - from;
+    }
+    if (argument_count == 3)
+    {
+        if (oop_eval(&arguments[2], &v) != 0 || !oop_expect_integer(&v, &count))
+        {
+            fprintf(stderr, "USSR: bytes_text: count must be an integer\n");
+            ussr_value_free(&vec_v);
+            return -1;
+        }
+    }
+    if (from < 0 || count < 0 || from > total || count > total - from)
+    {
+        fprintf(stderr, "USSR: bytes_text: range out of bounds\n");
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    text = malloc((size_t)count + 1);
+    if (text == NULL)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    for (i = 0; i < count; ++i)
+    {
+        ussr_value_t item;
+        ussr_int_t byte = -1;
+
+        if (!ussr_vector_get(vector, (size_t)(from + i), &item) ||
+            !oop_expect_integer(&item, &byte) || byte < 0 || byte > 255)
+        {
+            fprintf(stderr, "USSR: bytes_text: item %lld is not a byte 0..255\n",
+                    (long long)(from + i));
+            free(text);
+            ussr_value_free(&vec_v);
+            return -1;
+        }
+        if (byte == 0)
+        {
+            free(text);
+            ussr_value_free(&vec_v);
+            *out_result = ussr_null();
+            return 0;
+        }
+        text[i] = (char)byte;
+    }
+    text[count] = '\0';
+    ussr_value_free(&vec_v);
+    *out_result = ussr_string(text);
+    free(text);
+    return 0;
+}
+
 static int oop_do_write_bytes(
     ussr_argument_t *arguments,
     size_t argument_count,
@@ -3470,6 +4036,13 @@ int ussr_oop_dispatch(
         status = oop_do_write_bytes(arguments, argument_count, out_result);
     else if (strcmp(command, "text_bytes") == 0)
         status = oop_do_text_bytes(arguments, argument_count, out_result);
+    else if (strcmp(command, "bytes_text") == 0)
+        status = oop_do_bytes_text(arguments, argument_count, out_result);
+    else if (strcmp(command, "sha256") == 0 ||
+             strcmp(command, "md5") == 0 ||
+             strcmp(command, "hmac_sha256") == 0 ||
+             strcmp(command, "pbkdf2_sha256") == 0)
+        status = oop_do_hash(command, arguments, argument_count, out_result);
     else if (strcmp(command, "file_exists") == 0)
         status = oop_do_file_exists(arguments, argument_count, out_result);
     else if (strcmp(command, "typeof") == 0)

@@ -30,6 +30,16 @@
 /* Environment variable as malloc'd UTF-8, or NULL when not set. */
 char *ussr_env_get(const char *name);
 
+/* The bytes of a string, or of a vector of integers 0..255, as a malloc'd
+ * buffer with a NUL after them; 0 ok, -1 when v is neither (nothing to
+ * free then). */
+int ussr_value_bytes(const ussr_value_t *v, unsigned char **data,
+                     size_t *length);
+
+/* A vector of the integers 0..255 in data; 0 ok, -1 out of memory. */
+int ussr_bytes_value(const unsigned char *data, size_t length,
+                     ussr_value_t *out);
+
 int ussr_oop_dispatch(
     const char *command,
     const char *return_name,

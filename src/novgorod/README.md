@@ -8,7 +8,7 @@ served over HTTPS. It is the N of the **RUND stack**:
 | R | [Ryazan](../ryazan/) | TLS: the operating system's Schannel or OpenSSL |
 | U | [Ukraine](../ukraine/) | HTTP/1.1 server and request-handler framework |
 | N | Novgorod | this forum |
-| D | Dubna | PostgreSQL driver (planned; Novgorod keeps plain files until then) |
+| D | [Dubna](../dubna/) | PostgreSQL client (`--db`) |
 
 No accounts, no names, no cookies, no tracking. Boards, threads, replies,
 `>>123` quotes with backlinks, a catalog, and code-friendly
@@ -41,6 +41,7 @@ ussr src/novgorod/novgorod.su --host 0.0.0.0 --port 443 --cert forum.p12 --secre
 | `--cert FILE` `--secret PASS` | test certificate | PKCS#12 certificate and its password (OpenSSL: PEM chain and key file too) |
 | `--http` | off | plain HTTP, for a TLS-terminating proxy in front |
 | `--hsts` | off | send `Strict-Transport-Security` |
+| `--db CONNINFO` | files | keep posts in PostgreSQL through Dubna: `host=... dbname=... user=... password=...` or `postgres://user:pass@host/db?sslmode=require` |
 
 ## Boards
 
@@ -102,8 +103,16 @@ existing file, so two posts can never share a number. Boards keep 100
 threads; the thread bumped longest ago is deleted, with its files, when a
 new one would make 101. Replies stop bumping a thread after 300.
 
-The storage functions (`nv_open`, `nv_store`, `nv_remove_thread`) are the
-seam where Dubna will plug in PostgreSQL.
+With `--db`, posts live in the table `novgorod_posts` instead (created on
+the first start; the role needs CREATE on its schema, which PostgreSQL 15+
+does not grant on `public` by default). The database numbers posts with a
+sequence; boards.txt and the images stay in the data folder. Every write
+opens its own connection, so request tasks never share one. Posts already
+in files are not copied into the database.
+
+```bash
+ussr src/novgorod/novgorod.su --db "postgres://forum:secret@localhost/forum?sslmode=require"
+```
 
 ## Files
 
@@ -117,4 +126,5 @@ seam where Dubna will plug in PostgreSQL.
 | `docs/MARKUP.md` | the markup reference |
 | `tests/TESTPLAN.md` | what is tested and how |
 
-Tests: `ussr tests/novgorod_test.su` (also part of `tests/run_all.sh`).
+Tests: `ussr tests/novgorod_test.su` (also part of `tests/run_all.sh`);
+`DUBNA_TEST_URL=... ussr tests/novgorod_db_live.su` for `--db`.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+- `--db CONNINFO` keeps posts in PostgreSQL through Dubna; images and
+  boards.txt stay in the data folder.
+
 ## 0.1.0
 - First version: an anonymous image forum for programmers over HTTPS
   (Ryazan TLS, Ukraine HTTP). Boards from `boards.txt`, threads with bump

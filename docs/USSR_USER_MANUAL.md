@@ -1078,7 +1078,26 @@ clear_bytes(v): bytes         # set_bytes with value 0
 read_bytes(v): "path"         # the file's bytes 0..255 (null if unreadable)
 write_bytes(n): "path" bytes  # write exactly these bytes; count, or -1
 text_bytes(v): "text"         # the string's bytes 0..255
+bytes_text(s): bytes [from [count]]  # back to a string; null if a byte is 0
 ```
+
+**Bytes on sockets and hashes (native).** Strings end at a zero byte, so
+binary protocols (PostgreSQL's, for Dubna in `src/dubna/`) move vectors of
+bytes instead:
+
+```
+socket_send_bytes(n): s bytes        # bytes sent, -1 on error
+socket_recv_bytes(v): s max          # up to max bytes; [] once closed, null on error
+tls_send_bytes(n): s bytes           # tls_send for bytes (0: wait_writable)
+tls_recv_bytes(v): s max             # tls_recv as bytes; null: wait_readable
+sha256(v): data                      # 32-byte digest of a string or bytes
+hmac_sha256(v): key data             # 32 bytes
+pbkdf2_sha256(v): password salt iterations [length]   # 32 bytes by default
+md5(v): data                         # 16 bytes; legacy protocols only
+```
+
+The hashes serve logins (SCRAM-SHA-256, md5); results are byte vectors.
+They are not encryption, which belongs to TLS (Ryazan).
 
 **math.su — mathematical functions:**
 
