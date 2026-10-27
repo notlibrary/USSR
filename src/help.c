@@ -95,6 +95,12 @@ static const help_entry_t g_help[] = {
     { "getenv", "shell", "getenv(v): name", "environment variable, or null" },
     { "setenv", "shell", "setenv(r): name value", "set an environment variable" },
     { "unsetenv", "shell", "unsetenv(r): name", "remove an environment variable" },
+    { "launch", "shell", "launch(ok): target [params [hidden]]",
+      "start a program, or open a file, folder or URL with its system "
+      "program, without waiting; 0 started, 1 failed. hidden: no console "
+      "window (Windows)" },
+    { "localtime", "shell", "localtime(v): [seconds]",
+      "[year month day hour minute second weekday yearday] in local time" },
     { "alias", "shell", "alias(_): \"ll\" \"ls\" \"-l\"",
       "ll(_): x then runs ls(_): \"-l\" x; \"\" removes it, one argument "
       "gives its words, none lists them. Expanded in lines typed at "

@@ -15,19 +15,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <conio.h>
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
+#include <shellapi.h>
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 #else
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -2727,6 +2731,280 @@ static int oop_do_env(
     return 0;
 }
 
+#ifndef _WIN32
+/* Splits params at blanks into argv[first..]; "double quotes" group words.
+ * The words point into params, which is modified. Returns the new count. */
+static size_t oop_launch_words(char *params, char **argv, size_t first,
+                               size_t limit)
+{
+    size_t count = first;
+    char *p = params;
+
+    while (*p != '\0' && count + 1 < limit)
+    {
+        char *word;
+        while (*p == ' ' || *p == '\t')
+            ++p;
+        if (*p == '\0')
+            break;
+        if (*p == '"')
+        {
+            word = ++p;
+            while (*p != '\0' && *p != '"')
+                ++p;
+        }
+        else
+        {
+            word = p;
+            while (*p != '\0' && *p != ' ' && *p != '\t')
+                ++p;
+        }
+        if (*p != '\0')
+            *p++ = '\0';
+        argv[count++] = word;
+    }
+    argv[count] = NULL;
+    return count;
+}
+#endif
+
+/* launch(ok): target [params [hidden]] -> starts target without waiting:
+ * a program (with the params string as its arguments), or a document,
+ * folder or URL, which opens with the program the system has for it.
+ * hidden starts a program without a console window (Windows). 0 when it
+ * started, 1 when it could not. */
+static int oop_do_launch(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t target_v;
+    ussr_value_t params_v;
+    ussr_value_t hidden_v;
+    const char *target;
+    const char *params = "";
+    int hidden = 0;
+    int failed = 1;
+
+    if (argument_count < 1 || argument_count > 3)
+    {
+        fprintf(stderr, "USSR: launch(ok): target [params [hidden]]\n");
+        return -1;
+    }
+    if (!oop_env_argument("launch", arguments, 0, &target_v, &target))
+        return -1;
+    params_v = ussr_null();
+    if (argument_count >= 2 &&
+        !oop_env_argument("launch", arguments, 1, &params_v, &params))
+    {
+        ussr_value_free(&target_v);
+        return -1;
+    }
+    if (argument_count == 3)
+    {
+        if (oop_eval(&arguments[2], &hidden_v) != 0)
+        {
+            ussr_value_free(&target_v);
+            ussr_value_free(&params_v);
+            return -1;
+        }
+        hidden = (hidden_v.type == USSR_BOOLEAN && hidden_v.data.boolean) ||
+                 (hidden_v.type == USSR_INTEGER && hidden_v.data.integer != 0);
+        ussr_value_free(&hidden_v);
+    }
+#ifdef _WIN32
+    {
+        /* Windows paths take backslashes; URLs keep their slashes. */
+        size_t n = strlen(target);
+        char *native = malloc(n + 1);
+        if (native != NULL)
+        {
+            size_t i;
+            memcpy(native, target, n + 1);
+            if (strstr(native, "://") == NULL)
+                for (i = 0; i < n; ++i)
+                    if (native[i] == '/')
+                        native[i] = '\\';
+            if (hidden)
+            {
+                size_t size = n + strlen(params) + 4;
+                char *line = malloc(size);
+                if (line != NULL)
+                {
+                    STARTUPINFOA startup;
+                    PROCESS_INFORMATION info;
+                    memset(&startup, 0, sizeof(startup));
+                    startup.cb = sizeof(startup);
+                    snprintf(line, size, "\"%s\" %s", native, params);
+                    if (CreateProcessA(NULL, line, NULL, NULL, FALSE,
+                                       CREATE_NO_WINDOW |
+                                           CREATE_NEW_PROCESS_GROUP,
+                                       NULL, NULL, &startup, &info))
+                    {
+                        CloseHandle(info.hThread);
+                        CloseHandle(info.hProcess);
+                        failed = 0;
+                    }
+                    free(line);
+                }
+            }
+            else
+            {
+                HINSTANCE status = ShellExecuteA(
+                    NULL, "open", native, params[0] != '\0' ? params : NULL,
+                    NULL, SW_SHOWNORMAL);
+                failed = (INT_PTR)status <= 32;
+            }
+            free(native);
+        }
+    }
+#else
+    {
+        /* Double fork so the program is not our child; a close-on-exec pipe
+         * tells whether the exec worked. */
+        char *words = strdup(params);
+        int report[2];
+        if (words != NULL && pipe(report) == 0)
+        {
+            pid_t child;
+            fcntl(report[1], F_SETFD, FD_CLOEXEC);
+            child = fork();
+            if (child == 0)
+            {
+                char *argv[64];
+                struct stat st;
+                int is_program = 0;
+                int null_fd;
+                close(report[0]);
+                setsid();
+                if (fork() != 0)
+                    _exit(0);
+                null_fd = open("/dev/null", O_RDWR);
+                if (null_fd >= 0)
+                {
+                    dup2(null_fd, 0);
+                    if (hidden)
+                    {
+                        dup2(null_fd, 1);
+                        dup2(null_fd, 2);
+                    }
+                }
+                /* a bare name is a program on PATH; a path is one when it
+                 * is an executable file */
+                if (strchr(target, '/') == NULL && strstr(target, "://") == NULL)
+                    is_program = 1;
+                else if (stat(target, &st) == 0 && S_ISREG(st.st_mode) &&
+                         access(target, X_OK) == 0)
+                    is_program = 1;
+                if (is_program)
+                {
+                    argv[0] = (char *)target;
+                    oop_launch_words(words, argv, 1, 64);
+                }
+                else
+                {
+#ifdef __APPLE__
+                    argv[0] = "open";
+#else
+                    argv[0] = "xdg-open";
+#endif
+                    argv[1] = (char *)target;
+                    argv[2] = NULL;
+                }
+                execvp(argv[0], argv);
+                {
+                    char code = 1;
+                    ssize_t ignored = write(report[1], &code, 1);
+                    (void)ignored;
+                }
+                _exit(127);
+            }
+            close(report[1]);
+            if (child > 0)
+            {
+                char code;
+                waitpid(child, NULL, 0);
+                failed = read(report[0], &code, 1) > 0;
+            }
+            close(report[0]);
+        }
+        free(words);
+    }
+#endif
+    *out_result = ussr_integer(failed ? 1 : 0);
+    ussr_value_free(&target_v);
+    ussr_value_free(&params_v);
+    return 0;
+}
+
+/* localtime(v): [seconds] -> local date and time of a time(t): value (now
+ * without one) as [year month day hour minute second weekday yearday];
+ * month 1..12, weekday 0 (Sunday)..6, yearday 1..366. */
+static int oop_do_localtime(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    time_t when = time(NULL);
+    struct tm parts;
+    ussr_vector_t *vector;
+    long fields[8];
+    size_t i;
+
+    if (argument_count > 1)
+    {
+        fprintf(stderr, "USSR: localtime(v): [seconds]\n");
+        return -1;
+    }
+    if (argument_count == 1)
+    {
+        ussr_value_t seconds_v;
+        if (oop_eval(&arguments[0], &seconds_v) != 0)
+            return -1;
+        if (seconds_v.type != USSR_INTEGER)
+        {
+            fprintf(stderr, "USSR: localtime() expects integer seconds\n");
+            ussr_value_free(&seconds_v);
+            return -1;
+        }
+        when = (time_t)seconds_v.data.integer;
+        ussr_value_free(&seconds_v);
+    }
+#ifdef _WIN32
+    if (localtime_s(&parts, &when) != 0)
+#else
+    if (localtime_r(&when, &parts) == NULL)
+#endif
+    {
+        fprintf(stderr, "USSR: localtime cannot convert that time\n");
+        return -1;
+    }
+    fields[0] = parts.tm_year + 1900L;
+    fields[1] = parts.tm_mon + 1L;
+    fields[2] = parts.tm_mday;
+    fields[3] = parts.tm_hour;
+    fields[4] = parts.tm_min;
+    fields[5] = parts.tm_sec;
+    fields[6] = parts.tm_wday;
+    fields[7] = parts.tm_yday + 1L;
+    vector = ussr_vector_create(NULL);
+    for (i = 0; vector != NULL && i < 8; ++i)
+        if (ussr_vector_push(vector, ussr_integer(fields[i])) != 0)
+        {
+            ussr_vector_release(vector);
+            vector = NULL;
+        }
+    if (vector == NULL)
+    {
+        fprintf(stderr, "USSR: localtime: out of memory\n");
+        return -1;
+    }
+    *out_result = ussr_vector_value(vector);
+    return 0;
+}
+
 /* chr(s): b -> one-byte string for 1..255; UTF-8 text is built by joining
  * the bytes of each character. */
 static int oop_do_chr(
@@ -3200,6 +3478,10 @@ int ussr_oop_dispatch(
              strcmp(command, "setenv") == 0 ||
              strcmp(command, "unsetenv") == 0)
         status = oop_do_env(command, arguments, argument_count, out_result);
+    else if (strcmp(command, "launch") == 0)
+        status = oop_do_launch(arguments, argument_count, out_result);
+    else if (strcmp(command, "localtime") == 0)
+        status = oop_do_localtime(arguments, argument_count, out_result);
     else if (strcmp(command, "chr") == 0)
         status = oop_do_chr(arguments, argument_count, out_result);
     else if (strcmp(command, "fail") == 0)

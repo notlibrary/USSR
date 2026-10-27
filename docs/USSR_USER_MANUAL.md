@@ -204,6 +204,10 @@ init(ret): arg_cnt arg_vec [
 
 exits with status 3 (`echo $?` prints `3`).
 
+`ussr`'s own options (`-v`, `-e`, `-c`) come before the script name;
+everything after it, dashes included, is the script's (`ussr
+src/kremlin/kremlin.su --window` passes `--window` to Kremlin).
+
 Textual assembler files can also be run directly:
 
 ```
@@ -1005,6 +1009,32 @@ one variable), values are converted between UTF-8 and the Win32 Unicode
 environment, and empty values are kept rather than deleting the variable.
 On POSIX systems names are case-sensitive and the C library's `setenv`,
 `unsetenv` and `getenv` are used.
+
+**Starting programs and local time (native):**
+
+```
+launch(ok): "notes.txt"                  # open with the system's program
+launch(ok): "https://example.org"        # a URL opens in the browser
+launch(ok): "notepad" "notes.txt"        # a program and its arguments
+launch(ok): "ussr" "klin.su" true        # no console window (Windows)
+localtime(t):                            # now: [2026,10,27,9,5,0,2,300]
+localtime(t): 0                          # a time(s): value
+```
+
+Unlike an external command (§9), `launch` does not wait: the program keeps
+running on its own, and `ok` is `0` when it started, `1` when it could not
+(no such program, nothing to open the file with). The first argument is a
+program (by name on `PATH`, or a path to it) or a file, folder or URL, which
+opens with the program the system has for it: `ShellExecute` on Windows,
+`xdg-open` on Linux, `open` on macOS. The optional second argument is the
+argument string (on POSIX split at blanks, `"double quotes"` grouping
+words); the third, when true, starts a program without a console window on
+Windows (a GUI script run by `ussr`), and on POSIX sends its output to
+`/dev/null`.
+
+`localtime` gives the local date and time as
+`[year month day hour minute second weekday yearday]`: month 1-12, weekday
+0 (Sunday) to 6, yearday 1-366.
 
 **Runtime helpers (native):**
 

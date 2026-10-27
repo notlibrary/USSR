@@ -41,6 +41,12 @@ maximize(result): window [
     petersburg_maximize(result): window
 ]
 
+# Covers the whole primary monitor with a borderless window; 1 when there
+# is no monitor to cover and the window was maximized instead.
+fullscreen(result): window [
+    petersburg_fullscreen(result): window
+]
+
 label(result): window text [
     petersburg_create_label(result): window text
 ]
@@ -184,6 +190,12 @@ canvasfill(result): canvas x y width height color [
 
 canvastext(result): canvas x y text color [
     petersburg_canvas_text(result): canvas x y text color
+]
+
+# Text at scale 1..16: each font pixel becomes a scale x scale square, so a
+# character cell is 7 * scale pixels wide and 7 * scale high.
+canvastextscale(result): canvas x y text color scale [
+    petersburg_canvas_text_scaled(result): canvas x y text color scale
 ]
 
 canvascount(result): canvas [

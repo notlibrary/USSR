@@ -3404,7 +3404,9 @@ int main(int argc, char **argv)
 	srand(time(NULL));
 	seed_xrp32(rand());
 	
-    while ((opt = getopt_long(argc, argv, "ve:c", long_options, NULL)) != -1)
+    /* "+": options end at the script name, so the script's own arguments
+     * (kremlin.su --window) are passed to it untouched */
+    while ((opt = getopt_long(argc, argv, "+ve:c", long_options, NULL)) != -1)
     {
         switch (opt)
         {
