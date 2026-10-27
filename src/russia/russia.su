@@ -67,6 +67,14 @@ lx_digit_p(r): b [
     ]
 ]
 
+# Value of hex digit byte b (0-9, a-f, A-F), or -1.
+lx_hex_value(r): b [
+    set(r): {0 - 1}
+    if(_): {b >= 48 && b <= 57} [ set(r): {b - 48} ]
+    if(_): {b >= 97 && b <= 102} [ set(r): {b - 87} ]
+    if(_): {b >= 65 && b <= 70} [ set(r): {b - 55} ]
+]
+
 # ---- emit one token: kind text line ----
 lx_emit(r): kind text tline [
     new(lx_t): "lx_Tok" 0 "" 0
@@ -218,6 +226,46 @@ lx_scan(r): s [
                     set(lx_k): 7
                 ]
                 lx_emit(_): lx_k lx_txt lx_ln
+                set(lx_adv): 1
+            ]
+        ]
+        # hex number: 0x then up to 16 significant digits, read as the
+        # 64-bit pattern; emitted as an integer token in decimal
+        if(_): {lx_adv = 0 && lx_b = 48 && lx_pos + 2 < lx_n + 1} [
+            set(lx_hx): {0 - 1}
+            set(lx_hd): {0 - 1}
+            if(_): {lx_pos + 1 < lx_n} [ at(lx_hx): lx_sb {lx_pos + 1} ]
+            if(_): {lx_pos + 2 < lx_n} [
+                at(lx_hb): lx_sb {lx_pos + 2}
+                lx_hex_value(lx_hd): lx_hb
+            ]
+            if(_): {(lx_hx = 120 || lx_hx = 88) && lx_hd >= 0} [
+                set(lx_start): lx_pos
+                set(lx_pos): {lx_pos + 2}
+                set(lx_hv): 0
+                set(lx_hn): 0
+                set(lx_hmore): 1
+                while(_): {lx_hmore = 1} [
+                    set(lx_hd): {0 - 1}
+                    if(_): {lx_pos < lx_n} [
+                        at(lx_hb): lx_sb lx_pos
+                        lx_hex_value(lx_hd): lx_hb
+                    ]
+                    if(_): {lx_hd < 0} [ set(lx_hmore): 0 ]
+                    else(_): [
+                        set(lx_hv): {(lx_hv << 4) | lx_hd}
+                        # leading zeros do not count
+                        if(_): {lx_hn > 0 || lx_hd > 0} [ set(lx_hn): {lx_hn + 1} ]
+                        set(lx_pos): {lx_pos + 1}
+                    ]
+                ]
+                slice(lx_tmp): lx_src lx_start {lx_pos - lx_start}
+                if(_): {lx_hn > 16} [
+                    set(lx_failed): 1
+                    concat(lx_err): "hex integer " lx_tmp " has more than 16 digits (64 bits)"
+                ]
+                encode(lx_htxt): lx_hv
+                lx_emit(_): 2 lx_htxt lx_ln
                 set(lx_adv): 1
             ]
         ]
@@ -1130,6 +1178,11 @@ ps_par(r): [
                 getf(ps_par_nk): ps_par_nx "kind"
                 getf(ps_par_ns): ps_par_nx "text"
                 concat(ps_par_neg): "-" ps_par_ns
+                slice(ps_par_n0): ps_par_ns 0 1
+                if(_): {ps_par_n0 = "-"} [
+                    len(ps_par_nl): ps_par_ns
+                    slice(ps_par_neg): ps_par_ns 1 {ps_par_nl - 1}
+                ]
                 if(_): {ps_par_op = "-" && ps_par_nk = 2} [
                     ps_adv(_): 0
                     ps_adv(_): 0

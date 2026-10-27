@@ -230,6 +230,44 @@ ck_lex(r): text [
                 set(ck_xdone): 1
             ]
         ]
+        # hex integers: 0x then up to 16 significant digits, the 64-bit
+        # pattern; the INT token holds it in decimal
+        if(_): {ck_xdone = 0 && ck_xb = 48 && ck_xp + 2 < ck_xn} [
+            at(ck_hx): ck_xtb {ck_xp + 1}
+            at(ck_hb): ck_xtb {ck_xp + 2}
+            lx_hex_value(ck_hd): ck_hb
+            if(_): {(ck_hx = 120 || ck_hx = 88) && ck_hd >= 0} [
+                set(ck_hq): {ck_xp + 2}
+                set(ck_hv): 0
+                set(ck_hn): 0
+                set(ck_hgo): 1
+                while(_): {ck_hgo = 1} [
+                    set(ck_hd): {0 - 1}
+                    if(_): {ck_hq < ck_xn} [
+                        at(ck_hb): ck_xtb ck_hq
+                        lx_hex_value(ck_hd): ck_hb
+                    ]
+                    if(_): {ck_hd < 0} [ set(ck_hgo): 0 ]
+                    else(_): [
+                        set(ck_hv): {(ck_hv << 4) | ck_hd}
+                        if(_): {ck_hn > 0 || ck_hd > 0} [ set(ck_hn): {ck_hn + 1} ]
+                        add(ck_hq): ck_hq 1
+                    ]
+                ]
+                slice(ck_htext): text ck_xp {ck_hq - ck_xp}
+                if(_): {ck_hn > 16} [
+                    concat(ck_xm): "hex integer " ck_htext " has more than 16 digits (64 bits)"
+                    ck_tok(_): "ERR" ck_xm ck_xl
+                    set(ck_xerr): 1
+                ]
+                else(_): [
+                    encode(ck_hdec): ck_hv
+                    ck_tok(_): "INT" ck_hdec ck_xl
+                ]
+                set(ck_xp): ck_hq
+                set(ck_xdone): 1
+            ]
+        ]
         # numbers: REAL is digits.digits, else INTEGER
         if(_): {ck_xdone = 0} [
             at(ck_xcl): ck_cls ck_xb

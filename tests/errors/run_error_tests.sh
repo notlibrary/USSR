@@ -261,6 +261,10 @@ printf 'set(a): 1\nset(b): 9223372036854775808\n' >"$tmp/bigint.su"
 check "integer literal out of range" \
     "bigint.su:2: integer 9223372036854775808 is outside" "$tmp/bigint.su"
 
+printf 'set(a): 0xFF\nset(b): 0x1CAFEBABEDEADBEEF\n' >"$tmp/bighex.su"
+check "hex literal over 64 bits" \
+    "bighex.su:2: hex integer 0x1CAFEBABEDEADBEEF has more than 16 digits (64 bits)" "$tmp/bighex.su"
+
 # A shift count outside 0..63 stops the program at run time.
 printf 'set(n): 64\nprint(_): {1 << n}\n' >"$tmp/shift.su"
 "$USSR" "$tmp/shift.su" </dev/null >"$tmp/out" 2>"$tmp/err"

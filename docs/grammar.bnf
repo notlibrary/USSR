@@ -156,9 +156,17 @@
 
 <null> ::= "null"
 
-<integer> ::= REGEX([0-9]+)
+<integer> ::= <decimal-integer> | <hex-integer>
+
+<decimal-integer> ::= REGEX([0-9]+)
 # Must fit in a signed 64-bit integer; a larger one is a lexer error
 # (write it as a real instead).
+
+<hex-integer> ::= REGEX(0[xX][0-9a-fA-F]+)
+# 0xCAFEBABE, 0xdeadbeef, 0X1f: at most 16 digits after leading zeros
+# (more is a lexer error), read as the 64-bit two's complement pattern,
+# so 0x7FFFFFFFFFFFFFFF is the largest integer and 0xFFFFFFFFFFFFFFFF
+# is -1. The value is an ordinary integer; "-" <integer> negates it.
 
 <real> ::= REGEX([0-9]+ "." [0-9]+)
 

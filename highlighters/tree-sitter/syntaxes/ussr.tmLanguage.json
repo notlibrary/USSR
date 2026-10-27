@@ -135,6 +135,7 @@
         { "name": "constant.language.null.ussr", "match": "\\bnull\\b" },
         { "name": "constant.language.macro.ussr", "match": "\\b(?:M_PI|M_E)\\b" },
         { "name": "constant.numeric.float.ussr", "match": "(?:(?<=[\\s:])-)?\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.hex.ussr", "match": "(?:(?<=[\\s:])-)?\\b0[xX][0-9a-fA-F]+\\b" },
         { "name": "constant.numeric.integer.ussr", "match": "(?:(?<=[\\s:])-)?\\b[0-9]+\\b" }
       ]
     },

@@ -88,33 +88,33 @@ $define KM_KEY_MENU 348
 $define KM_WIDTH 1024
 $define KM_HEIGHT 700
 $define KM_WALLS 5
-$define KM_PANEL 1842465
-$define KM_PANEL_LINE 3816772
-$define KM_BUTTON 2895412
-$define KM_START 11740702
-$define KM_START_ON 14172207
-$define KM_GOLD 15909198
-$define KM_TEXT 15790320
-$define KM_DIM 10133670
-$define KM_SHADOW 0
-$define KM_SELECT 2972300
-$define KM_SELECT_LINE 9286882
-$define KM_MENU 2829617
-$define KM_MENU_LINE 5264476
-$define KM_MENU_SEP 4474702
-$define KM_HILITE 4026294
-$define KM_FIELD 1184534
-$define KM_ERROR 16747136
-$define KM_BAR 1447706
-$define KM_FOLDER 15317321
-$define KM_FOLDER_TAB 13212206
-$define KM_FOLDER_LIP 16176255
-$define KM_PAGE 15921906
-$define KM_PAGE_FOLD 12434877
-$define KM_PAGE_LINE 11579568
-$define KM_WINDOW 2830134
-$define KM_PROMPT 8181372
-$define KM_WHITE 16777215
+$define KM_PANEL 0x1C1D21
+$define KM_PANEL_LINE 0x3A3D44
+$define KM_BUTTON 0x2C2E34
+$define KM_START 0xB3261E
+$define KM_START_ON 0xD8402F
+$define KM_GOLD 0xF2C14E
+$define KM_TEXT 0xF0F0F0
+$define KM_DIM 0x9AA0A6
+$define KM_SHADOW 0x000000
+$define KM_SELECT 0x2D5A8C
+$define KM_SELECT_LINE 0x8DB4E2
+$define KM_MENU 0x2B2D31
+$define KM_MENU_LINE 0x50545C
+$define KM_MENU_SEP 0x44474E
+$define KM_HILITE 0x3D6FB6
+$define KM_FIELD 0x121316
+$define KM_ERROR 0xFF8A80
+$define KM_BAR 0x16171A
+$define KM_FOLDER 0xE9B949
+$define KM_FOLDER_TAB 0xC99A2E
+$define KM_FOLDER_LIP 0xF6D47F
+$define KM_PAGE 0xF2F2F2
+$define KM_PAGE_FOLD 0xBDBDBD
+$define KM_PAGE_LINE 0xB0B0B0
+$define KM_WINDOW 0x2B2F36
+$define KM_PROMPT 0x7CD67C
+$define KM_WHITE 0xFFFFFF
 
 # --- text -------------------------------------------------------------------
 
@@ -1911,24 +1911,24 @@ km_wall_name(r): i [
 km_wall_colors(r): i [
     vec(r): ""
     if(_): {i = 1} [
-        push(_): r 9182227
-        push(_): r 3869190
+        push(_): r 0x8C1C13
+        push(_): r 0x3B0A06
     ]
     elif(_): {i = 2} [
-        push(_): r 4873598
-        push(_): r 1712691
+        push(_): r 0x4A5D7E
+        push(_): r 0x1A2233
     ]
     elif(_): {i = 3} [
-        push(_): r 7049073
-        push(_): r 2372906
+        push(_): r 0x6B8F71
+        push(_): r 0x24352A
     ]
     elif(_): {i = 4} [
-        push(_): r 3816772
-        push(_): r 1316120
+        push(_): r 0x3A3D44
+        push(_): r 0x141518
     ]
     else(_): [
-        push(_): r 3038835
-        push(_): r 993075
+        push(_): r 0x2E5E73
+        push(_): r 0x0F2733
     ]
 ]
 
@@ -2463,17 +2463,17 @@ km_star(r): canvas cx cy radius color [
 ]
 
 km_kind_color(r): kind [
-    set(r): 4937059
-    if(_): {kind = "code"} [ set(r): 3050327 ]
-    if(_): {kind = "text"} [ set(r): 7041664 ]
-    if(_): {kind = "image"} [ set(r): 9323693 ]
-    if(_): {kind = "document"} [ set(r): 2845872 ]
-    if(_): {kind = "audio"} [ set(r): 14251782 ]
-    if(_): {kind = "video"} [ set(r): 12597547 ]
-    if(_): {kind = "archive"} [ set(r): 9133628 ]
-    if(_): {kind = "web"} [ set(r): 947344 ]
-    if(_): {kind = "folder"} [ set(r): 15317321 ]
-    if(_): {kind = "program"} [ set(r): 4026294 ]
+    set(r): 0x4B5563
+    if(_): {kind = "code"} [ set(r): 0x2E8B57 ]
+    if(_): {kind = "text"} [ set(r): 0x6B7280 ]
+    if(_): {kind = "image"} [ set(r): 0x8E44AD ]
+    if(_): {kind = "document"} [ set(r): 0x2B6CB0 ]
+    if(_): {kind = "audio"} [ set(r): 0xD97706 ]
+    if(_): {kind = "video"} [ set(r): 0xC0392B ]
+    if(_): {kind = "archive"} [ set(r): 0x8B5E3C ]
+    if(_): {kind = "web"} [ set(r): 0x0E7490 ]
+    if(_): {kind = "folder"} [ set(r): 0xE9B949 ]
+    if(_): {kind = "program"} [ set(r): 0x3D6FB6 ]
 ]
 
 # A launcher's tile color, picked by its name.
@@ -2487,12 +2487,12 @@ km_name_color(r): text [
         set(_knc_i): {_knc_i + 1}
     ]
     set(_knc_k): {_knc_sum % 6}
-    set(r): 12597547
-    if(_): {_knc_k = 1} [ set(r): 2845872 ]
-    if(_): {_knc_k = 2} [ set(r): 3050327 ]
-    if(_): {_knc_k = 3} [ set(r): 14251782 ]
-    if(_): {_knc_k = 4} [ set(r): 9323693 ]
-    if(_): {_knc_k = 5} [ set(r): 947344 ]
+    set(r): 0xC0392B
+    if(_): {_knc_k = 1} [ set(r): 0x2B6CB0 ]
+    if(_): {_knc_k = 2} [ set(r): 0x2E8B57 ]
+    if(_): {_knc_k = 3} [ set(r): 0xD97706 ]
+    if(_): {_knc_k = 4} [ set(r): 0x8E44AD ]
+    if(_): {_knc_k = 5} [ set(r): 0x0E7490 ]
 ]
 
 # A 40 x 40 icon (times u) for kind at (x, y).
@@ -2526,8 +2526,8 @@ km_draw_icon(r): canvas kind name x y u [
         canvasfill(_): canvas {x + 8 * u} {y + 2 * u} {24 * u} {33 * u} KM_PAGE
         canvasfill(_): canvas {x + 26 * u} {y + 2 * u} {6 * u} {6 * u} KM_PAGE_FOLD
         if(_): {kind = "image"} [
-            canvasfill(_): canvas {x + 11 * u} {y + 8 * u} {18 * u} {11 * u} 8238048
-            canvasfill(_): canvas {x + 11 * u} {y + 15 * u} {18 * u} {4 * u} 5151323
+            canvasfill(_): canvas {x + 11 * u} {y + 8 * u} {18 * u} {11 * u} 0x7DB3E0
+            canvasfill(_): canvas {x + 11 * u} {y + 15 * u} {18 * u} {4 * u} 0x4E9A5B
         ]
         else(_): [
             canvasfill(_): canvas {x + 12 * u} {y + 9 * u} {14 * u} u KM_PAGE_LINE

@@ -36,6 +36,7 @@ DIGIT       [0-9]
 LETTER      [a-zA-Z_]
 IDENT       {LETTER}({LETTER}|{DIGIT})*
 INTEGER     {DIGIT}+
+HEXINT      0[xX][0-9a-fA-F]+
 REAL        {DIGIT}+"."{DIGIT}+
 STRING      \"([^\"\\\n]|\\.)*\"
 UNO         '([^'\\\n]|\\.)*'
@@ -85,6 +86,36 @@ UNO         '([^'\\\n]|\\.)*'
 {REAL}                      {
     yylval.real = strtod(yytext, NULL);
     return REAL;
+}
+
+{HEXINT}                    {
+    /* 0xCAFEBABE: up to 16 hex digits, read as the 64-bit pattern, so
+     * 0xFFFFFFFFFFFFFFFF is -1 */
+    const char *digits = yytext + 2;
+    unsigned long long bits = 0;
+
+    while (*digits == '0' && digits[1] != '\0')
+        ++digits;
+    if (strlen(digits) > 16)
+    {
+        const char *file;
+        int line;
+
+        ussr_parse_locate(yylineno, &file, &line);
+        fprintf(stderr,
+                "%s:%d: hex integer %s has more than 16 digits (64 bits)\n",
+                file, line, yytext);
+        ussr_lexer_reported = 1;
+        return LEX_ERROR;
+    }
+    for (; *digits != '\0'; ++digits)
+    {
+        int c = *digits;
+        int d = c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
+        bits = (bits << 4) | (unsigned long long)d;
+    }
+    yylval.integer = (ussr_int_t)bits;
+    return INTEGER;
 }
 
 {INTEGER}                   {
