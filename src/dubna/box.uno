@@ -1,0 +1,1 @@
+'Package{name=`dubna`,version=`0.1.0`,description=`PostgreSQL client: protocol 3.0, TLS through Ryazan, SCRAM-SHA-256, parameterised queries (RUND stack)`,entry=`dubna.su`,dependencies=[`ryazan`,`library`],files=[`dubna.su`,`README.md`,`CHANGELOG.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

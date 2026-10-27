@@ -1,0 +1,110 @@
+# Novgorod with its posts in PostgreSQL (--db). Not run by tests/run_all.sh;
+# point DUBNA_TEST_URL at a database you may create a table in. Uses the
+# table novgorod_test_posts and drops it at the end.
+#   DUBNA_TEST_URL="host=127.0.0.1 dbname=postgres user=postgres password=..." ussr tests/novgorod_db_live.su
+$include "../src/novgorod/novgorod.su"
+
+global(_): failures
+
+check(r): label ok detail [
+    if(_): ok [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label ": " detail
+        add(failures): failures 1
+    ]
+    print(_): line
+    set(r): 0
+]
+
+has(r): text needle [
+    nvm_find(at): text needle 0
+    set(r): {at >= 0}
+]
+
+post(r): board thread text [
+    set(boundary): "nvdb9"
+    concat(body): "--" boundary "\r\nContent-Disposition: form-data; name=\"board\"\r\n\r\n" board "\r\n"
+    concat(body): body "--" boundary "\r\nContent-Disposition: form-data; name=\"thread\"\r\n\r\n" thread "\r\n"
+    concat(body): body "--" boundary "\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\n" text "\r\n"
+    concat(body): body "--" boundary "--\r\n"
+    len(bl): body
+    str_from_int(bls): bl
+    concat(req): "POST /post HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=" boundary "\r\nContent-Length: " bls "\r\n\r\n" body
+    nv_handle(r): "POST" "/post" req
+]
+
+page(r): target [
+    concat(req): "GET " target " HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    nv_handle(r): "GET" target req
+]
+
+drop_table(r): [
+    dubna_connect(c): nv_db
+    dubna_query(r): c "drop table if exists novgorod_test_posts"
+    dubna_close(_): c
+]
+
+init(ret): arg_cnt arg_vec [
+    set(failures): 0
+    getenv(url): "DUBNA_TEST_URL"
+    if(_): {url = null || url = ""} [
+        print(_): "SKIP set DUBNA_TEST_URL to a PostgreSQL conninfo or URL"
+        set(ret): 0
+        return(ret): ret
+    ]
+    nv_types(_):
+    nv_setup(_):
+    set(nv_db): url
+    set(nv_db_table): "novgorod_test_posts"
+    dubna_init(_):
+    drop_table(_):
+    nv_open(count): "tests/novgorod_db_tmp"
+    check(_): "empty table" {count = 0} "not empty"
+    post(resp): "c" "0" "first **thread**"
+    has(ok): resp "Location: /c/res/"
+    check(_): "thread saved" ok resp
+    set(op_no): 0
+    len(np): nv_posts
+    if(_): {np > 0} [
+        at(op): nv_posts 0
+        getf(op_no): op "no"
+    ]
+    str_from_int(ops): op_no
+    concat(reply): ">>" ops " a reply with 'quotes' and $1"
+    post(resp): "c" ops reply
+    has(ok): resp "Location: /c/res/"
+    check(_): "reply saved" ok resp
+    # a fresh start reads the posts back from PostgreSQL
+    nv_setup(_):
+    set(nv_db): url
+    set(nv_db_table): "novgorod_test_posts"
+    nv_open(count): "tests/novgorod_db_tmp"
+    check(_): "reloaded" {count = 2} "wrong count"
+    concat(target): "/c/res/" ops
+    page(html): target
+    has(ok): html "a reply with &#39;quotes&#39; and $1"
+    check(_): "reply text" ok "missing"
+    has(ok): html "<b>thread</b>"
+    check(_): "markup" ok "missing"
+    # pruning deletes the rows
+    set(nv_max_threads): 1
+    sleep(_): 1100
+    post(resp): "c" "0" "second thread"
+    dubna_connect(c): url
+    concat(sql): "select count(*) from novgorod_test_posts where no = " ops " or thread = " ops
+    dubna_query(res): c sql
+    dubna_value(left): res 0 0
+    dubna_close(_): c
+    check(_): "pruned rows" {left = "0"} left
+    drop_table(_):
+    remove_file(_): "tests/novgorod_db_tmp/boards.txt"
+    remove_dir(_): "tests/novgorod_db_tmp/posts"
+    remove_dir(_): "tests/novgorod_db_tmp/img"
+    remove_dir(_): "tests/novgorod_db_tmp"
+    set(ret): 0
+    if(_): {failures > 0} [
+        set(ret): 1
+    ]
+]

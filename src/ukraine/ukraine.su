@@ -6,6 +6,13 @@
 # by a USSR scheduler task; this module does not spawn operating-system tasks.
 #
 #   uk_server(result): host port                      plain HTTP
+#   uk_request_header(v): request name               header value, "" if absent
+#   uk_request_body(b): request                      bytes after the head
+#   uk_response_ex(r): status type headers body      response with extra
+#       "\n"-separated header lines
+# Bodies are read through Content-Length, up to the global uk_max_body
+# (1 MiB when unset); longer requests get 413.
+#
 #   uk_server_tls(result): host port cert secret      HTTPS through ryazan.su;
 #       cert is a PKCS#12 file (.p12/.pfx) and secret its password (with
 #       OpenSSL also a PEM certificate chain and the PEM key file)
@@ -40,10 +47,21 @@ uk_recv(result): client tls [
     ]
 ]
 
+# The whole request: head and, when it has a Content-Length, the body.
+# "" when the request is malformed or the peer went away; the integer 413
+# when the body is longer than uk_max_body (1 MiB unless the application
+# sets the global uk_max_body before uk_server).
 uk_read_request(result): client tls [
     set(result): ""
     set(uk_read_done): 0
     set(uk_read_failed): 0
+    set(uk_read_end): {0 - 1}
+    set(uk_read_from): 0
+    set(uk_read_need): 0
+    set(uk_read_limit): uk_max_body
+    if(_): {uk_read_limit = null} [
+        set(uk_read_limit): 1048576
+    ]
     while(_): {uk_read_done = 0} [
         uk_recv(uk_read_chunk): client tls
         if(_): {uk_read_chunk = null} [
@@ -59,27 +77,83 @@ uk_read_request(result): client tls [
             if(_): {uk_read_chunk_len > 0} [
                 concat(result): result uk_read_chunk
                 len(uk_read_total): result
-                uk_find(uk_read_end): result "\r\n\r\n" 0
-                if(_): {uk_read_end >= 0} [
+                if(_): {uk_read_end < 0} [
+                    # only the new bytes (and three before them) can end the head
+                    uk_find(uk_read_end): result "\r\n\r\n" uk_read_from
+                    set(uk_read_from): {uk_read_total - 3}
+                    if(_): {uk_read_end < 0 && uk_read_total > 16384} [
+                        set(uk_read_failed): 1
+                        set(uk_read_done): 1
+                    ]
                     if(_): {uk_read_end > 16380} [
                         set(uk_read_failed): 1
                         set(uk_read_done): 1
                     ]
-                    if(_): {uk_read_end <= 16380} [
-                        set(uk_read_done): 1
+                    if(_): {uk_read_end >= 0 && uk_read_failed = 0} [
+                        uk_request_header(uk_read_length): result "content-length"
+                        set(uk_read_body): 0
+                        if(_): {uk_read_length != ""} [
+                            str_to_number(uk_read_body): uk_read_length
+                            typeof(uk_read_type): uk_read_body
+                            if(_): {uk_read_type != "integer"} [
+                                set(uk_read_body): {0 - 1}
+                            ]
+                        ]
+                        if(_): {uk_read_body < 0} [
+                            set(uk_read_failed): 1
+                            set(uk_read_done): 1
+                        ]
+                        if(_): {uk_read_body > uk_read_limit} [
+                            set(uk_read_failed): 2
+                            set(uk_read_done): 1
+                        ]
+                        set(uk_read_need): {uk_read_end + 4 + uk_read_body}
                     ]
                 ]
-                if(_): {uk_read_end < 0} [
-                    if(_): {uk_read_total > 16384} [
-                        set(uk_read_failed): 1
-                        set(uk_read_done): 1
-                    ]
+                if(_): {uk_read_end >= 0 && uk_read_failed = 0 && uk_read_total >= uk_read_need} [
+                    set(uk_read_done): 1
                 ]
             ]
         ]
     ]
     if(_): {uk_read_failed = 1} [
         set(result): ""
+    ]
+    if(_): {uk_read_failed = 2} [
+        set(result): 413
+    ]
+]
+
+# Value of the request header name (ASCII case-insensitive), blanks
+# trimmed; "" when the request has no such header.
+uk_request_header(result): request name [
+    set(result): ""
+    uk_find(uk_header_end): request "\r\n\r\n" 0
+    if(_): {uk_header_end < 0} [
+        return(result): result
+    ]
+    slice(uk_header_head): request 0 {uk_header_end + 2}
+    str_lower(uk_header_lower): uk_header_head
+    str_lower(uk_header_name): name
+    concat(uk_header_key): "\r\n" uk_header_name ":"
+    uk_find(uk_header_at): uk_header_lower uk_header_key 0
+    if(_): {uk_header_at < 0} [
+        return(result): result
+    ]
+    len(uk_header_key_len): uk_header_key
+    add(uk_header_from): uk_header_at uk_header_key_len
+    uk_find(uk_header_stop): uk_header_head "\r\n" uk_header_from
+    slice(uk_header_value): uk_header_head uk_header_from {uk_header_stop - uk_header_from}
+    str_trim(result): uk_header_value
+]
+
+# The bytes after the blank line that ends the head ("" when none).
+uk_request_body(result): request [
+    set(result): ""
+    uk_find(uk_body_at): request "\r\n\r\n" 0
+    if(_): {uk_body_at >= 0} [
+        len(uk_body_total): request
+        slice(result): request {uk_body_at + 4} {uk_body_total - uk_body_at - 4}
     ]
 ]
 
@@ -108,12 +182,35 @@ uk_request_target(result): request [
 ]
 
 uk_response(result): status_line content_type body [
+    uk_response_ex(result): status_line content_type "" body
+]
+
+# uk_response with extra header lines, separated by "\n" (a trailing newline
+# is optional; "" for none), for example "Location: /\nCache-Control: no-store".
+uk_response_ex(result): status_line content_type headers body [
+    len(uk_resp_length): body
+    str_from_int(uk_resp_length_text): uk_resp_length
     set(result): "HTTP/1.1 "
     concat(result): result status_line "\r\n"
     concat(result): result "Content-Type: " content_type "\r\n"
+    concat(result): result "Content-Length: " uk_resp_length_text "\r\n"
     concat(result): result "Connection: close\r\n"
-    concat(result): result "X-Content-Type-Options: nosniff\r\n\r\n"
-    concat(result): result body
+    concat(result): result "X-Content-Type-Options: nosniff\r\n"
+    len(uk_resp_headers_len): headers
+    set(uk_resp_from): 0
+    while(_): {uk_resp_from < uk_resp_headers_len} [
+        uk_find(uk_resp_stop): headers "\n" uk_resp_from
+        if(_): {uk_resp_stop < 0} [
+            set(uk_resp_stop): uk_resp_headers_len
+        ]
+        slice(uk_resp_line): headers uk_resp_from {uk_resp_stop - uk_resp_from}
+        str_trim(uk_resp_line): uk_resp_line
+        if(_): {uk_resp_line != ""} [
+            concat(result): result uk_resp_line "\r\n"
+        ]
+        add(uk_resp_from): uk_resp_stop 1
+    ]
+    concat(result): result "\r\n" body
 ]
 
 uk_send_all(result): client response tls [
@@ -166,6 +263,11 @@ uk_client_tls(result): client credential secret [
 
 uk_connection(result): client tls [
     uk_read_request(uk_client_request): client tls
+    if(_): {uk_client_request = 413} [
+        uk_response(uk_client_response): "413 Content Too Large" "text/plain; charset=utf-8" "Content Too Large\n"
+        uk_send_all(uk_client_sent): client uk_client_response tls
+        set(uk_client_request): ""
+    ]
     len(uk_client_request_len): uk_client_request
     if(_): {uk_client_request_len > 0} [
         uk_request_method(uk_client_method): uk_client_request

@@ -12,6 +12,7 @@
 #include "eventq.h"
 #include "gc.h"
 #include "petersburg.h"
+#include "ussr_oop_builtins.h"
 
 /*
  * Cooperative multithreading scheduler, modeled on the FreeBSD
@@ -833,6 +834,23 @@ static int sched_do_socket(const char *name, const ussr_value_t *values,
         if(got<0){free(buffer);*out=ussr_null();return 1;}
         buffer[got]='\0'; *out=ussr_string(buffer); free(buffer); return 1;
     }
+    if (strcmp(name, "socket_recv_bytes") == 0) {
+        /* like socket_recv, as a vector of bytes 0..255: binary protocols */
+        unsigned char *buffer; long got; size_t cap; int status;
+        if (count!=2 || sched_socket_handle_arg(values,0,&h)!=0 || values[1].type!=USSR_INTEGER || values[1].data.integer<1 || values[1].data.integer>65536) return -1;
+        cap=(size_t)values[1].data.integer; buffer=malloc(cap); if(!buffer)return -1;
+        got=ussr_socket_recv(h,buffer,cap);
+        if(got<0){free(buffer);*out=ussr_null();return 1;}
+        status=ussr_bytes_value(buffer,(size_t)got,out); free(buffer);
+        return status==0 ? 1 : -1;
+    }
+    if (strcmp(name, "socket_send_bytes") == 0) {
+        unsigned char *data; size_t length; long sent;
+        if(count!=2 || sched_socket_handle_arg(values,0,&h)!=0 || values[1].type!=USSR_VECTOR)return -1;
+        if(ussr_value_bytes(&values[1],&data,&length)!=0)return -1;
+        sent=ussr_socket_send(h,data,length); free(data);
+        *out=ussr_integer(sent); return 1;
+    }
     if (strcmp(name, "socket_send") == 0) {
         long sent;
         if(count!=2 || sched_socket_handle_arg(values,0,&h)!=0 || values[1].type!=USSR_STRING)return -1;
@@ -944,6 +962,28 @@ static int sched_do_tls(const char *name, const ussr_value_t *values,
         *out = ussr_integer(ryazan_tls_send(h, values[1].data.string,
                                             strlen(values[1].data.string)));
         return 1;
+    }
+    if (strcmp(name, "tls_recv_bytes") == 0) {
+        /* tls_recv as a byte vector: empty once closed or failed, null:
+         * wait_readable and call again */
+        unsigned char *buffer; long got; size_t cap; int status;
+        if (count != 2 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type != USSR_INTEGER || values[1].data.integer < 1 ||
+            values[1].data.integer > 65536) return -1;
+        cap = (size_t)values[1].data.integer; buffer = malloc(cap); if (!buffer) return -1;
+        got = ryazan_tls_recv(h, buffer, cap);
+        if (got == RYAZAN_RECV_WANT_READ) { free(buffer); *out = ussr_null(); return 1; }
+        if (got < 0) got = 0;
+        status = ussr_bytes_value(buffer, (size_t)got, out); free(buffer);
+        return status == 0 ? 1 : -1;
+    }
+    if (strcmp(name, "tls_send_bytes") == 0) {
+        unsigned char *data; size_t length; long sent;
+        if (count != 2 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type != USSR_VECTOR) return -1;
+        if (ussr_value_bytes(&values[1], &data, &length) != 0) return -1;
+        sent = ryazan_tls_send(h, data, length); free(data);
+        *out = ussr_integer(sent); return 1;
     }
     if (strcmp(name, "tls_flush") == 0) {
         if (count != 1 || sched_socket_handle_arg(values,0,&h)!=0) return -1;

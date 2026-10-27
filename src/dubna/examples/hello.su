@@ -1,0 +1,36 @@
+# Asks a PostgreSQL server who and where you are. From the repository root:
+#     ussr src/dubna/examples/hello.su "postgres://user:password@localhost/postgres"
+# or with PGHOST, PGUSER, PGPASSWORD... set and no argument.
+$include "../dubna.su"
+
+init(ret): argc argv [
+    set(conninfo): ""
+    if(_): {argc > 0} [
+        at(conninfo): argv 0
+    ]
+    dubna_connect(db): conninfo
+    if(_): {db = null} [
+        dubna_error(why):
+        print(_): why
+        set(ret): 1
+        return(ret): ret
+    ]
+    dubna_query(res): db "select current_user, current_database(), version()"
+    dubna_value(who): res 0 0
+    dubna_value(where): res 0 1
+    dubna_value(what): res 0 2
+    getf(tls): db "tls"
+    set(how): "unencrypted"
+    if(_): tls [
+        set(how): "over TLS"
+    ]
+    concat(line): who " in " where ", " how
+    print(_): line
+    print(_): what
+    dubna_exec(res): db "select $1::int * $2::int as product" '[6,7]'
+    dubna_value(p): res 0 "product"
+    concat(line): "6 * 7 = " p
+    print(_): line
+    dubna_close(_): db
+    set(ret): 0
+]

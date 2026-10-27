@@ -1,0 +1,91 @@
+# Dubna against a real PostgreSQL server. Not run by tests/run_all.sh (it
+# needs a server); point DUBNA_TEST_URL at a database you may create a
+# temporary table in:
+#   DUBNA_TEST_URL="host=127.0.0.1 port=5432 dbname=postgres user=postgres password=..." ussr tests/dubna_live.su
+#   DUBNA_TEST_URL="postgres://user:pass@localhost/db?sslmode=require" RYAZAN_CA_FILE=ca.pem ussr tests/dubna_live.su
+# Prints PASS or FAIL per check; exit status 1 when one failed.
+$include "../src/dubna/dubna.su"
+
+global(_): failures
+
+check(r): label ok detail [
+    if(_): ok [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label ": " detail
+        add(failures): failures 1
+    ]
+    print(_): line
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(failures): 0
+    getenv(url): "DUBNA_TEST_URL"
+    if(_): {url = null || url = ""} [
+        print(_): "SKIP set DUBNA_TEST_URL to a PostgreSQL conninfo or URL"
+        set(ret): 0
+        return(ret): ret
+    ]
+    dubna_connect(c): url
+    dubna_error(e):
+    check(_): "connect" {c != null} e
+    if(_): {c = null} [
+        set(ret): 1
+        return(ret): ret
+    ]
+    dubna_parameter(version): c "server_version"
+    getf(tls): c "tls"
+    set(tls_text): "plain"
+    if(_): tls [
+        set(tls_text): "TLS"
+    ]
+    concat(line): "server " version " over " tls_text
+    print(_): line
+    dubna_query(res): c "select 1 + 1 as two, null::text as nothing, 'Новгород' as city"
+    dubna_ok(ok): res
+    getf(e): res "error"
+    check(_): "simple query" ok e
+    dubna_value(v): res 0 "two"
+    check(_): "integer as text" {v = "2"} v
+    dubna_value(v): res 0 "nothing"
+    check(_): "null" {v = null} "not null"
+    dubna_value(v): res 0 "city"
+    check(_): "utf-8" {v = "Новгород"} v
+    vec(params): ""
+    push(_): params "it's \"quoted\"; drop table x; --"
+    push(_): params 41
+    push(_): params null
+    dubna_exec(res): c "select $1::text as t, $2::int + 1 as n, $3::text is null as isnull" params
+    dubna_value(t): res 0 "t"
+    dubna_value(n): res 0 "n"
+    dubna_value(isnull): res 0 "isnull"
+    check(_): "parameter stays data" {t = "it's \"quoted\"; drop table x; --"} t
+    check(_): "number parameter" {n = "42"} n
+    check(_): "null parameter" {isnull = "t"} isnull
+    dubna_query(res): c "create temp table dubna_t (id serial primary key, body text); insert into dubna_t (body) select 'row ' || g from generate_series(1, 500) g"
+    dubna_count(n): res
+    getf(e): res "error"
+    check(_): "insert count" {n = 500} e
+    dubna_exec(res): c "select id, body from dubna_t where id > $1 order by id" '[100]'
+    dubna_count(n): res
+    check(_): "select count" {n = 400} "wrong row count"
+    dubna_value(v): res 399 "body"
+    check(_): "last row" {v = "row 500"} v
+    dubna_query(res): c "select * from dubna_no_such_table"
+    getf(code): res "code"
+    check(_): "error code" {code = "42P01"} code
+    dubna_query(res): c "begin; update dubna_t set body = 'x'; rollback"
+    dubna_query(res): c "select count(*) from dubna_t where body = 'x'"
+    dubna_value(v): res 0 0
+    check(_): "rollback" {v = "0"} v
+    dubna_query(res): c "select 1 as alive"
+    dubna_value(v): res 0 0
+    check(_): "usable after errors" {v = "1"} v
+    dubna_close(_): c
+    set(ret): 0
+    if(_): {failures > 0} [
+        set(ret): 1
+    ]
+]

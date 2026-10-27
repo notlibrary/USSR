@@ -1,0 +1,1393 @@
+# Dubna - a PostgreSQL client for USSR, the D of the RUND stack (Ryazan TLS,
+# Ukraine HTTP, Novgorod forum, Dubna database). It speaks the PostgreSQL
+# frontend/backend protocol 3.0 over the socket API, with TLS from ryazan.su.
+#
+#   dubna_connect(c): conninfo        connection, or null (dubna_error says why)
+#   dubna_query(res): c sql           simple query: one or more statements,
+#                                     the last result kept
+#   dubna_exec(res): c sql params     one statement with $1, $2 ... taken from
+#                                     the vector params (strings, numbers,
+#                                     booleans or null), never spliced in
+#   dubna_close(_): c                 says goodbye and closes the socket
+#   dubna_error(msg):                 why the last call failed
+#   dubna_ok(b): res                  true when res is not an error
+#   dubna_value(v): res row col       a field as text (null for SQL NULL);
+#                                     col is a number or a column name
+#   dubna_count(n): res               rows returned, else rows affected
+#
+# conninfo is "host=... port=... dbname=... user=... password=...
+# sslmode=..." or a URL postgres://user:password@host:port/dbname?sslmode=...;
+# missing parts come from PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD and
+# PGSSLMODE, then localhost, 5432 and the user name. sslmode: disable,
+# prefer (the default: TLS when the server offers it, plain when TLS fails)
+# or require. Ryazan always checks the server's certificate and name
+# (libpq's verify-full); RYAZAN_CA_FILE names a CA file for a private
+# certificate.
+#
+# Authentication: trust, password, md5 and SCRAM-SHA-256 (the server's
+# signature is checked too). Results come back as text.
+#
+# Bytes travel as vectors of 0..255 (socket_send_bytes, tls_recv_bytes, ...)
+# because the protocol is full of zero bytes, which USSR strings cannot hold.
+# One connection serves one task at a time.
+$once
+$include "../libs/strings.su"
+$include "../ryazan/ryazan.su"
+
+global(_): dubna_last_error dubna_typed
+
+# ---------------------------------------------------------------- types
+
+# Declares Dubna's types; dubna_connect calls it. A task started with async
+# copies the globals, so call it in init before starting tasks that connect.
+dubna_init(r): [
+    set(r): 0
+    # a bare argument reads an unset name as null (an expression would not)
+    set(done): dubna_typed
+    if(_): {done = true} [
+        return(r): r
+    ]
+    struct(DubnaConn): "socket:number" "tls:boolean" "inbuf:vector" "inpos:number" "params:vector" "status:string" "pid:number" "key:number" "open:boolean" "notices:vector"
+    struct(DubnaResult): "columns:vector" "types:vector" "rows:vector" "tag:string" "error:string" "code:string"
+    set(dubna_typed): true
+]
+
+dubna_error(r): [
+    set(r): dubna_last_error
+    if(_): {r = null} [
+        set(r): ""
+    ]
+]
+
+dubna_fail(r): message [
+    set(dubna_last_error): message
+    set(r): null
+]
+
+# ---------------------------------------------------------------- bytes
+
+dubna_put_int32(r): v n [
+    if(_): {n < 0} [
+        set(n): {n + 4294967296}
+    ]
+    push(_): v {(n >> 24) & 255}
+    push(_): v {(n >> 16) & 255}
+    push(_): v {(n >> 8) & 255}
+    push(_): v {n & 255}
+    set(r): v
+]
+
+dubna_put_int16(r): v n [
+    if(_): {n < 0} [
+        set(n): {n + 65536}
+    ]
+    push(_): v {(n >> 8) & 255}
+    push(_): v {n & 255}
+    set(r): v
+]
+
+dubna_put_bytes(r): v bytes [
+    len(n): bytes
+    set(i): 0
+    while(_): {i < n} [
+        at(b): bytes i
+        push(_): v b
+        add(i): i 1
+    ]
+    set(r): v
+]
+
+# The string's bytes and a terminating zero.
+dubna_put_cstr(r): v s [
+    text_bytes(bytes): s
+    dubna_put_bytes(_): v bytes
+    push(_): v 0
+    set(r): v
+]
+
+dubna_int32(r): v i [
+    at(a): v i
+    at(b): v {i + 1}
+    at(c): v {i + 2}
+    at(d): v {i + 3}
+    set(r): {(a << 24) | (b << 16) | (c << 8) | d}
+    if(_): {r >= 2147483648} [
+        set(r): {r - 4294967296}
+    ]
+]
+
+dubna_int16(r): v i [
+    at(a): v i
+    at(b): v {i + 1}
+    set(r): {(a << 8) | b}
+    if(_): {r >= 32768} [
+        set(r): {r - 65536}
+    ]
+]
+
+# Index of the zero byte at or after i (len(v) when there is none).
+dubna_zero(r): v i [
+    len(n): v
+    set(r): i
+    set(go): true
+    while(_): {go && r < n} [
+        at(b): v r
+        if(_): {b = 0} [
+            set(go): false
+        ]
+        else(_): [
+            add(r): r 1
+        ]
+    ]
+]
+
+dubna_cstr(r): v i [
+    dubna_zero(j): v i
+    bytes_text(r): v i {j - i}
+]
+
+dubna_vslice(r): v from count [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < count} [
+        at(b): v {from + i}
+        push(_): r b
+        add(i): i 1
+    ]
+]
+
+dubna_hex(r): v [
+    set(r): ""
+    set(digits): "0123456789abcdef"
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(b): v i
+        slice(h): digits {b >> 4} 1
+        slice(l): digits {b & 15} 1
+        concat(r): r h l
+        add(i): i 1
+    ]
+]
+
+dubna_b64_alphabet(r): [
+    set(r): "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+]
+
+dubna_base64(r): v [
+    dubna_b64_alphabet(abc):
+    set(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(a): v i
+        set(b): 0
+        set(c): 0
+        if(_): {i + 1 < n} [
+            at(b): v {i + 1}
+        ]
+        if(_): {i + 2 < n} [
+            at(c): v {i + 2}
+        ]
+        set(w): {(a << 16) | (b << 8) | c}
+        slice(x1): abc {(w >> 18) & 63} 1
+        slice(x2): abc {(w >> 12) & 63} 1
+        slice(x3): abc {(w >> 6) & 63} 1
+        slice(x4): abc {w & 63} 1
+        if(_): {i + 1 >= n} [
+            set(x3): "="
+        ]
+        if(_): {i + 2 >= n} [
+            set(x4): "="
+        ]
+        concat(r): r x1 x2 x3 x4
+        add(i): i 3
+    ]
+]
+
+dubna_b64_value(r): b [
+    set(r): {0 - 1}
+    if(_): {b >= 65 && b <= 90} [
+        set(r): {b - 65}
+    ]
+    elif(_): {b >= 97 && b <= 122} [
+        set(r): {b - 71}
+    ]
+    elif(_): {b >= 48 && b <= 57} [
+        set(r): {b + 4}
+    ]
+    elif(_): {b = 43} [
+        set(r): 62
+    ]
+    elif(_): {b = 47} [
+        set(r): 63
+    ]
+]
+
+# Bytes of base64 text, or null when it is not base64.
+dubna_unbase64(r): s [
+    vec(r): ""
+    len(n): s
+    if(_): {n % 4 != 0} [
+        set(r): null
+        return(r): r
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        set(w): 0
+        set(pad): 0
+        set(k): 0
+        while(_): {k < 4} [
+            byte(b): s {i + k}
+            if(_): {b = 61} [
+                add(pad): pad 1
+                set(x): 0
+            ]
+            else(_): [
+                dubna_b64_value(x): b
+                if(_): {x < 0 || pad > 0} [
+                    set(r): null
+                    return(r): r
+                ]
+            ]
+            set(w): {(w << 6) | x}
+            add(k): k 1
+        ]
+        push(_): r {(w >> 16) & 255}
+        if(_): {pad < 2} [
+            push(_): r {(w >> 8) & 255}
+        ]
+        if(_): {pad < 1} [
+            push(_): r {w & 255}
+        ]
+        add(i): i 4
+    ]
+]
+
+dubna_xor(r): a b [
+    vec(r): ""
+    len(n): a
+    set(i): 0
+    while(_): {i < n} [
+        at(x): a i
+        at(y): b i
+        push(_): r {x ^ y}
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- messages
+
+# A typed message: the type letter, its length, the body.
+dubna_message(r): type body [
+    vec(r): ""
+    if(_): {type != ""} [
+        byte(t): type 0
+        push(_): r t
+    ]
+    len(n): body
+    dubna_put_int32(_): r {n + 4}
+    dubna_put_bytes(_): r body
+]
+
+dubna_startup_message(r): user database [
+    vec(body): ""
+    dubna_put_int32(_): body 196608
+    dubna_put_cstr(_): body "user"
+    dubna_put_cstr(_): body user
+    if(_): {database != ""} [
+        dubna_put_cstr(_): body "database"
+        dubna_put_cstr(_): body database
+    ]
+    dubna_put_cstr(_): body "client_encoding"
+    dubna_put_cstr(_): body "UTF8"
+    dubna_put_cstr(_): body "application_name"
+    dubna_put_cstr(_): body "dubna"
+    push(_): body 0
+    dubna_message(r): "" body
+]
+
+dubna_ssl_request(r): [
+    vec(body): ""
+    dubna_put_int32(_): body 80877103
+    dubna_message(r): "" body
+]
+
+dubna_query_message(r): sql [
+    vec(body): ""
+    dubna_put_cstr(_): body sql
+    dubna_message(r): "Q" body
+]
+
+# The answer to an MD5 challenge: "md5" + md5(md5(password user) salt) in hex.
+dubna_md5_password(r): user password salt [
+    concat(inner_text): password user
+    md5(inner): inner_text
+    dubna_hex(inner_hex): inner
+    text_bytes(both): inner_hex
+    dubna_put_bytes(_): both salt
+    md5(outer): both
+    dubna_hex(outer_hex): outer
+    concat(r): "md5" outer_hex
+]
+
+# The value of key=... in a SCRAM attribute list ("" when absent).
+dubna_scram_attr(r): text key [
+    set(r): ""
+    concat(head): key "="
+    len(hl): head
+    len(n): text
+    set(from): 0
+    while(_): {from < n} [
+        str_find(j): text "," from
+        if(_): {j < 0} [
+            set(j): n
+        ]
+        slice(part): text from {j - from}
+        len(pl): part
+        if(_): {pl >= hl} [
+            slice(start): part 0 hl
+            if(_): {start = head} [
+                slice(r): part hl {pl - hl}
+                return(r): r
+            ]
+        ]
+        set(from): {j + 1}
+    ]
+]
+
+dubna_scram_first(r): user nonce [
+    concat(r): "n=" user ",r=" nonce
+]
+
+# SCRAM-SHA-256 (RFC 5802, RFC 7677) from the client's first message (bare,
+# without "n,,") and the server's: [client-final message, the server
+# signature to expect in base64], or null when the server's message is bad.
+dubna_scram_final(r): password client_first_bare server_first [
+    set(r): null
+    dubna_scram_attr(nonce): server_first "r"
+    dubna_scram_attr(salt64): server_first "s"
+    dubna_scram_attr(iter_text): server_first "i"
+    dubna_scram_attr(cnonce): client_first_bare "r"
+    str_to_number(iterations): iter_text
+    dubna_unbase64(salt): salt64
+    len(cl): cnonce
+    len(nl): nonce
+    if(_): {salt = null || iterations = null || nl <= cl} [
+        return(r): r
+    ]
+    slice(start): nonce 0 cl
+    if(_): {start != cnonce || iterations < 1} [
+        return(r): r
+    ]
+    pbkdf2_sha256(salted): password salt iterations
+    hmac_sha256(client_key): salted "Client Key"
+    sha256(stored_key): client_key
+    concat(without_proof): "c=biws,r=" nonce
+    concat(auth): client_first_bare "," server_first "," without_proof
+    hmac_sha256(client_signature): stored_key auth
+    dubna_xor(proof): client_key client_signature
+    hmac_sha256(server_key): salted "Server Key"
+    hmac_sha256(server_signature): server_key auth
+    dubna_base64(proof64): proof
+    dubna_base64(server64): server_signature
+    concat(final): without_proof ",p=" proof64
+    vec(r): ""
+    push(_): r final
+    push(_): r server64
+]
+
+dubna_nonce(r): [
+    vec(bytes): ""
+    set(i): 0
+    while(_): {i < 3} [
+        random64(x):
+        time(t):
+        set(x): {x ^ (t << 20)}
+        set(k): 0
+        while(_): {k < 6} [
+            push(_): bytes {(x >> (k * 8)) & 255}
+            add(k): k 1
+        ]
+        add(i): i 1
+    ]
+    dubna_base64(r): bytes
+]
+
+# ---------------------------------------------------------------- conninfo
+
+# Settings as a vector of [name, value, name, value ...].
+dubna_conninfo(r): text [
+    vec(r): ""
+    str_trim(text): text
+    len(n): text
+    set(url): false
+    if(_): {n >= 11} [
+        slice(head): text 0 11
+        set(url): {head = "postgres://"}
+    ]
+    if(_): {n >= 13} [
+        slice(head): text 0 13
+        if(_): {head = "postgresql://"} [
+            set(url): true
+        ]
+    ]
+    if(_): url [
+        str_find(at): text "://" 0
+        slice(rest): text {at + 3} {n - at - 3}
+        set(query): ""
+        str_find(q): rest "?" 0
+        if(_): {q >= 0} [
+            len(rl): rest
+            slice(query): rest {q + 1} {rl - q - 1}
+            slice(rest): rest 0 q
+        ]
+        set(db): ""
+        str_find(slash): rest "/" 0
+        if(_): {slash >= 0} [
+            len(rl): rest
+            slice(db): rest {slash + 1} {rl - slash - 1}
+            slice(rest): rest 0 slash
+        ]
+        set(userinfo): ""
+        set(hostport): rest
+        set(last_at): {0 - 1}
+        str_find(a): rest "@" 0
+        while(_): {a >= 0} [
+            set(last_at): a
+            str_find(a): rest "@" {a + 1}
+        ]
+        if(_): {last_at >= 0} [
+            len(rl): rest
+            slice(userinfo): rest 0 last_at
+            slice(hostport): rest {last_at + 1} {rl - last_at - 1}
+        ]
+        if(_): {userinfo != ""} [
+            str_find(colon): userinfo ":" 0
+            if(_): {colon >= 0} [
+                len(ul): userinfo
+                slice(u): userinfo 0 colon
+                slice(p): userinfo {colon + 1} {ul - colon - 1}
+                dubna_unpercent(u): u
+                dubna_unpercent(p): p
+                push(_): r "user"
+                push(_): r u
+                push(_): r "password"
+                push(_): r p
+            ]
+            else(_): [
+                dubna_unpercent(u): userinfo
+                push(_): r "user"
+                push(_): r u
+            ]
+        ]
+        if(_): {hostport != ""} [
+            str_find(colon): hostport ":" 0
+            if(_): {colon >= 0} [
+                len(hl): hostport
+                slice(h): hostport 0 colon
+                slice(pt): hostport {colon + 1} {hl - colon - 1}
+                push(_): r "host"
+                push(_): r h
+                push(_): r "port"
+                push(_): r pt
+            ]
+            else(_): [
+                push(_): r "host"
+                push(_): r hostport
+            ]
+        ]
+        if(_): {db != ""} [
+            dubna_unpercent(db): db
+            push(_): r "dbname"
+            push(_): r db
+        ]
+        len(ql): query
+        set(from): 0
+        while(_): {from < ql} [
+            str_find(amp): query "&" from
+            if(_): {amp < 0} [
+                set(amp): ql
+            ]
+            slice(pair): query from {amp - from}
+            str_find(eq): pair "=" 0
+            if(_): {eq > 0} [
+                len(pl): pair
+                slice(k): pair 0 eq
+                slice(v): pair {eq + 1} {pl - eq - 1}
+                dubna_unpercent(v): v
+                push(_): r k
+                push(_): r v
+            ]
+            set(from): {amp + 1}
+        ]
+        return(r): r
+    ]
+    # key=value pairs; values may be 'single quoted' with \' and \\
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): {b = 32 || b = 9} [
+            add(i): i 1
+            continue(_): ""
+        ]
+        str_find(eq): text "=" i
+        if(_): {eq < 0} [
+            return(r): r
+        ]
+        slice(key): text i {eq - i}
+        str_trim(key): key
+        set(j): {eq + 1}
+        while(_): {j < n} [
+            byte(b): text j
+            if(_): {b != 32} [
+                break(_): ""
+            ]
+            add(j): j 1
+        ]
+        set(value): ""
+        if(_): {j < n} [
+            byte(b): text j
+            if(_): {b = 39} [
+                add(j): j 1
+                set(go): true
+                while(_): {go && j < n} [
+                    byte(b): text j
+                    if(_): {b = 92 && j + 1 < n} [
+                        slice(c): text {j + 1} 1
+                        concat(value): value c
+                        add(j): j 2
+                    ]
+                    elif(_): {b = 39} [
+                        set(go): false
+                        add(j): j 1
+                    ]
+                    else(_): [
+                        slice(c): text j 1
+                        concat(value): value c
+                        add(j): j 1
+                    ]
+                ]
+            ]
+            else(_): [
+                set(k): j
+                while(_): {k < n} [
+                    byte(b): text k
+                    if(_): {b = 32 || b = 9} [
+                        break(_): ""
+                    ]
+                    add(k): k 1
+                ]
+                slice(value): text j {k - j}
+                set(j): k
+            ]
+        ]
+        push(_): r key
+        push(_): r value
+        set(i): j
+    ]
+]
+
+dubna_unpercent(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 37 && i + 2 < n} [
+            slice(hx): s {i + 1} 2
+            byte(h1): hx 0
+            byte(h2): hx 1
+            dubna_hexval(d1): h1
+            dubna_hexval(d2): h2
+            if(_): {d1 >= 0 && d2 >= 0 && d1 * 16 + d2 > 0} [
+                chr(c): {d1 * 16 + d2}
+                concat(r): r c
+                add(i): i 3
+                continue(_): ""
+            ]
+        ]
+        slice(c): s i 1
+        concat(r): r c
+        add(i): i 1
+    ]
+]
+
+dubna_hexval(r): b [
+    set(r): {0 - 1}
+    if(_): {b >= 48 && b <= 57} [
+        set(r): {b - 48}
+    ]
+    elif(_): {b >= 97 && b <= 102} [
+        set(r): {b - 87}
+    ]
+    elif(_): {b >= 65 && b <= 70} [
+        set(r): {b - 55}
+    ]
+]
+
+# A setting from parsed conninfo, else the environment variable, else dflt.
+dubna_setting(r): settings name env dflt [
+    set(r): null
+    len(n): settings
+    set(i): 0
+    while(_): {i + 1 < n} [
+        at(k): settings i
+        if(_): {k = name} [
+            at(r): settings {i + 1}
+        ]
+        add(i): i 2
+    ]
+    if(_): {r = null && env != ""} [
+        getenv(r): env
+    ]
+    if(_): {r = null || r = ""} [
+        set(r): dflt
+    ]
+]
+
+# ---------------------------------------------------------------- wire
+
+dubna_send(r): c bytes [
+    getf(s): c "socket"
+    getf(tls): c "tls"
+    set(r): 0
+    set(rest): bytes
+    len(n): rest
+    while(_): {n > 0} [
+        if(_): tls [
+            tls_send_bytes(sent): s rest
+        ]
+        else(_): [
+            socket_send_bytes(sent): s rest
+        ]
+        if(_): {sent < 0} [
+            set(r): {0 - 1}
+            return(r): r
+        ]
+        if(_): {sent = 0} [
+            wait_writable(_): s
+        ]
+        if(_): {sent > 0 && sent < n} [
+            dubna_vslice(rest): rest sent {n - sent}
+        ]
+        if(_): {sent >= n} [
+            vec(rest): ""
+        ]
+        len(n): rest
+    ]
+    if(_): tls [
+        set(flushed): 2
+        while(_): {flushed = 2} [
+            tls_flush(flushed): s
+            if(_): {flushed = 2} [
+                wait_writable(_): s
+            ]
+        ]
+        if(_): {flushed < 0} [
+            set(r): {0 - 1}
+        ]
+    ]
+]
+
+# More bytes into the input buffer; false once the server is gone.
+dubna_fill(r): c [
+    getf(s): c "socket"
+    getf(tls): c "tls"
+    set(chunk): null
+    while(_): {chunk = null} [
+        if(_): tls [
+            tls_recv_bytes(chunk): s 65536
+            if(_): {chunk = null} [
+                wait_readable(_): s
+            ]
+        ]
+        else(_): [
+            wait_readable(_): s
+            socket_recv_bytes(chunk): s 65536
+            if(_): {chunk = null} [
+                vec(chunk): ""
+            ]
+        ]
+    ]
+    len(n): chunk
+    set(r): {n > 0}
+    if(_): r [
+        getf(inbuf): c "inbuf"
+        getf(pos): c "inpos"
+        len(have): inbuf
+        if(_): {pos >= have} [
+            setf(_): c "inbuf" chunk
+            setf(_): c "inpos" 0
+        ]
+        else(_): [
+            dubna_put_bytes(_): inbuf chunk
+        ]
+    ]
+]
+
+# The next message as [type letter, body bytes], or null when the server
+# is gone.
+dubna_read(r): c [
+    set(r): null
+    set(go): true
+    while(_): go [
+        getf(inbuf): c "inbuf"
+        getf(pos): c "inpos"
+        len(have): inbuf
+        if(_): {have - pos >= 5} [
+            dubna_int32(size): inbuf {pos + 1}
+            if(_): {size < 4} [
+                return(r): r
+            ]
+            if(_): {have - pos >= size + 1} [
+                at(t): inbuf pos
+                chr(type): t
+                dubna_vslice(body): inbuf {pos + 5} {size - 4}
+                setf(_): c "inpos" {pos + 1 + size}
+                vec(r): ""
+                push(_): r type
+                push(_): r body
+                return(r): r
+            ]
+        ]
+        dubna_fill(more): c
+        if(_): {more = false} [
+            setf(_): c "open" false
+            return(r): r
+        ]
+    ]
+]
+
+# "SEVERITY CODE: message" from an ErrorResponse or NoticeResponse body,
+# and the SQLSTATE in out (a vector) when out is not null.
+dubna_error_text(r): body out [
+    set(severity): ""
+    set(code): ""
+    set(message): ""
+    set(detail): ""
+    len(n): body
+    set(i): 0
+    while(_): {i < n} [
+        at(f): body i
+        if(_): {f = 0} [
+            break(_): ""
+        ]
+        dubna_zero(j): body {i + 1}
+        bytes_text(v): body {i + 1} {j - i - 1}
+        if(_): {v = null} [
+            set(v): ""
+        ]
+        if(_): {f = 86} [
+            set(severity): v
+        ]
+        elif(_): {f = 83 && severity = ""} [
+            set(severity): v
+        ]
+        elif(_): {f = 67} [
+            set(code): v
+        ]
+        elif(_): {f = 77} [
+            set(message): v
+        ]
+        elif(_): {f = 68} [
+            set(detail): v
+        ]
+        set(i): {j + 1}
+    ]
+    concat(r): severity " " code ": " message
+    if(_): {detail != ""} [
+        concat(r): r " (" detail ")"
+    ]
+    if(_): {out != null} [
+        push(_): out code
+    ]
+]
+
+# ---------------------------------------------------------------- connect
+
+dubna_connect(r): conninfo [
+    dubna_init(_):
+    set(r): null
+    dubna_conninfo(settings): conninfo
+    getenv(os_user): "USERNAME"
+    if(_): {os_user = null} [
+        getenv(os_user): "USER"
+    ]
+    if(_): {os_user = null} [
+        set(os_user): "postgres"
+    ]
+    dubna_setting(host): settings "host" "PGHOST" "localhost"
+    dubna_setting(port_text): settings "port" "PGPORT" "5432"
+    dubna_setting(user): settings "user" "PGUSER" os_user
+    dubna_setting(password): settings "password" "PGPASSWORD" ""
+    dubna_setting(database): settings "dbname" "PGDATABASE" user
+    dubna_setting(sslmode): settings "sslmode" "PGSSLMODE" "prefer"
+    str_to_number(port): port_text
+    if(_): {port = null} [
+        dubna_fail(r): "dubna: the port is not a number"
+        return(r): r
+    ]
+    if(_): {sslmode != "disable" && sslmode != "prefer" && sslmode != "require" && sslmode != "verify-ca" && sslmode != "verify-full" && sslmode != "allow"} [
+        concat(msg): "dubna: unknown sslmode " sslmode
+        dubna_fail(r): msg
+        return(r): r
+    ]
+    dubna_open(r): host port user password database sslmode
+    if(_): {r = null && sslmode = "prefer"} [
+        # like libpq: prefer falls back to a plain connection when TLS
+        # fails (an untrusted certificate, for one); require does not
+        dubna_error(why):
+        len(wl): why
+        set(head): ""
+        if(_): {wl >= 15} [
+            slice(head): why 0 15
+        ]
+        if(_): {head = "dubna: TLS with"} [
+            dubna_open(r): host port user password database "disable"
+        ]
+    ]
+]
+
+dubna_open(r): host port user password database sslmode [
+    set(r): null
+    str_from_int(port_text): port
+    socket_tcp(s):
+    if(_): {s < 1} [
+        dubna_fail(r): "dubna: could not create a socket"
+        return(r): r
+    ]
+    socket_connect(ok): s host port
+    if(_): {ok != 0} [
+        socket_close(_): s
+        concat(msg): "dubna: could not connect to " host ":" port_text
+        dubna_fail(r): msg
+        return(r): r
+    ]
+    vec(inbuf): ""
+    vec(params): ""
+    vec(notices): ""
+    new(c): "DubnaConn" s false inbuf 0 params "I" 0 0 true notices
+    tls_backend(backend):
+    if(_): {sslmode != "disable" && sslmode != "allow" && backend != "none"} [
+        dubna_ssl_request(m):
+        dubna_send(sent): c m
+        set(answer): null
+        set(tries): 0
+        while(_): {answer = null && sent = 0 && tries < 100} [
+            wait_readable(_): s
+            socket_recv_bytes(answer): s 1
+            add(tries): tries 1
+        ]
+        if(_): {answer = null} [
+            vec(answer): ""
+        ]
+        set(a): 0
+        len(an): answer
+        if(_): {an = 1} [
+            at(a): answer 0
+        ]
+        if(_): {a = 83} [
+            tls_client(started): s host
+            set(shaken): {0 - 1}
+            if(_): {started = 0} [
+                ryazan_handshake(shaken): s
+            ]
+            if(_): {shaken != 0} [
+                tls_error(why):
+                socket_close(_): s
+                concat(msg): "dubna: TLS with " host " failed: " why
+                dubna_fail(r): msg
+                return(r): r
+            ]
+            setf(_): c "tls" true
+        ]
+        elif(_): {a = 78 && sslmode = "prefer"} [
+            set(a): 78
+        ]
+        else(_): [
+            socket_close(_): s
+            dubna_fail(r): "dubna: the server does not offer TLS (sslmode=require)"
+            return(r): r
+        ]
+    ]
+    if(_): {sslmode != "disable" && sslmode != "allow" && sslmode != "prefer" && backend = "none"} [
+        socket_close(_): s
+        dubna_fail(r): "dubna: this ussr was built without TLS"
+        return(r): r
+    ]
+    dubna_startup_message(m): user database
+    dubna_send(_): c m
+    dubna_authenticate(why): c user password
+    if(_): {why != ""} [
+        dubna_drop(_): c
+        dubna_fail(r): why
+        return(r): r
+    ]
+    # parameters, the backend key, then ReadyForQuery
+    while(_): {true} [
+        dubna_read(msg): c
+        if(_): {msg = null} [
+            dubna_drop(_): c
+            dubna_fail(r): "dubna: the server closed the connection"
+            return(r): r
+        ]
+        at(type): msg 0
+        at(body): msg 1
+        if(_): {type = "S"} [
+            dubna_cstr(name): body 0
+            dubna_zero(z): body 0
+            dubna_cstr(value): body {z + 1}
+            push(_): params name
+            push(_): params value
+        ]
+        elif(_): {type = "K"} [
+            dubna_int32(pid): body 0
+            setf(_): c "pid" pid
+            dubna_int32(key): body 4
+            setf(_): c "key" key
+        ]
+        elif(_): {type = "Z"} [
+            at(st): body 0
+            chr(status): st
+            setf(_): c "status" status
+            set(r): c
+            return(r): r
+        ]
+        elif(_): {type = "E"} [
+            dubna_error_text(text): body null
+            dubna_drop(_): c
+            concat(msg): "dubna: " text
+            dubna_fail(r): msg
+            return(r): r
+        ]
+        elif(_): {type = "N"} [
+            dubna_error_text(text): body null
+            push(_): notices text
+        ]
+    ]
+]
+
+dubna_password_message(r): text [
+    vec(body): ""
+    dubna_put_cstr(_): body text
+    dubna_message(r): "p" body
+]
+
+# Runs the server's authentication exchange: "" once it says AuthenticationOk,
+# else why not.
+dubna_authenticate(r): c user password [
+    set(r): ""
+    set(expect): ""
+    set(client_first): ""
+    while(_): {true} [
+        dubna_read(msg): c
+        if(_): {msg = null} [
+            set(r): "dubna: the server closed the connection during login"
+            return(r): r
+        ]
+        at(type): msg 0
+        at(body): msg 1
+        if(_): {type = "E"} [
+            dubna_error_text(text): body null
+            concat(r): "dubna: " text
+            return(r): r
+        ]
+        if(_): {type != "R"} [
+            concat(r): "dubna: unexpected message " type " during login"
+            return(r): r
+        ]
+        dubna_int32(code): body 0
+        if(_): {code = 0} [
+            if(_): {expect != ""} [
+                set(r): "dubna: the server skipped its SCRAM signature"
+            ]
+            return(r): r
+        ]
+        if(_): {code = 3 || code = 5 || code = 10} [
+            if(_): {password = ""} [
+                set(r): "dubna: the server wants a password and none was given"
+                return(r): r
+            ]
+        ]
+        if(_): {code = 3} [
+            dubna_password_message(m): password
+            dubna_send(_): c m
+        ]
+        elif(_): {code = 5} [
+            dubna_vslice(salt): body 4 4
+            dubna_md5_password(answer): user password salt
+            dubna_password_message(m): answer
+            dubna_send(_): c m
+        ]
+        elif(_): {code = 10} [
+            # mechanism names, each zero-terminated, then a zero
+            len(n): body
+            set(i): 4
+            set(found): false
+            while(_): {i < n} [
+                dubna_zero(j): body i
+                if(_): {j = i} [
+                    break(_): ""
+                ]
+                bytes_text(mech): body i {j - i}
+                if(_): {mech = "SCRAM-SHA-256"} [
+                    set(found): true
+                ]
+                set(i): {j + 1}
+            ]
+            if(_): {found = false} [
+                set(r): "dubna: the server offers no SASL mechanism Dubna knows (it speaks SCRAM-SHA-256)"
+                return(r): r
+            ]
+            dubna_nonce(nonce):
+            # PostgreSQL takes the user from the startup message
+            dubna_scram_first(client_first): "" nonce
+            concat(first): "n,," client_first
+            text_bytes(first_bytes): first
+            len(fl): first_bytes
+            vec(sb): ""
+            dubna_put_cstr(_): sb "SCRAM-SHA-256"
+            dubna_put_int32(_): sb fl
+            dubna_put_bytes(_): sb first_bytes
+            dubna_message(m): "p" sb
+            dubna_send(_): c m
+        ]
+        elif(_): {code = 11} [
+            len(n): body
+            bytes_text(server_first): body 4 {n - 4}
+            dubna_scram_final(final): password client_first server_first
+            if(_): {final = null} [
+                set(r): "dubna: the server's SCRAM message is malformed"
+                return(r): r
+            ]
+            at(client_final): final 0
+            at(expect): final 1
+            text_bytes(fb): client_final
+            vec(sb): ""
+            dubna_put_bytes(_): sb fb
+            dubna_message(m): "p" sb
+            dubna_send(_): c m
+        ]
+        elif(_): {code = 12} [
+            len(n): body
+            bytes_text(server_final): body 4 {n - 4}
+            dubna_scram_attr(v): server_final "v"
+            if(_): {expect = "" || v != expect} [
+                set(r): "dubna: the server's SCRAM signature is wrong; it does not know the password"
+                return(r): r
+            ]
+            set(expect): ""
+        ]
+        else(_): [
+            str_from_int(cs): code
+            concat(r): "dubna: unsupported authentication method " cs " (Dubna speaks trust, password, md5 and SCRAM-SHA-256)"
+            return(r): r
+        ]
+    ]
+]
+
+dubna_drop(r): c [
+    getf(s): c "socket"
+    getf(tls): c "tls"
+    if(_): tls [
+        tls_close(_): s
+    ]
+    socket_close(r): s
+    setf(_): c "open" false
+]
+
+dubna_close(r): c [
+    set(r): 0
+    if(_): {c = null} [
+        return(r): r
+    ]
+    getf(open): c "open"
+    if(_): open [
+        vec(empty): ""
+        dubna_message(m): "X" empty
+        dubna_send(_): c m
+        dubna_drop(r): c
+    ]
+]
+
+# ---------------------------------------------------------------- queries
+
+dubna_new_result(r): [
+    vec(columns): ""
+    vec(types): ""
+    vec(rows): ""
+    new(r): "DubnaResult" columns types rows "" "" ""
+]
+
+dubna_row_description(r): res body [
+    vec(columns): ""
+    vec(types): ""
+    dubna_int16(n): body 0
+    set(i): 2
+    set(k): 0
+    while(_): {k < n} [
+        dubna_zero(z): body i
+        bytes_text(name): body i {z - i}
+        push(_): columns name
+        dubna_int32(oid): body {z + 7}
+        push(_): types oid
+        set(i): {z + 19}
+        add(k): k 1
+    ]
+    setf(_): res "columns" columns
+    setf(_): res "types" types
+    vec(rows): ""
+    setf(_): res "rows" rows
+    set(r): n
+]
+
+dubna_data_row(r): body [
+    vec(r): ""
+    dubna_int16(n): body 0
+    set(i): 2
+    set(k): 0
+    while(_): {k < n} [
+        dubna_int32(size): body i
+        if(_): {size < 0} [
+            push(_): r null
+            add(i): i 4
+        ]
+        else(_): [
+            bytes_text(v): body {i + 4} size
+            push(_): r v
+            set(i): {i + 4 + size}
+        ]
+        add(k): k 1
+    ]
+]
+
+# Reads replies up to ReadyForQuery into a result.
+dubna_collect(r): c [
+    dubna_new_result(r):
+    while(_): {true} [
+        dubna_read(msg): c
+        if(_): {msg = null} [
+            setf(_): r "error" "dubna: the server closed the connection"
+            dubna_fail(_): "dubna: the server closed the connection"
+            return(r): r
+        ]
+        at(type): msg 0
+        at(body): msg 1
+        if(_): {type = "T"} [
+            dubna_row_description(_): r body
+        ]
+        elif(_): {type = "D"} [
+            dubna_data_row(row): body
+            getf(rows): r "rows"
+            push(_): rows row
+        ]
+        elif(_): {type = "C"} [
+            dubna_cstr(tag): body 0
+            setf(_): r "tag" tag
+        ]
+        elif(_): {type = "E"} [
+            vec(code_out): ""
+            dubna_error_text(text): body code_out
+            at(code): code_out 0
+            concat(text): "dubna: " text
+            setf(_): r "error" text
+            setf(_): r "code" code
+            dubna_fail(_): text
+        ]
+        elif(_): {type = "N"} [
+            dubna_error_text(text): body null
+            getf(notices): c "notices"
+            push(_): notices text
+        ]
+        elif(_): {type = "S"} [
+            dubna_cstr(name): body 0
+            dubna_zero(z): body 0
+            dubna_cstr(value): body {z + 1}
+            getf(params): c "params"
+            push(_): params name
+            push(_): params value
+        ]
+        elif(_): {type = "Z"} [
+            at(st): body 0
+            chr(status): st
+            setf(_): c "status" status
+            return(r): r
+        ]
+    ]
+]
+
+dubna_query(r): c sql [
+    dubna_query_message(m): sql
+    dubna_send(sent): c m
+    if(_): {sent != 0} [
+        dubna_new_result(r):
+        setf(_): r "error" "dubna: could not send the query"
+        dubna_fail(_): "dubna: could not send the query"
+        return(r): r
+    ]
+    dubna_collect(r): c
+]
+
+# A parameter as text, or null for SQL NULL.
+dubna_param_text(r): v [
+    typeof(t): v
+    set(r): v
+    if(_): {t = "integer"} [
+        str_from_int(r): v
+    ]
+    elif(_): {t = "real"} [
+        str_from_number(r): v 15
+    ]
+    elif(_): {t = "boolean"} [
+        set(r): "false"
+        if(_): v [
+            set(r): "true"
+        ]
+    ]
+    elif(_): {t != "string" && t != "null"} [
+        encode(r): v
+    ]
+]
+
+# Parse, Bind, Describe, Execute and Sync for one statement with parameters.
+dubna_exec_messages(r): sql params [
+    vec(r): ""
+    vec(parse): ""
+    dubna_put_cstr(_): parse ""
+    dubna_put_cstr(_): parse sql
+    dubna_put_int16(_): parse 0
+    dubna_message(m): "P" parse
+    dubna_put_bytes(_): r m
+    vec(bind): ""
+    dubna_put_cstr(_): bind ""
+    dubna_put_cstr(_): bind ""
+    dubna_put_int16(_): bind 0
+    len(n): params
+    dubna_put_int16(_): bind n
+    set(i): 0
+    while(_): {i < n} [
+        at(p): params i
+        dubna_param_text(text): p
+        if(_): {text = null} [
+            dubna_put_int32(_): bind {0 - 1}
+        ]
+        else(_): [
+            text_bytes(bytes): text
+            len(bl): bytes
+            dubna_put_int32(_): bind bl
+            dubna_put_bytes(_): bind bytes
+        ]
+        add(i): i 1
+    ]
+    dubna_put_int16(_): bind 0
+    dubna_message(m): "B" bind
+    dubna_put_bytes(_): r m
+    vec(describe): ""
+    push(_): describe 80
+    push(_): describe 0
+    dubna_message(m): "D" describe
+    dubna_put_bytes(_): r m
+    vec(execute): ""
+    dubna_put_cstr(_): execute ""
+    dubna_put_int32(_): execute 0
+    dubna_message(m): "E" execute
+    dubna_put_bytes(_): r m
+    vec(sync): ""
+    dubna_message(m): "S" sync
+    dubna_put_bytes(_): r m
+]
+
+dubna_exec(r): c sql params [
+    dubna_exec_messages(m): sql params
+    dubna_send(sent): c m
+    if(_): {sent != 0} [
+        dubna_new_result(r):
+        setf(_): r "error" "dubna: could not send the query"
+        dubna_fail(_): "dubna: could not send the query"
+        return(r): r
+    ]
+    dubna_collect(r): c
+]
+
+# ---------------------------------------------------------------- results
+
+dubna_ok(r): res [
+    getf(e): res "error"
+    set(r): {e = ""}
+]
+
+dubna_count(r): res [
+    getf(rows): res "rows"
+    len(r): rows
+    getf(columns): res "columns"
+    len(nc): columns
+    if(_): {nc > 0} [
+        return(r): r
+    ]
+    # INSERT 0 5, UPDATE 3, DELETE 2: the last word of the tag
+    getf(tag): res "tag"
+    set(r): 0
+    len(n): tag
+    set(i): n
+    while(_): {i > 0} [
+        byte(b): tag {i - 1}
+        if(_): {b = 32} [
+            break(_): ""
+        ]
+        sub(i): i 1
+    ]
+    slice(last): tag i {n - i}
+    str_to_number(x): last
+    if(_): {x != null} [
+        set(r): x
+    ]
+]
+
+dubna_column(r): res name [
+    set(r): {0 - 1}
+    getf(columns): res "columns"
+    len(n): columns
+    set(i): 0
+    while(_): {i < n} [
+        at(cn): columns i
+        if(_): {cn = name} [
+            set(r): i
+            return(r): r
+        ]
+        add(i): i 1
+    ]
+]
+
+dubna_value(r): res row col [
+    set(r): null
+    typeof(t): col
+    if(_): {t = "string"} [
+        dubna_column(col): res col
+    ]
+    getf(rows): res "rows"
+    len(n): rows
+    if(_): {row < 0 || row >= n || col < 0} [
+        return(r): r
+    ]
+    at(cells): rows row
+    len(nc): cells
+    if(_): {col < nc} [
+        at(r): cells col
+    ]
+]
+
+# The server setting name (server_version, TimeZone, ...), or "".
+dubna_parameter(r): c name [
+    set(r): ""
+    getf(params): c "params"
+    len(n): params
+    set(i): 0
+    while(_): {i + 1 < n} [
+        at(k): params i
+        if(_): {k = name} [
+            at(r): params {i + 1}
+        ]
+        add(i): i 2
+    ]
+]

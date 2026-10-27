@@ -1,0 +1,248 @@
+# Dubna without a server: byte helpers, base64, protocol messages, md5 and
+# SCRAM-SHA-256 login answers (RFC 7677's example), reply parsing,
+# conninfo strings and URLs, and the new hash builtins against published
+# test vectors. Prints PASS or FAIL per check. tests/dubna_live.su talks to
+# a real server.
+$include "../src/dubna/dubna.su"
+
+eq(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        typeof(gt): got
+        typeof(wt): want
+        if(_): {gt != "string"} [ encode(got): got ]
+        if(_): {wt != "string"} [ encode(want): want ]
+        concat(line): "FAIL " label ": got " got ", want " want
+    ]
+    print(_): line
+    set(r): 0
+]
+
+hex_of(r): data [
+    typeof(t): data
+    set(v): data
+    if(_): {t = "string"} [
+        text_bytes(v): data
+    ]
+    dubna_hex(r): v
+]
+
+hash_checks(r): [
+    sha256(x): ""
+    dubna_hex(h): x
+    eq(_): "sha256 empty" h "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    sha256(x): "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+    dubna_hex(h): x
+    eq(_): "sha256 two blocks" h "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    md5(x): "The quick brown fox jumps over the lazy dog"
+    dubna_hex(h): x
+    eq(_): "md5" h "9e107d9d372bb6826bd81d3542a419d6"
+    hmac_sha256(x): "key" "The quick brown fox jumps over the lazy dog"
+    dubna_hex(h): x
+    eq(_): "hmac" h "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+    pbkdf2_sha256(x): "password" "salt" 4096
+    dubna_hex(h): x
+    eq(_): "pbkdf2" h "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"
+    pbkdf2_sha256(x): "passwordPASSWORDpassword" "saltSALTsaltSALTsaltSALTsaltSALTsalt" 4096 40
+    dubna_hex(h): x
+    eq(_): "pbkdf2 40 bytes" h "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9"
+    text_bytes(b): "héllo"
+    bytes_text(s): b
+    eq(_): "bytes_text" s "héllo"
+    bytes_text(s): b 1 2
+    eq(_): "bytes_text range" s "é"
+    push(_): b 0
+    bytes_text(s): b
+    eq(_): "bytes_text zero" s null
+    set(r): 0
+]
+
+byte_checks(r): [
+    vec(v): ""
+    dubna_put_int32(_): v 196608
+    dubna_put_int32(_): v {0 - 1}
+    dubna_put_int16(_): v 513
+    dubna_hex(h): v
+    eq(_): "put ints" h "00030000ffffffff0201"
+    dubna_int32(n): v 0
+    eq(_): "int32" n 196608
+    dubna_int32(n): v 4
+    eq(_): "int32 negative" n {0 - 1}
+    dubna_int16(n): v 8
+    eq(_): "int16" n 513
+    text_bytes(nc): "n,,"
+    dubna_base64(s): nc
+    eq(_): "base64" s "biws"
+    set(raw): '[0,255,16,32,1]'
+    dubna_base64(s): raw
+    eq(_): "base64 padding" s "AP8QIAE="
+    dubna_unbase64(back): s
+    encode(back): back
+    eq(_): "unbase64" back "[0,255,16,32,1]"
+    dubna_unbase64(bad): "AP8*IAE="
+    eq(_): "unbase64 refuses" bad null
+    set(r): 0
+]
+
+message_checks(r): [
+    dubna_startup_message(m): "alice" "db"
+    dubna_hex(h): m
+    eq(_): "startup" h "0000004c000300007573657200616c69636500646174616261736500646200636c69656e745f656e636f64696e670055544638006170706c69636174696f6e5f6e616d65006475626e610000"
+    dubna_ssl_request(m):
+    dubna_hex(h): m
+    eq(_): "ssl request" h "0000000804d2162f"
+    dubna_query_message(m): "select 1"
+    dubna_hex(h): m
+    eq(_): "query" h "510000000d73656c656374203100"
+    dubna_exec_messages(m): "select $1" '[7,null]'
+    dubna_hex(h): m
+    eq(_): "extended" h "50000000110073656c65637420243100000042000000150000000000020000000137ffffffff000044000000065000450000000900000000005300000004"
+    set(r): 0
+]
+
+login_checks(r): [
+    dubna_md5_password(a): "alice" "s3cret" '[1,2,3,250]'
+    eq(_): "md5 answer" a "md5340e5149e7418ea1ae00cb66c1408d5f"
+    # RFC 7677, section 3
+    dubna_scram_first(first): "user" "rOprNGfwEbeRWgbNEkqO"
+    eq(_): "scram first" first "n=user,r=rOprNGfwEbeRWgbNEkqO"
+    dubna_scram_final(f): "pencil" first "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"
+    at(client_final): f 0
+    at(server_sig): f 1
+    eq(_): "scram proof" client_final "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ="
+    eq(_): "scram server signature" server_sig "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4="
+    dubna_scram_final(f): "pencil" first "r=someoneelse,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"
+    eq(_): "scram foreign nonce" f null
+    dubna_scram_final(f): "pencil" first "r=rOprNGfwEbeRWgbNEkqOxyz,s=***,i=4096"
+    eq(_): "scram bad salt" f null
+    dubna_nonce(a):
+    dubna_nonce(b):
+    len(na): a
+    eq(_): "nonce length" na 24
+    eq(_): "nonces differ" {a != b} true
+    set(r): 0
+]
+
+reply_checks(r): [
+    dubna_init(_):
+    # ErrorResponse: S ERROR, V ERROR, C 42P01, M ..., D ...
+    vec(body): ""
+    push(_): body 83
+    dubna_put_cstr(_): body "FEHLER"
+    push(_): body 86
+    dubna_put_cstr(_): body "ERROR"
+    push(_): body 67
+    dubna_put_cstr(_): body "42P01"
+    push(_): body 77
+    dubna_put_cstr(_): body "relation \"x\" does not exist"
+    push(_): body 68
+    dubna_put_cstr(_): body "look closer"
+    push(_): body 0
+    vec(code): ""
+    dubna_error_text(t): body code
+    eq(_): "error text" t "ERROR 42P01: relation \"x\" does not exist (look closer)"
+    at(c): code 0
+    eq(_): "sqlstate" c "42P01"
+    # RowDescription with two columns, then a DataRow with a NULL
+    vec(rd): ""
+    dubna_put_int16(_): rd 2
+    dubna_put_cstr(_): rd "id"
+    dubna_put_int32(_): rd 0
+    dubna_put_int16(_): rd 0
+    dubna_put_int32(_): rd 23
+    dubna_put_int16(_): rd 4
+    dubna_put_int32(_): rd {0 - 1}
+    dubna_put_int16(_): rd 0
+    dubna_put_cstr(_): rd "name"
+    dubna_put_int32(_): rd 0
+    dubna_put_int16(_): rd 0
+    dubna_put_int32(_): rd 25
+    dubna_put_int16(_): rd {0 - 1}
+    dubna_put_int32(_): rd {0 - 1}
+    dubna_put_int16(_): rd 0
+    dubna_new_result(res):
+    dubna_row_description(n): res rd
+    eq(_): "columns" n 2
+    getf(types): res "types"
+    encode(types): types
+    eq(_): "column types" types "[23,25]"
+    vec(dr): ""
+    dubna_put_int16(_): dr 2
+    dubna_put_int32(_): dr 2
+    text_bytes(b): "42"
+    dubna_put_bytes(_): dr b
+    dubna_put_int32(_): dr {0 - 1}
+    dubna_data_row(row): dr
+    getf(rows): res "rows"
+    push(_): rows row
+    dubna_value(v): res 0 "id"
+    eq(_): "value by name" v "42"
+    dubna_value(v): res 0 1
+    eq(_): "null value" v null
+    dubna_value(v): res 5 0
+    eq(_): "no such row" v null
+    dubna_count(n): res
+    eq(_): "row count" n 1
+    dubna_new_result(res):
+    setf(_): res "tag" "UPDATE 17"
+    dubna_count(n): res
+    eq(_): "affected" n 17
+    dubna_ok(ok): res
+    eq(_): "ok" ok true
+    dubna_param_text(p): 12
+    eq(_): "param int" p "12"
+    dubna_param_text(p): true
+    eq(_): "param bool" p "true"
+    dubna_param_text(p): null
+    eq(_): "param null" p null
+    set(r): 0
+]
+
+setting(r): settings name [
+    dubna_setting(r): settings name "" "-"
+]
+
+conninfo_checks(r): [
+    dubna_conninfo(s): "host=db.example port=6543 dbname=forum user=nv password='it\\'s ok' sslmode=require"
+    setting(v): s "host"
+    eq(_): "kv host" v "db.example"
+    setting(v): s "port"
+    eq(_): "kv port" v "6543"
+    setting(v): s "dbname"
+    eq(_): "kv dbname" v "forum"
+    setting(v): s "password"
+    eq(_): "kv quoted" v "it's ok"
+    setting(v): s "sslmode"
+    eq(_): "kv sslmode" v "require"
+    dubna_conninfo(s): "postgres://nv:p%40ss%3Aword@db.example:6543/forum?sslmode=disable&application_name=x"
+    setting(v): s "user"
+    eq(_): "url user" v "nv"
+    setting(v): s "password"
+    eq(_): "url password" v "p@ss:word"
+    setting(v): s "host"
+    eq(_): "url host" v "db.example"
+    setting(v): s "port"
+    eq(_): "url port" v "6543"
+    setting(v): s "dbname"
+    eq(_): "url dbname" v "forum"
+    setting(v): s "sslmode"
+    eq(_): "url sslmode" v "disable"
+    dubna_conninfo(s): "postgresql://localhost"
+    setting(v): s "host"
+    eq(_): "url host only" v "localhost"
+    setting(v): s "port"
+    eq(_): "url default port" v "-"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    hash_checks(_):
+    byte_checks(_):
+    message_checks(_):
+    login_checks(_):
+    reply_checks(_):
+    conninfo_checks(_):
+    set(ret): 0
+]

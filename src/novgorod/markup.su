@@ -1,0 +1,526 @@
+# Novgorod markup: the lightweight, markdown-like syntax of forum posts,
+# turned into safe HTML. Everything that is not markup is escaped, so a post
+# can never inject a tag or an attribute.
+#
+#   nvm_clean(t): text        drop CR and control bytes (TAB becomes spaces)
+#   nvm_escape(h): text       & < > " ' as HTML entities
+#   nvm_render(h): text       the whole post body as HTML
+#   nvm_inline(h): line depth one line of inline markup (depth starts at 0)
+#   nvm_refs(v): text         the post numbers quoted with >>N, in order
+#
+# Syntax (see docs/MARKUP.md):
+#   **bold**  *italic*  ~~strike~~  ||spoiler||  `code`
+#   ```lang ... ``` fenced code block (no markup inside)
+#   > quoted line          >>123 link to post 123      >>>/c/ link to a board
+#   http:// and https:// URLs become links; \* \` \\ ... write a character as is
+$once
+$include "../libs/strings.su"
+
+nvm_escape(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(run): 0
+    while(_): {i < n} [
+        byte(b): s i
+        set(rep): ""
+        if(_): {b = 38} [
+            set(rep): "&amp;"
+        ]
+        elif(_): {b = 60} [
+            set(rep): "&lt;"
+        ]
+        elif(_): {b = 62} [
+            set(rep): "&gt;"
+        ]
+        elif(_): {b = 34} [
+            set(rep): "&quot;"
+        ]
+        elif(_): {b = 39} [
+            set(rep): "&#39;"
+        ]
+        if(_): {rep != ""} [
+            if(_): {i > run} [
+                slice(part): s run {i - run}
+                concat(r): r part
+            ]
+            concat(r): r rep
+            set(run): {i + 1}
+        ]
+        add(i): i 1
+    ]
+    if(_): {run = 0} [
+        set(r): s
+        return(r): r
+    ]
+    if(_): {n > run} [
+        slice(part): s run {n - run}
+        concat(r): r part
+    ]
+]
+
+# CR and control bytes go (TAB becomes four spaces), the end is trimmed.
+nvm_clean(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(run): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {(b < 32 && b != 10) || b = 127} [
+            if(_): {i > run} [
+                slice(part): s run {i - run}
+                concat(r): r part
+            ]
+            if(_): {b = 9} [
+                concat(r): r "    "
+            ]
+            set(run): {i + 1}
+        ]
+        add(i): i 1
+    ]
+    if(_): {n > run} [
+        slice(part): s run {n - run}
+        concat(r): r part
+    ]
+    str_trim(r): r
+]
+
+# First index of needle in s at or after from, or -1.
+nvm_find(r): s needle from [
+    set(r): {0 - 1}
+    len(n): s
+    len(m): needle
+    if(_): {m = 0} [
+        return(r): r
+    ]
+    byte(first): needle 0
+    set(i): from
+    if(_): {i < 0} [
+        set(i): 0
+    ]
+    set(last): {n - m}
+    while(_): {i <= last} [
+        byte(b): s i
+        if(_): {b = first} [
+            slice(piece): s i m
+            if(_): {piece = needle} [
+                set(r): i
+                return(r): r
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+nvm_is_space(r): b [
+    set(r): {b = 32 || b = 9 || b = 10}
+]
+
+nvm_is_digit(r): b [
+    set(r): {b >= 48 && b <= 57}
+]
+
+nvm_is_word(r): b [
+    set(r): {(b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 95}
+]
+
+# Index of the delimiter that closes one opened at i (its length k), the
+# closing one preceded by a non-blank; -1 when there is none. The opening one
+# must be followed by a non-blank.
+nvm_closer(r): s i k delim [
+    set(r): {0 - 1}
+    len(n): s
+    if(_): {i + k >= n} [
+        return(r): r
+    ]
+    byte(after): s {i + k}
+    nvm_is_space(blank): after
+    if(_): blank [
+        return(r): r
+    ]
+    set(from): {i + k + 1}
+    while(_): {from < n} [
+        nvm_find(j): s delim from
+        if(_): {j < 0} [
+            return(r): r
+        ]
+        byte(before): s {j - 1}
+        nvm_is_space(blank): before
+        set(ok): {blank = false}
+        # a single * must not be half of a **
+        if(_): {ok && k = 1 && delim = "*"} [
+            if(_): {j + 1 < n} [
+                byte(next): s {j + 1}
+                if(_): {next = 42} [
+                    set(ok): false
+                ]
+            ]
+        ]
+        if(_): ok [
+            set(r): j
+            return(r): r
+        ]
+        set(from): {j + 1}
+    ]
+]
+
+# Length of the URL starting at i (http:// or https://), 0 when none.
+nvm_url_len(r): s i [
+    set(r): 0
+    len(n): s
+    set(head): ""
+    set(head7): ""
+    if(_): {i + 8 <= n} [
+        slice(head): s i 8
+    ]
+    if(_): {i + 7 <= n} [
+        slice(head7): s i 7
+    ]
+    if(_): {head != "https://" && head7 != "http://"} [
+        return(r): r
+    ]
+    if(_): {i > 0} [
+        byte(before): s {i - 1}
+        nvm_is_word(word): before
+        if(_): word [
+            return(r): r
+        ]
+    ]
+    len(n): s
+    set(j): i
+    set(go): true
+    while(_): {go && j < n} [
+        byte(b): s j
+        if(_): {b <= 32 || b = 34 || b = 39 || b = 60 || b = 62 || b = 96 || b = 127} [
+            set(go): false
+        ]
+        else(_): [
+            add(j): j 1
+        ]
+    ]
+    # trailing punctuation belongs to the sentence
+    set(go): true
+    while(_): {go && j > i} [
+        byte(b): s {j - 1}
+        if(_): {b = 46 || b = 44 || b = 59 || b = 58 || b = 33 || b = 63 || b = 41 || b = 93 || b = 42 || b = 126 || b = 124} [
+            sub(j): j 1
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    set(r): {j - i}
+    if(_): {r <= 8} [
+        set(r): 0
+    ]
+]
+
+nvm_inline(r): s depth [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(run): 0
+    while(_): {i < n} [
+        byte(b): s i
+        set(out): null
+        set(skip): 0
+        if(_): {b = 92 && i + 1 < n} [
+            # \x writes x as is when x is a markup character
+            byte(next): s {i + 1}
+            if(_): {next = 92 || next = 96 || next = 42 || next = 126 || next = 124 || next = 62 || next = 95} [
+                chr(c): next
+                nvm_escape(out): c
+                set(skip): 2
+            ]
+        ]
+        elif(_): {b = 96} [
+            nvm_find(j): s "`" {i + 1}
+            if(_): {j > i + 1} [
+                slice(code): s {i + 1} {j - i - 1}
+                nvm_escape(code): code
+                concat(out): "<code>" code "</code>"
+                set(skip): {j - i + 1}
+            ]
+        ]
+        elif(_): {b = 42 || b = 126 || b = 124} [
+            set(k): 1
+            set(open): ""
+            set(close): ""
+            if(_): {i + 1 < n} [
+                byte(next): s {i + 1}
+                if(_): {next = b} [
+                    set(k): 2
+                ]
+            ]
+            if(_): {b = 42 && k = 2} [
+                set(open): "<b>"
+                set(close): "</b>"
+            ]
+            elif(_): {b = 42} [
+                set(open): "<i>"
+                set(close): "</i>"
+            ]
+            elif(_): {b = 126 && k = 2} [
+                set(open): "<s>"
+                set(close): "</s>"
+            ]
+            elif(_): {b = 124 && k = 2} [
+                set(open): "<span class=\"spoiler\">"
+                set(close): "</span>"
+            ]
+            if(_): {open != "" && depth < 8} [
+                slice(delim): s i k
+                nvm_closer(j): s i k delim
+                if(_): {j > 0} [
+                    slice(inner): s {i + k} {j - i - k}
+                    nvm_inline(inner): inner {depth + 1}
+                    concat(out): open inner close
+                    set(skip): {j - i + k}
+                ]
+            ]
+        ]
+        elif(_): {b = 62 && i + 2 < n} [
+            slice(two): s i 2
+            if(_): {two = ">>"} [
+                byte(third): s {i + 2}
+                nvm_is_digit(digit): third
+                if(_): digit [
+                    set(j): {i + 2}
+                    set(go): true
+                    while(_): {go && j < n && j - i < 12} [
+                        byte(c): s j
+                        nvm_is_digit(go): c
+                        if(_): go [
+                            add(j): j 1
+                        ]
+                    ]
+                    slice(no): s {i + 2} {j - i - 2}
+                    concat(out): "<a class=\"ref\" href=\"/p/" no "\" data-ref=\"" no "\">&gt;&gt;" no "</a>"
+                    set(skip): {j - i}
+                ]
+                if(_): {third = 62 && i + 4 < n} [
+                    # >>>/board/
+                    byte(slash): s {i + 3}
+                    if(_): {slash = 47} [
+                        set(j): {i + 4}
+                        set(go): true
+                        while(_): {go && j < n && j - i < 24} [
+                            byte(c): s j
+                            set(go): {(c >= 97 && c <= 122) || (c >= 48 && c <= 57)}
+                            if(_): go [
+                                add(j): j 1
+                            ]
+                        ]
+                        if(_): {j < n && j > i + 4} [
+                            byte(c): s j
+                            if(_): {c = 47} [
+                                slice(board): s {i + 4} {j - i - 4}
+                                concat(out): "<a class=\"ref\" href=\"/" board "/\">&gt;&gt;&gt;/" board "/</a>"
+                                set(skip): {j - i + 1}
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        elif(_): {b = 104} [
+            nvm_url_len(k): s i
+            if(_): {k > 0} [
+                slice(url): s i k
+                nvm_escape(url): url
+                concat(out): "<a href=\"" url "\" rel=\"nofollow noopener noreferrer ugc\" target=\"_blank\">" url "</a>"
+                set(skip): k
+            ]
+        ]
+        if(_): {out = null && (b = 38 || b = 60 || b = 62 || b = 34 || b = 39)} [
+            chr(c): b
+            nvm_escape(out): c
+            set(skip): 1
+        ]
+        if(_): {out != null} [
+            if(_): {i > run} [
+                slice(part): s run {i - run}
+                concat(r): r part
+            ]
+            concat(r): r out
+            add(i): i skip
+            set(run): i
+        ]
+        else(_): [
+            add(i): i 1
+        ]
+    ]
+    if(_): {run = 0} [
+        set(r): s
+        return(r): r
+    ]
+    if(_): {n > run} [
+        slice(part): s run {n - run}
+        concat(r): r part
+    ]
+]
+
+# Lines of text (split at LF), as a vector of strings.
+nvm_lines(r): s [
+    vec(r): ""
+    len(n): s
+    set(from): 0
+    while(_): {from <= n} [
+        nvm_find(j): s "\n" from
+        if(_): {j < 0} [
+            set(j): n
+        ]
+        slice(line): s from {j - from}
+        push(_): r line
+        set(from): {j + 1}
+    ]
+]
+
+# The language word after ``` (letters, digits, + # - .), at most 16 bytes.
+nvm_fence_lang(r): line [
+    set(r): ""
+    len(n): line
+    set(i): 3
+    while(_): {i < n && i < 19} [
+        byte(b): line i
+        if(_): {(b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) || b = 43 || b = 35 || b = 45 || b = 46} [
+            add(i): i 1
+        ]
+        else(_): [
+            slice(r): line 3 {i - 3}
+            return(r): r
+        ]
+    ]
+    slice(r): line 3 {i - 3}
+]
+
+# Whether a line starting with > is a quote, not a >>N or >>>/b/ link.
+nvm_is_quote(r): line [
+    set(r): false
+    len(n): line
+    if(_): {n = 0} [
+        return(r): r
+    ]
+    byte(b): line 0
+    if(_): {b != 62} [
+        return(r): r
+    ]
+    set(r): true
+    if(_): {n >= 3} [
+        slice(two): line 0 2
+        byte(third): line 2
+        nvm_is_digit(digit): third
+        if(_): {two = ">>" && (digit || third = 62)} [
+            set(r): false
+        ]
+    ]
+]
+
+nvm_render(r): text [
+    set(r): ""
+    nvm_lines(lines): text
+    len(count): lines
+    set(i): 0
+    set(in_code): false
+    set(prev_text): false
+    set(blanks): 0
+    set(code_lines): 0
+    while(_): {i < count} [
+        at(line): lines i
+        set(head): ""
+        len(line_len): line
+        if(_): {line_len >= 3} [
+            slice(head): line 0 3
+        ]
+        if(_): {in_code} [
+            if(_): {head = "```"} [
+                concat(r): r "</code></pre>"
+                set(in_code): false
+                set(prev_text): false
+            ]
+            else(_): [
+                nvm_escape(esc): line
+                if(_): {code_lines > 0} [
+                    concat(r): r "\n"
+                ]
+                concat(r): r esc
+                add(code_lines): code_lines 1
+            ]
+        ]
+        elif(_): {head = "```"} [
+            nvm_fence_lang(lang): line
+            if(_): {lang != ""} [
+                nvm_escape(lang): lang
+                concat(r): r "<pre class=\"code\" data-lang=\"" lang "\"><code>"
+            ]
+            else(_): [
+                concat(r): r "<pre class=\"code\"><code>"
+            ]
+            set(in_code): true
+            set(code_lines): 0
+            set(blanks): 0
+        ]
+        else(_): [
+            str_trim(bare): line
+            if(_): {bare = ""} [
+                add(blanks): blanks 1
+            ]
+            else(_): [
+                set(blanks): 0
+            ]
+            # at most one empty line in a row
+            if(_): {blanks < 2} [
+                nvm_is_quote(quote): line
+                if(_): quote [
+                    len(rest_len): line
+                    slice(rest): line 1 {rest_len - 1}
+                    nvm_inline(html): rest 0
+                    concat(html): "<span class=\"quote\">&gt;" html "</span>"
+                ]
+                else(_): [
+                    nvm_inline(html): line 0
+                ]
+                if(_): prev_text [
+                    concat(r): r "<br>\n"
+                ]
+                concat(r): r html
+                set(prev_text): true
+            ]
+        ]
+        add(i): i 1
+    ]
+    if(_): in_code [
+        concat(r): r "</code></pre>"
+    ]
+]
+
+nvm_refs(r): text [
+    vec(r): ""
+    len(n): text
+    set(from): 0
+    while(_): {from < n} [
+        nvm_find(j): text ">>" from
+        if(_): {j < 0} [
+            return(r): r
+        ]
+        set(k): {j + 2}
+        set(no): 0
+        set(go): true
+        while(_): {go && k < n && k - j < 12} [
+            byte(c): text k
+            nvm_is_digit(go): c
+            if(_): go [
+                set(no): {no * 10 + c - 48}
+                add(k): k 1
+            ]
+        ]
+        if(_): {k > j + 2} [
+            push(_): r no
+        ]
+        set(from): {k}
+        if(_): {k = j + 2} [
+            set(from): {j + 2}
+        ]
+    ]
+]

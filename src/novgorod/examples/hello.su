@@ -1,0 +1,25 @@
+# A tiny Novgorod on plain HTTP with one board, its data in the folder
+# novgorod-example where you start it. From the repository root:
+#     ussr src/novgorod/examples/hello.su
+# then open http://127.0.0.1:18990/
+$include "../novgorod.su"
+
+init(ret): arg_cnt arg_vec [
+    nv_types(_):
+    nv_setup(_):
+    set(nv_title): "Hello Novgorod"
+    set(nv_tls): false
+    make_dir(_): "novgorod-example"
+    file_exists(have): "novgorod-example/boards.txt"
+    if(_): {have = false} [
+        writefile(_): "novgorod-example/boards.txt" "hello | Hello | Say hello in code\n"
+    ]
+    nv_load_static(found): "src/novgorod/static"
+    if(_): {found = false} [
+        print(_): "run this from the repository root\n"
+        set(ret): 1
+        return(ret): ret
+    ]
+    nv_open(_): "novgorod-example"
+    uk_server(ret): "127.0.0.1" 18990
+]

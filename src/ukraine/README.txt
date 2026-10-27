@@ -39,6 +39,15 @@ certificate in tests/ryazan/ on port 18996:
 
   curl --cacert tests/ryazan/localhost.cert.pem https://localhost:18996/
 
+Requests with a Content-Length are read with their body, up to the global
+`uk_max_body` (1 MiB unless the application sets it before starting the
+server); a longer one is answered 413. `uk_request_header(v): request name`
+returns a header (name case-insensitive, "" when absent),
+`uk_request_body(b): request` the body, and
+`uk_response_ex(result): status content_type headers body` adds header
+lines separated by "\n" (for example "Location: /\nCache-Control: no-store").
+Responses carry Content-Length. src/novgorod/ is a full application.
+
 See `tests/ukraine_http.su` for a runnable example and
 `tests/ukraine_unit.su` for helper checks. The existing
 `tests/socket_smoke.su` and `tests/socket_echo.su` exercise the lower-level
@@ -47,6 +56,7 @@ socket API.
 The socket API returns small integer handles, not native descriptors. The
 current HTTP layer is intentionally small: IPv4 TCP, one request per
 connection, a 16 KiB request-header limit, and application-defined routing.
-It does not yet parse request bodies or provide IPv6; TLS comes from ryazan.
+It does not decode chunked request bodies or provide IPv6; TLS comes from
+ryazan.
 Keep the server on trusted networks until those features and production-grade
 timeouts/limits are added.

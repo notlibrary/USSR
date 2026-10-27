@@ -1,0 +1,321 @@
+# Novgorod forum engine without a socket: markup, forms, storage and pages
+# on a scratch data folder in tests/novgorod_tmp. Prints PASS or FAIL per
+# check.
+$include "../src/novgorod/novgorod.su"
+
+eq(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        typeof(gt): got
+        typeof(wt): want
+        if(_): {gt != "string"} [ encode(got): got ]
+        if(_): {wt != "string"} [ encode(want): want ]
+        concat(line): "FAIL " label ": got " got ", want " want
+    ]
+    print(_): line
+    set(r): 0
+]
+
+has(r): label text needle [
+    nvm_find(at): text needle 0
+    if(_): {at >= 0} [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label ": no " needle " in " text
+    ]
+    print(_): line
+    set(r): 0
+]
+
+lacks(r): label text needle [
+    nvm_find(at): text needle 0
+    if(_): {at < 0} [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label ": found " needle " in " text
+    ]
+    print(_): line
+    set(r): 0
+]
+
+markup_checks(r): [
+    nvm_escape(h): "<a href=\"x\">&'"
+    eq(_): "escape" h "&lt;a href=&quot;x&quot;&gt;&amp;&#39;"
+    nvm_inline(h): "plain text" 0
+    eq(_): "plain" h "plain text"
+    nvm_inline(h): "**bold** and *it* and ~~gone~~ and ||secret||" 0
+    eq(_): "emphasis" h "<b>bold</b> and <i>it</i> and <s>gone</s> and <span class=\"spoiler\">secret</span>"
+    nvm_inline(h): "**bold *nested* here**" 0
+    eq(_): "nested" h "<b>bold <i>nested</i> here</b>"
+    nvm_inline(h): "a * b * c and int *p, *q" 0
+    eq(_): "lone stars" h "a * b * c and int *p, *q"
+    nvm_inline(h): "use `x->y && *p` here" 0
+    eq(_): "code span" h "use <code>x-&gt;y &amp;&amp; *p</code> here"
+    nvm_inline(h): "\\*not italic\\* and \\`tick" 0
+    eq(_): "backslash" h "*not italic* and `tick"
+    nvm_inline(h): "see >>42, and >>>/c/ too" 0
+    eq(_): "refs" h "see <a class=\"ref\" href=\"/p/42\" data-ref=\"42\">&gt;&gt;42</a>, and <a class=\"ref\" href=\"/c/\">&gt;&gt;&gt;/c/</a> too"
+    nvm_inline(h): "go to https://example.org/a?b=1&c=2. now" 0
+    eq(_): "url" h "go to <a href=\"https://example.org/a?b=1&amp;c=2\" rel=\"nofollow noopener noreferrer ugc\" target=\"_blank\">https://example.org/a?b=1&amp;c=2</a>. now"
+    nvm_inline(h): "javascript:alert(1) <script>" 0
+    eq(_): "no js url" h "javascript:alert(1) &lt;script&gt;"
+    nvm_inline(h): "**<img onerror=x>**" 0
+    eq(_): "escape inside" h "<b>&lt;img onerror=x&gt;</b>"
+    nvm_inline(h): "unclosed **bold" 0
+    eq(_): "unclosed" h "unclosed **bold"
+    nvm_render(h): "> quoted\n>>7 reply\nline"
+    eq(_): "quote lines" h "<span class=\"quote\">&gt; quoted</span><br>\n<a class=\"ref\" href=\"/p/7\" data-ref=\"7\">&gt;&gt;7</a> reply<br>\nline"
+    nvm_render(h): "code:\n```c\nint *p = **q;\n  if (a < b) {}\n```\nafter"
+    eq(_): "fence" h "code:<pre class=\"code\" data-lang=\"c\"><code>int *p = **q;\n  if (a &lt; b) {}</code></pre>after"
+    nvm_render(h): "a\n\n\n\nb"
+    eq(_): "blank lines" h "a<br>\n<br>\nb"
+    nvm_render(h): "```\nopen <b>"
+    eq(_): "open fence" h "<pre class=\"code\"><code>open &lt;b&gt;</code></pre>"
+    chr(bell): 7
+    concat(raw): "\r\n  tab\there\r\nbell" bell "  \n"
+    nvm_clean(t): raw
+    eq(_): "clean" t "tab    here\nbell"
+    nvm_refs(v): ">>12 >>3 >>>/c/ >>x >>12"
+    encode(v): v
+    eq(_): "ref list" v "[12,3,12]"
+    set(r): 0
+]
+
+global(_): dir
+
+# Empties the scratch data folder.
+scrub(r): [
+    set(r): 0
+    vec(subs): ""
+    push(_): subs "posts"
+    push(_): subs "img"
+    set(k): 0
+    while(_): {k < 2} [
+        at(sub): subs k
+        concat(path): dir "/" sub
+        list_dir(names): path
+        if(_): {names != null} [
+            len(n): names
+            set(i): 0
+            while(_): {i < n} [
+                at(name): names i
+                concat(f): path "/" name
+                remove_file(_): f
+                add(i): i 1
+            ]
+        ]
+        remove_dir(_): path
+        add(k): k 1
+    ]
+    concat(f): dir "/boards.txt"
+    remove_file(_): f
+    concat(f): dir "/seq"
+    remove_file(_): f
+    remove_dir(_): dir
+]
+
+# A multipart/form-data POST /post with the given fields (name, value...).
+form_request(r): fields origin [
+    set(boundary): "----nvtest7MA4YWxk"
+    set(body): ""
+    len(n): fields
+    set(i): 0
+    while(_): {i < n} [
+        at(name): fields i
+        at(value): fields {i + 1}
+        concat(body): body "--" boundary "\r\nContent-Disposition: form-data; name=\"" name "\"\r\n\r\n" value "\r\n"
+        add(i): i 2
+    ]
+    concat(body): body "--" boundary "--\r\n"
+    len(bl): body
+    str_from_int(bls): bl
+    concat(r): "POST /post HTTP/1.1\r\nHost: localhost:8443\r\nContent-Type: multipart/form-data; boundary=" boundary "\r\nContent-Length: " bls "\r\n"
+    if(_): {origin != ""} [
+        concat(r): r "Origin: " origin "\r\n"
+    ]
+    concat(r): r "\r\n" body
+]
+
+post_fields(r): board thread subject text website mime img [
+    vec(r): ""
+    push(_): r "board"
+    push(_): r board
+    push(_): r "thread"
+    push(_): r thread
+    push(_): r "subject"
+    push(_): r subject
+    push(_): r "text"
+    push(_): r text
+    push(_): r "website"
+    push(_): r website
+    push(_): r "mime"
+    push(_): r mime
+    push(_): r "imgw"
+    push(_): r "640"
+    push(_): r "imgh"
+    push(_): r "480"
+    push(_): r "thw"
+    push(_): r "200"
+    push(_): r "thh"
+    push(_): r "150"
+    push(_): r "thumb"
+    set(thumb): ""
+    if(_): {img != ""} [
+        set(thumb): "/9j/AAAA"
+    ]
+    push(_): r thumb
+    push(_): r "img"
+    push(_): r img
+]
+
+post(r): board thread subject text img [
+    set(mime): ""
+    if(_): {img != ""} [
+        set(mime): "jpeg"
+    ]
+    post_fields(fields): board thread subject text "" mime img
+    form_request(req): fields "https://localhost:8443"
+    nv_handle(r): "POST" "/post" req
+]
+
+fetch(r): target [
+    concat(req): "GET " target " HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    nv_handle(r): "GET" target req
+]
+
+status(r): response [
+    slice(r): response 9 3
+]
+
+engine_checks(r): [
+    nv_setup(_):
+    nv_open(count): dir
+    eq(_): "empty forum" count 0
+    len(nb): nv_boards
+    eq(_): "default boards" nb 6
+    post(resp): "c" "0" "Pointers" "**hi** there\n```c\nint *p;\n```" "/9j/AAAA"
+    status(code): resp
+    eq(_): "thread posted" code "303"
+    has(_): "thread location" resp "Location: /c/res/1#p1\r\n"
+    post(resp): "c" "1" "" ">>1 agreed, see `p`" ""
+    has(_): "reply location" resp "Location: /c/res/1#p2\r\n"
+    fetch(page): "/c/res/1"
+    status(code): page
+    eq(_): "thread page" code "200"
+    has(_): "thread subject" page "<span class=\"subject\">Pointers</span>"
+    has(_): "thread code block" page "<pre class=\"code\" data-lang=\"c\"><code>int *p;</code></pre>"
+    has(_): "backlink" page "<span class=\"backlinks\"><a class=\"ref\" href=\"/p/2\" data-ref=\"2\">&gt;&gt;2</a>"
+    has(_): "thumbnail" page "<img src=\"/t/1.svg\" width=\"200\" height=\"150\""
+    has(_): "reply form" page "name=\"thread\" value=\"1\""
+    has(_): "csp" page "Content-Security-Policy: default-src 'none'"
+    fetch(page): "/c/"
+    has(_): "board index" page "id=\"p2\""
+    has(_): "board reply link" page "<a class=\"open\" href=\"/c/res/1\">[Reply]</a>"
+    fetch(page): "/c/catalog"
+    has(_): "catalog" page "<span class=\"count\">R: 1</span><b>Pointers</b>"
+    fetch(page): "/"
+    has(_): "home boards" page "<a href=\"/c/\">/c/ C and systems</a>"
+    has(_): "home recent" page "/c/ 2</a>"
+    fetch(svg): "/t/1.svg"
+    has(_): "thumb svg" svg "Content-Type: image/svg+xml\r\n"
+    has(_): "thumb data" svg "href=\"data:image/jpeg;base64,/9j/AAAA\""
+    fetch(svg): "/i/1.svg"
+    has(_): "image svg" svg "width=\"640\" height=\"480\""
+    fetch(resp): "/i/2.svg"
+    status(code): resp
+    eq(_): "no image" code "404"
+    fetch(resp): "/p/2"
+    has(_): "post link" resp "Location: /c/res/1#p2\r\n"
+    fetch(resp): "/c"
+    has(_): "board slash" resp "Location: /c/\r\n"
+    fetch(resp): "/nope/"
+    status(code): resp
+    eq(_): "unknown" code "404"
+    fetch(resp): "/markup"
+    has(_): "markup page" resp "<b>bold</b>"
+    fetch(resp): "/c/res/2"
+    status(code): resp
+    eq(_): "reply is no thread" code "404"
+    nv_handle(resp): "HEAD" "/" "HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    uk_route(resp): "HEAD" "/" "HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    nv_ends(bare): resp "\r\n\r\n"
+    eq(_): "head" bare true
+
+    # refusals
+    post_fields(fields): "c" "0" "" "spam" "http://x" "" ""
+    form_request(req): fields ""
+    nv_handle(resp): "POST" "/post" req
+    has(_): "honeypot" resp "That looked like spam."
+    post(resp): "anime" "0" "" "hello" ""
+    has(_): "bad board" resp "No such board."
+    post(resp): "c" "0" "" "   " ""
+    has(_): "empty" resp "A post needs text or an image."
+    post(resp): "c" "77" "" "hello" ""
+    has(_): "missing thread" resp "That thread is gone."
+    post(resp): "c" "2" "" "hello" ""
+    has(_): "reply to reply" resp "That thread is gone."
+    post_fields(fields): "c" "0" "" "x" "" "png" "/9j/AAAA"
+    form_request(req): fields ""
+    nv_handle(resp): "POST" "/post" req
+    has(_): "mime mismatch" resp "The image does not match its type."
+    post_fields(fields): "c" "0" "" "x" "" "jpeg" "/9j/AA\"<"
+    form_request(req): fields ""
+    nv_handle(resp): "POST" "/post" req
+    has(_): "bad base64" resp "The image is too large or damaged."
+    post_fields(fields): "c" "0" "" "x" "" "" ""
+    form_request(req): fields "https://evil.example"
+    nv_handle(resp): "POST" "/post" req
+    status(code): resp
+    eq(_): "cross origin" code "403"
+    nv_handle(resp): "POST" "/post" "POST /post HTTP/1.1\r\nContent-Type: text/plain\r\n\r\nx"
+    has(_): "not multipart" resp "The form could not be read."
+
+    # a fresh start reads everything back
+    nv_setup(_):
+    nv_open(count): dir
+    eq(_): "reload count" count 2
+    fetch(page): "/c/res/1"
+    has(_): "reload backlink" page "data-ref=\"2\">&gt;&gt;2</a> </span>"
+    post(resp): "prog" "0" "" "third" ""
+    has(_): "numbers go on" resp "Location: /prog/res/3#p3\r\n"
+
+    # old threads fall off a full board
+    set(nv_max_threads): 2
+    sleep(_): 1100
+    post(resp): "c" "0" "" "second thread" ""
+    sleep(_): 1100
+    post(resp): "c" "0" "" "third thread" ""
+    fetch(resp): "/c/res/1"
+    status(code): resp
+    eq(_): "pruned" code "404"
+    concat(f): dir "/posts/1.post"
+    file_exists(gone): f
+    eq(_): "pruned file" gone false
+    concat(f): dir "/img/1t.svg"
+    file_exists(gone): f
+    eq(_): "pruned image" gone false
+    fetch(resp): "/c/res/5"
+    status(code): resp
+    eq(_): "kept" code "200"
+
+    # the forum-wide rate limit
+    set(nv_rate): 1
+    post(resp): "meta" "0" "" "one" ""
+    post(resp): "meta" "0" "" "two" ""
+    has(_): "rate limit" resp "wait a minute"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(dir): "tests/novgorod_tmp"
+    markup_checks(_):
+    nv_types(_):
+    scrub(_):
+    engine_checks(_):
+    scrub(_):
+    set(ret): 0
+]

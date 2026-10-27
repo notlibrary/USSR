@@ -96,7 +96,7 @@ suite() {
     # quine attempts in tests/quines (none of them is a quine yet).
     for f in tests/*.su tests/*.ua tests/math/*.su tests/oop/*.su; do
         case "$f" in
-            tests/socket_*|tests/ukraine_*|tests/ryazan_*|tests/chain.su|tests/script.su) continue ;;
+            tests/socket_*|tests/ukraine_*|tests/ryazan_*|tests/*_live.su|tests/chain.su|tests/script.su) continue ;;
         esac
         want="tests/expected/${f#tests/}.txt"
         input="tests/expected/${f#tests/}.in"

@@ -2661,6 +2661,11 @@ rt_is_host(r): nm [
     if(_): {nm = "write_stderr"} [ set(r): 1 ]
     if(_): {nm = "read_bytes"} [ set(r): 1 ]
     if(_): {nm = "text_bytes"} [ set(r): 1 ]
+    if(_): {nm = "bytes_text"} [ set(r): 1 ]
+    if(_): {nm = "sha256"} [ set(r): 1 ]
+    if(_): {nm = "md5"} [ set(r): 1 ]
+    if(_): {nm = "hmac_sha256"} [ set(r): 1 ]
+    if(_): {nm = "pbkdf2_sha256"} [ set(r): 1 ]
     if(_): {nm = "write_bytes"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
 ]
@@ -2713,7 +2718,8 @@ rt_host(r): nm vals [
     if(_): {rt_hn > 0} [ at(rt_ha0): vals 0 ]
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
     if(_): {rt_hn > 2} [ at(rt_ha2): vals 2 ]
-    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch"} [ rt_fatal(_): ]
+    if(_): {rt_hn > 3} [ at(rt_ha3): vals 3 ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch" && nm != "bytes_text" && nm != "pbkdf2_sha256"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2854,6 +2860,29 @@ rt_host(r): nm vals [
     if(_): {nm = "text_bytes"} [
         if(_): {rt_hn = 1} [ text_bytes(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "bytes_text"} [
+        if(_): {rt_hn = 1} [ bytes_text(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ bytes_text(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn = 3} [ bytes_text(r): rt_ha0 rt_ha1 rt_ha2 ]
+        if(_): {rt_hn < 1 || rt_hn > 3} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "sha256"} [
+        if(_): {rt_hn = 1} [ sha256(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "md5"} [
+        if(_): {rt_hn = 1} [ md5(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "hmac_sha256"} [
+        if(_): {rt_hn = 2} [ hmac_sha256(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn != 2} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "pbkdf2_sha256"} [
+        if(_): {rt_hn = 3} [ pbkdf2_sha256(r): rt_ha0 rt_ha1 rt_ha2 ]
+        if(_): {rt_hn = 4} [ pbkdf2_sha256(r): rt_ha0 rt_ha1 rt_ha2 rt_ha3 ]
+        if(_): {rt_hn < 3 || rt_hn > 4} [ rt_fatal(_): ]
     ]
     if(_): {nm = "write_bytes"} [
         if(_): {rt_hn = 2} [ write_bytes(r): rt_ha0 rt_ha1 ]

@@ -1,0 +1,1937 @@
+# Novgorod - an anonymous image forum for programmers, served over HTTPS by
+# ukraine.su and ryazan.su. Part of the RUND stack: Ryazan (TLS), Ukraine
+# (HTTP), Novgorod (this forum), Dubna (PostgreSQL driver, to come).
+#
+#   ussr src/novgorod/novgorod.su [options]
+#     --host 127.0.0.1    --port 8443      address to listen on
+#     --data DIR          posts and images (default novgorod-data)
+#     --static DIR        novgorod.css and novgorod.js (default: found)
+#     --db CONNINFO       keep posts in PostgreSQL through Dubna (a
+#                         conninfo string or postgres:// URL; images and
+#                         boards.txt stay in the data folder)
+#     --cert FILE --secret PASS            server certificate (PKCS#12);
+#                         without one the public test certificate is used
+#     --http              plain HTTP instead of HTTPS
+#     --hsts              send Strict-Transport-Security
+#
+# Posts are anonymous and numbered across the whole forum. Bodies use
+# Novgorod markup (markup.su). Images are re-encoded by the browser (which
+# also drops EXIF metadata) and stored as base64 inside SVG wrappers, because
+# USSR strings cannot hold zero bytes; browsers show them like any image.
+# The data folder holds posts/N.post (a small header, a blank line, the
+# text), img/N.svg and img/Nt.svg (image and thumbnail), seq (the next
+# number) and boards.txt (one "name | title | description" per line).
+$once
+$include "../ukraine/ukraine.su"
+$include "markup.su"
+$include "../dubna/dubna.su"
+
+global(_): nv_db nv_db_table uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
+global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_max_thumb
+
+# ---------------------------------------------------------------- setup
+
+# The forum's types; call once.
+nv_types(r): [
+    struct(NvPost): "no:number" "board:string" "thread:number" "time:number" "subject:string" "text:string" "html:string" "image:string" "iw:number" "ih:number" "tw:number" "th:number" "refs:vector" "alive:boolean" "owner:any"
+    struct(NvThread): "op:NvPost" "posts:vector" "bump:number" "alive:boolean"
+    struct(NvBoard): "name:string" "title:string" "about:string" "threads:vector"
+    struct(NvForm): "board:string" "thread:string" "subject:string" "text:string" "website:string" "mime:string" "imgw:string" "imgh:string" "thw:string" "thh:string" "thumb:string" "img:string"
+    set(r): 0
+]
+
+# Default limits and an empty forum; call before nv_open.
+nv_setup(r): [
+    set(nv_title): "Novgorod"
+    set(nv_max_threads): 100
+    set(nv_bump_limit): 300
+    set(nv_page_size): 10
+    set(nv_preview): 3
+    set(nv_rate): 30
+    set(nv_max_text): 8000
+    set(nv_max_subject): 100
+    set(nv_max_image): 2400000
+    set(nv_max_thumb): 80000
+    set(uk_max_body): 2600000
+    set(nv_hsts): false
+    set(nv_db): ""
+    set(nv_db_table): "novgorod_posts"
+    set(nv_tls): true
+    set(nv_css): ""
+    set(nv_js): ""
+    vec(nv_boards): "NvBoard"
+    vec(nv_posts): "NvPost"
+    vec(nv_seq): ""
+    vec(nv_log): ""
+    set(r): 0
+]
+
+nv_s(r): n [
+    str_from_int(r): n
+]
+
+# Integer from decimal digits only, else null.
+nv_int(r): s [
+    set(r): null
+    len(n): s
+    if(_): {n = 0 || n > 12} [
+        return(r): r
+    ]
+    set(v): 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b < 48 || b > 57} [
+            return(r): r
+        ]
+        set(v): {v * 10 + b - 48}
+        add(i): i 1
+    ]
+    set(r): v
+]
+
+nv_starts(r): s prefix [
+    len(n): s
+    len(m): prefix
+    set(r): false
+    if(_): {m <= n} [
+        slice(head): s 0 m
+        set(r): {head = prefix}
+    ]
+]
+
+nv_ends(r): s suffix [
+    len(n): s
+    len(m): suffix
+    set(r): false
+    if(_): {m <= n} [
+        slice(tail): s {n - m} m
+        set(r): {tail = suffix}
+    ]
+]
+
+nv_pad2(r): n [
+    nv_s(r): n
+    if(_): {n < 10} [
+        concat(r): "0" r
+    ]
+]
+
+nv_date(r): t [
+    localtime(lt): t
+    at(y): lt 0
+    at(mo): lt 1
+    at(d): lt 2
+    at(h): lt 3
+    at(mi): lt 4
+    nv_s(ys): y
+    nv_pad2(mos): mo
+    nv_pad2(ds): d
+    nv_pad2(hs): h
+    nv_pad2(mis): mi
+    concat(r): ys "-" mos "-" ds " " hs ":" mis
+]
+
+nv_path(r): a b [
+    concat(r): nv_data "/" a b
+]
+
+# ---------------------------------------------------------------- boards
+
+nv_add_board(r): name title about [
+    vec(threads): "NvThread"
+    new(r): "NvBoard" name title about threads
+    push(_): nv_boards r
+]
+
+nv_default_boards(r): [
+    set(r): "# name | title | description\n"
+    concat(r): r "prog | Programming | General programming: problems, ideas, tools and careers\n"
+    concat(r): r "c | C and systems | C, C++, Rust, assembly, kernels, compilers and linkers\n"
+    concat(r): r "lang | Languages | Language design, type systems, interpreters and virtual machines\n"
+    concat(r): r "web | Web and networks | HTTP, TLS, browsers, servers and protocols\n"
+    concat(r): r "ussr | USSR | The USSR shell, the RUND stack and the rest of the family\n"
+    concat(r): r "meta | Meta | Novgorod itself: bugs, rules and wishes\n"
+]
+
+nv_load_boards(r): text [
+    nvm_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        str_trim(line): line
+        nv_starts(comment): line "#"
+        if(_): {line != "" && comment = false} [
+            nvm_find(a): line "|" 0
+            nvm_find(b): line "|" {a + 1}
+            if(_): {a > 0 && b > a} [
+                slice(name): line 0 a
+                slice(title): line {a + 1} {b - a - 1}
+                len(ln): line
+                slice(about): line {b + 1} {ln - b - 1}
+                str_trim(name): name
+                str_lower(name): name
+                str_trim(title): title
+                str_trim(about): about
+                nv_board_name_ok(ok): name
+                if(_): ok [
+                    nv_add_board(_): name title about
+                ]
+            ]
+        ]
+        add(i): i 1
+    ]
+    len(r): nv_boards
+]
+
+nv_board_name_ok(r): name [
+    len(n): name
+    set(r): {n > 0 && n <= 16}
+    set(i): 0
+    while(_): {r && i < n} [
+        byte(b): name i
+        set(r): {(b >= 97 && b <= 122) || (b >= 48 && b <= 57)}
+        add(i): i 1
+    ]
+    # these names are routes of their own
+    if(_): {name = "p" || name = "i" || name = "t" || name = "static" || name = "post" || name = "markup"} [
+        set(r): false
+    ]
+]
+
+nv_board(r): name [
+    set(r): null
+    len(n): nv_boards
+    set(i): 0
+    while(_): {i < n} [
+        at(b): nv_boards i
+        getf(bn): b "name"
+        if(_): {bn = name} [
+            set(r): b
+            return(r): r
+        ]
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- posts
+
+# Posts are kept in nv_posts by number (new ones may land slightly out of
+# order when two arrive at once, so the search falls back to a scan).
+nv_find_post(r): no [
+    set(r): null
+    len(n): nv_posts
+    set(lo): 0
+    set(hi): {n - 1}
+    while(_): {lo <= hi} [
+        set(mid): {(lo + hi) >> 1}
+        at(p): nv_posts mid
+        getf(pn): p "no"
+        if(_): {pn = no} [
+            set(r): p
+            return(r): r
+        ]
+        if(_): {pn < no} [
+            set(lo): {mid + 1}
+        ]
+        else(_): [
+            set(hi): {mid - 1}
+        ]
+    ]
+    set(i): {n - 1}
+    while(_): {i >= 0 && i >= n - 64} [
+        at(p): nv_posts i
+        getf(pn): p "no"
+        if(_): {pn = no} [
+            set(r): p
+            return(r): r
+        ]
+        sub(i): i 1
+    ]
+]
+
+nv_post_file(r): p [
+    getf(no): p "no"
+    getf(board): p "board"
+    getf(thread): p "thread"
+    getf(t): p "time"
+    getf(subject): p "subject"
+    getf(image): p "image"
+    getf(text): p "text"
+    nv_s(nos): no
+    nv_s(ths): thread
+    nv_s(ts): t
+    concat(r): "no " nos "\nboard " board "\nthread " ths "\ntime " ts "\nsubject " subject "\n"
+    if(_): {image != ""} [
+        getf(iw): p "iw"
+        getf(ih): p "ih"
+        getf(tw): p "tw"
+        getf(th): p "th"
+        nv_s(iws): iw
+        nv_s(ihs): ih
+        nv_s(tws): tw
+        nv_s(ths): th
+        concat(r): r "image " image " " iws " " ihs " " tws " " ths "\n"
+    ]
+    concat(r): r "\n" text
+]
+
+nv_new_post(r): no board thread t subject text image iw ih tw th [
+    nvm_render(html): text
+    nvm_refs(refs): text
+    # from a template: russia.su's new takes at most ten fields
+    decode(r): "NvPost{no=0,board=``,thread=0,time=0,subject=``,text=``,html=``,image=``,iw=0,ih=0,tw=0,th=0,refs=[],alive=true,owner=null}"
+    setf(_): r "no" no
+    setf(_): r "board" board
+    setf(_): r "thread" thread
+    setf(_): r "time" t
+    setf(_): r "subject" subject
+    setf(_): r "text" text
+    setf(_): r "html" html
+    setf(_): r "image" image
+    setf(_): r "iw" iw
+    setf(_): r "ih" ih
+    setf(_): r "tw" tw
+    setf(_): r "th" th
+    setf(_): r "refs" refs
+]
+
+# A post from its file's text, or null when the file is damaged.
+nv_parse_post(r): file [
+    set(r): null
+    nvm_find(split): file "\n\n" 0
+    if(_): {split < 0} [
+        return(r): r
+    ]
+    slice(head): file 0 split
+    len(n): file
+    slice(text): file {split + 2} {n - split - 2}
+    set(no): null
+    set(board): ""
+    set(thread): null
+    set(t): null
+    set(subject): ""
+    set(image): ""
+    set(iw): 0
+    set(ih): 0
+    set(tw): 0
+    set(th): 0
+    nvm_lines(lines): head
+    len(count): lines
+    set(i): 0
+    while(_): {i < count} [
+        at(line): lines i
+        nvm_find(sp): line " " 0
+        len(ll): line
+        if(_): {sp > 0} [
+            slice(key): line 0 sp
+            slice(value): line {sp + 1} {ll - sp - 1}
+            if(_): {key = "no"} [
+                nv_int(no): value
+            ]
+            elif(_): {key = "board"} [
+                set(board): value
+            ]
+            elif(_): {key = "thread"} [
+                nv_int(thread): value
+            ]
+            elif(_): {key = "time"} [
+                nv_int(t): value
+            ]
+            elif(_): {key = "subject"} [
+                set(subject): value
+            ]
+            elif(_): {key = "image"} [
+                nv_words(w): value
+                len(wn): w
+                if(_): {wn = 5} [
+                    at(image): w 0
+                    at(x): w 1
+                    nv_int(iw): x
+                    at(x): w 2
+                    nv_int(ih): x
+                    at(x): w 3
+                    nv_int(tw): x
+                    at(x): w 4
+                    nv_int(th): x
+                ]
+            ]
+        ]
+        add(i): i 1
+    ]
+    if(_): {no = null || thread = null || t = null || board = "" || iw = null || ih = null || tw = null || th = null} [
+        return(r): r
+    ]
+    nv_new_post(r): no board thread t subject text image iw ih tw th
+]
+
+nv_words(r): s [
+    vec(r): ""
+    len(n): s
+    set(from): 0
+    while(_): {from < n} [
+        nvm_find(j): s " " from
+        if(_): {j < 0} [
+            set(j): n
+        ]
+        if(_): {j > from} [
+            slice(w): s from {j - from}
+            push(_): r w
+        ]
+        set(from): {j + 1}
+    ]
+]
+
+# Sorted copy of a vector of structs by an integer field (merge sort).
+nv_sort(r): v field desc [
+    len(n): v
+    if(_): {n < 2} [
+        set(r): v
+        return(r): r
+    ]
+    vec(a): ""
+    vec(b): ""
+    set(half): {n >> 1}
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {i < half} [
+            push(_): a x
+        ]
+        else(_): [
+            push(_): b x
+        ]
+        add(i): i 1
+    ]
+    nv_sort(a): a field desc
+    nv_sort(b): b field desc
+    vec(r): ""
+    len(na): a
+    len(nb): b
+    set(i): 0
+    set(j): 0
+    while(_): {i < na && j < nb} [
+        at(x): a i
+        at(y): b j
+        getf(kx): x field
+        getf(ky): y field
+        set(left): {kx <= ky}
+        if(_): desc [
+            set(left): {kx >= ky}
+        ]
+        if(_): left [
+            push(_): r x
+            add(i): i 1
+        ]
+        else(_): [
+            push(_): r y
+            add(j): j 1
+        ]
+    ]
+    while(_): {i < na} [
+        at(x): a i
+        push(_): r x
+        add(i): i 1
+    ]
+    while(_): {j < nb} [
+        at(y): b j
+        push(_): r y
+        add(j): j 1
+    ]
+]
+
+# Files the folder dir needs; the boards, posts and next number from it.
+nv_open(r): dir [
+    set(nv_data): dir
+    make_dir(_): dir
+    nv_path(posts_dir): "posts" ""
+    nv_path(img_dir): "img" ""
+    make_dir(_): posts_dir
+    make_dir(_): img_dir
+    nv_path(boards_file): "boards.txt" ""
+    file_exists(have): boards_file
+    if(_): {have = false} [
+        nv_default_boards(text):
+        writefile(_): boards_file text
+    ]
+    readfile(text): boards_file
+    nv_load_boards(count): text
+    if(_): {count = 0} [
+        nv_default_boards(text):
+        nv_load_boards(count): text
+    ]
+    if(_): {nv_db != ""} [
+        nv_db_load(r):
+        return(r): r
+    ]
+    list_dir(names): posts_dir
+    vec(loaded): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        nv_ends(is_post): name ".post"
+        nv_starts(tmp): name "."
+        if(_): {is_post && tmp = false} [
+            nv_path(file_path): "posts/" name
+            readfile(file): file_path
+            nv_parse_post(p): file
+            if(_): {p != null} [
+                push(_): loaded p
+            ]
+        ]
+        add(i): i 1
+    ]
+    nv_sort(sorted): loaded "no" false
+    len(n): sorted
+    set(top): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(p): sorted i
+        nv_attach(_): p
+        getf(no): p "no"
+        if(_): {no > top} [
+            set(top): no
+        ]
+        add(i): i 1
+    ]
+    set(next): {top + 1}
+    nv_path(seq_file): "seq" ""
+    file_exists(have): seq_file
+    if(_): have [
+        readfile(seq_text): seq_file
+        str_trim(seq_text): seq_text
+        nv_int(saved): seq_text
+        if(_): {saved != null && saved > next} [
+            set(next): saved
+        ]
+    ]
+    push(_): nv_seq next
+    len(r): nv_posts
+]
+
+# Puts a loaded or new post into its board and thread; false when they
+# are gone.
+nv_attach(r): p [
+    set(r): false
+    getf(board_name): p "board"
+    nv_board(board): board_name
+    if(_): {board = null} [
+        return(r): r
+    ]
+    getf(thread_no): p "thread"
+    getf(t): p "time"
+    if(_): {thread_no = 0} [
+        vec(posts): "NvPost"
+        push(_): posts p
+        new(thread): "NvThread" p posts t true
+        setf(_): p "owner" thread
+        getf(threads): board "threads"
+        push(_): threads thread
+        push(_): nv_posts p
+        set(r): true
+        return(r): r
+    ]
+    nv_find_post(op): thread_no
+    if(_): {op = null} [
+        return(r): r
+    ]
+    getf(op_thread): op "thread"
+    getf(op_board): op "board"
+    getf(op_alive): op "alive"
+    if(_): {op_thread != 0 || op_board != board_name || op_alive = false} [
+        return(r): r
+    ]
+    getf(thread): op "owner"
+    getf(posts): thread "posts"
+    push(_): posts p
+    setf(_): p "owner" thread
+    len(count): posts
+    if(_): {count <= nv_bump_limit} [
+        getf(bump): thread "bump"
+        if(_): {t > bump} [
+            setf(_): thread "bump" t
+        ]
+    ]
+    push(_): nv_posts p
+    set(r): true
+]
+
+# Gives p the next free number by renaming a temporary file into
+# posts/N.post (rename never replaces a file, so two posts can not share a
+# number); the number, or -1.
+nv_store(r): p [
+    set(r): {0 - 1}
+    if(_): {nv_db != ""} [
+        nv_db_store(r): p
+        return(r): r
+    ]
+    len(sn): nv_seq
+    at(no): nv_seq {sn - 1}
+    random64(tag):
+    nv_s(tags): tag
+    concat(tmp_name): ".tmp" tags
+    nv_path(tmp): "posts/" tmp_name
+    set(tries): 0
+    while(_): {tries < 1000} [
+        setf(_): p "no" no
+        nv_post_file(file): p
+        writefile(_): tmp file
+        nv_s(nos): no
+        concat(name): nos ".post"
+        nv_path(dest): "posts/" name
+        rename_path(failed): tmp dest
+        if(_): {failed = 0} [
+            push(_): nv_seq {no + 1}
+            nv_path(seq_file): "seq" ""
+            nv_s(next): {no + 1}
+            writefile(_): seq_file next
+            set(r): no
+            return(r): r
+        ]
+        add(no): no 1
+        add(tries): tries 1
+    ]
+    remove_file(_): tmp
+]
+
+nv_remove_thread(r): thread [
+    setf(_): thread "alive" false
+    if(_): {nv_db != ""} [
+        getf(op): thread "op"
+        getf(op_no): op "no"
+        nv_db_delete_thread(_): op_no
+    ]
+    getf(posts): thread "posts"
+    len(n): posts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): posts i
+        setf(_): p "alive" false
+        getf(no): p "no"
+        nv_s(nos): no
+        concat(name): nos ".post"
+        nv_path(f): "posts/" name
+        remove_file(_): f
+        concat(name): nos ".svg"
+        nv_path(f): "img/" name
+        remove_file(_): f
+        concat(name): nos "t.svg"
+        nv_path(f): "img/" name
+        remove_file(_): f
+        add(i): i 1
+    ]
+    set(r): n
+]
+
+# ---------------------------------------------------------------- PostgreSQL
+
+# With --db, posts live in a PostgreSQL table through Dubna; boards.txt and
+# the images stay in the data folder. Each write opens its own connection,
+# so request tasks never share one.
+
+nv_db_connect(r): [
+    dubna_connect(r): nv_db
+    if(_): {r = null} [
+        dubna_error(why):
+        concat(msg): "novgorod: " why "\n"
+        write_stderr(_): msg
+    ]
+]
+
+nv_db_check(r): res what [
+    dubna_ok(r): res
+    if(_): {r = false} [
+        getf(why): res "error"
+        concat(msg): "novgorod: " what ": " why "\n"
+        write_stderr(_): msg
+    ]
+]
+
+# Creates the table when needed and loads every post; the count, or -1.
+nv_db_load(r): [
+    set(r): {0 - 1}
+    dubna_init(_):
+    nv_db_connect(c):
+    if(_): {c = null} [
+        return(r): r
+    ]
+    concat(sql): "create table if not exists " nv_db_table " (no bigserial primary key, board text not null, thread bigint not null default 0, time bigint not null, subject text not null default '', body text not null default '', image text not null default '', iw integer not null default 0, ih integer not null default 0, tw integer not null default 0, th integer not null default 0); create index if not exists " nv_db_table "_thread on " nv_db_table " (thread)"
+    dubna_query(res): c sql
+    nv_db_check(ok): res "creating the table"
+    if(_): {ok = false} [
+        dubna_close(_): c
+        return(r): r
+    ]
+    concat(sql): "select no, board, thread, time, subject, body, image, iw, ih, tw, th from " nv_db_table " order by no"
+    dubna_query(res): c sql
+    dubna_close(_): c
+    nv_db_check(ok): res "loading posts"
+    if(_): {ok = false} [
+        return(r): r
+    ]
+    getf(rows): res "rows"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        vec(nums): ""
+        set(k): 0
+        while(_): {k < 11} [
+            at(cell): row k
+            if(_): {cell = null} [
+                set(cell): ""
+            ]
+            push(_): nums cell
+            add(k): k 1
+        ]
+        at(x): nums 0
+        nv_int(no): x
+        at(board): nums 1
+        at(x): nums 2
+        nv_int(thread): x
+        at(x): nums 3
+        nv_int(t): x
+        at(subject): nums 4
+        at(text): nums 5
+        at(image): nums 6
+        at(x): nums 7
+        nv_int(iw): x
+        at(x): nums 8
+        nv_int(ih): x
+        at(x): nums 9
+        nv_int(tw): x
+        at(x): nums 10
+        nv_int(th): x
+        if(_): {no != null && thread != null && t != null && iw != null && ih != null && tw != null && th != null} [
+            nv_new_post(p): no board thread t subject text image iw ih tw th
+            nv_attach(_): p
+        ]
+        add(i): i 1
+    ]
+    len(r): nv_posts
+]
+
+nv_db_store(r): p [
+    set(r): {0 - 1}
+    nv_db_connect(c):
+    if(_): {c = null} [
+        return(r): r
+    ]
+    vec(params): ""
+    getf(x): p "board"
+    push(_): params x
+    getf(x): p "thread"
+    push(_): params x
+    getf(x): p "time"
+    push(_): params x
+    getf(x): p "subject"
+    push(_): params x
+    getf(x): p "text"
+    push(_): params x
+    getf(x): p "image"
+    push(_): params x
+    getf(x): p "iw"
+    push(_): params x
+    getf(x): p "ih"
+    push(_): params x
+    getf(x): p "tw"
+    push(_): params x
+    getf(x): p "th"
+    push(_): params x
+    concat(sql): "insert into " nv_db_table " (board, thread, time, subject, body, image, iw, ih, tw, th) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning no"
+    dubna_exec(res): c sql params
+    dubna_close(_): c
+    nv_db_check(ok): res "saving a post"
+    if(_): ok [
+        dubna_value(v): res 0 0
+        nv_int(no): v
+        if(_): {no != null} [
+            setf(_): p "no" no
+            set(r): no
+        ]
+    ]
+]
+
+nv_db_delete_thread(r): op_no [
+    set(r): {0 - 1}
+    nv_db_connect(c):
+    if(_): {c = null} [
+        return(r): r
+    ]
+    vec(params): ""
+    push(_): params op_no
+    concat(sql): "delete from " nv_db_table " where no = $1 or thread = $1"
+    dubna_exec(res): c sql params
+    dubna_close(_): c
+    nv_db_check(ok): res "pruning a thread"
+    if(_): ok [
+        dubna_count(r): res
+    ]
+]
+
+# Live threads of a board, most recently bumped first.
+nv_threads(r): board [
+    getf(all): board "threads"
+    vec(live): ""
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(t): all i
+        getf(alive): t "alive"
+        if(_): alive [
+            push(_): live t
+        ]
+        add(i): i 1
+    ]
+    nv_sort(r): live "bump" true
+]
+
+nv_prune(r): board [
+    set(r): 0
+    nv_threads(live): board
+    len(n): live
+    set(i): nv_max_threads
+    while(_): {i < n} [
+        at(t): live i
+        nv_remove_thread(_): t
+        add(r): r 1
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- forms
+
+# The value of attribute key="..." in a part's header text, or "".
+nv_attr(r): head key [
+    set(r): ""
+    concat(needle): key "=\""
+    nvm_find(at): head needle 0
+    if(_): {at < 0} [
+        return(r): r
+    ]
+    len(kl): needle
+    set(from): {at + kl}
+    nvm_find(stop): head "\"" from
+    if(_): {stop > from} [
+        slice(r): head from {stop - from}
+    ]
+]
+
+nv_form_set(r): form name value [
+    set(r): true
+    if(_): {name = "board" || name = "thread" || name = "subject" || name = "text" || name = "website" || name = "mime"} [
+        setf(_): form name value
+    ]
+    elif(_): {name = "imgw" || name = "imgh" || name = "thw" || name = "thh" || name = "thumb" || name = "img"} [
+        setf(_): form name value
+    ]
+]
+
+# A multipart/form-data request as an NvForm, or null when it is not one.
+nv_parse_form(r): request [
+    set(r): null
+    uk_request_header(ctype): request "content-type"
+    str_lower(lower): ctype
+    nv_starts(multipart): lower "multipart/form-data"
+    if(_): {multipart = false} [
+        return(r): r
+    ]
+    nvm_find(bat): lower "boundary=" 0
+    if(_): {bat < 0} [
+        return(r): r
+    ]
+    len(cl): ctype
+    slice(boundary): ctype {bat + 9} {cl - bat - 9}
+    nvm_find(semi): boundary ";" 0
+    if(_): {semi >= 0} [
+        slice(boundary): boundary 0 semi
+    ]
+    str_trim(boundary): boundary
+    nv_starts(quoted): boundary "\""
+    len(bl): boundary
+    if(_): {quoted && bl > 2} [
+        slice(boundary): boundary 1 {bl - 2}
+    ]
+    len(bl): boundary
+    if(_): {bl = 0 || bl > 200} [
+        return(r): r
+    ]
+    uk_request_body(body): request
+    len(n): body
+    concat(delim): "--" boundary
+    concat(next_delim): "\r\n" delim
+    concat(end_mark): next_delim "--"
+    len(dl): delim
+    len(el): end_mark
+    decode(form): "NvForm{board=``,thread=``,subject=``,text=``,website=``,mime=``,imgw=``,imgh=``,thw=``,thh=``,thumb=``,img=``}"
+    nvm_find(pos): body delim 0
+    if(_): {pos < 0} [
+        return(r): r
+    ]
+    set(parts): 0
+    while(_): {pos >= 0 && parts < 40} [
+        set(after): {pos + dl}
+        if(_): {after + 2 > n} [
+            return(r): r
+        ]
+        slice(two): body after 2
+        if(_): {two = "--"} [
+            set(r): form
+            return(r): r
+        ]
+        if(_): {two != "\r\n"} [
+            return(r): r
+        ]
+        set(hstart): {after + 2}
+        nvm_find(hend): body "\r\n\r\n" hstart
+        if(_): {hend < 0} [
+            return(r): r
+        ]
+        slice(head): body hstart {hend - hstart}
+        nv_attr(name): head "name"
+        set(dstart): {hend + 4}
+        set(dend): {0 - 1}
+        if(_): {name = "img"} [
+            # the image comes last: its end is the closing delimiter, so
+            # the large value is never searched
+            nv_ends(closed): body end_mark
+            concat(end_crlf): end_mark "\r\n"
+            nv_ends(closed_crlf): body end_crlf
+            if(_): closed [
+                set(dend): {n - el}
+            ]
+            if(_): closed_crlf [
+                set(dend): {n - el - 2}
+            ]
+        ]
+        if(_): {dend < dstart} [
+            nvm_find(dend): body next_delim dstart
+        ]
+        if(_): {dend < 0} [
+            return(r): r
+        ]
+        slice(value): body dstart {dend - dstart}
+        nv_form_set(_): form name value
+        set(pos): {dend + 2}
+        add(parts): parts 1
+    ]
+]
+
+# Whether s is base64 (A-Z a-z 0-9 + /, = padding) of at most max bytes.
+nv_base64_ok(r): s max [
+    len(n): s
+    set(r): {n > 0 && n <= max && n % 4 = 0}
+    if(_): {r = false} [
+        return(r): r
+    ]
+    set(body_end): n
+    byte(b): s {n - 1}
+    if(_): {b = 61} [
+        set(body_end): {n - 1}
+        byte(b): s {n - 2}
+        if(_): {b = 61} [
+            set(body_end): {n - 2}
+        ]
+    ]
+    set(i): 0
+    while(_): {i < body_end} [
+        byte(b): s i
+        if(_): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 47 && b <= 57) || b = 43} [
+            add(i): i 1
+        ]
+        else(_): [
+            set(r): false
+            return(r): r
+        ]
+    ]
+]
+
+nv_dim(r): s max [
+    nv_int(r): s
+    if(_): {r = null} [
+        return(r): r
+    ]
+    if(_): {r < 1 || r > max} [
+        set(r): null
+    ]
+]
+
+nv_svg(r): mime w h data [
+    nv_s(ws): w
+    nv_s(hs): h
+    concat(r): "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" ws "\" height=\"" hs "\" viewBox=\"0 0 " ws " " hs "\"><image width=\"" ws "\" height=\"" hs "\" href=\"data:image/" mime ";base64," data "\"/></svg>"
+]
+
+# Rate limit over the whole forum: true when another post may go in now.
+nv_rate_ok(r): now [
+    set(r): true
+    len(n): nv_log
+    if(_): {n < nv_rate} [
+        return(r): r
+    ]
+    at(t): nv_log {n - nv_rate}
+    set(r): {now - t >= 60}
+]
+
+# Checks and stores a submitted post: "" and the new post in out (a vector),
+# or the reason it was refused.
+nv_submit(r): form out [
+    set(r): ""
+    getf(website): form "website"
+    if(_): {website != ""} [
+        set(r): "That looked like spam."
+        return(r): r
+    ]
+    getf(board_name): form "board"
+    nv_board(board): board_name
+    if(_): {board = null} [
+        set(r): "No such board."
+        return(r): r
+    ]
+    getf(thread_text): form "thread"
+    set(thread_no): 0
+    if(_): {thread_text != "" && thread_text != "0"} [
+        nv_int(thread_no): thread_text
+        if(_): {thread_no = null} [
+            set(r): "No such thread."
+            return(r): r
+        ]
+        nv_find_post(op): thread_no
+        set(ok): false
+        if(_): {op != null} [
+            getf(op_thread): op "thread"
+            getf(op_board): op "board"
+            getf(op_alive): op "alive"
+            set(ok): {op_thread = 0 && op_board = board_name && op_alive}
+        ]
+        if(_): {ok = false} [
+            set(r): "That thread is gone."
+            return(r): r
+        ]
+    ]
+    getf(text): form "text"
+    nvm_clean(text): text
+    len(text_len): text
+    if(_): {text_len > nv_max_text} [
+        nv_s(max): nv_max_text
+        concat(r): "The text is longer than " max " bytes."
+        return(r): r
+    ]
+    set(subject): ""
+    if(_): {thread_no = 0} [
+        getf(subject): form "subject"
+        nvm_clean(subject): subject
+        nvm_lines(sl): subject
+        at(subject): sl 0
+        str_trim(subject): subject
+    ]
+    len(subject_len): subject
+    if(_): {subject_len > nv_max_subject} [
+        set(r): "The subject is too long."
+        return(r): r
+    ]
+    getf(img): form "img"
+    set(image): ""
+    set(iw): 0
+    set(ih): 0
+    set(tw): 0
+    set(th): 0
+    if(_): {img != ""} [
+        getf(mime): form "mime"
+        if(_): {mime != "jpeg" && mime != "png"} [
+            set(r): "Images are sent as JPEG or PNG."
+            return(r): r
+        ]
+        nv_base64_ok(ok): img nv_max_image
+        if(_): {ok = false} [
+            set(r): "The image is too large or damaged."
+            return(r): r
+        ]
+        nv_starts(jpeg): img "/9j/"
+        nv_starts(png): img "iVBORw0KGgo"
+        if(_): {(mime = "jpeg" && jpeg = false) || (mime = "png" && png = false)} [
+            set(r): "The image does not match its type."
+            return(r): r
+        ]
+        getf(thumb): form "thumb"
+        nv_base64_ok(ok): thumb nv_max_thumb
+        nv_starts(tjpeg): thumb "/9j/"
+        if(_): {ok = false || tjpeg = false} [
+            set(r): "The thumbnail is missing or damaged."
+            return(r): r
+        ]
+        getf(x): form "imgw"
+        nv_dim(iw): x 20000
+        getf(x): form "imgh"
+        nv_dim(ih): x 20000
+        getf(x): form "thw"
+        nv_dim(tw): x 400
+        getf(x): form "thh"
+        nv_dim(th): x 400
+        if(_): {iw = null || ih = null || tw = null || th = null} [
+            set(r): "The image size is missing."
+            return(r): r
+        ]
+        set(image): mime
+    ]
+    if(_): {text = "" && image = ""} [
+        set(r): "A post needs text or an image."
+        return(r): r
+    ]
+    time(now):
+    nv_rate_ok(ok): now
+    if(_): {ok = false} [
+        set(r): "The forum is busy; wait a minute and post again."
+        return(r): r
+    ]
+    push(_): nv_log now
+    nv_new_post(p): 0 board_name thread_no now subject text image iw ih tw th
+    nv_store(no): p
+    if(_): {no < 0} [
+        set(r): "The post could not be saved."
+        return(r): r
+    ]
+    if(_): {image != ""} [
+        nv_s(nos): no
+        nv_svg(svg): image iw ih img
+        concat(name): nos ".svg"
+        nv_path(f): "img/" name
+        writefile(_): f svg
+        nv_svg(svg): "jpeg" tw th thumb
+        concat(name): nos "t.svg"
+        nv_path(f): "img/" name
+        writefile(_): f svg
+    ]
+    nv_attach(attached): p
+    if(_): {attached = false} [
+        set(r): "That thread is gone."
+        return(r): r
+    ]
+    if(_): {thread_no = 0} [
+        nv_prune(_): board
+    ]
+    push(_): out p
+]
+
+# ---------------------------------------------------------------- pages
+
+nv_nav(r): [
+    set(r): "<nav class=\"boards\"><a class=\"home\" href=\"/\">"
+    nvm_escape(title): nv_title
+    concat(r): r title "</a>"
+    len(n): nv_boards
+    set(i): 0
+    while(_): {i < n} [
+        at(b): nv_boards i
+        getf(name): b "name"
+        getf(btitle): b "title"
+        nvm_escape(btitle): btitle
+        concat(r): r " <a href=\"/" name "/\" title=\"" btitle "\">/" name "/</a>"
+        add(i): i 1
+    ]
+    concat(r): r " <a class=\"help\" href=\"/markup\">markup</a></nav>\n"
+]
+
+nv_page(r): title body [
+    nvm_escape(t): title
+    nv_nav(nav):
+    set(r): "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+    concat(r): r "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+    concat(r): r "<meta name=\"referrer\" content=\"same-origin\">"
+    concat(r): r "<title>" t "</title><link rel=\"stylesheet\" href=\"/static/novgorod.css\">"
+    concat(r): r "<script src=\"/static/novgorod.js\" defer></script></head>\n<body>\n" nav
+    concat(r): r "<main>\n" body "</main>\n"
+    concat(r): r "<footer>Novgorod on the RUND stack: Ryazan, Ukraine, Novgorod, Dubna. Anonymous; no accounts, no tracking.</footer>\n</body></html>\n"
+]
+
+nv_html_headers(r): [
+    set(r): "Content-Security-Policy: default-src 'none'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'\nReferrer-Policy: same-origin\nX-Frame-Options: DENY\nCache-Control: no-store\n"
+    if(_): {nv_hsts && nv_tls} [
+        concat(r): r "Strict-Transport-Security: max-age=31536000\n"
+    ]
+]
+
+nv_html(r): status title body [
+    nv_page(page): title body
+    nv_html_headers(headers):
+    uk_response_ex(r): status "text/html; charset=utf-8" headers page
+]
+
+nv_error(r): status message [
+    nvm_escape(m): message
+    concat(body): "<section class=\"notice\"><h1>" status "</h1><p>" m "</p><p><a href=\"/\" data-back>Back</a> · <a href=\"/\">Home</a></p></section>\n"
+    nv_html(r): status status body
+]
+
+nv_redirect(r): location [
+    concat(headers): "Location: " location "\nCache-Control: no-store\n"
+    uk_response_ex(r): "303 See Other" "text/plain; charset=utf-8" headers "See Other\n"
+]
+
+nv_thread_url(r): board no [
+    nv_s(nos): no
+    concat(r): "/" board "/res/" nos
+]
+
+nv_post_html(r): p preview backlinks [
+    getf(no): p "no"
+    getf(board): p "board"
+    getf(thread): p "thread"
+    getf(t): p "time"
+    getf(subject): p "subject"
+    getf(html): p "html"
+    getf(image): p "image"
+    nv_s(nos): no
+    set(op_no): thread
+    set(cls): "post reply"
+    if(_): {thread = 0} [
+        set(op_no): no
+        set(cls): "post op"
+    ]
+    nv_thread_url(turl): board op_no
+    nv_date(date): t
+    concat(r): "<article class=\"" cls "\" id=\"p" nos "\" data-no=\"" nos "\"><header class=\"meta\">"
+    if(_): {subject != ""} [
+        nvm_escape(se): subject
+        concat(r): r "<span class=\"subject\">" se "</span> "
+    ]
+    concat(r): r "<span class=\"name\">Anonymous</span> <span class=\"date\">" date "</span> "
+    concat(r): r "<a class=\"no\" href=\"" turl "#p" nos "\">No.</a><a class=\"no quote-me\" href=\"" turl "#q" nos "\" data-quote=\"" nos "\">" nos "</a>"
+    if(_): {thread = 0 && preview} [
+        concat(r): r " <a class=\"open\" href=\"" turl "\">[Reply]</a>"
+    ]
+    len(bn): backlinks
+    if(_): {bn > 0} [
+        concat(r): r " <span class=\"backlinks\">"
+        set(i): 0
+        while(_): {i < bn} [
+            at(b): backlinks i
+            nv_s(bs): b
+            concat(r): r "<a class=\"ref\" href=\"/p/" bs "\" data-ref=\"" bs "\">&gt;&gt;" bs "</a> "
+            add(i): i 1
+        ]
+        concat(r): r "</span>"
+    ]
+    concat(r): r "</header>"
+    if(_): {image != ""} [
+        getf(iw): p "iw"
+        getf(ih): p "ih"
+        getf(tw): p "tw"
+        getf(th): p "th"
+        nv_s(iws): iw
+        nv_s(ihs): ih
+        nv_s(tws): tw
+        nv_s(ths): th
+        concat(r): r "<figure class=\"image\"><a href=\"/i/" nos ".svg\" target=\"_blank\" data-expand data-w=\"" iws "\" data-h=\"" ihs "\">"
+        concat(r): r "<img src=\"/t/" nos ".svg\" width=\"" tws "\" height=\"" ths "\" alt=\"image of post " nos "\" loading=\"lazy\"></a>"
+        concat(r): r "<figcaption>" image ", " iws "×" ihs "</figcaption></figure>"
+    ]
+    concat(r): r "<div class=\"text\">" html "</div></article>\n"
+]
+
+# Post numbers that quote each post of a thread, by index.
+nv_backlinks(r): posts [
+    vec(r): ""
+    len(n): posts
+    set(i): 0
+    while(_): {i < n} [
+        vec(empty): ""
+        push(_): r empty
+        add(i): i 1
+    ]
+    set(j): 0
+    while(_): {j < n} [
+        at(p): posts j
+        getf(pno): p "no"
+        getf(refs): p "refs"
+        len(rn): refs
+        set(k): 0
+        set(last): {0 - 1}
+        while(_): {k < rn} [
+            at(ref): refs k
+            # a binary search in the thread (numbers increase)
+            set(lo): 0
+            set(hi): {j - 1}
+            set(found): {0 - 1}
+            while(_): {lo <= hi && found < 0} [
+                set(mid): {(lo + hi) >> 1}
+                at(q): posts mid
+                getf(qno): q "no"
+                if(_): {qno = ref} [
+                    set(found): mid
+                ]
+                elif(_): {qno < ref} [
+                    set(lo): {mid + 1}
+                ]
+                else(_): [
+                    set(hi): {mid - 1}
+                ]
+            ]
+            if(_): {found >= 0 && found != last} [
+                at(list): r found
+                push(_): list pno
+                set(last): found
+            ]
+            add(k): k 1
+        ]
+        add(j): j 1
+    ]
+]
+
+nv_form_html(r): board thread [
+    nv_s(ts): thread
+    set(legend): "New thread"
+    if(_): {thread != 0} [
+        set(legend): "Reply"
+    ]
+    nv_s(max_text): nv_max_text
+    set(r): "<form class=\"post-form\" id=\"reply\" action=\"/post\" method=\"post\" enctype=\"multipart/form-data\" accept-charset=\"utf-8\">"
+    concat(r): r "<fieldset><legend>" legend "</legend>"
+    concat(r): r "<input type=\"hidden\" name=\"board\" value=\"" board "\"><input type=\"hidden\" name=\"thread\" value=\"" ts "\">"
+    if(_): {thread = 0} [
+        concat(r): r "<input class=\"subject\" name=\"subject\" maxlength=\"100\" placeholder=\"Subject\" autocomplete=\"off\">"
+    ]
+    concat(r): r "<textarea name=\"text\" rows=\"6\" maxlength=\"" max_text "\" placeholder=\"**bold** *italic* `code` ```lang code block``` >quote >>123\"></textarea>"
+    concat(r): r "<input class=\"trap\" name=\"website\" tabindex=\"-1\" autocomplete=\"off\" aria-hidden=\"true\">"
+    concat(r): r "<div class=\"row\"><input type=\"file\" accept=\"image/png,image/jpeg,image/gif,image/webp\" data-image>"
+    concat(r): r "<button type=\"submit\">Post</button> <a href=\"/markup\" target=\"_blank\">markup help</a></div>"
+    concat(r): r "<p class=\"hint\" data-status>Images are re-encoded in your browser, which removes their metadata.</p>"
+    concat(r): r "<noscript><p class=\"hint\">Attaching an image needs JavaScript; text posts work without it.</p></noscript>"
+    concat(r): r "<input type=\"hidden\" name=\"mime\"><input type=\"hidden\" name=\"imgw\"><input type=\"hidden\" name=\"imgh\">"
+    concat(r): r "<input type=\"hidden\" name=\"thw\"><input type=\"hidden\" name=\"thh\"><input type=\"hidden\" name=\"thumb\"><input type=\"hidden\" name=\"img\">"
+    concat(r): r "</fieldset></form>\n"
+]
+
+# A thread on a board page: the opening post and its last replies.
+nv_thread_preview(r): thread [
+    getf(posts): thread "posts"
+    len(n): posts
+    vec(none): ""
+    at(op): posts 0
+    set(r): "<section class=\"thread\">"
+    nv_post_html(h): op true none
+    concat(r): r h
+    set(from): {n - nv_preview}
+    if(_): {from < 1} [
+        set(from): 1
+    ]
+    if(_): {from > 1} [
+        nv_s(omitted): {from - 1}
+        getf(no): op "no"
+        getf(board): op "board"
+        nv_thread_url(turl): board no
+        concat(r): r "<p class=\"omitted\">" omitted " replies omitted. <a href=\"" turl "\">Open the thread</a></p>"
+    ]
+    set(i): from
+    while(_): {i < n} [
+        at(p): posts i
+        nv_post_html(h): p true none
+        concat(r): r h
+        add(i): i 1
+    ]
+    concat(r): r "</section>\n"
+]
+
+nv_board_header(r): board [
+    getf(name): board "name"
+    getf(title): board "title"
+    getf(about): board "about"
+    nvm_escape(title): title
+    nvm_escape(about): about
+    concat(r): "<header class=\"board\"><h1>/" name "/ " title "</h1><p>" about "</p>"
+    concat(r): r "<p class=\"views\"><a href=\"/" name "/\">index</a> · <a href=\"/" name "/catalog\">catalog</a></p></header>\n"
+]
+
+nv_board_page(r): board page [
+    nv_threads(live): board
+    len(n): live
+    set(from): {page * nv_page_size}
+    if(_): {from >= n && page > 0} [
+        nv_error(r): "404 Not Found" "There is no such page."
+        return(r): r
+    ]
+    getf(name): board "name"
+    nv_board_header(body): board
+    nv_form_html(form): name 0
+    concat(body): body form "<hr>\n"
+    set(i): from
+    while(_): {i < n && i < from + nv_page_size} [
+        at(t): live i
+        nv_thread_preview(h): t
+        concat(body): body h "<hr>\n"
+        add(i): i 1
+    ]
+    if(_): {n = 0} [
+        concat(body): body "<p class=\"empty\">No threads yet. Start one.</p>\n"
+    ]
+    set(pages): 0
+    while(_): {pages * nv_page_size < n} [
+        add(pages): pages 1
+    ]
+    if(_): {pages > 1} [
+        concat(body): body "<nav class=\"pages\">"
+    ]
+    set(k): 0
+    while(_): {k < pages && pages > 1} [
+        nv_s(ks): k
+        if(_): {k = page} [
+            concat(body): body "<b>" ks "</b> "
+        ]
+        elif(_): {k = 0} [
+            concat(body): body "<a href=\"/" name "/\">0</a> "
+        ]
+        else(_): [
+            concat(body): body "<a href=\"/" name "/?page=" ks "\">" ks "</a> "
+        ]
+        add(k): k 1
+    ]
+    if(_): {pages > 1} [
+        concat(body): body "</nav>\n"
+    ]
+    getf(title): board "title"
+    concat(page_title): "/" name "/ " title " - " nv_title
+    nv_html(r): "200 OK" page_title body
+]
+
+nv_excerpt(r): text count [
+    utf8_count(chars): text
+    set(r): text
+    if(_): {chars > count} [
+        utf8_index(cut): text count
+        slice(r): text 0 cut
+        concat(r): r "…"
+    ]
+    nvm_escape(r): r
+]
+
+nv_catalog_page(r): board [
+    nv_threads(live): board
+    len(n): live
+    getf(name): board "name"
+    nv_board_header(body): board
+    concat(body): body "<div class=\"catalog\">"
+    set(i): 0
+    while(_): {i < n} [
+        at(t): live i
+        getf(op): t "op"
+        getf(posts): t "posts"
+        len(pc): posts
+        nv_s(replies): {pc - 1}
+        getf(no): op "no"
+        nv_thread_url(turl): name no
+        getf(image): op "image"
+        getf(subject): op "subject"
+        getf(text): op "text"
+        concat(body): body "<a class=\"tile\" href=\"" turl "\">"
+        if(_): {image != ""} [
+            nv_s(nos): no
+            concat(body): body "<img src=\"/t/" nos ".svg\" alt=\"\" loading=\"lazy\">"
+        ]
+        concat(body): body "<span class=\"count\">R: " replies "</span>"
+        if(_): {subject != ""} [
+            nvm_escape(se): subject
+            concat(body): body "<b>" se "</b>"
+        ]
+        nv_excerpt(ex): text 160
+        concat(body): body "<span>" ex "</span></a>"
+        add(i): i 1
+    ]
+    concat(body): body "</div>\n"
+    if(_): {n = 0} [
+        concat(body): body "<p class=\"empty\">No threads yet.</p>\n"
+    ]
+    concat(page_title): "/" name "/ catalog - " nv_title
+    nv_html(r): "200 OK" page_title body
+]
+
+nv_thread_page(r): board no [
+    getf(name): board "name"
+    nv_find_post(op): no
+    set(ok): false
+    if(_): {op != null} [
+        getf(op_thread): op "thread"
+        getf(op_board): op "board"
+        getf(op_alive): op "alive"
+        set(ok): {op_thread = 0 && op_board = name && op_alive}
+    ]
+    if(_): {ok = false} [
+        nv_error(r): "404 Not Found" "This thread does not exist, or it fell off the board."
+        return(r): r
+    ]
+    getf(thread): op "owner"
+    getf(posts): thread "posts"
+    nv_backlinks(back): posts
+    nv_board_header(body): board
+    concat(body): body "<section class=\"thread full\">"
+    len(n): posts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): posts i
+        at(bl): back i
+        nv_post_html(h): p false bl
+        concat(body): body h
+        add(i): i 1
+    ]
+    concat(body): body "</section>\n"
+    if(_): {n > nv_bump_limit} [
+        concat(body): body "<p class=\"omitted\">Bump limit reached: replies no longer lift this thread.</p>\n"
+    ]
+    nv_form_html(form): name no
+    concat(body): body "<hr>\n" form
+    getf(subject): op "subject"
+    set(title): subject
+    if(_): {title = ""} [
+        getf(text): op "text"
+        nvm_lines(tl): text
+        at(title): tl 0
+        utf8_count(tc): title
+        if(_): {tc > 60} [
+            utf8_index(cut): title 60
+            slice(title): title 0 cut
+        ]
+    ]
+    concat(title): "/" name "/ " title " - " nv_title
+    nv_html(r): "200 OK" title body
+]
+
+nv_home_page(r): [
+    len(total): nv_posts
+    concat(body): "<header class=\"board\"><h1>" nv_title "</h1><p>An anonymous image forum for programmers. No accounts, no names, no tracking.</p></header>\n"
+    concat(body): body "<table class=\"board-list\"><thead><tr><th>Board</th><th>About</th><th>Threads</th></tr></thead><tbody>"
+    len(n): nv_boards
+    set(i): 0
+    while(_): {i < n} [
+        at(b): nv_boards i
+        getf(name): b "name"
+        getf(title): b "title"
+        getf(about): b "about"
+        nvm_escape(title): title
+        nvm_escape(about): about
+        nv_threads(live): b
+        len(tn): live
+        nv_s(tns): tn
+        concat(body): body "<tr><td><a href=\"/" name "/\">/" name "/ " title "</a></td><td>" about "</td><td>" tns "</td></tr>"
+        add(i): i 1
+    ]
+    concat(body): body "</tbody></table>\n"
+    concat(body): body "<section class=\"rules\"><h2>Rules</h2><ol>"
+    concat(body): body "<li>Programming and computing only. Off-topic threads fall off the board.</li>"
+    concat(body): body "<li>No anime. Post diagrams, screenshots, code and hardware instead.</li>"
+    concat(body): body "<li>Nobody's personal data, nothing illegal, no spam.</li>"
+    concat(body): body "<li>Format code with markup: <code>`inline`</code> and fenced <code>```</code> blocks. See <a href=\"/markup\">markup</a>.</li>"
+    concat(body): body "</ol></section>\n"
+    concat(body): body "<section class=\"recent\"><h2>Latest posts</h2>"
+    set(shown): 0
+    set(i): {total - 1}
+    while(_): {i >= 0 && shown < 8} [
+        at(p): nv_posts i
+        getf(alive): p "alive"
+        if(_): alive [
+            getf(no): p "no"
+            getf(board): p "board"
+            getf(text): p "text"
+            nv_s(nos): no
+            nv_excerpt(ex): text 100
+            if(_): {ex = ""} [
+                set(ex): "(image)"
+            ]
+            concat(body): body "<p><a class=\"ref\" href=\"/p/" nos "\">/" board "/ " nos "</a> " ex "</p>"
+            add(shown): shown 1
+        ]
+        sub(i): i 1
+    ]
+    if(_): {shown = 0} [
+        concat(body): body "<p class=\"empty\">Nothing posted yet.</p>"
+    ]
+    concat(body): body "</section>\n"
+    nv_html(r): "200 OK" nv_title body
+]
+
+nv_markup_example(r): source [
+    nvm_escape(src): source
+    nvm_render(out): source
+    concat(r): "<tr><td><pre>" src "</pre></td><td class=\"text\">" out "</td></tr>"
+]
+
+nv_markup_page(r): [
+    set(body): "<header class=\"board\"><h1>Markup</h1><p>Novgorod markup is a small, markdown-like syntax. Everything else is shown as typed.</p></header>\n"
+    concat(body): body "<table class=\"markup\"><thead><tr><th>You type</th><th>You get</th></tr></thead><tbody>"
+    nv_markup_example(x): "**bold**, *italic*, ~~strike~~"
+    concat(body): body x
+    nv_markup_example(x): "||spoiler|| (hover or tap)"
+    concat(body): body x
+    nv_markup_example(x): "inline `code` with `*no* markup`"
+    concat(body): body x
+    nv_markup_example(x): "```c\nint main(void) {\n    return *argv != 0;\n}\n```"
+    concat(body): body x
+    nv_markup_example(x): "> a quoted line\nyour answer"
+    concat(body): body x
+    nv_markup_example(x): ">>1 links to post 1\n>>>/c/ links to a board"
+    concat(body): body x
+    nv_markup_example(x): "https://example.org/ becomes a link"
+    concat(body): body x
+    nv_markup_example(x): "\\*not italic\\* and \\`not code\\`"
+    concat(body): body x
+    concat(body): body "</tbody></table>\n"
+    nv_s(mt): nv_max_text
+    concat(body): body "<p>Posts hold up to " mt " bytes of text. Images: JPEG, PNG, GIF or WebP, re-encoded by your browser to JPEG or PNG (an animated GIF keeps its first frame). Click a number to quote that post.</p>\n"
+    concat(title): "Markup - " nv_title
+    nv_html(r): "200 OK" title body
+]
+
+# ---------------------------------------------------------------- routes
+
+nv_image(r): name thumb [
+    set(r): null
+    nv_ends(svg): name ".svg"
+    if(_): {svg = false} [
+        return(r): r
+    ]
+    len(n): name
+    slice(digits): name 0 {n - 4}
+    nv_int(no): digits
+    if(_): {no = null} [
+        return(r): r
+    ]
+    nv_s(nos): no
+    concat(file): nos ".svg"
+    if(_): thumb [
+        concat(file): nos "t.svg"
+    ]
+    nv_path(path): "img/" file
+    file_exists(have): path
+    if(_): {have = false} [
+        return(r): r
+    ]
+    readfile(svg_text): path
+    uk_response_ex(r): "200 OK" "image/svg+xml" "Content-Security-Policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'\nCache-Control: public, max-age=31536000, immutable\n" svg_text
+]
+
+nv_static_file(r): name [
+    set(r): null
+    if(_): {name = "novgorod.css"} [
+        uk_response_ex(r): "200 OK" "text/css; charset=utf-8" "Cache-Control: public, max-age=3600\n" nv_css
+    ]
+    if(_): {name = "novgorod.js"} [
+        uk_response_ex(r): "200 OK" "text/javascript; charset=utf-8" "Cache-Control: public, max-age=3600\n" nv_js
+    ]
+]
+
+# Parts of a path split at "/", empty ones left out.
+nv_segments(r): path [
+    vec(r): ""
+    len(n): path
+    set(from): 0
+    while(_): {from < n} [
+        nvm_find(j): path "/" from
+        if(_): {j < 0} [
+            set(j): n
+        ]
+        if(_): {j > from} [
+            slice(w): path from {j - from}
+            push(_): r w
+        ]
+        set(from): {j + 1}
+    ]
+]
+
+nv_query_int(r): query key default [
+    set(r): default
+    concat(needle): key "="
+    nvm_find(at): query needle 0
+    if(_): {at < 0} [
+        return(r): r
+    ]
+    len(kl): needle
+    len(n): query
+    set(from): {at + kl}
+    nvm_find(stop): query "&" from
+    if(_): {stop < 0} [
+        set(stop): n
+    ]
+    slice(v): query from {stop - from}
+    nv_int(x): v
+    if(_): {x != null} [
+        set(r): x
+    ]
+]
+
+# False for a post another site's page sent: Sec-Fetch-Site says so, or
+# the Origin header names another host. Pages send no referrer to other
+# sites, so the browser still fills in Origin for our own forms.
+nv_same_origin(r): request [
+    set(r): true
+    uk_request_header(site): request "sec-fetch-site"
+    if(_): {site = "cross-site" || site = "same-site"} [
+        set(r): false
+        return(r): r
+    ]
+    uk_request_header(origin): request "origin"
+    if(_): {origin = ""} [
+        return(r): r
+    ]
+    uk_request_header(host): request "host"
+    concat(a): "https://" host
+    concat(b): "http://" host
+    set(r): {origin = a || origin = b}
+]
+
+nv_handle_post(r): request [
+    nv_same_origin(same): request
+    if(_): {same = false} [
+        nv_error(r): "403 Forbidden" "Posts must come from this forum's own pages."
+        return(r): r
+    ]
+    nv_parse_form(form): request
+    if(_): {form = null} [
+        nv_error(r): "400 Bad Request" "The form could not be read."
+        return(r): r
+    ]
+    vec(out): ""
+    nv_submit(why): form out
+    if(_): {why != ""} [
+        nv_error(r): "400 Bad Request" why
+        return(r): r
+    ]
+    at(p): out 0
+    getf(no): p "no"
+    getf(board): p "board"
+    getf(thread): p "thread"
+    set(op_no): thread
+    if(_): {thread = 0} [
+        set(op_no): no
+    ]
+    nv_thread_url(turl): board op_no
+    nv_s(nos): no
+    concat(location): turl "#p" nos
+    nv_redirect(r): location
+]
+
+nv_handle(r): method target request [
+    nvm_find(q): target "?" 0
+    set(path): target
+    set(query): ""
+    if(_): {q >= 0} [
+        len(tl): target
+        slice(path): target 0 q
+        slice(query): target {q + 1} {tl - q - 1}
+    ]
+    if(_): {method = "POST"} [
+        if(_): {path = "/post"} [
+            nv_handle_post(r): request
+            return(r): r
+        ]
+        nv_error(r): "405 Method Not Allowed" "Only /post takes posts."
+        return(r): r
+    ]
+    if(_): {method != "GET" && method != "HEAD"} [
+        nv_error(r): "405 Method Not Allowed" "This method is not supported."
+        return(r): r
+    ]
+    nv_segments(seg): path
+    len(n): seg
+    nv_ends(slash): path "/"
+    if(_): {n = 0} [
+        nv_home_page(r):
+        return(r): r
+    ]
+    at(first): seg 0
+    if(_): {n = 1 && first = "markup"} [
+        nv_markup_page(r):
+        return(r): r
+    ]
+    if(_): {n = 2} [
+        at(second): seg 1
+        set(r): null
+        if(_): {first = "static"} [
+            nv_static_file(r): second
+        ]
+        elif(_): {first = "i"} [
+            nv_image(r): second false
+        ]
+        elif(_): {first = "t"} [
+            nv_image(r): second true
+        ]
+        elif(_): {first = "p"} [
+            nv_int(no): second
+            set(r): null
+            if(_): {no != null} [
+                nv_find_post(p): no
+                if(_): {p != null} [
+                    getf(alive): p "alive"
+                    if(_): alive [
+                        getf(board): p "board"
+                        getf(thread): p "thread"
+                        set(op_no): thread
+                        if(_): {thread = 0} [
+                            set(op_no): no
+                        ]
+                        nv_thread_url(turl): board op_no
+                        concat(location): turl "#p" second
+                        nv_redirect(r): location
+                    ]
+                ]
+            ]
+        ]
+        if(_): {r != null} [
+            return(r): r
+        ]
+    ]
+    nv_board(board): first
+    if(_): {board != null} [
+        if(_): {n = 1 && slash} [
+            nv_query_int(page): query "page" 0
+            nv_board_page(r): board page
+            return(r): r
+        ]
+        if(_): {n = 1} [
+            concat(location): "/" first "/"
+            nv_redirect(r): location
+            return(r): r
+        ]
+        at(second): seg 1
+        if(_): {n = 2 && second = "catalog"} [
+            nv_catalog_page(r): board
+            return(r): r
+        ]
+        if(_): {n = 3 && second = "res"} [
+            at(third): seg 2
+            nv_int(no): third
+            if(_): {no != null} [
+                nv_thread_page(r): board no
+                return(r): r
+            ]
+        ]
+    ]
+    nv_error(r): "404 Not Found" "Nothing lives here."
+]
+
+uk_route(result): method target raw_request [
+    nv_handle(result): method target raw_request
+    if(_): {method = "HEAD"} [
+        # the same head, no body
+        nvm_find(head_end): result "\r\n\r\n" 0
+        slice(result): result 0 {head_end + 4}
+    ]
+]
+
+# Reads novgorod.css and novgorod.js from dir; false when they are missing.
+nv_load_static(r): dir [
+    concat(css_path): dir "/novgorod.css"
+    concat(js_path): dir "/novgorod.js"
+    file_exists(have_css): css_path
+    file_exists(have_js): js_path
+    set(r): {have_css && have_js}
+    if(_): r [
+        readfile(nv_css): css_path
+        readfile(nv_js): js_path
+        set(nv_static): dir
+    ]
+]
+
+$ifdef __MAIN__
+init(ret): arg_cnt arg_vec [
+    nv_types(_):
+    nv_setup(_):
+    set(host): "127.0.0.1"
+    set(port): 8443
+    set(data): "novgorod-data"
+    set(static_dir): ""
+    set(cert): ""
+    set(secret): ""
+    set(i): 0
+    while(_): {i < arg_cnt} [
+        at(a): arg_vec i
+        set(v): ""
+        if(_): {i + 1 < arg_cnt} [
+            at(v): arg_vec {i + 1}
+        ]
+        if(_): {a = "--http"} [
+            set(nv_tls): false
+        ]
+        elif(_): {a = "--hsts"} [
+            set(nv_hsts): true
+        ]
+        elif(_): {a = "--host"} [
+            set(host): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--port"} [
+            nv_int(port): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--data"} [
+            set(data): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--db"} [
+            set(nv_db): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--static"} [
+            set(static_dir): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--cert"} [
+            set(cert): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--secret"} [
+            set(secret): v
+            add(i): i 1
+        ]
+        else(_): [
+            concat(msg): "novgorod: unknown option " a "\n"
+            write_stderr(_): msg
+            set(ret): 2
+            return(ret): ret
+        ]
+        add(i): i 1
+    ]
+    if(_): {port = null} [
+        write_stderr(_): "novgorod: --port takes a number\n"
+        set(ret): 2
+        return(ret): ret
+    ]
+    set(found): false
+    if(_): {static_dir != ""} [
+        nv_load_static(found): static_dir
+    ]
+    else(_): [
+        nv_load_static(found): "src/novgorod/static"
+        if(_): {found = false} [
+            nv_load_static(found): "static"
+        ]
+        if(_): {found = false} [
+            concat(guess): data "/static"
+            nv_load_static(found): guess
+        ]
+    ]
+    if(_): {found = false} [
+        write_stderr(_): "novgorod: novgorod.css and novgorod.js not found; pass --static DIR\n"
+        set(ret): 1
+        return(ret): ret
+    ]
+    nv_open(count): data
+    if(_): {count < 0} [
+        write_stderr(_): "novgorod: could not open the database\n"
+        set(ret): 1
+        return(ret): ret
+    ]
+    nv_s(cs): count
+    concat(msg): "novgorod: " cs " posts in " data "\n"
+    print(_): msg
+    if(_): {nv_tls = false} [
+        uk_server(ret): host port
+        return(ret): ret
+    ]
+    if(_): {cert = ""} [
+        set(cert): "tests/ryazan/localhost.p12"
+        set(secret): "ryazan-test"
+        print(_): "novgorod: serving the public test certificate (tests/ryazan); pass --cert for a real one\n"
+    ]
+    uk_server_tls(ret): host port cert secret
+]
+$endif

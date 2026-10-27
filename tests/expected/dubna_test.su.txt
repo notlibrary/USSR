@@ -1,0 +1,59 @@
+PASS sha256 empty
+PASS sha256 two blocks
+PASS md5
+PASS hmac
+PASS pbkdf2
+PASS pbkdf2 40 bytes
+PASS bytes_text
+PASS bytes_text range
+PASS bytes_text zero
+PASS put ints
+PASS int32
+PASS int32 negative
+PASS int16
+PASS base64
+PASS base64 padding
+PASS unbase64
+PASS unbase64 refuses
+PASS startup
+PASS ssl request
+PASS query
+PASS extended
+PASS md5 answer
+PASS scram first
+PASS scram proof
+PASS scram server signature
+PASS scram foreign nonce
+PASS scram bad salt
+PASS nonce length
+PASS nonces differ
+PASS error text
+PASS sqlstate
+PASS columns
+PASS column types
+PASS value by name
+PASS null value
+PASS no such row
+PASS row count
+PASS affected
+PASS ok
+PASS param int
+PASS param bool
+PASS param null
+PASS kv host
+PASS kv port
+PASS kv dbname
+PASS kv quoted
+PASS kv sslmode
+PASS url user
+PASS url password
+PASS url host
+PASS url port
+PASS url dbname
+PASS url sslmode
+PASS url host only
+PASS url default port
+
+--- stderr ---
+
+--- exit 0 ---
