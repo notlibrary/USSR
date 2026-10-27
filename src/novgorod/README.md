@@ -40,8 +40,15 @@ ussr src/novgorod/novgorod.su --host 0.0.0.0 --port 443 --cert forum.p12 --secre
 | `--static DIR` | found | folder with `novgorod.css` and `novgorod.js` (looks in `src/novgorod/static`, `static`, `DIR/static`) |
 | `--cert FILE` `--secret PASS` | test certificate | PKCS#12 certificate and its password (OpenSSL: PEM chain and key file too) |
 | `--http` | off | plain HTTP, for a TLS-terminating proxy in front |
+| `--prefix /board` | none | serve under a path: a reverse proxy strips it, Novgorod writes it into links and redirects |
 | `--hsts` | off | send `Strict-Transport-Security` |
 | `--db CONNINFO` | files | keep posts in PostgreSQL through Dubna: `host=... dbname=... user=... password=...` or `postgres://user:pass@host/db?sslmode=require` |
+
+## Behind Apache at /board
+
+[deploy/](deploy/) installs a board with PostgreSQL storage on an Ubuntu
+server that already runs Apache: one script, see
+[deploy/README.md](deploy/README.md).
 
 ## Boards
 

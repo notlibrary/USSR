@@ -218,6 +218,11 @@ nvm_url_len(r): s i [
 
 nvm_inline(r): s depth [
     set(r): ""
+    # nvm_prefix: a path the links start with ("/board" behind a proxy)
+    set(pre): nvm_prefix
+    if(_): {pre = null} [
+        set(pre): ""
+    ]
     len(n): s
     set(i): 0
     set(run): 0
@@ -296,7 +301,7 @@ nvm_inline(r): s depth [
                         ]
                     ]
                     slice(no): s {i + 2} {j - i - 2}
-                    concat(out): "<a class=\"ref\" href=\"/p/" no "\" data-ref=\"" no "\">&gt;&gt;" no "</a>"
+                    concat(out): "<a class=\"ref\" href=\"" pre "/p/" no "\" data-ref=\"" no "\">&gt;&gt;" no "</a>"
                     set(skip): {j - i}
                 ]
                 if(_): {third = 62 && i + 4 < n} [
@@ -316,7 +321,7 @@ nvm_inline(r): s depth [
                             byte(c): s j
                             if(_): {c = 47} [
                                 slice(board): s {i + 4} {j - i - 4}
-                                concat(out): "<a class=\"ref\" href=\"/" board "/\">&gt;&gt;&gt;/" board "/</a>"
+                                concat(out): "<a class=\"ref\" href=\"" pre "/" board "/\">&gt;&gt;&gt;/" board "/</a>"
                                 set(skip): {j - i + 1}
                             ]
                         ]

@@ -60,6 +60,17 @@ PASS pruned file
 PASS pruned image
 PASS kept
 PASS rate limit
+PASS prefix nav
+PASS prefix assets
+PASS prefix form
+PASS prefix post link
+PASS prefix redirect
+PASS prefix board redirect
+PASS prefix markup
+PASS prefix ok
+PASS prefix trailing slash
+PASS prefix no slash
+PASS prefix quote
 
 --- stderr ---
 

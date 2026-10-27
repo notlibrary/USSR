@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+- `--prefix /board` serves the board under a path behind a reverse proxy.
+- `deploy/`: install.sh, an Apache snippet and a systemd unit for a board
+  with PostgreSQL storage behind an existing Apache.
+
 ## 0.2.0
 - `--db CONNINFO` keeps posts in PostgreSQL through Dubna; images and
   boards.txt stay in the data folder.

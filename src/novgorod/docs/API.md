@@ -36,6 +36,7 @@ Limits are globals that `nv_setup` sets and you may change before
 `nv_rate` (30 posts a minute, forum-wide), `nv_max_text` (8000 bytes),
 `nv_max_subject` (100), `nv_max_image` and `nv_max_thumb` (base64
 characters), `uk_max_body` (2600000 bytes per request), `nv_title`,
+`nv_prefix` and `nvm_prefix` (the `--prefix` path, `""` by default),
 `nv_db` (a Dubna conninfo; `""` keeps posts in files) and `nv_db_table`
 (`novgorod_posts`).
 

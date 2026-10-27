@@ -1,0 +1,21 @@
+# Novgorod behind Apache; install.sh fills in the @...@ parts.
+[Unit]
+Description=Novgorod board (USSR, RUND stack)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@
+# PGPASSWORD for Dubna, kept out of the command line (ps shows that)
+EnvironmentFile=@ENV_FILE@
+Environment=USSR_MOSCOW=
+ExecStart=@COMMAND@ "@CONNINFO@"
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
