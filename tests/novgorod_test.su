@@ -307,6 +307,31 @@ engine_checks(r): [
     post(resp): "meta" "0" "" "one" ""
     post(resp): "meta" "0" "" "two" ""
     has(_): "rate limit" resp "wait a minute"
+
+    # behind a reverse proxy at /board
+    set(nv_prefix): "/board"
+    set(nvm_prefix): "/board"
+    fetch(page): "/c/res/5"
+    has(_): "prefix nav" page "<a href=\"/board/c/\" title="
+    has(_): "prefix assets" page "href=\"/board/static/novgorod.css\""
+    has(_): "prefix form" page "action=\"/board/post\""
+    has(_): "prefix post link" page "href=\"/board/c/res/5#p5\""
+    fetch(resp): "/p/5"
+    has(_): "prefix redirect" resp "Location: /board/c/res/5#p5\r\n"
+    fetch(resp): "/c"
+    has(_): "prefix board redirect" resp "Location: /board/c/\r\n"
+    nvm_inline(h): ">>42 and >>>/c/" 0
+    eq(_): "prefix markup" h "<a class=\"ref\" href=\"/board/p/42\" data-ref=\"42\">&gt;&gt;42</a> and <a class=\"ref\" href=\"/board/c/\">&gt;&gt;&gt;/c/</a>"
+    nv_prefix_ok(ok): "/board"
+    eq(_): "prefix ok" ok true
+    nv_prefix_ok(ok): "/board/"
+    eq(_): "prefix trailing slash" ok false
+    nv_prefix_ok(ok): "board"
+    eq(_): "prefix no slash" ok false
+    nv_prefix_ok(ok): "/bo\"ard"
+    eq(_): "prefix quote" ok false
+    set(nv_prefix): ""
+    set(nvm_prefix): ""
     set(r): 0
 ]
 

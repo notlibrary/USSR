@@ -12,6 +12,8 @@
 #     --cert FILE --secret PASS            server certificate (PKCS#12);
 #                         without one the public test certificate is used
 #     --http              plain HTTP instead of HTTPS
+#     --prefix /board     serve under a path behind a reverse proxy that
+#                         strips it (links and redirects carry it)
 #     --hsts              send Strict-Transport-Security
 #
 # Posts are anonymous and numbered across the whole forum. Bodies use
@@ -26,7 +28,7 @@ $include "../ukraine/ukraine.su"
 $include "markup.su"
 $include "../dubna/dubna.su"
 
-global(_): nv_db nv_db_table uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
+global(_): nv_prefix nvm_prefix nv_db nv_db_table uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
 global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_max_thumb
 
 # ---------------------------------------------------------------- setup
@@ -55,6 +57,8 @@ nv_setup(r): [
     set(uk_max_body): 2600000
     set(nv_hsts): false
     set(nv_db): ""
+    set(nv_prefix): ""
+    set(nvm_prefix): ""
     set(nv_db_table): "novgorod_posts"
     set(nv_tls): true
     set(nv_css): ""
@@ -64,6 +68,27 @@ nv_setup(r): [
     vec(nv_seq): ""
     vec(nv_log): ""
     set(r): 0
+]
+
+# Whether p is a usable --prefix: "/x", "/x/y" (no trailing slash).
+nv_prefix_ok(r): p [
+    len(n): p
+    set(r): {n >= 2 && n <= 64}
+    if(_): {r = false} [
+        return(r): r
+    ]
+    byte(first): p 0
+    byte(last): p {n - 1}
+    if(_): {first != 47 || last = 47} [
+        set(r): false
+        return(r): r
+    ]
+    set(i): 0
+    while(_): {r && i < n} [
+        byte(b): p i
+        set(r): {(b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) || b = 45 || b = 95 || b = 47}
+        add(i): i 1
+    ]
 ]
 
 nv_s(r): n [
@@ -1118,7 +1143,7 @@ nv_submit(r): form out [
 # ---------------------------------------------------------------- pages
 
 nv_nav(r): [
-    set(r): "<nav class=\"boards\"><a class=\"home\" href=\"/\">"
+    concat(r): "<nav class=\"boards\"><a class=\"home\" href=\"" nv_prefix "/\">"
     nvm_escape(title): nv_title
     concat(r): r title "</a>"
     len(n): nv_boards
@@ -1128,10 +1153,10 @@ nv_nav(r): [
         getf(name): b "name"
         getf(btitle): b "title"
         nvm_escape(btitle): btitle
-        concat(r): r " <a href=\"/" name "/\" title=\"" btitle "\">/" name "/</a>"
+        concat(r): r " <a href=\"" nv_prefix "/" name "/\" title=\"" btitle "\">/" name "/</a>"
         add(i): i 1
     ]
-    concat(r): r " <a class=\"help\" href=\"/markup\">markup</a></nav>\n"
+    concat(r): r " <a class=\"help\" href=\"" nv_prefix "/markup\">markup</a></nav>\n"
 ]
 
 nv_page(r): title body [
@@ -1140,8 +1165,8 @@ nv_page(r): title body [
     set(r): "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
     concat(r): r "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
     concat(r): r "<meta name=\"referrer\" content=\"same-origin\">"
-    concat(r): r "<title>" t "</title><link rel=\"stylesheet\" href=\"/static/novgorod.css\">"
-    concat(r): r "<script src=\"/static/novgorod.js\" defer></script></head>\n<body>\n" nav
+    concat(r): r "<title>" t "</title><link rel=\"stylesheet\" href=\"" nv_prefix "/static/novgorod.css\">"
+    concat(r): r "<script src=\"" nv_prefix "/static/novgorod.js\" defer></script></head>\n<body>\n" nav
     concat(r): r "<main>\n" body "</main>\n"
     concat(r): r "<footer>Novgorod on the RUND stack: Ryazan, Ukraine, Novgorod, Dubna. Anonymous; no accounts, no tracking.</footer>\n</body></html>\n"
 ]
@@ -1161,7 +1186,7 @@ nv_html(r): status title body [
 
 nv_error(r): status message [
     nvm_escape(m): message
-    concat(body): "<section class=\"notice\"><h1>" status "</h1><p>" m "</p><p><a href=\"/\" data-back>Back</a> · <a href=\"/\">Home</a></p></section>\n"
+    concat(body): "<section class=\"notice\"><h1>" status "</h1><p>" m "</p><p><a href=\"" nv_prefix "/\" data-back>Back</a> · <a href=\"" nv_prefix "/\">Home</a></p></section>\n"
     nv_html(r): status status body
 ]
 
@@ -1172,7 +1197,7 @@ nv_redirect(r): location [
 
 nv_thread_url(r): board no [
     nv_s(nos): no
-    concat(r): "/" board "/res/" nos
+    concat(r): nv_prefix "/" board "/res/" nos
 ]
 
 nv_post_html(r): p preview backlinks [
@@ -1209,7 +1234,7 @@ nv_post_html(r): p preview backlinks [
         while(_): {i < bn} [
             at(b): backlinks i
             nv_s(bs): b
-            concat(r): r "<a class=\"ref\" href=\"/p/" bs "\" data-ref=\"" bs "\">&gt;&gt;" bs "</a> "
+            concat(r): r "<a class=\"ref\" href=\"" nv_prefix "/p/" bs "\" data-ref=\"" bs "\">&gt;&gt;" bs "</a> "
             add(i): i 1
         ]
         concat(r): r "</span>"
@@ -1224,8 +1249,8 @@ nv_post_html(r): p preview backlinks [
         nv_s(ihs): ih
         nv_s(tws): tw
         nv_s(ths): th
-        concat(r): r "<figure class=\"image\"><a href=\"/i/" nos ".svg\" target=\"_blank\" data-expand data-w=\"" iws "\" data-h=\"" ihs "\">"
-        concat(r): r "<img src=\"/t/" nos ".svg\" width=\"" tws "\" height=\"" ths "\" alt=\"image of post " nos "\" loading=\"lazy\"></a>"
+        concat(r): r "<figure class=\"image\"><a href=\"" nv_prefix "/i/" nos ".svg\" target=\"_blank\" data-expand data-w=\"" iws "\" data-h=\"" ihs "\">"
+        concat(r): r "<img src=\"" nv_prefix "/t/" nos ".svg\" width=\"" tws "\" height=\"" ths "\" alt=\"image of post " nos "\" loading=\"lazy\"></a>"
         concat(r): r "<figcaption>" image ", " iws "×" ihs "</figcaption></figure>"
     ]
     concat(r): r "<div class=\"text\">" html "</div></article>\n"
@@ -1287,7 +1312,7 @@ nv_form_html(r): board thread [
         set(legend): "Reply"
     ]
     nv_s(max_text): nv_max_text
-    set(r): "<form class=\"post-form\" id=\"reply\" action=\"/post\" method=\"post\" enctype=\"multipart/form-data\" accept-charset=\"utf-8\">"
+    concat(r): "<form class=\"post-form\" id=\"reply\" action=\"" nv_prefix "/post\" method=\"post\" enctype=\"multipart/form-data\" accept-charset=\"utf-8\">"
     concat(r): r "<fieldset><legend>" legend "</legend>"
     concat(r): r "<input type=\"hidden\" name=\"board\" value=\"" board "\"><input type=\"hidden\" name=\"thread\" value=\"" ts "\">"
     if(_): {thread = 0} [
@@ -1296,7 +1321,7 @@ nv_form_html(r): board thread [
     concat(r): r "<textarea name=\"text\" rows=\"6\" maxlength=\"" max_text "\" placeholder=\"**bold** *italic* `code` ```lang code block``` >quote >>123\"></textarea>"
     concat(r): r "<input class=\"trap\" name=\"website\" tabindex=\"-1\" autocomplete=\"off\" aria-hidden=\"true\">"
     concat(r): r "<div class=\"row\"><input type=\"file\" accept=\"image/png,image/jpeg,image/gif,image/webp\" data-image>"
-    concat(r): r "<button type=\"submit\">Post</button> <a href=\"/markup\" target=\"_blank\">markup help</a></div>"
+    concat(r): r "<button type=\"submit\">Post</button> <a href=\"" nv_prefix "/markup\" target=\"_blank\">markup help</a></div>"
     concat(r): r "<p class=\"hint\" data-status>Images are re-encoded in your browser, which removes their metadata.</p>"
     concat(r): r "<noscript><p class=\"hint\">Attaching an image needs JavaScript; text posts work without it.</p></noscript>"
     concat(r): r "<input type=\"hidden\" name=\"mime\"><input type=\"hidden\" name=\"imgw\"><input type=\"hidden\" name=\"imgh\">"
@@ -1341,7 +1366,7 @@ nv_board_header(r): board [
     nvm_escape(title): title
     nvm_escape(about): about
     concat(r): "<header class=\"board\"><h1>/" name "/ " title "</h1><p>" about "</p>"
-    concat(r): r "<p class=\"views\"><a href=\"/" name "/\">index</a> · <a href=\"/" name "/catalog\">catalog</a></p></header>\n"
+    concat(r): r "<p class=\"views\"><a href=\"" nv_prefix "/" name "/\">index</a> · <a href=\"" nv_prefix "/" name "/catalog\">catalog</a></p></header>\n"
 ]
 
 nv_board_page(r): board page [
@@ -1380,10 +1405,10 @@ nv_board_page(r): board page [
             concat(body): body "<b>" ks "</b> "
         ]
         elif(_): {k = 0} [
-            concat(body): body "<a href=\"/" name "/\">0</a> "
+            concat(body): body "<a href=\"" nv_prefix "/" name "/\">0</a> "
         ]
         else(_): [
-            concat(body): body "<a href=\"/" name "/?page=" ks "\">" ks "</a> "
+            concat(body): body "<a href=\"" nv_prefix "/" name "/?page=" ks "\">" ks "</a> "
         ]
         add(k): k 1
     ]
@@ -1427,7 +1452,7 @@ nv_catalog_page(r): board [
         concat(body): body "<a class=\"tile\" href=\"" turl "\">"
         if(_): {image != ""} [
             nv_s(nos): no
-            concat(body): body "<img src=\"/t/" nos ".svg\" alt=\"\" loading=\"lazy\">"
+            concat(body): body "<img src=\"" nv_prefix "/t/" nos ".svg\" alt=\"\" loading=\"lazy\">"
         ]
         concat(body): body "<span class=\"count\">R: " replies "</span>"
         if(_): {subject != ""} [
@@ -1512,7 +1537,7 @@ nv_home_page(r): [
         nv_threads(live): b
         len(tn): live
         nv_s(tns): tn
-        concat(body): body "<tr><td><a href=\"/" name "/\">/" name "/ " title "</a></td><td>" about "</td><td>" tns "</td></tr>"
+        concat(body): body "<tr><td><a href=\"" nv_prefix "/" name "/\">/" name "/ " title "</a></td><td>" about "</td><td>" tns "</td></tr>"
         add(i): i 1
     ]
     concat(body): body "</tbody></table>\n"
@@ -1520,7 +1545,7 @@ nv_home_page(r): [
     concat(body): body "<li>Programming and computing only. Off-topic threads fall off the board.</li>"
     concat(body): body "<li>No anime. Post diagrams, screenshots, code and hardware instead.</li>"
     concat(body): body "<li>Nobody's personal data, nothing illegal, no spam.</li>"
-    concat(body): body "<li>Format code with markup: <code>`inline`</code> and fenced <code>```</code> blocks. See <a href=\"/markup\">markup</a>.</li>"
+    concat(body): body "<li>Format code with markup: <code>`inline`</code> and fenced <code>```</code> blocks. See <a href=\"" nv_prefix "/markup\">markup</a>.</li>"
     concat(body): body "</ol></section>\n"
     concat(body): body "<section class=\"recent\"><h2>Latest posts</h2>"
     set(shown): 0
@@ -1537,7 +1562,7 @@ nv_home_page(r): [
             if(_): {ex = ""} [
                 set(ex): "(image)"
             ]
-            concat(body): body "<p><a class=\"ref\" href=\"/p/" nos "\">/" board "/ " nos "</a> " ex "</p>"
+            concat(body): body "<p><a class=\"ref\" href=\"" nv_prefix "/p/" nos "\">/" board "/ " nos "</a> " ex "</p>"
             add(shown): shown 1
         ]
         sub(i): i 1
@@ -1787,7 +1812,7 @@ nv_handle(r): method target request [
             return(r): r
         ]
         if(_): {n = 1} [
-            concat(location): "/" first "/"
+            concat(location): nv_prefix "/" first "/"
             nv_redirect(r): location
             return(r): r
         ]
@@ -1864,6 +1889,17 @@ init(ret): arg_cnt arg_vec [
         ]
         elif(_): {a = "--data"} [
             set(data): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--prefix"} [
+            nv_prefix_ok(ok): v
+            if(_): {ok = false} [
+                write_stderr(_): "novgorod: --prefix is a path like /board (letters, digits, - _ /)\n"
+                set(ret): 2
+                return(ret): ret
+            ]
+            set(nv_prefix): v
+            set(nvm_prefix): v
             add(i): i 1
         ]
         elif(_): {a = "--db"} [
