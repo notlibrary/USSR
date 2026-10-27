@@ -1,0 +1,45 @@
+# A Kremlin desktop in a window, on the folder kremlin-example in the
+# directory you start it from.
+#     ussr src/kremlin/examples/hello.su
+$include "../kremlin.su"
+
+pointer(result): canvas x y [
+    kremlinclick(_): x y
+]
+
+double(result): canvas x y [
+    kremlindouble(_): x y
+]
+
+menu(result): canvas x y [
+    kremlinmenu(_): x y
+]
+
+wheel(result): canvas x y direction [
+    kremlinwheel(_): direction
+]
+
+key(result): window k [
+    kremlinkey(_): k
+]
+
+keyup(result): window k [
+    kremlinkeyup(_): k
+]
+
+init(result): arg_count arg_values [
+    getcwd(here):
+    km_slashes(here): here
+    km_join(root): here "kremlin-example"
+    kremlinreset(_): root
+    createwindow(window): "Kremlin example" KM_WIDTH KM_HEIGHT
+    kremlininitialize(canvas): window
+    on(_): canvas "pointer" "pointer"
+    on(_): canvas "double" "double"
+    on(_): canvas "menu" "menu"
+    on(_): canvas "wheel" "wheel"
+    on(_): window "key" "key"
+    on(_): window "keyup" "keyup"
+    show(_): window
+    run(_):
+]

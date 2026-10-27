@@ -100,7 +100,13 @@ EXTRA_DIST = \
 	klin/docs/API.md \
 	klin/examples/hello.su \
 	klin/tests/TESTPLAN.md \
+	kremlin/kremlin.su \
 	kremlin/box.uno \
+	kremlin/README.md \
+	kremlin/CHANGELOG.md \
+	kremlin/docs/API.md \
+	kremlin/examples/hello.su \
+	kremlin/tests/TESTPLAN.md \
 	novgorod/box.uno \
 	ryazan/box.uno \
 	ryazan/ryazan.su \

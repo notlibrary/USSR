@@ -1,0 +1,378 @@
+# Kremlin desktop GUI test. Needs a GLFW-enabled ussr and a display; the
+# window is never shown. Run from the repository root:
+#     ussr tests/gui/kremlin_test.su
+# Clicks, double-clicks and right-clicks icons, the panel and menus, types
+# in dialogs and uses the keyboard on a scratch desktop in
+# tests/kremlin_gui_tmp, all through Petersburg's input path. Nothing is
+# started (km_dryrun). Prints PASS or FAIL per check.
+$include "../../src/kremlin/kremlin.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 40
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 300} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    sleep(_): 20
+    set(r): 0
+]
+
+# The hit area [x y w h tag] with this tag, or null.
+find_hit(r): tag [
+    set(r): null
+    set(_fh_hits): km_hits?
+    len(_fh_n): _fh_hits
+    set(_fh_i): 0
+    while(_): {_fh_i < _fh_n} [
+        at(_fh_h): _fh_hits _fh_i
+        at(_fh_t): _fh_h 4
+        if(_): {_fh_t = tag} [ set(r): _fh_h ]
+        set(_fh_i): {_fh_i + 1}
+    ]
+]
+
+# Injects event at the middle of the hit area with this tag; false when
+# there is none.
+at_tag(r): event tag [
+    find_hit(_at_h): tag
+    set(r): false
+    if(_): {_at_h != null} [
+        at(_at_x): _at_h 0
+        at(_at_y): _at_h 1
+        at(_at_w): _at_h 2
+        at(_at_hh): _at_h 3
+        km_div(_at_px): {_at_x * 2 + _at_w} 2
+        km_div(_at_py): {_at_y * 2 + _at_hh} 2
+        set(_at_c): km_canvas?
+        inject(_): _at_c event _at_px _at_py 0
+        settle(_):
+        set(r): true
+    ]
+]
+
+click_tag(r): tag [
+    at_tag(r): "pointer" tag
+    if(_): {r = false} [
+        concat(_ct_line): "FAIL no hit area " tag
+        print(_): _ct_line
+    ]
+]
+
+# The middle of icon i's cell.
+icon_event(r): event i [
+    set(_ie_m): km_metrics?
+    set(_ie_scroll): km_scroll?
+    km_cell(_ie_xy): i _ie_m _ie_scroll
+    at(_ie_x): _ie_xy 0
+    at(_ie_y): _ie_xy 1
+    set(_ie_c): km_canvas?
+    inject(_): _ie_c event {_ie_x + 48} {_ie_y + 30} 0
+    settle(_):
+    set(r): 0
+]
+
+point(r): event x y [
+    set(_pt_c): km_canvas?
+    inject(_): _pt_c event x y 0
+    settle(_):
+    set(r): 0
+]
+
+key(r): code [
+    set(_ky_w): km_window?
+    inject(_): _ky_w "key" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+keyup(r): code [
+    set(_ku_w): km_window?
+    inject(_): _ku_w "keyup" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+# Types text in a dialog: letters, digits and blanks.
+type(r): text [
+    len(_ty_n): text
+    set(_ty_i): 0
+    while(_): {_ty_i < _ty_n} [
+        byte(_ty_b): text _ty_i
+        if(_): {_ty_b >= 65 && _ty_b <= 90} [
+            key(_): 340
+            key(_): _ty_b
+            keyup(_): 340
+        ]
+        elif(_): {_ty_b >= 97 && _ty_b <= 122} [ key(_): {_ty_b - 32} ]
+        else(_): [ key(_): _ty_b ]
+        set(_ty_i): {_ty_i + 1}
+    ]
+    set(r): 0
+]
+
+ctrl(r): code [
+    key(_): 341
+    key(_): code
+    keyup(_): 341
+    set(r): 0
+]
+
+last_launch(r): [
+    set(_ll_log): km_launched?
+    len(_ll_n): _ll_log
+    set(r): ""
+    if(_): {_ll_n > 0} [
+        at(_ll_p): _ll_log {_ll_n - 1}
+        at(_ll_t): _ll_p 1
+        at(_ll_a): _ll_p 2
+        concat(r): _ll_t " " _ll_a
+    ]
+]
+
+contains(r): s needle [
+    str_find(_cn_i): s needle 0
+    set(r): {_cn_i >= 0}
+]
+
+test_pointer(result): canvas x y [
+    kremlinclick(_): x y
+]
+
+test_double(result): canvas x y [
+    kremlindouble(_): x y
+]
+
+test_menu(result): canvas x y [
+    kremlinmenu(_): x y
+]
+
+test_wheel(result): canvas x y direction [
+    kremlinwheel(_): direction
+]
+
+test_key(result): window k [
+    kremlinkey(_): k
+]
+
+test_keyup(result): window k [
+    kremlinkeyup(_): k
+]
+
+init(result): arg_count arg_values [
+    getcwd(cwd):
+    km_slashes(cwd): cwd
+    km_join(root): cwd "tests/kremlin_gui_tmp"
+    kremlinreset(_): root
+    set(km_dryrun): true!
+    createwindow(window): "Kremlin test" KM_WIDTH KM_HEIGHT
+    kremlininitialize(canvas): window
+    on(_): canvas "pointer" "test_pointer"
+    on(_): canvas "double" "test_double"
+    on(_): canvas "menu" "test_menu"
+    on(_): canvas "wheel" "test_wheel"
+    on(_): window "key" "test_key"
+    on(_): window "keyup" "test_keyup"
+    run(_):
+
+    canvascount(shapes): canvas
+    check(_): "the desktop is drawn" {shapes > 60} true
+    find_hit(h): "start"
+    check(_): "the KREMLIN button" {h != null} true
+    find_hit(h): "clock"
+    check(_): "the clock" {h != null} true
+    find_hit(h): "pin:3"
+    check(_): "four pins on the panel" {h != null} true
+
+    # select and open with the mouse
+    icon_event(_): "pointer" 1
+    kremlinselected(s):
+    check(_): "click selects" s "Documents/"
+    point(_): "pointer" 600 300
+    kremlinselected(s):
+    check(_): "click on nothing clears the selection" s ""
+    icon_event(_): "double" 0
+    set(d): km_dir?
+    km_ends_with(ok): d "/Apps"
+    check(_): "double-click opens a folder" ok true
+    kremlinitems(items):
+    len(n): items
+    check(_): "the Apps folder has five launchers" n 5
+    click_tag(_): "back"
+    kremlinselected(s):
+    check(_): "Back returns and selects the folder" s "Apps/"
+
+    # the folder menu and a dialog typed into
+    point(_): "menu" 600 300
+    set(p): km_popup?
+    check(_): "right-click on nothing: the folder menu" p "folder"
+    key(_): 264
+    key(_): 257
+    set(dlg): km_dialog?
+    check(_): "New folder asks for a name" dlg "input"
+    set(v): km_dlg_value?
+    check(_): "with a suggestion" v "New folder"
+    key(_): 341
+    key(_): 259
+    keyup(_): 341
+    type(_): "Music 1"
+    set(v): km_dlg_value?
+    check(_): "typing in the dialog" v "Music 1"
+    key(_): 257
+    kremlinselected(s):
+    check(_): "Enter creates the folder" s "Music 1/"
+
+    # rename with F2, refused names keep the dialog open
+    key(_): 291
+    set(v): km_dlg_value?
+    check(_): "F2 offers the old name" v "Music 1"
+    ctrl(_): 259
+    type(_): "Documents"
+    key(_): 257
+    set(dlg): km_dialog?
+    check(_): "a taken name keeps the dialog" dlg "input"
+    set(e): km_dlg_error?
+    check(_): "and says why" e "Something with that name is already here"
+    ctrl(_): 259
+    type(_): "Songs"
+    click_tag(_): "dialog-ok"
+    kremlinselected(s):
+    check(_): "rename with the OK button" s "Songs/"
+
+    # the item menu by right-click, and delete with its confirmation
+    kremlinselect(_): "Songs/"
+    km_index_of(i): "Songs/"
+    icon_event(_): "menu" i
+    set(p): km_popup?
+    check(_): "right-click on an icon: its menu" p "item"
+    set(items): km_popup_items?
+    at(first): items 0
+    at(first): first 0
+    check(_): "Open comes first" first "Open"
+    key(_): 256
+    set(p): km_popup?
+    check(_): "Escape closes the menu" p ""
+    key(_): 261
+    set(dlg): km_dialog?
+    check(_): "Del asks first" dlg "confirm"
+    click_tag(_): "dialog-ok"
+    km_index_of(i): "Songs/"
+    check(_): "the folder is deleted" i {0 - 1}
+
+    # the KREMLIN menu starts an app
+    click_tag(_): "start"
+    set(p): km_popup?
+    check(_): "the KREMLIN button opens the menu" p "start"
+    click_tag(_): "item:0"
+    last_launch(l):
+    contains(ok): l "klin.su"
+    check(_): "the first app is the calculator" ok true
+    set(p): km_popup?
+    check(_): "the menu closes" p ""
+    set(st): km_status?
+    check(_): "the panel says what started" st "Starting Calculator"
+
+    # keyboard: the menu, letters, arrows
+    key(_): 299
+    set(p): km_popup?
+    check(_): "F10 opens the menu" p "start"
+    key(_): 69
+    set(sel): km_popup_sel?
+    set(items): km_popup_items?
+    at(it): items sel
+    at(it): it 0
+    check(_): "a letter picks a menu item" it "Exit Kremlin"
+    key(_): 257
+    set(dlg): km_dialog?
+    check(_): "Exit asks first" dlg "confirm"
+    key(_): 256
+    set(dlg): km_dialog?
+    check(_): "Escape keeps the desktop" dlg ""
+    key(_): 87
+    kremlinselected(s):
+    check(_): "typing a letter selects by name" s "Welcome.txt"
+    key(_): 268
+    key(_): 264
+    kremlinselected(s):
+    check(_): "Home then Down" s "Documents/"
+
+    # pins and Run
+    click_tag(_): "pin:0"
+    last_launch(l):
+    contains(ok): l "ussr"
+    check(_): "a pin starts its launcher" ok true
+    ctrl(_): 82
+    set(t): km_dlg_title?
+    check(_): "Ctrl+R asks what to run" t "Run"
+    type(_): "notepad todo.txt"
+    key(_): 257
+    last_launch(l):
+    check(_): "Run starts it" l "notepad todo.txt"
+
+    # pin from the keyboard, then it shows on the panel
+    kremlinselect(_): "Welcome.txt"
+    ctrl(_): 80
+    set(pins): km_pins?
+    len(n): pins
+    check(_): "Ctrl+P pins the selection" n 5
+    find_hit(h): "pin:4"
+    check(_): "the new pin is on the panel" {h != null} true
+
+    # the calendar
+    click_tag(_): "clock"
+    set(p): km_popup?
+    check(_): "the clock opens the calendar" p "calendar"
+    set(m0): km_cal_m?
+    click_tag(_): "cal-next"
+    set(m1): km_cal_m?
+    check(_): "next month" {m1 = m0 + 1 || (m0 = 12 && m1 = 1)} true
+    key(_): 256
+    set(p): km_popup?
+    check(_): "Escape closes the calendar" p ""
+
+    # help
+    key(_): 290
+    set(dlg): km_dialog?
+    check(_): "F1 shows the keys" dlg "message"
+    key(_): 257
+    set(dlg): km_dialog?
+    check(_): "Enter closes it" dlg ""
+
+    close(_): window
+    # the scratch desktop
+    set(_rm): "tests/kremlin_gui_tmp"
+    list_dir(apps): "tests/kremlin_gui_tmp/Apps"
+    len(n): apps
+    set(i): 0
+    while(_): {i < n} [
+        at(f): apps i
+        concat(fp): "tests/kremlin_gui_tmp/Apps/" f
+        remove_file(_): fp
+        set(i): {i + 1}
+    ]
+    remove_dir(_): "tests/kremlin_gui_tmp/Apps"
+    remove_dir(_): "tests/kremlin_gui_tmp/Documents"
+    remove_file(_): "tests/kremlin_gui_tmp/Welcome.txt"
+    remove_file(_): "tests/kremlin_gui_tmp/.kremlin"
+    remove_dir(_): "tests/kremlin_gui_tmp/Music 1"
+    remove_dir(_): "tests/kremlin_gui_tmp"
+    file_exists(gone): "tests/kremlin_gui_tmp"
+    check(_): "scratch desktop removed" gone false
+    set(result): 0
+]

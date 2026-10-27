@@ -1,0 +1,164 @@
+PASS backslashes
+PASS parent
+PASS parent of a top folder
+PASS parent of a drive
+PASS parent of /home
+PASS base
+PASS join at a drive
+PASS join
+PASS strip slash
+PASS extension
+PASS dot file has no extension
+PASS last extension
+PASS folders have no extension
+PASS absolute drive path
+PASS relative path
+PASS kind folder
+PASS kind launcher
+PASS kind program
+PASS kind code
+PASS kind text
+PASS kind image
+PASS kind document
+PASS kind audio
+PASS kind archive
+PASS kind file
+PASS launcher label
+PASS folder label
+PASS settings file is hidden
+PASS desktop.ini is hidden
+PASS files are shown
+PASS short label, one line
+PASS label breaks at a blank
+PASS label without blanks is cut
+PASS fit
+PASS tail
+PASS wrap text
+PASS Cyrillic is shown in Latin letters
+PASS soft signs drop out
+PASS other characters show as ?
+PASS split keeps empty parts
+PASS 27 Oct 2026 is a Tuesday
+PASS 1 Jan 2000 is a Saturday
+PASS 2024 is a leap year
+PASS 1900 is not
+PASS 2000 is
+PASS February 2026
+PASS February 2024
+PASS October 2026 starts on Thursday
+PASS cells before the 1st are empty
+PASS 31 October
+PASS cells after the last day are empty
+PASS clock
+PASS date
+PASS month name
+PASS localtime has eight fields
+PASS localtime of 0
+PASS parse launcher
+PASS a plain line is the command
+PASS a drive path is not a key
+PASS launcher text round trip
+PASS split command
+PASS split quoted command
+PASS command without arguments
+PASS settings: scale (and a bad one ignored)
+PASS settings: wallpaper
+PASS settings: sort
+PASS settings: pins
+PASS settings: ussr
+PASS settings round trip
+PASS settings round trip source
+PASS key a
+PASS key A
+PASS key !
+PASS key #
+PASS key ?
+PASS key .
+PASS key _
+PASS keypad 4
+PASS F1 types nothing
+PASS rows
+PASS columns
+PASS location bar moves the grid down
+PASS icon under a point
+PASS icon under a point, scrolled
+PASS no icon past the last
+PASS no icon in the margin
+PASS cell corner
+PASS down stops at the column end
+PASS down
+PASS up stops at the top
+PASS right
+PASS right into a short column
+PASS right stops at the last column
+PASS left
+PASS end
+PASS first arrow selects the first icon
+PASS nothing to select
+PASS scroll to show an icon
+PASS scroll back
+PASS scroll stops at the last column
+PASS first run makes a desktop
+PASS first run saves the settings
+PASS the USSR source folder is found
+PASS first run pins
+PASS the menu lists the apps
+PASS new folder
+PASS new folder is selected
+PASS new folder: name taken
+PASS new folder: bad name
+PASS new folder: blank name
+PASS new file
+PASS duplicate
+PASS the copy is selected
+PASS second copy
+PASS folders are not duplicated
+PASS rename
+PASS renamed file is selected
+PASS rename onto a name in use
+PASS listing, folders first
+PASS new launcher
+PASS launcher file
+PASS launcher plan
+PASS launcher needs a command
+PASS rename a launcher
+PASS a launcher keeps .kl
+PASS edited launcher
+PASS pin once
+PASS pins are paths in the desktop
+PASS pins are saved
+PASS a renamed folder stays pinned
+PASS renamed folder is selected
+PASS unpin
+PASS a folder opens on the desktop
+PASS open a folder
+PASS it is empty
+PASS back
+PASS back selects the folder left
+PASS no back from the desktop
+PASS a script is started
+PASS with its path
+PASS a document opens with the system
+PASS a missing file is an error
+PASS open a launcher
+PASS it was started
+PASS and the panel says so
+PASS run a command
+PASS typing jumps to a name
+PASS typing more narrows it
+PASS sort by type
+PASS a full folder is not deleted
+PASS delete an empty folder
+PASS deleting unpins
+PASS the next icon is selected
+PASS delete a file
+PASS it is gone
+PASS autostart runs kremlin.su
+PASS autostart opens this desktop
+PASS next wallpaper
+PASS settings survive a restart
+PASS scratch desktop removed
+
+--- stderr ---
+
+--- exit 0 ---
