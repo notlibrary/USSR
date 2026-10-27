@@ -63,17 +63,24 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan and Kremlin have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin and Novgorod have code so far):
 
 - kgb.su - Knowledge Giga Base, Markdown knowledge base manager
 - klin.su - GUI calculator, programmer, scientific and casual in one (working: `src/klin`)
 - kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
-- novgorod.su - HTTP forum script
+- novgorod.su - anonymous HTTPS image forum for programmers with lightweight markup (working: `src/novgorod`)
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
 - siberia.su - office package, spreadsheet tables and document editor
 - stalin.su - hard disk formatting manager
 - usa.su - C compiler written in USSR
 - sochi.su - desktop preference game
+
+The **RUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
+(HTTP) under Novgorod (the forum), with Dubna (a PostgreSQL driver) to come.
+
+```bash
+ussr src/novgorod/novgorod.su          # Novgorod on https://localhost:8443/
+```
 
 ```USSR
 $include "ural.su"
