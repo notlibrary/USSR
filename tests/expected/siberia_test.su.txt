@@ -1,0 +1,129 @@
+PASS =1+2*3
+PASS =(1+2)*3
+PASS =2^3^2
+PASS =-2^2
+PASS =10/4
+PASS =10/5
+PASS =1/3
+PASS =2/3*3
+PASS =50%
+PASS =2^40
+PASS =2^62
+PASS =10^20*1.0
+PASS =1/0
+PASS =1+
+PASS =(1
+PASS =FOO(1)
+PASS =ZZ1
+PASS =1e3+1
+PASS = 2 * 3 
+PASS =A3
+PASS =B2
+PASS =$A$1+a2
+PASS =B1
+PASS =B1+1
+PASS =C7+1
+PASS =SUM(A1:A3)
+PASS =SUM(A3:A1)
+PASS =SUM(A1:B3)
+PASS =AVERAGE(A1:A3)
+PASS =MIN(A1:A3,0.5)
+PASS =MAX(A1:A3;10)
+PASS =COUNT(A1:B3)
+PASS =AVERAGE(C1:C3)
+PASS =B2
+PASS ="ab"&"cd"
+PASS ="say ""hi"""
+PASS =A1&B1
+PASS =A1<2
+PASS =A1<>1
+PASS =B1="HELLO"
+PASS ="a"<"b"
+PASS =IF(A1>0,"pos","neg")
+PASS =IF(A1>5,1)
+PASS =AND(1,A1>0)
+PASS =OR(0,FALSE)
+PASS =NOT(A1)
+PASS =ABS(-3)
+PASS =INT(-2.5)
+PASS =ROUND(2.345,2)
+PASS =ROUND(-2.5)
+PASS =SQRT(16)
+PASS =SQRT(-1)
+PASS =MOD(-7,3)
+PASS =MOD(7,0)
+PASS =POWER(2,-2)
+PASS =LEN("Привет")
+PASS =UPPER(B1)
+PASS =ROUND(PI(),4)
+PASS =SUM(B1)
+PASS cycle
+PASS cycle broken
+PASS =SUM(D1:D3)
+PASS =D3&"x"
+PASS number with blanks
+PASS text
+PASS lone =
+PASS cell name AB4
+PASS fods formula
+PASS fods range
+PASS fods value
+PASS fods text
+PASS fods boolean
+PASS fods blank row
+PASS fods skipped cells
+PASS fods spaces
+PASS fods load
+PASS fods C1
+PASS fods A3
+PASS fods C3
+PASS fods D4
+PASS fods B5
+PASS lo load
+PASS lo value
+PASS lo formula
+PASS lo formula value
+PASS lo text
+PASS lo boolean
+PASS lo repeats
+PASS lo empty
+PASS csv out
+PASS csv quoted
+PASS csv quote
+PASS csv no cr
+PASS csv formula
+PASS csv newline in quotes
+PASS csv semicolons
+PASS type and enter
+PASS backspace joins
+PASS type inside
+PASS end delete left backspace
+PASS delete joins
+PASS set text
+PASS right by characters
+PASS utf8 backspace
+PASS wrap words
+PASS wrap long word
+PASS wrap empty
+PASS down in a paragraph
+PASS down to the next paragraph
+PASS up keeps the column
+PASS home of a wrapped line
+PASS end of a wrapped line
+PASS fodt font
+PASS fodt spaces
+PASS fodt empty paragraph
+PASS fodt load
+PASS fodt text
+PASS fodt family
+PASS fodt size
+PASS fodt bold
+PASS lo document
+PASS lo family
+PASS lo size
+PASS lo italic
+PASS txt load
+
+--- stderr ---
+
+--- exit 0 ---

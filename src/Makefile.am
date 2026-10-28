@@ -51,6 +51,7 @@ EXTRA_DIST = \
     ussr_oop_builtins.h \
     scheduler.h \
     petersburg.h \
+    ttf.h \
     eventq.h \
     socket.h \
     ryazan.h \
@@ -115,7 +116,10 @@ EXTRA_DIST = \
 	ryazan/docs/API.md \
 	ryazan/examples/hello.su \
 	ryazan/tests/TESTPLAN.md \
+	siberia/siberia.su \
 	siberia/box.uno \
+	siberia/README.md \
+	siberia/CHANGELOG.md \
 	stalin/box.uno \
 	usa/box.uno \
 	sochi/box.uno

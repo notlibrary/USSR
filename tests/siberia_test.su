@@ -1,0 +1,371 @@
+# Siberia engine: formulas, sheet and document files, and editing the
+# document. No window is needed. Prints PASS or FAIL per check.
+$include "../src/siberia/siberia.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label ": got " got ", want " want
+    ]
+    print(_): line
+    set(r): 0
+]
+
+# Sets cell A9 to the formula and checks what it shows.
+calc(r): formula want [
+    sbset(_): "A9" formula
+    sbshow(got): "A9"
+    check(r): formula got want
+]
+
+contains(r): label text needle [
+    str_find(at): text needle 0
+    set(got): "missing"
+    if(_): {at >= 0} [ set(got): "found" ]
+    check(r): label got "found"
+]
+
+# The document's paragraphs joined by "|", and the cursor.
+padstate(r): [
+    sbpadtext(t):
+    set(r): ""
+    len(n): t
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): t i
+        if(_): {b = 10} [ concat(r): r "|" ]
+        else(_): [
+            slice(c): t i 1
+            concat(r): r c
+        ]
+        set(i): {i + 1}
+    ]
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    str_from_int(rs): row
+    str_from_int(cs): col
+    concat(r): r " @" rs ":" cs
+]
+
+keys(r): list [
+    len(n): list
+    set(i): 0
+    while(_): {i < n} [
+        at(k): list i
+        sbpadkey(_): k
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+formulas_test(r): [
+    sbsetup(_):
+    sbsheetreset(_):
+    # arithmetic and precedence
+    calc(_): "=1+2*3" "7"
+    calc(_): "=(1+2)*3" "9"
+    calc(_): "=2^3^2" "64"
+    calc(_): "=-2^2" "4"
+    calc(_): "=10/4" "2.5"
+    calc(_): "=10/5" "2"
+    calc(_): "=1/3" "0.3333333333"
+    calc(_): "=2/3*3" "2"
+    calc(_): "=50%" "0.5"
+    calc(_): "=2^40" "1099511627776"
+    calc(_): "=2^62" "4.611686018E18"
+    calc(_): "=10^20*1.0" "1E20"
+    calc(_): "=1/0" "#DIV/0!"
+    calc(_): "=1+" "#ERROR!"
+    calc(_): "=(1" "#ERROR!"
+    calc(_): "=FOO(1)" "#NAME?"
+    calc(_): "=ZZ1" "#REF!"
+    calc(_): "=1e3+1" "1001"
+    calc(_): "= 2 * 3 " "6"
+    # references
+    sbset(_): "A1" "1"
+    sbset(_): "A2" "2.5"
+    sbset(_): "A3" "=A1+A2"
+    sbset(_): "B1" "hello"
+    sbset(_): "B2" "=A3*2"
+    calc(_): "=A3" "3.5"
+    calc(_): "=B2" "7"
+    calc(_): "=$A$1+a2" "3.5"
+    calc(_): "=B1" "hello"
+    calc(_): "=B1+1" "#VALUE!"
+    calc(_): "=C7+1" "1"
+    calc(_): "=SUM(A1:A3)" "7"
+    calc(_): "=SUM(A3:A1)" "7"
+    calc(_): "=SUM(A1:B3)" "14"
+    calc(_): "=AVERAGE(A1:A3)" "2.333333333"
+    calc(_): "=MIN(A1:A3,0.5)" "0.5"
+    calc(_): "=MAX(A1:A3;10)" "10"
+    calc(_): "=COUNT(A1:B3)" "4"
+    calc(_): "=AVERAGE(C1:C3)" "#DIV/0!"
+    sbset(_): "A2" "4"
+    calc(_): "=B2" "10"
+    # text, comparisons, functions
+    calc(_): "=\"ab\"&\"cd\"" "abcd"
+    calc(_): "=\"say \"\"hi\"\"\"" "say \"hi\""
+    calc(_): "=A1&B1" "1hello"
+    calc(_): "=A1<2" "TRUE"
+    calc(_): "=A1<>1" "FALSE"
+    calc(_): "=B1=\"HELLO\"" "TRUE"
+    calc(_): "=\"a\"<\"b\"" "TRUE"
+    calc(_): "=IF(A1>0,\"pos\",\"neg\")" "pos"
+    calc(_): "=IF(A1>5,1)" "FALSE"
+    calc(_): "=AND(1,A1>0)" "TRUE"
+    calc(_): "=OR(0,FALSE)" "FALSE"
+    calc(_): "=NOT(A1)" "FALSE"
+    calc(_): "=ABS(-3)" "3"
+    calc(_): "=INT(-2.5)" "-3"
+    calc(_): "=ROUND(2.345,2)" "2.35"
+    calc(_): "=ROUND(-2.5)" "-3"
+    calc(_): "=SQRT(16)" "4"
+    calc(_): "=SQRT(-1)" "#NUM!"
+    calc(_): "=MOD(-7,3)" "2"
+    calc(_): "=MOD(7,0)" "#DIV/0!"
+    calc(_): "=POWER(2,-2)" "0.25"
+    calc(_): "=LEN(\"Привет\")" "6"
+    calc(_): "=UPPER(B1)" "HELLO"
+    calc(_): "=ROUND(PI(),4)" "3.1416"
+    calc(_): "=SUM(B1)" "#VALUE!"
+    # cycles and errors spread
+    sbset(_): "D1" "=D2"
+    sbset(_): "D2" "=D1+1"
+    sbshow(got): "D2"
+    check(_): "cycle" got "#CYCLE!"
+    sbset(_): "D1" "5"
+    sbshow(got): "D2"
+    check(_): "cycle broken" got "6"
+    sbset(_): "D3" "=1/0"
+    calc(_): "=SUM(D1:D3)" "#DIV/0!"
+    calc(_): "=D3&\"x\"" "#DIV/0!"
+    # numbers and text as typed
+    sbset(_): "E1" " 42 "
+    sbshow(got): "E1"
+    check(_): "number with blanks" got "42"
+    sbset(_): "E2" "12abc"
+    sbshow(got): "E2"
+    check(_): "text" got "12abc"
+    sbset(_): "E3" "="
+    sbshow(got): "E3"
+    check(_): "lone =" got "="
+    sb_cellname(got): {3 * SB_COLS + 27}
+    check(_): "cell name AB4" got "AB4"
+    set(r): 0
+]
+
+files_test(r): [
+    # .fods round trip
+    sbsheetreset(_):
+    sbset(_): "A1" "1"
+    sbset(_): "B1" "2"
+    sbset(_): "C1" "=A1+B1"
+    sbset(_): "A3" "=SUM(A1:C1)"
+    sbset(_): "C3" "a <b> & \"c\""
+    sbset(_): "D4" "=A1>0"
+    sbset(_): "B5" "x  y"
+    sbsheetfods(fods):
+    contains(_): "fods formula" fods "table:formula=\"of:=[.A1]+[.B1]\""
+    contains(_): "fods range" fods "of:=SUM([.A1:.C1])"
+    contains(_): "fods value" fods "office:value-type=\"float\" office:value=\"3\""
+    contains(_): "fods text" fods "<text:p>a &lt;b&gt; &amp; &quot;c&quot;</text:p>"
+    contains(_): "fods boolean" fods "office:boolean-value=\"true\""
+    contains(_): "fods blank row" fods "<table:table-row><table:table-cell/></table:table-row>"
+    contains(_): "fods skipped cells" fods "<table:table-cell table:number-columns-repeated=\"3\"/>"
+    contains(_): "fods spaces" fods "x <text:s/>y"
+    sbsheetload(err): fods "fods"
+    check(_): "fods load" err ""
+    sbget(got): "C1"
+    check(_): "fods C1" got "=A1+B1"
+    sbshow(got): "A3"
+    check(_): "fods A3" got "6"
+    sbget(got): "C3"
+    check(_): "fods C3" got "a <b> & \"c\""
+    sbshow(got): "D4"
+    check(_): "fods D4" got "TRUE"
+    sbget(got): "B5"
+    check(_): "fods B5" got "x  y"
+    # what LibreOffice writes: repeats, styles, annotations, sheet names
+    set(lo): "<office:document><office:body><office:spreadsheet><table:table table:name=\"S\" table:style-name=\"ta1\"><table:table-column table:number-columns-repeated=\"1024\"/><table:table-row table:number-rows-repeated=\"2\"><table:table-cell table:number-columns-repeated=\"1024\"/></table:table-row><table:table-row><table:table-cell table:number-columns-repeated=\"2\"/><table:table-cell office:value-type=\"float\" office:value=\"0.1\" calcext:value-type=\"float\"><text:p>10%</text:p></table:table-cell><table:table-cell table:formula=\"of:=[$S.C3]*[.C3]\" office:value-type=\"float\" office:value=\"0.01\"><text:p>0.01</text:p></table:table-cell><table:table-cell office:value-type=\"string\"><office:annotation><text:p>note</text:p></office:annotation><text:p>one</text:p><text:p><text:span>two</text:span><text:s text:c=\"2\"/>3</text:p></table:table-cell></table:table-row><table:table-row table:number-rows-repeated=\"2\"><table:table-cell office:value-type=\"boolean\" office:boolean-value=\"true\"><text:p>TRUE</text:p></table:table-cell><table:table-cell table:number-columns-repeated=\"2\" office:value-type=\"float\" office:value=\"7\"><text:p>7</text:p></table:table-cell></table:table-row><table:table-row table:number-rows-repeated=\"1048570\"><table:table-cell table:number-columns-repeated=\"1024\"/></table:table-row></table:table></office:spreadsheet></office:body></office:document>"
+    sbsheetload(err): lo "fods"
+    check(_): "lo load" err ""
+    sbget(got): "C3"
+    check(_): "lo value" got "0.1"
+    sbget(got): "D3"
+    check(_): "lo formula" got "=C3*C3"
+    sbshow(got): "D3"
+    check(_): "lo formula value" got "0.01"
+    sbget(got): "E3"
+    check(_): "lo text" got "one two  3"
+    sbget(got): "A4"
+    check(_): "lo boolean" got "TRUE"
+    sbget(got): "C5"
+    check(_): "lo repeats" got "7"
+    sbget(got): "A1"
+    check(_): "lo empty" got ""
+    set(r): 0
+]
+
+csv_test(r): [
+    # CSV
+    sbsheetreset(_):
+    sbset(_): "A1" "name"
+    sbset(_): "B1" "say, \"hi\""
+    sbset(_): "A2" "=1/4"
+    sbset(_): "C2" "x"
+    sbsheetcsv(csv):
+    check(_): "csv out" csv "name,\"say, \"\"hi\"\"\",\n0.25,,x\n"
+    sbsheetload(_): "a,\"b,c\",\"d\"\"e\"\r\n1;2,=A2*2\n\"multi\nline\"" "csv"
+    sbget(got): "B1"
+    check(_): "csv quoted" got "b,c"
+    sbget(got): "C1"
+    check(_): "csv quote" got "d\"e"
+    sbget(got): "A2"
+    check(_): "csv no cr" got "1;2"
+    sbshow(got): "B2"
+    check(_): "csv formula" got "#VALUE!"
+    sbget(got): "A3"
+    check(_): "csv newline in quotes" got "multi\nline"
+    sbsheetload(_): "1;2;3\n4;5;=A2+C1\n" "csv"
+    sbshow(got): "C2"
+    check(_): "csv semicolons" got "7"
+    set(r): 0
+]
+
+pad_test(r): [
+    # the document: typing and keys (bitmap metrics: 14 pixels a byte)
+    set(sb_pfont): 0!
+    set(sb_pwidth): 140!
+    sbpadreset(_):
+    sbpadtype(_): "Hello"
+    sbpadkey(_): SB_KEY_ENTER
+    sbpadtype(_): "World"
+    padstate(got):
+    check(_): "type and enter" got "Hello|World @1:5"
+    vec(k): ""
+    push(_): k SB_KEY_HOME
+    push(_): k SB_KEY_BACKSPACE
+    keys(_): k
+    padstate(got):
+    check(_): "backspace joins" got "HelloWorld @0:5"
+    sbpadtype(_): ", "
+    padstate(got):
+    check(_): "type inside" got "Hello, World @0:7"
+    vec(k): ""
+    push(_): k SB_KEY_END
+    push(_): k SB_KEY_DELETE
+    push(_): k SB_KEY_LEFT
+    push(_): k SB_KEY_BACKSPACE
+    keys(_): k
+    padstate(got):
+    check(_): "end delete left backspace" got "Hello, Word @0:10"
+    sbpadsettext(_): "ab\ncd"
+    vec(k): ""
+    push(_): k SB_KEY_END
+    push(_): k SB_KEY_DELETE
+    keys(_): k
+    padstate(got):
+    check(_): "delete joins" got "abcd @0:2"
+    sbpadsettext(_): "Да\nнет\r\n\tx"
+    padstate(got):
+    check(_): "set text" got "Да|нет|    x @0:0"
+    vec(k): ""
+    push(_): k SB_KEY_RIGHT
+    push(_): k SB_KEY_RIGHT
+    push(_): k SB_KEY_RIGHT
+    keys(_): k
+    padstate(got):
+    check(_): "right by characters" got "Да|нет|    x @1:0"
+    sbpadkey(_): SB_KEY_LEFT
+    sbpadkey(_): SB_KEY_BACKSPACE
+    padstate(got):
+    check(_): "utf8 backspace" got "Д|нет|    x @0:2"
+    # wrapping at 10 characters
+    sb_wrap(w): "aaaa bbbb cccc dddd"
+    encode(got): w
+    check(_): "wrap words" got "[0,10]"
+    sb_wrap(w): "abcdefghijklmnopqrstuvwxy"
+    encode(got): w
+    check(_): "wrap long word" got "[0,10,20]"
+    sb_wrap(w): ""
+    encode(got): w
+    check(_): "wrap empty" got "[0]"
+    sbpadsettext(_): "aaaa bbbb cccc\nxy"
+    vec(k): ""
+    push(_): k SB_KEY_RIGHT
+    push(_): k SB_KEY_RIGHT
+    push(_): k SB_KEY_DOWN
+    keys(_): k
+    padstate(got):
+    check(_): "down in a paragraph" got "aaaa bbbb cccc|xy @0:12"
+    sbpadkey(_): SB_KEY_DOWN
+    padstate(got):
+    check(_): "down to the next paragraph" got "aaaa bbbb cccc|xy @1:2"
+    sbpadkey(_): SB_KEY_UP
+    padstate(got):
+    check(_): "up keeps the column" got "aaaa bbbb cccc|xy @0:12"
+    sbpadkey(_): SB_KEY_HOME
+    padstate(got):
+    check(_): "home of a wrapped line" got "aaaa bbbb cccc|xy @0:10"
+    sbpadkey(_): SB_KEY_UP
+    sbpadkey(_): SB_KEY_END
+    padstate(got):
+    check(_): "end of a wrapped line" got "aaaa bbbb cccc|xy @0:9"
+    set(r): 0
+]
+
+fodt_test(r): [
+    # .fodt round trip
+    set(sb_family): "DejaVu Sans"!
+    set(sb_size): 14!
+    set(sb_bold): true!
+    set(sb_italic): false!
+    sbpadsettext(_): "  two  spaces & <tags>\n\nlast"
+    sbpadfodt(fodt):
+    contains(_): "fodt font" fodt "style:font-name=\"DejaVu Sans\" fo:font-size=\"14pt\" fo:font-weight=\"bold\""
+    contains(_): "fodt spaces" fodt "<text:p><text:s text:c=\"2\"/>two <text:s/>spaces &amp; &lt;tags&gt;</text:p>"
+    contains(_): "fodt empty paragraph" fodt "<text:p/>"
+    set(sb_family): ""!
+    set(sb_size): 10!
+    set(sb_bold): false!
+    sbpadload(err): fodt "fodt"
+    check(_): "fodt load" err ""
+    padstate(got):
+    check(_): "fodt text" got "  two  spaces & <tags>||last @0:0"
+    set(f): sb_family?
+    check(_): "fodt family" f "DejaVu Sans"
+    set(z): sb_size?
+    str_from_int(zs): z
+    check(_): "fodt size" zs "14"
+    set(b): sb_bold?
+    check(_): "fodt bold" b true
+    # LibreOffice's way: a font face name mapped to its family, headings,
+    # spans, tabs, line breaks, notes
+    set(lo): "<office:document><office:font-face-decls><style:font-face style:name=\"Liberation Serif1\" svg:font-family=\"'Liberation Serif'\" style:font-family-generic=\"roman\"/></office:font-face-decls><office:styles><style:default-style style:family=\"paragraph\"><style:paragraph-properties fo:hyphenation-ladder-count=\"no-limit\"/><style:text-properties style:font-name=\"Liberation Serif1\" fo:font-size=\"11.5pt\" fo:font-style=\"italic\"/></style:default-style></office:styles><office:body><office:text><text:sequence-decls/><text:h text:outline-level=\"1\">Title</text:h><text:p text:style-name=\"P1\">a<text:span text:style-name=\"T1\">b</text:span><text:tab/>c<text:note><text:note-body><text:p>foot</text:p></text:note-body></text:note><text:line-break/>d&#1071;&#x44f;</text:p><text:list><text:list-item><text:p>item</text:p></text:list-item></text:list></office:text></office:body></office:document>"
+    sbpadload(err): lo "fodt"
+    padstate(got):
+    check(_): "lo document" got "Title|ab    c|dЯя|item @0:0"
+    set(f): sb_family?
+    check(_): "lo family" f "Liberation Serif"
+    set(z): sb_size?
+    str_from_int(zs): z
+    check(_): "lo size" zs "12"
+    set(i): sb_italic?
+    check(_): "lo italic" i true
+    sbpadload(err): "plain\ntext" "txt"
+    padstate(got):
+    check(_): "txt load" got "plain|text @0:0"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    formulas_test(_):
+    files_test(_):
+    csv_test(_):
+    pad_test(_):
+    fodt_test(_):
+    set(ret): 0
+]

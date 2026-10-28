@@ -1,1 +1,1 @@
-'Package{name=`siberia`,version=`0.1.0`,description=`Office package: spreadsheet tables and document editor`,entry=`siberia.su`,dependencies=[`petersburg`,`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`siberia`,version=`0.1.0`,description=`Office package: a spreadsheet (.fods, .csv) and, with --pad, a document editor with system fonts (.fodt, .txt)`,entry=`siberia.su`,dependencies=[`petersburg`,`library`],files=[`siberia.su`,`README.md`,`CHANGELOG.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

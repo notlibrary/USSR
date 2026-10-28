@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-alpha
+- Outline fonts from the system: `fontinfo`, `loadfont`, `fontwidth`,
+  `fontheight` and `canvasfonttext` draw anti-aliased TrueType text (`.ttf`,
+  `.ttc`) through a small built-in reader (`src/ttf.h`).
+- Added the window `"char"` event: typed characters as Unicode code points.
+
 ## 0.4.0-alpha
 - Added `toolbar(window)`: a strip docked at the top of the window whose
   buttons sit side by side. Buttons accept `setchecked`/`getchecked` and are

@@ -202,6 +202,33 @@ canvascount(result): canvas [
     petersburg_canvas_count(result): canvas
 ]
 
+# --- outline fonts ------------------------------------------------------------
+# TrueType files from the system (.ttf, first face of a .ttc).
+# fontinfo: "Family|Style", or "" when the file is not a usable font.
+fontinfo(result): path [
+    petersburg_font_info(result): path
+]
+
+# A font handle (1, 2, ...), the same one for the same path; 0 if unusable.
+loadfont(result): path [
+    petersburg_font_load(result): path
+]
+
+# Advance of text in pixels at size pixels per em.
+fontwidth(result): font size text [
+    petersburg_font_width(result): font size text
+]
+
+# Line height in pixels at size pixels per em.
+fontheight(result): font size [
+    petersburg_font_height(result): font size
+]
+
+# Anti-aliased text whose line box starts at (x, y).
+canvasfonttext(result): canvas x y text color font size [
+    petersburg_canvas_font_text(result): canvas x y text color font size
+]
+
 getwidth(result): widget [
     petersburg_get_width(result): widget
 ]

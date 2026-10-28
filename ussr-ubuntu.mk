@@ -162,7 +162,7 @@ $(SRC_DIR)/win/process_win32.o: $(SRC_DIR)/win/process_win32.c $(SRC_DIR)/proces
 $(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/petersburg.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(PETERSBURG_OBJ): $(SRC_DIR)/petersburg.c $(SRC_DIR)/petersburg.h $(SRC_DIR)/scheduler.h $(SRC_DIR)/eventq.h
+$(PETERSBURG_OBJ): $(SRC_DIR)/petersburg.c $(SRC_DIR)/petersburg.h $(SRC_DIR)/ttf.h $(SRC_DIR)/scheduler.h $(SRC_DIR)/eventq.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/eventq.o: $(SRC_DIR)/eventq.c $(SRC_DIR)/eventq.h $(SRC_DIR)/process.h $(SRC_DIR)/socket.h
