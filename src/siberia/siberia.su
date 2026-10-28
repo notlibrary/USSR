@@ -1,0 +1,4325 @@
+# siberia.su - Siberia, a small office package for USSR on a Petersburg
+# canvas: a spreadsheet by default, a document editor with --pad.
+#
+#     ussr src/siberia/siberia.su [file.fods|file.csv]
+#     ussr src/siberia/siberia.su --pad [file.fodt|file.txt]
+#
+# Files are OpenDocument in its flat, single-XML form (.fods spreadsheets,
+# .fodt text documents), which LibreOffice and other ODF programs open and
+# save; sheets also read and write CSV and documents plain text. The pad
+# lists the TrueType fonts installed on the system.
+#
+# The engine (cells, formulas, files, the document and its cursor) works
+# without a window and is what tests/siberia_test.su checks. Public API:
+#   sbsetup(r):                   -> types and starting state; call first
+#   sbinitialize(canvas): window mode  -> sbsetup, toolbar and canvas
+#   sbsheetreset(r):              -> an empty sheet
+#   sbset(r): name text           -> sets a cell ("B3") to typed text
+#   sbget(r): name                -> the cell's typed text
+#   sbshow(r): name               -> the cell's value as displayed
+#   sbsheetfods(r): / sbsheetcsv(r):        -> the sheet as file text
+#   sbsheetload(r): text kind     -> loads "fods" or "csv" text; "" or why not
+#   sbpadreset(r): / sbpadsettext(r): text / sbpadtext(r):
+#   sbpadkey(r): key / sbpadtype(r): text   -> edits at the cursor
+#   sbpadfodt(r): / sbpadload(r): text kind ("fodt" or "txt")
+#
+# Callbacks are separate processes, so the state lives in the hash
+# namespace (sb_*): the sheet's cells are SbCell structs in sb_cells, the
+# document's paragraphs SbPara structs in sb_paras.
+$once
+$include "../petersburg/petersburg.su"
+$include "../libs/strings.su"
+$include "../libs/math.su"
+
+$define SB_COLS 52
+$define SB_ROWS 2000
+$define SB_COLW 96
+$define SB_ROWH 22
+$define SB_HEADW 48
+$define SB_BARH 28
+$define SB_STATUSH 22
+$define SB_UIPX 14
+$define SB_MARGIN 56
+$define SB_WIDTH 960
+$define SB_HEIGHT 640
+
+$define SB_KEY_ESC 256
+$define SB_KEY_ENTER 257
+$define SB_KEY_TAB 258
+$define SB_KEY_BACKSPACE 259
+$define SB_KEY_DELETE 261
+$define SB_KEY_RIGHT 262
+$define SB_KEY_LEFT 263
+$define SB_KEY_DOWN 264
+$define SB_KEY_UP 265
+$define SB_KEY_PAGE_UP 266
+$define SB_KEY_PAGE_DOWN 267
+$define SB_KEY_HOME 268
+$define SB_KEY_END 269
+$define SB_KEY_F1 290
+$define SB_KEY_F2 291
+$define SB_KEY_KP_ENTER 335
+
+# --- small helpers ----------------------------------------------------------
+
+# Declares the types and gives every piece of state its starting value;
+# call it once before anything else.
+sbsetup(r): [
+    struct(SbCell): "text:string" "value:any" "gen:number"
+    struct(SbFamily): "name:string" "key:string" "regular:string" "bold:string" "italic:string" "bolditalic:string"
+    struct(SbPara): "text:string"
+    struct(SbParse): "toks:vector" "pos:number"
+    struct(SbRow): "cells:vector"
+    sbstate(r):
+]
+
+# Every piece of state back to its starting value (an empty sheet and
+# document, no file).
+sbstate(r): [
+    new(blank): "SbCell" "" null 0
+    set(sb_blank): blank!
+    set(sb_window): 0!
+    set(sb_canvas): 0!
+    set(sb_mode): "sheet"!
+    set(sb_path): ""!
+    set(sb_dirty): false!
+    set(sb_message): ""!
+    set(sb_status_left): ""!
+    set(sb_dialog): ""!
+    set(sb_dlg_text): ""!
+    set(sb_dlg_next): ""!
+    set(sb_shift): false!
+    set(sb_ctrl): false!
+    set(sb_alt): false!
+    set(sb_uifont): 0!
+    vec(v): ""
+    set(sb_buttons): v!
+    vec(v): ""
+    set(sb_rows): v!
+    set(sb_gen): 1!
+    set(sb_maxrow): {0 - 1}!
+    set(sb_maxcol): {0 - 1}!
+    set(sb_row): 0!
+    set(sb_col): 0!
+    set(sb_top): 0!
+    set(sb_left): 0!
+    set(sb_edit): false!
+    set(sb_buf): ""!
+    vec(v): ""
+    set(sb_families): v!
+    set(sb_family): ""!
+    set(sb_size): 12!
+    set(sb_bold): false!
+    set(sb_italic): false!
+    set(sb_pfont): 0!
+    set(sb_ppx): 16!
+    set(sb_pwidth): 600!
+    set(sb_plines_visible): 20!
+    vec(v): ""
+    set(sb_plines): v!
+    set(sb_pfollow): true!
+    set(sb_picker): false!
+    set(sb_pick): 0!
+    set(sb_pick_top): 0!
+    sbpadreset(_):
+    set(r): 0
+]
+
+sb_minus_one(r): [
+    set(r): {0 - 1}
+]
+
+sb_is_number(r): v [
+    typeof(t): v
+    set(r): {t = "integer" || t = "real"}
+]
+
+sb_starts(r): s prefix [
+    len(n): s
+    len(m): prefix
+    set(r): false
+    if(_): {m <= n} [
+        slice(head): s 0 m
+        set(r): {head = prefix}
+    ]
+]
+
+sb_ends(r): s suffix [
+    len(n): s
+    len(m): suffix
+    set(r): false
+    if(_): {m <= n} [
+        slice(tail): s {n - m} m
+        set(r): {tail = suffix}
+    ]
+]
+
+sb_upper(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(from): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b >= 97 && b <= 122} [
+            slice(run): s from {i - from}
+            chr(c): {b - 32}
+            concat(r): r run c
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    slice(run): s from {n - from}
+    concat(r): r run
+]
+
+# -1, 0 or 1: a against b, bytes compared without regard to ASCII case.
+sb_compare_text(r): a b [
+    str_lower(x): a
+    str_lower(y): b
+    len(n): x
+    len(m): y
+    set(r): 0
+    set(i): 0
+    while(_): {r = 0 && i < n && i < m} [
+        byte(p): x i
+        byte(q): y i
+        if(_): {p < q} [ sb_minus_one(r): ]
+        elif(_): {p > q} [ set(r): 1 ]
+        set(i): {i + 1}
+    ]
+    if(_): {r = 0 && n < m} [ sb_minus_one(r): ]
+    if(_): {r = 0 && n > m} [ set(r): 1 ]
+]
+
+# UTF-8 text of one code point.
+sb_utf8(r): cp [
+    if(_): {cp < 128} [ chr(r): cp ]
+    else(_): [
+        vec(v): ""
+        if(_): {cp < 2048} [
+            push(_): v {192 | (cp >> 6)}
+        ]
+        elif(_): {cp < 65536} [
+            push(_): v {224 | (cp >> 12)}
+            push(_): v {128 | ((cp >> 6) & 63)}
+        ]
+        else(_): [
+            push(_): v {240 | (cp >> 18)}
+            push(_): v {128 | ((cp >> 12) & 63)}
+            push(_): v {128 | ((cp >> 6) & 63)}
+        ]
+        push(_): v {128 | (cp & 63)}
+        utf8_from_bytes(r): v
+    ]
+]
+
+# Text without its last character.
+sb_drop_last(r): s [
+    len(n): s
+    set(r): s
+    if(_): {n > 0} [
+        utf8_prev(i): s n
+        slice(r): s 0 i
+    ]
+]
+
+sb_basename(r): path [
+    len(n): path
+    set(i): n
+    set(go): {i > 0}
+    while(_): go [
+        byte(b): path {i - 1}
+        if(_): {b = 47 || b = 92} [ set(go): false ]
+        else(_): [
+            set(i): {i - 1}
+            set(go): {i > 0}
+        ]
+    ]
+    slice(r): path i {n - i}
+]
+
+# Lower-case extension with its dot (".fods"), or "".
+sb_extension(r): path [
+    sb_basename(name): path
+    len(n): name
+    set(r): ""
+    set(i): {n - 1}
+    set(go): {i > 0}
+    while(_): go [
+        byte(b): name i
+        if(_): {b = 46} [
+            slice(ext): name i {n - i}
+            str_lower(r): ext
+            set(go): false
+        ]
+        else(_): [
+            set(i): {i - 1}
+            set(go): {i > 0}
+        ]
+    ]
+]
+
+# Whole file, or null when it cannot be read.
+sb_read(r): path [
+    set(r): null
+    file_exists(e): path
+    if(_): e [
+        open_file(h): path "rb"
+        if(_): {h >= 0} [
+            read_file(r): h
+            close_file(_): h
+        ]
+    ]
+]
+
+# true when the text was written.
+sb_write(r): path text [
+    set(r): false
+    open_file(h): path "wb"
+    if(_): {h >= 0} [
+        len(n): text
+        write_file(w): h text
+        close_file(_): h
+        set(r): {w = n}
+    ]
+]
+
+# --- values -----------------------------------------------------------------
+# A cell value is null (empty), a number, a string, a boolean or an error:
+# a string starting with byte 1, then the name ("#DIV/0!").
+
+sb_err(r): name [
+    chr(r): 1
+    concat(r): r name
+]
+
+sb_is_err(r): v [
+    set(r): false
+    typeof(t): v
+    if(_): {t = "string"} [
+        len(n): v
+        if(_): {n > 0} [
+            byte(b): v 0
+            set(r): {b = 1}
+        ]
+    ]
+]
+
+# A number with up to 10 significant digits.
+sb_fmt(r): x [
+    typeof(t): x
+    if(_): {t = "integer"} [
+        str_from_int(r): x
+        return(_): r
+    ]
+    if(_): {x != x || x - x != 0.0} [
+        set(r): "#NUM!"
+        return(_): r
+    ]
+    set(ax): x
+    if(_): {x < 0} [ set(ax): {0 - x} ]
+    if(_): {ax = 0} [
+        set(r): "0"
+        return(_): r
+    ]
+    if(_): {ax >= 1000000000000000.0 || ax < 0.000001} [
+        set(e): 0
+        set(m): ax
+        while(_): {m >= 10} [
+            set(m): {m / 10}
+            set(e): {e + 1}
+        ]
+        while(_): {m < 1} [
+            set(m): {m * 10}
+            set(e): {e - 1}
+        ]
+        str_from_number(ms): m 9
+        if(_): {ms = "10"} [
+            set(ms): "1"
+            set(e): {e + 1}
+        ]
+        str_from_int(es): e
+        set(r): ""
+        if(_): {x < 0} [ set(r): "-" ]
+        concat(r): r ms "E" es
+        return(_): r
+    ]
+    set(k): 1
+    set(p): 10.0
+    while(_): {ax >= p} [
+        set(p): {p * 10}
+        set(k): {k + 1}
+    ]
+    set(d): {10 - k}
+    if(_): {ax < 1} [ set(d): 10 ]
+    if(_): {d < 0} [ set(d): 0 ]
+    str_from_number(r): x d
+]
+
+# A value as the cell shows it.
+sb_show_value(r): v [
+    typeof(t): v
+    set(r): ""
+    if(_): {t = "integer" || t = "real"} [ sb_fmt(r): v ]
+    elif(_): {t = "boolean"} [
+        set(r): "FALSE"
+        if(_): v [ set(r): "TRUE" ]
+    ]
+    elif(_): {t = "string"} [
+        sb_is_err(e): v
+        set(r): v
+        if(_): e [
+            len(n): v
+            slice(r): v 1 {n - 1}
+        ]
+    ]
+    elif(_): {t = "vector"} [ set(r): "#VALUE!" ]
+]
+
+# A value as a number for arithmetic, or an error.
+sb_num(r): v [
+    typeof(t): v
+    set(r): v
+    if(_): {t = "null"} [ set(r): 0 ]
+    elif(_): {t = "boolean"} [
+        set(r): 0
+        if(_): v [ set(r): 1 ]
+    ]
+    elif(_): {t = "vector"} [ sb_err(r): "#VALUE!" ]
+    elif(_): {t = "string"} [
+        sb_is_err(e): v
+        if(_): {e = false} [
+            str_trim(s): v
+            if(_): {s = ""} [ set(r): 0 ]
+            else(_): [
+                str_to_number(r): s
+                typeof(t2): r
+                if(_): {t2 = "null"} [ sb_err(r): "#VALUE!" ]
+            ]
+        ]
+    ]
+]
+
+sb_text_of(r): v [
+    sb_is_number(n): v
+    if(_): n [ sb_fmt(r): v ]
+    else(_): [ sb_show_value(r): v ]
+]
+
+# --- cells ------------------------------------------------------------------
+
+# Column letters: 0 -> A, 25 -> Z, 26 -> AA.
+sb_colname(r): c [
+    set(r): ""
+    set(n): {c + 1}
+    while(_): {n > 0} [
+        set(m): {(n - 1) % 26}
+        chr(ch): {65 + m}
+        concat(r): ch r
+        str_trunc(n): {(n - 1 - m) / 26}
+    ]
+]
+
+sb_cellname(r): index [
+    set(col): {index % SB_COLS}
+    str_trunc(row): {(index - col) / SB_COLS}
+    sb_colname(r): col
+    str_from_int(rs): {row + 1}
+    concat(r): r rs
+]
+
+# Cell index of a reference ("B3", "$B$3"); -1 when it is not one, -2
+# when it is shaped like one but lies outside the sheet.
+sb_ref(r): s [
+    sb_minus_one(r):
+    len(n): s
+    set(i): 0
+    set(col): 0
+    set(letters): 0
+    set(row): 0
+    set(digits): 0
+    if(_): {n > 0} [
+        byte(b): s 0
+        if(_): {b = 36} [ set(i): 1 ]
+    ]
+    set(go): {i < n}
+    while(_): go [
+        byte(b): s i
+        if(_): {b >= 97 && b <= 122} [ set(b): {b - 32} ]
+        if(_): {b >= 65 && b <= 90 && letters < 3} [
+            set(col): {col * 26 + b - 64}
+            set(letters): {letters + 1}
+            set(i): {i + 1}
+            set(go): {i < n}
+        ]
+        else(_): [ set(go): false ]
+    ]
+    if(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 36} [ set(i): {i + 1} ]
+    ]
+    set(go): {i < n}
+    while(_): go [
+        byte(b): s i
+        if(_): {b >= 48 && b <= 57 && digits < 8} [
+            set(row): {row * 10 + b - 48}
+            set(digits): {digits + 1}
+            set(i): {i + 1}
+            set(go): {i < n}
+        ]
+        else(_): [ set(go): false ]
+    ]
+    if(_): {letters > 0 && digits > 0 && i = n} [
+        set(r): {0 - 2}
+        if(_): {row >= 1 && row <= SB_ROWS && col <= SB_COLS} [
+            set(r): {(row - 1) * SB_COLS + col - 1}
+        ]
+    ]
+]
+
+# Rows (SbRow in sb_rows) get their cells on the first write; until then
+# every cell of the row is the shared empty cell sb_blank. Allocating the
+# whole grid up front is slow, and slower again while a previous grid is
+# still waiting for the collector.
+sbsheetreset(r): [
+    set(rows): sb_rows?
+    len(n): rows
+    if(_): {n = 0} [
+        set(i): 0
+        while(_): {i < SB_ROWS} [
+            vec(cells): "SbCell"
+            new(row): "SbRow" cells
+            push(_): rows row
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        set(maxrow): sb_maxrow?
+        set(i): 0
+        while(_): {i <= maxrow} [
+            at(row): rows i
+            vec(cells): "SbCell"
+            setf(_): row "cells" cells
+            set(i): {i + 1}
+        ]
+    ]
+    set(sb_gen): 1!
+    set(sb_maxrow): {0 - 1}!
+    set(sb_maxcol): {0 - 1}!
+    set(r): 0
+]
+
+sb_cell(r): index [
+    set(col): {index % SB_COLS}
+    str_trunc(rn): {(index - col) / SB_COLS}
+    set(rows): sb_rows?
+    at(row): rows rn
+    getf(cells): row "cells"
+    len(n): cells
+    if(_): {n = 0} [ set(r): sb_blank? ] else(_): [ at(r): cells col ]
+]
+
+# The cell itself, giving its row cells when it has none yet.
+sb_cell_for_write(r): index [
+    set(col): {index % SB_COLS}
+    str_trunc(rn): {(index - col) / SB_COLS}
+    set(rows): sb_rows?
+    at(row): rows rn
+    getf(cells): row "cells"
+    len(n): cells
+    if(_): {n = 0} [
+        set(i): 0
+        while(_): {i < SB_COLS} [
+            new(c): "SbCell" "" null 0
+            push(_): cells c
+            set(i): {i + 1}
+        ]
+    ]
+    at(r): cells col
+]
+
+sb_set_index(r): index text [
+    sb_cell_for_write(c): index
+    setf(_): c "text" text
+    set(gen): sb_gen?
+    set(sb_gen): {gen + 1}!
+    if(_): {text != ""} [
+        set(col): {index % SB_COLS}
+        str_trunc(row): {(index - col) / SB_COLS}
+        set(mr): sb_maxrow?
+        set(mc): sb_maxcol?
+        if(_): {row > mr} [ set(sb_maxrow): row! ]
+        if(_): {col > mc} [ set(sb_maxcol): col! ]
+    ]
+    set(r): 0
+]
+
+# The value of a cell, computed once per change of the sheet.
+sb_value(r): index [
+    sb_cell(c): index
+    getf(g): c "gen"
+    set(gen): sb_gen?
+    if(_): {g = gen} [ getf(r): c "value" ]
+    elif(_): {g = 0 - gen} [ sb_err(r): "#CYCLE!" ]
+    else(_): [
+        setf(_): c "gen" {0 - gen}
+        getf(text): c "text"
+        sb_compute(r): text
+        setf(_): c "value" r
+        setf(_): c "gen" gen
+    ]
+]
+
+sb_compute(r): text [
+    set(r): null
+    len(n): text
+    if(_): {n > 0} [
+        byte(b): text 0
+        if(_): {b = 61 && n > 1} [
+            slice(f): text 1 {n - 1}
+            sb_formula(r): f
+        ]
+        else(_): [
+            str_trim(s): text
+            set(num): null
+            if(_): {s != ""} [ str_to_number(num): s ]
+            typeof(t): num
+            if(_): {t = "null"} [ set(r): text ]
+            else(_): [ set(r): num ]
+        ]
+    ]
+]
+
+sbset(r): name text [
+    sb_ref(i): name
+    if(_): {i < 0} [ fail(_): "sbset: not a cell name" ]
+    sb_set_index(r): i text
+]
+
+sbget(r): name [
+    sb_ref(i): name
+    sb_cell(c): i
+    getf(r): c "text"
+]
+
+sbshow(r): name [
+    sb_ref(i): name
+    sb_value(v): i
+    sb_show_value(r): v
+]
+
+# --- formulas ---------------------------------------------------------------
+# Tokens are [kind text value]: kind "num", "str", "ref" (value: the cell
+# index), "name", "op" or "bad". References may also be written the
+# OpenFormula way, "[.A1]" and "[.A1:.B2]", as .fods files store them.
+
+sb_is_letter(r): b [
+    set(r): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 95 || b = 36}
+]
+
+sb_is_digit(r): b [
+    set(r): {b >= 48 && b <= 57}
+]
+
+sb_push_tok(r): toks kind text value [
+    vec(t): ""
+    push(_): t kind
+    push(_): t text
+    push(_): t value
+    push(_): toks t
+    set(r): 0
+]
+
+# One side of an OpenFormula reference: "$Sheet1.$A$1" -> "A1".
+sb_of_ref(r): s [
+    len(n): s
+    set(i): n
+    set(go): {i > 0}
+    while(_): go [
+        byte(b): s {i - 1}
+        if(_): {b = 46} [ set(go): false ]
+        else(_): [
+            set(i): {i - 1}
+            set(go): {i > 0}
+        ]
+    ]
+    slice(r): s i {n - i}
+]
+
+sb_tokens(r): s [
+    vec(r): ""
+    len(n): s
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        set(b2): 0
+        if(_): {i + 1 < n} [ byte(b2): s {i + 1} ]
+        sb_is_digit(dg): b
+        sb_is_digit(dg2): b2
+        sb_is_letter(lt): b
+        if(_): {b = 32 || b = 9 || b = 10 || b = 13} [ set(i): {i + 1} ]
+        elif(_): {dg || (b = 46 && dg2)} [
+            set(j): i
+            set(go): true
+            set(seen_e): false
+            while(_): go [
+                set(j): {j + 1}
+                set(go): false
+                if(_): {j < n} [
+                    byte(c): s j
+                    sb_is_digit(cd): c
+                    if(_): {cd || c = 46} [ set(go): true ]
+                    elif(_): {(c = 69 || c = 101) && seen_e = false && j + 1 < n} [
+                        byte(c2): s {j + 1}
+                        sb_is_digit(cd2): c2
+                        set(sign): {c2 = 43 || c2 = 45}
+                        if(_): {sign && j + 2 < n} [
+                            byte(c3): s {j + 2}
+                            sb_is_digit(cd2): c3
+                            if(_): cd2 [ set(j): {j + 1} ]
+                        ]
+                        if(_): cd2 [
+                            set(go): true
+                            set(seen_e): true
+                        ]
+                    ]
+                ]
+            ]
+            slice(text): s i {j - i}
+            str_to_number(v): text
+            typeof(t): v
+            if(_): {t = "null"} [ sb_push_tok(_): r "bad" text null ]
+            else(_): [ sb_push_tok(_): r "num" text v ]
+            set(i): j
+        ]
+        elif(_): {b = 34} [
+            set(text): ""
+            set(j): {i + 1}
+            set(go): {j < n}
+            while(_): go [
+                byte(c): s j
+                if(_): {c = 34} [
+                    set(c2): 0
+                    if(_): {j + 1 < n} [ byte(c2): s {j + 1} ]
+                    if(_): {c2 = 34} [
+                        concat(text): text "\""
+                        set(j): {j + 2}
+                    ]
+                    else(_): [
+                        set(j): {j + 1}
+                        set(go): false
+                    ]
+                ]
+                else(_): [
+                    chr(ch): c
+                    concat(text): text ch
+                    set(j): {j + 1}
+                ]
+                if(_): {j >= n} [ set(go): false ]
+            ]
+            sb_push_tok(_): r "str" text text
+            set(i): j
+        ]
+        elif(_): {b = 91} [
+            str_find(close): s "]" i
+            if(_): {close < 0} [ set(close): n ]
+            slice(inner): s {i + 1} {close - i - 1}
+            str_find(colon): inner ":" 0
+            if(_): {colon < 0} [
+                sb_of_ref(a): inner
+                sb_ref(ia): a
+                sb_upper(a): a
+                sb_push_tok(_): r "ref" a ia
+            ]
+            else(_): [
+                len(il): inner
+                slice(left): inner 0 colon
+                slice(right): inner {colon + 1} {il - colon - 1}
+                sb_of_ref(a): left
+                sb_of_ref(z): right
+                sb_ref(ia): a
+                sb_ref(iz): z
+                sb_upper(a): a
+                sb_upper(z): z
+                sb_push_tok(_): r "ref" a ia
+                sb_push_tok(_): r "op" ":" null
+                sb_push_tok(_): r "ref" z iz
+            ]
+            set(i): {close + 1}
+        ]
+        elif(_): lt [
+            set(j): i
+            set(go): true
+            while(_): go [
+                set(j): {j + 1}
+                set(go): false
+                if(_): {j < n} [
+                    byte(c): s j
+                    sb_is_letter(cl): c
+                    sb_is_digit(cd): c
+                    set(go): {cl || cd || c = 46}
+                ]
+            ]
+            slice(word): s i {j - i}
+            sb_upper(word): word
+            set(k): j
+            set(go): {k < n}
+            set(next): 0
+            while(_): go [
+                byte(next): s k
+                if(_): {next = 32} [
+                    set(k): {k + 1}
+                    set(go): {k < n}
+                ]
+                else(_): [ set(go): false ]
+            ]
+            sb_ref(idx): word
+            if(_): {next = 40 && k < n} [ sb_push_tok(_): r "name" word null ]
+            elif(_): {idx != 0 - 1} [ sb_push_tok(_): r "ref" word idx ]
+            else(_): [ sb_push_tok(_): r "name" word null ]
+            set(i): j
+        ]
+        else(_): [
+            chr(op): b
+            set(two): ""
+            if(_): {b2 != 0} [
+                chr(c2s): b2
+                concat(two): op c2s
+            ]
+            if(_): {two = "<=" || two = ">=" || two = "<>"} [
+                set(op): two
+                set(i): {i + 1}
+            ]
+            set(known): "+-*/^&=<>%:,;()"
+            str_find(at): known op 0
+            len(ol): op
+            if(_): {at >= 0 || ol = 2} [ sb_push_tok(_): r "op" op null ]
+            else(_): [ sb_push_tok(_): r "bad" op null ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+# Formula text from tokens; of: true writes OpenFormula ("[.A1]", ";").
+sb_emit(r): toks of [
+    set(r): ""
+    len(n): toks
+    set(i): 0
+    while(_): {i < n} [
+        at(t): toks i
+        at(kind): t 0
+        at(text): t 1
+        set(piece): text
+        if(_): {kind = "str"} [
+            set(piece): "\""
+            len(tl): text
+            set(j): 0
+            while(_): {j < tl} [
+                byte(c): text j
+                chr(ch): c
+                concat(piece): piece ch
+                if(_): {c = 34} [ concat(piece): piece "\"" ]
+                set(j): {j + 1}
+            ]
+            concat(piece): piece "\""
+        ]
+        elif(_): {kind = "ref" && of} [
+            set(piece): "[."
+            concat(piece): piece text
+            set(range): false
+            if(_): {i + 2 < n} [
+                at(t1): toks {i + 1}
+                at(t2): toks {i + 2}
+                at(k1): t1 1
+                at(k2): t2 0
+                set(range): {k1 = ":" && k2 = "ref"}
+                if(_): range [
+                    at(z): t2 1
+                    concat(piece): piece ":." z
+                    set(i): {i + 2}
+                ]
+            ]
+            concat(piece): piece "]"
+        ]
+        elif(_): {kind = "op" && of && text = ","} [ set(piece): ";" ]
+        elif(_): {kind = "op" && of = false && text = ";"} [ set(piece): "," ]
+        concat(r): r piece
+        set(i): {i + 1}
+    ]
+]
+
+sb_peek(r): p [
+    set(r): null
+    getf(toks): p "toks"
+    getf(pos): p "pos"
+    len(n): toks
+    if(_): {pos < n} [ at(r): toks pos ]
+]
+
+# true (and the token consumed) when the next token is the operator op.
+sb_accept(r): p op [
+    sb_peek(t): p
+    typeof(ty): t
+    set(r): false
+    if(_): {ty = "vector"} [
+        at(kind): t 0
+        at(text): t 1
+        if(_): {kind = "op"} [
+            if(_): {text = op} [
+                set(r): true
+                getf(pos): p "pos"
+                setf(_): p "pos" {pos + 1}
+            ]
+        ]
+    ]
+]
+
+# The operator text of the next token, or "".
+sb_peek_op(r): p [
+    sb_peek(t): p
+    typeof(ty): t
+    set(r): ""
+    if(_): {ty = "vector"} [
+        at(kind): t 0
+        if(_): {kind = "op"} [ at(r): t 1 ]
+    ]
+]
+
+sb_formula(r): text [
+    sb_tokens(toks): text
+    new(p): "SbParse" toks 0
+    sb_expr(r): p
+    getf(pos): p "pos"
+    len(n): toks
+    sb_is_err(e): r
+    if(_): {pos < n && e = false} [ sb_err(r): "#ERROR!" ]
+    typeof(t): r
+    if(_): {t = "vector"} [ sb_err(r): "#VALUE!" ]
+]
+
+sb_expr(r): p [
+    sb_concat_expr(r): p
+    sb_peek_op(op): p
+    if(_): {op = "=" || op = "<>" || op = "<" || op = ">" || op = "<=" || op = ">="} [
+        sb_accept(_): p op
+        sb_concat_expr(b): p
+        sb_compare_op(r): r b op
+    ]
+]
+
+sb_concat_expr(r): p [
+    sb_add_expr(r): p
+    sb_accept(more): p "&"
+    while(_): more [
+        sb_add_expr(b): p
+        sb_is_err(ea): r
+        sb_is_err(eb): b
+        if(_): eb [ set(r): b ]
+        if(_): {ea = false && eb = false} [
+            sb_text_of(x): r
+            sb_text_of(y): b
+            concat(r): x y
+        ]
+        sb_accept(more): p "&"
+    ]
+]
+
+sb_add_expr(r): p [
+    sb_mul_expr(r): p
+    sb_peek_op(op): p
+    while(_): {op = "+" || op = "-"} [
+        sb_accept(_): p op
+        sb_mul_expr(b): p
+        sb_arith(r): r b op
+        sb_peek_op(op): p
+    ]
+]
+
+sb_mul_expr(r): p [
+    sb_pow_expr(r): p
+    sb_peek_op(op): p
+    while(_): {op = "*" || op = "/"} [
+        sb_accept(_): p op
+        sb_pow_expr(b): p
+        sb_arith(r): r b op
+        sb_peek_op(op): p
+    ]
+]
+
+sb_pow_expr(r): p [
+    sb_unary(r): p
+    sb_accept(more): p "^"
+    while(_): more [
+        sb_unary(b): p
+        sb_arith(r): r b "^"
+        sb_accept(more): p "^"
+    ]
+]
+
+sb_unary(r): p [
+    sb_peek_op(op): p
+    if(_): {op = "-"} [
+        sb_accept(_): p "-"
+        sb_unary(v): p
+        sb_arith(r): 0 v "-"
+    ]
+    elif(_): {op = "+"} [
+        sb_accept(_): p "+"
+        sb_unary(v): p
+        sb_num(r): v
+    ]
+    else(_): [
+        sb_primary(r): p
+        sb_accept(pct): p "%"
+        while(_): pct [
+            sb_arith(r): r 100 "/"
+            sb_accept(pct): p "%"
+        ]
+    ]
+]
+
+sb_primary(r): p [
+    sb_err(r): "#ERROR!"
+    sb_peek(t): p
+    typeof(ty): t
+    if(_): {ty != "vector"} [ return(_): r ]
+    getf(pos): p "pos"
+    setf(_): p "pos" {pos + 1}
+    at(kind): t 0
+    at(text): t 1
+    at(value): t 2
+    if(_): {kind = "num" || kind = "str"} [ set(r): value ]
+    elif(_): {kind = "ref"} [
+        set(r): null
+        sb_accept(range): p ":"
+        if(_): range [
+            sb_peek(t2): p
+            typeof(ty2): t2
+            sb_err(r): "#ERROR!"
+            if(_): {ty2 = "vector"} [
+                at(k2): t2 0
+                if(_): {k2 = "ref"} [
+                    getf(pos): p "pos"
+                    setf(_): p "pos" {pos + 1}
+                    at(v2): t2 2
+                    sb_range(r): value v2
+                ]
+            ]
+        ]
+        elif(_): {value < 0} [ sb_err(r): "#REF!" ]
+        else(_): [ sb_value(r): value ]
+    ]
+    elif(_): {kind = "name"} [
+        sb_accept(call): p "("
+        if(_): call [
+            vec(args): ""
+            sb_accept(empty): p ")"
+            set(ok): true
+            if(_): {empty = false} [
+                set(go): true
+                while(_): go [
+                    sb_expr(a): p
+                    push(_): args a
+                    sb_accept(comma): p ","
+                    sb_accept(semi): p ";"
+                    set(go): {comma || semi}
+                ]
+                sb_accept(ok): p ")"
+            ]
+            if(_): ok [ sb_call(r): text args ]
+        ]
+        elif(_): {text = "TRUE"} [ set(r): true ]
+        elif(_): {text = "FALSE"} [ set(r): false ]
+        else(_): [ sb_err(r): "#NAME?" ]
+    ]
+    elif(_): {kind = "op" && text = "("} [
+        sb_expr(r): p
+        sb_accept(ok): p ")"
+        if(_): {ok = false} [ sb_err(r): "#ERROR!" ]
+    ]
+]
+
+# A range as [row1 col1 row2 col2], corners in order; #REF! outside.
+sb_range(r): a b [
+    if(_): {a < 0 || b < 0} [
+        sb_err(r): "#REF!"
+        return(_): r
+    ]
+    set(ca): {a % SB_COLS}
+    set(cb): {b % SB_COLS}
+    str_trunc(ra): {(a - ca) / SB_COLS}
+    str_trunc(rb): {(b - cb) / SB_COLS}
+    vec(r): ""
+    if(_): {ra < rb} [ push(_): r ra ] else(_): [ push(_): r rb ]
+    if(_): {ca < cb} [ push(_): r ca ] else(_): [ push(_): r cb ]
+    if(_): {ra < rb} [ push(_): r rb ] else(_): [ push(_): r ra ]
+    if(_): {ca < cb} [ push(_): r cb ] else(_): [ push(_): r ca ]
+]
+
+sb_arith(r): a b op [
+    sb_num(x): a
+    sb_num(y): b
+    sb_is_err(ex): x
+    sb_is_err(ey): y
+    if(_): ex [ set(r): x ]
+    elif(_): ey [ set(r): y ]
+    elif(_): {op = "+"} [ set(r): {x + y} ]
+    elif(_): {op = "-"} [ set(r): {x - y} ]
+    elif(_): {op = "*"} [ sb_mul(r): x y ]
+    elif(_): {op = "/"} [
+        if(_): {y = 0} [ sb_err(r): "#DIV/0!" ]
+        else(_): [
+            set(r): {x / y}
+            typeof(tx): x
+            typeof(tyy): y
+            if(_): {tx = "integer" && tyy = "integer"} [
+                if(_): {(x % y) = 0} [ str_trunc(r): r ]
+            ]
+        ]
+    ]
+    else(_): [ sb_pow(r): x y ]
+]
+
+# a * b, as reals when the integer product could overflow.
+sb_mul(r): a b [
+    typeof(ta): a
+    typeof(tb): b
+    set(big): false
+    if(_): {ta = "integer" && tb = "integer"} [
+        set(big): {a > 3037000499 || a < 0 - 3037000499 || b > 3037000499 || b < 0 - 3037000499}
+    ]
+    if(_): big [ set(r): {a * 1.0 * b} ] else(_): [ set(r): {a * b} ]
+]
+
+sb_pow(r): x y [
+    str_trunc(yi): y
+    set(whole): {yi = y}
+    if(_): {whole && yi >= 0 - 1024 && yi <= 1024} [
+        set(n): yi
+        if(_): {n < 0} [ set(n): {0 - n} ]
+        set(r): 1
+        set(base): x
+        while(_): {n > 0} [
+            if(_): {(n % 2) = 1} [ sb_mul(r): r base ]
+            sb_mul(base): base base
+            str_trunc(n): {n / 2}
+        ]
+        if(_): {yi < 0} [
+            if(_): {r = 0} [ sb_err(r): "#DIV/0!" ]
+            else(_): [ set(r): {1.0 / r} ]
+        ]
+    ]
+    elif(_): {x > 0} [ pow(r): x y ]
+    elif(_): {x = 0 && y > 0} [ set(r): 0 ]
+    else(_): [ sb_err(r): "#NUM!" ]
+]
+
+sb_compare_op(r): a b op [
+    sb_is_err(ea): a
+    sb_is_err(eb): b
+    if(_): ea [
+        set(r): a
+        return(_): r
+    ]
+    if(_): eb [
+        set(r): b
+        return(_): r
+    ]
+    typeof(ta): a
+    typeof(tb): b
+    if(_): {ta = "boolean"} [ sb_num(a): a ]
+    if(_): {tb = "boolean"} [ sb_num(b): b ]
+    sb_is_number(na): a
+    sb_is_number(nb): b
+    if(_): {ta = "null"} [
+        if(_): {tb = "string"} [ set(a): "" ] else(_): [ set(a): 0 ]
+        sb_is_number(na): a
+    ]
+    if(_): {tb = "null"} [
+        if(_): {ta = "string"} [ set(b): "" ] else(_): [ set(b): 0 ]
+        sb_is_number(nb): b
+    ]
+    set(c): 0
+    if(_): {na && nb} [
+        if(_): {a < b} [ sb_minus_one(c): ]
+        elif(_): {a > b} [ set(c): 1 ]
+    ]
+    elif(_): na [ sb_minus_one(c): ]
+    elif(_): nb [ set(c): 1 ]
+    else(_): [ sb_compare_text(c): a b ]
+    if(_): {op = "="} [ set(r): {c = 0} ]
+    elif(_): {op = "<>"} [ set(r): {c != 0} ]
+    elif(_): {op = "<"} [ set(r): {c < 0} ]
+    elif(_): {op = ">"} [ set(r): {c > 0} ]
+    elif(_): {op = "<="} [ set(r): {c <= 0} ]
+    else(_): [ set(r): {c >= 0} ]
+]
+
+# The numbers of a function's arguments, ranges expanded (text and empty
+# cells in ranges are skipped), or the first error.
+sb_collect(r): args [
+    vec(r): ""
+    len(n): args
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        typeof(t): a
+        if(_): {t = "vector"} [
+            at(r1): a 0
+            at(c1): a 1
+            at(r2): a 2
+            at(c2): a 3
+            set(row): r1
+            while(_): {row <= r2} [
+                set(col): c1
+                while(_): {col <= c2} [
+                    sb_value(v): {row * SB_COLS + col}
+                    sb_is_err(e): v
+                    if(_): e [ return(_): v ]
+                    sb_is_number(isn): v
+                    if(_): isn [ push(_): r v ]
+                    set(col): {col + 1}
+                ]
+                set(row): {row + 1}
+            ]
+        ]
+        elif(_): {t != "null"} [
+            sb_num(v): a
+            sb_is_err(e): v
+            if(_): e [ return(_): v ]
+            push(_): r v
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sb_round(r): x digits [
+    set(m): 1
+    set(k): 0
+    while(_): {k < digits} [
+        set(m): {m * 10}
+        set(k): {k + 1}
+    ]
+    set(ax): x
+    if(_): {x < 0} [ set(ax): {0 - x} ]
+    if(_): {ax * m >= 1000000000000000.0} [
+        set(r): x
+        return(_): r
+    ]
+    # the tiny relative nudge rounds 2.345 (2.34499.. as a double) up,
+    # as spreadsheets do
+    str_trunc(q): {ax * m * 1.000000000001 + 0.5}
+    if(_): {digits = 0} [ set(r): q ]
+    else(_): [ set(r): {q / m} ]
+    if(_): {x < 0} [ set(r): {0 - r} ]
+]
+
+sb_call(r): name args [
+    len(n): args
+    sb_err(r): "#NAME?"
+    set(agg): {name = "SUM" || name = "AVERAGE" || name = "MIN" || name = "MAX" || name = "COUNT"}
+    if(_): agg [
+        sb_collect(v): args
+        sb_is_err(e): v
+        if(_): e [
+            set(r): v
+            return(_): r
+        ]
+        len(k): v
+        set(sum): 0
+        set(i): 0
+        while(_): {i < k} [
+            at(x): v i
+            set(sum): {sum + x}
+            set(i): {i + 1}
+        ]
+        if(_): {name = "SUM"} [ set(r): sum ]
+        elif(_): {name = "COUNT"} [ set(r): k ]
+        elif(_): {k = 0} [
+            if(_): {name = "AVERAGE"} [ sb_err(r): "#DIV/0!" ] else(_): [ set(r): 0 ]
+        ]
+        elif(_): {name = "AVERAGE"} [ sb_arith(r): sum k "/" ]
+        else(_): [
+            at(r): v 0
+            set(i): 1
+            while(_): {i < k} [
+                at(x): v i
+                if(_): {name = "MIN" && x < r} [ set(r): x ]
+                if(_): {name = "MAX" && x > r} [ set(r): x ]
+                set(i): {i + 1}
+            ]
+        ]
+        return(_): r
+    ]
+    if(_): {name = "PI"} [
+        set(r): M_PI
+        return(_): r
+    ]
+    if(_): {name = "IF"} [
+        sb_err(r): "#VALUE!"
+        if(_): {n >= 2} [
+            at(c): args 0
+            sb_num(c): c
+            sb_is_err(e): c
+            if(_): e [ set(r): c ]
+            elif(_): {c != 0} [ at(r): args 1 ]
+            elif(_): {n >= 3} [ at(r): args 2 ]
+            else(_): [ set(r): false ]
+        ]
+        return(_): r
+    ]
+    if(_): {name = "AND" || name = "OR"} [
+        sb_collect(v): args
+        sb_is_err(e): v
+        set(r): v
+        if(_): {e = false} [
+            len(k): v
+            set(r): {name = "AND"}
+            set(i): 0
+            while(_): {i < k} [
+                at(x): v i
+                if(_): {name = "AND" && x = 0} [ set(r): false ]
+                if(_): {name = "OR" && x != 0} [ set(r): true ]
+                set(i): {i + 1}
+            ]
+        ]
+        return(_): r
+    ]
+    if(_): {name = "LEN" || name = "UPPER" || name = "LOWER"} [
+        sb_err(r): "#VALUE!"
+        if(_): {n = 1} [
+            at(a): args 0
+            sb_is_err(e): a
+            typeof(ta): a
+            if(_): e [ set(r): a ]
+            elif(_): {ta != "vector"} [
+                sb_text_of(s): a
+                if(_): {name = "LEN"} [ utf8_count(r): s ]
+                elif(_): {name = "UPPER"} [ sb_upper(r): s ]
+                else(_): [ str_lower(r): s ]
+            ]
+        ]
+        return(_): r
+    ]
+    # numeric functions of one or two numbers
+    set(one): {name = "ABS" || name = "INT" || name = "SQRT" || name = "NOT"}
+    set(two): {name = "MOD" || name = "POWER" || name = "ROUND"}
+    if(_): {one = false && two = false} [ return(_): r ]
+    sb_err(r): "#VALUE!"
+    if(_): {(one && n != 1) || (two && (n < 1 || n > 2)) || (two && name != "ROUND" && n != 2)} [ return(_): r ]
+    at(a): args 0
+    sb_num(x): a
+    set(y): 0
+    if(_): {n = 2} [
+        at(b): args 1
+        sb_num(y): b
+    ]
+    sb_is_err(ex): x
+    sb_is_err(ey): y
+    if(_): ex [ set(r): x ]
+    elif(_): ey [ set(r): y ]
+    elif(_): {name = "ABS"} [
+        set(r): x
+        if(_): {x < 0} [ set(r): {0 - x} ]
+    ]
+    elif(_): {name = "INT"} [ floor(r): x ]
+    elif(_): {name = "NOT"} [ set(r): {x = 0} ]
+    elif(_): {name = "SQRT"} [
+        if(_): {x < 0} [ sb_err(r): "#NUM!" ]
+        elif(_): {x = 0} [ set(r): 0 ]
+        else(_): [
+            sqrt(r): x
+            str_trunc(ri): r
+            if(_): {ri * ri = x} [ set(r): ri ]
+        ]
+    ]
+    elif(_): {name = "POWER"} [ sb_pow(r): x y ]
+    elif(_): {name = "MOD"} [
+        if(_): {y = 0} [ sb_err(r): "#DIV/0!" ]
+        else(_): [
+            typeof(tx): x
+            typeof(tyy): y
+            if(_): {tx = "integer" && tyy = "integer"} [
+                set(r): {x % y}
+                if(_): {r != 0 && (r < 0) != (y < 0)} [ set(r): {r + y} ]
+            ]
+            else(_): [
+                floor(f): {x / y}
+                set(r): {x - y * f}
+            ]
+        ]
+    ]
+    else(_): [
+        str_trunc(d): y
+        if(_): {d < 0} [ set(d): 0 ]
+        if(_): {d > 12} [ set(d): 12 ]
+        sb_round(r): x d
+    ]
+]
+
+# --- OpenDocument XML -------------------------------------------------------
+
+sb_xml_escape(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(from): 0
+    while(_): {i < n} [
+        byte(b): s i
+        set(rep): ""
+        if(_): {b = 38} [ set(rep): "&amp;" ]
+        elif(_): {b = 60} [ set(rep): "&lt;" ]
+        elif(_): {b = 62} [ set(rep): "&gt;" ]
+        elif(_): {b = 34} [ set(rep): "&quot;" ]
+        elif(_): {b < 32 && b != 9 && b != 10} [ set(rep): " " ]
+        if(_): {rep != ""} [
+            slice(run): s from {i - from}
+            concat(r): r run rep
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    slice(run): s from {n - from}
+    concat(r): r run
+]
+
+# Paragraph text as ODF content: runs of spaces as <text:s/>, tabs as
+# <text:tab/>.
+sb_odf_text(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(from): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 32 || b = 9} [
+            slice(run): s from {i - from}
+            sb_xml_escape(run): run
+            concat(r): r run
+            if(_): {b = 9} [
+                concat(r): r "<text:tab/>"
+                set(i): {i + 1}
+            ]
+            else(_): [
+                set(j): i
+                set(go): true
+                while(_): go [
+                    set(j): {j + 1}
+                    set(go): false
+                    if(_): {j < n} [
+                        byte(c): s j
+                        set(go): {c = 32}
+                    ]
+                ]
+                set(k): {j - i}
+                if(_): {i > 0} [
+                    concat(r): r " "
+                    set(k): {k - 1}
+                ]
+                if(_): {k = 1} [ concat(r): r "<text:s/>" ]
+                elif(_): {k > 1} [
+                    str_from_int(ks): k
+                    concat(r): r "<text:s text:c=\"" ks "\"/>"
+                ]
+                set(i): j
+            ]
+            set(from): i
+        ]
+        else(_): [ set(i): {i + 1} ]
+    ]
+    slice(run): s from {n - from}
+    sb_xml_escape(run): run
+    concat(r): r run
+]
+
+sb_xml_unescape(r): s [
+    str_find(amp): s "&" 0
+    if(_): {amp < 0} [
+        set(r): s
+        return(_): r
+    ]
+    set(r): ""
+    len(n): s
+    set(from): 0
+    while(_): {amp >= 0} [
+        slice(run): s from {amp - from}
+        concat(r): r run
+        str_find(semi): s ";" amp
+        if(_): {semi < 0 || semi - amp > 10} [
+            concat(r): r "&"
+            set(from): {amp + 1}
+        ]
+        else(_): [
+            slice(name): s {amp + 1} {semi - amp - 1}
+            set(rep): ""
+            if(_): {name = "amp"} [ set(rep): "&" ]
+            elif(_): {name = "lt"} [ set(rep): "<" ]
+            elif(_): {name = "gt"} [ set(rep): ">" ]
+            elif(_): {name = "quot"} [ set(rep): "\"" ]
+            elif(_): {name = "apos"} [ set(rep): "'" ]
+            else(_): [
+                sb_starts(num): name "#"
+                if(_): num [
+                    len(nl): name
+                    set(cp): 0
+                    set(j): 1
+                    set(hex): false
+                    if(_): {nl > 1} [
+                        byte(h): name 1
+                        if(_): {h = 120 || h = 88} [
+                            set(hex): true
+                            set(j): 2
+                        ]
+                    ]
+                    while(_): {j < nl} [
+                        byte(d): name j
+                        if(_): hex [
+                            set(v): 0
+                            if(_): {d >= 48 && d <= 57} [ set(v): {d - 48} ]
+                            if(_): {d >= 97 && d <= 102} [ set(v): {d - 87} ]
+                            if(_): {d >= 65 && d <= 70} [ set(v): {d - 55} ]
+                            set(cp): {cp * 16 + v}
+                        ]
+                        else(_): [ set(cp): {cp * 10 + d - 48} ]
+                        set(j): {j + 1}
+                    ]
+                    if(_): {cp > 0 && cp < 1114112} [ sb_utf8(rep): cp ]
+                ]
+            ]
+            concat(r): r rep
+            set(from): {semi + 1}
+        ]
+        str_find(amp): s "&" from
+    ]
+    slice(run): s from {n - from}
+    concat(r): r run
+]
+
+# The tag at s[i] = "<": [kind name attrs end]; kind is "open", "close",
+# "empty" or "other" (declarations, comments), end the index past ">".
+sb_xml_tag(r): s i [
+    len(n): s
+    set(j): {i + 1}
+    set(q): 0
+    set(go): {j < n}
+    while(_): go [
+        byte(b): s j
+        if(_): {q != 0} [
+            if(_): {b = q} [ set(q): 0 ]
+            set(j): {j + 1}
+        ]
+        elif(_): {b = 34 || b = 39} [
+            set(q): b
+            set(j): {j + 1}
+        ]
+        elif(_): {b = 62} [ set(go): false ]
+        else(_): [ set(j): {j + 1} ]
+        if(_): {j >= n} [ set(go): false ]
+    ]
+    slice(inner): s {i + 1} {j - i - 1}
+    len(m): inner
+    set(kind): "open"
+    set(name): ""
+    set(attrs): ""
+    if(_): {m > 0} [
+        byte(first): inner 0
+        byte(last): inner {m - 1}
+        if(_): {first = 47} [
+            set(kind): "close"
+            slice(name): inner 1 {m - 1}
+            str_trim(name): name
+        ]
+        elif(_): {first = 63 || first = 33} [ set(kind): "other" ]
+        else(_): [
+            if(_): {last = 47} [
+                set(kind): "empty"
+                slice(inner): inner 0 {m - 1}
+                set(m): {m - 1}
+            ]
+            set(k): 0
+            set(go): {k < m}
+            while(_): go [
+                byte(c): inner k
+                if(_): {c = 32 || c = 9 || c = 10 || c = 13} [ set(go): false ]
+                else(_): [
+                    set(k): {k + 1}
+                    set(go): {k < m}
+                ]
+            ]
+            slice(name): inner 0 k
+            slice(attrs): inner k {m - k}
+        ]
+    ]
+    vec(r): ""
+    push(_): r kind
+    push(_): r name
+    push(_): r attrs
+    push(_): r {j + 1}
+]
+
+# An attribute's value from a tag's attribute text, or null.
+sb_xml_attr(r): attrs name [
+    set(r): null
+    concat(key): name "=\""
+    len(kl): key
+    set(pos): 0
+    set(go): true
+    while(_): go [
+        str_find(pos): attrs key pos
+        set(go): false
+        if(_): {pos > 0} [
+            byte(before): attrs {pos - 1}
+            if(_): {before = 32 || before = 9 || before = 10 || before = 13} [
+                set(from): {pos + kl}
+                str_find(close): attrs "\"" from
+                if(_): {close >= 0} [
+                    slice(v): attrs from {close - from}
+                    sb_xml_unescape(r): v
+                ]
+            ]
+            else(_): [
+                set(pos): {pos + 1}
+                set(go): true
+            ]
+        ]
+    ]
+]
+
+sb_attr_int(r): attrs name default [
+    sb_xml_attr(v): attrs name
+    set(r): default
+    typeof(t): v
+    if(_): {t = "string"} [
+        str_to_number(x): v
+        typeof(tx): x
+        if(_): {tx = "integer"} [ set(r): x ]
+    ]
+]
+
+# The text of an XML text run, decoded.
+sb_xml_text(r): s from to [
+    slice(run): s from {to - from}
+    sb_xml_unescape(r): run
+]
+
+# Index of the next "<" at or after i, or n.
+sb_next_lt(r): s i n [
+    set(r): i
+    set(go): {r < n}
+    while(_): go [
+        byte(b): s r
+        if(_): {b = 60} [ set(go): false ]
+        else(_): [
+            set(r): {r + 1}
+            set(go): {r < n}
+        ]
+    ]
+]
+
+$define SB_ODF_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" xmlns:of=\"urn:oasis:names:tc:opendocument:xmlns:of:1.2\" office:version=\"1.2\" "
+
+# --- sheet files ------------------------------------------------------------
+
+# A number as xsd:double text.
+sb_xml_number(r): x [
+    typeof(t): x
+    if(_): {t = "integer"} [ str_from_int(r): x ]
+    else(_): [
+        set(ax): x
+        if(_): {x < 0} [ set(ax): {0 - x} ]
+        if(_): {ax >= 1000000000000000.0 || (ax < 0.000001 && ax > 0)} [ sb_fmt(r): x ]
+        else(_): [ str_from_number(r): x 15 ]
+    ]
+]
+
+sb_fods_cell(r): index [
+    sb_cell(c): index
+    getf(text): c "text"
+    sb_value(v): index
+    typeof(t): v
+    sb_is_err(e): v
+    sb_show_value(shown): v
+    sb_odf_text(p): shown
+    set(r): "<table:table-cell"
+    byte(b0): text 0
+    if(_): {b0 = 61} [
+        len(tl): text
+        slice(f): text 1 {tl - 1}
+        sb_tokens(toks): f
+        sb_emit(of): toks true
+        sb_xml_escape(of): of
+        concat(r): r " table:formula=\"of:=" of "\""
+    ]
+    if(_): {(t = "integer" || t = "real") && e = false} [
+        sb_xml_number(xn): v
+        concat(r): r " office:value-type=\"float\" office:value=\"" xn "\""
+    ]
+    elif(_): {t = "boolean"} [
+        set(bv): "false"
+        if(_): v [ set(bv): "true" ]
+        concat(r): r " office:value-type=\"boolean\" office:boolean-value=\"" bv "\""
+    ]
+    else(_): [ concat(r): r " office:value-type=\"string\"" ]
+    concat(r): r "><text:p>" p "</text:p></table:table-cell>"
+]
+
+sb_repeat_attr(r): name count [
+    set(r): ""
+    if(_): {count > 1} [
+        str_from_int(cs): count
+        concat(r): " " name "=\"" cs "\""
+    ]
+]
+
+sbsheetfods(r): [
+    set(maxrow): sb_maxrow?
+    set(maxcol): sb_maxcol?
+    set(cells): {maxcol + 1}
+    if(_): {cells < 1} [ set(cells): 1 ]
+    str_from_int(cs): cells
+    concat(r): SB_ODF_HEAD "office:mimetype=\"application/vnd.oasis.opendocument.spreadsheet\">\n<office:body>\n<office:spreadsheet>\n<table:table table:name=\"Sheet1\">\n<table:table-column table:number-columns-repeated=\"" cs "\"/>\n"
+    set(row): 0
+    set(blank_rows): 0
+    while(_): {row <= maxrow} [
+        set(line): ""
+        set(empty): 0
+        set(col): 0
+        set(used): false
+        while(_): {col <= maxcol} [
+            set(index): {row * SB_COLS + col}
+            sb_cell(c): index
+            getf(text): c "text"
+            if(_): {text = ""} [ set(empty): {empty + 1} ]
+            else(_): [
+                if(_): {empty > 0} [
+                    sb_repeat_attr(ra): "table:number-columns-repeated" empty
+                    concat(line): line "<table:table-cell" ra "/>"
+                    set(empty): 0
+                ]
+                sb_fods_cell(cell): index
+                concat(line): line cell
+                set(used): true
+            ]
+            set(col): {col + 1}
+        ]
+        if(_): used [
+            if(_): {blank_rows > 0} [
+                sb_repeat_attr(ra): "table:number-rows-repeated" blank_rows
+                concat(r): r "<table:table-row" ra "><table:table-cell/></table:table-row>\n"
+                set(blank_rows): 0
+            ]
+            concat(r): r "<table:table-row>" line "</table:table-row>\n"
+        ]
+        else(_): [ set(blank_rows): {blank_rows + 1} ]
+        set(row): {row + 1}
+    ]
+    if(_): {maxrow < 0} [ concat(r): r "<table:table-row><table:table-cell/></table:table-row>\n" ]
+    concat(r): r "</table:table>\n</office:spreadsheet>\n</office:body>\n</office:document>\n"
+]
+
+sb_csv_field(r): s [
+    set(r): s
+    str_find(a): s "," 0
+    str_find(b): s "\"" 0
+    str_find(c): s "\n" 0
+    str_find(d): s ";" 0
+    if(_): {a >= 0 || b >= 0 || c >= 0 || d >= 0} [
+        set(r): "\""
+        len(n): s
+        set(i): 0
+        while(_): {i < n} [
+            byte(x): s i
+            chr(ch): x
+            concat(r): r ch
+            if(_): {x = 34} [ concat(r): r "\"" ]
+            set(i): {i + 1}
+        ]
+        concat(r): r "\""
+    ]
+]
+
+# The sheet's values as CSV (formulas are saved as their results).
+sbsheetcsv(r): [
+    set(r): ""
+    set(maxrow): sb_maxrow?
+    set(maxcol): sb_maxcol?
+    set(row): 0
+    while(_): {row <= maxrow} [
+        set(col): 0
+        set(line): ""
+        while(_): {col <= maxcol} [
+            sb_value(v): {row * SB_COLS + col}
+            sb_is_number(isn): v
+            if(_): isn [ sb_xml_number(s): v ] else(_): [ sb_show_value(s): v ]
+            sb_csv_field(s): s
+            if(_): {col > 0} [ concat(line): line "," ]
+            concat(line): line s
+            set(col): {col + 1}
+        ]
+        concat(r): r line "\n"
+        set(row): {row + 1}
+    ]
+]
+
+sb_load_csv(r): text [
+    set(r): ""
+    len(n): text
+    # comma, or semicolon when the first line has semicolons and no commas
+    str_find(nl): text "\n" 0
+    if(_): {nl < 0} [ set(nl): n ]
+    slice(first): text 0 nl
+    str_find(hc): first "," 0
+    str_find(hs): first ";" 0
+    set(sep): 44
+    if(_): {hc < 0 && hs >= 0} [ set(sep): 59 ]
+    set(row): 0
+    set(col): 0
+    set(i): 0
+    set(field): ""
+    set(quoted): false
+    set(dirty): false
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): quoted [
+            if(_): {b = 34} [
+                set(b2): 0
+                if(_): {i + 1 < n} [ byte(b2): text {i + 1} ]
+                if(_): {b2 = 34} [
+                    concat(field): field "\""
+                    set(i): {i + 1}
+                ]
+                else(_): [ set(quoted): false ]
+            ]
+            else(_): [
+                chr(ch): b
+                concat(field): field ch
+            ]
+        ]
+        elif(_): {b = 34} [
+            set(quoted): true
+            set(dirty): true
+        ]
+        elif(_): {b = sep || b = 10} [
+            if(_): {row < SB_ROWS && col < SB_COLS && field != ""} [ sb_set_index(_): {row * SB_COLS + col} field ]
+            set(field): ""
+            set(dirty): false
+            set(col): {col + 1}
+            if(_): {b = 10} [
+                set(row): {row + 1}
+                set(col): 0
+            ]
+        ]
+        elif(_): {b != 13} [
+            chr(ch): b
+            concat(field): field ch
+            set(dirty): true
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {(dirty || field != "") && row < SB_ROWS && col < SB_COLS} [ sb_set_index(_): {row * SB_COLS + col} field ]
+]
+
+sb_load_fods(r): s [
+    set(r): "no table in this file"
+    str_find(start): s "<table:table " 0
+    if(_): {start < 0} [ str_find(start): s "<table:table>" 0 ]
+    if(_): {start < 0} [ return(_): r ]
+    set(r): ""
+    len(n): s
+    set(i): start
+    set(row): 0
+    set(col): 0
+    set(rows_rep): 1
+    vec(rowbuf): ""
+    set(cols_rep): 1
+    set(formula): null
+    set(vtype): ""
+    set(value): null
+    set(bvalue): null
+    set(text): ""
+    set(paras): 0
+    set(in_p): false
+    set(hidden): 0
+    set(in_cell): false
+    set(done): false
+    while(_): {i < n && done = false} [
+        byte(b): s i
+        if(_): {b != 60} [
+            sb_next_lt(j): s i n
+            if(_): {in_p && hidden = 0} [
+                sb_xml_text(t): s i j
+                concat(text): text t
+            ]
+            set(i): j
+        ]
+        else(_): [
+            sb_xml_tag(tag): s i
+            at(kind): tag 0
+            at(name): tag 1
+            at(attrs): tag 2
+            at(i): tag 3
+            set(finish): false
+            if(_): {name = "table:table-row" && (kind = "open" || kind = "empty")} [
+                sb_attr_int(rows_rep): attrs "table:number-rows-repeated" 1
+                set(col): 0
+                vec(rowbuf): ""
+                if(_): {kind = "empty"} [ set(row): {row + rows_rep} ]
+            ]
+            elif(_): {name = "table:table-row" && kind = "close"} [
+                len(cells): rowbuf
+                if(_): {cells > 0} [
+                    set(k): 0
+                    while(_): {k < rows_rep && row + k < SB_ROWS} [
+                        set(m): 0
+                        while(_): {m < cells} [
+                            at(entry): rowbuf m
+                            at(ec): entry 0
+                            at(et): entry 1
+                            sb_set_index(_): {(row + k) * SB_COLS + ec} et
+                            set(m): {m + 1}
+                        ]
+                        set(k): {k + 1}
+                    ]
+                ]
+                set(row): {row + rows_rep}
+            ]
+            elif(_): {(name = "table:table-cell" || name = "table:covered-table-cell") && (kind = "open" || kind = "empty")} [
+                sb_attr_int(cols_rep): attrs "table:number-columns-repeated" 1
+                sb_xml_attr(formula): attrs "table:formula"
+                sb_xml_attr(vtype): attrs "office:value-type"
+                typeof(tv): vtype
+                if(_): {tv = "null"} [ set(vtype): "" ]
+                sb_xml_attr(value): attrs "office:value"
+                sb_xml_attr(bvalue): attrs "office:boolean-value"
+                set(text): ""
+                set(paras): 0
+                set(in_cell): true
+                if(_): {kind = "empty"} [ set(finish): true ]
+            ]
+            elif(_): {(name = "table:table-cell" || name = "table:covered-table-cell") && kind = "close"} [ set(finish): true ]
+            elif(_): {name = "text:p" && kind = "open" && in_cell} [
+                if(_): {hidden = 0} [
+                    if(_): {paras > 0} [ concat(text): text " " ]
+                    set(paras): {paras + 1}
+                ]
+                set(in_p): true
+            ]
+            elif(_): {name = "text:p" && kind = "close"} [ set(in_p): false ]
+            elif(_): {name = "office:annotation" && kind = "open"} [ set(hidden): {hidden + 1} ]
+            elif(_): {name = "office:annotation" && kind = "close"} [ set(hidden): {hidden - 1} ]
+            elif(_): {in_p && hidden = 0 && (name = "text:s" || name = "text:tab" || name = "text:line-break")} [
+                set(count): 1
+                if(_): {name = "text:s"} [ sb_attr_int(count): attrs "text:c" 1 ]
+                str_repeat(sp): " " count
+                concat(text): text sp
+            ]
+            elif(_): {name = "table:table" && kind = "close"} [ set(done): true ]
+            if(_): finish [
+                set(stored): text
+                typeof(tf): formula
+                typeof(tval): value
+                if(_): {tf = "string"} [
+                    str_find(eq): formula "=" 0
+                    len(fl): formula
+                    slice(body): formula {eq + 1} {fl - eq - 1}
+                    sb_tokens(toks): body
+                    sb_emit(plain): toks false
+                    concat(stored): "=" plain
+                ]
+                elif(_): {(vtype = "float" || vtype = "percentage" || vtype = "currency") && tval = "string"} [ set(stored): value ]
+                elif(_): {vtype = "boolean"} [
+                    set(stored): "FALSE"
+                    if(_): {bvalue = "true"} [ set(stored): "TRUE" ]
+                ]
+                if(_): {stored != ""} [
+                    set(k): 0
+                    while(_): {k < cols_rep && col + k < SB_COLS} [
+                        vec(entry): ""
+                        push(_): entry {col + k}
+                        push(_): entry stored
+                        push(_): rowbuf entry
+                        set(k): {k + 1}
+                    ]
+                ]
+                set(col): {col + cols_rep}
+                set(in_cell): false
+                set(in_p): false
+            ]
+        ]
+    ]
+]
+
+sbsheetload(r): text kind [
+    sbsheetreset(_):
+    if(_): {kind = "csv"} [ sb_load_csv(r): text ]
+    else(_): [ sb_load_fods(r): text ]
+]
+
+# --- the document -----------------------------------------------------------
+# Paragraphs are SbPara structs in sb_paras; the cursor is sb_prow (the
+# paragraph) and sb_pcol (a byte offset in it). Lines wrap at sb_pwidth
+# pixels, measured with the document font (sb_pfont, sb_ppx pixels per
+# em) or, without one, the bitmap font at scale 2.
+
+sbpadreset(r): [
+    vec(paras): "SbPara"
+    new(p): "SbPara" ""
+    push(_): paras p
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(sb_ptop): 0!
+    set(sb_ptopline): 0!
+    set(sb_goalx): {0 - 1}!
+    set(sb_dirty): false!
+    set(r): 0
+]
+
+sb_pad_count(r): [
+    set(paras): sb_paras?
+    len(r): paras
+]
+
+sb_para_text(r): index [
+    set(paras): sb_paras?
+    at(p): paras index
+    getf(r): p "text"
+]
+
+sb_para_set(r): index text [
+    set(paras): sb_paras?
+    at(p): paras index
+    setf(_): p "text" text
+    set(sb_dirty): true!
+    set(r): 0
+]
+
+# Tabs as four spaces, control characters dropped.
+sb_clean_line(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(from): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b < 32} [
+            slice(run): s from {i - from}
+            concat(r): r run
+            if(_): {b = 9} [ concat(r): r "    " ]
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    slice(run): s from {n - from}
+    concat(r): r run
+]
+
+sbpadsettext(r): text [
+    vec(paras): "SbPara"
+    len(n): text
+    set(from): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 10
+        if(_): {i < n} [ byte(b): text i ]
+        if(_): {b = 10} [
+            slice(line): text from {i - from}
+            sb_clean_line(line): line
+            new(p): "SbPara" line
+            push(_): paras p
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(sb_ptop): 0!
+    set(sb_ptopline): 0!
+    set(sb_goalx): {0 - 1}!
+    set(r): 0
+]
+
+sbpadtext(r): [
+    set(paras): sb_paras?
+    len(n): paras
+    set(r): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        getf(t): p "text"
+        if(_): {i > 0} [ concat(r): r "\n" ]
+        concat(r): r t
+        set(i): {i + 1}
+    ]
+]
+
+sb_measure(r): text [
+    set(font): sb_pfont?
+    if(_): {font > 0} [
+        set(px): sb_ppx?
+        fontwidth(r): font px text
+    ]
+    else(_): [
+        len(n): text
+        set(r): {n * 14}
+    ]
+]
+
+sb_line_height(r): [
+    set(font): sb_pfont?
+    set(r): 20
+    if(_): {font > 0} [
+        set(px): sb_ppx?
+        fontheight(r): font px
+    ]
+]
+
+# Index past the run of spaces at i.
+sb_skip_spaces(r): s i n [
+    set(r): i
+    set(go): {r < n}
+    while(_): go [
+        byte(b): s r
+        if(_): {b = 32} [
+            set(r): {r + 1}
+            set(go): {r < n}
+        ]
+        else(_): [ set(go): false ]
+    ]
+]
+
+# Start offsets of the wrapped lines of a paragraph: words move to the
+# next line when they do not fit; a word wider than the line breaks.
+sb_wrap(r): text [
+    vec(r): ""
+    push(_): r 0
+    set(width): sb_pwidth?
+    len(n): text
+    set(start): 0
+    while(_): {start < n} [
+        set(end): start
+        set(go): true
+        while(_): go [
+            # the next word and the spaces after it
+            set(j): end
+            set(more): {j < n}
+            while(_): more [
+                byte(b): text j
+                if(_): {b = 32} [ set(more): false ]
+                else(_): [
+                    set(j): {j + 1}
+                    set(more): {j < n}
+                ]
+            ]
+            slice(piece): text start {j - start}
+            sb_measure(w): piece
+            sb_skip_spaces(next): text j n
+            if(_): {w <= width} [
+                set(end): next
+                set(go): {end < n}
+            ]
+            elif(_): {end = start} [
+                # one word wider than the line: as many characters as fit
+                utf8_next(k): text start
+                set(fit): true
+                while(_): {fit && k < n} [
+                    utf8_next(k2): text k
+                    slice(piece): text start {k2 - start}
+                    sb_measure(w): piece
+                    if(_): {w <= width} [ set(k): k2 ] else(_): [ set(fit): false ]
+                ]
+                set(end): k
+                set(go): false
+            ]
+            else(_): [ set(go): false ]
+        ]
+        if(_): {end < n} [ push(_): r end ]
+        set(start): end
+    ]
+]
+
+# The wrapped line of starts that holds byte col.
+sb_line_of(r): starts col [
+    len(n): starts
+    set(r): 0
+    set(i): 1
+    while(_): {i < n} [
+        at(s): starts i
+        if(_): {s <= col} [ set(r): i ]
+        set(i): {i + 1}
+    ]
+]
+
+# The last caret position on line k: before a wrapped line's last
+# character (the space it wrapped at), or the paragraph's end.
+sb_line_limit(r): text starts k [
+    len(n): starts
+    len(r): text
+    if(_): {k + 1 < n} [
+        at(next): starts {k + 1}
+        utf8_prev(r): text next
+    ]
+]
+
+sb_line_start(r): starts k [
+    at(r): starts k
+]
+
+# The byte offset on line k nearest to x pixels.
+sb_col_at_x(r): text starts k x [
+    sb_line_start(start): starts k
+    sb_line_limit(limit): text starts k
+    set(r): start
+    set(prev): 0.0
+    set(go): {r < limit}
+    while(_): go [
+        utf8_next(next): text r
+        slice(piece): text start {next - start}
+        sb_measure(w): piece
+        if(_): {(prev + w) / 2 > x} [ set(go): false ]
+        else(_): [
+            set(r): next
+            set(prev): w
+            set(go): {r < limit}
+        ]
+    ]
+]
+
+sb_caret_x(r): text starts col [
+    sb_line_of(k): starts col
+    at(start): starts k
+    slice(piece): text start {col - start}
+    sb_measure(r): piece
+]
+
+sbpadtype(r): s [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    slice(left): t 0 col
+    slice(right): t col {n - col}
+    concat(t): left s right
+    sb_para_set(_): row t
+    len(sl): s
+    set(sb_pcol): {col + sl}!
+    set(sb_goalx): {0 - 1}!
+    set(r): 0
+]
+
+# Replaces the paragraph list: items before index, the new ones, and the
+# items from index + drop on.
+sb_paras_splice(r): index drop items [
+    set(paras): sb_paras?
+    len(n): paras
+    vec(out): "SbPara"
+    set(i): 0
+    while(_): {i < index} [
+        at(p): paras i
+        push(_): out p
+        set(i): {i + 1}
+    ]
+    len(k): items
+    set(j): 0
+    while(_): {j < k} [
+        at(p): items j
+        push(_): out p
+        set(j): {j + 1}
+    ]
+    set(i): {index + drop}
+    while(_): {i < n} [
+        at(p): paras i
+        push(_): out p
+        set(i): {i + 1}
+    ]
+    set(sb_paras): out!
+    set(sb_dirty): true!
+    set(r): 0
+]
+
+sb_pad_enter(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    slice(left): t 0 col
+    slice(right): t col {n - col}
+    vec(items): ""
+    new(a): "SbPara" left
+    new(b): "SbPara" right
+    push(_): items a
+    push(_): items b
+    sb_paras_splice(_): row 1 items
+    set(sb_prow): {row + 1}!
+    set(sb_pcol): 0!
+    set(r): 0
+]
+
+sb_pad_backspace(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    if(_): {col > 0} [
+        utf8_prev(i): t col
+        slice(left): t 0 i
+        slice(right): t col {n - col}
+        concat(t): left right
+        sb_para_set(_): row t
+        set(sb_pcol): i!
+    ]
+    elif(_): {row > 0} [
+        sb_para_text(prev): {row - 1}
+        len(pl): prev
+        concat(joined): prev t
+        vec(items): ""
+        new(a): "SbPara" joined
+        push(_): items a
+        sb_paras_splice(_): {row - 1} 2 items
+        set(sb_prow): {row - 1}!
+        set(sb_pcol): pl!
+    ]
+    set(r): 0
+]
+
+sb_pad_delete(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    sb_pad_count(count):
+    if(_): {col < n} [
+        utf8_next(i): t col
+        slice(left): t 0 col
+        slice(right): t i {n - i}
+        concat(t): left right
+        sb_para_set(_): row t
+    ]
+    elif(_): {row + 1 < count} [
+        sb_para_text(next): {row + 1}
+        concat(joined): t next
+        vec(items): ""
+        new(a): "SbPara" joined
+        push(_): items a
+        sb_paras_splice(_): row 2 items
+    ]
+    set(r): 0
+]
+
+# Moves the cursor one wrapped line up (dir -1) or down (1), keeping the
+# horizontal position of the first move in sb_goalx.
+sb_pad_vertical(r): dir [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    sb_wrap(starts): t
+    sb_line_of(k): starts col
+    set(goal): sb_goalx?
+    if(_): {goal < 0} [
+        sb_caret_x(goal): t starts col
+        set(sb_goalx): goal!
+    ]
+    len(lines): starts
+    sb_pad_count(count):
+    set(k2): {k + dir}
+    if(_): {k2 >= 0 && k2 < lines} [
+        sb_col_at_x(c): t starts k2 goal
+        set(sb_pcol): c!
+    ]
+    elif(_): {k2 < 0 && row > 0} [
+        sb_para_text(t2): {row - 1}
+        sb_wrap(s2): t2
+        len(l2): s2
+        sb_col_at_x(c): t2 s2 {l2 - 1} goal
+        set(sb_prow): {row - 1}!
+        set(sb_pcol): c!
+    ]
+    elif(_): {k2 >= lines && row + 1 < count} [
+        sb_para_text(t2): {row + 1}
+        sb_wrap(s2): t2
+        sb_col_at_x(c): t2 s2 0 goal
+        set(sb_prow): {row + 1}!
+        set(sb_pcol): c!
+    ]
+    elif(_): {k2 < 0} [ set(sb_pcol): 0! ]
+    else(_): [
+        len(tl): t
+        set(sb_pcol): tl!
+    ]
+    set(r): 0
+]
+
+# One editing or movement key (GLFW code); ctrl for Ctrl+Home/End.
+# Returns true when the key was used.
+sb_pad_key(r): key ctrl [
+    set(r): true
+    set(keep_goal): false
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    sb_pad_count(count):
+    if(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [ sb_pad_enter(_): ]
+    elif(_): {key = SB_KEY_BACKSPACE} [ sb_pad_backspace(_): ]
+    elif(_): {key = SB_KEY_DELETE} [ sb_pad_delete(_): ]
+    elif(_): {key = SB_KEY_TAB} [ sbpadtype(_): "    " ]
+    elif(_): {key = SB_KEY_LEFT} [
+        if(_): {col > 0} [
+            utf8_prev(c): t col
+            set(sb_pcol): c!
+        ]
+        elif(_): {row > 0} [
+            sb_para_text(prev): {row - 1}
+            len(pl): prev
+            set(sb_prow): {row - 1}!
+            set(sb_pcol): pl!
+        ]
+    ]
+    elif(_): {key = SB_KEY_RIGHT} [
+        if(_): {col < n} [
+            utf8_next(c): t col
+            set(sb_pcol): c!
+        ]
+        elif(_): {row + 1 < count} [
+            set(sb_prow): {row + 1}!
+            set(sb_pcol): 0!
+        ]
+    ]
+    elif(_): {key = SB_KEY_UP} [
+        sb_pad_vertical(_): {0 - 1}
+        set(keep_goal): true
+    ]
+    elif(_): {key = SB_KEY_DOWN} [
+        sb_pad_vertical(_): 1
+        set(keep_goal): true
+    ]
+    elif(_): {key = SB_KEY_PAGE_UP || key = SB_KEY_PAGE_DOWN} [
+        set(dir): 1
+        if(_): {key = SB_KEY_PAGE_UP} [ sb_minus_one(dir): ]
+        set(steps): sb_plines_visible?
+        typeof(ts): steps
+        if(_): {ts != "integer"} [ set(steps): 20 ]
+        set(steps): {steps - 1}
+        if(_): {steps < 1} [ set(steps): 1 ]
+        set(i): 0
+        while(_): {i < steps} [
+            sb_pad_vertical(_): dir
+            set(i): {i + 1}
+        ]
+        set(keep_goal): true
+    ]
+    elif(_): {key = SB_KEY_HOME && ctrl} [
+        set(sb_prow): 0!
+        set(sb_pcol): 0!
+    ]
+    elif(_): {key = SB_KEY_END && ctrl} [
+        sb_para_text(last): {count - 1}
+        len(ll): last
+        set(sb_prow): {count - 1}!
+        set(sb_pcol): ll!
+    ]
+    elif(_): {key = SB_KEY_HOME || key = SB_KEY_END} [
+        sb_wrap(starts): t
+        sb_line_of(k): starts col
+        if(_): {key = SB_KEY_HOME} [ at(c): starts k ]
+        else(_): [ sb_line_limit(c): t starts k ]
+        set(sb_pcol): c!
+    ]
+    else(_): [ set(r): false ]
+    if(_): {keep_goal = false} [ set(sb_goalx): {0 - 1}! ]
+]
+
+sbpadkey(r): key [
+    sb_pad_key(r): key false
+]
+
+# --- document files ---------------------------------------------------------
+
+sbpadfodt(r): [
+    set(family): sb_family?
+    typeof(tf): family
+    if(_): {tf != "string" || family = ""} [ set(family): "Liberation Serif" ]
+    set(size): sb_size?
+    typeof(tz): size
+    if(_): {tz != "integer"} [ set(size): 12 ]
+    set(bold): sb_bold?
+    set(italic): sb_italic?
+    sb_xml_escape(fe): family
+    str_from_int(ss): size
+    concat(r): SB_ODF_HEAD "office:mimetype=\"application/vnd.oasis.opendocument.text\">\n<office:font-face-decls>\n<style:font-face style:name=\"" fe "\" svg:font-family=\"'" fe "'\"/>\n</office:font-face-decls>\n<office:styles>\n<style:default-style style:family=\"paragraph\">\n<style:text-properties style:font-name=\"" fe "\" fo:font-size=\"" ss "pt\""
+    if(_): {bold = true} [ concat(r): r " fo:font-weight=\"bold\"" ]
+    if(_): {italic = true} [ concat(r): r " fo:font-style=\"italic\"" ]
+    concat(r): r "/>\n</style:default-style>\n</office:styles>\n<office:body>\n<office:text>\n"
+    set(paras): sb_paras?
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        getf(t): p "text"
+        if(_): {t = ""} [ concat(r): r "<text:p/>\n" ]
+        else(_): [
+            sb_odf_text(x): t
+            concat(r): r "<text:p>" x "</text:p>\n"
+        ]
+        set(i): {i + 1}
+    ]
+    concat(r): r "</office:text>\n</office:body>\n</office:document>\n"
+]
+
+# The attributes of the first tag named name at or after from, or null.
+sb_find_tag_attrs(r): s name from [
+    set(r): null
+    concat(key): "<" name " "
+    str_find(at): s key from
+    if(_): {at >= 0} [
+        sb_xml_tag(tag): s at
+        at(r): tag 2
+    ]
+]
+
+# The document font from the styles: the default paragraph style, else
+# the first text properties that name a font. Sets sb_family, sb_size,
+# sb_bold and sb_italic for what it finds.
+sb_fodt_font(r): s [
+    set(r): 0
+    str_find(def): s "<style:default-style style:family=\"paragraph\"" 0
+    set(attrs): null
+    if(_): {def >= 0} [ sb_find_tag_attrs(attrs): s "style:text-properties" def ]
+    set(name): null
+    typeof(ta): attrs
+    if(_): {ta = "string"} [ sb_xml_attr(name): attrs "style:font-name" ]
+    typeof(tn): name
+    if(_): {tn != "string"} [
+        str_find(at): s "style:font-name=\"" 0
+        if(_): {at >= 0} [
+            set(scan): 0
+            if(_): {at > 2000} [ set(scan): {at - 2000} ]
+            set(best): {0 - 1}
+            set(go): true
+            while(_): go [
+                str_find(lt): s "<style:text-properties " scan
+                if(_): {lt >= 0 && lt < at} [
+                    set(best): lt
+                    set(scan): {lt + 1}
+                ]
+                else(_): [ set(go): false ]
+            ]
+            if(_): {best >= 0} [
+                sb_xml_tag(tag): s best
+                at(attrs): tag 2
+                sb_xml_attr(name): attrs "style:font-name"
+            ]
+        ]
+    ]
+    typeof(tn): name
+    if(_): {tn = "string"} [
+        # the face's family from its declaration
+        set(family): name
+        sb_xml_escape(en): name
+        concat(key): "<style:font-face style:name=\"" en "\""
+        str_find(at): s key 0
+        if(_): {at >= 0} [
+            sb_xml_tag(tag): s at
+            at(fa): tag 2
+            sb_xml_attr(ff): fa "svg:font-family"
+            typeof(tff): ff
+            if(_): {tff = "string"} [
+                len(fl): ff
+                set(family): ff
+                if(_): {fl >= 2} [
+                    byte(q): ff 0
+                    if(_): {q = 39 || q = 34} [ slice(family): ff 1 {fl - 2} ]
+                ]
+            ]
+        ]
+        set(sb_family): family!
+        sb_xml_attr(size): attrs "fo:font-size"
+        typeof(tsz): size
+        if(_): {tsz = "string"} [
+            sb_ends(pt): size "pt"
+            if(_): pt [
+                len(sl): size
+                slice(num): size 0 {sl - 2}
+                str_to_number(v): num
+                sb_is_number(isn): v
+                if(_): isn [
+                    str_trunc(v): {v + 0.5}
+                    if(_): {v >= 4 && v <= 200} [ set(sb_size): v! ]
+                ]
+            ]
+        ]
+        sb_xml_attr(weight): attrs "fo:font-weight"
+        sb_xml_attr(style): attrs "fo:font-style"
+        set(sb_bold): {weight = "bold"}!
+        set(sb_italic): {style = "italic"}!
+        set(r): 1
+    ]
+]
+
+sb_load_fodt(r): s [
+    set(r): "no text in this file"
+    str_find(start): s "<office:text" 0
+    if(_): {start < 0} [ return(_): r ]
+    set(r): ""
+    set(sb_bold): false!
+    set(sb_italic): false!
+    sb_fodt_font(_): s
+    vec(paras): "SbPara"
+    len(n): s
+    set(i): start
+    set(text): ""
+    set(depth): 0
+    set(hidden): 0
+    set(done): false
+    while(_): {i < n && done = false} [
+        byte(b): s i
+        if(_): {b != 60} [
+            sb_next_lt(j): s i n
+            if(_): {depth > 0 && hidden = 0} [
+                sb_xml_text(t): s i j
+                concat(text): text t
+            ]
+            set(i): j
+        ]
+        else(_): [
+            sb_xml_tag(tag): s i
+            at(kind): tag 0
+            at(name): tag 1
+            at(attrs): tag 2
+            at(i): tag 3
+            set(para): {name = "text:p" || name = "text:h"}
+            if(_): {name = "office:annotation" || name = "text:note"} [
+                if(_): {kind = "open"} [ set(hidden): {hidden + 1} ]
+                if(_): {kind = "close"} [ set(hidden): {hidden - 1} ]
+            ]
+            elif(_): {para && kind = "empty" && hidden = 0} [
+                new(p): "SbPara" ""
+                push(_): paras p
+            ]
+            elif(_): {para && kind = "open"} [
+                if(_): {depth = 0} [ set(text): "" ]
+                set(depth): {depth + 1}
+            ]
+            elif(_): {para && kind = "close"} [
+                set(depth): {depth - 1}
+                if(_): {depth <= 0 && hidden = 0} [
+                    set(depth): 0
+                    sb_clean_line(text): text
+                    new(p): "SbPara" text
+                    push(_): paras p
+                    set(text): ""
+                ]
+            ]
+            elif(_): {depth > 0 && hidden = 0} [
+                if(_): {name = "text:s"} [
+                    sb_attr_int(count): attrs "text:c" 1
+                    str_repeat(sp): " " count
+                    concat(text): text sp
+                ]
+                elif(_): {name = "text:tab"} [ concat(text): text "    " ]
+                elif(_): {name = "text:line-break"} [
+                    new(p): "SbPara" text
+                    push(_): paras p
+                    set(text): ""
+                ]
+            ]
+            elif(_): {name = "office:text" && kind = "close"} [ set(done): true ]
+        ]
+    ]
+    len(count): paras
+    if(_): {count = 0} [
+        new(p): "SbPara" ""
+        push(_): paras p
+    ]
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(sb_ptop): 0!
+    set(sb_ptopline): 0!
+    set(sb_goalx): {0 - 1}!
+]
+
+sbpadload(r): text kind [
+    sbpadreset(_):
+    set(r): ""
+    if(_): {kind = "fodt"} [ sb_load_fodt(r): text ]
+    else(_): [ sbpadsettext(_): text ]
+    set(sb_dirty): false!
+]
+
+# --- system fonts -----------------------------------------------------------
+
+sb_font_dirs(r): [
+    vec(r): ""
+    getenv(win): "WINDIR"
+    typeof(tw): win
+    if(_): {tw = "string"} [
+        concat(d): win "/Fonts"
+        push(_): r d
+    ]
+    getenv(local): "LOCALAPPDATA"
+    typeof(tl): local
+    if(_): {tl = "string"} [
+        concat(d): local "/Microsoft/Windows/Fonts"
+        push(_): r d
+    ]
+    push(_): r "/usr/share/fonts"
+    push(_): r "/usr/local/share/fonts"
+    push(_): r "/System/Library/Fonts"
+    push(_): r "/Library/Fonts"
+    getenv(home): "HOME"
+    typeof(th): home
+    if(_): {th = "string"} [
+        concat(d): home "/.local/share/fonts"
+        push(_): r d
+        concat(d): home "/.fonts"
+        push(_): r d
+        concat(d): home "/Library/Fonts"
+        push(_): r d
+    ]
+]
+
+# Adds the font file at path to families (a vector of SbFamily).
+sb_add_font(r): families path [
+    set(r): 0
+    fontinfo(info): path
+    if(_): {info = ""} [ return(_): r ]
+    str_find(bar): info "|" 0
+    len(il): info
+    slice(family): info 0 bar
+    slice(style): info {bar + 1} {il - bar - 1}
+    str_lower(style): style
+    len(n): families
+    set(found): null
+    set(i): 0
+    while(_): {i < n} [
+        at(f): families i
+        getf(fname): f "name"
+        if(_): {fname = family} [
+            set(found): f
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+    typeof(tf): found
+    if(_): {tf = "null"} [
+        str_lower(key): family
+        new(found): "SbFamily" family key "" "" "" ""
+        push(_): families found
+    ]
+    str_find(isb): style "bold" 0
+    str_find(isi): style "italic" 0
+    str_find(iso): style "oblique" 0
+    set(slot): "regular"
+    if(_): {isb >= 0 && (isi >= 0 || iso >= 0)} [ set(slot): "bolditalic" ]
+    elif(_): {isb >= 0} [ set(slot): "bold" ]
+    elif(_): {isi >= 0 || iso >= 0} [ set(slot): "italic" ]
+    getf(old): found slot
+    set(plain): {style = "regular" || style = "normal" || style = "book" || style = "roman"}
+    if(_): {old = "" || (slot = "regular" && plain)} [ setf(_): found slot path ]
+]
+
+sb_scan_dir(r): families dir depth [
+    set(r): 0
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t != "vector" || depth > 4} [ return(_): r ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        concat(path): dir "/" name
+        sb_ends(isdir): name "/"
+        if(_): isdir [
+            len(pl): path
+            slice(path): path 0 {pl - 1}
+            sb_scan_dir(_): families path {depth + 1}
+        ]
+        else(_): [
+            sb_extension(ext): name
+            if(_): {ext = ".ttf" || ext = ".ttc"} [ sb_add_font(_): families path ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sb_sort_families(r): v [
+    len(n): v
+    if(_): {n < 2} [
+        set(r): v
+        return(_): r
+    ]
+    str_trunc(half): {n / 2}
+    vec(a): ""
+    vec(b): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {i < half} [ push(_): a x ] else(_): [ push(_): b x ]
+        set(i): {i + 1}
+    ]
+    sb_sort_families(a): a
+    sb_sort_families(b): b
+    vec(r): ""
+    len(na): a
+    len(nb): b
+    set(i): 0
+    set(j): 0
+    while(_): {i < na || j < nb} [
+        set(take_a): {j >= nb}
+        if(_): {i < na && j < nb} [
+            at(fa): a i
+            at(fb): b j
+            getf(ka): fa "key"
+            getf(kb): fb "key"
+            sb_compare_text(c): ka kb
+            set(take_a): {c <= 0}
+        ]
+        if(_): take_a [
+            at(x): a i
+            set(i): {i + 1}
+        ]
+        else(_): [
+            at(x): b j
+            set(j): {j + 1}
+        ]
+        push(_): r x
+    ]
+]
+
+# The families of the installed fonts, by name.
+sb_scan_fonts(r): [
+    vec(families): ""
+    sb_font_dirs(dirs):
+    len(n): dirs
+    set(i): 0
+    while(_): {i < n} [
+        at(d): dirs i
+        is_dir(isd): d
+        if(_): {isd = 1} [ sb_scan_dir(_): families d 0 ]
+        set(i): {i + 1}
+    ]
+    # families with only bold or italic faces still get a regular one
+    len(k): families
+    set(i): 0
+    while(_): {i < k} [
+        at(f): families i
+        getf(reg): f "regular"
+        if(_): {reg = ""} [
+            getf(b): f "bold"
+            getf(it): f "italic"
+            getf(bi): f "bolditalic"
+            set(pick): b
+            if(_): {pick = ""} [ set(pick): it ]
+            if(_): {pick = ""} [ set(pick): bi ]
+            setf(_): f "regular" pick
+        ]
+        set(i): {i + 1}
+    ]
+    sb_sort_families(r): families
+]
+
+sb_family_index(r): families name [
+    sb_minus_one(r):
+    str_lower(key): name
+    len(n): families
+    set(i): 0
+    while(_): {i < n} [
+        at(f): families i
+        getf(k): f "key"
+        if(_): {k = key} [
+            set(r): i
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# The file of a family's face, falling back to the nearest one there is.
+sb_face_path(r): family bold italic [
+    getf(reg): family "regular"
+    getf(b): family "bold"
+    getf(it): family "italic"
+    getf(bi): family "bolditalic"
+    set(r): reg
+    if(_): {bold && italic} [
+        if(_): {bi != ""} [ set(r): bi ] elif(_): {b != ""} [ set(r): b ] elif(_): {it != ""} [ set(r): it ]
+    ]
+    elif(_): bold [
+        if(_): {b != ""} [ set(r): b ]
+    ]
+    elif(_): italic [
+        if(_): {it != ""} [ set(r): it ]
+    ]
+]
+
+# Loads the document font from sb_family, sb_bold, sb_italic and sb_size
+# into sb_pfont and sb_ppx; 0 (the bitmap font) when there is none.
+sb_apply_font(r): [
+    set(families): sb_families?
+    set(name): sb_family?
+    set(bold): sb_bold?
+    set(italic): sb_italic?
+    set(size): sb_size?
+    set(sb_pfont): 0!
+    str_trunc(px): {size * 4 / 3 + 0.5}
+    set(sb_ppx): px!
+    typeof(tf): families
+    set(r): 0
+    if(_): {tf = "vector"} [
+        sb_family_index(i): families name
+        if(_): {i >= 0} [
+            at(f): families i
+            sb_face_path(path): f bold italic
+            loadfont(r): path
+            set(sb_pfont): r!
+        ]
+    ]
+]
+
+# --- the GUI: shared ----------------------------------------------------------
+
+sb_ui_text(r): x y text color [
+    set(canvas): sb_canvas?
+    set(font): sb_uifont?
+    if(_): {font > 0} [ canvasfonttext(r): canvas x y text color font SB_UIPX ]
+    else(_): [ canvastext(r): canvas x {y + 4} text color ]
+]
+
+sb_ui_width(r): text [
+    set(font): sb_uifont?
+    if(_): {font > 0} [ fontwidth(r): font SB_UIPX text ]
+    else(_): [
+        len(n): text
+        set(r): {n * 7}
+    ]
+]
+
+# The longest start of text that fits in width pixels of the UI font.
+sb_fit(r): text width [
+    sb_ui_width(w): text
+    set(r): text
+    if(_): {w > width} [
+        set(r): ""
+        set(i): 0
+        len(n): text
+        set(go): {i < n}
+        while(_): go [
+            utf8_next(next): text i
+            slice(piece): text 0 next
+            sb_ui_width(w): piece
+            if(_): {w > width} [ set(go): false ]
+            else(_): [
+                set(r): piece
+                set(i): next
+                set(go): {i < n}
+            ]
+        ]
+    ]
+]
+
+# A font for the program's own labels, from the usual places.
+sb_find_ui_font(r): [
+    set(r): 0
+    vec(paths): ""
+    getenv(win): "WINDIR"
+    typeof(tw): win
+    if(_): {tw = "string"} [
+        concat(p): win "/Fonts/segoeui.ttf"
+        push(_): paths p
+        concat(p): win "/Fonts/tahoma.ttf"
+        push(_): paths p
+        concat(p): win "/Fonts/arial.ttf"
+        push(_): paths p
+    ]
+    push(_): paths "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    push(_): paths "/usr/share/fonts/TTF/DejaVuSans.ttf"
+    push(_): paths "/usr/share/fonts/dejavu/DejaVuSans.ttf"
+    push(_): paths "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+    push(_): paths "/System/Library/Fonts/Supplemental/Arial.ttf"
+    len(n): paths
+    set(i): 0
+    while(_): {i < n && r = 0} [
+        at(p): paths i
+        file_exists(e): p
+        if(_): e [ loadfont(r): p ]
+        set(i): {i + 1}
+    ]
+]
+
+sb_status(r): text [
+    set(sb_message): text!
+    set(r): 0
+]
+
+sb_canvas_size(r): [
+    set(canvas): sb_canvas?
+    getwidth(w): canvas
+    getheight(h): canvas
+    if(_): {w < 50} [ set(w): SB_WIDTH ]
+    if(_): {h < 50} [ set(h): {SB_HEIGHT - 40} ]
+    vec(r): ""
+    push(_): r w
+    push(_): r h
+]
+
+sb_draw_status(r): w h [
+    set(canvas): sb_canvas?
+    canvasfill(_): canvas 0 {h - SB_STATUSH} w SB_STATUSH 15263976
+    canvasline(_): canvas 0 {h - SB_STATUSH} w {h - SB_STATUSH} 13158600
+    set(path): sb_path?
+    set(name): "Untitled"
+    if(_): {path != ""} [ sb_basename(name): path ]
+    set(dirty): sb_dirty?
+    if(_): {dirty = true} [ concat(name): name " *" ]
+    set(msg): sb_message?
+    set(left): sb_status_left?
+    if(_): {msg != ""} [ set(left): msg ]
+    sb_ui_text(_): 8 {h - SB_STATUSH + 3} left 3355443
+    sb_ui_width(nw): name
+    sb_ui_text(_): {w - nw - 10} {h - SB_STATUSH + 3} name 3355443
+    set(r): 0
+]
+
+# The file-name or yes/no box over everything else.
+sb_draw_dialog(r): w h [
+    set(kind): sb_dialog?
+    set(r): 0
+    if(_): {kind = ""} [ return(_): r ]
+    set(canvas): sb_canvas?
+    set(bw): 560
+    if(_): {bw > w - 20} [ set(bw): {w - 20} ]
+    set(bh): 116
+    str_trunc(x): {(w - bw) / 2}
+    str_trunc(y): {(h - bh) / 3}
+    canvasfill(_): canvas {x + 3} {y + 3} bw bh 10066329
+    canvasfill(_): canvas x y bw bh 16250871
+    canvasrect(_): canvas x y bw bh 7368816
+    set(title): "Open file"
+    if(_): {kind = "save"} [ set(title): "Save as" ]
+    if(_): {kind = "discard"} [ set(title): "Discard the unsaved changes?" ]
+    sb_ui_text(_): {x + 14} {y + 12} title 2236962
+    if(_): {kind = "discard"} [
+        sb_ui_text(_): {x + 14} {y + 48} "Enter: discard them      Esc: keep editing" 4473924
+    ]
+    else(_): [
+        canvasfill(_): canvas {x + 14} {y + 40} {bw - 28} 28 16777215
+        canvasrect(_): canvas {x + 14} {y + 40} {bw - 28} 28 8421504
+        set(text): sb_dlg_text?
+        sb_ui_width(tw): text
+        set(room): {bw - 48}
+        set(shown): text
+        # long paths show their end
+        while(_): {tw > room} [
+            utf8_next(cut): shown 0
+            len(sl): shown
+            slice(shown): shown cut {sl - cut}
+            sb_ui_width(tw): shown
+        ]
+        sb_ui_text(_): {x + 20} {y + 45} shown 0
+        canvasfill(_): canvas {x + 21 + tw} {y + 44} 2 20 0
+        set(hint): ".fods or .csv"
+        set(mode): sb_mode?
+        if(_): {mode = "pad"} [ set(hint): ".fodt or .txt" ]
+        concat(hint): "Enter: OK    Esc: cancel    Formats: " hint
+        sb_ui_text(_): {x + 14} {y + 82} hint 6316128
+    ]
+]
+
+sb_dialog_open(r): kind [
+    set(sb_dialog): kind!
+    set(path): sb_path?
+    set(mode): sb_mode?
+    set(text): path
+    if(_): {text = ""} [
+        getcwd(cwd):
+        set(name): "untitled.fods"
+        if(_): {mode = "pad"} [ set(name): "untitled.fodt" ]
+        if(_): {kind = "open"} [ set(name): "" ]
+        concat(text): cwd "/" name
+    ]
+    elif(_): {kind = "open"} [
+        sb_basename(base): path
+        len(pl): path
+        len(bl): base
+        slice(text): path 0 {pl - bl}
+    ]
+    set(sb_dlg_text): text!
+    set(r): 0
+]
+
+sb_is_dirty(r): [
+    set(r): sb_dirty?
+    if(_): {r != true} [ set(r): false ]
+]
+
+# New, open, save and save as, asking first when changes would be lost.
+sb_action(r): action [
+    set(r): 0
+    sb_status(_): ""
+    sb_is_dirty(dirty):
+    if(_): {(action = "new" || action = "open") && dirty} [
+        set(sb_dlg_next): action!
+        set(sb_dialog): "discard"!
+        return(_): r
+    ]
+    if(_): {action = "new"} [ sb_new(_): ]
+    elif(_): {action = "open"} [ sb_dialog_open(_): "open" ]
+    elif(_): {action = "save"} [
+        set(path): sb_path?
+        if(_): {path = ""} [ sb_dialog_open(_): "save" ]
+        else(_): [ sb_save(_): path ]
+    ]
+    elif(_): {action = "saveas"} [ sb_dialog_open(_): "save" ]
+]
+
+sb_new(r): [
+    set(mode): sb_mode?
+    if(_): {mode = "pad"} [ sbpadreset(_): ] else(_): [ sb_sheet_new(_): ]
+    set(sb_path): ""!
+    set(sb_dirty): false!
+    set(r): 0
+]
+
+sb_sheet_new(r): [
+    sbsheetreset(_):
+    set(sb_row): 0!
+    set(sb_col): 0!
+    set(sb_top): 0!
+    set(sb_left): 0!
+    set(sb_edit): false!
+    set(sb_buf): ""!
+    set(r): 0
+]
+
+sb_open(r): path [
+    set(r): false
+    set(mode): sb_mode?
+    sb_extension(ext): path
+    if(_): {ext = ".ods" || ext = ".odt" || ext = ".xlsx" || ext = ".docx"} [
+        sb_status(_): "Packed (zip) files are not supported: save it as flat ODF (.fods/.fodt) first"
+        return(_): r
+    ]
+    sb_read(text): path
+    typeof(tt): text
+    if(_): {tt != "string"} [
+        concat(msg): "Cannot read " path
+        sb_status(_): msg
+        return(_): r
+    ]
+    if(_): {mode = "pad"} [
+        set(kind): "txt"
+        if(_): {ext = ".fodt"} [ set(kind): "fodt" ]
+        sbpadload(err): text kind
+        sb_apply_font(_):
+        sb_pad_tool_labels(_):
+    ]
+    else(_): [
+        set(kind): "fods"
+        if(_): {ext = ".csv" || ext = ".txt"} [ set(kind): "csv" ]
+        sb_sheet_new(_):
+        sbsheetload(err): text kind
+    ]
+    if(_): {err != ""} [
+        concat(msg): "Cannot open " path ": " err
+        sb_status(_): msg
+        return(_): r
+    ]
+    set(sb_path): path!
+    set(sb_dirty): false!
+    sb_basename(base): path
+    concat(msg): "Opened " base
+    sb_status(_): msg
+    set(r): true
+]
+
+sb_save(r): path [
+    set(r): false
+    set(mode): sb_mode?
+    sb_extension(ext): path
+    if(_): {ext = ".ods" || ext = ".odt" || ext = ".xlsx" || ext = ".docx"} [
+        sb_status(_): "Packed (zip) files are not supported: use .fods or .fodt"
+        return(_): r
+    ]
+    if(_): {ext = ""} [
+        if(_): {mode = "pad"} [ concat(path): path ".fodt" ] else(_): [ concat(path): path ".fods" ]
+        sb_extension(ext): path
+    ]
+    if(_): {mode = "pad"} [
+        if(_): {ext = ".fodt"} [ sbpadfodt(text): ] else(_): [ sbpadtext(text): ]
+    ]
+    else(_): [
+        if(_): {ext = ".csv"} [ sbsheetcsv(text): ] else(_): [ sbsheetfods(text): ]
+    ]
+    sb_write(ok): path text
+    if(_): ok [
+        set(sb_path): path!
+        set(sb_dirty): false!
+        sb_basename(base): path
+        concat(msg): "Saved " base
+        if(_): {ext = ".csv"} [ concat(msg): msg " (formulas as their values)" ]
+        sb_status(_): msg
+        set(r): true
+    ]
+    else(_): [
+        concat(msg): "Cannot write " path
+        sb_status(_): msg
+    ]
+]
+
+# A key while the dialog is up.
+sb_dialog_key(r): key [
+    set(r): 0
+    set(kind): sb_dialog?
+    set(ctrl): sb_ctrl?
+    if(_): {key = SB_KEY_ESC} [ set(sb_dialog): ""! ]
+    elif(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [
+        set(sb_dialog): ""!
+        if(_): {kind = "discard"} [
+            set(next): sb_dlg_next?
+            set(sb_dirty): false!
+            sb_action(_): next
+        ]
+        else(_): [
+            set(text): sb_dlg_text?
+            str_trim(text): text
+            if(_): {text != ""} [
+                if(_): {kind = "open"} [ sb_open(_): text ] else(_): [ sb_save(_): text ]
+            ]
+        ]
+    ]
+    elif(_): {key = SB_KEY_BACKSPACE} [
+        set(text): sb_dlg_text?
+        sb_drop_last(text): text
+        set(sb_dlg_text): text!
+    ]
+    elif(_): {key = 85 && ctrl = true} [ set(sb_dlg_text): ""! ]
+]
+
+sb_dialog_char(r): s [
+    set(kind): sb_dialog?
+    if(_): {kind != "discard"} [
+        set(text): sb_dlg_text?
+        concat(text): text s
+        set(sb_dlg_text): text!
+    ]
+    set(r): 0
+]
+
+sb_modifier(r): key down [
+    set(r): true
+    if(_): {key = 340 || key = 344} [ set(sb_shift): down! ]
+    elif(_): {key = 341 || key = 345} [ set(sb_ctrl): down! ]
+    elif(_): {key = 342 || key = 346} [ set(sb_alt): down! ]
+    else(_): [ set(r): false ]
+]
+
+# Ctrl shortcuts both modes share; true when the key was one.
+sb_common_key(r): key [
+    set(r): false
+    set(ctrl): sb_ctrl?
+    set(shift): sb_shift?
+    if(_): {ctrl != true} [
+        if(_): {key = SB_KEY_F1} [
+            sb_help(_):
+            set(r): true
+        ]
+        return(_): r
+    ]
+    set(r): true
+    if(_): {key = 78} [ sb_action(_): "new" ]
+    elif(_): {key = 79} [ sb_action(_): "open" ]
+    elif(_): {key = 83 && shift = true} [ sb_action(_): "saveas" ]
+    elif(_): {key = 83} [ sb_action(_): "save" ]
+    elif(_): {key = 81} [
+        set(window): sb_window?
+        close(_): window
+    ]
+    else(_): [ set(r): false ]
+]
+
+sb_help(r): [
+    set(mode): sb_mode?
+    if(_): {mode = "pad"} [
+        set(text): "Type to write. Arrows, Home/End, Ctrl+Home/End and Page Up/Down move the cursor. FONT picks a system font; - and + change the size, B and I make the text bold or italic (Ctrl+B, Ctrl+I, Ctrl+[ and Ctrl+]). Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fodt (OpenDocument text) or .txt."
+    ]
+    else(_): [
+        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell, F2 to change it, Enter to keep it, Esc to cancel, Delete to clear. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
+    ]
+    messagebox(_): "Siberia" text
+    set(r): 0
+]
+
+# --- the GUI: sheet -----------------------------------------------------------
+
+sb_visible_rows(r): h [
+    str_trunc(r): {(h - SB_BARH - SB_ROWH - SB_STATUSH) / SB_ROWH}
+    if(_): {r < 1} [ set(r): 1 ]
+]
+
+sb_visible_cols(r): w [
+    str_trunc(r): {(w - SB_HEADW) / SB_COLW}
+    if(_): {r < 1} [ set(r): 1 ]
+]
+
+# Scrolls so that the current cell is in view.
+sb_reveal(r): [
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    sb_visible_rows(vr): h
+    sb_visible_cols(vc): w
+    set(row): sb_row?
+    set(col): sb_col?
+    set(top): sb_top?
+    set(left): sb_left?
+    if(_): {row < top} [ set(top): row ]
+    if(_): {row >= top + vr} [ set(top): {row - vr + 1} ]
+    if(_): {col < left} [ set(left): col ]
+    if(_): {col >= left + vc} [ set(left): {col - vc + 1} ]
+    set(sb_top): top!
+    set(sb_left): left!
+    set(r): 0
+]
+
+sb_sheet_draw(r): [
+    set(canvas): sb_canvas?
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    canvasclear(_): canvas 16777215
+    set(row): sb_row?
+    set(col): sb_col?
+    set(top): sb_top?
+    set(left): sb_left?
+    set(editing): sb_edit?
+    set(index): {row * SB_COLS + col}
+    # formula bar
+    canvasfill(_): canvas 0 0 w SB_BARH 16250871
+    canvasline(_): canvas 0 {SB_BARH - 1} w {SB_BARH - 1} 13158600
+    sb_cellname(name): index
+    sb_ui_text(_): 10 6 name 2236962
+    canvasline(_): canvas 64 4 64 {SB_BARH - 5} 13158600
+    if(_): {editing = true} [ set(content): sb_buf? ]
+    else(_): [
+        sb_cell(cur): index
+        getf(content): cur "text"
+    ]
+    sb_fit(shown): content {w - 90}
+    sb_ui_text(_): 74 6 shown 0
+    if(_): {editing = true} [
+        sb_ui_width(cw): shown
+        canvasfill(_): canvas {75 + cw} 6 1 16 0
+    ]
+    # headers
+    sb_visible_rows(vr): h
+    sb_visible_cols(vc): w
+    set(gy): {SB_BARH + SB_ROWH}
+    canvasfill(_): canvas 0 SB_BARH w SB_ROWH 15329769
+    canvasfill(_): canvas 0 SB_BARH SB_HEADW {h - SB_BARH - SB_STATUSH} 15329769
+    set(c): 0
+    while(_): {c <= vc && left + c < SB_COLS} [
+        set(x): {SB_HEADW + c * SB_COLW}
+        sb_colname(cn): {left + c}
+        sb_ui_width(cnw): cn
+        set(fill): 15329769
+        if(_): {left + c = col} [
+            canvasfill(_): canvas x SB_BARH SB_COLW SB_ROWH 13883606
+        ]
+        str_trunc(cx): {x + (SB_COLW - cnw) / 2}
+        sb_ui_text(_): cx {SB_BARH + 3} cn 3355443
+        canvasline(_): canvas {x + SB_COLW} SB_BARH {x + SB_COLW} {h - SB_STATUSH} 14211288
+        set(c): {c + 1}
+    ]
+    set(k): 0
+    while(_): {k <= vr && top + k < SB_ROWS} [
+        set(y): {gy + k * SB_ROWH}
+        if(_): {top + k = row} [
+            canvasfill(_): canvas 0 y SB_HEADW SB_ROWH 13883606
+        ]
+        str_from_int(rn): {top + k + 1}
+        sb_ui_width(rnw): rn
+        str_trunc(rx): {(SB_HEADW - rnw) / 2}
+        sb_ui_text(_): rx {y + 3} rn 3355443
+        canvasline(_): canvas 0 {y + SB_ROWH} w {y + SB_ROWH} 14211288
+        set(k): {k + 1}
+    ]
+    canvasline(_): canvas SB_HEADW SB_BARH SB_HEADW {h - SB_STATUSH} 11842740
+    canvasline(_): canvas 0 gy w gy 11842740
+    # cells
+    set(k): 0
+    while(_): {k <= vr && top + k < SB_ROWS} [
+        set(c): 0
+        while(_): {c <= vc && left + c < SB_COLS} [
+            set(ci): {(top + k) * SB_COLS + left + c}
+            sb_cell(cell): ci
+            getf(text): cell "text"
+            if(_): {text != "" && (ci != index || editing != true)} [
+                sb_value(v): ci
+                sb_show_value(s): v
+                sb_fit(s): s {SB_COLW - 8}
+                sb_is_number(isn): v
+                sb_is_err(ise): v
+                set(color): 0
+                if(_): ise [ set(color): 12592896 ]
+                set(x): {SB_HEADW + c * SB_COLW + 4}
+                if(_): isn [
+                    sb_ui_width(sw): s
+                    set(x): {SB_HEADW + (c + 1) * SB_COLW - 4 - sw}
+                ]
+                sb_ui_text(_): x {gy + k * SB_ROWH + 3} s color
+            ]
+            set(c): {c + 1}
+        ]
+        set(k): {k + 1}
+    ]
+    # the current cell
+    if(_): {row >= top && col >= left} [
+        set(x): {SB_HEADW + (col - left) * SB_COLW}
+        set(y): {gy + (row - top) * SB_ROWH}
+        if(_): {editing = true} [
+            set(buf): sb_buf?
+            canvasfill(_): canvas {x + 1} {y + 1} {SB_COLW - 1} {SB_ROWH - 1} 16777215
+            sb_ui_width(bw): buf
+            set(shown): buf
+            while(_): {bw > SB_COLW - 10} [
+                utf8_next(cut): shown 0
+                len(sl): shown
+                slice(shown): shown cut {sl - cut}
+                sb_ui_width(bw): shown
+            ]
+            sb_ui_text(_): {x + 4} {y + 3} shown 0
+            canvasfill(_): canvas {x + 5 + bw} {y + 3} 1 16 0
+        ]
+        canvasrect(_): canvas x y {SB_COLW + 1} {SB_ROWH + 1} 2192198
+        canvasrect(_): canvas {x + 1} {y + 1} {SB_COLW - 1} {SB_ROWH - 1} 2192198
+    ]
+    sb_draw_status(_): w h
+    sb_draw_dialog(_): w h
+    set(r): 0
+]
+
+sb_sheet_move(r): drow dcol [
+    set(row): sb_row?
+    set(col): sb_col?
+    set(row): {row + drow}
+    set(col): {col + dcol}
+    if(_): {row < 0} [ set(row): 0 ]
+    if(_): {col < 0} [ set(col): 0 ]
+    if(_): {row >= SB_ROWS} [ set(row): {SB_ROWS - 1} ]
+    if(_): {col >= SB_COLS} [ set(col): {SB_COLS - 1} ]
+    set(sb_row): row!
+    set(sb_col): col!
+    sb_reveal(_):
+    set(r): 0
+]
+
+sb_sheet_commit(r): [
+    set(editing): sb_edit?
+    if(_): {editing = true} [
+        set(buf): sb_buf?
+        set(row): sb_row?
+        set(col): sb_col?
+        sb_set_index(_): {row * SB_COLS + col} buf
+        set(sb_edit): false!
+        set(sb_dirty): true!
+    ]
+    set(r): 0
+]
+
+sb_sheet_key(r): key [
+    set(r): 0
+    set(editing): sb_edit?
+    set(shift): sb_shift?
+    set(ctrl): sb_ctrl?
+    sb_canvas_size(size):
+    at(h): size 1
+    sb_visible_rows(vr): h
+    set(back): {shift = true}
+    if(_): {editing = true} [
+        if(_): {key = SB_KEY_ESC} [ set(sb_edit): false! ]
+        elif(_): {key = SB_KEY_BACKSPACE} [
+            set(buf): sb_buf?
+            sb_drop_last(buf): buf
+            set(sb_buf): buf!
+        ]
+        elif(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [
+            sb_sheet_commit(_):
+            if(_): back [ sb_sheet_move(_): {0 - 1} 0 ] else(_): [ sb_sheet_move(_): 1 0 ]
+        ]
+        elif(_): {key = SB_KEY_TAB} [
+            sb_sheet_commit(_):
+            if(_): back [ sb_sheet_move(_): 0 {0 - 1} ] else(_): [ sb_sheet_move(_): 0 1 ]
+        ]
+        elif(_): {key = SB_KEY_UP} [
+            sb_sheet_commit(_):
+            sb_sheet_move(_): {0 - 1} 0
+        ]
+        elif(_): {key = SB_KEY_DOWN} [
+            sb_sheet_commit(_):
+            sb_sheet_move(_): 1 0
+        ]
+        elif(_): {key = SB_KEY_LEFT} [
+            sb_sheet_commit(_):
+            sb_sheet_move(_): 0 {0 - 1}
+        ]
+        elif(_): {key = SB_KEY_RIGHT} [
+            sb_sheet_commit(_):
+            sb_sheet_move(_): 0 1
+        ]
+        return(_): r
+    ]
+    set(row): sb_row?
+    set(col): sb_col?
+    if(_): {key = SB_KEY_UP} [ sb_sheet_move(_): {0 - 1} 0 ]
+    elif(_): {key = SB_KEY_DOWN || key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [
+        if(_): {back && key != SB_KEY_DOWN} [ sb_sheet_move(_): {0 - 1} 0 ] else(_): [ sb_sheet_move(_): 1 0 ]
+    ]
+    elif(_): {key = SB_KEY_LEFT} [ sb_sheet_move(_): 0 {0 - 1} ]
+    elif(_): {key = SB_KEY_RIGHT} [ sb_sheet_move(_): 0 1 ]
+    elif(_): {key = SB_KEY_TAB} [
+        if(_): back [ sb_sheet_move(_): 0 {0 - 1} ] else(_): [ sb_sheet_move(_): 0 1 ]
+    ]
+    elif(_): {key = SB_KEY_PAGE_UP} [ sb_sheet_move(_): {0 - vr} 0 ]
+    elif(_): {key = SB_KEY_PAGE_DOWN} [ sb_sheet_move(_): vr 0 ]
+    elif(_): {key = SB_KEY_HOME && ctrl = true} [ sb_sheet_move(_): {0 - row} {0 - col} ]
+    elif(_): {key = SB_KEY_HOME} [ sb_sheet_move(_): 0 {0 - col} ]
+    elif(_): {key = SB_KEY_END && ctrl = true} [
+        set(mr): sb_maxrow?
+        set(mc): sb_maxcol?
+        if(_): {mr < 0} [ set(mr): 0 ]
+        if(_): {mc < 0} [ set(mc): 0 ]
+        sb_sheet_move(_): {mr - row} {mc - col}
+    ]
+    elif(_): {key = SB_KEY_F2} [
+        sb_cell(cell): {row * SB_COLS + col}
+        getf(text): cell "text"
+        set(sb_buf): text!
+        set(sb_edit): true!
+    ]
+    elif(_): {key = SB_KEY_DELETE} [
+        sb_set_index(_): {row * SB_COLS + col} ""
+        set(sb_dirty): true!
+    ]
+    elif(_): {key = SB_KEY_BACKSPACE} [
+        set(sb_buf): ""!
+        set(sb_edit): true!
+    ]
+]
+
+sb_sheet_char(r): s [
+    set(editing): sb_edit?
+    if(_): {editing = true} [
+        set(buf): sb_buf?
+        concat(buf): buf s
+        set(sb_buf): buf!
+    ]
+    else(_): [
+        set(sb_buf): s!
+        set(sb_edit): true!
+    ]
+    set(r): 0
+]
+
+sb_sheet_click(r): x y double [
+    set(r): 0
+    set(top): sb_top?
+    set(left): sb_left?
+    set(gy): {SB_BARH + SB_ROWH}
+    if(_): {x < SB_HEADW || y < gy} [ return(_): r ]
+    str_trunc(c): {(x - SB_HEADW) / SB_COLW}
+    str_trunc(k): {(y - gy) / SB_ROWH}
+    set(row): {top + k}
+    set(col): {left + c}
+    if(_): {row >= SB_ROWS || col >= SB_COLS} [ return(_): r ]
+    sb_sheet_commit(_):
+    set(sb_row): row!
+    set(sb_col): col!
+    sb_reveal(_):
+    if(_): double [
+        sb_cell(cell): {row * SB_COLS + col}
+        getf(text): cell "text"
+        set(sb_buf): text!
+        set(sb_edit): true!
+    ]
+]
+
+sb_sheet_wheel(r): direction [
+    set(top): sb_top?
+    set(top): {top - direction * 3}
+    if(_): {top < 0} [ set(top): 0 ]
+    if(_): {top > SB_ROWS - 1} [ set(top): {SB_ROWS - 1} ]
+    set(sb_top): top!
+    set(r): 0
+]
+
+# --- the GUI: pad -------------------------------------------------------------
+
+$define SB_SIZES "8 9 10 11 12 14 16 18 20 22 24 28 32 36 48 72"
+
+sb_pad_tool_labels(r): [
+    set(buttons): sb_buttons?
+    set(family): sb_family?
+    set(size): sb_size?
+    set(bold): sb_bold?
+    set(italic): sb_italic?
+    typeof(tb): buttons
+    set(r): 0
+    if(_): {tb != "vector"} [ return(_): r ]
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(handle): entry 0
+        at(action): entry 1
+        if(_): {action = "font"} [
+            set(label): family
+            len(fl): label
+            if(_): {fl > 24} [
+                slice(label): label 0 22
+                concat(label): label ".."
+            ]
+            concat(label): "Font: " label
+            settext(_): handle label
+        ]
+        elif(_): {action = "size"} [
+            str_from_int(ss): size
+            concat(label): ss " pt"
+            settext(_): handle label
+        ]
+        elif(_): {action = "bold"} [ setchecked(_): handle {bold = true} ]
+        elif(_): {action = "italic"} [ setchecked(_): handle {italic = true} ]
+        set(i): {i + 1}
+    ]
+]
+
+sb_pad_size_step(r): dir [
+    set(size): sb_size?
+    set(words): SB_SIZES
+    set(r): size
+    set(best): size
+    len(n): words
+    set(i): 0
+    set(from): 0
+    while(_): {i <= n} [
+        set(b): 32
+        if(_): {i < n} [ byte(b): words i ]
+        if(_): {b = 32} [
+            slice(w): words from {i - from}
+            str_to_number(v): w
+            if(_): {dir > 0 && v > size && (best = size || v < best)} [ set(best): v ]
+            if(_): {dir < 0 && v < size && (best = size || v > best)} [ set(best): v ]
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    set(sb_size): best!
+    set(sb_dirty): true!
+    sb_apply_font(_):
+    sb_pad_tool_labels(_):
+    set(r): best
+]
+
+# Moves the first shown line (sb_ptop, sb_ptopline) by n wrapped lines.
+sb_pad_scroll(r): n [
+    set(p): sb_ptop?
+    set(k): sb_ptopline?
+    sb_pad_count(count):
+    while(_): {n > 0} [
+        sb_para_text(t): p
+        sb_wrap(starts): t
+        len(lines): starts
+        if(_): {k + 1 < lines} [ set(k): {k + 1} ]
+        elif(_): {p + 1 < count} [
+            set(p): {p + 1}
+            set(k): 0
+        ]
+        set(n): {n - 1}
+    ]
+    while(_): {n < 0} [
+        if(_): {k > 0} [ set(k): {k - 1} ]
+        elif(_): {p > 0} [
+            set(p): {p - 1}
+            sb_para_text(t): p
+            sb_wrap(starts): t
+            len(lines): starts
+            set(k): {lines - 1}
+        ]
+        set(n): {n + 1}
+    ]
+    set(sb_ptop): p!
+    set(sb_ptopline): k!
+    set(r): 0
+]
+
+# Scrolls so that the cursor's line is on screen.
+sb_pad_reveal(r): [
+    set(r): 0
+    set(visible): sb_plines_visible?
+    typeof(tv): visible
+    if(_): {tv != "integer"} [ return(_): r ]
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    set(top): sb_ptop?
+    set(topline): sb_ptopline?
+    sb_para_text(t): row
+    sb_wrap(starts): t
+    sb_line_of(k): starts col
+    if(_): {row < top || (row = top && k < topline)} [
+        set(sb_ptop): row!
+        set(sb_ptopline): k!
+        return(_): r
+    ]
+    # lines from the top to the cursor, when that is at most a screen
+    set(before): 0
+    set(far): {row - top >= visible}
+    if(_): {far = false} [
+        set(p): top
+        while(_): {p < row} [
+            sb_para_text(tp): p
+            sb_wrap(sp): tp
+            len(lp): sp
+            set(before): {before + lp}
+            set(p): {p + 1}
+        ]
+        set(before): {before - topline + k}
+        set(far): {before >= visible}
+    ]
+    if(_): far [
+        set(sb_ptop): row!
+        set(sb_ptopline): k!
+        sb_pad_scroll(_): {1 - visible}
+    ]
+]
+
+sb_pad_draw(r): [
+    set(canvas): sb_canvas?
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    set(width): {w - 2 * SB_MARGIN}
+    if(_): {width < 40} [ set(width): 40 ]
+    set(sb_pwidth): width!
+    sb_line_height(lh):
+    str_trunc(visible): {(h - SB_STATUSH - 16) / lh}
+    if(_): {visible < 1} [ set(visible): 1 ]
+    set(sb_plines_visible): visible!
+    set(follow): sb_pfollow?
+    if(_): {follow != false} [ sb_pad_reveal(_): ]
+    canvasclear(_): canvas 16777215
+    set(font): sb_pfont?
+    set(px): sb_ppx?
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    set(p): sb_ptop?
+    set(k): sb_ptopline?
+    sb_pad_count(count):
+    vec(lines): ""
+    set(y): 12
+    set(shown): 0
+    while(_): {shown < visible && p < count} [
+        sb_para_text(t): p
+        sb_wrap(starts): t
+        len(nl): starts
+        if(_): {k >= nl} [ set(k): {nl - 1} ]
+        while(_): {k < nl && shown < visible} [
+            at(start): starts k
+            len(end): t
+            if(_): {k + 1 < nl} [ at(end): starts {k + 1} ]
+            slice(piece): t start {end - start}
+            if(_): {font > 0} [ canvasfonttext(_): canvas SB_MARGIN y piece 0 font px ]
+            else(_): [ canvastextscale(_): canvas SB_MARGIN {y + 3} piece 0 2 ]
+            vec(entry): ""
+            push(_): entry p
+            push(_): entry start
+            push(_): entry k
+            push(_): entry y
+            push(_): lines entry
+            sb_line_of(ck): starts col
+            if(_): {p = row && ck = k} [
+                slice(before): t start {col - start}
+                sb_measure(cx): before
+                str_trunc(cx): cx
+                canvasfill(_): canvas {SB_MARGIN + cx} y 2 lh 0
+            ]
+            set(y): {y + lh}
+            set(shown): {shown + 1}
+            set(k): {k + 1}
+        ]
+        set(p): {p + 1}
+        set(k): 0
+    ]
+    set(sb_plines): lines!
+    # status: where the cursor is
+    sb_para_text(t): row
+    utf8_column(column): t col
+    str_from_int(rs): {row + 1}
+    str_from_int(cs): {column + 1}
+    str_from_int(ps): count
+    concat(left): "Paragraph " rs " of " ps ", column " cs
+    set(sb_status_left): left!
+    sb_draw_status(_): w h
+    sb_pad_draw_picker(_): w h
+    sb_draw_dialog(_): w h
+    set(r): 0
+]
+
+sb_pad_click(r): x y [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker = true} [
+        sb_picker_click(_): x y
+        return(_): r
+    ]
+    set(lines): sb_plines?
+    typeof(tl): lines
+    if(_): {tl != "vector"} [ return(_): r ]
+    len(n): lines
+    if(_): {n = 0} [ return(_): r ]
+    sb_line_height(lh):
+    set(pick): {n - 1}
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): lines i
+        at(ly): entry 3
+        if(_): {y < ly + lh && pick = n - 1 && y >= ly} [ set(pick): i ]
+        set(i): {i + 1}
+    ]
+    at(first): lines 0
+    at(fy): first 3
+    if(_): {y < fy} [ set(pick): 0 ]
+    at(entry): lines pick
+    at(p): entry 0
+    at(k): entry 2
+    sb_para_text(t): p
+    sb_wrap(starts): t
+    sb_col_at_x(c): t starts k {x - SB_MARGIN}
+    set(sb_prow): p!
+    set(sb_pcol): c!
+    set(sb_goalx): {0 - 1}!
+]
+
+# The font picker: the system's families in a list over the page.
+$define SB_PICK_ROWS 14
+$define SB_PICK_ROWH 24
+
+sb_picker_box(r): w h [
+    set(bw): 320
+    set(bh): {SB_PICK_ROWS * SB_PICK_ROWH + 8}
+    vec(r): ""
+    push(_): r 140
+    push(_): r 6
+    push(_): r bw
+    push(_): r bh
+]
+
+sb_pad_draw_picker(r): w h [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker != true} [ return(_): r ]
+    set(canvas): sb_canvas?
+    set(families): sb_families?
+    len(n): families
+    set(sel): sb_pick?
+    set(top): sb_pick_top?
+    if(_): {sel < top} [ set(top): sel ]
+    if(_): {sel >= top + SB_PICK_ROWS} [ set(top): {sel - SB_PICK_ROWS + 1} ]
+    set(sb_pick_top): top!
+    sb_picker_box(box): w h
+    at(x): box 0
+    at(y): box 1
+    at(bw): box 2
+    at(bh): box 3
+    canvasfill(_): canvas {x + 3} {y + 3} bw bh 10066329
+    canvasfill(_): canvas x y bw bh 16777215
+    canvasrect(_): canvas x y bw bh 7368816
+    if(_): {n = 0} [
+        sb_ui_text(_): {x + 10} {y + 8} "No TrueType fonts found" 4473924
+        return(_): r
+    ]
+    set(i): 0
+    while(_): {i < SB_PICK_ROWS && top + i < n} [
+        at(f): families {top + i}
+        getf(name): f "name"
+        set(ry): {y + 4 + i * SB_PICK_ROWH}
+        set(color): 0
+        if(_): {top + i = sel} [
+            canvasfill(_): canvas {x + 2} ry {bw - 4} SB_PICK_ROWH 2192198
+            set(color): 16777215
+        ]
+        sb_fit(name): name {bw - 24}
+        sb_ui_text(_): {x + 10} {ry + 4} name color
+        set(i): {i + 1}
+    ]
+    # where in the list
+    if(_): {n > SB_PICK_ROWS} [
+        str_trunc(ty): {y + 4 + (bh - 8) * top / n}
+        str_trunc(th): {(bh - 8) * SB_PICK_ROWS / n}
+        if(_): {th < 8} [ set(th): 8 ]
+        canvasfill(_): canvas {x + bw - 6} ty 3 th 11184810
+    ]
+]
+
+sb_picker_open(r): [
+    set(families): sb_families?
+    set(name): sb_family?
+    sb_family_index(i): families name
+    if(_): {i < 0} [ set(i): 0 ]
+    set(sb_pick): i!
+    set(sb_pick_top): {i - 5}!
+    set(top): sb_pick_top?
+    if(_): {top < 0} [ set(sb_pick_top): 0! ]
+    set(sb_picker): true!
+    set(r): 0
+]
+
+sb_picker_choose(r): [
+    set(families): sb_families?
+    set(sel): sb_pick?
+    len(n): families
+    if(_): {sel >= 0 && sel < n} [
+        at(f): families sel
+        getf(name): f "name"
+        set(sb_family): name!
+        set(sb_dirty): true!
+        sb_apply_font(_):
+        sb_pad_tool_labels(_):
+    ]
+    set(sb_picker): false!
+    set(r): 0
+]
+
+sb_picker_key(r): key [
+    set(families): sb_families?
+    len(n): families
+    set(sel): sb_pick?
+    if(_): {key = SB_KEY_ESC} [ set(sb_picker): false! ]
+    elif(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [ sb_picker_choose(_): ]
+    elif(_): {key = SB_KEY_UP} [ set(sel): {sel - 1} ]
+    elif(_): {key = SB_KEY_DOWN} [ set(sel): {sel + 1} ]
+    elif(_): {key = SB_KEY_PAGE_UP} [ set(sel): {sel - SB_PICK_ROWS} ]
+    elif(_): {key = SB_KEY_PAGE_DOWN} [ set(sel): {sel + SB_PICK_ROWS} ]
+    elif(_): {key = SB_KEY_HOME} [ set(sel): 0 ]
+    elif(_): {key = SB_KEY_END} [ set(sel): {n - 1} ]
+    if(_): {sel >= n} [ set(sel): {n - 1} ]
+    if(_): {sel < 0} [ set(sel): 0 ]
+    set(sb_pick): sel!
+    set(r): 0
+]
+
+# A typed letter jumps to the next family that starts with it.
+sb_picker_char(r): s [
+    set(families): sb_families?
+    len(n): families
+    set(sel): sb_pick?
+    str_lower(s): s
+    set(i): 1
+    set(found): false
+    while(_): {i <= n && found = false} [
+        set(idx): {(sel + i) % n}
+        at(f): families idx
+        getf(key): f "key"
+        sb_starts(m): key s
+        if(_): m [
+            set(sb_pick): idx!
+            set(found): true
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+sb_picker_click(r): x y [
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    sb_picker_box(box): w h
+    at(bx): box 0
+    at(by): box 1
+    at(bw): box 2
+    at(bh): box 3
+    set(r): 0
+    if(_): {x < bx || x > bx + bw || y < by || y > by + bh} [
+        set(sb_picker): false!
+        return(_): r
+    ]
+    str_trunc(i): {(y - by - 4) / SB_PICK_ROWH}
+    set(top): sb_pick_top?
+    set(families): sb_families?
+    len(n): families
+    if(_): {i >= 0 && i < SB_PICK_ROWS && top + i < n} [
+        set(sb_pick): {top + i}!
+        sb_picker_choose(_):
+    ]
+]
+
+sb_pad_key_gui(r): key [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker = true} [
+        sb_picker_key(_): key
+        return(_): r
+    ]
+    set(ctrl): sb_ctrl?
+    if(_): {ctrl = true} [
+        if(_): {key = 66} [
+            set(b): sb_bold?
+            set(sb_bold): {b != true}!
+            set(sb_dirty): true!
+            sb_apply_font(_):
+            sb_pad_tool_labels(_):
+            return(_): r
+        ]
+        if(_): {key = 73} [
+            set(i): sb_italic?
+            set(sb_italic): {i != true}!
+            set(sb_dirty): true!
+            sb_apply_font(_):
+            sb_pad_tool_labels(_):
+            return(_): r
+        ]
+        if(_): {key = 93} [
+            sb_pad_size_step(_): 1
+            return(_): r
+        ]
+        if(_): {key = 91} [
+            sb_pad_size_step(_): {0 - 1}
+            return(_): r
+        ]
+    ]
+    sb_pad_key(_): key {ctrl = true}
+]
+
+# --- the GUI: events ----------------------------------------------------------
+
+sb_redraw(r): [
+    set(mode): sb_mode?
+    if(_): {mode = "pad"} [ sb_pad_draw(r): ] else(_): [ sb_sheet_draw(r): ]
+]
+
+sbkey(r): key [
+    uilock(_):
+    sb_modifier(mod): key true
+    if(_): {mod = false} [
+        set(sb_pfollow): true!
+        set(dialog): sb_dialog?
+        set(mode): sb_mode?
+        if(_): {dialog != ""} [ sb_dialog_key(_): key ]
+        else(_): [
+            sb_common_key(used): key
+            if(_): {used = false} [
+                if(_): {mode = "pad"} [ sb_pad_key_gui(_): key ] else(_): [ sb_sheet_key(_): key ]
+            ]
+        ]
+        sb_redraw(_):
+    ]
+    uiunlock(_):
+    set(r): 0
+]
+
+sbkeyup(r): key [
+    sb_modifier(_): key false
+    set(r): 0
+]
+
+sbchar(r): cp [
+    uilock(_):
+    set(ctrl): sb_ctrl?
+    set(alt): sb_alt?
+    if(_): {ctrl != true || alt = true} [
+        set(sb_pfollow): true!
+        sb_utf8(s): cp
+        set(dialog): sb_dialog?
+        set(mode): sb_mode?
+        set(picker): sb_picker?
+        if(_): {dialog != ""} [ sb_dialog_char(_): s ]
+        elif(_): {mode = "pad" && picker = true} [ sb_picker_char(_): s ]
+        elif(_): {mode = "pad"} [ sbpadtype(_): s ]
+        else(_): [ sb_sheet_char(_): s ]
+        sb_redraw(_):
+    ]
+    uiunlock(_):
+    set(r): 0
+]
+
+sbclick(r): x y double [
+    uilock(_):
+    set(dialog): sb_dialog?
+    set(mode): sb_mode?
+    if(_): {dialog = ""} [
+        set(sb_pfollow): true!
+        if(_): {mode = "pad"} [
+            if(_): {double = false} [ sb_pad_click(_): x y ]
+        ]
+        else(_): [ sb_sheet_click(_): x y double ]
+        sb_redraw(_):
+    ]
+    uiunlock(_):
+    set(r): 0
+]
+
+sbwheel(r): direction [
+    uilock(_):
+    set(mode): sb_mode?
+    set(picker): sb_picker?
+    if(_): {mode = "pad" && picker = true} [
+        set(top): sb_pick_top?
+        set(families): sb_families?
+        len(n): families
+        set(top): {top - direction * 3}
+        if(_): {top > n - SB_PICK_ROWS} [ set(top): {n - SB_PICK_ROWS} ]
+        if(_): {top < 0} [ set(top): 0 ]
+        set(sel): sb_pick?
+        if(_): {sel < top} [ set(sb_pick): top! ]
+        if(_): {sel >= top + SB_PICK_ROWS} [ set(sb_pick): {top + SB_PICK_ROWS - 1}! ]
+        set(sb_pick_top): top!
+    ]
+    elif(_): {mode = "pad"} [
+        sb_pad_scroll(_): {0 - direction * 3}
+        # the view stays where the wheel put it until the next edit
+        set(sb_pfollow): false!
+    ]
+    else(_): [ sb_sheet_wheel(_): direction ]
+    sb_redraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+sbtool(r): button [
+    uilock(_):
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(action): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(handle): entry 0
+        if(_): {handle = button} [ at(action): entry 1 ]
+        set(i): {i + 1}
+    ]
+    set(dialog): sb_dialog?
+    if(_): {dialog = ""} [
+        set(mode): sb_mode?
+        if(_): {mode != "pad"} [ sb_sheet_commit(_): ]
+        if(_): {action = "new" || action = "open" || action = "save" || action = "saveas"} [ sb_action(_): action ]
+        elif(_): {action = "help"} [ sb_help(_): ]
+        elif(_): {action = "font"} [
+            set(picker): sb_picker?
+            if(_): {picker = true} [ set(sb_picker): false! ] else(_): [ sb_picker_open(_): ]
+        ]
+        elif(_): {action = "smaller"} [ sb_pad_size_step(_): {0 - 1} ]
+        elif(_): {action = "bigger"} [ sb_pad_size_step(_): 1 ]
+        elif(_): {action = "bold" || action = "italic"} [
+            if(_): {action = "bold"} [
+                set(b): sb_bold?
+                set(sb_bold): {b != true}!
+            ]
+            else(_): [
+                set(b): sb_italic?
+                set(sb_italic): {b != true}!
+            ]
+            set(sb_dirty): true!
+            sb_apply_font(_):
+        ]
+    ]
+    set(mode): sb_mode?
+    if(_): {mode = "pad"} [ sb_pad_tool_labels(_): ]
+    sb_redraw(_):
+    uiunlock(_):
+    set(r): 0
+]
+
+sbfocus(r): focused [
+    set(sb_shift): false!
+    set(sb_ctrl): false!
+    set(sb_alt): false!
+    set(r): 0
+]
+
+sb_add_button(r): bar label action [
+    button(r): bar label
+    on(_): r "click" "sb_app_tool"
+    set(buttons): sb_buttons?
+    vec(entry): ""
+    push(_): entry r
+    push(_): entry action
+    push(_): buttons entry
+]
+
+# Builds the toolbar and the canvas of window for mode ("sheet" or
+# "pad"); returns the canvas.
+sbinitialize(canvas): window mode [
+    sbsetup(_):
+    sbbuild(canvas): window mode
+]
+
+# sbinitialize after sbsetup (or sbstate) has run.
+sbbuild(canvas): window mode [
+    set(sb_window): window!
+    set(sb_mode): mode!
+    sb_find_ui_font(ui):
+    set(sb_uifont): ui!
+    toolbar(bar): window
+    sb_add_button(_): bar "NEW" "new"
+    sb_add_button(_): bar "OPEN" "open"
+    sb_add_button(_): bar "SAVE" "save"
+    sb_add_button(_): bar "SAVE AS" "saveas"
+    if(_): {mode = "pad"} [
+        sb_scan_fonts(families):
+        set(sb_families): families!
+        vec(prefer): ""
+        push(_): prefer "Calibri"
+        push(_): prefer "Liberation Serif"
+        push(_): prefer "Times New Roman"
+        push(_): prefer "DejaVu Serif"
+        push(_): prefer "Arial"
+        push(_): prefer "DejaVu Sans"
+        len(pn): prefer
+        set(i): 0
+        set(found): false
+        while(_): {i < pn && found = false} [
+            at(name): prefer i
+            sb_family_index(fi): families name
+            if(_): {fi >= 0} [
+                set(sb_family): name!
+                set(found): true
+            ]
+            set(i): {i + 1}
+        ]
+        len(fn): families
+        if(_): {found = false && fn > 0} [
+            at(f0): families 0
+            getf(n0): f0 "name"
+            set(sb_family): n0!
+        ]
+        sb_apply_font(_):
+        sb_add_button(_): bar "Font: ------------------------" "font"
+        sb_add_button(_): bar "-" "smaller"
+        sb_add_button(_): bar "12 pt" "size"
+        sb_add_button(_): bar "+" "bigger"
+        sb_add_button(_): bar "B" "bold"
+        sb_add_button(_): bar "I" "italic"
+    ]
+    else(_): [ sb_sheet_new(_): ]
+    sb_add_button(_): bar "HELP" "help"
+    canvas(canvas): window
+    set(sb_canvas): canvas!
+    pack(_): canvas true
+    if(_): {mode = "pad"} [ sb_pad_tool_labels(_): ]
+    sb_redraw(_):
+]
+
+# `ussr src/siberia/siberia.su` runs the program; scripts that $include
+# siberia.su (the tests) keep their own init.
+$ifdef __MAIN__
+sb_app_tool(result): button [
+    sbtool(_): button
+]
+
+sb_app_pointer(result): canvas x y [
+    sbclick(_): x y false
+]
+
+sb_app_double(result): canvas x y [
+    sbclick(_): x y true
+]
+
+sb_app_wheel(result): canvas x y direction [
+    sbwheel(_): direction
+]
+
+sb_app_key(result): window key [
+    sbkey(_): key
+]
+
+sb_app_keyup(result): window key [
+    sbkeyup(_): key
+]
+
+sb_app_char(result): window cp [
+    sbchar(_): cp
+]
+
+sb_app_focus(result): window focused [
+    sbfocus(_): focused
+]
+
+# Redraws when the window changes size.
+sb_app_tick(result): window [
+    set(result): 0
+    set(last): ""
+    set(go): true
+    while(_): go [
+        sleep(_): 500
+        alive(go): window
+        if(_): go [
+            set(canvas): sb_canvas?
+            getwidth(w): canvas
+            getheight(h): canvas
+            str_from_int(ws): w
+            str_from_int(hs): h
+            concat(now): ws "x" hs
+            if(_): {now != last} [
+                set(last): now
+                uilock(_):
+                sb_redraw(_):
+                uiunlock(_):
+            ]
+        ]
+    ]
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    set(mode): "sheet"
+    set(file): ""
+    set(bad): false
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        if(_): {a = "--pad"} [ set(mode): "pad" ]
+        elif(_): {a = "--sheet"} [ set(mode): "sheet" ]
+        else(_): [
+            sb_starts(opt): a "-"
+            if(_): {opt || file != ""} [ set(bad): true ] else(_): [ set(file): a ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): bad [
+        print(_): "usage: ussr siberia.su [--pad] [file]"
+        print(_): "  spreadsheet: .fods (OpenDocument) or .csv; --pad: document, .fodt or .txt"
+        set(result): 2
+        return(_): result
+    ]
+    set(title): "Siberia"
+    if(_): {mode = "pad"} [ set(title): "Siberia Pad" ]
+    createwindow(window): title SB_WIDTH SB_HEIGHT
+    sbinitialize(canvas): window mode
+    if(_): {file != ""} [
+        file_exists(e): file
+        if(_): e [ sb_open(_): file ]
+        else(_): [
+            set(sb_path): file!
+            sb_basename(base): file
+            concat(msg): "New file " base
+            sb_status(_): msg
+        ]
+    ]
+    on(_): canvas "pointer" "sb_app_pointer"
+    on(_): canvas "double" "sb_app_double"
+    on(_): canvas "wheel" "sb_app_wheel"
+    on(_): window "key" "sb_app_key"
+    on(_): window "keyup" "sb_app_keyup"
+    on(_): window "char" "sb_app_char"
+    on(_): window "focus" "sb_app_focus"
+    show(_): window
+    async(_): "sb_app_tick" window
+    run(_):
+    sleep(_): 150
+    uilock(_):
+    sb_redraw(_):
+    uiunlock(_):
+]
+$endif

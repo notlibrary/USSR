@@ -40,6 +40,10 @@ a diagnostic.
 | `canvasrect(canvas, x, y, width, height, color)` / `canvasfill(...)` | Canvas, four numbers, color | Zero; appends a rectangle outline / filled rectangle |
 | `canvastext(canvas, x, y, text, color)` | Canvas, two numbers, string, color | Zero; appends bitmap-font text |
 | `canvastextscale(canvas, x, y, text, color, scale)` | As `canvastext`, then an integer 1..16 | Zero; bitmap-font text with each font pixel `scale` pixels square (a character cell is `7 * scale` wide) |
+| `canvasfonttext(canvas, x, y, text, color, font, size)` | Canvas, two numbers, UTF-8 string, color, font handle, pixels per em 1..1000 | Zero; anti-aliased outline-font text whose line box starts at `(x, y)` (the baseline is the font's ascent below `y`) |
+| `fontinfo(path)` | Font file path | `"Family|Style"` (name IDs 1 and 2, English when present), or `""` when the file is not a TrueType-outline font (`.ttf`, first face of a `.ttc`) |
+| `loadfont(path)` | Font file path | Font handle `1..64`, the same for the same path, or `0` when it cannot be used |
+| `fontwidth(font, size, text)` / `fontheight(font, size)` | Font handle, pixels per em, and text | Advance width of the text (a real) / line height (ascent + descent + line gap, an integer) in pixels; sizes are rounded to whole pixels as drawing does |
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
@@ -62,6 +66,7 @@ a diagnostic.
 | `"key"` | Window | window, GLFW key code (key press) |
 | `"keyup"` | Window | window, GLFW key code (key release) |
 | `"focus"` | Window | window, `1` when focused, `0` when focus is lost |
+| `"char"` | Window | window, Unicode code point of a typed character (any script; not sent for control keys or while Ctrl shortcuts are held) |
 
 A callback's parameter count must match the table. Every callback runs as its
 own scheduler process with a copy of the variables the main process had when
@@ -101,6 +106,16 @@ name a two-parameter definition and receive the window handle and GLFW key
 code. Native GLFW callbacks only enqueue events; `scheduler.c` drains them
 between VM instruction slices and schedules handlers through
 `ussr_sched_spawn_func`.
+
+## Outline fonts
+
+`loadfont` reads a TrueType font from its file, for example
+`C:\Windows\Fonts\arial.ttf` or a file under `/usr/share/fonts`, and
+`canvasfonttext` draws UTF-8 text with it. Glyphs are rasterized with
+anti-aliasing in the runtime (no hinting, no kerning) and cached as textures
+per window; fonts with CFF outlines (most `.otf`) are refused. Typed text
+comes from the window's `"char"` event, which delivers code points beyond
+ASCII; `"key"` still reports every key press.
 
 ## Image format
 

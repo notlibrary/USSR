@@ -1,0 +1,291 @@
+# Siberia GUI test. Needs a GLFW-enabled ussr and a display; the windows
+# are never shown. Run from the repository root:
+#     ussr tests/gui/siberia_test.su
+# Types into the sheet and the pad, uses the toolbar, the font picker and
+# the save and open dialogs, all through Petersburg's input path. Prints
+# PASS or FAIL per check.
+$include "../../src/siberia/siberia.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 40
+    uiidle(idle):
+    set(tries): 0
+    while(_): {idle = false && tries < 300} [
+        sleep(_): 10
+        uiidle(idle):
+        set(tries): {tries + 1}
+    ]
+    sleep(_): 20
+    set(r): 0
+]
+
+key(r): code [
+    set(w): sb_window?
+    inject(_): w "key" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+keyup(r): code [
+    set(w): sb_window?
+    inject(_): w "keyup" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+ctrl(r): code [
+    key(_): 341
+    key(_): code
+    keyup(_): 341
+    set(r): 0
+]
+
+# Types text through "char" events, one code point each.
+typed(r): text [
+    set(w): sb_window?
+    vec(cps): ""
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        utf8_next(j): text i
+        byte(b): text i
+        set(cp): b
+        if(_): {j - i = 2} [
+            byte(b2): text {i + 1}
+            set(cp): {((b & 31) << 6) | (b2 & 63)}
+        ]
+        inject(_): w "char" cp 0 0
+        set(i): j
+    ]
+    settle(_):
+    set(r): 0
+]
+
+tool(r): action [
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(a): entry 1
+        if(_): {a = action} [
+            at(h): entry 0
+            inject(_): h "click" 0 0 0
+        ]
+        set(i): {i + 1}
+    ]
+    settle(_):
+    set(r): 0
+]
+
+test_tool(result): button [
+    sbtool(_): button
+]
+
+test_pointer(result): canvas x y [
+    sbclick(_): x y false
+]
+
+test_double(result): canvas x y [
+    sbclick(_): x y true
+]
+
+test_key(result): window k [
+    sbkey(_): k
+]
+
+test_keyup(result): window k [
+    sbkeyup(_): k
+]
+
+test_char(result): window cp [
+    sbchar(_): cp
+]
+
+listen(r): window canvas [
+    on(_): canvas "pointer" "test_pointer"
+    on(_): canvas "double" "test_double"
+    on(_): window "key" "test_key"
+    on(_): window "keyup" "test_keyup"
+    on(_): window "char" "test_char"
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(h): entry 0
+        on(_): h "click" "test_tool"
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    getcwd(cwd):
+    concat(sheet_file): cwd "/tests/gui/siberia_tmp.fods"
+    concat(pad_file): cwd "/tests/gui/siberia_tmp.fodt"
+    remove_file(_): sheet_file
+    remove_file(_): pad_file
+
+    # --- the sheet
+    sbsetup(_):
+    createwindow(window): "Siberia test" SB_WIDTH SB_HEIGHT
+    sbbuild(canvas): window "sheet"
+    listen(_): window canvas
+    run(_):
+    settle(_):
+    typed(_): "12"
+    key(_): SB_KEY_ENTER
+    typed(_): "=A1*2"
+    key(_): SB_KEY_TAB
+    sbget(got): "A1"
+    check(_): "typed number" got "12"
+    sbshow(got): "A2"
+    check(_): "typed formula" got "24"
+    set(row): sb_row?
+    set(col): sb_col?
+    check(_): "tab moves right" {row = 1 && col = 1} true
+    # click on C1, F2, edit, Escape keeps the old text
+    set(x): {SB_HEADW + 2 * SB_COLW + 10}
+    set(y): {SB_BARH + SB_ROWH + 5}
+    inject(_): canvas "pointer" x y 0
+    settle(_):
+    set(col): sb_col?
+    set(row): sb_row?
+    check(_): "click selects C1" {row = 0 && col = 2} true
+    typed(_): "Привет"
+    key(_): SB_KEY_ESC
+    sbget(got): "C1"
+    check(_): "escape cancels" got ""
+    typed(_): "Привет"
+    key(_): SB_KEY_BACKSPACE
+    key(_): SB_KEY_DOWN
+    sbget(got): "C1"
+    check(_): "cyrillic and backspace" got "Приве"
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_F2
+    typed(_): "!"
+    key(_): SB_KEY_ENTER
+    sbget(got): "C1"
+    check(_): "F2 edits" got "Приве!"
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_DELETE
+    sbget(got): "C1"
+    check(_): "delete clears" got ""
+    canvascount(shapes): canvas
+    check(_): "the grid is drawn" {shapes > 50} true
+    # save through the dialog, then open again
+    ctrl(_): 83
+    set(d): sb_dialog?
+    check(_): "Ctrl+S asks for a name" d "save"
+    ctrl(_): 85
+    typed(_): sheet_file
+    key(_): SB_KEY_ENTER
+    file_exists(e): sheet_file
+    check(_): "saved" e true
+    set(dirty): sb_dirty?
+    check(_): "clean after saving" dirty false
+    tool(_): "new"
+    sbget(got): "A1"
+    check(_): "NEW empties the sheet" got ""
+    tool(_): "open"
+    ctrl(_): 85
+    typed(_): sheet_file
+    key(_): SB_KEY_ENTER
+    sbshow(got): "A2"
+    check(_): "opened again" got "24"
+    typed(_): "x"
+    key(_): SB_KEY_ENTER
+    ctrl(_): 78
+    set(d): sb_dialog?
+    check(_): "Ctrl+N asks before discarding" d "discard"
+    key(_): SB_KEY_ESC
+    set(d): sb_dialog?
+    check(_): "escape keeps the changes" d ""
+    destroy(_): window
+
+    # --- the pad
+    sbstate(_):
+    createwindow(window): "Siberia Pad test" SB_WIDTH SB_HEIGHT
+    sbbuild(canvas): window "pad"
+    listen(_): window canvas
+    run(_):
+    settle(_):
+    set(families): sb_families?
+    len(nf): families
+    check(_): "system fonts found" {nf > 0} true
+    set(font): sb_pfont?
+    check(_): "a document font is loaded" {font > 0} true
+    typed(_): "Hello, мир"
+    key(_): SB_KEY_ENTER
+    typed(_): "second"
+    sbpadtext(got):
+    check(_): "typed into the pad" got "Hello, мир\nsecond"
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_END
+    key(_): SB_KEY_BACKSPACE
+    sbpadtext(got):
+    check(_): "keys in the pad" got "Hello, ми\nsecond"
+    # click at the start of the first line
+    set(lines): sb_plines?
+    at(first): lines 0
+    at(fy): first 3
+    inject(_): canvas "pointer" {SB_MARGIN - 20} {fy + 4} 0
+    settle(_):
+    set(col): sb_pcol?
+    check(_): "click places the cursor" col 0
+    # bold, size, font picker
+    tool(_): "bold"
+    set(b): sb_bold?
+    check(_): "B toggles bold" b true
+    tool(_): "bigger"
+    set(z): sb_size?
+    check(_): "+ makes it bigger" z 14
+    tool(_): "font"
+    set(pk): sb_picker?
+    check(_): "FONT opens the picker" pk true
+    key(_): SB_KEY_HOME
+    key(_): SB_KEY_ENTER
+    set(pk): sb_picker?
+    check(_): "Enter closes the picker" pk false
+    at(f0): families 0
+    getf(n0): f0 "name"
+    set(after): sb_family?
+    check(_): "the first family is chosen" after n0
+    canvascount(shapes): canvas
+    check(_): "the page is drawn" {shapes > 3} true
+    # save as .fodt and read it back
+    ctrl(_): 83
+    ctrl(_): 85
+    typed(_): pad_file
+    key(_): SB_KEY_ENTER
+    file_exists(e): pad_file
+    check(_): "document saved" e true
+    sb_read(saved): pad_file
+    sb_xml_escape(fe): n0
+    concat(want): "style:font-name=\"" fe "\" fo:font-size=\"14pt\" fo:font-weight=\"bold\""
+    str_find(at): saved want 0
+    check(_): "the font is saved" {at >= 0} true
+    sbpadreset(_):
+    sb_open(_): pad_file
+    sbpadtext(got):
+    check(_): "document opened again" got "Hello, ми\nsecond"
+    destroy(_): window
+    remove_file(_): sheet_file
+    remove_file(_): pad_file
+    set(result): 0
+]

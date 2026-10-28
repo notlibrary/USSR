@@ -14,6 +14,8 @@
 #include <math.h>
 #include <stdint.h>
 
+#include "ttf.h"
+
 #define PETERSBURG_MAX_SHAPES 200000
 
 typedef enum
@@ -37,7 +39,8 @@ typedef enum
     PETERSBURG_SHAPE_ARC,
     PETERSBURG_SHAPE_RECT,
     PETERSBURG_SHAPE_FILL,
-    PETERSBURG_SHAPE_TEXT
+    PETERSBURG_SHAPE_TEXT,
+    PETERSBURG_SHAPE_FONT_TEXT /* v[2] pixels per em, v[3] font handle */
 } petersburg_shape_kind_t;
 
 /* One retained canvas primitive, in canvas-local framebuffer pixels. */
@@ -63,6 +66,7 @@ typedef struct petersburg_widget
     char *wheel_callback;
     char *menu_callback;
     char *double_callback;
+    char *char_callback;
     int x;
     int y;
     int width;
@@ -481,6 +485,207 @@ static void petersburg_text(
     petersburg_text_scaled(x, y, text, red, green, blue, max_width, 1);
 }
 
+/* --- outline fonts --------------------------------------------------------
+ * loadfont reads a TrueType file once per path; handles index
+ * petersburg_fonts from 1. Glyph bitmaps become alpha textures, cached per
+ * OpenGL context (each window has its own) and dropped with the window. */
+#define PETERSBURG_MAX_FONTS 64
+#define PETERSBURG_GLYPH_BUCKETS 1024
+
+typedef struct petersburg_glyph_entry
+{
+    GLFWwindow *context;
+    int font;
+    int glyph;
+    int px;
+    GLuint texture; /* 0: an empty glyph (a space) */
+    int width;
+    int height;
+    int left;
+    int top;
+    struct petersburg_glyph_entry *next;
+} petersburg_glyph_entry_t;
+
+static ttf_font_t petersburg_fonts[PETERSBURG_MAX_FONTS];
+static char *petersburg_font_paths[PETERSBURG_MAX_FONTS];
+static int petersburg_font_count;
+static petersburg_glyph_entry_t *petersburg_glyph_cache[PETERSBURG_GLYPH_BUCKETS];
+
+static ttf_font_t *petersburg_font(long handle)
+{
+    if (handle < 1 || handle > petersburg_font_count)
+        return NULL;
+    return &petersburg_fonts[handle - 1];
+}
+
+/* Handle of the font at path, loading it the first time; 0 if unusable. */
+static long petersburg_font_load(const char *path)
+{
+    FILE *file;
+    long size;
+    unsigned char *data;
+    int i;
+
+    for (i = 0; i < petersburg_font_count; ++i)
+        if (strcmp(petersburg_font_paths[i], path) == 0)
+            return i + 1;
+    if (petersburg_font_count == PETERSBURG_MAX_FONTS ||
+        (file = fopen(path, "rb")) == NULL)
+        return 0;
+    if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) <= 0 ||
+        size > 64L * 1024 * 1024 || fseek(file, 0, SEEK_SET) != 0 ||
+        (data = malloc((size_t)size)) == NULL)
+    {
+        fclose(file);
+        return 0;
+    }
+    if (fread(data, 1, (size_t)size, file) != (size_t)size ||
+        !ttf_load(&petersburg_fonts[petersburg_font_count], data,
+                  (size_t)size) ||
+        (petersburg_font_paths[petersburg_font_count] =
+             petersburg_strdup(path)) == NULL)
+    {
+        fclose(file);
+        free(data);
+        return 0;
+    }
+    fclose(file);
+    return ++petersburg_font_count;
+}
+
+static double petersburg_font_scale(const ttf_font_t *font, double px)
+{
+    return px / (double)font->units_per_em;
+}
+
+/* Advance of UTF-8 text in pixels at px pixels per em. */
+static double petersburg_font_width(const ttf_font_t *font, double px,
+                                    const char *text)
+{
+    const unsigned char *s = (const unsigned char *)text;
+    long units = 0;
+
+    while (*s != '\0')
+        units += ttf_advance(font, ttf_glyph_index(font, ttf_utf8_next(&s)));
+    return (double)units * petersburg_font_scale(font, px);
+}
+
+static petersburg_glyph_entry_t *petersburg_font_glyph(int font_handle,
+                                                       int glyph, int px)
+{
+    GLFWwindow *context = glfwGetCurrentContext();
+    unsigned bucket = ((unsigned)glyph * 31u + (unsigned)px * 131u +
+                       (unsigned)font_handle * 7919u) %
+                      PETERSBURG_GLYPH_BUCKETS;
+    petersburg_glyph_entry_t *entry;
+    unsigned char *pixels;
+
+    for (entry = petersburg_glyph_cache[bucket]; entry != NULL;
+         entry = entry->next)
+        if (entry->context == context && entry->font == font_handle &&
+            entry->glyph == glyph && entry->px == px)
+            return entry;
+    entry = calloc(1, sizeof(*entry));
+    if (entry == NULL)
+        return NULL;
+    entry->context = context;
+    entry->font = font_handle;
+    entry->glyph = glyph;
+    entry->px = px;
+    pixels = ttf_render_glyph(petersburg_font(font_handle), glyph,
+                              (float)px, &entry->width, &entry->height,
+                              &entry->left, &entry->top);
+    if (pixels != NULL)
+    {
+        glGenTextures(1, &entry->texture);
+        glBindTexture(GL_TEXTURE_2D, entry->texture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, entry->width, entry->height,
+                     0, GL_ALPHA, GL_UNSIGNED_BYTE, pixels);
+        free(pixels);
+    }
+    entry->next = petersburg_glyph_cache[bucket];
+    petersburg_glyph_cache[bucket] = entry;
+    return entry;
+}
+
+/* Drops the cached glyphs of a window's context (the context frees the
+ * textures when it is destroyed). */
+static void petersburg_glyphs_forget(GLFWwindow *context)
+{
+    int bucket;
+
+    for (bucket = 0; bucket < PETERSBURG_GLYPH_BUCKETS; ++bucket)
+    {
+        petersburg_glyph_entry_t **link = &petersburg_glyph_cache[bucket];
+        while (*link != NULL)
+        {
+            petersburg_glyph_entry_t *entry = *link;
+            if (entry->context == context)
+            {
+                *link = entry->next;
+                free(entry);
+            }
+            else
+                link = &entry->next;
+        }
+    }
+}
+
+/* Text whose line box starts at y: the baseline is the font's ascent
+ * below it. Pen positions are rounded per glyph so stems stay sharp. */
+static void petersburg_font_text(float x, float y, const char *text,
+                                 unsigned long color, long font_handle,
+                                 double px, float max_x)
+{
+    ttf_font_t *font = petersburg_font(font_handle);
+    const unsigned char *s = (const unsigned char *)text;
+    double scale, pen = x;
+    float baseline;
+    int size = (int)(px + 0.5);
+
+    if (font == NULL || size < 1)
+        return;
+    scale = petersburg_font_scale(font, size);
+    baseline = (float)floor(y + font->ascent * scale + 0.5);
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glColor3f((float)((color >> 16) & 255) / 255.0f,
+              (float)((color >> 8) & 255) / 255.0f,
+              (float)(color & 255) / 255.0f);
+    while (*s != '\0' && pen < max_x)
+    {
+        int glyph = ttf_glyph_index(font, ttf_utf8_next(&s));
+        petersburg_glyph_entry_t *entry =
+            petersburg_font_glyph((int)font_handle, glyph, size);
+        if (entry != NULL && entry->texture != 0)
+        {
+            float gx = (float)floor(pen + 0.5) + (float)entry->left;
+            float gy = baseline + (float)entry->top;
+            glBindTexture(GL_TEXTURE_2D, entry->texture);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 0);
+            glVertex2f(gx, gy);
+            glTexCoord2f(1, 0);
+            glVertex2f(gx + (float)entry->width, gy);
+            glTexCoord2f(1, 1);
+            glVertex2f(gx + (float)entry->width, gy + (float)entry->height);
+            glTexCoord2f(0, 1);
+            glVertex2f(gx, gy + (float)entry->height);
+            glEnd();
+        }
+        pen += ttf_advance(font, glyph) * scale;
+    }
+    glDisable(GL_BLEND);
+    glDisable(GL_TEXTURE_2D);
+}
+
 static void petersburg_layout_flow(petersburg_widget_t *window, int top)
 {
     petersburg_widget_t *widget;
@@ -890,6 +1095,11 @@ static void petersburg_render_canvas(
                                    canvas->width,
                                    v[2] >= 1.0 ? (int)v[2] : 1);
             break;
+        case PETERSBURG_SHAPE_FONT_TEXT:
+            petersburg_font_text((float)(ox + v[0]), (float)(oy + v[1]),
+                                 shape->text, shape->color, (long)v[3], v[2],
+                                 (float)(ox + canvas->width));
+            break;
         }
     }
     glDisable(GL_SCISSOR_TEST);
@@ -1212,8 +1422,13 @@ static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
     size_t length;
     size_t old_length;
     char *text;
-    (void)native;
+    petersburg_widget_t *window = petersburg_window_for(native);
 
+    /* typed text for the window, any script (Cyrillic too) */
+    if (window != NULL && codepoint >= 32 && codepoint != 127 &&
+        codepoint <= 0x10FFFF)
+        petersburg_queue(window, window->char_callback, 1, (long)codepoint,
+                         0, 0);
     if (petersburg_focus == NULL || codepoint < 32 || codepoint > 126)
         return;
     encoded[0] = (char)codepoint;
@@ -1446,6 +1661,7 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
 {
     if (widget->native_window != NULL)
     {
+        petersburg_glyphs_forget(widget->native_window);
         glfwSetWindowUserPointer(widget->native_window, NULL);
         glfwDestroyWindow(widget->native_window);
     }
@@ -1462,6 +1678,7 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->wheel_callback);
     free(widget->menu_callback);
     free(widget->double_callback);
+    free(widget->char_callback);
     free(widget);
 }
 
@@ -1706,10 +1923,13 @@ static int petersburg_set_callback(
     else if (strcmp(event_name, "focus") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         slot = &widget->focus_callback;
+    else if (strcmp(event_name, "char") == 0 &&
+             widget->type == PETERSBURG_WINDOW)
+        slot = &widget->char_callback;
     else
     {
         fprintf(stderr,
-                "USSR: Petersburg event must be click/change on a widget, pointer on an image or canvas, wheel/menu/double on a canvas, or key/keyup/focus on a window\n");
+                "USSR: Petersburg event must be click/change on a widget, pointer on an image or canvas, wheel/menu/double on a canvas, or key/keyup/focus/char on a window\n");
         return -1;
     }
     copy = petersburg_strdup(callback);
@@ -1988,6 +2208,9 @@ static int petersburg_inject(
     else if (strcmp(event_name, "focus") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         petersburg_window_focus(widget->native_window, a != 0);
+    else if (strcmp(event_name, "char") == 0 &&
+             widget->type == PETERSBURG_WINDOW)
+        petersburg_character(widget->native_window, (unsigned int)a);
     else if (strcmp(event_name, "pointer") == 0 &&
              (widget->type == PETERSBURG_CANVAS ||
               widget->type == PETERSBURG_IMAGE))
@@ -2551,6 +2774,89 @@ int ussr_petersburg_dispatch(
             widget->shapes[widget->shape_count - 1].v[2] = (double)scale;
         return status;
     }
+    if (strcmp(name, "petersburg_font_info") == 0)
+    {
+        /* path -> "Family|Style", or "" when it is not a usable font */
+        char family[256], style[128], info[400];
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_string(values, 0, &text))
+        {
+            fprintf(stderr, "USSR: %s expects a font file path\n", name);
+            return -1;
+        }
+        info[0] = '\0';
+        if (ttf_file_info(text, family, sizeof(family), style, sizeof(style)))
+            snprintf(info, sizeof(info), "%s|%s", family, style);
+        *out = ussr_string(info);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_font_load") == 0)
+    {
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_string(values, 0, &text))
+        {
+            fprintf(stderr, "USSR: %s expects a font file path\n", name);
+            return -1;
+        }
+        *out = ussr_integer(petersburg_font_load(text));
+        return 1;
+    }
+    if (strcmp(name, "petersburg_font_width") == 0 ||
+        strcmp(name, "petersburg_font_height") == 0)
+    {
+        /* font size [text]: the advance of text, or the line height, in
+         * pixels at size pixels per em (rounded as drawing rounds it) */
+        int width = name[16] == 'w';
+        long font_handle;
+        double size;
+        ttf_font_t *font;
+        if (!petersburg_arity(name, value_count, width ? 3 : 2) ||
+            !petersburg_expect_integer(values, 0, &font_handle) ||
+            (font = petersburg_font(font_handle)) == NULL ||
+            !petersburg_expect_number(values, 1, &size) ||
+            size < 1 || size > 1000 ||
+            (width && !petersburg_expect_string(values, 2, &text)))
+        {
+            fprintf(stderr, "USSR: %s expects a font handle, a size 1..1000%s\n",
+                    name, width ? " and text" : "");
+            return -1;
+        }
+        size = floor(size + 0.5);
+        if (width)
+            *out = ussr_real(petersburg_font_width(font, size, text));
+        else
+            *out = ussr_integer((long)ceil(
+                (font->ascent - font->descent + font->line_gap) *
+                petersburg_font_scale(font, size)));
+        return 1;
+    }
+    if (strcmp(name, "petersburg_canvas_font_text") == 0)
+    {
+        /* canvas x y text color font size */
+        long font_handle;
+        double size;
+        if (!petersburg_arity(name, value_count, 7) ||
+            !petersburg_expect_integer(values, 5, &font_handle) ||
+            petersburg_font(font_handle) == NULL ||
+            !petersburg_expect_number(values, 6, &size) ||
+            size < 1 || size > 1000)
+        {
+            fprintf(stderr,
+                    "USSR: %s expects canvas, x, y, text, color, font, size 1..1000\n",
+                    name);
+            return -1;
+        }
+        status = petersburg_canvas_shape(name, PETERSBURG_SHAPE_FONT_TEXT, 2, 1,
+                                         values, 5, out);
+        if (status > 0 && petersburg_expect_integer(values, 0, &id) &&
+            (widget = petersburg_find(id)) != NULL &&
+            widget->shape_count > 0)
+        {
+            widget->shapes[widget->shape_count - 1].v[2] = size;
+            widget->shapes[widget->shape_count - 1].v[3] = (double)font_handle;
+        }
+        return status;
+    }
     if (strcmp(name, "petersburg_canvas_count") == 0)
     {
         if (!petersburg_arity(name, value_count, 1) ||
@@ -2755,6 +3061,12 @@ void ussr_petersburg_cleanup(void)
 #ifdef USSR_WITH_GLFW
     while (petersburg_widgets != NULL)
         (void)petersburg_destroy(petersburg_widgets->id);
+    while (petersburg_font_count > 0)
+    {
+        --petersburg_font_count;
+        free(petersburg_fonts[petersburg_font_count].data);
+        free(petersburg_font_paths[petersburg_font_count]);
+    }
     if (petersburg_initialized)
         glfwTerminate();
     petersburg_initialized = 0;

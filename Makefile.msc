@@ -135,7 +135,7 @@ $(SRC)\ussr_ru.obj: $(SRC)\ussr_ru.c $(SRC)\ussr_ru.h $(SRC)\ussr_bytecode.h $(S
 $(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h $(SRC)\ryazan.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
 
-$(PETERSBURG_OBJ): $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\scheduler.h $(SRC)\eventq.h
+$(PETERSBURG_OBJ): $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\ttf.h $(SRC)\scheduler.h $(SRC)\eventq.h
 	$(CC) $(CFLAGS) /c /Fo:$(PETERSBURG_OBJ) $(SRC)\petersburg.c
 
 $(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h $(SRC)\socket.h
