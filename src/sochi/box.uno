@@ -1,1 +1,1 @@
-'Package{name=`sochi`,version=`0.1.0`,description=`Desktop preference game`,entry=`sochi.su`,dependencies=[`petersburg`,`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`sochi`,version=`0.1.0`,description=`Sochi: Preferans for three players by the Sochi rules, peer to peer over UDP port 33333 with LAN discovery, nicknames, chat and bots`,entry=`sochi.su`,dependencies=[`library`],files=[`sochi.su`,`README.md`,`CHANGELOG.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

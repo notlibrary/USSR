@@ -42,6 +42,21 @@ int ussr_socket_would_block(void);
 int ussr_socket_poll(ussr_socket_pollfd_t *fds, size_t count, int timeout_ms);
 const char *ussr_socket_last_error(void);
 
+/* UDP: a nonblocking datagram socket bound to ipv4 ("*" or NULL: any) and
+ * port (0: any free port), with broadcast enabled. A nonzero port is bound
+ * exclusively, so a second program asking for the same port fails. */
+int ussr_socket_udp(const char *ipv4, unsigned short port);
+/* Sends one datagram to host (an IPv4 address, 255.255.255.255 or a DNS
+ * name) and port. Returns bytes sent or -1. */
+long ussr_socket_sendto(ussr_socket_handle_t handle, const char *host,
+                        unsigned short port, const void *buffer, size_t length);
+/* Waits at most timeout_ms (0: just checks) for one datagram. Returns its
+ * length with the sender's address in ip (dotted) and port, -2 when none
+ * arrived, -1 on error. */
+long ussr_socket_recvfrom(ussr_socket_handle_t handle, void *buffer,
+                          size_t capacity, int timeout_ms,
+                          char *ip, size_t ip_capacity, unsigned *port);
+
 #ifdef __cplusplus
 }
 #endif

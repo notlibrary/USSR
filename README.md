@@ -63,7 +63,7 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod, Dubna, Siberia, KGB and Stalin have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod, Dubna, Siberia, KGB, Stalin and Sochi have code so far):
 
 - dubna.su - PostgreSQL client: protocol 3.0, TLS, SCRAM-SHA-256, parameterised queries (working: `src/dubna`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base: folders are objects and categories (working: `src/kgb`)
@@ -74,7 +74,7 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin,
 - siberia.su - office package, spreadsheet tables and document editor
 - stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS and FFS2 (working: `src/stalin`)
 - usa.su - C compiler written in USSR
-- sochi.su - desktop preference game
+- sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
 
 The **RUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
 (HTTP) under Novgorod (the forum), with Dubna (the PostgreSQL client) under
@@ -131,6 +131,16 @@ ussr src/stalin/stalin.su mkimg disk.img 20M
 ussr src/stalin/stalin.su init disk.img gpt
 ussr src/stalin/stalin.su add disk.img --size 8M --type ext4 --name root
 ussr src/stalin/stalin.su show disk.img
+```
+
+Sochi, three-player Preferans by the Sochi rules: the first copy hosts the
+table, the others find it on the LAN (UDP port 33333) or join it by
+address, and the three chat while they play:
+
+```bash
+ussr src/sochi/sochi.su                     # nickname, then the tables on the LAN
+ussr src/sochi/sochi.su host --bots 2       # a table with two bots
+ussr src/sochi/sochi.su join 192.168.1.20   # a table across the network
 ```
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder

@@ -58,3 +58,47 @@ int ussr_socket_connect(int h,const char *host,unsigned short port,int timeout_m
     if(e!=0){errno=e;set_error("connect");return -1;}
     return 0;
 }
+
+int ussr_socket_udp(const char *ip,unsigned short port){
+    int fd,h,yes=1,flags;struct sockaddr_in a;
+    if(ussr_socket_init()!=0)return -1;
+    memset(&a,0,sizeof(a));a.sin_family=AF_INET;a.sin_port=htons(port);
+    if(!ip||!*ip||!strcmp(ip,"*")||!strcmp(ip,"0.0.0.0"))a.sin_addr.s_addr=htonl(INADDR_ANY);
+    else if(inet_pton(AF_INET,ip,&a.sin_addr)!=1){errno=EINVAL;set_error("invalid IPv4 address");return -1;}
+    fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0){set_error("socket");return -1;}
+    (void)setsockopt(fd,SOL_SOCKET,SO_BROADCAST,&yes,sizeof(yes));
+    /* no SO_REUSEADDR: a second program asking for the same port fails */
+    if(bind(fd,(struct sockaddr*)&a,sizeof(a))<0){set_error("bind");close(fd);return -1;}
+    flags=fcntl(fd,F_GETFL,0);if(flags<0||fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0){set_error("nonblocking");close(fd);return -1;}
+    h=put_socket(fd);return h;
+}
+long ussr_socket_sendto(int h,const char *host,unsigned short port,const void *b,size_t n){
+    int fd=get_socket(h);struct addrinfo hints,*res=NULL;char service[8];ssize_t r;
+    if(fd<0)return -1;
+    memset(&hints,0,sizeof(hints));hints.ai_family=AF_INET;hints.ai_socktype=SOCK_DGRAM;
+    snprintf(service,sizeof(service),"%u",(unsigned)port);
+    if(!host||!*host||getaddrinfo(host,service,&hints,&res)!=0||!res){snprintf(error_text,sizeof(error_text),"cannot resolve %.120s",host?host:"");return -1;}
+    r=sendto(fd,b,n,0,res->ai_addr,res->ai_addrlen);freeaddrinfo(res);
+    if(r<0){set_error("sendto");return -1;}
+    return (long)r;
+}
+long ussr_socket_recvfrom(int h,void *b,size_t n,int timeout_ms,char *ip,size_t ipcap,unsigned *port){
+    int fd=get_socket(h);struct sockaddr_in a;socklen_t alen;ssize_t r;struct pollfd p;
+    if(fd<0)return -1;
+    for(;;){
+        alen=sizeof(a);
+        r=recvfrom(fd,b,n,0,(struct sockaddr*)&a,&alen);
+        if(r>=0)break;
+        if(errno==EINTR||errno==ECONNREFUSED)continue;
+        if(errno!=EAGAIN&&errno!=EWOULDBLOCK){set_error("recvfrom");return -1;}
+        if(timeout_ms<=0)return -2;
+        p.fd=fd;p.events=POLLIN;p.revents=0;
+        r=poll(&p,1,timeout_ms);
+        if(r<0&&errno!=EINTR){set_error("poll");return -1;}
+        if(r==0)return -2;
+        timeout_ms=0;
+    }
+    if(ip&&ipcap){if(!inet_ntop(AF_INET,&a.sin_addr,ip,(socklen_t)ipcap))ip[0]=0;}
+    if(port)*port=ntohs(a.sin_port);
+    return (long)r;
+}

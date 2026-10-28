@@ -1,0 +1,3239 @@
+# Sochi - Preferans for three players, the Sochi ("Sochinka") rules, over
+# UDP. There is no server: the first program to open a table is its host
+# and keeps the game; the other two join it over UDP port 33333, found by
+# LAN broadcast or given an address (an IP or host name, for WAN).
+#
+# 32 cards, 7 to Ace in spades, clubs, diamonds and hearts; 10 cards each
+# and 2 in the talon. Bidding from forehand (left of the dealer): 6 spades
+# < 6 clubs < 6 diamonds < 6 hearts < 6 no trumps < 7 spades ... < 10 NT,
+# misere between 8 NT and 9 spades. A pass is final; misere only as a
+# player's first bid, and its bidder cannot bid again. The declarer takes
+# the talon (shown to all), discards two cards and names a contract no
+# lower than the bid. Whist is responsible: obligations 6:4, 7:2, 8:1,
+# 9:1, 10:1 tricks, half each when both whist (rounded down), half-whist
+# on 6 only; a lone whister plays the passer's hand laid open. All pass:
+# raspasy, no trumps, the talon cards set the suit of tricks 1 and 2, a
+# trick costs 1, 2, 3 on the mountain on the 1st, 2nd, 3rd raspasy in a
+# row, a player with no tricks gets 1 in the pool. Contracts are worth 2,
+# 4, 6, 8, 10 (misere 10); the game ends when every pool is full.
+#
+# Usage: ussr src/sochi/sochi.su [host | join [ADDRESS]] [options]; with
+# no command it asks for a nickname and looks for tables on the LAN.
+# Library use: the so_* functions are the rules (so_new_game, so_act,
+# so_legal, so_view, so_bot); tests/sochi_test.su plays with them.
+$once
+$include "../libs/strings.su"
+
+# a view's fields: so_view(v): seat gives a vector, at(x): v V_HAND reads one
+$define V_SEQ 0
+$define V_SEAT 1
+$define V_NAMES 2
+$define V_KIND 3
+$define V_POOL 4
+$define V_MOUNT 5
+$define V_WHIST 6
+$define V_PSIZE 7
+$define V_DEALER 8
+$define V_HANDNO 9
+$define V_PHASE 10
+$define V_TURN 11
+$define V_CTL 12
+$define V_HAND 13
+$define V_OTHERS 14
+$define V_COUNTS 15
+$define V_BIDS 16
+$define V_HIGH 17
+$define V_DECL 18
+$define V_CONTRACT 19
+$define V_TRUMP 20
+$define V_WST 21
+$define V_OPEN 22
+$define V_TALON 23
+$define V_DISCARD 24
+$define V_TRICK 25
+$define V_TSEATS 26
+$define V_LEAD 27
+$define V_TRICKS 28
+$define V_TRICKNO 29
+$define V_LAST 30
+$define V_LOG 31
+$define V_LOGN 32
+$define V_CHAT 33
+$define V_RESULT 34
+$define V_READY 35
+$define V_LEGAL 36
+$define V_ACTID 37
+$define V_STREAK 38
+$define V_ERR 39
+$define V_FINAL 40
+$define V_ONLINE 41
+$define V_FIELDS 42
+
+global(_): sg_typed sg_rank_names sg_suit_letters sg_suit_marks sg_uni
+global(_): sg_names sg_kind sg_pool sg_mount sg_whist sg_psize sg_dealer sg_handno
+global(_): sg_hands sg_talon sg_discard sg_phase sg_turn sg_bids sg_high sg_hseat
+global(_): sg_decl sg_contract sg_trump sg_wst sg_open sg_trick sg_tseats sg_lead
+global(_): sg_tricks sg_trickno sg_last sg_log sg_logn sg_chat sg_result sg_ready
+global(_): sg_streak sg_tshow sg_seq sg_rng sg_err sg_actid sg_final sg_online
+global(_): sn_sock sn_port sn_addr sn_acked sn_seen sn_tick sn_seat sn_host
+global(_): su_tty su_esc su_buf su_quit su_msgs su_name su_bot su_fast su_shown
+global(_): su_logn su_pending su_actid su_view su_over
+
+so_types(r): [
+    set(r): 0
+    set(done): sg_typed
+    if(_): {done = true} [
+        return(r): r
+    ]
+    set(sg_rank_names): '[`7`,`8`,`9`,`10`,`J`,`Q`,`K`,`A`]'
+    set(sg_suit_letters): '[`s`,`c`,`d`,`h`]'
+    set(sg_suit_marks): '[`♠`,`♣`,`♦`,`♥`]'
+    set(sg_uni): false
+    set(sg_typed): true
+]
+
+# ---------------------------------------------------------------- helpers
+
+so_int(r): n [
+    str_from_int(r): n
+]
+
+# a / b rounded down, for a >= 0 and b > 0 ("/" gives a real)
+so_div(r): a b [
+    str_trunc(r): {a / b}
+    if(_): {r * b > a} [
+        sub(r): r 1
+    ]
+]
+
+# the first k bytes of s (all of a shorter s)
+so_head(r): s k [
+    set(r): s
+    len(n): s
+    if(_): {n > k} [
+        slice(r): s 0 k
+    ]
+]
+
+so_next(r): s [
+    set(r): {(s + 1) % 3}
+]
+
+so_vec3(r): x [
+    vec(r): ""
+    push(_): r x
+    push(_): r x
+    push(_): r x
+]
+
+so_copy(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        push(_): r x
+        add(i): i 1
+    ]
+]
+
+so_has(r): v x [
+    set(r): false
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [
+            set(r): true
+            set(i): n
+        ]
+        add(i): i 1
+    ]
+]
+
+# removes the first x from v; true when there was one
+so_remove(r): v x [
+    set(r): false
+    len(n): v
+    set(k): -1
+    set(i): 0
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [
+            set(k): i
+            set(i): n
+        ]
+        add(i): i 1
+    ]
+    if(_): {k >= 0} [
+        set(i): k
+        while(_): {i < n - 1} [
+            at(y): v {i + 1}
+            set(v): i y
+            add(i): i 1
+        ]
+        pop(_): v
+        set(r): true
+    ]
+]
+
+# sorts a vector of integers, smallest first
+so_sort(_): v [
+    len(n): v
+    set(i): 1
+    while(_): {i < n} [
+        at(x): v i
+        set(j): {i - 1}
+        set(go): true
+        while(_): go [
+            set(go): false
+            if(_): {j >= 0} [
+                at(y): v j
+                if(_): {y > x} [
+                    set(v): {j + 1} y
+                    sub(j): j 1
+                    set(go): true
+                ]
+            ]
+        ]
+        set(v): {j + 1} x
+        add(i): i 1
+    ]
+]
+
+so_add_at(_): v i n [
+    at(x): v i
+    set(v): i {x + n}
+]
+
+# s padded with spaces to w characters (UTF-8 aware)
+so_pad(r): s w [
+    set(r): s
+    utf8_count(n): s
+    while(_): {n < w} [
+        concat(r): r " "
+        add(n): n 1
+    ]
+]
+
+so_lpad(r): s w [
+    set(r): s
+    utf8_count(n): s
+    while(_): {n < w} [
+        concat(r): " " r
+        add(n): n 1
+    ]
+]
+
+# a value n / 3 with one decimal, signed: settlements are in thirds
+so_fmt3(r): n [
+    set(a): n
+    set(sign): "+"
+    if(_): {n < 0} [
+        set(a): {0 - n}
+        set(sign): "-"
+    ]
+    if(_): {n = 0} [
+        set(sign): ""
+    ]
+    so_div(t): {a * 20 + 3} 6
+    so_div(w): t 10
+    so_int(ws): w
+    so_int(fs): {t - w * 10}
+    concat(r): sign ws "." fs
+]
+
+# printable text for a nickname or a chat line: no backticks, no control
+# characters, at most max bytes (whole UTF-8 characters)
+so_clean(r): s max [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        set(k): 1
+        if(_): {b >= 192} [
+            utf8_len(k): b
+        ]
+        len(rl): r
+        if(_): {i + k > n} [
+            set(k): {n - i}
+        ]
+        if(_): {rl + k > max} [
+            set(i): n
+        ]
+        elif(_): {b = 96} [
+            concat(r): r "'"
+        ]
+        elif(_): {b >= 32 && b != 127} [
+            slice(ch): s i k
+            concat(r): r ch
+        ]
+        add(i): i k
+    ]
+    str_trim(r): r
+]
+
+# words of a line split at blanks
+so_words(r): line [
+    vec(r): ""
+    set(w): ""
+    len(n): line
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 32
+        if(_): {i < n} [
+            byte(b): line i
+        ]
+        if(_): {b = 32 || b = 9 || b = 44} [
+            if(_): {w != ""} [
+                push(_): r w
+            ]
+            set(w): ""
+        ]
+        else(_): [
+            slice(ch): line i 1
+            concat(w): w ch
+        ]
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- cards
+# A card is 0..31: suit * 8 + rank, suits spades, clubs, diamonds, hearts,
+# ranks 7 8 9 10 J Q K A.
+
+so_suit(r): c [
+    set(r): {c >> 3}
+]
+
+so_rank(r): c [
+    set(r): {c & 7}
+]
+
+so_suit_name(r): s [
+    if(_): sg_uni [
+        at(r): sg_suit_marks s
+    ]
+    else(_): [
+        at(r): sg_suit_letters s
+    ]
+]
+
+# "Qh": the form players type and the protocol carries
+so_card(r): c [
+    at(rk): sg_rank_names {c & 7}
+    at(su): sg_suit_letters {c >> 3}
+    concat(r): rk su
+]
+
+# "Q♥" on a terminal, "Qh" elsewhere
+so_card_show(r): c [
+    at(rk): sg_rank_names {c & 7}
+    so_suit_name(su): {c >> 3}
+    concat(r): rk su
+]
+
+so_suit_parse(r): s [
+    set(r): -1
+    if(_): {s = "s" || s = "♠"} [ set(r): 0 ]
+    if(_): {s = "c" || s = "♣"} [ set(r): 1 ]
+    if(_): {s = "d" || s = "♦"} [ set(r): 2 ]
+    if(_): {s = "h" || s = "♥"} [ set(r): 3 ]
+]
+
+# "Qh", "qH", "10s", "Ts", "Q♥" -> a card, or -1
+so_parse_card(r): text [
+    str_trim(t): text
+    str_lower(t): t
+    set(r): -1
+    len(n): t
+    if(_): {n >= 2} [
+        # the suit: one letter or one 3-byte mark
+        set(sl): 1
+        byte(last): t {n - 1}
+        if(_): {last >= 128 && n >= 4} [
+            set(sl): 3
+        ]
+        slice(st): t {n - sl} sl
+        slice(rt): t 0 {n - sl}
+        so_suit_parse(s): st
+        set(k): -1
+        if(_): {rt = "7"} [ set(k): 0 ]
+        if(_): {rt = "8"} [ set(k): 1 ]
+        if(_): {rt = "9"} [ set(k): 2 ]
+        if(_): {rt = "10" || rt = "t"} [ set(k): 3 ]
+        if(_): {rt = "j"} [ set(k): 4 ]
+        if(_): {rt = "q"} [ set(k): 5 ]
+        if(_): {rt = "k"} [ set(k): 6 ]
+        if(_): {rt = "a"} [ set(k): 7 ]
+        if(_): {s >= 0 && k >= 0} [
+            set(r): {s * 8 + k}
+        ]
+    ]
+]
+
+# a hand by suits, high cards first: "♠ A K 9  ♣ Q 8  ♦ -  ♥ J 7"
+so_hand_show(r): cards [
+    set(r): ""
+    set(s): 0
+    while(_): {s < 4} [
+        so_suit_name(sn): s
+        set(part): sn
+        set(any): false
+        set(k): 7
+        while(_): {k >= 0} [
+            if(_): {k < 8} [
+                so_has(h): cards {s * 8 + k}
+                if(_): h [
+                    at(rk): sg_rank_names k
+                    concat(part): part " " rk
+                    set(any): true
+                ]
+            ]
+            sub(k): k 1
+        ]
+        if(_): {any = false} [
+            concat(part): part " -"
+        ]
+        if(_): {s > 0} [
+            concat(r): r "   "
+        ]
+        concat(r): r part
+        add(s): s 1
+    ]
+]
+
+so_cards_show(r): cards [
+    set(r): ""
+    len(n): cards
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cards i
+        so_card_show(cs): c
+        if(_): {i > 0} [
+            concat(r): r " "
+        ]
+        concat(r): r cs
+        add(i): i 1
+    ]
+]
+
+# a beats b in a trick with this trump (4: none); b leads or is trump
+so_beats(r): a b trump [
+    set(r): false
+    set(sa): {a >> 3}
+    set(sb): {b >> 3}
+    if(_): {sa = sb} [
+        set(r): {(a & 7) > (b & 7)}
+    ]
+    elif(_): {sa = trump} [
+        set(r): true
+    ]
+]
+
+# index of the winning card of a trick (some cards), led suit led: the
+# highest trump, else the highest of the led suit; -1 when no card is
+# either (a raspasy talon trick nobody followed)
+so_trick_best(r): cards led trump [
+    set(r): -1
+    len(n): cards
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cards i
+        set(s): {c >> 3}
+        if(_): {s = led || s = trump} [
+            if(_): {r < 0} [
+                set(r): i
+            ]
+            else(_): [
+                at(best): cards r
+                so_beats(b): c best trump
+                if(_): b [
+                    set(r): i
+                ]
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- bids
+# A bid is an order number: 2 * ((level - 6) * 5 + strain) for strains
+# spades, clubs, diamonds, hearts, no trumps; 29 is misere (between 8 NT,
+# 28, and 9 spades, 30); -1 a pass, -2 no bid yet.
+
+so_level(r): ord [
+    set(r): 0
+    if(_): {ord >= 0 && ord != 29} [
+        so_div(q): {ord >> 1} 5
+        set(r): {q + 6}
+    ]
+]
+
+so_strain(r): ord [
+    set(r): 4
+    if(_): {ord >= 0 && ord != 29} [
+        set(r): {(ord >> 1) % 5}
+    ]
+]
+
+so_bid_ord(r): level strain [
+    set(r): {((level - 6) * 5 + strain) * 2}
+]
+
+# "6s", "10nt", "mis", "pass": typed and on the wire
+so_bid_name(r): ord [
+    set(r): ""
+    if(_): {ord = -1} [ set(r): "pass" ]
+    elif(_): {ord = 29} [ set(r): "mis" ]
+    elif(_): {ord >= 0} [
+        so_level(l): ord
+        so_strain(s): ord
+        so_int(r): l
+        if(_): {s = 4} [
+            concat(r): r "nt"
+        ]
+        else(_): [
+            at(sl): sg_suit_letters s
+            concat(r): r sl
+        ]
+    ]
+]
+
+so_bid_show(r): ord [
+    set(r): ""
+    if(_): {ord = -1} [ set(r): "pass" ]
+    elif(_): {ord = 29} [
+        set(r): "misere"
+        if(_): sg_uni [ set(r): "misère" ]
+    ]
+    elif(_): {ord >= 0} [
+        so_level(l): ord
+        so_strain(s): ord
+        so_int(r): l
+        if(_): {s = 4} [
+            concat(r): r "NT"
+        ]
+        else(_): [
+            so_suit_name(sn): s
+            concat(r): r sn
+        ]
+    ]
+]
+
+# typed text -> a bid order number, -1 pass, -3 not a bid
+so_parse_bid(r): text [
+    str_trim(t): text
+    str_lower(t): t
+    set(r): -3
+    if(_): {t = "pass" || t = "p" || t = "pas" || t = "пас"} [
+        set(r): -1
+    ]
+    elif(_): {t = "mis" || t = "misere" || t = "misère" || t = "m" || t = "мизер"} [
+        set(r): 29
+    ]
+    else(_): [
+        len(n): t
+        set(l): -1
+        set(rest): ""
+        if(_): {n >= 2} [
+            slice(d2): t 0 2
+            slice(d1): t 0 1
+            if(_): {d2 = "10"} [
+                set(l): 10
+                slice(rest): t 2 {n - 2}
+            ]
+            elif(_): {d1 = "6" || d1 = "7" || d1 = "8" || d1 = "9"} [
+                str_to_number(l): d1
+                slice(rest): t 1 {n - 1}
+            ]
+        ]
+        set(s): -1
+        if(_): {rest = "nt" || rest = "n" || rest = "bk" || rest = "бк"} [
+            set(s): 4
+        ]
+        elif(_): {rest != ""} [
+            so_suit_parse(s): rest
+        ]
+        if(_): {l >= 6 && s >= 0} [
+            so_bid_ord(r): l s
+        ]
+    ]
+]
+
+# contract value: 6:2 7:4 8:6 9:8 10:10, misere 10
+so_value(r): ord [
+    set(r): 10
+    if(_): {ord != 29} [
+        so_level(l): ord
+        set(r): {(l - 5) * 2}
+    ]
+]
+
+# whisters' tricks owed: 6:4 7:2 8:1 9:1 10:1
+so_obligation(r): level [
+    set(r): 1
+    if(_): {level = 6} [ set(r): 4 ]
+    if(_): {level = 7} [ set(r): 2 ]
+]
+
+# ---------------------------------------------------------------- game
+
+so_rand(r): n [
+    set(sg_rng): {(sg_rng * 1103515245 + 12345) & 2147483647}
+    set(r): {(sg_rng >> 8) % n}
+]
+
+so_log(_): text [
+    push(_): sg_log text
+    add(sg_logn): sg_logn 1
+    len(n): sg_log
+    if(_): {n > 8} [
+        set(keep): sg_log
+        vec(sg_log): ""
+        set(i): {n - 8}
+        while(_): {i < n} [
+            at(x): keep i
+            push(_): sg_log x
+            add(i): i 1
+        ]
+    ]
+]
+
+so_chat_add(_): text [
+    push(_): sg_chat text
+    len(n): sg_chat
+    if(_): {n > 6} [
+        set(keep): sg_chat
+        vec(sg_chat): ""
+        set(i): {n - 6}
+        while(_): {i < n} [
+            at(x): keep i
+            push(_): sg_chat x
+            add(i): i 1
+        ]
+    ]
+]
+
+so_name(r): seat [
+    at(r): sg_names seat
+]
+
+# a table with no players yet; so_new_game starts the first hand
+so_table(_): psize seed [
+    so_types(_):
+    vec(sg_names): ""
+    push(_): sg_names ""
+    push(_): sg_names ""
+    push(_): sg_names ""
+    so_vec3(sg_kind): ""
+    so_vec3(sg_online): 1
+    so_vec3(sg_pool): 0
+    so_vec3(sg_mount): 0
+    vec(sg_whist): ""
+    set(i): 0
+    while(_): {i < 9} [
+        push(_): sg_whist 0
+        add(i): i 1
+    ]
+    set(sg_psize): psize
+    set(sg_rng): {seed & 2147483647}
+    set(sg_dealer): 2
+    set(sg_handno): 0
+    set(sg_streak): 0
+    set(sg_phase): "lobby"
+    set(sg_turn): -1
+    vec(sg_hands): ""
+    push(_): sg_hands '[]'
+    push(_): sg_hands '[]'
+    push(_): sg_hands '[]'
+    vec(sg_talon): ""
+    vec(sg_discard): ""
+    so_vec3(sg_bids): -2
+    set(sg_high): -1
+    set(sg_hseat): -1
+    set(sg_decl): -1
+    set(sg_contract): -1
+    set(sg_trump): 4
+    so_vec3(sg_wst): ""
+    set(sg_open): -1
+    vec(sg_trick): ""
+    vec(sg_tseats): ""
+    set(sg_lead): -1
+    so_vec3(sg_tricks): 0
+    set(sg_trickno): 0
+    set(sg_last): ""
+    vec(sg_log): ""
+    set(sg_logn): 0
+    vec(sg_chat): ""
+    set(sg_result): ""
+    so_vec3(sg_ready): 0
+    set(sg_tshow): false
+    set(sg_seq): 1
+    so_vec3(sg_err): ""
+    so_vec3(sg_actid): 0
+    set(sg_final): null
+]
+
+so_new_game(_): [
+    so_vec3(sg_pool): 0
+    so_vec3(sg_mount): 0
+    set(i): 0
+    while(_): {i < 9} [
+        set(sg_whist): i 0
+        add(i): i 1
+    ]
+    set(sg_handno): 0
+    set(sg_streak): 0
+    set(sg_final): null
+    so_start_hand(_):
+]
+
+so_forehand(r): [
+    so_next(r): sg_dealer
+]
+
+so_start_hand(_): [
+    add(sg_handno): sg_handno 1
+    so_next(sg_dealer): sg_dealer
+    # shuffle and deal: 10 cards each, 2 to the talon
+    vec(deck): ""
+    set(i): 0
+    while(_): {i < 32} [
+        push(_): deck i
+        add(i): i 1
+    ]
+    set(i): 31
+    while(_): {i > 0} [
+        so_rand(j): {i + 1}
+        at(a): deck i
+        at(b): deck j
+        set(deck): i b
+        set(deck): j a
+        sub(i): i 1
+    ]
+    vec(sg_hands): ""
+    set(p): 0
+    while(_): {p < 3} [
+        vec(h): ""
+        set(i): 0
+        while(_): {i < 10} [
+            at(c): deck {p * 10 + i}
+            push(_): h c
+            add(i): i 1
+        ]
+        so_sort(_): h
+        push(_): sg_hands h
+        add(p): p 1
+    ]
+    vec(sg_talon): ""
+    at(c): deck 30
+    push(_): sg_talon c
+    at(c): deck 31
+    push(_): sg_talon c
+    vec(sg_discard): ""
+    so_vec3(sg_bids): -2
+    set(sg_high): -1
+    set(sg_hseat): -1
+    set(sg_decl): -1
+    set(sg_contract): -1
+    set(sg_trump): 4
+    so_vec3(sg_wst): ""
+    set(sg_open): -1
+    vec(sg_trick): ""
+    vec(sg_tseats): ""
+    so_vec3(sg_tricks): 0
+    set(sg_trickno): 0
+    set(sg_last): ""
+    set(sg_result): ""
+    so_vec3(sg_ready): 0
+    set(sg_tshow): false
+    set(sg_phase): "bid"
+    so_forehand(sg_turn):
+    set(sg_lead): sg_turn
+    so_int(hn): sg_handno
+    so_name(dn): sg_dealer
+    concat(m): "Hand " hn ", dealer " dn
+    so_log(_): m
+]
+
+# who must act now: the player to move, or the lone whister for the open
+# passer's hand; -1 when nobody (lobby, between hands, game over)
+so_ctl(r): [
+    set(r): -1
+    if(_): {sg_phase = "bid" || sg_phase = "discard" || sg_phase = "contract" || sg_phase = "whist" || sg_phase = "whist2" || sg_phase = "play"} [
+        set(r): sg_turn
+        if(_): {sg_phase = "play" && sg_open >= 0 && sg_turn = sg_open} [
+            # the whister plays the open passer's cards
+            so_next(f): sg_decl
+            so_next(s): f
+            set(r): f
+            if(_): {f = sg_open} [
+                set(r): s
+            ]
+        ]
+    ]
+]
+
+# the cards seat may play now
+so_legal_cards(r): seat [
+    at(hand): sg_hands seat
+    vec(r): ""
+    set(led): -1
+    len(nt): sg_trick
+    if(_): {sg_decl < 0 && sg_trickno < 2} [
+        # raspasy: the talon card sets the suit of tricks 1 and 2
+        at(tc): sg_talon sg_trickno
+        set(led): {tc >> 3}
+    ]
+    elif(_): {nt > 0} [
+        at(c0): sg_trick 0
+        set(led): {c0 >> 3}
+    ]
+    len(n): hand
+    vec(follow): ""
+    vec(ruff): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(c): hand i
+        if(_): {(c >> 3) = led} [
+            push(_): follow c
+        ]
+        if(_): {(c >> 3) = sg_trump} [
+            push(_): ruff c
+        ]
+        add(i): i 1
+    ]
+    len(nf): follow
+    len(nr): ruff
+    if(_): {led < 0} [
+        so_copy(r): hand
+    ]
+    elif(_): {nf > 0} [
+        set(r): follow
+    ]
+    elif(_): {nr > 0} [
+        set(r): ruff
+    ]
+    else(_): [
+        so_copy(r): hand
+    ]
+]
+
+# the actions seat may take now (chat and "n:" between hands aside)
+so_legal(r): seat [
+    vec(r): ""
+    so_ctl(ctl):
+    if(_): {ctl = seat} [
+        if(_): {sg_phase = "bid"} [
+            push(_): r "b:pass"
+            at(mine): sg_bids seat
+            if(_): {mine != 29} [
+                set(o): {sg_high + 1}
+                if(_): {o < 0} [
+                    set(o): 0
+                ]
+                while(_): {o <= 48} [
+                    if(_): {(o & 1) = 0} [
+                        so_bid_name(bn): o
+                        concat(a): "b:" bn
+                        push(_): r a
+                    ]
+                    if(_): {o = 29 && mine = -2} [
+                        push(_): r "b:mis"
+                    ]
+                    add(o): o 1
+                ]
+            ]
+        ]
+        elif(_): {sg_phase = "discard"} [
+            push(_): r "d:*"
+        ]
+        elif(_): {sg_phase = "contract"} [
+            set(o): sg_high
+            while(_): {o <= 48} [
+                so_bid_name(bn): o
+                concat(a): "c:" bn
+                push(_): r a
+                add(o): o 2
+            ]
+        ]
+        elif(_): {sg_phase = "whist" || sg_phase = "whist2"} [
+            push(_): r "w:whist"
+            push(_): r "w:pass"
+            so_next(f): sg_decl
+            so_next(s): f
+            at(fw): sg_wst f
+            so_level(l): sg_contract
+            if(_): {sg_phase = "whist" && seat = s && fw = "pass" && l = 6} [
+                push(_): r "w:half"
+            ]
+        ]
+        elif(_): {sg_phase = "play"} [
+            so_legal_cards(cards): sg_turn
+            len(n): cards
+            set(i): 0
+            while(_): {i < n} [
+                at(c): cards i
+                so_card(cn): c
+                concat(a): "p:" cn
+                push(_): r a
+                add(i): i 1
+            ]
+        ]
+    ]
+]
+
+# applies one action from seat; "" when done, else why not
+so_act(r): seat action [
+    set(r): ""
+    len(n): action
+    so_head(verb): action 2
+    set(arg): ""
+    if(_): {n > 2} [
+        slice(arg): action 2 {n - 2}
+    ]
+    if(_): {verb = "t:"} [
+        so_clean(text): arg 200
+        if(_): {text != ""} [
+            so_name(who): seat
+            concat(line): who ": " text
+            so_chat_add(_): line
+        ]
+    ]
+    elif(_): {verb = "n:"} [
+        if(_): {sg_phase = "done"} [
+            set(sg_ready): seat 1
+            at(r0): sg_ready 0
+            at(r1): sg_ready 1
+            at(r2): sg_ready 2
+            if(_): {r0 + r1 + r2 = 3} [
+                so_start_hand(_):
+            ]
+        ]
+    ]
+    else(_): [
+        so_ctl(ctl):
+        so_legal(legal): seat
+        so_has(ok): legal action
+        if(_): {ctl != seat} [
+            set(r): "not your turn"
+        ]
+        elif(_): {verb = "d:"} [
+            so_words(w): arg
+            len(nw): w
+            set(r): "discard two cards"
+            if(_): {nw = 2} [
+                at(w0): w 0
+                at(w1): w 1
+                so_parse_card(a): w0
+                so_parse_card(b): w1
+                at(hand): sg_hands seat
+                so_has(ha): hand a
+                so_has(hb): hand b
+                if(_): {ha && hb && a != b} [
+                    so_do_discard(_): a b
+                    set(r): ""
+                ]
+            ]
+        ]
+        elif(_): {ok = false} [
+            set(r): "not a legal move"
+        ]
+        elif(_): {verb = "b:"} [
+            so_parse_bid(o): arg
+            so_do_bid(_): seat o
+        ]
+        elif(_): {verb = "c:"} [
+            so_parse_bid(o): arg
+            so_do_contract(_): o
+        ]
+        elif(_): {verb = "w:"} [
+            so_do_whist(_): seat arg
+        ]
+        elif(_): {verb = "p:"} [
+            so_parse_card(c): arg
+            so_do_play(_): sg_turn c
+        ]
+    ]
+    set(sg_err): seat r
+    add(sg_seq): sg_seq 1
+]
+
+so_do_bid(_): seat ord [
+    set(sg_bids): seat ord
+    if(_): {ord >= 0} [
+        set(sg_high): ord
+        set(sg_hseat): seat
+    ]
+    so_name(who): seat
+    so_bid_show(bs): ord
+    concat(m): who ": " bs
+    so_log(_): m
+    set(passes): 0
+    set(i): 0
+    while(_): {i < 3} [
+        at(b): sg_bids i
+        if(_): {b = -1} [
+            add(passes): passes 1
+        ]
+        add(i): i 1
+    ]
+    if(_): {passes = 3} [
+        so_start_raspasy(_):
+    ]
+    elif(_): {passes = 2 && sg_high >= 0} [
+        set(sg_decl): sg_hseat
+        so_take_talon(_):
+    ]
+    else(_): [
+        so_next(t): seat
+        at(b): sg_bids t
+        if(_): {b = -1} [
+            so_next(t): t
+        ]
+        set(sg_turn): t
+    ]
+]
+
+so_start_raspasy(_): [
+    add(sg_streak): sg_streak 1
+    set(sg_decl): -1
+    set(sg_contract): -1
+    set(sg_trump): 4
+    set(sg_tshow): true
+    set(m): sg_streak
+    if(_): {m > 3} [
+        set(m): 3
+    ]
+    so_int(ms): m
+    concat(t): "All pass: raspasy, a trick costs " ms
+    so_log(_): t
+    so_start_play(_):
+]
+
+so_take_talon(_): [
+    set(sg_streak): 0
+    at(hand): sg_hands sg_decl
+    at(t0): sg_talon 0
+    at(t1): sg_talon 1
+    push(_): hand t0
+    push(_): hand t1
+    so_sort(_): hand
+    set(sg_tshow): true
+    set(sg_phase): "discard"
+    set(sg_turn): sg_decl
+    so_name(who): sg_decl
+    so_cards_show(ts): sg_talon
+    concat(m): who " takes the talon: " ts
+    so_log(_): m
+]
+
+so_do_discard(_): a b [
+    at(hand): sg_hands sg_decl
+    so_remove(_): hand a
+    so_remove(_): hand b
+    vec(sg_discard): ""
+    push(_): sg_discard a
+    push(_): sg_discard b
+    so_sort(_): sg_discard
+    if(_): {sg_high = 29} [
+        set(sg_contract): 29
+        set(sg_trump): 4
+        set(sg_tshow): false
+        # misere: the defenders play with their cards open
+        set(sg_open): -2
+        so_name(who): sg_decl
+        concat(m): who " plays misere"
+        so_log(_): m
+        so_start_play(_):
+    ]
+    else(_): [
+        set(sg_phase): "contract"
+        set(sg_turn): sg_decl
+    ]
+]
+
+so_do_contract(_): ord [
+    set(sg_contract): ord
+    so_strain(sg_trump): ord
+    set(sg_phase): "whist"
+    so_next(sg_turn): sg_decl
+    so_name(who): sg_decl
+    so_bid_show(bs): ord
+    concat(m): who " plays " bs
+    so_log(_): m
+]
+
+so_do_whist(_): seat w [
+    so_next(f): sg_decl
+    so_next(s): f
+    so_name(who): seat
+    concat(m): who ": " w
+    if(_): {w = "half"} [
+        concat(m): who ": half-whist"
+    ]
+    so_log(_): m
+    if(_): {sg_phase = "whist2"} [
+        set(sg_wst): f w
+        if(_): {w = "whist"} [
+            # the first defender takes it back: the half-whist is off
+            set(sg_wst): s "pass"
+        ]
+        so_whist_done(_):
+    ]
+    else(_): [
+        set(sg_wst): seat w
+        if(_): {seat = f} [
+            set(sg_turn): s
+        ]
+        elif(_): {w = "half"} [
+            set(sg_phase): "whist2"
+            set(sg_turn): f
+        ]
+        else(_): [
+            so_whist_done(_):
+        ]
+    ]
+]
+
+so_whist_done(_): [
+    set(sg_tshow): false
+    so_next(f): sg_decl
+    so_next(s): f
+    at(fw): sg_wst f
+    at(sw): sg_wst s
+    set(nw): 0
+    if(_): {fw = "whist"} [ add(nw): nw 1 ]
+    if(_): {sw = "whist"} [ add(nw): nw 1 ]
+    if(_): {nw = 0} [
+        so_score_hand(_):
+    ]
+    else(_): [
+        if(_): {nw = 1} [
+            set(sg_open): f
+            if(_): {fw = "whist"} [
+                set(sg_open): s
+            ]
+            so_name(pn): sg_open
+            concat(m): pn " lays the cards open"
+            so_log(_): m
+        ]
+        so_start_play(_):
+    ]
+]
+
+so_start_play(_): [
+    set(sg_phase): "play"
+    vec(sg_trick): ""
+    vec(sg_tseats): ""
+    so_vec3(sg_tricks): 0
+    set(sg_trickno): 0
+    so_forehand(sg_lead):
+    set(sg_turn): sg_lead
+]
+
+so_do_play(_): seat card [
+    at(hand): sg_hands seat
+    so_remove(_): hand card
+    push(_): sg_trick card
+    push(_): sg_tseats seat
+    len(n): sg_trick
+    if(_): {n = 3} [
+        so_trick_done(_):
+    ]
+    else(_): [
+        so_next(sg_turn): seat
+    ]
+]
+
+so_trick_done(_): [
+    set(rasp): {sg_decl < 0}
+    at(c0): sg_trick 0
+    set(led): {c0 >> 3}
+    if(_): {rasp && sg_trickno < 2} [
+        at(tc): sg_talon sg_trickno
+        set(led): {tc >> 3}
+    ]
+    so_trick_best(bi): sg_trick led sg_trump
+    set(win): -1
+    if(_): {bi >= 0} [
+        at(win): sg_tseats bi
+        so_add_at(_): sg_tricks win 1
+    ]
+    so_int(tn): {sg_trickno + 1}
+    concat(t): "Trick " tn ":"
+    if(_): {rasp && sg_trickno < 2} [
+        at(tc): sg_talon sg_trickno
+        so_card_show(tcs): tc
+        concat(t): t " talon " tcs ","
+    ]
+    set(i): 0
+    while(_): {i < 3} [
+        at(c): sg_trick i
+        at(p): sg_tseats i
+        so_name(pn): p
+        so_card_show(cs): c
+        concat(t): t " " pn " " cs
+        add(i): i 1
+    ]
+    if(_): {win >= 0} [
+        so_name(wn): win
+        concat(t): t " - " wn
+    ]
+    else(_): [
+        concat(t): t " - nobody"
+    ]
+    set(sg_last): t
+    vec(sg_trick): ""
+    vec(sg_tseats): ""
+    add(sg_trickno): sg_trickno 1
+    so_forehand(sg_lead):
+    if(_): {win >= 0 && (rasp = false || sg_trickno >= 2)} [
+        set(sg_lead): win
+    ]
+    set(sg_turn): sg_lead
+    if(_): {sg_trickno = 10} [
+        so_score_hand(_):
+    ]
+]
+
+# ---------------------------------------------------------------- scores
+
+so_whist_add(_): a b n [
+    so_add_at(_): sg_whist {a * 3 + b} n
+]
+
+# n points to seat's pool; what a full pool cannot take helps the other
+# pools (10 whists on that player per point), the rest is 5 whists on
+# each of the other two per point
+so_pool_add(_): seat n [
+    at(p): sg_pool seat
+    set(room): {sg_psize - p}
+    if(_): {room < 0} [
+        set(room): 0
+    ]
+    if(_): {n <= room} [
+        set(sg_pool): seat {p + n}
+    ]
+    else(_): [
+        set(sg_pool): seat {p + room}
+        set(extra): {n - room}
+        so_next(j): seat
+        set(k): 0
+        while(_): {k < 2} [
+            at(pj): sg_pool j
+            set(rj): {sg_psize - pj}
+            if(_): {rj > extra} [
+                set(rj): extra
+            ]
+            if(_): {rj > 0} [
+                set(sg_pool): j {pj + rj}
+                so_whist_add(_): seat j {rj * 10}
+                set(extra): {extra - rj}
+            ]
+            so_next(j): j
+            add(k): k 1
+        ]
+        if(_): {extra > 0} [
+            so_next(j): seat
+            so_next(j2): j
+            so_whist_add(_): seat j {extra * 5}
+            so_whist_add(_): seat j2 {extra * 5}
+        ]
+    ]
+]
+
+so_score_hand(_): [
+    if(_): {sg_decl < 0} [
+        so_score_raspasy(_):
+    ]
+    elif(_): {sg_contract = 29} [
+        so_score_misere(_):
+    ]
+    else(_): [
+        so_score_contract(_):
+    ]
+    so_log(_): sg_result
+    so_vec3(sg_ready): 0
+    set(sg_phase): "done"
+    set(full): 0
+    set(i): 0
+    while(_): {i < 3} [
+        at(p): sg_pool i
+        if(_): {p >= sg_psize} [
+            add(full): full 1
+        ]
+        add(i): i 1
+    ]
+    if(_): {full = 3} [
+        set(sg_phase): "over"
+        so_settle(sg_final):
+        so_log(_): "Every pool is full: the game is over"
+    ]
+]
+
+so_score_raspasy(_): [
+    set(m): sg_streak
+    if(_): {m > 3} [
+        set(m): 3
+    ]
+    set(sg_result): "Raspasy:"
+    set(i): 0
+    while(_): {i < 3} [
+        at(t): sg_tricks i
+        so_add_at(_): sg_mount i {t * m}
+        if(_): {t = 0} [
+            so_pool_add(_): i 1
+        ]
+        so_name(pn): i
+        so_int(ts): t
+        concat(sg_result): sg_result " " pn " " ts
+        add(i): i 1
+    ]
+]
+
+so_score_misere(_): [
+    at(d): sg_tricks sg_decl
+    so_name(who): sg_decl
+    if(_): {d = 0} [
+        so_pool_add(_): sg_decl 10
+        concat(sg_result): who " made the misere"
+    ]
+    else(_): [
+        so_add_at(_): sg_mount sg_decl {d * 10}
+        so_int(ds): d
+        concat(sg_result): who " failed the misere: " ds " tricks"
+    ]
+]
+
+so_score_contract(_): [
+    so_level(l): sg_contract
+    so_value(v): sg_contract
+    so_obligation(o): l
+    so_next(f): sg_decl
+    so_next(s): f
+    at(fw): sg_wst f
+    at(sw): sg_wst s
+    so_name(who): sg_decl
+    so_bid_show(bs): sg_contract
+    concat(sg_result): who " " bs ": "
+    set(nw): 0
+    if(_): {fw = "whist"} [ add(nw): nw 1 ]
+    if(_): {sw = "whist"} [ add(nw): nw 1 ]
+    if(_): {nw = 0} [
+        # unplayed: counted as made; a half-whister gets half the whists
+        so_pool_add(_): sg_decl v
+        concat(sg_result): sg_result "not whisted, counted as made"
+        if(_): {sw = "half"} [
+            so_div(half): o 2
+            so_whist_add(_): s sg_decl {v * half}
+            so_name(sn): s
+            concat(sg_result): sg_result ", " sn " half-whists"
+        ]
+    ]
+    else(_): [
+        at(d): sg_tricks sg_decl
+        set(w): {10 - d}
+        so_int(ds): d
+        concat(sg_result): sg_result ds " tricks"
+        if(_): {d >= l} [
+            so_pool_add(_): sg_decl v
+            concat(sg_result): sg_result ", made"
+        ]
+        else(_): [
+            so_add_at(_): sg_mount sg_decl {v * (l - d)}
+            so_int(us): {l - d}
+            concat(sg_result): sg_result ", down " us
+        ]
+        set(k): 0
+        set(i): f
+        while(_): {k < 2} [
+            at(wi): sg_wst i
+            if(_): {wi = "whist"} [
+                # a lone whister played both hands: both defenders' tricks
+                at(wt): sg_tricks i
+                set(share): o
+                if(_): {nw = 1} [
+                    set(wt): w
+                ]
+                else(_): [
+                    so_div(share): o 2
+                ]
+                set(gain): {v * wt}
+                if(_): {d < l} [
+                    add(gain): gain {v * (l - d)}
+                ]
+                so_whist_add(_): i sg_decl gain
+                so_name(wn): i
+                so_int(wts): wt
+                concat(sg_result): sg_result "; " wn " whist " wts
+                if(_): {d >= l && w < o && wt < share} [
+                    so_add_at(_): sg_mount i {(v >> 1) * (share - wt)}
+                    concat(sg_result): sg_result " (short)"
+                ]
+            ]
+            so_next(i): i
+            add(k): k 1
+        ]
+    ]
+]
+
+# final balances in thirds of a whist: unclosed pool goes to the
+# mountain, mountains are evened out at 10 whists a point
+so_settle(r): [
+    vec(m): ""
+    set(sum): 0
+    set(i): 0
+    while(_): {i < 3} [
+        at(mi): sg_mount i
+        at(pi): sg_pool i
+        if(_): {pi < sg_psize} [
+            add(mi): mi {sg_psize - pi}
+        ]
+        push(_): m mi
+        add(sum): sum mi
+        add(i): i 1
+    ]
+    vec(r): ""
+    set(i): 0
+    while(_): {i < 3} [
+        at(mi): m i
+        set(b): {10 * (sum - 3 * mi)}
+        set(j): 0
+        while(_): {j < 3} [
+            if(_): {j != i} [
+                at(wij): sg_whist {i * 3 + j}
+                at(wji): sg_whist {j * 3 + i}
+                add(b): b {3 * (wij - wji)}
+            ]
+            add(j): j 1
+        ]
+        push(_): r b
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- views
+# What seat may see, as a view: its own cards, open hands, counts of the
+# others, the table. The host sends it to each player as UNO text.
+
+so_view(r): seat [
+    so_types(_):
+    set(nf): V_FIELDS
+    vec(r): ""
+    set(i): 0
+    while(_): {i < nf} [
+        push(_): r null
+        add(i): i 1
+    ]
+    set(r): V_SEQ sg_seq
+    set(r): V_SEAT seat
+    set(r): V_NAMES sg_names
+    set(r): V_KIND sg_kind
+    set(r): V_ONLINE sg_online
+    set(r): V_POOL sg_pool
+    set(r): V_MOUNT sg_mount
+    set(r): V_WHIST sg_whist
+    set(r): V_PSIZE sg_psize
+    set(r): V_DEALER sg_dealer
+    set(r): V_HANDNO sg_handno
+    set(r): V_PHASE sg_phase
+    set(r): V_TURN sg_turn
+    so_ctl(ctl):
+    set(r): V_CTL ctl
+    at(hand): sg_hands seat
+    set(r): V_HAND hand
+    vec(others): ""
+    vec(counts): ""
+    set(i): 0
+    while(_): {i < 3} [
+        at(h): sg_hands i
+        len(hn): h
+        push(_): counts hn
+        set(show): false
+        if(_): {sg_phase = "play" && sg_open = i} [ set(show): true ]
+        if(_): {sg_phase = "play" && sg_open = -2 && i != sg_decl} [ set(show): true ]
+        if(_): {i != seat && show} [
+            push(_): others h
+        ]
+        else(_): [
+            push(_): others null
+        ]
+        add(i): i 1
+    ]
+    set(r): V_OTHERS others
+    set(r): V_COUNTS counts
+    set(r): V_BIDS sg_bids
+    set(r): V_HIGH sg_high
+    set(r): V_DECL sg_decl
+    set(r): V_CONTRACT sg_contract
+    set(r): V_TRUMP sg_trump
+    set(r): V_WST sg_wst
+    set(r): V_OPEN sg_open
+    vec(talon): ""
+    if(_): {sg_tshow && sg_decl >= 0} [
+        set(talon): sg_talon
+    ]
+    if(_): {sg_tshow && sg_decl < 0 && sg_trickno < 2} [
+        at(tc): sg_talon sg_trickno
+        push(_): talon tc
+    ]
+    set(r): V_TALON talon
+    vec(dis): ""
+    if(_): {seat = sg_decl} [
+        set(dis): sg_discard
+    ]
+    set(r): V_DISCARD dis
+    set(r): V_TRICK sg_trick
+    set(r): V_TSEATS sg_tseats
+    set(r): V_LEAD sg_lead
+    set(r): V_TRICKS sg_tricks
+    set(r): V_TRICKNO sg_trickno
+    set(r): V_LAST sg_last
+    set(r): V_LOG sg_log
+    set(r): V_LOGN sg_logn
+    set(r): V_CHAT sg_chat
+    set(r): V_RESULT sg_result
+    set(r): V_READY sg_ready
+    so_legal(legal): seat
+    set(r): V_LEGAL legal
+    set(r): V_ACTID sg_actid
+    set(r): V_STREAK sg_streak
+    at(err): sg_err seat
+    set(r): V_ERR err
+    set(r): V_FINAL sg_final
+]
+
+# ---------------------------------------------------------------- bots
+# A bot sees only its view: it counts high cards and long suits, bids a
+# suit it can make, whists with two likely tricks and plays simply.
+
+# half-tricks of a hand with trump suit t (4: no trumps)
+so_bot_halfs(r): cards t [
+    set(r): 0
+    set(s): 0
+    while(_): {s < 4} [
+        set(cnt): 0
+        set(k): 0
+        while(_): {k < 8} [
+            so_has(h): cards {s * 8 + k}
+            if(_): h [ add(cnt): cnt 1 ]
+            add(k): k 1
+        ]
+        so_has(ha): cards {s * 8 + 7}
+        so_has(hk): cards {s * 8 + 6}
+        so_has(hq): cards {s * 8 + 5}
+        if(_): ha [ add(r): r 2 ]
+        if(_): {hk && cnt >= 2} [ add(r): r 2 ]
+        if(_): {hk && cnt < 2} [ add(r): r 1 ]
+        if(_): {hq && cnt >= 3} [ add(r): r 1 ]
+        if(_): {s = t && cnt > 3} [ add(r): r {(cnt - 3) * 2} ]
+        if(_): {t < 4 && s != t && cnt < 2} [
+            add(r): r {2 - cnt}
+        ]
+        add(s): s 1
+    ]
+]
+
+so_bot_best_suit(r): cards [
+    set(r): 0
+    set(best): -1
+    set(s): 0
+    while(_): {s < 4} [
+        so_bot_halfs(h): cards s
+        if(_): {h > best} [
+            set(best): h
+            set(r): s
+        ]
+        add(s): s 1
+    ]
+]
+
+so_bot(r): view [
+    set(r): ""
+    at(seat): view V_SEAT
+    at(phase): view V_PHASE
+    at(ctl): view V_CTL
+    at(hand): view V_HAND
+    at(legal): view V_LEGAL
+    if(_): {phase = "done"} [
+        at(ready): view V_READY
+        at(me): ready seat
+        if(_): {me = 0} [
+            set(r): "n:"
+        ]
+    ]
+    elif(_): {ctl = seat} [
+        if(_): {phase = "bid"} [
+            so_bot_best_suit(s): hand
+            so_bot_halfs(h): hand s
+            set(est): {h >> 1}
+            set(r): "b:pass"
+            set(l): 6
+            set(go): true
+            while(_): {go && l <= est && l <= 10} [
+                so_bid_ord(o): l s
+                so_bid_name(bn): o
+                concat(a): "b:" bn
+                so_has(ok): legal a
+                if(_): ok [
+                    set(r): a
+                    set(go): false
+                ]
+                add(l): l 1
+            ]
+        ]
+        elif(_): {phase = "discard"} [
+            at(high): view V_HIGH
+            so_bot_best_suit(s): hand
+            # misere: away with the two highest; else two low side cards
+            vec(cand): ""
+            len(n): hand
+            set(k): 0
+            while(_): {k < 8} [
+                set(rank): k
+                if(_): {high = 29} [
+                    set(rank): {7 - k}
+                ]
+                set(i): 0
+                while(_): {i < n} [
+                    at(c): hand i
+                    if(_): {(c & 7) = rank && ((c >> 3) != s || high = 29)} [
+                        push(_): cand c
+                    ]
+                    add(i): i 1
+                ]
+                add(k): k 1
+            ]
+            set(i): 0
+            while(_): {i < n} [
+                at(c): hand i
+                push(_): cand c
+                add(i): i 1
+            ]
+            at(a): cand 0
+            set(b): a
+            set(i): 1
+            while(_): {b = a} [
+                at(b): cand i
+                add(i): i 1
+            ]
+            so_card(as): a
+            so_card(bs): b
+            concat(r): "d:" as " " bs
+        ]
+        elif(_): {phase = "contract"} [
+            at(r): legal 0
+        ]
+        elif(_): {phase = "whist" || phase = "whist2"} [
+            at(contract): view V_CONTRACT
+            so_level(l): contract
+            so_bot_halfs(h): hand 4
+            set(need): 4
+            if(_): {l >= 7} [
+                set(need): 2
+            ]
+            set(r): "w:pass"
+            if(_): {h >= need} [
+                set(r): "w:whist"
+            ]
+        ]
+        elif(_): {phase = "play"} [
+            so_bot_play(r): view
+        ]
+    ]
+]
+
+so_bot_play(r): view [
+    at(legal): view V_LEGAL
+    at(trick): view V_TRICK
+    at(tseats): view V_TSEATS
+    at(decl): view V_DECL
+    at(contract): view V_CONTRACT
+    at(trump): view V_TRUMP
+    at(turn): view V_TURN
+    at(talon): view V_TALON
+    vec(cards): ""
+    len(n): legal
+    set(i): 0
+    while(_): {i < n} [
+        at(a): legal i
+        len(al): a
+        slice(cn): a 2 {al - 2}
+        so_parse_card(c): cn
+        push(_): cards c
+        add(i): i 1
+    ]
+    # avoid tricks on raspasy and as the misere player
+    set(mode): "win"
+    if(_): {decl < 0 || (contract = 29 && turn = decl)} [
+        set(mode): "avoid"
+    ]
+    elif(_): {contract = 29} [
+        set(mode): "low"
+    ]
+    len(nt): trick
+    set(led): -1
+    len(ntal): talon
+    if(_): {decl < 0 && ntal > 0} [
+        at(tc): talon 0
+        set(led): {tc >> 3}
+    ]
+    elif(_): {nt > 0} [
+        at(c0): trick 0
+        set(led): {c0 >> 3}
+    ]
+    set(bi): -1
+    if(_): {led >= 0} [
+        so_trick_best(bi): trick led trump
+    ]
+    set(bestc): -1
+    set(bests): -1
+    if(_): {bi >= 0} [
+        at(bestc): trick bi
+        at(bests): tseats bi
+    ]
+    # the lowest and highest card, and the lowest and highest that win
+    set(lo): -1
+    set(hi): -1
+    set(wlo): -1
+    set(lhi): -1
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cards i
+        if(_): {lo < 0} [ set(lo): c ]
+        if(_): {hi < 0} [ set(hi): c ]
+        if(_): {(c & 7) < (lo & 7)} [ set(lo): c ]
+        if(_): {(c & 7) > (hi & 7)} [ set(hi): c ]
+        set(wins): false
+        if(_): {led >= 0} [
+            if(_): {bestc < 0} [
+                set(wins): {(c >> 3) = led || (c >> 3) = trump}
+            ]
+            else(_): [
+                so_beats(wins): c bestc trump
+            ]
+        ]
+        if(_): wins [
+            if(_): {wlo < 0} [ set(wlo): c ]
+            if(_): {(c & 7) < (wlo & 7)} [ set(wlo): c ]
+        ]
+        else(_): [
+            if(_): {lhi < 0} [ set(lhi): c ]
+            if(_): {(c & 7) > (lhi & 7)} [ set(lhi): c ]
+        ]
+        add(i): i 1
+    ]
+    set(pick): lo
+    if(_): {mode = "avoid"} [
+        if(_): {nt = 0 && led < 0} [
+            set(pick): lo
+        ]
+        elif(_): {lhi >= 0} [
+            set(pick): lhi
+        ]
+        else(_): [
+            set(pick): hi
+        ]
+    ]
+    elif(_): {mode = "win"} [
+        set(partner): false
+        if(_): {bests >= 0 && turn != decl && bests != decl} [
+            set(partner): true
+        ]
+        if(_): {nt = 0} [
+            set(pick): hi
+        ]
+        elif(_): {partner = false && wlo >= 0} [
+            set(pick): wlo
+        ]
+    ]
+    so_card(pn): pick
+    concat(r): "p:" pn
+]
+
+# ---------------------------------------------------------------- screen
+
+so_render(r): view [
+    vec(r): ""
+    at(seat): view V_SEAT
+    at(names): view V_NAMES
+    at(phase): view V_PHASE
+    at(psize): view V_PSIZE
+    at(handno): view V_HANDNO
+    at(dealer): view V_DEALER
+    at(pool): view V_POOL
+    at(mount): view V_MOUNT
+    at(whist): view V_WHIST
+    at(online): view V_ONLINE
+    set(dot): " - "
+    if(_): sg_uni [ set(dot): " · " ]
+    so_int(ps): psize
+    concat(top): "Sochi preferans" dot "pool " ps
+    if(_): {handno > 0} [
+        so_int(hs): handno
+        at(dn): names dealer
+        concat(top): top dot "hand " hs dot "dealer " dn
+    ]
+    push(_): r top
+    push(_): r ""
+    # the score sheet
+    set(head): "  player        pool mount  whists on"
+    set(i): 0
+    while(_): {i < 3} [
+        at(nm): names i
+        utf8_index(cut): nm 6
+        slice(nm): nm 0 cut
+        so_lpad(nm): nm 7
+        concat(head): head nm
+        add(i): i 1
+    ]
+    push(_): r head
+    set(i): 0
+    while(_): {i < 3} [
+        at(nm): names i
+        set(mark): "  "
+        if(_): {i = seat} [ set(mark): "> " ]
+        at(on): online i
+        if(_): {nm = ""} [ set(nm): "(empty)" ]
+        if(_): {on = 0} [ concat(nm): nm " (offline)" ]
+        so_pad(nm): nm 14
+        at(p): pool i
+        at(m): mount i
+        so_int(pst): p
+        so_int(mst): m
+        so_lpad(pst): pst 4
+        so_lpad(mst): mst 6
+        concat(row): mark nm pst mst "           "
+        set(j): 0
+        while(_): {j < 3} [
+            set(cell): "-"
+            if(_): {j != i} [
+                at(w): whist {i * 3 + j}
+                so_int(cell): w
+            ]
+            so_lpad(cell): cell 7
+            concat(row): row cell
+            add(j): j 1
+        ]
+        push(_): r row
+        add(i): i 1
+    ]
+    push(_): r ""
+    if(_): {phase = "lobby"} [
+        set(n): 0
+        set(i): 0
+        while(_): {i < 3} [
+            at(nm): names i
+            if(_): {nm != ""} [ add(n): n 1 ]
+            add(i): i 1
+        ]
+        so_int(ns): n
+        concat(t): "Waiting for players: " ns " of 3 at the table."
+        push(_): r t
+        push(_): r "Others join with: ussr src/sochi/sochi.su (LAN) or sochi.su join ADDRESS"
+    ]
+    else(_): [
+        so_render_table(_): view r
+    ]
+    # recent events and chat
+    push(_): r ""
+    at(log): view V_LOG
+    len(nl): log
+    set(i): 0
+    if(_): {nl > 4} [ set(i): {nl - 4} ]
+    while(_): {i < nl} [
+        at(x): log i
+        concat(x): "  " x
+        push(_): r x
+        add(i): i 1
+    ]
+    at(chat): view V_CHAT
+    len(nc): chat
+    if(_): {nc > 0} [
+        push(_): r "-- chat --"
+        set(i): 0
+        while(_): {i < nc} [
+            at(x): chat i
+            push(_): r x
+            add(i): i 1
+        ]
+    ]
+    push(_): r ""
+    so_render_hint(h): view
+    push(_): r h
+    at(err): view V_ERR
+    if(_): {err != ""} [
+        concat(e): "! " err
+        push(_): r e
+    ]
+]
+
+so_render_table(_): view r [
+    at(names): view V_NAMES
+    at(phase): view V_PHASE
+    at(bids): view V_BIDS
+    at(decl): view V_DECL
+    at(contract): view V_CONTRACT
+    at(wst): view V_WST
+    at(talon): view V_TALON
+    at(trick): view V_TRICK
+    at(tseats): view V_TSEATS
+    at(tricks): view V_TRICKS
+    at(trickno): view V_TRICKNO
+    at(others): view V_OTHERS
+    at(hand): view V_HAND
+    at(discard): view V_DISCARD
+    at(open): view V_OPEN
+    if(_): {phase = "bid"} [
+        set(t): "Bids:"
+        set(i): 0
+        while(_): {i < 3} [
+            at(nm): names i
+            at(b): bids i
+            so_bid_show(bs): b
+            if(_): {b = -2} [ set(bs): "..." ]
+            concat(t): t "  " nm " " bs
+            add(i): i 1
+        ]
+        push(_): r t
+    ]
+    if(_): {decl >= 0} [
+        at(dn): names decl
+        set(t): ""
+        if(_): {contract >= 0} [
+            so_bid_show(cs): contract
+            concat(t): "Contract: " dn " " cs
+            set(i): 0
+            while(_): {i < 3} [
+                at(w): wst i
+                if(_): {w != ""} [
+                    at(wn): names i
+                    concat(t): t "   " wn " " w
+                ]
+                add(i): i 1
+            ]
+        ]
+        else(_): [
+            at(high): view V_HIGH
+            so_bid_show(cs): high
+            concat(t): "Declarer: " dn ", bid " cs
+        ]
+        push(_): r t
+    ]
+    elif(_): {phase = "play" || phase = "done"} [
+        at(streak): view V_STREAK
+        if(_): {streak > 0} [
+            set(m): streak
+            if(_): {m > 3} [ set(m): 3 ]
+            so_int(ms): m
+            concat(t): "Raspasy: no trumps, avoid tricks; a trick costs " ms
+            push(_): r t
+        ]
+    ]
+    len(ntal): talon
+    if(_): {ntal > 0} [
+        so_cards_show(ts): talon
+        concat(t): "Talon: " ts
+        push(_): r t
+    ]
+    len(nd): discard
+    if(_): {nd > 0} [
+        so_cards_show(ds): discard
+        concat(t): "Your discard: " ds
+        push(_): r t
+    ]
+    if(_): {phase = "play"} [
+        set(i): 0
+        while(_): {i < 3} [
+            at(o): others i
+            typeof(ot): o
+            if(_): {ot = "vector"} [
+                at(on): names i
+                so_hand_show(hs): o
+                concat(t): on " (open): " hs
+                push(_): r t
+            ]
+            add(i): i 1
+        ]
+        so_int(tn): {trickno + 1}
+        concat(t): "Trick " tn ":"
+        len(nt): trick
+        set(i): 0
+        while(_): {i < nt} [
+            at(c): trick i
+            at(p): tseats i
+            at(pn): names p
+            so_card_show(cs): c
+            concat(t): t "  " pn " " cs
+            add(i): i 1
+        ]
+        push(_): r t
+    ]
+    at(last): view V_LAST
+    if(_): {last != "" && (phase = "play" || phase = "done")} [
+        concat(t): "Last: " last
+        push(_): r t
+    ]
+    if(_): {phase = "play" || phase = "done" || phase = "over"} [
+        set(t): "Tricks:"
+        set(i): 0
+        while(_): {i < 3} [
+            at(nm): names i
+            at(k): tricks i
+            so_int(ks): k
+            concat(t): t "  " nm " " ks
+            add(i): i 1
+        ]
+        push(_): r t
+    ]
+    if(_): {phase = "done" || phase = "over"} [
+        at(result): view V_RESULT
+        push(_): r result
+    ]
+    if(_): {phase = "over"} [
+        at(final): view V_FINAL
+        push(_): r "Final score (whists):"
+        set(i): 0
+        while(_): {i < 3} [
+            at(nm): names i
+            at(b): final i
+            so_fmt3(bs): b
+            so_pad(nm): nm 14
+            concat(t): "  " nm bs
+            push(_): r t
+            add(i): i 1
+        ]
+    ]
+    push(_): r ""
+    so_hand_show(hs): hand
+    len(nh): hand
+    if(_): {nh > 0} [
+        concat(t): "Your cards: " hs
+        push(_): r t
+    ]
+]
+
+so_render_hint(r): view [
+    at(seat): view V_SEAT
+    at(names): view V_NAMES
+    at(phase): view V_PHASE
+    at(ctl): view V_CTL
+    at(turn): view V_TURN
+    at(legal): view V_LEGAL
+    set(r): ""
+    if(_): {phase = "lobby"} [
+        set(r): "Type to chat; /quit leaves."
+    ]
+    elif(_): {phase = "done"} [
+        at(ready): view V_READY
+        at(me): ready seat
+        set(r): "Press Enter for the next hand."
+        if(_): {me = 1} [
+            set(r): "Waiting for the others to press Enter."
+        ]
+    ]
+    elif(_): {phase = "over"} [
+        set(r): "Game over. /quit leaves."
+    ]
+    elif(_): {ctl = seat} [
+        if(_): {phase = "bid"} [
+            set(r): "Your bid:"
+            len(n): legal
+            set(i): 1
+            if(_): {n > 1} [
+                at(a): legal 1
+                len(al): a
+                slice(an): a 2 {al - 2}
+                if(_): {an != "mis"} [
+                    concat(r): r " " an " or higher (6s 6c 6d 6h 6nt 7s ... 10nt)"
+                ]
+            ]
+            so_has(m): legal "b:mis"
+            if(_): m [ concat(r): r ", mis" ]
+            concat(r): r ", pass"
+        ]
+        elif(_): {phase = "discard"} [
+            set(r): "Discard two cards, e.g.: 7s 8d"
+        ]
+        elif(_): {phase = "contract"} [
+            at(a): legal 0
+            len(al): a
+            slice(an): a 2 {al - 2}
+            concat(r): "Name your contract: " an " or higher"
+        ]
+        elif(_): {phase = "whist" || phase = "whist2"} [
+            set(r): "whist or pass"
+            so_has(h): legal "w:half"
+            if(_): h [ set(r): "whist, pass or half" ]
+        ]
+        elif(_): {phase = "play"} [
+            set(r): "Your card:"
+            if(_): {turn != seat} [
+                at(tn): names turn
+                concat(r): "Play for " tn ":"
+            ]
+            len(n): legal
+            set(i): 0
+            while(_): {i < n} [
+                at(a): legal i
+                len(al): a
+                slice(an): a 2 {al - 2}
+                concat(r): r " " an
+                add(i): i 1
+            ]
+        ]
+        concat(r): r "   ('text to chat)"
+    ]
+    else(_): [
+        set(r): "Waiting"
+        if(_): {ctl >= 0} [
+            at(cn): names ctl
+            concat(r): "Waiting for " cn
+        ]
+        concat(r): r "; type to chat."
+    ]
+]
+
+# typed line -> a protocol action for this view, "" for none, or "!" and
+# an error message. On your turn a long line that is no move is chat (it
+# was likely typed while waiting).
+so_line_action(r): view line [
+    at(seat): view V_SEAT
+    at(phase): view V_PHASE
+    at(ctl): view V_CTL
+    at(legal): view V_LEGAL
+    str_trim(t): line
+    set(r): ""
+    len(n): t
+    so_head(c1): t 1
+    if(_): {n = 0} [
+        if(_): {phase = "done"} [
+            set(r): "n:"
+        ]
+    ]
+    elif(_): {c1 = "'"} [
+        slice(rest): t 1 {n - 1}
+        concat(r): "t:" rest
+    ]
+    elif(_): {ctl != seat} [
+        concat(r): "t:" t
+    ]
+    elif(_): {phase = "bid"} [
+        so_parse_bid(o): t
+        set(r): "!not a bid: type 6s, 7h, 8nt, mis or pass"
+        if(_): {o = -3 && n > 5} [ concat(r): "t:" t ]
+        if(_): {o >= -1} [
+            so_bid_name(bn): o
+            concat(a): "b:" bn
+            so_has(ok): legal a
+            set(r): "!too low, or not allowed now"
+            if(_): ok [ set(r): a ]
+        ]
+    ]
+    elif(_): {phase = "discard"} [
+        so_words(w): t
+        len(nw): w
+        set(r): "!discard two cards, e.g. 7s 8d"
+        if(_): {nw != 2 && n > 7} [ concat(r): "t:" t ]
+        if(_): {nw = 2} [
+            at(w0): w 0
+            at(w1): w 1
+            so_parse_card(a): w0
+            so_parse_card(b): w1
+            at(hand): view V_HAND
+            so_has(ha): hand a
+            so_has(hb): hand b
+            if(_): {ha && hb && a != b} [
+                so_card(as): a
+                so_card(bs): b
+                concat(r): "d:" as " " bs
+            ]
+        ]
+    ]
+    elif(_): {phase = "contract"} [
+        so_parse_bid(o): t
+        set(r): "!name a contract, e.g. 7h"
+        if(_): {o < 0 && n > 5} [ concat(r): "t:" t ]
+        if(_): {o >= 0} [
+            so_bid_name(bn): o
+            concat(a): "c:" bn
+            so_has(ok): legal a
+            set(r): "!lower than your bid"
+            if(_): ok [ set(r): a ]
+        ]
+    ]
+    elif(_): {phase = "whist" || phase = "whist2"} [
+        str_lower(lt): t
+        set(a): ""
+        if(_): {lt = "whist" || lt = "w" || lt = "вист"} [ set(a): "w:whist" ]
+        if(_): {lt = "pass" || lt = "p" || lt = "пас"} [ set(a): "w:pass" ]
+        if(_): {lt = "half" || lt = "h" || lt = "полвиста"} [ set(a): "w:half" ]
+        so_has(ok): legal a
+        set(r): "!whist or pass"
+        if(_): {a = "" && n > 5} [ concat(r): "t:" t ]
+        if(_): ok [ set(r): a ]
+    ]
+    elif(_): {phase = "play"} [
+        so_parse_card(c): t
+        set(r): "!not a card: type e.g. Qh, 10s, 7d"
+        if(_): {c < 0 && n > 5} [ concat(r): "t:" t ]
+        if(_): {c >= 0} [
+            so_card(cn): c
+            concat(a): "p:" cn
+            so_has(ok): legal a
+            set(r): "!you cannot play that card now"
+            if(_): ok [ set(r): a ]
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- terminal
+
+su_write(_): text [
+    template(_): "STR" text
+]
+
+su_draw(_): [
+    set(v): su_view
+    typeof(tv): v
+    if(_): {tv = "vector"} [
+        so_render(lines): v
+        set(out): ""
+        if(_): su_tty [
+            concat(out): su_esc "[H" su_esc "[2J"
+        ]
+        else(_): [
+            set(out): "----\n"
+        ]
+        len(n): lines
+        set(i): 0
+        while(_): {i < n} [
+            at(l): lines i
+            concat(out): out l
+            if(_): su_tty [
+                concat(out): out "\r\n"
+            ]
+            else(_): [
+                concat(out): out "\n"
+            ]
+            add(i): i 1
+        ]
+        len(nm): su_msgs
+        set(i): 0
+        while(_): {i < nm} [
+            at(l): su_msgs i
+            concat(out): out "* " l
+            if(_): su_tty [ concat(out): out "\r\n" ]
+            else(_): [ concat(out): out "\n" ]
+            add(i): i 1
+        ]
+        su_write(_): out
+    ]
+    su_prompt(_):
+]
+
+su_prompt(_): [
+    if(_): su_tty [
+        concat(p): "\r" su_esc "[K> " su_buf
+        su_write(_): p
+    ]
+]
+
+su_say(_): text [
+    push(_): su_msgs text
+    len(n): su_msgs
+    if(_): {n > 3} [
+        set(keep): su_msgs
+        vec(su_msgs): ""
+        set(i): {n - 3}
+        while(_): {i < n} [
+            at(x): keep i
+            push(_): su_msgs x
+            add(i): i 1
+        ]
+    ]
+]
+
+# reads waiting keys into su_buf; a finished line, or null
+su_keys(r): [
+    set(r): null
+    terminal_key_ready(k): 0
+    while(_): {k = 1 && su_quit = false} [
+        terminal_getch(c):
+        set(k): 0
+        if(_): {c < 0} [
+            # end of input: a line in progress still counts
+            if(_): {su_buf != ""} [
+                set(r): su_buf
+                set(su_buf): ""
+            ]
+            else(_): [
+                set(su_quit): true
+            ]
+        ]
+        elif(_): {c = 13 || c = 10} [
+            set(r): su_buf
+            set(su_buf): ""
+            if(_): su_tty [ su_write(_): "\r\n" ]
+        ]
+        elif(_): {c = 3 || c = 4} [
+            set(su_quit): true
+        ]
+        elif(_): {c = 8 || c = 127} [
+            len(n): su_buf
+            # one UTF-8 character back
+            set(i): {n - 1}
+            set(go): {i > 0}
+            while(_): go [
+                byte(b): su_buf i
+                set(go): false
+                if(_): {b >= 128 && b < 192 && i > 0} [
+                    sub(i): i 1
+                    set(go): {i > 0}
+                ]
+            ]
+            if(_): {n > 0} [
+                slice(su_buf): su_buf 0 i
+            ]
+            su_prompt(_):
+        ]
+        elif(_): {c = 27} [
+            # an escape sequence: ESC [ x, ESC O x
+            terminal_key_ready(k2): 20
+            if(_): {k2 = 1} [
+                terminal_getch(c2):
+                if(_): {c2 = 91 || c2 = 79} [
+                    terminal_key_ready(k3): 20
+                    if(_): {k3 = 1} [
+                        terminal_getch(_):
+                    ]
+                ]
+            ]
+        ]
+        elif(_): {c >= 32} [
+            chr(ch): c
+            len(n): su_buf
+            if(_): {n < 200} [
+                concat(su_buf): su_buf ch
+                if(_): {su_tty && c < 128} [
+                    su_write(_): ch
+                ]
+                elif(_): su_tty [
+                    terminal_key_ready(more): 0
+                    if(_): {more = 0} [ su_prompt(_): ]
+                ]
+            ]
+        ]
+        if(_): {r = null} [
+            terminal_key_ready(k): 0
+        ]
+    ]
+]
+
+# a whole line from the keyboard, waiting for it (before the game starts)
+su_read_line(r): prompt [
+    if(_): su_tty [
+        concat(p): "\r" su_esc "[K" prompt su_buf
+        su_write(_): p
+    ]
+    else(_): [
+        su_write(_): prompt
+    ]
+    set(r): null
+    while(_): {r = null && su_quit = false} [
+        terminal_key_ready(k): 200
+        if(_): {k = 1} [
+            su_keys(r):
+        ]
+    ]
+    if(_): {r = null} [ set(r): "" ]
+]
+
+# ---------------------------------------------------------------- network
+# Datagrams are text: "SOCHI1 VERB rest". FIND / TABLE find tables, JOIN /
+# WELCOME / FULL seat a player, VIEW seq uno carries a player's view (sent
+# again until ACK seq), ACT id action carries a move or a chat line (sent
+# again until the view shows actid >= id), PING keeps a seat online, BYE
+# leaves.
+
+sn_send(_): host port text [
+    concat(m): "SOCHI1 " text
+    socket_sendto(_): sn_sock host port m
+]
+
+# "VERB rest" of a datagram, or null when it is not ours
+sn_parse(r): text [
+    set(r): null
+    so_head(head): text 7
+    if(_): {head = "SOCHI1 "} [
+        len(n): text
+        slice(body): text 7 {n - 7}
+        str_find(sp): body " " 0
+        vec(r): ""
+        if(_): {sp < 0} [
+            push(_): r body
+            push(_): r ""
+        ]
+        else(_): [
+            slice(verb): body 0 sp
+            len(bn): body
+            slice(rest): body {sp + 1} {bn - sp - 1}
+            push(_): r verb
+            push(_): r rest
+        ]
+    ]
+]
+
+sn_split2(r): text [
+    vec(r): ""
+    str_find(sp): text " " 0
+    if(_): {sp < 0} [
+        push(_): r text
+        push(_): r ""
+    ]
+    else(_): [
+        slice(a): text 0 sp
+        len(n): text
+        slice(b): text {sp + 1} {n - sp - 1}
+        push(_): r a
+        push(_): r b
+    ]
+]
+
+# "ip:port" -> [ip port]
+sn_hostport(r): addr [
+    vec(r): ""
+    str_find(c): addr ":" 0
+    slice(h): addr 0 c
+    len(n): addr
+    slice(ps): addr {c + 1} {n - c - 1}
+    str_to_number(p): ps
+    push(_): r h
+    push(_): r p
+]
+
+# looks for tables for about ms milliseconds: [[ip port info] ...]
+sn_discover(r): ms [
+    vec(r): ""
+    vec(seen): ""
+    set(left): ms
+    while(_): {left > 0} [
+        sn_send(_): "255.255.255.255" sn_port "FIND"
+        sn_send(_): "127.0.0.1" sn_port "FIND"
+        set(w): 0
+        while(_): {w < 300} [
+            socket_recvfrom(m): sn_sock 50
+            add(w): w 50
+            typeof(tm): m
+            if(_): {tm = "vector"} [
+                at(text): m 0
+                at(ip): m 1
+                at(port): m 2
+                sn_parse(p): text
+                typeof(tp): p
+                if(_): {tp = "vector"} [
+                    at(verb): p 0
+                    at(info): p 1
+                    if(_): {verb = "TABLE"} [
+                        so_has(dup): seen info
+                        if(_): {dup = false} [
+                            push(_): seen info
+                            vec(e): ""
+                            push(_): e ip
+                            push(_): e port
+                            push(_): e info
+                            push(_): r e
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        sub(left): left 300
+    ]
+]
+
+# host: a seat's view goes out
+sn_send_view(_): seat [
+    at(addr): sn_addr seat
+    if(_): {addr != ""} [
+        so_view(v): seat
+        encode(u): v
+        so_int(qs): sg_seq
+        sn_hostport(hp): addr
+        at(h): hp 0
+        at(p): hp 1
+        concat(m): "VIEW " qs " " u
+        sn_send(_): h p m
+    ]
+]
+
+su_bot_step(_): seat [
+    so_view(v): seat
+    so_bot(a): v
+    if(_): {a != ""} [
+        so_act(_): seat a
+    ]
+]
+
+# the host's loop: seat 0 is this program (a player or a bot), seats 1
+# and 2 join over the network or are bots here
+sn_host(r): name bots [
+    set(r): 0
+    socket_udp(sn_sock): sn_port
+    if(_): {sn_sock < 0} [
+        so_int(ps): sn_port
+        concat(m): "UDP port " ps " is taken: a table is already open on this computer"
+        print(_): m
+        return(r): 3
+    ]
+    set(sn_host): true
+    set(sg_names): 0 name
+    set(sg_kind): 0 "local"
+    if(_): su_bot [ set(sg_kind): 0 "bot" ]
+    vec(sn_addr): ""
+    push(_): sn_addr ""
+    push(_): sn_addr ""
+    push(_): sn_addr ""
+    so_vec3(sn_acked): 0
+    so_vec3(sn_seen): 0
+    set(i): 1
+    while(_): {i <= bots} [
+        set(bn): "Masha"
+        if(_): {i = 2} [ set(bn): "Grisha" ]
+        concat(bn): "Bot " bn
+        set(sg_names): i bn
+        set(sg_kind): i "bot"
+        add(i): i 1
+    ]
+    so_log(_): "The table is open"
+    if(_): {bots >= 2} [
+        so_new_game(_):
+    ]
+    set(sn_tick): 0
+    set(sent): 0
+    set(resend): 0
+    set(botat): 0
+    set(botseq): -1
+    set(overat): -1
+    while(_): {su_quit = false} [
+        socket_recvfrom(m): sn_sock 20
+        typeof(tm): m
+        while(_): {tm = "vector"} [
+            sn_host_packet(_): m
+            socket_recvfrom(m): sn_sock 0
+            typeof(tm): m
+        ]
+        add(sn_tick): sn_tick 1
+        if(_): {su_bot = false} [
+            su_keys(line):
+            if(_): {line != null} [
+                su_host_line(_): line
+                if(_): {su_shown = -1} [ su_show(_): 0 ]
+            ]
+        ]
+        # bots here move after a short pause, so people can follow
+        if(_): {sg_seq != botseq} [
+            set(botseq): sg_seq
+            set(botat): {sn_tick + 25}
+            if(_): su_fast [ set(botat): sn_tick ]
+        ]
+        if(_): {sn_tick >= botat} [
+            set(i): 0
+            set(moved): false
+            while(_): {i < 3 && moved = false} [
+                at(k): sg_kind i
+                if(_): {k = "bot"} [
+                    set(before): sg_seq
+                    su_bot_step(_): i
+                    set(moved): {sg_seq != before}
+                ]
+                add(i): i 1
+            ]
+        ]
+        if(_): {sg_seq != sent} [
+            set(sent): sg_seq
+            set(resend): {sn_tick + 15}
+            set(i): 1
+            while(_): {i < 3} [
+                sn_send_view(_): i
+                add(i): i 1
+            ]
+            su_show(_): 0
+        ]
+        elif(_): {sn_tick >= resend} [
+            set(resend): {sn_tick + 15}
+            set(i): 1
+            while(_): {i < 3} [
+                at(ak): sn_acked i
+                if(_): {ak < sg_seq} [
+                    sn_send_view(_): i
+                ]
+                add(i): i 1
+            ]
+        ]
+        # a remote player silent for about 15 s is offline
+        if(_): {(sn_tick % 50) = 0} [
+            set(i): 1
+            while(_): {i < 3} [
+                at(addr): sn_addr i
+                at(seen): sn_seen i
+                at(on): sg_online i
+                if(_): {addr != "" && sn_tick - seen > 750 && on = 1} [
+                    set(sg_online): i 0
+                    add(sg_seq): sg_seq 1
+                ]
+                add(i): i 1
+            ]
+        ]
+        # a bot host closes the table a while after the game is over
+        if(_): {sg_phase = "over" && overat < 0} [
+            set(overat): {sn_tick + 150}
+        ]
+        if(_): {su_bot && overat >= 0 && sn_tick >= overat} [
+            set(su_quit): true
+        ]
+    ]
+    set(i): 1
+    while(_): {i < 3} [
+        at(addr): sn_addr i
+        if(_): {addr != ""} [
+            sn_hostport(hp): addr
+            at(h): hp 0
+            at(p): hp 1
+            sn_send(_): h p "BYE"
+        ]
+        add(i): i 1
+    ]
+    socket_close(_): sn_sock
+]
+
+sn_host_packet(_): m [
+    at(text): m 0
+    at(ip): m 1
+    at(port): m 2
+    so_int(ps): port
+    concat(addr): ip ":" ps
+    sn_parse(p): text
+    typeof(tp): p
+    if(_): {tp = "vector"} [
+        at(verb): p 0
+        at(rest): p 1
+        set(seat): -1
+        set(i): 1
+        while(_): {i < 3} [
+            at(a): sn_addr i
+            if(_): {a = addr} [ set(seat): i ]
+            add(i): i 1
+        ]
+        if(_): {seat > 0} [
+            set(sn_seen): seat sn_tick
+            at(on): sg_online seat
+            if(_): {on = 0} [
+                set(sg_online): seat 1
+                add(sg_seq): sg_seq 1
+            ]
+        ]
+        if(_): {verb = "FIND"} [
+            set(n): 0
+            set(i): 0
+            while(_): {i < 3} [
+                at(nm): sg_names i
+                if(_): {nm != ""} [ add(n): n 1 ]
+                add(i): i 1
+            ]
+            at(hn): sg_names 0
+            so_int(ns): n
+            so_int(pz): sg_psize
+            concat(info): hn " (" ns "/3, pool " pz ")"
+            if(_): {sg_phase != "lobby"} [
+                concat(info): info ", playing"
+            ]
+            concat(reply): "TABLE " info
+            sn_send(_): ip port reply
+        ]
+        elif(_): {verb = "JOIN"} [
+            sn_host_join(_): ip port addr rest
+        ]
+        elif(_): {verb = "ACK" && seat > 0} [
+            str_to_number(q): rest
+            at(ak): sn_acked seat
+            if(_): {q > ak} [ set(sn_acked): seat q ]
+        ]
+        elif(_): {verb = "ACT" && seat > 0} [
+            sn_split2(ia): rest
+            at(ids): ia 0
+            at(action): ia 1
+            str_to_number(id): ids
+            at(last): sg_actid seat
+            if(_): {id > last} [
+                set(sg_actid): seat id
+                so_act(_): seat action
+            ]
+            else(_): [
+                sn_send_view(_): seat
+            ]
+        ]
+        elif(_): {verb = "BYE" && seat > 0} [
+            set(sg_online): seat 0
+            if(_): {sg_phase = "lobby"} [
+                set(sg_names): seat ""
+                set(sg_kind): seat ""
+                set(sn_addr): seat ""
+            ]
+            add(sg_seq): sg_seq 1
+        ]
+    ]
+]
+
+sn_host_join(_): ip port addr rest [
+    so_clean(nick): rest 24
+    if(_): {nick = ""} [ set(nick): "Player" ]
+    set(seat): -1
+    # the same nickname coming back takes its seat again
+    set(i): 1
+    while(_): {i < 3} [
+        at(nm): sg_names i
+        at(k): sg_kind i
+        if(_): {nm = nick && k = "remote"} [ set(seat): i ]
+        add(i): i 1
+    ]
+    if(_): {seat < 0 && sg_phase = "lobby"} [
+        set(i): 1
+        while(_): {i < 3} [
+            at(nm): sg_names i
+            if(_): {nm = "" && seat < 0} [ set(seat): i ]
+            add(i): i 1
+        ]
+        if(_): {seat > 0} [
+            set(i): 0
+            while(_): {i < 3} [
+                at(nm): sg_names i
+                if(_): {nm = nick} [ concat(nick): nick "2" ]
+                add(i): i 1
+            ]
+            set(sg_names): seat nick
+            set(sg_kind): seat "remote"
+            set(sg_actid): seat 0
+            concat(m): nick " joins the table"
+            so_log(_): m
+        ]
+    ]
+    if(_): {seat < 0} [
+        sn_send(_): ip port "FULL"
+    ]
+    else(_): [
+        set(sn_addr): seat addr
+        set(sn_acked): seat 0
+        set(sn_seen): seat sn_tick
+        set(sg_online): seat 1
+        so_int(ss): seat
+        at(last): sg_actid seat
+        so_int(ls): last
+        concat(w): "WELCOME " ss " " ls
+        sn_send(_): ip port w
+        set(full): true
+        set(i): 0
+        while(_): {i < 3} [
+            at(nm): sg_names i
+            if(_): {nm = ""} [ set(full): false ]
+            add(i): i 1
+        ]
+        if(_): {full && sg_phase = "lobby"} [
+            so_new_game(_):
+        ]
+        add(sg_seq): sg_seq 1
+    ]
+]
+
+# the host player's typed line
+su_host_line(_): line [
+    so_view(v): 0
+    su_line_cmd(a): v line
+    if(_): {a != ""} [
+        so_act(_): 0 a
+    ]
+]
+
+# commands common to host and client: /quit, /help; the action otherwise
+su_line_cmd(r): view line [
+    set(r): ""
+    str_trim(t): line
+    so_head(c1): t 1
+    if(_): {c1 = "/"} [
+        str_lower(lt): t
+        if(_): {lt = "/quit" || lt = "/q" || lt = "/exit"} [
+            set(su_quit): true
+        ]
+        else(_): [
+            su_say(_): "Moves: a bid (6s, 7h, 8nt, mis, pass), two cards to discard (7s 8d), whist / pass / half, a card (Qh, 10s). 'text chats; when it is not your turn any line chats. /quit leaves."
+            set(su_shown): -1
+        ]
+    ]
+    else(_): [
+        so_line_action(a): view t
+        so_head(c1): a 1
+        if(_): {c1 = "!"} [
+            len(n): a
+            slice(e): a 1 {n - 1}
+            su_say(_): e
+            set(su_shown): -1
+        ]
+        else(_): [
+            set(r): a
+        ]
+    ]
+]
+
+# redraws when the view changed; bots print the new log lines instead
+su_show(_): seat [
+    if(_): sn_host [
+        so_view(su_view): seat
+    ]
+    typeof(tv): su_view
+    if(_): {tv = "vector"} [
+        at(q): su_view V_SEQ
+        if(_): su_bot [
+            at(logn): su_view V_LOGN
+            at(log): su_view V_LOG
+            len(nl): log
+            set(first): {logn - nl}
+            set(i): su_logn
+            if(_): {i < first} [ set(i): first ]
+            while(_): {i < logn} [
+                at(x): log {i - first}
+                print(_): x
+                add(i): i 1
+            ]
+            set(su_logn): logn
+            at(phase): su_view V_PHASE
+            if(_): {phase = "over" && su_over = false} [
+                set(su_over): true
+                at(final): su_view V_FINAL
+                at(names): su_view V_NAMES
+                set(i): 0
+                while(_): {i < 3} [
+                    at(nm): names i
+                    at(b): final i
+                    so_fmt3(bs): b
+                    concat(t): "  " nm " " bs
+                    print(_): t
+                    add(i): i 1
+                ]
+            ]
+            set(su_shown): q
+        ]
+        elif(_): {q != su_shown} [
+            set(su_shown): q
+            su_draw(_):
+        ]
+    ]
+]
+
+# a client's loop at a table host:port
+sn_client(r): host port name [
+    set(r): 0
+    set(sn_host): false
+    vec(su_pending): ""
+    set(su_actid): 0
+    set(su_view): null
+    set(seat): -1
+    # join: ask until WELCOME (about 10 s)
+    set(tries): 0
+    concat(jm): "JOIN " name
+    while(_): {seat < 0 && tries < 20 && su_quit = false} [
+        sn_send(_): host port jm
+        set(w): 0
+        while(_): {w < 10 && seat < 0} [
+            socket_recvfrom(m): sn_sock 50
+            add(w): w 1
+            typeof(tm): m
+            if(_): {tm = "vector"} [
+                at(text): m 0
+                sn_parse(p): text
+                typeof(tp): p
+                if(_): {tp = "vector"} [
+                    at(verb): p 0
+                    at(rest): p 1
+                    if(_): {verb = "WELCOME"} [
+                        sn_split2(sl): rest
+                        at(ss): sl 0
+                        at(ls): sl 1
+                        str_to_number(seat): ss
+                        str_to_number(su_actid): ls
+                    ]
+                    elif(_): {verb = "FULL"} [
+                        print(_): "That table is full or already playing."
+                        return(r): 1
+                    ]
+                ]
+            ]
+        ]
+        add(tries): tries 1
+    ]
+    if(_): {seat < 0} [
+        print(_): "No answer from that table."
+        return(r): 1
+    ]
+    set(sn_seat): seat
+    set(sn_tick): 0
+    set(lastview): 0
+    set(resend): 0
+    set(botseq): -1
+    set(botat): 0
+    set(overat): -1
+    set(lost): false
+    while(_): {su_quit = false} [
+        socket_recvfrom(m): sn_sock 20
+        typeof(tm): m
+        while(_): {tm = "vector"} [
+            at(text): m 0
+            sn_parse(p): text
+            typeof(tp): p
+            if(_): {tp = "vector"} [
+                at(verb): p 0
+                at(rest): p 1
+                if(_): {verb = "VIEW"} [
+                    sn_split2(qu): rest
+                    at(qs): qu 0
+                    at(u): qu 1
+                    str_to_number(q): qs
+                    concat(ack): "ACK " qs
+                    sn_send(_): host port ack
+                    set(lastview): sn_tick
+                    set(have): 0
+                    typeof(tv): su_view
+                    if(_): {tv = "vector"} [
+                        at(have): su_view V_SEQ
+                    ]
+                    if(_): {q > have} [
+                        decode(su_view): u
+                        # actions the host has applied leave the queue
+                        at(ids): su_view V_ACTID
+                        at(done): ids seat
+                        len(np): su_pending
+                        while(_): {np > 0} [
+                            at(hd): su_pending 0
+                            at(hid): hd 0
+                            if(_): {hid <= done} [
+                                so_slice_from(su_pending): su_pending 1
+                                len(np): su_pending
+                            ]
+                            else(_): [
+                                set(np): 0
+                            ]
+                        ]
+                        set(resend): sn_tick
+                    ]
+                ]
+                elif(_): {verb = "BYE"} [
+                    su_say(_): "The host closed the table."
+                    set(su_shown): -1
+                    if(_): su_bot [ set(su_quit): true ]
+                ]
+            ]
+            socket_recvfrom(m): sn_sock 0
+            typeof(tm): m
+        ]
+        add(sn_tick): sn_tick 1
+        typeof(tv): su_view
+        if(_): {tv = "vector"} [
+            su_show(_): seat
+            if(_): su_bot [
+                at(q): su_view V_SEQ
+                len(np): su_pending
+                if(_): {q != botseq} [
+                    set(botseq): q
+                    set(botat): sn_tick
+                ]
+                if(_): {np = 0 && sn_tick >= botat} [
+                    so_bot(a): su_view
+                    if(_): {a != ""} [
+                        su_queue(_): a
+                        set(botat): {sn_tick + 1000000}
+                    ]
+                ]
+                at(phase): su_view V_PHASE
+                if(_): {phase = "over" && overat < 0} [
+                    set(overat): {sn_tick + 100}
+                ]
+                if(_): {overat >= 0 && sn_tick >= overat} [
+                    set(su_quit): true
+                ]
+            ]
+            else(_): [
+                su_keys(line):
+                if(_): {line != null} [
+                    su_line_cmd(a): su_view line
+                    if(_): {a != ""} [
+                        su_queue(_): a
+                    ]
+                    if(_): {su_shown = -1} [ su_draw(_): ]
+                ]
+            ]
+        ]
+        # the queue's head goes out again until the host has it
+        len(np): su_pending
+        if(_): {np > 0 && sn_tick >= resend} [
+            at(hd): su_pending 0
+            at(hid): hd 0
+            at(ha): hd 1
+            so_int(hs): hid
+            concat(am): "ACT " hs " " ha
+            sn_send(_): host port am
+            set(resend): {sn_tick + 15}
+        ]
+        if(_): {(sn_tick % 100) = 0} [
+            sn_send(_): host port "PING"
+        ]
+        if(_): {sn_tick - lastview > 750 && lost = false} [
+            set(lost): true
+            su_say(_): "No word from the host for a while..."
+            set(su_shown): -1
+        ]
+        if(_): {sn_tick - lastview <= 750} [ set(lost): false ]
+    ]
+    sn_send(_): host port "BYE"
+    socket_close(_): sn_sock
+]
+
+su_queue(_): action [
+    add(su_actid): su_actid 1
+    vec(e): ""
+    push(_): e su_actid
+    push(_): e action
+    push(_): su_pending e
+]
+
+so_slice_from(r): v from [
+    vec(r): ""
+    len(n): v
+    set(i): from
+    while(_): {i < n} [
+        at(x): v i
+        push(_): r x
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- main
+
+so_usage(r): [
+    print(_): "Sochi: Preferans for three over UDP port 33333 (Sochi rules)"
+    print(_): ""
+    print(_): "  sochi                    nickname, then the tables on the LAN"
+    print(_): "  sochi host               open a table here"
+    print(_): "  sochi join [ADDRESS]     join the table at ADDRESS (IP or host name),"
+    print(_): "                           else the first one on the LAN"
+    print(_): ""
+    print(_): "  --name NICK    your nickname       --pool N    pool size (10)"
+    print(_): "  --bots N       host: N bots fill the other seats (0..2)"
+    print(_): "  --bot          a bot plays this seat   --fast   bots do not pause"
+    print(_): "  --port P       another UDP port    --seed N    repeatable deals"
+    print(_): "  --ascii        letters for suits (s c d h)"
+    set(r): 0
+]
+
+so_main(r): args [
+    so_types(_):
+    set(r): 0
+    set(cmd): ""
+    set(name): ""
+    set(addr): ""
+    set(pool): 10
+    set(bots): 0
+    set(seed): -1
+    set(ascii): false
+    set(su_bot): false
+    set(su_fast): false
+    set(su_quit): false
+    set(sn_port): 33333
+    len(n): args
+    set(i): 0
+    set(bad): ""
+    while(_): {i < n} [
+        at(a): args i
+        set(val): ""
+        if(_): {i + 1 < n} [
+            at(val): args {i + 1}
+        ]
+        if(_): {a = "--name"} [
+            set(name): val
+            add(i): i 1
+        ]
+        elif(_): {a = "--pool"} [
+            str_to_number(pool): val
+            add(i): i 1
+        ]
+        elif(_): {a = "--bots"} [
+            str_to_number(bots): val
+            add(i): i 1
+        ]
+        elif(_): {a = "--seed"} [
+            str_to_number(seed): val
+            add(i): i 1
+        ]
+        elif(_): {a = "--port"} [
+            str_to_number(sn_port): val
+            add(i): i 1
+        ]
+        elif(_): {a = "--bot"} [ set(su_bot): true ]
+        elif(_): {a = "--fast"} [ set(su_fast): true ]
+        elif(_): {a = "--ascii"} [ set(ascii): true ]
+        elif(_): {a = "help" || a = "--help" || a = "-h"} [ set(cmd): "help" ]
+        elif(_): {cmd = "" && (a = "host" || a = "join")} [ set(cmd): a ]
+        elif(_): {cmd = "join" && addr = ""} [ set(addr): a ]
+        else(_): [ set(bad): a ]
+        add(i): i 1
+    ]
+    typeof(tp): pool
+    typeof(tb): bots
+    typeof(tsd): seed
+    typeof(tpo): sn_port
+    if(_): {bad != "" || tp != "integer" || tb != "integer" || tsd != "integer" || tpo != "integer"} [
+        so_usage(_):
+        return(r): 2
+    ]
+    if(_): {cmd = "help"} [
+        so_usage(r):
+        return(r): r
+    ]
+    if(_): {pool < 1} [ set(pool): 1 ]
+    if(_): {bots < 0} [ set(bots): 0 ]
+    if(_): {bots > 2} [ set(bots): 2 ]
+    if(_): {seed < 0} [
+        time(t):
+        random64(rr):
+        set(seed): {(t ^ rr) & 2147483647}
+    ]
+    terminal_escape(su_esc):
+    set(su_tty): false
+    vec(su_msgs): ""
+    set(su_buf): ""
+    set(su_shown): -1
+    set(su_logn): 0
+    set(su_over): false
+    set(sn_host): false
+    if(_): {su_bot = false} [
+        terminal_raw(raw):
+        set(su_tty): {raw = 0}
+    ]
+    set(sg_uni): {su_tty && ascii = false}
+    so_table(_): pool seed
+    while(_): {name = "" && su_bot = false && su_quit = false} [
+        su_read_line(name): "Your nickname: "
+        so_clean(name): name 24
+    ]
+    if(_): {name = ""} [
+        set(name): "Bot"
+        if(_): {su_bot} [
+            random64(rr):
+            so_int(ns): {(rr & 1023) % 900 + 100}
+            concat(name): "Bot " ns
+        ]
+    ]
+    so_clean(name): name 24
+    if(_): {cmd = "host"} [
+        sn_host(r): name bots
+        if(_): {r = 3} [
+            # someone hosts here already: join that table
+            set(addr): "127.0.0.1"
+            set(cmd): "join"
+        ]
+    ]
+    if(_): {cmd != "host"} [
+        socket_udp(sn_sock):
+        if(_): {sn_sock < 0} [
+            print(_): "Cannot open a UDP socket"
+            return(r): 2
+        ]
+        set(hp): sn_port
+        if(_): {addr = ""} [
+            set(choice): ""
+            while(_): {choice = "" && su_quit = false} [
+                if(_): {su_bot = false} [ su_write(_): "Looking for tables on the LAN...\r\n" ]
+                sn_discover(tables): 1500
+                len(nt): tables
+                if(_): {su_bot || cmd = "join"} [
+                    if(_): {nt > 0} [
+                        set(choice): "1"
+                    ]
+                    elif(_): su_bot [
+                        set(choice): "r"
+                    ]
+                    else(_): [
+                        set(choice): "n"
+                    ]
+                ]
+                else(_): [
+                    set(i): 0
+                    while(_): {i < nt} [
+                        at(e): tables i
+                        at(ip): e 0
+                        at(info): e 2
+                        so_int(is): {i + 1}
+                        concat(l): "  " is ") " info " at " ip "\r\n"
+                        su_write(_): l
+                        add(i): i 1
+                    ]
+                    if(_): {nt = 0} [ su_write(_): "No tables found.\r\n" ]
+                    su_read_line(choice): "Number to join, h to host, r to look again, or an address: "
+                    str_trim(choice): choice
+                ]
+                if(_): {choice = "r"} [ set(choice): "" ]
+            ]
+            if(_): {choice = "n"} [
+                print(_): "No table found on the LAN: give an address, or host one."
+                return(r): 1
+            ]
+            str_to_number(k): choice
+            typeof(tk): k
+            if(_): {choice = "h" || choice = "host"} [
+                socket_close(_): sn_sock
+                sn_host(r): name bots
+                return(r): r
+            ]
+            elif(_): {tk = "integer"} [
+                len(nt): tables
+                if(_): {k < 1 || k > nt} [
+                    print(_): "No such table"
+                    return(r): 1
+                ]
+                at(e): tables {k - 1}
+                at(addr): e 0
+                at(hp): e 1
+            ]
+            else(_): [
+                set(addr): choice
+            ]
+        ]
+        # ADDRESS may carry a port: host:port
+        str_find(colon): addr ":" 0
+        if(_): {colon > 0} [
+            len(al): addr
+            slice(pp): addr {colon + 1} {al - colon - 1}
+            slice(addr): addr 0 colon
+            str_to_number(hp): pp
+        ]
+        sn_client(r): addr hp name
+    ]
+    if(_): su_tty [
+        terminal_sane(_):
+        su_write(_): "\r\n"
+    ]
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(args): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): args a
+        add(i): i 1
+    ]
+    so_main(ret): args
+]
+$endif
