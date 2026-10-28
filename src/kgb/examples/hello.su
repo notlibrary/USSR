@@ -1,0 +1,24 @@
+# Prints, for every object of the knowledge base given as the argument
+# (default: the current one), its path and how many facts it has.
+$include "../kgb.su"
+
+init(result): arg_count arg_values [
+    set(given): ""
+    if(_): {arg_count > 0} [
+        at(given): arg_values 0
+    ]
+    kgb_find_root(kgb_root): given
+    kgb_scan(_):
+    len(n): kgb_objects
+    set(i): 0
+    while(_): {i < n} [
+        at(obj): kgb_objects i
+        kgb_facts(facts): obj
+        len(k): facts
+        str_from_int(ks): k
+        concat(line): obj ": " ks " facts"
+        print(_): line
+        add(i): i 1
+    ]
+    set(result): 0
+]

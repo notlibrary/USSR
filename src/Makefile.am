@@ -93,7 +93,13 @@ EXTRA_DIST = \
 	tula/docs/API.md \
 	tula/examples/hello.su \
 	tula/tests/TESTPLAN.md \
+	kgb/kgb.su \
 	kgb/box.uno \
+	kgb/README.md \
+	kgb/CHANGELOG.md \
+	kgb/docs/API.md \
+	kgb/examples/hello.su \
+	kgb/tests/TESTPLAN.md \
 	klin/klin.su \
 	klin/box.uno \
 	klin/README.md \

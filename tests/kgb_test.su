@@ -1,0 +1,150 @@
+# KGB knowledge base: builds a small base in tests/kgb-tmp with kgb's own
+# commands, queries it and takes it apart again. Prints each command line,
+# what it printed and its exit status.
+$include "../src/kgb/kgb.su"
+
+global(_): kb
+
+kgb(r): line [
+    concat(shown): "$ kgb " line
+    print(_): shown
+    kgb_split(words): line " "
+    vec(args): ""
+    push(_): args "--kb"
+    push(_): args kb
+    len(n): words
+    set(i): 0
+    while(_): {i < n} [
+        at(w): words i
+        # "_" stands for a space inside one argument
+        kgb_split(parts): w "_"
+        kgb_joined(w): parts " "
+        push(_): args w
+        add(i): i 1
+    ]
+    kgb_main(r): args
+    if(_): {r != 0} [
+        kgb_int(code): r
+        concat(st): "[exit " code "]"
+        print(_): st
+    ]
+]
+
+# Removes what an earlier, interrupted run left behind.
+cleanup(r): [
+    set(r): 0
+    # a category whose objects are gone but which has facts is an object
+    # then, so delete until nothing is left
+    set(rounds): 0
+    is_dir(d): kb
+    set(go): {d = 1}
+    while(_): {go && rounds < 8} [
+        set(kgb_root): kb
+        kgb_scan(_):
+        set(list): kgb_objects
+        len(n): list
+        set(i): 0
+        while(_): {i < n} [
+            at(o): list i
+            vec(args): ""
+            push(_): args "--kb"
+            push(_): args kb
+            push(_): args "del"
+            push(_): args o
+            kgb_main(_): args
+            add(i): i 1
+        ]
+        set(go): {n > 0}
+        add(rounds): rounds 1
+    ]
+    concat(marker): kb "/.kgb"
+    file_exists(e): marker
+    if(_): e [
+        remove_file(_): marker
+    ]
+    remove_dir(_): kb
+]
+
+init(ret): arg_cnt arg_vec [
+    set(kb): "tests/kgb-tmp"
+    cleanup(_):
+    kgb(_): "init tests/kgb-tmp"
+    kgb(_): "add animals/mammals/cat legs:_4"
+    kgb(_): "add cat sound:_meow"
+    kgb(_): "add cat hunts_[[mouse]]"
+    kgb(_): "add animals/mammals/mouse legs:_4"
+    kgb(_): "add mouse color:_grey"
+    kgb(_): "add animals/birds/sparrow legs:_2"
+    kgb(_): "add sparrow color:_brown"
+    kgb(_): "new animals/birds/penguin"
+    kgb(_): "add penguin legs: 2"
+    kgb(_): "add penguin flies:_no"
+    # facts every bird inherits, written by hand
+    writefile(_): "tests/kgb-tmp/animals/birds/birds.md" "# Birds\n\n- flies: yes\n* has **feathers**\n1. lays eggs\nA note, not a fact.\n"
+    writefile(_): "tests/kgb-tmp/animals/birds/penguin/habitat.md" "# Habitat\n\n## Where\n- lives in: Antarctica\n- swims\n"
+    kgb(_): "add penguin --file habitat eats:_fish"
+    kgb(_): "tree"
+    kgb(_): "tree birds"
+    kgb(_): "ls"
+    kgb(_): "ls mammals"
+    kgb(_): "cats"
+    kgb(_): "show penguin"
+    kgb(_): "get sparrow flies"
+    kgb(_): "get penguin flies"
+    kgb(_): "get cat flies"
+    kgb(_): "where legs=2 flies=yes"
+    kgb(_): "where legs>3 or color~gre"
+    kgb(_): "where !color"
+    kgb(_): "where name=cat"
+    kgb(_): "where legs>=2 and legs<=2 --in animals"
+    kgb(_): "where flies!=yes"
+    kgb(_): "where wings"
+    kgb(_): "table animals"
+    kgb(_): "table birds legs flies lives_in"
+    kgb(_): "props"
+    kgb(_): "props birds"
+    kgb(_): "type cat"
+    kgb(_): "is cat mammals"
+    kgb(_): "is cat animals/mammals"
+    kgb(_): "is cat birds"
+    kgb(_): "refs mouse"
+    kgb(_): "links cat"
+    kgb(_): "find FEATHER"
+    kgb(_): "find meow --in birds"
+    kgb(_): "add cat legs:_four"
+    kgb(_): "set cat legs 4"
+    kgb(_): "show cat"
+    kgb(_): "edit cat 2 sound:_purr"
+    kgb(_): "rm cat 3"
+    kgb(_): "rm cat 9"
+    kgb(_): "show cat"
+    readfile(text): "tests/kgb-tmp/animals/mammals/cat/cat.md"
+    print(_): text
+    kgb(_): "unset sparrow flies"
+    kgb(_): "unset sparrow color"
+    kgb(_): "unset sparrow color"
+    kgb(_): "add cat likes_[[fish]]"
+    kgb(_): "new animals/mammals/cat/kitten"
+    kgb(_): "check"
+    kgb(_): "del kitten"
+    kgb(_): "stats"
+    kgb(_): "mv mouse animals/rodents"
+    kgb(_): "mv mouse sparrow"
+    kgb(_): "tree"
+    kgb(_): "mv mouse animals/mammals"
+    kgb(_): "rename mouse mus"
+    kgb(_): "del mus"
+    kgb(_): "dump birds"
+    kgb(_): "show cats"
+    kgb(_): "show mammals"
+    kgb(_): "show nothing"
+    kgb(_): "add nope x"
+    kgb(_): "new animals/birds"
+    kgb(_): "frob"
+    cleanup(_):
+    is_dir(left): kb
+    if(_): {left = 0} [
+        print(_): "cleaned up"
+    ]
+    set(ret): 0
+]
