@@ -9,6 +9,9 @@ env:
   APP_NAME: ussr-win-bin-amd64
   # The GLFW release the Windows build links and ships (same as ci.yml)
   GLFW_VERSION: 3.5.1
+  # win_bison and win_flex for the Windows build (lexxmark/winflexbison)
+  WINFLEXBISON_VERSION: 2.5.25
+  WINFLEXBISON_SHA256: 8D324B62BE33604B2C45AD1DD34AB93D722534448F55A16CA7292DE32B6AC135
   # Seconds one russia.su run may take before it counts as hung (the
   # russia.su pass of tests/run_all.sh interprets each test inside ussr).
   USSR_RUSSIA_TIMEOUT: "300"
@@ -44,12 +47,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # winflexbison from its GitHub release, not Chocolatey: when the
+      # community feed times out, choco installs nothing and still succeeds,
+      # and the build fails later on a missing win_bison.
       - name: Install Flex and Bison
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install winflexbison3 --no-progress -y
-          echo "C:\\Program Files\\winflexbison3" >> $env:GITHUB_PATH
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $PWD 'build\winflexbison'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $zip = Join-Path $dir 'winflexbison.zip'
+          $url = "https://github.com/lexxmark/winflexbison/releases/download/v$env:WINFLEXBISON_VERSION/win_flex_bison-$env:WINFLEXBISON_VERSION.zip"
+          for ($try = 1; $try -le 3; $try++) {
+            try { Invoke-WebRequest $url -OutFile $zip; break }
+            catch { if ($try -eq 3) { throw }; Start-Sleep -Seconds (10 * $try) }
+          }
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          if ($hash -ne $env:WINFLEXBISON_SHA256) { throw "winflexbison.zip SHA-256 $hash, expected $env:WINFLEXBISON_SHA256" }
+          Expand-Archive $zip -DestinationPath $dir -Force
+          & (Join-Path $dir 'win_bison.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'win_bison does not run' }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Initialize MSVC Environment
         if: runner.os == 'Windows'
