@@ -913,3 +913,54 @@ I've got 2 issues concerning USSR usability as shell
 Customizing API endpoint URL; AI model AI provider; and api key is done through environmental variables
 
 Also share your practical advice to improve USSR usability  
+
+Add the following to list of USSR subprojects add box.uno to directories
+
+kgb.su - Knowledge Giga Base markdown Knowledge base manager
+klin.su - gui programmer scientific casual calculator 3 in 1
+kremlin.su - gui desktop manager program
+novgorod.su - http forum script 
+ryazan.su - secure cryptosocket library
+siberia.su - office package spreadsheet tables and document editor
+stalin.su - hard disk formatting manager
+usa.su - C compiler written in USSR
+sochi.su - desktop preference game
+
+Let's start ussr compiler optimization cycle
+- Do feature both in ussr and russia
+- Optimization target is performance not size
+- Start from doing one most simple then go to hard
+- Create list of Optimizations and their status
+- Optimize anywhere in layer 1-7
+
+We need to implement ryazan.su critical dedicated TLS protocol library
+which uses asymmetrical cipher for authentication and symmetrical cipher to remain confidential
+dedicated secure sockets layer is what we need now ukraine must use ryazan to become truly https daemon
+and serve https requests also ussr or russia may use ryazan to query ai via `prompt(_):`
+also ural downloads via https queries it's crucial task
+
+Now let's make alternative desktop manager kremlin
+it runs full screen lightweight traditional desktop in user home `~/kremlin` or `C:\Users\%username%\kremlin`
+Concentrate on it's utility and usability like in klin.su calculator
+
+Now we must dive deeply into RUND stack
+Ryazan Ukraine Novgorod Dubna where dubna is USSR postgres database driver
+make novgorod simple https anonymous image posting forum for programmers(no anime please) with lightweight markdown-like markup
+
+RUND stack is the mainline of the project now
+
+Now let's make siberia office packet by default it starts as simple spreadsheet program like spread32
+with options --pad it loads simple document editor
+so user can select font and write something like in wordpad
+use popular open-source doc and sheet formats take fonts from system
+
+Now let's do command line fact oriented markdown knowledge base manager kgb.su
+each markdown file is a list of facts about object each folder on the bottom of the fs tree is object
+folders not in bottom is classifier category type
+that's all simple predictable now do operations with such database with kgb.su
+
+Now the final boss the sysadmin partition editor script stalin.su
+Test it on virtual 20MB hard-drive let it support GPT MBR ext4 NTFS ufs ffs2 
+It works on command line by default it just lists all detected storage devices HDD SSD flash
+It use bread bwrite calls to actually edit and find the table
+basic functions are add partition remove partition edit partition

@@ -5,6 +5,9 @@ of facts kept in plain Markdown files and folders. There is no database file
 and no index: the folders are the database, so any editor, `git`, `grep` or
 file manager works on it too.
 
+This fact oriented approach works good for databases with 0-9000 very special objects
+Obvious examples are programming languages countries nuclear power plants
+
 ## The two rules
 
 - A folder **with no subfolders** is an **object**. The Markdown files in it
