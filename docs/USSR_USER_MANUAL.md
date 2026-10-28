@@ -1100,6 +1100,39 @@ md5(v): data                         # 16 bytes; legacy protocols only
 The hashes serve logins (SCRAM-SHA-256, md5); results are byte vectors.
 They are not encryption, which belongs to TLS (Ryazan).
 
+**UDP datagrams and the keyboard (native).** Sochi (`src/sochi/`), the
+three-player Preferans game, talks over UDP with these:
+
+```
+socket_udp(h): [port [ip]]            # nonblocking UDP socket, broadcast on; port 0 or none: any free one
+socket_sendto(n): h host port data    # one datagram (string or bytes); bytes sent or -1
+socket_recvfrom(v): h [ms]            # [text ip port]; null if none came within ms (0: just look); -1 on error
+terminal_key_ready(v): [ms]           # 1 when terminal_getch has a key (or the end of input) within ms
+socket_close(ok): h                   # as for TCP sockets
+```
+
+A nonzero port is bound exclusively, so a second program asking for the
+same port gets `-1`. That is how a second Sochi host on one computer knows
+a table is already open there. The host is an IPv4 address, a DNS name, or
+`255.255.255.255` for a LAN broadcast. A datagram's text ends at its first
+zero byte. On Windows, a "port unreachable" reply to an earlier datagram
+does not fail the next `socket_recvfrom`. `terminal_key_ready` lets one loop
+serve both the keyboard and a socket: wait in `socket_recvfrom` with a short
+timeout, then read the keys that are ready.
+
+```
+socket_udp(s): 33333
+socket_recvfrom(m): s 500       # e.g. [`hello`,`192.168.1.7`,52246]
+socket_udp(c):
+socket_sendto(_): c "255.255.255.255" 33333 "hello"
+```
+
+Sochi itself plays by the Sochi rules: bidding with misère, the talon,
+responsible whist, raspasy, and pool, mountain and whists. The first copy
+to start hosts the table, and the other two find it by broadcast or join
+it by address: `ussr src/sochi/sochi.su`, `... host`, `... join ADDRESS`.
+Its README has the rules and the moves.
+
 **Disks and disk images (native).** Stalin (`src/stalin/`) edits partition
 tables with these. A device is an image file or a raw disk
 (`\\.\PhysicalDrive0` on Windows, `/dev/sda` on Linux, which need

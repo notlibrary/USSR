@@ -1,0 +1,36 @@
+# Deals one hand with the seed given as the argument (default 1), shows
+# the three hands and the talon, and lets three bots bid it out:
+# "ussr hello.su 7".
+$include "../sochi.su"
+
+init(result): arg_count arg_values [
+    set(seed): 1
+    if(_): {arg_count > 0} [
+        at(a): arg_values 0
+        str_to_number(seed): a
+    ]
+    so_table(_): 10 seed
+    set(sg_names): 0 "Anna"
+    set(sg_names): 1 "Boris"
+    set(sg_names): 2 "Vera"
+    so_new_game(_):
+    set(p): 0
+    while(_): {p < 3} [
+        so_name(pn): p
+        at(h): sg_hands p
+        so_hand_show(hs): h
+        concat(line): pn ": " hs
+        print(_): line
+        add(p): p 1
+    ]
+    so_cards_show(ts): sg_talon
+    concat(line): "talon: " ts
+    print(_): line
+    while(_): {sg_phase = "bid"} [
+        so_view(v): sg_turn
+        so_bot(a): v
+        so_act(_): sg_turn a
+    ]
+    print(_): sg_log
+    set(result): 0
+]
