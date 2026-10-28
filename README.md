@@ -63,7 +63,7 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod, Dubna, Siberia and KGB have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod, Dubna, Siberia, KGB and Stalin have code so far):
 
 - dubna.su - PostgreSQL client: protocol 3.0, TLS, SCRAM-SHA-256, parameterised queries (working: `src/dubna`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base: folders are objects and categories (working: `src/kgb`)
@@ -72,7 +72,7 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin,
 - novgorod.su - anonymous HTTPS image forum for programmers with lightweight markup (working: `src/novgorod`)
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
 - siberia.su - office package, spreadsheet tables and document editor
-- stalin.su - hard disk formatting manager
+- stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS and FFS2 (working: `src/stalin`)
 - usa.su - C compiler written in USSR
 - sochi.su - desktop preference game
 
@@ -119,6 +119,18 @@ KGB, the knowledge base, runs in the terminal:
 ussr src/kgb/kgb.su init zoo
 ussr src/kgb/kgb.su --kb zoo add animals/mammals/cat legs: 4
 ussr src/kgb/kgb.su --kb zoo where "legs>2"
+```
+
+Stalin, the partition editor, too; with no command it lists the storage
+devices. Raw disks (`\\.\PhysicalDrive1`, `/dev/sdb`) need administrator
+rights and `--yes`; an image file needs neither:
+
+```bash
+ussr src/stalin/stalin.su
+ussr src/stalin/stalin.su mkimg disk.img 20M
+ussr src/stalin/stalin.su init disk.img gpt
+ussr src/stalin/stalin.su add disk.img --size 8M --type ext4 --name root
+ussr src/stalin/stalin.su show disk.img
 ```
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder

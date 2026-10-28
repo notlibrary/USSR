@@ -1,0 +1,276 @@
+# Stalin partition editor: makes a 20 MB disk image in tests/stalin-tmp.img,
+# writes GPT and MBR tables on it with stalin's own commands, stamps file
+# system headers (ext4, NTFS, UFS1, UFS2/FFS2, FAT32, a BSD disklabel, an
+# EBR chain) into the partitions with bwrite, and checks what stalin reads
+# back. Prints each command line, what it printed and its exit status;
+# error messages land in stderr. STALIN_SEED makes the GUIDs repeatable.
+$include "../src/stalin/stalin.su"
+
+global(_): img
+
+stalin(r): line [
+    concat(shown): "$ stalin " line
+    print(_): shown
+    t_split(words): line
+    stalin_main(r): words
+    if(_): {r != 0} [
+        st_int(code): r
+        concat(st): "[exit " code "]"
+        print(_): st
+    ]
+]
+
+# Words of a line; "IMG" stands for the image and "_" for a space.
+t_split(r): line [
+    vec(r): ""
+    set(word): ""
+    len(n): line
+    set(i): 0
+    while(_): {i <= n} [
+        set(c): 32
+        if(_): {i < n} [
+            byte(c): line i
+        ]
+        if(_): {c = 32} [
+            if(_): {word != ""} [
+                if(_): {word = "IMG"} [
+                    set(word): img
+                ]
+                push(_): r word
+                set(word): ""
+            ]
+        ]
+        elif(_): {c = 95} [
+            concat(word): word " "
+        ]
+        else(_): [
+            chr(ch): c
+            concat(word): word ch
+        ]
+        add(i): i 1
+    ]
+]
+
+# Writes bytes at byte offset off of partition sector lba.
+poke(_): lba off bytes [
+    st_div(first): off 512
+    len(n): bytes
+    st_div_up(count): {off - first * 512 + n} 512
+    bread(b): img {lba + first} count
+    t_copy_in(_): b {off - first * 512} bytes
+    bwrite(_): img {lba + first} b
+]
+
+t_copy_in(_): v at bytes [
+    len(n): bytes
+    set(i): 0
+    while(_): {i < n} [
+        at(x): bytes i
+        set(v): {at + i} x
+        add(i): i 1
+    ]
+]
+
+text_at(_): v i s [
+    text_bytes(b): s
+    t_copy_in(_): v i b
+]
+
+# An ext4 superblock: 1 KiB blocks, journal, extents, flex_bg.
+stamp_ext4(_): lba blocks label [
+    st_zeros(sb): 1024
+    st_put(_): sb 4 4 blocks
+    st_put(_): sb 56 2 0xEF53
+    st_put(_): sb 92 4 4
+    st_put(_): sb 96 4 0x242
+    text_at(_): sb 120 label
+    poke(_): lba 1024 sb
+]
+
+stamp_ntfs(_): lba sectors [
+    st_zeros(b): 512
+    text_at(_): b 3 "NTFS    "
+    st_put(_): b 11 2 512
+    st_put(_): b 40 8 {sectors - 1}
+    st_put(_): b 72 8 0x1234ABCD5678EF90
+    st_put(_): b 510 2 0xAA55
+    poke(_): lba 0 b
+]
+
+stamp_fat32(_): lba sectors label [
+    st_zeros(b): 512
+    text_at(_): b 3 "MSDOS5.0"
+    st_put(_): b 11 2 512
+    st_put(_): b 32 4 sectors
+    text_at(_): b 71 label
+    text_at(_): b 82 "FAT32   "
+    st_put(_): b 510 2 0xAA55
+    poke(_): lba 0 b
+]
+
+# UFS2 superblock at 64 KiB, UFS1 at 8 KiB; 2 KiB fragments.
+stamp_ufs(_): lba sectors label two [
+    st_zeros(sb): 1376
+    st_put(_): sb 48 4 16384
+    st_put(_): sb 52 4 2048
+    st_div(frags): {sectors * 512} 2048
+    if(_): two [
+        st_put(_): sb 1080 8 frags
+        text_at(_): sb 680 label
+        st_put(_): sb 1372 4 0x19540119
+        poke(_): lba 65536 sb
+    ]
+    else(_): [
+        st_put(_): sb 36 4 frags
+        st_put(_): sb 1372 4 0x011954
+        poke(_): lba 8192 sb
+    ]
+]
+
+# An OpenBSD disklabel in sector 1 of a slice: partition a (4.2BSD) from
+# the slice start + 64, in absolute sectors, holding FFS2.
+stamp_disklabel(_): lba sectors label [
+    st_zeros(d): 512
+    st_put(_): d 0 4 0x82564557
+    st_put(_): d 132 4 0x82564557
+    st_put(_): d 140 2 16
+    st_put(_): d 148 4 {sectors - 64}
+    st_put(_): d 152 4 {lba + 64}
+    st_put(_): d 160 1 7
+    poke(_): lba 512 d
+    stamp_ufs(_): {lba + 64} {sectors - 64} label true
+]
+
+# Zeroes the first 160 sectors of every MiB in count sectors from lba
+# (where boot sectors, superblocks and labels live).
+clear(_): lba count [
+    st_zeros(z): {160 * 512}
+    set(i): 0
+    while(_): {i < count} [
+        bwrite(_): img {lba + i} z
+        add(i): i 2048
+    ]
+]
+
+# An EBR at ebr: one logical partition at ebr + 2048 of count sectors.
+stamp_ebr(_): ebr count type [
+    st_zeros(e): 512
+    st_put(_): e 450 1 type
+    st_put(_): e 454 4 2048
+    st_put(_): e 458 4 count
+    st_put(_): e 510 2 0xAA55
+    bwrite(_): img ebr e
+]
+
+init(ret): arg_count arg_values [
+    set(img): "tests/stalin-tmp.img"
+    setenv(_): "STALIN_SEED" "1917"
+    file_exists(old): img
+    if(_): old [
+        remove_file(_): img
+    ]
+    stalin(_): "types"
+    stalin(_): "mkimg IMG 20M"
+    stalin(_): "mkimg IMG 20M"
+    stalin(_): "show IMG"
+
+    print(_): ""
+    print(_): "# GPT"
+    stalin(_): "init IMG gpt"
+    stalin(_): "add IMG --size 4M --type ext4 --name root"
+    stalin(_): "add IMG --size 4M --type ntfs --name windows"
+    stalin(_): "add IMG --size 4M --type ufs --name freebsd --boot on"
+    stalin(_): "add IMG --type openbsd --name openbsd"
+    stalin(_): "add IMG --size 1M"
+    stamp_ext4(_): 2048 4096 "rootfs"
+    stamp_ntfs(_): 10240 8192
+    stamp_ufs(_): 18432 8192 "fbsdroot" true
+    stamp_ufs(_): 26624 14303 "obsdroot" true
+    stalin(_): "IMG"
+    stalin(_): "edit IMG 2 --type fat32 --name Données_C:"
+    stalin(_): "edit IMG 3 --size 8M"
+    stalin(_): "rm IMG 2"
+    stalin(_): "edit IMG 3 --start 5M --size 5M --attrs 1"
+    stalin(_): "add IMG --num 9 --type swap --uuid 01234567-89ab-cdef-0123-456789abcdef"
+    stalin(_): "rm IMG 9 --dry-run"
+
+    print(_): ""
+    print(_): "# mistakes"
+    stalin(_): "rm IMG 2"
+    stalin(_): "rm IMG two"
+    stalin(_): "edit IMG 1 --type nosuch"
+    stalin(_): "edit IMG 1 --boot maybe"
+    stalin(_): "add IMG --size huge"
+    stalin(_): "rm IMG 9"
+    stalin(_): "add IMG --start 3M --size 1M"
+    stalin(_): "add IMG --num 1"
+    stalin(_): "add IMG --uuid not-a-guid"
+    stalin(_): "show IMG --frob"
+    stalin(_): "frob"
+    stalin(_): "show tests/stalin-missing.img"
+    stalin(_): "init IMG dos"
+
+    print(_): ""
+    print(_): "# a damaged primary GPT header is read from the backup and repaired"
+    st_zeros(z): 512
+    bwrite(_): img 1 z
+    stalin(_): "show IMG"
+    stalin(_): "edit IMG 1 --name root2"
+    st_gpt_header(h): 1
+    typeof(th): h
+    print(_): th
+
+    print(_): ""
+    print(_): "# MBR"
+    stalin(_): "init IMG mbr"
+    stalin(_): "add IMG --size 4M --type ntfs --boot on"
+    stalin(_): "add IMG --size 4M --type freebsd"
+    stalin(_): "add IMG --size 4M --type openbsd"
+    stalin(_): "add IMG --type extended"
+    stalin(_): "add IMG --size 1M"
+    stalin(_): "edit IMG 2 --name nope"
+    # file systems the GPT partitions left behind go first
+    clear(_): 2048 38912
+    stamp_ntfs(_): 2048 8192
+    stamp_ufs(_): 10240 8192 "" false
+    stamp_disklabel(_): 18432 8192 "openroot"
+    # two logical partitions in the extended one (26624..40959)
+    stamp_ebr(_): 26624 4096 0x83
+    st_zeros(e): 512
+    bread(e): img 26624
+    st_put(_): e 466 1 0x05
+    st_put(_): e 470 4 6144
+    st_put(_): e 474 4 8192
+    bwrite(_): img 26624 e
+    stamp_ebr(_): {26624 + 6144} 6144 0x0C
+    stamp_ext4(_): {26624 + 2048} 2048 "logical5"
+    stamp_fat32(_): {26624 + 6144 + 2048} 6144 "LOGICAL6"
+    stalin(_): "edit IMG 3 --boot on"
+    stalin(_): "edit IMG 5 --type linux"
+    stalin(_): "rm IMG 4"
+    stalin(_): "edit IMG 2 --type 0xa9"
+
+    print(_): ""
+    print(_): "# wipe, sector sizes, raw disks"
+    stalin(_): "wipe IMG"
+    stalin(_): "mkimg IMG 20M --sector 4096 --yes"
+    stalin(_): "init IMG gpt --sector 4096"
+    stalin(_): "add IMG --size 8M --name four --sector 4096"
+    stalin(_): "init IMG gpt --sector 999"
+    set(st_dev): "/dev/sdz"
+    set(st_yes): false
+    set(st_dry): false
+    st_may_write(w):
+    st_int(tw): w
+    print(_): tw
+    set(st_yes): true
+    st_may_write(w):
+    st_int(tw): w
+    print(_): tw
+    bdevices(d):
+    typeof(td): d
+    print(_): td
+
+    remove_file(_): img
+    set(ret): 0
+]

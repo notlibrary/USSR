@@ -1,0 +1,37 @@
+# Prints the file system in every partition of the disk or image given as
+# the argument, one line each: "1 ext4 rootfs".
+$include "../stalin.su"
+
+init(result): arg_count arg_values [
+    set(result): 2
+    if(_): {arg_count < 1} [
+        print(_): "usage: ussr hello.su DISK"
+        return(result): result
+    ]
+    st_types(_):
+    set(st_sector): 512
+    at(dev): arg_values 0
+    st_open(result): dev
+    if(_): {result = 0} [
+        st_load(result):
+    ]
+    if(_): {result != 0} [
+        return(result): result
+    ]
+    len(n): st_parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): st_parts i
+        getf(num): p "num"
+        getf(s): p "start"
+        getf(e): p "end"
+        getf(code): p "type"
+        st_probe(fs): s {e - s + 1} code
+        at(name): fs 0
+        at(label): fs 1
+        str_from_int(tn): num
+        concat(line): tn " " name " " label
+        print(_): line
+        add(i): i 1
+    ]
+]
