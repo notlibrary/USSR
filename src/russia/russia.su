@@ -2673,6 +2673,10 @@ rt_is_host(r): nm [
     if(_): {nm = "bsize"} [ set(r): 1 ]
     if(_): {nm = "bdevices"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
+    if(_): {nm = "terminal_key_ready"} [ set(r): 1 ]
+    if(_): {nm = "socket_udp"} [ set(r): 1 ]
+    if(_): {nm = "socket_sendto"} [ set(r): 1 ]
+    if(_): {nm = "socket_recvfrom"} [ set(r): 1 ]
 ]
 # The host name to call for builtin nm at node nd: prompt(_) prints its
 # reply in ussr, so it becomes __prompt_print, which rt_prompt prints.
@@ -2724,7 +2728,7 @@ rt_host(r): nm vals [
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
     if(_): {rt_hn > 2} [ at(rt_ha2): vals 2 ]
     if(_): {rt_hn > 3} [ at(rt_ha3): vals 3 ]
-    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch" && nm != "bytes_text" && nm != "pbkdf2_sha256" && nm != "bread" && nm != "bwrite" && nm != "crc32"} [ rt_fatal(_): ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch" && nm != "bytes_text" && nm != "pbkdf2_sha256" && nm != "bread" && nm != "bwrite" && nm != "crc32" && nm != "socket_sendto"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2853,6 +2857,25 @@ rt_host(r): nm vals [
     if(_): {nm = "terminal_size"} [
         if(_): {rt_hn = 0} [ terminal_size(r): ]
         if(_): {rt_hn != 0} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "terminal_key_ready"} [
+        if(_): {rt_hn = 0} [ terminal_key_ready(r): ]
+        if(_): {rt_hn = 1} [ terminal_key_ready(r): rt_ha0 ]
+        if(_): {rt_hn > 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "socket_udp"} [
+        if(_): {rt_hn = 0} [ socket_udp(r): ]
+        if(_): {rt_hn = 1} [ socket_udp(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ socket_udp(r): rt_ha0 rt_ha1 ]
+    ]
+    if(_): {nm = "socket_sendto"} [
+        if(_): {rt_hn = 4} [ socket_sendto(r): rt_ha0 rt_ha1 rt_ha2 rt_ha3 ]
+        if(_): {rt_hn != 4} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "socket_recvfrom"} [
+        if(_): {rt_hn = 1} [ socket_recvfrom(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ socket_recvfrom(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn > 2 || rt_hn = 0} [ rt_fatal(_): ]
     ]
     if(_): {nm = "write_stderr"} [
         if(_): {rt_hn = 1} [ write_stderr(r): rt_ha0 ]

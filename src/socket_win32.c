@@ -48,3 +48,57 @@ int ussr_socket_connect(int h,const char *host,unsigned short port,int timeout_m
     if(e!=0){WSASetLastError(e);set_error("connect");return -1;}
     return 0;
 }
+
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR,12)
+#endif
+int ussr_socket_udp(const char *ip,unsigned short port){
+    SOCKET s;struct sockaddr_in a;BOOL yes=TRUE,no=FALSE;DWORD got=0;int h;
+    if(ussr_socket_init()!=0)return -1;
+    memset(&a,0,sizeof(a));a.sin_family=AF_INET;a.sin_port=htons(port);
+    if(!ip||!*ip||!strcmp(ip,"*")||!strcmp(ip,"0.0.0.0"))a.sin_addr.s_addr=htonl(INADDR_ANY);
+    else if(InetPtonA(AF_INET,ip,&a.sin_addr)!=1){WSASetLastError(WSAEINVAL);set_error("invalid IPv4 address");return -1;}
+    s=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);if(s==INVALID_SOCKET){set_error("socket");return -1;}
+    (void)setsockopt(s,SOL_SOCKET,SO_BROADCAST,(const char*)&yes,sizeof(yes));
+    if(port!=0)(void)setsockopt(s,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,(const char*)&yes,sizeof(yes));
+    /* an ICMP "port unreachable" must not fail the next recvfrom */
+    (void)WSAIoctl(s,SIO_UDP_CONNRESET,&no,sizeof(no),NULL,0,&got,NULL,NULL);
+    if(bind(s,(struct sockaddr*)&a,sizeof(a))==SOCKET_ERROR){set_error("bind");closesocket(s);return -1;}
+    h=put_socket(s);if(h<0)return -1;
+    if(ussr_socket_nonblocking(h)!=0){ussr_socket_close(h);return -1;}
+    return h;
+}
+long ussr_socket_sendto(int h,const char *host,unsigned short port,const void *b,size_t n){
+    SOCKET s=get_socket(h);ADDRINFOA hints,*res=NULL;char service[8];int r;
+    if(s==INVALID_SOCKET)return -1;
+    memset(&hints,0,sizeof(hints));hints.ai_family=AF_INET;hints.ai_socktype=SOCK_DGRAM;
+    snprintf(service,sizeof(service),"%u",(unsigned)port);
+    if(!host||!*host||getaddrinfo(host,service,&hints,&res)!=0||!res){snprintf(error_text,sizeof(error_text),"cannot resolve %.120s",host?host:"");return -1;}
+    if(n>INT_MAX)n=INT_MAX;
+    r=sendto(s,(const char*)b,(int)n,0,res->ai_addr,(int)res->ai_addrlen);freeaddrinfo(res);
+    if(r==SOCKET_ERROR){set_error("sendto");return -1;}
+    return r;
+}
+long ussr_socket_recvfrom(int h,void *b,size_t n,int timeout_ms,char *ip,size_t ipcap,unsigned *port){
+    SOCKET s=get_socket(h);struct sockaddr_in a;int alen,r;WSAPOLLFD p;
+    if(s==INVALID_SOCKET)return -1;
+    if(n>INT_MAX)n=INT_MAX;
+    for(;;){
+        alen=sizeof(a);
+        r=recvfrom(s,(char*)b,(int)n,0,(struct sockaddr*)&a,&alen);
+        if(r!=SOCKET_ERROR)break;
+        r=WSAGetLastError();
+        if(r==WSAECONNRESET)continue;
+        if(r==WSAEMSGSIZE){r=(int)n;break;}
+        if(r!=WSAEWOULDBLOCK){set_error("recvfrom");return -1;}
+        if(timeout_ms<=0)return -2;
+        p.fd=s;p.events=POLLRDNORM;p.revents=0;
+        r=WSAPoll(&p,1,timeout_ms);
+        if(r==SOCKET_ERROR){set_error("WSAPoll");return -1;}
+        if(r==0)return -2;
+        timeout_ms=0;
+    }
+    if(ip&&ipcap){if(!InetNtopA(AF_INET,&a.sin_addr,ip,ipcap))ip[0]=0;}
+    if(port)*port=ntohs(a.sin_port);
+    return r;
+}

@@ -108,6 +108,20 @@ static const help_entry_t g_help[] = {
     { "bdevices", "bytes", "bdevices(v):", "storage devices: [path bytes kind bus model sector] each" },
     { "tls_recv_bytes", "bytes", "tls_recv_bytes(v): socket max", "tls_recv as a byte vector; null: wait_readable" },
 
+    /* UDP datagrams */
+    { "socket_udp", "network", "socket_udp(h): [port [ip]]",
+      "a UDP socket bound to port (0: any) with broadcast on; -1 if the "
+      "port is taken" },
+    { "socket_sendto", "network", "socket_sendto(n): socket host port data",
+      "send one datagram (a string or byte vector) to host:port, "
+      "255.255.255.255 broadcasts; bytes sent or -1" },
+    { "socket_recvfrom", "network", "socket_recvfrom(v): socket [ms]",
+      "one datagram as [text ip port], waiting up to ms; null if none "
+      "came, -1 on error" },
+    { "terminal_key_ready", "network", "terminal_key_ready(v): [ms]",
+      "1 when terminal_getch has a key (or the end of input) within ms, "
+      "else 0: poll the keyboard between datagrams" },
+
     /* environment and shell */
     { "getenv", "shell", "getenv(v): name", "environment variable, or null" },
     { "setenv", "shell", "setenv(r): name value", "set an environment variable" },
@@ -146,7 +160,7 @@ static const help_entry_t g_help[] = {
 
 static const char *const g_groups[] = {
     "values", "math", "control", "strings", "data",
-    "files", "bytes", "shell", "processes", NULL
+    "files", "bytes", "network", "shell", "processes", NULL
 };
 
 /* text word-wrapped to 78 columns, every line indented by two */

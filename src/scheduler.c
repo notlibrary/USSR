@@ -876,6 +876,66 @@ static int sched_do_socket(const char *name, const ussr_value_t *values,
                                               (unsigned short)values[2].data.integer,(int)timeout));
         return 1;
     }
+    if (strcmp(name, "socket_udp") == 0) {
+        /* socket_udp(h): [port [ip]]: a bound UDP socket, broadcast on */
+        long port = 0; const char *ip = NULL;
+        if (count > 2) return -1;
+        if (count >= 1) {
+            if (values[0].type!=USSR_INTEGER || values[0].data.integer<0 ||
+                values[0].data.integer>65535) return -1;
+            port = (long)values[0].data.integer;
+        }
+        if (count == 2) {
+            if (values[1].type!=USSR_STRING) return -1;
+            ip = values[1].data.string;
+        }
+        *out=ussr_integer(ussr_socket_udp(ip,(unsigned short)port)); return 1;
+    }
+    if (strcmp(name, "socket_sendto") == 0) {
+        /* socket_sendto(n): socket host port text-or-bytes */
+        unsigned char *data = NULL; size_t length; long sent;
+        if (count!=4 || sched_socket_handle_arg(values,0,&h)!=0 ||
+            values[1].type!=USSR_STRING || values[2].type!=USSR_INTEGER ||
+            values[2].data.integer<1 || values[2].data.integer>65535) return -1;
+        if (values[3].type==USSR_STRING) {
+            sent=ussr_socket_sendto(h,values[1].data.string,(unsigned short)values[2].data.integer,
+                                    values[3].data.string,strlen(values[3].data.string));
+        } else if (values[3].type==USSR_VECTOR) {
+            if(ussr_value_bytes(&values[3],&data,&length)!=0)return -1;
+            sent=ussr_socket_sendto(h,values[1].data.string,(unsigned short)values[2].data.integer,data,length);
+            free(data);
+        } else return -1;
+        *out=ussr_integer(sent); return 1;
+    }
+    if (strcmp(name, "socket_recvfrom") == 0) {
+        /* socket_recvfrom(v): socket [timeout_ms]: [text ip port], null
+         * when nothing arrived in time, -1 on error */
+        char *buffer; char ip[64]; unsigned port = 0; long got, timeout = 0;
+        ussr_vector_t *v;
+        if ((count!=1 && count!=2) || sched_socket_handle_arg(values,0,&h)!=0) return -1;
+        if (count == 2) {
+            if (values[1].type!=USSR_INTEGER || values[1].data.integer<0) return -1;
+            timeout = values[1].data.integer > 60000 ? 60000 : (long)values[1].data.integer;
+        }
+        buffer=malloc(65536); if(!buffer)return -1;
+        ip[0]='\0';
+        got=ussr_socket_recvfrom(h,buffer,65535,(int)timeout,ip,sizeof(ip),&port);
+        if(got==-2){free(buffer);*out=ussr_null();return 1;}
+        if(got<0){free(buffer);*out=ussr_integer(-1);return 1;}
+        buffer[got]='\0';
+        v=ussr_vector_create(NULL);
+        if(!v){free(buffer);return -1;}
+        {
+            /* push retains what it stores: the temporaries are released here */
+            ussr_value_t text = ussr_string(buffer), from = ussr_string(ip);
+            int failed = text.data.string == NULL || from.data.string == NULL ||
+                         ussr_vector_push(v,text)!=0 || ussr_vector_push(v,from)!=0 ||
+                         ussr_vector_push(v,ussr_integer((ussr_int_t)port))!=0;
+            ussr_value_free(&text); ussr_value_free(&from); free(buffer);
+            if(failed){ ussr_vector_release(v); return -1; }
+        }
+        *out=ussr_vector_value(v); return 1;
+    }
     return 0;
 }
 

@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <poll.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <linux/fs.h>
@@ -1006,6 +1007,29 @@ static int oop_do_terminal_escape(
     return 0;
 }
 
+/* terminal_key_ready(v): [ms] -> 1 when terminal_getch has a byte (or
+ * the end of input) to give within ms milliseconds (default 0), else 0:
+ * a program can poll the keyboard between other work, such as sockets. */
+static int oop_key_ready_ms(ussr_argument_t *arguments, size_t argument_count, ussr_int_t *ms)
+{
+    ussr_value_t v;
+    *ms = 0;
+    if (argument_count == 0)
+        return 0;
+    if (argument_count > 1 || oop_eval(&arguments[0], &v) != 0)
+        return -1;
+    if (!oop_expect_integer(&v, ms) || *ms < 0)
+    {
+        ussr_value_free(&v);
+        fprintf(stderr, "USSR: terminal_key_ready(v): [milliseconds]\n");
+        return -1;
+    }
+    ussr_value_free(&v);
+    if (*ms > 60000)
+        *ms = 60000;
+    return 0;
+}
+
 #ifdef _WIN32
 
 static DWORD term_saved_imode;
@@ -1279,6 +1303,50 @@ static int oop_do_terminal_size(
     return 0;
 }
 
+static int oop_do_terminal_key_ready(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_int_t ms;
+    DWORD start;
+
+    if (oop_key_ready_ms(arguments, argument_count, &ms) != 0)
+        return -1;
+    start = GetTickCount();
+    for (;;)
+    {
+        int ready = term_pushback_count > 0;
+
+        if (!ready && term_stdin_is_console())
+            ready = _kbhit() != 0;
+        else if (!ready)
+        {
+            HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+            DWORD avail = 0;
+
+            /* a pipe: bytes waiting, or closed (the end of input);
+             * a file never blocks */
+            if (GetFileType(hin) == FILE_TYPE_PIPE)
+                ready = !PeekNamedPipe(hin, NULL, 0, NULL, &avail, NULL) ||
+                        avail > 0;
+            else
+                ready = 1;
+        }
+        if (ready)
+        {
+            *out_result = ussr_integer(1);
+            return 0;
+        }
+        if ((ussr_int_t)(GetTickCount() - start) >= ms)
+            break;
+        Sleep(5);
+    }
+    *out_result = ussr_integer(0);
+    return 0;
+}
+
 #else /* POSIX */
 
 static struct termios term_saved;
@@ -1403,6 +1471,29 @@ static int oop_do_terminal_size(
         (unsigned)ws.ws_col
     );
     *out_result = ussr_string(buffer);
+    return 0;
+}
+
+static int oop_do_terminal_key_ready(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_int_t ms;
+    struct pollfd p;
+    int r;
+
+    if (oop_key_ready_ms(arguments, argument_count, &ms) != 0)
+        return -1;
+    p.fd = 0;
+    p.events = POLLIN;
+    p.revents = 0;
+    do
+    {
+        r = poll(&p, 1, (int)ms);
+    } while (r < 0 && errno == EINTR);
+    *out_result = ussr_integer(r > 0 ? 1 : 0);
     return 0;
 }
 
@@ -4706,6 +4797,8 @@ int ussr_oop_dispatch(
         status = oop_do_terminal_sane(arguments, argument_count, out_result);
     else if (strcmp(command, "terminal_getch") == 0)
         status = oop_do_terminal_getch(arguments, argument_count, out_result);
+    else if (strcmp(command, "terminal_key_ready") == 0)
+        status = oop_do_terminal_key_ready(arguments, argument_count, out_result);
     else if (strcmp(command, "terminal_size") == 0)
         status = oop_do_terminal_size(arguments, argument_count, out_result);
     else if (strcmp(command, "encode") == 0)
