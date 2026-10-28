@@ -1,0 +1,455 @@
+# Sochi preferans: the rules without the network. Card and bid names, a
+# seeded deal, bidding with misere, the talon, whist and half-whist,
+# legal cards (follow suit, trump, raspasy talon suit), the score of every
+# kind of hand (made, down, short whist, half-whist, misere, raspasy, a
+# full pool helping the others), the settlement, a player's view through
+# UNO and a whole game of three bots. The deck is shuffled by sochi's own
+# generator, so ussr and russia.su deal the same cards.
+$include "../src/sochi/sochi.su"
+
+t_print_vec(_): label v [
+    encode(s): v
+    concat(line): label " " s
+    print(_): line
+]
+
+t_scores(_): [
+    t_print_vec(_): "  pool" sg_pool
+    t_print_vec(_): "  mount" sg_mount
+    t_print_vec(_): "  whist" sg_whist
+]
+
+# a seat's action and what came of it
+t_act(_): seat action [
+    so_act(e): seat action
+    so_int(ss): seat
+    concat(line): "seat " ss " " action
+    if(_): {e != ""} [
+        concat(line): line " -> " e
+    ]
+    print(_): line
+]
+
+t_legal(_): seat [
+    so_legal(l): seat
+    len(n): l
+    so_int(ns): n
+    so_int(ss): seat
+    concat(line): "  legal for " ss " (" ns "):"
+    set(i): 0
+    while(_): {i < n && i < 6} [
+        at(a): l i
+        concat(line): line " " a
+        add(i): i 1
+    ]
+    if(_): {n > 6} [
+        at(a): l {n - 1}
+        concat(line): line " ... " a
+    ]
+    print(_): line
+]
+
+t_table(_): [
+    so_table(_): 10 42
+    set(sg_names): 0 "Anna"
+    set(sg_names): 1 "Boris"
+    set(sg_names): 2 "Vera"
+]
+
+t_cards(_): text [
+    so_words(w): text
+    vec(r): ""
+    len(n): w
+    set(i): 0
+    while(_): {i < n} [
+        at(x): w i
+        so_parse_card(c): x
+        push(_): r c
+        add(i): i 1
+    ]
+    so_sort(_): r
+    return(_): r
+]
+
+# a contract hand ready to score: declarer seat 0, defenders 1 and 2
+t_contract(_): label bid w1 w2 d t1 t2 [
+    t_table(_):
+    set(sg_decl): 0
+    so_parse_bid(sg_contract): bid
+    set(sg_wst): 1 w1
+    set(sg_wst): 2 w2
+    set(sg_tricks): 0 d
+    set(sg_tricks): 1 t1
+    set(sg_tricks): 2 t2
+    so_score_contract(_):
+    print(_): label
+    print(_): sg_result
+    t_scores(_):
+]
+
+init(ret): arg_count arg_values [
+    so_types(_):
+    print(_): "== cards"
+    set(line): ""
+    set(c): 0
+    while(_): {c < 32} [
+        so_card(cn): c
+        concat(line): line " " cn
+        add(c): c 1
+    ]
+    print(_): line
+    vec(tries): ""
+    push(_): tries "Qh"
+    push(_): tries "10S"
+    push(_): tries "ts"
+    push(_): tries "7♣"
+    push(_): tries "A♦"
+    push(_): tries "1h"
+    push(_): tries "Kx"
+    push(_): tries ""
+    set(i): 0
+    len(n): tries
+    while(_): {i < n} [
+        at(x): tries i
+        so_parse_card(c): x
+        so_int(cs): c
+        concat(line): "  '" x "' -> " cs
+        print(_): line
+        add(i): i 1
+    ]
+    t_cards(h): "As Ks 7s Qh 10h 9d 8d Jc 7c 9c"
+    so_hand_show(hs): h
+    print(_): hs
+
+    print(_): "== bids"
+    set(line): ""
+    set(o): 0
+    while(_): {o <= 48} [
+        so_bid_name(bn): o
+        concat(line): line " " bn
+        add(o): o 2
+        if(_): {o = 30} [
+            so_bid_name(bn): 29
+            concat(line): line " " bn
+        ]
+    ]
+    print(_): line
+    vec(tries): ""
+    push(_): tries "6S"
+    push(_): tries "10nt"
+    push(_): tries "7♥"
+    push(_): tries "9n"
+    push(_): tries "mis"
+    push(_): tries "pass"
+    push(_): tries "5s"
+    push(_): tries "11h"
+    push(_): tries "6x"
+    set(i): 0
+    len(n): tries
+    while(_): {i < n} [
+        at(x): tries i
+        so_parse_bid(o): x
+        so_int(os): o
+        so_value(v): o
+        so_int(vs): v
+        concat(line): "  '" x "' -> " os
+        if(_): {o >= 0} [
+            concat(line): line ", worth " vs
+        ]
+        print(_): line
+        add(i): i 1
+    ]
+
+    print(_): "== deal (seed 42)"
+    t_table(_):
+    so_new_game(_):
+    set(p): 0
+    while(_): {p < 3} [
+        so_name(pn): p
+        at(h): sg_hands p
+        so_hand_show(hs): h
+        concat(line): "  " pn ": " hs
+        print(_): line
+        add(p): p 1
+    ]
+    so_cards_show(ts): sg_talon
+    concat(line): "  talon: " ts
+    print(_): line
+
+    print(_): "== bidding: misere, outbid misere, declarer"
+    t_legal(_): 1
+    t_act(_): 0 "b:6s"
+    t_act(_): 1 "b:6s"
+    t_act(_): 2 "b:6s"
+    t_act(_): 2 "b:mis"
+    t_legal(_): 0
+    t_act(_): 0 "b:8nt"
+    t_act(_): 0 "b:9s"
+    t_legal(_): 1
+    t_act(_): 1 "b:mis"
+    t_act(_): 1 "b:pass"
+    t_legal(_): 2
+    t_act(_): 2 "b:9c"
+    t_act(_): 2 "b:pass"
+    print(_): sg_phase
+    at(h): sg_hands 0
+    len(nh): h
+    so_int(nhs): nh
+    concat(line): "  Anna holds " nhs " cards"
+    print(_): line
+    t_act(_): 0 "d:7s 7s"
+    at(c0): h 0
+    at(c1): h 1
+    so_card(a0): c0
+    so_card(a1): c1
+    concat(dis): "d:" a0 " " a1
+    t_act(_): 0 dis
+    t_legal(_): 0
+    t_act(_): 0 "c:6s"
+    t_act(_): 0 "c:9s"
+    t_legal(_): 1
+    t_act(_): 1 "w:pass"
+    t_legal(_): 2
+    t_act(_): 2 "w:pass"
+    print(_): sg_result
+    t_scores(_):
+    t_act(_): 0 "t:good luck `all`"
+    t_act(_): 1 "n:"
+    t_act(_): 2 "n:"
+    print(_): sg_phase
+    t_act(_): 0 "n:"
+    so_int(hn): sg_handno
+    concat(line): sg_phase " hand " hn
+    print(_): line
+    t_print_vec(_): "  chat" sg_chat
+
+    print(_): "== half-whist, then the first defender whists after all"
+    t_table(_):
+    so_new_game(_):
+    t_act(_): 1 "b:6h"
+    t_act(_): 2 "b:pass"
+    t_act(_): 0 "b:pass"
+    at(h): sg_hands 1
+    at(c0): h 0
+    at(c1): h 1
+    so_card(a0): c0
+    so_card(a1): c1
+    concat(dis): "d:" a0 " " a1
+    t_act(_): 1 dis
+    t_act(_): 1 "c:6h"
+    t_act(_): 2 "w:pass"
+    t_legal(_): 0
+    t_act(_): 0 "w:half"
+    print(_): sg_phase
+    t_legal(_): 2
+    t_act(_): 2 "w:whist"
+    so_int(os): sg_open
+    concat(line): sg_phase ", open hand of seat " os
+    print(_): line
+    # Anna (seat 0) passed and lays her cards open: Vera plays them
+    so_ctl(cc):
+    so_int(ccs): cc
+    so_int(tts): sg_turn
+    concat(line): "  turn " tts ", played by " ccs
+    print(_): line
+
+    print(_): "== legal cards"
+    t_table(_):
+    so_new_game(_):
+    set(sg_phase): "play"
+    set(sg_decl): 0
+    set(sg_trump): 0
+    set(sg_turn): 2
+    t_cards(h): "As 8s Kh 7h 9d"
+    set(sg_hands): 2 h
+    t_cards(sg_trick): "Qh"
+    t_legal(_): 2
+    t_cards(sg_trick): "Qc"
+    t_legal(_): 2
+    t_cards(h): "Kh 7h 9d"
+    set(sg_hands): 2 h
+    t_legal(_): 2
+    set(sg_trump): 4
+    t_legal(_): 2
+    t_cards(sg_trick): "Kc Ac"
+    vec(sg_tseats): ""
+    push(_): sg_tseats 0
+    push(_): sg_tseats 1
+    so_trick_best(b): sg_trick 1 4
+    so_int(bs): b
+    concat(line): "  best of Kc Ac: " bs
+    print(_): line
+    t_cards(tr): "Ac 7s 10d"
+    so_trick_best(b): tr 1 0
+    so_int(bs): b
+    concat(line): "  best of Ac 7s 10d, spades trump: " bs
+    print(_): line
+    # raspasy: the talon card's suit leads tricks 1 and 2
+    set(sg_decl): -1
+    vec(sg_trick): ""
+    t_cards(sg_talon): "Jd 8c"
+    set(sg_trickno): 0
+    t_legal(_): 2
+    set(sg_trickno): 1
+    t_legal(_): 2
+
+    print(_): "== scores"
+    t_contract(_): "6s, both whist, 6 / 3 / 1:" "6s" "whist" "whist" 6 3 1
+    t_contract(_): "6s, both whist, 7 / 2 / 1 (Vera short):" "6s" "whist" "whist" 7 2 1
+    t_contract(_): "7h, Boris alone, 6 / 2 / 2:" "7h" "whist" "pass" 6 2 2
+    t_contract(_): "8nt, both whist, 10 / 0 / 0:" "8nt" "whist" "whist" 10 0 0
+    t_contract(_): "8nt, Vera alone, 10 / 0 / 0:" "8nt" "pass" "whist" 10 0 0
+    t_contract(_): "6c, Vera half-whists:" "6c" "pass" "half" 0 0 0
+    t_contract(_): "10d, both whist, 8 / 1 / 1:" "10d" "whist" "whist" 8 1 1
+    t_contract(_): "7s, nobody whists:" "7s" "pass" "pass" 0 0 0
+
+    print(_): "misere made, misere down 2:"
+    t_table(_):
+    set(sg_decl): 1
+    set(sg_contract): 29
+    set(sg_tricks): 1 0
+    so_score_misere(_):
+    print(_): sg_result
+    set(sg_tricks): 1 2
+    so_score_misere(_):
+    print(_): sg_result
+    t_scores(_):
+
+    print(_): "raspasy 1st and 3rd in a row, tricks 0 / 4 / 6:"
+    t_table(_):
+    set(sg_tricks): 0 0
+    set(sg_tricks): 1 4
+    set(sg_tricks): 2 6
+    set(sg_streak): 1
+    so_score_raspasy(_):
+    print(_): sg_result
+    set(sg_streak): 3
+    so_score_raspasy(_):
+    t_scores(_):
+
+    print(_): "a full pool helps: pools 9 / 4 / 10, Anna gets 6, then 4 more:"
+    t_table(_):
+    set(sg_pool): 0 9
+    set(sg_pool): 1 4
+    set(sg_pool): 2 10
+    so_pool_add(_): 0 6
+    t_scores(_):
+    so_pool_add(_): 0 4
+    t_scores(_):
+
+    print(_): "== settlement"
+    t_table(_):
+    set(sg_pool): 0 10
+    set(sg_pool): 1 10
+    set(sg_pool): 2 8
+    set(sg_mount): 0 4
+    set(sg_mount): 1 10
+    set(sg_mount): 2 0
+    set(sg_whist): 1 30
+    set(sg_whist): 3 12
+    set(sg_whist): 5 7
+    set(sg_whist): 6 1
+    so_settle(f):
+    t_print_vec(_): "  thirds" f
+    set(i): 0
+    while(_): {i < 3} [
+        at(b): f i
+        so_fmt3(bs): b
+        so_name(pn): i
+        concat(line): "  " pn " " bs
+        print(_): line
+        add(i): i 1
+    ]
+    so_fmt3(x): -1
+    so_fmt3(y): 2
+    concat(line): "  " x " " y
+    print(_): line
+
+    print(_): "== a view through UNO"
+    t_table(_):
+    so_new_game(_):
+    so_view(v): 1
+    encode(u): v
+    decode(v2): u
+    encode(u2): v2
+    set(same): {u = u2}
+    if(_): same [ print(_): "  round trip: same" ]
+    at(others): v2 V_OTHERS
+    at(counts): v2 V_COUNTS
+    t_print_vec(_): "  others" others
+    t_print_vec(_): "  counts" counts
+    at(ctl): v2 V_CTL
+    so_int(cs): ctl
+    concat(line): "  ctl " cs
+    print(_): line
+    so_render_hint(hint): v2
+    print(_): hint
+    vec(lines): ""
+    push(_): lines "6s"
+    push(_): lines "7x"
+    push(_): lines "'hi there"
+    push(_): lines "pass"
+    push(_): lines ""
+    set(i): 0
+    len(n): lines
+    while(_): {i < n} [
+        at(x): lines i
+        so_line_action(a): v2 x
+        concat(line): "  '" x "' -> " a
+        print(_): line
+        add(i): i 1
+    ]
+    so_view(v0): 0
+    so_line_action(a): v0 "6s"
+    concat(line): "  seat 0 types 6s -> " a
+    print(_): line
+
+    print(_): "== three bots, pool 3, seed 2026"
+    so_table(_): 3 2026
+    set(sg_names): 0 "Anna"
+    set(sg_names): 1 "Boris"
+    set(sg_names): 2 "Vera"
+    so_new_game(_):
+    set(printed): 0
+    set(steps): 0
+    while(_): {sg_phase != "over" && steps < 2000} [
+        so_ctl(cc):
+        set(i): 0
+        while(_): {i < 3} [
+            if(_): {cc = i || sg_phase = "done"} [
+                so_view(v): i
+                so_bot(a): v
+                if(_): {a != ""} [
+                    so_act(e): i a
+                    if(_): {e != ""} [
+                        concat(m): "  bot error: " a " " e
+                        print(_): m
+                    ]
+                ]
+            ]
+            add(i): i 1
+        ]
+        len(nl): sg_log
+        set(first): {sg_logn - nl}
+        while(_): {printed < sg_logn} [
+            if(_): {printed >= first} [
+                at(x): sg_log {printed - first}
+                concat(x): "  " x
+                print(_): x
+            ]
+            add(printed): printed 1
+        ]
+        add(steps): steps 1
+    ]
+    t_scores(_):
+    set(i): 0
+    while(_): {i < 3} [
+        at(b): sg_final i
+        so_fmt3(bs): b
+        so_name(pn): i
+        concat(line): "  " pn " " bs
+        print(_): line
+        add(i): i 1
+    ]
+    set(ret): 0
+]

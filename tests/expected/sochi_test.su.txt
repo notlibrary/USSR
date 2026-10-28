@@ -1,0 +1,239 @@
+== cards
+ 7s 8s 9s 10s Js Qs Ks As 7c 8c 9c 10c Jc Qc Kc Ac 7d 8d 9d 10d Jd Qd Kd Ad 7h 8h 9h 10h Jh Qh Kh Ah
+  'Qh' -> 29
+  '10S' -> 3
+  'ts' -> 3
+  '7♣' -> 8
+  'A♦' -> 23
+  '1h' -> -1
+  'Kx' -> -1
+  '' -> -1
+s A K 7   c J 9 7   d 9 8   h Q 10
+== bids
+ 6s 6c 6d 6h 6nt 7s 7c 7d 7h 7nt 8s 8c 8d 8h 8nt mis 9s 9c 9d 9h 9nt 10s 10c 10d 10h 10nt
+  '6S' -> 0, worth 2
+  '10nt' -> 48, worth 10
+  '7♥' -> 16, worth 4
+  '9n' -> 38, worth 8
+  'mis' -> 29, worth 10
+  'pass' -> -1
+  '5s' -> -3
+  '11h' -> -3
+  '6x' -> -3
+== deal (seed 42)
+  Anna: s A 7   c A 9 7   d Q 7   h A 10 9
+  Boris: s J 8   c 8   d K J 9   h K Q J 8
+  Vera: s K Q 10   c Q J 10   d A 10 8   h 7
+  talon: 9s Kc
+== bidding: misere, outbid misere, declarer
+  legal for 1 (27): b:pass b:6s b:6c b:6d b:6h b:6nt ... b:10nt
+seat 0 b:6s -> not your turn
+seat 1 b:6s
+seat 2 b:6s -> not a legal move
+seat 2 b:mis
+  legal for 0 (11): b:pass b:9s b:9c b:9d b:9h b:9nt ... b:10nt
+seat 0 b:8nt -> not a legal move
+seat 0 b:9s
+  legal for 1 (10): b:pass b:9c b:9d b:9h b:9nt b:10s ... b:10nt
+seat 1 b:mis -> not a legal move
+seat 1 b:pass
+  legal for 2 (1): b:pass
+seat 2 b:9c -> not a legal move
+seat 2 b:pass
+discard
+  Anna holds 12 cards
+seat 0 d:7s 7s -> discard two cards
+seat 0 d:7s 9s
+  legal for 0 (10): c:9s c:9c c:9d c:9h c:9nt c:10s ... c:10nt
+seat 0 c:6s -> not a legal move
+seat 0 c:9s
+  legal for 1 (2): w:whist w:pass
+seat 1 w:pass
+  legal for 2 (2): w:whist w:pass
+seat 2 w:pass
+Anna 9s: not whisted, counted as made
+  pool [8,0,0]
+  mount [0,0,0]
+  whist [0,0,0,0,0,0,0,0,0]
+seat 0 t:good luck `all`
+seat 1 n:
+seat 2 n:
+done
+seat 0 n:
+bid hand 2
+  chat [`Anna: good luck 'all'`]
+== half-whist, then the first defender whists after all
+seat 1 b:6h
+seat 2 b:pass
+seat 0 b:pass
+seat 1 d:8s 9s
+seat 1 c:6h
+seat 2 w:pass
+  legal for 0 (3): w:whist w:pass w:half
+seat 0 w:half
+whist2
+  legal for 2 (2): w:whist w:pass
+seat 2 w:whist
+play, open hand of seat 0
+  turn 1, played by 1
+== legal cards
+  legal for 2 (2): p:7h p:Kh
+  legal for 2 (2): p:8s p:As
+  legal for 2 (3): p:9d p:7h p:Kh
+  legal for 2 (3): p:9d p:7h p:Kh
+  best of Kc Ac: 1
+  best of Ac 7s 10d, spades trump: 0
+  legal for 2 (3): p:9d p:7h p:Kh
+  legal for 2 (1): p:9d
+== scores
+6s, both whist, 6 / 3 / 1:
+Anna 6s: 6 tricks, made; Boris whist 3; Vera whist 1
+  pool [2,0,0]
+  mount [0,0,0]
+  whist [0,0,0,6,0,0,2,0,0]
+6s, both whist, 7 / 2 / 1 (Vera short):
+Anna 6s: 7 tricks, made; Boris whist 2; Vera whist 1 (short)
+  pool [2,0,0]
+  mount [0,0,1]
+  whist [0,0,0,4,0,0,2,0,0]
+7h, Boris alone, 6 / 2 / 2:
+Anna 7h: 6 tricks, down 1; Boris whist 4
+  pool [0,0,0]
+  mount [4,0,0]
+  whist [0,0,0,20,0,0,0,0,0]
+8nt, both whist, 10 / 0 / 0:
+Anna 8NT: 10 tricks, made; Boris whist 0; Vera whist 0
+  pool [6,0,0]
+  mount [0,0,0]
+  whist [0,0,0,0,0,0,0,0,0]
+8nt, Vera alone, 10 / 0 / 0:
+Anna 8NT: 10 tricks, made; Vera whist 0 (short)
+  pool [6,0,0]
+  mount [0,0,3]
+  whist [0,0,0,0,0,0,0,0,0]
+6c, Vera half-whists:
+Anna 6c: not whisted, counted as made, Vera half-whists
+  pool [2,0,0]
+  mount [0,0,0]
+  whist [0,0,0,0,0,0,4,0,0]
+10d, both whist, 8 / 1 / 1:
+Anna 10d: 8 tricks, down 2; Boris whist 1; Vera whist 1
+  pool [0,0,0]
+  mount [20,0,0]
+  whist [0,0,0,30,0,0,30,0,0]
+7s, nobody whists:
+Anna 7s: not whisted, counted as made
+  pool [4,0,0]
+  mount [0,0,0]
+  whist [0,0,0,0,0,0,0,0,0]
+misere made, misere down 2:
+Boris made the misere
+Boris failed the misere: 2 tricks
+  pool [0,10,0]
+  mount [0,20,0]
+  whist [0,0,0,0,0,0,0,0,0]
+raspasy 1st and 3rd in a row, tricks 0 / 4 / 6:
+Raspasy: Anna 0 Boris 4 Vera 6
+  pool [2,0,0]
+  mount [0,16,24]
+  whist [0,0,0,0,0,0,0,0,0]
+a full pool helps: pools 9 / 4 / 10, Anna gets 6, then 4 more:
+  pool [10,9,10]
+  mount [0,0,0]
+  whist [0,50,0,0,0,0,0,0,0]
+  pool [10,10,10]
+  mount [0,0,0]
+  whist [0,75,15,0,0,0,0,0,0]
+== settlement
+  thirds [91,-173,82]
+  Anna +30.3
+  Boris -57.7
+  Vera +27.3
+  -0.3 +0.7
+== a view through UNO
+  round trip: same
+  others [null,null,null]
+  counts [10,10,10]
+  ctl 1
+Your bid: 6s or higher (6s 6c 6d 6h 6nt 7s ... 10nt), mis, pass   ('text to chat)
+  '6s' -> b:6s
+  '7x' -> !not a bid: type 6s, 7h, 8nt, mis or pass
+  ''hi there' -> t:hi there
+  'pass' -> b:pass
+  '' -> 
+  seat 0 types 6s -> t:6s
+== three bots, pool 3, seed 2026
+  Hand 1, dealer Anna
+  Boris: 6s
+  Vera: pass
+  Anna: pass
+  Boris takes the talon: Ad 9h
+  Boris plays 6s
+  Vera: pass
+  Anna: pass
+  Boris 6s: not whisted, counted as made
+  Hand 2, dealer Boris
+  Vera: pass
+  Anna: pass
+  Boris: pass
+  All pass: raspasy, a trick costs 1
+  Raspasy: Anna 4 Boris 3 Vera 3
+  Hand 3, dealer Vera
+  Anna: 6c
+  Boris: pass
+  Vera: pass
+  Anna takes the talon: 8c Qh
+  Anna plays 6c
+  Boris: pass
+  Vera: whist
+  Boris lays the cards open
+  Anna 6c: 7 tricks, made; Vera whist 3 (short)
+  Hand 4, dealer Anna
+  Boris: pass
+  Vera: pass
+  Anna: pass
+  All pass: raspasy, a trick costs 1
+  Raspasy: Anna 1 Boris 2 Vera 7
+  Hand 5, dealer Boris
+  Vera: pass
+  Anna: pass
+  Boris: pass
+  All pass: raspasy, a trick costs 2
+  Raspasy: Anna 2 Boris 5 Vera 3
+  Hand 6, dealer Vera
+  Anna: pass
+  Boris: pass
+  Vera: 6h
+  Vera takes the talon: 9s Ks
+  Vera plays 6h
+  Anna: pass
+  Boris: whist
+  Anna lays the cards open
+  Vera 6h: 9 tricks, made; Boris whist 1 (short)
+  Hand 7, dealer Anna
+  Boris: pass
+  Vera: pass
+  Anna: 6s
+  Anna takes the talon: 8s 7c
+  Anna plays 6s
+  Boris: whist
+  Vera: pass
+  Vera lays the cards open
+  Anna 6s: 7 tricks, made; Boris whist 3 (short)
+  Hand 8, dealer Boris
+  Vera: pass
+  Anna: pass
+  Boris: pass
+  All pass: raspasy, a trick costs 1
+  Raspasy: Anna 0 Boris 2 Vera 8
+  Every pool is full: the game is over
+  pool [3,3,3]
+  mount [9,21,25]
+  whist [0,10,10,6,0,2,6,0,0]
+  Anna +101.3
+  Boris -28.7
+  Vera -72.7
+
+--- stderr ---
+
+--- exit 0 ---
