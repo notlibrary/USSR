@@ -63,10 +63,10 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod and Dubna have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod, Dubna, Siberia and KGB have code so far):
 
 - dubna.su - PostgreSQL client: protocol 3.0, TLS, SCRAM-SHA-256, parameterised queries (working: `src/dubna`)
-- kgb.su - Knowledge Giga Base, Markdown knowledge base manager
+- kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base: folders are objects and categories (working: `src/kgb`)
 - klin.su - GUI calculator, programmer, scientific and casual in one (working: `src/klin`)
 - kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
 - novgorod.su - anonymous HTTPS image forum for programmers with lightweight markup (working: `src/novgorod`)
@@ -111,6 +111,14 @@ ussr src/tver/tver.su [directory]     # Tver, two-panel file manager
 ussr src/tula/tula.su [drawing.dxf]   # Tula, 2D CAD and DXF viewer
 ussr src/klin/klin.su [sci|prog]      # Klin, calculator
 ussr src/kremlin/kremlin.su [--window] # Kremlin, desktop on ~/kremlin
+```
+
+KGB, the knowledge base, runs in the terminal:
+
+```bash
+ussr src/kgb/kgb.su init zoo
+ussr src/kgb/kgb.su --kb zoo add animals/mammals/cat legs: 4
+ussr src/kgb/kgb.su --kb zoo where "legs>2"
 ```
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder

@@ -1,0 +1,2562 @@
+# KGB - Knowledge Giga Base: a command line manager for a knowledge base of
+# facts kept in plain Markdown files and folders.
+#
+# The whole database is a folder tree with two simple rules:
+#
+#   - a folder with no subfolders is an OBJECT; the Markdown files in it
+#     (*.md) are lists of facts about that object;
+#   - every other folder is a CATEGORY (a classifier, a type): the path
+#     from the root to an object is its classification, so
+#     animals/mammals/cat is a cat that is a mammal that is an animal.
+#
+# A fact is one Markdown list item ("- ", "* ", "+ " or "1. "). A fact of
+# the form "key: value" is also a property. "# Title" heads a file and
+# "## Name" (or deeper) headings group facts into sections; other lines
+# are notes that kgb leaves alone. Markdown files in
+# a category folder hold facts every object below it inherits (the root
+# folder's own files, a README for instance, are not inherited). A fact
+# may link to another object with [[name]] or [[path/to/name]].
+#
+# The root is --kb DIR, else $KGB_HOME, else the nearest folder at or above
+# the current one holding a .kgb file (kgb init makes one), else ".".
+# Names starting with "." are ignored everywhere.
+#
+# Usage: ussr src/kgb/kgb.su COMMAND ...; kgb help lists the commands.
+# Library use: kgb_main(code): args runs one command line (a vector of
+# strings) and returns its exit status: 0 done or true, 1 nothing found or
+# false, 2 a usage or database error.
+$once
+$include "../libs/strings.su"
+
+global(_): kgb_root kgb_objects kgb_cats kgb_typed kgb_opt_in kgb_opt_file
+
+kgb_types(r): [
+    set(r): 0
+    # a bare argument reads an unset name as null (an expression would not)
+    set(done): kgb_typed
+    if(_): {done = true} [
+        return(r): r
+    ]
+    struct(KgbFact): "owner:string" "file:string" "line:number" "text:string" "section:string"
+    set(kgb_typed): true
+]
+
+# ---------------------------------------------------------------- text
+
+kgb_starts(r): s p [
+    len(n): s
+    len(m): p
+    set(r): false
+    if(_): {m <= n} [
+        slice(h): s 0 m
+        set(r): {h = p}
+    ]
+]
+
+kgb_ends(r): s p [
+    len(n): s
+    len(m): p
+    set(r): false
+    if(_): {m <= n} [
+        slice(t): s {n - m} m
+        set(r): {t = p}
+    ]
+]
+
+kgb_from(r): s i [
+    len(n): s
+    set(r): ""
+    if(_): {i < n} [
+        slice(r): s i {n - i}
+    ]
+]
+
+kgb_is_string(r): v [
+    typeof(t): v
+    set(r): {t = "string"}
+]
+
+kgb_int(r): n [
+    str_from_int(r): n
+]
+
+kgb_has_text(r): hay needle [
+    str_lower(h): hay
+    str_lower(n): needle
+    str_find(at): h n 0
+    set(r): {at >= 0}
+]
+
+kgb_same(r): a b [
+    str_lower(x): a
+    str_lower(y): b
+    set(r): {x = y}
+]
+
+# Removes every occurrence of piece.
+kgb_drop(r): s piece [
+    set(r): ""
+    len(m): piece
+    set(i): 0
+    set(go): true
+    while(_): go [
+        str_find(at): s piece i
+        if(_): {at < 0} [
+            kgb_from(t): s i
+            concat(r): r t
+            set(go): false
+        ]
+        else(_): [
+            slice(t): s i {at - i}
+            concat(r): r t
+            set(i): {at + m}
+        ]
+    ]
+]
+
+# Backslashes become slashes; "./" in front and slashes at the ends go.
+kgb_clean(r): path [
+    set(r): ""
+    len(n): path
+    set(i): 0
+    while(_): {i < n} [
+        at(c): path i
+        if(_): {c = "\\"} [
+            set(c): "/"
+        ]
+        concat(r): r c
+        add(i): i 1
+    ]
+    kgb_starts(dot): r "./"
+    while(_): dot [
+        kgb_from(r): r 2
+        kgb_starts(dot): r "./"
+    ]
+    if(_): {r = "."} [
+        set(r): ""
+    ]
+    kgb_starts(lead): r "/"
+    while(_): lead [
+        kgb_from(r): r 1
+        kgb_starts(lead): r "/"
+    ]
+    kgb_ends(tail): r "/"
+    while(_): tail [
+        len(k): r
+        slice(r): r 0 {k - 1}
+        kgb_ends(tail): r "/"
+    ]
+]
+
+kgb_last_slash(r): s [
+    len(n): s
+    set(r): -1
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(c): s i
+        if(_): {c = "/"} [
+            set(r): i
+            set(i): -1
+        ]
+        else(_): [
+            sub(i): i 1
+        ]
+    ]
+]
+
+kgb_base(r): path [
+    kgb_last_slash(k): path
+    kgb_from(r): path {k + 1}
+]
+
+kgb_parent(r): path [
+    kgb_last_slash(k): path
+    set(r): ""
+    if(_): {k > 0} [
+        slice(r): path 0 k
+    ]
+]
+
+kgb_join(r): a b [
+    set(r): b
+    if(_): {a != ""} [
+        concat(r): a "/" b
+    ]
+]
+
+kgb_split(r): s sep [
+    vec(r): ""
+    len(m): sep
+    set(i): 0
+    set(go): true
+    while(_): go [
+        str_find(at): s sep i
+        if(_): {at < 0} [
+            kgb_from(t): s i
+            push(_): r t
+            set(go): false
+        ]
+        else(_): [
+            slice(t): s i {at - i}
+            push(_): r t
+            set(i): {at + m}
+        ]
+    ]
+]
+
+kgb_words(r): v from [
+    set(r): ""
+    len(n): v
+    set(i): from
+    while(_): {i < n} [
+        at(w): v i
+        if(_): {i > from} [
+            concat(r): r " "
+        ]
+        concat(r): r w
+        add(i): i 1
+    ]
+]
+
+kgb_joined(r): v sep [
+    set(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(w): v i
+        if(_): {i > 0} [
+            concat(r): r sep
+        ]
+        concat(r): r w
+        add(i): i 1
+    ]
+]
+
+# a before b, ignoring ASCII case, byte by byte.
+kgb_less(r): a b [
+    str_lower(x): a
+    str_lower(y): b
+    len(n): x
+    len(m): y
+    set(r): {n < m}
+    set(i): 0
+    set(go): true
+    while(_): {go && i < n && i < m} [
+        byte(p): x i
+        byte(q): y i
+        if(_): {p != q} [
+            set(r): {p < q}
+            set(go): false
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_sorted(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        vec(out): ""
+        set(placed): false
+        len(k): r
+        set(j): 0
+        while(_): {j < k} [
+            at(y): r j
+            if(_): {placed = false} [
+                kgb_less(before): x y
+                if(_): before [
+                    push(_): out x
+                    set(placed): true
+                ]
+            ]
+            push(_): out y
+            add(j): j 1
+        ]
+        if(_): {placed = false} [
+            push(_): out x
+        ]
+        set(r): out
+        add(i): i 1
+    ]
+]
+
+kgb_index(r): v x [
+    len(n): v
+    set(r): -1
+    set(i): 0
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [
+            set(r): i
+            set(i): n
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_number(r): s [
+    str_to_number(r): s
+]
+
+kgb_err(r): message [
+    concat(line): "kgb: " message "\n"
+    write_stderr(_): line
+    set(r): 2
+]
+
+# ---------------------------------------------------------------- files
+
+kgb_full(r): rel [
+    set(r): kgb_root
+    if(_): {rel != ""} [
+        concat(r): kgb_root "/" rel
+    ]
+]
+
+# The names in folder rel: dirs true for subfolders (without the slash),
+# false for .md files. Dot names are skipped.
+kgb_entries(r): rel dirs [
+    vec(r): ""
+    kgb_full(p): rel
+    list_dir(names): p
+    typeof(t): names
+    if(_): {t != "vector"} [
+        return(r): r
+    ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        byte(b0): nm 0
+        if(_): {b0 != 46} [
+            kgb_ends(d): nm "/"
+            if(_): {d && dirs} [
+                len(k): nm
+                slice(s): nm 0 {k - 1}
+                push(_): r s
+            ]
+            if(_): {d = false && dirs = false} [
+                str_lower(low): nm
+                kgb_ends(md): low ".md"
+                if(_): md [
+                    push(_): r nm
+                ]
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_lines(r): path [
+    vec(r): ""
+    open_file(h): path "r"
+    if(_): {h < 0} [
+        return(r): r
+    ]
+    set(first): true
+    read_line(l): h
+    kgb_is_string(more): l
+    while(_): more [
+        if(_): first [
+            len(n): l
+            if(_): {n >= 3} [
+                byte(b0): l 0
+                byte(b1): l 1
+                byte(b2): l 2
+                if(_): {b0 = 239 && b1 = 187 && b2 = 191} [
+                    kgb_from(l): l 3
+                ]
+            ]
+            set(first): false
+        ]
+        push(_): r l
+        read_line(l): h
+        kgb_is_string(more): l
+    ]
+    close_file(_): h
+]
+
+kgb_write_lines(r): path lines [
+    set(text): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        concat(text): text l "\n"
+        add(i): i 1
+    ]
+    writefile(_): path text
+    set(r): 0
+]
+
+# Makes the folders of rel below the root; true when rel is a folder then.
+kgb_mkdirs(r): rel [
+    kgb_split(parts): rel "/"
+    len(n): parts
+    set(sofar): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(part): parts i
+        kgb_join(sofar): sofar part
+        kgb_full(p): sofar
+        is_dir(d): p
+        if(_): {d = 0} [
+            make_dir(_): p
+        ]
+        add(i): i 1
+    ]
+    kgb_full(p): rel
+    is_dir(d): p
+    set(r): {d = 1}
+]
+
+# ---------------------------------------------------------------- the tree
+
+kgb_find_root(r): given [
+    kgb_clean(r): given
+    kgb_starts(abs): given "/"
+    if(_): abs [
+        concat(r): "/" r
+    ]
+    if(_): {given != ""} [
+        if(_): {r = ""} [
+            set(r): "."
+        ]
+        return(r): r
+    ]
+    getenv(home): "KGB_HOME"
+    kgb_is_string(set_home): home
+    if(_): set_home [
+        if(_): {home != ""} [
+            kgb_clean(r): home
+            kgb_starts(abs): home "/"
+            if(_): abs [
+                concat(r): "/" r
+            ]
+            return(r): r
+        ]
+    ]
+    getcwd(cwd):
+    kgb_clean(p): cwd
+    kgb_starts(abs): cwd "/"
+    if(_): abs [
+        concat(p): "/" p
+    ]
+    set(r): "."
+    set(go): true
+    while(_): go [
+        concat(marker): p "/.kgb"
+        file_exists(e): marker
+        if(_): e [
+            set(r): p
+            set(go): false
+        ]
+        else(_): [
+            kgb_last_slash(k): p
+            if(_): {k <= 0} [
+                set(go): false
+            ]
+            else(_): [
+                slice(p): p 0 k
+            ]
+        ]
+    ]
+]
+
+kgb_walk(r): rel [
+    set(r): 0
+    kgb_entries(subs): rel true
+    len(n): subs
+    if(_): {rel != ""} [
+        if(_): {n = 0} [
+            push(_): kgb_objects rel
+        ]
+        else(_): [
+            push(_): kgb_cats rel
+        ]
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(s): subs i
+        kgb_join(child): rel s
+        kgb_walk(_): child
+        add(i): i 1
+    ]
+]
+
+kgb_scan(r): [
+    vec(kgb_objects): ""
+    vec(kgb_cats): ""
+    kgb_walk(r): ""
+]
+
+kgb_is_object(r): rel [
+    kgb_index(i): kgb_objects rel
+    set(r): {i >= 0}
+]
+
+kgb_is_cat(r): rel [
+    set(r): {rel = ""}
+    kgb_index(i): kgb_cats rel
+    if(_): {i >= 0} [
+        set(r): true
+    ]
+]
+
+# True when path is rel itself or lies below it (rel "" is the root).
+kgb_under(r): path rel [
+    set(r): true
+    if(_): {rel != ""} [
+        concat(pre): rel "/"
+        kgb_starts(r): path pre
+        if(_): {path = rel} [
+            set(r): true
+        ]
+    ]
+]
+
+# The entries of list matching name: the path itself, or a path ending
+# in /name (so "cat" and "mammals/cat" both find animals/mammals/cat).
+kgb_matches(r): list name [
+    vec(r): ""
+    concat(tail): "/" name
+    len(n): list
+    set(i): 0
+    while(_): {i < n} [
+        at(p): list i
+        kgb_ends(e): p tail
+        if(_): {p = name || e} [
+            push(_): r p
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_ambiguous(r): name hits [
+    kgb_joined(all): hits ", "
+    concat(m): "'" name "' is ambiguous: " all
+    kgb_err(r): m
+]
+
+# An object's path from a name or path, or null after saying why.
+kgb_object(r): name [
+    set(r): null
+    kgb_clean(p): name
+    if(_): {p = ""} [
+        kgb_err(_): "which object?"
+        return(r): r
+    ]
+    kgb_matches(hits): kgb_objects p
+    len(n): hits
+    if(_): {n = 1} [
+        at(r): hits 0
+        return(r): r
+    ]
+    if(_): {n > 1} [
+        kgb_ambiguous(_): p hits
+        return(r): r
+    ]
+    kgb_matches(cats): kgb_cats p
+    len(c): cats
+    if(_): {c > 0} [
+        at(first): cats 0
+        concat(m): first " is a category, not an object"
+        kgb_err(_): m
+        return(r): r
+    ]
+    concat(m): "no object '" p "'"
+    kgb_err(_): m
+]
+
+# A category's path ("" for the root), or null after saying why.
+kgb_category(r): name [
+    set(r): null
+    kgb_clean(p): name
+    if(_): {p = ""} [
+        set(r): ""
+        return(r): r
+    ]
+    kgb_matches(hits): kgb_cats p
+    len(n): hits
+    if(_): {n = 1} [
+        at(r): hits 0
+        return(r): r
+    ]
+    if(_): {n > 1} [
+        kgb_ambiguous(_): p hits
+        return(r): r
+    ]
+    kgb_matches(objs): kgb_objects p
+    len(c): objs
+    if(_): {c > 0} [
+        at(first): objs 0
+        concat(m): first " is an object, not a category"
+        kgb_err(_): m
+        return(r): r
+    ]
+    concat(m): "no category '" p "'"
+    kgb_err(_): m
+]
+
+# The --in category, "" for everything, or null.
+kgb_scope(r): [
+    kgb_category(r): kgb_opt_in
+]
+
+kgb_objects_in(r): cat [
+    vec(r): ""
+    len(n): kgb_objects
+    set(i): 0
+    while(_): {i < n} [
+        at(p): kgb_objects i
+        kgb_under(u): p cat
+        if(_): u [
+            push(_): r p
+        ]
+        add(i): i 1
+    ]
+]
+
+# The categories above an object, nearest first, without the root.
+kgb_ancestors(r): rel [
+    vec(r): ""
+    kgb_parent(p): rel
+    while(_): {p != ""} [
+        push(_): r p
+        kgb_parent(p): p
+    ]
+]
+
+# Removes empty category folders from rel upwards, which would otherwise
+# turn into objects without facts.
+kgb_prune(r): rel [
+    set(r): 0
+    set(p): rel
+    while(_): {p != ""} [
+        kgb_full(full): p
+        list_dir(names): full
+        typeof(t): names
+        set(empty): false
+        if(_): {t = "vector"} [
+            len(k): names
+            set(empty): {k = 0}
+        ]
+        if(_): empty [
+            remove_dir(_): full
+            concat(m): "removed empty category " p
+            print(_): m
+            kgb_parent(p): p
+        ]
+        else(_): [
+            kgb_entries(subs): p true
+            len(ns): subs
+            if(_): {ns = 0} [
+                concat(m): "note: " p " has no objects left, so it is an object now"
+                print(_): m
+            ]
+            set(p): ""
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- facts
+
+# The fact a line holds (the list item's text), or null.
+kgb_fact_text(r): line [
+    set(r): null
+    str_trim(t): line
+    len(n): t
+    if(_): {n < 2} [
+        return(r): r
+    ]
+    slice(h): t 0 2
+    if(_): {h = "- " || h = "* " || h = "+ "} [
+        kgb_from(rest): t 2
+        str_trim(r): rest
+        return(r): r
+    ]
+    set(i): 0
+    set(go): true
+    while(_): {go && i < n} [
+        byte(b): t i
+        if(_): {b >= 48 && b <= 57} [
+            add(i): i 1
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    if(_): {i > 0 && i + 1 < n} [
+        slice(mark): t i 2
+        if(_): {mark = ". " || mark = ") "} [
+            kgb_from(rest): t {i + 2}
+            str_trim(r): rest
+        ]
+    ]
+]
+
+# Everything of a list item line before its text: indent, marker, space.
+kgb_fact_prefix(r): line [
+    len(n): line
+    set(i): 0
+    set(go): true
+    while(_): {go && i < n} [
+        byte(b): line i
+        if(_): {b = 32 || b = 9} [
+            add(i): i 1
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    byte(b): line i
+    if(_): {b = 45 || b = 42 || b = 43} [
+        add(i): i 1
+    ]
+    else(_): [
+        set(go): true
+        while(_): {go && i < n} [
+            byte(b): line i
+            if(_): {b >= 48 && b <= 57} [
+                add(i): i 1
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        add(i): i 1
+    ]
+    set(go): true
+    while(_): {go && i < n} [
+        byte(b): line i
+        if(_): {b = 32 || b = 9} [
+            add(i): i 1
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    slice(r): line 0 i
+]
+
+kgb_heading(r): line [
+    set(r): null
+    str_trim(t): line
+    kgb_starts(h): t "#"
+    if(_): h [
+        len(n): t
+        set(i): 0
+        set(go): true
+        while(_): {go && i < n} [
+            byte(b): t i
+            if(_): {b = 35} [
+                add(i): i 1
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        kgb_from(rest): t i
+        str_trim(r): rest
+    ]
+]
+
+# The facts of one folder (object or category), file by file.
+kgb_facts(r): rel [
+    kgb_types(_):
+    vec(r): "KgbFact"
+    kgb_entries(files): rel false
+    kgb_full(dir): rel
+    len(nf): files
+    set(f): 0
+    while(_): {f < nf} [
+        at(name): files f
+        concat(path): dir "/" name
+        kgb_lines(lines): path
+        set(section): ""
+        len(nl): lines
+        set(i): 0
+        while(_): {i < nl} [
+            at(line): lines i
+            kgb_heading(h): line
+            kgb_is_string(is_h): h
+            if(_): is_h [
+                # "# title" heads the file; "## name" and deeper are sections
+                str_trim(raw): line
+                kgb_starts(sub): raw "##"
+                set(section): ""
+                if(_): sub [
+                    set(section): h
+                ]
+            ]
+            else(_): [
+                kgb_fact_text(t): line
+                kgb_is_string(is_f): t
+                if(_): is_f [
+                    new(fact): "KgbFact" rel name i t section
+                    push(_): r fact
+                ]
+            ]
+            add(i): i 1
+        ]
+        add(f): f 1
+    ]
+]
+
+# A property fact's key in lower case ("key: value"), or null.
+kgb_key(r): text [
+    set(r): null
+    kgb_drop(t): text "**"
+    kgb_drop(t): t "__"
+    str_find(c): t ":" 0
+    len(n): t
+    if(_): {c <= 0 || c > 40} [
+        return(r): r
+    ]
+    if(_): {c + 1 < n} [
+        byte(b): t {c + 1}
+        if(_): {b != 32 && b != 9} [
+            return(r): r
+        ]
+    ]
+    slice(k): t 0 c
+    str_trim(k): k
+    str_find(bad): k "[" 0
+    if(_): {k = "" || bad >= 0} [
+        return(r): r
+    ]
+    str_lower(r): k
+]
+
+kgb_value(r): text [
+    kgb_drop(t): text "**"
+    kgb_drop(t): t "__"
+    str_find(c): t ":" 0
+    kgb_from(v): t {c + 1}
+    str_trim(r): v
+]
+
+# The values of key among facts.
+kgb_values_in(r): facts key [
+    vec(r): ""
+    str_lower(want): key
+    len(n): facts
+    set(i): 0
+    while(_): {i < n} [
+        at(f): facts i
+        getf(t): f "text"
+        kgb_key(k): t
+        kgb_is_string(is_k): k
+        if(_): is_k [
+            if(_): {k = want} [
+                kgb_value(v): t
+                push(_): r v
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+# An object's values of key: its own, else the nearest category's.
+kgb_values(r): rel key [
+    kgb_facts(own): rel
+    kgb_values_in(r): own key
+    len(n): r
+    if(_): {n > 0} [
+        return(r): r
+    ]
+    kgb_ancestors(up): rel
+    len(m): up
+    set(i): 0
+    while(_): {i < m} [
+        at(c): up i
+        kgb_facts(fs): c
+        kgb_values_in(r): fs key
+        len(n): r
+        if(_): {n > 0} [
+            set(i): m
+        ]
+        add(i): i 1
+    ]
+]
+
+# Keys of the facts, in order, each once.
+kgb_keys_in(r): facts keys [
+    set(r): keys
+    len(n): facts
+    set(i): 0
+    while(_): {i < n} [
+        at(f): facts i
+        getf(t): f "text"
+        kgb_key(k): t
+        kgb_is_string(is_k): k
+        if(_): is_k [
+            kgb_index(at): keys k
+            if(_): {at < 0} [
+                push(_): keys k
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+# An object's keys, its own and inherited.
+kgb_keys(r): rel [
+    vec(r): ""
+    kgb_facts(own): rel
+    kgb_keys_in(r): own r
+    kgb_ancestors(up): rel
+    len(m): up
+    set(i): 0
+    while(_): {i < m} [
+        at(c): up i
+        kgb_facts(fs): c
+        kgb_keys_in(r): fs r
+        add(i): i 1
+    ]
+]
+
+kgb_fact_path(r): fact [
+    getf(owner): fact "owner"
+    getf(file): fact "file"
+    kgb_full(dir): owner
+    concat(r): dir "/" file
+]
+
+# Rewrites a fact's line with new text, keeping its marker.
+kgb_replace_fact(r): fact text [
+    kgb_fact_path(path): fact
+    getf(at): fact "line"
+    kgb_lines(lines): path
+    vec(out): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        if(_): {i = at} [
+            kgb_fact_prefix(pre): l
+            concat(l): pre text
+        ]
+        push(_): out l
+        add(i): i 1
+    ]
+    kgb_write_lines(r): path out
+]
+
+kgb_remove_fact(r): fact [
+    kgb_fact_path(path): fact
+    getf(at): fact "line"
+    kgb_lines(lines): path
+    vec(out): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        if(_): {i != at} [
+            at(l): lines i
+            push(_): out l
+        ]
+        add(i): i 1
+    ]
+    kgb_write_lines(r): path out
+]
+
+# The file new facts of an object go to: --file, else its first .md
+# file, else <name>.md, made with a heading.
+kgb_target(r): rel [
+    kgb_full(dir): rel
+    set(name): kgb_opt_file
+    if(_): {name != ""} [
+        str_lower(low): name
+        kgb_ends(md): low ".md"
+        if(_): {md = false} [
+            concat(name): name ".md"
+        ]
+    ]
+    else(_): [
+        kgb_entries(files): rel false
+        len(n): files
+        if(_): {n > 0} [
+            at(name): files 0
+        ]
+        else(_): [
+            kgb_base(b): rel
+            concat(name): b ".md"
+        ]
+    ]
+    concat(r): dir "/" name
+    file_exists(e): r
+    if(_): {e = false} [
+        kgb_base(b): rel
+        concat(head): "# " b "\n"
+        writefile(_): r head
+    ]
+]
+
+kgb_append_fact(r): rel text [
+    kgb_target(path): rel
+    kgb_lines(lines): path
+    len(n): lines
+    set(go): {n > 0}
+    while(_): go [
+        at(last): lines {n - 1}
+        str_trim(t): last
+        if(_): {t = ""} [
+            pop(_): lines
+            sub(n): n 1
+            set(go): {n > 0}
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    if(_): {n > 0} [
+        at(last): lines {n - 1}
+        kgb_heading(h): last
+        kgb_is_string(is_h): h
+        if(_): is_h [
+            push(_): lines ""
+        ]
+    ]
+    concat(item): "- " text
+    push(_): lines item
+    kgb_write_lines(r): path lines
+]
+
+# The [[link]] targets in a fact's text.
+kgb_links_of(r): text [
+    vec(r): ""
+    set(i): 0
+    set(go): true
+    while(_): go [
+        str_find(a): text "[[" i
+        set(b): -1
+        if(_): {a >= 0} [
+            str_find(b): text "]]" {a + 2}
+        ]
+        if(_): {b < 0} [
+            set(go): false
+        ]
+        else(_): [
+            slice(t): text {a + 2} {b - a - 2}
+            str_find(bar): t "|" 0
+            if(_): {bar >= 0} [
+                slice(t): t 0 bar
+            ]
+            str_trim(t): t
+            kgb_clean(t): t
+            push(_): r t
+            set(i): {b + 2}
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- commands
+
+kgb_usage(r): [
+    print(_): "usage: kgb [--kb DIR] COMMAND ..."
+    print(_): ""
+    print(_): "A folder without subfolders is an object, its *.md list items are facts;"
+    print(_): "other folders are categories. A fact \"key: value\" is a property."
+    print(_): ""
+    print(_): "  init [DIR]               make DIR (default .) a knowledge base"
+    print(_): "  tree [CAT]               the classification with fact counts"
+    print(_): "  ls [CAT]                 objects (in CAT), one path a line"
+    print(_): "  cats [CAT]               categories"
+    print(_): "  show OBJ                 the facts, numbered, and inherited ones"
+    print(_): "  new PATH                 make an object, e.g. animals/mammals/cat"
+    print(_): "  add OBJ FACT...          append a fact (a new PATH is created)"
+    print(_): "  edit OBJ N FACT...       replace fact N"
+    print(_): "  rm OBJ N                 remove fact N"
+    print(_): "  get OBJ KEY              the values of a property"
+    print(_): "  set OBJ KEY VALUE...     set a property (replaces its values)"
+    print(_): "  unset OBJ KEY            remove a property"
+    print(_): "  find TEXT...             facts containing TEXT"
+    print(_): "  where COND... [or COND...]  objects matching: key  !key  key=v"
+    print(_): "                           key!=v  key~v (contains)  key>n key<n key>=n key<=n"
+    print(_): "  table [CAT] [KEY...]     a Markdown table of the properties"
+    print(_): "  props [CAT]              property keys and how many objects have them"
+    print(_): "  type OBJ                 the classification of an object"
+    print(_): "  is OBJ CAT               true (0) when OBJ is classified under CAT"
+    print(_): "  mv OBJ CAT               reclassify an object"
+    print(_): "  rename OBJ NAME          rename an object"
+    print(_): "  del OBJ                  delete an object's facts and folder"
+    print(_): "  links OBJ                objects OBJ links to with [[name]]"
+    print(_): "  refs OBJ                 facts that link to OBJ"
+    print(_): "  stats                    counts"
+    print(_): "  check                    problems: empty objects, broken links..."
+    print(_): "  dump [CAT]               everything as one Markdown document"
+    print(_): ""
+    print(_): "Options: --in CAT limits find, where and dump; --file F picks the .md"
+    print(_): "file add and set write to. Root: --kb, $KGB_HOME, a .kgb file above, \".\"."
+    set(r): 0
+]
+
+kgb_need(r): p count usage [
+    len(n): p
+    set(r): true
+    if(_): {n < count} [
+        concat(m): "usage: kgb " usage
+        kgb_err(_): m
+        set(r): false
+    ]
+]
+
+kgb_cmd_init(r): p [
+    len(n): p
+    set(dir): "."
+    if(_): {n > 1} [
+        at(dir): p 1
+    ]
+    kgb_clean(c): dir
+    kgb_starts(abs): dir "/"
+    if(_): abs [
+        concat(c): "/" c
+    ]
+    if(_): {c = ""} [
+        set(c): "."
+    ]
+    set(kgb_root): ""
+    kgb_split(parts): c "/"
+    len(k): parts
+    set(sofar): ""
+    set(i): 0
+    while(_): {i < k} [
+        at(part): parts i
+        if(_): {i = 0} [
+            set(sofar): part
+        ]
+        else(_): [
+            concat(sofar): sofar "/" part
+        ]
+        if(_): {sofar != ""} [
+            is_dir(d): sofar
+            if(_): {d = 0} [
+                make_dir(_): sofar
+            ]
+        ]
+        add(i): i 1
+    ]
+    is_dir(d): c
+    if(_): {d = 0} [
+        concat(m): "cannot make " c
+        kgb_err(r): m
+        return(r): r
+    ]
+    concat(marker): c "/.kgb"
+    file_exists(e): marker
+    if(_): e [
+        concat(m): c " is already a knowledge base"
+        print(_): m
+    ]
+    else(_): [
+        writefile(_): marker "# kgb knowledge base: folders without subfolders are objects\n"
+        concat(m): "knowledge base in " c
+        print(_): m
+    ]
+    set(r): 0
+]
+
+kgb_tree_at(r): rel depth [
+    set(r): 0
+    str_repeat(pad): "  " depth
+    kgb_entries(subs): rel true
+    len(n): subs
+    set(i): 0
+    while(_): {i < n} [
+        at(s): subs i
+        kgb_join(child): rel s
+        kgb_is_object(obj): child
+        if(_): obj [
+            kgb_facts(fs): child
+            len(k): fs
+            kgb_int(ks): k
+            concat(line): pad s " (" ks ")"
+            print(_): line
+        ]
+        else(_): [
+            concat(line): pad s "/"
+            print(_): line
+            kgb_tree_at(_): child {depth + 1}
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_cmd_tree(r): p [
+    kgb_words(name): p 1
+    kgb_category(cat): name
+    kgb_is_string(ok): cat
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    set(depth): 0
+    if(_): {cat != ""} [
+        concat(head): cat "/"
+        print(_): head
+        set(depth): 1
+    ]
+    kgb_tree_at(r): cat depth
+]
+
+kgb_cmd_list(r): p objects [
+    kgb_words(name): p 1
+    kgb_category(cat): name
+    kgb_is_string(ok): cat
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    set(list): kgb_cats
+    if(_): objects [
+        set(list): kgb_objects
+    ]
+    set(r): 1
+    len(n): list
+    set(i): 0
+    while(_): {i < n} [
+        at(x): list i
+        kgb_under(u): x cat
+        if(_): {u && x != cat} [
+            print(_): x
+            set(r): 0
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_show_facts(r): facts numbered [
+    set(r): 0
+    set(file): ""
+    set(section): ""
+    len(n): facts
+    set(i): 0
+    while(_): {i < n} [
+        at(f): facts i
+        getf(ff): f "file"
+        getf(fs): f "section"
+        getf(t): f "text"
+        if(_): {ff != file} [
+            concat(line): "  [" ff "]"
+            print(_): line
+            set(file): ff
+            set(section): ""
+        ]
+        if(_): {fs != section} [
+            concat(line): "  ## " fs
+            print(_): line
+            set(section): fs
+        ]
+        if(_): numbered [
+            kgb_int(no): {i + 1}
+            concat(line): "  " no ". " t
+        ]
+        else(_): [
+            concat(line): "  - " t
+        ]
+        print(_): line
+        add(i): i 1
+    ]
+]
+
+kgb_cmd_show(r): p [
+    kgb_need(ok): p 2 "show OBJ"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_words(name): p 1
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    print(_): obj
+    kgb_facts(own): obj
+    kgb_show_facts(_): own true
+    kgb_ancestors(up): obj
+    len(m): up
+    set(i): 0
+    while(_): {i < m} [
+        at(c): up i
+        kgb_facts(fs): c
+        len(k): fs
+        if(_): {k > 0} [
+            concat(line): "from " c "/:"
+            print(_): line
+            kgb_show_facts(_): fs false
+        ]
+        add(i): i 1
+    ]
+    set(r): 0
+]
+
+# Makes the object at path (literal, below the root); "" if it cannot.
+kgb_create(r): path [
+    set(r): ""
+    kgb_clean(rel): path
+    if(_): {rel = ""} [
+        kgb_err(_): "which object?"
+        return(r): r
+    ]
+    kgb_full(full): rel
+    is_dir(d): full
+    if(_): {d = 1} [
+        concat(m): rel " already exists"
+        kgb_err(_): m
+        return(r): r
+    ]
+    # an object above it turns into a category
+    kgb_ancestors(up): rel
+    len(m): up
+    set(i): 0
+    while(_): {i < m} [
+        at(c): up i
+        kgb_is_object(was): c
+        if(_): was [
+            concat(note): "note: " c " was an object; now it is a category and " rel " inherits its facts"
+            print(_): note
+        ]
+        add(i): i 1
+    ]
+    kgb_mkdirs(made): rel
+    if(_): {made = false} [
+        concat(m): "cannot make " rel
+        kgb_err(_): m
+        return(r): r
+    ]
+    set(r): rel
+]
+
+kgb_cmd_new(r): p [
+    kgb_need(ok): p 2 "new PATH"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(path): p 1
+    kgb_create(rel): path
+    if(_): {rel = ""} [
+        return(r): 2
+    ]
+    kgb_target(_): rel
+    concat(m): "new object " rel
+    print(_): m
+    set(r): 0
+]
+
+kgb_cmd_add(r): p [
+    kgb_need(ok): p 3 "add OBJ FACT..."
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    kgb_words(text): p 2
+    kgb_clean(c): name
+    kgb_matches(hits): kgb_objects c
+    kgb_matches(cats): kgb_cats c
+    len(nh): hits
+    len(nc): cats
+    str_find(slash): c "/" 0
+    set(obj): null
+    if(_): {nh = 0 && nc = 0 && slash > 0} [
+        kgb_create(obj): c
+        if(_): {obj = ""} [
+            return(r): 2
+        ]
+        concat(m): "new object " obj
+        print(_): m
+    ]
+    else(_): [
+        kgb_object(obj): c
+        kgb_is_string(ok): obj
+        if(_): {ok = false} [
+            if(_): {nh = 0 && nc = 0} [
+                kgb_err(_): "give a path, like category/name, to make a new object"
+            ]
+            return(r): 2
+        ]
+    ]
+    kgb_append_fact(r): obj text
+]
+
+# The object and its fact number N from p[1] and p[2], or null.
+kgb_numbered(r): p usage [
+    set(r): null
+    kgb_need(ok): p 3 usage
+    if(_): {ok = false} [
+        return(r): r
+    ]
+    at(name): p 1
+    at(num): p 2
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): r
+    ]
+    kgb_number(no): num
+    kgb_facts(fs): obj
+    len(n): fs
+    typeof(t): no
+    if(_): {t != "integer"} [
+        concat(m): "not a fact number: " num
+        kgb_err(_): m
+        return(r): r
+    ]
+    if(_): {no < 1 || no > n} [
+        kgb_int(ns): n
+        concat(m): obj " has facts 1 to " ns
+        kgb_err(_): m
+        return(r): r
+    ]
+    at(r): fs {no - 1}
+]
+
+kgb_cmd_edit(r): p [
+    kgb_need(ok): p 4 "edit OBJ N FACT..."
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_numbered(f): p "edit OBJ N FACT..."
+    typeof(t): f
+    if(_): {t != "KgbFact"} [
+        return(r): 2
+    ]
+    kgb_words(text): p 3
+    kgb_replace_fact(r): f text
+]
+
+kgb_cmd_rm(r): p [
+    kgb_numbered(f): p "rm OBJ N"
+    typeof(t): f
+    if(_): {t != "KgbFact"} [
+        return(r): 2
+    ]
+    getf(text): f "text"
+    concat(m): "removed: " text
+    print(_): m
+    kgb_remove_fact(r): f
+]
+
+kgb_cmd_get(r): p [
+    kgb_need(ok): p 3 "get OBJ KEY"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    kgb_words(key): p 2
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_values(vs): obj key
+    len(n): vs
+    set(r): 1
+    set(i): 0
+    while(_): {i < n} [
+        at(v): vs i
+        print(_): v
+        set(r): 0
+        add(i): i 1
+    ]
+]
+
+# The object's own facts with key.
+kgb_own_with(r): obj key [
+    kgb_types(_):
+    vec(r): "KgbFact"
+    str_lower(want): key
+    kgb_facts(fs): obj
+    len(n): fs
+    set(i): 0
+    while(_): {i < n} [
+        at(f): fs i
+        getf(t): f "text"
+        kgb_key(k): t
+        kgb_is_string(is_k): k
+        if(_): is_k [
+            if(_): {k = want} [
+                push(_): r f
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_cmd_set(r): p [
+    kgb_need(ok): p 4 "set OBJ KEY VALUE..."
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    at(key): p 2
+    kgb_words(value): p 3
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    concat(text): key ": " value
+    kgb_own_with(fs): obj key
+    len(n): fs
+    if(_): {n = 0} [
+        kgb_append_fact(r): obj text
+        return(r): r
+    ]
+    # the later ones go first, so earlier line numbers stay right
+    set(i): {n - 1}
+    while(_): {i > 0} [
+        at(f): fs i
+        kgb_remove_fact(_): f
+        sub(i): i 1
+    ]
+    at(f): fs 0
+    kgb_replace_fact(r): f text
+]
+
+kgb_cmd_unset(r): p [
+    kgb_need(ok): p 3 "unset OBJ KEY"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    kgb_words(key): p 2
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_own_with(fs): obj key
+    len(n): fs
+    if(_): {n = 0} [
+        kgb_values(vs): obj key
+        len(k): vs
+        if(_): {k > 0} [
+            concat(m): key " is inherited; unset it in the category that says it (kgb show " obj ")"
+            kgb_err(r): m
+        ]
+        else(_): [
+            concat(m): obj " has no " key
+            kgb_err(_): m
+            set(r): 1
+        ]
+        return(r): r
+    ]
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(f): fs i
+        kgb_remove_fact(_): f
+        sub(i): i 1
+    ]
+    set(r): 0
+]
+
+# Every folder under the scope, categories with a trailing slash.
+kgb_folders_in(r): cat [
+    vec(r): ""
+    len(n): kgb_cats
+    set(i): 0
+    while(_): {i < n} [
+        at(c): kgb_cats i
+        kgb_under(u): c cat
+        if(_): u [
+            push(_): r c
+        ]
+        add(i): i 1
+    ]
+    kgb_objects_in(objs): cat
+    len(m): objs
+    set(i): 0
+    while(_): {i < m} [
+        at(o): objs i
+        push(_): r o
+        add(i): i 1
+    ]
+]
+
+kgb_label(r): rel [
+    set(r): rel
+    kgb_is_cat(c): rel
+    if(_): c [
+        concat(r): rel "/"
+    ]
+]
+
+kgb_cmd_find(r): p [
+    kgb_need(ok): p 2 "find TEXT..."
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_words(needle): p 1
+    kgb_scope(cat):
+    kgb_is_string(ok): cat
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_folders_in(all): cat
+    set(r): 1
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(rel): all i
+        kgb_facts(fs): rel
+        kgb_label(lab): rel
+        len(k): fs
+        set(j): 0
+        while(_): {j < k} [
+            at(f): fs j
+            getf(t): f "text"
+            kgb_has_text(hit): t needle
+            if(_): hit [
+                concat(line): lab ": " t
+                print(_): line
+                set(r): 0
+            ]
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+]
+
+# One condition parsed: [negate, key, op, value]; op "" means "has key".
+kgb_condition(r): token [
+    vec(r): ""
+    set(neg): false
+    set(t): token
+    kgb_starts(bang): t "!"
+    if(_): bang [
+        set(neg): true
+        kgb_from(t): t 1
+    ]
+    len(n): t
+    set(at): -1
+    set(i): 0
+    while(_): {i < n} [
+        at(c): t i
+        if(_): {c = "=" || c = "!" || c = "~" || c = "<" || c = ">"} [
+            set(at): i
+            set(i): n
+        ]
+        add(i): i 1
+    ]
+    set(key): t
+    set(op): ""
+    set(value): ""
+    if(_): {at > 0} [
+        slice(key): t 0 at
+        set(op): "="
+        at(c): t at
+        set(width): 1
+        if(_): {at + 1 < n} [
+            slice(two): t at 2
+            if(_): {two = "!=" || two = ">=" || two = "<="} [
+                set(op): two
+                set(width): 2
+            ]
+            else(_): [
+                set(op): c
+            ]
+        ]
+        else(_): [
+            set(op): c
+        ]
+        kgb_from(value): t {at + width}
+        str_trim(value): value
+    ]
+    str_trim(key): key
+    push(_): r neg
+    push(_): r key
+    push(_): r op
+    push(_): r value
+]
+
+kgb_value_test(r): v op want [
+    set(r): false
+    if(_): {op = "~"} [
+        kgb_has_text(r): v want
+        return(r): r
+    ]
+    kgb_number(a): v
+    kgb_number(b): want
+    typeof(ta): a
+    typeof(tb): b
+    set(nums): {(ta = "integer" || ta = "real") && (tb = "integer" || tb = "real")}
+    if(_): {op = "=" || op = "!="} [
+        if(_): nums [
+            set(r): {a = b}
+        ]
+        else(_): [
+            kgb_same(r): v want
+        ]
+        return(r): r
+    ]
+    if(_): {nums = false} [
+        return(r): r
+    ]
+    if(_): {op = ">"} [ set(r): {a > b} ]
+    if(_): {op = "<"} [ set(r): {a < b} ]
+    if(_): {op = ">="} [ set(r): {a >= b} ]
+    if(_): {op = "<="} [ set(r): {a <= b} ]
+]
+
+# Values of key for where and table: the properties, else the pseudo
+# properties name (the object's folder) and path.
+kgb_lookup(r): obj key [
+    kgb_values(r): obj key
+    len(n): r
+    if(_): {n = 0} [
+        str_lower(k): key
+        if(_): {k = "name"} [
+            kgb_base(b): obj
+            push(_): r b
+        ]
+        if(_): {k = "path"} [
+            push(_): r obj
+        ]
+    ]
+]
+
+kgb_test(r): obj cond [
+    at(neg): cond 0
+    at(key): cond 1
+    at(op): cond 2
+    at(want): cond 3
+    kgb_lookup(vs): obj key
+    len(n): vs
+    if(_): {op = ""} [
+        set(r): {n > 0}
+    ]
+    elif(_): {op = "!="} [
+        set(r): true
+        set(i): 0
+        while(_): {i < n} [
+            at(v): vs i
+            kgb_value_test(eq): v "=" want
+            if(_): eq [
+                set(r): false
+            ]
+            add(i): i 1
+        ]
+    ]
+    else(_): [
+        set(r): false
+        set(i): 0
+        while(_): {i < n} [
+            at(v): vs i
+            kgb_value_test(hit): v op want
+            if(_): hit [
+                set(r): true
+            ]
+            add(i): i 1
+        ]
+    ]
+    if(_): neg [
+        set(r): {r = false}
+    ]
+]
+
+kgb_cmd_where(r): p [
+    kgb_need(ok): p 2 "where COND... [or COND...]"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_scope(cat):
+    kgb_is_string(ok): cat
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    # groups of conditions, all of a group must hold, one group is enough
+    vec(groups): ""
+    vec(group): ""
+    len(n): p
+    set(i): 1
+    while(_): {i < n} [
+        at(tok): p i
+        if(_): {tok = "or" || tok = "OR"} [
+            push(_): groups group
+            vec(group): ""
+        ]
+        elif(_): {tok != "and" && tok != "AND"} [
+            kgb_condition(c): tok
+            at(key): c 1
+            if(_): {key = ""} [
+                concat(m): "no key in condition '" tok "'"
+                kgb_err(r): m
+                return(r): r
+            ]
+            push(_): group c
+        ]
+        add(i): i 1
+    ]
+    push(_): groups group
+    kgb_objects_in(objs): cat
+    set(r): 1
+    len(no): objs
+    len(ng): groups
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): objs i
+        set(any): false
+        set(g): 0
+        while(_): {g < ng} [
+            at(conds): groups g
+            len(nc): conds
+            set(all): {nc > 0}
+            set(c): 0
+            while(_): {c < nc} [
+                at(cond): conds c
+                kgb_test(hit): obj cond
+                if(_): {hit = false} [
+                    set(all): false
+                    set(c): nc
+                ]
+                add(c): c 1
+            ]
+            if(_): all [
+                set(any): true
+                set(g): ng
+            ]
+            add(g): g 1
+        ]
+        if(_): any [
+            print(_): obj
+            set(r): 0
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_cell(r): text [
+    kgb_split(parts): text "|"
+    kgb_joined(r): parts "\\|"
+]
+
+kgb_cmd_table(r): p [
+    len(n): p
+    set(cat): ""
+    set(first): 1
+    if(_): {n > 1} [
+        at(name): p 1
+        kgb_clean(c): name
+        kgb_matches(hits): kgb_cats c
+        len(nh): hits
+        if(_): {nh > 0 || c = ""} [
+            kgb_category(cat): name
+            kgb_is_string(ok): cat
+            if(_): {ok = false} [
+                return(r): 2
+            ]
+            set(first): 2
+        ]
+    ]
+    kgb_objects_in(objs): cat
+    len(no): objs
+    vec(keys): ""
+    if(_): {first < n} [
+        set(i): first
+        while(_): {i < n} [
+            at(k): p i
+            push(_): keys k
+            add(i): i 1
+        ]
+    ]
+    else(_): [
+        set(i): 0
+        while(_): {i < no} [
+            at(o): objs i
+            kgb_keys(ks): o
+            len(nk): ks
+            set(j): 0
+            while(_): {j < nk} [
+                at(k): ks j
+                kgb_index(at): keys k
+                if(_): {at < 0} [
+                    push(_): keys k
+                ]
+                add(j): j 1
+            ]
+            add(i): i 1
+        ]
+    ]
+    len(nk): keys
+    set(head): "| object |"
+    set(rule): "|---|"
+    set(j): 0
+    while(_): {j < nk} [
+        at(k): keys j
+        kgb_cell(kc): k
+        concat(head): head " " kc " |"
+        concat(rule): rule "---|"
+        add(j): j 1
+    ]
+    print(_): head
+    print(_): rule
+    set(skip): 0
+    if(_): {cat != ""} [
+        len(cl): cat
+        set(skip): {cl + 1}
+    ]
+    set(i): 0
+    while(_): {i < no} [
+        at(o): objs i
+        kgb_from(shown): o skip
+        kgb_cell(sc): shown
+        concat(row): "| " sc " |"
+        set(j): 0
+        while(_): {j < nk} [
+            at(k): keys j
+            kgb_lookup(vs): o k
+            kgb_joined(v): vs ", "
+            kgb_cell(vc): v
+            concat(row): row " " vc " |"
+            add(j): j 1
+        ]
+        print(_): row
+        add(i): i 1
+    ]
+    set(r): 0
+    if(_): {no = 0} [
+        set(r): 1
+    ]
+]
+
+kgb_cmd_props(r): p [
+    kgb_words(name): p 1
+    kgb_category(cat): name
+    kgb_is_string(ok): cat
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_objects_in(objs): cat
+    vec(keys): ""
+    vec(counts): ""
+    len(no): objs
+    set(i): 0
+    while(_): {i < no} [
+        at(o): objs i
+        kgb_keys(ks): o
+        len(nk): ks
+        set(j): 0
+        while(_): {j < nk} [
+            at(k): ks j
+            kgb_index(at): keys k
+            if(_): {at < 0} [
+                push(_): keys k
+                push(_): counts 1
+            ]
+            else(_): [
+                # vectors have no store: rebuild counts with one more at at
+                vec(next): ""
+                len(nc): counts
+                set(c): 0
+                while(_): {c < nc} [
+                    at(x): counts c
+                    if(_): {c = at} [
+                        add(x): x 1
+                    ]
+                    push(_): next x
+                    add(c): c 1
+                ]
+                set(counts): next
+            ]
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+    kgb_sorted(order): keys
+    len(nk): order
+    set(r): 1
+    set(j): 0
+    while(_): {j < nk} [
+        at(k): order j
+        kgb_index(at): keys k
+        at(c): counts at
+        kgb_int(cs): c
+        concat(line): k "  " cs
+        print(_): line
+        set(r): 0
+        add(j): j 1
+    ]
+]
+
+kgb_cmd_type(r): p [
+    kgb_need(ok): p 2 "type OBJ"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_words(name): p 1
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_split(parts): obj "/"
+    kgb_joined(line): parts " > "
+    print(_): line
+    set(r): 0
+]
+
+kgb_cmd_is(r): p [
+    kgb_need(ok): p 3 "is OBJ CAT"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    at(cname): p 2
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_clean(c): cname
+    # a category path, or the name of any category the object is under
+    kgb_under(r1): obj c
+    concat(mid): "/" c "/"
+    concat(wrapped): "/" obj
+    str_find(at): wrapped mid 0
+    set(yes): {(r1 && c != obj) || at >= 0}
+    if(_): yes [
+        print(_): "yes"
+        set(r): 0
+    ]
+    else(_): [
+        print(_): "no"
+        set(r): 1
+    ]
+]
+
+kgb_cmd_mv(r): p [
+    kgb_need(ok): p 3 "mv OBJ CAT"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    at(cname): p 2
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    # an existing category by name, else a new path below the root
+    kgb_clean(cat): cname
+    kgb_matches(cats): kgb_cats cat
+    kgb_matches(objs): kgb_objects cat
+    len(nc): cats
+    len(nob): objs
+    if(_): {nc > 0 || nob > 0} [
+        kgb_category(cat): cat
+        kgb_is_string(ok): cat
+        if(_): {ok = false} [
+            return(r): 2
+        ]
+    ]
+    kgb_under(inside): cat obj
+    if(_): {inside && cat != ""} [
+        kgb_err(r): "cannot move an object into itself"
+        return(r): r
+    ]
+    kgb_base(b): obj
+    kgb_join(dest): cat b
+    kgb_full(to): dest
+    is_dir(d): to
+    if(_): {d = 1} [
+        concat(m): dest " already exists"
+        kgb_err(r): m
+        return(r): r
+    ]
+    if(_): {cat != ""} [
+        kgb_mkdirs(_): cat
+    ]
+    kgb_full(from): obj
+    rename_path(bad): from to
+    if(_): {bad != 0} [
+        concat(m): "cannot move " obj " to " dest
+        kgb_err(r): m
+        return(r): r
+    ]
+    concat(m): obj " -> " dest
+    print(_): m
+    kgb_parent(old): obj
+    kgb_prune(_): old
+    set(r): 0
+]
+
+kgb_cmd_rename(r): p [
+    kgb_need(ok): p 3 "rename OBJ NAME"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    at(name): p 1
+    at(newname): p 2
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    str_find(slash): newname "/" 0
+    byte(b0): newname 0
+    if(_): {slash >= 0 || newname = "" || b0 = 46} [
+        kgb_err(r): "a new name has no slashes and does not start with a dot (kgb mv reclassifies)"
+        return(r): r
+    ]
+    kgb_parent(up): obj
+    kgb_join(dest): up newname
+    kgb_full(to): dest
+    is_dir(d): to
+    if(_): {d = 1} [
+        concat(m): dest " already exists"
+        kgb_err(r): m
+        return(r): r
+    ]
+    kgb_full(from): obj
+    rename_path(bad): from to
+    if(_): {bad != 0} [
+        concat(m): "cannot rename " obj
+        kgb_err(r): m
+        return(r): r
+    ]
+    concat(m): obj " -> " dest
+    print(_): m
+    set(r): 0
+]
+
+kgb_cmd_del(r): p [
+    kgb_need(ok): p 2 "del OBJ"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_words(name): p 1
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_full(dir): obj
+    kgb_entries(files): obj false
+    len(n): files
+    set(i): 0
+    while(_): {i < n} [
+        at(f): files i
+        concat(path): dir "/" f
+        remove_file(_): path
+        add(i): i 1
+    ]
+    remove_dir(bad): dir
+    if(_): {bad != 0} [
+        concat(m): "removed the facts of " obj "; its folder holds other files and stays"
+        kgb_err(r): m
+        return(r): r
+    ]
+    concat(m): "deleted " obj
+    print(_): m
+    kgb_parent(old): obj
+    kgb_prune(_): old
+    set(r): 0
+]
+
+# The object a link names, or "" when none or several do.
+kgb_link_target(r): link [
+    set(r): ""
+    kgb_matches(hits): kgb_objects link
+    len(n): hits
+    if(_): {n = 1} [
+        at(r): hits 0
+    ]
+]
+
+kgb_cmd_links(r): p [
+    kgb_need(ok): p 2 "links OBJ"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_words(name): p 1
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    set(r): 1
+    kgb_facts(fs): obj
+    len(n): fs
+    set(i): 0
+    while(_): {i < n} [
+        at(f): fs i
+        getf(t): f "text"
+        kgb_links_of(ls): t
+        len(k): ls
+        set(j): 0
+        while(_): {j < k} [
+            at(l): ls j
+            kgb_link_target(to): l
+            if(_): {to = ""} [
+                concat(line): l " (no such object)"
+            ]
+            else(_): [
+                set(line): to
+            ]
+            print(_): line
+            set(r): 0
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_cmd_refs(r): p [
+    kgb_need(ok): p 2 "refs OBJ"
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_words(name): p 1
+    kgb_object(obj): name
+    kgb_is_string(ok): obj
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    set(r): 1
+    kgb_folders_in(all): ""
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(rel): all i
+        kgb_facts(fs): rel
+        kgb_label(lab): rel
+        len(k): fs
+        set(j): 0
+        while(_): {j < k} [
+            at(f): fs j
+            getf(t): f "text"
+            kgb_links_of(ls): t
+            len(nl): ls
+            set(hit): false
+            set(l): 0
+            while(_): {l < nl} [
+                at(link): ls l
+                kgb_link_target(to): link
+                if(_): {to = obj} [
+                    set(hit): true
+                ]
+                add(l): l 1
+            ]
+            if(_): hit [
+                concat(line): lab ": " t
+                print(_): line
+                set(r): 0
+            ]
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+]
+
+kgb_cmd_stats(r): p [
+    kgb_folders_in(all): ""
+    set(facts): 0
+    set(props): 0
+    set(files): 0
+    vec(keys): ""
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(rel): all i
+        kgb_facts(fs): rel
+        len(k): fs
+        add(facts): facts k
+        kgb_keys_in(keys): fs keys
+        kgb_entries(md): rel false
+        len(m): md
+        add(files): files m
+        set(j): 0
+        while(_): {j < k} [
+            at(f): fs j
+            getf(t): f "text"
+            kgb_key(key): t
+            kgb_is_string(is_k): key
+            if(_): is_k [
+                add(props): props 1
+            ]
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+    len(no): kgb_objects
+    len(nc): kgb_cats
+    len(nk): keys
+    kgb_int(s1): no
+    kgb_int(s2): nc
+    kgb_int(s3): facts
+    kgb_int(s4): props
+    kgb_int(s5): nk
+    kgb_int(s6): files
+    concat(l): "root        " kgb_root
+    print(_): l
+    concat(l): "objects     " s1
+    print(_): l
+    concat(l): "categories  " s2
+    print(_): l
+    concat(l): "facts       " s3
+    print(_): l
+    concat(l): "properties  " s4 " (" s5 " keys)"
+    print(_): l
+    concat(l): "files       " s6
+    print(_): l
+    set(r): 0
+]
+
+kgb_problem(r): text [
+    print(_): text
+    set(r): 1
+]
+
+kgb_cmd_check(r): p [
+    set(r): 0
+    # names shared by several objects need a path to be named
+    vec(seen): ""
+    len(no): kgb_objects
+    set(i): 0
+    while(_): {i < no} [
+        at(o): kgb_objects i
+        kgb_base(b): o
+        kgb_index(done): seen b
+        if(_): {done < 0} [
+            push(_): seen b
+            kgb_matches(hits): kgb_objects b
+            len(nh): hits
+            if(_): {nh > 1} [
+                kgb_joined(all): hits ", "
+                concat(m): "shared name '" b "': " all
+                kgb_problem(r): m
+            ]
+        ]
+        add(i): i 1
+    ]
+    kgb_folders_in(all): ""
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(rel): all i
+        kgb_label(lab): rel
+        kgb_facts(fs): rel
+        len(k): fs
+        kgb_is_object(obj): rel
+        if(_): {obj && k = 0} [
+            concat(m): "no facts: " rel
+            kgb_problem(r): m
+        ]
+        # md files without a single fact
+        kgb_entries(md): rel false
+        len(nm): md
+        set(j): 0
+        while(_): {j < nm} [
+            at(file): md j
+            set(count): 0
+            set(x): 0
+            while(_): {x < k} [
+                at(f): fs x
+                getf(ff): f "file"
+                if(_): {ff = file} [
+                    add(count): count 1
+                ]
+                add(x): x 1
+            ]
+            if(_): {count = 0 && obj} [
+                concat(m): "no facts in " rel "/" file
+                kgb_problem(r): m
+            ]
+            add(j): j 1
+        ]
+        vec(texts): ""
+        set(j): 0
+        while(_): {j < k} [
+            at(f): fs j
+            getf(t): f "text"
+            str_lower(low): t
+            kgb_index(dup): texts low
+            if(_): {dup >= 0} [
+                concat(m): "repeated fact in " lab ": " t
+                kgb_problem(r): m
+            ]
+            push(_): texts low
+            kgb_links_of(ls): t
+            len(nl): ls
+            set(l): 0
+            while(_): {l < nl} [
+                at(link): ls l
+                kgb_matches(hits): kgb_objects link
+                len(nh): hits
+                if(_): {nh = 0} [
+                    concat(m): "broken link [[" link "]] in " lab
+                    kgb_problem(r): m
+                ]
+                if(_): {nh > 1} [
+                    concat(m): "ambiguous link [[" link "]] in " lab
+                    kgb_problem(r): m
+                ]
+                add(l): l 1
+            ]
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+    if(_): {r = 0} [
+        print(_): "ok"
+    ]
+]
+
+kgb_dump_at(r): rel [
+    set(r): 0
+    kgb_facts(fs): rel
+    len(k): fs
+    if(_): {k > 0 && rel != ""} [
+        kgb_label(lab): rel
+        concat(head): "# " lab
+        print(_): head
+        print(_): ""
+        set(section): ""
+        set(file): ""
+        set(j): 0
+        while(_): {j < k} [
+            at(f): fs j
+            getf(t): f "text"
+            getf(s): f "section"
+            getf(ff): f "file"
+            if(_): {s != section || (ff != file && j > 0)} [
+                if(_): {j > 0} [
+                    print(_): ""
+                ]
+                if(_): {s != ""} [
+                    concat(sh): "## " s
+                    print(_): sh
+                    print(_): ""
+                ]
+                set(section): s
+            ]
+            set(file): ff
+            concat(item): "- " t
+            print(_): item
+            add(j): j 1
+        ]
+        print(_): ""
+    ]
+    kgb_entries(subs): rel true
+    len(n): subs
+    set(i): 0
+    while(_): {i < n} [
+        at(s): subs i
+        kgb_join(child): rel s
+        kgb_dump_at(_): child
+        add(i): i 1
+    ]
+]
+
+kgb_cmd_dump(r): p [
+    kgb_words(name): p 1
+    if(_): {name = ""} [
+        set(name): kgb_opt_in
+    ]
+    kgb_category(cat): name
+    kgb_is_string(ok): cat
+    if(_): {ok = false} [
+        return(r): 2
+    ]
+    kgb_dump_at(r): cat
+]
+
+# Runs one command line: a vector of strings without the program name.
+kgb_main(r): args [
+    kgb_types(_):
+    set(kgb_opt_in): ""
+    set(kgb_opt_file): ""
+    set(given): ""
+    vec(p): ""
+    len(n): args
+    set(plain): false
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        set(option): {plain = false && i + 1 < n}
+        if(_): {plain = false && a = "--"} [
+            set(plain): true
+        ]
+        elif(_): {option && a = "--kb"} [
+            at(given): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--in"} [
+            at(kgb_opt_in): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--file"} [
+            at(kgb_opt_file): args {i + 1}
+            add(i): i 1
+        ]
+        else(_): [
+            push(_): p a
+        ]
+        add(i): i 1
+    ]
+    len(np): p
+    set(cmd): "help"
+    if(_): {np > 0} [
+        at(cmd): p 0
+    ]
+    if(_): {cmd = "help" || cmd = "--help" || cmd = "-h"} [
+        kgb_usage(r):
+        return(r): r
+    ]
+    if(_): {cmd = "init"} [
+        kgb_cmd_init(r): p
+        return(r): r
+    ]
+    kgb_find_root(kgb_root): given
+    kgb_full(top): ""
+    is_dir(d): top
+    if(_): {d = 0} [
+        concat(m): "no knowledge base at " top
+        kgb_err(r): m
+        return(r): r
+    ]
+    kgb_scan(_):
+    set(r): -1
+    if(_): {cmd = "tree"} [ kgb_cmd_tree(r): p ]
+    elif(_): {cmd = "ls"} [ kgb_cmd_list(r): p true ]
+    elif(_): {cmd = "cats"} [ kgb_cmd_list(r): p false ]
+    elif(_): {cmd = "show"} [ kgb_cmd_show(r): p ]
+    elif(_): {cmd = "new"} [ kgb_cmd_new(r): p ]
+    elif(_): {cmd = "add"} [ kgb_cmd_add(r): p ]
+    elif(_): {cmd = "edit"} [ kgb_cmd_edit(r): p ]
+    elif(_): {cmd = "rm"} [ kgb_cmd_rm(r): p ]
+    elif(_): {cmd = "get"} [ kgb_cmd_get(r): p ]
+    elif(_): {cmd = "set"} [ kgb_cmd_set(r): p ]
+    elif(_): {cmd = "unset"} [ kgb_cmd_unset(r): p ]
+    elif(_): {cmd = "find"} [ kgb_cmd_find(r): p ]
+    elif(_): {cmd = "where"} [ kgb_cmd_where(r): p ]
+    elif(_): {cmd = "table"} [ kgb_cmd_table(r): p ]
+    elif(_): {cmd = "props"} [ kgb_cmd_props(r): p ]
+    elif(_): {cmd = "type"} [ kgb_cmd_type(r): p ]
+    elif(_): {cmd = "is"} [ kgb_cmd_is(r): p ]
+    elif(_): {cmd = "mv"} [ kgb_cmd_mv(r): p ]
+    elif(_): {cmd = "rename"} [ kgb_cmd_rename(r): p ]
+    elif(_): {cmd = "del"} [ kgb_cmd_del(r): p ]
+    elif(_): {cmd = "links"} [ kgb_cmd_links(r): p ]
+    elif(_): {cmd = "refs"} [ kgb_cmd_refs(r): p ]
+    elif(_): {cmd = "stats"} [ kgb_cmd_stats(r): p ]
+    elif(_): {cmd = "check"} [ kgb_cmd_check(r): p ]
+    elif(_): {cmd = "dump"} [ kgb_cmd_dump(r): p ]
+    if(_): {r = -1} [
+        concat(m): "unknown command '" cmd "' (kgb help lists them)"
+        kgb_err(r): m
+    ]
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(args): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): args a
+        add(i): i 1
+    ]
+    kgb_main(ret): args
+]
+$endif

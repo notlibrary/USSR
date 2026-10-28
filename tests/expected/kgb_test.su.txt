@@ -1,0 +1,247 @@
+$ kgb init tests/kgb-tmp
+knowledge base in tests/kgb-tmp
+$ kgb add animals/mammals/cat legs:_4
+new object animals/mammals/cat
+$ kgb add cat sound:_meow
+$ kgb add cat hunts_[[mouse]]
+$ kgb add animals/mammals/mouse legs:_4
+new object animals/mammals/mouse
+$ kgb add mouse color:_grey
+$ kgb add animals/birds/sparrow legs:_2
+new object animals/birds/sparrow
+$ kgb add sparrow color:_brown
+$ kgb new animals/birds/penguin
+new object animals/birds/penguin
+$ kgb add penguin legs: 2
+$ kgb add penguin flies:_no
+$ kgb add penguin --file habitat eats:_fish
+$ kgb tree
+animals/
+  birds/
+    penguin (5)
+    sparrow (2)
+  mammals/
+    cat (3)
+    mouse (2)
+$ kgb tree birds
+animals/birds/
+  penguin (5)
+  sparrow (2)
+$ kgb ls
+animals/birds/penguin
+animals/birds/sparrow
+animals/mammals/cat
+animals/mammals/mouse
+$ kgb ls mammals
+animals/mammals/cat
+animals/mammals/mouse
+$ kgb cats
+animals
+animals/birds
+animals/mammals
+$ kgb show penguin
+animals/birds/penguin
+  [habitat.md]
+  ## Where
+  1. lives in: Antarctica
+  2. swims
+  3. eats: fish
+  [penguin.md]
+  4. legs: 2
+  5. flies: no
+from animals/birds/:
+  [birds.md]
+  - flies: yes
+  - has **feathers**
+  - lays eggs
+$ kgb get sparrow flies
+yes
+$ kgb get penguin flies
+no
+$ kgb get cat flies
+[exit 1]
+$ kgb where legs=2 flies=yes
+animals/birds/sparrow
+$ kgb where legs>3 or color~gre
+animals/mammals/cat
+animals/mammals/mouse
+$ kgb where !color
+animals/birds/penguin
+animals/mammals/cat
+$ kgb where name=cat
+animals/mammals/cat
+$ kgb where legs>=2 and legs<=2 --in animals
+animals/birds/penguin
+animals/birds/sparrow
+$ kgb where flies!=yes
+animals/birds/penguin
+animals/mammals/cat
+animals/mammals/mouse
+$ kgb where wings
+[exit 1]
+$ kgb table animals
+| object | lives in | eats | legs | flies | color | sound |
+|---|---|---|---|---|---|---|
+| birds/penguin | Antarctica | fish | 2 | no |  |  |
+| birds/sparrow |  |  | 2 | yes | brown |  |
+| mammals/cat |  |  | 4 |  |  | meow |
+| mammals/mouse |  |  | 4 |  | grey |  |
+$ kgb table birds legs flies lives_in
+| object | legs | flies | lives in |
+|---|---|---|---|
+| penguin | 2 | no | Antarctica |
+| sparrow | 2 | yes |  |
+$ kgb props
+color  2
+eats  1
+flies  2
+legs  4
+lives in  1
+sound  1
+$ kgb props birds
+color  1
+eats  1
+flies  2
+legs  2
+lives in  1
+$ kgb type cat
+animals > mammals > cat
+$ kgb is cat mammals
+yes
+$ kgb is cat animals/mammals
+yes
+$ kgb is cat birds
+no
+[exit 1]
+$ kgb refs mouse
+animals/mammals/cat: hunts [[mouse]]
+$ kgb links cat
+animals/mammals/mouse
+$ kgb find FEATHER
+animals/birds/: has **feathers**
+$ kgb find meow --in birds
+[exit 1]
+$ kgb add cat legs:_four
+$ kgb set cat legs 4
+$ kgb show cat
+animals/mammals/cat
+  [cat.md]
+  1. legs: 4
+  2. sound: meow
+  3. hunts [[mouse]]
+$ kgb edit cat 2 sound:_purr
+$ kgb rm cat 3
+removed: hunts [[mouse]]
+$ kgb rm cat 9
+[exit 2]
+$ kgb show cat
+animals/mammals/cat
+  [cat.md]
+  1. legs: 4
+  2. sound: purr
+# cat
+
+- legs: 4
+- sound: purr
+
+$ kgb unset sparrow flies
+[exit 2]
+$ kgb unset sparrow color
+$ kgb unset sparrow color
+[exit 1]
+$ kgb add cat likes_[[fish]]
+$ kgb new animals/mammals/cat/kitten
+note: animals/mammals/cat was an object; now it is a category and animals/mammals/cat/kitten inherits its facts
+new object animals/mammals/cat/kitten
+$ kgb check
+broken link [[fish]] in animals/mammals/cat/
+no facts: animals/mammals/cat/kitten
+no facts in animals/mammals/cat/kitten/kitten.md
+[exit 1]
+$ kgb del kitten
+deleted animals/mammals/cat/kitten
+note: animals/mammals/cat has no objects left, so it is an object now
+$ kgb stats
+root        tests/kgb-tmp
+objects     4
+categories  3
+facts       14
+properties  10 (6 keys)
+files       6
+$ kgb mv mouse animals/rodents
+animals/mammals/mouse -> animals/rodents/mouse
+$ kgb mv mouse sparrow
+[exit 2]
+$ kgb tree
+animals/
+  birds/
+    penguin (5)
+    sparrow (1)
+  mammals/
+    cat (3)
+  rodents/
+    mouse (2)
+$ kgb mv mouse animals/mammals
+animals/rodents/mouse -> animals/mammals/mouse
+removed empty category animals/rodents
+$ kgb rename mouse mus
+animals/mammals/mouse -> animals/mammals/mus
+$ kgb del mus
+deleted animals/mammals/mus
+$ kgb dump birds
+# animals/birds/
+
+- flies: yes
+- has **feathers**
+- lays eggs
+
+# animals/birds/penguin
+
+## Where
+
+- lives in: Antarctica
+- swims
+- eats: fish
+
+- legs: 2
+- flies: no
+
+# animals/birds/sparrow
+
+- legs: 2
+
+$ kgb show cats
+[exit 2]
+$ kgb show mammals
+[exit 2]
+$ kgb show nothing
+[exit 2]
+$ kgb add nope x
+[exit 2]
+$ kgb new animals/birds
+[exit 2]
+$ kgb frob
+[exit 2]
+deleted animals/birds/penguin
+deleted animals/birds/sparrow
+note: animals/birds has no objects left, so it is an object now
+deleted animals/mammals/cat
+removed empty category animals/mammals
+deleted animals/birds
+removed empty category animals
+cleaned up
+
+--- stderr ---
+kgb: animals/mammals/cat has facts 1 to 2
+kgb: flies is inherited; unset it in the category that says it (kgb show animals/birds/sparrow)
+kgb: animals/birds/sparrow has no color
+kgb: animals/birds/sparrow is an object, not a category
+kgb: no object 'cats'
+kgb: animals/mammals is a category, not an object
+kgb: no object 'nothing'
+kgb: no object 'nope'
+kgb: give a path, like category/name, to make a new object
+kgb: animals/birds already exists
+kgb: unknown command 'frob' (kgb help lists them)
+
+--- exit 0 ---

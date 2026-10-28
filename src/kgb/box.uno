@@ -1,1 +1,1 @@
-'Package{name=`kgb`,version=`0.1.0`,description=`Knowledge Giga Base: Markdown knowledge base manager`,entry=`kgb.su`,dependencies=[`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`kgb`,version=`0.1.0`,description=`Knowledge Giga Base: a fact-oriented Markdown knowledge base on folders (objects, categories, properties, queries)`,entry=`kgb.su`,dependencies=[`library`],files=[`kgb.su`,`README.md`,`CHANGELOG.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
