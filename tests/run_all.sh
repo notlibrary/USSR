@@ -11,6 +11,8 @@
 #     sh tests/run_all.sh --russia [ussr]   run only the russia.su pass
 #     sh tests/run_all.sh --native [ussr]   run only the ussr pass
 #     USSR_SKIP_GUI=1 sh tests/run_all.sh   skip tests/gui (no display/GLFW)
+#     USSR_SUITES="errors exit" sh ...      only these suite runners (folder
+#                                           names under tests/; "" for none)
 #     sh tests/run_all.sh --update [ussr]   rewrite tests/expected/ from the
 #                                           current ussr output (review the
 #                                           diff!); russia is not run
@@ -79,6 +81,15 @@ suite() {
                   tests/exit/run_exit_tests.sh tests/shell/run_shell_tests.sh; do
         [ -f "$runner" ] || continue
         [ "$update" = 1 ] && continue
+        # USSR_SUITES="errors exit ..." keeps only the runners of those
+        # test folders (tests/run_default.sh uses it)
+        if [ -n "${USSR_SUITES+set}" ]; then
+            dir=${runner#tests/}
+            case " $USSR_SUITES " in
+                *" ${dir%%/*} "*) ;;
+                *) continue ;;
+            esac
+        fi
         [ "$label" = russia ] && [ "$runner" = tests/russia/run_uuasm_tests.sh ] &&
             continue
         n=$((n + 1))
