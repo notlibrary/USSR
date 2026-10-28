@@ -95,12 +95,17 @@ static const help_entry_t g_help[] = {
     { "text_bytes", "bytes", "text_bytes(v): s", "a string's bytes as a vector" },
     { "bytes_text", "bytes", "bytes_text(s): v [from [count]]", "bytes as a string; null if one is 0" },
     { "sha256", "bytes", "sha256(v): data", "SHA-256 digest (32 bytes) of a string or byte vector" },
+    { "crc32", "bytes", "crc32(n): data [from [count]]", "CRC-32 (zlib, GPT, PNG) of a string or byte vector" },
     { "md5", "bytes", "md5(v): data", "MD5 digest (16 bytes); for old protocols only" },
     { "hmac_sha256", "bytes", "hmac_sha256(v): key data", "HMAC-SHA-256 (32 bytes)" },
     { "pbkdf2_sha256", "bytes", "pbkdf2_sha256(v): password salt iterations [length]", "PBKDF2-HMAC-SHA-256 key (default 32 bytes)" },
     { "socket_send_bytes", "bytes", "socket_send_bytes(n): socket v", "send a byte vector; bytes sent or -1" },
     { "socket_recv_bytes", "bytes", "socket_recv_bytes(v): socket max", "receive up to max bytes; empty once closed, null on error" },
     { "tls_send_bytes", "bytes", "tls_send_bytes(n): socket v", "tls_send for a byte vector" },
+    { "bread", "bytes", "bread(v): device lba [count [sector]]", "read sectors of a disk or image; null on error" },
+    { "bwrite", "bytes", "bwrite(n): device lba bytes [sector]", "write whole sectors; bytes written or -1" },
+    { "bsize", "bytes", "bsize(n): device", "size of a disk or image in bytes; -1 if unknown" },
+    { "bdevices", "bytes", "bdevices(v):", "storage devices: [path bytes kind bus model sector] each" },
     { "tls_recv_bytes", "bytes", "tls_recv_bytes(v): socket max", "tls_recv as a byte vector; null: wait_readable" },
 
     /* environment and shell */

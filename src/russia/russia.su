@@ -2667,6 +2667,11 @@ rt_is_host(r): nm [
     if(_): {nm = "hmac_sha256"} [ set(r): 1 ]
     if(_): {nm = "pbkdf2_sha256"} [ set(r): 1 ]
     if(_): {nm = "write_bytes"} [ set(r): 1 ]
+    if(_): {nm = "bread"} [ set(r): 1 ]
+    if(_): {nm = "crc32"} [ set(r): 1 ]
+    if(_): {nm = "bwrite"} [ set(r): 1 ]
+    if(_): {nm = "bsize"} [ set(r): 1 ]
+    if(_): {nm = "bdevices"} [ set(r): 1 ]
     if(_): {nm = "finv_sqrt"} [ set(r): 1 ]
 ]
 # The host name to call for builtin nm at node nd: prompt(_) prints its
@@ -2719,7 +2724,7 @@ rt_host(r): nm vals [
     if(_): {rt_hn > 1} [ at(rt_ha1): vals 1 ]
     if(_): {rt_hn > 2} [ at(rt_ha2): vals 2 ]
     if(_): {rt_hn > 3} [ at(rt_ha3): vals 3 ]
-    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch" && nm != "bytes_text" && nm != "pbkdf2_sha256"} [ rt_fatal(_): ]
+    if(_): {rt_hn > 2 && nm != "prompt" && nm != "__prompt_print" && nm != "alias" && nm != "launch" && nm != "bytes_text" && nm != "pbkdf2_sha256" && nm != "bread" && nm != "bwrite" && nm != "crc32"} [ rt_fatal(_): ]
     if(_): {nm = "pop"} [
         if(_): {rt_hn = 1} [ pop(r): rt_ha0 ]
         if(_): {rt_hn != 1} [ rt_fatal(_): ]
@@ -2887,6 +2892,31 @@ rt_host(r): nm vals [
     if(_): {nm = "write_bytes"} [
         if(_): {rt_hn = 2} [ write_bytes(r): rt_ha0 rt_ha1 ]
         if(_): {rt_hn != 2} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "crc32"} [
+        if(_): {rt_hn = 1} [ crc32(r): rt_ha0 ]
+        if(_): {rt_hn = 2} [ crc32(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn = 3} [ crc32(r): rt_ha0 rt_ha1 rt_ha2 ]
+        if(_): {rt_hn < 1 || rt_hn > 3} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "bread"} [
+        if(_): {rt_hn = 2} [ bread(r): rt_ha0 rt_ha1 ]
+        if(_): {rt_hn = 3} [ bread(r): rt_ha0 rt_ha1 rt_ha2 ]
+        if(_): {rt_hn = 4} [ bread(r): rt_ha0 rt_ha1 rt_ha2 rt_ha3 ]
+        if(_): {rt_hn < 2 || rt_hn > 4} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "bwrite"} [
+        if(_): {rt_hn = 3} [ bwrite(r): rt_ha0 rt_ha1 rt_ha2 ]
+        if(_): {rt_hn = 4} [ bwrite(r): rt_ha0 rt_ha1 rt_ha2 rt_ha3 ]
+        if(_): {rt_hn < 3 || rt_hn > 4} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "bsize"} [
+        if(_): {rt_hn = 1} [ bsize(r): rt_ha0 ]
+        if(_): {rt_hn != 1} [ rt_fatal(_): ]
+    ]
+    if(_): {nm = "bdevices"} [
+        if(_): {rt_hn = 0} [ bdevices(r): ]
+        if(_): {rt_hn != 0} [ rt_fatal(_): ]
     ]
     if(_): {nm = "finv_sqrt"} [
         if(_): {rt_hn = 1} [ finv_sqrt(r): rt_ha0 ]

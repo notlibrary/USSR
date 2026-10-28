@@ -1,0 +1,306 @@
+$ stalin types
+NAME          MBR  GPT GUID                              DESCRIPTION
+linux         83   0FC63DAF-8483-4772-8E79-3D69D8477DE4  Linux filesystem: ext2, ext3, ext4
+swap          82   0657FD6D-A4AB-43C4-84E5-0933C84B4F4F  Linux swap
+home          -    933AC7E1-2EB4-4F13-B844-0E14E2AEF915  Linux /home
+lvm           8E   E6D6D379-F507-44C2-A23C-238F2A3DF928  Linux LVM
+raid          FD   A19D880F-05FC-4D3B-A006-743F0F84911E  Linux RAID
+ntfs          07   EBD0A0A2-B9E5-4433-87C0-68B6B72699C7  Microsoft basic data: NTFS, exFAT
+fat32         0C   EBD0A0A2-B9E5-4433-87C0-68B6B72699C7  FAT32 (LBA)
+fat16         0E   EBD0A0A2-B9E5-4433-87C0-68B6B72699C7  FAT16 (LBA)
+fat32-chs     0B   -                                     FAT32 (CHS)
+fat16-chs     06   -                                     FAT16 (CHS)
+efi           EF   C12A7328-F81F-11D2-BA4B-00A0C93EC93B  EFI system partition
+msr           -    E3C9E316-0B5C-4DB8-817D-F92DF00215AE  Microsoft reserved
+winre         27   DE94BBA4-06D1-4D40-A16A-BFD50179D6AC  Windows recovery
+bios-boot     -    21686148-6449-6E6F-744E-656564454649  BIOS boot (GRUB)
+ufs           A5   516E7CB6-6ECF-11D6-8FF8-00022D09712B  FreeBSD UFS (MBR: FreeBSD slice)
+freebsd-boot  -    83BD6B9D-7F41-11DC-BE0B-001560B84F0F  FreeBSD boot
+freebsd-swap  -    516E7CB5-6ECF-11D6-8FF8-00022D09712B  FreeBSD swap
+freebsd-zfs   -    516E7CBA-6ECF-11D6-8FF8-00022D09712B  FreeBSD ZFS
+ffs2          A6   824CC7A0-36A8-11E3-890A-952519AD3F61  OpenBSD FFS2 (MBR: OpenBSD slice)
+netbsd        A9   49F48D5A-B10E-11DC-B99B-0019D1879648  NetBSD FFS
+extended      05   -                                     MBR extended partition
+extended-lba  0F   -                                     MBR extended partition (LBA)
+
+aliases: ext2=linux ext3=linux ext4=linux linux-swap=swap windows=ntfs exfat=ntfs fat=fat32 vfat=fat32 esp=efi ufs2=ufs ufs1=ufs freebsd=ufs openbsd=ffs2 ffs=netbsd
+$ stalin mkimg IMG 20M
+Created tests/stalin-tmp.img: 20 MiB, 40960 sectors
+$ stalin mkimg IMG 20M
+[exit 2]
+$ stalin show IMG
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: none
+
+# GPT
+$ stalin init IMG gpt
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+No partitions.
+Free: 34..40926 (20 MiB)
+$ stalin add IMG --size 4M --type ext4 --name root
+Added partition 1: 4 MiB linux
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#  START    END  SECTORS   SIZE  TYPE   FS  LABEL  NAME
+1   2048  10239     8192  4 MiB  linux             root
+Free: 10240..40926 (15 MiB)
+$ stalin add IMG --size 4M --type ntfs --name windows
+Added partition 2: 4 MiB ntfs
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#  START    END  SECTORS   SIZE  TYPE   FS  LABEL  NAME
+1   2048  10239     8192  4 MiB  linux             root
+2  10240  18431     8192  4 MiB  ntfs              windows
+Free: 18432..40926 (11 MiB)
+$ stalin add IMG --size 4M --type ufs --name freebsd --boot on
+Added partition 3: 4 MiB ufs
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#   START    END  SECTORS   SIZE  TYPE   FS  LABEL  NAME
+1    2048  10239     8192  4 MiB  linux             root
+2   10240  18431     8192  4 MiB  ntfs              windows
+3*  18432  26623     8192  4 MiB  ufs               freebsd
+Free: 26624..40926 (7 MiB)
+$ stalin add IMG --type openbsd --name openbsd
+Added partition 4: 7 MiB ffs2
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#   START    END  SECTORS   SIZE  TYPE   FS  LABEL  NAME
+1    2048  10239     8192  4 MiB  linux             root
+2   10240  18431     8192  4 MiB  ntfs              windows
+3*  18432  26623     8192  4 MiB  ufs               freebsd
+4   26624  40926    14303  7 MiB  ffs2              openbsd
+$ stalin add IMG --size 1M
+[exit 2]
+$ stalin IMG
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#   START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1    2048  10239     8192  4 MiB  linux  ext4  rootfs            root
+2   10240  18431     8192  4 MiB  ntfs   ntfs  serial 5678-EF90  windows
+3*  18432  26623     8192  4 MiB  ufs    ufs2  fbsdroot          freebsd
+4   26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+$ stalin edit IMG 2 --type fat32 --name Données_C:
+Changed partition 2
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#   START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1    2048  10239     8192  4 MiB  linux  ext4  rootfs            root
+2   10240  18431     8192  4 MiB  ntfs   ntfs  serial 5678-EF90  Données C:
+3*  18432  26623     8192  4 MiB  ufs    ufs2  fbsdroot          freebsd
+4   26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+$ stalin edit IMG 3 --size 8M
+[exit 2]
+$ stalin rm IMG 2
+Removed partition 2
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#   START    END  SECTORS   SIZE  TYPE   FS    LABEL     NAME
+1    2048  10239     8192  4 MiB  linux  ext4  rootfs    root
+3*  18432  26623     8192  4 MiB  ufs    ufs2  fbsdroot  freebsd
+4   26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot  openbsd
+Free: 10240..18431 (4 MiB)
+$ stalin edit IMG 3 --start 5M --size 5M --attrs 1
+note: the partition moved; its data did not
+Changed partition 3
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#  START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1   2048  10239     8192  4 MiB  linux  ext4  rootfs            root
+3  10240  20479    10240  5 MiB  ufs    ntfs  serial 5678-EF90  freebsd
+4  26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+Free: 20480..26623 (3 MiB)
+$ stalin add IMG --num 9 --type swap --uuid 01234567-89ab-cdef-0123-456789abcdef
+Added partition 9: 3 MiB swap
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#  START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1   2048  10239     8192  4 MiB  linux  ext4  rootfs            root
+3  10240  20479    10240  5 MiB  ufs    ntfs  serial 5678-EF90  freebsd
+9  20480  26623     6144  3 MiB  swap
+4  26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+$ stalin rm IMG 9 --dry-run
+dry run: would write 32 sector(s) at LBA 2 (primary GPT partition array)
+dry run: would write 1 sector(s) at LBA 1 (primary GPT header)
+dry run: would write 32 sector(s) at LBA 40927 (backup GPT partition array)
+dry run: would write 1 sector(s) at LBA 40959 (backup GPT header)
+dry run: would write 1 sector(s) at LBA 0 (protective MBR)
+
+# mistakes
+$ stalin rm IMG 2
+[exit 2]
+$ stalin rm IMG two
+[exit 2]
+$ stalin edit IMG 1 --type nosuch
+[exit 2]
+$ stalin edit IMG 1 --boot maybe
+[exit 2]
+$ stalin add IMG --size huge
+[exit 2]
+$ stalin rm IMG 9
+Removed partition 9
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#  START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1   2048  10239     8192  4 MiB  linux  ext4  rootfs            root
+3  10240  20479    10240  5 MiB  ufs    ntfs  serial 5678-EF90  freebsd
+4  26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+Free: 20480..26623 (3 MiB)
+$ stalin add IMG --start 3M --size 1M
+[exit 2]
+$ stalin add IMG --num 1
+[exit 2]
+$ stalin add IMG --uuid not-a-guid
+[exit 2]
+$ stalin show IMG --frob
+[exit 2]
+$ stalin frob
+[exit 2]
+$ stalin show tests/stalin-missing.img
+[exit 2]
+$ stalin init IMG dos
+[exit 2]
+
+# a damaged primary GPT header is read from the backup and repaired
+$ stalin show IMG
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+warning: the primary GPT header is damaged; using the backup
+#  START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1   2048  10239     8192  4 MiB  linux  ext4  rootfs            root
+3  10240  20479    10240  5 MiB  ufs    ntfs  serial 5678-EF90  freebsd
+4  26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+Free: 20480..26623 (3 MiB)
+$ stalin edit IMG 1 --name root2
+Changed partition 1
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 34..40926, 128 entries
+#  START    END  SECTORS   SIZE  TYPE   FS    LABEL             NAME
+1   2048  10239     8192  4 MiB  linux  ext4  rootfs            root2
+3  10240  20479    10240  5 MiB  ufs    ntfs  serial 5678-EF90  freebsd
+4  26624  40926    14303  7 MiB  ffs2   ffs2  obsdroot          openbsd
+Free: 20480..26623 (3 MiB)
+vector
+
+# MBR
+$ stalin init IMG mbr
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+No partitions.
+Free: 1..40959 (20 MiB)
+$ stalin add IMG --size 4M --type ntfs --boot on
+Added partition 1: 4 MiB ntfs
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE  FS    LABEL
+1*   2048  10239     8192  4 MiB  ntfs  ext4  rootfs
+Free: 10240..40959 (15 MiB)
+$ stalin add IMG --size 4M --type freebsd
+Added partition 2: 4 MiB ufs
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE  FS    LABEL
+1*   2048  10239     8192  4 MiB  ntfs  ext4  rootfs
+2   10240  18431     8192  4 MiB  ufs   ntfs  serial 5678-EF90
+Free: 18432..40959 (11 MiB)
+$ stalin add IMG --size 4M --type openbsd
+Added partition 3: 4 MiB ffs2
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE  FS    LABEL
+1*   2048  10239     8192  4 MiB  ntfs  ext4  rootfs
+2   10240  18431     8192  4 MiB  ufs   ntfs  serial 5678-EF90
+3   18432  26623     8192  4 MiB  ffs2  ffs2  fbsdroot
+Free: 26624..40959 (7 MiB)
+$ stalin add IMG --type extended
+Added partition 4: 7 MiB extended
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE      FS    LABEL
+1*   2048  10239     8192  4 MiB  ntfs      ext4  rootfs
+2   10240  18431     8192  4 MiB  ufs       ntfs  serial 5678-EF90
+3   18432  26623     8192  4 MiB  ffs2      ffs2  fbsdroot
+4   26624  40959    14336  7 MiB  extended  -
+$ stalin add IMG --size 1M
+[exit 2]
+$ stalin edit IMG 2 --name nope
+[exit 2]
+$ stalin edit IMG 3 --boot on
+Changed partition 3
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE             FS                  LABEL
+1    2048  10239     8192  4 MiB  ntfs             ntfs                serial 5678-EF90
+2   10240  18431     8192  4 MiB  ufs              ufs1
+3*  18432  26623     8192  4 MiB  ffs2             ffs2 (disklabel a)  openroot
+4   26624  40959    14336  7 MiB  extended         -
+5   28672  32767     4096  2 MiB  linux (logical)  ext4                logical5
+6   34816  40959     6144  3 MiB  fat32 (logical)  fat32               LOGICAL6
+$ stalin edit IMG 5 --type linux
+[exit 2]
+$ stalin rm IMG 4
+Removed partition 4 and its logical partitions
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE  FS                  LABEL
+1    2048  10239     8192  4 MiB  ntfs  ntfs                serial 5678-EF90
+2   10240  18431     8192  4 MiB  ufs   ufs1
+3*  18432  26623     8192  4 MiB  ffs2  ffs2 (disklabel a)  openroot
+Free: 26624..40959 (7 MiB)
+$ stalin edit IMG 2 --type 0xa9
+Changed partition 2
+Disk tests/stalin-tmp.img: 20 MiB, 40960 sectors of 512 bytes
+Table: MBR, disk signature 0x7ABA03FD
+#   START    END  SECTORS   SIZE  TYPE    FS                  LABEL
+1    2048  10239     8192  4 MiB  ntfs    ntfs                serial 5678-EF90
+2   10240  18431     8192  4 MiB  netbsd  ffs
+3*  18432  26623     8192  4 MiB  ffs2    ffs2 (disklabel a)  openroot
+Free: 26624..40959 (7 MiB)
+
+# wipe, sector sizes, raw disks
+$ stalin wipe IMG
+Wiped the partition tables of tests/stalin-tmp.img
+$ stalin mkimg IMG 20M --sector 4096 --yes
+Created tests/stalin-tmp.img: 20 MiB, 5120 sectors
+$ stalin init IMG gpt --sector 4096
+Disk tests/stalin-tmp.img: 20 MiB, 5120 sectors of 4096 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 6..5114, 128 entries
+No partitions.
+Free: 6..5114 (20 MiB)
+$ stalin add IMG --size 8M --name four --sector 4096
+Added partition 1: 8 MiB linux
+Disk tests/stalin-tmp.img: 20 MiB, 5120 sectors of 4096 bytes
+Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 6..5114, 128 entries
+#  START   END  SECTORS   SIZE  TYPE   FS  LABEL  NAME
+1    256  2303     2048  8 MiB  linux             four
+Free: 2304..5114 (11 MiB)
+$ stalin init IMG gpt --sector 999
+[exit 2]
+2
+0
+vector
+
+--- stderr ---
+stalin: tests/stalin-tmp.img exists: add --yes to replace it
+stalin: no free space that large
+stalin: does not fit: 4 MiB free from sector 18432
+stalin: no partition 2
+stalin: bad partition number 'two'
+stalin: unknown gpt partition type 'nosuch' (stalin types)
+stalin: --boot is on or off
+stalin: bad --size 'huge'
+stalin: sector 6144 is not free
+stalin: partition 1 exists
+stalin: bad GUID 'not-a-guid'
+stalin: unknown option --frob
+stalin: unknown command 'frob' (stalin help lists them)
+stalin: cannot open tests/stalin-missing.img
+stalin: the table kind is gpt or mbr
+stalin: an MBR holds 4 primary partitions and all are used
+stalin: MBR partitions have no names
+stalin: logical partitions are read-only here
+stalin: --sector is 512, 1024, 2048 or 4096
+stalin: /dev/sdz is a raw disk: add --yes to write to it (or --dry-run to see what would change)
+
+--- exit 0 ---

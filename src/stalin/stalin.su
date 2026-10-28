@@ -1,0 +1,2505 @@
+# Stalin - the sysadmin's partition editor: lists storage devices and
+# reads, creates and edits GPT and MBR partition tables on disks and disk
+# images, and recognises the file systems inside the partitions (ext2/3/4,
+# NTFS, UFS1, UFS2/FFS2, FAT, exFAT, plus swap, XFS and Btrfs signatures).
+#
+# Every byte goes through four builtins of ussr: bread(v): dev lba [count
+# [sector]] and bwrite(n): dev lba bytes [sector] read and write whole
+# sectors, bsize(n): dev sizes a disk or image and bdevices(v): lists the
+# machine's storage devices with their kind (HDD, SSD, flash).
+#
+# A device is a disk image file or a raw disk: \\.\PhysicalDrive1 on
+# Windows, /dev/sdb on Linux (raw disks need administrator or root rights).
+# Writing to a raw disk also needs --yes; --dry-run shows the sectors a
+# command would write and writes none.
+#
+# Usage: ussr src/stalin/stalin.su [COMMAND] ...; stalin help lists them.
+# With no command it lists the storage devices.
+# Library use: stalin_main(code): args runs one command line (a vector of
+# strings) and returns its exit status: 0 done, 1 nothing to do or
+# declined, 2 a usage or device error.
+$once
+$include "../libs/strings.su"
+
+global(_): st_typed st_type_table st_type_alias
+global(_): st_dev st_sector st_lbas st_bytes st_kind st_parts st_notes
+global(_): st_disk_guid st_disk_sig st_first st_last st_entry_count st_entry_size
+global(_): st_yes st_dry st_wrote st_seeded st_counter
+global(_): st_o_start st_o_size st_o_type st_o_name st_o_boot st_o_uuid
+global(_): st_o_attrs st_o_num st_o_sector
+
+st_types(r): [
+    set(r): 0
+    # a bare argument reads an unset name as null (an expression would not)
+    set(done): st_typed
+    if(_): {done = true} [
+        return(r): r
+    ]
+    struct(StPart): "num:number" "start:number" "end:number" "type:string" "name:string" "uuid:string" "attrs:number" "boot:boolean" "logical:boolean"
+    # name, GPT type GUID, MBR type (hex), description; the first row
+    # with a GUID or MBR code names it when a table is shown
+    set(st_type_table): '[[`linux`,`0FC63DAF-8483-4772-8E79-3D69D8477DE4`,`83`,`Linux filesystem: ext2, ext3, ext4`],[`swap`,`0657FD6D-A4AB-43C4-84E5-0933C84B4F4F`,`82`,`Linux swap`],[`home`,`933AC7E1-2EB4-4F13-B844-0E14E2AEF915`,``,`Linux /home`],[`lvm`,`E6D6D379-F507-44C2-A23C-238F2A3DF928`,`8E`,`Linux LVM`],[`raid`,`A19D880F-05FC-4D3B-A006-743F0F84911E`,`FD`,`Linux RAID`],[`ntfs`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`07`,`Microsoft basic data: NTFS, exFAT`],[`fat32`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0C`,`FAT32 (LBA)`],[`fat16`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0E`,`FAT16 (LBA)`],[`fat32-chs`,``,`0B`,`FAT32 (CHS)`],[`fat16-chs`,``,`06`,`FAT16 (CHS)`],[`efi`,`C12A7328-F81F-11D2-BA4B-00A0C93EC93B`,`EF`,`EFI system partition`],[`msr`,`E3C9E316-0B5C-4DB8-817D-F92DF00215AE`,``,`Microsoft reserved`],[`winre`,`DE94BBA4-06D1-4D40-A16A-BFD50179D6AC`,`27`,`Windows recovery`],[`bios-boot`,`21686148-6449-6E6F-744E-656564454649`,``,`BIOS boot (GRUB)`],[`ufs`,`516E7CB6-6ECF-11D6-8FF8-00022D09712B`,`A5`,`FreeBSD UFS (MBR: FreeBSD slice)`],[`freebsd-boot`,`83BD6B9D-7F41-11DC-BE0B-001560B84F0F`,``,`FreeBSD boot`],[`freebsd-swap`,`516E7CB5-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD swap`],[`freebsd-zfs`,`516E7CBA-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD ZFS`],[`ffs2`,`824CC7A0-36A8-11E3-890A-952519AD3F61`,`A6`,`OpenBSD FFS2 (MBR: OpenBSD slice)`],[`netbsd`,`49F48D5A-B10E-11DC-B99B-0019D1879648`,`A9`,`NetBSD FFS`],[`extended`,``,`05`,`MBR extended partition`],[`extended-lba`,``,`0F`,`MBR extended partition (LBA)`]]'
+    set(st_type_alias): '[[`ext2`,`linux`],[`ext3`,`linux`],[`ext4`,`linux`],[`linux-swap`,`swap`],[`windows`,`ntfs`],[`exfat`,`ntfs`],[`fat`,`fat32`],[`vfat`,`fat32`],[`esp`,`efi`],[`ufs2`,`ufs`],[`ufs1`,`ufs`],[`freebsd`,`ufs`],[`openbsd`,`ffs2`],[`ffs`,`netbsd`]]'
+    set(st_typed): true
+]
+
+# ---------------------------------------------------------------- numbers
+
+st_int(r): n [
+    str_from_int(r): n
+]
+
+# a / b rounded down, for a >= 0 and b > 0 (USSR "/" gives a real)
+st_div(r): a b [
+    set(r): 0
+    set(rest): a
+    set(sh): 0
+    while(_): {(b << sh) <= (a >> 1) && sh < 62} [
+        add(sh): sh 1
+    ]
+    while(_): {sh >= 0} [
+        set(part): {b << sh}
+        if(_): {part <= rest} [
+            set(rest): {rest - part}
+            set(r): {r | (1 << sh)}
+        ]
+        sub(sh): sh 1
+    ]
+]
+
+# a / b rounded up
+st_div_up(r): a b [
+    st_div(r): {a + b - 1} b
+]
+
+st_hex(r): b [
+    set(digits): "0123456789ABCDEF"
+    slice(h): digits {(b >> 4) & 15} 1
+    slice(l): digits {b & 15} 1
+    concat(r): h l
+]
+
+# Value of a hex digit, or -1.
+st_hex_digit(r): c [
+    set(r): -1
+    if(_): {c >= 48 && c <= 57} [
+        set(r): {c - 48}
+    ]
+    elif(_): {c >= 65 && c <= 70} [
+        set(r): {c - 55}
+    ]
+    elif(_): {c >= 97 && c <= 102} [
+        set(r): {c - 87}
+    ]
+]
+
+# "83", "0x83" or "a5" as an integer 0..255; -1 when it is not one.
+st_parse_hex_byte(r): s [
+    set(r): -1
+    len(n): s
+    set(i): 0
+    if(_): {n > 2} [
+        slice(p): s 0 2
+        if(_): {p = "0x" || p = "0X"} [
+            set(i): 2
+        ]
+    ]
+    if(_): {n - i < 1 || n - i > 2} [
+        return(r): r
+    ]
+    set(v): 0
+    while(_): {i < n} [
+        byte(c): s i
+        st_hex_digit(d): c
+        if(_): {d < 0} [
+            return(r): -1
+        ]
+        set(v): {v * 16 + d}
+        add(i): i 1
+    ]
+    set(r): v
+]
+
+# 0x-prefixed hex of a 64-bit value (attributes may use the top bit).
+st_hex64(r): x [
+    set(r): ""
+    set(k): 7
+    while(_): {k >= 0} [
+        st_hex(h): {(x >> (k * 8)) & 255}
+        concat(r): r h
+        sub(k): k 1
+    ]
+    concat(r): "0x" r
+]
+
+# bytes as "20 MiB", "1.5 GiB", "512 B"
+st_human(r): bytes [
+    set(units): '[`B`,`KiB`,`MiB`,`GiB`,`TiB`,`PiB`]'
+    set(u): 0
+    set(scale): 1
+    while(_): {u < 5 && bytes >= scale * 1024} [
+        set(scale): {scale * 1024}
+        add(u): u 1
+    ]
+    at(name): units u
+    if(_): {u = 0} [
+        st_int(t): bytes
+    ]
+    else(_): [
+        str_from_number(t): {bytes / scale} 1
+    ]
+    concat(r): t " " name
+]
+
+# "4M", "512K", "2G", "2048s", "1.5G" or "8" (MiB) as sectors; "max" -2;
+# -1 when it is not a size.
+st_parse_size(r): text [
+    set(r): -1
+    str_lower(s): text
+    if(_): {s = "max" || s = "rest"} [
+        return(r): -2
+    ]
+    len(n): s
+    if(_): {n = 0} [
+        return(r): r
+    ]
+    set(mult): 1048576
+    set(sectors): false
+    set(end): n
+    byte(c): s {n - 1}
+    if(_): {c = 98 && n > 1} [
+        # "MiB", "MB", "KB": drop the b and an i before it
+        set(end): {n - 1}
+        byte(c): s {end - 1}
+        if(_): {c = 105 && end > 1} [
+            set(end): {end - 1}
+            byte(c): s {end - 1}
+        ]
+    ]
+    if(_): {c = 115} [
+        set(sectors): true
+        set(end): {end - 1}
+    ]
+    elif(_): {c = 107} [
+        set(mult): 1024
+        set(end): {end - 1}
+    ]
+    elif(_): {c = 109} [
+        set(end): {end - 1}
+    ]
+    elif(_): {c = 103} [
+        set(mult): 1073741824
+        set(end): {end - 1}
+    ]
+    elif(_): {c = 116} [
+        set(mult): 1099511627776
+        set(end): {end - 1}
+    ]
+    if(_): {end < 1} [
+        return(r): r
+    ]
+    slice(digits): s 0 end
+    set(k): 0
+    while(_): {k < end} [
+        byte(d): digits k
+        if(_): {(d < 48 || d > 57) && d != 46} [
+            return(r): -1
+        ]
+        add(k): k 1
+    ]
+    str_to_number(x): digits
+    typeof(t): x
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    if(_): sectors [
+        str_trunc(r): x
+        return(r): r
+    ]
+    str_trunc(b): {x * mult}
+    st_div(r): b st_sector
+]
+
+# ---------------------------------------------------------------- bytes
+
+st_zeros(r): n [
+    set(r): null
+    if(_): {st_dev != "" && n >= 512 && (n % 512) = 0} [
+        bread(r): st_dev 0 {n >> 9} 512
+    ]
+    typeof(t): r
+    if(_): {t = "null"} [
+        vec(r): ""
+        set(i): 0
+        while(_): {i < n} [
+            push(_): r 0
+            add(i): i 1
+        ]
+    ]
+    else(_): [
+        clear_bytes(r): r
+    ]
+]
+
+# n bytes of v from i, little-endian, as an unsigned integer (n <= 8)
+st_le(r): v i n [
+    set(r): 0
+    set(k): {n - 1}
+    while(_): {k >= 0} [
+        at(b): v {i + k}
+        set(r): {(r << 8) | b}
+        sub(k): k 1
+    ]
+]
+
+st_put(r): v i n x [
+    set(k): 0
+    while(_): {k < n} [
+        set(v): {i + k} {x & 255}
+        set(x): {x >> 8}
+        add(k): k 1
+    ]
+    set(r): v
+]
+
+st_fill(r): v i n b [
+    set(k): 0
+    while(_): {k < n} [
+        set(v): {i + k} b
+        add(k): k 1
+    ]
+    set(r): v
+]
+
+st_vslice(r): v from count [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < count} [
+        at(b): v {from + i}
+        push(_): r b
+        add(i): i 1
+    ]
+]
+
+# Text of up to n bytes at i, ending at a zero byte, control bytes as "?",
+# without surrounding blanks.
+st_ascii(r): v i n [
+    set(r): ""
+    set(k): 0
+    set(go): true
+    while(_): {go && k < n} [
+        at(b): v {i + k}
+        if(_): {b = 0} [
+            set(go): false
+        ]
+        else(_): [
+            if(_): {b < 32 || b = 127} [
+                set(b): 63
+            ]
+            chr(c): b
+            concat(r): r c
+        ]
+        add(k): k 1
+    ]
+    str_trim(r): r
+]
+
+st_crc32(r): v from n [
+    crc32(r): v from n
+]
+
+# UTF-16LE name of up to units code units at i (GPT names) as UTF-8.
+st_utf16_text(r): v i units [
+    set(r): ""
+    set(k): 0
+    set(go): true
+    while(_): {go && k < units} [
+        st_le(u): v {i + k * 2} 2
+        if(_): {u = 0} [
+            set(go): false
+        ]
+        elif(_): {u < 32} [
+            concat(r): r "?"
+        ]
+        elif(_): {u < 128} [
+            chr(c): u
+            concat(r): r c
+        ]
+        elif(_): {u < 2048} [
+            chr(c1): {192 | (u >> 6)}
+            chr(c2): {128 | (u & 63)}
+            concat(r): r c1 c2
+        ]
+        elif(_): {u >= 55296 && u < 57344} [
+            concat(r): r "?"
+        ]
+        else(_): [
+            chr(c1): {224 | (u >> 12)}
+            chr(c2): {128 | ((u >> 6) & 63)}
+            chr(c3): {128 | (u & 63)}
+            concat(r): r c1 c2 c3
+        ]
+        add(k): k 1
+    ]
+]
+
+# UTF-8 text as UTF-16 code units (characters past U+FFFF become "?").
+st_utf16_units(r): s [
+    vec(r): ""
+    text_bytes(b): s
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(c): b i
+        set(u): 63
+        set(step): 1
+        if(_): {c < 128} [
+            set(u): c
+        ]
+        elif(_): {c >= 192 && c < 224 && i + 1 < n} [
+            at(c2): b {i + 1}
+            set(u): {((c & 31) << 6) | (c2 & 63)}
+            set(step): 2
+        ]
+        elif(_): {c >= 224 && c < 240 && i + 2 < n} [
+            at(c2): b {i + 1}
+            at(c3): b {i + 2}
+            set(u): {((c & 15) << 12) | ((c2 & 63) << 6) | (c3 & 63)}
+            set(step): 3
+        ]
+        elif(_): {c >= 240} [
+            set(step): 4
+        ]
+        push(_): r u
+        add(i): i step
+    ]
+]
+
+# ---------------------------------------------------------------- GUIDs
+
+# Byte order of a GUID on disk: the first three fields are little-endian.
+st_guid_order(r): [
+    set(r): '[3,2,1,0,5,4,7,6,8,9,10,11,12,13,14,15]'
+]
+
+st_guid_text(r): v i [
+    st_guid_order(order):
+    set(r): ""
+    set(k): 0
+    while(_): {k < 16} [
+        at(o): order k
+        at(b): v {i + o}
+        st_hex(h): b
+        concat(r): r h
+        if(_): {k = 3 || k = 5 || k = 7 || k = 9} [
+            concat(r): r "-"
+        ]
+        add(k): k 1
+    ]
+]
+
+# The 16 bytes a GUID text spells in text order, or null.
+st_guid_parse(r): text [
+    set(r): null
+    len(n): text
+    if(_): {n != 36} [
+        return(r): r
+    ]
+    vec(bytes): ""
+    set(i): 0
+    while(_): {i < 36} [
+        byte(c): text i
+        if(_): {i = 8 || i = 13 || i = 18 || i = 23} [
+            if(_): {c != 45} [
+                return(r): null
+            ]
+            add(i): i 1
+        ]
+        else(_): [
+            byte(c2): text {i + 1}
+            st_hex_digit(h): c
+            st_hex_digit(l): c2
+            if(_): {h < 0 || l < 0} [
+                return(r): null
+            ]
+            push(_): bytes {h * 16 + l}
+            add(i): i 2
+        ]
+    ]
+    set(r): bytes
+]
+
+# A GUID text in upper case, or null when it is not one.
+st_guid_clean(r): text [
+    st_guid_parse(b): text
+    set(r): null
+    typeof(t): b
+    if(_): {t != "null"} [
+        st_guid_order(order):
+        vec(v): ""
+        st_zeros(v): 16
+        set(k): 0
+        while(_): {k < 16} [
+            at(o): order k
+            at(x): b k
+            set(v): o x
+            add(k): k 1
+        ]
+        st_guid_text(r): v 0
+    ]
+]
+
+st_guid_put(r): v i text [
+    st_guid_parse(b): text
+    st_guid_order(order):
+    set(k): 0
+    while(_): {k < 16} [
+        at(o): order k
+        at(x): b k
+        set(v): {i + o} x
+        add(k): k 1
+    ]
+    set(r): v
+]
+
+# 16 random bytes. random64 starts from the time in seconds, so two runs
+# in one second would repeat it: the device, the GUIDs already on it and
+# a counter go through SHA-256 with it (STALIN_SEED leaves the time out).
+st_random16(r): [
+    add(st_counter): st_counter 1
+    random64(x):
+    st_int(tx): x
+    st_int(tc): st_counter
+    concat(text): tx "|" tc "|" st_dev "|" st_disk_guid
+    if(_): {st_seeded = false} [
+        time(now):
+        st_int(tn): now
+        concat(text): text "|" tn
+    ]
+    len(n): st_parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): st_parts i
+        getf(u): p "uuid"
+        concat(text): text "|" u
+        add(i): i 1
+    ]
+    sha256(d): text
+    st_vslice(r): d 0 16
+]
+
+# A random (version 4) GUID.
+st_guid_new(r): [
+    st_random16(t):
+    at(b6): t 6
+    set(t): 6 {(b6 & 15) | 64}
+    at(b8): t 8
+    set(t): 8 {(b8 & 63) | 128}
+    set(r): ""
+    set(k): 0
+    while(_): {k < 16} [
+        at(b): t k
+        st_hex(h): b
+        concat(r): r h
+        if(_): {k = 3 || k = 5 || k = 7 || k = 9} [
+            concat(r): r "-"
+        ]
+        add(k): k 1
+    ]
+]
+
+# ---------------------------------------------------------------- output
+
+st_err(r): message [
+    concat(line): "stalin: " message "\n"
+    write_stderr(_): line
+    set(r): 2
+]
+
+st_note(_): message [
+    push(_): st_notes message
+]
+
+st_pad(r): s w [
+    set(r): s
+    len(n): s
+    while(_): {n < w} [
+        concat(r): r " "
+        add(n): n 1
+    ]
+]
+
+st_lpad(r): s w [
+    set(r): s
+    len(n): s
+    while(_): {n < w} [
+        concat(r): " " r
+        add(n): n 1
+    ]
+]
+
+# Prints rows (vectors of strings) as columns; right aligns the columns
+# whose flag in right is true.
+st_table(_): rows right [
+    len(nr): rows
+    if(_): {nr = 0} [
+        return(_): 0
+    ]
+    at(first): rows 0
+    len(nc): first
+    vec(widths): ""
+    set(c): 0
+    while(_): {c < nc} [
+        push(_): widths 0
+        add(c): c 1
+    ]
+    set(i): 0
+    while(_): {i < nr} [
+        at(row): rows i
+        set(c): 0
+        while(_): {c < nc} [
+            at(cell): row c
+            len(w): cell
+            at(old): widths c
+            if(_): {w > old} [
+                set(widths): c w
+            ]
+            add(c): c 1
+        ]
+        add(i): i 1
+    ]
+    set(i): 0
+    while(_): {i < nr} [
+        at(row): rows i
+        set(line): ""
+        set(c): 0
+        while(_): {c < nc} [
+            at(cell): row c
+            at(w): widths c
+            at(ra): right c
+            if(_): ra [
+                st_lpad(cell): cell w
+            ]
+            else(_): [
+                st_pad(cell): cell w
+            ]
+            if(_): {c > 0} [
+                concat(line): line "  "
+            ]
+            concat(line): line cell
+            add(c): c 1
+        ]
+        st_rtrim(line): line
+        print(_): line
+        add(i): i 1
+    ]
+]
+
+st_rtrim(r): s [
+    len(n): s
+    set(go): true
+    while(_): {go && n > 0} [
+        byte(c): s {n - 1}
+        if(_): {c = 32} [
+            sub(n): n 1
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    slice(r): s 0 n
+]
+
+# ---------------------------------------------------------------- types
+
+# Type code for a name on the current table kind: a GUID for GPT, two
+# hex digits for MBR; null when the name means nothing there.
+st_type_code(r): name kind [
+    set(r): null
+    str_lower(want): name
+    len(na): st_type_alias
+    set(i): 0
+    while(_): {i < na} [
+        at(row): st_type_alias i
+        at(alias): row 0
+        if(_): {alias = want} [
+            at(want): row 1
+        ]
+        add(i): i 1
+    ]
+    if(_): {kind = "gpt"} [
+        set(col): 1
+    ]
+    else(_): [
+        set(col): 2
+    ]
+    len(nt): st_type_table
+    set(i): 0
+    while(_): {i < nt} [
+        at(row): st_type_table i
+        at(tn): row 0
+        if(_): {tn = want} [
+            at(code): row col
+            if(_): {code != ""} [
+                return(r): code
+            ]
+        ]
+        add(i): i 1
+    ]
+    # a raw code
+    if(_): {kind = "gpt"} [
+        st_guid_clean(r): name
+    ]
+    else(_): [
+        st_parse_hex_byte(b): name
+        if(_): {b > 0} [
+            st_hex(r): b
+        ]
+    ]
+]
+
+# The name for a type code, or the code itself.
+st_type_name(r): code kind [
+    set(r): code
+    if(_): {kind = "gpt"} [
+        set(col): 1
+    ]
+    else(_): [
+        set(col): 2
+    ]
+    len(nt): st_type_table
+    set(i): {nt - 1}
+    while(_): {i >= 0} [
+        at(row): st_type_table i
+        at(c): row col
+        if(_): {c = code} [
+            at(r): row 0
+        ]
+        sub(i): i 1
+    ]
+]
+
+st_is_extended(r): code [
+    set(r): {code = "05" || code = "0F" || code = "85"}
+]
+
+# ---------------------------------------------------------------- device
+
+st_is_raw(r): path [
+    set(r): false
+    len(n): path
+    if(_): {n > 4} [
+        slice(p): path 0 4
+        if(_): {p = "\\\\.\\" || p = "/dev"} [
+            set(r): true
+        ]
+    ]
+]
+
+# Opens dev: sets st_dev, st_bytes, st_lbas. 0, or 2 after saying why.
+st_open(r): dev [
+    set(r): 0
+    set(st_dev): dev
+    bsize(b): dev
+    if(_): {b < 0} [
+        concat(m): "cannot open " dev
+        st_err(r): m
+        return(r): r
+    ]
+    set(st_bytes): b
+    st_div(st_lbas): b st_sector
+    if(_): {st_lbas < 128} [
+        concat(m): dev " is too small for a partition table"
+        st_err(r): m
+        return(r): r
+    ]
+    bread(s0): dev 0 1 st_sector
+    typeof(t): s0
+    if(_): {t = "null"} [
+        concat(m): "cannot read " dev
+        st_is_raw(raw): dev
+        if(_): raw [
+            concat(m): m " (raw disks need administrator or root rights)"
+        ]
+        st_err(r): m
+    ]
+]
+
+st_read(r): lba count [
+    bread(r): st_dev lba count st_sector
+]
+
+# Writes sectors (or says what it would write under --dry-run).
+st_write(r): lba bytes what [
+    set(r): 0
+    len(n): bytes
+    st_div(count): n st_sector
+    st_int(tl): lba
+    st_int(tc): count
+    if(_): st_dry [
+        concat(m): "dry run: would write " tc " sector(s) at LBA " tl " (" what ")"
+        print(_): m
+        return(r): r
+    ]
+    bwrite(w): st_dev lba bytes st_sector
+    if(_): {w != n} [
+        concat(m): "writing " what " at LBA " tl " failed"
+        st_err(r): m
+        return(r): r
+    ]
+    add(st_wrote): st_wrote count
+]
+
+# ---------------------------------------------------------------- reading
+
+st_new_part(r): num start end type name uuid attrs boot logical [
+    new(r): "StPart" num start end type name uuid attrs boot logical
+]
+
+# A GPT header sector at lba with its CRC checked, or null.
+st_gpt_header(r): lba [
+    set(r): null
+    st_read(h): lba 1
+    typeof(t): h
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    st_ascii(sig): h 0 8
+    if(_): {sig != "EFI PART"} [
+        return(r): r
+    ]
+    st_le(size): h 12 4
+    if(_): {size < 92 || size > st_sector} [
+        return(r): r
+    ]
+    st_le(crc): h 16 4
+    st_put(_): h 16 4 0
+    st_crc32(sum): h 0 size
+    st_put(_): h 16 4 crc
+    if(_): {sum = crc} [
+        set(r): h
+    ]
+]
+
+# The partition entry array a header describes, CRC checked, or null.
+st_gpt_entries(r): h [
+    set(r): null
+    st_le(lba): h 72 8
+    st_le(count): h 80 4
+    st_le(size): h 84 4
+    st_le(crc): h 88 4
+    if(_): {count < 1 || count > 4096 || size < 128 || size > 4096 || (size % 8) != 0} [
+        return(r): r
+    ]
+    set(total): {count * size}
+    st_div_up(sectors): total st_sector
+    if(_): {lba < 1 || lba + sectors > st_lbas} [
+        return(r): r
+    ]
+    st_read(e): lba sectors
+    typeof(t): e
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    st_crc32(sum): e 0 total
+    if(_): {sum = crc} [
+        set(r): e
+    ]
+]
+
+st_load_gpt(r): [
+    set(r): 0
+    set(st_kind): "gpt"
+    st_gpt_header(h): 1
+    set(e): null
+    typeof(t): h
+    if(_): {t != "null"} [
+        st_gpt_entries(e): h
+        typeof(t2): e
+        if(_): {t2 = "null"} [
+            st_note(_): "the primary GPT partition array is damaged; using the backup"
+            set(h): null
+        ]
+    ]
+    else(_): [
+        st_note(_): "the primary GPT header is damaged; using the backup"
+    ]
+    st_gpt_header(b): {st_lbas - 1}
+    typeof(tb): b
+    set(backup_ok): false
+    if(_): {tb != "null"} [
+        st_gpt_entries(be): b
+        typeof(tbe): be
+        set(backup_ok): {tbe != "null"}
+    ]
+    typeof(t): h
+    set(primary): {t != "null"}
+    if(_): {t = "null"} [
+        if(_): {backup_ok = false} [
+            st_err(r): "the disk has a protective MBR but no readable GPT"
+            return(r): r
+        ]
+        set(h): b
+        set(e): be
+    ]
+    elif(_): {backup_ok = false} [
+        st_note(_): "the backup GPT is missing or damaged; any write rewrites it"
+    ]
+    st_le(st_first): h 40 8
+    st_le(st_last): h 48 8
+    st_guid_text(st_disk_guid): h 56
+    st_le(st_entry_count): h 80 4
+    st_le(st_entry_size): h 84 4
+    st_le(alt): h 32 8
+    if(_): {primary && backup_ok && alt != st_lbas - 1} [
+        st_note(_): "the backup GPT is not at the end of the disk (was the disk resized?)"
+    ]
+    set(k): 0
+    while(_): {k < st_entry_count} [
+        set(base): {k * st_entry_size}
+        st_guid_text(type): e base
+        if(_): {type != "00000000-0000-0000-0000-000000000000"} [
+            st_guid_text(uuid): e {base + 16}
+            st_le(start): e {base + 32} 8
+            st_le(end): e {base + 40} 8
+            st_le(attrs): e {base + 48} 8
+            set(units): {(st_entry_size - 56) >> 1}
+            if(_): {units > 36} [
+                set(units): 36
+            ]
+            st_utf16_text(name): e {base + 56} units
+            st_new_part(p): {k + 1} start end type name uuid attrs {(attrs & 4) != 0} false
+            push(_): st_parts p
+        ]
+        add(k): k 1
+    ]
+]
+
+# The logical partitions of an extended partition at ext (EBR chain).
+st_load_logical(_): ext [
+    set(ebr): ext
+    set(num): 5
+    set(guard): 0
+    while(_): {ebr > 0 && guard < 256} [
+        add(guard): guard 1
+        st_read(e): ebr 1
+        typeof(t): e
+        set(next): 0
+        if(_): {t != "null"} [
+            at(s1): e 510
+            at(s2): e 511
+            if(_): {s1 = 85 && s2 = 170} [
+                at(type): e 450
+                st_le(rel): e 454 4
+                st_le(count): e 458 4
+                if(_): {type != 0 && count > 0} [
+                    st_hex(code): type
+                    set(start): {ebr + rel}
+                    st_new_part(p): num start {start + count - 1} code "" "" 0 false true
+                    push(_): st_parts p
+                    add(num): num 1
+                ]
+                at(type2): e 466
+                st_le(rel2): e 470 4
+                st_hex(code2): type2
+                st_is_extended(isx): code2
+                if(_): {isx && rel2 > 0} [
+                    set(next): {ext + rel2}
+                ]
+            ]
+        ]
+        set(ebr): next
+    ]
+]
+
+# Reads the partition table into st_kind and st_parts: "gpt", "mbr", or
+# "none". 0, or 2 after saying why.
+st_load(r): [
+    set(r): 0
+    vec(st_parts): "StPart"
+    vec(st_notes): ""
+    set(st_kind): "none"
+    set(st_disk_sig): 0
+    set(st_disk_guid): ""
+    st_read(s0): 0 1
+    at(m1): s0 510
+    at(m2): s0 511
+    if(_): {m1 != 85 || m2 != 170} [
+        return(r): r
+    ]
+    # a boot sector of a whole-disk file system also ends in 55 AA: a
+    # partition table has only 0x00 and 0x80 boot flags
+    set(k): 0
+    set(valid): true
+    set(gpt): false
+    while(_): {k < 4} [
+        set(base): {446 + k * 16}
+        at(flag): s0 base
+        at(type): s0 {base + 4}
+        if(_): {flag != 0 && flag != 128} [
+            set(valid): false
+        ]
+        if(_): {type = 238} [
+            set(gpt): true
+        ]
+        add(k): k 1
+    ]
+    if(_): {valid = false} [
+        return(r): r
+    ]
+    if(_): gpt [
+        st_load_gpt(r):
+        return(r): r
+    ]
+    set(st_kind): "mbr"
+    st_le(st_disk_sig): s0 440 4
+    set(k): 0
+    while(_): {k < 4} [
+        set(base): {446 + k * 16}
+        at(flag): s0 base
+        at(type): s0 {base + 4}
+        st_le(start): s0 {base + 8} 4
+        st_le(count): s0 {base + 12} 4
+        if(_): {type != 0 && count > 0} [
+            st_hex(code): type
+            st_new_part(p): {k + 1} start {start + count - 1} code "" "" 0 {flag = 128} false
+            push(_): st_parts p
+            st_is_extended(isx): code
+            if(_): isx [
+                st_load_logical(_): start
+            ]
+        ]
+        add(k): k 1
+    ]
+]
+
+# ---------------------------------------------------------------- probing
+
+# count bytes at byte offset off inside a partition of n sectors from
+# start, or null when they are past its end or unreadable.
+st_part_bytes(r): start n off count [
+    set(r): null
+    st_div(first): off st_sector
+    st_div(last): {off + count - 1} st_sector
+    if(_): {last >= n} [
+        return(r): r
+    ]
+    st_read(b): {start + first} {last - first + 1}
+    typeof(t): b
+    if(_): {t != "null"} [
+        st_vslice(r): b {off - first * st_sector} count
+    ]
+]
+
+# A UFS superblock at off: [fs label bytes] or null.
+st_probe_ufs(r): start n off bsd [
+    set(r): null
+    st_part_bytes(sb): start n off 1376
+    typeof(t): sb
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    st_le(magic): sb 1372 4
+    st_le(fsize): sb 52 4
+    if(_): {magic = 0x19540119} [
+        set(fs): "ufs2"
+        if(_): bsd [
+            set(fs): "ffs2"
+        ]
+        st_ascii(label): sb 680 32
+        st_le(frags): sb 1080 8
+        vec(r): ""
+        push(_): r fs
+        push(_): r label
+        push(_): r {frags * fsize}
+    ]
+    elif(_): {magic = 0x011954} [
+        set(fs): "ufs1"
+        if(_): bsd [
+            set(fs): "ffs"
+        ]
+        st_le(frags): sb 36 4
+        vec(r): ""
+        push(_): r fs
+        push(_): r ""
+        push(_): r {frags * fsize}
+    ]
+]
+
+st_probe_ufs_all(r): start n bsd [
+    st_probe_ufs(r): start n 65536 bsd
+    typeof(t): r
+    if(_): {t = "null"} [
+        st_probe_ufs(r): start n 8192 bsd
+    ]
+]
+
+# The file system in n sectors from start: [fs label bytes]; fs is "" when
+# nothing is recognised. code is the partition type (BSD types say FFS).
+st_probe(r): start n code [
+    vec(r): ""
+    push(_): r ""
+    push(_): r ""
+    push(_): r 0
+    set(bsd): {code = "A6" || code = "A9" || code = "824CC7A0-36A8-11E3-890A-952519AD3F61" || code = "49F48D5A-B10E-11DC-B99B-0019D1879648"}
+    st_part_bytes(b): start n 0 512
+    typeof(t): b
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    st_ascii(oem): b 3 8
+    st_ascii(fat32): b 82 5
+    st_ascii(fat16): b 54 5
+    st_ascii(xfs): b 0 4
+    st_le(bps): b 11 2
+    if(_): {oem = "NTFS"} [
+        set(r): 0 "ntfs"
+        st_le(total): b 40 8
+        set(r): 2 {total * bps}
+        st_le(serial): b 72 4
+        st_hex64(sx): serial
+        slice(s1): sx 10 4
+        slice(s2): sx 14 4
+        concat(sl): "serial " s1 "-" s2
+        set(r): 1 sl
+        return(r): r
+    ]
+    if(_): {oem = "EXFAT"} [
+        set(r): 0 "exfat"
+        st_le(total): b 72 8
+        at(shift): b 108
+        set(r): 2 {total << shift}
+        return(r): r
+    ]
+    if(_): {fat32 = "FAT32"} [
+        set(r): 0 "fat32"
+        st_ascii(label): b 71 11
+        set(r): 1 label
+        st_le(total): b 32 4
+        set(r): 2 {total * bps}
+        return(r): r
+    ]
+    set(f3): ""
+    len(nf16): fat16
+    if(_): {nf16 >= 3} [
+        slice(f3): fat16 0 3
+    ]
+    if(_): {f3 = "FAT"} [
+        str_lower(fs): fat16
+        set(r): 0 fs
+        st_ascii(label): b 43 11
+        set(r): 1 label
+        st_le(total): b 19 2
+        if(_): {total = 0} [
+            st_le(total): b 32 4
+        ]
+        set(r): 2 {total * bps}
+        return(r): r
+    ]
+    if(_): {xfs = "XFSB"} [
+        set(r): 0 "xfs"
+        st_ascii(label): b 108 12
+        set(r): 1 label
+        return(r): r
+    ]
+    # ext2/3/4: superblock at byte 1024
+    st_part_bytes(sb): start n 1024 1024
+    typeof(t): sb
+    if(_): {t != "null"} [
+        st_le(magic): sb 56 2
+        if(_): {magic = 0xEF53} [
+            st_le(compat): sb 92 4
+            st_le(incompat): sb 96 4
+            set(fs): "ext2"
+            if(_): {(compat & 4) != 0} [
+                set(fs): "ext3"
+            ]
+            # extents, 64bit, flex_bg
+            if(_): {(incompat & 0x2C0) != 0} [
+                set(fs): "ext4"
+            ]
+            set(r): 0 fs
+            st_ascii(label): sb 120 16
+            set(r): 1 label
+            st_le(lo): sb 4 4
+            set(blocks): lo
+            if(_): {(incompat & 0x80) != 0} [
+                st_le(hi): sb 336 4
+                set(blocks): {(hi << 32) | lo}
+            ]
+            st_le(lb): sb 24 4
+            set(r): 2 {blocks * (1024 << lb)}
+            return(r): r
+        ]
+    ]
+    st_probe_ufs_all(u): start n bsd
+    typeof(t): u
+    if(_): {t != "null"} [
+        return(r): u
+    ]
+    # BSD disklabel in sector 1 (MBR FreeBSD/OpenBSD/NetBSD slices)
+    st_part_bytes(lb): start n 512 512
+    typeof(t): lb
+    if(_): {t != "null"} [
+        st_le(m1): lb 0 4
+        st_le(m2): lb 132 4
+        if(_): {m1 = 0x82564557 && m2 = 0x82564557} [
+            set(r): 0 "disklabel"
+            st_le(np): lb 140 2
+            if(_): {np > 16} [
+                set(np): 16
+            ]
+            set(k): 0
+            while(_): {k < np} [
+                set(e): {148 + k * 16}
+                st_le(size): lb e 4
+                st_le(off): lb {e + 4} 4
+                at(fstype): lb {e + 12}
+                if(_): {fstype = 7 && size > 0} [
+                    # OpenBSD and NetBSD count from the disk start, FreeBSD
+                    # from the slice
+                    set(inner): {off - start}
+                    if(_): {off < start} [
+                        set(inner): off
+                    ]
+                    st_probe_ufs_all(u): {start + inner} {n - inner} true
+                    typeof(tu): u
+                    if(_): {tu != "null"} [
+                        chr(letter): {97 + k}
+                        at(fs): u 0
+                        concat(fs): fs " (disklabel " letter ")"
+                        set(u): 0 fs
+                        return(r): u
+                    ]
+                ]
+                add(k): k 1
+            ]
+            return(r): r
+        ]
+    ]
+    # Linux swap: "SWAPSPACE2" at the end of the first 4 KiB page
+    st_part_bytes(sw): start n 4086 10
+    typeof(t): sw
+    if(_): {t != "null"} [
+        st_ascii(sig): sw 0 10
+        if(_): {sig = "SWAPSPACE2"} [
+            set(r): 0 "swap"
+            return(r): r
+        ]
+    ]
+    st_part_bytes(bt): start n 65600 8
+    typeof(t): bt
+    if(_): {t != "null"} [
+        st_ascii(sig): bt 0 8
+        if(_): {sig = "_BHRfS_M"} [
+            set(r): 0 "btrfs"
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- showing
+
+st_part_cmp(r): a b [
+    getf(x): a "start"
+    getf(y): b "start"
+    set(r): {x - y}
+]
+
+# st_parts sorted by start sector.
+st_sorted(r): parts [
+    vec(r): "StPart"
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        push(_): r p
+        add(i): i 1
+    ]
+    set(i): 1
+    while(_): {i < n} [
+        set(j): i
+        set(go): true
+        while(_): {go && j > 0} [
+            at(a): r {j - 1}
+            at(b): r j
+            st_part_cmp(c): a b
+            if(_): {c > 0} [
+                set(r): {j - 1} b
+                set(r): j a
+                sub(j): j 1
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+
+st_by_num(r): parts [
+    vec(r): "StPart"
+    len(n): parts
+    set(num): 1
+    set(found): 0
+    while(_): {found < n} [
+        set(i): 0
+        while(_): {i < n} [
+            at(p): parts i
+            getf(pn): p "num"
+            if(_): {pn = num} [
+                push(_): r p
+                add(found): found 1
+            ]
+            add(i): i 1
+        ]
+        add(num): num 1
+    ]
+]
+
+# Sectors partitions may use: [low high] for the current table kind.
+st_usable(r): [
+    vec(r): ""
+    if(_): {st_kind = "gpt"} [
+        push(_): r st_first
+        push(_): r st_last
+    ]
+    else(_): [
+        set(hi): {st_lbas - 1}
+        if(_): {hi > 0xFFFFFFFF} [
+            set(hi): 0xFFFFFFFF
+        ]
+        push(_): r 1
+        push(_): r hi
+    ]
+]
+
+# Free [start end] ranges between the partitions other than skip (a
+# number; 0 skips none). Logical partitions live inside their extended
+# partition and are not counted.
+st_free(r): skip [
+    vec(r): ""
+    vec(used): "StPart"
+    len(n): st_parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): st_parts i
+        getf(pn): p "num"
+        getf(lg): p "logical"
+        if(_): {pn != skip && lg = false} [
+            push(_): used p
+        ]
+        add(i): i 1
+    ]
+    st_sorted(used): used
+    st_usable(range):
+    at(lo): range 0
+    at(hi): range 1
+    set(at_s): lo
+    len(nu): used
+    set(i): 0
+    while(_): {i < nu} [
+        at(p): used i
+        getf(s): p "start"
+        getf(e): p "end"
+        if(_): {s > at_s} [
+            set(last): {s - 1}
+            if(_): {last > hi} [
+                set(last): hi
+            ]
+            if(_): {last >= at_s} [
+                vec(g): ""
+                push(_): g at_s
+                push(_): g last
+                push(_): r g
+            ]
+        ]
+        if(_): {e + 1 > at_s} [
+            set(at_s): {e + 1}
+        ]
+        add(i): i 1
+    ]
+    if(_): {at_s <= hi} [
+        vec(g): ""
+        push(_): g at_s
+        push(_): g hi
+        push(_): r g
+    ]
+]
+
+st_show(r): [
+    set(r): 0
+    st_int(tl): st_lbas
+    st_int(ts): st_sector
+    st_human(hb): st_bytes
+    concat(line): "Disk " st_dev ": " hb ", " tl " sectors of " ts " bytes"
+    print(_): line
+    if(_): {st_kind = "gpt"} [
+        st_int(tf): st_first
+        st_int(tla): st_last
+        st_int(tc): st_entry_count
+        concat(line): "Table: GPT, disk GUID " st_disk_guid ", usable sectors " tf ".." tla ", " tc " entries"
+        print(_): line
+    ]
+    elif(_): {st_kind = "mbr"} [
+        st_hex64(sig): st_disk_sig
+        slice(sig): sig 10 8
+        concat(line): "Table: MBR, disk signature 0x" sig
+        print(_): line
+    ]
+    else(_): [
+        print(_): "Table: none"
+        st_probe(fs): 0 st_lbas ""
+        at(name): fs 0
+        if(_): {name != ""} [
+            at(label): fs 1
+            concat(line): "Whole disk file system: " name
+            if(_): {label != ""} [
+                concat(line): line ", label " label
+            ]
+            print(_): line
+        ]
+    ]
+    len(nn): st_notes
+    set(i): 0
+    while(_): {i < nn} [
+        at(m): st_notes i
+        concat(m): "warning: " m
+        print(_): m
+        add(i): i 1
+    ]
+    if(_): {st_kind = "none"} [
+        return(r): r
+    ]
+    st_sorted(parts): st_parts
+    vec(rows): ""
+    set(gpt): {st_kind = "gpt"}
+    set(rows_hdr): '[`#`,`START`,`END`,`SECTORS`,`SIZE`,`TYPE`,`FS`,`LABEL`]'
+    if(_): gpt [
+        push(_): rows_hdr "NAME"
+    ]
+    push(_): rows rows_hdr
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        getf(num): p "num"
+        getf(s): p "start"
+        getf(e): p "end"
+        getf(code): p "type"
+        getf(name): p "name"
+        getf(boot): p "boot"
+        getf(lg): p "logical"
+        st_int(c0): num
+        if(_): boot [
+            concat(c0): c0 "*"
+        ]
+        st_int(c1): s
+        st_int(c2): e
+        set(count): {e - s + 1}
+        st_int(c3): count
+        st_human(c4): {count * st_sector}
+        st_type_name(c5): code st_kind
+        set(c6): ""
+        set(c7): ""
+        st_is_extended(isx): code
+        if(_): {st_kind = "mbr" && isx} [
+            set(c6): "-"
+        ]
+        elif(_): {e < st_lbas && e >= s} [
+            st_probe(fs): s count code
+            at(c6): fs 0
+            at(c7): fs 1
+        ]
+        if(_): lg [
+            concat(c5): c5 " (logical)"
+        ]
+        vec(row): ""
+        push(_): row c0
+        push(_): row c1
+        push(_): row c2
+        push(_): row c3
+        push(_): row c4
+        push(_): row c5
+        push(_): row c6
+        push(_): row c7
+        if(_): gpt [
+            push(_): row name
+        ]
+        push(_): rows row
+        add(i): i 1
+    ]
+    if(_): {n = 0} [
+        print(_): "No partitions."
+    ]
+    else(_): [
+        st_table(_): rows '[false,true,true,true,true,false,false,false,false]'
+    ]
+    st_free(free): 0
+    len(nf): free
+    set(i): 0
+    while(_): {i < nf} [
+        at(g): free i
+        at(a): g 0
+        at(b): g 1
+        set(count): {b - a + 1}
+        # gaps under one MiB are alignment slack
+        if(_): {count * st_sector >= 1048576} [
+            st_int(ta): a
+            st_int(tb): b
+            st_human(hs): {count * st_sector}
+            concat(line): "Free: " ta ".." tb " (" hs ")"
+            print(_): line
+        ]
+        add(i): i 1
+    ]
+]
+
+# ---------------------------------------------------------------- writing
+
+# CHS bytes of a sector (255 heads, 63 sectors a track) at v[i..i+2].
+st_chs(_): v i lba [
+    if(_): {lba >= 1023 * 255 * 63} [
+        set(v): i 254
+        set(v): {i + 1} 255
+        set(v): {i + 2} 255
+        return(_): 0
+    ]
+    st_div(c): lba 16065
+    set(rest): {lba - c * 16065}
+    st_div(h): rest 63
+    set(s): {rest - h * 63 + 1}
+    set(v): i h
+    set(v): {i + 1} {s | ((c >> 2) & 192)}
+    set(v): {i + 2} {c & 255}
+]
+
+st_mbr_entry(_): v slot boot code start count [
+    set(base): {446 + slot * 16}
+    if(_): boot [
+        set(v): base 128
+    ]
+    else(_): [
+        set(v): base 0
+    ]
+    st_chs(_): v {base + 1} start
+    st_parse_hex_byte(t): code
+    set(v): {base + 4} t
+    st_chs(_): v {base + 5} {start + count - 1}
+    st_put(_): v {base + 8} 4 start
+    st_put(_): v {base + 12} 4 count
+]
+
+# Sector 0 with boot code kept and a new partition area.
+st_sector0(r): [
+    st_read(r): 0 1
+    st_fill(_): r 446 64 0
+    set(r): 510 85
+    set(r): 511 170
+    if(_): {st_sector > 512} [
+        # 4K sectors: the 55 AA stays at byte 510, the rest is zero
+        st_fill(_): r 512 {st_sector - 512} 0
+    ]
+]
+
+st_write_mbr(r): [
+    st_sector0(s0):
+    st_put(_): s0 440 4 st_disk_sig
+    st_put(_): s0 444 2 0
+    len(n): st_parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): st_parts i
+        getf(lg): p "logical"
+        if(_): {lg = false} [
+            getf(num): p "num"
+            getf(s): p "start"
+            getf(e): p "end"
+            getf(code): p "type"
+            getf(boot): p "boot"
+            st_mbr_entry(_): s0 {num - 1} boot code s {e - s + 1}
+        ]
+        add(i): i 1
+    ]
+    st_write(r): 0 s0 "MBR"
+]
+
+st_gpt_header_bytes(r): my alt entries_lba crc [
+    st_zeros(h): st_sector
+    text_bytes(sig): "EFI PART"
+    set(k): 0
+    while(_): {k < 8} [
+        at(b): sig k
+        set(h): k b
+        add(k): k 1
+    ]
+    st_put(_): h 8 4 0x00010000
+    st_put(_): h 12 4 92
+    st_put(_): h 24 8 my
+    st_put(_): h 32 8 alt
+    st_put(_): h 40 8 st_first
+    st_put(_): h 48 8 st_last
+    st_guid_put(_): h 56 st_disk_guid
+    st_put(_): h 72 8 entries_lba
+    st_put(_): h 80 4 st_entry_count
+    st_put(_): h 84 4 st_entry_size
+    st_put(_): h 88 4 crc
+    st_crc32(sum): h 0 92
+    st_put(_): h 16 4 sum
+    set(r): h
+]
+
+st_write_gpt(r): [
+    set(total): {st_entry_count * st_entry_size}
+    st_div_up(sectors): total st_sector
+    st_zeros(e): {sectors * st_sector}
+    len(n): st_parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): st_parts i
+        getf(num): p "num"
+        set(base): {(num - 1) * st_entry_size}
+        getf(code): p "type"
+        getf(uuid): p "uuid"
+        getf(s): p "start"
+        getf(en): p "end"
+        getf(attrs): p "attrs"
+        getf(name): p "name"
+        st_guid_put(_): e base code
+        st_guid_put(_): e {base + 16} uuid
+        st_put(_): e {base + 32} 8 s
+        st_put(_): e {base + 40} 8 en
+        st_put(_): e {base + 48} 8 attrs
+        st_utf16_units(units): name
+        len(nu): units
+        set(room): {(st_entry_size - 56) >> 1}
+        if(_): {nu > room} [
+            set(nu): room
+        ]
+        set(k): 0
+        while(_): {k < nu} [
+            at(u): units k
+            st_put(_): e {base + 56 + k * 2} 2 u
+            add(k): k 1
+        ]
+        add(i): i 1
+    ]
+    st_crc32(crc): e 0 total
+    set(last): {st_lbas - 1}
+    set(backup_entries): {last - sectors}
+    st_gpt_header_bytes(primary): 1 last 2 crc
+    st_gpt_header_bytes(backup): last 1 backup_entries crc
+    # protective MBR: one 0xEE partition over the whole disk
+    st_sector0(s0):
+    set(count): {st_lbas - 1}
+    if(_): {count > 0xFFFFFFFF} [
+        set(count): 0xFFFFFFFF
+    ]
+    st_mbr_entry(_): s0 0 false "EE" 1 count
+    st_write(r): 2 e "primary GPT partition array"
+    if(_): {r = 0} [
+        st_write(r): 1 primary "primary GPT header"
+    ]
+    if(_): {r = 0} [
+        st_write(r): backup_entries e "backup GPT partition array"
+    ]
+    if(_): {r = 0} [
+        st_write(r): last backup "backup GPT header"
+    ]
+    if(_): {r = 0} [
+        st_write(r): 0 s0 "protective MBR"
+    ]
+]
+
+st_commit(r): [
+    if(_): {st_kind = "gpt"} [
+        st_write_gpt(r):
+    ]
+    else(_): [
+        st_write_mbr(r):
+    ]
+    # what loading warned about is rewritten now
+    if(_): {r = 0 && st_dry = false} [
+        vec(st_notes): ""
+    ]
+]
+
+# Raw disks are written only with --yes.
+st_may_write(r): [
+    set(r): 0
+    st_is_raw(raw): st_dev
+    if(_): {raw && st_yes = false && st_dry = false} [
+        concat(m): st_dev " is a raw disk: add --yes to write to it (or --dry-run to see what would change)"
+        st_err(r): m
+    ]
+]
+
+# ---------------------------------------------------------------- commands
+
+st_usage(r): [
+    set(r): 0
+    print(_): "stalin - partition editor for GPT and MBR disks and disk images"
+    print(_): ""
+    print(_): "  stalin [list]                  storage devices: HDD, SSD, flash"
+    print(_): "  stalin show DEV                partition table, file systems, free space"
+    print(_): "  stalin mkimg FILE SIZE         new blank disk image, e.g. disk.img 20M"
+    print(_): "  stalin init DEV gpt|mbr        new empty partition table"
+    print(_): "  stalin add DEV [options]       add a partition (default: all free space)"
+    print(_): "  stalin rm DEV N                remove partition N"
+    print(_): "  stalin edit DEV N [options]    change partition N"
+    print(_): "  stalin wipe DEV                erase the partition tables"
+    print(_): "  stalin types                   partition type names"
+    print(_): ""
+    print(_): "options:"
+    print(_): "  --type T      type name (stalin types), MBR hex code or GPT GUID"
+    print(_): "  --start POS   first sector: 2048s, 1M, 1.5G (default: first aligned free)"
+    print(_): "  --size SIZE   20M, 512K, 4096s, max (a bare number is MiB)"
+    print(_): "  --name NAME   GPT partition name"
+    print(_): "  --boot on|off MBR active flag; GPT legacy BIOS bootable attribute"
+    print(_): "  --uuid GUID   GPT partition GUID      --attrs N  GPT attribute bits"
+    print(_): "  --num N       partition number for add"
+    print(_): "  --sector N    sector size of an image (default 512)"
+    print(_): "  --dry-run     show the sectors a command would write, write none"
+    print(_): "  --yes         allow writing to a raw disk"
+    print(_): ""
+    print(_): "DEV is an image file or a raw disk (\\\\.\\PhysicalDrive1, /dev/sdb)."
+    print(_): "Moving or resizing a partition changes the table only, not its data."
+]
+
+st_cmd_types(r): [
+    set(r): 0
+    vec(rows): ""
+    push(_): rows '[`NAME`,`MBR`,`GPT GUID`,`DESCRIPTION`]'
+    len(n): st_type_table
+    set(i): 0
+    while(_): {i < n} [
+        at(row): st_type_table i
+        at(name): row 0
+        at(g): row 1
+        at(m): row 2
+        at(d): row 3
+        if(_): {g = ""} [
+            set(g): "-"
+        ]
+        if(_): {m = ""} [
+            set(m): "-"
+        ]
+        vec(out): ""
+        push(_): out name
+        push(_): out m
+        push(_): out g
+        push(_): out d
+        push(_): rows out
+        add(i): i 1
+    ]
+    st_table(_): rows '[false,false,false,false]'
+    print(_): ""
+    set(line): "aliases:"
+    len(na): st_type_alias
+    set(i): 0
+    while(_): {i < na} [
+        at(row): st_type_alias i
+        at(a): row 0
+        at(b): row 1
+        concat(line): line " " a "=" b
+        add(i): i 1
+    ]
+    print(_): line
+]
+
+# What sector 0 (and 1) of an open device hold: gpt, mbr, none, or "?".
+st_peek(r): dev [
+    set(r): "?"
+    bread(s0): dev 0 1
+    typeof(t): s0
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    set(st_dev): dev
+    set(st_sector): 512
+    bsize(b): dev
+    st_div(st_lbas): b 512
+    st_load(code):
+    set(r): st_kind
+    if(_): {code != 0} [
+        set(r): "?"
+    ]
+    elif(_): {st_kind != "none"} [
+        len(n): st_parts
+        st_int(tn): n
+        concat(r): st_kind " (" tn ")"
+    ]
+]
+
+st_cmd_list(r): [
+    set(r): 0
+    bdevices(devs):
+    len(n): devs
+    if(_): {n = 0} [
+        print(_): "No storage devices found."
+        return(r): 1
+    ]
+    vec(rows): ""
+    push(_): rows '[`DEVICE`,`KIND`,`BUS`,`SIZE`,`SECTOR`,`TABLE`,`MODEL`]'
+    set(blind): false
+    set(i): 0
+    while(_): {i < n} [
+        at(d): devs i
+        at(path): d 0
+        at(bytes): d 1
+        at(kind): d 2
+        at(bus): d 3
+        at(model): d 4
+        at(sector): d 5
+        set(size): "?"
+        if(_): {bytes >= 0} [
+            st_human(size): bytes
+        ]
+        st_int(ts): sector
+        st_peek(table): path
+        if(_): {table = "?"} [
+            set(blind): true
+        ]
+        vec(row): ""
+        push(_): row path
+        push(_): row kind
+        push(_): row bus
+        push(_): row size
+        push(_): row ts
+        push(_): row table
+        push(_): row model
+        push(_): rows row
+        add(i): i 1
+    ]
+    st_table(_): rows '[false,false,false,true,true,false,false]'
+    if(_): blind [
+        print(_): ""
+        print(_): "TABLE ?: no read access; run as administrator (root) to read partition tables."
+    ]
+]
+
+st_cmd_show(r): p [
+    len(n): p
+    if(_): {n < 2} [
+        st_err(r): "show which device?"
+        return(r): r
+    ]
+    at(dev): p 1
+    st_open(r): dev
+    if(_): {r = 0} [
+        st_load(r):
+    ]
+    if(_): {r = 0} [
+        st_show(r):
+    ]
+]
+
+st_cmd_mkimg(r): p [
+    len(n): p
+    if(_): {n < 3} [
+        st_err(r): "usage: stalin mkimg FILE SIZE"
+        return(r): r
+    ]
+    at(file): p 1
+    at(size_text): p 2
+    st_parse_size(sectors): size_text
+    if(_): {sectors < 128} [
+        concat(m): "bad image size '" size_text "' (at least 128 sectors)"
+        st_err(r): m
+        return(r): r
+    ]
+    file_exists(e): file
+    if(_): {e && st_yes = false} [
+        concat(m): file " exists: add --yes to replace it"
+        st_err(r): m
+        return(r): r
+    ]
+    st_is_raw(raw): file
+    if(_): raw [
+        st_err(r): "mkimg makes image files, not devices"
+        return(r): r
+    ]
+    open_file(h): file "wb"
+    if(_): {h = -1} [
+        concat(m): "cannot create " file
+        st_err(r): m
+        return(r): r
+    ]
+    close_file(_): h
+    st_zeros(z): st_sector
+    bwrite(w): file {sectors - 1} z st_sector
+    if(_): {w < 0} [
+        concat(m): "cannot write " file
+        st_err(r): m
+        return(r): r
+    ]
+    st_int(ts): sectors
+    st_human(hs): {sectors * st_sector}
+    concat(m): "Created " file ": " hs ", " ts " sectors"
+    print(_): m
+    set(r): 0
+]
+
+st_cmd_init(r): p [
+    len(n): p
+    if(_): {n < 3} [
+        st_err(r): "usage: stalin init DEV gpt|mbr"
+        return(r): r
+    ]
+    at(dev): p 1
+    at(kind): p 2
+    str_lower(kind): kind
+    if(_): {kind != "gpt" && kind != "mbr"} [
+        st_err(r): "the table kind is gpt or mbr"
+        return(r): r
+    ]
+    st_open(r): dev
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_may_write(r):
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    vec(st_parts): "StPart"
+    vec(st_notes): ""
+    set(st_kind): kind
+    if(_): {kind = "gpt"} [
+        set(st_entry_count): 128
+        set(st_entry_size): 128
+        st_div_up(sectors): {128 * 128} st_sector
+        set(st_first): {2 + sectors}
+        set(st_last): {st_lbas - 2 - sectors}
+        st_guid_new(st_disk_guid):
+    ]
+    else(_): [
+        st_random16(x):
+        st_le(st_disk_sig): x 0 4
+    ]
+    if(_): {kind = "gpt"} [
+        # a GPT replaces a backup GPT the old table may have left, and
+        # an MBR wipes one, so nothing stale stays at the end
+        st_commit(r):
+    ]
+    else(_): [
+        st_wipe_gpt(r):
+        if(_): {r = 0} [
+            st_commit(r):
+        ]
+    ]
+    if(_): {r = 0 && st_dry = false} [
+        st_show(_):
+    ]
+]
+
+# Zeroes both GPT headers and arrays.
+st_wipe_gpt(r): [
+    st_div_up(sectors): {128 * 128} st_sector
+    add(sectors): sectors 1
+    st_zeros(z): {sectors * st_sector}
+    st_write(r): 1 z "primary GPT area"
+    if(_): {r = 0} [
+        st_write(r): {st_lbas - sectors} z "backup GPT area"
+    ]
+]
+
+st_cmd_wipe(r): p [
+    len(n): p
+    if(_): {n < 2} [
+        st_err(r): "wipe which device?"
+        return(r): r
+    ]
+    at(dev): p 1
+    st_open(r): dev
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_may_write(r):
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_wipe_gpt(r):
+    if(_): {r = 0} [
+        st_read(s0): 0 1
+        st_fill(_): s0 446 66 0
+        st_write(r): 0 s0 "MBR partition area"
+    ]
+    if(_): {r = 0 && st_dry = false} [
+        concat(m): "Wiped the partition tables of " st_dev
+        print(_): m
+    ]
+]
+
+# Opens and loads a device for a change. 0, or 2 after saying why.
+st_prepare(r): dev [
+    st_open(r): dev
+    if(_): {r = 0} [
+        st_may_write(r):
+    ]
+    if(_): {r = 0} [
+        st_load(r):
+    ]
+    if(_): {r = 0 && st_kind = "none"} [
+        concat(m): st_dev " has no partition table (stalin init " st_dev " gpt)"
+        st_err(r): m
+    ]
+]
+
+st_find(r): num [
+    set(r): null
+    len(n): st_parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): st_parts i
+        getf(pn): p "num"
+        if(_): {pn = num} [
+            set(r): p
+        ]
+        add(i): i 1
+    ]
+]
+
+# Sectors in one MiB: partitions start on MiB boundaries.
+st_align(r): [
+    st_div(r): 1048576 st_sector
+    if(_): {r < 1} [
+        set(r): 1
+    ]
+]
+
+st_align_up(r): x [
+    st_align(a):
+    st_div_up(q): x a
+    set(r): {q * a}
+]
+
+# Places a partition: [start end] from --start/--size inside the free
+# space (skip: the partition being edited, whose old place is free), or
+# null after saying why. old_start/old_size keep what --start/--size omit
+# (-1: choose).
+st_place(r): skip old_start old_size [
+    set(r): null
+    st_free(free): skip
+    set(start): old_start
+    set(size): old_size
+    typeof(ts): st_o_start
+    if(_): {ts != "null"} [
+        st_parse_size(start): st_o_start
+        if(_): {start < 0} [
+            concat(m): "bad --start '" st_o_start "'"
+            st_err(_): m
+            return(r): r
+        ]
+    ]
+    typeof(tz): st_o_size
+    if(_): {tz != "null"} [
+        st_parse_size(size): st_o_size
+        if(_): {size = -1 || size = 0} [
+            concat(m): "bad --size '" st_o_size "'"
+            st_err(_): m
+            return(r): r
+        ]
+    ]
+    len(nf): free
+    set(i): 0
+    while(_): {i < nf} [
+        at(g): free i
+        at(a): g 0
+        at(b): g 1
+        set(s): start
+        if(_): {start < 0} [
+            st_align_up(s): a
+        ]
+        if(_): {s >= a && s <= b} [
+            set(e): b
+            if(_): {size > 0} [
+                set(e): {s + size - 1}
+            ]
+            if(_): {e <= b} [
+                vec(r): ""
+                push(_): r s
+                push(_): r e
+                return(r): r
+            ]
+            if(_): {start >= 0} [
+                st_int(ts2): s
+                st_human(hf): {(b - s + 1) * st_sector}
+                concat(m): "does not fit: " hf " free from sector " ts2
+                st_err(_): m
+                return(r): null
+            ]
+        ]
+        add(i): i 1
+    ]
+    if(_): {start >= 0} [
+        st_int(ts2): start
+        concat(m): "sector " ts2 " is not free"
+        st_err(_): m
+    ]
+    else(_): [
+        st_err(_): "no free space that large"
+    ]
+]
+
+# Applies --type, --name, --boot, --uuid, --attrs to p. 0, or 2.
+st_apply(r): p [
+    set(r): 0
+    typeof(t): st_o_type
+    if(_): {t != "null"} [
+        st_type_code(code): st_o_type st_kind
+        typeof(tc): code
+        if(_): {tc = "null"} [
+            concat(m): "unknown " st_kind " partition type '" st_o_type "' (stalin types)"
+            st_err(r): m
+            return(r): r
+        ]
+        if(_): {st_kind = "mbr" && code = "EE"} [
+            st_err(r): "type EE is the GPT protective partition"
+            return(r): r
+        ]
+        setf(_): p "type" code
+    ]
+    typeof(t): st_o_name
+    if(_): {t != "null"} [
+        if(_): {st_kind = "mbr"} [
+            st_err(r): "MBR partitions have no names"
+            return(r): r
+        ]
+        setf(_): p "name" st_o_name
+    ]
+    typeof(t): st_o_uuid
+    if(_): {t != "null"} [
+        if(_): {st_kind = "mbr"} [
+            st_err(r): "MBR partitions have no GUIDs"
+            return(r): r
+        ]
+        st_guid_clean(g): st_o_uuid
+        typeof(tg): g
+        if(_): {tg = "null"} [
+            concat(m): "bad GUID '" st_o_uuid "'"
+            st_err(r): m
+            return(r): r
+        ]
+        setf(_): p "uuid" g
+    ]
+    typeof(t): st_o_attrs
+    if(_): {t != "null"} [
+        if(_): {st_kind = "mbr"} [
+            st_err(r): "MBR partitions have no attribute bits"
+            return(r): r
+        ]
+        str_to_number(a): st_o_attrs
+        typeof(ta): a
+        if(_): {ta != "integer"} [
+            concat(m): "bad --attrs '" st_o_attrs "'"
+            st_err(r): m
+            return(r): r
+        ]
+        setf(_): p "attrs" a
+        setf(_): p "boot" {(a & 4) != 0}
+    ]
+    typeof(t): st_o_boot
+    if(_): {t != "null"} [
+        str_lower(b): st_o_boot
+        set(on): {b = "on" || b = "yes" || b = "1" || b = "true"}
+        if(_): {on = false && b != "off" && b != "no" && b != "0" && b != "false"} [
+            st_err(r): "--boot is on or off"
+            return(r): r
+        ]
+        if(_): {st_kind = "mbr"} [
+            if(_): on [
+                # one active partition
+                len(n): st_parts
+                set(i): 0
+                while(_): {i < n} [
+                    at(q): st_parts i
+                    setf(_): q "boot" false
+                    add(i): i 1
+                ]
+            ]
+            setf(_): p "boot" on
+        ]
+        else(_): [
+            getf(a): p "attrs"
+            set(a): {a & (0 - 5)}
+            if(_): on [
+                set(a): {a | 4}
+            ]
+            setf(_): p "attrs" a
+            setf(_): p "boot" on
+        ]
+    ]
+]
+
+st_cmd_add(r): p [
+    len(n): p
+    if(_): {n < 2} [
+        st_err(r): "add to which device?"
+        return(r): r
+    ]
+    at(dev): p 1
+    st_prepare(r): dev
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    # the number: --num or the first free slot
+    if(_): {st_kind = "gpt"} [
+        set(slots): st_entry_count
+    ]
+    else(_): [
+        set(slots): 4
+    ]
+    set(num): 0
+    typeof(tn): st_o_num
+    if(_): {tn != "null"} [
+        str_to_number(num): st_o_num
+        typeof(tnum): num
+        if(_): {tnum != "integer"} [
+            set(num): 0
+        ]
+        if(_): {num < 1 || num > slots} [
+            st_int(tsl): slots
+            concat(m): "--num is 1.." tsl
+            st_err(r): m
+            return(r): r
+        ]
+        st_find(old): num
+        typeof(to): old
+        if(_): {to != "null"} [
+            st_int(tnn): num
+            concat(m): "partition " tnn " exists"
+            st_err(r): m
+            return(r): r
+        ]
+    ]
+    else(_): [
+        set(k): 1
+        while(_): {num = 0 && k <= slots} [
+            st_find(old): k
+            typeof(to): old
+            if(_): {to = "null"} [
+                set(num): k
+            ]
+            add(k): k 1
+        ]
+        if(_): {num = 0} [
+            if(_): {st_kind = "mbr"} [
+                st_err(r): "an MBR holds 4 primary partitions and all are used"
+            ]
+            else(_): [
+                st_err(r): "every GPT entry is in use"
+            ]
+            return(r): r
+        ]
+    ]
+    st_type_code(code): "linux" st_kind
+    set(uuid): ""
+    if(_): {st_kind = "gpt"} [
+        st_guid_new(uuid):
+    ]
+    st_new_part(part): num 0 0 code "" uuid 0 false false
+    st_apply(r): part
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_place(where): 0 -1 -1
+    typeof(tw): where
+    if(_): {tw = "null"} [
+        return(r): 2
+    ]
+    at(s): where 0
+    at(e): where 1
+    setf(_): part "start" s
+    setf(_): part "end" e
+    push(_): st_parts part
+    st_commit(r):
+    if(_): {r = 0 && st_dry = false} [
+        st_int(tn2): num
+        st_human(hs): {(e - s + 1) * st_sector}
+        getf(code): part "type"
+        st_type_name(tname): code st_kind
+        concat(m): "Added partition " tn2 ": " hs " " tname
+        print(_): m
+        st_show(_):
+    ]
+]
+
+# The partition a command names, or null after saying why.
+st_target(r): p [
+    set(r): null
+    len(n): p
+    if(_): {n < 3} [
+        st_err(_): "which partition number?"
+        return(r): r
+    ]
+    at(t): p 2
+    str_to_number(num): t
+    typeof(tt): num
+    if(_): {tt != "integer"} [
+        concat(m): "bad partition number '" t "'"
+        st_err(_): m
+        return(r): r
+    ]
+    st_find(r): num
+    typeof(tr): r
+    if(_): {tr = "null"} [
+        concat(m): "no partition " t
+        st_err(_): m
+    ]
+]
+
+st_cmd_rm(r): p [
+    len(n): p
+    if(_): {n < 3} [
+        st_err(r): "usage: stalin rm DEV N"
+        return(r): r
+    ]
+    at(dev): p 1
+    st_prepare(r): dev
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_target(part): p
+    typeof(t): part
+    if(_): {t = "null"} [
+        return(r): 2
+    ]
+    getf(lg): part "logical"
+    if(_): lg [
+        st_err(r): "logical partitions are read-only here; remove their extended partition"
+        return(r): r
+    ]
+    getf(num): part "num"
+    getf(code): part "type"
+    st_is_extended(isx): code
+    vec(keep): "StPart"
+    len(np): st_parts
+    set(i): 0
+    while(_): {i < np} [
+        at(q): st_parts i
+        getf(qn): q "num"
+        getf(ql): q "logical"
+        if(_): {qn != num && (ql = false || isx = false || st_kind != "mbr")} [
+            push(_): keep q
+        ]
+        add(i): i 1
+    ]
+    set(st_parts): keep
+    st_commit(r):
+    if(_): {r = 0 && st_dry = false} [
+        st_int(tn): num
+        concat(m): "Removed partition " tn
+        if(_): {isx && st_kind = "mbr"} [
+            concat(m): m " and its logical partitions"
+        ]
+        print(_): m
+        st_show(_):
+    ]
+]
+
+st_cmd_edit(r): p [
+    len(n): p
+    if(_): {n < 3} [
+        st_err(r): "usage: stalin edit DEV N [options]"
+        return(r): r
+    ]
+    at(dev): p 1
+    st_prepare(r): dev
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_target(part): p
+    typeof(t): part
+    if(_): {t = "null"} [
+        return(r): 2
+    ]
+    getf(lg): part "logical"
+    if(_): lg [
+        st_err(r): "logical partitions are read-only here"
+        return(r): r
+    ]
+    getf(num): part "num"
+    typeof(ts): st_o_start
+    typeof(tz): st_o_size
+    if(_): {ts != "null" || tz != "null"} [
+        getf(s): part "start"
+        getf(e): part "end"
+        st_place(where): num s {e - s + 1}
+        typeof(tw): where
+        if(_): {tw = "null"} [
+            return(r): 2
+        ]
+        at(ns): where 0
+        at(ne): where 1
+        setf(_): part "start" ns
+        setf(_): part "end" ne
+        if(_): {ns != s} [
+            print(_): "note: the partition moved; its data did not"
+        ]
+    ]
+    st_apply(r): part
+    if(_): {r != 0} [
+        return(r): r
+    ]
+    st_commit(r):
+    if(_): {r = 0 && st_dry = false} [
+        st_int(tn): num
+        concat(m): "Changed partition " tn
+        print(_): m
+        st_show(_):
+    ]
+]
+
+stalin_main(r): args [
+    st_types(_):
+    set(st_yes): false
+    set(st_dry): false
+    set(st_wrote): 0
+    set(st_seeded): false
+    set(st_counter): 0
+    set(st_dev): ""
+    set(st_disk_guid): ""
+    set(st_sector): 512
+    set(st_o_start): null
+    set(st_o_size): null
+    set(st_o_type): null
+    set(st_o_name): null
+    set(st_o_boot): null
+    set(st_o_uuid): null
+    set(st_o_attrs): null
+    set(st_o_num): null
+    vec(st_parts): "StPart"
+    vec(st_notes): ""
+    set(st_kind): "none"
+    vec(p): ""
+    len(n): args
+    set(plain): false
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        set(option): {plain = false && i + 1 < n}
+        set(flag): {plain = false}
+        if(_): {flag && a = "--"} [
+            set(plain): true
+        ]
+        elif(_): {flag && (a = "--yes" || a = "-y")} [
+            set(st_yes): true
+        ]
+        elif(_): {flag && (a = "--dry-run" || a = "-n")} [
+            set(st_dry): true
+        ]
+        elif(_): {option && a = "--start"} [
+            at(st_o_start): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--size"} [
+            at(st_o_size): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--type"} [
+            at(st_o_type): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--name"} [
+            at(st_o_name): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--boot"} [
+            at(st_o_boot): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--uuid"} [
+            at(st_o_uuid): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--attrs"} [
+            at(st_o_attrs): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--num"} [
+            at(st_o_num): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--sector"} [
+            at(sv): args {i + 1}
+            str_to_number(st_sector): sv
+            typeof(tsv): st_sector
+            if(_): {tsv != "integer"} [
+                set(st_sector): 0
+            ]
+            if(_): {st_sector != 512 && st_sector != 1024 && st_sector != 2048 && st_sector != 4096} [
+                st_err(r): "--sector is 512, 1024, 2048 or 4096"
+                return(r): r
+            ]
+            add(i): i 1
+        ]
+        else(_): [
+            set(dash): ""
+            len(al): a
+            if(_): {al > 1} [
+                slice(dash): a 0 2
+            ]
+            if(_): {flag && dash = "--"} [
+                concat(m): "unknown option " a
+                st_err(r): m
+                return(r): r
+            ]
+            push(_): p a
+        ]
+        add(i): i 1
+    ]
+    # STALIN_SEED makes new GUIDs and disk signatures repeatable (tests)
+    getenv(seed): "STALIN_SEED"
+    typeof(tseed): seed
+    if(_): {tseed = "string"} [
+        str_to_number(sn): seed
+        typeof(tsn): sn
+        if(_): {tsn = "integer"} [
+            seed_random64(_): sn
+            set(st_seeded): true
+        ]
+    ]
+    len(np): p
+    set(cmd): "list"
+    if(_): {np > 0} [
+        at(cmd): p 0
+    ]
+    set(r): -1
+    if(_): {cmd = "help" || cmd = "--help" || cmd = "-h"} [ st_usage(r): ]
+    elif(_): {cmd = "list"} [ st_cmd_list(r): ]
+    elif(_): {cmd = "show" || cmd = "print"} [ st_cmd_show(r): p ]
+    elif(_): {cmd = "types"} [ st_cmd_types(r): ]
+    elif(_): {cmd = "mkimg"} [ st_cmd_mkimg(r): p ]
+    elif(_): {cmd = "init" || cmd = "mklabel"} [ st_cmd_init(r): p ]
+    elif(_): {cmd = "add"} [ st_cmd_add(r): p ]
+    elif(_): {cmd = "rm" || cmd = "remove" || cmd = "del"} [ st_cmd_rm(r): p ]
+    elif(_): {cmd = "edit"} [ st_cmd_edit(r): p ]
+    elif(_): {cmd = "wipe"} [ st_cmd_wipe(r): p ]
+    if(_): {r = -1} [
+        # "stalin disk.img" shows that disk
+        file_exists(e): cmd
+        st_is_raw(raw): cmd
+        if(_): {e || raw} [
+            vec(q): ""
+            push(_): q "show"
+            push(_): q cmd
+            st_cmd_show(r): q
+        ]
+        else(_): [
+            concat(m): "unknown command '" cmd "' (stalin help lists them)"
+            st_err(r): m
+        ]
+    ]
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(args): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): args a
+        add(i): i 1
+    ]
+    stalin_main(ret): args
+]
+$endif

@@ -1,1 +1,1 @@
-'Package{name=`stalin`,version=`0.1.0`,description=`Hard disk formatting manager`,entry=`stalin.su`,dependencies=[`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`stalin`,version=`0.1.0`,description=`Stalin: partition editor for GPT and MBR disks and images; lists HDD, SSD and flash devices; recognises ext4, NTFS, UFS and FFS2`,entry=`stalin.su`,dependencies=[`library`],files=[`stalin.su`,`README.md`,`CHANGELOG.md`,`docs/API.md`,`examples/hello.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

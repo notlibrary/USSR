@@ -1091,6 +1091,7 @@ socket_recv_bytes(v): s max          # up to max bytes; [] once closed, null on 
 tls_send_bytes(n): s bytes           # tls_send for bytes (0: wait_writable)
 tls_recv_bytes(v): s max             # tls_recv as bytes; null: wait_readable
 sha256(v): data                      # 32-byte digest of a string or bytes
+crc32(n): data [from [count]]        # CRC-32 of zlib, GPT and PNG, an integer
 hmac_sha256(v): key data             # 32 bytes
 pbkdf2_sha256(v): password salt iterations [length]   # 32 bytes by default
 md5(v): data                         # 16 bytes; legacy protocols only
@@ -1098,6 +1099,24 @@ md5(v): data                         # 16 bytes; legacy protocols only
 
 The hashes serve logins (SCRAM-SHA-256, md5); results are byte vectors.
 They are not encryption, which belongs to TLS (Ryazan).
+
+**Disks and disk images (native).** Stalin (`src/stalin/`) edits partition
+tables with these. A device is an image file or a raw disk
+(`\\.\PhysicalDrive0` on Windows, `/dev/sda` on Linux, which need
+administrator or root rights to read or write):
+
+```
+bread(v): dev lba [count [sector]]   # count sectors (1) of sector bytes (512) from lba; null on error
+bwrite(n): dev lba bytes [sector]    # whole sectors at lba; bytes written or -1; grows an image
+bsize(n): dev                        # bytes, -1 when unknown
+bdevices(v):                         # [path bytes kind bus model sector] per device;
+                                     # kind: HDD, SSD, flash, virtual or disk
+```
+
+`bwrite` only opens files that exist (make an image with `open_file` or
+`stalin mkimg`). `bdevices` asks Windows (IOCTL_STORAGE_QUERY_PROPERTY: bus,
+seek penalty, removable media) or Linux (`/sys/block`); other systems give
+an empty vector.
 
 **math.su — mathematical functions:**
 

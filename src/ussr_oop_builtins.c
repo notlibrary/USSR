@@ -23,6 +23,7 @@
 #include <io.h>
 #include <windows.h>
 #include <shellapi.h>
+#include <winioctl.h>
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
@@ -34,6 +35,9 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <linux/fs.h>
+#endif
 #endif
 
 /*
@@ -2399,6 +2403,56 @@ static int oop_do_hash(const char *command, ussr_argument_t *arguments,
         free(a);
         return status;
     }
+    if (strcmp(command, "crc32") == 0)
+    {
+        /* crc32(n): data [from [count]]: the CRC-32 of zlib, GPT and
+         * PNG over the bytes from..from+count-1 (default: all) */
+        ussr_int_t range[2] = { 0, -1 };
+        uint32_t crc = 0xFFFFFFFFu;
+        size_t i;
+        size_t k;
+
+        if (argument_count < 1 || argument_count > 3)
+        {
+            fprintf(stderr, "USSR: crc32(n): data [from [count]]\n");
+            return -1;
+        }
+        for (k = 1; k < argument_count; ++k)
+        {
+            ussr_value_t v;
+            int ok;
+
+            if (oop_eval(&arguments[k], &v) != 0)
+                return -1;
+            ok = oop_expect_integer(&v, &range[k - 1]);
+            ussr_value_free(&v);
+            if (!ok)
+            {
+                fprintf(stderr, "USSR: crc32: from and count are integers\n");
+                return -1;
+            }
+        }
+        if (oop_bytes_argument(command, arguments, 0, &a, &a_length) != 0)
+            return -1;
+        if (range[1] < 0)
+            range[1] = (ussr_int_t)a_length - range[0];
+        if (range[0] < 0 || range[1] < 0 ||
+            (size_t)range[0] + (size_t)range[1] > a_length)
+        {
+            fprintf(stderr, "USSR: crc32: range out of bounds\n");
+            free(a);
+            return -1;
+        }
+        for (i = (size_t)range[0]; i < (size_t)(range[0] + range[1]); ++i)
+        {
+            crc ^= a[i];
+            for (k = 0; k < 8; ++k)
+                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+        free(a);
+        *out_result = ussr_integer((ussr_int_t)(crc ^ 0xFFFFFFFFu));
+        return 0;
+    }
     if (strcmp(command, "hmac_sha256") == 0)
     {
         if (argument_count != 2)
@@ -2673,6 +2727,569 @@ static int oop_do_write_bytes(
         written = 0;
     free(data);
     *out_result = ussr_integer(written ? (ussr_int_t)count : -1);
+    return 0;
+}
+
+/* ------------------------------------------------------------- */
+/* Block devices (stalin.su):                                      */
+/*   bread(v): dev lba [count [sector]]  -> count sectors (default  */
+/*             1 of 512 bytes) from sector lba as a byte vector;    */
+/*             null (non-fatal) when they cannot all be read        */
+/*   bwrite(n): dev lba bytes [sector]   -> writes the bytes (a     */
+/*             whole number of sectors) at sector lba; bytes        */
+/*             written, or -1 (non-fatal)                           */
+/*   bsize(n): dev                       -> size in bytes, -1 when  */
+/*             unknown                                              */
+/*   bdevices(v):                        -> one [path bytes kind    */
+/*             bus model sector] vector per storage device; kind    */
+/*             is HDD, SSD, flash, virtual or disk                  */
+/* dev is a disk image file or a raw device: \\.\PhysicalDrive0 on  */
+/* Windows, /dev/sda on Linux. The file must already exist; writing */
+/* past the end of an image grows it.                               */
+/* ------------------------------------------------------------- */
+
+/* Reads or writes length bytes at offset; 0 when all of them moved. */
+static int oop_block_io(const char *path, int writing, long long offset,
+                        unsigned char *data, size_t length)
+{
+    size_t done = 0;
+#ifdef _WIN32
+    HANDLE handle;
+    LARGE_INTEGER where;
+    int ok;
+
+    handle = CreateFileA(path,
+                         writing ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (handle == INVALID_HANDLE_VALUE)
+        return -1;
+    where.QuadPart = offset;
+    ok = SetFilePointerEx(handle, where, NULL, FILE_BEGIN) != 0;
+    while (ok && done < length)
+    {
+        DWORD chunk = length - done > 0x40000000u ? 0x40000000u
+                                                  : (DWORD)(length - done);
+        DWORD moved = 0;
+
+        if (writing)
+            ok = WriteFile(handle, data + done, chunk, &moved, NULL) != 0;
+        else
+            ok = ReadFile(handle, data + done, chunk, &moved, NULL) != 0;
+        if (moved == 0)
+            ok = 0;
+        done += moved;
+    }
+    if (ok && writing)
+        FlushFileBuffers(handle);
+    CloseHandle(handle);
+    return ok && done == length ? 0 : -1;
+#else
+    int fd = open(path, writing ? O_RDWR : O_RDONLY);
+    int ok = fd >= 0;
+
+    while (ok && done < length)
+    {
+        ssize_t moved = writing
+            ? pwrite(fd, data + done, length - done, (off_t)(offset + done))
+            : pread(fd, data + done, length - done, (off_t)(offset + done));
+        if (moved <= 0)
+            ok = 0;
+        else
+            done += (size_t)moved;
+    }
+    if (ok && writing && fsync(fd) != 0)
+        ok = 0;
+    if (fd >= 0)
+        close(fd);
+    return ok && done == length ? 0 : -1;
+#endif
+}
+
+/* The integer arguments of bread/bwrite from index first on: lba,
+ * then count and sector when given (defaults 1 and 512). */
+static int oop_block_numbers(const char *name, ussr_argument_t *arguments,
+                             size_t first, size_t argument_count,
+                             ussr_int_t *numbers, size_t wanted)
+{
+    size_t i;
+
+    for (i = 0; i < wanted && first + i < argument_count; ++i)
+    {
+        ussr_value_t v;
+        int ok;
+
+        if (oop_eval(&arguments[first + i], &v) != 0)
+            return 0;
+        ok = oop_expect_integer(&v, &numbers[i]);
+        ussr_value_free(&v);
+        if (!ok)
+        {
+            fprintf(stderr, "USSR: %s expects integer sector numbers\n",
+                    name);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int oop_do_bread(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+    ussr_int_t numbers[3] = { 0, 1, 512 };
+    unsigned char *data;
+    size_t length;
+    int status;
+
+    if (argument_count < 2 || argument_count > 4)
+    {
+        fprintf(stderr, "USSR: bread(v): device lba [count [sector]]\n");
+        return -1;
+    }
+    if (!oop_block_numbers("bread", arguments, 1, argument_count,
+                           numbers, 3))
+        return -1;
+    if (numbers[0] < 0 || numbers[1] < 0 || numbers[2] <= 0 ||
+        numbers[1] > (1 << 24) / numbers[2])
+    {
+        fprintf(stderr, "USSR: bread: bad lba, count or sector size\n");
+        return -1;
+    }
+    if (!oop_path_argument("bread", arguments, 0, &path_v, &path))
+        return -1;
+    length = (size_t)(numbers[1] * numbers[2]);
+    data = malloc(length > 0 ? length : 1);
+    if (data == NULL)
+    {
+        ussr_value_free(&path_v);
+        return -1;
+    }
+    status = oop_block_io(path, 0, (long long)numbers[0] * numbers[2],
+                          data, length);
+    ussr_value_free(&path_v);
+    if (status != 0)
+    {
+        free(data);
+        *out_result = ussr_null();
+        return 0;
+    }
+    status = ussr_bytes_value(data, length, out_result);
+    free(data);
+    return status;
+}
+
+static int oop_do_bwrite(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    ussr_value_t bytes_v;
+    const char *path;
+    ussr_int_t numbers[2] = { 0, 512 };
+    ussr_int_t sector;
+    unsigned char *data = NULL;
+    size_t length = 0;
+    int status;
+
+    if (argument_count < 3 || argument_count > 4)
+    {
+        fprintf(stderr, "USSR: bwrite(n): device lba bytes [sector]\n");
+        return -1;
+    }
+    if (!oop_block_numbers("bwrite", arguments, 1, 2, numbers, 1))
+        return -1;
+    if (argument_count == 4 &&
+        !oop_block_numbers("bwrite", arguments, 3, 4, numbers + 1, 1))
+        return -1;
+    sector = numbers[1];
+    if (numbers[0] < 0 || sector <= 0)
+    {
+        fprintf(stderr, "USSR: bwrite: bad lba or sector size\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[2], &bytes_v) != 0)
+        return -1;
+    status = bytes_v.type == USSR_VECTOR
+        ? ussr_value_bytes(&bytes_v, &data, &length) : -1;
+    ussr_value_free(&bytes_v);
+    if (status != 0)
+    {
+        fprintf(stderr, "USSR: bwrite expects a vector of bytes 0..255\n");
+        return -1;
+    }
+    if (length == 0 || length % (size_t)sector != 0)
+    {
+        fprintf(stderr, "USSR: bwrite: %u bytes is not a whole number of "
+                "%d-byte sectors\n", (unsigned)length, (int)sector);
+        free(data);
+        return -1;
+    }
+    if (!oop_path_argument("bwrite", arguments, 0, &path_v, &path))
+    {
+        free(data);
+        return -1;
+    }
+    status = oop_block_io(path, 1, (long long)numbers[0] * sector,
+                          data, length);
+    ussr_value_free(&path_v);
+    free(data);
+    *out_result = ussr_integer(status == 0 ? (ussr_int_t)length : -1);
+    return 0;
+}
+
+static long long oop_block_size(const char *path)
+{
+#ifdef _WIN32
+    HANDLE handle;
+    LARGE_INTEGER size;
+    DISK_GEOMETRY_EX geometry;
+    DWORD got = 0;
+    long long result = -1;
+
+    handle = CreateFileA(path, FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (handle == INVALID_HANDLE_VALUE)
+        return -1;
+    if (GetFileType(handle) == FILE_TYPE_DISK &&
+        GetFileSizeEx(handle, &size))
+        result = size.QuadPart;
+    if (DeviceIoControl(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
+                        &geometry, sizeof geometry, &got, NULL))
+        result = geometry.DiskSize.QuadPart;
+    CloseHandle(handle);
+    return result;
+#else
+    struct stat info;
+    long long result = -1;
+    int fd;
+
+    if (stat(path, &info) != 0)
+        return -1;
+    if (S_ISREG(info.st_mode))
+        return (long long)info.st_size;
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return -1;
+#if defined(__linux__) && defined(BLKGETSIZE64)
+    {
+        unsigned long long bytes = 0;
+        if (ioctl(fd, BLKGETSIZE64, &bytes) == 0)
+            result = (long long)bytes;
+    }
+#endif
+    if (result < 0)
+    {
+        off_t end = lseek(fd, 0, SEEK_END);
+        if (end > 0)
+            result = (long long)end;
+    }
+    close(fd);
+    return result;
+#endif
+}
+
+static int oop_do_bsize(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    const char *path;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: bsize(n): device\n");
+        return -1;
+    }
+    if (!oop_path_argument("bsize", arguments, 0, &path_v, &path))
+        return -1;
+    *out_result = ussr_integer((ussr_int_t)oop_block_size(path));
+    ussr_value_free(&path_v);
+    return 0;
+}
+
+/* Appends [path bytes kind bus model sector] to devices. */
+static int oop_block_device_push(ussr_vector_t *devices, const char *path,
+                                 long long bytes, const char *kind,
+                                 const char *bus, const char *model,
+                                 long long sector)
+{
+    ussr_vector_t *entry = ussr_vector_create(NULL);
+    const char *texts[4];
+    int failed;
+    int i;
+
+    if (entry == NULL)
+        return -1;
+    texts[0] = path;
+    texts[1] = kind;
+    texts[2] = bus;
+    texts[3] = model;
+    failed = 0;
+    /* push retains what it stores: each temporary is released here */
+    for (i = 0; i < 4 && !failed; ++i)
+    {
+        ussr_value_t text = ussr_string(texts[i]);
+
+        failed = text.data.string == NULL ||
+                 ussr_vector_push(entry, text) != 0;
+        ussr_value_free(&text);
+        if (!failed && i == 0)
+            failed = ussr_vector_push(entry,
+                                      ussr_integer((ussr_int_t)bytes)) != 0;
+    }
+    if (!failed)
+        failed = ussr_vector_push(entry,
+                                  ussr_integer((ussr_int_t)sector)) != 0;
+    if (!failed)
+        failed = ussr_vector_push(devices, ussr_vector_value(entry)) != 0;
+    ussr_vector_release(entry);
+    return failed ? -1 : 0;
+}
+
+/* Copies text without leading/trailing blanks into out (size bytes). */
+static void oop_block_trim(const char *text, char *out, size_t size)
+{
+    size_t n;
+
+    while (*text == ' ' || *text == '\t')
+        ++text;
+    n = strlen(text);
+    while (n > 0 && (text[n - 1] == ' ' || text[n - 1] == '\t' ||
+                     text[n - 1] == '\n' || text[n - 1] == '\r'))
+        --n;
+    if (n >= size)
+        n = size - 1;
+    memcpy(out, text, n);
+    out[n] = '\0';
+}
+
+#ifdef _WIN32
+static const char *oop_block_bus_name(int bus)
+{
+    static const char *names[] = {
+        "unknown", "SCSI", "ATAPI", "ATA", "1394", "SSA", "FC", "USB",
+        "RAID", "iSCSI", "SAS", "SATA", "SD", "MMC", "virtual",
+        "file", "spaces", "NVMe", "SCM", "UFS"
+    };
+    return bus >= 0 && bus < (int)(sizeof names / sizeof names[0])
+        ? names[bus] : "unknown";
+}
+
+static int oop_block_list(ussr_vector_t *devices)
+{
+    int i;
+
+    for (i = 0; i < 64; ++i)
+    {
+        char path[64];
+        char model[256];
+        char raw[256];
+        HANDLE handle;
+        STORAGE_PROPERTY_QUERY query;
+        BYTE buffer[1024];
+        STORAGE_DEVICE_DESCRIPTOR *descriptor;
+        DEVICE_SEEK_PENALTY_DESCRIPTOR penalty;
+        DISK_GEOMETRY_EX geometry;
+        DWORD got = 0;
+        long long bytes = -1;
+        long long sector = 512;
+        int bus = 0;
+        int removable = 0;
+        int seeks = -1;
+        const char *kind;
+
+        snprintf(path, sizeof path, "\\\\.\\PhysicalDrive%d", i);
+        handle = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+        if (handle == INVALID_HANDLE_VALUE)
+            continue;
+        model[0] = '\0';
+        memset(&query, 0, sizeof query);
+        query.PropertyId = StorageDeviceProperty;
+        query.QueryType = PropertyStandardQuery;
+        memset(buffer, 0, sizeof buffer);
+        if (DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY,
+                            &query, sizeof query, buffer, sizeof buffer,
+                            &got, NULL) && got >= sizeof *descriptor)
+        {
+            descriptor = (STORAGE_DEVICE_DESCRIPTOR *)buffer;
+            bus = (int)descriptor->BusType;
+            removable = descriptor->RemovableMedia != 0;
+            raw[0] = '\0';
+            if (descriptor->VendorIdOffset != 0 &&
+                descriptor->VendorIdOffset < sizeof buffer)
+            {
+                strncat(raw, (char *)buffer + descriptor->VendorIdOffset,
+                        100);
+                strcat(raw, " ");
+            }
+            if (descriptor->ProductIdOffset != 0 &&
+                descriptor->ProductIdOffset < sizeof buffer)
+                strncat(raw, (char *)buffer + descriptor->ProductIdOffset,
+                        100);
+            oop_block_trim(raw, model, sizeof model);
+        }
+        query.PropertyId = StorageDeviceSeekPenaltyProperty;
+        memset(&penalty, 0, sizeof penalty);
+        if (DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY,
+                            &query, sizeof query, &penalty, sizeof penalty,
+                            &got, NULL) && got >= sizeof penalty)
+            seeks = penalty.IncursSeekPenalty != 0;
+        if (DeviceIoControl(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL,
+                            0, &geometry, sizeof geometry, &got, NULL))
+        {
+            bytes = geometry.DiskSize.QuadPart;
+            if (geometry.Geometry.BytesPerSector > 0)
+                sector = geometry.Geometry.BytesPerSector;
+        }
+        CloseHandle(handle);
+        if (bus == BusTypeUsb || bus == BusTypeSd || bus == BusTypeMmc ||
+            removable)
+            kind = "flash";
+        else if (bus == BusTypeVirtual || bus == BusTypeFileBackedVirtual)
+            kind = "virtual";
+        else if (bus == BusTypeNvme || seeks == 0)
+            kind = "SSD";
+        else if (seeks == 1)
+            kind = "HDD";
+        else
+            kind = "disk";
+        if (oop_block_device_push(devices, path, bytes, kind,
+                                  oop_block_bus_name(bus), model,
+                                  sector) != 0)
+            return -1;
+    }
+    return 0;
+}
+#elif defined(__linux__)
+/* The first line of /sys/block/name/what, trimmed; "" when unreadable. */
+static void oop_block_sys(const char *name, const char *what, char *out,
+                          size_t size)
+{
+    char path[512];
+    char line[256];
+    FILE *input;
+
+    out[0] = '\0';
+    snprintf(path, sizeof path, "/sys/block/%s/%s", name, what);
+    input = fopen(path, "r");
+    if (input == NULL)
+        return;
+    if (fgets(line, sizeof line, input) != NULL)
+        oop_block_trim(line, out, size);
+    fclose(input);
+}
+
+static int oop_block_list(ussr_vector_t *devices)
+{
+    DIR *dir = opendir("/sys/block");
+    struct dirent *entry;
+    int status = 0;
+
+    if (dir == NULL)
+        return 0;
+    while (status == 0 && (entry = readdir(dir)) != NULL)
+    {
+        const char *name = entry->d_name;
+        char text[256];
+        char model[256];
+        char link[1024];
+        char path[300];
+        char sys[300];
+        long long bytes;
+        long long sector;
+        int rotational;
+        int removable;
+        ssize_t got;
+        const char *kind;
+        const char *bus = "SCSI";
+
+        if (name[0] == '.' || strncmp(name, "loop", 4) == 0 ||
+            strncmp(name, "ram", 3) == 0 || strncmp(name, "zram", 4) == 0 ||
+            strncmp(name, "fd", 2) == 0 || strncmp(name, "sr", 2) == 0 ||
+            strncmp(name, "dm-", 3) == 0 || strncmp(name, "md", 2) == 0)
+            continue;
+        oop_block_sys(name, "size", text, sizeof text);
+        bytes = text[0] != '\0' ? atoll(text) * 512 : -1;
+        oop_block_sys(name, "queue/logical_block_size", text, sizeof text);
+        sector = text[0] != '\0' ? atoll(text) : 512;
+        oop_block_sys(name, "queue/rotational", text, sizeof text);
+        rotational = text[0] == '1';
+        oop_block_sys(name, "removable", text, sizeof text);
+        removable = text[0] == '1';
+        oop_block_sys(name, "device/model", model, sizeof model);
+        snprintf(sys, sizeof sys, "/sys/block/%s", name);
+        got = readlink(sys, link, sizeof link - 1);
+        link[got > 0 ? got : 0] = '\0';
+        if (strstr(link, "/usb") != NULL)
+            bus = "USB";
+        else if (strncmp(name, "mmcblk", 6) == 0)
+            bus = "MMC";
+        else if (strncmp(name, "nvme", 4) == 0)
+            bus = "NVMe";
+        else if (strstr(link, "/ata") != NULL)
+            bus = "ATA";
+        else if (strstr(link, "virtio") != NULL ||
+                 strncmp(name, "vd", 2) == 0)
+            bus = "virtual";
+        /* disks a hypervisor emulates on an ordinary bus */
+        if (strstr(model, "Virtual") != NULL ||
+            strstr(model, "QEMU") != NULL || strstr(model, "VBOX") != NULL ||
+            strstr(model, "VMware") != NULL)
+            removable = 0, rotational = -1;
+        if (strcmp(bus, "USB") == 0 || strcmp(bus, "MMC") == 0 ||
+            removable)
+            kind = "flash";
+        else if (strcmp(bus, "virtual") == 0 || rotational < 0)
+            kind = "virtual";
+        else
+            kind = rotational ? "HDD" : "SSD";
+        snprintf(path, sizeof path, "/dev/%s", name);
+        status = oop_block_device_push(devices, path, bytes, kind, bus,
+                                       model, sector);
+    }
+    closedir(dir);
+    return status;
+}
+#else
+static int oop_block_list(ussr_vector_t *devices)
+{
+    (void)devices;
+    return 0;
+}
+#endif
+
+static int oop_do_bdevices(
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_vector_t *devices;
+
+    if (argument_count != 0)
+    {
+        fprintf(stderr, "USSR: bdevices(v):\n");
+        return -1;
+    }
+    devices = ussr_vector_create(NULL);
+    if (devices == NULL)
+        return -1;
+    if (oop_block_list(devices) != 0)
+    {
+        ussr_vector_release(devices);
+        return -1;
+    }
+    *out_result = ussr_vector_value(devices);
     return 0;
 }
 
@@ -4034,12 +4651,21 @@ int ussr_oop_dispatch(
         status = oop_do_read_bytes(arguments, argument_count, out_result);
     else if (strcmp(command, "write_bytes") == 0)
         status = oop_do_write_bytes(arguments, argument_count, out_result);
+    else if (strcmp(command, "bread") == 0)
+        status = oop_do_bread(arguments, argument_count, out_result);
+    else if (strcmp(command, "bwrite") == 0)
+        status = oop_do_bwrite(arguments, argument_count, out_result);
+    else if (strcmp(command, "bsize") == 0)
+        status = oop_do_bsize(arguments, argument_count, out_result);
+    else if (strcmp(command, "bdevices") == 0)
+        status = oop_do_bdevices(argument_count, out_result);
     else if (strcmp(command, "text_bytes") == 0)
         status = oop_do_text_bytes(arguments, argument_count, out_result);
     else if (strcmp(command, "bytes_text") == 0)
         status = oop_do_bytes_text(arguments, argument_count, out_result);
     else if (strcmp(command, "sha256") == 0 ||
              strcmp(command, "md5") == 0 ||
+             strcmp(command, "crc32") == 0 ||
              strcmp(command, "hmac_sha256") == 0 ||
              strcmp(command, "pbkdf2_sha256") == 0)
         status = oop_do_hash(command, arguments, argument_count, out_result);

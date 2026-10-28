@@ -126,6 +126,12 @@ EXTRA_DIST = \
 	siberia/box.uno \
 	siberia/README.md \
 	siberia/CHANGELOG.md \
+	stalin/stalin.su \
 	stalin/box.uno \
+	stalin/README.md \
+	stalin/CHANGELOG.md \
+	stalin/docs/API.md \
+	stalin/examples/hello.su \
+	stalin/tests/TESTPLAN.md \
 	usa/box.uno \
 	sochi/box.uno
