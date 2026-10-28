@@ -1197,6 +1197,15 @@ diff before committing it. Not run: the socket and HTTP tests (they need a
 free port), `tests/chain.su` and `tests/script.su` (their output is the
 host's `ps` listing, and chaining is POSIX-only), and `tests/quines`.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the same script on every
-pull request and push to `main`: Ubuntu with GLFW under Xvfb, Ubuntu without
-GLFW, and Windows with MSVC and GLFW.
+`sh tests/run_default.sh` is the quick set: the ussr pass only, with the
+suites in `tests/ru`, `tests/vectors`, `tests/errors`, `tests/exit`,
+`tests/repl` and `tests/shell` and every standalone script; no russia.su
+pass, no GUI, Mbl or UUASM tests. `USSR_SUITES="errors exit"` picks the
+suite runners of either script by folder name.
+
+GitHub Actions runs `tests/run_default.sh` on every pull request and push
+to `main` (`.github/workflows/ci.yml`: one Ubuntu job with a
+`make -f ussr-ubuntu.mk DEBUG=1` build), and the full `tests/run_all.sh`
+on the release builds when a tag is pushed (`.github/workflows/release.yml`:
+Ubuntu with GLFW under Xvfb, Windows with MSVC without the GUI tests, and
+the Ryazan TLS loopback on both).

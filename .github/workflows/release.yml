@@ -9,6 +9,9 @@ env:
   APP_NAME: ussr-win-bin-amd64
   # The GLFW release the Windows build links and ships (same as ci.yml)
   GLFW_VERSION: 3.5.1
+  # Seconds one russia.su run may take before it counts as hung (the
+  # russia.su pass of tests/run_all.sh interprets each test inside ussr).
+  USSR_RUSSIA_TIMEOUT: "300"
 
 jobs:
   create-release:
@@ -104,12 +107,19 @@ jobs:
           if (-not (Test-Path $glfwDll)) { throw "GLFW runtime DLL not found at $glfwDll" }
           Copy-Item $glfwDll .\glfw3.dll -Force
 
-      - name: Test on Windows (without GUI)
+      # The full test set (pull requests run only tests/run_default.sh):
+      # ussr and the russia.su parity pass. The GUI tests run on Linux.
+      - name: Test on Windows (all, without GUI)
         if: runner.os == 'Windows'
         shell: bash
         env:
           USSR_SKIP_GUI: "1"
-        run: sh tests/run_all.sh --native ./ussr.exe
+        run: sh tests/run_all.sh ./ussr.exe
+
+      - name: Ryazan TLS loopback (Schannel)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: timeout 120 ./ussr.exe tests/ryazan_loopback.su
 
       - name: Package for Windows
         if: runner.os == 'Windows'
@@ -141,7 +151,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flex bison autoconf automake libtool \
             cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev \
-            libglfw3-dev libgl1-mesa-dev
+            libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth
 
       - name: Build and test Ural
         if: runner.os != 'Windows'
@@ -157,12 +167,18 @@ jobs:
         shell: bash
         run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 RYAZAN_REQUIRE_TLS=1 ussr
 
-      - name: Test on Linux (without GUI)
+      - name: Ryazan TLS loopback (OpenSSL)
+        if: runner.os != 'Windows'
+        run: timeout 120 ./ussr tests/ryazan_loopback.su
+
+      # The full test set: ussr, the russia.su parity pass and the GUI tests
+      # on a virtual display.
+      - name: Test on Linux (all, GUI on a virtual display)
         if: runner.os != 'Windows'
         shell: bash
         env:
-          USSR_SKIP_GUI: "1"
-        run: sh tests/run_all.sh --native ./ussr
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" sh tests/run_all.sh ./ussr
 
       - name: Package for Linux
         if: runner.os != 'Windows'

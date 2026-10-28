@@ -1,10 +1,13 @@
 name: CI
 
-# Builds USSR on Linux and Windows and runs every test (tests/run_all.sh)
-# twice, side by side: with the ussr binary and with the self-hosted
-# src/russia/russia.su. A russia.su failure is a parity gap with ussr: it is
-# listed in the job summary but does not fail the job yet (the ussr pass
-# does). Once russia.su reaches parity, set USSR_RUSSIA_STRICT=1 here.
+# The quick check for every pull request and push to main: one Linux job,
+# a debug build (no optimisation, so it compiles fast) and
+# tests/run_default.sh, the main suites with the ussr binary only.
+#
+# Everything else runs in release.yml when a tag is pushed: release builds
+# on Linux and Windows, tests/run_all.sh with the russia.su parity pass,
+# the GUI tests and the Ryazan TLS loopback. Run that set by hand with
+# "sh tests/run_all.sh" before tagging.
 
 on:
   push:
@@ -16,39 +19,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Seconds one russia.su run may take before it counts as hung. russia.su
-# interprets the program inside ussr, so big programs (the Tula GUI tests)
-# can take minutes on a CI runner.
-env:
-  USSR_RUSSIA_TIMEOUT: "300"
-
 jobs:
   linux:
-    name: Linux (gcc, Petersburg under Xvfb)
+    name: Linux (gcc debug, default tests)
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build and GUI dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flex bison pkg-config libssl-dev \
-            libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth
-
-      - name: Build
-        run: make -f ussr-ubuntu.mk -j"$(nproc)" RYAZAN_REQUIRE_TLS=1 ussr
-
-      - name: Ryazan TLS loopback (OpenSSL)
-        run: timeout 120 ./ussr tests/ryazan_loopback.su
-
-      - name: Test (GUI tests on a virtual display)
-        env:
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" sh tests/run_all.sh ./ussr
-
-  linux-no-gui:
-    name: Linux (gcc, no GLFW)
-    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -57,84 +32,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flex bison
 
-      - name: Build
-        run: make -f ussr-ubuntu.mk -j"$(nproc)" ussr
+      - name: Build (debug)
+        run: make -f ussr-ubuntu.mk -j"$(nproc)" DEBUG=1 ussr
 
-      - name: Test
-        env:
-          USSR_SKIP_GUI: "1"
-        run: sh tests/run_all.sh ./ussr
-
-  windows:
-    name: Windows (MSVC, Petersburg)
-    runs-on: windows-latest
-    env:
-      GLFW_VERSION: 3.5.1
-      MESA_VERSION: 26.1.8
-    steps:
-      # Test sources and expectations are LF; keep them that way.
-      - name: Keep LF line endings
-        run: git config --global core.autocrlf false
-
-      - uses: actions/checkout@v4
-
-      - name: Install Flex and Bison
-        shell: powershell
-        run: choco install winflexbison3 --no-progress -y
-
-      - uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Fetch GLFW
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force build | Out-Null
-          $zip = "build\glfw.zip"
-          Invoke-WebRequest "https://github.com/glfw/glfw/releases/download/$env:GLFW_VERSION/glfw-$env:GLFW_VERSION.bin.WIN64.zip" -OutFile $zip
-          Expand-Archive $zip -DestinationPath build -Force
-
-      - name: Build
-        shell: cmd
-        run: |
-          win_bison -d -o src\parser.tab.c src\parser.y || exit /b 1
-          win_flex -o src\lexer.c src\lexer.l || exit /b 1
-          set GLFW=%CD%\build\glfw-%GLFW_VERSION%.bin.WIN64
-          nmake /nologo /f Makefile.msc PREGENERATED=1 GLFW_DIR=%GLFW% GLFW_LIB=%GLFW%\lib-vc2022\glfw3dll.lib || exit /b 1
-          copy /y %GLFW%\lib-vc2022\glfw3.dll .
-
-      - name: Test (without GUI)
-        shell: bash
-        env:
-          USSR_SKIP_GUI: "1"
-        run: sh tests/run_all.sh ./ussr.exe
-
-      - name: Ryazan TLS loopback (Schannel)
-        shell: bash
-        run: timeout 120 ./ussr.exe tests/ryazan_loopback.su
-
-      # Hosted runners only have GDI's OpenGL 1.1 and Petersburg asks for
-      # 2.1, so the GUI tests use Mesa's software opengl32.dll (llvmpipe).
-      # Not yet proven on hosted runners: drop continue-on-error once green.
-      - name: Fetch Mesa (software OpenGL)
-        continue-on-error: true
-        shell: powershell
-        run: |
-          $archive = "build\mesa.7z"
-          Invoke-WebRequest "https://github.com/pal1000/mesa-dist-win/releases/download/$env:MESA_VERSION/mesa3d-$env:MESA_VERSION-release-msvc.7z" -OutFile $archive
-          7z x $archive -obuild\mesa -y | Out-Null
-          Copy-Item build\mesa\x64\*.dll . -Force
-
-      - name: Test GUI
-        continue-on-error: true
-        shell: bash
-        env:
-          GALLIUM_DRIVER: llvmpipe
-        run: |
-          for f in tests/gui/*.su; do
-            echo "== $f"
-            ./ussr.exe "$f" </dev/null >gui.out 2>&1; status=$?
-            cat gui.out
-            if [ "$status" -ne 0 ] || grep -q '^FAIL' gui.out || ! grep -q '^PASS' gui.out; then
-              failed="$failed $f"
-            fi
-          done
-          [ -z "$failed" ] || { echo "GUI failures:$failed"; exit 1; }
+      - name: Test (default set)
+        run: sh tests/run_default.sh ./ussr

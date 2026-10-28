@@ -1,5 +1,11 @@
 CC      = gcc
 CFLAGS  = -std=c11 -O2 -flto=auto -Wall -Wextra -Wpedantic
+# DEBUG=1: no optimisation or LTO, with debug symbols; quick to compile
+# (CI's pull request build). Objects share names with the release
+# build, so run "make -f ussr-ubuntu.mk clean" when switching.
+ifneq ($(DEBUG),)
+CFLAGS  = -std=c11 -O0 -g -Wall -Wextra -Wpedantic
+endif
 # The Petersburg GUI is built in whenever pkg-config finds GLFW and OpenGL
 # (libglfw3-dev, libgl1-mesa-dev); PETERSBURG_BUNDLE=1 requires them.
 # The GUI build compiles petersburg.c to its own object, so installing or
