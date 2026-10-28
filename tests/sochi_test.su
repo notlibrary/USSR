@@ -389,6 +389,7 @@ init(ret): arg_count arg_values [
     push(_): lines "7x"
     push(_): lines "'hi there"
     push(_): lines "pass"
+    push(_): lines "good game all"
     push(_): lines ""
     set(i): 0
     len(n): lines

@@ -160,6 +160,7 @@ Your bid: 6s or higher (6s 6c 6d 6h 6nt 7s ... 10nt), mis, pass   ('text to chat
   '7x' -> !not a bid: type 6s, 7h, 8nt, mis or pass
   ''hi there' -> t:hi there
   'pass' -> b:pass
+  'good game all' -> t:good game all
   '' -> 
   seat 0 types 6s -> t:6s
 == three bots, pool 3, seed 2026

@@ -2098,7 +2098,8 @@ so_render_hint(r): view [
 ]
 
 # typed line -> a protocol action for this view, "" for none, or "!" and
-# an error message
+# an error message. On your turn a long line that is no move is chat (it
+# was likely typed while waiting).
 so_line_action(r): view line [
     at(seat): view V_SEAT
     at(phase): view V_PHASE
@@ -2123,6 +2124,7 @@ so_line_action(r): view line [
     elif(_): {phase = "bid"} [
         so_parse_bid(o): t
         set(r): "!not a bid: type 6s, 7h, 8nt, mis or pass"
+        if(_): {o = -3 && n > 5} [ concat(r): "t:" t ]
         if(_): {o >= -1} [
             so_bid_name(bn): o
             concat(a): "b:" bn
@@ -2135,6 +2137,7 @@ so_line_action(r): view line [
         so_words(w): t
         len(nw): w
         set(r): "!discard two cards, e.g. 7s 8d"
+        if(_): {nw != 2 && n > 7} [ concat(r): "t:" t ]
         if(_): {nw = 2} [
             at(w0): w 0
             at(w1): w 1
@@ -2153,6 +2156,7 @@ so_line_action(r): view line [
     elif(_): {phase = "contract"} [
         so_parse_bid(o): t
         set(r): "!name a contract, e.g. 7h"
+        if(_): {o < 0 && n > 5} [ concat(r): "t:" t ]
         if(_): {o >= 0} [
             so_bid_name(bn): o
             concat(a): "c:" bn
@@ -2169,11 +2173,13 @@ so_line_action(r): view line [
         if(_): {lt = "half" || lt = "h" || lt = "полвиста"} [ set(a): "w:half" ]
         so_has(ok): legal a
         set(r): "!whist or pass"
+        if(_): {a = "" && n > 5} [ concat(r): "t:" t ]
         if(_): ok [ set(r): a ]
     ]
     elif(_): {phase = "play"} [
         so_parse_card(c): t
         set(r): "!not a card: type e.g. Qh, 10s, 7d"
+        if(_): {c < 0 && n > 5} [ concat(r): "t:" t ]
         if(_): {c >= 0} [
             so_card(cn): c
             concat(a): "p:" cn
