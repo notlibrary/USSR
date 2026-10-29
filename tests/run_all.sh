@@ -104,10 +104,14 @@ suite() {
     # --- standalone scripts against tests/expected/
     # Not checked here: network tests (need sockets and a free port), chain.su
     # and script.su (output of the host's ps; chaining is POSIX-only), and the
-    # quine attempts in tests/quines (none of them is a quine yet).
+    # quine attempts in tests/quines (none of them is a quine yet). Also left
+    # out: stalin (a partition editor; a slip could write a GPT table where
+    # the runner did not mean it to) and usa (the C compiler, tested its own
+    # way: see src/usa/README.md); run them by hand.
     for f in tests/*.su tests/*.ua tests/math/*.su tests/oop/*.su; do
         case "$f" in
             tests/socket_*|tests/ukraine_*|tests/ryazan_*|tests/*_live.su|tests/chain.su|tests/script.su) continue ;;
+            tests/stalin_*|tests/usa_*|tests/usa/*) continue ;;
         esac
         want="tests/expected/${f#tests/}.txt"
         input="tests/expected/${f#tests/}.in"
