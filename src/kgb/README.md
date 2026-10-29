@@ -6,7 +6,7 @@ and no index: the folders are the database, so any editor, `git`, `grep` or
 file manager works on it too.
 
 This fact oriented approach works good for databases with 0-9000 very special objects
-Obvious examples are programming languages countries nuclear power plants
+Obvious examples are programming languages countries nuclear power plants and base electronic components
 
 ## The two rules
 

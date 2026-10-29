@@ -1,0 +1,1603 @@
+# C preprocessor in USSR for usa, forked from russia's pp.su (the pass
+# ussr runs before parsing) with '#' for '$' and what C code needs:
+#
+#     pp_run(text): path    -> preprocessed source of the file at path
+#
+# Directives (a line whose first non-blank byte is '#'):
+#   #include "file" | <file>  "" against the including file's directory,
+#                             then -I directories, then usa's include/
+#   #define NAME value        object-like macro
+#   #define NAME(a, b) body   function-like, with # (stringize), ## (paste)
+#                             and ... / __VA_ARGS__
+#   #undef NAME
+#   #if expr / #ifdef / #ifndef / #elif expr / #else / #endif
+#                             expr: integer constant expression with
+#                             defined NAME and defined(NAME)
+#   #error text               stops with text; #warning prints it
+#   #pragma once              the file is read at most once (as $once);
+#                             other pragmas, #line and #ident are ignored
+# __FILE__ and __LINE__ expand where they are used.
+#
+# Comments are removed and backslash-newlines spliced before directives
+# are seen; the lines they take are kept, so the line map stays right.
+# A function-like macro call whose ')' is on a later line takes those
+# lines in. A macro's own name is not expanded inside its expansion.
+#
+# Directive lines produce no output; every other active line is copied
+# with its macros expanded (strings and character constants are left
+# alone). On an error pp_failed is 1 and pp_msg holds the message.
+#
+# pp_mapf/pp_mapl give, for each line of the output, the file and the
+# line it came from.
+
+global(_): pp_inc pp_once pp_cact pp_cse pp_ctk pp_act
+global(_): pp_out pp_outv pp_failed pp_msg pp_win pp_sigp pp_xargs pp_xafter
+global(_): pp_mapf pp_mapl pp_curline pp_dirs pp_sysdir pp_hide pp_more
+global(_): pp_dtab pp_dn pp_dv pp_dp pp_dlive pp_ndefs pp_ev_t pp_ev_k pp_ev_i
+global(_): pp_pend pp_pendl pp_idx
+
+# ---- hash tables: a vector of n key buckets then n value buckets ----
+ht_new(r): n [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < n + n} [
+        vec(b): ""
+        push(_): r b
+        add(i): i 1
+    ]
+]
+# The value stored under key, or -1.
+ht_get(r): h key [
+    set(r): {0 - 1}
+    len(m): h
+    set(n): {m >> 1}
+    crc32(c): key
+    set(bi): {c & (n - 1)}
+    at(ks): h bi
+    len(k): ks
+    while(_): {k > 0} [
+        sub(k): k 1
+        at(x): ks k
+        if(_): {x = key} [
+            at(vs): h {bi + n}
+            at(r): vs k
+            set(k): 0
+        ]
+    ]
+]
+ht_put(r): h key val [
+    set(r): 0
+    len(m): h
+    set(n): {m >> 1}
+    crc32(c): key
+    set(bi): {c & (n - 1)}
+    at(ks): h bi
+    at(vs): h {bi + n}
+    len(k): ks
+    set(hit): 0
+    while(_): {k > 0} [
+        sub(k): k 1
+        at(x): ks k
+        if(_): {x = key} [
+            set(vs): k val
+            set(hit): 1
+            set(k): 0
+        ]
+    ]
+    if(_): {hit = 0} [
+        push(_): ks key
+        push(_): vs val
+    ]
+]
+
+# Integer quotient of a by b, truncated toward zero, as C divides.
+# '/' always gives a real; at() truncates a real index, so pp_idx (0..65535)
+# turns the exact real quotient back into an integer 16 bits at a time.
+pp_idiv(r): a b [
+    set(q): {(a - a % b) / b}
+    set(neg): 0
+    if(_): {q < 0} [
+        set(neg): 1
+        set(q): {0 - q}
+    ]
+    pp_f2i(r): q
+    if(_): {neg = 1} [ set(r): {0 - r} ]
+]
+# A non-negative real below 2^63 truncated to an integer.
+pp_f2i(r): x [
+    if(_): {pp_idx = null} [
+        vec(pp_idx): ""
+        set(i): 0
+        while(_): {i < 65536} [
+            push(_): pp_idx i
+            add(i): i 1
+        ]
+    ]
+    if(_): {x < 65536} [
+        at(r): pp_idx x
+    ]
+    elif(_): {x < 4294967296} [
+        at(h): pp_idx {x / 65536}
+        at(l): pp_idx {x - h * 65536}
+        set(r): {h * 65536 + l}
+    ]
+    else(_): [
+        pp_f2i(h): {x / 4294967296}
+        pp_f2i(l): {x - h * 4294967296}
+        set(r): {h * 4294967296 + l}
+    ]
+]
+
+# ---- bytes ----
+pp_space_p(r): b [
+    set(r): 0
+    if(_): {b = 32 || (b > 8 && b < 14)} [ set(r): 1 ]
+]
+pp_alpha_p(r): b [
+    set(r): 0
+    if(_): {(b > 64 && b < 91) || (b > 96 && b < 123)} [ set(r): 1 ]
+]
+pp_digit_p(r): b [
+    set(r): 0
+    if(_): {b > 47 && b < 58} [ set(r): 1 ]
+]
+pp_idstart_p(r): b [
+    set(r): 0
+    if(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95} [ set(r): 1 ]
+]
+pp_idchar_p(r): b [
+    set(r): 0
+    if(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95 || (b > 47 && b < 58)} [ set(r): 1 ]
+]
+# First index at or after i in s that is not white space.
+pp_skip(r): s i [
+    len(n): s
+    set(r): i
+    set(go): 1
+    while(_): {go = 1 && r < n} [
+        byte(b): s r
+        if(_): {b = 32 || (b > 8 && b < 14)} [ add(r): r 1 ]
+        else(_): [ set(go): 0 ]
+    ]
+]
+# End of the identifier (alnum or _) run starting at i.
+pp_idend(r): s i [
+    len(n): s
+    set(r): i
+    set(go): 1
+    while(_): {go = 1 && r < n} [
+        byte(b): s r
+        if(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95 || (b > 47 && b < 58)} [ add(r): r 1 ]
+        else(_): [ set(go): 0 ]
+    ]
+]
+# s[i..j) as a string.
+pp_cut(r): s i j [
+    set(r): ""
+    if(_): {j > i} [ slice(r): s i {j - i} ]
+]
+# s from i to its end.
+pp_rest(r): s i [
+    len(n): s
+    pp_cut(r): s i n
+]
+# s without white space at either end.
+pp_trim(r): s [
+    len(n): s
+    pp_skip(i): s 0
+    set(j): n
+    set(go): 1
+    while(_): {go = 1 && j > i} [
+        byte(b): s {j - 1}
+        pp_space_p(go): b
+        if(_): {go = 1} [ sub(j): j 1 ]
+    ]
+    pp_cut(r): s i j
+]
+# Index just past the "..." or '...' literal opening at i (escape-aware;
+# the end of s when it never closes).
+pp_strend(r): s i [
+    len(n): s
+    byte(q): s i
+    add(r): i 1
+    set(esc): 0
+    set(go): 1
+    while(_): {go = 1 && r < n} [
+        byte(b): s r
+        add(r): r 1
+        if(_): {esc = 1} [
+            set(esc): 0
+        ]
+        elif(_): {b = 92} [
+            set(esc): 1
+        ]
+        elif(_): {b = q || b = 10} [
+            set(go): 0
+        ]
+    ]
+]
+pp_fail(r): msg [
+    if(_): {pp_failed = 0} [
+        set(pp_failed): 1
+        len(d): pp_inc
+        set(pp_msg): msg
+        if(_): {d > 0} [
+            at(f): pp_inc {d - 1}
+            encode(ls): pp_curline
+            concat(pp_msg): f ":"
+            concat(pp_msg): pp_msg ls
+            concat(pp_msg): pp_msg ": error: "
+            concat(pp_msg): pp_msg msg
+        ]
+    ]
+    set(r): 0
+]
+
+# ---- defines ----
+# A define is index i into pp_dn (name), pp_dv (body), pp_dp (the
+# parameter vector, null for an object-like macro) and pp_dlive.
+pp_find(r): name [
+    ht_get(r): pp_dtab name
+    if(_): {r >= 0} [
+        at(lv): pp_dlive r
+        if(_): {lv = 0} [ set(r): {0 - 1} ]
+    ]
+]
+pp_define(r): name params value [
+    set(r): 0
+    ht_get(i): pp_dtab name
+    if(_): {i >= 0} [
+        set(pp_dv): i value
+        set(pp_dp): i params
+        set(pp_dlive): i 1
+    ]
+    else(_): [
+        push(_): pp_dn name
+        push(_): pp_dv value
+        push(_): pp_dp params
+        push(_): pp_dlive 1
+        ht_put(_): pp_dtab name pp_ndefs
+        add(pp_ndefs): pp_ndefs 1
+    ]
+]
+pp_undef(r): name [
+    set(r): 0
+    ht_get(i): pp_dtab name
+    if(_): {i >= 0} [ set(pp_dlive): i 0 ]
+]
+# Replace the top item of a stack vector.
+pp_settop(r): v x [
+    pop(_): v
+    push(_): v x
+    set(r): 0
+]
+pp_isdef(r): name [
+    pp_find(i): name
+    set(r): 0
+    if(_): {i >= 0 || name = "__FILE__" || name = "__LINE__"} [ set(r): 1 ]
+]
+pp_hidden(r): name [
+    set(r): 0
+    len(n): pp_hide
+    while(_): {n > 0} [
+        sub(n): n 1
+        at(x): pp_hide n
+        if(_): {x = name} [
+            set(r): 1
+            set(n): 0
+        ]
+    ]
+]
+# Parameter list of "(a, b, ...)" starting at the '(' at i of s:
+# pp_sigp gets the names (... as __VA_ARGS__); r is the index just
+# past ')', or -1 (reported) when it is malformed.
+pp_params(r): s i [
+    vec(pp_sigp): ""
+    len(n): s
+    pp_skip(c): s {i + 1}
+    set(r): {0 - 1}
+    set(go): 1
+    set(ch): 0
+    if(_): {c < n} [ byte(ch): s c ]
+    if(_): {ch = 41} [
+        set(r): {c + 1}
+        set(go): 0
+    ]
+    while(_): {go = 1} [
+        set(nm): ""
+        pp_idend(e): s c
+        if(_): {e > c} [
+            pp_cut(nm): s c e
+        ]
+        elif(_): {c + 2 < n} [
+            slice(dots): s c 3
+            if(_): {dots = "..."} [
+                set(nm): "__VA_ARGS__"
+                add(e): c 3
+            ]
+        ]
+        if(_): {nm = ""} [
+            set(go): 0
+        ]
+        else(_): [
+            # a named variadic parameter: "args..."
+            pp_skip(c): s e
+            if(_): {c + 2 < n} [
+                slice(dots2): s c 3
+                if(_): {dots2 = "..."} [
+                    set(nm): "__VA_ARGS__"
+                    add(c): c 3
+                    pp_skip(c): s c
+                ]
+            ]
+            push(_): pp_sigp nm
+            set(ch2): 0
+            if(_): {c < n} [ byte(ch2): s c ]
+            if(_): {ch2 = 41} [
+                set(r): {c + 1}
+                set(go): 0
+            ]
+            elif(_): {ch2 = 44} [
+                pp_skip(c): s {c + 1}
+            ]
+            else(_): [ set(go): 0 ]
+        ]
+    ]
+    if(_): {r < 0} [
+        pp_cut(sig): s i n
+        concat(m): "invalid macro parameter list: " sig
+        pp_fail(_): m
+    ]
+]
+
+# ---- macro expansion ----
+# Arguments of the invocation whose '(' is at open: pp_xargs, and pp_xafter
+# just past its ')'. 0, or 1 when it never closes on this line (pp_more is
+# then set, and the caller takes the next line in).
+pp_args(r): s open [
+    vec(pp_xargs): ""
+    set(pp_xafter): 0
+    len(n): s
+    add(c): open 1
+    set(st): c
+    set(pd): 0
+    set(r): 1
+    set(go): 1
+    while(_): {go = 1 && c < n} [
+        byte(b): s c
+        if(_): {b = 34 || b = 39} [
+            pp_strend(c): s c
+        ]
+        elif(_): {b = 40 || b = 91 || b = 123} [
+            add(pd): pd 1
+            add(c): c 1
+        ]
+        elif(_): {(b = 41 || b = 93 || b = 125) && pd > 0} [
+            sub(pd): pd 1
+            add(c): c 1
+        ]
+        elif(_): {b = 41} [
+            set(go): 0
+            len(count): pp_xargs
+            pp_cut(a): s st c
+            pp_trim(a2): a
+            if(_): {count > 0 || a2 != ""} [
+                push(_): pp_xargs a2
+            ]
+            add(pp_xafter): c 1
+            set(r): 0
+        ]
+        elif(_): {b = 44 && pd = 0} [
+            pp_cut(a3): s st c
+            pp_trim(a4): a3
+            push(_): pp_xargs a4
+            add(c): c 1
+            set(st): c
+        ]
+        else(_): [
+            add(c): c 1
+        ]
+    ]
+    if(_): {r = 1} [ set(pp_more): 1 ]
+]
+# The string literal spelling text: "text" with \ and " escaped.
+pp_stringize(r): text [
+    set(r): "\""
+    len(n): text
+    set(i): 0
+    set(inq): 0
+    while(_): {i < n} [
+        slice(ch): text i 1
+        byte(b): text i
+        if(_): {b = 34 || (b = 92 && inq != 0)} [ concat(r): r "\\" ]
+        if(_): {inq = 0 && (b = 34 || b = 39)} [ set(inq): b ]
+        elif(_): {inq != 0 && b = 92} [
+            # keep the escaped character inside the literal as it is
+            concat(r): r ch
+            add(i): i 1
+            slice(ch): text i 1
+            byte(b2): text i
+            if(_): {b2 = 34 || b2 = 92} [ concat(r): r "\\" ]
+        ]
+        elif(_): {inq != 0 && b = inq} [ set(inq): 0 ]
+        concat(r): r ch
+        add(i): i 1
+    ]
+    concat(r): r "\""
+]
+# body with each parameter identifier replaced by its argument, #param
+# stringized and the ## between two pieces removed.
+pp_subst(r): body params args [
+    vec(out): ""
+    len(n): body
+    len(pc): params
+    len(ac): args
+    set(c): 0
+    set(paste): 0
+    while(_): {c < n} [
+        byte(b): body c
+        if(_): {b = 34 || b = 39} [
+            pp_strend(e): body c
+            pp_cut(s): body c e
+            push(_): out s
+            set(c): e
+            set(paste): 0
+        ]
+        elif(_): {b = 35 && c + 1 < n} [
+            byte(b2): body {c + 1}
+            if(_): {b2 = 35} [
+                # paste: drop the white space before and after
+                len(on): out
+                set(go): 1
+                while(_): {go = 1 && on > 0} [
+                    at(last): out {on - 1}
+                    pp_trim(lt): last
+                    if(_): {lt = ""} [
+                        pop(_): out
+                        sub(on): on 1
+                    ]
+                    else(_): [ set(go): 0 ]
+                ]
+                pp_skip(c): body {c + 2}
+                set(paste): 1
+            ]
+            else(_): [
+                pp_skip(c2): body {c + 1}
+                pp_idend(e2): body c2
+                pp_cut(nm): body c2 e2
+                set(hit): {0 - 1}
+                set(k): 0
+                while(_): {hit < 0 && k < pc} [
+                    at(p): params k
+                    if(_): {p = nm} [ set(hit): k ]
+                    add(k): k 1
+                ]
+                if(_): {hit >= 0 && e2 > c2} [
+                    set(arg): ""
+                    if(_): {hit < ac} [ at(arg): args hit ]
+                    pp_stringize(sz): arg
+                    push(_): out sz
+                    set(c): e2
+                ]
+                else(_): [
+                    push(_): out "#"
+                    add(c): c 1
+                ]
+                set(paste): 0
+            ]
+        ]
+        elif(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95} [
+            pp_idend(e3): body c
+            pp_cut(nm2): body c e3
+            set(hit2): {0 - 1}
+            set(k2): 0
+            while(_): {hit2 < 0 && k2 < pc} [
+                at(p2): params k2
+                if(_): {p2 = nm2} [ set(hit2): k2 ]
+                add(k2): k2 1
+            ]
+            if(_): {hit2 >= 0} [
+                set(arg2): ""
+                if(_): {hit2 < ac} [ at(arg2): args hit2 ]
+                # GNU: , ## __VA_ARGS__ drops the comma when it is empty
+                if(_): {paste = 1 && arg2 = "" && nm2 = "__VA_ARGS__"} [
+                    len(on2): out
+                    if(_): {on2 > 0} [
+                        at(last2): out {on2 - 1}
+                        pp_trim(lt2): last2
+                        if(_): {lt2 = ","} [ pop(_): out ]
+                    ]
+                ]
+                if(_): {paste = 0} [
+                    # an argument not next to ## is expanded first
+                    pp_expand(arg2): arg2 0
+                    # ...unless ## follows it
+                    pp_skip(nx): body e3
+                    if(_): {nx + 1 < n} [
+                        slice(nx2): body nx 2
+                        if(_): {nx2 = "##"} [
+                            if(_): {hit2 < ac} [ at(arg2): args hit2 ]
+                        ]
+                    ]
+                ]
+                push(_): out arg2
+            ]
+            else(_): [
+                push(_): out nm2
+            ]
+            set(c): e3
+            set(paste): 0
+        ]
+        else(_): [
+            # a run up to the next identifier, literal or #
+            set(e4): {c + 1}
+            set(go4): 1
+            while(_): {go4 = 1 && e4 < n} [
+                byte(b4): body e4
+                if(_): {(b4 > 64 && b4 < 91) || (b4 > 96 && b4 < 123) || b4 = 95 || b4 = 34 || b4 = 39 || b4 = 35} [ set(go4): 0 ]
+                else(_): [ add(e4): e4 1 ]
+            ]
+            pp_cut(run): body c e4
+            push(_): out run
+            set(c): e4
+            set(paste): 0
+        ]
+    ]
+    pp_join(r): out
+]
+# text with its macros expanded.
+pp_expand(r): text depth [
+    set(r): text
+    if(_): {depth > 200} [
+        pp_fail(_): "macro expansion too deep"
+        return(_): r
+    ]
+    if(_): {pp_ndefs = 0} [ return(_): r ]
+    vec(out): ""
+    len(n): text
+    set(c): 0
+    set(changed): 0
+    while(_): {pp_failed = 0 && c < n} [
+        byte(b): text c
+        if(_): {b = 34 || b = 39} [
+            pp_strend(e): text c
+            pp_cut(s): text c e
+            push(_): out s
+            set(c): e
+        ]
+        elif(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95} [
+            pp_idend(e3): text c
+            pp_cut(name): text c e3
+            set(c): e3
+            set(done): 0
+            pp_find(di): name
+            if(_): {di >= 0} [
+                pp_hidden(hid): name
+                if(_): {hid = 1} [ set(di): {0 - 1} ]
+            ]
+            if(_): {di >= 0} [
+                at(prm): pp_dp di
+                at(body): pp_dv di
+                if(_): {prm = null} [
+                    push(_): pp_hide name
+                    pp_expand(x): body {depth + 1}
+                    pop(_): pp_hide
+                    push(_): out x
+                    set(changed): 1
+                    set(done): 1
+                ]
+                else(_): [
+                    pp_skip(la): text e3
+                    set(lb): 0
+                    if(_): {la < n} [ byte(lb): text la ]
+                    if(_): {lb = 40} [
+                        pp_args(ar): text la
+                        if(_): {ar = 1} [ return(_): r ]
+                        set(args): pp_xargs
+                        set(after): pp_xafter
+                        len(na): args
+                        len(np): prm
+                        set(va): 0
+                        if(_): {np > 0} [
+                            at(lastp): prm {np - 1}
+                            if(_): {lastp = "__VA_ARGS__"} [ set(va): 1 ]
+                        ]
+                        if(_): {va = 1 && na > np} [
+                            # the extra arguments join __VA_ARGS__
+                            vec(a2): ""
+                            set(k): 0
+                            while(_): {k < np - 1} [
+                                at(ak): args k
+                                push(_): a2 ak
+                                add(k): k 1
+                            ]
+                            set(rest): ""
+                            while(_): {k < na} [
+                                at(ak2): args k
+                                if(_): {rest != ""} [ concat(rest): rest ", " ]
+                                concat(rest): rest ak2
+                                add(k): k 1
+                            ]
+                            push(_): a2 rest
+                            set(args): a2
+                            set(na): np
+                        ]
+                        if(_): {na < np && (va = 1 || (na = 0 && np = 1))} [
+                            while(_): {na < np} [
+                                push(_): args ""
+                                add(na): na 1
+                            ]
+                        ]
+                        if(_): {na != np} [
+                            concat(m): "macro '" name
+                            concat(m): m "' expects "
+                            encode(nps): np
+                            concat(m): m nps
+                            concat(m): m " arguments, got "
+                            encode(nas): na
+                            concat(m): m nas
+                            pp_fail(_): m
+                        ]
+                        if(_): {pp_failed = 0} [
+                            pp_subst(sub): body prm args
+                            push(_): pp_hide name
+                            pp_expand(x2): sub {depth + 1}
+                            pop(_): pp_hide
+                            push(_): out x2
+                            set(c): after
+                            set(changed): 1
+                        ]
+                        set(done): 1
+                    ]
+                ]
+            ]
+            if(_): {done = 0} [
+                if(_): {name = "__LINE__"} [
+                    encode(ln): pp_curline
+                    push(_): out ln
+                    set(changed): 1
+                ]
+                elif(_): {name = "__FILE__"} [
+                    len(d): pp_inc
+                    at(f): pp_inc {d - 1}
+                    pp_stringize(fs): f
+                    push(_): out fs
+                    set(changed): 1
+                ]
+                else(_): [ push(_): out name ]
+            ]
+        ]
+        else(_): [
+            # copy the whole run up to the next identifier or literal; a
+            # number's letters (0x1F, 1e5, 10UL) belong to the number
+            set(e2): {c + 1}
+            if(_): {b > 47 && b < 58} [
+                set(go3): 1
+                while(_): {go3 = 1 && e2 < n} [
+                    byte(b3): text e2
+                    if(_): {(b3 > 64 && b3 < 91) || (b3 > 96 && b3 < 123) || b3 = 95 || (b3 > 47 && b3 < 58) || b3 = 46} [ add(e2): e2 1 ]
+                    else(_): [ set(go3): 0 ]
+                ]
+            ]
+            set(go): 1
+            while(_): {go = 1 && e2 < n} [
+                byte(b2): text e2
+                if(_): {(b2 > 64 && b2 < 91) || (b2 > 96 && b2 < 123) || b2 = 95 || b2 = 34 || b2 = 39 || (b2 > 47 && b2 < 58)} [ set(go): 0 ]
+                else(_): [ add(e2): e2 1 ]
+            ]
+            pp_cut(run): text c e2
+            push(_): out run
+            set(c): e2
+        ]
+    ]
+    if(_): {changed = 1} [ pp_join(r): out ]
+]
+
+# ---- conditionals ----
+pp_cpush(r): cond [
+    set(r): 0
+    len(d): pp_cact
+    if(_): {d >= 64} [
+        pp_fail(_): "conditional nesting too deep"
+    ]
+    if(_): {pp_failed = 0} [
+        set(a): 0
+        if(_): {pp_act = 1 && cond != 0} [ set(a): 1 ]
+        push(_): pp_cact a
+        push(_): pp_cse 0
+        push(_): pp_ctk a
+        set(pp_act): a
+    ]
+]
+# Whether the conditional enclosing the innermost one is active.
+pp_cparent(r): [
+    len(n): pp_cact
+    set(r): 1
+    if(_): {n > 1} [ at(r): pp_cact {n - 2} ]
+]
+pp_celse(r): [
+    set(r): 0
+    len(n): pp_cact
+    if(_): {n = 0} [ pp_fail(_): "#else without #if" ]
+    if(_): {pp_failed = 0} [
+        sub(i): n 1
+        at(s): pp_cse i
+        if(_): {s = 1} [ pp_fail(_): "#else after #else" ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_settop(_): pp_cse 1
+        pp_cparent(p):
+        at(t): pp_ctk i
+        set(a): 0
+        if(_): {p = 1 && t = 0} [ set(a): 1 ]
+        pp_settop(_): pp_cact a
+        pp_settop(_): pp_ctk 1
+        set(pp_act): a
+    ]
+]
+# #elif: its condition is only worked out when no branch was taken yet.
+pp_celif(r): text [
+    set(r): 0
+    len(n): pp_cact
+    if(_): {n = 0} [ pp_fail(_): "#elif without #if" ]
+    if(_): {pp_failed = 0} [
+        sub(i): n 1
+        at(s): pp_cse i
+        if(_): {s = 1} [ pp_fail(_): "#elif after #else" ]
+    ]
+    if(_): {pp_failed = 0} [
+        pp_cparent(p):
+        at(t): pp_ctk i
+        set(a): 0
+        if(_): {p = 1 && t = 0} [
+            pp_ifexpr(a): text
+            if(_): {a != 0} [ set(a): 1 ]
+        ]
+        pp_settop(_): pp_cact a
+        if(_): {a = 1} [ pp_settop(_): pp_ctk 1 ]
+        set(pp_act): a
+    ]
+]
+pp_cpop(r): [
+    set(r): 0
+    len(n): pp_cact
+    if(_): {n = 0} [ pp_fail(_): "#endif without #if" ]
+    if(_): {pp_failed = 0} [
+        pop(_): pp_cact
+        pop(_): pp_cse
+        pop(_): pp_ctk
+        set(pp_act): 1
+        if(_): {n > 1} [ at(pp_act): pp_cact {n - 2} ]
+    ]
+]
+
+# ---- #if expressions ----
+# defined NAME / defined(NAME) replaced by 1 or 0 (before expansion).
+pp_defined(r): s [
+    vec(out): ""
+    len(n): s
+    set(c): 0
+    while(_): {c < n} [
+        byte(b): s c
+        if(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95} [
+            pp_idend(e): s c
+            pp_cut(nm): s c e
+            if(_): {nm = "defined"} [
+                pp_skip(c2): s e
+                set(par): 0
+                if(_): {c2 < n} [
+                    byte(b2): s c2
+                    if(_): {b2 = 40} [
+                        set(par): 1
+                        pp_skip(c2): s {c2 + 1}
+                    ]
+                ]
+                pp_idend(e2): s c2
+                pp_cut(nm2): s c2 e2
+                if(_): {nm2 = ""} [ pp_fail(_): "expected identifier after defined" ]
+                pp_isdef(d): nm2
+                encode(ds): d
+                push(_): out ds
+                pp_skip(c): s e2
+                if(_): {par = 1} [
+                    set(b3): 0
+                    if(_): {c < n} [ byte(b3): s c ]
+                    if(_): {b3 != 41} [ pp_fail(_): "expected ')' after defined(NAME" ]
+                    add(c): c 1
+                ]
+            ]
+            else(_): [
+                push(_): out nm
+                set(c): e
+            ]
+        ]
+        else(_): [
+            slice(ch): s c 1
+            push(_): out ch
+            add(c): c 1
+        ]
+    ]
+    pp_join(r): out
+]
+# The value of a #if/#elif expression (0 when it failed).
+pp_ifexpr(r): s [
+    set(r): 0
+    pp_defined(s1): s
+    if(_): {pp_failed = 1} [ return(_): r ]
+    pp_expand(s2): s1 0
+    if(_): {pp_failed = 1} [ return(_): r ]
+    pp_defined(s3): s2
+    # tokens: pp_ev_k 0 number, 1 operator; pp_ev_t the value or text
+    vec(pp_ev_k): ""
+    vec(pp_ev_t): ""
+    len(n): s3
+    set(c): 0
+    while(_): {c < n && pp_failed = 0} [
+        byte(b): s3 c
+        if(_): {b = 32 || (b > 8 && b < 14)} [
+            add(c): c 1
+        ]
+        elif(_): {b > 47 && b < 58} [
+            pp_idend(e): s3 c
+            pp_cut(num): s3 c e
+            pp_number(v): num
+            push(_): pp_ev_k 0
+            push(_): pp_ev_t v
+            set(c): e
+        ]
+        elif(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95} [
+            pp_idend(e): s3 c
+            push(_): pp_ev_k 0
+            push(_): pp_ev_t 0
+            set(c): e
+        ]
+        elif(_): {b = 39} [
+            pp_strend(e): s3 c
+            set(v): 0
+            if(_): {e > c + 2} [
+                byte(v): s3 {c + 1}
+                if(_): {v = 92} [
+                    byte(v2): s3 {c + 2}
+                    set(v): v2
+                    if(_): {v2 = 110} [ set(v): 10 ]
+                    if(_): {v2 = 116} [ set(v): 9 ]
+                    if(_): {v2 = 48} [ set(v): 0 ]
+                    if(_): {v2 = 114} [ set(v): 13 ]
+                ]
+            ]
+            push(_): pp_ev_k 0
+            push(_): pp_ev_t v
+            set(c): e
+        ]
+        else(_): [
+            set(op): ""
+            if(_): {c + 1 < n} [
+                slice(two): s3 c 2
+                if(_): {two = "&&" || two = "||" || two = "==" || two = "!=" || two = "<=" || two = ">=" || two = "<<" || two = ">>"} [ set(op): two ]
+            ]
+            if(_): {op = ""} [ slice(op): s3 c 1 ]
+            push(_): pp_ev_k 1
+            push(_): pp_ev_t op
+            len(ol): op
+            add(c): c ol
+        ]
+    ]
+    if(_): {pp_failed = 1} [ return(_): r ]
+    set(pp_ev_i): 0
+    pp_ev_cond(r):
+    len(nt): pp_ev_k
+    if(_): {pp_failed = 0 && pp_ev_i < nt} [ pp_fail(_): "junk at the end of a #if expression" ]
+]
+# Value of a C integer literal (decimal, 0x hex, 0 octal; suffixes skipped).
+pp_number(r): s [
+    set(r): 0
+    len(n): s
+    set(base): 10
+    set(i): 0
+    if(_): {n > 1} [
+        byte(b0): s 0
+        byte(b1): s 1
+        if(_): {b0 = 48 && (b1 = 120 || b1 = 88)} [
+            set(base): 16
+            set(i): 2
+        ]
+        elif(_): {b0 = 48} [
+            set(base): 8
+            set(i): 1
+        ]
+    ]
+    set(go): 1
+    while(_): {go = 1 && i < n} [
+        byte(b): s i
+        set(d): {0 - 1}
+        if(_): {b > 47 && b < 58} [ set(d): {b - 48} ]
+        elif(_): {base = 16 && b > 96 && b < 103} [ set(d): {b - 87} ]
+        elif(_): {base = 16 && b > 64 && b < 71} [ set(d): {b - 55} ]
+        if(_): {d < 0 || d >= base} [ set(go): 0 ]
+        else(_): [
+            set(r): {r * base + d}
+            add(i): i 1
+        ]
+    ]
+]
+pp_ev_peek(r): [
+    set(r): ""
+    len(n): pp_ev_k
+    if(_): {pp_ev_i < n} [
+        at(k): pp_ev_k pp_ev_i
+        if(_): {k = 1} [ at(r): pp_ev_t pp_ev_i ]
+    ]
+]
+pp_ev_cond(r): [
+    pp_ev_bin(r): 0
+    pp_ev_peek(op):
+    if(_): {op = "?"} [
+        add(pp_ev_i): pp_ev_i 1
+        pp_ev_cond(a):
+        pp_ev_peek(op2):
+        if(_): {op2 != ":"} [ pp_fail(_): "expected ':' in #if expression" ]
+        add(pp_ev_i): pp_ev_i 1
+        pp_ev_cond(b):
+        if(_): {r != 0} [ set(r): a ]
+        else(_): [ set(r): b ]
+    ]
+]
+# Binding strength of a binary operator, 0 for none.
+pp_ev_prec(r): op [
+    set(r): 0
+    if(_): {op = "||"} [ set(r): 1 ]
+    elif(_): {op = "&&"} [ set(r): 2 ]
+    elif(_): {op = "|"} [ set(r): 3 ]
+    elif(_): {op = "^"} [ set(r): 4 ]
+    elif(_): {op = "&"} [ set(r): 5 ]
+    elif(_): {op = "==" || op = "!="} [ set(r): 6 ]
+    elif(_): {op = "<" || op = ">" || op = "<=" || op = ">="} [ set(r): 7 ]
+    elif(_): {op = "<<" || op = ">>"} [ set(r): 8 ]
+    elif(_): {op = "+" || op = "-"} [ set(r): 9 ]
+    elif(_): {op = "*" || op = "/" || op = "%"} [ set(r): 10 ]
+]
+pp_ev_bin(r): minp [
+    pp_ev_unary(r):
+    set(go): 1
+    while(_): {go = 1 && pp_failed = 0} [
+        pp_ev_peek(op):
+        pp_ev_prec(p): op
+        if(_): {p = 0 || p <= minp} [ set(go): 0 ]
+        else(_): [
+            add(pp_ev_i): pp_ev_i 1
+            pp_ev_bin(b): p
+            set(a): r
+            if(_): {op = "||"} [ set(r): {a != 0 || b != 0} ]
+            elif(_): {op = "&&"} [ set(r): {a != 0 && b != 0} ]
+            elif(_): {op = "|"} [ set(r): {a | b} ]
+            elif(_): {op = "^"} [ set(r): {a ^ b} ]
+            elif(_): {op = "&"} [ set(r): {a & b} ]
+            elif(_): {op = "=="} [ set(r): {a = b} ]
+            elif(_): {op = "!="} [ set(r): {a != b} ]
+            elif(_): {op = "<"} [ set(r): {a < b} ]
+            elif(_): {op = ">"} [ set(r): {a > b} ]
+            elif(_): {op = "<="} [ set(r): {a <= b} ]
+            elif(_): {op = ">="} [ set(r): {a >= b} ]
+            elif(_): {op = "<<"} [ set(r): {a << b} ]
+            elif(_): {op = ">>"} [ set(r): {a >> b} ]
+            elif(_): {op = "+"} [ set(r): {a + b} ]
+            elif(_): {op = "-"} [ set(r): {a - b} ]
+            elif(_): {op = "*"} [ set(r): {a * b} ]
+            elif(_): {b = 0} [ pp_fail(_): "division by zero in #if" ]
+            elif(_): {op = "/"} [ pp_idiv(r): a b ]
+            else(_): [ set(r): {a % b} ]
+            if(_): {r = true} [ set(r): 1 ]
+            if(_): {r = false} [ set(r): 0 ]
+        ]
+    ]
+]
+pp_ev_unary(r): [
+    set(r): 0
+    len(n): pp_ev_k
+    if(_): {pp_ev_i >= n} [
+        pp_fail(_): "#if expression ends too soon"
+        return(_): r
+    ]
+    at(k): pp_ev_k pp_ev_i
+    at(t): pp_ev_t pp_ev_i
+    add(pp_ev_i): pp_ev_i 1
+    if(_): {k = 0} [ set(r): t ]
+    elif(_): {t = "("} [
+        pp_ev_cond(r):
+        pp_ev_peek(cl):
+        if(_): {cl != ")"} [ pp_fail(_): "missing ')' in #if expression" ]
+        add(pp_ev_i): pp_ev_i 1
+    ]
+    elif(_): {t = "!"} [
+        pp_ev_unary(v):
+        set(r): 0
+        if(_): {v = 0} [ set(r): 1 ]
+    ]
+    elif(_): {t = "-"} [
+        pp_ev_unary(v):
+        set(r): {0 - v}
+    ]
+    elif(_): {t = "+"} [ pp_ev_unary(r): ]
+    elif(_): {t = "~"} [
+        pp_ev_unary(v):
+        set(r): {v ^ (0 - 1)}
+    ]
+    else(_): [
+        concat(m): "unexpected '" t
+        concat(m): m "' in #if expression"
+        pp_fail(_): m
+    ]
+]
+
+# ---- files ----
+# Absolute, normalized form of a path for #pragma once (case-folded on
+# Windows).
+pp_canon(r): path [
+    len(n): path
+    set(abs): 0
+    if(_): {n > 0} [
+        byte(b0): path 0
+        if(_): {b0 = 47 || b0 = 92} [ set(abs): 1 ]
+    ]
+    if(_): {n > 2} [
+        byte(b1): path 1
+        byte(b2): path 2
+        if(_): {b1 = 58 && (b2 = 47 || b2 = 92)} [ set(abs): 1 ]
+    ]
+    set(p): path
+    if(_): {abs = 0} [
+        getcwd(d):
+        concat(d): d "/"
+        concat(p): d path
+    ]
+    # split on / and \, drop "." segments, let ".." remove the previous
+    len(l): p
+    vec(seg): ""
+    set(cur): ""
+    set(i): 0
+    while(_): {i <= l} [
+        set(ch): 47
+        if(_): {i < l} [ byte(ch): p i ]
+        if(_): {ch = 47 || ch = 92} [
+            if(_): {cur = ".."} [
+                len(sl): seg
+                if(_): {sl > 1} [ pop(_): seg ]
+            ]
+            elif(_): {cur != "." && cur != ""} [
+                push(_): seg cur
+            ]
+            elif(_): {i = 0} [
+                push(_): seg ""
+            ]
+            set(cur): ""
+        ]
+        else(_): [
+            slice(c1): p i 1
+            concat(cur): cur c1
+        ]
+        add(i): i 1
+    ]
+    set(r): ""
+    len(sn): seg
+    set(k): 0
+    while(_): {k < sn} [
+        at(sg): seg k
+        if(_): {k > 0} [ concat(r): r "/" ]
+        concat(r): r sg
+        add(k): k 1
+    ]
+    if(_): {pp_win = 1} [ pp_lower(r): r ]
+]
+pp_lower(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b > 64 && b < 91} [
+            chr(c): {b + 32}
+        ]
+        else(_): [
+            slice(c): s i 1
+        ]
+        concat(r): r c
+        add(i): i 1
+    ]
+]
+pp_isabs(r): f [
+    set(r): 0
+    len(n): f
+    if(_): {n > 0} [
+        byte(b0): f 0
+        if(_): {b0 = 47 || b0 = 92} [ set(r): 1 ]
+    ]
+    if(_): {n > 2} [
+        byte(b0): f 0
+        byte(b1): f 1
+        byte(b2): f 2
+        pp_alpha_p(al): b0
+        if(_): {al = 1 && b1 = 58 && (b2 = 47 || b2 = 92)} [ set(r): 1 ]
+    ]
+]
+# The directory part of path, with its trailing separator ("" for none).
+pp_dirname(r): path [
+    set(r): ""
+    len(n): path
+    set(sep): {0 - 1}
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): path i
+        if(_): {b = 47 || b = 92} [ set(sep): i ]
+        add(i): i 1
+    ]
+    if(_): {sep >= 0} [ slice(r): path 0 {sep + 1} ]
+]
+# The file an #include names: "" tries the including file's directory
+# first; then each -I directory and usa's include/. "" when not found.
+pp_resolve(r): filename quoted [
+    set(r): ""
+    pp_isabs(abs): filename
+    if(_): {abs = 1} [
+        file_exists(ex): filename
+        if(_): {ex = true} [ set(r): filename ]
+        return(_): r
+    ]
+    len(d): pp_inc
+    if(_): {quoted = 1 && d > 0} [
+        at(cur): pp_inc {d - 1}
+        pp_dirname(dir): cur
+        concat(p): dir filename
+        file_exists(ex): p
+        if(_): {ex = true} [
+            set(r): p
+            return(_): r
+        ]
+    ]
+    len(nd): pp_dirs
+    set(i): 0
+    while(_): {i < nd} [
+        at(dir2): pp_dirs i
+        concat(p2): dir2 "/"
+        concat(p2): p2 filename
+        file_exists(ex2): p2
+        if(_): {ex2 = true} [
+            set(r): p2
+            set(i): nd
+        ]
+        add(i): i 1
+    ]
+]
+pp_file(r): fname [
+    set(r): 0
+    pp_canon(cn): fname
+    set(seen): 0
+    len(on): pp_once
+    set(i): 0
+    while(_): {i < on} [
+        at(o): pp_once i
+        if(_): {o = cn} [ set(seen): 1 ]
+        add(i): i 1
+    ]
+    if(_): {seen = 1} [ return(_): r ]
+    len(d): pp_inc
+    if(_): {d >= 64} [
+        concat(m): "#include nested too deeply: " fname
+        pp_fail(_): m
+        return(_): r
+    ]
+    set(savedline): pp_curline
+    push(_): pp_inc fname
+    readfile(src): fname
+    pp_clean(src2): src
+    pp_text(_): src2
+    if(_): {pp_failed = 0 && pp_pend != ""} [
+        set(pp_curline): pp_pendl
+        pp_fail(_): "unterminated macro call"
+    ]
+    if(_): {pp_failed = 0} [ pop(_): pp_inc ]
+    set(pp_curline): savedline
+]
+# The pieces of v joined, pairwise so the copying stays O(n log n).
+pp_join(r): v [
+    set(p): v
+    len(n): p
+    while(_): {n > 1} [
+        vec(q): ""
+        set(k): 0
+        while(_): {k < n} [
+            at(a): p k
+            if(_): {k + 1 < n} [
+                at(z): p {k + 1}
+                concat(a): a z
+            ]
+            push(_): q a
+            add(k): k 2
+        ]
+        set(p): q
+        len(n): p
+    ]
+    set(r): ""
+    if(_): {n = 1} [ at(r): p 0 ]
+]
+# src without comments and backslash-newlines; every line they took is
+# put back after the line they ended on, so line numbers do not move.
+pp_clean(r): src [
+    text_bytes(v): src
+    len(n): v
+    vec(o): ""
+    set(i): 0
+    # state: 0 code, 34 "string", 39 'char'
+    set(st): 0
+    set(owed): 0
+    while(_): {i < n} [
+        at(b): v i
+        set(nb): 0
+        if(_): {i + 1 < n} [ at(nb): v {i + 1} ]
+        if(_): {b = 92 && (nb = 10 || (nb = 13 && i + 2 < n))} [
+            # line splice
+            if(_): {nb = 13} [ add(i): i 1 ]
+            add(i): i 2
+            add(owed): owed 1
+        ]
+        elif(_): {b = 13} [
+            add(i): i 1
+        ]
+        elif(_): {b = 10} [
+            push(_): o 10
+            while(_): {owed > 0} [
+                push(_): o 10
+                sub(owed): owed 1
+            ]
+            set(st): 0
+            add(i): i 1
+        ]
+        elif(_): {st != 0} [
+            push(_): o b
+            if(_): {b = 92} [
+                if(_): {nb != 10 && nb != 13 && nb != 0} [
+                    push(_): o nb
+                    add(i): i 1
+                ]
+            ]
+            elif(_): {b = st} [ set(st): 0 ]
+            add(i): i 1
+        ]
+        elif(_): {b = 34 || b = 39} [
+            push(_): o b
+            set(st): b
+            add(i): i 1
+        ]
+        elif(_): {b = 47 && nb = 47} [
+            # to the end of the line (a splice continues it)
+            set(go): 1
+            while(_): {go = 1 && i < n} [
+                at(c): v i
+                if(_): {c = 10} [ set(go): 0 ]
+                elif(_): {c = 92 && i + 1 < n} [
+                    at(c2): v {i + 1}
+                    if(_): {c2 = 10} [
+                        add(owed): owed 1
+                        add(i): i 2
+                    ]
+                    else(_): [ add(i): i 1 ]
+                ]
+                else(_): [ add(i): i 1 ]
+            ]
+        ]
+        elif(_): {b = 47 && nb = 42} [
+            push(_): o 32
+            add(i): i 2
+            set(go): 1
+            while(_): {go = 1 && i < n} [
+                at(c): v i
+                if(_): {c = 42 && i + 1 < n} [
+                    at(c2): v {i + 1}
+                    if(_): {c2 = 47} [
+                        set(go): 0
+                        add(i): i 1
+                    ]
+                ]
+                if(_): {c = 10} [ add(owed): owed 1 ]
+                add(i): i 1
+            ]
+        ]
+        else(_): [
+            push(_): o b
+            add(i): i 1
+        ]
+    ]
+    push(_): o 10
+    while(_): {owed > 0} [
+        push(_): o 10
+        sub(owed): owed 1
+    ]
+    len(on): o
+    bytes_text(r): o 0 on
+    if(_): {r = null} [ set(r): "" ]
+]
+# Every line of a file's text, in order (a line keeps its "\n").
+pp_text(r): src [
+    set(r): 0
+    text_bytes(v): src
+    len(n): src
+    set(s): 0
+    set(line): 0
+    while(_): {pp_failed = 0 && s < n} [
+        add(line): line 1
+        set(e): s
+        set(go): 1
+        while(_): {go = 1 && e < n} [
+            at(b): v e
+            add(e): e 1
+            if(_): {b = 10} [ set(go): 0 ]
+        ]
+        pp_cut(l): src s e
+        set(pp_curline): line
+        pp_line(_): l
+        set(s): e
+    ]
+]
+pp_line(r): line [
+    set(r): 0
+    if(_): {pp_pend != ""} [
+        # a macro call left open on an earlier line takes this one in
+        len(pl): pp_pend
+        slice(pend): pp_pend 0 {pl - 1}
+        concat(j): pend " "
+        concat(line): j line
+        set(pp_curline): pp_pendl
+        set(pp_pend): ""
+    ]
+    pp_skip(c): line 0
+    len(n): line
+    set(b): 0
+    if(_): {c < n} [ byte(b): line c ]
+    if(_): {b = 35} [
+        pp_directive(_): line {c + 1}
+    ]
+    elif(_): {pp_act = 1} [
+        set(pp_more): 0
+        pp_expand(x): line 0
+        if(_): {pp_failed = 0 && pp_more = 1} [
+            set(pp_pend): line
+            set(pp_pendl): pp_curline
+            return(_): r
+        ]
+        if(_): {pp_failed = 0} [
+            len(d): pp_inc
+            at(f): pp_inc {d - 1}
+            push(_): pp_mapf f
+            push(_): pp_mapl pp_curline
+            push(_): pp_outv x
+            set(nl): 1
+            len(xn): x
+            if(_): {xn > 0} [
+                byte(last): x {xn - 1}
+                if(_): {last = 10} [ set(nl): 0 ]
+            ]
+            if(_): {nl = 1} [ push(_): pp_outv "\n" ]
+        ]
+    ]
+]
+pp_directive(r): line p [
+    set(r): 0
+    pp_skip(p): line p
+    pp_idend(e): line p
+    pp_cut(dn): line p e
+    pp_skip(c): line e
+    pp_rest(rest): line c
+    pp_trim(t): rest
+    if(_): {dn = "ifdef" || dn = "ifndef"} [
+        pp_idend(e2): t 0
+        set(cond): 0
+        if(_): {pp_act = 1} [
+            if(_): {e2 = 0} [ pp_fail(_): "#ifdef requires a name" ]
+            pp_cut(nm): t 0 e2
+            pp_isdef(cond): nm
+            if(_): {dn = "ifndef"} [ set(cond): {1 - cond} ]
+        ]
+        pp_cpush(_): cond
+    ]
+    elif(_): {dn = "if"} [
+        set(cond): 0
+        if(_): {pp_act = 1} [ pp_ifexpr(cond): t ]
+        pp_cpush(_): cond
+    ]
+    elif(_): {dn = "elif"} [ pp_celif(_): t ]
+    elif(_): {dn = "else"} [ pp_celse(_): ]
+    elif(_): {dn = "endif"} [ pp_cpop(_): ]
+    elif(_): {pp_act = 0} [
+        # anything else in a skipped branch is ignored
+        set(r): 0
+    ]
+    elif(_): {dn = "define"} [ pp_pdefine(_): t ]
+    elif(_): {dn = "undef"} [
+        pp_idend(e3): t 0
+        pp_cut(nm3): t 0 e3
+        pp_undef(_): nm3
+    ]
+    elif(_): {dn = "include" || dn = "include_next"} [ pp_pinclude(_): t ]
+    elif(_): {dn = "error"} [
+        concat(m): "#error " t
+        pp_fail(_): m
+    ]
+    elif(_): {dn = "warning"} [
+        len(d): pp_inc
+        at(f): pp_inc {d - 1}
+        encode(ls): pp_curline
+        concat(m): f ":"
+        concat(m): m ls
+        concat(m): m ": warning: #warning "
+        concat(m): m t
+        concat(m): m "\n"
+        write_stderr(_): m
+    ]
+    elif(_): {dn = "pragma"} [
+        if(_): {t = "once"} [
+            len(d): pp_inc
+            at(cur): pp_inc {d - 1}
+            pp_canon(cn): cur
+            push(_): pp_once cn
+        ]
+    ]
+    elif(_): {dn = "line" || dn = "ident" || dn = "sccs" || dn = ""} [
+        set(r): 0
+    ]
+    else(_): [
+        concat(m): "unknown preprocessing directive #" dn
+        pp_fail(_): m
+    ]
+]
+pp_pinclude(r): s [
+    set(r): 0
+    set(t): s
+    len(n): t
+    set(b): 0
+    if(_): {n > 0} [ byte(b): t 0 ]
+    if(_): {b != 34 && b != 60} [
+        # #include MACRO
+        pp_expand(t): s 0
+        pp_trim(t): t
+        len(n): t
+        if(_): {n > 0} [ byte(b): t 0 ]
+    ]
+    set(close): 34
+    set(quoted): 1
+    if(_): {b = 60} [
+        set(close): 62
+        set(quoted): 0
+    ]
+    elif(_): {b != 34} [
+        pp_fail(_): "#include expects \"FILENAME\" or <FILENAME>"
+        return(_): r
+    ]
+    set(e): 1
+    while(_): {e < n} [
+        byte(b2): t e
+        if(_): {b2 = close} [ set(n): e ]
+        else(_): [ add(e): e 1 ]
+    ]
+    pp_cut(fn): t 1 e
+    pp_resolve(path): fn quoted
+    if(_): {path = ""} [
+        concat(m): fn ": No such file or directory"
+        pp_fail(_): m
+        return(_): r
+    ]
+    pp_file(_): path
+]
+pp_pdefine(r): s [
+    set(r): 0
+    len(n): s
+    set(b): 0
+    if(_): {n > 0} [ byte(b): s 0 ]
+    pp_idstart_p(ok): b
+    if(_): {ok = 0} [
+        pp_fail(_): "macro names must be identifiers"
+        return(_): r
+    ]
+    pp_idend(ne): s 0
+    pp_cut(name): s 0 ne
+    set(params): null
+    set(c): ne
+    set(b2): 0
+    if(_): {ne < n} [ byte(b2): s ne ]
+    if(_): {b2 = 40} [
+        pp_params(c): s ne
+        if(_): {pp_failed = 1} [ return(_): r ]
+        set(params): pp_sigp
+    ]
+    pp_rest(val): s c
+    pp_trim(val): val
+    pp_define(_): name params val
+]
+
+# Predefined macros: target facts usa's code generator keeps.
+pp_predefine(r): [
+    set(r): 0
+    pp_define(_): "__STDC__" null "1"
+    pp_define(_): "__STDC_VERSION__" null "199901L"
+    pp_define(_): "__STDC_HOSTED__" null "1"
+    pp_define(_): "__usa__" null "1"
+    pp_define(_): "__USSR__" null "1"
+    pp_define(_): "__LP64__" null "1"
+    pp_define(_): "_LP64" null "1"
+    pp_define(_): "__CHAR_BIT__" null "8"
+    pp_define(_): "__CHAR_UNSIGNED__" null "1"
+    pp_define(_): "__SIZEOF_SHORT__" null "2"
+    pp_define(_): "__SIZEOF_INT__" null "4"
+    pp_define(_): "__SIZEOF_LONG__" null "8"
+    pp_define(_): "__SIZEOF_LONG_LONG__" null "8"
+    pp_define(_): "__SIZEOF_POINTER__" null "8"
+    pp_define(_): "__SIZEOF_FLOAT__" null "4"
+    pp_define(_): "__SIZEOF_DOUBLE__" null "8"
+    pp_define(_): "__DATE__" null "\"Oct 29 2026\""
+    pp_define(_): "__TIME__" null "\"00:00:00\""
+]
+
+# Preprocess the file at path: dirs are the -I directories then usa's
+# include directory; defs the -D NAME=VALUE pairs as a vector of
+# "NAME=VALUE" strings.
+pp_init(r): dirs defs [
+    set(r): 0
+    ht_new(pp_dtab): 1024
+    vec(pp_dn): ""
+    vec(pp_dv): ""
+    vec(pp_dp): ""
+    vec(pp_dlive): ""
+    set(pp_ndefs): 0
+    set(pp_dirs): dirs
+    vec(pp_inc): ""
+    vec(pp_once): ""
+    vec(pp_cact): ""
+    vec(pp_cse): ""
+    vec(pp_ctk): ""
+    vec(pp_hide): ""
+    set(pp_act): 1
+    set(pp_out): ""
+    set(pp_pend): ""
+    set(pp_pendl): 0
+    set(pp_more): 0
+    set(pp_curline): 0
+    set(pp_failed): 0
+    set(pp_msg): ""
+    set(pp_win): 0
+    getenv(os): "OS"
+    if(_): {os = "Windows_NT"} [ set(pp_win): 1 ]
+    pp_predefine(_):
+    len(nd): defs
+    set(i): 0
+    while(_): {i < nd} [
+        at(d): defs i
+        len(dl): d
+        set(eq): {0 - 1}
+        set(k): 0
+        while(_): {k < dl && eq < 0} [
+            byte(bk): d k
+            if(_): {bk = 61} [ set(eq): k ]
+            add(k): k 1
+        ]
+        if(_): {eq < 0} [ pp_define(_): d null "1" ]
+        else(_): [
+            slice(dn): d 0 eq
+            pp_rest(dv): d {eq + 1}
+            pp_define(_): dn null dv
+        ]
+        add(i): i 1
+    ]
+]
+# One translation unit: the defines are fresh for each (pp_init first).
+pp_run(r): path [
+    vec(pp_outv): ""
+    vec(pp_mapf): ""
+    vec(pp_mapl): ""
+    vec(pp_inc): ""
+    vec(pp_cact): ""
+    pp_file(_): path
+    if(_): {pp_failed = 0} [
+        len(cd): pp_cact
+        if(_): {cd != 0} [ pp_fail(_): "unterminated #if" ]
+    ]
+    pp_join(pp_out): pp_outv
+    set(r): pp_out
+]

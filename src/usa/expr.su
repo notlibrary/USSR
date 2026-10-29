@@ -1,0 +1,1399 @@
+# Expressions and statements of the usa parser (parse.su has the rest).
+#
+# Expression nodes (nd_k): 1 integer constant (v), 2 floating constant
+# (v: its spelling, or an integer for a whole value), 3 variable (a: the
+# symbol), 4 string literal (v: its address), 5 binary operator (c: the
+# VM opcode ADD 16 .. SHR 34), 6 &&, 7 ||, 8 !, 9 unary -, 10 ~, 11 &,
+# 12 * (load through a pointer), 13 =, 14 op= (c: opcode, v: the type
+# the operation is done in), 15 ++/-- (b: 1 postfix, c: the step),
+# 16 call (a: callee, v: the arguments), 17 ?:, 18 comma, 19 cast,
+# 22 va_start, 25 a function used as a value (a: symbol), 26 array to
+# pointer (a: the array), 27 address plus offset (a: base address, v:
+# bytes), 29 USSR string constant (v), 47 statement expression (a:
+# block, b: value).
+# Statements: 30 block (v: vector), 31 expression, 32 if, 33 while,
+# 34 do, 35 for (v: body), 36 return, 37 break, 38 continue, 39 switch
+# (v: the case nodes), 40 case (v: value), 41 default, 42 goto (v: name),
+# 43 label (v: name), 44 empty, 45 clear (a: lvalue, v: bytes).
+
+# ---- conversions ----
+# n as an rvalue: arrays decay to pointers, functions to their address.
+p_rval(r): n [
+    set(r): n
+    at(t): nd_t n
+    at(k): ty_k t
+    if(_): {k = 10} [
+        at(b): ty_b t
+        ty_ptr(pt): b
+        nd_new(r): 26 pt n 0 0 0
+    ]
+    elif(_): {k = 11} [
+        at(nk): nd_k n
+        ty_ptr(pt): t
+        if(_): {nk = 3} [
+            at(s): nd_a n
+            nd_new(r): 25 pt s 0 0 0
+        ]
+        else(_): [
+            nd_new(r): 19 pt n 0 0 0
+        ]
+    ]
+]
+# n converted to type t.
+p_conv(r): n t [
+    p_rval(r): n
+    at(f): nd_t r
+    if(_): {f = t} [ return(_): r ]
+    at(tk): ty_k t
+    at(fk): ty_k f
+    if(_): {tk = 12 || tk = 13} [
+        if(_): {fk = tk} [ return(_): r ]
+        p_fail(_): "incompatible types when converting to a struct or union"
+    ]
+    if(_): {fk = 12 || fk = 13} [
+        if(_): {tk != 0} [ p_fail(_): "a struct or union cannot be converted to a scalar" ]
+    ]
+    at(nk): nd_k r
+    if(_): {nk = 1} [
+        ty_isint(ti): t
+        if(_): {ti = 1 || tk = 9} [
+            nd_new(c): 19 t r 0 0 0
+            p_ceval(v): c
+            nd_num(r): v t
+            return(_): r
+        ]
+        if(_): {tk = 7 || tk = 8} [
+            at(iv): nd_v r
+            nd_new(r): 2 t 0 0 0 iv
+            return(_): r
+        ]
+    ]
+    if(_): {nk = 2 && (tk = 7 || tk = 8)} [
+        at(fv): nd_v r
+        nd_new(r): 2 t 0 0 0 fv
+        return(_): r
+    ]
+    nd_new(r): 19 t r 0 0 0
+]
+p_isnullconst(r): n [
+    set(r): 0
+    at(k): nd_k n
+    if(_): {k = 1} [
+        at(v): nd_v n
+        if(_): {v = 0} [ set(r): 1 ]
+    ]
+    if(_): {k = 19} [
+        at(a): nd_a n
+        p_isnullconst(r): a
+    ]
+]
+p_new_assign(r): lv e [
+    at(t): nd_t lv
+    at(k): ty_k t
+    if(_): {k = 10} [ p_fail(_): "assignment to an array" ]
+    p_conv(e2): e t
+    nd_new(r): 13 t lv e2 0 0
+]
+# A binary operator node (VM opcode op) with C's conversions applied.
+p_binop(r): op l r0 [
+    p_rval(a): l
+    p_rval(b): r0
+    at(ta): nd_t a
+    at(tb): nd_t b
+    ty_isptr(pa): ta
+    ty_isptr(pb): tb
+    ty_isarith(ia): ta
+    ty_isarith(ib): tb
+    if(_): {op = 16 && pb = 1 && pa = 0} [
+        set(x): a
+        set(a): b
+        set(b): x
+        set(ta): nd_t a
+        set(tb): nd_t b
+        at(ta): nd_t a
+        at(tb): nd_t b
+        set(pa): 1
+        set(pb): 0
+        ty_isarith(ia): ta
+        ty_isarith(ib): tb
+    ]
+    if(_): {(op = 16 || op = 17) && pa = 1 && pb = 0} [
+        if(_): {ib = 0} [ p_fail(_): "invalid operands to pointer arithmetic" ]
+        at(base): ty_b ta
+        at(bk): ty_k base
+        set(es): 1
+        if(_): {bk != 0 && bk != 11} [ ty_sizeof(es): base p_ln ]
+        p_conv(idx): b ty_long
+        if(_): {es != 1} [
+            nd_num(sz): es ty_long
+            p_fold(idx): 18 idx sz ty_long
+        ]
+        p_fold(r): op a idx ta
+        return(_): r
+    ]
+    if(_): {op = 17 && pa = 1 && pb = 1} [
+        at(base): ty_b ta
+        at(bk): ty_k base
+        set(es): 1
+        if(_): {bk != 0} [ ty_sizeof(es): base p_ln ]
+        p_fold(d): 17 a b ty_long
+        set(r): d
+        if(_): {es != 1} [
+            nd_num(sz): es ty_long
+            p_fold(r): 19 d sz ty_long
+        ]
+        return(_): r
+    ]
+    if(_): {op >= 22 && op <= 27} [
+        if(_): {ia = 1 && ib = 1} [
+            ty_common(ct): ta tb
+            p_conv(a): a ct
+            p_conv(b): b ct
+        ]
+        elif(_): {pa = 1 && pb = 0} [ p_conv(b): b ta ]
+        elif(_): {pb = 1 && pa = 0} [ p_conv(a): a tb ]
+        p_fold(r): op a b ty_int
+        return(_): r
+    ]
+    if(_): {ia = 0 || ib = 0} [ p_fail(_): "invalid operands to binary operator" ]
+    if(_): {op = 33 || op = 34} [
+        ty_promote(pt): ta
+        ty_promote(qt): tb
+        p_conv(a): a pt
+        p_conv(b): b qt
+        p_fold(r): op a b pt
+        return(_): r
+    ]
+    ty_common(ct): ta tb
+    if(_): {op = 20 || op >= 30} [
+        ty_isflt(fl): ct
+        if(_): {fl = 1} [ p_fail(_): "invalid operands to binary operator (need integers)" ]
+    ]
+    p_conv(a): a ct
+    p_conv(b): b ct
+    p_fold(r): op a b ct
+]
+# A binary node, folded when both sides are integer constants.
+p_fold(r): op a b t [
+    nd_new(r): 5 t a b op 0
+    at(ka): nd_k a
+    at(kb): nd_k b
+    ty_isint(ti): t
+    at(tk): ty_k t
+    if(_): {ka = 1 && kb = 1 && (ti = 1 || tk = 9)} [
+        if(_): {op = 19 || op = 20} [
+            at(bv): nd_v b
+            if(_): {bv = 0} [ return(_): r ]
+        ]
+        at(at2): nd_t a
+        at(au): ty_u at2
+        set(fold): 1
+        if(_): {au = 1 && (op = 19 || op = 20 || (op >= 24 && op <= 27))} [
+            at(av): nd_v a
+            at(bv2): nd_v b
+            if(_): {av < 0 || bv2 < 0} [ set(fold): 0 ]
+        ]
+        if(_): {fold = 1} [
+            p_ceval(v): r
+            if(_): {v != null} [ nd_num(r): v t ]
+        ]
+    ]
+]
+# The type of node n is a struct or union: n itself (whose value is the
+# object's address).
+p_structval(r): n [
+    set(r): n
+    at(t): nd_t n
+    ty_isagg(ag): t
+    if(_): {ag = 0} [ p_fail(_): "request for a member in something not a structure or union" ]
+]
+p_member(r): base name arrow [
+    if(_): {arrow = 1} [
+        p_rval(p): base
+        at(pt): nd_t p
+        at(pk): ty_k pt
+        if(_): {pk != 9} [ p_fail(_): "invalid type argument of '->'" ]
+        at(st): ty_b pt
+        set(sv): p
+    ]
+    else(_): [
+        p_structval(sv): base
+        at(st): nd_t sv
+    ]
+    ty_isagg(ag): st
+    if(_): {ag = 0} [ p_fail(_): "request for a member in something not a structure or union" ]
+    at(cpl): ty_cpl st
+    if(_): {cpl = 0} [ p_fail(_): "dereferencing a pointer to an incomplete type" ]
+    ty_member(m): st name
+    if(_): {m < 0} [
+        concat(msg): "no member named '" name
+        concat(msg): msg "'"
+        p_fail(_): msg
+    ]
+    at(mt): mb_t m
+    at(mo): mb_o m
+    ty_ptr(pt2): mt
+    at(sk): nd_k sv
+    if(_): {sk = 1} [
+        # offsetof: a constant address
+        at(bv): nd_v sv
+        nd_num(off): {bv + mo} pt2
+    ]
+    elif(_): {mo = 0} [
+        nd_new(off): 19 pt2 sv 0 0 0
+    ]
+    else(_): [
+        nd_new(off): 27 pt2 sv 0 0 mo
+    ]
+    nd_new(r): 12 mt off 0 0 0
+]
+p_deref(r): n [
+    p_rval(p): n
+    at(t): nd_t p
+    at(k): ty_k t
+    if(_): {k != 9} [ p_fail(_): "invalid type argument of unary '*'" ]
+    at(b): ty_b t
+    at(bk): ty_k b
+    if(_): {bk = 11} [
+        # *f is f for a function pointer
+        set(r): p
+        return(_): r
+    ]
+    if(_): {bk = 0} [ p_fail(_): "dereferencing a 'void *' pointer" ]
+    nd_new(r): 12 b p 0 0 0
+]
+p_addr(r): n [
+    at(k): nd_k n
+    at(t): nd_t n
+    at(tk): ty_k t
+    if(_): {k = 12} [
+        at(p): nd_a n
+        at(pt): nd_t p
+        ty_ptr(want): t
+        set(r): p
+        if(_): {pt != want} [ nd_new(r): 19 want p 0 0 0 ]
+        return(_): r
+    ]
+    if(_): {k = 3} [
+        at(s): nd_a n
+        at(sk): sy_k s
+        if(_): {sk = 3} [
+            ty_ptr(ft): t
+            nd_new(r): 25 ft s 0 0 0
+            return(_): r
+        ]
+        set(sy_at): s 1
+        ty_ptr(pt): t
+        nd_new(r): 11 pt n 0 0 0
+        return(_): r
+    ]
+    if(_): {k = 4 || k = 47 || (k = 16 && (tk = 12 || tk = 13)) || (k = 17 && (tk = 12 || tk = 13)) || (k = 13 && (tk = 12 || tk = 13))} [
+        ty_ptr(pt): t
+        nd_new(r): 19 pt n 0 0 0
+        return(_): r
+    ]
+    if(_): {k = 26 || k = 25} [
+        # &array decays the same; &function
+        set(r): n
+        return(_): r
+    ]
+    p_fail(_): "lvalue required as unary '&' operand"
+]
+p_islvalue(r): n [
+    at(k): nd_k n
+    set(r): 0
+    if(_): {k = 3 || k = 12} [ set(r): 1 ]
+]
+p_incdec(r): n post delta [
+    p_islvalue(lv): n
+    if(_): {lv = 0} [ p_fail(_): "lvalue required as increment operand" ]
+    at(t): nd_t n
+    at(k): ty_k t
+    set(step): delta
+    if(_): {k = 9} [
+        at(b): ty_b t
+        ty_sizeof(es): b p_ln
+        set(step): {delta * es}
+    ]
+    ty_isscalar(sc): t
+    if(_): {sc = 0} [ p_fail(_): "wrong type argument to increment" ]
+    nd_new(r): 15 t n post step 0
+]
+
+# ---- strings ----
+# The bytes of one or more adjacent string literals.
+p_strlit(r): [
+    at(r0): tk_s p_i
+    add(p_i): p_i 1
+    set(r): r0
+    while(_): {1 = 1} [
+        at(k): tk_k p_i
+        if(_): {k != 4} [ break(_): "" ]
+        at(more): tk_s p_i
+        if(_): {r = r0} [
+            vec(cp): ""
+            len(n0): r0
+            set(i): 0
+            while(_): {i < n0} [
+                at(b0): r0 i
+                push(_): cp b0
+                add(i): i 1
+            ]
+            set(r): cp
+        ]
+        len(n): more
+        set(j): 0
+        while(_): {j < n} [
+            at(b): more j
+            push(_): r b
+            add(j): j 1
+        ]
+        add(p_i): p_i 1
+    ]
+]
+# A string literal node for the bytes sv: static storage set up before
+# main runs.
+p_strnode(r): sv [
+    len(n): sv
+    ty_arr(t): ty_char {n + 1}
+    set(addr): g_top
+    add(g_top): g_top {n + 1}
+    set(g_top): {(g_top + 7) - (g_top + 7) % 8}
+    push(_): p_strs addr
+    push(_): p_strs sv
+    nd_new(r): 4 t 0 0 0 addr
+]
+
+# ---- expressions ----
+p_expr(r): [
+    p_assign(r):
+    while(_): {1 = 1} [
+        p_accept(cm): ","
+        if(_): {cm = 0} [ break(_): "" ]
+        p_assign(b):
+        p_rval(b2): b
+        at(bt): nd_t b2
+        nd_new(r): 18 bt r b2 0 0
+    ]
+]
+p_assign(r): [
+    p_cond(r):
+    at(k): tk_k p_i
+    if(_): {k != 5} [ return(_): r ]
+    at(s): tk_s p_i
+    set(op): 0
+    if(_): {s = "="} [ set(op): 1 ]
+    elif(_): {s = "+="} [ set(op): 16 ]
+    elif(_): {s = "-="} [ set(op): 17 ]
+    elif(_): {s = "*="} [ set(op): 18 ]
+    elif(_): {s = "/="} [ set(op): 19 ]
+    elif(_): {s = "%="} [ set(op): 20 ]
+    elif(_): {s = "&="} [ set(op): 31 ]
+    elif(_): {s = "|="} [ set(op): 32 ]
+    elif(_): {s = "^="} [ set(op): 30 ]
+    elif(_): {s = "<<="} [ set(op): 33 ]
+    elif(_): {s = ">>="} [ set(op): 34 ]
+    if(_): {op = 0} [ return(_): r ]
+    p_mark(_):
+    add(p_i): p_i 1
+    p_islvalue(lv): r
+    if(_): {lv = 0} [ p_fail(_): "lvalue required as left operand of assignment" ]
+    p_assign(rhs):
+    if(_): {op = 1} [
+        p_new_assign(r): r rhs
+        return(_): r
+    ]
+    # a op= b: the operation in a's and b's common type (or pointer step)
+    at(t): nd_t r
+    at(tk): ty_k t
+    p_rval(b): rhs
+    at(bt): nd_t b
+    if(_): {tk = 9 && (op = 16 || op = 17)} [
+        at(base): ty_b t
+        ty_sizeof(es): base p_ln
+        p_conv(b): b ty_long
+        if(_): {es != 1} [
+            nd_num(sz): es ty_long
+            p_fold(b): 18 b sz ty_long
+        ]
+        nd_new(r): 14 t r b op t
+        return(_): r
+    ]
+    ty_isarith(ia): t
+    ty_isarith(ib): bt
+    if(_): {ia = 0 || ib = 0} [ p_fail(_): "invalid operands to compound assignment" ]
+    if(_): {op = 33 || op = 34} [
+        ty_promote(ct): t
+        ty_promote(st): bt
+        p_conv(b): b st
+    ]
+    else(_): [
+        ty_common(ct): t bt
+        p_conv(b): b ct
+    ]
+    nd_new(r): 14 t r b op ct
+]
+p_cond(r): [
+    p_bin(r): 0
+    p_is(q): "?"
+    if(_): {q = 0} [ return(_): r ]
+    p_mark(_):
+    add(p_i): p_i 1
+    p_rval(c): r
+    # GNU a ?: b
+    p_is(el): ":"
+    if(_): {el = 1} [
+        set(a): c
+    ]
+    else(_): [
+        p_expr(a):
+    ]
+    p_expect(_): ":"
+    p_cond(b):
+    p_rval(a): a
+    p_rval(b): b
+    at(ta): nd_t a
+    at(tb): nd_t b
+    set(t): ta
+    ty_isarith(ia): ta
+    ty_isarith(ib): tb
+    if(_): {ia = 1 && ib = 1} [
+        ty_common(t): ta tb
+        p_conv(a): a t
+        p_conv(b): b t
+    ]
+    else(_): [
+        at(ka): ty_k ta
+        at(kb): ty_k tb
+        p_isnullconst(na): a
+        p_isnullconst(nb): b
+        if(_): {ka = 9 && nb = 1} [ p_conv(b): b ta ]
+        elif(_): {kb = 9 && na = 1} [
+            set(t): tb
+            p_conv(a): a tb
+        ]
+        elif(_): {ka = 9 && kb = 9} [
+            # void * against another pointer: the other
+            at(ba): ty_b ta
+            at(bak): ty_k ba
+            if(_): {bak = 0} [ set(t): tb ]
+        ]
+        elif(_): {ka = 0 || kb = 0} [ set(t): ty_void ]
+    ]
+    nd_new(r): 17 t c a b 0
+    p_ceval(cv): c
+    if(_): {cv != null} [
+        at(ak): nd_k a
+        at(bk): nd_k b
+        if(_): {ak = 1 && bk = 1} [
+            if(_): {cv != 0} [ set(r): a ]
+            else(_): [ set(r): b ]
+        ]
+    ]
+]
+# Binding strength of a binary operator token, 0 for none; p_bop gets
+# its opcode (or 6 &&, 7 ||).
+global(_): p_bop
+p_prec(r): s [
+    set(r): 0
+    if(_): {s = "||"} [
+        set(r): 1
+        set(p_bop): 7
+    ]
+    elif(_): {s = "&&"} [
+        set(r): 2
+        set(p_bop): 6
+    ]
+    elif(_): {s = "|"} [
+        set(r): 3
+        set(p_bop): 32
+    ]
+    elif(_): {s = "^"} [
+        set(r): 4
+        set(p_bop): 30
+    ]
+    elif(_): {s = "&"} [
+        set(r): 5
+        set(p_bop): 31
+    ]
+    elif(_): {s = "=="} [
+        set(r): 6
+        set(p_bop): 22
+    ]
+    elif(_): {s = "!="} [
+        set(r): 6
+        set(p_bop): 23
+    ]
+    elif(_): {s = "<"} [
+        set(r): 7
+        set(p_bop): 24
+    ]
+    elif(_): {s = "<="} [
+        set(r): 7
+        set(p_bop): 25
+    ]
+    elif(_): {s = ">"} [
+        set(r): 7
+        set(p_bop): 26
+    ]
+    elif(_): {s = ">="} [
+        set(r): 7
+        set(p_bop): 27
+    ]
+    elif(_): {s = "<<"} [
+        set(r): 8
+        set(p_bop): 33
+    ]
+    elif(_): {s = ">>"} [
+        set(r): 8
+        set(p_bop): 34
+    ]
+    elif(_): {s = "+"} [
+        set(r): 9
+        set(p_bop): 16
+    ]
+    elif(_): {s = "-"} [
+        set(r): 9
+        set(p_bop): 17
+    ]
+    elif(_): {s = "*"} [
+        set(r): 10
+        set(p_bop): 18
+    ]
+    elif(_): {s = "/"} [
+        set(r): 10
+        set(p_bop): 19
+    ]
+    elif(_): {s = "%"} [
+        set(r): 10
+        set(p_bop): 20
+    ]
+]
+p_bin(r): minp [
+    p_cast(r):
+    while(_): {1 = 1} [
+        at(k): tk_k p_i
+        if(_): {k != 5} [ break(_): "" ]
+        at(s): tk_s p_i
+        p_prec(pr): s
+        if(_): {pr = 0 || pr <= minp} [ break(_): "" ]
+        set(op): p_bop
+        p_mark(_):
+        add(p_i): p_i 1
+        p_bin(b): pr
+        if(_): {op = 6 || op = 7} [
+            p_rval(a2): r
+            p_rval(b2): b
+            nd_new(n): op ty_int a2 b2 0 0
+            p_ceval(cv): n
+            set(r): n
+            if(_): {cv != null} [ nd_num(r): cv ty_int ]
+        ]
+        else(_): [
+            p_binop(r): op r b
+        ]
+    ]
+]
+p_cast(r): [
+    p_is(lp): "("
+    if(_): {lp = 1} [
+        add(nx): p_i 1
+        p_istype_at(isty): nx
+        if(_): {isty = 1} [
+            p_mark(_):
+            add(p_i): p_i 1
+            p_typename(t):
+            p_expect(_): ")"
+            p_is(br): "{"
+            if(_): {br = 1} [
+                p_complit(r): t
+                p_postfix(r): r
+                return(_): r
+            ]
+            p_cast(e):
+            at(tk): ty_k t
+            if(_): {tk = 0} [
+                p_rval(e2): e
+                nd_new(r): 19 ty_void e2 0 0 0
+                return(_): r
+            ]
+            ty_isscalar(sc): t
+            if(_): {sc = 0} [ p_fail(_): "conversion to non-scalar type requested" ]
+            p_rval(e2): e
+            at(et): nd_t e2
+            ty_isscalar(esc): et
+            if(_): {esc = 0} [ p_fail(_): "aggregate value used where a scalar was expected" ]
+            p_conv(r): e2 t
+            if(_): {r = e2} [
+                # keep a node of its own for the cast's type
+                nd_new(r): 19 t e2 0 0 0
+            ]
+            return(_): r
+        ]
+    ]
+    p_unary(r):
+]
+# A compound literal (type){...}: an unnamed object, as an lvalue.
+p_complit(r): t [
+    sy_new(s): "%lit" 1 t
+    if(_): {p_fn < 0} [
+        set(sy_st): s 1
+        p_initializer(init): s
+        p_alloc(_): s
+        push(_): p_ginit init
+        at(t2): sy_t s
+        nd_new(r): 3 t2 s 0 0 0
+    ]
+    else(_): [
+        set(sy_st): s 2
+        push(_): p_fsyms s
+        p_initializer(init): s
+        at(t2): sy_t s
+        nd_new(v): 3 t2 s 0 0 0
+        nd_new(r): 47 t2 init v 0 0
+    ]
+]
+p_unary(r): [
+    p_mark(_):
+    at(k): tk_k p_i
+    if(_): {k = 5} [
+        at(s): tk_s p_i
+        if(_): {s = "++" || s = "--"} [
+            add(p_i): p_i 1
+            p_unary(e):
+            set(d): 1
+            if(_): {s = "--"} [ set(d): {0 - 1} ]
+            p_incdec(r): e 0 d
+            return(_): r
+        ]
+        if(_): {s = "&"} [
+            add(p_i): p_i 1
+            p_cast(e):
+            p_addr(r): e
+            return(_): r
+        ]
+        if(_): {s = "*"} [
+            add(p_i): p_i 1
+            p_cast(e):
+            p_deref(r): e
+            return(_): r
+        ]
+        if(_): {s = "+" || s = "-" || s = "~"} [
+            add(p_i): p_i 1
+            p_cast(e):
+            p_rval(e2): e
+            at(t): nd_t e2
+            ty_isarith(ia): t
+            if(_): {ia = 0} [ p_fail(_): "wrong type argument to unary operator" ]
+            ty_promote(pt): t
+            p_conv(e3): e2 pt
+            set(r): e3
+            if(_): {s = "-"} [
+                nd_new(r): 9 pt e3 0 0 0
+            ]
+            if(_): {s = "~"} [
+                ty_isflt(fl): pt
+                if(_): {fl = 1} [ p_fail(_): "wrong type argument to bit-complement" ]
+                nd_new(r): 10 pt e3 0 0 0
+            ]
+            p_ceval(cv): r
+            ty_isint(ii): pt
+            if(_): {cv != null && ii = 1} [ nd_num(r): cv pt ]
+            return(_): r
+        ]
+        if(_): {s = "!"} [
+            add(p_i): p_i 1
+            p_cast(e):
+            p_rval(e2): e
+            nd_new(r): 8 ty_int e2 0 0 0
+            p_ceval(cv): r
+            if(_): {cv != null} [ nd_num(r): cv ty_int ]
+            return(_): r
+        ]
+    ]
+    if(_): {k = 1} [
+        at(s): tk_s p_i
+        if(_): {s = "sizeof" || s = "_Alignof" || s = "__alignof__"} [
+            add(p_i): p_i 1
+            set(t): {0 - 1}
+            p_is(lp): "("
+            if(_): {lp = 1} [
+                add(nx): p_i 1
+                p_istype_at(isty): nx
+                if(_): {isty = 1} [
+                    add(p_i): p_i 1
+                    p_typename(t):
+                    p_expect(_): ")"
+                ]
+            ]
+            if(_): {t < 0} [
+                # the operand is not evaluated: only its type counts
+                set(save): p_ginit
+                vec(p_ginit): ""
+                set(nsave): p_fsyms
+                p_unary(e):
+                set(p_ginit): save
+                at(t): nd_t e
+            ]
+            at(stk): ty_k t
+            set(stn): 0
+            if(_): {stk = 10} [ at(stn): ty_n t ]
+            if(_): {s = "sizeof" && stn = (0 - 2)} [
+                # a variable length array: its length times its element
+                at(vlen): ty_m t
+                at(vel): ty_b t
+                ty_sizeof(ves): vel p_ln
+                nd_num(vesn): ves ty_long
+                p_fold(vsz): 18 vlen vesn ty_long
+                p_conv(r): vsz ty_ulong
+                return(_): r
+            ]
+            if(_): {s = "sizeof"} [ ty_sizeof(v): t p_ln ]
+            else(_): [ at(v): ty_al t ]
+            nd_num(r): v ty_ulong
+            return(_): r
+        ]
+    ]
+    p_primary(e):
+    p_postfix(r): e
+]
+p_postfix(r): e [
+    set(r): e
+    while(_): {1 = 1} [
+        at(k): tk_k p_i
+        if(_): {k != 5} [ break(_): "" ]
+        at(s): tk_s p_i
+        p_mark(_):
+        if(_): {s = "["} [
+            add(p_i): p_i 1
+            p_expr(ix):
+            p_expect(_): "]"
+            p_binop(sum): 16 r ix
+            p_deref(r): sum
+        ]
+        elif(_): {s = "("} [
+            add(p_i): p_i 1
+            p_call(r): r
+        ]
+        elif(_): {s = "." || s = "->"} [
+            add(p_i): p_i 1
+            p_ident(name):
+            set(arrow): 0
+            if(_): {s = "->"} [ set(arrow): 1 ]
+            p_member(r): r name arrow
+        ]
+        elif(_): {s = "++" || s = "--"} [
+            add(p_i): p_i 1
+            set(d): 1
+            if(_): {s = "--"} [ set(d): {0 - 1} ]
+            p_incdec(r): r 1 d
+        ]
+        else(_): [ break(_): "" ]
+    ]
+]
+# A call of f; "(" already taken.
+p_call(r): f [
+    p_rval(fv): f
+    at(ft): nd_t fv
+    at(fk): ty_k ft
+    set(fnt): {0 - 1}
+    if(_): {fk = 9} [
+        at(b): ty_b ft
+        at(bk): ty_k b
+        if(_): {bk = 11} [ set(fnt): b ]
+    ]
+    if(_): {fnt < 0} [ p_fail(_): "called object is not a function or function pointer" ]
+    at(ps): ty_m fnt
+    at(va): ty_va fnt
+    at(proto): ty_proto fnt
+    at(ret): ty_b fnt
+    len(np): ps
+    at(fvk): nd_k fv
+    if(_): {fvk = 25} [
+        # libc calls main(argc, argv) whatever main was declared with
+        at(fsym): nd_a fv
+        at(fsn): sy_n fsym
+        if(_): {fsn = "main"} [ set(proto): 0 ]
+    ]
+    vec(args): ""
+    vec(otypes): ""
+    p_is(cl): ")"
+    set(i): 0
+    if(_): {cl = 0} [
+        while(_): {1 = 1} [
+            p_assign(a):
+            p_rval(a2): a
+            at(ot): nd_t a2
+            push(_): otypes ot
+            if(_): {i < np && proto = 1} [
+                at(pt): ps i
+                p_conv(a2): a2 pt
+            ]
+            else(_): [
+                # default argument promotions
+                at(at2): nd_t a2
+                at(ak): ty_k at2
+                if(_): {ak = 7} [ p_conv(a2): a2 ty_double ]
+                elif(_): {ak >= 1 && ak <= 3} [ p_conv(a2): a2 ty_int ]
+            ]
+            push(_): args a2
+            add(i): i 1
+            p_accept(cm): ","
+            if(_): {cm = 0} [ break(_): "" ]
+        ]
+    ]
+    p_expect(_): ")"
+    if(_): {proto = 1 && (i < np || (i > np && va = 0))} [
+        set(m): "too few arguments to function"
+        if(_): {i > np} [ set(m): "too many arguments to function" ]
+        at(fk2): nd_k fv
+        if(_): {fk2 = 25} [
+            at(fs): nd_a fv
+            at(fname): sy_n fs
+            concat(m): m " '"
+            concat(m): m fname
+            concat(m): m "'"
+        ]
+        p_fail(_): m
+    ]
+    if(_): {fvk = 25} [
+        p_bytecall(r): fv args otypes
+        if(_): {r >= 0} [ return(_): r ]
+    ]
+    nd_new(r): 16 ret fv np va args
+]
+# The layout of type t for byte-level copies: its scalar leaves as
+# "<code><offset>" joined by ",", code b/B char, h/H short, i/I int,
+# q/Q long or pointer, f float, d double ("" for plain bytes).
+p_desc(r): t [
+    vec(parts): ""
+    p_desc_into(_): t 0 parts
+    set(r): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(x): parts i
+        if(_): {i > 0} [ concat(r): r "," ]
+        concat(r): r x
+        add(i): i 1
+    ]
+]
+p_desc_into(r): t base out [
+    set(r): 0
+    at(k): ty_k t
+    at(u): ty_u t
+    len(cnt): out
+    if(_): {cnt > 4096} [ return(_): r ]
+    if(_): {k = 10} [
+        at(b): ty_b t
+        at(n): ty_n t
+        at(es): ty_sz b
+        set(i): 0
+        while(_): {i < n} [
+            p_desc_into(_): b {base + i * es} out
+            add(i): i 1
+        ]
+        return(_): r
+    ]
+    if(_): {k = 12 || k = 13} [
+        at(ms): ty_m t
+        len(nm): ms
+        set(i): 0
+        set(top): nm
+        # a union is written as its first member
+        if(_): {k = 13 && nm > 0} [ set(top): 1 ]
+        while(_): {i < top} [
+            at(m): ms i
+            at(mt): mb_t m
+            at(mo): mb_o m
+            p_desc_into(_): mt {base + mo} out
+            add(i): i 1
+        ]
+        return(_): r
+    ]
+    set(c): ""
+    if(_): {k = 1 || k = 2} [
+        set(c): "b"
+        if(_): {u = 1} [ set(c): "B" ]
+    ]
+    elif(_): {k = 3} [
+        set(c): "h"
+        if(_): {u = 1} [ set(c): "H" ]
+    ]
+    elif(_): {k = 4} [
+        set(c): "i"
+        if(_): {u = 1} [ set(c): "I" ]
+    ]
+    elif(_): {k = 5 || k = 6} [
+        set(c): "q"
+        if(_): {u = 1} [ set(c): "Q" ]
+    ]
+    elif(_): {k = 9} [ set(c): "Q" ]
+    elif(_): {k = 7} [ set(c): "f" ]
+    elif(_): {k = 8} [ set(c): "d" ]
+    if(_): {c != ""} [
+        encode(os): base
+        concat(x): c os
+        push(_): out x
+    ]
+]
+# The kind of what pointer type pt points at for byte copies: "" for
+# bytes (char, void, unknown), else its layout.
+p_ptrdesc(r): pt [
+    set(r): ""
+    at(k): ty_k pt
+    if(_): {k != 9} [ return(_): r ]
+    at(b): ty_b pt
+    at(bk): ty_k b
+    if(_): {bk = 0 || bk = 2 || bk = 1 || bk = 11} [ return(_): r ]
+    at(cpl): ty_cpl b
+    if(_): {cpl = 0} [ return(_): r ]
+    p_desc(r): b
+    # a layout of chars only is bytes too
+    len(n): r
+    set(other): 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(ch): r i
+        if(_): {ch != 98 && ch != 66 && ch != 44 && (ch < 48 || ch > 57)} [ set(other): 1 ]
+        add(i): i 1
+    ]
+    if(_): {other = 0} [ set(r): "" ]
+]
+# fwrite/fread/memcpy/memmove between typed objects and bytes: C memory
+# keeps each scalar in one cell, so these become __fwrite_t, __fread_t
+# and __memcpy_t, given the layouts so they can make or read real
+# little-endian bytes. -1 when the call stays as it is.
+p_bytecall(r): fv args otypes [
+    set(r): {0 - 1}
+    at(fs): nd_a fv
+    at(name): sy_n fs
+    if(_): {name != "fwrite" && name != "fread" && name != "memcpy" && name != "memmove"} [ return(_): r ]
+    len(na): args
+    if(_): {(name = "fwrite" || name = "fread") && na = 4} [
+        at(pt): otypes 0
+        p_ptrdesc(d): pt
+        if(_): {d = ""} [ return(_): r ]
+        at(b): ty_b pt
+        ty_sizeof(stride): b p_ln
+        set(rt): "__fwrite_t"
+        if(_): {name = "fread"} [ set(rt): "__fread_t" ]
+        nd_new(dn): 29 ty_uval 0 0 0 d
+        nd_num(sn): stride ty_long
+        vec(a2): ""
+        set(i): 0
+        while(_): {i < 4} [
+            at(x): args i
+            push(_): a2 x
+            add(i): i 1
+        ]
+        push(_): a2 dn
+        push(_): a2 sn
+        p_rtcall(r): rt a2
+        return(_): r
+    ]
+    if(_): {(name = "memcpy" || name = "memmove") && na = 3} [
+        at(dt): otypes 0
+        at(st): otypes 1
+        p_ptrdesc(dd): dt
+        p_ptrdesc(sd): st
+        # same layouts copy cell by cell; only bytes against a layout change
+        if(_): {(dd = "") = (sd = "")} [ return(_): r ]
+        set(ds): 1
+        set(ss): 1
+        if(_): {dd != ""} [
+            at(db): ty_b dt
+            ty_sizeof(ds): db p_ln
+        ]
+        if(_): {sd != ""} [
+            at(sb): ty_b st
+            ty_sizeof(ss): sb p_ln
+        ]
+        vec(a2): ""
+        set(i): 0
+        while(_): {i < 3} [
+            at(x): args i
+            push(_): a2 x
+            add(i): i 1
+        ]
+        nd_new(ddn): 29 ty_uval 0 0 0 dd
+        nd_num(dsn): ds ty_long
+        nd_new(sdn): 29 ty_uval 0 0 0 sd
+        nd_num(ssn): ss ty_long
+        push(_): a2 ddn
+        push(_): a2 dsn
+        push(_): a2 sdn
+        push(_): a2 ssn
+        p_rtcall(r): "__memcpy_t" a2
+    ]
+]
+# A call of runtime function name (declared by the prelude) with args.
+p_rtcall(r): name args [
+    ht_get(s): lk_tab name
+    if(_): {s < 0} [
+        concat(m): "usa: the runtime function '" name
+        concat(m): m "' is not declared"
+        p_fail(_): m
+    ]
+    at(ft): sy_t s
+    at(ret): ty_b ft
+    ty_ptr(pt): ft
+    nd_new(f): 25 pt s 0 0 0
+    len(na): args
+    nd_new(r): 16 ret f na 0 args
+]
+p_primary(r): [
+    p_mark(_):
+    at(k): tk_k p_i
+    at(s): tk_s p_i
+    if(_): {k = 2} [
+        add(p_i): p_i 1
+        at(t): tk_x {p_i - 1}
+        nd_num(r): s t
+        return(_): r
+    ]
+    if(_): {k = 3} [
+        add(p_i): p_i 1
+        set(t): ty_double
+        len(sn): s
+        byte(last): s {sn - 1}
+        if(_): {last = 102 || last = 70} [ set(t): ty_float ]
+        nd_new(r): 2 t 0 0 0 s
+        return(_): r
+    ]
+    if(_): {k = 4} [
+        p_strlit(sv):
+        p_strnode(r): sv
+        return(_): r
+    ]
+    if(_): {k = 5 && s = "("} [
+        add(p_i): p_i 1
+        p_is(br): "{"
+        if(_): {br = 1} [
+            # GNU statement expression: its last expression is the value
+            if(_): {p_fn < 0} [ p_fail(_): "statement expression outside a function" ]
+            p_block(b):
+            at(items): nd_v b
+            len(ni): items
+            set(val): {0 - 1}
+            if(_): {ni > 0} [
+                at(last): items {ni - 1}
+                at(lk): nd_k last
+                if(_): {lk = 31} [
+                    pop(_): items
+                    at(val): nd_a last
+                ]
+            ]
+            if(_): {val < 0} [ nd_new(val): 19 ty_void 0 0 0 0 ]
+            p_rval(val2): val
+            at(vt): nd_t val2
+            nd_new(r): 47 vt b val2 0 0
+            p_expect(_): ")"
+            return(_): r
+        ]
+        p_expr(r):
+        p_expect(_): ")"
+        return(_): r
+    ]
+    if(_): {k = 1} [
+        add(p_i): p_i 1
+        if(_): {s = "__builtin_va_start" || s = "__va_area"} [
+            p_expect(_): "("
+            p_expect(_): ")"
+            nd_new(r): 22 ty_charp 0 0 0 0
+            return(_): r
+        ]
+        if(_): {s = "__U"} [
+            # a USSR string constant: __U("text")
+            p_expect(_): "("
+            p_strlit(sv):
+            p_expect(_): ")"
+            len(n): sv
+            vec(o): ""
+            set(i): 0
+            while(_): {i < n} [
+                at(b): sv i
+                push(_): o b
+                add(i): i 1
+            ]
+            bytes_text(us): o 0 n
+            nd_new(r): 29 ty_uval 0 0 0 us
+            return(_): r
+        ]
+        sc_find(sy): s
+        if(_): {sy < 0} [
+            p_is(callp): "("
+            if(_): {callp = 1} [
+                # an undeclared function: implicitly int f()
+                concat(m): "implicit declaration of function '" s
+                concat(m): m "'"
+                at(ln): tk_l {p_i - 1}
+                usa_warn(_): ln m
+                vec(nop): ""
+                ty_fn(ft): ty_int nop 0
+                set(ty_proto): ft 0
+                # bind at file scope
+                at(outer): sc_names 0
+                set(saven): sc_names
+                vec(tmpn): ""
+                push(_): tmpn outer
+                set(sc_names): tmpn
+                p_declare(sy): s ft 3 1
+                set(sc_names): saven
+            ]
+            else(_): [
+                concat(m): "'" s
+                concat(m): m "' undeclared"
+                at(ln): tk_l {p_i - 1}
+                usa_error(_): ln m
+            ]
+        ]
+        at(sk): sy_k sy
+        at(t): sy_t sy
+        if(_): {sk = 4} [
+            at(v): sy_v sy
+            nd_num(r): v ty_int
+            return(_): r
+        ]
+        if(_): {sk = 5} [
+            at(r): sy_v sy
+            return(_): r
+        ]
+        if(_): {sk = 2} [ p_fail(_): "unexpected type name in expression" ]
+        nd_new(r): 3 t sy 0 0 0
+        return(_): r
+    ]
+    p_failat(_): "expected expression"
+]
+
+# ---- statements ----
+p_block(r): [
+    p_expect(_): "{"
+    sc_push(_):
+    vec(items): ""
+    while(_): {1 = 1} [
+        p_accept(cl): "}"
+        if(_): {cl = 1} [ break(_): "" ]
+        at(k): tk_k p_i
+        if(_): {k = 0} [ p_failat(_): "expected '}'" ]
+        p_blockitem(s):
+        if(_): {s >= 0} [ push(_): items s ]
+    ]
+    sc_pop(_):
+    nd_new(r): 30 ty_void 0 0 0 items
+]
+# A declaration or a statement in a block (-1: nothing to run).
+p_blockitem(r): [
+    p_mark(_):
+    p_istype(isty):
+    if(_): {isty = 1} [
+        # a typedef name followed by ':' is a label
+        p_is_at(lab): {p_i + 1} ":"
+        at(s): tk_s p_i
+        if(_): {lab = 1 && s != "default"} [ set(isty): 0 ]
+    ]
+    if(_): {isty = 1} [
+        p_declspec(bt):
+        p_decl_rest(r): bt 0
+        return(_): r
+    ]
+    p_is(sa): "_Static_assert"
+    if(_): {sa = 1} [
+        add(p_i): p_i 1
+        p_skip_parens(_):
+        p_expect(_): ";"
+        set(r): {0 - 1}
+        return(_): r
+    ]
+    p_stmt(r):
+]
+p_stmt(r): [
+    p_mark(_):
+    at(k): tk_k p_i
+    at(s): tk_s p_i
+    if(_): {k = 5 && s = "{"} [
+        p_block(r):
+        return(_): r
+    ]
+    if(_): {k = 5 && s = ";"} [
+        add(p_i): p_i 1
+        nd_new(r): 44 ty_void 0 0 0 0
+        return(_): r
+    ]
+    if(_): {k = 1} [
+        p_is_at(lab): {p_i + 1} ":"
+        if(_): {lab = 1 && s != "default"} [
+            add(p_i): p_i 2
+            p_is(cl): "}"
+            set(st): {0 - 1}
+            if(_): {cl = 0} [ p_stmt(st): ]
+            nd_new(r): 43 ty_void st 0 0 s
+            push(_): p_lab s
+            return(_): r
+        ]
+        if(_): {s = "if"} [
+            add(p_i): p_i 1
+            p_expect(_): "("
+            p_expr(c):
+            p_rval(c2): c
+            p_expect(_): ")"
+            p_stmt(a):
+            set(b): {0 - 1}
+            p_accept(el): "else"
+            if(_): {el = 1} [ p_stmt(b): ]
+            nd_new(r): 32 ty_void c2 a b 0
+            return(_): r
+        ]
+        if(_): {s = "while"} [
+            add(p_i): p_i 1
+            p_expect(_): "("
+            p_expr(c):
+            p_rval(c2): c
+            p_expect(_): ")"
+            p_stmt(b):
+            nd_new(r): 33 ty_void c2 b 0 0
+            return(_): r
+        ]
+        if(_): {s = "do"} [
+            add(p_i): p_i 1
+            p_stmt(b):
+            p_expect(_): "while"
+            p_expect(_): "("
+            p_expr(c):
+            p_rval(c2): c
+            p_expect(_): ")"
+            p_expect(_): ";"
+            nd_new(r): 34 ty_void b c2 0 0
+            return(_): r
+        ]
+        if(_): {s = "for"} [
+            add(p_i): p_i 1
+            p_expect(_): "("
+            sc_push(_):
+            set(init): {0 - 1}
+            p_istype(isty):
+            if(_): {isty = 1} [
+                p_declspec(bt):
+                p_decl_rest(init): bt 0
+            ]
+            else(_): [
+                p_accept(e0): ";"
+                if(_): {e0 = 0} [
+                    p_expr(ie):
+                    nd_new(init): 31 ty_void ie 0 0 0
+                    p_expect(_): ";"
+                ]
+            ]
+            set(cond): {0 - 1}
+            p_accept(e1): ";"
+            if(_): {e1 = 0} [
+                p_expr(c):
+                p_rval(cond): c
+                p_expect(_): ";"
+            ]
+            set(step): {0 - 1}
+            p_accept(e2): ")"
+            if(_): {e2 = 0} [
+                p_expr(step):
+                p_expect(_): ")"
+            ]
+            p_stmt(body):
+            sc_pop(_):
+            nd_new(r): 35 ty_void init cond step body
+            return(_): r
+        ]
+        if(_): {s = "switch"} [
+            add(p_i): p_i 1
+            p_expect(_): "("
+            p_expr(c):
+            p_rval(c2): c
+            at(ct): nd_t c2
+            ty_isint(ii): ct
+            if(_): {ii = 0} [ p_fail(_): "switch quantity not an integer" ]
+            ty_promote(pt): ct
+            p_conv(c3): c2 pt
+            p_expect(_): ")"
+            vec(cases): ""
+            push(_): p_sw cases
+            p_stmt(b):
+            pop(_): p_sw
+            nd_new(r): 39 ty_void c3 b 0 cases
+            return(_): r
+        ]
+        if(_): {s = "case" || s = "default"} [
+            add(p_i): p_i 1
+            len(d): p_sw
+            if(_): {d = 0} [
+                concat(m): s " label not within a switch statement"
+                p_fail(_): m
+            ]
+            at(cases): p_sw {d - 1}
+            if(_): {s = "case"} [
+                p_cond(e):
+                p_const(v): e
+                set(hi): v
+                p_accept(rng): "..."
+                if(_): {rng = 1} [
+                    p_cond(e2):
+                    p_const(hi): e2
+                ]
+                p_expect(_): ":"
+                p_is(cl): "}"
+                set(st): {0 - 1}
+                if(_): {cl = 0} [ p_stmt(st): ]
+                nd_new(r): 40 ty_void st hi 0 v
+            ]
+            else(_): [
+                p_expect(_): ":"
+                p_is(cl): "}"
+                set(st): {0 - 1}
+                if(_): {cl = 0} [ p_stmt(st): ]
+                nd_new(r): 41 ty_void st 0 0 0
+            ]
+            push(_): cases r
+            return(_): r
+        ]
+        if(_): {s = "break"} [
+            add(p_i): p_i 1
+            p_expect(_): ";"
+            nd_new(r): 37 ty_void 0 0 0 0
+            return(_): r
+        ]
+        if(_): {s = "continue"} [
+            add(p_i): p_i 1
+            p_expect(_): ";"
+            nd_new(r): 38 ty_void 0 0 0 0
+            return(_): r
+        ]
+        if(_): {s = "return"} [
+            add(p_i): p_i 1
+            set(e): {0 - 1}
+            p_is(sm): ";"
+            at(ft): sy_t p_fn
+            at(rt): ty_b ft
+            at(rk): ty_k rt
+            if(_): {sm = 0} [
+                p_expr(e0):
+                if(_): {rk = 0} [
+                    p_rval(e): e0
+                ]
+                else(_): [
+                    p_conv(e): e0 rt
+                ]
+            ]
+            p_expect(_): ";"
+            nd_new(r): 36 ty_void e 0 0 0
+            return(_): r
+        ]
+        if(_): {s = "goto"} [
+            add(p_i): p_i 1
+            p_ident(lab2):
+            p_expect(_): ";"
+            nd_new(r): 42 ty_void 0 0 0 lab2
+            return(_): r
+        ]
+    ]
+    p_expr(e):
+    p_expect(_): ";"
+    nd_new(r): 31 ty_void e 0 0 0
+]

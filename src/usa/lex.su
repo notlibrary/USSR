@@ -1,0 +1,321 @@
+# C tokens for usa, from the preprocessed text of one translation unit.
+#
+#   lx_run(_): text    fills the token vectors:
+#     tk_k  kind: 0 end, 1 identifier, 2 integer, 3 floating, 4 string,
+#           5 punctuator
+#     tk_s  the identifier or punctuator text, the integer value, the
+#           floating constant's spelling, or a string's bytes (a vector)
+#     tk_x  for an integer, its type (ty_int, ty_uint, ty_long, ty_ulong)
+#     tk_l  the output line it is on (an index into pp_mapf/pp_mapl)
+#
+# Character constants are integers of type int. Adjacent string literals
+# stay separate tokens; the parser joins them.
+
+global(_): tk_k tk_s tk_x tk_l lx_err
+
+# Report an error at output line ln and stop.
+lx_fail(r): ln msg [
+    set(r): 0
+    usa_error(_): ln msg
+]
+
+# The value of the escape sequence after the backslash at v[i]; lx_end
+# is set to the index after it.
+global(_): lx_end
+lx_escape(r): v i n [
+    at(b): v i
+    set(lx_end): {i + 1}
+    set(r): b
+    if(_): {b = 110} [ set(r): 10 ]
+    elif(_): {b = 116} [ set(r): 9 ]
+    elif(_): {b = 114} [ set(r): 13 ]
+    elif(_): {b = 48 || (b > 48 && b < 56)} [
+        set(r): 0
+        set(k): 0
+        set(j): i
+        while(_): {k < 3 && j < n} [
+            at(c): v j
+            if(_): {c > 47 && c < 56} [
+                set(r): {r * 8 + c - 48}
+                add(j): j 1
+                add(k): k 1
+            ]
+            else(_): [ set(k): 3 ]
+        ]
+        set(lx_end): j
+    ]
+    elif(_): {b = 120} [
+        set(r): 0
+        set(j): {i + 1}
+        set(go): 1
+        while(_): {go = 1 && j < n} [
+            at(c): v j
+            set(d): {0 - 1}
+            if(_): {c > 47 && c < 58} [ set(d): {c - 48} ]
+            elif(_): {c > 96 && c < 103} [ set(d): {c - 87} ]
+            elif(_): {c > 64 && c < 71} [ set(d): {c - 55} ]
+            if(_): {d < 0} [ set(go): 0 ]
+            else(_): [
+                set(r): {(r * 16 + d) & 255}
+                add(j): j 1
+            ]
+        ]
+        set(lx_end): j
+    ]
+    elif(_): {b = 97} [ set(r): 7 ]
+    elif(_): {b = 98} [ set(r): 8 ]
+    elif(_): {b = 102} [ set(r): 12 ]
+    elif(_): {b = 118} [ set(r): 11 ]
+    elif(_): {b = 101} [ set(r): 27 ]
+]
+
+# The integer constant spelled s (suffixes included): its value, with
+# its type in lx_ity.
+global(_): lx_ity
+lx_intval(r): s ln [
+    set(r): 0
+    len(n): s
+    set(base): 10
+    set(i): 0
+    if(_): {n > 1} [
+        byte(b0): s 0
+        byte(b1): s 1
+        if(_): {b0 = 48 && (b1 = 120 || b1 = 88)} [
+            set(base): 16
+            set(i): 2
+        ]
+        elif(_): {b0 = 48} [
+            set(base): 8
+            set(i): 1
+        ]
+    ]
+    set(big): 0
+    set(go): 1
+    while(_): {go = 1 && i < n} [
+        byte(b): s i
+        set(d): {0 - 1}
+        if(_): {b > 47 && b < 58} [ set(d): {b - 48} ]
+        elif(_): {base = 16 && b > 96 && b < 103} [ set(d): {b - 87} ]
+        elif(_): {base = 16 && b > 64 && b < 71} [ set(d): {b - 55} ]
+        if(_): {d < 0 || d >= base} [ set(go): 0 ]
+        else(_): [
+            # beyond 2^63 the value wraps: an unsigned long constant
+            if(_): {r > 922337203685477579 || r < 0} [ set(big): 1 ]
+            set(r): {r * base + d}
+            add(i): i 1
+        ]
+    ]
+    set(u): 0
+    set(l): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 117 || b = 85} [ set(u): 1 ]
+        elif(_): {b = 108 || b = 76} [ set(l): 1 ]
+        else(_): [ lx_fail(_): ln "invalid integer constant suffix" ]
+        add(i): i 1
+    ]
+    if(_): {r < 0} [ set(big): 1 ]
+    # the type: the first of int, unsigned int (not decimal), long,
+    # unsigned long (not decimal) that holds the value
+    set(lx_ity): ty_int
+    if(_): {u = 1} [ set(lx_ity): ty_uint ]
+    if(_): {big = 1} [
+        set(lx_ity): ty_ulong
+    ]
+    elif(_): {l = 1 || r > 4294967295} [
+        set(lx_ity): ty_long
+        if(_): {u = 1} [ set(lx_ity): ty_ulong ]
+    ]
+    elif(_): {r > 2147483647} [
+        if(_): {u = 1 || base != 10} [ set(lx_ity): ty_uint ]
+        else(_): [ set(lx_ity): ty_long ]
+    ]
+]
+
+lx_tok(r): kind s ln [
+    push(_): tk_k kind
+    push(_): tk_s s
+    push(_): tk_x 0
+    push(_): tk_l ln
+    set(r): 0
+]
+
+lx_run(r): text [
+    set(r): 0
+    vec(tk_k): ""
+    vec(tk_s): ""
+    vec(tk_x): ""
+    vec(tk_l): ""
+    text_bytes(v): text
+    len(n): v
+    set(i): 0
+    set(ln): 0
+    while(_): {i < n} [
+        at(b): v i
+        if(_): {b = 10} [
+            add(ln): ln 1
+            add(i): i 1
+        ]
+        elif(_): {b = 32 || b = 9 || b = 13 || b = 12 || b = 11} [
+            add(i): i 1
+        ]
+        elif(_): {(b > 64 && b < 91) || (b > 96 && b < 123) || b = 95 || b = 36} [
+            set(j): {i + 1}
+            set(go): 1
+            while(_): {go = 1 && j < n} [
+                at(c): v j
+                if(_): {(c > 64 && c < 91) || (c > 96 && c < 123) || c = 95 || (c > 47 && c < 58) || c = 36} [ add(j): j 1 ]
+                else(_): [ set(go): 0 ]
+            ]
+            slice(s): text i {j - i}
+            # L"..." and L'x' (wide) are read as plain ones
+            set(nb): 0
+            if(_): {j < n} [ at(nb): v j ]
+            if(_): {s = "L" && (nb = 34 || nb = 39)} [
+                set(i): j
+            ]
+            else(_): [
+                lx_tok(_): 1 s ln
+                set(i): j
+            ]
+        ]
+        elif(_): {(b > 47 && b < 58) || b = 46} [
+            set(nb): 0
+            if(_): {i + 1 < n} [ at(nb): v {i + 1} ]
+            if(_): {b = 46 && (nb < 48 || nb > 57)} [
+                # punctuation: . or ...
+                set(p3): 0
+                if(_): {i + 2 < n} [ at(p3): v {i + 2} ]
+                if(_): {nb = 46 && p3 = 46} [
+                    lx_tok(_): 5 "..." ln
+                    add(i): i 3
+                ]
+                else(_): [
+                    lx_tok(_): 5 "." ln
+                    add(i): i 1
+                ]
+            ]
+            else(_): [
+                # a preprocessing number
+                set(j): {i + 1}
+                set(flt): 0
+                if(_): {b = 46} [ set(flt): 1 ]
+                set(hex): 0
+                if(_): {b = 48 && (nb = 120 || nb = 88)} [ set(hex): 1 ]
+                set(go): 1
+                while(_): {go = 1 && j < n} [
+                    at(c): v j
+                    at(pc): v {j - 1}
+                    if(_): {(c > 64 && c < 91) || (c > 96 && c < 123) || c = 95 || (c > 47 && c < 58)} [
+                        if(_): {hex = 0 && (c = 101 || c = 69)} [ set(flt): 1 ]
+                        if(_): {hex = 1 && (c = 112 || c = 80)} [ set(flt): 1 ]
+                        add(j): j 1
+                    ]
+                    elif(_): {c = 46} [
+                        set(flt): 1
+                        add(j): j 1
+                    ]
+                    elif(_): {(c = 43 || c = 45) && (pc = 101 || pc = 69 || pc = 112 || pc = 80) && (hex = 0 || pc = 112 || pc = 80)} [
+                        add(j): j 1
+                    ]
+                    else(_): [ set(go): 0 ]
+                ]
+                slice(s): text i {j - i}
+                if(_): {flt = 1} [
+                    lx_tok(_): 3 s ln
+                ]
+                else(_): [
+                    lx_intval(iv): s ln
+                    lx_tok(_): 2 iv ln
+                    len(tn): tk_x
+                    set(tk_x): {tn - 1} lx_ity
+                ]
+                set(i): j
+            ]
+        ]
+        elif(_): {b = 34} [
+            # a string literal: its bytes
+            vec(sv): ""
+            add(j): i 1
+            set(go): 1
+            while(_): {go = 1} [
+                if(_): {j >= n} [ lx_fail(_): ln "missing terminating \" character" ]
+                at(c): v j
+                if(_): {c = 34} [
+                    set(go): 0
+                    add(j): j 1
+                ]
+                elif(_): {c = 10} [ lx_fail(_): ln "missing terminating \" character" ]
+                elif(_): {c = 92 && j + 1 < n} [
+                    lx_escape(e): v {j + 1} n
+                    push(_): sv e
+                    set(j): lx_end
+                ]
+                else(_): [
+                    push(_): sv c
+                    add(j): j 1
+                ]
+            ]
+            lx_tok(_): 4 sv ln
+            set(i): j
+        ]
+        elif(_): {b = 39} [
+            # a character constant: an int (the char is signed)
+            add(j): i 1
+            set(val): 0
+            set(cnt): 0
+            set(go): 1
+            while(_): {go = 1} [
+                if(_): {j >= n} [ lx_fail(_): ln "missing terminating ' character" ]
+                at(c): v j
+                if(_): {c = 39} [
+                    set(go): 0
+                    add(j): j 1
+                ]
+                elif(_): {c = 10} [ lx_fail(_): ln "missing terminating ' character" ]
+                elif(_): {c = 92 && j + 1 < n} [
+                    lx_escape(e): v {j + 1} n
+                    set(val): {(val << 8) | (e & 255)}
+                    add(cnt): cnt 1
+                    set(j): lx_end
+                ]
+                else(_): [
+                    set(val): {(val << 8) | c}
+                    add(cnt): cnt 1
+                    add(j): j 1
+                ]
+            ]
+            if(_): {cnt = 0} [ lx_fail(_): ln "empty character constant" ]
+            # plain char is unsigned: a byte above 127 stays positive
+            lx_tok(_): 2 val ln
+            len(tn): tk_x
+            set(tk_x): {tn - 1} ty_int
+            set(i): j
+        ]
+        else(_): [
+            # punctuators, longest first
+            set(p): ""
+            if(_): {i + 2 < n} [
+                slice(t3): text i 3
+                if(_): {t3 = "<<=" || t3 = ">>=" || t3 = "..."} [ set(p): t3 ]
+            ]
+            if(_): {p = "" && i + 1 < n} [
+                slice(t2): text i 2
+                if(_): {t2 = "->" || t2 = "++" || t2 = "--" || t2 = "<<" || t2 = ">>" || t2 = "<=" || t2 = ">=" || t2 = "==" || t2 = "!=" || t2 = "&&" || t2 = "||" || t2 = "+=" || t2 = "-=" || t2 = "*=" || t2 = "/=" || t2 = "%=" || t2 = "&=" || t2 = "|=" || t2 = "^=" || t2 = "##"} [ set(p): t2 ]
+            ]
+            if(_): {p = ""} [
+                slice(p): text i 1
+                if(_): {b = 35 || b = 64 || b = 96 || b = 92 || b > 126 || b < 32} [
+                    encode(bs): b
+                    concat(m): "stray character (byte " bs
+                    concat(m): m ") in program"
+                    lx_fail(_): ln m
+                ]
+            ]
+            lx_tok(_): 5 p ln
+            len(pl): p
+            add(i): i pl
+        ]
+    ]
+    lx_tok(_): 0 "" ln
+]
