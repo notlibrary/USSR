@@ -1,5 +1,24 @@
 # USSR programming language CHANGELOG
 
+## [Unreleased]
+
+### Added
+- Omsk (`src/omsk/omsk.su`), image thumbnails in pure USSR: PNG (every
+  colour type and depth) and sequential JPEG in, a baseline JPEG fitted
+  into a square box out. The RUND stack becomes the ROUND stack: Ryazan,
+  Omsk, Ukraine, Novgorod, Dubna.
+
+### Changed
+- Novgorod makes its 200x200 thumbnails on the server with Omsk, into
+  `thumbs/`, and takes the image size from the picture itself; the footer
+  links the ROUND stack to the USSR repository.
+- `tests/run_all.sh` no longer runs the Stalin test (it writes partition
+  tables) or usa's (usa is tested its own way).
+- `src/Makefile.am` ships every file of every `.su` package in `make
+  dist` (Novgorod's deploy kit, Ukraine, Dubna, Omsk, Sochi and usa were
+  missing or only their `box.uno`); `Makefile.msc` and `ussr-ubuntu.mk`
+  list every header each object includes, so editing one rebuilds them.
+
 ## [0.4.9] - 2026-10-29
 
 The second wave of the project is finished: every subproject listed in
