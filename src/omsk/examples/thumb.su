@@ -1,0 +1,50 @@
+# Makes a thumbnail of a PNG or JPEG file. From the repository root:
+#     ussr src/omsk/examples/thumb.su picture.png thumb.jpg [side]
+# side is the box the thumbnail fits in (200 by default).
+$include "../omsk.su"
+
+init(ret): argc argv [
+    set(ret): 1
+    if(_): {argc < 2} [
+        print(_): "usage: thumb.su picture thumb.jpg [side]"
+        return(ret): ret
+    ]
+    at(from): argv 0
+    at(to): argv 1
+    set(side): 200
+    if(_): {argc > 2} [
+        at(s): argv 2
+        str_to_number(side): s
+    ]
+    read_bytes(v): from
+    if(_): {v = null} [
+        concat(m): "cannot read " from
+        print(_): m
+        return(ret): ret
+    ]
+    omsk_thumb(t): v side
+    if(_): {t = null} [
+        omsk_error(why):
+        concat(m): from ": " why
+        print(_): m
+        return(ret): ret
+    ]
+    at(jpeg): t 4
+    write_bytes(n): to jpeg
+    if(_): {n < 0} [
+        concat(m): "cannot write " to
+        print(_): m
+        return(ret): ret
+    ]
+    at(w): t 0
+    at(h): t 1
+    at(tw): t 2
+    at(th): t 3
+    str_from_int(w): w
+    str_from_int(h): h
+    str_from_int(tw): tw
+    str_from_int(th): th
+    concat(m): from " " w "x" h " -> " to " " tw "x" th
+    print(_): m
+    set(ret): 0
+]
