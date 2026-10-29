@@ -155,21 +155,22 @@ ussr hello.ru
 
 With usa the second wave is done and USSR is complete. Its programs:
 
-- moscow.su - the startup configuration file
-- library (`src/libs`) - the standard library: io, math, bytes, strings, vectors
+- ussr/ussr.exe - the USSR programming language and shell
+- moscow.su - the USSR startup configuration file
+- library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
 - russia.su - bootstrapped USSR interpreter, written in USSR
-- ural.su - package manager
+- ural.su - USSR package manager
 - ukraine.su - HTTP server and web framework
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
 - Mbl.su - vi-like console text editor
-- tver.su - two-panel file manager
-- tula.su - 2D CAD with DXF
-- klin.su - calculator: casual, scientific and programmer modes
+- tver.su - GUI two-panel file manager
+- tula.su - GUI 2D CAD with DXF
+- klin.su - GUI calculator: casual, scientific and programmer modes
 - ryazan.su - TLS and HTTPS on Schannel or OpenSSL
-- kremlin.su - full-screen desktop on ~/kremlin
+- kremlin.su - GUI full-screen desktop on ~/kremlin
 - novgorod.su - anonymous HTTPS image forum (RUND stack)
 - dubna.su - PostgreSQL client (RUND stack)
-- siberia.su - office package: spreadsheet and document editor
+- siberia.su - GUI office package: spreadsheet and document editor
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP
