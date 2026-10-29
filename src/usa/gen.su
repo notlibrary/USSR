@@ -32,7 +32,7 @@ global(_): co_op co_a co_b co_c co_i k_tag k_val k_tab st_s st_tab
 global(_): fn_name fn_entry fn_params fn_locals fn_defined fn_np fn_sym fn_kind fn_taken fn_rbuf fn_va
 global(_): g_fix_at g_fix_sym g_endfix g_calls g_calls_f
 global(_): g_slots g_slotn g_fp g_brk g_cont g_labels g_labn g_gotos g_goton g_cur g_icall
-global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero usa_trace
+global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero usa_trace g_hasvla
 
 # ======================= pools =======================
 gen_init(r): [
@@ -354,6 +354,7 @@ g_layout(r): psyms lsyms va [
     set(r): 0
     vec(g_slots): ""
     set(g_frame): 0
+    set(g_hasvla): 0
     len(np): psyms
     set(i): 0
     while(_): {i < np} [
@@ -405,6 +406,16 @@ g_place(r): s [
     at(t): sy_t s
     at(k): ty_k t
     at(taken): sy_at s
+    set(isvla): 0
+    if(_): {k = 10} [
+        at(vn0): ty_n t
+        # a variable length array is a VM local holding its stack address
+        if(_): {vn0 = (0 - 2)} [
+            set(isvla): 1
+            set(g_hasvla): 1
+        ]
+    ]
+    if(_): {isvla = 1} [ return(_): r ]
     if(_): {taken = 1 || k = 10 || k = 12 || k = 13} [
         at(sz): ty_sz t
         at(al): ty_al t
@@ -455,7 +466,7 @@ gen_function(r): s psyms lsyms body [
         s_idx(ws): "write_stderr"
         e(_): 68 1 1 0 ws
     ]
-    if(_): {g_frame > 0} [
+    if(_): {g_frame > 0 || g_hasvla = 1} [
         set(g_fp): 1
         e_gload(_): 28 "SP"
         e_int(_): 27 g_frame
@@ -569,6 +580,10 @@ gen_addr(r): n d [
             e(at): 1 d 0 0 0
             push(_): g_fix_at at
             push(_): g_fix_sym s
+        ]
+        elif(_): {st = 2} [
+            # a variable length array: the address it was given
+            g_loadvar(_): s d
         ]
         elif(_): {st = 4} [
             at(off): sy_a s
@@ -1326,13 +1341,49 @@ gen_stmt(r): n [
     set(g_cur): ln
     if(_): {k = 30} [
         at(items): nd_v n
+        at(isdecl): nd_b n
         len(ni): items
+        # a scope declaring variable length arrays gives their stack back
+        set(vslot): {0 - 1}
+        if(_): {isdecl = 0} [
+            g_hasvla_items(hv): items
+            if(_): {hv = 1} [
+                g_newlocal(vslot): "%vla"
+                s_idx(vs): "%vla"
+                e_gload(_): 0 "SP"
+                e(_): 3 0 1 vslot vs
+            ]
+        ]
         set(i): 0
         while(_): {i < ni} [
             at(s): items i
             gen_stmt(_): s
             add(i): i 1
         ]
+        if(_): {vslot >= 0} [
+            s_idx(vs2): "%vla"
+            e(_): 2 0 1 vslot vs2
+            e_gstore(_): 0 "SP"
+        ]
+    ]
+    elif(_): {k = 48} [
+        # a variable length array: SP bumped by its size, rounded to 8
+        at(s): nd_a n
+        at(t): sy_t s
+        at(len): ty_m t
+        at(el): ty_b t
+        at(es): ty_sz el
+        gen_expr(_): len 0
+        e_int(_): 1 {es}
+        e(_): 18 0 0 1 0
+        e_int(_): 1 7
+        e(_): 16 0 0 1 0
+        e_int(_): 1 {0 - 8}
+        e(_): 31 0 0 1 0
+        e_gload(_): 1 "SP"
+        g_storevar(_): s 1
+        e(_): 16 1 1 0 0
+        e_gstore(_): 1 "SP"
     ]
     elif(_): {k = 31} [
         at(a): nd_a n
@@ -1509,6 +1560,24 @@ gen_stmt(r): n [
     ]
     else(_): [
         gen_expr(_): n 0
+    ]
+]
+# Whether the statements in items declare a variable length array.
+g_hasvla_items(r): items [
+    set(r): 0
+    len(n): items
+    set(i): 0
+    while(_): {i < n} [
+        at(s): items i
+        at(k): nd_k s
+        at(b): nd_b s
+        if(_): {k = 48} [ set(r): 1 ]
+        if(_): {k = 30 && b = 1} [
+            at(sub): nd_v s
+            g_hasvla_items(r2): sub
+            if(_): {r2 = 1} [ set(r): 1 ]
+        ]
+        add(i): i 1
     ]
 ]
 # break and continue targets of a loop (a switch pushes null for continue).

@@ -743,6 +743,19 @@ p_unary(r): [
                 set(p_ginit): save
                 at(t): nd_t e
             ]
+            at(stk): ty_k t
+            set(stn): 0
+            if(_): {stk = 10} [ at(stn): ty_n t ]
+            if(_): {s = "sizeof" && stn = (0 - 2)} [
+                # a variable length array: its length times its element
+                at(vlen): ty_m t
+                at(vel): ty_b t
+                ty_sizeof(ves): vel p_ln
+                nd_num(vesn): ves ty_long
+                p_fold(vsz): 18 vlen vesn ty_long
+                p_conv(r): vsz ty_ulong
+                return(_): r
+            ]
             if(_): {s = "sizeof"} [ ty_sizeof(v): t p_ln ]
             else(_): [ at(v): ty_al t ]
             nd_num(r): v ty_ulong
@@ -811,12 +824,15 @@ p_call(r): f [
         if(_): {fsn = "main"} [ set(proto): 0 ]
     ]
     vec(args): ""
+    vec(otypes): ""
     p_is(cl): ")"
     set(i): 0
     if(_): {cl = 0} [
         while(_): {1 = 1} [
             p_assign(a):
             p_rval(a2): a
+            at(ot): nd_t a2
+            push(_): otypes ot
             if(_): {i < np && proto = 1} [
                 at(pt): ps i
                 p_conv(a2): a2 pt
@@ -848,7 +864,191 @@ p_call(r): f [
         ]
         p_fail(_): m
     ]
+    if(_): {fvk = 25} [
+        p_bytecall(r): fv args otypes
+        if(_): {r >= 0} [ return(_): r ]
+    ]
     nd_new(r): 16 ret fv np va args
+]
+# The layout of type t for byte-level copies: its scalar leaves as
+# "<code><offset>" joined by ",", code b/B char, h/H short, i/I int,
+# q/Q long or pointer, f float, d double ("" for plain bytes).
+p_desc(r): t [
+    vec(parts): ""
+    p_desc_into(_): t 0 parts
+    set(r): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(x): parts i
+        if(_): {i > 0} [ concat(r): r "," ]
+        concat(r): r x
+        add(i): i 1
+    ]
+]
+p_desc_into(r): t base out [
+    set(r): 0
+    at(k): ty_k t
+    at(u): ty_u t
+    len(cnt): out
+    if(_): {cnt > 4096} [ return(_): r ]
+    if(_): {k = 10} [
+        at(b): ty_b t
+        at(n): ty_n t
+        at(es): ty_sz b
+        set(i): 0
+        while(_): {i < n} [
+            p_desc_into(_): b {base + i * es} out
+            add(i): i 1
+        ]
+        return(_): r
+    ]
+    if(_): {k = 12 || k = 13} [
+        at(ms): ty_m t
+        len(nm): ms
+        set(i): 0
+        set(top): nm
+        # a union is written as its first member
+        if(_): {k = 13 && nm > 0} [ set(top): 1 ]
+        while(_): {i < top} [
+            at(m): ms i
+            at(mt): mb_t m
+            at(mo): mb_o m
+            p_desc_into(_): mt {base + mo} out
+            add(i): i 1
+        ]
+        return(_): r
+    ]
+    set(c): ""
+    if(_): {k = 1 || k = 2} [
+        set(c): "b"
+        if(_): {u = 1} [ set(c): "B" ]
+    ]
+    elif(_): {k = 3} [
+        set(c): "h"
+        if(_): {u = 1} [ set(c): "H" ]
+    ]
+    elif(_): {k = 4} [
+        set(c): "i"
+        if(_): {u = 1} [ set(c): "I" ]
+    ]
+    elif(_): {k = 5 || k = 6} [
+        set(c): "q"
+        if(_): {u = 1} [ set(c): "Q" ]
+    ]
+    elif(_): {k = 9} [ set(c): "Q" ]
+    elif(_): {k = 7} [ set(c): "f" ]
+    elif(_): {k = 8} [ set(c): "d" ]
+    if(_): {c != ""} [
+        encode(os): base
+        concat(x): c os
+        push(_): out x
+    ]
+]
+# The kind of what pointer type pt points at for byte copies: "" for
+# bytes (char, void, unknown), else its layout.
+p_ptrdesc(r): pt [
+    set(r): ""
+    at(k): ty_k pt
+    if(_): {k != 9} [ return(_): r ]
+    at(b): ty_b pt
+    at(bk): ty_k b
+    if(_): {bk = 0 || bk = 2 || bk = 1 || bk = 11} [ return(_): r ]
+    at(cpl): ty_cpl b
+    if(_): {cpl = 0} [ return(_): r ]
+    p_desc(r): b
+    # a layout of chars only is bytes too
+    len(n): r
+    set(other): 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(ch): r i
+        if(_): {ch != 98 && ch != 66 && ch != 44 && (ch < 48 || ch > 57)} [ set(other): 1 ]
+        add(i): i 1
+    ]
+    if(_): {other = 0} [ set(r): "" ]
+]
+# fwrite/fread/memcpy/memmove between typed objects and bytes: C memory
+# keeps each scalar in one cell, so these become __fwrite_t, __fread_t
+# and __memcpy_t, given the layouts so they can make or read real
+# little-endian bytes. -1 when the call stays as it is.
+p_bytecall(r): fv args otypes [
+    set(r): {0 - 1}
+    at(fs): nd_a fv
+    at(name): sy_n fs
+    if(_): {name != "fwrite" && name != "fread" && name != "memcpy" && name != "memmove"} [ return(_): r ]
+    len(na): args
+    if(_): {(name = "fwrite" || name = "fread") && na = 4} [
+        at(pt): otypes 0
+        p_ptrdesc(d): pt
+        if(_): {d = ""} [ return(_): r ]
+        at(b): ty_b pt
+        ty_sizeof(stride): b p_ln
+        set(rt): "__fwrite_t"
+        if(_): {name = "fread"} [ set(rt): "__fread_t" ]
+        nd_new(dn): 29 ty_uval 0 0 0 d
+        nd_num(sn): stride ty_long
+        vec(a2): ""
+        set(i): 0
+        while(_): {i < 4} [
+            at(x): args i
+            push(_): a2 x
+            add(i): i 1
+        ]
+        push(_): a2 dn
+        push(_): a2 sn
+        p_rtcall(r): rt a2
+        return(_): r
+    ]
+    if(_): {(name = "memcpy" || name = "memmove") && na = 3} [
+        at(dt): otypes 0
+        at(st): otypes 1
+        p_ptrdesc(dd): dt
+        p_ptrdesc(sd): st
+        # same layouts copy cell by cell; only bytes against a layout change
+        if(_): {(dd = "") = (sd = "")} [ return(_): r ]
+        set(ds): 1
+        set(ss): 1
+        if(_): {dd != ""} [
+            at(db): ty_b dt
+            ty_sizeof(ds): db p_ln
+        ]
+        if(_): {sd != ""} [
+            at(sb): ty_b st
+            ty_sizeof(ss): sb p_ln
+        ]
+        vec(a2): ""
+        set(i): 0
+        while(_): {i < 3} [
+            at(x): args i
+            push(_): a2 x
+            add(i): i 1
+        ]
+        nd_new(ddn): 29 ty_uval 0 0 0 dd
+        nd_num(dsn): ds ty_long
+        nd_new(sdn): 29 ty_uval 0 0 0 sd
+        nd_num(ssn): ss ty_long
+        push(_): a2 ddn
+        push(_): a2 dsn
+        push(_): a2 sdn
+        push(_): a2 ssn
+        p_rtcall(r): "__memcpy_t" a2
+    ]
+]
+# A call of runtime function name (declared by the prelude) with args.
+p_rtcall(r): name args [
+    ht_get(s): lk_tab name
+    if(_): {s < 0} [
+        concat(m): "usa: the runtime function '" name
+        concat(m): m "' is not declared"
+        p_fail(_): m
+    ]
+    at(ft): sy_t s
+    at(ret): ty_b ft
+    ty_ptr(pt): ft
+    nd_new(f): 25 pt s 0 0 0
+    len(na): args
+    nd_new(r): 16 ret f na 0 args
 ]
 p_primary(r): [
     p_mark(_):

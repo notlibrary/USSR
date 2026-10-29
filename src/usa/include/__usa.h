@@ -16,6 +16,10 @@ long __f2i(double x);
 void *memcpy(void *dst, const void *src, size_t n);
 void *memset(void *p, int c, size_t n);
 void __strinit(char *p, __uval s);
+/* fwrite/fread/memcpy between typed objects and bytes (see p_bytecall) */
+size_t __fwrite_t(const void *p, size_t size, size_t n, void *f, __uval desc, long stride);
+size_t __fread_t(void *p, size_t size, size_t n, void *f, __uval desc, long stride);
+void *__memcpy_t(void *d, const void *s, size_t n, __uval ddesc, long dstride, __uval sdesc, long sstride);
 void __ginit(void);
 int __start(long argc, __uval argv);
 int main();

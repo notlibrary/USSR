@@ -783,7 +783,7 @@ p_declarator(r): t need [
     at(k): tk_k p_i
     if(_): {k = 1} [
         p_istype(isty2):
-        if(_): {isty2 = 0} [ p_ident(p_dname): ]
+        if(_): {isty2 = 0 || need = 1} [ p_ident(p_dname): ]
     ]
     if(_): {need = 1 && p_dname = ""} [ p_failat(_): "expected identifier" ]
     # the parameters' declarators set p_dname too
@@ -815,13 +815,27 @@ p_dsuffix(r): t [
         p_accept(st): "static"
         p_accept(cq): "const"
         p_is(rb): "]"
+        set(vla): {0 - 1}
         if(_): {rb = 0} [
             p_assign(e):
-            p_const(n): e
+            p_ceval(n): e
+            if(_): {n = null} [
+                # a variable length array: its length is worked out where
+                # it is declared (n -2, the length node in ty_m)
+                if(_): {p_fn < 0} [ p_fail(_): "variable length array at file scope" ]
+                p_conv(vla): e ty_long
+                set(n): {0 - 2}
+            ]
         ]
         p_expect(_): "]"
         p_dsuffix(inner): t
+        at(ik): ty_k inner
+        if(_): {ik = 10} [
+            at(inn): ty_n inner
+            if(_): {inn = (0 - 2)} [ p_fail(_): "only the first dimension of an array may vary" ]
+        ]
         ty_arr(r): inner n
+        if(_): {vla >= 0} [ set(ty_m): r vla ]
         return(_): r
     ]
     p_is(lp): "("
@@ -1096,7 +1110,12 @@ p_decl_rest(r): bt file [
                 if(_): {lc = 0} [ p_fail(_): "storage size isn't known" ]
                 if(_): {lk2 = 10} [
                     at(ln2): ty_n lt
-                    if(_): {ln2 < 0} [ p_fail(_): "array size missing" ]
+                    if(_): {ln2 = (0 - 2)} [
+                        # stack space for it when the declaration runs
+                        nd_new(vd): 48 ty_void s 0 0 0
+                        push(_): inits vd
+                    ]
+                    elif(_): {ln2 < 0} [ p_fail(_): "array size missing" ]
                 ]
             ]
         ]
@@ -1105,7 +1124,8 @@ p_decl_rest(r): bt file [
     ]
     p_expect(_): ";"
     len(ni): inits
-    if(_): {ni > 0} [ nd_new(r): 30 ty_void 0 0 0 inits ]
+    # b = 1: a declaration's statements, not a scope of its own
+    if(_): {ni > 0} [ nd_new(r): 30 ty_void 0 1 0 inits ]
 ]
 
 # ---- initializers ----

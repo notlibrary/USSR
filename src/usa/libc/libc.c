@@ -18,6 +18,9 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <locale.h>
+#include <unistd.h>
+#include <getopt.h>
+#include <pwd.h>
 
 __uval __ussr_text_bytes(__uval s);
 __uval __ussr_clear_bytes(__uval v);
@@ -783,6 +786,286 @@ FILE *fopen(const char *path, const char *mode)
     __files = f;
     __fwritebytes(f);
     return f;
+}
+
+/* ---------------- objects as bytes ----------------
+   A scalar lives in the cell at its address; these give the bytes it
+   has in a real machine (little-endian, IEEE-754) and back, after the
+   layout usa passes: "<code><offset>" items joined by ",". */
+
+/* the bits of a double */
+static unsigned long __dbits(double x)
+{
+    unsigned long sign = 0, mant;
+    long e = 0;
+    if (x < 0) {
+        sign = 1UL << 63;
+        x = -x;
+    }
+    if (x != x)
+        return 0x7FF8000000000000UL;
+    if (x > 1.7976931348623157e308)
+        return sign | 0x7FF0000000000000UL;
+    if (x == 0)
+        return sign;
+    while (x >= 2) {
+        x /= 2;
+        e++;
+    }
+    while (x < 1 && e > -1022) {
+        x *= 2;
+        e--;
+    }
+    if (x < 1)
+        /* subnormal: x * 2^-1022 with x < 1 */
+        return sign | (unsigned long)(long)ldexp(x, 52);
+    mant = (unsigned long)(long)ldexp(x - 1, 52);
+    return sign | ((unsigned long)(e + 1023) << 52) | mant;
+}
+
+static double __dfrombits(unsigned long b)
+{
+    long e = (long)((b >> 52) & 2047);
+    unsigned long m = b & 0xFFFFFFFFFFFFFUL;
+    double x;
+    if (e == 2047)
+        x = m ? __nan() : HUGE_VAL;
+    else if (e == 0)
+        x = ldexp((double)(long)m, -1074);
+    else
+        x = ldexp(1 + ldexp((double)(long)m, -52), (int)(e - 1023));
+    return (b >> 63) ? -x : x;
+}
+
+/* the bits of x as a float (rounded to nearest even) */
+static unsigned long __fbits(double x)
+{
+    unsigned long sign = 0, mant;
+    long e = 0;
+    double m;
+    if (x < 0) {
+        sign = 1UL << 31;
+        x = -x;
+    }
+    if (x != x)
+        return 0x7FC00000UL;
+    if (x == 0)
+        return sign;
+    while (x >= 2) {
+        x /= 2;
+        e++;
+    }
+    while (x < 1 && e > -126) {
+        x *= 2;
+        e--;
+    }
+    if (x < 1) {
+        m = ldexp(x, 23);
+        mant = (unsigned long)(long)rint(m);
+        return sign | mant;
+    }
+    m = ldexp(x - 1, 23);
+    mant = (unsigned long)(long)rint(m);
+    if (mant >= (1UL << 23)) {
+        mant = 0;
+        e++;
+    }
+    if (e > 127)
+        return sign | 0x7F800000UL;
+    return sign | ((unsigned long)(e + 127) << 23) | mant;
+}
+
+static double __ffrombits(unsigned long b)
+{
+    long e = (long)((b >> 23) & 255);
+    unsigned long m = b & 0x7FFFFFUL;
+    double x;
+    if (e == 255)
+        x = m ? __nan() : HUGE_VAL;
+    else if (e == 0)
+        x = ldexp((double)(long)m, -149);
+    else
+        x = ldexp(1 + ldexp((double)(long)m, -23), (int)(e - 127));
+    return (b >> 31) & 1 ? -x : x;
+}
+
+/* the layout string d parsed: codes and offsets; their count */
+static int __layout(__uval d, char *codes, long *offs, int max)
+{
+    long n = (long)__ussr_len(d), i = 0;
+    int k = 0;
+    while (i < n && k < max) {
+        long off = 0;
+        codes[k] = (char)(int)__ussr_byte(d, i++);
+        while (i < n) {
+            int c = (int)__ussr_byte(d, i++);
+            if (c == ',')
+                break;
+            off = off * 10 + (c - '0');
+        }
+        offs[k++] = off;
+    }
+    return k;
+}
+
+static int __codewidth(int c)
+{
+    switch (c) {
+    case 'b': case 'B': return 1;
+    case 'h': case 'H': return 2;
+    case 'i': case 'I': case 'f': return 4;
+    }
+    return 8;
+}
+
+/* object (of a layout) at obj as stride bytes into out */
+static void __pack(unsigned char *out, const char *obj, long stride, const char *codes, const long *offs, int nl)
+{
+    long b = 0;
+    int k = 0;
+    while (b < stride) {
+        if (k < nl && offs[k] == b) {
+            int w = __codewidth(codes[k]), j;
+            unsigned long v;
+            if (codes[k] == 'd')
+                v = __dbits(*(const double *)(obj + b));
+            else if (codes[k] == 'f')
+                v = __fbits(*(const float *)(obj + b));
+            else if (w == 1)
+                v = (unsigned char)obj[b];
+            else if (w == 2)
+                v = (unsigned short)*(const short *)(obj + b);
+            else if (w == 4)
+                v = (unsigned int)*(const int *)(obj + b);
+            else
+                v = *(const unsigned long *)(obj + b);
+            for (j = 0; j < w && b + j < stride; j++) {
+                out[b + j] = v & 255;
+                v >>= 8;
+            }
+            b += w;
+            k++;
+        } else {
+            /* padding (or a cell no leaf owns) */
+            out[b] = (unsigned char)obj[b];
+            b++;
+        }
+    }
+}
+
+/* stride bytes at in as an object (of a layout) at obj */
+static void __unpack(char *obj, const unsigned char *in, long stride, const char *codes, const long *offs, int nl)
+{
+    long b = 0;
+    int k = 0;
+    while (b < stride) {
+        if (k < nl && offs[k] == b) {
+            int w = __codewidth(codes[k]), j;
+            unsigned long v = 0;
+            for (j = w - 1; j >= 0; j--)
+                v = (v << 8) | (b + j < stride ? in[b + j] : 0);
+            switch (codes[k]) {
+            case 'b': *(signed char *)(obj + b) = (signed char)v; break;
+            case 'B': *(unsigned char *)(obj + b) = (unsigned char)v; break;
+            case 'h': *(short *)(obj + b) = (short)v; break;
+            case 'H': *(unsigned short *)(obj + b) = (unsigned short)v; break;
+            case 'i': *(int *)(obj + b) = (int)v; break;
+            case 'I': *(unsigned int *)(obj + b) = (unsigned int)v; break;
+            case 'f': *(float *)(obj + b) = __ffrombits(v); break;
+            case 'd': *(double *)(obj + b) = __dfrombits(v); break;
+            default: *(unsigned long *)(obj + b) = v; break;
+            }
+            b += w;
+            k++;
+        } else {
+            obj[b] = in[b];
+            b++;
+        }
+    }
+}
+
+size_t __fwrite_t(const void *p, size_t size, size_t n, void *fp, __uval desc, long stride)
+{
+    char codes[512];
+    long offs[512];
+    unsigned char *buf;
+    long total = size * n, done = 0;
+    int nl = __layout(desc, codes, offs, 512);
+    FILE *f = fp;
+    if (stride <= 0 || total == 0)
+        return 0;
+    buf = malloc(stride);
+    while (done + stride <= total) {
+        long i;
+        __pack(buf, (const char *)p + done, stride, codes, offs, nl);
+        for (i = 0; i < stride; i++)
+            fputc(buf[i], f);
+        done += stride;
+    }
+    while (done < total)
+        fputc(((const unsigned char *)p)[done++], f);
+    free(buf);
+    return size ? n : 0;
+}
+
+size_t __fread_t(void *p, size_t size, size_t n, void *fp, __uval desc, long stride)
+{
+    char codes[512];
+    long offs[512];
+    unsigned char *buf;
+    long total = size * n, done = 0;
+    int nl = __layout(desc, codes, offs, 512), c = 0;
+    FILE *f = fp;
+    if (stride <= 0 || size == 0)
+        return 0;
+    buf = malloc(stride);
+    while (done < total) {
+        long i, chunk = total - done < stride ? total - done : stride;
+        for (i = 0; i < chunk; i++) {
+            c = fgetc(f);
+            if (c == EOF)
+                break;
+            buf[i] = c;
+        }
+        if (i < chunk) {
+            done += i;
+            break;
+        }
+        if (chunk == stride)
+            __unpack((char *)p + done, buf, stride, codes, offs, nl);
+        else
+            memcpy((char *)p + done, buf, chunk);
+        done += chunk;
+    }
+    free(buf);
+    return done / size;
+}
+
+void *__memcpy_t(void *d, const void *s, size_t n, __uval ddesc, long dstride, __uval sdesc, long sstride)
+{
+    char codes[512];
+    long offs[512], done = 0, total = n;
+    int nl;
+    if ((long)__ussr_len(sdesc) > 0) {
+        /* typed objects into bytes */
+        nl = __layout(sdesc, codes, offs, 512);
+        while (done + sstride <= total) {
+            __pack((unsigned char *)d + done, (const char *)s + done, sstride, codes, offs, nl);
+            done += sstride;
+        }
+    } else {
+        /* bytes into typed objects */
+        nl = __layout(ddesc, codes, offs, 512);
+        while (done + dstride <= total) {
+            __unpack((char *)d + done, (const unsigned char *)s + done, dstride, codes, offs, nl);
+            done += dstride;
+        }
+    }
+    while (done < total) {
+        ((unsigned char *)d)[done] = ((const unsigned char *)s)[done];
+        done++;
+    }
+    return d;
 }
 
 FILE *freopen(const char *path, const char *mode, FILE *f)
@@ -1935,9 +2218,11 @@ time_t time(time_t *t)
 clock_t clock(void) { return __time() * CLOCKS_PER_SEC; }
 double difftime(time_t a, time_t b) { return (double)(a - b); }
 
-struct tm *gmtime(const time_t *t)
+static int __leap(long y) { return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0); }
+
+struct tm *gmtime_r(const time_t *t, struct tm *out)
 {
-    static struct tm tm;
+    struct tm tm;
     long s = *t, days, y = 1970;
     int mdays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
     int m = 0;
@@ -1969,10 +2254,251 @@ struct tm *gmtime(const time_t *t)
     tm.tm_mon = m;
     tm.tm_mday = days + 1;
     tm.tm_isdst = 0;
-    return &tm;
+    *out = tm;
+    return out;
+}
+
+/* there is no time zone: local time is UTC */
+struct tm *gmtime(const time_t *t)
+{
+    static struct tm tm;
+    return gmtime_r(t, &tm);
 }
 
 struct tm *localtime(const time_t *t) { return gmtime(t); }
+struct tm *localtime_r(const time_t *t, struct tm *out) { return gmtime_r(t, out); }
+
+time_t mktime(struct tm *tm)
+{
+    static const int before[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+    long y, mon = tm->tm_mon, days, t;
+    y = tm->tm_year + 1900 + mon / 12;
+    mon %= 12;
+    if (mon < 0) {
+        mon += 12;
+        y--;
+    }
+    /* days from 1970-01-01 to the first of that year */
+    days = (y - 1970) * 365 + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400;
+    days += before[mon] + tm->tm_mday - 1;
+    if (mon > 1 && __leap(y))
+        days++;
+    t = days * 86400 + tm->tm_hour * 3600L + tm->tm_min * 60L + tm->tm_sec;
+    gmtime_r(&t, tm);
+    return t;
+}
+
+static const char *__wday[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+static const char *__month[12] = {"January", "February", "March", "April", "May", "June", "July",
+                                  "August", "September", "October", "November", "December"};
+
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm)
+{
+    char buf[64];
+    size_t n = 0;
+    const char *p;
+    for (p = fmt; *p; p++) {
+        const char *add = buf;
+        int wd = ((tm->tm_wday % 7) + 7) % 7;
+        buf[0] = 0;
+        if (*p != '%') {
+            buf[0] = *p;
+            buf[1] = 0;
+        } else {
+            p++;
+            if (*p == 'E' || *p == 'O')
+                p++;
+            switch (*p) {
+            case 'a': snprintf(buf, 64, "%.3s", __wday[wd]); break;
+            case 'A': add = __wday[wd]; break;
+            case 'b': case 'h': snprintf(buf, 64, "%.3s", __month[tm->tm_mon]); break;
+            case 'B': add = __month[tm->tm_mon]; break;
+            case 'c': snprintf(buf, 64, "%.3s %.3s %2d %02d:%02d:%02d %d", __wday[wd], __month[tm->tm_mon], tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, tm->tm_year + 1900); break;
+            case 'C': snprintf(buf, 64, "%02d", (tm->tm_year + 1900) / 100); break;
+            case 'd': snprintf(buf, 64, "%02d", tm->tm_mday); break;
+            case 'D': snprintf(buf, 64, "%02d/%02d/%02d", tm->tm_mon + 1, tm->tm_mday, tm->tm_year % 100); break;
+            case 'e': snprintf(buf, 64, "%2d", tm->tm_mday); break;
+            case 'F': snprintf(buf, 64, "%d-%02d-%02d", tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday); break;
+            case 'H': snprintf(buf, 64, "%02d", tm->tm_hour); break;
+            case 'I': snprintf(buf, 64, "%02d", tm->tm_hour % 12 ? tm->tm_hour % 12 : 12); break;
+            case 'j': snprintf(buf, 64, "%03d", tm->tm_yday + 1); break;
+            case 'm': snprintf(buf, 64, "%02d", tm->tm_mon + 1); break;
+            case 'M': snprintf(buf, 64, "%02d", tm->tm_min); break;
+            case 'n': add = "\n"; break;
+            case 'p': add = tm->tm_hour < 12 ? "AM" : "PM"; break;
+            case 'R': snprintf(buf, 64, "%02d:%02d", tm->tm_hour, tm->tm_min); break;
+            case 'S': snprintf(buf, 64, "%02d", tm->tm_sec); break;
+            case 't': add = "\t"; break;
+            case 'T': case 'X': snprintf(buf, 64, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec); break;
+            case 'u': snprintf(buf, 64, "%d", wd ? wd : 7); break;
+            case 'w': snprintf(buf, 64, "%d", wd); break;
+            case 'x': snprintf(buf, 64, "%02d/%02d/%02d", tm->tm_mon + 1, tm->tm_mday, tm->tm_year % 100); break;
+            case 'y': snprintf(buf, 64, "%02d", tm->tm_year % 100); break;
+            case 'Y': snprintf(buf, 64, "%d", tm->tm_year + 1900); break;
+            case 'z': add = "+0000"; break;
+            case 'Z': add = "UTC"; break;
+            case 's': snprintf(buf, 64, "%ld", mktime((struct tm *)tm)); break;
+            case '%': add = "%"; break;
+            case 0: p--; break;
+            default: snprintf(buf, 64, "%%%c", *p); break;
+            }
+        }
+        while (*add) {
+            if (n + 1 >= max)
+                return 0;
+            s[n++] = *add++;
+        }
+    }
+    if (n >= max)
+        return 0;
+    s[n] = 0;
+    return n;
+}
+
+char *asctime(const struct tm *tm)
+{
+    static char buf[32];
+    strftime(buf, sizeof buf, "%a %b %e %H:%M:%S %Y\n", tm);
+    return buf;
+}
+
+char *ctime(const time_t *t) { return asctime(localtime(t)); }
+
+/* ---------------- POSIX bits ---------------- */
+
+uid_t getuid(void) { return 1000; }
+uid_t geteuid(void) { return 1000; }
+gid_t getgid(void) { return 1000; }
+pid_t getpid(void) { return 1; }
+
+struct passwd *getpwuid(uid_t uid)
+{
+    static struct passwd pw;
+    char *home = getenv("HOME"), *user = getenv("USER");
+    if (!home)
+        home = getenv("USERPROFILE");
+    if (!user)
+        user = getenv("USERNAME");
+    pw.pw_name = user ? user : "user";
+    pw.pw_passwd = "x";
+    pw.pw_uid = uid;
+    pw.pw_gid = uid;
+    pw.pw_gecos = pw.pw_name;
+    pw.pw_dir = home ? home : ".";
+    pw.pw_shell = "ussr";
+    return &pw;
+}
+
+struct passwd *getpwnam(const char *name) { return getpwuid(1000); }
+
+/* getopt as POSIX (no permutation), with GNU long options */
+char *optarg;
+int optind = 1, opterr = 1, optopt;
+static int __optpos;
+
+static int __getopt(int argc, char *const argv[], const char *opts, const struct option *lo, int *li, int longonly)
+{
+    const char *arg, *o;
+    int c;
+    optarg = 0;
+    if (*opts == '+' || *opts == '-')
+        opts++;
+    if (__optpos == 0) {
+        if (optind >= argc || !argv[optind] || argv[optind][0] != '-' || argv[optind][1] == 0)
+            return -1;
+        if (strcmp(argv[optind], "--") == 0) {
+            optind++;
+            return -1;
+        }
+        if (lo && (argv[optind][1] == '-' || longonly)) {
+            const char *name = argv[optind] + (argv[optind][1] == '-' ? 2 : 1);
+            size_t len = strcspn(name, "=");
+            int i, hit = -1;
+            for (i = 0; lo[i].name; i++) {
+                if (strncmp(lo[i].name, name, len) == 0) {
+                    if (strlen(lo[i].name) == len) {
+                        hit = i;
+                        break;
+                    }
+                    if (hit < 0)
+                        hit = i;
+                }
+            }
+            if (hit >= 0 || argv[optind][1] == '-') {
+                optind++;
+                if (hit < 0) {
+                    if (opterr)
+                        fprintf(stderr, "%s: unrecognized option '--%s'\n", argv[0], name);
+                    optopt = 0;
+                    return '?';
+                }
+                if (li)
+                    *li = hit;
+                if (name[len] == '=') {
+                    if (lo[hit].has_arg == no_argument) {
+                        if (opterr)
+                            fprintf(stderr, "%s: option '--%s' doesn't allow an argument\n", argv[0], lo[hit].name);
+                        return '?';
+                    }
+                    optarg = (char *)name + len + 1;
+                } else if (lo[hit].has_arg == required_argument) {
+                    if (optind >= argc) {
+                        if (opterr)
+                            fprintf(stderr, "%s: option '--%s' requires an argument\n", argv[0], lo[hit].name);
+                        return *opts == ':' ? ':' : '?';
+                    }
+                    optarg = argv[optind++];
+                }
+                if (lo[hit].flag) {
+                    *lo[hit].flag = lo[hit].val;
+                    return 0;
+                }
+                return lo[hit].val;
+            }
+        }
+        __optpos = 1;
+    }
+    arg = argv[optind];
+    c = arg[__optpos++];
+    o = strchr(opts, c);
+    if (!o || c == ':') {
+        if (opterr && *opts != ':')
+            fprintf(stderr, "%s: invalid option -- '%c'\n", argv[0], c);
+        optopt = c;
+        if (!arg[__optpos]) {
+            optind++;
+            __optpos = 0;
+        }
+        return '?';
+    }
+    if (o[1] == ':') {
+        if (arg[__optpos]) {
+            optarg = (char *)arg + __optpos;
+        } else if (o[2] != ':') {
+            if (optind + 1 >= argc) {
+                if (opterr && *opts != ':')
+                    fprintf(stderr, "%s: option requires an argument -- '%c'\n", argv[0], c);
+                optopt = c;
+                optind++;
+                __optpos = 0;
+                return *opts == ':' ? ':' : '?';
+            }
+            optarg = argv[++optind];
+        }
+        optind++;
+        __optpos = 0;
+        return c;
+    }
+    if (!arg[__optpos]) {
+        optind++;
+        __optpos = 0;
+    }
+    return c;
+}
+
+int getopt(int argc, char *const argv[], const char *opts) { return __getopt(argc, argv, opts, 0, 0, 0); }
+int getopt_long(int argc, char *const argv[], const char *opts, const struct option *lo, int *li) { return __getopt(argc, argv, opts, lo, li, 0); }
+int getopt_long_only(int argc, char *const argv[], const char *opts, const struct option *lo, int *li) { return __getopt(argc, argv, opts, lo, li, 1); }
 
 /* ---------------- math ---------------- */
 
