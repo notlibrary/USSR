@@ -52,7 +52,7 @@ characters), `uk_max_body` (2600000 bytes per request), `nv_title`,
 | `GET /i/N.svg`, `/t/N.svg` | image and thumbnail of post N |
 | `GET /markup` | the markup reference with live examples |
 | `GET /static/novgorod.css`, `/static/novgorod.js` | assets |
-| `POST /post` | `multipart/form-data` with `board`, `thread` (`0` for a new thread), `subject`, `text`, `website` (must stay empty), and for an image `mime` (`jpeg`/`png`), `imgw`, `imgh`, `thw`, `thh`, `thumb`, `img` (base64, last); answers `303` to the new post |
+| `POST /post` | `multipart/form-data` with `board`, `thread` (`0` for a new thread), `subject`, `text`, `website` (must stay empty), and for an image `mime` (`jpeg`/`png`), `imgw`, `imgh` (ignored: Omsk reads the real size), `img` (base64, last); the server makes the thumbnail; answers `303` to the new post |
 
 `HEAD` works wherever `GET` does.
 

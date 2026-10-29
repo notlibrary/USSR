@@ -1,6 +1,6 @@
 # Novgorod behind Apache; install.sh fills in the @...@ parts.
 [Unit]
-Description=Novgorod board (USSR, RUND stack)
+Description=Novgorod board (USSR, ROUND stack)
 After=network.target postgresql.service
 Wants=postgresql.service
 

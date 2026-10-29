@@ -1,4 +1,4 @@
-# Dubna - a PostgreSQL client for USSR, the D of the RUND stack (Ryazan TLS,
+# Dubna - a PostgreSQL client for USSR, the D of the ROUND stack (Ryazan TLS,
 # Ukraine HTTP, Novgorod forum, Dubna database). It speaks the PostgreSQL
 # frontend/backend protocol 3.0 over the socket API, with TLS from ryazan.su.
 #

@@ -1,6 +1,6 @@
 # Novgorod - an anonymous image forum for programmers, served over HTTPS by
-# ukraine.su and ryazan.su. Part of the RUND stack: Ryazan (TLS), Ukraine
-# (HTTP), Novgorod (this forum), Dubna (PostgreSQL driver, to come).
+# ukraine.su and ryazan.su. Part of the ROUND stack: Ryazan (TLS), Omsk
+# (thumbnails), Ukraine (HTTP), Novgorod (this forum), Dubna (PostgreSQL).
 #
 #   ussr src/novgorod/novgorod.su [options]
 #     --host 127.0.0.1    --port 8443      address to listen on
@@ -20,16 +20,20 @@
 # Novgorod markup (markup.su). Images are re-encoded by the browser (which
 # also drops EXIF metadata) and stored as base64 inside SVG wrappers, because
 # USSR strings cannot hold zero bytes; browsers show them like any image.
+# The server makes each thumbnail itself with Omsk (omsk.su): the picture
+# shrunk into 200x200, which pages show in its place.
 # The data folder holds posts/N.post (a small header, a blank line, the
-# text), img/N.svg and img/Nt.svg (image and thumbnail), seq (the next
-# number) and boards.txt (one "name | title | description" per line).
+# text), img/N.svg (the image), thumbs/N.svg (its thumbnail; boards from
+# before Omsk keep theirs as img/Nt.svg), seq (the next number) and
+# boards.txt (one "name | title | description" per line).
 $once
 $include "../ukraine/ukraine.su"
 $include "markup.su"
+$include "../omsk/omsk.su"
 $include "../dubna/dubna.su"
 
 global(_): nv_prefix nvm_prefix nv_db nv_db_table uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
-global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_max_thumb
+global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_thumb_side
 
 # ---------------------------------------------------------------- setup
 
@@ -53,7 +57,7 @@ nv_setup(r): [
     set(nv_max_text): 8000
     set(nv_max_subject): 100
     set(nv_max_image): 2400000
-    set(nv_max_thumb): 80000
+    set(nv_thumb_side): 200
     set(uk_max_body): 2600000
     set(nv_hsts): false
     set(nv_db): ""
@@ -175,7 +179,7 @@ nv_default_boards(r): [
     concat(r): r "c | C and systems | C, C++, Rust, assembly, kernels, compilers and linkers\n"
     concat(r): r "lang | Languages | Language design, type systems, interpreters and virtual machines\n"
     concat(r): r "web | Web and networks | HTTP, TLS, browsers, servers and protocols\n"
-    concat(r): r "ussr | USSR | The USSR shell, the RUND stack and the rest of the family\n"
+    concat(r): r "ussr | USSR | The USSR shell, the ROUND stack and the rest of the family\n"
     concat(r): r "meta | Meta | Novgorod itself: bugs, rules and wishes\n"
 ]
 
@@ -472,8 +476,10 @@ nv_open(r): dir [
     make_dir(_): dir
     nv_path(posts_dir): "posts" ""
     nv_path(img_dir): "img" ""
+    nv_path(thumbs_dir): "thumbs" ""
     make_dir(_): posts_dir
     make_dir(_): img_dir
+    make_dir(_): thumbs_dir
     nv_path(boards_file): "boards.txt" ""
     file_exists(have): boards_file
     if(_): {have = false} [
@@ -644,6 +650,9 @@ nv_remove_thread(r): thread [
         remove_file(_): f
         concat(name): nos "t.svg"
         nv_path(f): "img/" name
+        remove_file(_): f
+        concat(name): nos ".svg"
+        nv_path(f): "thumbs/" name
         remove_file(_): f
         add(i): i 1
     ]
@@ -1080,25 +1089,26 @@ nv_submit(r): form out [
             set(r): "The image does not match its type."
             return(r): r
         ]
-        getf(thumb): form "thumb"
-        nv_base64_ok(ok): thumb nv_max_thumb
-        nv_starts(tjpeg): thumb "/9j/"
-        if(_): {ok = false || tjpeg = false} [
-            set(r): "The thumbnail is missing or damaged."
+        # decoding takes seconds: not for a post the rate limit refuses
+        time(now):
+        nv_rate_ok(ok): now
+        if(_): {ok = false} [
+            set(r): "The forum is busy; wait a minute and post again."
             return(r): r
         ]
-        getf(x): form "imgw"
-        nv_dim(iw): x 20000
-        getf(x): form "imgh"
-        nv_dim(ih): x 20000
-        getf(x): form "thw"
-        nv_dim(tw): x 400
-        getf(x): form "thh"
-        nv_dim(th): x 400
-        if(_): {iw = null || ih = null || tw = null || th = null} [
-            set(r): "The image size is missing."
+        # the size and the thumbnail come from the picture itself, not
+        # from what the browser says about it
+        omsk_thumb_base64(t): img nv_thumb_side
+        if(_): {t = null} [
+            omsk_error(why):
+            concat(r): "The image could not be read: " why "."
             return(r): r
         ]
+        at(iw): t 0
+        at(ih): t 1
+        at(tw): t 2
+        at(th): t 3
+        at(thumb): t 4
         set(image): mime
     ]
     if(_): {text = "" && image = ""} [
@@ -1125,8 +1135,8 @@ nv_submit(r): form out [
         nv_path(f): "img/" name
         writefile(_): f svg
         nv_svg(svg): "jpeg" tw th thumb
-        concat(name): nos "t.svg"
-        nv_path(f): "img/" name
+        concat(name): nos ".svg"
+        nv_path(f): "thumbs/" name
         writefile(_): f svg
     ]
     nv_attach(attached): p
@@ -1168,7 +1178,7 @@ nv_page(r): title body [
     concat(r): r "<title>" t "</title><link rel=\"stylesheet\" href=\"" nv_prefix "/static/novgorod.css\">"
     concat(r): r "<script src=\"" nv_prefix "/static/novgorod.js\" defer></script></head>\n<body>\n" nav
     concat(r): r "<main>\n" body "</main>\n"
-    concat(r): r "<footer>Novgorod on the RUND stack: Ryazan, Ukraine, Novgorod, Dubna. Anonymous; no accounts, no tracking.</footer>\n</body></html>\n"
+    concat(r): r "<footer>Novgorod on the <a href=\"https://github.com/notlibrary/USSR\">ROUND stack</a>: Ryazan, Omsk, Ukraine, Novgorod, Dubna. Anonymous; no accounts, no tracking.</footer>\n</body></html>\n"
 ]
 
 nv_html_headers(r): [
@@ -1324,8 +1334,7 @@ nv_form_html(r): board thread [
     concat(r): r "<button type=\"submit\">Post</button> <a href=\"" nv_prefix "/markup\" target=\"_blank\">markup help</a></div>"
     concat(r): r "<p class=\"hint\" data-status>Images are re-encoded in your browser, which removes their metadata.</p>"
     concat(r): r "<noscript><p class=\"hint\">Attaching an image needs JavaScript; text posts work without it.</p></noscript>"
-    concat(r): r "<input type=\"hidden\" name=\"mime\"><input type=\"hidden\" name=\"imgw\"><input type=\"hidden\" name=\"imgh\">"
-    concat(r): r "<input type=\"hidden\" name=\"thw\"><input type=\"hidden\" name=\"thh\"><input type=\"hidden\" name=\"thumb\"><input type=\"hidden\" name=\"img\">"
+    concat(r): r "<input type=\"hidden\" name=\"mime\"><input type=\"hidden\" name=\"imgw\"><input type=\"hidden\" name=\"imgh\"><input type=\"hidden\" name=\"img\">"
     concat(r): r "</fieldset></form>\n"
 ]
 
@@ -1622,10 +1631,16 @@ nv_image(r): name thumb [
     ]
     nv_s(nos): no
     concat(file): nos ".svg"
-    if(_): thumb [
-        concat(file): nos "t.svg"
-    ]
     nv_path(path): "img/" file
+    if(_): thumb [
+        # Omsk's thumbnail; boards from before Omsk have img/Nt.svg
+        nv_path(path): "thumbs/" file
+        file_exists(have): path
+        if(_): {have = false} [
+            concat(file): nos "t.svg"
+            nv_path(path): "img/" file
+        ]
+    ]
     file_exists(have): path
     if(_): {have = false} [
         return(r): r
