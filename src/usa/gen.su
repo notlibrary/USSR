@@ -695,13 +695,13 @@ g_norm(r): d t [
     if(_): {b >= 64} [ return(_): r ]
     at(u): ty_u t
     if(_): {u = 1} [
-        e_int(_): {d + 1} {(1 << b) - 1}
-        e(_): 31 d d {d + 1} 0
+        e_int(_): 30 {(1 << b) - 1}
+        e(_): 31 d d 30 0
     ]
     else(_): [
-        e_int(_): {d + 1} {64 - b}
-        e(_): 33 d d {d + 1} 0
-        e(_): 34 d d {d + 1} 0
+        e_int(_): 30 {64 - b}
+        e(_): 33 d d 30 0
+        e(_): 34 d d 30 0
     ]
 ]
 # The truth of the value in d as 0 or 1.
@@ -738,22 +738,22 @@ g_conv(r): d from to [
         # an integer as a real: dividing by 1 gives one
         at(fu): ty_u from
         ty_bits(fb): from
-        e_int(_): {d + 1} 1
+        e_int(_): 30 1
         if(_): {fu = 1 && fb = 64} [
             # an unsigned long above 2^63 is negative here
-            e_int(_): {d + 2} 0
-            e(_): 24 {d + 2} d {d + 2} 0
-            e(_): 19 d d {d + 1} 0
-            e(j): 50 {d + 2} 0 0 0
+            e_int(_): 31 0
+            e(_): 24 31 d 31 0
+            e(_): 19 d d 30 0
+            e(j): 50 31 0 0 0
             # + 2^64
             k_real(kb): {1087 << 52}
-            e(_): 1 {d + 1} 0 0 kb
-            e(_): 16 d d {d + 1} 0
+            e(_): 1 30 0 0 kb
+            e(_): 16 d d 30 0
             here(h):
             patch(_): j h
         ]
         else(_): [
-            e(_): 19 d d {d + 1} 0
+            e(_): 19 d d 30 0
         ]
         return(_): r
     ]
@@ -791,10 +791,8 @@ g_arith(r): op t dst x y [
     at(k): ty_k t
     at(u): ty_u t
     ty_bits(b): t
-    set(top): x
-    if(_): {y > top} [ set(top): y ]
-    add(top): top 1
-    g_reg(_): top
+    # R30 is scratch: the operands may sit next to live registers
+    set(top): 30
     if(_): {k = 7 || k = 8 || k = 9 || k = 10 || k = 14} [
         e(_): op dst x y 0
         return(_): r

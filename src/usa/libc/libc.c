@@ -630,7 +630,7 @@ int fputc(int c, FILE *f)
     unsigned char b = c;
     if (f->fd == 1 || f->fd == 2) {
         f->buf[f->blen++] = b;
-        if (f->blen == 512 || (b == '\n' && f->fd == 2))
+        if (f->blen == 512 || b == '\n')
             __flushout(f);
         return b;
     }
@@ -1087,6 +1087,12 @@ static int __vformat(struct __sink *k, const char *fmt, va_list ap)
         for (;; p++) {
             if (*p == 'l' || *p == 'q' || *p == 'j' || *p == 'z' || *p == 't') lng = 1;
             else if (*p == 'h' || *p == 'L') ;
+            else if (*p == 'I' && p[1] == '6' && p[2] == '4') {
+                /* MSVC's %I64d */
+                lng = 1;
+                p += 2;
+            } else if (*p == 'I' && p[1] == '3' && p[2] == '2') p += 2;
+            else if (*p == 'I') lng = 1;
             else break;
         }
         c = *p;
