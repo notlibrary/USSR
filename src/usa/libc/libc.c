@@ -32,7 +32,9 @@ __uval __ussr_len(__uval v);
 __uval __ussr_byte(__uval s, __uval i);
 __uval __ussr_read_bytes(__uval path);
 __uval __ussr_write_bytes(__uval path, __uval v);
-__uval __ussr_file_exists(__uval path);
+__uval __ussr_is_dir(__uval path);
+__uval __ussr_open_file(__uval path, __uval mode);
+__uval __ussr_close_file(__uval h);
 __uval __ussr_remove_file(__uval path);
 __uval __ussr_rename_path(__uval from, __uval to);
 __uval __ussr_getenv(__uval name);
@@ -1906,9 +1908,18 @@ struct lconv *localeconv(void)
 
 int isatty(int fd) { return fd <= 2; }
 int unlink(const char *path) { return remove(path); }
+/* (file_exists needs call-site records .ru files leave out) */
 int access(const char *path, int mode)
 {
-    return (long)__ussr_file_exists(__ustr(path)) == (long)__ussr_file_exists(__U(".")) ? 0 : -1;
+    __uval p = __ustr(path);
+    long h;
+    if ((long)__ussr_is_dir(p) == 1)
+        return 0;
+    h = (long)__ussr_open_file(p, __U("rb"));
+    if (h < 0)
+        return -1;
+    __ussr_close_file(h);
+    return 0;
 }
 
 /* ---------------- time ---------------- */
