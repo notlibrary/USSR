@@ -43,6 +43,7 @@ __uval __ussr_rename_path(__uval from, __uval to);
 __uval __ussr_getenv(__uval name);
 __uval __ussr_terminal_getch(void);
 __uval __ussr_sin(__uval x);
+__uval __ussr_localtime(__uval t);
 __uval __ussr_ln(__uval x);
 __uval __ussr_typeof(__uval x);
 __uval __mem(void);
@@ -2258,17 +2259,50 @@ struct tm *gmtime_r(const time_t *t, struct tm *out)
     return out;
 }
 
-/* there is no time zone: local time is UTC */
 struct tm *gmtime(const time_t *t)
 {
     static struct tm tm;
     return gmtime_r(t, &tm);
 }
 
-struct tm *localtime(const time_t *t) { return gmtime(t); }
-struct tm *localtime_r(const time_t *t, struct tm *out) { return gmtime_r(t, out); }
+/* USSR's localtime: [year, month 1-12, day, hour, minute, second,
+   weekday 0-6 from Sunday, day of the year from 1] */
+struct tm *localtime_r(const time_t *t, struct tm *out)
+{
+    __uval v = __ussr_localtime(*t);
+    out->tm_year = (int)(long)__vget(v, 0) - 1900;
+    out->tm_mon = (int)(long)__vget(v, 1) - 1;
+    out->tm_mday = (int)(long)__vget(v, 2);
+    out->tm_hour = (int)(long)__vget(v, 3);
+    out->tm_min = (int)(long)__vget(v, 4);
+    out->tm_sec = (int)(long)__vget(v, 5);
+    out->tm_wday = (int)(long)__vget(v, 6);
+    out->tm_yday = (int)(long)__vget(v, 7) - 1;
+    out->tm_isdst = 0;
+    return out;
+}
 
+struct tm *localtime(const time_t *t)
+{
+    static struct tm tm;
+    return localtime_r(t, &tm);
+}
+
+static time_t __timegm(struct tm *tm);
+
+/* local time to seconds: as UTC, less the zone's offset then */
 time_t mktime(struct tm *tm)
+{
+    struct tm lt;
+    time_t t0 = __timegm(tm), off;
+    localtime_r(&t0, &lt);
+    off = __timegm(&lt) - t0;
+    t0 -= off;
+    localtime_r(&t0, tm);
+    return t0;
+}
+
+static time_t __timegm(struct tm *tm)
 {
     static const int before[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
     long y, mon = tm->tm_mon, days, t;
@@ -2284,7 +2318,6 @@ time_t mktime(struct tm *tm)
     if (mon > 1 && __leap(y))
         days++;
     t = days * 86400 + tm->tm_hour * 3600L + tm->tm_min * 60L + tm->tm_sec;
-    gmtime_r(&t, tm);
     return t;
 }
 
