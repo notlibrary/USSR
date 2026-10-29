@@ -1,0 +1,677 @@
+# usa: a small C compiler written in USSR. It compiles C files to one
+# .ru program for the USSR VM (docs/RU_BYTECODE_FORMAT.md):
+#
+#     ussr usa.su [-o out.ru] [-I dir] [-D NAME[=VALUE]] [-E] file.c ...
+#     ussr out.ru args...
+#
+# Every file is preprocessed (cpp.su), tokenized (lex.su), parsed
+# (parse.su, expr.su) and compiled to VM code (gen.su) function by
+# function; then the files are linked with usa's C library (libc/,
+# compiled the same way) and the program is written. -E prints the
+# preprocessed text instead.
+#
+# usa finds its include/ and libc/ through USA_HOME, else in src/usa,
+# usa or . (from the current directory).
+
+$include "cpp.su"
+$include "lex.su"
+$include "parse.su"
+$include "expr.su"
+$include "gen.su"
+
+global(_): usa_home usa_out usa_files
+
+# ======================= link =======================
+# __ginit: string literals and static initializers, run before main.
+link_ginit(r): [
+    set(r): 0
+    ht_get(gs): lk_tab "__ginit"
+    at(fi): sy_v gs
+    vec(g_slots): ""
+    g_newlocal(g_ret_slot): "%r"
+    set(g_va_slot): {0 - 1}
+    set(g_fp): 0
+    vec(g_brk): ""
+    vec(g_cont): ""
+    here(entry):
+    set(fn_entry): fi entry
+    set(fn_defined): fi 1
+    e_gload(_): 29 "M"
+    fn_rt(si): "__strinit"
+    len(ns): p_strs
+    set(i): 0
+    while(_): {i < ns} [
+        at(addr): p_strs i
+        at(sv): p_strs {i + 1}
+        len(n): sv
+        set(j): 0
+        while(_): {j < n} [
+            # the bytes up to the next NUL (memory starts out zero)
+            set(k): j
+            set(go): 1
+            while(_): {go = 1 && k < n} [
+                at(b): sv k
+                if(_): {b = 0} [ set(go): 0 ]
+                else(_): [ add(k): k 1 ]
+            ]
+            if(_): {k > j} [
+                bytes_text(seg): sv j {k - j}
+                e_int(_): 0 {addr + j}
+                k_str(ks): seg
+                e(_): 1 1 0 0 ks
+                e(at): 80 0 2 0 si
+                push(_): g_calls at
+                push(_): g_calls_f si
+            ]
+            set(j): {k + 1}
+        ]
+        add(i): i 2
+    ]
+    len(ng): p_ginit
+    set(i): 0
+    while(_): {i < ng} [
+        at(st): p_ginit i
+        gen_stmt(_): st
+        add(i): i 1
+    ]
+    e_int(_): 0 0
+    g_ret(_): 0
+    vec(pn): ""
+    set(fn_params): fi pn
+    set(fn_locals): fi g_slots
+    set(fn_np): fi 0
+]
+# init(arg_cnt, arg_vec): the program's entry, calling libc's __start.
+link_init(r): [
+    set(r): 0
+    fn_internal(fi): "init" 2
+    here(entry):
+    set(fn_entry): fi entry
+    vec(ps): ""
+    push(_): ps "arg_cnt"
+    push(_): ps "arg_vec"
+    vec(ls): ""
+    push(_): ls "arg_cnt"
+    push(_): ls "arg_vec"
+    push(_): ls "%r"
+    set(fn_params): fi ps
+    set(fn_locals): fi ls
+    s_idx(s0): "arg_cnt"
+    s_idx(s1): "arg_vec"
+    s_idx(sr): "%r"
+    e(_): 2 0 1 0 s0
+    e(_): 2 1 1 1 s1
+    fn_rt(st): "__start"
+    e(_): 80 0 2 2 st
+    e(_): 3 2 1 2 sr
+    e(_): 81 0 0 0 0
+]
+# Bodies of the functions the code generator calls by name: dispatchers
+# for calls through pointers, and the __ussr_ builtin wrappers.
+link_dispatch(r): [
+    set(r): 0
+    len(nk): g_icall
+    set(k): 0
+    while(_): {k < nk} [
+        at(fi): g_icall k
+        if(_): {fi >= 0} [
+            # the functions taken as values that take k arguments
+            vec(cand): ""
+            len(nf): fn_name
+            set(j): 0
+            while(_): {j < nf} [
+                at(tk): fn_taken j
+                at(np): fn_np j
+                if(_): {tk = 1 && np = k} [ push(_): cand j ]
+                add(j): j 1
+            ]
+            if(_): {k > 27} [ usa_error(_): {0 - 1} "too many arguments in a call through a function pointer" ]
+            here(entry):
+            set(fn_entry): fi entry
+            vec(ps): ""
+            push(_): ps "%f"
+            set(j): 0
+            while(_): {j < k} [
+                encode(js): j
+                concat(pn): "%a" js
+                push(_): ps pn
+                add(j): j 1
+            ]
+            vec(ls): ""
+            set(j): 0
+            while(_): {j <= k} [
+                at(x): ps j
+                push(_): ls x
+                add(j): j 1
+            ]
+            push(_): ls "%r"
+            set(fn_params): fi ps
+            set(fn_locals): fi ls
+            set(j): 0
+            while(_): {j <= k} [
+                at(x): ps j
+                s_idx(sx): x
+                e(_): 2 j 1 j sx
+                add(j): j 1
+            ]
+            len(nc): cand
+            link_dsearch(_): cand 0 nc k
+        ]
+        add(k): k 1
+    ]
+]
+# Binary search on R0 (function index + 1) over cand[lo..hi).
+link_dsearch(r): cand lo hi k [
+    set(r): 0
+    set(t): {k + 1}
+    if(_): {hi - lo <= 3} [
+        set(i): lo
+        while(_): {i < hi} [
+            at(c): cand i
+            e_int(_): t {c + 1}
+            e(_): 22 {t + 1} 0 t 0
+            e(j): 50 {t + 1} 0 0 0
+            e(_): 80 1 k {t + 2} c
+            s_idx(sr): "%r"
+            e(_): 3 {t + 2} 1 {k + 1} sr
+            e(_): 81 0 0 0 0
+            here(h):
+            patch(_): j h
+            add(i): i 1
+        ]
+        # no such function
+        k_str(ks): "usa: call through an invalid function pointer\n"
+        e(_): 1 0 0 0 ks
+        s_idx(ws): "write_stderr"
+        e(_): 68 1 1 0 ws
+        e_int(_): 0 1
+        e_gstore(_): 0 "%exit"
+        e_gload(_): 31 "%exit"
+        e(_): 240 0 0 0 0
+        return(_): r
+    ]
+    set(mid): {(lo + hi) >> 1}
+    at(c): cand mid
+    e_int(_): t {c + 1}
+    e(_): 24 {t + 1} 0 t 0
+    e(j): 49 {t + 1} 0 0 0
+    link_dsearch(_): cand mid hi k
+    here(h):
+    patch(_): j h
+    link_dsearch(_): cand lo mid k
+]
+# A wrapper for a USSR builtin, __ussr_NAME(args): NAME's result.
+link_wrapper(r): fi [
+    set(r): 0
+    at(name): fn_name fi
+    len(nl): name
+    slice(oop): name 7 {nl - 7}
+    at(np): fn_np fi
+    here(entry):
+    set(fn_entry): fi entry
+    set(fn_defined): fi 1
+    vec(ps): ""
+    set(j): 0
+    while(_): {j < np} [
+        encode(js): j
+        concat(pn): "%a" js
+        push(_): ps pn
+        add(j): j 1
+    ]
+    vec(ls): ""
+    set(j): 0
+    while(_): {j < np} [
+        at(x): ps j
+        push(_): ls x
+        s_idx(sx): x
+        e(_): 2 j 1 j sx
+        add(j): j 1
+    ]
+    push(_): ls "%r"
+    set(fn_params): fi ps
+    set(fn_locals): fi ls
+    if(_): {oop = "template_str"} [
+        s_idx(fs): "STR"
+        e(_): 77 np np 0 fs
+    ]
+    elif(_): {oop = "concat"} [
+        e(_): 66 np 0 np 0
+    ]
+    else(_): [
+        s_idx(os): oop
+        e(_): 68 np np 0 os
+    ]
+    s_idx(sr): "%r"
+    e(_): 3 np 1 np sr
+    e(_): 81 0 0 0 0
+]
+link_run(r): [
+    set(r): 0
+    link_ginit(_):
+    link_init(_):
+    link_dispatch(_):
+    # functions used but not defined
+    vec(used): ""
+    len(nf): fn_name
+    set(i): 0
+    while(_): {i < nf} [
+        push(_): used 0
+        add(i): i 1
+    ]
+    len(nc): g_calls_f
+    set(i): 0
+    while(_): {i < nc} [
+        at(f): g_calls_f i
+        set(used): f 1
+        add(i): i 1
+    ]
+    set(i): 0
+    while(_): {i < nf} [
+        at(tk): fn_taken i
+        at(u): used i
+        at(df): fn_defined i
+        if(_): {(tk = 1 || u = 1) && df = 0} [
+            at(name): fn_name i
+            len(nl): name
+            set(pre): ""
+            if(_): {nl > 7} [ slice(pre): name 0 7 ]
+            if(_): {pre = "__ussr_"} [ link_wrapper(_): i ]
+            else(_): [
+                concat(m): "undefined reference to '" name
+                concat(m): m "'"
+                usa_error(_): {0 - 1} m
+            ]
+        ]
+        add(i): i 1
+    ]
+    # static addresses
+    len(nx): g_fix_at
+    set(i): 0
+    while(_): {i < nx} [
+        at(at2): g_fix_at i
+        at(s): g_fix_sym i
+        at(addr): sy_a s
+        if(_): {addr = 0} [
+            at(name): sy_n s
+            concat(m): "undefined reference to '" name
+            concat(m): m "'"
+            usa_error(_): {0 - 1} m
+        ]
+        k_int(ka): addr
+        set(co_i): at2 ka
+        add(i): i 1
+    ]
+    set(g_top): {(g_top + 63) - (g_top + 63) % 64}
+    k_int(ke): g_top
+    len(ne): g_endfix
+    set(i): 0
+    while(_): {i < ne} [
+        at(at3): g_endfix i
+        set(co_i): at3 ke
+        add(i): i 1
+    ]
+    # each call passes as many registers as its function has parameters
+    set(i): 0
+    while(_): {i < nc} [
+        at(at4): g_calls i
+        at(f): g_calls_f i
+        at(np): fn_np f
+        at(a): co_a at4
+        if(_): {a + np > 31} [
+            at(name): fn_name f
+            concat(m): "a call of '" name
+            concat(m): m "' needs too many registers"
+            usa_error(_): {0 - 1} m
+        ]
+        set(co_b): at4 np
+        add(i): i 1
+    ]
+    e(_): 240 0 0 0 0
+]
+
+# ======================= .ru writer =======================
+w_u8(r): v x [
+    push(_): v {x & 255}
+    set(r): 0
+]
+w_n(r): v x n [
+    set(r): 0
+    set(i): 0
+    while(_): {i < n} [
+        push(_): v {x & 255}
+        set(x): {x >> 8}
+        add(i): i 1
+    ]
+]
+w_str(r): v s [
+    set(r): 0
+    len(n): s
+    w_n(_): v n 4
+    if(_): {n > 0} [
+        text_bytes(b): s
+        set(i): 0
+        while(_): {i < n} [
+            at(x): b i
+            push(_): v x
+            add(i): i 1
+        ]
+    ]
+]
+write_ru(r): path [
+    vec(v): ""
+    push(_): v 137
+    push(_): v 85
+    push(_): v 83
+    push(_): v 83
+    push(_): v 82
+    push(_): v 13
+    push(_): v 10
+    push(_): v 26
+    w_n(_): v 3 2
+    w_n(_): v 0 2
+    w_n(_): v 3 4
+    # producer: ussr 0.4.7
+    w_n(_): v 1031 4
+    w_n(_): v 0 4
+    len(n): co_op
+    w_n(_): v n 4
+    set(i): 0
+    while(_): {i < n} [
+        at(op): co_op i
+        at(a): co_a i
+        at(b): co_b i
+        at(c): co_c i
+        at(imm): co_i i
+        push(_): v op
+        push(_): v a
+        push(_): v b
+        push(_): v c
+        w_n(_): v imm 4
+        add(i): i 1
+    ]
+    len(nk): k_tag
+    w_n(_): v nk 4
+    set(i): 0
+    while(_): {i < nk} [
+        at(tg): k_tag i
+        at(kv): k_val i
+        push(_): v tg
+        if(_): {tg = 3} [ w_str(_): v kv ]
+        else(_): [ w_n(_): v kv 8 ]
+        add(i): i 1
+    ]
+    len(ns): st_s
+    w_n(_): v ns 4
+    set(i): 0
+    while(_): {i < ns} [
+        at(s): st_s i
+        w_str(_): v s
+        add(i): i 1
+    ]
+    len(nf): fn_name
+    w_n(_): v nf 4
+    set(i): 0
+    while(_): {i < nf} [
+        at(name): fn_name i
+        w_str(_): v name
+        w_str(_): v "%r"
+        at(en): fn_entry i
+        w_n(_): v en 4
+        at(ps): fn_params i
+        at(ls): fn_locals i
+        if(_): {ps = null} [
+            # declared, never defined nor used: a placeholder entry
+            vec(ps): ""
+            at(np0): fn_np i
+            set(j): 0
+            while(_): {j < np0} [
+                encode(js): j
+                concat(pn): "%a" js
+                push(_): ps pn
+                add(j): j 1
+            ]
+            vec(ls): ""
+            set(j): 0
+            while(_): {j < np0} [
+                at(x): ps j
+                push(_): ls x
+                add(j): j 1
+            ]
+            push(_): ls "%r"
+        ]
+        len(np): ps
+        w_n(_): v np 4
+        set(j): 0
+        while(_): {j < np} [
+            at(p): ps j
+            w_str(_): v p
+            add(j): j 1
+        ]
+        len(nl): ls
+        w_n(_): v nl 4
+        set(j): 0
+        while(_): {j < nl} [
+            at(l): ls j
+            w_str(_): v l
+            add(j): j 1
+        ]
+        add(i): i 1
+    ]
+    # no command or scan call sites
+    w_n(_): v 0 4
+    w_n(_): v 0 4
+    len(total): v
+    set(pl): {total - 24}
+    set(v): 20 {pl & 255}
+    set(v): 21 {(pl >> 8) & 255}
+    set(v): 22 {(pl >> 16) & 255}
+    set(v): 23 {(pl >> 24) & 255}
+    crc32(crc): v
+    w_n(_): v crc 4
+    write_bytes(r): path v
+]
+
+# ======================= driver =======================
+usa_findhome(r): [
+    getenv(h): "USA_HOME"
+    set(r): ""
+    if(_): {h != null && h != ""} [
+        set(r): h
+        return(_): r
+    ]
+    vec(cands): ""
+    push(_): cands "src/usa"
+    push(_): cands "usa"
+    push(_): cands "."
+    push(_): cands ".."
+    push(_): cands "../usa"
+    push(_): cands "../src/usa"
+    push(_): cands "../../src/usa"
+    len(n): cands
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cands i
+        concat(p): c "/include/__usa.h"
+        file_exists(ex): p
+        if(_): {ex = true} [
+            set(r): c
+            set(i): n
+        ]
+        add(i): i 1
+    ]
+]
+# Preprocess, parse and compile one file.
+usa_unit(r): path dirs defs only_pp [
+    set(r): 0
+    pp_init(_): dirs defs
+    vec(pp_outv): ""
+    vec(pp_mapf): ""
+    vec(pp_mapl): ""
+    vec(pp_inc): ""
+    vec(pp_cact): ""
+    concat(pre): usa_home "/include/__usa.h"
+    pp_file(_): pre
+    if(_): {pp_failed = 0} [ pp_file(_): path ]
+    if(_): {pp_failed = 0} [
+        len(cd): pp_cact
+        if(_): {cd != 0} [ pp_fail(_): "unterminated #if" ]
+    ]
+    if(_): {pp_failed = 1} [
+        concat(m): pp_msg "\n"
+        write_stderr(_): m
+        set(r): {1 % usa_zero}
+    ]
+    pp_join(text): pp_outv
+    if(_): {only_pp = 1} [
+        template(_): "STR" text
+        return(_): r
+    ]
+    lx_run(_): text
+    # a fresh file scope; the linkage table lk_tab stays
+    ht_new(sc_tab): 1024
+    vec(sc_names): ""
+    sc_push(_):
+    set(p_i): 0
+    set(p_fn): {0 - 1}
+    vec(p_sw): ""
+    vec(p_fsyms): ""
+    p_unit(_):
+]
+usa_main(r): args [
+    set(r): 0
+    set(usa_zero): 0
+    usa_findhome(usa_home):
+    if(_): {usa_home = ""} [
+        write_stderr(_): "usa: cannot find usa's include/ directory; set USA_HOME to the directory of usa.su\n"
+        set(r): {1 % usa_zero}
+    ]
+    vec(dirs): ""
+    vec(defs): ""
+    vec(files): ""
+    set(out): ""
+    set(only_pp): 0
+    set(nolib): 0
+    len(na): args
+    set(i): 0
+    while(_): {i < na} [
+        at(a): args i
+        len(al): a
+        set(pre): ""
+        if(_): {al >= 2} [ slice(pre): a 0 2 ]
+        if(_): {a = "-o"} [
+            add(i): i 1
+            at(out): args i
+        ]
+        elif(_): {a = "-E"} [ set(only_pp): 1 ]
+        elif(_): {a = "-nostdlib"} [ set(nolib): 1 ]
+        elif(_): {a = "-c" || a = "-O" || a = "-O2" || a = "-g" || a = "-Wall" || a = "-std=c99" || a = "-std=c89" || a = "-ansi" || a = "-pedantic"} [ set(r): 0 ]
+        elif(_): {pre = "-I"} [
+            if(_): {al = 2} [
+                add(i): i 1
+                at(d): args i
+            ]
+            else(_): [ slice(d): a 2 {al - 2} ]
+            push(_): dirs d
+        ]
+        elif(_): {pre = "-D"} [
+            if(_): {al = 2} [
+                add(i): i 1
+                at(d): args i
+            ]
+            else(_): [ slice(d): a 2 {al - 2} ]
+            push(_): defs d
+        ]
+        elif(_): {pre = "-l" || pre = "-L" || pre = "-W" || pre = "-f" || pre = "-m"} [ set(r): 0 ]
+        elif(_): {a = "-h" || a = "--help"} [
+            template(_): "STR" "usage: ussr usa.su [-o out.ru] [-I dir] [-D NAME[=VALUE]] [-E] file.c ...\n"
+            return(_): r
+        ]
+        else(_): [ push(_): files a ]
+        add(i): i 1
+    ]
+    len(nfiles): files
+    if(_): {nfiles = 0} [
+        write_stderr(_): "usa: no input files\n"
+        set(r): {1 % usa_zero}
+    ]
+    concat(sysinc): usa_home "/include"
+    push(_): dirs sysinc
+    if(_): {out = ""} [
+        at(f0): files 0
+        len(fl): f0
+        set(dot): {0 - 1}
+        set(j): 0
+        while(_): {j < fl} [
+            byte(b): f0 j
+            if(_): {b = 46} [ set(dot): j ]
+            if(_): {b = 47 || b = 92} [ set(dot): {0 - 1} ]
+            add(j): j 1
+        ]
+        set(out): f0
+        if(_): {dot > 0} [ slice(out): f0 0 dot ]
+        concat(out): out ".ru"
+    ]
+    ty_init(_):
+    gen_init(_):
+    vec(sy_n): ""
+    vec(sy_k): ""
+    vec(sy_t): ""
+    vec(sy_st): ""
+    vec(sy_a): ""
+    vec(sy_v): ""
+    vec(sy_at): ""
+    vec(sy_vn): ""
+    vec(sy_def): ""
+    vec(sy_ext): ""
+    vec(sy_ln): ""
+    vec(nd_k): ""
+    vec(nd_t): ""
+    vec(nd_a): ""
+    vec(nd_b): ""
+    vec(nd_c): ""
+    vec(nd_v): ""
+    vec(nd_ln): ""
+    ht_new(lk_tab): 1024
+    vec(p_ginit): ""
+    vec(p_strs): ""
+    set(p_ln): 0
+    set(g_top): 8
+    if(_): {nolib = 0 && only_pp = 0} [
+        concat(lib): usa_home "/libc/libc.c"
+        push(_): files lib
+    ]
+    len(nfiles): files
+    set(i): 0
+    while(_): {i < nfiles} [
+        at(f): files i
+        file_exists(ex): f
+        if(_): {ex = false} [
+            concat(m): "usa: cannot open '" f
+            concat(m): m "'\n"
+            write_stderr(_): m
+            set(r): {1 % usa_zero}
+        ]
+        usa_unit(_): f dirs defs only_pp
+        add(i): i 1
+    ]
+    if(_): {only_pp = 1} [ return(_): r ]
+    link_run(_):
+    write_ru(w): out
+    if(_): {w < 0} [
+        concat(m): "usa: cannot write '" out
+        concat(m): m "'\n"
+        write_stderr(_): m
+        set(r): {1 % usa_zero}
+    ]
+]
+global(_): usa_args
+usa_go(r): [
+    set(r): 0
+    usa_main(_): usa_args
+]
+init(ret): arg_cnt arg_vec [
+    set(usa_args): arg_vec
+    try(failed): "usa_go"
+    set(ret): 0
+    if(_): {failed = 1} [ set(ret): 1 ]
+]

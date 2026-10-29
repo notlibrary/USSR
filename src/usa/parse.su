@@ -1,0 +1,1549 @@
+# C parser for usa: types, scopes, declarations, expressions and
+# statements, by hand-written recursive descent over the tokens of lex.su.
+#
+# Expressions come out lowered for the code generator: every implicit
+# conversion is a CAST node, a.b and p->b are *(base + offset), a[i] is
+# *(a + i * size), sizeof and constant enum names are numbers.
+#
+# Types (ty_*): kind 0 void, 1 _Bool, 2 char, 3 short, 4 int, 5 long,
+# 6 long long, 7 float, 8 double, 9 pointer, 10 array, 11 function,
+# 12 struct, 13 union, 14 __uval (a USSR value as it is: libc's way to
+# hold vectors and strings). Enumerations are int.
+#
+# Symbols (sy_*): kind 1 object, 2 typedef, 3 function, 4 enumerator;
+# storage 1 static (a memory address), 2 automatic, 3 parameter.
+
+global(_): ty_k ty_u ty_sz ty_al ty_b ty_n ty_m ty_va ty_cpl ty_tag ty_ptrc ty_proto
+global(_): ty_void ty_bool ty_char ty_schar ty_uchar ty_short ty_ushort ty_int ty_uint
+global(_): ty_long ty_ulong ty_llong ty_ullong ty_float ty_double ty_uval ty_charp
+global(_): mb_n mb_t mb_o
+global(_): sy_n sy_k sy_t sy_st sy_a sy_v sy_at sy_vn sy_def sy_ext sy_ln
+global(_): sc_tab sc_names sc_lv lk_tab
+global(_): nd_k nd_t nd_a nd_b nd_c nd_v nd_ln
+global(_): p_i p_fn p_fsyms p_brk p_cont p_sw p_tu p_static_n p_ginit p_strs
+global(_): g_top p_lab
+
+# ======================= errors =======================
+# file:line of output line ln of the current translation unit.
+usa_where(r): ln [
+    set(r): "<input>"
+    len(n): pp_mapl
+    if(_): {ln >= 0 && ln < n} [
+        at(f): pp_mapf ln
+        at(l): pp_mapl ln
+        encode(ls): l
+        concat(r): f ":"
+        concat(r): r ls
+    ]
+]
+usa_error(r): ln msg [
+    usa_where(w): ln
+    concat(m): w ": error: "
+    concat(m): m msg
+    concat(m): m "\n"
+    write_stderr(_): m
+    # stop here: usa_main runs under try, which ends the compile quietly
+    set(r): {1 % usa_zero}
+]
+usa_warn(r): ln msg [
+    set(r): 0
+    usa_where(w): ln
+    concat(m): w ": warning: "
+    concat(m): m msg
+    concat(m): m "\n"
+    write_stderr(_): m
+]
+p_fail(r): msg [
+    at(ln): tk_l p_i
+    usa_error(r): ln msg
+]
+# error mentioning the current token
+p_failat(r): msg [
+    at(k): tk_k p_i
+    at(s): tk_s p_i
+    set(t): "end of input"
+    if(_): {k = 1 || k = 5} [ concat(t): "'" s ]
+    if(_): {k = 1 || k = 5} [ concat(t): t "'" ]
+    if(_): {k = 2 || k = 3} [ set(t): "a number" ]
+    if(_): {k = 4} [ set(t): "a string" ]
+    concat(m): msg " before "
+    concat(m): m t
+    p_fail(r): m
+]
+
+# ======================= types =======================
+ty_new(r): kind size align uns [
+    len(r): ty_k
+    push(_): ty_k kind
+    push(_): ty_u uns
+    push(_): ty_sz size
+    push(_): ty_al align
+    push(_): ty_b {0 - 1}
+    push(_): ty_n 0
+    push(_): ty_m null
+    push(_): ty_va 0
+    push(_): ty_cpl 1
+    push(_): ty_tag ""
+    push(_): ty_ptrc {0 - 1}
+    push(_): ty_proto 1
+]
+ty_init(r): [
+    set(r): 0
+    vec(ty_k): ""
+    vec(ty_u): ""
+    vec(ty_sz): ""
+    vec(ty_al): ""
+    vec(ty_b): ""
+    vec(ty_n): ""
+    vec(ty_m): ""
+    vec(ty_va): ""
+    vec(ty_cpl): ""
+    vec(ty_tag): ""
+    vec(ty_ptrc): ""
+    vec(ty_proto): ""
+    vec(mb_n): ""
+    vec(mb_t): ""
+    vec(mb_o): ""
+    ty_new(ty_void): 0 1 1 0
+    ty_new(ty_bool): 1 1 1 1
+    ty_new(ty_char): 2 1 1 1
+    ty_new(ty_schar): 2 1 1 0
+    ty_new(ty_uchar): 2 1 1 1
+    ty_new(ty_short): 3 2 2 0
+    ty_new(ty_ushort): 3 2 2 1
+    ty_new(ty_int): 4 4 4 0
+    ty_new(ty_uint): 4 4 4 1
+    ty_new(ty_long): 5 8 8 0
+    ty_new(ty_ulong): 5 8 8 1
+    ty_new(ty_llong): 6 8 8 0
+    ty_new(ty_ullong): 6 8 8 1
+    ty_new(ty_float): 7 4 4 0
+    ty_new(ty_double): 8 8 8 0
+    ty_new(ty_uval): 14 8 8 0
+    ty_ptr(ty_charp): ty_char
+]
+ty_ptr(r): t [
+    at(r): ty_ptrc t
+    if(_): {r < 0} [
+        ty_new(r): 9 8 8 1
+        set(ty_b): r t
+        set(ty_ptrc): t r
+    ]
+]
+ty_arr(r): t n [
+    at(es): ty_sz t
+    at(ea): ty_al t
+    set(sz): {es * n}
+    if(_): {n < 0} [ set(sz): 0 ]
+    ty_new(r): 10 sz ea 0
+    set(ty_b): r t
+    set(ty_n): r n
+]
+ty_fn(r): ret params va [
+    ty_new(r): 11 1 1 0
+    set(ty_b): r ret
+    set(ty_m): r params
+    set(ty_va): r va
+]
+# (the predicates give 0 or 1: a VM boolean never equals 1)
+ty_isint(r): t [
+    at(k): ty_k t
+    set(r): 0
+    if(_): {k >= 1 && k <= 6} [ set(r): 1 ]
+]
+ty_isflt(r): t [
+    at(k): ty_k t
+    set(r): 0
+    if(_): {k = 7 || k = 8} [ set(r): 1 ]
+]
+ty_isarith(r): t [
+    at(k): ty_k t
+    set(r): 0
+    if(_): {(k >= 1 && k <= 8) || k = 14} [ set(r): 1 ]
+]
+ty_isptr(r): t [
+    at(k): ty_k t
+    set(r): 0
+    if(_): {k = 9 || k = 10} [ set(r): 1 ]
+]
+ty_isscalar(r): t [
+    at(k): ty_k t
+    set(r): 0
+    if(_): {(k >= 1 && k <= 10) || k = 14} [ set(r): 1 ]
+]
+ty_isagg(r): t [
+    at(k): ty_k t
+    set(r): 0
+    if(_): {k = 12 || k = 13} [ set(r): 1 ]
+]
+# Bits of an integer type (64 for pointers).
+ty_bits(r): t [
+    at(k): ty_k t
+    set(r): 64
+    if(_): {k = 1 || k = 2} [ set(r): 8 ]
+    elif(_): {k = 3} [ set(r): 16 ]
+    elif(_): {k = 4} [ set(r): 32 ]
+]
+# The integer promotion of t.
+ty_promote(r): t [
+    set(r): t
+    at(k): ty_k t
+    if(_): {k >= 1 && k <= 3} [ set(r): ty_int ]
+]
+# The common type of the usual arithmetic conversions.
+ty_common(r): a b [
+    at(ka): ty_k a
+    at(kb): ty_k b
+    if(_): {ka = 14 || kb = 14} [
+        set(r): ty_uval
+        return(_): r
+    ]
+    if(_): {ka = 8 || kb = 8 || ka = 7 || kb = 7} [
+        set(r): ty_double
+        return(_): r
+    ]
+    ty_promote(a): a
+    ty_promote(b): b
+    if(_): {a = b} [
+        set(r): a
+        return(_): r
+    ]
+    at(ka): ty_k a
+    at(kb): ty_k b
+    at(ua): ty_u a
+    at(ub): ty_u b
+    # long long ranks as long here (both 64 bits)
+    if(_): {ka = 6} [ set(ka): 5 ]
+    if(_): {kb = 6} [ set(kb): 5 ]
+    if(_): {ua = ub} [
+        set(r): a
+        if(_): {kb > ka} [ set(r): b ]
+    ]
+    elif(_): {ua = 1 && ka >= kb} [ set(r): a ]
+    elif(_): {ub = 1 && kb >= ka} [ set(r): b ]
+    elif(_): {ua = 0} [
+        # signed a is wider than unsigned b: a holds every b
+        set(r): a
+    ]
+    else(_): [ set(r): b ]
+]
+# t as an element of an expression: arrays are their first element's
+# pointer, functions their pointer.
+ty_decayed(r): t [
+    set(r): t
+    at(k): ty_k t
+    if(_): {k = 10} [
+        at(b): ty_b t
+        ty_ptr(r): b
+    ]
+    elif(_): {k = 11} [ ty_ptr(r): t ]
+]
+# Whether two types are the same for redeclarations (loosely: kinds).
+ty_sizeof(r): t ln [
+    at(k): ty_k t
+    at(r): ty_sz t
+    if(_): {k = 11} [ set(r): 1 ]
+    at(cpl): ty_cpl t
+    if(_): {cpl = 0} [ usa_error(_): ln "invalid application of 'sizeof' to an incomplete type" ]
+]
+
+# ======================= nodes =======================
+nd_new(r): kind t a b c v [
+    len(r): nd_k
+    push(_): nd_k kind
+    push(_): nd_t t
+    push(_): nd_a a
+    push(_): nd_b b
+    push(_): nd_c c
+    push(_): nd_v v
+    push(_): nd_ln p_ln
+]
+global(_): p_ln
+p_mark(r): [
+    at(p_ln): tk_l p_i
+    set(r): p_ln
+]
+nd_num(r): v t [
+    nd_new(r): 1 t 0 0 0 v
+]
+
+# ======================= symbols and scopes =======================
+sy_new(r): name kind t [
+    len(r): sy_n
+    push(_): sy_n name
+    push(_): sy_k kind
+    push(_): sy_t t
+    push(_): sy_st 0
+    push(_): sy_a 0
+    push(_): sy_v 0
+    push(_): sy_at 0
+    push(_): sy_vn ""
+    push(_): sy_def 0
+    push(_): sy_ext 0
+    push(_): sy_ln p_ln
+]
+# Make name (in the ordinary or, with a "struct " prefix, the tag
+# namespace) refer to symbol s in the innermost scope.
+sc_bind(r): name s [
+    set(r): 0
+    ht_get(st): sc_tab name
+    if(_): {st = (0 - 1)} [
+        vec(st): ""
+        ht_put(_): sc_tab name st
+    ]
+    push(_): st s
+    len(d): sc_names
+    at(top): sc_names {d - 1}
+    push(_): top name
+]
+sc_find(r): name [
+    set(r): {0 - 1}
+    ht_get(st): sc_tab name
+    if(_): {st != (0 - 1)} [
+        len(n): st
+        if(_): {n > 0} [ at(r): st {n - 1} ]
+    ]
+]
+# The symbol bound to name in the innermost scope only, else -1.
+sc_find_here(r): name [
+    set(r): {0 - 1}
+    sc_find(s): name
+    if(_): {s >= 0} [
+        len(d): sc_names
+        at(top): sc_names {d - 1}
+        len(n): top
+        set(i): 0
+        while(_): {i < n} [
+            at(x): top i
+            if(_): {x = name} [
+                set(r): s
+                set(i): n
+            ]
+            add(i): i 1
+        ]
+    ]
+]
+sc_push(r): [
+    vec(l): ""
+    push(_): sc_names l
+    set(r): 0
+]
+sc_pop(r): [
+    set(r): 0
+    pop(top): sc_names
+    len(n): top
+    set(i): 0
+    while(_): {i < n} [
+        at(name): top i
+        ht_get(st): sc_tab name
+        pop(_): st
+        add(i): i 1
+    ]
+]
+
+# ======================= tokens =======================
+p_tok(r): [
+    at(r): tk_s p_i
+]
+p_kind(r): [
+    at(r): tk_k p_i
+]
+# 1 when the current token is the identifier or punctuator s.
+p_is(r): s [
+    set(r): 0
+    at(k): tk_k p_i
+    if(_): {k = 1 || k = 5} [
+        at(t): tk_s p_i
+        if(_): {t = s} [ set(r): 1 ]
+    ]
+]
+p_is_at(r): i s [
+    set(r): 0
+    at(k): tk_k i
+    if(_): {k = 1 || k = 5} [
+        at(t): tk_s i
+        if(_): {t = s} [ set(r): 1 ]
+    ]
+]
+# Consume s if it is next: 1, else 0.
+p_accept(r): s [
+    p_is(r): s
+    if(_): {r = 1} [ add(p_i): p_i 1 ]
+]
+p_expect(r): s [
+    p_is(r): s
+    if(_): {r = 0} [
+        concat(m): "expected '" s
+        concat(m): m "'"
+        p_failat(_): m
+    ]
+    add(p_i): p_i 1
+]
+p_ident(r): [
+    at(k): tk_k p_i
+    if(_): {k != 1} [ p_failat(_): "expected identifier" ]
+    at(r): tk_s p_i
+    add(p_i): p_i 1
+]
+
+# ======================= declarations =======================
+# Whether the token at i begins a type name.
+p_istype_at(r): i [
+    set(r): 0
+    at(k): tk_k i
+    if(_): {k != 1} [ return(_): r ]
+    at(s): tk_s i
+    if(_): {s = "void" || s = "char" || s = "short" || s = "int" || s = "long" || s = "float" || s = "double" || s = "signed" || s = "unsigned" || s = "_Bool" || s = "struct" || s = "union" || s = "enum" || s = "const" || s = "volatile" || s = "static" || s = "extern" || s = "typedef" || s = "inline" || s = "register" || s = "auto" || s = "restrict" || s = "__uval" || s = "__inline" || s = "__inline__" || s = "__restrict" || s = "__restrict__" || s = "_Noreturn" || s = "__extension__" || s = "__const" || s = "_Alignas" || s = "__signed__" || s = "bool"} [
+        set(r): 1
+        return(_): r
+    ]
+    sc_find(sy): s
+    if(_): {sy >= 0} [
+        at(sk): sy_k sy
+        if(_): {sk = 2} [ set(r): 1 ]
+    ]
+]
+p_istype(r): [
+    p_istype_at(r): p_i
+]
+# GNU __attribute__((...)) and similar annotations are skipped.
+p_skip_attr(r): [
+    set(r): 0
+    set(go): 1
+    while(_): {go = 1} [
+        p_is(a): "__attribute__"
+        p_is(a2): "__attribute"
+        p_is(a3): "__declspec"
+        p_is(a4): "__asm__"
+        p_is(a5): "__asm"
+        p_is(a6): "asm"
+        if(_): {a = 1 || a2 = 1 || a3 = 1 || a4 = 1 || a5 = 1 || a6 = 1} [
+            add(p_i): p_i 1
+            p_skip_parens(_):
+        ]
+        else(_): [ set(go): 0 ]
+    ]
+]
+# Skip a balanced ( ... ) group starting at the current token.
+p_skip_parens(r): [
+    set(r): 0
+    p_expect(_): "("
+    set(d): 1
+    while(_): {d > 0} [
+        at(k): tk_k p_i
+        if(_): {k = 0} [ p_fail(_): "unbalanced parentheses" ]
+        p_is(o): "("
+        p_is(c): ")"
+        if(_): {o = 1} [ add(d): d 1 ]
+        if(_): {c = 1} [ sub(d): d 1 ]
+        add(p_i): p_i 1
+    ]
+]
+# Storage class of the last declaration specifiers: 0 none, 1 typedef,
+# 2 static, 3 extern.
+global(_): p_sclass p_inline
+p_declspec(r): [
+    set(sclass): 0
+    set(p_inline): 0
+    set(r): {0 - 1}
+    set(nsig): 0
+    set(nuns): 0
+    set(nshort): 0
+    set(nlong): 0
+    set(base): ""
+    set(go): 1
+    while(_): {go = 1} [
+        p_skip_attr(_):
+        at(k): tk_k p_i
+        at(s): tk_s p_i
+        set(used): 0
+        if(_): {k = 1} [
+            if(_): {s = "typedef"} [ set(sclass): 1 ]
+            elif(_): {s = "static"} [ set(sclass): 2 ]
+            elif(_): {s = "extern"} [ set(sclass): 3 ]
+            elif(_): {s = "inline" || s = "__inline" || s = "__inline__" || s = "_Noreturn"} [ set(p_inline): 1 ]
+            elif(_): {s = "const" || s = "volatile" || s = "register" || s = "auto" || s = "restrict" || s = "__restrict" || s = "__restrict__" || s = "__extension__" || s = "__const" || s = "__volatile__"} [ set(used): 0 ]
+            elif(_): {s = "_Alignas"} [
+                add(p_i): p_i 1
+                p_skip_parens(_):
+                sub(p_i): p_i 1
+            ]
+            elif(_): {s = "signed" || s = "__signed__"} [ add(nsig): nsig 1 ]
+            elif(_): {s = "unsigned"} [ add(nuns): nuns 1 ]
+            elif(_): {s = "short"} [ add(nshort): nshort 1 ]
+            elif(_): {s = "long"} [ add(nlong): nlong 1 ]
+            elif(_): {s = "void" || s = "char" || s = "int" || s = "float" || s = "double" || s = "_Bool" || s = "bool" || s = "__uval"} [
+                if(_): {base != "" && base != "int" && s != "int"} [ p_fail(_): "two or more data types in declaration specifiers" ]
+                if(_): {base = "" || s != "int"} [ set(base): s ]
+            ]
+            elif(_): {s = "struct" || s = "union"} [
+                if(_): {r >= 0 || base != ""} [ p_fail(_): "two or more data types in declaration specifiers" ]
+                add(p_i): p_i 1
+                p_struct(r): s
+                sub(p_i): p_i 1
+            ]
+            elif(_): {s = "enum"} [
+                if(_): {r >= 0 || base != ""} [ p_fail(_): "two or more data types in declaration specifiers" ]
+                add(p_i): p_i 1
+                p_enum(r):
+                sub(p_i): p_i 1
+            ]
+            else(_): [
+                # a typedef name, when no other type is given yet
+                set(go): 0
+                if(_): {r < 0 && base = "" && nsig = 0 && nuns = 0 && nshort = 0 && nlong = 0} [
+                    sc_find(sy): s
+                    if(_): {sy >= 0} [
+                        at(sk): sy_k sy
+                        if(_): {sk = 2} [
+                            at(r): sy_t sy
+                            set(go): 1
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        else(_): [ set(go): 0 ]
+        if(_): {go = 1} [ add(p_i): p_i 1 ]
+    ]
+    # set last: a struct's member declarations come through here too
+    set(p_sclass): sclass
+    if(_): {r >= 0} [
+        if(_): {base != "" || nsig + nuns + nshort + nlong > 0} [ p_fail(_): "two or more data types in declaration specifiers" ]
+        return(_): r
+    ]
+    if(_): {base = "void"} [ set(r): ty_void ]
+    elif(_): {base = "_Bool" || base = "bool"} [ set(r): ty_bool ]
+    elif(_): {base = "__uval"} [ set(r): ty_uval ]
+    elif(_): {base = "float"} [ set(r): ty_float ]
+    elif(_): {base = "double"} [ set(r): ty_double ]
+    elif(_): {base = "char"} [
+        set(r): ty_char
+        if(_): {nuns > 0} [ set(r): ty_uchar ]
+        if(_): {nsig > 0} [ set(r): ty_schar ]
+    ]
+    else(_): [
+        # int, possibly short/long/unsigned
+        if(_): {base = "" && nsig + nuns + nshort + nlong = 0} [
+            # implicit int (old C); not in a statement position
+            p_fail(_): "expected declaration specifiers"
+        ]
+        set(r): ty_int
+        if(_): {nuns > 0} [ set(r): ty_uint ]
+        if(_): {nshort > 0} [
+            set(r): ty_short
+            if(_): {nuns > 0} [ set(r): ty_ushort ]
+        ]
+        if(_): {nlong = 1} [
+            set(r): ty_long
+            if(_): {nuns > 0} [ set(r): ty_ulong ]
+        ]
+        if(_): {nlong > 1} [
+            set(r): ty_llong
+            if(_): {nuns > 0} [ set(r): ty_ullong ]
+        ]
+    ]
+]
+
+# struct or union (the keyword already taken): its type.
+p_struct(r): which [
+    p_skip_attr(_):
+    set(tag): ""
+    at(k): tk_k p_i
+    if(_): {k = 1} [ p_ident(tag): ]
+    p_skip_attr(_):
+    p_is(body): "{"
+    set(kind): 12
+    if(_): {which = "union"} [ set(kind): 13 ]
+    set(r): {0 - 1}
+    if(_): {tag != ""} [
+        concat(key): "struct " tag
+        if(_): {body = 1} [ sc_find_here(r): key ]
+        else(_): [ sc_find(r): key ]
+        if(_): {r >= 0} [
+            at(tt): sy_t r
+            set(r): tt
+            at(tk2): ty_k tt
+            at(tc): ty_cpl tt
+            if(_): {tk2 != kind} [ p_fail(_): "tag used as the wrong kind of struct/union" ]
+            if(_): {body = 1 && tc = 1} [
+                concat(m): "redefinition of '" which
+                concat(m): m " "
+                concat(m): m tag
+                concat(m): m "'"
+                p_fail(_): m
+            ]
+        ]
+        if(_): {r < 0} [
+            ty_new(r): kind 0 1 0
+            set(ty_cpl): r 0
+            set(ty_tag): r tag
+            sy_new(s): key 2 r
+            sc_bind(_): key s
+        ]
+    ]
+    if(_): {body = 0} [
+        if(_): {tag = ""} [ p_failat(_): "expected '{'" ]
+        return(_): r
+    ]
+    if(_): {r < 0} [
+        ty_new(r): kind 0 1 0
+        set(ty_cpl): r 0
+    ]
+    p_expect(_): "{"
+    vec(ms): ""
+    set(off): 0
+    set(al): 1
+    set(size): 0
+    while(_): {1 = 1} [
+        p_accept(cl): "}"
+        if(_): {cl = 1} [ break(_): "" ]
+        p_declspec(bt):
+        p_is(semi): ";"
+        if(_): {semi = 1} [
+            # an anonymous struct or union: its members belong here
+            at(bk): ty_k bt
+            if(_): {bk = 12 || bk = 13} [
+                at(sub): ty_m bt
+                at(sa): ty_al bt
+                at(ssz): ty_sz bt
+                if(_): {kind = 12} [
+                    set(off): {(off + sa - 1) - (off + sa - 1) % sa}
+                ]
+                else(_): [ set(off): 0 ]
+                len(sn): sub
+                set(j): 0
+                while(_): {j < sn} [
+                    at(mm): sub j
+                    at(mn): mb_n mm
+                    at(mt): mb_t mm
+                    at(mo): mb_o mm
+                    len(nm): mb_n
+                    push(_): mb_n mn
+                    push(_): mb_t mt
+                    push(_): mb_o {mo + off}
+                    push(_): ms nm
+                    add(j): j 1
+                ]
+                if(_): {sa > al} [ set(al): sa ]
+                if(_): {kind = 12} [ add(off): off ssz ]
+                elif(_): {ssz > size} [ set(size): ssz ]
+            ]
+            add(p_i): p_i 1
+        ]
+        else(_): [
+            set(more): 1
+            while(_): {more = 1} [
+                set(mname): ""
+                set(mt): bt
+                p_is(colon): ":"
+                if(_): {colon = 0} [
+                    p_declarator(mt): bt 0
+                    set(mname): p_dname
+                ]
+                p_accept(bf): ":"
+                if(_): {bf = 1} [
+                    # a bit-field: its own storage of its declared type
+                    p_cond(we):
+                    p_const(_): we
+                ]
+                p_skip_attr(_):
+                at(ma): ty_al mt
+                at(msz): ty_sz mt
+                at(mk): ty_k mt
+                if(_): {mk = 10} [
+                    at(mn0): ty_n mt
+                    if(_): {mn0 < 0} [ set(msz): 0 ]
+                ]
+                if(_): {kind = 12} [
+                    set(off): {(off + ma - 1) - (off + ma - 1) % ma}
+                ]
+                else(_): [ set(off): 0 ]
+                if(_): {mname != ""} [
+                    len(nm): mb_n
+                    push(_): mb_n mname
+                    push(_): mb_t mt
+                    push(_): mb_o off
+                    push(_): ms nm
+                ]
+                if(_): {ma > al} [ set(al): ma ]
+                if(_): {kind = 12} [ add(off): off msz ]
+                elif(_): {msz > size} [ set(size): msz ]
+                p_accept(more): ","
+            ]
+            p_expect(_): ";"
+        ]
+    ]
+    if(_): {kind = 12} [ set(size): off ]
+    set(size): {(size + al - 1) - (size + al - 1) % al}
+    set(ty_m): r ms
+    set(ty_sz): r size
+    set(ty_al): r al
+    set(ty_cpl): r 1
+    p_skip_attr(_):
+]
+# The member called name of struct/union type t: its index, or -1.
+ty_member(r): t name [
+    set(r): {0 - 1}
+    at(ms): ty_m t
+    if(_): {ms = null} [ return(_): r ]
+    len(n): ms
+    set(i): 0
+    while(_): {i < n} [
+        at(m): ms i
+        at(mn): mb_n m
+        if(_): {mn = name} [
+            set(r): m
+            set(i): n
+        ]
+        add(i): i 1
+    ]
+]
+# enum (the keyword already taken): int, after binding its constants.
+p_enum(r): [
+    set(r): ty_int
+    p_skip_attr(_):
+    at(k): tk_k p_i
+    set(tag): ""
+    if(_): {k = 1} [ p_ident(tag): ]
+    p_accept(body): "{"
+    if(_): {body = 0} [ return(_): r ]
+    set(val): 0
+    while(_): {1 = 1} [
+        p_accept(cl): "}"
+        if(_): {cl = 1} [ break(_): "" ]
+        p_mark(_):
+        p_ident(name):
+        p_skip_attr(_):
+        p_accept(eq): "="
+        if(_): {eq = 1} [
+            p_cond(e):
+            p_const(val): e
+        ]
+        sy_new(s): name 4 ty_int
+        set(sy_v): s val
+        sc_bind(_): name s
+        add(val): val 1
+        p_accept(cm): ","
+        if(_): {cm = 0} [
+            p_expect(_): "}"
+            break(_): ""
+        ]
+    ]
+    p_skip_attr(_):
+]
+
+# A declarator over base type t: the type, with the name in p_dname
+# ("" for an abstract declarator). need: 1 a name is required.
+global(_): p_dname p_dparams
+p_declarator(r): t need [
+    set(p_dname): ""
+    p_skip_attr(_):
+    while(_): {1 = 1} [
+        p_accept(star): "*"
+        if(_): {star = 0} [ break(_): "" ]
+        ty_ptr(t): t
+        set(q): 1
+        while(_): {q = 1} [
+            p_is(c1): "const"
+            p_is(c2): "volatile"
+            p_is(c3): "restrict"
+            p_is(c4): "__restrict"
+            p_is(c5): "__restrict__"
+            p_is(c6): "__const"
+            if(_): {c1 + c2 + c3 + c4 + c5 + c6 > 0} [ add(p_i): p_i 1 ]
+            else(_): [ set(q): 0 ]
+        ]
+        p_skip_attr(_):
+    ]
+    p_is(lp): "("
+    set(nested): 0
+    if(_): {lp = 1} [
+        # "(" opens a nested declarator unless it starts a parameter list
+        add(nx): p_i 1
+        p_istype_at(isty): nx
+        p_is_at(isrp): nx ")"
+        if(_): {isty = 0 && isrp = 0} [ set(nested): 1 ]
+    ]
+    if(_): {nested = 1} [
+        # parse the suffixes first, then the inside over that type
+        set(start): p_i
+        add(p_i): p_i 1
+        p_skip_parens_from(_): 1
+        p_dsuffix(t): t
+        set(after): p_i
+        set(save_params): p_dparams
+        set(p_i): {start + 1}
+        p_declarator(r): t need
+        p_expect(_): ")"
+        set(p_i): after
+        if(_): {p_dparams = null} [ set(p_dparams): save_params ]
+        return(_): r
+    ]
+    at(k): tk_k p_i
+    if(_): {k = 1} [
+        p_istype(isty2):
+        if(_): {isty2 = 0} [ p_ident(p_dname): ]
+    ]
+    if(_): {need = 1 && p_dname = ""} [ p_failat(_): "expected identifier" ]
+    # the parameters' declarators set p_dname too
+    set(nm): p_dname
+    p_dsuffix(r): t
+    set(p_dname): nm
+    p_skip_attr(_):
+]
+# Skip to just past the ")" closing a "(" already consumed (depth d).
+p_skip_parens_from(r): d [
+    set(r): 0
+    while(_): {d > 0} [
+        at(k): tk_k p_i
+        if(_): {k = 0} [ p_fail(_): "unbalanced parentheses" ]
+        p_is(o): "("
+        p_is(c): ")"
+        if(_): {o = 1} [ add(d): d 1 ]
+        if(_): {c = 1} [ sub(d): d 1 ]
+        add(p_i): p_i 1
+    ]
+]
+# Array and function suffixes after a declarator's name.
+p_dsuffix(r): t [
+    set(r): t
+    p_is(lb): "["
+    if(_): {lb = 1} [
+        add(p_i): p_i 1
+        set(n): {0 - 1}
+        p_accept(st): "static"
+        p_accept(cq): "const"
+        p_is(rb): "]"
+        if(_): {rb = 0} [
+            p_assign(e):
+            p_const(n): e
+        ]
+        p_expect(_): "]"
+        p_dsuffix(inner): t
+        ty_arr(r): inner n
+        return(_): r
+    ]
+    p_is(lp): "("
+    if(_): {lp = 1} [
+        add(p_i): p_i 1
+        p_params(r): t
+        set(r): r
+        p_dsuffix_fn(r): r
+        return(_): r
+    ]
+]
+p_dsuffix_fn(r): t [
+    set(r): t
+]
+# A parameter list ("(" taken) for a function returning ret: the
+# function type. The parameter names go to p_dparams.
+p_params(r): ret [
+    vec(ps): ""
+    vec(names): ""
+    set(va): 0
+    set(proto): 1
+    p_is(v0): "void"
+    p_is_at(v1): {p_i + 1} ")"
+    if(_): {v0 = 1 && v1 = 1} [ add(p_i): p_i 2 ]
+    else(_): [
+        p_accept(empty): ")"
+        if(_): {empty = 1} [ set(proto): 0 ]
+        else(_): [
+            set(go): 1
+            while(_): {go = 1} [
+                p_accept(dots): "..."
+                if(_): {dots = 1} [
+                    set(va): 1
+                    p_expect(_): ")"
+                    set(go): 0
+                ]
+                else(_): [
+                    p_istype(isty):
+                    if(_): {isty = 0} [
+                        # an old-style identifier list: names only, int
+                        p_ident(nm0):
+                        push(_): ps ty_int
+                        push(_): names nm0
+                        set(proto): 0
+                    ]
+                    else(_): [
+                        p_declspec(bt):
+                        set(sp): p_dparams
+                        p_declarator(pt): bt 0
+                        set(p_dparams): sp
+                        at(pk): ty_k pt
+                        if(_): {pk = 10} [
+                            at(pb): ty_b pt
+                            ty_ptr(pt): pb
+                        ]
+                        elif(_): {pk = 11} [ ty_ptr(pt): pt ]
+                        push(_): ps pt
+                        push(_): names p_dname
+                    ]
+                    p_accept(cm): ","
+                    if(_): {cm = 0} [
+                        p_expect(_): ")"
+                        set(go): 0
+                    ]
+                ]
+            ]
+        ]
+    ]
+    ty_fn(r): ret ps va
+    set(ty_proto): r proto
+    set(p_dparams): names
+]
+# A type name (casts, sizeof): specifiers and an abstract declarator.
+p_typename(r): [
+    p_declspec(bt):
+    set(sp): p_dparams
+    p_declarator(r): bt 0
+    set(p_dparams): sp
+]
+
+# ---- object declarations ----
+# A new symbol for an object or function name of type t, storage class
+# sc, at file scope (file = 1) or in a block.
+p_declare(r): name t sc file [
+    at(k): ty_k t
+    set(kind): 1
+    if(_): {k = 11} [ set(kind): 3 ]
+    if(_): {sc = 1} [
+        sc_find_here(old): name
+        if(_): {old >= 0} [
+            at(ok): sy_k old
+            if(_): {ok = 2} [
+                set(r): old
+                return(_): r
+            ]
+        ]
+        sy_new(r): name 2 t
+        sc_bind(_): name r
+        return(_): r
+    ]
+    # external linkage: file scope objects and functions not static, and
+    # extern or function declarations in blocks
+    set(extl): 0
+    if(_): {file = 1 && sc != 2} [ set(extl): 1 ]
+    if(_): {file = 0 && (sc = 3 || kind = 3)} [ set(extl): 1 ]
+    if(_): {extl = 1} [
+        sc_find(here): name
+        if(_): {here >= 0 && file = 1} [
+            at(hk): sy_k here
+            at(hx): sy_ext here
+            if(_): {hk = kind && hx = 2} [
+                # a file static seen again (static int f(); int f() {})
+                p_merge(_): here t
+                set(r): here
+                return(_): r
+            ]
+        ]
+        ht_get(r): lk_tab name
+        if(_): {r >= 0} [
+            at(lk): sy_k r
+            if(_): {lk != kind} [
+                concat(m): "'" name
+                concat(m): m "' redeclared as a different kind of symbol"
+                p_fail(_): m
+            ]
+            p_merge(_): r t
+        ]
+        else(_): [
+            sy_new(r): name kind t
+            set(sy_ext): r 1
+            set(sy_st): r 1
+            ht_put(_): lk_tab name r
+            if(_): {kind = 3} [ fn_declare(_): r ]
+        ]
+        sc_bind(_): name r
+        return(_): r
+    ]
+    if(_): {file = 1} [
+        # static at file scope: this translation unit only
+        sc_find_here(old2): name
+        if(_): {old2 >= 0} [
+            at(ox): sy_ext old2
+            if(_): {ox = 2} [
+                p_merge(_): old2 t
+                set(r): old2
+                return(_): r
+            ]
+        ]
+        sy_new(r): name kind t
+        set(sy_ext): r 2
+        set(sy_st): r 1
+        if(_): {kind = 3} [ fn_declare(_): r ]
+        sc_bind(_): name r
+        return(_): r
+    ]
+    sc_find_here(dup): name
+    if(_): {dup >= 0} [
+        concat(m): "redeclaration of '" name
+        concat(m): m "'"
+        p_fail(_): m
+    ]
+    sy_new(r): name kind t
+    sc_bind(_): name r
+    if(_): {sc = 2} [
+        # a static local: static storage under a private name
+        set(sy_st): r 1
+    ]
+    else(_): [
+        set(sy_st): r 2
+        push(_): p_fsyms r
+    ]
+]
+# A later declaration of symbol s with type t: keep the complete one.
+p_merge(r): s t [
+    set(r): 0
+    at(old): sy_t s
+    at(ok): ty_k old
+    at(nk): ty_k t
+    if(_): {ok = 10 && nk = 10} [
+        at(on): ty_n old
+        if(_): {on < 0} [ set(sy_t): s t ]
+    ]
+    if(_): {ok = 11 && nk = 11} [
+        at(op): ty_proto old
+        at(np): ty_proto t
+        if(_): {op = 0 && np = 1} [ set(sy_t): s t ]
+    ]
+]
+# Static storage for symbol s (once): its address in C memory.
+p_alloc(r): s [
+    at(r): sy_a s
+    at(st): sy_st s
+    if(_): {r > 0 || st != 1} [ return(_): r ]
+    at(t): sy_t s
+    at(sz): ty_sz t
+    at(al): ty_al t
+    if(_): {al < 8} [ set(al): 8 ]
+    set(g_top): {(g_top + al - 1) - (g_top + al - 1) % al}
+    set(r): g_top
+    if(_): {sz < 1} [ set(sz): 1 ]
+    add(g_top): g_top sz
+    set(sy_a): s r
+    set(sy_def): s 1
+]
+# A declaration (specifiers taken: type bt): declarators up to ";", or a
+# function definition. In a block, the statements initializing the
+# objects are returned as a block node (or -1).
+p_decl_rest(r): bt file [
+    set(r): {0 - 1}
+    vec(inits): ""
+    set(sc): p_sclass
+    p_accept(semi0): ";"
+    if(_): {semi0 = 1} [ return(_): r ]
+    set(first): 1
+    while(_): {1 = 1} [
+        p_mark(_):
+        p_declarator(t): bt 1
+        set(name): p_dname
+        set(fparams): p_dparams
+        p_skip_attr(_):
+        at(tk2): ty_k t
+        if(_): {first = 1 && file = 1 && tk2 = 11} [
+            p_is(body): "{"
+            if(_): {body = 1} [
+                p_declare(s): name t sc 1
+                p_funcdef(_): s t fparams
+                return(_): r
+            ]
+        ]
+        set(first): 0
+        if(_): {tk2 = 0 && sc != 1} [
+            concat(m): "variable '" name
+            concat(m): m "' declared void"
+            p_fail(_): m
+        ]
+        p_declare(s): name t sc file
+        at(sk): sy_k s
+        p_accept(eq): "="
+        if(_): {eq = 1} [
+            if(_): {sk != 1} [ p_fail(_): "only objects can be initialized" ]
+            if(_): {sc = 3 && file = 0} [ p_fail(_): "an extern declaration in a block cannot have an initializer" ]
+            set(st): 2
+            at(st): sy_st s
+            p_initializer(init): s
+            if(_): {st = 1} [
+                # static storage: initialized before main runs
+                p_alloc(_): s
+                push(_): p_ginit init
+            ]
+            else(_): [ push(_): inits init ]
+        ]
+        else(_): [
+            at(st2): sy_st s
+            # file scope objects without extern are (tentative) definitions
+            if(_): {sk = 1 && st2 = 1 && sc != 3} [
+                at(ft): sy_t s
+                at(fk): ty_k ft
+                if(_): {fk = 10} [
+                    at(fn): ty_n ft
+                    if(_): {fn < 0 && file = 0} [ p_fail(_): "array size missing" ]
+                ]
+                if(_): {file = 0 || fk != 10} [ p_alloc(_): s ]
+                else(_): [
+                    at(fn2): ty_n ft
+                    if(_): {fn2 >= 0} [ p_alloc(_): s ]
+                ]
+            ]
+            if(_): {sk = 1 && st2 = 2} [
+                at(lt): sy_t s
+                at(lc): ty_cpl lt
+                at(lk2): ty_k lt
+                if(_): {lc = 0} [ p_fail(_): "storage size isn't known" ]
+                if(_): {lk2 = 10} [
+                    at(ln2): ty_n lt
+                    if(_): {ln2 < 0} [ p_fail(_): "array size missing" ]
+                ]
+            ]
+        ]
+        p_accept(cm): ","
+        if(_): {cm = 0} [ break(_): "" ]
+    ]
+    p_expect(_): ";"
+    len(ni): inits
+    if(_): {ni > 0} [ nd_new(r): 30 ty_void 0 0 0 inits ]
+]
+
+# ---- initializers ----
+# The initialization of object symbol s: a block of assignments. An
+# array of unknown size takes its size from the initializer.
+p_initializer(r): s [
+    at(t): sy_t s
+    nd_new(var): 3 t s 0 0 0
+    vec(stmts): ""
+    at(st): sy_st s
+    set(zero): 1
+    if(_): {st = 1} [ set(zero): 0 ]
+    p_init_into(nt): var t stmts zero
+    if(_): {nt != t} [
+        set(sy_t): s nt
+        set(nd_t): var nt
+    ]
+    nd_new(r): 30 ty_void 0 0 0 stmts
+]
+# Initialize the object at lvalue node lv (type t) from the tokens: the
+# statements go to stmts. zero: 1 when parts not given must be cleared.
+# The type (an array's size may be filled in).
+p_init_into(r): lv t stmts zero [
+    set(r): t
+    at(k): ty_k t
+    p_is(br): "{"
+    at(tk0): tk_k p_i
+    if(_): {k = 10 && tk0 = 4} [
+        # char array = "string"
+        p_strlit(sv):
+        p_init_string(r): lv t sv stmts zero
+        return(_): r
+    ]
+    if(_): {k = 10 && br = 1} [
+        at(tk1): tk_k {p_i + 1}
+        p_is_at(cb): {p_i + 2} "}"
+        if(_): {tk1 = 4 && cb = 1} [
+            add(p_i): p_i 1
+            p_strlit(sv2):
+            p_init_string(r): lv t sv2 stmts zero
+            p_expect(_): "}"
+            return(_): r
+        ]
+    ]
+    if(_): {(k = 10 || k = 12 || k = 13) && br = 1} [
+        add(p_i): p_i 1
+        p_init_list(r): lv t stmts zero 1
+        p_expect(_): "}"
+        return(_): r
+    ]
+    if(_): {k = 10 || k = 12 || k = 13} [
+        if(_): {k != 10} [
+            # a struct from an expression of its type
+            p_assign(e):
+            at(et): nd_t e
+            p_new_assign(a): lv e
+            push(_): stmts a
+            return(_): r
+        ]
+        # brace elision: the elements come straight from this list
+        p_init_list(r): lv t stmts zero 0
+        return(_): r
+    ]
+    if(_): {br = 1} [
+        # a scalar in braces
+        add(p_i): p_i 1
+        p_init_into(r): lv t stmts zero
+        p_accept(_): ","
+        p_expect(_): "}"
+        return(_): r
+    ]
+    p_assign(e):
+    p_new_assign(a): lv e
+    nd_new(es): 31 ty_void a 0 0 0
+    push(_): stmts es
+]
+p_init_string(r): lv t sv stmts zero [
+    set(r): t
+    at(n): ty_n t
+    len(sl): sv
+    if(_): {n < 0} [
+        at(b): ty_b t
+        ty_arr(r): b {sl + 1}
+        set(n): {sl + 1}
+        set(nd_t): lv r
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        set(c): 0
+        if(_): {i < sl} [ at(c): sv i ]
+        if(_): {c != 0 || zero = 1} [
+            nd_elem(e): lv i
+            nd_num(cv): c ty_int
+            p_new_assign(a): e cv
+            nd_new(es): 31 ty_void a 0 0 0
+            push(_): stmts es
+        ]
+        add(i): i 1
+    ]
+]
+# The lvalue of element i of the array at lvalue lv.
+nd_elem(r): lv i [
+    at(t): nd_t lv
+    at(b): ty_b t
+    at(es): ty_sz b
+    ty_ptr(pt): b
+    nd_new(base): 26 pt lv 0 0 0
+    nd_new(off): 27 pt base 0 0 {i * es}
+    nd_new(r): 12 b off 0 0 0
+]
+# The lvalue of member m of the struct at lvalue lv.
+nd_field(r): lv m [
+    at(mt): mb_t m
+    at(mo): mb_o m
+    ty_ptr(pt): mt
+    nd_new(off): 27 pt lv 0 0 mo
+    nd_new(r): 12 mt off 0 0 0
+]
+# Initializer list elements for an array or struct at lvalue lv; braced:
+# 1 inside its own braces (stops at "}"), 0 for elided braces (stops
+# after the members it can hold).
+p_init_list(r): lv t stmts zero braced [
+    set(r): t
+    at(k): ty_k t
+    set(n): {0 - 1}
+    set(count): 0
+    if(_): {k = 10} [ at(n): ty_n t ]
+    if(_): {k != 10} [
+        at(ms): ty_m t
+        len(count): ms
+    ]
+    if(_): {zero = 1 && braced = 1} [
+        # everything not given is zero: clear it all first
+        at(sz): ty_sz t
+        if(_): {sz > 0} [
+            nd_new(z): 45 ty_void lv 0 0 sz
+            push(_): stmts z
+        ]
+    ]
+    set(i): 0
+    set(maxi): 0
+    while(_): {1 = 1} [
+        p_is(cl): "}"
+        if(_): {cl = 1} [ break(_): "" ]
+        if(_): {braced = 0 && k = 10 && n >= 0 && i >= n} [ break(_): "" ]
+        if(_): {braced = 0 && k != 10 && i >= count} [ break(_): "" ]
+        # designators
+        p_is(dl): "["
+        p_is(dd): "."
+        if(_): {dl = 1 && k = 10} [
+            add(p_i): p_i 1
+            p_cond(ie):
+            p_const(i): ie
+            p_expect(_): "]"
+            p_accept(_): "="
+        ]
+        if(_): {dd = 1 && k != 10} [
+            add(p_i): p_i 1
+            p_ident(mn):
+            ty_member(mi): t mn
+            if(_): {mi < 0} [
+                concat(m): "unknown field '" mn
+                concat(m): m "' specified in initializer"
+                p_fail(_): m
+            ]
+            at(ms2): ty_m t
+            set(j): 0
+            while(_): {j < count} [
+                at(mj): ms2 j
+                if(_): {mj = mi} [
+                    set(i): j
+                    set(j): count
+                ]
+                add(j): j 1
+            ]
+            p_accept(_): "="
+        ]
+        if(_): {k = 10} [
+            nd_elem(el): lv i
+            at(et): ty_b t
+            p_init_into(_): el et stmts 0
+        ]
+        else(_): [
+            if(_): {i >= count} [ p_fail(_): "excess elements in struct initializer" ]
+            at(ms3): ty_m t
+            at(mm): ms3 i
+            nd_field(fl): lv mm
+            at(mt): mb_t mm
+            p_init_into(_): fl mt stmts 0
+            if(_): {k = 13} [ set(count): 1 ]
+        ]
+        add(i): i 1
+        if(_): {i > maxi} [ set(maxi): i ]
+        p_accept(cm): ","
+        if(_): {cm = 0} [ break(_): "" ]
+        if(_): {braced = 0} [
+            # an elided list ends where its parent's next element begins
+            p_is(dl2): "["
+            p_is(dd2): "."
+            if(_): {dl2 = 1 || dd2 = 1} [ break(_): "" ]
+        ]
+    ]
+    if(_): {k = 10 && n < 0} [
+        at(b): ty_b t
+        ty_arr(r): b maxi
+        set(nd_t): lv r
+        if(_): {zero = 1 && braced = 1} [
+            # the clear above had no size yet
+            len(sn): stmts
+            set(si): 0
+            while(_): {si < sn} [
+                at(sx): stmts si
+                at(skd): nd_k sx
+                at(sa): nd_a sx
+                if(_): {skd = 45 && sa = lv} [
+                    at(rsz): ty_sz r
+                    set(nd_v): sx rsz
+                ]
+                add(si): si 1
+            ]
+        ]
+    ]
+]
+
+# ---- function definitions ----
+p_funcdef(r): s t names [
+    set(r): 0
+    at(fi): sy_v s
+    at(isdef): fn_defined fi
+    if(_): {isdef = 1} [
+        at(nm): sy_n s
+        concat(m): "redefinition of '" nm
+        concat(m): m "'"
+        p_fail(_): m
+    ]
+    set(sy_t): s t
+    set(fn_defined): fi 1
+    set(sy_def): s 1
+    set(p_fn): s
+    vec(p_fsyms): ""
+    vec(p_lab): ""
+    sc_push(_):
+    at(ps): ty_m t
+    len(np): ps
+    vec(psyms): ""
+    set(i): 0
+    while(_): {i < np} [
+        at(pt): ps i
+        at(pn): names i
+        if(_): {pn = ""} [
+            encode(is): i
+            concat(pn): "%p" is
+        ]
+        sy_new(ps2): pn 1 pt
+        set(sy_st): ps2 3
+        sc_bind(_): pn ps2
+        push(_): psyms ps2
+        add(i): i 1
+    ]
+    # __func__
+    at(fname): sy_n s
+    len(fl): fname
+    vec(fv): ""
+    set(j): 0
+    while(_): {j < fl} [
+        byte(fb): fname j
+        push(_): fv fb
+        add(j): j 1
+    ]
+    p_strnode(fsn): fv
+    sy_new(fs): "__func__" 4 ty_int
+    set(sy_k): fs 5
+    set(sy_v): fs fsn
+    sc_bind(_): "__func__" fs
+    sc_bind(_): "__FUNCTION__" fs
+    p_block(body):
+    sc_pop(_):
+    p_check_labels(_):
+    gen_function(_): s psyms p_fsyms body
+    set(p_fn): {0 - 1}
+]
+p_check_labels(r): [
+    set(r): 0
+]
+
+# ---- file scope ----
+p_unit(r): [
+    set(r): 0
+    while(_): {1 = 1} [
+        at(k): tk_k p_i
+        if(_): {k = 0} [ break(_): "" ]
+        p_accept(semi): ";"
+        p_skip_attr(_):
+        if(_): {semi = 0} [
+            p_mark(_):
+            p_is(sa): "_Static_assert"
+            if(_): {sa = 1} [
+                add(p_i): p_i 1
+                p_skip_parens(_):
+                p_expect(_): ";"
+            ]
+            else(_): [
+                p_istype(isty):
+                set(bt): ty_int
+                if(_): {isty = 1} [ p_declspec(bt): ]
+                else(_): [
+                    # old C: a declaration with no type is int
+                    set(p_sclass): 0
+                    at(k2): tk_k p_i
+                    if(_): {k2 != 1} [ p_failat(_): "expected declaration" ]
+                ]
+                p_decl_rest(_): bt 1
+            ]
+        ]
+    ]
+]
+
+# ======================= constant expressions =======================
+# The value of integer constant expression node n (an error if it is not
+# one).
+p_const(r): n [
+    p_ceval(r): n
+    if(_): {r = null} [ p_fail(_): "expression is not an integer constant" ]
+]
+# The value of node n when it is constant, else null.
+p_ceval(r): n [
+    set(r): null
+    at(k): nd_k n
+    at(t): nd_t n
+    if(_): {k = 1} [
+        at(r): nd_v n
+        return(_): r
+    ]
+    if(_): {k = 19} [
+        at(a): nd_a n
+        p_ceval(v): a
+        if(_): {v = null} [ return(_): r ]
+        ty_isint(ii): t
+        at(tk): ty_k t
+        if(_): {ii = 1} [
+            ty_bits(bits): t
+            at(u): ty_u t
+            set(r): v
+            if(_): {tk = 1} [
+                set(r): 0
+                if(_): {v != 0} [ set(r): 1 ]
+            ]
+            elif(_): {bits < 64 && u = 1} [ set(r): {v & ((1 << bits) - 1)} ]
+            elif(_): {bits < 64} [ set(r): {(v << (64 - bits)) >> (64 - bits)} ]
+        ]
+        elif(_): {tk = 9} [ set(r): v ]
+        return(_): r
+    ]
+    if(_): {k = 5} [
+        at(a): nd_a n
+        at(b): nd_b n
+        at(op): nd_c n
+        p_ceval(x): a
+        p_ceval(y): b
+        if(_): {x = null || y = null} [ return(_): r ]
+        at(at2): nd_t a
+        at(u): ty_u at2
+        if(_): {op = 16} [ set(r): {x + y} ]
+        elif(_): {op = 17} [ set(r): {x - y} ]
+        elif(_): {op = 18} [ set(r): {x * y} ]
+        elif(_): {op = 19 || op = 20} [
+            if(_): {y = 0} [ p_fail(_): "division by zero in a constant expression" ]
+            if(_): {op = 19} [ pp_idiv(r): x y ]
+            else(_): [ set(r): {x % y} ]
+        ]
+        elif(_): {op = 22} [ set(r): {x = y} ]
+        elif(_): {op = 23} [ set(r): {x != y} ]
+        elif(_): {op = 24} [ set(r): {x < y} ]
+        elif(_): {op = 25} [ set(r): {x <= y} ]
+        elif(_): {op = 26} [ set(r): {x > y} ]
+        elif(_): {op = 27} [ set(r): {x >= y} ]
+        elif(_): {op = 30} [ set(r): {x ^ y} ]
+        elif(_): {op = 31} [ set(r): {x & y} ]
+        elif(_): {op = 32} [ set(r): {x | y} ]
+        elif(_): {op = 33} [ set(r): {x << y} ]
+        elif(_): {op = 34} [
+            set(r): {x >> y}
+            if(_): {u = 1 && x < 0 && y > 0} [ set(r): {(x >> y) & ((1 << (64 - y)) - 1)} ]
+        ]
+        if(_): {r = true} [ set(r): 1 ]
+        if(_): {r = false} [ set(r): 0 ]
+        # wrap to the result type
+        ty_isint(ri): t
+        if(_): {ri = 1 && r != null} [
+            ty_bits(rb): t
+            at(ru): ty_u t
+            if(_): {rb < 64 && ru = 1} [ set(r): {r & ((1 << rb) - 1)} ]
+            elif(_): {rb < 64} [ set(r): {(r << (64 - rb)) >> (64 - rb)} ]
+        ]
+        return(_): r
+    ]
+    if(_): {k = 6 || k = 7} [
+        at(a): nd_a n
+        at(b): nd_b n
+        p_ceval(x): a
+        p_ceval(y): b
+        if(_): {x = null || y = null} [ return(_): r ]
+        set(r): 0
+        if(_): {k = 6 && x != 0 && y != 0} [ set(r): 1 ]
+        if(_): {k = 7 && (x != 0 || y != 0)} [ set(r): 1 ]
+        return(_): r
+    ]
+    if(_): {k = 8 || k = 9 || k = 10} [
+        at(a): nd_a n
+        p_ceval(x): a
+        if(_): {x = null} [ return(_): r ]
+        if(_): {k = 8} [
+            set(r): 0
+            if(_): {x = 0} [ set(r): 1 ]
+        ]
+        if(_): {k = 9} [ set(r): {0 - x} ]
+        if(_): {k = 10} [ set(r): {x ^ (0 - 1)} ]
+        ty_isint(ri): t
+        if(_): {ri = 1} [
+            ty_bits(rb): t
+            at(ru): ty_u t
+            if(_): {rb < 64 && ru = 1} [ set(r): {r & ((1 << rb) - 1)} ]
+            elif(_): {rb < 64} [ set(r): {(r << (64 - rb)) >> (64 - rb)} ]
+        ]
+        return(_): r
+    ]
+    if(_): {k = 17} [
+        at(a): nd_a n
+        p_ceval(x): a
+        if(_): {x = null} [ return(_): r ]
+        at(b): nd_b n
+        at(c): nd_c n
+        if(_): {x != 0} [ p_ceval(r): b ]
+        else(_): [ p_ceval(r): c ]
+        return(_): r
+    ]
+    if(_): {k = 18} [
+        at(b): nd_b n
+        p_ceval(r): b
+    ]
+]

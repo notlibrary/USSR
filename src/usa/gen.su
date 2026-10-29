@@ -1,0 +1,1563 @@
+# usa's code generator: USSR VM bytecode from the parser's nodes, the
+# link step, and the .ru writer (docs/RU_BYTECODE_FORMAT.md).
+#
+# The C machine on the USSR VM:
+#   memory    one USSR vector, the global M; an address is an index into
+#             it. Objects have their C sizes and alignments and each
+#             scalar lives in the cell at its address (the other cells
+#             of a long or a pointer stay unused), so sizeof, pointer
+#             arithmetic, memcpy and memset work as in C.
+#             Layout: globals and string literals from 8, then the stack
+#             (SP, a global, grows up), then the heap (malloc pushes).
+#   registers R29 holds M in every function (loaded on entry), R28 the
+#             frame pointer of a function with objects in memory; R0..R27
+#             evaluate expressions, a node into its register d with the
+#             ones above it as temporaries.
+#   locals    scalars whose address is never taken are VM locals of the
+#             call (LOAD_VAR/STORE_VAR, B=1, by slot); arrays, structs
+#             and the rest live in the frame.
+#   calls     CALL with the arguments in consecutive registers. The
+#             variadic part goes into memory on the stack, its address
+#             as a hidden last parameter (%va), 8 bytes per argument.
+#             A struct is passed as its address (the callee copies it)
+#             and returned as the address of a per-function buffer.
+#   pointers  to functions are function index + 1; calls through them go
+#             to a generated dispatcher for that number of arguments.
+#   integers  are VM integers (64 bits) kept in the range of their C
+#             type: narrowing conversions mask or sign-extend; unsigned
+#             int results are masked to 32 bits.
+#   reals     double and float are VM reals.
+
+global(_): co_op co_a co_b co_c co_i k_tag k_val k_tab st_s st_tab
+global(_): fn_name fn_entry fn_params fn_locals fn_defined fn_np fn_sym fn_kind fn_taken fn_rbuf fn_va
+global(_): g_fix_at g_fix_sym g_endfix g_calls g_calls_f
+global(_): g_slots g_slotn g_fp g_brk g_cont g_labels g_labn g_gotos g_goton g_cur g_icall
+global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero
+
+# ======================= pools =======================
+gen_init(r): [
+    set(r): 0
+    vec(co_op): ""
+    vec(co_a): ""
+    vec(co_b): ""
+    vec(co_c): ""
+    vec(co_i): ""
+    vec(k_tag): ""
+    vec(k_val): ""
+    ht_new(k_tab): 4096
+    vec(st_s): ""
+    ht_new(st_tab): 1024
+    vec(fn_name): ""
+    vec(fn_entry): ""
+    vec(fn_params): ""
+    vec(fn_locals): ""
+    vec(fn_defined): ""
+    vec(fn_np): ""
+    vec(fn_sym): ""
+    vec(fn_kind): ""
+    vec(fn_taken): ""
+    vec(fn_rbuf): ""
+    vec(fn_va): ""
+    vec(g_fix_at): ""
+    vec(g_fix_sym): ""
+    vec(g_endfix): ""
+    vec(g_calls): ""
+    vec(g_calls_f): ""
+    vec(g_icall): ""
+    vec(g_leaves): ""
+    # instruction 0: top-level code, which does not run (init is the entry)
+    e(_): 240 0 0 0 0
+]
+e(r): op a b c imm [
+    len(r): co_op
+    push(_): co_op op
+    push(_): co_a a
+    push(_): co_b b
+    push(_): co_c c
+    push(_): co_i imm
+]
+here(r): [
+    len(r): co_op
+]
+patch(r): at to [
+    set(r): 0
+    set(co_i): at to
+]
+patch_all(r): v to [
+    set(r): 0
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(j): v i
+        set(co_i): j to
+        add(i): i 1
+    ]
+]
+# Constant pool entries: tag 1 integer, 2 real (IEEE bits), 3 string.
+k_int(r): v [
+    encode(ks): v
+    concat(key): "i" ks
+    ht_get(r): k_tab key
+    if(_): {r < 0} [
+        len(r): k_tag
+        push(_): k_tag 1
+        push(_): k_val v
+        ht_put(_): k_tab key r
+    ]
+]
+k_real(r): bits [
+    encode(ks): bits
+    concat(key): "r" ks
+    ht_get(r): k_tab key
+    if(_): {r < 0} [
+        len(r): k_tag
+        push(_): k_tag 2
+        push(_): k_val bits
+        ht_put(_): k_tab key r
+    ]
+]
+k_str(r): s [
+    concat(key): "s" s
+    ht_get(r): k_tab key
+    if(_): {r < 0} [
+        len(r): k_tag
+        push(_): k_tag 3
+        push(_): k_val s
+        ht_put(_): k_tab key r
+    ]
+]
+s_idx(r): s [
+    ht_get(r): st_tab s
+    if(_): {r < 0} [
+        len(r): st_s
+        push(_): st_s s
+        ht_put(_): st_tab s r
+    ]
+]
+# LOAD_CONST d, the integer v.
+e_int(r): d v [
+    k_int(k): v
+    e(r): 1 d 0 0 k
+]
+e_gload(r): d name [
+    s_idx(s): name
+    e(r): 2 d 2 0 s
+]
+e_gstore(r): d name [
+    s_idx(s): name
+    e(r): 3 d 2 0 s
+]
+# IEEE-754 binary64 bits of the integer v (rounded to nearest even).
+real_bits(r): v [
+    set(r): 0
+    if(_): {v = 0} [ return(_): r ]
+    set(sign): 0
+    if(_): {v < 0} [
+        set(sign): 1
+        set(v): {0 - v}
+    ]
+    if(_): {v < 0} [
+        # -2^63
+        set(r): {(1 << 63) | ((1023 + 63) << 52)}
+        return(_): r
+    ]
+    set(ex): 0
+    set(x): v
+    while(_): {x > 1} [
+        set(x): {x >> 1}
+        add(ex): ex 1
+    ]
+    if(_): {ex <= 52} [
+        set(m): {v << (52 - ex)}
+    ]
+    else(_): [
+        set(sh): {ex - 52}
+        set(m): {v >> sh}
+        set(rem): {v & ((1 << sh) - 1)}
+        set(half): {1 << (sh - 1)}
+        if(_): {rem > half || (rem = half && (m & 1) = 1)} [
+            add(m): m 1
+            if(_): {m >= (1 << 53)} [
+                set(m): {m >> 1}
+                add(ex): ex 1
+            ]
+        ]
+    ]
+    set(r): {((ex + 1023) << 52) | (m & ((1 << 52) - 1))}
+    if(_): {sign = 1} [ set(r): {r | (1 << 63)} ]
+]
+# Load the floating constant spelled s (or a whole number) into d.
+e_flt(r): d s [
+    set(r): 0
+    typeof(ty): s
+    if(_): {ty = "integer"} [
+        real_bits(b): s
+        k_real(k): b
+        e(_): 1 d 0 0 k
+        return(_): r
+    ]
+    # digits and exponent: value = m * 10^ex
+    len(n): s
+    set(m): 0
+    set(ex): 0
+    set(nd): 0
+    set(i): 0
+    set(seen): 0
+    set(go): 1
+    while(_): {go = 1 && i < n} [
+        byte(b): s i
+        if(_): {b > 47 && b < 58} [
+            if(_): {nd < 18} [
+                set(m): {m * 10 + b - 48}
+                if(_): {m > 0} [ add(nd): nd 1 ]
+                if(_): {seen = 1} [ sub(ex): ex 1 ]
+            ]
+            elif(_): {seen = 0} [ add(ex): ex 1 ]
+            add(i): i 1
+        ]
+        elif(_): {b = 46} [
+            set(seen): 1
+            add(i): i 1
+        ]
+        else(_): [ set(go): 0 ]
+    ]
+    if(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 101 || b = 69} [
+            add(i): i 1
+            set(neg): 0
+            byte(b2): s i
+            if(_): {b2 = 45} [
+                set(neg): 1
+                add(i): i 1
+            ]
+            elif(_): {b2 = 43} [ add(i): i 1 ]
+            set(e2): 0
+            set(go): 1
+            while(_): {go = 1 && i < n} [
+                byte(b3): s i
+                if(_): {b3 > 47 && b3 < 58} [
+                    set(e2): {e2 * 10 + b3 - 48}
+                    add(i): i 1
+                ]
+                else(_): [ set(go): 0 ]
+            ]
+            if(_): {neg = 1} [ set(e2): {0 - e2} ]
+            add(ex): ex e2
+        ]
+    ]
+    if(_): {m = 0} [
+        k_real(k): 0
+        e(_): 1 d 0 0 k
+        return(_): r
+    ]
+    # m * 10^ex: whole while it fits, else divisions/multiplications of
+    # exact reals
+    while(_): {ex > 0 && m < 922337203685477580} [
+        set(m): {m * 10}
+        sub(ex): ex 1
+    ]
+    real_bits(mb): m
+    k_real(km): mb
+    e(_): 1 d 0 0 km
+    while(_): {ex < 0} [
+        set(step): ex
+        if(_): {step < (0 - 18)} [ set(step): {0 - 18} ]
+        set(p): 1
+        set(j): 0
+        while(_): {j < 0 - step} [
+            set(p): {p * 10}
+            add(j): j 1
+        ]
+        real_bits(pb): p
+        k_real(kp): pb
+        e(_): 1 {d + 1} 0 0 kp
+        e(_): 19 d d {d + 1} 0
+        sub(ex): ex step
+    ]
+    while(_): {ex > 0} [
+        set(step): ex
+        if(_): {step > 18} [ set(step): 18 ]
+        set(p): 1
+        set(j): 0
+        while(_): {j < step} [
+            set(p): {p * 10}
+            add(j): j 1
+        ]
+        real_bits(pb): p
+        k_real(kp): pb
+        e(_): 1 {d + 1} 0 0 kp
+        e(_): 18 d d {d + 1} 0
+        sub(ex): ex step
+    ]
+]
+
+# ======================= functions =======================
+# A function table entry for function symbol s (its index in sy_v).
+fn_declare(r): s [
+    len(r): fn_name
+    at(name): sy_n s
+    if(_): {name = "init"} [ set(name): "c.init" ]
+    at(t): sy_t s
+    at(ps): ty_m t
+    len(np): ps
+    at(va): ty_va t
+    if(_): {va = 1} [ add(np): np 1 ]
+    push(_): fn_name name
+    push(_): fn_entry 0
+    push(_): fn_params null
+    push(_): fn_locals null
+    push(_): fn_defined 0
+    push(_): fn_np np
+    push(_): fn_sym s
+    push(_): fn_kind 0
+    push(_): fn_taken 0
+    push(_): fn_rbuf 0
+    push(_): fn_va va
+    set(sy_v): s r
+]
+# A function the code generator makes itself: its index.
+fn_internal(r): name np [
+    len(r): fn_name
+    push(_): fn_name name
+    push(_): fn_entry 0
+    push(_): fn_params null
+    push(_): fn_locals null
+    push(_): fn_defined 1
+    push(_): fn_np np
+    push(_): fn_sym {0 - 1}
+    push(_): fn_kind 2
+    push(_): fn_taken 0
+    push(_): fn_rbuf 0
+    push(_): fn_va 0
+]
+# The function index of the C function called name (declared by the
+# prelude), for the helpers the code calls.
+fn_rt(r): name [
+    ht_get(s): lk_tab name
+    if(_): {s < 0} [
+        concat(m): "usa: the runtime function '" name
+        concat(m): m "' is not declared (is include/__usa.h there?)"
+        usa_error(_): {0 - 1} m
+    ]
+    at(r): sy_v s
+]
+
+# ---- per-function state ----
+# A VM local of the current function: its slot.
+g_newlocal(r): name [
+    len(r): g_slots
+    push(_): g_slots name
+]
+# Storage for every parameter and local of the function being compiled.
+g_layout(r): psyms lsyms va [
+    set(r): 0
+    vec(g_slots): ""
+    set(g_frame): 0
+    len(np): psyms
+    set(i): 0
+    while(_): {i < np} [
+        at(s): psyms i
+        at(nm): sy_n s
+        encode(is): s
+        concat(vn): nm "."
+        concat(vn): vn is
+        g_newlocal(slot): vn
+        set(sy_vn): s vn
+        set(sy_a): s slot
+        add(i): i 1
+    ]
+    set(g_va_slot): {0 - 1}
+    if(_): {va = 1} [ g_newlocal(g_va_slot): "%va" ]
+    g_newlocal(g_ret_slot): "%r"
+    # parameters that must be in memory get a frame copy
+    set(i): 0
+    while(_): {i < np} [
+        at(s): psyms i
+        g_place(_): s
+        add(i): i 1
+    ]
+    len(nl): lsyms
+    set(i): 0
+    while(_): {i < nl} [
+        at(s): lsyms i
+        at(st): sy_st s
+        if(_): {st = 2} [
+            at(nm): sy_n s
+            encode(is): s
+            concat(vn): nm "."
+            concat(vn): vn is
+            set(sy_vn): s vn
+            g_place(_): s
+            at(st2): sy_st s
+            if(_): {st2 = 2} [
+                g_newlocal(slot): vn
+                set(sy_a): s slot
+            ]
+        ]
+        add(i): i 1
+    ]
+]
+# Put automatic object s in the frame (storage 4, offset in sy_v... sy_a)
+# when it needs an address.
+g_place(r): s [
+    set(r): 0
+    at(t): sy_t s
+    at(k): ty_k t
+    at(taken): sy_at s
+    if(_): {taken = 1 || k = 10 || k = 12 || k = 13} [
+        at(sz): ty_sz t
+        at(al): ty_al t
+        if(_): {al < 8} [ set(al): 8 ]
+        set(g_frame): {(g_frame + al - 1) - (g_frame + al - 1) % al}
+        at(st): sy_st s
+        if(_): {st = 3} [
+            # a parameter: keep its slot for the copy in the prologue
+            at(slot): sy_a s
+            set(sy_v): s slot
+        ]
+        set(sy_a): s g_frame
+        set(sy_st): s 4
+        if(_): {sz < 1} [ set(sz): 1 ]
+        add(g_frame): g_frame sz
+        set(g_frame): {(g_frame + 7) - (g_frame + 7) % 8}
+    ]
+]
+g_reg(r): d [
+    set(r): 0
+    if(_): {d > 27} [ usa_error(_): g_cur "expression too complex (out of registers)" ]
+]
+
+gen_function(r): s psyms lsyms body [
+    set(r): 0
+    at(fi): sy_v s
+    at(t): sy_t s
+    at(va): ty_va t
+    set(g_cur): p_ln
+    g_layout(_): psyms lsyms va
+    vec(g_brk): ""
+    vec(g_cont): ""
+    vec(g_labels): ""
+    vec(g_labn): ""
+    vec(g_gotos): ""
+    vec(g_goton): ""
+    set(g_fp): 0
+    here(entry):
+    set(fn_entry): fi entry
+    e_gload(_): 29 "M"
+    if(_): {g_frame > 0} [
+        set(g_fp): 1
+        e_gload(_): 28 "SP"
+        e_int(_): 27 g_frame
+        e(_): 16 27 28 27 0
+        e_gstore(_): 27 "SP"
+    ]
+    # parameters kept in the frame: copy them in
+    len(np): psyms
+    set(i): 0
+    while(_): {i < np} [
+        at(ps): psyms i
+        at(st): sy_st ps
+        if(_): {st = 4} [
+            at(slot): sy_v ps
+            at(vn): sy_vn ps
+            s_idx(sv): vn
+            e(_): 2 0 1 slot sv
+            at(off): sy_a ps
+            e_int(_): 1 off
+            e(_): 16 1 28 1 0
+            at(pt): sy_t ps
+            ty_isagg(ag): pt
+            if(_): {ag = 1} [ g_copy(_): 1 0 pt 2 ]
+            else(_): [ e(_): 9 29 1 0 0 ]
+        ]
+        add(i): i 1
+    ]
+    gen_stmt(_): body
+    # falling off the end returns 0
+    e_int(_): 0 0
+    g_ret(_): 0
+    # gotos
+    len(ng): g_gotos
+    set(j): 0
+    while(_): {j < ng} [
+        at(gi): g_gotos j
+        at(gn): g_goton j
+        set(hit): {0 - 1}
+        len(nlab): g_labn
+        set(k): 0
+        while(_): {k < nlab} [
+            at(ln): g_labn k
+            if(_): {ln = gn} [ at(hit): g_labels k ]
+            add(k): k 1
+        ]
+        if(_): {hit < 0} [
+            concat(m): "label '" gn
+            concat(m): m "' used but not defined"
+            usa_error(_): g_cur m
+        ]
+        patch(_): gi hit
+        add(j): j 1
+    ]
+    vec(pn): ""
+    set(i): 0
+    set(nparams): np
+    if(_): {va = 1} [ add(nparams): nparams 1 ]
+    # the definition decides the parameter count (main may be declared ())
+    set(fn_np): fi nparams
+    set(fn_va): fi va
+    while(_): {i < nparams} [
+        at(x): g_slots i
+        push(_): pn x
+        add(i): i 1
+    ]
+    set(fn_params): fi pn
+    set(fn_locals): fi g_slots
+]
+# Return the value in register d from the current function.
+g_ret(r): d [
+    set(r): 0
+    s_idx(rs): "%r"
+    e(_): 3 d 1 g_ret_slot rs
+    if(_): {g_fp = 1} [ e_gstore(_): 28 "SP" ]
+    e(_): 81 0 0 0 0
+]
+
+# ======================= expressions =======================
+# Load or store a VM local or the memory of symbol s.
+g_isvm(r): s [
+    at(st): sy_st s
+    set(r): 0
+    if(_): {st = 2 || st = 3} [ set(r): 1 ]
+]
+g_loadvar(r): s d [
+    set(r): 0
+    at(vn): sy_vn s
+    at(slot): sy_a s
+    s_idx(sv): vn
+    if(_): {slot < 256} [ e(_): 2 d 1 slot sv ]
+    else(_): [ e(_): 2 d 0 0 sv ]
+]
+g_storevar(r): s d [
+    set(r): 0
+    at(vn): sy_vn s
+    at(slot): sy_a s
+    s_idx(sv): vn
+    if(_): {slot < 256} [ e(_): 3 d 1 slot sv ]
+    else(_): [ e(_): 3 d 0 0 sv ]
+]
+# The address of lvalue (or aggregate) node n into d.
+gen_addr(r): n d [
+    set(r): 0
+    g_reg(_): d
+    at(k): nd_k n
+    if(_): {k = 3} [
+        at(s): nd_a n
+        at(st): sy_st s
+        if(_): {st = 1} [
+            # a static address, fixed when the program is linked
+            e(at): 1 d 0 0 0
+            push(_): g_fix_at at
+            push(_): g_fix_sym s
+        ]
+        elif(_): {st = 4} [
+            at(off): sy_a s
+            e_int(_): d off
+            e(_): 16 d 28 d 0
+        ]
+        else(_): [
+            at(nm): sy_n s
+            concat(m): "cannot take the address of '" nm
+            concat(m): m "'"
+            usa_error(_): g_cur m
+        ]
+        return(_): r
+    ]
+    if(_): {k = 12} [
+        at(a): nd_a n
+        gen_expr(_): a d
+        return(_): r
+    ]
+    gen_expr(_): n d
+]
+# The scalar leaves (cell offsets) of a struct/union/array type.
+g_leafs(r): t [
+    vec(r): ""
+    g_leafs_into(_): t 0 r
+]
+g_leafs_into(r): t base out [
+    set(r): 0
+    at(k): ty_k t
+    if(_): {k = 10} [
+        at(b): ty_b t
+        at(n): ty_n t
+        at(es): ty_sz b
+        set(i): 0
+        while(_): {i < n} [
+            g_leafs_into(_): b {base + i * es} out
+            len(cnt): out
+            if(_): {cnt > 64} [ set(i): n ]
+            add(i): i 1
+        ]
+    ]
+    elif(_): {k = 12 || k = 13} [
+        at(ms): ty_m t
+        len(nm): ms
+        set(i): 0
+        while(_): {i < nm} [
+            at(m): ms i
+            at(mt): mb_t m
+            at(mo): mb_o m
+            g_leafs_into(_): mt {base + mo} out
+            add(i): i 1
+        ]
+        if(_): {k = 13} [
+            # members overlap: every offset once
+            len(cnt): out
+            vec(u): ""
+            set(i): 0
+            while(_): {i < cnt} [
+                at(x): out i
+                set(dup): 0
+                len(un): u
+                set(j): 0
+                while(_): {j < un} [
+                    at(y): u j
+                    if(_): {y = x} [ set(dup): 1 ]
+                    add(j): j 1
+                ]
+                if(_): {dup = 0} [ push(_): u x ]
+                add(i): i 1
+            ]
+            while(_): {cnt > 0} [
+                pop(_): out
+                sub(cnt): cnt 1
+            ]
+            len(un): u
+            set(i): 0
+            while(_): {i < un} [
+                at(x): u i
+                push(_): out x
+                add(i): i 1
+            ]
+        ]
+    ]
+    else(_): [ push(_): out base ]
+]
+# Copy the object of type t at the address in src to the address in dst;
+# registers from tmp up are free.
+g_copy(r): dst src t tmp [
+    set(r): 0
+    g_leafs(lv): t
+    len(n): lv
+    at(sz): ty_sz t
+    if(_): {n <= 24} [
+        set(i): 0
+        while(_): {i < n} [
+            at(off): lv i
+            if(_): {off = 0} [
+                e(_): 8 tmp 29 src 0
+                e(_): 9 29 dst tmp 0
+            ]
+            else(_): [
+                e_int(_): tmp off
+                e(_): 16 {tmp + 1} src tmp 0
+                e(_): 8 {tmp + 1} 29 {tmp + 1} 0
+                e(_): 16 tmp dst tmp 0
+                e(_): 9 29 tmp {tmp + 1} 0
+            ]
+            add(i): i 1
+        ]
+        return(_): r
+    ]
+    # memcpy(dst, src, size): the arguments must be consecutive
+    g_reg(_): {tmp + 2}
+    e_int(_): tmp 0
+    e(_): 16 tmp dst tmp 0
+    e_int(_): {tmp + 1} 0
+    e(_): 16 {tmp + 1} src {tmp + 1} 0
+    e_int(_): {tmp + 2} sz
+    fn_rt(f): "memcpy"
+    e(at): 80 tmp 3 tmp f
+    push(_): g_calls at
+    push(_): g_calls_f f
+]
+# Normalize the integer in d to type t: mask an unsigned type narrower
+# than 64 bits, sign-extend a signed one; _Bool to 0/1.
+g_norm(r): d t [
+    set(r): 0
+    at(k): ty_k t
+    if(_): {k = 1} [
+        g_tobool(_): d
+        return(_): r
+    ]
+    ty_bits(b): t
+    if(_): {b >= 64} [ return(_): r ]
+    at(u): ty_u t
+    if(_): {u = 1} [
+        e_int(_): {d + 1} {(1 << b) - 1}
+        e(_): 31 d d {d + 1} 0
+    ]
+    else(_): [
+        e_int(_): {d + 1} {64 - b}
+        e(_): 33 d d {d + 1} 0
+        e(_): 34 d d {d + 1} 0
+    ]
+]
+# The truth of the value in d as 0 or 1.
+g_tobool(r): d [
+    set(r): 0
+    e(j): 50 d 0 0 0
+    e_int(_): d 1
+    e(j2): 48 0 0 0 0
+    here(h):
+    patch(_): j h
+    e_int(_): d 0
+    here(h2):
+    patch(_): j2 h2
+]
+# A VM boolean in d as the int 0 or 1.
+g_bool2int(r): d [
+    set(r): 0
+    g_tobool(_): d
+]
+# Convert the value in d from type from to type to.
+g_conv(r): d from to [
+    set(r): 0
+    if(_): {from = to} [ return(_): r ]
+    at(fk): ty_k from
+    at(tk): ty_k to
+    if(_): {tk = 0 || tk = 14 || tk = 10 || tk = 11 || tk = 12 || tk = 13} [ return(_): r ]
+    if(_): {fk = 14} [
+        if(_): {tk = 1} [ g_tobool(_): d ]
+        else(_): [ g_norm(_): d to ]
+        return(_): r
+    ]
+    if(_): {tk = 7 || tk = 8} [
+        if(_): {fk = 7 || fk = 8} [ return(_): r ]
+        # an integer as a real: dividing by 1 gives one
+        at(fu): ty_u from
+        ty_bits(fb): from
+        e_int(_): {d + 1} 1
+        if(_): {fu = 1 && fb = 64} [
+            # an unsigned long above 2^63 is negative here
+            e_int(_): {d + 2} 0
+            e(_): 24 {d + 2} d {d + 2} 0
+            e(_): 19 d d {d + 1} 0
+            e(j): 50 {d + 2} 0 0 0
+            # + 2^64
+            k_real(kb): {1087 << 52}
+            e(_): 1 {d + 1} 0 0 kb
+            e(_): 16 d d {d + 1} 0
+            here(h):
+            patch(_): j h
+        ]
+        else(_): [
+            e(_): 19 d d {d + 1} 0
+        ]
+        return(_): r
+    ]
+    if(_): {tk = 1} [
+        g_tobool(_): d
+        return(_): r
+    ]
+    if(_): {fk = 7 || fk = 8} [
+        fn_rt(f): "__f2i"
+        e(at): 80 d 1 d f
+        push(_): g_calls at
+        push(_): g_calls_f f
+        g_norm(_): d to
+        return(_): r
+    ]
+    # integer or pointer to integer or pointer
+    if(_): {fk = 1} [ return(_): r ]
+    ty_bits(fb): from
+    ty_bits(tb): to
+    at(fu): ty_u from
+    at(tu): ty_u to
+    if(_): {fk = 9 || fk = 10 || fk = 11} [ set(fu): 1 ]
+    if(_): {tk = 9} [ set(tu): 1 ]
+    if(_): {tb >= 64} [ return(_): r ]
+    set(need): 1
+    if(_): {tu = 1 && fu = 1 && fb <= tb} [ set(need): 0 ]
+    if(_): {tu = 0 && fu = 0 && fb <= tb} [ set(need): 0 ]
+    if(_): {tu = 0 && fu = 1 && fb < tb} [ set(need): 0 ]
+    if(_): {need = 1} [ g_norm(_): d to ]
+]
+# The arithmetic of op on the values in x and y (type t) into dst; for
+# helper calls y must be x + 1. Registers above max(x, y) are free.
+g_arith(r): op t dst x y [
+    set(r): 0
+    at(k): ty_k t
+    at(u): ty_u t
+    ty_bits(b): t
+    set(top): x
+    if(_): {y > top} [ set(top): y ]
+    add(top): top 1
+    g_reg(_): top
+    if(_): {k = 7 || k = 8 || k = 9 || k = 10 || k = 14} [
+        e(_): op dst x y 0
+        return(_): r
+    ]
+    if(_): {op = 19 || op = 20 || (op = 34 && u = 1 && b = 64)} [
+        set(h): ""
+        if(_): {op = 19} [
+            set(h): "__idiv"
+            if(_): {u = 1 && b = 64} [ set(h): "__udiv64" ]
+        ]
+        elif(_): {op = 20} [
+            if(_): {u = 1 && b = 64} [ set(h): "__umod64" ]
+        ]
+        else(_): [ set(h): "__ushr64" ]
+        if(_): {h = ""} [
+            e(_): 20 dst x y 0
+            return(_): r
+        ]
+        if(_): {y != x + 1} [ usa_error(_): g_cur "internal: helper operands not consecutive" ]
+        fn_rt(f): h
+        e(at): 80 x 2 dst f
+        push(_): g_calls at
+        push(_): g_calls_f f
+        return(_): r
+    ]
+    if(_): {op >= 24 && op <= 27 && u = 1 && b = 64} [
+        # unsigned 64-bit order: flip the sign bits
+        e_int(_): top {1 << 63}
+        e(_): 30 x x top 0
+        e(_): 30 y y top 0
+    ]
+    e(_): op dst x y 0
+    if(_): {b = 32 && (op = 16 || op = 17 || op = 18 || op = 33) && (u = 1 || op = 18 || op = 33)} [
+        g_norm(_): dst t
+    ]
+]
+# A compare-and-branch: jumps (to be patched) taken when node n's truth
+# is sense; d and up are free.
+gen_cjump(r): n d sense [
+    vec(r): ""
+    g_reg(_): d
+    at(k): nd_k n
+    if(_): {k = 1} [
+        at(v): nd_v n
+        set(tr): 0
+        if(_): {v != 0} [ set(tr): 1 ]
+        if(_): {tr = sense} [
+            e(j): 48 0 0 0 0
+            push(_): r j
+        ]
+        return(_): r
+    ]
+    if(_): {k = 8} [
+        at(a): nd_a n
+        gen_cjump(r): a d {1 - sense}
+        return(_): r
+    ]
+    if(_): {k = 6 || k = 7} [
+        at(a): nd_a n
+        at(b): nd_b n
+        # && jumping on false (or || on true) is the jumps of both sides
+        if(_): {(k = 6 && sense = 0) || (k = 7 && sense = 1)} [
+            gen_cjump(r): a d sense
+            gen_cjump(r2): b d sense
+            len(n2): r2
+            set(i): 0
+            while(_): {i < n2} [
+                at(x): r2 i
+                push(_): r x
+                add(i): i 1
+            ]
+            return(_): r
+        ]
+        gen_cjump(skip): a d {1 - sense}
+        gen_cjump(r): b d sense
+        here(h):
+        patch_all(_): skip h
+        return(_): r
+    ]
+    if(_): {k = 5} [
+        at(op): nd_c n
+        if(_): {op >= 22 && op <= 27} [
+            at(a): nd_a n
+            at(b): nd_b n
+            gen_expr(_): a d
+            gen_expr(_): b {d + 1}
+            at(at2): nd_t a
+            g_arith(_): op at2 d d {d + 1}
+            set(jop): 50
+            if(_): {sense = 1} [ set(jop): 49 ]
+            e(j): jop d 0 0 0
+            push(_): r j
+            return(_): r
+        ]
+    ]
+    gen_expr(_): n d
+    set(jop): 50
+    if(_): {sense = 1} [ set(jop): 49 ]
+    e(j): jop d 0 0 0
+    push(_): r j
+]
+# Store the scalar in d to lvalue n; registers above d are free.
+g_store(r): n d [
+    set(r): 0
+    at(k): nd_k n
+    if(_): {k = 3} [
+        at(s): nd_a n
+        g_isvm(vm): s
+        if(_): {vm = 1} [
+            g_storevar(_): s d
+            return(_): r
+        ]
+    ]
+    gen_addr(_): n {d + 1}
+    e(_): 9 29 {d + 1} d 0
+]
+# Load lvalue n (scalar) into d, leaving its address in d + 1 when it is
+# in memory: 1 then, 0 for a VM local.
+g_loadlv(r): n d [
+    set(r): 0
+    at(k): nd_k n
+    if(_): {k = 3} [
+        at(s): nd_a n
+        g_isvm(vm): s
+        if(_): {vm = 1} [
+            g_loadvar(_): s d
+            return(_): r
+        ]
+    ]
+    set(r): 1
+    gen_addr(_): n {d + 1}
+    e(_): 8 d 29 {d + 1} 0
+]
+gen_expr(r): n d [
+    set(r): 0
+    g_reg(_): d
+    at(k): nd_k n
+    at(t): nd_t n
+    at(tk): ty_k t
+    if(_): {k = 1} [
+        at(v): nd_v n
+        e_int(_): d v
+    ]
+    elif(_): {k = 2} [
+        at(v): nd_v n
+        e_flt(_): d v
+    ]
+    elif(_): {k = 3} [
+        at(s): nd_a n
+        if(_): {tk = 10 || tk = 12 || tk = 13} [
+            gen_addr(_): n d
+            return(_): r
+        ]
+        g_isvm(vm): s
+        if(_): {vm = 1} [ g_loadvar(_): s d ]
+        else(_): [
+            gen_addr(_): n d
+            e(_): 8 d 29 d 0
+        ]
+    ]
+    elif(_): {k = 4} [
+        at(v): nd_v n
+        e_int(_): d v
+    ]
+    elif(_): {k = 5} [
+        at(a): nd_a n
+        at(b): nd_b n
+        at(op): nd_c n
+        gen_expr(_): a d
+        gen_expr(_): b {d + 1}
+        at(at2): nd_t a
+        g_arith(_): op at2 d d {d + 1}
+        if(_): {op >= 22 && op <= 27} [ g_bool2int(_): d ]
+    ]
+    elif(_): {k = 6 || k = 7 || k = 8} [
+        gen_cjump(f): n d 0
+        e_int(_): d 1
+        e(j): 48 0 0 0 0
+        here(h):
+        patch_all(_): f h
+        e_int(_): d 0
+        here(h2):
+        patch(_): j h2
+    ]
+    elif(_): {k = 9} [
+        at(a): nd_a n
+        gen_expr(_): a d
+        e(_): 21 d d 0 0
+        ty_bits(b): t
+        at(u): ty_u t
+        if(_): {u = 1 && b = 32} [ g_norm(_): d t ]
+    ]
+    elif(_): {k = 10} [
+        at(a): nd_a n
+        gen_expr(_): a d
+        ty_bits(b): t
+        at(u): ty_u t
+        set(mask): {0 - 1}
+        if(_): {u = 1 && b = 32} [ set(mask): 4294967295 ]
+        e_int(_): {d + 1} mask
+        e(_): 30 d d {d + 1} 0
+    ]
+    elif(_): {k = 11} [
+        at(a): nd_a n
+        gen_addr(_): a d
+    ]
+    elif(_): {k = 12} [
+        at(a): nd_a n
+        gen_expr(_): a d
+        if(_): {tk != 10 && tk != 12 && tk != 13 && tk != 11} [
+            e(_): 8 d 29 d 0
+        ]
+    ]
+    elif(_): {k = 13} [
+        at(a): nd_a n
+        at(b): nd_b n
+        if(_): {tk = 12 || tk = 13} [
+            gen_expr(_): b d
+            gen_addr(_): a {d + 1}
+            g_copy(_): {d + 1} d t {d + 2}
+            return(_): r
+        ]
+        gen_expr(_): b d
+        g_store(_): a d
+    ]
+    elif(_): {k = 14} [
+        at(a): nd_a n
+        at(b): nd_b n
+        at(op): nd_c n
+        at(ct): nd_v n
+        gen_expr(_): b {d + 1}
+        at(ak): nd_k a
+        set(inmem): 1
+        if(_): {ak = 3} [
+            at(s): nd_a a
+            g_isvm(vm): s
+            if(_): {vm = 1} [
+                set(inmem): 0
+                g_loadvar(_): s d
+            ]
+        ]
+        if(_): {inmem = 1} [
+            gen_addr(_): a {d + 2}
+            e(_): 8 d 29 {d + 2} 0
+        ]
+        g_conv(_): d t ct
+        g_arith(_): op ct d d {d + 1}
+        g_conv(_): d ct t
+        if(_): {inmem = 1} [ e(_): 9 29 {d + 2} d 0 ]
+        else(_): [
+            at(s2): nd_a a
+            g_storevar(_): s2 d
+        ]
+    ]
+    elif(_): {k = 15} [
+        at(a): nd_a n
+        at(post): nd_b n
+        at(step): nd_c n
+        g_loadlv(inmem): a d
+        set(v): d
+        if(_): {post = 1} [ set(v): {d + 2} ]
+        e_int(_): {d + 3} step
+        e(_): 16 v d {d + 3} 0
+        ty_isint(ii): t
+        if(_): {ii = 1} [
+            ty_bits(b): t
+            at(u): ty_u t
+            if(_): {b < 32 || u = 1 || tk = 1} [ g_norm(_): v t ]
+        ]
+        if(_): {inmem = 1} [ e(_): 9 29 {d + 1} v 0 ]
+        else(_): [
+            at(s): nd_a a
+            g_storevar(_): s v
+        ]
+    ]
+    elif(_): {k = 16} [ gen_call(_): n d ]
+    elif(_): {k = 17} [
+        at(c): nd_a n
+        at(a): nd_b n
+        at(b): nd_c n
+        gen_cjump(f): c d 0
+        gen_expr(_): a d
+        e(j): 48 0 0 0 0
+        here(h):
+        patch_all(_): f h
+        gen_expr(_): b d
+        here(h2):
+        patch(_): j h2
+    ]
+    elif(_): {k = 18} [
+        at(a): nd_a n
+        at(b): nd_b n
+        gen_expr(_): a d
+        gen_expr(_): b d
+    ]
+    elif(_): {k = 19} [
+        at(a): nd_a n
+        if(_): {a = 0 && tk = 0} [ return(_): r ]
+        gen_expr(_): a d
+        at(ft): nd_t a
+        g_conv(_): d ft t
+    ]
+    elif(_): {k = 22} [
+        if(_): {g_va_slot < 0} [ usa_error(_): g_cur "va_start used in a function with fixed arguments" ]
+        s_idx(sv): "%va"
+        e(_): 2 d 1 g_va_slot sv
+    ]
+    elif(_): {k = 25} [
+        at(s): nd_a n
+        at(fi): sy_v s
+        set(fn_taken): fi 1
+        e_int(_): d {fi + 1}
+    ]
+    elif(_): {k = 26} [
+        at(a): nd_a n
+        gen_addr(_): a d
+    ]
+    elif(_): {k = 27} [
+        at(a): nd_a n
+        at(off): nd_v n
+        gen_expr(_): a d
+        if(_): {off != 0} [
+            e_int(_): {d + 1} off
+            e(_): 16 d d {d + 1} 0
+        ]
+    ]
+    elif(_): {k = 29} [
+        at(v): nd_v n
+        k_str(ks): v
+        e(_): 1 d 0 0 ks
+    ]
+    elif(_): {k = 47} [
+        at(a): nd_a n
+        at(b): nd_b n
+        gen_stmt(_): a
+        gen_expr(_): b d
+    ]
+    else(_): [
+        encode(ks): k
+        concat(m): "internal: cannot generate node kind " ks
+        usa_error(_): g_cur m
+    ]
+]
+# Intrinsics: names the code generator turns into instructions.
+gen_intrinsic(r): name args d [
+    set(r): 0
+    if(_): {name != "__exit" && name != "__setmem" && name != "__mem" && name != "__getsp" && name != "__setsp" && name != "__getidx" && name != "__setidx" && name != "__gget" && name != "__gset" && name != "__data_end" && name != "__rdiv" && name != "__vget" && name != "__vset" && name != "__time" && name != "__random64"} [ return(_): r ]
+    set(r): 1
+    len(n): args
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        gen_expr(_): a {d + i}
+        add(i): i 1
+    ]
+    if(_): {name = "__exit"} [
+        e_gstore(_): d "%exit"
+        e_gload(_): 31 "%exit"
+        e(_): 240 0 0 0 0
+    ]
+    elif(_): {name = "__setmem"} [
+        e_gstore(_): d "M"
+        e_gload(_): 29 "M"
+    ]
+    elif(_): {name = "__mem"} [ e_gload(_): d "M" ]
+    elif(_): {name = "__getsp"} [ e_gload(_): d "SP" ]
+    elif(_): {name = "__setsp"} [ e_gstore(_): d "SP" ]
+    elif(_): {name = "__getidx"} [ e_gload(_): d "IDX" ]
+    elif(_): {name = "__setidx"} [ e_gstore(_): d "IDX" ]
+    elif(_): {name = "__gget"} [ e_gload(_): d "G0" ]
+    elif(_): {name = "__gset"} [ e_gstore(_): d "G0" ]
+    elif(_): {name = "__data_end"} [
+        e(at): 1 d 0 0 0
+        push(_): g_endfix at
+    ]
+    elif(_): {name = "__rdiv"} [ e(_): 19 d d {d + 1} 0 ]
+    elif(_): {name = "__vget"} [ e(_): 8 d d {d + 1} 0 ]
+    elif(_): {name = "__vset"} [ e(_): 9 d {d + 1} {d + 2} 0 ]
+    elif(_): {name = "__time"} [ e(_): 73 d 0 0 0 ]
+    elif(_): {name = "__random64"} [ e(_): 70 d 0 0 0 ]
+    else(_): [ set(r): 0 ]
+]
+gen_call(r): n d [
+    set(r): 0
+    at(f): nd_a n
+    at(np): nd_b n
+    at(va): nd_c n
+    at(args): nd_v n
+    at(t): nd_t n
+    len(na): args
+    at(fk): nd_k f
+    if(_): {fk = 25} [
+        at(s): nd_a f
+        at(name): sy_n s
+        byte(c0): name 0
+        if(_): {c0 = 95} [
+            gen_intrinsic(done): name args d
+            if(_): {done = 1} [ return(_): r ]
+        ]
+        at(fi): sy_v s
+        if(_): {va = 1} [
+            g_reg(_): {d + na + 3}
+            set(i): 0
+            while(_): {i < np} [
+                at(a): args i
+                gen_expr(_): a {d + i}
+                add(i): i 1
+            ]
+            set(nx): {na - np}
+            set(base): {d + np}
+            set(j): 0
+            while(_): {j < nx} [
+                at(a): args {np + j}
+                gen_expr(_): a {base + 1 + j}
+                add(j): j 1
+            ]
+            set(tmp): {base + 1 + nx}
+            e_gload(_): base "SP"
+            set(j): 0
+            while(_): {j < nx} [
+                if(_): {j = 0} [
+                    e(_): 9 29 base {base + 1} 0
+                ]
+                else(_): [
+                    e_int(_): tmp {8 * j}
+                    e(_): 16 tmp base tmp 0
+                    e(_): 9 29 tmp {base + 1 + j} 0
+                ]
+                add(j): j 1
+            ]
+            e_int(_): tmp {8 * nx + 8}
+            e(_): 16 tmp base tmp 0
+            e_gstore(_): tmp "SP"
+            e(at): 80 d {np + 1} d fi
+            push(_): g_calls at
+            push(_): g_calls_f fi
+            e_gstore(_): base "SP"
+            return(_): r
+        ]
+        g_reg(_): {d + na}
+        set(i): 0
+        while(_): {i < na} [
+            at(a): args i
+            gen_expr(_): a {d + i}
+            add(i): i 1
+        ]
+        e(at): 80 d na d fi
+        push(_): g_calls at
+        push(_): g_calls_f fi
+        return(_): r
+    ]
+    # through a pointer: the dispatcher for this many arguments
+    g_reg(_): {d + na + 2}
+    gen_expr(_): f d
+    set(nargs): na
+    if(_): {va = 1} [
+        set(i): 0
+        while(_): {i < np} [
+            at(a): args i
+            gen_expr(_): a {d + 1 + i}
+            add(i): i 1
+        ]
+        set(nx): {na - np}
+        set(base): {d + 1 + np}
+        set(j): 0
+        while(_): {j < nx} [
+            at(a): args {np + j}
+            gen_expr(_): a {base + 1 + j}
+            add(j): j 1
+        ]
+        set(tmp): {base + 1 + nx}
+        g_reg(_): tmp
+        e_gload(_): base "SP"
+        set(j): 0
+        while(_): {j < nx} [
+            e_int(_): tmp {8 * j}
+            e(_): 16 tmp base tmp 0
+            e(_): 9 29 tmp {base + 1 + j} 0
+            add(j): j 1
+        ]
+        e_int(_): tmp {8 * nx + 8}
+        e(_): 16 tmp base tmp 0
+        e_gstore(_): tmp "SP"
+        set(nargs): {np + 1}
+        g_icall_fn(fi): nargs
+        e(_): 80 d {nargs + 1} d fi
+        e_gstore(_): base "SP"
+        return(_): r
+    ]
+    set(i): 0
+    while(_): {i < na} [
+        at(a): args i
+        gen_expr(_): a {d + 1 + i}
+        add(i): i 1
+    ]
+    g_icall_fn(fi): na
+    e(_): 80 d {na + 1} d fi
+]
+# The dispatcher for calls through pointers with k arguments.
+g_icall_fn(r): k [
+    len(n): g_icall
+    while(_): {n <= k} [
+        push(_): g_icall {0 - 1}
+        add(n): n 1
+    ]
+    at(r): g_icall k
+    if(_): {r < 0} [
+        encode(ks): k
+        concat(nm): "__icall_" ks
+        fn_internal(r): nm {k + 1}
+        set(g_icall): k r
+    ]
+]
+
+# ======================= statements =======================
+gen_stmt(r): n [
+    set(r): 0
+    if(_): {n < 0} [ return(_): r ]
+    at(k): nd_k n
+    at(ln): nd_ln n
+    set(g_cur): ln
+    if(_): {k = 30} [
+        at(items): nd_v n
+        len(ni): items
+        set(i): 0
+        while(_): {i < ni} [
+            at(s): items i
+            gen_stmt(_): s
+            add(i): i 1
+        ]
+    ]
+    elif(_): {k = 31} [
+        at(a): nd_a n
+        at(ak): nd_k a
+        if(_): {ak = 15} [
+            # x++ as a statement: no old value to keep
+            set(nd_b): a 0
+        ]
+        gen_expr(_): a 0
+    ]
+    elif(_): {k = 32} [
+        at(c): nd_a n
+        at(a): nd_b n
+        at(b): nd_c n
+        gen_cjump(f): c 0 0
+        gen_stmt(_): a
+        if(_): {b >= 0} [
+            e(j): 48 0 0 0 0
+            here(h):
+            patch_all(_): f h
+            gen_stmt(_): b
+            here(h2):
+            patch(_): j h2
+        ]
+        else(_): [
+            here(h):
+            patch_all(_): f h
+        ]
+    ]
+    elif(_): {k = 33} [
+        at(c): nd_a n
+        at(b): nd_b n
+        here(top):
+        gen_cjump(f): c 0 0
+        g_loop_push(_):
+        gen_stmt(_): b
+        e(_): 48 0 0 0 top
+        here(h):
+        patch_all(_): f h
+        g_loop_pop(_): h top
+    ]
+    elif(_): {k = 34} [
+        at(b): nd_a n
+        at(c): nd_b n
+        here(top):
+        g_loop_push(_):
+        gen_stmt(_): b
+        here(ct):
+        gen_cjump(t): c 0 1
+        patch_all(_): t top
+        here(h):
+        g_loop_pop(_): h ct
+    ]
+    elif(_): {k = 35} [
+        at(init): nd_a n
+        at(c): nd_b n
+        at(step): nd_c n
+        at(body): nd_v n
+        if(_): {init >= 0} [ gen_stmt(_): init ]
+        here(top):
+        vec(f): ""
+        if(_): {c >= 0} [ gen_cjump(f): c 0 0 ]
+        g_loop_push(_):
+        gen_stmt(_): body
+        here(ct):
+        if(_): {step >= 0} [
+            at(sk): nd_k step
+            if(_): {sk = 15} [ set(nd_b): step 0 ]
+            gen_expr(_): step 0
+        ]
+        e(_): 48 0 0 0 top
+        here(h):
+        patch_all(_): f h
+        g_loop_pop(_): h ct
+    ]
+    elif(_): {k = 36} [
+        at(a): nd_a n
+        if(_): {a < 0} [
+            e_int(_): 0 0
+        ]
+        else(_): [
+            gen_expr(_): a 0
+            at(ft): sy_t p_fn
+            at(rt): ty_b ft
+            ty_isagg(ag): rt
+            if(_): {ag = 1} [
+                # copy into this function's return buffer
+                at(fi): sy_v p_fn
+                at(buf): fn_rbuf fi
+                if(_): {buf = 0} [
+                    at(sz): ty_sz rt
+                    set(g_top): {(g_top + 7) - (g_top + 7) % 8}
+                    set(buf): g_top
+                    add(g_top): g_top sz
+                    set(fn_rbuf): fi buf
+                ]
+                e_int(_): 1 buf
+                g_copy(_): 1 0 rt 2
+                e_int(_): 0 buf
+            ]
+        ]
+        g_ret(_): 0
+    ]
+    elif(_): {k = 37} [
+        len(nb): g_brk
+        if(_): {nb = 0} [ usa_error(_): ln "break statement not within loop or switch" ]
+        at(l): g_brk {nb - 1}
+        e(j): 48 0 0 0 0
+        push(_): l j
+    ]
+    elif(_): {k = 38} [
+        len(nc): g_cont
+        set(l): null
+        while(_): {nc > 0 && l = null} [
+            at(l): g_cont {nc - 1}
+            sub(nc): nc 1
+        ]
+        if(_): {l = null} [ usa_error(_): ln "continue statement not within a loop" ]
+        e(j): 48 0 0 0 0
+        push(_): l j
+    ]
+    elif(_): {k = 39} [ gen_switch(_): n ]
+    elif(_): {k = 40 || k = 41} [
+        here(h):
+        at(j): nd_c n
+        if(_): {j > 0} [ patch(_): j h ]
+        at(a): nd_a n
+        gen_stmt(_): a
+    ]
+    elif(_): {k = 42} [
+        at(name): nd_v n
+        e(j): 48 0 0 0 0
+        push(_): g_gotos j
+        push(_): g_goton name
+    ]
+    elif(_): {k = 43} [
+        at(name): nd_v n
+        here(h):
+        push(_): g_labels h
+        push(_): g_labn name
+        at(a): nd_a n
+        gen_stmt(_): a
+    ]
+    elif(_): {k = 44} [ set(r): 0 ]
+    elif(_): {k = 45} [
+        at(a): nd_a n
+        at(sz): nd_v n
+        at(t): nd_t a
+        g_leafs(lv): t
+        len(nl): lv
+        gen_addr(_): a 0
+        if(_): {nl <= 16} [
+            e_int(_): 1 0
+            set(i): 0
+            while(_): {i < nl} [
+                at(off): lv i
+                if(_): {off = 0} [ e(_): 9 29 0 1 0 ]
+                else(_): [
+                    e_int(_): 2 off
+                    e(_): 16 2 0 2 0
+                    e(_): 9 29 2 1 0
+                ]
+                add(i): i 1
+            ]
+        ]
+        else(_): [
+            e_int(_): 1 0
+            e_int(_): 2 sz
+            fn_rt(f): "memset"
+            e(at): 80 0 3 0 f
+            push(_): g_calls at
+            push(_): g_calls_f f
+        ]
+    ]
+    else(_): [
+        gen_expr(_): n 0
+    ]
+]
+# break and continue targets of a loop (a switch pushes null for continue).
+g_loop_push(r): [
+    set(r): 0
+    vec(b): ""
+    vec(c): ""
+    push(_): g_brk b
+    push(_): g_cont c
+]
+g_loop_pop(r): brk cont [
+    set(r): 0
+    pop(b): g_brk
+    pop(c): g_cont
+    patch_all(_): b brk
+    if(_): {c != null} [ patch_all(_): c cont ]
+]
+gen_switch(r): n [
+    set(r): 0
+    at(c): nd_a n
+    at(body): nd_b n
+    at(cases): nd_v n
+    gen_expr(_): c 0
+    len(nc): cases
+    set(dflt): {0 - 1}
+    set(i): 0
+    while(_): {i < nc} [
+        at(cs): cases i
+        at(ck): nd_k cs
+        if(_): {ck = 41} [ set(dflt): cs ]
+        else(_): [
+            at(lo): nd_v cs
+            at(hi): nd_b cs
+            if(_): {lo = hi} [
+                e_int(_): 1 lo
+                e(_): 22 2 0 1 0
+            ]
+            else(_): [
+                e_int(_): 1 lo
+                e(_): 27 2 0 1 0
+                e_int(_): 1 hi
+                e(_): 25 3 0 1 0
+                e(_): 28 2 2 3 0
+            ]
+            e(j): 49 2 0 0 0
+            set(nd_c): cs j
+        ]
+        add(i): i 1
+    ]
+    e(jd): 48 0 0 0 0
+    # the default label patches jd when the body reaches it
+    if(_): {dflt >= 0} [ set(nd_c): dflt jd ]
+    vec(b): ""
+    push(_): g_brk b
+    push(_): g_cont null
+    gen_stmt(_): body
+    here(h):
+    g_loop_pop(_): h 0
+    if(_): {dflt < 0} [ patch(_): jd h ]
+]
