@@ -207,6 +207,8 @@ void *malloc(size_t n)
     if (__freel[c]) {
         p = __freel[c];
         __freel[c] = *(long *)p;
+        /* the header held the list link: its class again */
+        *(long *)p = c;
         return (void *)(p + 8);
     }
     p = __brk;
@@ -947,98 +949,189 @@ static double __pow10(int e)
     return neg ? 1 / r : r;
 }
 
-/* x >= 0 as fixed-point text with prec decimals; the length */
-static int __ftoa(double x, int prec, char *out)
+/* Times mul (small enough that a limb times it stays below 2^53, where
+   division is quick) the number in big[0..nb), base 10^9, least
+   significant limb first; the new limb count. */
+static int __bigmul(long *big, int nb, long mul)
 {
-    char tmp[400];
-    int n = 0, i, nd;
-    double ip, fp;
-    long d;
-    if (prec > 30)
-        prec = 30;
-    /* round at the last decimal */
-    x = x + 0.5 * __pow10(-prec);
-    ip = floor(x);
-    fp = x - ip;
-    if (ip < 1e18) {
-        unsigned long u = (unsigned long)(long)ip;
-        nd = __utoa(u, 10, 0, tmp);
-    } else {
-        /* digits of a big whole number, from the top */
-        int e = 0;
-        double t = ip;
-        while (t >= 10) {
-            t /= 10;
-            e++;
+    long carry = 0, v;
+    int i;
+    for (i = 0; i < nb; i++) {
+        v = big[i] * mul + carry;
+        big[i] = v % 1000000000;
+        carry = v / 1000000000;
+    }
+    while (carry) {
+        big[nb++] = carry % 1000000000;
+        carry /= 1000000000;
+    }
+    return nb;
+}
+
+/* The exact decimal digits of a finite x > 0, without leading or
+   trailing zeros, into d; their count. x = 0.d1d2d3... * 10^*dp. */
+static int __exact(double x, char *d, int *dp)
+{
+    long big[130], m;
+    int nb, e = 0, i, j, n = 0, k = 0;
+    char tmp[9];
+    /* x = m * 2^e, m a whole number below 2^53 */
+    while (x >= 9007199254740992.0 * 4294967296.0) {
+        x /= 4294967296.0;
+        e += 32;
+    }
+    while (x >= 9007199254740992.0) {
+        x /= 2;
+        e++;
+    }
+    while (x < 1048576.0) {
+        x *= 4294967296.0;
+        e -= 32;
+    }
+    while (x < 4503599627370496.0) {
+        x *= 2;
+        e--;
+    }
+    m = (long)x;
+    big[0] = m % 1000000000;
+    big[1] = m / 1000000000;
+    nb = big[1] ? 2 : 1;
+    while (e > 0) {
+        int s = e > 22 ? 22 : e;
+        nb = __bigmul(big, nb, 1L << s);
+        e -= s;
+    }
+    /* m / 2^n = m * 5^n / 10^n */
+    while (e < 0) {
+        int s = -e > 9 ? 9 : -e;
+        long mul = 1;
+        for (i = 0; i < s; i++)
+            mul *= 5;
+        nb = __bigmul(big, nb, mul);
+        e += s;
+        k += s;
+    }
+    for (i = nb - 1; i >= 0; i--) {
+        long v = big[i];
+        for (j = 8; j >= 0; j--) {
+            tmp[j] = '0' + v % 10;
+            v /= 10;
         }
-        nd = 0;
-        for (i = e; i >= 0; i--) {
-            double p = __pow10(i);
-            int dg = (int)(ip / p);
-            if (dg > 9)
-                dg = 9;
-            if (dg < 0)
-                dg = 0;
-            ip -= dg * p;
-            tmp[e - i] = '0' + dg;
-            nd++;
-        }
-        for (i = 0; i < nd / 2; i++) {
-            char c = tmp[i];
-            tmp[i] = tmp[nd - 1 - i];
-            tmp[nd - 1 - i] = c;
+        for (j = 0; j < 9; j++) {
+            if (n == 0 && tmp[j] == '0')
+                continue;
+            d[n++] = tmp[j];
         }
     }
-    for (i = nd - 1; i >= 0; i--)
-        out[n++] = tmp[i];
-    if (prec > 0) {
-        out[n++] = '.';
-        for (i = 0; i < prec; i++) {
-            fp *= 10;
-            d = (long)fp;
-            if (d > 9)
-                d = 9;
-            out[n++] = '0' + d;
-            fp -= d;
-        }
-    }
+    *dp = n - k;
+    while (n > 1 && d[n - 1] == '0')
+        n--;
     return n;
 }
 
-/* x > 0 as d.ddde+XX; the length */
-static int __etoa(double x, int prec, int upper, char *out)
+/* d[0..n) rounded to keep digits, halves to even (keep may be 0 or
+   less); the new count, *dp moving when 9s carry over. */
+static int __rounddig(char *d, int n, int keep, int *dp)
 {
-    int e = 0, n;
-    char tmp[64];
-    if (x != 0) {
-        while (x >= 10) {
-            x /= 10;
-            e++;
+    int up, i;
+    if (keep >= n)
+        return n;
+    if (keep < 0)
+        return 0;
+    up = d[keep] > '5';
+    if (d[keep] == '5') {
+        up = keep + 1 < n || (keep > 0 && (d[keep - 1] - '0') % 2 == 1);
+    }
+    n = keep;
+    if (!up)
+        return n;
+    for (i = keep - 1; i >= 0; i--) {
+        if (d[i] != '9') {
+            d[i]++;
+            return n;
         }
-        while (x < 1) {
-            x *= 10;
-            e--;
-        }
+        d[i] = '0';
     }
-    n = __ftoa(x, prec, out);
-    if (out[0] == '1' && out[1] == '0') {
-        /* 9.99 rounded up to 10.0 */
-        x /= 10;
-        e++;
-        n = __ftoa(x, prec, out);
-    }
-    out[n++] = upper ? 'E' : 'e';
-    out[n++] = e < 0 ? '-' : '+';
-    if (e < 0)
-        e = -e;
-    if (e < 10)
-        out[n++] = '0';
-    {
-        int m = __utoa(e, 10, 0, tmp), i;
-        for (i = m - 1; i >= 0; i--)
-            out[n++] = tmp[i];
-    }
+    /* 99.9 -> 100 */
+    d[0] = '1';
+    if (n == 0)
+        n = 1;
+    (*dp)++;
     return n;
+}
+
+/* The digit at place i of 0.d... (zero outside d). */
+static int __dig(const char *d, int n, int i)
+{
+    return i >= 0 && i < n ? d[i] : '0';
+}
+
+/* x >= 0 (finite) in conversion c (f, e or g, any case) with precision
+   prec into out; the length. */
+static int __fmtdbl(char *out, double x, int prec, int c, int alt)
+{
+    char d[1100];
+    int n = 0, dp = 1, len = 0, i, P, X, upper = c == 'E' || c == 'G';
+    if (x > 0)
+        n = __exact(x, d, &dp);
+    else
+        dp = 1;
+    if (c == 'g' || c == 'G') {
+        P = prec == 0 ? 1 : prec;
+        if (n > 0)
+            n = __rounddig(d, n, P, &dp);
+        while (n > 1 && d[n - 1] == '0')
+            n--;
+        X = n > 0 ? dp - 1 : 0;
+        if (P > X && X >= -4) {
+            c = 'f';
+            prec = P - 1 - X;
+        } else {
+            c = 'e';
+            prec = P - 1;
+        }
+        if (!alt) {
+            /* no trailing zeros in the fraction */
+            int sig = n > 0 ? n : 1;
+            if (c == 'f') {
+                int frac = sig - dp;
+                if (frac < prec)
+                    prec = frac < 0 ? 0 : frac;
+            } else if (sig - 1 < prec) {
+                prec = sig - 1;
+            }
+        }
+    }
+    if (c == 'f' || c == 'F') {
+        if (n > 0)
+            n = __rounddig(d, n, dp + prec, &dp);
+        if (dp <= 0)
+            out[len++] = '0';
+        for (i = 0; i < dp; i++)
+            out[len++] = __dig(d, n, i);
+        if (prec > 0 || alt)
+            out[len++] = '.';
+        for (i = 0; i < prec; i++)
+            out[len++] = __dig(d, n, dp + i);
+        return len;
+    }
+    if (n > 0)
+        n = __rounddig(d, n, prec + 1, &dp);
+    X = n > 0 ? dp - 1 : 0;
+    out[len++] = __dig(d, n, 0);
+    if (prec > 0 || alt)
+        out[len++] = '.';
+    for (i = 1; i <= prec; i++)
+        out[len++] = __dig(d, n, i);
+    out[len++] = upper ? 'E' : 'e';
+    out[len++] = X < 0 ? '-' : '+';
+    if (X < 0)
+        X = -X;
+    if (X >= 100)
+        out[len++] = '0' + X / 100;
+    out[len++] = '0' + X / 10 % 10;
+    out[len++] = '0' + X % 10;
+    return len;
 }
 
 static int __vformat(struct __sink *k, const char *fmt, va_list ap)
@@ -1174,46 +1267,10 @@ static int __vformat(struct __sink *k, const char *fmt, va_list ap)
                 strcpy(num, "inf");
                 n = 3;
                 zero = 0;
-            } else if (c == 'f' || c == 'F') {
-                n = __ftoa(x, prec, num);
-            } else if (c == 'e' || c == 'E') {
-                n = __etoa(x, prec, c == 'E', num);
             } else {
-                int P = prec == 0 ? 1 : prec, X = 0;
-                double t = x;
-                if (t != 0) {
-                    /* the exponent after rounding to P digits */
-                    char e[64];
-                    int m = __etoa(t, P - 1, 0, e), i = 0;
-                    while (e[i] != 'e')
-                        i++;
-                    X = atoi(e + i + 1);
-                }
-                if (P > X && X >= -4)
-                    n = __ftoa(x, P - 1 - X, num);
-                else
-                    n = __etoa(x, P - 1, c == 'G', num);
-                if (!alt) {
-                    /* drop trailing zeros of the fraction */
-                    int epos = n, i, dot = -1;
-                    for (i = 0; i < n; i++) {
-                        if (num[i] == 'e' || num[i] == 'E') {
-                            epos = i;
-                            break;
-                        }
-                        if (num[i] == '.')
-                            dot = i;
-                    }
-                    if (dot >= 0) {
-                        int end = epos;
-                        while (end > dot + 1 && num[end - 1] == '0')
-                            end--;
-                        if (end == dot + 1)
-                            end = dot;
-                        memmove(num + end, num + epos, n - epos);
-                        n = end + (n - epos);
-                    }
-                }
+                if (prec > 400)
+                    prec = 400;
+                n = __fmtdbl(num, x, prec, c, alt);
             }
             __emitnum(k, sign, "", num, n, width, left, zero);
         } else if (c == 'n') {
@@ -1945,6 +2002,18 @@ double trunc(double x)
 }
 
 double round(double x) { return x < 0 ? -floor(-x + 0.5) : floor(x + 0.5); }
+
+/* to nearest, ties to even */
+double rint(double x)
+{
+    double f = floor(x), d = x - f;
+    if (d > 0.5 || (d == 0.5 && fmod(f, 2) != 0))
+        f += 1;
+    return f;
+}
+
+double nearbyint(double x) { return rint(x); }
+long lrint(double x) { return (long)rint(x); }
 long lround(double x) { return (long)round(x); }
 double fmin(double a, double b) { return a < b ? a : b; }
 double fmax(double a, double b) { return a > b ? a : b; }
@@ -2083,7 +2152,15 @@ double pow(double x, double y)
 }
 
 double sin(double x) { return (double)__ussr_sin(x); }
-double cos(double x) { return (double)__ussr_sin(x + M_PI / 2); }
+/* cos(x) = sin(x + pi/2), with the rounding of x + pi/2 (and pi/2's own
+   tail) put back by sin(s + e) ~ sin(s) + e cos(s) */
+double cos(double x)
+{
+    double p1 = 1.5707963267948966, p2 = 6.123233995736766e-17;
+    double s = x + p1, bv = s - x, av = s - bv;
+    double e = ((x - av) + (p1 - bv)) + p2;
+    return (double)__ussr_sin(s) + e * (double)__ussr_sin(s + p1);
+}
 double tan(double x) { return sin(x) / cos(x); }
 
 double atan(double x)

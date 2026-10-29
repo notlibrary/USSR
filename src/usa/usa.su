@@ -540,6 +540,7 @@ usa_unit(r): path dirs defs only_pp [
 usa_main(r): args [
     set(r): 0
     set(usa_zero): 0
+    set(usa_trace): 0
     usa_findhome(usa_home):
     if(_): {usa_home = ""} [
         write_stderr(_): "usa: cannot find usa's include/ directory; set USA_HOME to the directory of usa.su\n"
@@ -564,6 +565,7 @@ usa_main(r): args [
         ]
         elif(_): {a = "-E"} [ set(only_pp): 1 ]
         elif(_): {a = "-nostdlib"} [ set(nolib): 1 ]
+        elif(_): {a = "-trace"} [ set(usa_trace): 1 ]
         elif(_): {a = "-c" || a = "-O" || a = "-O2" || a = "-g" || a = "-Wall" || a = "-std=c99" || a = "-std=c89" || a = "-ansi" || a = "-pedantic"} [ set(r): 0 ]
         elif(_): {pre = "-I"} [
             if(_): {al = 2} [

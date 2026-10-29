@@ -32,7 +32,7 @@ global(_): co_op co_a co_b co_c co_i k_tag k_val k_tab st_s st_tab
 global(_): fn_name fn_entry fn_params fn_locals fn_defined fn_np fn_sym fn_kind fn_taken fn_rbuf fn_va
 global(_): g_fix_at g_fix_sym g_endfix g_calls g_calls_f
 global(_): g_slots g_slotn g_fp g_brk g_cont g_labels g_labn g_gotos g_goton g_cur g_icall
-global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero
+global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero usa_trace
 
 # ======================= pools =======================
 gen_init(r): [
@@ -445,6 +445,16 @@ gen_function(r): s psyms lsyms body [
     here(entry):
     set(fn_entry): fi entry
     e_gload(_): 29 "M"
+    if(_): {usa_trace = 1} [
+        # -trace: each call says which function it enters
+        at(tn): sy_n s
+        concat(tm): "> " tn
+        concat(tm): tm "\n"
+        k_str(tk): tm
+        e(_): 1 0 0 0 tk
+        s_idx(ws): "write_stderr"
+        e(_): 68 1 1 0 ws
+    ]
     if(_): {g_frame > 0} [
         set(g_fp): 1
         e_gload(_): 28 "SP"

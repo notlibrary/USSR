@@ -655,12 +655,14 @@ pp_expand(r): text depth [
                 if(_): {name = "__LINE__"} [
                     encode(ln): pp_curline
                     push(_): out ln
+                    set(changed): 1
                 ]
                 elif(_): {name = "__FILE__"} [
                     len(d): pp_inc
                     at(f): pp_inc {d - 1}
                     pp_stringize(fs): f
                     push(_): out fs
+                    set(changed): 1
                 ]
                 else(_): [ push(_): out name ]
             ]
