@@ -456,13 +456,13 @@ p_declspec(r): [
         p_skip_attr(_):
         at(k): tk_k p_i
         at(s): tk_s p_i
-        set(used): 0
+        set(go): 1
         if(_): {k = 1} [
             if(_): {s = "typedef"} [ set(sclass): 1 ]
             elif(_): {s = "static"} [ set(sclass): 2 ]
             elif(_): {s = "extern"} [ set(sclass): 3 ]
             elif(_): {s = "inline" || s = "__inline" || s = "__inline__" || s = "_Noreturn"} [ set(p_inline): 1 ]
-            elif(_): {s = "const" || s = "volatile" || s = "register" || s = "auto" || s = "restrict" || s = "__restrict" || s = "__restrict__" || s = "__extension__" || s = "__const" || s = "__volatile__"} [ set(used): 0 ]
+            elif(_): {s = "const" || s = "volatile" || s = "register" || s = "auto" || s = "restrict" || s = "__restrict" || s = "__restrict__" || s = "__extension__" || s = "__const" || s = "__volatile__"} [ set(go): 1 ]
             elif(_): {s = "_Alignas"} [
                 add(p_i): p_i 1
                 p_skip_parens(_):
@@ -704,8 +704,7 @@ p_enum(r): [
     set(r): ty_int
     p_skip_attr(_):
     at(k): tk_k p_i
-    set(tag): ""
-    if(_): {k = 1} [ p_ident(tag): ]
+    if(_): {k = 1} [ p_ident(_): ]
     p_accept(body): "{"
     if(_): {body = 0} [ return(_): r ]
     set(val): 0
@@ -812,8 +811,8 @@ p_dsuffix(r): t [
     if(_): {lb = 1} [
         add(p_i): p_i 1
         set(n): {0 - 1}
-        p_accept(st): "static"
-        p_accept(cq): "const"
+        p_accept(_): "static"
+        p_accept(_): "const"
         p_is(rb): "]"
         set(vla): {0 - 1}
         if(_): {rb = 0} [
@@ -1180,7 +1179,6 @@ p_init_into(r): lv t stmts zero [
         if(_): {k != 10} [
             # a struct from an expression of its type
             p_assign(e):
-            at(et): nd_t e
             p_new_assign(a): lv e
             push(_): stmts a
             return(_): r

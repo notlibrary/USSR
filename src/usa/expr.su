@@ -624,7 +624,6 @@ p_cast(r): [
             ty_isscalar(esc): et
             if(_): {esc = 0} [ p_fail(_): "aggregate value used where a scalar was expected" ]
             p_conv(r): e2 t
-            at(rk): nd_k r
             if(_): {r = e2} [
                 # keep a node of its own for the cast's type
                 nd_new(r): 19 t e2 0 0 0
@@ -691,13 +690,6 @@ p_unary(r): [
             set(r): e3
             if(_): {s = "-"} [
                 nd_new(r): 9 pt e3 0 0 0
-                at(ek): nd_k e3
-                if(_): {ek = 2} [
-                    # -1.5: a negative floating constant
-                    at(fv): nd_v e3
-                    set(r): e3
-                    nd_new(r): 9 pt e3 0 0 0
-                ]
             ]
             if(_): {s = "~"} [
                 ty_isflt(fl): pt
@@ -1140,8 +1132,6 @@ p_primary(r): [
                 vec(nop): ""
                 ty_fn(ft): ty_int nop 0
                 set(ty_proto): ft 0
-                sc_find(dummy): s
-                len(d): sc_names
                 # bind at file scope
                 at(outer): sc_names 0
                 set(saven): sc_names

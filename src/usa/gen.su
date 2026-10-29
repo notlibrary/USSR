@@ -854,6 +854,79 @@ g_arith(r): op t dst x y [
         g_norm(_): dst t
     ]
 ]
+# Integer / and % by a constant power of two 2^k, and >> of an unsigned
+# long by a constant, without the helper calls: the left value is in d
+# already. 1 when done (b not generated), else 0.
+g_pow2op(r): op t b d [
+    set(r): 0
+    if(_): {op != 19 && op != 20 && op != 34} [ return(_): r ]
+    at(bk): nd_k b
+    if(_): {bk != 1} [ return(_): r ]
+    ty_isint(ii): t
+    if(_): {ii = 0} [ return(_): r ]
+    at(v): nd_v b
+    at(u): ty_u t
+    ty_bits(bits): t
+    if(_): {op = 34} [
+        if(_): {u = 0 || bits < 64 || v <= 0 || v > 63} [ return(_): r ]
+        # unsigned long >> k: the arithmetic shift, then the sign bits off
+        e_int(_): {d + 1} v
+        e(_): 34 d d {d + 1} 0
+        e_int(_): {d + 1} {(1 << (64 - v)) - 1}
+        e(_): 31 d d {d + 1} 0
+        set(r): 1
+        return(_): r
+    ]
+    if(_): {v <= 0 || (v & (v - 1)) != 0} [ return(_): r ]
+    set(kk): 0
+    set(x): v
+    while(_): {x > 1} [
+        set(x): {x >> 1}
+        add(kk): kk 1
+    ]
+    if(_): {u = 1} [
+        if(_): {op = 20} [
+            e_int(_): {d + 1} {v - 1}
+            e(_): 31 d d {d + 1} 0
+        ]
+        elif(_): {kk > 0} [
+            e_int(_): {d + 1} kk
+            e(_): 34 d d {d + 1} 0
+            if(_): {bits = 64} [
+                e_int(_): {d + 1} {(1 << (64 - kk)) - 1}
+                e(_): 31 d d {d + 1} 0
+            ]
+        ]
+        set(r): 1
+        return(_): r
+    ]
+    if(_): {kk = 0} [
+        # x / 1 is x, x % 1 is 0
+        if(_): {op = 20} [ e_int(_): d 0 ]
+        set(r): 1
+        return(_): r
+    ]
+    # signed: q = (x + ((x >> 63) & (2^k - 1))) >> k rounds toward zero
+    g_reg(_): {d + 2}
+    e_int(_): {d + 2} 63
+    e(_): 34 {d + 1} d {d + 2} 0
+    e_int(_): {d + 2} {v - 1}
+    e(_): 31 {d + 1} {d + 1} {d + 2} 0
+    e(_): 16 {d + 1} d {d + 1} 0
+    e_int(_): {d + 2} kk
+    e(_): 34 {d + 1} {d + 1} {d + 2} 0
+    if(_): {op = 19} [
+        # the quotient into d (+ 0: there is no move)
+        e_int(_): 30 0
+        e(_): 16 d {d + 1} 30 0
+    ]
+    else(_): [
+        # x - (q << k)
+        e(_): 33 {d + 1} {d + 1} {d + 2} 0
+        e(_): 17 d d {d + 1} 0
+    ]
+    set(r): 1
+]
 # A compare-and-branch: jumps (to be patched) taken when node n's truth
 # is sense; d and up are free.
 gen_cjump(r): n d sense [
@@ -986,9 +1059,11 @@ gen_expr(r): n d [
         at(a): nd_a n
         at(b): nd_b n
         at(op): nd_c n
-        gen_expr(_): a d
-        gen_expr(_): b {d + 1}
         at(at2): nd_t a
+        gen_expr(_): a d
+        g_pow2op(done): op at2 b d
+        if(_): {done = 1} [ return(_): r ]
+        gen_expr(_): b {d + 1}
         g_arith(_): op at2 d d {d + 1}
         if(_): {op >= 22 && op <= 27} [ g_bool2int(_): d ]
     ]
@@ -1206,7 +1281,6 @@ gen_call(r): n d [
     at(np): nd_b n
     at(va): nd_c n
     at(args): nd_v n
-    at(t): nd_t n
     len(na): args
     at(fk): nd_k f
     if(_): {fk = 25} [
