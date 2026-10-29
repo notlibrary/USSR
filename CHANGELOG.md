@@ -26,7 +26,7 @@ the README has code, and with usa, the C compiler, USSR is complete.
   PostgreSQL client).
 - Kremlin, the full-screen desktop, and Klin, the calculator.
 - `launch` and `localtime` builtins, Petersburg full screen, double-click
-  and menu events, scaled text; hex integer literals (`0xCAFEBABE`).
+  and menu events, scaled text; hex integer literals (`0xCAFEBABE 0xDEADBEEF`).
 
 ### Changed
 - The optimization cycle (docs/OPTIMIZATIONS.md): getf/at/setf/len fast
@@ -39,7 +39,7 @@ the README has code, and with usa, the C compiler, USSR is complete.
 ### Fixed
 - The VM's `LOAD_VAR` leaked its register's old value.
 
-## [Unreleased]
+## [0.4.8] - 2026-10-22
 
 ### Added
 - `bread(v): dev lba [count [sector]]` and `bwrite(n): dev lba bytes [sector]` read and write whole sectors of a disk image or raw disk (`\\.\PhysicalDriveN`, `/dev/sdX`) as byte vectors; `bsize(n): dev` sizes one and `bdevices(v):` lists the storage devices with path, size, kind (HDD, SSD, flash, virtual), bus, model and sector size (Windows storage IOCTLs, Linux `/sys/block`). `crc32(n): data [from [count]]` joins the hashes. Mirrored in russia.su.
