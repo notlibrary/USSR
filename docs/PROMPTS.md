@@ -964,3 +964,16 @@ Test it on virtual 20MB hard-drive let it support GPT MBR ext4 NTFS ufs ffs2
 It works on command line by default it just lists all detected storage devices HDD SSD flash
 It use bread bwrite calls to actually edit and find the table
 basic functions are add partition remove partition edit partition
+
+Now let's implement classic russian table trading card deck game for 3 persons sochi.su
+Preference use sochi sochinka rule set it's important 
+No separate public server that track games each script can be a client and a server 
+use UDP socket on 33333 port to play; prefer LAN over WAN and make a small chat for 3 players
+Ask for their nicknames 32 cards starting from 7 spades, clubs, diamonds, hearts no jokers 
+the closest anglo analog is bridge I believe you can do it ask me for rules just in case
+
+Complete the circle usa.su C compiler written in USSR which outputs .ru USSR bytecode
+pick preprocessor from russia.su(change $ to #) make compiler tiny or nano
+no REPL mode just compile to .ru
+battle test it on real C projects not on premade tests 
+use hand-made parser that's all it is the the final prog in our project
