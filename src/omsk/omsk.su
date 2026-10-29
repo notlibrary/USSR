@@ -1,0 +1,2384 @@
+# Omsk - image thumbnails for USSR: the O of the ROUND stack (Ryazan TLS,
+# Omsk images, Ukraine HTTP, Novgorod forum, Dubna PostgreSQL).
+#
+# Pure USSR, no native image code: Omsk reads PNG and baseline JPEG,
+# shrinks the picture to fit a square box (200x200 for Novgorod), keeping
+# its proportions, and writes the thumbnail as a baseline JPEG.
+#
+#   omsk_thumb(t): bytes side         -> [w h tw th jpeg-bytes] or null
+#   omsk_thumb_base64(t): text side   -> [w h tw th jpeg-base64] or null
+#   omsk_info(i): bytes               -> ["png"|"jpeg" w h] or null
+#   omsk_fit(d): w h side             -> [tw th], the thumbnail's size
+#   omsk_unbase64(v): text            -> bytes, or null if not base64
+#   omsk_base64(s): bytes             -> base64 text
+#   omsk_error(s):                    -> why the last call gave null
+#
+# PNG: every colour type at bit depths 1-16, not interlaced; transparent
+# pixels go on white. JPEG: baseline and extended sequential Huffman,
+# greyscale or YCbCr, any 1x/2x/4x sampling, restart intervals; not
+# progressive or arithmetic coded. Pictures larger than omsk_max_pixels
+# (2048x2048 by default) are refused, so a small file cannot make Omsk
+# spend minutes on a huge one.
+#
+# How it stays fast enough in an interpreter: a JPEG is decoded at 1/8,
+# 1/4 or 1/2 of its size when that is still larger than the thumbnail (a
+# reduced inverse DCT, as libjpeg's scaled decoding does), and each
+# thumbnail pixel averages at most 4x4 samples of its source area. A PNG is
+# inflated and unfiltered row by row, keeping only the 32 KiB window and
+# the rows it samples. USSR vectors only grow at the end (push), so every
+# table here is built in order and read with at.
+$once
+$include "../libs/strings.su"
+
+global(_): omsk_ready omsk_err omsk_max_pixels omsk_b64v omsk_b64c omsk_rev omsk_lbase omsk_lext omsk_dbase omsk_dext omsk_clpos omsk_fixl omsk_fixd omsk_zz omsk_nat2zz omsk_idct omsk_fdct omsk_qlum omsk_qchr omsk_rlum omsk_rchr omsk_edcl omsk_edcc omsk_eacl omsk_eacc omsk_jhead omsk_nbits omsk_recip
+global(_): omsk_pw omsk_ph omsk_ptype omsk_pdepth omsk_pch omsk_pstride omsk_pbpp omsk_plte omsk_trns omsk_prev omsk_pc omsk_py omsk_rowmap omsk_rowlast omsk_rowk omsk_coff omsk_ccnt omsk_cpos omsk_ptw omsk_acc omsk_rgb omsk_zero omsk_trim_kept
+
+# ---------------------------------------------------------------- tables
+
+omsk_setup(r): [
+    set(r): 0
+    set(ready): omsk_ready
+    if(_): {ready = true} [
+        return(r): r
+    ]
+    set(omsk_ready): true
+    set(omsk_err): ""
+    set(limit): omsk_max_pixels
+    if(_): {limit = null} [
+        set(omsk_max_pixels): 4194304
+    ]
+    set(omsk_b64c): "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    # base64 digit values; 64 marks "=", 128 anything else
+    vec(omsk_b64v): ""
+    set(i): 0
+    while(_): {i < 256} [
+        set(x): 128
+        if(_): {i >= 65 && i <= 90} [
+            set(x): {i - 65}
+        ]
+        elif(_): {i >= 97 && i <= 122} [
+            set(x): {i - 71}
+        ]
+        elif(_): {i >= 48 && i <= 57} [
+            set(x): {i + 4}
+        ]
+        elif(_): {i = 43} [
+            set(x): 62
+        ]
+        elif(_): {i = 47} [
+            set(x): 63
+        ]
+        elif(_): {i = 61} [
+            set(x): 64
+        ]
+        push(_): omsk_b64v x
+        add(i): i 1
+    ]
+    # deflate: 10-bit reversal, length and distance bases, code length order
+    set(omsk_rev): '[0,512,256,768,128,640,384,896,64,576,320,832,192,704,448,960,32,544,288,800,160,672,416,928,96,608,352,864,224,736,480,992,16,528,272,784,144,656,400,912,80,592,336,848,208,720,464,976,48,560,304,816,176,688,432,944,112,624,368,880,240,752,496,1008,8,520,264,776,136,648,392,904,72,584,328,840,200,712,456,968,40,552,296,808,168,680,424,936,104,616,360,872,232,744,488,1000,24,536,280,792,152,664,408,920,88,600,344,856,216,728,472,984,56,568,312,824,184,696,440,952,120,632,376,888,248,760,504,1016,4,516,260,772,132,644,388,900,68,580,324,836,196,708,452,964,36,548,292,804,164,676,420,932,100,612,356,868,228,740,484,996,20,532,276,788,148,660,404,916,84,596,340,852,212,724,468,980,52,564,308,820,180,692,436,948,116,628,372,884,244,756,500,1012,12,524,268,780,140,652,396,908,76,588,332,844,204,716,460,972,44,556,300,812,172,684,428,940,108,620,364,876,236,748,492,1004,28,540,284,796,156,668,412,924,92,604,348,860,220,732,476,988,60,572,316,828,188,700,444,956,124,636,380,892,252,764,508,1020,2,514,258,770,130,642,386,898,66,578,322,834,194,706,450,962,34,546,290,802,162,674,418,930,98,610,354,866,226,738,482,994,18,530,274,786,146,658,402,914,82,594,338,850,210,722,466,978,50,562,306,818,178,690,434,946,114,626,370,882,242,754,498,1010,10,522,266,778,138,650,394,906,74,586,330,842,202,714,458,970,42,554,298,810,170,682,426,938,106,618,362,874,234,746,490,1002,26,538,282,794,154,666,410,922,90,602,346,858,218,730,474,986,58,570,314,826,186,698,442,954,122,634,378,890,250,762,506,1018,6,518,262,774,134,646,390,902,70,582,326,838,198,710,454,966,38,550,294,806,166,678,422,934,102,614,358,870,230,742,486,998,22,534,278,790,150,662,406,918,86,598,342,854,214,726,470,982,54,566,310,822,182,694,438,950,118,630,374,886,246,758,502,1014,14,526,270,782,142,654,398,910,78,590,334,846,206,718,462,974,46,558,302,814,174,686,430,942,110,622,366,878,238,750,494,1006,30,542,286,798,158,670,414,926,94,606,350,862,222,734,478,990,62,574,318,830,190,702,446,958,126,638,382,894,254,766,510,1022,1,513,257,769,129,641,385,897,65,577,321,833,193,705,449,961,33,545,289,801,161,673,417,929,97,609,353,865,225,737,481,993,17,529,273,785,145,657,401,913,81,593,337,849,209,721,465,977,49,561,305,817,177,689,433,945,113,625,369,881,241,753,497,1009,9,521,265,777,137,649,393,905,73,585,329,841,201,713,457,969,41,553,297,809,169,681,425,937,105,617,361,873,233,745,489,1001,25,537,281,793,153,665,409,921,89,601,345,857,217,729,473,985,57,569,313,825,185,697,441,953,121,633,377,889,249,761,505,1017,5,517,261,773,133,645,389,901,69,581,325,837,197,709,453,965,37,549,293,805,165,677,421,933,101,613,357,869,229,741,485,997,21,533,277,789,149,661,405,917,85,597,341,853,213,725,469,981,53,565,309,821,181,693,437,949,117,629,373,885,245,757,501,1013,13,525,269,781,141,653,397,909,77,589,333,845,205,717,461,973,45,557,301,813,173,685,429,941,109,621,365,877,237,749,493,1005,29,541,285,797,157,669,413,925,93,605,349,861,221,733,477,989,61,573,317,829,189,701,445,957,125,637,381,893,253,765,509,1021,3,515,259,771,131,643,387,899,67,579,323,835,195,707,451,963,35,547,291,803,163,675,419,931,99,611,355,867,227,739,483,995,19,531,275,787,147,659,403,915,83,595,339,851,211,723,467,979,51,563,307,819,179,691,435,947,115,627,371,883,243,755,499,1011,11,523,267,779,139,651,395,907,75,587,331,843,203,715,459,971,43,555,299,811,171,683,427,939,107,619,363,875,235,747,491,1003,27,539,283,795,155,667,411,923,91,603,347,859,219,731,475,987,59,571,315,827,187,699,443,955,123,635,379,891,251,763,507,1019,7,519,263,775,135,647,391,903,71,583,327,839,199,711,455,967,39,551,295,807,167,679,423,935,103,615,359,871,231,743,487,999,23,535,279,791,151,663,407,919,87,599,343,855,215,727,471,983,55,567,311,823,183,695,439,951,119,631,375,887,247,759,503,1015,15,527,271,783,143,655,399,911,79,591,335,847,207,719,463,975,47,559,303,815,175,687,431,943,111,623,367,879,239,751,495,1007,31,543,287,799,159,671,415,927,95,607,351,863,223,735,479,991,63,575,319,831,191,703,447,959,127,639,383,895,255,767,511,1023]'
+    set(omsk_lbase): '[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258]'
+    set(omsk_lext): '[0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0]'
+    set(omsk_dbase): '[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577]'
+    set(omsk_dext): '[0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13]'
+    # where each code length code comes in the header (16 17 18 0 8 7 ...)
+    set(omsk_clpos): '[3,17,15,13,11,9,7,5,4,6,8,10,12,14,16,18,0,1,2]'
+    vec(lens): ""
+    set(i): 0
+    while(_): {i < 288} [
+        set(l): 8
+        if(_): {i >= 144 && i < 256} [
+            set(l): 9
+        ]
+        elif(_): {i >= 256 && i < 280} [
+            set(l): 7
+        ]
+        push(_): lens l
+        add(i): i 1
+    ]
+    omsk_huff_lens(omsk_fixl): lens 0 288
+    vec(lens): ""
+    set(i): 0
+    while(_): {i < 30} [
+        push(_): lens 5
+        add(i): i 1
+    ]
+    omsk_huff_lens(omsk_fixd): lens 0 30
+    # JPEG: zigzag order, scaled inverse DCT bases (N outputs from N
+    # coefficients, each the average of 8/N pixels; times 4096), the
+    # forward DCT, and the encoder's quality-85 tables
+    set(omsk_zz): '[0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28,35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63]'
+    set(omsk_nat2zz): '[0,1,5,6,14,15,27,28,2,4,7,13,16,26,29,42,3,8,12,17,25,30,41,43,9,11,18,24,31,40,44,53,10,19,23,32,39,45,52,54,20,22,33,38,46,51,55,60,21,34,37,47,50,56,59,61,35,36,48,49,57,58,62,63]'
+    vec(omsk_idct): ""
+    push(_): omsk_idct null
+    push(_): omsk_idct '[1448]'
+    push(_): omsk_idct '[1448,1312,1448,-1312]'
+    push(_): omsk_idct null
+    push(_): omsk_idct '[1448,1856,1338,652,1448,769,-1338,-1573,1448,-769,-1338,1573,1448,-1856,1338,-652]'
+    push(_): omsk_idct null
+    push(_): omsk_idct null
+    push(_): omsk_idct null
+    push(_): omsk_idct '[1448,2009,1892,1703,1448,1138,784,400,1448,1703,784,-400,-1448,-2009,-1892,-1138,1448,1138,-784,-2009,-1448,400,1892,1703,1448,400,-1892,-1138,1448,1703,-784,-2009,1448,-400,-1892,1138,1448,-1703,-784,2009,1448,-1138,-784,2009,-1448,-400,1892,-1703,1448,-1703,784,400,-1448,2009,-1892,1138,1448,-2009,1892,-1703,1448,-1138,784,-400]'
+    set(omsk_fdct): '[1448,1448,1448,1448,1448,1448,1448,1448,2009,1703,1138,400,-400,-1138,-1703,-2009,1892,784,-784,-1892,-1892,-784,784,1892,1703,-400,-2009,-1138,1138,2009,400,-1703,1448,-1448,-1448,1448,1448,-1448,-1448,1448,1138,-2009,400,1703,-1703,-400,2009,-1138,784,-1892,1892,-784,-784,1892,-1892,784,400,-1138,1703,-2009,2009,-1703,1138,-400]'
+    set(omsk_qlum): '[5,3,4,4,4,3,5,4,4,4,5,5,5,6,7,12,8,7,7,7,7,15,11,11,9,12,17,15,18,18,17,15,17,17,19,22,28,23,19,20,26,21,17,17,24,33,24,26,29,29,31,31,31,19,23,34,36,34,30,36,28,30,31,30]'
+    set(omsk_qchr): '[5,5,5,7,6,7,14,8,8,14,30,20,17,20,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30]'
+    set(omsk_rlum): '[13107,21845,16384,16384,16384,21845,13107,16384,16384,16384,13107,13107,13107,10923,9362,5461,8192,9362,9362,9362,9362,4369,5958,5958,7282,5461,3855,4369,3641,3641,3855,4369,3855,3855,3449,2979,2341,2849,3449,3277,2521,3121,3855,3855,2731,1986,2731,2521,2260,2260,2114,2114,2114,3449,2849,1928,1820,1928,2185,1820,2341,2185,2114,2185]'
+    set(omsk_rchr): '[13107,13107,13107,9362,10923,9362,4681,8192,8192,4681,2185,3277,3855,3277,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185,2185]'
+    # Huffman codes of the standard tables: code * 32 + length per symbol
+    set(omsk_edcl): '[2,67,99,131,163,195,452,965,1990,4039,8136,16329]'
+    set(omsk_edcc): '[2,34,66,195,452,965,1990,4039,8136,16329,32714,65483]'
+    set(omsk_eacl): '[324,2,34,131,356,837,3847,7944,32458,2093136,2093168,0,0,0,0,0,0,388,869,3879,16073,65227,2093200,2093232,2093264,2093296,2093328,0,0,0,0,0,0,901,7976,32490,130700,2093360,2093392,2093424,2093456,2093488,2093520,0,0,0,0,0,0,1862,16105,130732,2093552,2093584,2093616,2093648,2093680,2093712,2093744,0,0,0,0,0,0,1894,32522,2093776,2093808,2093840,2093872,2093904,2093936,2093968,2094000,0,0,0,0,0,0,3911,65259,2094032,2094064,2094096,2094128,2094160,2094192,2094224,2094256,0,0,0,0,0,0,3943,130764,2094288,2094320,2094352,2094384,2094416,2094448,2094480,2094512,0,0,0,0,0,0,8008,130796,2094544,2094576,2094608,2094640,2094672,2094704,2094736,2094768,0,0,0,0,0,0,16137,1046543,2094800,2094832,2094864,2094896,2094928,2094960,2094992,2095024,0,0,0,0,0,0,16169,2095056,2095088,2095120,2095152,2095184,2095216,2095248,2095280,2095312,0,0,0,0,0,0,16201,2095344,2095376,2095408,2095440,2095472,2095504,2095536,2095568,2095600,0,0,0,0,0,0,32554,2095632,2095664,2095696,2095728,2095760,2095792,2095824,2095856,2095888,0,0,0,0,0,0,32586,2095920,2095952,2095984,2096016,2096048,2096080,2096112,2096144,2096176,0,0,0,0,0,0,65291,2096208,2096240,2096272,2096304,2096336,2096368,2096400,2096432,2096464,0,0,0,0,0,0,2096496,2096528,2096560,2096592,2096624,2096656,2096688,2096720,2096752,2096784,0,0,0,0,0,65323,2096816,2096848,2096880,2096912,2096944,2096976,2097008,2097040,2097072,2097104,0,0,0,0,0]'
+    set(omsk_eacc): '[2,34,131,324,773,805,1798,3847,16009,32458,130700,0,0,0,0,0,0,356,1830,7880,16041,65227,130732,2093328,2093360,2093392,2093424,0,0,0,0,0,0,837,7912,32490,130764,1046607,2093456,2093488,2093520,2093552,2093584,0,0,0,0,0,0,869,7944,32522,130796,2093616,2093648,2093680,2093712,2093744,2093776,0,0,0,0,0,0,1862,16073,2093808,2093840,2093872,2093904,2093936,2093968,2094000,2094032,0,0,0,0,0,0,1894,32554,2094064,2094096,2094128,2094160,2094192,2094224,2094256,2094288,0,0,0,0,0,0,3879,65259,2094320,2094352,2094384,2094416,2094448,2094480,2094512,2094544,0,0,0,0,0,0,3911,65291,2094576,2094608,2094640,2094672,2094704,2094736,2094768,2094800,0,0,0,0,0,0,7976,2094832,2094864,2094896,2094928,2094960,2094992,2095024,2095056,2095088,0,0,0,0,0,0,16105,2095120,2095152,2095184,2095216,2095248,2095280,2095312,2095344,2095376,0,0,0,0,0,0,16137,2095408,2095440,2095472,2095504,2095536,2095568,2095600,2095632,2095664,0,0,0,0,0,0,16169,2095696,2095728,2095760,2095792,2095824,2095856,2095888,2095920,2095952,0,0,0,0,0,0,16201,2095984,2096016,2096048,2096080,2096112,2096144,2096176,2096208,2096240,0,0,0,0,0,0,65323,2096272,2096304,2096336,2096368,2096400,2096432,2096464,2096496,2096528,0,0,0,0,0,0,523278,2096560,2096592,2096624,2096656,2096688,2096720,2096752,2096784,2096816,0,0,0,0,0,32586,1046639,2096848,2096880,2096912,2096944,2096976,2097008,2097040,2097072,2097104,0,0,0,0,0]'
+    set(omsk_jhead): '[255,219,0,67,0,5,3,4,4,4,3,5,4,4,4,5,5,5,6,7,12,8,7,7,7,7,15,11,11,9,12,17,15,18,18,17,15,17,17,19,22,28,23,19,20,26,21,17,17,24,33,24,26,29,29,31,31,31,19,23,34,36,34,30,36,28,30,31,30,255,219,0,67,1,5,5,5,7,6,7,14,8,8,14,30,20,17,20,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,255,196,0,31,0,0,1,5,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,2,3,4,5,6,7,8,9,10,11,255,196,0,181,16,0,2,1,3,3,2,4,3,5,5,4,4,0,0,1,125,1,2,3,0,4,17,5,18,33,49,65,6,19,81,97,7,34,113,20,50,129,145,161,8,35,66,177,193,21,82,209,240,36,51,98,114,130,9,10,22,23,24,25,26,37,38,39,40,41,42,52,53,54,55,56,57,58,67,68,69,70,71,72,73,74,83,84,85,86,87,88,89,90,99,100,101,102,103,104,105,106,115,116,117,118,119,120,121,122,131,132,133,134,135,136,137,138,146,147,148,149,150,151,152,153,154,162,163,164,165,166,167,168,169,170,178,179,180,181,182,183,184,185,186,194,195,196,197,198,199,200,201,202,210,211,212,213,214,215,216,217,218,225,226,227,228,229,230,231,232,233,234,241,242,243,244,245,246,247,248,249,250,255,196,0,31,1,0,3,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,2,3,4,5,6,7,8,9,10,11,255,196,0,181,17,0,2,1,2,4,4,3,4,7,5,4,4,0,1,2,119,0,1,2,3,17,4,5,33,49,6,18,65,81,7,97,113,19,34,50,129,8,20,66,145,161,177,193,9,35,51,82,240,21,98,114,209,10,22,36,52,225,37,241,23,24,25,26,38,39,40,41,42,53,54,55,56,57,58,67,68,69,70,71,72,73,74,83,84,85,86,87,88,89,90,99,100,101,102,103,104,105,106,115,116,117,118,119,120,121,122,130,131,132,133,134,135,136,137,138,146,147,148,149,150,151,152,153,154,162,163,164,165,166,167,168,169,170,178,179,180,181,182,183,184,185,186,194,195,196,197,198,199,200,201,202,210,211,212,213,214,215,216,217,218,226,227,228,229,230,231,232,233,234,242,243,244,245,246,247,248,249,250]'
+    # bits needed for 0..4095
+    vec(omsk_nbits): ""
+    push(_): omsk_nbits 0
+    set(s): 1
+    while(_): {s <= 12} [
+        set(k): {1 << (s - 1)}
+        while(_): {k > 0} [
+            push(_): omsk_nbits s
+            set(k): {k - 1}
+        ]
+        add(s): s 1
+    ]
+    # 65536 / k, rounded, for averaging k = 1..16 samples
+    set(omsk_recip): '[0,65536,32768,21845,16384,13107,10923,9362,8192,7282,6554,5958,5461,5041,4681,4369,4096]'
+]
+
+omsk_error(r): [
+    set(r): omsk_err
+]
+
+# A Huffman table from code lengths lens[start .. start+count): see
+# omsk_huff_build. null when the lengths do not form a prefix code.
+omsk_huff_lens(r): lens start count [
+    vec(buckets): ""
+    set(l): 0
+    while(_): {l <= 16} [
+        vec(b): ""
+        push(_): buckets b
+        add(l): l 1
+    ]
+    set(i): 0
+    while(_): {i < count} [
+        at(l): lens {start + i}
+        if(_): {l > 0} [
+            at(b): buckets l
+            push(_): b i
+        ]
+        add(i): i 1
+    ]
+    vec(cnt): ""
+    vec(sorted): ""
+    set(l): 0
+    while(_): {l <= 16} [
+        at(b): buckets l
+        len(n): b
+        if(_): {l = 0} [
+            set(n): 0
+        ]
+        push(_): cnt n
+        set(i): 0
+        while(_): {i < n} [
+            at(x): b i
+            push(_): sorted x
+            add(i): i 1
+        ]
+        add(l): l 1
+    ]
+    omsk_huff_build(r): cnt sorted
+]
+
+# A canonical Huffman table: cnt[l] codes of length l (l = 1..16), their
+# symbols in code order in sorted. [tab first offs sorted cnt]: tab has
+# 1024 entries indexed by the next 10 code bits, most significant first:
+# symbol * 32 + length for codes up to 10 bits, 0 for longer ones, which
+# continue bit by bit with first[l] (the first code of length l) and
+# offs[l] (its place in sorted).
+omsk_huff_build(r): cnt sorted [
+    set(r): null
+    vec(tab): ""
+    set(k): 0
+    set(l): 1
+    while(_): {l <= 10} [
+        at(n): cnt l
+        set(rep): {1 << (10 - l)}
+        while(_): {n > 0} [
+            at(sym): sorted k
+            set(e): {sym * 32 + l}
+            set(j): rep
+            while(_): {j > 0} [
+                push(_): tab e
+                set(j): {j - 1}
+            ]
+            add(k): k 1
+            set(n): {n - 1}
+        ]
+        add(l): l 1
+    ]
+    len(n): tab
+    if(_): {n > 1024} [
+        return(r): r
+    ]
+    while(_): {n < 1024} [
+        push(_): tab 0
+        add(n): n 1
+    ]
+    vec(first): ""
+    vec(offs): ""
+    set(code): 0
+    set(idx): 0
+    set(l): 0
+    while(_): {l <= 16} [
+        at(n): cnt l
+        push(_): first code
+        push(_): offs idx
+        set(code): {(code + n) << 1}
+        add(idx): idx n
+        add(l): l 1
+    ]
+    vec(r): ""
+    push(_): r tab
+    push(_): r first
+    push(_): r offs
+    push(_): r sorted
+    push(_): r cnt
+]
+
+# ---------------------------------------------------------------- base64
+
+omsk_unbase64(r): s [
+    omsk_setup(_):
+    set(r): null
+    len(n): s
+    if(_): {n = 0 || n % 4 != 0} [
+        return(r): r
+    ]
+    set(t): omsk_b64v
+    vec(out): ""
+    set(i): 0
+    while(_): {i < n} [
+        byte(c0): s i
+        byte(c1): s {i + 1}
+        byte(c2): s {i + 2}
+        byte(c3): s {i + 3}
+        at(a): t c0
+        at(b): t c1
+        at(c): t c2
+        at(d): t c3
+        if(_): {(a | b | c | d) > 63} [
+            # "=" padding, only at the very end
+            if(_): {i + 4 != n || a > 63 || b > 63 || c = 128 || d != 64} [
+                return(r): r
+            ]
+            set(w): {(a << 18) | (b << 12)}
+            push(_): out {w >> 16}
+            if(_): {c != 64} [
+                set(w): {w | (c << 6)}
+                push(_): out {(w >> 8) & 255}
+            ]
+            set(r): out
+            return(r): r
+        ]
+        set(w): {(a << 18) | (b << 12) | (c << 6) | d}
+        push(_): out {w >> 16}
+        push(_): out {(w >> 8) & 255}
+        push(_): out {w & 255}
+        add(i): i 4
+    ]
+    set(r): out
+]
+
+omsk_base64(r): v [
+    omsk_setup(_):
+    set(abc): omsk_b64c
+    len(n): v
+    set(r): ""
+    set(chunk): ""
+    set(groups): 0
+    set(i): 0
+    while(_): {i + 2 < n} [
+        at(a): v i
+        at(b): v {i + 1}
+        at(c): v {i + 2}
+        set(w): {(a << 16) | (b << 8) | c}
+        slice(x1): abc {w >> 18} 1
+        slice(x2): abc {(w >> 12) & 63} 1
+        slice(x3): abc {(w >> 6) & 63} 1
+        slice(x4): abc {w & 63} 1
+        concat(chunk): chunk x1 x2 x3 x4
+        add(i): i 3
+        add(groups): groups 1
+        if(_): {groups = 512} [
+            concat(r): r chunk
+            set(chunk): ""
+            set(groups): 0
+        ]
+    ]
+    if(_): {i < n} [
+        at(a): v i
+        set(b): 0
+        if(_): {i + 1 < n} [
+            at(b): v {i + 1}
+        ]
+        set(w): {(a << 16) | (b << 8)}
+        slice(x1): abc {w >> 18} 1
+        slice(x2): abc {(w >> 12) & 63} 1
+        set(x3): "="
+        if(_): {i + 1 < n} [
+            slice(x3): abc {(w >> 6) & 63} 1
+        ]
+        concat(chunk): chunk x1 x2 x3 "="
+    ]
+    concat(r): r chunk
+]
+
+# ---------------------------------------------------------------- sizes
+
+# a / b rounded down, for positive integers
+omsk_idiv(r): a b [
+    str_trunc(r): {a / b}
+]
+
+# The thumbnail size for a w x h picture in a side x side box: the same
+# proportions, never larger than the picture.
+omsk_fit(r): w h side [
+    set(tw): w
+    set(th): h
+    if(_): {w > side || h > side} [
+        if(_): {w >= h} [
+            set(tw): side
+            str_trunc(th): {h * side / w + 0.5}
+        ]
+        else(_): [
+            set(th): side
+            str_trunc(tw): {w * side / h + 0.5}
+        ]
+    ]
+    if(_): {tw < 1} [
+        set(tw): 1
+    ]
+    if(_): {th < 1} [
+        set(th): 1
+    ]
+    vec(r): ""
+    push(_): r tw
+    push(_): r th
+]
+
+# Samples of an axis of S source pixels for T thumbnail pixels (S >= T):
+# [off cnt pos], where thumbnail pixel o averages the cnt[o] positions
+# pos[off[o] ..], spread evenly over its share of the source (at most 4).
+omsk_axis(r): S T [
+    vec(off): ""
+    vec(cnt): ""
+    vec(pos): ""
+    set(o): 0
+    set(a): 0
+    while(_): {o < T} [
+        omsk_idiv(b): {(o + 1) * S} T
+        set(span): {b - a}
+        if(_): {span < 1} [
+            set(span): 1
+        ]
+        set(k): span
+        if(_): {k > 4} [
+            set(k): 4
+        ]
+        len(n): pos
+        push(_): off n
+        push(_): cnt k
+        set(j): 0
+        while(_): {j < k} [
+            omsk_idiv(d): {(2 * j + 1) * span} {2 * k}
+            set(x): {a + d}
+            if(_): {x >= S} [
+                set(x): {S - 1}
+            ]
+            push(_): pos x
+            add(j): j 1
+        ]
+        set(a): b
+        add(o): o 1
+    ]
+    vec(r): ""
+    push(_): r off
+    push(_): r cnt
+    push(_): r pos
+]
+
+# Big-endian integers of v at p.
+omsk_u16(r): v p [
+    at(a): v p
+    at(b): v {p + 1}
+    set(r): {(a << 8) | b}
+]
+
+omsk_u32(r): v p [
+    at(a): v p
+    at(b): v {p + 1}
+    at(c): v {p + 2}
+    at(d): v {p + 3}
+    set(r): {(a << 24) | (b << 16) | (c << 8) | d}
+]
+
+# A copy of v with item i replaced by x.
+omsk_vset(r): v i x [
+    vec(r): ""
+    len(n): v
+    set(k): 0
+    while(_): {k < n} [
+        at(y): v k
+        if(_): {k = i} [
+            set(y): x
+        ]
+        push(_): r y
+        add(k): k 1
+    ]
+]
+
+omsk_fail(r): why [
+    set(omsk_err): why
+    set(r): null
+]
+
+# ---------------------------------------------------------------- entry
+
+omsk_info(r): v [
+    omsk_setup(_):
+    set(r): null
+    typeof(t): v
+    if(_): {t != "vector"} [
+        return(r): r
+    ]
+    len(n): v
+    if(_): {n < 24} [
+        return(r): r
+    ]
+    at(a): v 0
+    at(b): v 1
+    if(_): {a = 137 && b = 80} [
+        omsk_u32(w): v 16
+        omsk_u32(h): v 20
+        vec(r): ""
+        push(_): r "png"
+        push(_): r w
+        push(_): r h
+        return(r): r
+    ]
+    if(_): {a != 255 || b != 216} [
+        return(r): r
+    ]
+    set(p): 2
+    while(_): {p + 9 < n} [
+        at(a): v p
+        at(m): v {p + 1}
+        if(_): {a != 255} [
+            return(r): r
+        ]
+        if(_): {m = 255} [
+            add(p): p 1
+            continue(_): ""
+        ]
+        if(_): {m >= 192 && m <= 207 && m != 196 && m != 200 && m != 204} [
+            omsk_u16(h): v {p + 5}
+            omsk_u16(w): v {p + 7}
+            vec(r): ""
+            push(_): r "jpeg"
+            push(_): r w
+            push(_): r h
+            return(r): r
+        ]
+        omsk_u16(l): v {p + 2}
+        set(p): {p + 2 + l}
+    ]
+]
+
+omsk_thumb(r): v side [
+    omsk_setup(_):
+    set(omsk_err): ""
+    set(r): null
+    omsk_info(info): v
+    if(_): {info = null} [
+        omsk_fail(r): "not a PNG or JPEG image"
+        return(r): r
+    ]
+    at(kind): info 0
+    at(w): info 1
+    at(h): info 2
+    if(_): {w < 1 || h < 1 || w > 65535 || h > 65535 || w * h > omsk_max_pixels} [
+        omsk_fail(r): "the picture is empty or too large"
+        return(r): r
+    ]
+    if(_): {side < 1} [
+        set(side): 1
+    ]
+    omsk_fit(d): w h side
+    at(tw): d 0
+    at(th): d 1
+    if(_): {kind = "png"} [
+        omsk_png(rgb): v tw th
+    ]
+    else(_): [
+        omsk_jpeg(rgb): v tw th
+    ]
+    if(_): {rgb = null} [
+        return(r): r
+    ]
+    omsk_encode(jpeg): rgb tw th
+    vec(r): ""
+    push(_): r w
+    push(_): r h
+    push(_): r tw
+    push(_): r th
+    push(_): r jpeg
+]
+
+omsk_thumb_base64(r): text side [
+    omsk_unbase64(v): text
+    if(_): {v = null} [
+        omsk_fail(r): "not base64"
+        return(r): r
+    ]
+    omsk_thumb(r): v side
+    if(_): {r = null} [
+        return(r): r
+    ]
+    at(jpeg): r 4
+    omsk_base64(b64): jpeg
+    at(w): r 0
+    at(h): r 1
+    at(tw): r 2
+    at(th): r 3
+    vec(r): ""
+    push(_): r w
+    push(_): r h
+    push(_): r tw
+    push(_): r th
+    push(_): r b64
+]
+
+# ---------------------------------------------------------------- PNG
+
+# The thumbnail (tw * th RGB values, row by row) of the PNG in v.
+omsk_png(r): v tw th [
+    set(r): null
+    len(n): v
+    set(sig): '[137,80,78,71,13,10,26,10]'
+    set(i): 0
+    while(_): {i < 8} [
+        at(a): v i
+        at(b): sig i
+        if(_): {a != b} [
+            omsk_fail(r): "not a PNG image"
+            return(r): r
+        ]
+        add(i): i 1
+    ]
+    set(p): 8
+    set(w): 0
+    vec(idat): ""
+    set(omsk_plte): null
+    vec(omsk_trns): ""
+    while(_): {p + 12 <= n} [
+        omsk_u32(l): v p
+        omsk_u32(type): v {p + 4}
+        set(q): {p + 8}
+        if(_): {q + l + 4 > n} [
+            omsk_fail(r): "the PNG is cut short"
+            return(r): r
+        ]
+        if(_): {type = 1229472850} [
+            # IHDR
+            omsk_u32(w): v q
+            omsk_u32(h): v {q + 4}
+            at(depth): v {q + 8}
+            at(ctype): v {q + 9}
+            at(interlace): v {q + 12}
+        ]
+        elif(_): {type = 1347179589} [
+            # PLTE
+            set(omsk_plte): null
+            vec(omsk_plte): ""
+            set(i): 0
+            while(_): {i < l} [
+                at(x): v {q + i}
+                push(_): omsk_plte x
+                add(i): i 1
+            ]
+        ]
+        elif(_): {type = 1951551059} [
+            # tRNS (alpha of palette entries; colour keys are ignored)
+            vec(omsk_trns): ""
+            set(i): 0
+            while(_): {i < l} [
+                at(x): v {q + i}
+                push(_): omsk_trns x
+                add(i): i 1
+            ]
+        ]
+        elif(_): {type = 1229209940} [
+            # IDAT: the zlib stream continues across chunks
+            set(i): 0
+            while(_): {i < l} [
+                at(x): v {q + i}
+                push(_): idat x
+                add(i): i 1
+            ]
+        ]
+        elif(_): {type = 1229278788} [
+            # IEND
+            break(_): ""
+        ]
+        set(p): {q + l + 4}
+    ]
+    if(_): {w = 0} [
+        omsk_fail(r): "the PNG has no header"
+        return(r): r
+    ]
+    if(_): {interlace != 0} [
+        omsk_fail(r): "interlaced PNG is not supported"
+        return(r): r
+    ]
+    set(ch): 0
+    if(_): {ctype = 0 && (depth = 1 || depth = 2 || depth = 4 || depth = 8 || depth = 16)} [
+        set(ch): 1
+    ]
+    elif(_): {ctype = 2 && (depth = 8 || depth = 16)} [
+        set(ch): 3
+    ]
+    elif(_): {ctype = 3 && (depth = 1 || depth = 2 || depth = 4 || depth = 8)} [
+        set(ch): 1
+    ]
+    elif(_): {ctype = 4 && (depth = 8 || depth = 16)} [
+        set(ch): 2
+    ]
+    elif(_): {ctype = 6 && (depth = 8 || depth = 16)} [
+        set(ch): 4
+    ]
+    if(_): {ch = 0} [
+        omsk_fail(r): "unknown PNG colour type or depth"
+        return(r): r
+    ]
+    if(_): {ctype = 3 && omsk_plte = null} [
+        omsk_fail(r): "the PNG has no palette"
+        return(r): r
+    ]
+    set(omsk_pw): w
+    set(omsk_ph): h
+    set(omsk_ptype): ctype
+    set(omsk_pdepth): depth
+    set(omsk_pch): ch
+    set(omsk_pstride): {(w * ch * depth + 7) >> 3}
+    set(omsk_pbpp): {(ch * depth) >> 3}
+    if(_): {omsk_pbpp < 1} [
+        set(omsk_pbpp): 1
+    ]
+    set(omsk_ptw): tw
+    # which source rows each thumbnail row samples
+    omsk_axis(ax): h th
+    at(rcnt): ax 1
+    at(rpos): ax 2
+    omsk_axis(ax): w tw
+    at(omsk_coff): ax 0
+    at(omsk_ccnt): ax 1
+    at(omsk_cpos): ax 2
+    vec(omsk_rowmap): ""
+    vec(omsk_rowlast): ""
+    set(omsk_rowk): rcnt
+    len(np): rpos
+    set(k): 0
+    set(o): 0
+    at(ko): rcnt 0
+    set(seen): 0
+    set(y): 0
+    while(_): {y < h} [
+        set(m): {0 - 1}
+        set(last): false
+        if(_): {k < np} [
+            at(ry): rpos k
+            if(_): {ry = y} [
+                set(m): o
+                add(k): k 1
+                add(seen): seen 1
+                if(_): {seen = ko} [
+                    set(last): true
+                    add(o): o 1
+                    set(seen): 0
+                    if(_): {o < th} [
+                        at(ko): rcnt o
+                    ]
+                ]
+            ]
+        ]
+        push(_): omsk_rowmap m
+        push(_): omsk_rowlast last
+        add(y): y 1
+    ]
+    vec(omsk_zero): ""
+    set(i): 0
+    while(_): {i < omsk_pstride} [
+        push(_): omsk_zero 0
+        add(i): i 1
+    ]
+    set(omsk_prev): omsk_zero
+    set(omsk_pc): 0
+    set(omsk_py): 0
+    set(omsk_acc): null
+    vec(omsk_rgb): ""
+    omsk_inflate(status): idat {h * (omsk_pstride + 1)}
+    if(_): {status != 0} [
+        return(r): r
+    ]
+    if(_): {omsk_py != h} [
+        omsk_fail(r): "the PNG image data is cut short"
+        return(r): r
+    ]
+    set(r): omsk_rgb
+    set(omsk_rgb): null
+    set(omsk_prev): null
+    set(omsk_zero): null
+]
+
+# Unfilters the complete rows of out from omsk_pc on and adds the sampled
+# ones to the thumbnail. 0, or -1 when a row has an unknown filter.
+omsk_png_take(r): out [
+    set(r): 0
+    len(olen): out
+    set(stride): omsk_pstride
+    set(bpp): omsk_pbpp
+    set(q): omsk_pc
+    set(prev): omsk_prev
+    set(y): omsk_py
+    while(_): {q + stride + 1 <= olen && y < omsk_ph} [
+        at(f): out q
+        add(q): q 1
+        vec(cur): ""
+        set(i): 0
+        if(_): {f = 0} [
+            while(_): {i < stride} [
+                at(x): out {q + i}
+                push(_): cur x
+                add(i): i 1
+            ]
+        ]
+        elif(_): {f = 1} [
+            while(_): {i < bpp} [
+                at(x): out {q + i}
+                push(_): cur x
+                add(i): i 1
+            ]
+            while(_): {i < stride} [
+                at(x): out {q + i}
+                at(a): cur {i - bpp}
+                push(_): cur {(x + a) & 255}
+                add(i): i 1
+            ]
+        ]
+        elif(_): {f = 2} [
+            while(_): {i < stride} [
+                at(x): out {q + i}
+                at(b): prev i
+                push(_): cur {(x + b) & 255}
+                add(i): i 1
+            ]
+        ]
+        elif(_): {f = 3} [
+            while(_): {i < bpp} [
+                at(x): out {q + i}
+                at(b): prev i
+                push(_): cur {(x + (b >> 1)) & 255}
+                add(i): i 1
+            ]
+            while(_): {i < stride} [
+                at(x): out {q + i}
+                at(a): cur {i - bpp}
+                at(b): prev i
+                push(_): cur {(x + ((a + b) >> 1)) & 255}
+                add(i): i 1
+            ]
+        ]
+        elif(_): {f = 4} [
+            while(_): {i < bpp} [
+                at(x): out {q + i}
+                at(b): prev i
+                push(_): cur {(x + b) & 255}
+                add(i): i 1
+            ]
+            while(_): {i < stride} [
+                at(x): out {q + i}
+                at(a): cur {i - bpp}
+                at(b): prev i
+                at(c): prev {i - bpp}
+                # the nearest of a, b, c to a + b - c; squares compare
+                # like the distances
+                set(pa): {(b - c) * (b - c)}
+                set(pb): {(a - c) * (a - c)}
+                set(pc): {(a + b - c - c) * (a + b - c - c)}
+                if(_): {pa <= pb && pa <= pc} [
+                    push(_): cur {(x + a) & 255}
+                ]
+                elif(_): {pb <= pc} [
+                    push(_): cur {(x + b) & 255}
+                ]
+                else(_): [
+                    push(_): cur {(x + c) & 255}
+                ]
+                add(i): i 1
+            ]
+        ]
+        else(_): [
+            omsk_fail(_): "bad PNG row filter"
+            set(r): {0 - 1}
+            return(r): r
+        ]
+        set(q): {q + stride}
+        at(m): omsk_rowmap y
+        if(_): {m >= 0} [
+            at(last): omsk_rowlast y
+            omsk_png_row(_): cur m last
+        ]
+        set(prev): cur
+        add(y): y 1
+    ]
+    set(omsk_pc): q
+    set(omsk_prev): prev
+    set(omsk_py): y
+]
+
+# Adds the samples of one unfiltered row to thumbnail row m.
+omsk_png_row(r): cur m last [
+    set(r): 0
+    set(tw): omsk_ptw
+    set(coff): omsk_coff
+    set(ccnt): omsk_ccnt
+    set(cpos): omsk_cpos
+    set(ctype): omsk_ptype
+    set(depth): omsk_pdepth
+    set(ch): omsk_pch
+    set(plte): omsk_plte
+    set(trns): omsk_trns
+    len(ntrns): trns
+    set(acc): omsk_acc
+    set(scale): 1
+    set(mask): {(1 << depth) - 1}
+    if(_): {depth = 1} [
+        set(scale): 255
+    ]
+    elif(_): {depth = 2} [
+        set(scale): 85
+    ]
+    elif(_): {depth = 4} [
+        set(scale): 17
+    ]
+    vec(sums): ""
+    set(o): 0
+    while(_): {o < tw} [
+        at(j): coff o
+        at(k): ccnt o
+        set(je): {j + k}
+        set(sr): 0
+        set(sg): 0
+        set(sb): 0
+        while(_): {j < je} [
+            at(x): cpos j
+            set(alpha): 255
+            if(_): {depth < 8} [
+                set(bit): {x * depth}
+                at(byte): cur {bit >> 3}
+                set(g): {(byte >> (8 - depth - (bit & 7))) & mask}
+                if(_): {ctype = 3} [
+                    set(pi): {g * 3}
+                    at(cr): plte pi
+                    at(cg): plte {pi + 1}
+                    at(cb): plte {pi + 2}
+                    if(_): {g < ntrns} [
+                        at(alpha): trns g
+                    ]
+                ]
+                else(_): [
+                    set(cr): {g * scale}
+                    set(cg): cr
+                    set(cb): cr
+                ]
+            ]
+            else(_): [
+                set(b0): {x * ch}
+                if(_): {depth = 16} [
+                    set(b0): {b0 * 2}
+                ]
+                set(st): {depth >> 3}
+                if(_): {ctype = 6} [
+                    at(cr): cur b0
+                    at(cg): cur {b0 + st}
+                    at(cb): cur {b0 + st * 2}
+                    at(alpha): cur {b0 + st * 3}
+                ]
+                elif(_): {ctype = 2} [
+                    at(cr): cur b0
+                    at(cg): cur {b0 + st}
+                    at(cb): cur {b0 + st * 2}
+                ]
+                elif(_): {ctype = 3} [
+                    at(g): cur b0
+                    set(pi): {g * 3}
+                    at(cr): plte pi
+                    at(cg): plte {pi + 1}
+                    at(cb): plte {pi + 2}
+                    if(_): {g < ntrns} [
+                        at(alpha): trns g
+                    ]
+                ]
+                else(_): [
+                    at(cr): cur b0
+                    if(_): {ctype = 4} [
+                        at(alpha): cur {b0 + st}
+                    ]
+                    set(cg): cr
+                    set(cb): cr
+                ]
+            ]
+            if(_): {alpha < 255} [
+                # on white: (c * a + 255 * (255 - a)) / 255, rounded
+                set(wh): {255 * (255 - alpha) + 128}
+                set(t): {cr * alpha + wh}
+                set(cr): {(t + (t >> 8)) >> 8}
+                set(t): {cg * alpha + wh}
+                set(cg): {(t + (t >> 8)) >> 8}
+                set(t): {cb * alpha + wh}
+                set(cb): {(t + (t >> 8)) >> 8}
+            ]
+            add(sr): sr cr
+            add(sg): sg cg
+            add(sb): sb cb
+            add(j): j 1
+        ]
+        push(_): sums sr
+        push(_): sums sg
+        push(_): sums sb
+        add(o): o 1
+    ]
+    if(_): {acc != null} [
+        vec(added): ""
+        len(n): sums
+        set(i): 0
+        while(_): {i < n} [
+            at(a): acc i
+            at(b): sums i
+            push(_): added {a + b}
+            add(i): i 1
+        ]
+        set(sums): added
+    ]
+    if(_): {last = false} [
+        set(omsk_acc): sums
+        return(r): r
+    ]
+    set(omsk_acc): null
+    at(kr): omsk_rowk m
+    set(rgb): omsk_rgb
+    set(recip): omsk_recip
+    set(o): 0
+    set(i): 0
+    while(_): {o < tw} [
+        at(kc): ccnt o
+        at(rc): recip {kr * kc}
+        at(a): sums i
+        push(_): rgb {(a * rc + 32768) >> 16}
+        at(a): sums {i + 1}
+        push(_): rgb {(a * rc + 32768) >> 16}
+        at(a): sums {i + 2}
+        push(_): rgb {(a * rc + 32768) >> 16}
+        add(i): i 3
+        add(o): o 1
+    ]
+]
+
+# Inflates the zlib stream in data, handing the bytes to omsk_png_take
+# as they come; expected is the number of bytes the image needs. 0 when
+# it worked.
+omsk_inflate(r): data expected [
+    set(r): {0 - 1}
+    len(n): data
+    if(_): {n < 6} [
+        omsk_fail(_): "the PNG has no image data"
+        return(r): r
+    ]
+    at(cmf): data 0
+    at(flg): data 1
+    if(_): {(cmf & 15) != 8 || ((cmf << 8) | flg) % 31 != 0 || (flg & 32) != 0} [
+        omsk_fail(_): "the PNG image data is not zlib"
+        return(r): r
+    ]
+    set(rev): omsk_rev
+    set(lbase): omsk_lbase
+    set(lext): omsk_lext
+    set(dbase): omsk_dbase
+    set(dext): omsk_dext
+    set(p): 2
+    set(bb): 0
+    set(bc): 0
+    vec(out): ""
+    set(olen): 0
+    set(done): 0
+    set(final): 0
+    while(_): {final = 0} [
+        while(_): {bc <= 48 && p < n} [
+            at(x): data p
+            set(bb): {bb | (x << bc)}
+            add(bc): bc 8
+            add(p): p 1
+        ]
+        set(final): {bb & 1}
+        set(type): {(bb >> 1) & 3}
+        set(bb): {bb >> 3}
+        set(bc): {bc - 3}
+        if(_): {type = 0} [
+            # stored: skip to a byte boundary, LEN, NLEN, the bytes
+            set(drop): {bc & 7}
+            set(bb): {bb >> drop}
+            set(bc): {bc - drop}
+            while(_): {bc < 32 && p < n} [
+                at(x): data p
+                set(bb): {bb | (x << bc)}
+                add(bc): bc 8
+                add(p): p 1
+            ]
+            set(slen): {bb & 65535}
+            set(nlen): {(bb >> 16) & 65535}
+            set(bb): {bb >> 32}
+            set(bc): {bc - 32}
+            if(_): {(slen ^ nlen) != 65535 || bc < 0} [
+                omsk_fail(_): "bad stored block in the PNG"
+                return(r): r
+            ]
+            while(_): {slen > 0} [
+                if(_): {bc < 8} [
+                    if(_): {p >= n} [
+                        omsk_fail(_): "the PNG image data is cut short"
+                        return(r): r
+                    ]
+                    at(x): data p
+                    set(bb): {bb | (x << bc)}
+                    add(bc): bc 8
+                    add(p): p 1
+                ]
+                push(_): out {bb & 255}
+                set(bb): {bb >> 8}
+                set(bc): {bc - 8}
+                add(olen): olen 1
+                set(slen): {slen - 1}
+                if(_): {olen >= 262144} [
+                    omsk_png_take(st): out
+                    if(_): {st != 0} [
+                        return(r): r
+                    ]
+                    omsk_trim(out): out
+                    add(done): done {olen - omsk_trim_kept}
+                    len(olen): out
+                    if(_): {done + olen > expected} [
+                        omsk_fail(_): "the PNG has more image data than its size"
+                        return(r): r
+                    ]
+                ]
+            ]
+            continue(_): ""
+        ]
+        if(_): {type = 1} [
+            set(lt): omsk_fixl
+            set(dt): omsk_fixd
+        ]
+        elif(_): {type = 2} [
+            omsk_inflate_tables(tables): data p bb bc
+            if(_): {tables = null} [
+                return(r): r
+            ]
+            at(lt): tables 0
+            at(dt): tables 1
+            at(p): tables 2
+            at(bb): tables 3
+            at(bc): tables 4
+        ]
+        else(_): [
+            omsk_fail(_): "bad block type in the PNG"
+            return(r): r
+        ]
+        at(ltab): lt 0
+        at(lfirst): lt 1
+        at(loffs): lt 2
+        at(lsorted): lt 3
+        at(lcnt): lt 4
+        at(dtab): dt 0
+        at(dfirst): dt 1
+        at(doffs): dt 2
+        at(dsorted): dt 3
+        at(dcnt): dt 4
+        while(_): true [
+            while(_): {bc <= 48 && p < n} [
+                at(x): data p
+                set(bb): {bb | (x << bc)}
+                add(bc): bc 8
+                add(p): p 1
+            ]
+            at(ix): rev {bb & 1023}
+            at(e): ltab ix
+            if(_): {e > 0} [
+                set(l): {e & 31}
+                set(sym): {e >> 5}
+                set(bb): {bb >> l}
+                set(bc): {bc - l}
+            ]
+            else(_): [
+                set(bb): {bb >> 10}
+                set(bc): {bc - 10}
+                set(code): ix
+                set(sym): {0 - 1}
+                set(l): 11
+                while(_): {l <= 15} [
+                    set(code): {(code << 1) | (bb & 1)}
+                    set(bb): {bb >> 1}
+                    set(bc): {bc - 1}
+                    at(f): lfirst l
+                    at(c): lcnt l
+                    set(d): {code - f}
+                    if(_): {d >= 0 && d < c} [
+                        at(o): loffs l
+                        at(sym): lsorted {o + d}
+                        break(_): ""
+                    ]
+                    add(l): l 1
+                ]
+                if(_): {sym < 0} [
+                    omsk_fail(_): "bad code in the PNG image data"
+                    return(r): r
+                ]
+            ]
+            if(_): {sym < 256} [
+                push(_): out sym
+                add(olen): olen 1
+            ]
+            elif(_): {sym = 256} [
+                break(_): ""
+            ]
+            else(_): [
+                set(si): {sym - 257}
+                if(_): {si > 28} [
+                    omsk_fail(_): "bad length in the PNG image data"
+                    return(r): r
+                ]
+                at(base): lbase si
+                at(ex): lext si
+                set(length): {base + (bb & ((1 << ex) - 1))}
+                set(bb): {bb >> ex}
+                set(bc): {bc - ex}
+                at(ix): rev {bb & 1023}
+                at(e): dtab ix
+                if(_): {e > 0} [
+                    set(l): {e & 31}
+                    set(ds): {e >> 5}
+                    set(bb): {bb >> l}
+                    set(bc): {bc - l}
+                ]
+                else(_): [
+                    set(bb): {bb >> 10}
+                    set(bc): {bc - 10}
+                    set(code): ix
+                    set(ds): {0 - 1}
+                    set(l): 11
+                    while(_): {l <= 15} [
+                        set(code): {(code << 1) | (bb & 1)}
+                        set(bb): {bb >> 1}
+                        set(bc): {bc - 1}
+                        at(f): dfirst l
+                        at(c): dcnt l
+                        set(d): {code - f}
+                        if(_): {d >= 0 && d < c} [
+                            at(o): doffs l
+                            at(ds): dsorted {o + d}
+                            break(_): ""
+                        ]
+                        add(l): l 1
+                    ]
+                ]
+                if(_): {ds < 0 || ds > 29} [
+                    omsk_fail(_): "bad distance in the PNG image data"
+                    return(r): r
+                ]
+                at(base): dbase ds
+                at(ex): dext ds
+                set(dist): {base + (bb & ((1 << ex) - 1))}
+                set(bb): {bb >> ex}
+                set(bc): {bc - ex}
+                if(_): {dist > olen} [
+                    omsk_fail(_): "bad distance in the PNG image data"
+                    return(r): r
+                ]
+                set(from): {olen - dist}
+                set(end): {from + length}
+                while(_): {from < end} [
+                    at(x): out from
+                    push(_): out x
+                    add(from): from 1
+                ]
+                add(olen): olen length
+            ]
+            if(_): {olen >= 262144} [
+                omsk_png_take(st): out
+                if(_): {st != 0} [
+                    return(r): r
+                ]
+                omsk_trim(out): out
+                add(done): done {olen - omsk_trim_kept}
+                len(olen): out
+                if(_): {done + olen > expected} [
+                    omsk_fail(_): "the PNG has more image data than its size"
+                    return(r): r
+                ]
+            ]
+        ]
+        if(_): {bc < 0} [
+            omsk_fail(_): "the PNG image data is cut short"
+            return(r): r
+        ]
+    ]
+    omsk_png_take(st): out
+    if(_): {st != 0} [
+        return(r): r
+    ]
+    set(r): 0
+]
+
+# out without the bytes before the last 32 KiB that omsk_png_take has
+# used; omsk_pc follows, omsk_trim_kept is the new length.
+omsk_trim(r): out [
+    len(olen): out
+    set(from): {olen - 32768}
+    if(_): {from > omsk_pc} [
+        set(from): omsk_pc
+    ]
+    if(_): {from < 0} [
+        set(from): 0
+    ]
+    vec(r): ""
+    set(i): from
+    while(_): {i < olen} [
+        at(x): out i
+        push(_): r x
+        add(i): i 1
+    ]
+    set(omsk_pc): {omsk_pc - from}
+    set(omsk_trim_kept): {olen - from}
+]
+
+# The code tables of a dynamic block whose header starts at bit position
+# (p, bb, bc): [litlen dist p bb bc], or null.
+omsk_inflate_tables(r): data p bb bc [
+    set(r): null
+    len(n): data
+    while(_): {bc <= 48 && p < n} [
+        at(x): data p
+        set(bb): {bb | (x << bc)}
+        add(bc): bc 8
+        add(p): p 1
+    ]
+    set(hlit): {(bb & 31) + 257}
+    set(hdist): {((bb >> 5) & 31) + 1}
+    set(hclen): {((bb >> 10) & 15) + 4}
+    set(bb): {bb >> 14}
+    set(bc): {bc - 14}
+    vec(raw): ""
+    set(i): 0
+    while(_): {i < hclen} [
+        while(_): {bc <= 48 && p < n} [
+            at(x): data p
+            set(bb): {bb | (x << bc)}
+            add(bc): bc 8
+            add(p): p 1
+        ]
+        push(_): raw {bb & 7}
+        set(bb): {bb >> 3}
+        set(bc): {bc - 3}
+        add(i): i 1
+    ]
+    vec(cl): ""
+    set(i): 0
+    while(_): {i < 19} [
+        at(j): omsk_clpos i
+        set(l): 0
+        if(_): {j < hclen} [
+            at(l): raw j
+        ]
+        push(_): cl l
+        add(i): i 1
+    ]
+    omsk_huff_lens(ct): cl 0 19
+    if(_): {ct = null} [
+        omsk_fail(r): "bad code lengths in the PNG"
+        return(r): r
+    ]
+    at(ctab): ct 0
+    set(rev): omsk_rev
+    vec(lens): ""
+    set(total): {hlit + hdist}
+    set(got): 0
+    set(last): 0
+    while(_): {got < total} [
+        while(_): {bc <= 48 && p < n} [
+            at(x): data p
+            set(bb): {bb | (x << bc)}
+            add(bc): bc 8
+            add(p): p 1
+        ]
+        at(ix): rev {bb & 1023}
+        at(e): ctab ix
+        if(_): {e = 0} [
+            omsk_fail(r): "bad code lengths in the PNG"
+            return(r): r
+        ]
+        set(l): {e & 31}
+        set(sym): {e >> 5}
+        set(bb): {bb >> l}
+        set(bc): {bc - l}
+        if(_): {sym < 16} [
+            push(_): lens sym
+            set(last): sym
+            add(got): got 1
+            continue(_): ""
+        ]
+        set(rep): 0
+        set(val): 0
+        if(_): {sym = 16} [
+            if(_): {got = 0} [
+                omsk_fail(r): "bad code lengths in the PNG"
+                return(r): r
+            ]
+            set(rep): {3 + (bb & 3)}
+            set(bb): {bb >> 2}
+            set(bc): {bc - 2}
+            set(val): last
+        ]
+        elif(_): {sym = 17} [
+            set(rep): {3 + (bb & 7)}
+            set(bb): {bb >> 3}
+            set(bc): {bc - 3}
+        ]
+        else(_): [
+            set(rep): {11 + (bb & 127)}
+            set(bb): {bb >> 7}
+            set(bc): {bc - 7}
+        ]
+        if(_): {got + rep > total} [
+            omsk_fail(r): "bad code lengths in the PNG"
+            return(r): r
+        ]
+        while(_): {rep > 0} [
+            push(_): lens val
+            add(got): got 1
+            set(rep): {rep - 1}
+        ]
+        set(last): val
+    ]
+    omsk_huff_lens(lt): lens 0 hlit
+    omsk_huff_lens(dt): lens hlit hdist
+    if(_): {lt = null || dt = null} [
+        omsk_fail(r): "bad code lengths in the PNG"
+        return(r): r
+    ]
+    vec(r): ""
+    push(_): r lt
+    push(_): r dt
+    push(_): r p
+    push(_): r bb
+    push(_): r bc
+]
+
+# ---------------------------------------------------------------- JPEG
+
+# The thumbnail (tw * th RGB values, row by row) of the JPEG in v.
+omsk_jpeg(r): v tw th [
+    set(r): null
+    len(n): v
+    vec(qt): ""
+    vec(hdc): ""
+    vec(hac): ""
+    set(i): 0
+    while(_): {i < 4} [
+        push(_): qt null
+        push(_): hdc null
+        push(_): hac null
+        add(i): i 1
+    ]
+    set(ri): 0
+    set(w): 0
+    set(h): 0
+    set(nc): 0
+    set(p): 2
+    while(_): true [
+        if(_): {p + 4 > n} [
+            omsk_fail(r): "the JPEG is cut short"
+            return(r): r
+        ]
+        at(a): v p
+        at(m): v {p + 1}
+        if(_): {a != 255} [
+            omsk_fail(r): "bad JPEG marker"
+            return(r): r
+        ]
+        if(_): {m = 255} [
+            add(p): p 1
+            continue(_): ""
+        ]
+        if(_): {m = 217} [
+            omsk_fail(r): "the JPEG has no image data"
+            return(r): r
+        ]
+        omsk_u16(l): v {p + 2}
+        set(q): {p + 4}
+        set(se): {p + 2 + l}
+        if(_): {se > n} [
+            omsk_fail(r): "the JPEG is cut short"
+            return(r): r
+        ]
+        if(_): {m = 219} [
+            # DQT: tables in zigzag order
+            while(_): {q < se} [
+                at(b): v q
+                add(q): q 1
+                set(pq): {b >> 4}
+                vec(t): ""
+                set(k): 0
+                while(_): {k < 64} [
+                    if(_): {pq = 0} [
+                        at(x): v q
+                        add(q): q 1
+                    ]
+                    else(_): [
+                        omsk_u16(x): v q
+                        add(q): q 2
+                    ]
+                    push(_): t x
+                    add(k): k 1
+                ]
+                omsk_vset(qt): qt {b & 3} t
+            ]
+        ]
+        elif(_): {m = 196} [
+            # DHT
+            while(_): {q < se} [
+                at(b): v q
+                add(q): q 1
+                vec(cnt): ""
+                push(_): cnt 0
+                set(total): 0
+                set(k): 0
+                while(_): {k < 16} [
+                    at(x): v {q + k}
+                    push(_): cnt x
+                    add(total): total x
+                    add(k): k 1
+                ]
+                set(q): {q + 16}
+                vec(vals): ""
+                set(k): 0
+                while(_): {k < total} [
+                    at(x): v {q + k}
+                    push(_): vals x
+                    add(k): k 1
+                ]
+                set(q): {q + total}
+                omsk_huff_build(t): cnt vals
+                if(_): {t = null} [
+                    omsk_fail(r): "bad JPEG Huffman table"
+                    return(r): r
+                ]
+                if(_): {(b >> 4) = 0} [
+                    omsk_vset(hdc): hdc {b & 3} t
+                ]
+                else(_): [
+                    omsk_vset(hac): hac {b & 3} t
+                ]
+            ]
+        ]
+        elif(_): {m = 192 || m = 193} [
+            # SOF0 / SOF1: sequential Huffman
+            at(prec): v q
+            omsk_u16(h): v {q + 1}
+            omsk_u16(w): v {q + 3}
+            at(nc): v {q + 5}
+            if(_): {prec != 8 || (nc != 1 && nc != 3)} [
+                omsk_fail(r): "only 8-bit greyscale or colour JPEG is supported"
+                return(r): r
+            ]
+            vec(cid): ""
+            vec(chs): ""
+            vec(cvs): ""
+            vec(ctq): ""
+            set(k): 0
+            set(hmax): 1
+            set(vmax): 1
+            while(_): {k < nc} [
+                set(o): {q + 6 + k * 3}
+                at(x): v o
+                push(_): cid x
+                at(x): v {o + 1}
+                set(hs): {x >> 4}
+                set(vs): {x & 15}
+                if(_): {(hs != 1 && hs != 2 && hs != 4) || (vs != 1 && vs != 2 && vs != 4)} [
+                    omsk_fail(r): "unsupported JPEG sampling"
+                    return(r): r
+                ]
+                push(_): chs hs
+                push(_): cvs vs
+                if(_): {hs > hmax} [
+                    set(hmax): hs
+                ]
+                if(_): {vs > vmax} [
+                    set(vmax): vs
+                ]
+                at(x): v {o + 2}
+                push(_): ctq {x & 3}
+                add(k): k 1
+            ]
+        ]
+        elif(_): {m >= 194 && m <= 207 && m != 196 && m != 200 && m != 204} [
+            omsk_fail(r): "progressive or arithmetic JPEG is not supported"
+            return(r): r
+        ]
+        elif(_): {m = 221} [
+            omsk_u16(ri): v q
+        ]
+        elif(_): {m = 218} [
+            # SOS: the one scan of a sequential picture
+            if(_): {nc = 0} [
+                omsk_fail(r): "the JPEG has no frame header"
+                return(r): r
+            ]
+            at(ns): v q
+            if(_): {ns != nc} [
+                omsk_fail(r): "JPEG with several scans is not supported"
+                return(r): r
+            ]
+            vec(sdc): ""
+            vec(sac): ""
+            vec(sq): ""
+            set(k): 0
+            while(_): {k < ns} [
+                at(id): v {q + 1 + k * 2}
+                at(x): v {q + 2 + k * 2}
+                at(want): cid k
+                if(_): {id != want} [
+                    omsk_fail(r): "the JPEG scan does not match its frame"
+                    return(r): r
+                ]
+                at(t): hdc {(x >> 4) & 3}
+                push(_): sdc t
+                at(t): hac {x & 3}
+                push(_): sac t
+                at(tq): ctq k
+                at(t): qt tq
+                push(_): sq t
+                add(k): k 1
+            ]
+            set(k): 0
+            while(_): {k < ns} [
+                at(a): sdc k
+                at(b): sac k
+                at(c): sq k
+                if(_): {a = null || b = null || c = null} [
+                    omsk_fail(r): "the JPEG lacks a table its scan uses"
+                    return(r): r
+                ]
+                add(k): k 1
+            ]
+            if(_): {nc = 1} [
+                # one component: blocks in plain rows, whatever its sampling
+                set(chs): '[1]'
+                set(cvs): '[1]'
+                set(hmax): 1
+                set(vmax): 1
+            ]
+            omsk_jpeg_scan(r): v se w h nc chs cvs hmax vmax sdc sac sq ri tw th
+            return(r): r
+        ]
+        set(p): se
+    ]
+]
+
+# Decodes the scan starting at p and samples the thumbnail from it.
+omsk_jpeg_scan(r): v p w h nc chs cvs hmax vmax sdc sac sq ri tw th [
+    set(r): null
+    len(n): v
+    # decode at N/8 of the size, N the smallest still at least the thumbnail
+    set(nn): 1
+    while(_): {nn < 8 && (((w * nn + 7) >> 3) < tw || ((h * nn + 7) >> 3) < th)} [
+        set(nn): {nn * 2}
+    ]
+    set(logn): 0
+    if(_): {nn = 2} [
+        set(logn): 1
+    ]
+    elif(_): {nn = 4} [
+        set(logn): 2
+    ]
+    elif(_): {nn = 8} [
+        set(logn): 3
+    ]
+    # each component at N/8 of its own size; colour sampled down in both
+    # directions at twice (or four times) that, so it keeps the resolution
+    vec(cnn): ""
+    vec(cext): ""
+    vec(cbasis): ""
+    vec(cneed): ""
+    vec(ckmax): ""
+    set(c): 0
+    while(_): {c < nc} [
+        at(hs): chs c
+        at(vs): cvs c
+        set(e): 0
+        if(_): {hmax > hs && vmax > vs && nn < 8} [
+            set(e): 1
+            if(_): {hmax >= 4 * hs && vmax >= 4 * vs && nn < 4} [
+                set(e): 2
+            ]
+        ]
+        set(cn): {nn << e}
+        push(_): cnn cn
+        push(_): cext e
+        at(b): omsk_idct cn
+        push(_): cbasis b
+        # coefficients needed: zigzag positions of (u, v) with u, v < N
+        vec(need): ""
+        set(kmax): 0
+        set(vv): 0
+        while(_): {vv < cn} [
+            set(uu): 0
+            while(_): {uu < cn} [
+                at(z): omsk_nat2zz {vv * 8 + uu}
+                push(_): need z
+                if(_): {z > kmax} [
+                    set(kmax): z
+                ]
+                add(uu): uu 1
+            ]
+            add(vv): vv 1
+        ]
+        push(_): cneed need
+        push(_): ckmax kmax
+        add(c): c 1
+    ]
+    set(mcuw): {8 * hmax}
+    set(mcuh): {8 * vmax}
+    omsk_idiv(mcux): {w + mcuw - 1} mcuw
+    omsk_idiv(mcuy): {h + mcuh - 1} mcuh
+    if(_): {nc = 1} [
+        set(mcux): {(w + 7) >> 3}
+        set(mcuy): {(h + 7) >> 3}
+    ]
+    # per component: blocks per MCU, tables
+    vec(planes): ""
+    set(k): 0
+    while(_): {k < nc} [
+        vec(pl): ""
+        push(_): planes pl
+        add(k): k 1
+    ]
+    at(hs0): chs 0
+    at(vs0): cvs 0
+    set(nb0): {hs0 * vs0}
+    set(nb1): 0
+    set(nb2): 0
+    if(_): {nc = 3} [
+        at(hs1): chs 1
+        at(vs1): cvs 1
+        at(hs2): chs 2
+        at(vs2): cvs 2
+        set(nb1): {hs1 * vs1}
+        set(nb2): {hs2 * vs2}
+    ]
+    set(bb): 0
+    set(bc): 0
+    set(marker): false
+    set(mcus): {mcux * mcuy}
+    set(left): ri
+    set(mi): 0
+    set(pred0): 0
+    set(pred1): 0
+    set(pred2): 0
+    while(_): {mi < mcus} [
+        if(_): {ri > 0} [
+            if(_): {left = 0} [
+                # restart: drop the bits, step over RSTn
+                set(bb): 0
+                set(bc): 0
+                set(marker): false
+                while(_): {p + 1 < n} [
+                    at(a): v p
+                    at(b): v {p + 1}
+                    if(_): {a = 255 && b >= 208 && b <= 215} [
+                        set(p): {p + 2}
+                        break(_): ""
+                    ]
+                    add(p): p 1
+                ]
+                set(pred0): 0
+                set(pred1): 0
+                set(pred2): 0
+                set(left): ri
+            ]
+            set(left): {left - 1}
+        ]
+        set(c): 0
+        while(_): {c < nc} [
+            at(pl): planes c
+            at(dct): sdc c
+            at(act): sac c
+            at(q): sq c
+            at(cn): cnn c
+            at(basis): cbasis c
+            at(need): cneed c
+            at(kmax): ckmax c
+            at(dtab): dct 0
+            at(atab): act 0
+            set(nb): nb0
+            set(pred): pred0
+            if(_): {c = 1} [
+                set(nb): nb1
+                set(pred): pred1
+            ]
+            elif(_): {c = 2} [
+                set(nb): nb2
+                set(pred): pred2
+            ]
+            set(bi): 0
+            while(_): {bi < nb} [
+                # one block: DC, then AC until EOB
+                set(tab): dtab
+                set(tt): dct
+                set(kk): 0
+                vec(blk): ""
+                while(_): {kk < 64} [
+                    while(_): {bc <= 32} [
+                        set(x): 0
+                        if(_): {marker = false && p < n} [
+                            at(x): v p
+                            if(_): {x = 255} [
+                                at(x2): v {p + 1}
+                                if(_): {x2 = 0} [
+                                    set(p): {p + 2}
+                                ]
+                                else(_): [
+                                    set(marker): true
+                                    set(x): 0
+                                ]
+                            ]
+                            else(_): [
+                                add(p): p 1
+                            ]
+                        ]
+                        set(bb): {((bb & 4294967295) << 8) | x}
+                        add(bc): bc 8
+                    ]
+                    at(e): tab {(bb >> (bc - 10)) & 1023}
+                    if(_): {e > 0} [
+                        set(bc): {bc - (e & 31)}
+                        set(sym): {e >> 5}
+                    ]
+                    else(_): [
+                        set(code): {(bb >> (bc - 10)) & 1023}
+                        set(bc): {bc - 10}
+                        set(sym): {0 - 1}
+                        set(l): 11
+                        at(tf): tt 1
+                        at(to): tt 2
+                        at(ts): tt 3
+                        at(tc): tt 4
+                        while(_): {l <= 16} [
+                            set(bc): {bc - 1}
+                            set(code): {(code << 1) | ((bb >> bc) & 1)}
+                            at(f): tf l
+                            at(tcn): tc l
+                            set(d): {code - f}
+                            if(_): {d >= 0 && d < tcn} [
+                                at(o): to l
+                                at(sym): ts {o + d}
+                                break(_): ""
+                            ]
+                            add(l): l 1
+                        ]
+                        if(_): {sym < 0} [
+                            omsk_fail(r): "bad code in the JPEG image data"
+                            return(r): r
+                        ]
+                    ]
+                    if(_): {kk = 0} [
+                        # DC difference
+                        set(s): sym
+                        set(val): 0
+                        if(_): {s > 0} [
+                            set(val): {(bb >> (bc - s)) & ((1 << s) - 1)}
+                            set(bc): {bc - s}
+                            if(_): {val < (1 << (s - 1))} [
+                                set(val): {val - (1 << s) + 1}
+                            ]
+                        ]
+                        set(pred): {pred + val}
+                        at(qk): q 0
+                        set(dc): {pred * qk}
+                        if(_): {cn > 1} [
+                            push(_): blk dc
+                        ]
+                        set(kk): 1
+                        set(tab): atab
+                        set(tt): act
+                        continue(_): ""
+                    ]
+                    set(run): {sym >> 4}
+                    set(s): {sym & 15}
+                    if(_): {s = 0} [
+                        if(_): {run != 15} [
+                            break(_): ""
+                        ]
+                        set(kk): {kk + 16}
+                        continue(_): ""
+                    ]
+                    set(kk): {kk + run}
+                    set(val): {(bb >> (bc - s)) & ((1 << s) - 1)}
+                    set(bc): {bc - s}
+                    if(_): {val < (1 << (s - 1))} [
+                        set(val): {val - (1 << s) + 1}
+                    ]
+                    if(_): {kk <= kmax && cn > 1} [
+                        len(bl): blk
+                        while(_): {bl < kk} [
+                            push(_): blk 0
+                            add(bl): bl 1
+                        ]
+                        at(qk): q kk
+                        push(_): blk {val * qk}
+                    ]
+                    add(kk): kk 1
+                ]
+                if(_): {kk > 64} [
+                    omsk_fail(r): "bad JPEG block"
+                    return(r): r
+                ]
+                # the block's N x N pixels, row by row
+                if(_): {cn = 1} [
+                    set(x): {(dc + 1028) >> 3}
+                    if(_): {x < 0} [
+                        set(x): 0
+                    ]
+                    if(_): {x > 255} [
+                        set(x): 255
+                    ]
+                    push(_): pl x
+                ]
+                else(_): [
+                    len(bl): blk
+                    while(_): {bl <= kmax} [
+                        push(_): blk 0
+                        add(bl): bl 1
+                    ]
+                    # rows: t[v][x] = sum over u of F(u, v) B[x][u]
+                    vec(tv): ""
+                    set(vv): 0
+                    while(_): {vv < cn} [
+                        set(xx): 0
+                        while(_): {xx < cn} [
+                            set(sum): 0
+                            set(uu): 0
+                            set(ni): {vv * cn}
+                            set(bi2): {xx * cn}
+                            while(_): {uu < cn} [
+                                at(z): need {ni + uu}
+                                at(cf): blk z
+                                if(_): {cf != 0} [
+                                    at(bx): basis {bi2 + uu}
+                                    set(sum): {sum + cf * bx}
+                                ]
+                                add(uu): uu 1
+                            ]
+                            push(_): tv sum
+                            add(xx): xx 1
+                        ]
+                        add(vv): vv 1
+                    ]
+                    # columns: out[y][x] = sum over v of t[v][x] B[y][v]
+                    set(yy): 0
+                    while(_): {yy < cn} [
+                        set(xx): 0
+                        set(bi2): {yy * cn}
+                        while(_): {xx < cn} [
+                            set(sum): 8388608
+                            set(vv): 0
+                            while(_): {vv < cn} [
+                                at(t): tv {vv * cn + xx}
+                                at(by): basis {bi2 + vv}
+                                set(sum): {sum + t * by}
+                                add(vv): vv 1
+                            ]
+                            set(x): {(sum >> 24) + 128}
+                            if(_): {x < 0} [
+                                set(x): 0
+                            ]
+                            if(_): {x > 255} [
+                                set(x): 255
+                            ]
+                            push(_): pl x
+                            add(xx): xx 1
+                        ]
+                        add(yy): yy 1
+                    ]
+                ]
+                add(bi): bi 1
+            ]
+            if(_): {c = 0} [
+                set(pred0): pred
+            ]
+            elif(_): {c = 1} [
+                set(pred1): pred
+            ]
+            else(_): [
+                set(pred2): pred
+            ]
+            add(c): c 1
+        ]
+        add(mi): mi 1
+    ]
+    # sample the thumbnail from the planes: address = row part + column part
+    set(sw): {(w * nn + 7) >> 3}
+    set(sh): {(h * nn + 7) >> 3}
+    omsk_axis(ax): sw tw
+    at(coff): ax 0
+    at(ccnt): ax 1
+    at(cpos): ax 2
+    omsk_axis(ax): sh th
+    at(roff): ax 0
+    at(rcnt): ax 1
+    at(rpos): ax 2
+    vec(cparts): ""
+    vec(rparts): ""
+    set(c): 0
+    while(_): {c < nc} [
+        at(hs): chs c
+        at(vs): cvs c
+        # source pixel x is plane pixel x * hs / hmax
+        set(shx): 0
+        if(_): {hmax > hs} [
+            set(shx): 1
+            if(_): {hmax = 4 * hs} [
+                set(shx): 2
+            ]
+        ]
+        set(shy): 0
+        if(_): {vmax > vs} [
+            set(shy): 1
+            if(_): {vmax = 4 * vs} [
+                set(shy): 2
+            ]
+        ]
+        set(lhs): 0
+        if(_): {hs = 2} [
+            set(lhs): 1
+        ]
+        elif(_): {hs = 4} [
+            set(lhs): 2
+        ]
+        set(lvs): 0
+        if(_): {vs = 2} [
+            set(lvs): 1
+        ]
+        elif(_): {vs = 4} [
+            set(lvs): 2
+        ]
+        at(cn): cnn c
+        at(e): cext c
+        set(shx): {shx - e}
+        set(shy): {shy - e}
+        set(cn2): {cn * cn}
+        set(lgn): {logn + e}
+        set(hv): {hs * vs * cn2}
+        vec(cp): ""
+        len(np): cpos
+        set(i): 0
+        while(_): {i < np} [
+            at(sx): cpos i
+            set(px): {sx >> shx}
+            set(bx): {px >> lgn}
+            push(_): cp {(bx >> lhs) * hv + (bx & (hs - 1)) * cn2 + (px & (cn - 1))}
+            add(i): i 1
+        ]
+        push(_): cparts cp
+        vec(rp): ""
+        len(np): rpos
+        set(i): 0
+        while(_): {i < np} [
+            at(sy): rpos i
+            set(py): {sy >> shy}
+            set(by): {py >> lgn}
+            push(_): rp {(by >> lvs) * mcux * hv + (by & (vs - 1)) * hs * cn2 + (py & (cn - 1)) * cn}
+            add(i): i 1
+        ]
+        push(_): rparts rp
+        add(c): c 1
+    ]
+    at(p0): planes 0
+    at(cp0): cparts 0
+    at(rp0): rparts 0
+    if(_): {nc = 3} [
+        at(p1): planes 1
+        at(p2): planes 2
+        at(cp1): cparts 1
+        at(cp2): cparts 2
+        at(rp1): rparts 1
+        at(rp2): rparts 2
+    ]
+    set(recip): omsk_recip
+    vec(rgb): ""
+    set(oy): 0
+    while(_): {oy < th} [
+        at(r0): roff oy
+        at(kr): rcnt oy
+        set(re): {r0 + kr}
+        set(ox): 0
+        while(_): {ox < tw} [
+            at(c0): coff ox
+            at(kc): ccnt ox
+            set(ce): {c0 + kc}
+            set(sy0): 0
+            set(sy1): 0
+            set(sy2): 0
+            set(ri2): r0
+            while(_): {ri2 < re} [
+                at(a0): rp0 ri2
+                if(_): {nc = 3} [
+                    at(a1): rp1 ri2
+                    at(a2): rp2 ri2
+                ]
+                set(ci): c0
+                while(_): {ci < ce} [
+                    at(b0): cp0 ci
+                    at(x): p0 {a0 + b0}
+                    add(sy0): sy0 x
+                    if(_): {nc = 3} [
+                        at(b1): cp1 ci
+                        at(x): p1 {a1 + b1}
+                        add(sy1): sy1 x
+                        at(b2): cp2 ci
+                        at(x): p2 {a2 + b2}
+                        add(sy2): sy2 x
+                    ]
+                    add(ci): ci 1
+                ]
+                add(ri2): ri2 1
+            ]
+            at(rc): recip {kr * kc}
+            set(yv): {(sy0 * rc + 32768) >> 16}
+            if(_): {nc = 1} [
+                push(_): rgb yv
+                push(_): rgb yv
+                push(_): rgb yv
+            ]
+            else(_): [
+                # YCbCr to RGB, times 65536
+                set(cb): {((sy1 * rc + 32768) >> 16) - 128}
+                set(cr): {((sy2 * rc + 32768) >> 16) - 128}
+                set(yv): {yv * 65536 + 32768}
+                set(cr2): {(yv + 91881 * cr) >> 16}
+                set(cg2): {(yv - 22554 * cb - 46802 * cr) >> 16}
+                set(cb2): {(yv + 116130 * cb) >> 16}
+                if(_): {cr2 < 0} [
+                    set(cr2): 0
+                ]
+                if(_): {cr2 > 255} [
+                    set(cr2): 255
+                ]
+                if(_): {cg2 < 0} [
+                    set(cg2): 0
+                ]
+                if(_): {cg2 > 255} [
+                    set(cg2): 255
+                ]
+                if(_): {cb2 < 0} [
+                    set(cb2): 0
+                ]
+                if(_): {cb2 > 255} [
+                    set(cb2): 255
+                ]
+                push(_): rgb cr2
+                push(_): rgb cg2
+                push(_): rgb cb2
+            ]
+            add(ox): ox 1
+        ]
+        add(oy): oy 1
+    ]
+    set(r): rgb
+]
+
+# ---------------------------------------------------------------- encoder
+
+# A baseline JPEG (quality 85, 4:4:4) of w x h RGB values, as bytes.
+omsk_encode(r): rgb w h [
+    vec(out): ""
+    set(head): '[255,216,255,224,0,16,74,70,73,70,0,1,1,0,0,1,0,1,0,0]'
+    omsk_append(_): out head
+    omsk_append(_): out omsk_jhead
+    set(sof): '[255,192,0,17,8]'
+    omsk_append(_): out sof
+    push(_): out {h >> 8}
+    push(_): out {h & 255}
+    push(_): out {w >> 8}
+    push(_): out {w & 255}
+    set(sof): '[3,1,17,0,2,17,1,3,17,1]'
+    omsk_append(_): out sof
+    set(sos): '[255,218,0,12,3,1,0,2,17,3,17,0,63,0]'
+    omsk_append(_): out sos
+    # Y, Cb, Cr planes (times 1, offset by -128 for the DCT)
+    vec(py): ""
+    vec(pcb): ""
+    vec(pcr): ""
+    set(n): {w * h * 3}
+    set(i): 0
+    while(_): {i < n} [
+        at(cr): rgb i
+        at(cg): rgb {i + 1}
+        at(cb): rgb {i + 2}
+        push(_): py {((19595 * cr + 38470 * cg + 7471 * cb + 32768) >> 16) - 128}
+        push(_): pcb {(0 - 11059 * cr - 21709 * cg + 32768 * cb + 32768) >> 16}
+        push(_): pcr {(32768 * cr - 27439 * cg - 5329 * cb + 32768) >> 16}
+        add(i): i 3
+    ]
+    set(fd): omsk_fdct
+    set(zz): omsk_zz
+    set(nbits): omsk_nbits
+    set(acc): 0
+    set(cnt): 0
+    set(pred0): 0
+    set(pred1): 0
+    set(pred2): 0
+    set(bh): {(h + 7) >> 3}
+    set(bw): {(w + 7) >> 3}
+    set(by): 0
+    while(_): {by < bh} [
+        set(bx): 0
+        while(_): {bx < bw} [
+            set(c): 0
+            while(_): {c < 3} [
+                set(plane): py
+                set(rq): omsk_rlum
+                set(edc): omsk_edcl
+                set(eac): omsk_eacl
+                set(pred): pred0
+                if(_): {c = 1} [
+                    set(plane): pcb
+                    set(rq): omsk_rchr
+                    set(edc): omsk_edcc
+                    set(eac): omsk_eacc
+                    set(pred): pred1
+                ]
+                elif(_): {c = 2} [
+                    set(plane): pcr
+                    set(rq): omsk_rchr
+                    set(edc): omsk_edcc
+                    set(eac): omsk_eacc
+                    set(pred): pred2
+                ]
+                # rows: t[y][u] = sum over x of A[u][x] f(x, y), edges repeated
+                vec(t): ""
+                set(y): 0
+                while(_): {y < 8} [
+                    set(sy): {by * 8 + y}
+                    if(_): {sy >= h} [
+                        set(sy): {h - 1}
+                    ]
+                    vec(f): ""
+                    set(x): 0
+                    while(_): {x < 8} [
+                        set(sx): {bx * 8 + x}
+                        if(_): {sx >= w} [
+                            set(sx): {w - 1}
+                        ]
+                        at(s): plane {sy * w + sx}
+                        push(_): f s
+                        add(x): x 1
+                    ]
+                    set(u): 0
+                    while(_): {u < 8} [
+                        set(sum): 0
+                        set(x): 0
+                        set(ai): {u * 8}
+                        while(_): {x < 8} [
+                            at(s): f x
+                            at(a): fd {ai + x}
+                            set(sum): {sum + s * a}
+                            add(x): x 1
+                        ]
+                        push(_): t sum
+                        add(u): u 1
+                    ]
+                    add(y): y 1
+                ]
+                # columns: F(u, v) = sum over y of A[v][y] t[y][u], natural order
+                vec(coef): ""
+                set(vv): 0
+                while(_): {vv < 8} [
+                    set(u): 0
+                    set(ai): {vv * 8}
+                    while(_): {u < 8} [
+                        set(sum): 0
+                        set(y): 0
+                        while(_): {y < 8} [
+                            at(s): t {y * 8 + u}
+                            at(a): fd {ai + y}
+                            set(sum): {sum + s * a}
+                            add(y): y 1
+                        ]
+                        push(_): coef sum
+                        add(u): u 1
+                    ]
+                    add(vv): vv 1
+                ]
+                # quantize in zigzag order and write the block
+                set(run): 0
+                set(k): 0
+                while(_): {k < 64} [
+                    at(z): zz k
+                    at(fv): coef z
+                    at(rk): rq k
+                    set(neg): {fv < 0}
+                    if(_): neg [
+                        set(fv): {0 - fv}
+                    ]
+                    set(qv): {(fv * rk + 549755813888) >> 40}
+                    if(_): neg [
+                        set(qv): {0 - qv}
+                    ]
+                    if(_): {k = 0} [
+                        set(diff): {qv - pred}
+                        set(pred): qv
+                        set(mag): diff
+                        if(_): {mag < 0} [
+                            set(mag): {0 - mag}
+                        ]
+                        at(s): nbits mag
+                        set(bits): diff
+                        if(_): {diff < 0} [
+                            set(bits): {diff + (1 << s) - 1}
+                        ]
+                        at(e): edc s
+                        set(size): {(e & 31) + s}
+                        set(acc): {(acc << size) | ((e >> 5) << s) | bits}
+                        add(cnt): cnt size
+                        while(_): {cnt >= 8} [
+                            set(cnt): {cnt - 8}
+                            set(ob): {(acc >> cnt) & 255}
+                            push(_): out ob
+                            if(_): {ob = 255} [
+                                push(_): out 0
+                            ]
+                        ]
+                        set(acc): {acc & ((1 << cnt) - 1)}
+                    ]
+                    elif(_): {qv = 0} [
+                        add(run): run 1
+                    ]
+                    else(_): [
+                        while(_): {run > 15} [
+                            at(e): eac 240
+                            set(size): {e & 31}
+                            set(acc): {(acc << size) | (e >> 5)}
+                            add(cnt): cnt size
+                            while(_): {cnt >= 8} [
+                                set(cnt): {cnt - 8}
+                                set(ob): {(acc >> cnt) & 255}
+                                push(_): out ob
+                                if(_): {ob = 255} [
+                                    push(_): out 0
+                                ]
+                            ]
+                            set(acc): {acc & ((1 << cnt) - 1)}
+                            set(run): {run - 16}
+                        ]
+                        set(mag): qv
+                        if(_): {mag < 0} [
+                            set(mag): {0 - mag}
+                        ]
+                        at(s): nbits mag
+                        set(bits): qv
+                        if(_): {qv < 0} [
+                            set(bits): {qv + (1 << s) - 1}
+                        ]
+                        at(e): eac {run * 16 + s}
+                        set(size): {(e & 31) + s}
+                        set(acc): {(acc << size) | ((e >> 5) << s) | bits}
+                        add(cnt): cnt size
+                        while(_): {cnt >= 8} [
+                            set(cnt): {cnt - 8}
+                            set(ob): {(acc >> cnt) & 255}
+                            push(_): out ob
+                            if(_): {ob = 255} [
+                                push(_): out 0
+                            ]
+                        ]
+                        set(acc): {acc & ((1 << cnt) - 1)}
+                        set(run): 0
+                    ]
+                    add(k): k 1
+                ]
+                if(_): {run > 0} [
+                    # end of block
+                    at(e): eac 0
+                    set(size): {e & 31}
+                    set(acc): {(acc << size) | (e >> 5)}
+                    add(cnt): cnt size
+                    while(_): {cnt >= 8} [
+                        set(cnt): {cnt - 8}
+                        set(ob): {(acc >> cnt) & 255}
+                        push(_): out ob
+                        if(_): {ob = 255} [
+                            push(_): out 0
+                        ]
+                    ]
+                    set(acc): {acc & ((1 << cnt) - 1)}
+                ]
+                if(_): {c = 0} [
+                    set(pred0): pred
+                ]
+                elif(_): {c = 1} [
+                    set(pred1): pred
+                ]
+                else(_): [
+                    set(pred2): pred
+                ]
+                add(c): c 1
+            ]
+            add(bx): bx 1
+        ]
+        add(by): by 1
+    ]
+    if(_): {cnt > 0} [
+        # pad the last byte with 1 bits
+        set(pad): {8 - cnt}
+        set(ob): {((acc << pad) | ((1 << pad) - 1)) & 255}
+        push(_): out ob
+        if(_): {ob = 255} [
+            push(_): out 0
+        ]
+    ]
+    push(_): out 255
+    push(_): out 217
+    set(r): out
+]
+
+# Pushes the items of b onto a.
+omsk_append(r): a b [
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        push(_): a x
+        add(i): i 1
+    ]
+    set(r): a
+]

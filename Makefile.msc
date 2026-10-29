@@ -108,13 +108,13 @@ $(SRC)\lexer.c: $(SRC)\lexer.l $(SRC)\parser.tab.h
 
 # --- object files -----------------------------------------------------
 
-$(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)\ussr_oop_builtins.h $(SRC)\process.h
+$(SRC)\ussr.obj: $(SRC)\ussr.c $(SRC)\ussr.h $(SRC)\uthash.h $(SRC)\uno.h $(SRC)\ussr_oop_builtins.h $(SRC)\process.h $(SRC)\gc.h $(SRC)\prng64_xrp32.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr.obj $(SRC)\ussr.c
 
 $(SRC)\pp.obj: $(SRC)\pp.c $(SRC)\pp.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\pp.obj $(SRC)\pp.c
 
-$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\ussr_ru.h $(SRC)\vm.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h $(SRC)\keybind.h $(SRC)\alias.h $(SRC)\history.h
+$(SRC)\main.obj: $(SRC)\main.c $(WIN)\worstline.h $(WIN)\getopt.h $(SRC)\ussr.h $(SRC)\ussr_version.h $(SRC)\pp.h $(SRC)\uno.h $(SRC)\ussr_bytecode.h $(SRC)\ussr_uuasm.h $(SRC)\ussr_ru.h $(SRC)\vm.h $(SRC)\ussr_oop_builtins.h $(SRC)\autocomplete.h $(SRC)\keybind.h $(SRC)\alias.h $(SRC)\history.h $(SRC)\completion_fs.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\prng64_xrp32.h $(SRC)\scheduler.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\main.obj $(SRC)\main.c
 
 $(SRC)\uno.obj: $(SRC)\uno.c $(SRC)\uno.h $(SRC)\ussr.h
@@ -132,7 +132,7 @@ $(SRC)\ussr_uuasm.obj: $(SRC)\ussr_uuasm.c $(SRC)\ussr_uuasm.h $(SRC)\ussr_bytec
 $(SRC)\ussr_ru.obj: $(SRC)\ussr_ru.c $(SRC)\ussr_ru.h $(SRC)\ussr_bytecode.h $(SRC)\ussr.h $(SRC)\ussr_version.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ussr_ru.obj $(SRC)\ussr_ru.c
 
-$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h $(SRC)\ryazan.h
+$(SRC)\scheduler.obj: $(SRC)\scheduler.c $(SRC)\scheduler.h $(SRC)\petersburg.h $(SRC)\vm.h $(SRC)\eventq.h $(SRC)\gc.h $(SRC)\ussr.h $(SRC)\ussr_bytecode.h $(SRC)\socket.h $(SRC)\ryazan.h $(SRC)\ussr_oop_builtins.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\scheduler.obj $(SRC)\scheduler.c
 
 $(PETERSBURG_OBJ): $(SRC)\petersburg.c $(SRC)\petersburg.h $(SRC)\ttf.h $(SRC)\scheduler.h $(SRC)\eventq.h
@@ -147,7 +147,7 @@ $(SRC)\socket_win32.obj: $(SRC)\socket_win32.c $(SRC)\socket.h
 $(SRC)\gc.obj: $(SRC)\gc.c $(SRC)\gc.h $(SRC)\uno.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\gc.obj $(SRC)\gc.c
 
-$(SRC)\parser.tab.obj: $(SRC)\parser.tab.c $(SRC)\parser.tab.h
+$(SRC)\parser.tab.obj: $(SRC)\parser.tab.c $(SRC)\parser.tab.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\parser.tab.obj $(SRC)\parser.tab.c
 
 $(SRC)\lexer.obj: $(SRC)\lexer.c $(SRC)\parser.tab.h
@@ -164,7 +164,7 @@ $(SRC)\keybind.obj: $(SRC)\keybind.c $(SRC)\keybind.h
 $(SRC)\ai.obj: $(SRC)\ai.c $(SRC)\ai.h $(SRC)\process.h $(SRC)\ussr_oop_builtins.h $(SRC)\ryazan.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ai.obj $(SRC)\ai.c
 
-$(SRC)\ryazan.obj: $(SRC)\ryazan.c $(SRC)\ryazan.h $(SRC)\ryazan_backend.h $(SRC)\socket.h
+$(SRC)\ryazan.obj: $(SRC)\ryazan.c $(SRC)\ryazan.h $(SRC)\ryazan_backend.h $(SRC)\socket.h $(SRC)\ussr_oop_builtins.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ryazan.obj $(SRC)\ryazan.c
 
 $(SRC)\ryazan_schannel.obj: $(SRC)\ryazan_schannel.c $(SRC)\ryazan_backend.h

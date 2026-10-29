@@ -66,6 +66,7 @@ few exceptions are Mbl.su - text editor and no-name std library with shared func
 Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code now: the second wave is finished):
 
 - dubna.su - PostgreSQL client: protocol 3.0, TLS, SCRAM-SHA-256, parameterised queries (working: `src/dubna`)
+- omsk.su - image thumbnails: PNG and baseline JPEG in, a 200x200 JPEG out, in pure USSR (working: `src/omsk`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base: folders are objects and categories (working: `src/kgb`)
 - klin.su - GUI calculator, programmer, scientific and casual in one (working: `src/klin`)
 - kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
@@ -76,8 +77,9 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
 
-The **RUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
-(HTTP) under Novgorod (the forum), with Dubna (the PostgreSQL client) under
+The **ROUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
+(HTTP) under Novgorod (the forum), with Omsk (image thumbnails) making
+Novgorod's 200x200 previews and Dubna (the PostgreSQL client) under
 Novgorod's `--db`.
 
 ```bash
@@ -168,8 +170,9 @@ With usa the second wave is done and USSR is complete. Its programs:
 - klin.su - GUI calculator: casual, scientific and programmer modes
 - ryazan.su - TLS and HTTPS on Schannel or OpenSSL
 - kremlin.su - GUI full-screen desktop on ~/kremlin
-- novgorod.su - anonymous HTTPS image forum (RUND stack)
-- dubna.su - PostgreSQL client (RUND stack)
+- novgorod.su - anonymous HTTPS image forum (ROUND stack)
+- dubna.su - PostgreSQL client (ROUND stack)
+- omsk.su - image thumbnails: PNG and baseline JPEG in pure USSR (ROUND stack)
 - siberia.su - GUI office package: spreadsheet and document editor
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor

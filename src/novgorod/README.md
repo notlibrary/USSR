@@ -1,11 +1,12 @@
 # Novgorod
 
 Novgorod is an anonymous image forum for programmers, written in USSR and
-served over HTTPS. It is the N of the **RUND stack**:
+served over HTTPS. It is the N of the **ROUND stack**:
 
 | Layer | Name | Job |
 |-------|------|-----|
 | R | [Ryazan](../ryazan/) | TLS: the operating system's Schannel or OpenSSL |
+| O | [Omsk](../omsk/) | image thumbnails: PNG and JPEG in, 200x200 JPEG out |
 | U | [Ukraine](../ukraine/) | HTTP/1.1 server and request-handler framework |
 | N | Novgorod | this forum |
 | D | [Dubna](../dubna/) | PostgreSQL client (`--db`) |
@@ -61,7 +62,7 @@ prog | Programming | General programming: problems, ideas, tools and careers
 c | C and systems | C, C++, Rust, assembly, kernels, compilers and linkers
 lang | Languages | Language design, type systems, interpreters and virtual machines
 web | Web and networks | HTTP, TLS, browsers, servers and protocols
-ussr | USSR | The USSR shell, the RUND stack and the rest of the family
+ussr | USSR | The USSR shell, the ROUND stack and the rest of the family
 meta | Meta | Novgorod itself: bugs, rules and wishes
 ```
 
@@ -69,18 +70,23 @@ Names are 1 to 16 lowercase letters or digits. Edit the file and restart.
 
 ## How images work
 
-USSR strings stop at a zero byte, so raw image bytes cannot travel through
-the server. The browser does the binary work instead:
+USSR strings stop at a zero byte, so raw image bytes travel through the
+server as base64:
 
 1. When you post, `novgorod.js` draws the picked image onto a canvas, at
    most 2048 pixels on its longest side, and encodes it as PNG (screenshots
-   and diagrams) or JPEG. It also draws a 200-pixel JPEG thumbnail.
-   Redrawing removes EXIF data (camera, GPS position) and anything hidden
-   after the picture.
-2. Both go to the server as base64 form fields. The server checks the
-   alphabet, the size, the JPEG/PNG signature and the dimensions.
-3. Each is stored as an SVG file that wraps the base64 in a `data:` URL.
-   Browsers show `/i/N.svg` and `/t/N.svg` like any image, cached forever.
+   and diagrams) or JPEG. Redrawing removes EXIF data (camera, GPS
+   position) and anything hidden after the picture.
+2. It goes to the server as a base64 form field. The server checks the
+   alphabet, the size and the JPEG/PNG signature, then
+   [Omsk](../omsk/) decodes the picture: its real size replaces what the
+   form says, and Omsk shrinks it into 200x200 (same proportions) and
+   encodes that as the thumbnail. A picture Omsk cannot read is refused.
+   This takes up to a few seconds for a 2048-pixel JPEG and about ten for
+   a 2048-pixel PNG; other visitors are served meanwhile.
+3. The image and the thumbnail are stored as SVG files that wrap the
+   base64 in a `data:` URL. Pages show the thumbnail `/t/N.svg`, which
+   opens the whole picture `/i/N.svg`; both are cached forever.
 
 Attaching an image needs JavaScript; text posts work without it. An
 animated GIF keeps its first frame.
@@ -103,8 +109,9 @@ animated GIF keeps its first frame.
 ## Storage
 
 `DIR/posts/N.post` holds one post: a few `key value` lines, a blank line,
-the text as typed. `DIR/img/N.svg` and `DIR/img/Nt.svg` hold its image and
-thumbnail, `DIR/seq` the next post number. A new number is taken by
+the text as typed. `DIR/img/N.svg` holds its image and
+`DIR/thumbs/N.svg` its thumbnail (boards from before Omsk have
+`DIR/img/Nt.svg`, which is still served), `DIR/seq` the next post number. A new number is taken by
 renaming a temporary file to `posts/N.post`, which never replaces an
 existing file, so two posts can never share a number. Boards keep 100
 threads; the thread bumped longest ago is deleted, with its files, when a

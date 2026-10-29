@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+- Thumbnails are made by the server with Omsk (`src/omsk`): every posted
+  picture is decoded, its real size replaces the one the form gives, and
+  a 200x200 JPEG goes to `thumbs/N.svg`. A picture Omsk cannot read is
+  refused; the browser no longer sends a thumbnail. Old boards keep their
+  `img/Nt.svg`, which is still served.
+- The footer names the ROUND stack (Ryazan, Omsk, Ukraine, Novgorod,
+  Dubna) and links to the USSR repository on GitHub.
+
 ## 0.3.0
 - `--prefix /board` serves the board under a path behind a reverse proxy.
 - `deploy/`: install.sh, an Apache snippet and a systemd unit for a board

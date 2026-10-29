@@ -18,6 +18,7 @@ PASS clean
 PASS ref list
 PASS empty forum
 PASS default boards
+PASS fake image refused
 PASS thread posted
 PASS thread location
 PASS reply location
@@ -35,6 +36,7 @@ PASS home boards
 PASS home recent
 PASS thumb svg
 PASS thumb data
+PASS thumbs folder
 PASS image svg
 PASS no image
 PASS post link
@@ -58,6 +60,7 @@ PASS numbers go on
 PASS pruned
 PASS pruned file
 PASS pruned image
+PASS pruned thumbnail
 PASS kept
 PASS rate limit
 PASS prefix nav

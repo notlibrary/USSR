@@ -5,9 +5,7 @@
   'use strict';
 
   const MAX_SIDE = 2048;     // longest side of an uploaded image
-  const THUMB_SIDE = 200;    // longest side of a thumbnail
   const MAX_IMAGE = 2300000; // base64 characters the server accepts (2400000)
-  const MAX_THUMB = 70000;
 
   function loadImage(file) {
     return new Promise((resolve, reject) => {
@@ -66,17 +64,12 @@
       }
       if (data === null) throw new Error('That image is too large even after shrinking it.');
     }
-    const thumb = draw(img, THUMB_SIDE, true);
-    const thumbData = base64(thumb, 'image/jpeg', 0.8);
-    if (thumbData.length > MAX_THUMB) throw new Error('The thumbnail came out too large.');
-    return {
-      mime, img: data, imgw: canvas.width, imgh: canvas.height,
-      thumb: thumbData, thw: thumb.width, thh: thumb.height,
-    };
+    // the server makes the thumbnail (Omsk)
+    return { mime, img: data, imgw: canvas.width, imgh: canvas.height };
   }
 
   function setFields(form, values) {
-    for (const name of ['mime', 'imgw', 'imgh', 'thw', 'thh', 'thumb', 'img']) {
+    for (const name of ['mime', 'imgw', 'imgh', 'img']) {
       const input = form.elements.namedItem(name);
       if (input) input.value = values ? String(values[name]) : '';
     }

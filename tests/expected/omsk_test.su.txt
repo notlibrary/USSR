@@ -1,0 +1,9 @@
+jpeg420 200: 16x12 -> 16x12, 812 bytes, crc 724999719, reads back
+jpeg420 8: 16x12 -> 8x6, 696 bytes, crc 1718978624, reads back
+jpeggray 200: 16x12 -> 16x12, 692 bytes, crc 1478198809, reads back
+jpegrst 200: 16x12 -> 16x12, 838 bytes, crc 786602202, reads back
+jpegprog 200: refused (progressive or arithmetic JPEG is not supported)
+
+--- stderr ---
+
+--- exit 0 ---

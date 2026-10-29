@@ -93,19 +93,19 @@ $(SRC_DIR)/parser.tab.h: $(SRC_DIR)/parser.tab.c
 $(SRC_DIR)/lex.yy.c: $(SRC_DIR)/lexer.l $(SRC_DIR)/parser.tab.h
 	flex -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/lexer.l
 
-$(SRC_DIR)/parser.tab.o: $(SRC_DIR)/parser.tab.c $(SRC_DIR)/ussr.h
+$(SRC_DIR)/parser.tab.o: $(SRC_DIR)/parser.tab.c $(SRC_DIR)/ussr.h $(SRC_DIR)/parser.tab.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/lex.yy.o: $(SRC_DIR)/lex.yy.c $(SRC_DIR)/ussr.h
+$(SRC_DIR)/lex.yy.o: $(SRC_DIR)/lex.yy.c $(SRC_DIR)/ussr.h $(SRC_DIR)/parser.tab.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ussr.o: $(SRC_DIR)/ussr.c $(SRC_DIR)/ussr.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/uthash.h
+$(SRC_DIR)/ussr.o: $(SRC_DIR)/ussr.c $(SRC_DIR)/ussr.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/uthash.h $(SRC_DIR)/gc.h $(SRC_DIR)/prng64_xrp32.h $(SRC_DIR)/process.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/ussr_bytecode.o: $(SRC_DIR)/ussr_bytecode.c $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/ussr.h $(SRC_DIR)/vm.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ussr_ru.o: $(SRC_DIR)/ussr_ru.c $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr.h
+$(SRC_DIR)/ussr_ru.o: $(SRC_DIR)/ussr_ru.c $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_version.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/ussr_uuasm.o: $(SRC_DIR)/ussr_uuasm.c $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr.h
@@ -120,13 +120,13 @@ $(SRC_DIR)/completion_fs_posix.o: $(SRC_DIR)/completion_fs_posix.c $(SRC_DIR)/co
 $(SRC_DIR)/completion_fs_win32.o: $(SRC_DIR)/completion_fs_win32.c $(SRC_DIR)/completion_fs.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h $(SRC_DIR)/keybind.h $(SRC_DIR)/alias.h $(SRC_DIR)/history.h
+$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/ussr.h $(SRC_DIR)/ussr_ru.h $(SRC_DIR)/ussr_bytecode.h $(SRC_DIR)/ussr_uuasm.h $(SRC_DIR)/vm.h $(SRC_DIR)/pp.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/autocomplete.h $(SRC_DIR)/bestline.h $(SRC_DIR)/keybind.h $(SRC_DIR)/alias.h $(SRC_DIR)/history.h $(SRC_DIR)/completion_fs.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/prng64_xrp32.h $(SRC_DIR)/scheduler.h $(SRC_DIR)/ussr_version.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/keybind.o: $(SRC_DIR)/keybind.c $(SRC_DIR)/keybind.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/ryazan.o: $(SRC_DIR)/ryazan.c $(SRC_DIR)/ryazan.h $(SRC_DIR)/ryazan_backend.h $(SRC_DIR)/socket.h
+$(SRC_DIR)/ryazan.o: $(SRC_DIR)/ryazan.c $(SRC_DIR)/ryazan.h $(SRC_DIR)/ryazan_backend.h $(SRC_DIR)/socket.h $(SRC_DIR)/ussr_oop_builtins.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/ryazan_openssl.o: $(SRC_DIR)/ryazan_openssl.c $(SRC_DIR)/ryazan_backend.h
@@ -159,13 +159,13 @@ $(SRC_DIR)/ussr_oop_builtins.o: $(SRC_DIR)/ussr_oop_builtins.c $(SRC_DIR)/ussr_o
 $(SRC_DIR)/bestline.o: $(SRC_DIR)/bestline.c $(SRC_DIR)/bestline.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/process_posix.o: $(SRC_DIR)/process_posix.c
+$(SRC_DIR)/process_posix.o: $(SRC_DIR)/process_posix.c $(SRC_DIR)/process.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/win/process_win32.o: $(SRC_DIR)/win/process_win32.c $(SRC_DIR)/process.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/petersburg.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h
+$(SRC_DIR)/scheduler.o: $(SRC_DIR)/scheduler.c $(SRC_DIR)/scheduler.h $(SRC_DIR)/petersburg.h $(SRC_DIR)/vm.h $(SRC_DIR)/eventq.h $(SRC_DIR)/gc.h $(SRC_DIR)/socket.h $(SRC_DIR)/ryazan.h $(SRC_DIR)/ussr_oop_builtins.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(PETERSBURG_OBJ): $(SRC_DIR)/petersburg.c $(SRC_DIR)/petersburg.h $(SRC_DIR)/ttf.h $(SRC_DIR)/scheduler.h $(SRC_DIR)/eventq.h
@@ -183,7 +183,7 @@ $(SRC_DIR)/socket_win32.o: $(SRC_DIR)/socket_win32.c $(SRC_DIR)/socket.h
 $(SRC_DIR)/gc.o: $(SRC_DIR)/gc.c $(SRC_DIR)/gc.h $(SRC_DIR)/uno.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c
+$(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c $(SRC_DIR)/prng64_xrp32.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:

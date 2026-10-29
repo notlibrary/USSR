@@ -1,0 +1,84 @@
+# Omsk thumbnails: decodes small PNG pictures (made by Pillow,
+# base64 below), shrinks them into 200x200 and 8x8 boxes, and prints each
+# thumbnail's size and the CRC-32 of the JPEG that Omsk wrote for it. The
+# thumbnails are read back by Omsk too, and the pictures it must refuse
+# say why.
+$include "../src/omsk/omsk.su"
+
+show(r): name text side [
+    omsk_thumb_base64(t): text side
+    if(_): {t = null} [
+        omsk_error(e):
+        str_from_int(ss): side
+        concat(s): name " " ss ": refused (" e ")"
+        print(_): s
+        set(r): 1
+        return(r): r
+    ]
+    at(w): t 0
+    at(h): t 1
+    at(tw): t 2
+    at(th): t 3
+    at(b64): t 4
+    omsk_unbase64(jpeg): b64
+    crc32(c): jpeg
+    len(n): jpeg
+    omsk_thumb(again): jpeg 200
+    set(back): "not readable"
+    set(ok): false
+    if(_): {again != null} [
+        at(aw): again 0
+        at(ah): again 1
+        set(ok): {aw = tw && ah = th}
+    ]
+    if(_): ok [
+        set(back): "reads back"
+    ]
+    str_from_int(ss): side
+    str_from_int(w): w
+    str_from_int(h): h
+    str_from_int(tw): tw
+    str_from_int(th): th
+    str_from_int(n): n
+    str_from_int(c): c
+    concat(s): name " " ss ": " w "x" h " -> " tw "x" th ", " n " bytes, crc " c ", " back
+    print(_): s
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(img): "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMCAYAAABr5z2BAAABGUlEQVR4nJ3SIW5CQRDG8X/JfiggM4LsE0BA9Qw1VaiKXqCqohfoCSrQXACBqm8qUFU1PQOGBEEwDSBICa5ZQgPkPRAVk1G/bzI7ewUvOG1zmuZEc6rmlMzZmLMwZ2bO1JzJvs/NWZqzNSdYILYFTUEUVAUlwUawEMwEU8Fk3+eCpWArCIKaAjGPX1f3AnbVt+5ZDFkKOMWj8QGnel59aHhdKcTQSgEH/PV5iv/qcbzW220eQycFHO/M+Yp5DG0FsuMHuxCQ5TE0VCIuRJyJONVNr1uIh72yiJmILRE72l0uNkSspxVOT3U3qGj0tD5cYVCWF0yGuqCSAvJ3fnjfyglyahdxGhCI5z9J0c5H2OAnPeK/sBKGb/0CgRRYiXjvgCEAAAAASUVORK5CYII="
+    show(_): "pngrgba" img 200
+    show(_): "pngrgba" img 8
+    set(img): "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMBAMAAACZySCyAAAAMFBMVEXE3Kw330SRgYfuOj36HijuDCKhHWAlH84AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABiiDulAAAACHRSTlMAgP///////8/q9PAAAABQSURBVHicRcrBCYUwFAXR4/OvBTuxO6uxJbECtYO4FpJI/AsvDHcW081IkkBtBHmV6xFsToeQKZu3aau/95I97oWi6Eb9tA5nE+r1xX+58ABBXhm6fMHscAAAAABJRU5ErkJggg=="
+    show(_): "pngpal" img 200
+    show(_): "pngpal" img 8
+    set(img): "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMEAAAAAAeHL4eAAAApklEQVR4nH2QOw7CMBAFJ/EfAnFKLkBPQ8H9T8EBaJFoERLazToJDbZsyXoz9q47RjKFRCLgcfT0dLo7PNEzkclEosWdLUcgkARIZp+Q8VxtItlTza4aw8S72XK3Z1Q7WywjsJ9tigAHffuzAeCozxaZAkhprx+gtlhuGLTqgccSX7QvjQXYWVtn7hrfzLbfEaB9y7VV3mwiYQbc2vfGlrMT4E+M+wJCNwqUUspsSwAAAABJRU5ErkJggg=="
+    show(_): "pnggray16" img 200
+    omsk_fit(d): 2048 1536 200
+    encode(s): d
+    concat(s): "fit 2048x1536: " s
+    print(_): s
+    omsk_fit(d): 30 4000 200
+    encode(s): d
+    concat(s): "fit 30x4000: " s
+    print(_): s
+    text_bytes(v): "Omsk"
+    omsk_base64(s): v
+    omsk_unbase64(back): s
+    bytes_text(t): back
+    concat(s): "base64: " s " " t
+    print(_): s
+    omsk_unbase64(bad): "abc"
+    omsk_unbase64(bad2): "ab=c"
+    encode(bad): bad
+    encode(bad2): bad2
+    concat(s): "bad base64: " bad " " bad2
+    print(_): s
+    show(_): "text" "aGVsbG8gd29ybGQh" 200
+    set(omsk_max_pixels): 100
+    set(img): "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAMABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDwTR/hVp/hyJFuLTcWHygggfpXqPw/+A7eIFguEtWEUnK7l6jPB/GvoTw94D0XVpY4ryyjuY9wOyVQwz64Ir6Y8BeBtIgt0K2+Dj2r5TG8Y43jLNa3tqk1Ri/gvoktEktl59+tzt4C8WKH9jYHB4bB8mIhfnqX+O/49er0t7ujsv/Z"
+    show(_): "limit" img 200
+    set(ret): 0
+
+]

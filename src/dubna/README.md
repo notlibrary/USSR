@@ -1,6 +1,6 @@
 # Dubna
 
-Dubna is a PostgreSQL client written in USSR: the D of the **RUND stack**.
+Dubna is a PostgreSQL client written in USSR: the D of the **ROUND stack**.
 
 | Layer | Name | Job |
 |-------|------|-----|

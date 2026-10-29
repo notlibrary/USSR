@@ -1,0 +1,1 @@
+'Package{name=`omsk`,version=`0.1.0`,description=`Image thumbnails in pure USSR: PNG and baseline JPEG in, a JPEG fitted into a square box out (ROUND stack)`,entry=`omsk.su`,dependencies=[`library`],files=[`omsk.su`,`README.md`,`CHANGELOG.md`,`docs/API.md`,`examples/thumb.su`,`tests/TESTPLAN.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

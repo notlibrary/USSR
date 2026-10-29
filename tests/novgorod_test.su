@@ -158,16 +158,6 @@ post_fields(r): board thread subject text website mime img [
     push(_): r "640"
     push(_): r "imgh"
     push(_): r "480"
-    push(_): r "thw"
-    push(_): r "200"
-    push(_): r "thh"
-    push(_): r "150"
-    push(_): r "thumb"
-    set(thumb): ""
-    if(_): {img != ""} [
-        set(thumb): "/9j/AAAA"
-    ]
-    push(_): r thumb
     push(_): r "img"
     push(_): r img
 ]
@@ -197,7 +187,11 @@ engine_checks(r): [
     eq(_): "empty forum" count 0
     len(nb): nv_boards
     eq(_): "default boards" nb 6
+    # a real 48x36 JPEG; the form claims 640x480, which Omsk overrules
+    set(picture): "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAkADADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDy6pbW2nu51gtIZZ5mztjiQsxwMnAHPQVFX0D4C8MReHtIi82NTqMq75pCq7kJAzGGH8IwO5BOT3r7HifiOlkGGVSS5py0iu9t36LS/qefgcFLFz5VoluzyWbwF4miieRtLYqiliFljY4HoA2SfYc1zU0bwyvFMjRyoxVkYYKkdQR2NfU9cF8VPDEWo6RLqlrGqX1oplkKqoMyYG7ceCSqrkc9ARjnj4zIPEWpi8XHDZhCMVN2Uo3Vm9rpt6N9bq3XQ9LF5NGnTc6Lbt0Z4nRRRX6wfPhX09pV/Bqmm219aNuhnQOvIJHqDgkZB4I7EGvmGun8G+Mr3wyxiRFuLB2Z3tzhSWIA3BsEg/KPUYzxnmviON+G62eYaEsN/Ep3snpdO11fvorX0PUyvGxws2p7M+gq5/x7fwaf4R1N7hsedC1uigjLO4KgDJ565PsCe1c7N8VtHETmGz1BpQp2qyooJ7AnccD3wa818WeJr3xLeiW72pBGzeRCoGIwcZGcZJ+UZJ79MdK/PuHeB8xrY2FTGQdOnBpu+7trZLz77Jeej9jGZpRjSapu7ZhUUUV+8HyYUUUUAFFFFABRRRQB/9k="
     post(resp): "c" "0" "Pointers" "**hi** there\n```c\nint *p;\n```" "/9j/AAAA"
+    has(_): "fake image refused" resp "The image could not be read"
+    post(resp): "c" "0" "Pointers" "**hi** there\n```c\nint *p;\n```" picture
     status(code): resp
     eq(_): "thread posted" code "303"
     has(_): "thread location" resp "Location: /c/res/1#p1\r\n"
@@ -209,7 +203,7 @@ engine_checks(r): [
     has(_): "thread subject" page "<span class=\"subject\">Pointers</span>"
     has(_): "thread code block" page "<pre class=\"code\" data-lang=\"c\"><code>int *p;</code></pre>"
     has(_): "backlink" page "<span class=\"backlinks\"><a class=\"ref\" href=\"/p/2\" data-ref=\"2\">&gt;&gt;2</a>"
-    has(_): "thumbnail" page "<img src=\"/t/1.svg\" width=\"200\" height=\"150\""
+    has(_): "thumbnail" page "<img src=\"/t/1.svg\" width=\"48\" height=\"36\""
     has(_): "reply form" page "name=\"thread\" value=\"1\""
     has(_): "csp" page "Content-Security-Policy: default-src 'none'"
     fetch(page): "/c/"
@@ -222,9 +216,12 @@ engine_checks(r): [
     has(_): "home recent" page "/c/ 2</a>"
     fetch(svg): "/t/1.svg"
     has(_): "thumb svg" svg "Content-Type: image/svg+xml\r\n"
-    has(_): "thumb data" svg "href=\"data:image/jpeg;base64,/9j/AAAA\""
+    has(_): "thumb data" svg "href=\"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD"
+    concat(f): dir "/thumbs/1.svg"
+    file_exists(have): f
+    eq(_): "thumbs folder" have true
     fetch(svg): "/i/1.svg"
-    has(_): "image svg" svg "width=\"640\" height=\"480\""
+    has(_): "image svg" svg "width=\"48\" height=\"36\""
     fetch(resp): "/i/2.svg"
     status(code): resp
     eq(_): "no image" code "404"
@@ -295,9 +292,12 @@ engine_checks(r): [
     concat(f): dir "/posts/1.post"
     file_exists(gone): f
     eq(_): "pruned file" gone false
-    concat(f): dir "/img/1t.svg"
+    concat(f): dir "/img/1.svg"
     file_exists(gone): f
     eq(_): "pruned image" gone false
+    concat(f): dir "/thumbs/1.svg"
+    file_exists(gone): f
+    eq(_): "pruned thumbnail" gone false
     fetch(resp): "/c/res/5"
     status(code): resp
     eq(_): "kept" code "200"

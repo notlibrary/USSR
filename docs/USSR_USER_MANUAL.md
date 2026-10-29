@@ -1247,7 +1247,9 @@ exit status is nonzero if anything failed. After an intended change in
 output, `sh tests/run_all.sh --update` rewrites the expectations; review the
 diff before committing it. Not run: the socket and HTTP tests (they need a
 free port), `tests/chain.su` and `tests/script.su` (their output is the
-host's `ps` listing, and chaining is POSIX-only), and `tests/quines`.
+host's `ps` listing, and chaining is POSIX-only), `tests/quines`, and the
+Stalin and usa tests (`tests/stalin_test.su` edits partition tables, so it
+is run by hand; usa has its own test strategy, in `src/usa/README.md`).
 
 `sh tests/run_default.sh` is the quick set: the ussr pass only, with the
 suites in `tests/ru`, `tests/vectors`, `tests/errors`, `tests/exit`,

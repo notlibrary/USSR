@@ -1,0 +1,15 @@
+pngrgba 200: 16x12 -> 16x12, 782 bytes, crc 2926499325, reads back
+pngrgba 8: 16x12 -> 8x6, 675 bytes, crc 3938549649, reads back
+pngpal 200: 16x12 -> 16x12, 874 bytes, crc 356278668, reads back
+pngpal 8: 16x12 -> 8x6, 701 bytes, crc 2068199982, reads back
+pnggray16 200: 16x12 -> 16x12, 634 bytes, crc 3203553802, reads back
+fit 2048x1536: [200,150]
+fit 30x4000: [2,200]
+base64: T21zaw== Omsk
+bad base64: null null
+text 200: refused (not a PNG or JPEG image)
+limit 200: refused (the picture is empty or too large)
+
+--- stderr ---
+
+--- exit 0 ---
