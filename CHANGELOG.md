@@ -1,5 +1,44 @@
 # USSR programming language CHANGELOG
 
+## [0.4.9] - 2026-10-29
+
+The second wave of the project is finished: every subproject listed in
+the README has code, and with usa, the C compiler, USSR is complete.
+
+### Added
+- usa (`src/usa/usa.su`), a C compiler written in USSR: C99 in, `.ru`
+  bytecode out. A preprocessor forked from russia's `pp.su` with `#`
+  directives (`#if` expressions, `#`/`##`, variadic macros), a
+  hand-written lexer and recursive-descent parser, a code generator for
+  the VM, a linker and the `.ru` writer, and a C library written in C
+  (stdio, printf/scanf with exact doubles, stdlib, string, math, time,
+  getopt). Builds pikchr (its 102 tests render as with gcc), lemon (it
+  regenerates pikchr's parser byte for byte), tpm (its test battery
+  passes), prng_xrp and LINPACK.
+- Sochi, three-player Preferans over UDP with LAN discovery and chat, on
+  new `socket_udp`, `socket_sendto`, `socket_recvfrom` and
+  `terminal_key_ready` builtins.
+- Stalin, the GPT/MBR partition editor, on the block I/O builtins.
+- KGB, the Knowledge Giga Base; Siberia, the office package (spreadsheet
+  and `--pad` document editor).
+- The RUND stack: Ryazan (TLS for ukraine and `prompt`), Novgorod (the
+  image forum, with `--prefix` and a deploy kit) and Dubna (the
+  PostgreSQL client).
+- Kremlin, the full-screen desktop, and Klin, the calculator.
+- `launch` and `localtime` builtins, Petersburg full screen, double-click
+  and menu events, scaled text; hex integer literals (`0xCAFEBABE`).
+
+### Changed
+- The optimization cycle (docs/OPTIMIZATIONS.md): getf/at/setf/len fast
+  paths, the integer fast path, shared reference-counted strings, O(1)
+  string length, whole-program optimization in the builds, and russia.su's
+  fused compare-and-branch and ordered dispatch.
+- CI runs quick tests on pull requests and the full `run_all.sh` on
+  releases; releases install winflexbison from GitHub.
+
+### Fixed
+- The VM's `LOAD_VAR` leaked its register's old value.
+
 ## [Unreleased]
 
 ### Added

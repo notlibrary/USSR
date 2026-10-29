@@ -63,7 +63,7 @@ e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and fr
 moscow.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
-Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin, Novgorod, Dubna, Siberia, KGB, Stalin and Sochi have code so far):
+Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code now: the second wave is finished):
 
 - dubna.su - PostgreSQL client: protocol 3.0, TLS, SCRAM-SHA-256, parameterised queries (working: `src/dubna`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base: folders are objects and categories (working: `src/kgb`)
@@ -73,7 +73,7 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; Klin, Ryazan, Kremlin,
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
 - siberia.su - office package, spreadsheet tables and document editor
 - stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS and FFS2 (working: `src/stalin`)
-- usa.su - C compiler written in USSR
+- usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
 
 The **RUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
@@ -142,6 +142,38 @@ ussr src/sochi/sochi.su                     # nickname, then the tables on the L
 ussr src/sochi/sochi.su host --bots 2       # a table with two bots
 ussr src/sochi/sochi.su join 192.168.1.20   # a table across the network
 ```
+
+usa, the C compiler, closes the circle: C goes in, `.ru` bytecode comes out
+and runs on the same VM as everything else:
+
+```bash
+ussr src/usa/usa.su hello.c        # writes hello.ru
+ussr hello.ru
+```
+
+## The project is complete
+
+With usa the second wave is done and USSR is complete. Its programs:
+
+- moscow.su - the startup configuration file
+- library (`src/libs`) - the standard library: io, math, bytes, strings, vectors
+- russia.su - bootstrapped USSR interpreter, written in USSR
+- ural.su - package manager
+- ukraine.su - HTTP server and web framework
+- petersburg - OpenGL GUI widgets, dialogs, events and layout
+- Mbl.su - vi-like console text editor
+- tver.su - two-panel file manager
+- tula.su - 2D CAD with DXF
+- klin.su - calculator: casual, scientific and programmer modes
+- ryazan.su - TLS and HTTPS on Schannel or OpenSSL
+- kremlin.su - full-screen desktop on ~/kremlin
+- novgorod.su - anonymous HTTPS image forum (RUND stack)
+- dubna.su - PostgreSQL client (RUND stack)
+- siberia.su - office package: spreadsheet and document editor
+- kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
+- stalin.su - GPT/MBR partition editor
+- sochi.su - three-player Preferans over UDP
+- usa.su - C compiler to `.ru` bytecode
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
 If you want to add 3rd party USSR package project create a repo then add the box.uno then pack and upload it 
