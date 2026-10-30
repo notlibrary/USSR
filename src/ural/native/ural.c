@@ -731,9 +731,19 @@ static int ftp_upload_file(CURL *curl, const char *path, const char *base,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, 60L);
+    printf("uploading %s\n", name);
+    fflush(stdout);
     rc = curl_easy_perform(curl);
     if (rc != CURLE_OK) {
-        snprintf(err, cap, "FTP upload failed: %s", curl_easy_strerror(rc));
+        if (rc == CURLE_OPERATION_TIMEDOUT || rc == CURLE_COULDNT_CONNECT)
+            snprintf(err, cap, "FTP upload of %s to %s failed: %s "
+                     "(check that the FTP host is reachable on port 21 and not "
+                     "behind an HTTP-only proxy such as Cloudflare)",
+                     name, url, curl_easy_strerror(rc));
+        else
+            snprintf(err, cap, "FTP upload of %s to %s failed: %s",
+                     name, url, curl_easy_strerror(rc));
         goto done;
     }
     printf("uploaded %s\n", name);
@@ -789,6 +799,9 @@ static int scan_upload_directory(CURL *curl, const char *directory,
         if (!strcmp(data.cFileName, ".") || !strcmp(data.cFileName, "..") ||
             (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
             continue;
+        /* Hidden directories such as .git never hold repository artifacts. */
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && data.cFileName[0] == '.')
+            continue;
         child = join_path(directory, data.cFileName);
         if (child == NULL) { result = -1; break; }
         if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -819,6 +832,7 @@ static int scan_upload_directory(CURL *curl, const char *directory,
         child = join_path(directory, item->d_name);
         if (child == NULL) { result = -1; break; }
         if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
+            if (item->d_name[0] == '.') { free(child); continue; }
             result = scan_upload_directory(curl, child, root, base, login,
                                            password, err, cap);
         } else if (lstat(child, &st) == 0 && S_ISREG(st.st_mode)) {
@@ -859,6 +873,19 @@ static int command_upload(const char *root, const char *url,
     }
     result = scan_upload_directory(curl, root, root, url, login, password,
                                    err, sizeof err);
+    /* The index goes last so clients never see entries before their files. */
+    if (result == 0) {
+        char *index = join_path(root, "ussr.boxes");
+        struct stat st;
+        if (index == NULL)
+            result = -1;
+        else if (stat(index, &st) == 0)
+            result = ftp_upload_file(curl, index, url, login, password,
+                                     "ussr.boxes", err, sizeof err);
+        else
+            fprintf(stderr, "ural: no ussr.boxes in %s; run ural pack first\n", root);
+        free(index);
+    }
     if (result != 0)
         fprintf(stderr, "ural: %s\n", err[0] ? err : "upload failed");
     curl_easy_cleanup(curl);
