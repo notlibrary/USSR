@@ -48,8 +48,9 @@ ural upload ./repository ftp://packages.example.org/var/www/USSR LOGIN PASSWORD
 `pack` recursively searches for package manifests, creates `.ural` archives
 and `*-box.uno` sidecars in the target directory, then updates that
 directory's `ussr.boxes`. The public HTTPS URL is mandatory and independent of
-the FTP filesystem path. `upload` transfers only top-level `.ural`,
-`*-box.uno`, and `ussr.boxes` files from the target directory.
+the FTP filesystem path. `upload` recursively transfers `.ural` and
+`*-box.uno` files (skipping hidden directories such as `.git`), keeping their
+relative paths, and then uploads the target directory's `ussr.boxes` last.
 
 `install` reads only enabled trusted repositories, downloads their SQLite
 index over verified HTTPS, chooses the newest available version, checks its
