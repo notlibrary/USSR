@@ -160,11 +160,12 @@ ussr hello.ru
 With usa the second wave is done and USSR is complete. Its programs:
 
 - ussr/ussr.exe - the USSR programming language and shell
+- russia.su - bootstrapped USSR interpreter, written in USSR
+- moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell (`sh src/moscow/build.sh`)
+- ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
-- russia.su - bootstrapped USSR interpreter, written in USSR
 - ural.su - USSR package manager
-- ukraine.su - HTTP server and web framework
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
 - Mbl.su - vi-like console text editor
 - tver.su - GUI two-panel file manager
@@ -177,7 +178,6 @@ With usa the second wave is done and USSR is complete. Its programs:
 - omsk.su - image thumbnails: PNG and baseline JPEG in pure USSR (ROUND stack)
 - siberia.su - GUI spreadsheet
 - novosibirsk.su - GUI document editor
-- moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell (`sh src/moscow/build.sh`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP
