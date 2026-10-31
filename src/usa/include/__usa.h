@@ -21,6 +21,11 @@ size_t __fwrite_t(const void *p, size_t size, size_t n, void *f, __uval desc, lo
 size_t __fread_t(void *p, size_t size, size_t n, void *f, __uval desc, long stride);
 void *__memcpy_t(void *d, const void *s, size_t n, __uval ddesc, long dstride, __uval sdesc, long sstride);
 void __ginit(void);
+void abort(void);
+#define __builtin_expect(x, v) (x)
+#define __builtin_trap() abort()
+#define __builtin_abort() abort()
+#define __builtin_unreachable() abort()
 int __start(long argc, __uval argv);
 int main();
 #endif

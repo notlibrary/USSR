@@ -186,5 +186,6 @@ to the trusted mountain(ftp server) using ural
 I am far beyond postneuroslopware coder now I owned the WHOLE LOOP and found literally nothingness in the end on the other side
 dreadful emptiness the machine asking for the next prompt the guy with dozens anime-avatar accounts is following me
 AI is like a plastic cheap ubiquitous thing that wins the entire world 
+Enough sentiments neuroslop is just a feature of the epoch Take it or leave it
 
 P.S. СССР Средство Создания Совершенных Разработок

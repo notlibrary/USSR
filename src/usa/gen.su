@@ -32,7 +32,7 @@ global(_): co_op co_a co_b co_c co_i k_tag k_val k_tab st_s st_tab
 global(_): fn_name fn_entry fn_params fn_locals fn_defined fn_np fn_sym fn_kind fn_taken fn_rbuf fn_va
 global(_): g_fix_at g_fix_sym g_endfix g_calls g_calls_f
 global(_): g_slots g_slotn g_fp g_brk g_cont g_labels g_labn g_gotos g_goton g_cur g_icall
-global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero usa_trace g_hasvla
+global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero usa_trace g_hasvla bn_rem
 
 # ======================= pools =======================
 gen_init(r): [
@@ -196,23 +196,215 @@ e_flt(r): d s [
         e(_): 1 d 0 0 k
         return(_): r
     ]
-    # digits and exponent: value = m * 10^ex
+    flt_bits(b): s
+    k_real(k): b
+    e(_): 1 d 0 0 k
+]
+
+# ---- exact decimal and hex to binary64 ----
+# Small bignums: vectors of 24-bit limbs, least significant first.
+bn_from(r): m [
+    vec(r): ""
+    while(_): {m > 0} [
+        push(_): r {m & 16777215}
+        set(m): {m >> 24}
+    ]
+]
+# a * m for 0 <= m < 2^24
+bn_mul(r): a m [
+    vec(r): ""
+    len(n): a
+    set(c): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(x): a i
+        set(y): {x * m + c}
+        push(_): r {y & 16777215}
+        set(c): {y >> 24}
+        add(i): i 1
+    ]
+    while(_): {c > 0} [
+        push(_): r {c & 16777215}
+        set(c): {c >> 24}
+    ]
+]
+# a * 2^k
+bn_shl(r): a k [
+    vec(r): ""
+    while(_): {k >= 24} [
+        push(_): r 0
+        sub(k): k 24
+    ]
+    bn_mul(b): a {1 << k}
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        push(_): r x
+        add(i): i 1
+    ]
+]
+# a / 10, the remainder in bn_rem
+bn_div10(r): a [
+    len(n): a
+    vec(t): ""
+    set(rem): 0
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(x): a i
+        set(y): {(rem << 24) | x}
+        # y < 2^28: y * ceil(2^35 / 10) >> 35 is y / 10
+        set(q): {(y * 3435973837) >> 35}
+        set(rem): {y - q * 10}
+        push(_): t q
+        sub(i): i 1
+    ]
+    set(bn_rem): rem
+    vec(r): ""
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(q): t i
+        push(_): r q
+        sub(i): i 1
+    ]
+]
+bn_bitlen(r): a [
+    set(r): 0
+    len(n): a
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(x): a i
+        if(_): {x > 0} [
+            set(r): {i * 24}
+            while(_): {x > 0} [
+                add(r): r 1
+                set(x): {x >> 1}
+            ]
+            return(_): r
+        ]
+        sub(i): i 1
+    ]
+]
+bn_bit(r): a i [
+    set(r): 0
+    if(_): {i < 0} [ return(_): r ]
+    set(li): 0
+    while(_): {i >= 24} [
+        sub(i): i 24
+        add(li): li 1
+    ]
+    len(n): a
+    if(_): {li >= n} [ return(_): r ]
+    at(x): a li
+    set(r): {(x >> i) & 1}
+]
+# bits s .. s+n-1 of a as an integer (n <= 60)
+bn_bits(r): a s n [
+    set(r): 0
+    set(j): {n - 1}
+    while(_): {j >= 0} [
+        bn_bit(b): a {s + j}
+        set(r): {(r << 1) | b}
+        sub(j): j 1
+    ]
+]
+# 1 when a has a set bit below bit s
+bn_low(r): a s [
+    set(r): 0
+    len(n): a
+    set(li): 0
+    while(_): {s >= 24 && li < n} [
+        at(x): a li
+        if(_): {x > 0} [
+            set(r): 1
+            return(_): r
+        ]
+        sub(s): s 24
+        add(li): li 1
+    ]
+    if(_): {li < n && s > 0} [
+        at(x): a li
+        if(_): {(x & ((1 << s) - 1)) > 0} [ set(r): 1 ]
+    ]
+]
+# The bits of (q + a little when sticky) * 2^-k, rounded to nearest even.
+flt_round(r): q k sticky [
+    set(r): 0
+    bn_bitlen(nb): q
+    if(_): {nb = 0} [ return(_): r ]
+    set(u): {nb - 1 - k - 52}
+    if(_): {u < (0 - 1074)} [ set(u): {0 - 1074} ]
+    set(s): {u + k}
+    if(_): {s <= 0} [
+        bn_bits(m): q 0 nb
+        set(m): {m << (0 - s)}
+    ]
+    else(_): [
+        bn_bits(m): q s {nb - s}
+        bn_bit(half): q {s - 1}
+        bn_low(rest): q {s - 1}
+        if(_): {sticky = 1} [ set(rest): 1 ]
+        if(_): {half = 1 && (rest = 1 || (m & 1) = 1)} [ add(m): m 1 ]
+    ]
+    if(_): {m >= (1 << 53)} [
+        set(m): {m >> 1}
+        add(u): u 1
+    ]
+    if(_): {u + 52 > 1023} [
+        set(r): {2047 << 52}
+        return(_): r
+    ]
+    if(_): {m < (1 << 52)} [
+        set(r): m
+        return(_): r
+    ]
+    set(r): {((u + 52 + 1023) << 52) | (m - (1 << 52))}
+]
+hex_digit(r): b [
+    set(r): {0 - 1}
+    if(_): {b > 47 && b < 58} [ set(r): {b - 48} ]
+    elif(_): {b > 96 && b < 103} [ set(r): {b - 87} ]
+    elif(_): {b > 64 && b < 71} [ set(r): {b - 55} ]
+]
+# The binary64 bits of the C floating constant spelled s (no sign).
+flt_bits(r): s [
+    set(r): 0
     len(n): s
     set(m): 0
     set(ex): 0
     set(nd): 0
-    set(i): 0
+    set(lost): 0
     set(seen): 0
+    set(i): 0
+    set(hex): 0
+    if(_): {n > 2} [
+        byte(b0): s 0
+        byte(b1): s 1
+        if(_): {b0 = 48 && (b1 = 120 || b1 = 88)} [
+            set(hex): 1
+            set(i): 2
+        ]
+    ]
     set(go): 1
     while(_): {go = 1 && i < n} [
         byte(b): s i
-        if(_): {b > 47 && b < 58} [
-            if(_): {nd < 18} [
-                set(m): {m * 10 + b - 48}
+        if(_): {hex = 1} [ hex_digit(v): b ]
+        else(_): [
+            set(v): {0 - 1}
+            if(_): {b > 47 && b < 58} [ set(v): {b - 48} ]
+        ]
+        if(_): {v >= 0} [
+            # hex: 15 digits (60 bits); decimal: 18 digits
+            if(_): {(hex = 1 && nd < 15) || (hex = 0 && nd < 18)} [
+                if(_): {hex = 1} [ set(m): {(m << 4) | v} ]
+                else(_): [ set(m): {m * 10 + v} ]
                 if(_): {m > 0} [ add(nd): nd 1 ]
                 if(_): {seen = 1} [ sub(ex): ex 1 ]
             ]
-            elif(_): {seen = 0} [ add(ex): ex 1 ]
+            else(_): [
+                if(_): {v > 0} [ set(lost): 1 ]
+                if(_): {seen = 0} [ add(ex): ex 1 ]
+            ]
             add(i): i 1
         ]
         elif(_): {b = 46} [
@@ -221,9 +413,11 @@ e_flt(r): d s [
         ]
         else(_): [ set(go): 0 ]
     ]
+    # the exponent: e for decimal (powers of 10), p for hex (powers of 2)
+    if(_): {hex = 1} [ set(ex): {ex * 4} ]
     if(_): {i < n} [
         byte(b): s i
-        if(_): {b = 101 || b = 69} [
+        if(_): {(hex = 0 && (b = 101 || b = 69)) || (hex = 1 && (b = 112 || b = 80))} [
             add(i): i 1
             set(neg): 0
             byte(b2): s i
@@ -237,7 +431,7 @@ e_flt(r): d s [
             while(_): {go = 1 && i < n} [
                 byte(b3): s i
                 if(_): {b3 > 47 && b3 < 58} [
-                    set(e2): {e2 * 10 + b3 - 48}
+                    if(_): {e2 < 100000} [ set(e2): {e2 * 10 + b3 - 48} ]
                     add(i): i 1
                 ]
                 else(_): [ set(go): 0 ]
@@ -246,50 +440,46 @@ e_flt(r): d s [
             add(ex): ex e2
         ]
     ]
-    if(_): {m = 0} [
-        k_real(k): 0
-        e(_): 1 d 0 0 k
+    if(_): {m = 0} [ return(_): r ]
+    bn_from(q): m
+    if(_): {hex = 1} [
+        if(_): {ex > 2200} [
+            set(r): {2047 << 52}
+            return(_): r
+        ]
+        if(_): {ex < (0 - 2200)} [ return(_): r ]
+        if(_): {ex >= 0} [
+            bn_shl(q): q ex
+            flt_round(r): q 0 lost
+        ]
+        else(_): [ flt_round(r): q {0 - ex} lost ]
         return(_): r
     ]
-    # m * 10^ex: whole while it fits, else divisions/multiplications of
-    # exact reals
-    while(_): {ex > 0 && m < 922337203685477580} [
-        set(m): {m * 10}
-        sub(ex): ex 1
+    if(_): {ex > 330} [
+        set(r): {2047 << 52}
+        return(_): r
     ]
-    real_bits(mb): m
-    k_real(km): mb
-    e(_): 1 d 0 0 km
-    while(_): {ex < 0} [
-        set(step): ex
-        if(_): {step < (0 - 18)} [ set(step): {0 - 18} ]
-        set(p): 1
+    if(_): {ex < (0 - 350)} [ return(_): r ]
+    if(_): {ex >= 0} [
         set(j): 0
-        while(_): {j < 0 - step} [
-            set(p): {p * 10}
+        while(_): {j < ex} [
+            bn_mul(q): q 10
             add(j): j 1
         ]
-        real_bits(pb): p
-        k_real(kp): pb
-        e(_): 1 {d + 1} 0 0 kp
-        e(_): 19 d d {d + 1} 0
-        sub(ex): ex step
+        flt_round(r): q 0 lost
+        return(_): r
     ]
-    while(_): {ex > 0} [
-        set(step): ex
-        if(_): {step > 18} [ set(step): 18 ]
-        set(p): 1
-        set(j): 0
-        while(_): {j < step} [
-            set(p): {p * 10}
-            add(j): j 1
-        ]
-        real_bits(pb): p
-        k_real(kp): pb
-        e(_): 1 {d + 1} 0 0 kp
-        e(_): 18 d d {d + 1} 0
-        sub(ex): ex step
+    # m / 10^n: scaled up by 2^k first; a dropped remainder makes it sticky
+    set(nn): {0 - ex}
+    set(k): {64 + 4 * nn}
+    bn_shl(q): q k
+    set(j): 0
+    while(_): {j < nn} [
+        bn_div10(q): q
+        if(_): {bn_rem > 0} [ set(lost): 1 ]
+        add(j): j 1
     ]
+    flt_round(r): q k lost
 ]
 
 # ======================= functions =======================

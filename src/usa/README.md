@@ -82,10 +82,16 @@ Real projects compiled by usa and compared with gcc builds:
 - **prng_xrp** (the XRP generators): test programs 1-7 print gcc's
   numbers.
 - **LINPACK** (emscripten's `linpack2.c`, order 100): gcc's results.
+- **emscripten's `test/core`**: of its 200 C programs with an expected
+  output, 72 print it exactly. Most of the rest include `emscripten.h`,
+  pthreads or POSIX headers usa does not have, use `longjmp`, divide by
+  zero, need command-line arguments, or assume wasm32 (32-bit `long`,
+  signed `char`, `-0.0`, 128-bit `long double`).
 
 ## Limits
 
-- No `long double` beyond `double`, no complex numbers, no `_Atomic`,
+- No `long double` beyond `double`, no `-0.0` (the VM cannot tell it from
+  0 without dividing by zero), no complex numbers, no `_Atomic`,
   no threads, no inline assembly (skipped), no K&R definitions with
   separate parameter declarations.
 - `setjmp` always returns 0 and `longjmp` ends the program: the VM's call
