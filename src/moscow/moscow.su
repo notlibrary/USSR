@@ -1,0 +1,66 @@
+# moscow.su - Moscow, the USSR amd64 kernel.
+#
+# The boot loader (arch/amd64/boot.nasm) puts the machine in long mode
+# and starts the NASM USSR runtime (arch/amd64/ussr_rt.nasm), which runs
+# this program, compiled to moscow.ru, as the first process. Moscow
+# reports the machine, then runs the shell, russia.ru, from the boot
+# image and runs it again whenever it fails; when the shell exits
+# normally (Ctrl-D) the machine halts. russia.ru is src/russia/russia.su,
+# the USSR interpreter written in USSR: its REPL is the shell, and the
+# commands it does not know itself (uptime, ls, mem, cpu, run, ...) go to
+# the runtime through its host calls.
+#
+#     sh src/moscow/build.sh          # builds moscow.img
+#     sh src/moscow/run.sh            # boots it in QEMU
+#
+# The k_* commands are the runtime's kernel services; src/moscow/README.md
+# lists them.
+$include "../libs/strings.su"
+
+mo_kb(r): bytes [
+    str_trunc(kb): {bytes / 1024}
+    str_from_int(r): kb
+    concat(r): r " KiB"
+]
+
+init(ret): arg_cnt arg_vec [
+    k_color(_): 14 1
+    print(_): "USSR Moscow kernel for amd64"
+    k_color(_): 7 0
+    k_cpu(cpu):
+    concat(line): "cpu:     " cpu
+    print(_): line
+    k_mem(m):
+    at(total): m 0
+    at(free): m 1
+    mo_kb(ts): total
+    mo_kb(fs): free
+    concat(line): "heap:    " ts ", " fs " free"
+    print(_): line
+    k_modules(mods):
+    len(n): mods
+    set(list): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(name): mods i
+        if(_): {i > 0} [ concat(list): list " " ]
+        concat(list): list name
+        set(i): {i + 1}
+    ]
+    concat(line): "image:   " list
+    print(_): line
+    set(ret): 0
+    set(go): true
+    while(_): go [
+        print(_): "moscow: starting russia.ru"
+        k_exec(status): "russia.ru"
+        if(_): {status = 0} [ set(go): false ]
+        else(_): [
+            str_from_int(ss): status
+            concat(line): "moscow: russia.ru failed with status " ss "; restarting"
+            print(_): line
+        ]
+    ]
+    print(_): "moscow: the shell has exited; system halted"
+    k_halt(_):
+]

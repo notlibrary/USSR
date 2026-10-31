@@ -60,7 +60,7 @@ and other statistical parameters you can imagine
 
 The project uses real existing geographical toponyms or cultural significant objects to name it's scripts 
 e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and framework tver.su - file manager russia.su - bootstrapped interpreter petersburg.su - gui library 
-moscow.su - main USSR configuration file etc
+kiev.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
 Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code now: the second wave is finished):
@@ -72,7 +72,9 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
 - novgorod.su - anonymous HTTPS image forum for programmers with lightweight markup (working: `src/novgorod`)
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
-- siberia.su - office package, spreadsheet tables and document editor
+- siberia.su - GUI spreadsheet: formulas, flat ODF (.fods) and CSV (working: `src/siberia`)
+- novosibirsk.su - GUI document editor with system fonts, split from Siberia: flat ODF text (.fodt) and .txt (working: `src/novosibirsk`)
+- moscow.su - amd64 kernel: a NASM two-stage boot loader starts a NASM USSR runtime (a `.ru` VM on bare metal) that runs moscow.ru, which runs russia.su (the self-hosted interpreter) as its shell with kernel commands like uptime(_): and ls(_):; one boot image, tested in QEMU (working: `src/moscow`)
 - stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS and FFS2 (working: `src/stalin`)
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
@@ -158,7 +160,7 @@ ussr hello.ru
 With usa the second wave is done and USSR is complete. Its programs:
 
 - ussr/ussr.exe - the USSR programming language and shell
-- moscow.su - the USSR startup configuration file
+- kiev.su - the USSR startup configuration file
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
 - russia.su - bootstrapped USSR interpreter, written in USSR
 - ural.su - USSR package manager
@@ -173,7 +175,9 @@ With usa the second wave is done and USSR is complete. Its programs:
 - novgorod.su - anonymous HTTPS image forum (ROUND stack)
 - dubna.su - PostgreSQL client (ROUND stack)
 - omsk.su - image thumbnails: PNG and baseline JPEG in pure USSR (ROUND stack)
-- siberia.su - GUI office package: spreadsheet and document editor
+- siberia.su - GUI spreadsheet
+- novosibirsk.su - GUI document editor
+- moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell (`sh src/moscow/build.sh`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP

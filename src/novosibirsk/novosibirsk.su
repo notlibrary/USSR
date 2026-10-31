@@ -1,0 +1,1483 @@
+# novosibirsk.su - Novosibirsk, a small document editor for USSR on a
+# Petersburg canvas, with the system's TrueType fonts. It was
+# `siberia.su --pad` before Siberia was split into the spreadsheet and this.
+#
+#     ussr src/novosibirsk/novosibirsk.su [file.fodt|file.txt]
+#
+# Files are OpenDocument text in its flat, single-XML form (.fodt), which
+# LibreOffice and other ODF programs open and save, or plain text.
+#
+# Novosibirsk defines SB_PAD and includes Siberia for the shared parts
+# (helpers, XML, the file dialog, the event handlers), so its state and
+# functions keep Siberia's sb_ prefix. The engine (the document and its
+# cursor) works without a window and is what tests/novosibirsk_test.su
+# checks. Public API, after sbsetup(_): from siberia.su:
+#   sbpadreset(r): / sbpadsettext(r): text / sbpadtext(r):
+#   sbpadkey(r): key / sbpadtype(r): text   -> edits at the cursor
+#   sbpadfodt(r): / sbpadload(r): text kind ("fodt" or "txt")
+#
+# The document's paragraphs are SbPara structs in sb_paras.
+$once
+$ifdef __MAIN__
+$define SB_APP 1
+$endif
+$define SB_PAD 1
+$include "../siberia/siberia.su"
+
+# --- the document -----------------------------------------------------------
+# Paragraphs are SbPara structs in sb_paras; the cursor is sb_prow (the
+# paragraph) and sb_pcol (a byte offset in it). Lines wrap at sb_pwidth
+# pixels, measured with the document font (sb_pfont, sb_ppx pixels per
+# em) or, without one, the bitmap font at scale 2.
+
+sbpadreset(r): [
+    vec(paras): "SbPara"
+    new(p): "SbPara" ""
+    push(_): paras p
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(sb_ptop): 0!
+    set(sb_ptopline): 0!
+    set(sb_goalx): {0 - 1}!
+    set(sb_dirty): false!
+    set(r): 0
+]
+
+sb_pad_count(r): [
+    set(paras): sb_paras?
+    len(r): paras
+]
+
+sb_para_text(r): index [
+    set(paras): sb_paras?
+    at(p): paras index
+    getf(r): p "text"
+]
+
+sb_para_set(r): index text [
+    set(paras): sb_paras?
+    at(p): paras index
+    setf(_): p "text" text
+    set(sb_dirty): true!
+    set(r): 0
+]
+
+# Tabs as four spaces, control characters dropped.
+sb_clean_line(r): s [
+    set(r): ""
+    len(n): s
+    set(i): 0
+    set(from): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b < 32} [
+            slice(run): s from {i - from}
+            concat(r): r run
+            if(_): {b = 9} [ concat(r): r "    " ]
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    slice(run): s from {n - from}
+    concat(r): r run
+]
+
+sbpadsettext(r): text [
+    vec(paras): "SbPara"
+    len(n): text
+    set(from): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 10
+        if(_): {i < n} [ byte(b): text i ]
+        if(_): {b = 10} [
+            slice(line): text from {i - from}
+            sb_clean_line(line): line
+            new(p): "SbPara" line
+            push(_): paras p
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(sb_ptop): 0!
+    set(sb_ptopline): 0!
+    set(sb_goalx): {0 - 1}!
+    set(r): 0
+]
+
+sbpadtext(r): [
+    set(paras): sb_paras?
+    len(n): paras
+    set(r): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        getf(t): p "text"
+        if(_): {i > 0} [ concat(r): r "\n" ]
+        concat(r): r t
+        set(i): {i + 1}
+    ]
+]
+
+sb_measure(r): text [
+    set(font): sb_pfont?
+    if(_): {font > 0} [
+        set(px): sb_ppx?
+        fontwidth(r): font px text
+    ]
+    else(_): [
+        len(n): text
+        set(r): {n * 14}
+    ]
+]
+
+sb_line_height(r): [
+    set(font): sb_pfont?
+    set(r): 20
+    if(_): {font > 0} [
+        set(px): sb_ppx?
+        fontheight(r): font px
+    ]
+]
+
+# Index past the run of spaces at i.
+sb_skip_spaces(r): s i n [
+    set(r): i
+    set(go): {r < n}
+    while(_): go [
+        byte(b): s r
+        if(_): {b = 32} [
+            set(r): {r + 1}
+            set(go): {r < n}
+        ]
+        else(_): [ set(go): false ]
+    ]
+]
+
+# Start offsets of the wrapped lines of a paragraph: words move to the
+# next line when they do not fit; a word wider than the line breaks.
+sb_wrap(r): text [
+    vec(r): ""
+    push(_): r 0
+    set(width): sb_pwidth?
+    len(n): text
+    set(start): 0
+    while(_): {start < n} [
+        set(end): start
+        set(go): true
+        while(_): go [
+            # the next word and the spaces after it
+            set(j): end
+            set(more): {j < n}
+            while(_): more [
+                byte(b): text j
+                if(_): {b = 32} [ set(more): false ]
+                else(_): [
+                    set(j): {j + 1}
+                    set(more): {j < n}
+                ]
+            ]
+            slice(piece): text start {j - start}
+            sb_measure(w): piece
+            sb_skip_spaces(next): text j n
+            if(_): {w <= width} [
+                set(end): next
+                set(go): {end < n}
+            ]
+            elif(_): {end = start} [
+                # one word wider than the line: as many characters as fit
+                utf8_next(k): text start
+                set(fit): true
+                while(_): {fit && k < n} [
+                    utf8_next(k2): text k
+                    slice(piece): text start {k2 - start}
+                    sb_measure(w): piece
+                    if(_): {w <= width} [ set(k): k2 ] else(_): [ set(fit): false ]
+                ]
+                set(end): k
+                set(go): false
+            ]
+            else(_): [ set(go): false ]
+        ]
+        if(_): {end < n} [ push(_): r end ]
+        set(start): end
+    ]
+]
+
+# The wrapped line of starts that holds byte col.
+sb_line_of(r): starts col [
+    len(n): starts
+    set(r): 0
+    set(i): 1
+    while(_): {i < n} [
+        at(s): starts i
+        if(_): {s <= col} [ set(r): i ]
+        set(i): {i + 1}
+    ]
+]
+
+# The last caret position on line k: before a wrapped line's last
+# character (the space it wrapped at), or the paragraph's end.
+sb_line_limit(r): text starts k [
+    len(n): starts
+    len(r): text
+    if(_): {k + 1 < n} [
+        at(next): starts {k + 1}
+        utf8_prev(r): text next
+    ]
+]
+
+sb_line_start(r): starts k [
+    at(r): starts k
+]
+
+# The byte offset on line k nearest to x pixels.
+sb_col_at_x(r): text starts k x [
+    sb_line_start(start): starts k
+    sb_line_limit(limit): text starts k
+    set(r): start
+    set(prev): 0.0
+    set(go): {r < limit}
+    while(_): go [
+        utf8_next(next): text r
+        slice(piece): text start {next - start}
+        sb_measure(w): piece
+        if(_): {(prev + w) / 2 > x} [ set(go): false ]
+        else(_): [
+            set(r): next
+            set(prev): w
+            set(go): {r < limit}
+        ]
+    ]
+]
+
+sb_caret_x(r): text starts col [
+    sb_line_of(k): starts col
+    at(start): starts k
+    slice(piece): text start {col - start}
+    sb_measure(r): piece
+]
+
+sbpadtype(r): s [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    slice(left): t 0 col
+    slice(right): t col {n - col}
+    concat(t): left s right
+    sb_para_set(_): row t
+    len(sl): s
+    set(sb_pcol): {col + sl}!
+    set(sb_goalx): {0 - 1}!
+    set(r): 0
+]
+
+# Replaces the paragraph list: items before index, the new ones, and the
+# items from index + drop on.
+sb_paras_splice(r): index drop items [
+    set(paras): sb_paras?
+    len(n): paras
+    vec(out): "SbPara"
+    set(i): 0
+    while(_): {i < index} [
+        at(p): paras i
+        push(_): out p
+        set(i): {i + 1}
+    ]
+    len(k): items
+    set(j): 0
+    while(_): {j < k} [
+        at(p): items j
+        push(_): out p
+        set(j): {j + 1}
+    ]
+    set(i): {index + drop}
+    while(_): {i < n} [
+        at(p): paras i
+        push(_): out p
+        set(i): {i + 1}
+    ]
+    set(sb_paras): out!
+    set(sb_dirty): true!
+    set(r): 0
+]
+
+sb_pad_enter(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    slice(left): t 0 col
+    slice(right): t col {n - col}
+    vec(items): ""
+    new(a): "SbPara" left
+    new(b): "SbPara" right
+    push(_): items a
+    push(_): items b
+    sb_paras_splice(_): row 1 items
+    set(sb_prow): {row + 1}!
+    set(sb_pcol): 0!
+    set(r): 0
+]
+
+sb_pad_backspace(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    if(_): {col > 0} [
+        utf8_prev(i): t col
+        slice(left): t 0 i
+        slice(right): t col {n - col}
+        concat(t): left right
+        sb_para_set(_): row t
+        set(sb_pcol): i!
+    ]
+    elif(_): {row > 0} [
+        sb_para_text(prev): {row - 1}
+        len(pl): prev
+        concat(joined): prev t
+        vec(items): ""
+        new(a): "SbPara" joined
+        push(_): items a
+        sb_paras_splice(_): {row - 1} 2 items
+        set(sb_prow): {row - 1}!
+        set(sb_pcol): pl!
+    ]
+    set(r): 0
+]
+
+sb_pad_delete(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    sb_pad_count(count):
+    if(_): {col < n} [
+        utf8_next(i): t col
+        slice(left): t 0 col
+        slice(right): t i {n - i}
+        concat(t): left right
+        sb_para_set(_): row t
+    ]
+    elif(_): {row + 1 < count} [
+        sb_para_text(next): {row + 1}
+        concat(joined): t next
+        vec(items): ""
+        new(a): "SbPara" joined
+        push(_): items a
+        sb_paras_splice(_): row 2 items
+    ]
+    set(r): 0
+]
+
+# Moves the cursor one wrapped line up (dir -1) or down (1), keeping the
+# horizontal position of the first move in sb_goalx.
+sb_pad_vertical(r): dir [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    sb_wrap(starts): t
+    sb_line_of(k): starts col
+    set(goal): sb_goalx?
+    if(_): {goal < 0} [
+        sb_caret_x(goal): t starts col
+        set(sb_goalx): goal!
+    ]
+    len(lines): starts
+    sb_pad_count(count):
+    set(k2): {k + dir}
+    if(_): {k2 >= 0 && k2 < lines} [
+        sb_col_at_x(c): t starts k2 goal
+        set(sb_pcol): c!
+    ]
+    elif(_): {k2 < 0 && row > 0} [
+        sb_para_text(t2): {row - 1}
+        sb_wrap(s2): t2
+        len(l2): s2
+        sb_col_at_x(c): t2 s2 {l2 - 1} goal
+        set(sb_prow): {row - 1}!
+        set(sb_pcol): c!
+    ]
+    elif(_): {k2 >= lines && row + 1 < count} [
+        sb_para_text(t2): {row + 1}
+        sb_wrap(s2): t2
+        sb_col_at_x(c): t2 s2 0 goal
+        set(sb_prow): {row + 1}!
+        set(sb_pcol): c!
+    ]
+    elif(_): {k2 < 0} [ set(sb_pcol): 0! ]
+    else(_): [
+        len(tl): t
+        set(sb_pcol): tl!
+    ]
+    set(r): 0
+]
+
+# One editing or movement key (GLFW code); ctrl for Ctrl+Home/End.
+# Returns true when the key was used.
+sb_pad_key(r): key ctrl [
+    set(r): true
+    set(keep_goal): false
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    sb_para_text(t): row
+    len(n): t
+    sb_pad_count(count):
+    if(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [ sb_pad_enter(_): ]
+    elif(_): {key = SB_KEY_BACKSPACE} [ sb_pad_backspace(_): ]
+    elif(_): {key = SB_KEY_DELETE} [ sb_pad_delete(_): ]
+    elif(_): {key = SB_KEY_TAB} [ sbpadtype(_): "    " ]
+    elif(_): {key = SB_KEY_LEFT} [
+        if(_): {col > 0} [
+            utf8_prev(c): t col
+            set(sb_pcol): c!
+        ]
+        elif(_): {row > 0} [
+            sb_para_text(prev): {row - 1}
+            len(pl): prev
+            set(sb_prow): {row - 1}!
+            set(sb_pcol): pl!
+        ]
+    ]
+    elif(_): {key = SB_KEY_RIGHT} [
+        if(_): {col < n} [
+            utf8_next(c): t col
+            set(sb_pcol): c!
+        ]
+        elif(_): {row + 1 < count} [
+            set(sb_prow): {row + 1}!
+            set(sb_pcol): 0!
+        ]
+    ]
+    elif(_): {key = SB_KEY_UP} [
+        sb_pad_vertical(_): {0 - 1}
+        set(keep_goal): true
+    ]
+    elif(_): {key = SB_KEY_DOWN} [
+        sb_pad_vertical(_): 1
+        set(keep_goal): true
+    ]
+    elif(_): {key = SB_KEY_PAGE_UP || key = SB_KEY_PAGE_DOWN} [
+        set(dir): 1
+        if(_): {key = SB_KEY_PAGE_UP} [ sb_minus_one(dir): ]
+        set(steps): sb_plines_visible?
+        typeof(ts): steps
+        if(_): {ts != "integer"} [ set(steps): 20 ]
+        set(steps): {steps - 1}
+        if(_): {steps < 1} [ set(steps): 1 ]
+        set(i): 0
+        while(_): {i < steps} [
+            sb_pad_vertical(_): dir
+            set(i): {i + 1}
+        ]
+        set(keep_goal): true
+    ]
+    elif(_): {key = SB_KEY_HOME && ctrl} [
+        set(sb_prow): 0!
+        set(sb_pcol): 0!
+    ]
+    elif(_): {key = SB_KEY_END && ctrl} [
+        sb_para_text(last): {count - 1}
+        len(ll): last
+        set(sb_prow): {count - 1}!
+        set(sb_pcol): ll!
+    ]
+    elif(_): {key = SB_KEY_HOME || key = SB_KEY_END} [
+        sb_wrap(starts): t
+        sb_line_of(k): starts col
+        if(_): {key = SB_KEY_HOME} [ at(c): starts k ]
+        else(_): [ sb_line_limit(c): t starts k ]
+        set(sb_pcol): c!
+    ]
+    else(_): [ set(r): false ]
+    if(_): {keep_goal = false} [ set(sb_goalx): {0 - 1}! ]
+]
+
+sbpadkey(r): key [
+    sb_pad_key(r): key false
+]
+
+# --- document files ---------------------------------------------------------
+
+sbpadfodt(r): [
+    set(family): sb_family?
+    typeof(tf): family
+    if(_): {tf != "string" || family = ""} [ set(family): "Liberation Serif" ]
+    set(size): sb_size?
+    typeof(tz): size
+    if(_): {tz != "integer"} [ set(size): 12 ]
+    set(bold): sb_bold?
+    set(italic): sb_italic?
+    sb_xml_escape(fe): family
+    str_from_int(ss): size
+    concat(r): SB_ODF_HEAD "office:mimetype=\"application/vnd.oasis.opendocument.text\">\n<office:font-face-decls>\n<style:font-face style:name=\"" fe "\" svg:font-family=\"'" fe "'\"/>\n</office:font-face-decls>\n<office:styles>\n<style:default-style style:family=\"paragraph\">\n<style:text-properties style:font-name=\"" fe "\" fo:font-size=\"" ss "pt\""
+    if(_): {bold = true} [ concat(r): r " fo:font-weight=\"bold\"" ]
+    if(_): {italic = true} [ concat(r): r " fo:font-style=\"italic\"" ]
+    concat(r): r "/>\n</style:default-style>\n</office:styles>\n<office:body>\n<office:text>\n"
+    set(paras): sb_paras?
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        getf(t): p "text"
+        if(_): {t = ""} [ concat(r): r "<text:p/>\n" ]
+        else(_): [
+            sb_odf_text(x): t
+            concat(r): r "<text:p>" x "</text:p>\n"
+        ]
+        set(i): {i + 1}
+    ]
+    concat(r): r "</office:text>\n</office:body>\n</office:document>\n"
+]
+
+# The attributes of the first tag named name at or after from, or null.
+sb_find_tag_attrs(r): s name from [
+    set(r): null
+    concat(key): "<" name " "
+    str_find(at): s key from
+    if(_): {at >= 0} [
+        sb_xml_tag(tag): s at
+        at(r): tag 2
+    ]
+]
+
+# The document font from the styles: the default paragraph style, else
+# the first text properties that name a font. Sets sb_family, sb_size,
+# sb_bold and sb_italic for what it finds.
+sb_fodt_font(r): s [
+    set(r): 0
+    str_find(def): s "<style:default-style style:family=\"paragraph\"" 0
+    set(attrs): null
+    if(_): {def >= 0} [ sb_find_tag_attrs(attrs): s "style:text-properties" def ]
+    set(name): null
+    typeof(ta): attrs
+    if(_): {ta = "string"} [ sb_xml_attr(name): attrs "style:font-name" ]
+    typeof(tn): name
+    if(_): {tn != "string"} [
+        str_find(at): s "style:font-name=\"" 0
+        if(_): {at >= 0} [
+            set(scan): 0
+            if(_): {at > 2000} [ set(scan): {at - 2000} ]
+            set(best): {0 - 1}
+            set(go): true
+            while(_): go [
+                str_find(lt): s "<style:text-properties " scan
+                if(_): {lt >= 0 && lt < at} [
+                    set(best): lt
+                    set(scan): {lt + 1}
+                ]
+                else(_): [ set(go): false ]
+            ]
+            if(_): {best >= 0} [
+                sb_xml_tag(tag): s best
+                at(attrs): tag 2
+                sb_xml_attr(name): attrs "style:font-name"
+            ]
+        ]
+    ]
+    typeof(tn): name
+    if(_): {tn = "string"} [
+        # the face's family from its declaration
+        set(family): name
+        sb_xml_escape(en): name
+        concat(key): "<style:font-face style:name=\"" en "\""
+        str_find(at): s key 0
+        if(_): {at >= 0} [
+            sb_xml_tag(tag): s at
+            at(fa): tag 2
+            sb_xml_attr(ff): fa "svg:font-family"
+            typeof(tff): ff
+            if(_): {tff = "string"} [
+                len(fl): ff
+                set(family): ff
+                if(_): {fl >= 2} [
+                    byte(q): ff 0
+                    if(_): {q = 39 || q = 34} [ slice(family): ff 1 {fl - 2} ]
+                ]
+            ]
+        ]
+        set(sb_family): family!
+        sb_xml_attr(size): attrs "fo:font-size"
+        typeof(tsz): size
+        if(_): {tsz = "string"} [
+            sb_ends(pt): size "pt"
+            if(_): pt [
+                len(sl): size
+                slice(num): size 0 {sl - 2}
+                str_to_number(v): num
+                sb_is_number(isn): v
+                if(_): isn [
+                    str_trunc(v): {v + 0.5}
+                    if(_): {v >= 4 && v <= 200} [ set(sb_size): v! ]
+                ]
+            ]
+        ]
+        sb_xml_attr(weight): attrs "fo:font-weight"
+        sb_xml_attr(style): attrs "fo:font-style"
+        set(sb_bold): {weight = "bold"}!
+        set(sb_italic): {style = "italic"}!
+        set(r): 1
+    ]
+]
+
+sb_load_fodt(r): s [
+    set(r): "no text in this file"
+    str_find(start): s "<office:text" 0
+    if(_): {start < 0} [ return(_): r ]
+    set(r): ""
+    set(sb_bold): false!
+    set(sb_italic): false!
+    sb_fodt_font(_): s
+    vec(paras): "SbPara"
+    len(n): s
+    set(i): start
+    set(text): ""
+    set(depth): 0
+    set(hidden): 0
+    set(done): false
+    while(_): {i < n && done = false} [
+        byte(b): s i
+        if(_): {b != 60} [
+            sb_next_lt(j): s i n
+            if(_): {depth > 0 && hidden = 0} [
+                sb_xml_text(t): s i j
+                concat(text): text t
+            ]
+            set(i): j
+        ]
+        else(_): [
+            sb_xml_tag(tag): s i
+            at(kind): tag 0
+            at(name): tag 1
+            at(attrs): tag 2
+            at(i): tag 3
+            set(para): {name = "text:p" || name = "text:h"}
+            if(_): {name = "office:annotation" || name = "text:note"} [
+                if(_): {kind = "open"} [ set(hidden): {hidden + 1} ]
+                if(_): {kind = "close"} [ set(hidden): {hidden - 1} ]
+            ]
+            elif(_): {para && kind = "empty" && hidden = 0} [
+                new(p): "SbPara" ""
+                push(_): paras p
+            ]
+            elif(_): {para && kind = "open"} [
+                if(_): {depth = 0} [ set(text): "" ]
+                set(depth): {depth + 1}
+            ]
+            elif(_): {para && kind = "close"} [
+                set(depth): {depth - 1}
+                if(_): {depth <= 0 && hidden = 0} [
+                    set(depth): 0
+                    sb_clean_line(text): text
+                    new(p): "SbPara" text
+                    push(_): paras p
+                    set(text): ""
+                ]
+            ]
+            elif(_): {depth > 0 && hidden = 0} [
+                if(_): {name = "text:s"} [
+                    sb_attr_int(count): attrs "text:c" 1
+                    str_repeat(sp): " " count
+                    concat(text): text sp
+                ]
+                elif(_): {name = "text:tab"} [ concat(text): text "    " ]
+                elif(_): {name = "text:line-break"} [
+                    new(p): "SbPara" text
+                    push(_): paras p
+                    set(text): ""
+                ]
+            ]
+            elif(_): {name = "office:text" && kind = "close"} [ set(done): true ]
+        ]
+    ]
+    len(count): paras
+    if(_): {count = 0} [
+        new(p): "SbPara" ""
+        push(_): paras p
+    ]
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(sb_ptop): 0!
+    set(sb_ptopline): 0!
+    set(sb_goalx): {0 - 1}!
+]
+
+sbpadload(r): text kind [
+    sbpadreset(_):
+    set(r): ""
+    if(_): {kind = "fodt"} [ sb_load_fodt(r): text ]
+    else(_): [ sbpadsettext(_): text ]
+    set(sb_dirty): false!
+]
+
+# --- system fonts -----------------------------------------------------------
+
+sb_font_dirs(r): [
+    vec(r): ""
+    getenv(win): "WINDIR"
+    typeof(tw): win
+    if(_): {tw = "string"} [
+        concat(d): win "/Fonts"
+        push(_): r d
+    ]
+    getenv(local): "LOCALAPPDATA"
+    typeof(tl): local
+    if(_): {tl = "string"} [
+        concat(d): local "/Microsoft/Windows/Fonts"
+        push(_): r d
+    ]
+    push(_): r "/usr/share/fonts"
+    push(_): r "/usr/local/share/fonts"
+    push(_): r "/System/Library/Fonts"
+    push(_): r "/Library/Fonts"
+    getenv(home): "HOME"
+    typeof(th): home
+    if(_): {th = "string"} [
+        concat(d): home "/.local/share/fonts"
+        push(_): r d
+        concat(d): home "/.fonts"
+        push(_): r d
+        concat(d): home "/Library/Fonts"
+        push(_): r d
+    ]
+]
+
+# Adds the font file at path to families (a vector of SbFamily).
+sb_add_font(r): families path [
+    set(r): 0
+    fontinfo(info): path
+    if(_): {info = ""} [ return(_): r ]
+    str_find(bar): info "|" 0
+    len(il): info
+    slice(family): info 0 bar
+    slice(style): info {bar + 1} {il - bar - 1}
+    str_lower(style): style
+    len(n): families
+    set(found): null
+    set(i): 0
+    while(_): {i < n} [
+        at(f): families i
+        getf(fname): f "name"
+        if(_): {fname = family} [
+            set(found): f
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+    typeof(tf): found
+    if(_): {tf = "null"} [
+        str_lower(key): family
+        new(found): "SbFamily" family key "" "" "" ""
+        push(_): families found
+    ]
+    str_find(isb): style "bold" 0
+    str_find(isi): style "italic" 0
+    str_find(iso): style "oblique" 0
+    set(slot): "regular"
+    if(_): {isb >= 0 && (isi >= 0 || iso >= 0)} [ set(slot): "bolditalic" ]
+    elif(_): {isb >= 0} [ set(slot): "bold" ]
+    elif(_): {isi >= 0 || iso >= 0} [ set(slot): "italic" ]
+    getf(old): found slot
+    set(plain): {style = "regular" || style = "normal" || style = "book" || style = "roman"}
+    if(_): {old = "" || (slot = "regular" && plain)} [ setf(_): found slot path ]
+]
+
+sb_scan_dir(r): families dir depth [
+    set(r): 0
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t != "vector" || depth > 4} [ return(_): r ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        concat(path): dir "/" name
+        sb_ends(isdir): name "/"
+        if(_): isdir [
+            len(pl): path
+            slice(path): path 0 {pl - 1}
+            sb_scan_dir(_): families path {depth + 1}
+        ]
+        else(_): [
+            sb_extension(ext): name
+            if(_): {ext = ".ttf" || ext = ".ttc"} [ sb_add_font(_): families path ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sb_sort_families(r): v [
+    len(n): v
+    if(_): {n < 2} [
+        set(r): v
+        return(_): r
+    ]
+    str_trunc(half): {n / 2}
+    vec(a): ""
+    vec(b): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {i < half} [ push(_): a x ] else(_): [ push(_): b x ]
+        set(i): {i + 1}
+    ]
+    sb_sort_families(a): a
+    sb_sort_families(b): b
+    vec(r): ""
+    len(na): a
+    len(nb): b
+    set(i): 0
+    set(j): 0
+    while(_): {i < na || j < nb} [
+        set(take_a): {j >= nb}
+        if(_): {i < na && j < nb} [
+            at(fa): a i
+            at(fb): b j
+            getf(ka): fa "key"
+            getf(kb): fb "key"
+            sb_compare_text(c): ka kb
+            set(take_a): {c <= 0}
+        ]
+        if(_): take_a [
+            at(x): a i
+            set(i): {i + 1}
+        ]
+        else(_): [
+            at(x): b j
+            set(j): {j + 1}
+        ]
+        push(_): r x
+    ]
+]
+
+# The families of the installed fonts, by name.
+sb_scan_fonts(r): [
+    vec(families): ""
+    sb_font_dirs(dirs):
+    len(n): dirs
+    set(i): 0
+    while(_): {i < n} [
+        at(d): dirs i
+        is_dir(isd): d
+        if(_): {isd = 1} [ sb_scan_dir(_): families d 0 ]
+        set(i): {i + 1}
+    ]
+    # families with only bold or italic faces still get a regular one
+    len(k): families
+    set(i): 0
+    while(_): {i < k} [
+        at(f): families i
+        getf(reg): f "regular"
+        if(_): {reg = ""} [
+            getf(b): f "bold"
+            getf(it): f "italic"
+            getf(bi): f "bolditalic"
+            set(pick): b
+            if(_): {pick = ""} [ set(pick): it ]
+            if(_): {pick = ""} [ set(pick): bi ]
+            setf(_): f "regular" pick
+        ]
+        set(i): {i + 1}
+    ]
+    sb_sort_families(r): families
+]
+
+sb_family_index(r): families name [
+    sb_minus_one(r):
+    str_lower(key): name
+    len(n): families
+    set(i): 0
+    while(_): {i < n} [
+        at(f): families i
+        getf(k): f "key"
+        if(_): {k = key} [
+            set(r): i
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# The file of a family's face, falling back to the nearest one there is.
+sb_face_path(r): family bold italic [
+    getf(reg): family "regular"
+    getf(b): family "bold"
+    getf(it): family "italic"
+    getf(bi): family "bolditalic"
+    set(r): reg
+    if(_): {bold && italic} [
+        if(_): {bi != ""} [ set(r): bi ] elif(_): {b != ""} [ set(r): b ] elif(_): {it != ""} [ set(r): it ]
+    ]
+    elif(_): bold [
+        if(_): {b != ""} [ set(r): b ]
+    ]
+    elif(_): italic [
+        if(_): {it != ""} [ set(r): it ]
+    ]
+]
+
+# Loads the document font from sb_family, sb_bold, sb_italic and sb_size
+# into sb_pfont and sb_ppx; 0 (the bitmap font) when there is none.
+sb_apply_font(r): [
+    set(families): sb_families?
+    set(name): sb_family?
+    set(bold): sb_bold?
+    set(italic): sb_italic?
+    set(size): sb_size?
+    set(sb_pfont): 0!
+    str_trunc(px): {size * 4 / 3 + 0.5}
+    set(sb_ppx): px!
+    typeof(tf): families
+    set(r): 0
+    if(_): {tf = "vector"} [
+        sb_family_index(i): families name
+        if(_): {i >= 0} [
+            at(f): families i
+            sb_face_path(path): f bold italic
+            loadfont(r): path
+            set(sb_pfont): r!
+        ]
+    ]
+]
+
+# --- the GUI: pad -------------------------------------------------------------
+
+$define SB_SIZES "8 9 10 11 12 14 16 18 20 22 24 28 32 36 48 72"
+
+sb_pad_tool_labels(r): [
+    set(buttons): sb_buttons?
+    set(family): sb_family?
+    set(size): sb_size?
+    set(bold): sb_bold?
+    set(italic): sb_italic?
+    typeof(tb): buttons
+    set(r): 0
+    if(_): {tb != "vector"} [ return(_): r ]
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(handle): entry 0
+        at(action): entry 1
+        if(_): {action = "font"} [
+            set(label): family
+            len(fl): label
+            if(_): {fl > 24} [
+                slice(label): label 0 22
+                concat(label): label ".."
+            ]
+            concat(label): "Font: " label
+            settext(_): handle label
+        ]
+        elif(_): {action = "size"} [
+            str_from_int(ss): size
+            concat(label): ss " pt"
+            settext(_): handle label
+        ]
+        elif(_): {action = "bold"} [ setchecked(_): handle {bold = true} ]
+        elif(_): {action = "italic"} [ setchecked(_): handle {italic = true} ]
+        set(i): {i + 1}
+    ]
+]
+
+sb_pad_size_step(r): dir [
+    set(size): sb_size?
+    set(words): SB_SIZES
+    set(r): size
+    set(best): size
+    len(n): words
+    set(i): 0
+    set(from): 0
+    while(_): {i <= n} [
+        set(b): 32
+        if(_): {i < n} [ byte(b): words i ]
+        if(_): {b = 32} [
+            slice(w): words from {i - from}
+            str_to_number(v): w
+            if(_): {dir > 0 && v > size && (best = size || v < best)} [ set(best): v ]
+            if(_): {dir < 0 && v < size && (best = size || v > best)} [ set(best): v ]
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    set(sb_size): best!
+    set(sb_dirty): true!
+    sb_apply_font(_):
+    sb_pad_tool_labels(_):
+    set(r): best
+]
+
+# Moves the first shown line (sb_ptop, sb_ptopline) by n wrapped lines.
+sb_pad_scroll(r): n [
+    set(p): sb_ptop?
+    set(k): sb_ptopline?
+    sb_pad_count(count):
+    while(_): {n > 0} [
+        sb_para_text(t): p
+        sb_wrap(starts): t
+        len(lines): starts
+        if(_): {k + 1 < lines} [ set(k): {k + 1} ]
+        elif(_): {p + 1 < count} [
+            set(p): {p + 1}
+            set(k): 0
+        ]
+        set(n): {n - 1}
+    ]
+    while(_): {n < 0} [
+        if(_): {k > 0} [ set(k): {k - 1} ]
+        elif(_): {p > 0} [
+            set(p): {p - 1}
+            sb_para_text(t): p
+            sb_wrap(starts): t
+            len(lines): starts
+            set(k): {lines - 1}
+        ]
+        set(n): {n + 1}
+    ]
+    set(sb_ptop): p!
+    set(sb_ptopline): k!
+    set(r): 0
+]
+
+# Scrolls so that the cursor's line is on screen.
+sb_pad_reveal(r): [
+    set(r): 0
+    set(visible): sb_plines_visible?
+    typeof(tv): visible
+    if(_): {tv != "integer"} [ return(_): r ]
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    set(top): sb_ptop?
+    set(topline): sb_ptopline?
+    sb_para_text(t): row
+    sb_wrap(starts): t
+    sb_line_of(k): starts col
+    if(_): {row < top || (row = top && k < topline)} [
+        set(sb_ptop): row!
+        set(sb_ptopline): k!
+        return(_): r
+    ]
+    # lines from the top to the cursor, when that is at most a screen
+    set(before): 0
+    set(far): {row - top >= visible}
+    if(_): {far = false} [
+        set(p): top
+        while(_): {p < row} [
+            sb_para_text(tp): p
+            sb_wrap(sp): tp
+            len(lp): sp
+            set(before): {before + lp}
+            set(p): {p + 1}
+        ]
+        set(before): {before - topline + k}
+        set(far): {before >= visible}
+    ]
+    if(_): far [
+        set(sb_ptop): row!
+        set(sb_ptopline): k!
+        sb_pad_scroll(_): {1 - visible}
+    ]
+]
+
+sb_pad_draw(r): [
+    set(canvas): sb_canvas?
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    set(width): {w - 2 * SB_MARGIN}
+    if(_): {width < 40} [ set(width): 40 ]
+    set(sb_pwidth): width!
+    sb_line_height(lh):
+    str_trunc(visible): {(h - SB_STATUSH - 16) / lh}
+    if(_): {visible < 1} [ set(visible): 1 ]
+    set(sb_plines_visible): visible!
+    set(follow): sb_pfollow?
+    if(_): {follow != false} [ sb_pad_reveal(_): ]
+    canvasclear(_): canvas 16777215
+    set(font): sb_pfont?
+    set(px): sb_ppx?
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    set(p): sb_ptop?
+    set(k): sb_ptopline?
+    sb_pad_count(count):
+    vec(lines): ""
+    set(y): 12
+    set(shown): 0
+    while(_): {shown < visible && p < count} [
+        sb_para_text(t): p
+        sb_wrap(starts): t
+        len(nl): starts
+        if(_): {k >= nl} [ set(k): {nl - 1} ]
+        while(_): {k < nl && shown < visible} [
+            at(start): starts k
+            len(end): t
+            if(_): {k + 1 < nl} [ at(end): starts {k + 1} ]
+            slice(piece): t start {end - start}
+            if(_): {font > 0} [ canvasfonttext(_): canvas SB_MARGIN y piece 0 font px ]
+            else(_): [ canvastextscale(_): canvas SB_MARGIN {y + 3} piece 0 2 ]
+            vec(entry): ""
+            push(_): entry p
+            push(_): entry start
+            push(_): entry k
+            push(_): entry y
+            push(_): lines entry
+            sb_line_of(ck): starts col
+            if(_): {p = row && ck = k} [
+                slice(before): t start {col - start}
+                sb_measure(cx): before
+                str_trunc(cx): cx
+                canvasfill(_): canvas {SB_MARGIN + cx} y 2 lh 0
+            ]
+            set(y): {y + lh}
+            set(shown): {shown + 1}
+            set(k): {k + 1}
+        ]
+        set(p): {p + 1}
+        set(k): 0
+    ]
+    set(sb_plines): lines!
+    # status: where the cursor is
+    sb_para_text(t): row
+    utf8_column(column): t col
+    str_from_int(rs): {row + 1}
+    str_from_int(cs): {column + 1}
+    str_from_int(ps): count
+    concat(left): "Paragraph " rs " of " ps ", column " cs
+    set(sb_status_left): left!
+    sb_draw_status(_): w h
+    sb_pad_draw_picker(_): w h
+    sb_draw_dialog(_): w h
+    set(r): 0
+]
+
+sb_pad_click(r): x y [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker = true} [
+        sb_picker_click(_): x y
+        return(_): r
+    ]
+    set(lines): sb_plines?
+    typeof(tl): lines
+    if(_): {tl != "vector"} [ return(_): r ]
+    len(n): lines
+    if(_): {n = 0} [ return(_): r ]
+    sb_line_height(lh):
+    set(pick): {n - 1}
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): lines i
+        at(ly): entry 3
+        if(_): {y < ly + lh && pick = n - 1 && y >= ly} [ set(pick): i ]
+        set(i): {i + 1}
+    ]
+    at(first): lines 0
+    at(fy): first 3
+    if(_): {y < fy} [ set(pick): 0 ]
+    at(entry): lines pick
+    at(p): entry 0
+    at(k): entry 2
+    sb_para_text(t): p
+    sb_wrap(starts): t
+    sb_col_at_x(c): t starts k {x - SB_MARGIN}
+    set(sb_prow): p!
+    set(sb_pcol): c!
+    set(sb_goalx): {0 - 1}!
+]
+
+# The font picker: the system's families in a list over the page.
+$define SB_PICK_ROWS 14
+$define SB_PICK_ROWH 24
+
+sb_picker_box(r): w h [
+    set(bw): 320
+    set(bh): {SB_PICK_ROWS * SB_PICK_ROWH + 8}
+    vec(r): ""
+    push(_): r 140
+    push(_): r 6
+    push(_): r bw
+    push(_): r bh
+]
+
+sb_pad_draw_picker(r): w h [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker != true} [ return(_): r ]
+    set(canvas): sb_canvas?
+    set(families): sb_families?
+    len(n): families
+    set(sel): sb_pick?
+    set(top): sb_pick_top?
+    if(_): {sel < top} [ set(top): sel ]
+    if(_): {sel >= top + SB_PICK_ROWS} [ set(top): {sel - SB_PICK_ROWS + 1} ]
+    set(sb_pick_top): top!
+    sb_picker_box(box): w h
+    at(x): box 0
+    at(y): box 1
+    at(bw): box 2
+    at(bh): box 3
+    canvasfill(_): canvas {x + 3} {y + 3} bw bh 10066329
+    canvasfill(_): canvas x y bw bh 16777215
+    canvasrect(_): canvas x y bw bh 7368816
+    if(_): {n = 0} [
+        sb_ui_text(_): {x + 10} {y + 8} "No TrueType fonts found" 4473924
+        return(_): r
+    ]
+    set(i): 0
+    while(_): {i < SB_PICK_ROWS && top + i < n} [
+        at(f): families {top + i}
+        getf(name): f "name"
+        set(ry): {y + 4 + i * SB_PICK_ROWH}
+        set(color): 0
+        if(_): {top + i = sel} [
+            canvasfill(_): canvas {x + 2} ry {bw - 4} SB_PICK_ROWH 2192198
+            set(color): 16777215
+        ]
+        sb_fit(name): name {bw - 24}
+        sb_ui_text(_): {x + 10} {ry + 4} name color
+        set(i): {i + 1}
+    ]
+    # where in the list
+    if(_): {n > SB_PICK_ROWS} [
+        str_trunc(ty): {y + 4 + (bh - 8) * top / n}
+        str_trunc(th): {(bh - 8) * SB_PICK_ROWS / n}
+        if(_): {th < 8} [ set(th): 8 ]
+        canvasfill(_): canvas {x + bw - 6} ty 3 th 11184810
+    ]
+]
+
+sb_picker_open(r): [
+    set(families): sb_families?
+    set(name): sb_family?
+    sb_family_index(i): families name
+    if(_): {i < 0} [ set(i): 0 ]
+    set(sb_pick): i!
+    set(sb_pick_top): {i - 5}!
+    set(top): sb_pick_top?
+    if(_): {top < 0} [ set(sb_pick_top): 0! ]
+    set(sb_picker): true!
+    set(r): 0
+]
+
+sb_picker_choose(r): [
+    set(families): sb_families?
+    set(sel): sb_pick?
+    len(n): families
+    if(_): {sel >= 0 && sel < n} [
+        at(f): families sel
+        getf(name): f "name"
+        set(sb_family): name!
+        set(sb_dirty): true!
+        sb_apply_font(_):
+        sb_pad_tool_labels(_):
+    ]
+    set(sb_picker): false!
+    set(r): 0
+]
+
+sb_picker_key(r): key [
+    set(families): sb_families?
+    len(n): families
+    set(sel): sb_pick?
+    if(_): {key = SB_KEY_ESC} [ set(sb_picker): false! ]
+    elif(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [ sb_picker_choose(_): ]
+    elif(_): {key = SB_KEY_UP} [ set(sel): {sel - 1} ]
+    elif(_): {key = SB_KEY_DOWN} [ set(sel): {sel + 1} ]
+    elif(_): {key = SB_KEY_PAGE_UP} [ set(sel): {sel - SB_PICK_ROWS} ]
+    elif(_): {key = SB_KEY_PAGE_DOWN} [ set(sel): {sel + SB_PICK_ROWS} ]
+    elif(_): {key = SB_KEY_HOME} [ set(sel): 0 ]
+    elif(_): {key = SB_KEY_END} [ set(sel): {n - 1} ]
+    if(_): {sel >= n} [ set(sel): {n - 1} ]
+    if(_): {sel < 0} [ set(sel): 0 ]
+    set(sb_pick): sel!
+    set(r): 0
+]
+
+# A typed letter jumps to the next family that starts with it.
+sb_picker_char(r): s [
+    set(families): sb_families?
+    len(n): families
+    set(sel): sb_pick?
+    str_lower(s): s
+    set(i): 1
+    set(found): false
+    while(_): {i <= n && found = false} [
+        set(idx): {(sel + i) % n}
+        at(f): families idx
+        getf(key): f "key"
+        sb_starts(m): key s
+        if(_): m [
+            set(sb_pick): idx!
+            set(found): true
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+sb_picker_click(r): x y [
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    sb_picker_box(box): w h
+    at(bx): box 0
+    at(by): box 1
+    at(bw): box 2
+    at(bh): box 3
+    set(r): 0
+    if(_): {x < bx || x > bx + bw || y < by || y > by + bh} [
+        set(sb_picker): false!
+        return(_): r
+    ]
+    str_trunc(i): {(y - by - 4) / SB_PICK_ROWH}
+    set(top): sb_pick_top?
+    set(families): sb_families?
+    len(n): families
+    if(_): {i >= 0 && i < SB_PICK_ROWS && top + i < n} [
+        set(sb_pick): {top + i}!
+        sb_picker_choose(_):
+    ]
+]
+
+sb_pad_key_gui(r): key [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker = true} [
+        sb_picker_key(_): key
+        return(_): r
+    ]
+    set(ctrl): sb_ctrl?
+    if(_): {ctrl = true} [
+        if(_): {key = 66} [
+            set(b): sb_bold?
+            set(sb_bold): {b != true}!
+            set(sb_dirty): true!
+            sb_apply_font(_):
+            sb_pad_tool_labels(_):
+            return(_): r
+        ]
+        if(_): {key = 73} [
+            set(i): sb_italic?
+            set(sb_italic): {i != true}!
+            set(sb_dirty): true!
+            sb_apply_font(_):
+            sb_pad_tool_labels(_):
+            return(_): r
+        ]
+        if(_): {key = 93} [
+            sb_pad_size_step(_): 1
+            return(_): r
+        ]
+        if(_): {key = 91} [
+            sb_pad_size_step(_): {0 - 1}
+            return(_): r
+        ]
+    ]
+    sb_pad_key(_): key {ctrl = true}
+]
+
+# --- hooks for Siberia's event handlers ---------------------------------------
+
+# A typed character in pad mode: to the font picker when it is open.
+sb_pad_char(r): s [
+    set(picker): sb_picker?
+    if(_): {picker = true} [ sb_picker_char(r): s ] else(_): [ sbpadtype(r): s ]
+]
+
+sb_pad_wheel(r): direction [
+    set(r): 0
+    set(picker): sb_picker?
+    if(_): {picker = true} [
+        set(top): sb_pick_top?
+        set(families): sb_families?
+        len(n): families
+        set(top): {top - direction * 3}
+        if(_): {top > n - SB_PICK_ROWS} [ set(top): {n - SB_PICK_ROWS} ]
+        if(_): {top < 0} [ set(top): 0 ]
+        set(sel): sb_pick?
+        if(_): {sel < top} [ set(sb_pick): top! ]
+        if(_): {sel >= top + SB_PICK_ROWS} [ set(sb_pick): {top + SB_PICK_ROWS - 1}! ]
+        set(sb_pick_top): top!
+    ]
+    else(_): [
+        sb_pad_scroll(_): {0 - direction * 3}
+        # the view stays where the wheel put it until the next edit
+        set(sb_pfollow): false!
+    ]
+]
+
+# A toolbar button of the pad's own (font, size, bold, italic).
+sb_pad_tool(r): action [
+    set(r): 0
+    if(_): {action = "font"} [
+        set(picker): sb_picker?
+        if(_): {picker = true} [ set(sb_picker): false! ] else(_): [ sb_picker_open(_): ]
+    ]
+    elif(_): {action = "smaller"} [ sb_pad_size_step(_): {0 - 1} ]
+    elif(_): {action = "bigger"} [ sb_pad_size_step(_): 1 ]
+    elif(_): {action = "bold" || action = "italic"} [
+        if(_): {action = "bold"} [
+            set(b): sb_bold?
+            set(sb_bold): {b != true}!
+        ]
+        else(_): [
+            set(b): sb_italic?
+            set(sb_italic): {b != true}!
+        ]
+        set(sb_dirty): true!
+        sb_apply_font(_):
+    ]
+]
+
+# The system fonts, the preferred family, and the pad's toolbar buttons.
+sb_pad_toolbar(r): bar [
+    set(r): 0
+    sb_scan_fonts(families):
+    set(sb_families): families!
+    vec(prefer): ""
+    push(_): prefer "Calibri"
+    push(_): prefer "Liberation Serif"
+    push(_): prefer "Times New Roman"
+    push(_): prefer "DejaVu Serif"
+    push(_): prefer "Arial"
+    push(_): prefer "DejaVu Sans"
+    len(pn): prefer
+    set(i): 0
+    set(found): false
+    while(_): {i < pn && found = false} [
+        at(name): prefer i
+        sb_family_index(fi): families name
+        if(_): {fi >= 0} [
+            set(sb_family): name!
+            set(found): true
+        ]
+        set(i): {i + 1}
+    ]
+    len(fn): families
+    if(_): {found = false && fn > 0} [
+        at(f0): families 0
+        getf(n0): f0 "name"
+        set(sb_family): n0!
+    ]
+    sb_apply_font(_):
+    sb_add_button(_): bar "Font: ------------------------" "font"
+    sb_add_button(_): bar "-" "smaller"
+    sb_add_button(_): bar "12 pt" "size"
+    sb_add_button(_): bar "+" "bigger"
+    sb_add_button(_): bar "B" "bold"
+    sb_add_button(_): bar "I" "italic"
+]
+
+$ifdef __MAIN__
+init(result): arg_count arg_values [
+    sb_app_main(result): "pad" "Novosibirsk" "usage: ussr novosibirsk.su [file.fodt|file.txt]" arg_count arg_values
+]
+$endif

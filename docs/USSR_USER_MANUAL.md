@@ -102,7 +102,7 @@ key `a`..`z`, `0`..`9` or `F1`..`F12`. Terminals never see the
 Super/Windows key, so `Mod` means Alt. Chords a terminal cannot tell from
 editing keys are refused with a reason: a letter without Ctrl or Alt,
 Ctrl+H/I/J/M (Backspace, Tab, Enter), Ctrl with a digit, and Shift with a
-letter or digit. Put bindings in `moscow.su` to have them in every
+letter or digit. Put bindings in `kiev.su` to have them in every
 session.
 
 Bindings also fire in the REPL of the self-hosted interpreter
@@ -130,7 +130,7 @@ alias(_): "ll" ""              # remove it
 As in an interactive shell, aliases apply only to lines typed at the REPL
 (the ussr REPL and russia.su's). Scripts, libraries, and code a typed line
 loads or `eval`s never see them, so a personal alias cannot change how a
-program behaves; that makes the home `moscow.su` the place for them. Not
+program behaves; that makes the home `kiev.su` the place for them. Not
 rewritten: a command with an explicit path (`./ll(_):`), a command whose
 last argument is a block (a function definition or control flow), and a
 name already rewritten on the way. Names are letters, digits and `_`; the
@@ -184,17 +184,17 @@ unmodified: `ussr.exe myscript.su`.
 the integer it leaves in `ret` is the process exit status: `0` to `255`
 as is, any other integer `1`. A `ret` that is never set (or is not an
 integer) gives `0`. A compile error or a runtime error gives `1`. The same
-holds for `.ru` files and `-e`. `moscow.su` (the startup file) stops
+holds for `.ru` files and `-e`. `kiev.su` (the startup file) stops
 `ussr` with its status when that is not `0`; the REPL ignores the
 statuses of the lines it runs.
 
 **Startup files.** Before a script, `-e` code or the REPL, `ussr` runs
-`moscow.su` from your home folder (`HOME`, else `USERPROFILE` on Windows)
+`kiev.su` from your home folder (`HOME`, else `USERPROFILE` on Windows)
 for settings you want everywhere (aliases, key bindings, `PS1`), and then
-`moscow.su` from the current folder for the project at hand, unless the two
-are the same file. Either may be missing. `USSR_MOSCOW` overrides both: it
+`kiev.su` from the current folder for the project at hand, unless the two
+are the same file. Either may be missing. `USSR_KIEV` overrides both: it
 names the only startup file to run, and set but empty it runs none
-(`USSR_MOSCOW= ussr script.su`). `-c` runs no startup file.
+(`USSR_KIEV= ussr script.su`). `-c` runs no startup file.
 
 ```
 init(ret): arg_cnt arg_vec [
@@ -225,7 +225,7 @@ The previous `.uuasm` spelling is still accepted.
 ```
 
 `-c` (long form `--compile`) preprocesses and compiles the script without
-running it and without loading `moscow.su`. The output file holds only the
+running it and without loading `kiev.su`. The output file holds only the
 binary program; nothing is printed on success. If the source does not
 compile, or the output cannot be written, a message goes to stderr, the
 exit status is 1, and no output file is left behind. Includes are resolved

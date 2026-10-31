@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+- Split: the document editor (`--pad`) is now Novosibirsk
+  (`src/novosibirsk/novosibirsk.su`), which includes `siberia.su` for the
+  shared parts. `siberia.su` is the spreadsheet only; the pad's engine
+  checks moved to `tests/novosibirsk_test.su`.
+
 ## 0.1.0
 - First version: a spreadsheet (default) and a document editor (`--pad`)
   in one program.

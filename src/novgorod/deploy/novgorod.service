@@ -9,7 +9,7 @@ User=@USER@
 WorkingDirectory=@REPO@
 # PGPASSWORD for Dubna, kept out of the command line (ps shows that)
 EnvironmentFile=@ENV_FILE@
-Environment=USSR_MOSCOW=
+Environment=USSR_KIEV=
 ExecStart=@COMMAND@ "@CONNINFO@"
 Restart=always
 RestartSec=3

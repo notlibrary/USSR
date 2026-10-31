@@ -1494,7 +1494,7 @@ ps_parse(r): src [
         set(r): 1
     ]
 ]
-# REPL entries only (repl_exec): aliases made with alias(_) (in moscow.su,
+# REPL entries only (repl_exec): aliases made with alias(_) (in kiev.su,
 # or an earlier REPL line)
 # rewrite commands as ussr's compiler does: the name becomes the
 # alias's first word and its other words go in front of the arguments.
@@ -9082,7 +9082,7 @@ repl_exec(r): src first [
 # After an entry failed (its error already reported): ussr's two lines
 # for a failed entry, and a clean slate for the next one. rp_pid counts
 # the entries run, which is ussr's process number when no startup file
-# ran (each moscow.su is a process of its own in ussr).
+# ran (each kiev.su is a process of its own in ussr).
 repl_failed(r): [
     global(_): rp_pid
     encode(rpf_n): rp_pid

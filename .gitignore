@@ -65,3 +65,6 @@ ussr.res
 tests/*_tmp.txt
 ps_output.txt
 .Mbl_probe.tmp
+
+# Moscow boot images (sh src/moscow/build.sh)
+/build/moscow/

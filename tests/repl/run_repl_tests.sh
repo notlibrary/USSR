@@ -53,16 +53,16 @@ expect "commands still run under a custom prompt" 'set(a): 6\nmul(b): a 7\nprint
 reject "PS1 text is never executed" 'print(_): 1\n' 'EXECUTED' 'PS1=print(_): "EXECUTED"'
 
 # A runtime error ends its entry, not the REPL; variables survive it.
-# No startup files (USSR_MOSCOW=): ussr numbers a process for each one,
+# No startup files (USSR_KIEV=): ussr numbers a process for each one,
 # which russia.su, running inside the host, cannot see.
 expect "an error ends the entry, not the REPL" \
     'set(a): 5\nfail(_): "boom"\nprint(_): a\n' \
-    'USSR VM: execution failed (status -1)ussr> 5' -u PS1 USSR_MOSCOW=
+    'USSR VM: execution failed (status -1)ussr> 5' -u PS1 USSR_KIEV=
 expect "a failed entry is reported like ussr's" \
-    'set(a): 5\nfail(_): "boom"\n' 'process 2 (init) failed' -u PS1 USSR_MOSCOW=
+    'set(a): 5\nfail(_): "boom"\n' 'process 2 (init) failed' -u PS1 USSR_KIEV=
 expect "the REPL carries on after several errors" \
     'set(n): {1 / 0}\nfail(_): "again"\nprint(_): "still here"\n' \
-    'ussr> still here' -u PS1 USSR_MOSCOW=
+    'ussr> still here' -u PS1 USSR_KIEV=
 
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

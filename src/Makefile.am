@@ -155,6 +155,20 @@ EXTRA_DIST = \
 	siberia/README.md \
 	siberia/box.uno \
 	siberia/siberia.su \
+	novosibirsk/README.md \
+	novosibirsk/box.uno \
+	novosibirsk/novosibirsk.su \
+	moscow/README.md \
+	moscow/arch/amd64/boot.nasm \
+	moscow/arch/amd64/image.nasm \
+	moscow/arch/amd64/layout.inc \
+	moscow/arch/amd64/ussr_rt.nasm \
+	moscow/build.sh \
+	moscow/moscow.su \
+	moscow/run.sh \
+	moscow/russia.su \
+	moscow/tools/qemu_test.py \
+	moscow/tools/rudump.py \
 	sochi/CHANGELOG.md \
 	sochi/README.md \
 	sochi/box.uno \

@@ -67,7 +67,7 @@ facts of its own turns it into an object. Categories left empty by `mv` or
     ussr src/kgb/kgb.su [--kb DIR] COMMAND ...
 
 In the USSR shell, `alias(_): "kgb" "ussr" "/path/to/src/kgb/kgb.su"` in
-`moscow.su` makes it `kgb(_): "ls"`; in another shell an alias of its own
+`kiev.su` makes it `kgb(_): "ls"`; in another shell an alias of its own
 makes it `kgb ls`. The examples below use the short form. Objects and categories are named
 by their path or by any tail of it that is unique: `cat`, `mammals/cat` and
 `animals/mammals/cat` are the same object. Arguments after the fact or value

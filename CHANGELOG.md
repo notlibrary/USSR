@@ -3,12 +3,31 @@
 ## [Unreleased]
 
 ### Added
+- Moscow (`src/moscow`), the amd64 kernel: a two-stage NASM boot loader
+  (`arch/amd64/boot.nasm`) enters long mode and starts the NASM USSR
+  runtime (`arch/amd64/ussr_rt.nasm`), a `.ru` bytecode VM on bare metal
+  with VGA, serial, keyboard and timer services (`k_*`). It runs the
+  kernel `moscow.ru`, which runs the shell `russia.ru`: the self-hosted
+  interpreter `src/russia/russia.su`, whose REPL is the shell. Commands
+  russia.su does not know go to the runtime through its host calls, so
+  `uptime(_):`, `ls(_):`, `mem(m):`, `run(s): "f.ru"` and the rest are
+  USSR commands. Stage 2 enters long mode at once and loads the files
+  from 1 MiB up with its own ATA driver; the runtime has its own GDT,
+  maps all RAM and puts the heap in the largest region. `image.nasm`
+  makes the boot disk and `tools/qemu_test.py` drives the shell in QEMU.
 - Omsk (`src/omsk/omsk.su`), image thumbnails in pure USSR: PNG (every
   colour type and depth) and sequential JPEG in, a baseline JPEG fitted
   into a square box out. The RUND stack becomes the ROUND stack: Ryazan,
   Omsk, Ukraine, Novgorod, Dubna.
 
 ### Changed
+- The startup file `moscow.su` is now `kiev.su`, and `USSR_MOSCOW` is
+  `USSR_KIEV`: Moscow is the name of the amd64 kernel. Rename a personal
+  `~/moscow.su` to `~/kiev.su`; the old names are no longer read.
+- Siberia is split in two: `src/siberia/siberia.su` is the spreadsheet
+  and the document editor (`siberia.su --pad` before) is Novosibirsk,
+  `src/novosibirsk/novosibirsk.su`, which includes Siberia for the shared
+  parts. The pad's engine checks moved to `tests/novosibirsk_test.su`.
 - Novgorod makes its 200x200 thumbnails on the server with Omsk, into
   `thumbs/`, and takes the image size from the picture itself; the footer
   links the ROUND stack to the USSR repository.

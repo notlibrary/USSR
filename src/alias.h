@@ -15,7 +15,7 @@
  * As in an interactive shell, aliases apply to lines typed at the REPL
  * only (each entry is expanded before it is compiled); scripts, libraries
  * and whatever an entry loads or evals never see them, so a personal
- * alias cannot change how a program behaves. moscow.su is the place for
+ * alias cannot change how a program behaves. kiev.su is the place for
  * them. Not expanded: commands with an explicit path (./ll), commands
  * that define a function or take a block, and a name already expanded on
  * the way (alias(_): "ls" "ls" "-F").

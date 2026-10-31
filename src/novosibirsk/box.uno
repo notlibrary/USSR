@@ -1,0 +1,1 @@
+'Package{name=`novosibirsk`,version=`0.1.0`,description=`Document editor with system fonts (.fodt, .txt); split from Siberia's --pad`,entry=`novosibirsk.su`,dependencies=[`siberia`,`petersburg`,`library`],files=[`novosibirsk.su`,`README.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
