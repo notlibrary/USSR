@@ -21,17 +21,21 @@ Needs NASM, QEMU and a built `ussr` (it compiles the two `.su` files):
     python src/moscow/tools/qemu_test.py    # headless test over serial
 
 `moscow.img` is a raw disk image; `dd` it to a USB stick to boot a real
-PC with a BIOS (or CSM).
+PC with a BIOS (or CSM) whose disk answers on the legacy ATA ports (IDE,
+or SATA in IDE mode); USB and AHCI drivers are not there yet.
 
 ## Boot
 
 - **Stage 1** (the MBR, 512 bytes) reads stage 2 with the BIOS extended
   disk read and jumps to it.
-- **Stage 2** enables A20, saves the BIOS (e820) memory map, reads the
-  file table (`MOSCOWFS`, sector 16) and loads every file it lists from
-  0x10000 up, builds identity page tables for the first GiB (2 MiB pages),
-  goes from real mode straight to long mode and jumps to the runtime
-  (always the first file) with the boot information block in `rdi`.
+- **Stage 2** uses the BIOS only for what only it knows: A20 and the
+  e820 memory map. It builds identity page tables for the first 4 GiB
+  (2 MiB pages) and goes from real mode straight to long mode. From
+  there on everything is 64-bit: an ATA PIO driver (primary master,
+  LBA28) reads the file table (`MOSCOWFS`, sector 16) and every file it
+  lists to memory from 1 MiB up, with no 640 KiB window, and stage 2
+  jumps to the runtime (always the first file) with the boot information
+  block in `rdi`. The heap starts at the next 2 MiB after the files.
 - `arch/amd64/layout.inc` holds the sector and memory layout;
   `arch/amd64/image.nasm` assembles the disk with `incbin`.
 

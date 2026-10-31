@@ -4,11 +4,13 @@
 ;
 ; Stage 1 is the MBR: the BIOS loads it at 0x7c00 and it reads stage 2
 ; (the next STAGE2_SECTORS sectors) to 0x7e00 with the extended disk
-; read. Stage 2 enables A20, records the BIOS memory map, reads the file
-; table and every file it lists (the NASM USSR runtime first, then
-; moscow.ru and russia.ru), builds identity page tables for the first
-; GiB, switches straight from real mode to long mode and jumps to the
-; runtime with the boot information block's address in rdi.
+; read. Stage 2 asks the BIOS for what only it knows (A20, the e820
+; memory map), builds identity page tables for the first 4 GiB and
+; switches from real mode straight to long mode. Everything after that
+; is 64-bit: an ATA PIO driver reads the file table and every file it
+; lists (the NASM USSR runtime first, then moscow.ru and russia.ru) to
+; memory from 1 MiB up, and stage 2 jumps to the runtime with the boot
+; information block's address in rdi.
 ;
 ; Progress goes to the screen through the BIOS and to the first serial
 ; port, so a headless QEMU shows where a boot stopped.
@@ -101,6 +103,8 @@ msg_read1:   db "Moscow: cannot read stage 2", 13, 10, 0
         dw 0xaa55
 
 ; --- stage 2 (0x7e00) ----------------------------------------------------
+; Real mode only for what needs the BIOS (A20, the e820 memory map); then
+; long mode, and the files are read with the ATA driver below.
 
 stage2:
         mov si, msg_hello
@@ -109,119 +113,31 @@ stage2:
         call enable_a20
         jc .a20_fail
         call read_memory_map
-
-        ; the file table
-        mov word [dap_count], 1
-        mov word [dap_offset], TOC_BUFFER
-        mov word [dap_segment], 0
-        mov dword [dap_lba], TOC_LBA
-        mov dword [dap_lba + 4], 0
-        call disk_read
-        jc .toc_fail
-        cmp dword [TOC_BUFFER], 'MOSC'
-        jne .toc_fail
-        cmp dword [TOC_BUFFER + 4], 'OWFS'
-        jne .toc_fail
-        mov eax, [TOC_BUFFER + 8]
-        test eax, eax
-        jz .toc_fail
-        cmp eax, TOC_MAX
-        ja .toc_fail
-        mov [file_count], ax
-
-        ; boot information header
-        mov dword [BOOTINFO + BI_MAGIC], 'MOSC'
-        mov [BOOTINFO + BI_NFILES], eax
         movzx eax, byte [boot_drive]
         mov [BOOTINFO + BI_DRIVE], eax
 
-        ; every file, one after another from RT_BASE
-        mov dword [load_addr], RT_BASE
-        mov word [file_index], 0
-.file:
-        mov ax, [file_index]
-        cmp ax, [file_count]
-        jae .files_done
-        mov si, ax
-        shl si, 5                       ; TOC_ENTRY_SIZE
-        add si, TOC_BUFFER + 16
-        mov di, ax
-        shl di, 5                       ; BIF_SIZE
-        add di, BOOTINFO + BI_FILES
-        ; name
-        push si
-        push di
-        mov cx, 16
-        rep movsb
-        pop di
-        pop si
-        mov eax, [load_addr]
-        mov [di + BIF_ADDR], eax
-        mov dword [di + BIF_ADDR + 4], 0
-        mov eax, [si + 20]              ; size in bytes
-        mov [di + BIF_SIZE_FIELD], eax
-        mov dword [di + BIF_SIZE_FIELD + 4], 0
-        mov eax, [si + 16]              ; first sector
-        mov [cur_lba], eax
-        mov eax, [si + 24]              ; sectors
-        mov [cur_left], eax
-        ; does it fit below the EBDA?
-        shl eax, 9
-        add eax, [load_addr]
-        cmp eax, LOAD_LIMIT
-        ja .too_big
-.chunk:
-        mov eax, [cur_left]
-        test eax, eax
-        jz .file_done
-        cmp eax, 64                     ; 32 KiB a read
-        jbe .count_ok
-        mov eax, 64
-.count_ok:
-        mov [dap_count], ax
-        mov ebx, [load_addr]
-        mov edx, ebx
-        shr edx, 4
-        mov [dap_segment], dx
-        and bx, 0x000f
-        mov [dap_offset], bx
-        mov edx, [cur_lba]
-        mov [dap_lba], edx
-        mov dword [dap_lba + 4], 0
-        push eax
-        call disk_read
-        pop eax
-        jc .read_fail
-        add [cur_lba], eax
-        sub [cur_left], eax
-        shl eax, 9
-        add [load_addr], eax
-        jmp .chunk
-.file_done:
-        inc word [file_index]
-        jmp .file
-
-.files_done:
-        mov si, msg_loaded
-        call bios_print
-
-        ; identity map the first GiB with 2 MiB pages
+        ; identity map the first 4 GiB with 2 MiB pages
         cld
         xor ax, ax
         mov es, ax
         mov di, PAGE_PML4
-        mov cx, 3 * 4096 / 4
+        mov cx, 6 * 4096 / 4
         xor eax, eax
         rep stosd
         mov dword [PAGE_PML4], PAGE_PDPT | 3
-        mov dword [PAGE_PDPT], PAGE_PD | 3
+        mov di, PAGE_PDPT
+        mov eax, PAGE_PD | 3
+        mov cx, 4
+.pdpt:
+        mov [di], eax
+        add eax, 0x1000
+        add di, 8
+        loop .pdpt
         mov di, PAGE_PD
         mov eax, 0x83                   ; present, writable, 2 MiB
-        xor edx, edx
-        mov cx, 512
+        mov cx, 2048
 .pd:
         mov [di], eax
-        mov [di + 4], edx
         add eax, 0x200000
         add di, 8
         loop .pd
@@ -249,33 +165,6 @@ stage2:
 .a20_fail:
         mov si, msg_a20
         jmp stage1_fail
-.toc_fail:
-        mov si, msg_toc
-        jmp stage1_fail
-.read_fail:
-        mov si, msg_read2
-        jmp stage1_fail
-.too_big:
-        mov si, msg_big
-        jmp stage1_fail
-
-; Reads with the packet at dap; carry set on failure (after 3 tries).
-disk_read:
-        mov byte [tries], 3
-.again:
-        mov si, dap
-        mov ah, 0x42
-        mov dl, [boot_drive]
-        int 0x13
-        jnc .ok
-        xor ah, ah                      ; reset, then try again
-        mov dl, [boot_drive]
-        int 0x13
-        dec byte [tries]
-        jnz .again
-        stc
-.ok:
-        ret
 
 ; A20 through the BIOS, then the fast gate; carry set when it stays off.
 enable_a20:
@@ -362,21 +251,13 @@ gdtr:
         dw gdtr - gdt - 1
         dd gdt
 
-file_count:  dw 0
-file_index:  dw 0
-load_addr:   dd 0
-cur_lba:     dd 0
-cur_left:    dd 0
-tries:       db 0
-
-msg_hello:   db "Moscow boot: stage 2", 13, 10, 0
-msg_loaded:  db "Moscow boot: files loaded, entering long mode", 13, 10, 0
+msg_hello:   db "Moscow boot: stage 2, entering long mode", 13, 10, 0
 msg_a20:     db "Moscow boot: A20 stays off", 13, 10, 0
-msg_toc:     db "Moscow boot: no file table (MOSCOWFS)", 13, 10, 0
-msg_read2:   db "Moscow boot: disk read error", 13, 10, 0
-msg_big:     db "Moscow boot: the files do not fit below 0x9f000", 13, 10, 0
+
+; --- long mode ------------------------------------------------------------
 
         bits 64
+        default abs
 long_entry:
         mov ax, 0x10
         mov ds, ax
@@ -385,9 +266,209 @@ long_entry:
         xor ax, ax
         mov fs, ax
         mov gs, ax
+        mov rsp, 0x7c00
+        cld
+
+        mov rsi, msg_long
+        call puts64
+
+        ; the file table
+        mov eax, TOC_LBA
+        mov ecx, 1
+        mov rdi, TOC_BUFFER
+        call ata_read
+        jc .disk_fail
+        mov rax, 'MOSCOWFS'
+        cmp [TOC_BUFFER], rax
+        jne .toc_fail
+        mov ebx, [TOC_BUFFER + 8]
+        test ebx, ebx
+        jz .toc_fail
+        cmp ebx, TOC_MAX
+        ja .toc_fail
+        mov dword [BOOTINFO + BI_MAGIC], 'MOSC'
+        mov [BOOTINFO + BI_NFILES], ebx
+
+        ; every file, one after another from RT_BASE
+        mov r12, RT_BASE                ; where the next file goes
+        mov r13, TOC_BUFFER + 16        ; table entry
+        mov r14, BOOTINFO + BI_FILES    ; boot information entry
+.file:
+        test ebx, ebx
+        jz .files_done
+        mov rax, [r13]
+        mov [r14 + BIF_NAME], rax
+        mov rax, [r13 + 8]
+        mov [r14 + BIF_NAME + 8], rax
+        mov [r14 + BIF_ADDR], r12
+        mov eax, [r13 + 20]             ; bytes
+        mov [r14 + BIF_SIZE_FIELD], rax
+        mov eax, [r13 + 16]             ; first sector
+        mov ecx, [r13 + 24]             ; sectors
+        mov rdi, r12
+        push rcx
+        call ata_read
+        pop rcx
+        jc .disk_fail
+        shl rcx, 9
+        add r12, rcx
+        add r12, FILE_ALIGN - 1
+        and r12, -FILE_ALIGN
+        add r13, TOC_ENTRY_SIZE
+        add r14, BIF_SIZE
+        dec ebx
+        jmp .file
+.files_done:
+        mov [BOOTINFO + BI_FILES_END], r12
+        mov rsi, msg_loaded
+        call puts64
         mov rsp, RT_STACK_TOP
         mov edi, BOOTINFO
-        mov eax, RT_BASE
+        mov rax, RT_BASE
         jmp rax
+
+.disk_fail:
+        mov rsi, msg_disk
+        jmp fail64
+.toc_fail:
+        mov rsi, msg_toc
+fail64:
+        call puts64
+.stop:
+        cli
+        hlt
+        jmp .stop
+
+; ATA PIO, primary master, LBA28: eax = first sector, ecx = sectors,
+; rdi = destination. Carry set on a device error.
+ata_read:
+        push rbx
+        push rdx
+.chunk:
+        test ecx, ecx
+        jz .ok
+        mov ebx, ecx
+        cmp ebx, 128
+        jbe .count
+        mov ebx, 128
+.count:
+        push rax
+        mov edx, 0x1f7
+.idle:
+        in al, dx
+        test al, 0x80                   ; BSY
+        jnz .idle
+        pop rax
+        push rax
+        mov edx, eax
+        shr edx, 24
+        and dl, 0x0f
+        or dl, 0xe0                     ; master, LBA
+        mov al, dl
+        mov dx, 0x1f6
+        out dx, al
+        mov dx, 0x1f2
+        mov al, bl
+        out dx, al
+        pop rax
+        push rax
+        mov dx, 0x1f3
+        out dx, al
+        shr eax, 8
+        mov dx, 0x1f4
+        out dx, al
+        shr eax, 8
+        mov dx, 0x1f5
+        out dx, al
+        mov dx, 0x1f7
+        mov al, 0x20                    ; READ SECTORS
+        out dx, al
+        push rcx
+        mov r8d, ebx
+.sector:
+        mov dx, 0x3f6                   ; 400 ns
+        in al, dx
+        in al, dx
+        in al, dx
+        in al, dx
+        mov dx, 0x1f7
+.wait:
+        in al, dx
+        test al, 0x80
+        jnz .wait
+        test al, 0x21                   ; ERR, DF
+        jnz .error
+        test al, 0x08                   ; DRQ
+        jz .wait
+        mov dx, 0x1f0
+        mov ecx, 256
+        rep insw
+        dec r8d
+        jnz .sector
+        pop rcx
+        pop rax
+        add eax, ebx
+        sub ecx, ebx
+        jmp .chunk
+.error:
+        pop rcx
+        pop rax
+        pop rdx
+        pop rbx
+        stc
+        ret
+.ok:
+        pop rdx
+        pop rbx
+        clc
+        ret
+
+; rsi = NUL-terminated text -> COM1 and the top of the screen
+puts64:
+        push rax
+        push rdx
+        push rdi
+.next:
+        lodsb
+        test al, al
+        jz .done
+        push rax
+        mov dx, COM1 + 5
+.tx:
+        in al, dx
+        test al, 0x20
+        jz .tx
+        pop rax
+        mov dx, COM1
+        out dx, al
+        cmp al, 32
+        jb .next
+        mov rdi, [screen_pos]
+        mov ah, 0x07
+        mov [rdi], ax
+        add qword [screen_pos], 2
+        jmp .next
+.done:
+        add qword [screen_pos], 160     ; the next message on a new line
+        and qword [screen_pos], -1
+        mov rax, [screen_pos]
+        sub rax, 0xb8000
+        xor edx, edx
+        mov edi, 160
+        div rdi
+        imul rax, rax, 160
+        add rax, 0xb8000
+        mov [screen_pos], rax
+        pop rdi
+        pop rdx
+        pop rax
+        ret
+
+        align 8
+screen_pos:  dq 0xb8000 + 160 * 20
+msg_long:    db "Moscow boot: long mode, reading the files (ATA)", 13, 10, 0
+msg_loaded:  db "Moscow boot: files loaded from 1 MiB, starting the runtime", 13, 10, 0
+msg_disk:    db "Moscow boot: ATA read error", 13, 10, 0
+msg_toc:     db "Moscow boot: no file table (MOSCOWFS)", 13, 10, 0
 
         times (1 + STAGE2_SECTORS) * 512 - ($ - $$) db 0

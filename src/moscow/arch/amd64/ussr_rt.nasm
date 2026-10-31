@@ -223,12 +223,17 @@ sys_reboot:
         int3
         jmp sys_halt
 
-; The heap: from HEAP_BASE to the end of the RAM region holding it, as
-; the BIOS map says, at most to the end of the identity map.
+; The heap: from the first 2 MiB boundary after the loaded files to the
+; end of the RAM region holding it, as the BIOS map says, at most to the
+; end of the identity map.
 heap_init:
-        mov qword [heap_ptr], HEAP_BASE
-        mov qword [heap_end], 0
         mov rsi, [boot_info]
+        mov rbx, [rsi + BI_FILES_END]
+        add rbx, 0x1fffff
+        and rbx, -0x200000
+        mov [heap_base], rbx
+        mov [heap_ptr], rbx
+        mov qword [heap_end], 0
         mov ecx, [rsi + BI_NE820]
         lea rsi, [rsi + BI_E820]
 .next:
@@ -239,9 +244,9 @@ heap_init:
         mov rax, [rsi]
         mov rdx, rax
         add rdx, [rsi + 8]
-        cmp rax, HEAP_BASE
+        cmp rax, rbx
         ja .skip
-        cmp rdx, HEAP_BASE
+        cmp rdx, rbx
         jbe .skip
         mov [heap_end], rdx
 .skip:
@@ -252,11 +257,12 @@ heap_init:
         mov rax, [heap_end]
         test rax, rax
         jnz .have
-        mov rax, 0x1000000              ; no map: assume 16 MiB
+        lea rax, [rbx + 0x1000000]      ; no map: assume 16 MiB more
 .have:
-        cmp rax, MAP_LIMIT
+        mov rcx, MAP_LIMIT
+        cmp rax, rcx
         jbe .ok
-        mov rax, MAP_LIMIT
+        mov rax, rcx
 .ok:
         mov [heap_end], rax
         ret
@@ -3174,7 +3180,7 @@ bi_k_mem:
         call vec_new
         mov rdi, rax
         mov rax, [heap_end]
-        sub rax, HEAP_BASE
+        sub rax, [heap_base]
         call vec_push_int
         mov rax, [heap_end]
         sub rax, [heap_ptr]
@@ -3535,6 +3541,7 @@ rt_end:
 
 absolute RT_DATA
 boot_info:      resq 1
+heap_base:      resq 1
 heap_ptr:       resq 1
 heap_end:       resq 1
 ticks:          resq 1
