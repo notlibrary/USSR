@@ -559,6 +559,7 @@ int isgraph(int c) { return c > 32 && c < 127; }
 int ispunct(int c) { return isgraph(c) && !isalnum(c); }
 int isxdigit(int c) { return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 int isascii(int c) { return c >= 0 && c < 128; }
+int toascii(int c) { return c & 0x7f; }
 int tolower(int c) { return isupper(c) ? c + 32 : c; }
 int toupper(int c) { return islower(c) ? c - 32 : c; }
 
@@ -679,8 +680,9 @@ size_t fwrite(const void *p, size_t size, size_t n, FILE *f)
     const unsigned char *s = p;
     size_t i, total = size * n;
     for (i = 0; i < total; i++)
-        fputc(s[i], f);
-    return size ? n : 0;
+        if (fputc(s[i], f) == EOF)
+            break;
+    return size ? i / size : 0;
 }
 
 int fgetc(FILE *f)
@@ -1597,6 +1599,29 @@ int vsnprintf(char *s, size_t n, const char *fmt, va_list ap)
     return r;
 }
 
+int vasprintf(char **out, const char *fmt, va_list ap)
+{
+    va_list ap2;
+    int n;
+    va_copy(ap2, ap);
+    n = vsnprintf(NULL, 0, fmt, ap);
+    *out = malloc(n + 1);
+    if (*out == NULL)
+        return -1;
+    vsnprintf(*out, n + 1, fmt, ap2);
+    return n;
+}
+
+int asprintf(char **out, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+    va_start(ap, fmt);
+    n = vasprintf(out, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
 int vsprintf(char *s, const char *fmt, va_list ap)
 {
     return vsnprintf(s, 1L << 40, fmt, ap);
@@ -1692,6 +1717,7 @@ int atoi(const char *s) { return (int)strtol(s, NULL, 10); }
 long atol(const char *s) { return strtol(s, NULL, 10); }
 long long atoll(const char *s) { return strtol(s, NULL, 10); }
 
+long double strtold(const char *s, char **end) { return strtod(s, end); }
 double strtod(const char *s, char **end)
 {
     const char *p = s;
@@ -1714,6 +1740,49 @@ double strtod(const char *s, char **end)
         if (end)
             *end = (char *)(p + 3);
         return __nan();
+    }
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') &&
+        (isxdigit(p[2]) || (p[2] == '.' && isxdigit(p[3])))) {
+        /* hex: up to 15 digits (60 bits), a power of two after p */
+        p += 2;
+        for (; isxdigit(*p) || *p == '.'; p++) {
+            int dv;
+            if (*p == '.') {
+                if (any < 0)
+                    break;
+                any = -1;
+                continue;
+            }
+            dv = isdigit(*p) ? *p - '0' : (*p | 32) - 'a' + 10;
+            if (nd < 15) {
+                m = m * 16 + dv;
+                if (m)
+                    nd++;
+                if (any < 0)
+                    ex -= 4;
+            } else if (any >= 0) {
+                ex += 4;
+            }
+        }
+        if (*p == 'p' || *p == 'P') {
+            const char *q = p + 1;
+            int eneg = 0, e = 0;
+            if (*q == '-' || *q == '+')
+                eneg = *q++ == '-';
+            if (isdigit(*q)) {
+                while (isdigit(*q)) {
+                    if (e < 100000)
+                        e = e * 10 + (*q - '0');
+                    q++;
+                }
+                ex += eneg ? -e : e;
+                p = q;
+            }
+        }
+        if (end)
+            *end = (char *)p;
+        v = ldexp((double)m, ex);
+        return neg ? -v : v;
     }
     while (isdigit(*p)) {
         if (nd < 18) {
@@ -1745,8 +1814,11 @@ double strtod(const char *s, char **end)
         if (*q == '-' || *q == '+')
             eneg = *q++ == '-';
         if (isdigit(*q)) {
-            while (isdigit(*q))
-                e = e * 10 + (*q++ - '0');
+            while (isdigit(*q)) {
+                if (e < 100000)
+                    e = e * 10 + (*q - '0');
+                q++;
+            }
             ex += eneg ? -e : e;
             p = q;
         }
@@ -1884,7 +1956,7 @@ static int __vscan(struct __src *r, const char *fmt, va_list ap)
                 else *va_arg(ap, int *) = v;
                 count++;
             }
-        } else if (*p == 'f' || *p == 'e' || *p == 'g' || *p == 'E' || *p == 'G' || *p == 'a') {
+        } else if (*p == 'f' || *p == 'e' || *p == 'g' || *p == 'E' || *p == 'G' || *p == 'a' || *p == 'F' || *p == 'A') {
             char buf[80];
             int n = 0;
             double v;
@@ -2038,6 +2110,13 @@ int rand(void)
 }
 
 void srand(unsigned int seed) { __rand_next = seed; }
+int rand_r(unsigned int *seed)
+{
+    unsigned long next = *seed;
+    next = next * 1103515245 + 12345;
+    *seed = (unsigned int)next;
+    return (unsigned int)(next / 65536) % 32768;
+}
 int abs(int x) { return x < 0 ? -x : x; }
 long labs(long x) { return x < 0 ? -x : x; }
 long long llabs(long long x) { return x < 0 ? -x : x; }
@@ -2587,10 +2666,28 @@ long lrint(double x) { return (long)rint(x); }
 long lround(double x) { return (long)round(x); }
 double fmin(double a, double b) { return a < b ? a : b; }
 double fmax(double a, double b) { return a > b ? a : b; }
+double copysign(double x, double y) { x = fabs(x); return y < 0 ? -x : x; }
+double scalbn(double x, int e) { return ldexp(x, e); }
+double exp2(double x) { return pow(2, x); }
+double __powi(double x, int n) { return pow(x, n); }
 
+/* Exact: subtract y * 2^k from the top k down; each step is exact. */
 double fmod(double x, double y)
 {
-    return x - trunc(x / y) * y;
+    double ax = fabs(x), ay = fabs(y), t;
+    if (x != x || y != y || y == 0 || ax > 1.7976931348623157e308)
+        return __nan();
+    if (ax < ay || ay > 1.7976931348623157e308)
+        return x;
+    t = ay;
+    while (t * 2 <= ax)
+        t *= 2;
+    while (t >= ay) {
+        if (ax >= t)
+            ax -= t;
+        t /= 2;
+    }
+    return x < 0 ? -ax : ax;
 }
 
 double modf(double x, double *ip)

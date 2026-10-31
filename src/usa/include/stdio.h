@@ -25,6 +25,8 @@ int snprintf(char *s, size_t n, const char *fmt, ...);
 int vprintf(const char *fmt, va_list ap);
 int vfprintf(FILE *f, const char *fmt, va_list ap);
 int vsprintf(char *s, const char *fmt, va_list ap);
+int vasprintf(char **out, const char *fmt, va_list ap);
+int asprintf(char **out, const char *fmt, ...);
 int vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
 int scanf(const char *fmt, ...);
 int fscanf(FILE *f, const char *fmt, ...);

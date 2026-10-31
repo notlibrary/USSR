@@ -713,6 +713,16 @@ p_unary(r): [
     ]
     if(_): {k = 1} [
         at(s): tk_s p_i
+        if(_): {s = "__builtin_va_ind"} [
+            # 1 when a variadic argument of this type is passed by address
+            add(p_i): p_i 1
+            p_expect(_): "("
+            p_typename(t):
+            p_expect(_): ")"
+            ty_isagg(v): t
+            nd_num(r): v ty_int
+            return(_): r
+        ]
         if(_): {s = "sizeof" || s = "_Alignof" || s = "__alignof__"} [
             add(p_i): p_i 1
             set(t): {0 - 1}
