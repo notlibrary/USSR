@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- Moscow (`src/moscow`), the amd64 kernel: a two-stage NASM boot loader
+  (`arch/amd64/boot.nasm`) enters long mode and starts the NASM USSR
+  runtime (`arch/amd64/ussr_rt.nasm`), a `.ru` bytecode VM on bare metal
+  with VGA, serial, keyboard and timer services (`k_*`). It runs the
+  kernel `moscow.ru`, which runs the shell `russia.ru`; `image.nasm`
+  makes the boot disk and `tools/qemu_test.py` drives the shell in QEMU.
 - Omsk (`src/omsk/omsk.su`), image thumbnails in pure USSR: PNG (every
   colour type and depth) and sequential JPEG in, a baseline JPEG fitted
   into a square box out. The RUND stack becomes the ROUND stack: Ryazan,
