@@ -85,11 +85,34 @@ FTP upload paths are treated as absolute paths from the FTP server root, so
 `ftp://host/var/www/html/USSR` uploads into `/var/www/html/USSR`, not a path
 relative to the FTP account's home directory.
 The target directory must already exist; subdirectories below it are
-created. If an existing directory is reported missing, the FTP server locks
-the login into its home directory (vsftpd `chroot_local_user=YES`), where `/`
-is that home and no client can reach `/var/www/html`: set the user's
-`local_root` to the repository directory and upload to `ftp://host/`, or
-lift the chroot for that user.
+created. After the index is uploaded, `upload` fetches it and one archive
+back through the public URL recorded by `pack`, and fails if the web server
+does not serve them (a 403, a 404, or an old cached copy).
+
+### Setting up the server
+
+A repository is an FTP directory that a web server publishes at the HTTPS
+URL given to `pack`. With vsftpd on Ubuntu and the web root `/var/www/html`:
+
+1. **Reach the directory.** If the login starts in `/` (ural says so), vsftpd
+   locks it into its home (`chroot_local_user=YES`) and `/var/www/html` is out
+   of reach. Either list the user in `chroot_list_file` with
+   `chroot_list_enable=YES` (users listed there are not locked in), or give it
+   `local_root=/var/www/html` through `user_config_dir` and upload to
+   `ftp://host/USSR`.
+2. **Let the login enter and write it.** The directory needs the x bit as
+   well as rw: `chown LOGIN /var/www/html/USSR` and `chmod 755` it, so
+   `ls -ld` shows `drwxr-xr-x`. A directory without x (`drw-r--r--`) cannot
+   be entered even by its owner.
+3. **Allow uploads and readable files** in `/etc/vsftpd.conf`:
+   `write_enable=YES` and `local_umask=022`. Ubuntu's default umask 077 makes
+   uploaded files readable only by the login, and the web server answers 403.
+   Restart vsftpd after changing it, and `chmod 644` files uploaded before.
+4. **Pack with the public URL**, not the FTP address:
+   `ural pack DIR https://example.org/USSR`, then
+   `ural upload DIR ftp://host/var/www/html/USSR LOGIN PASSWORD`. When the
+   site sits behind an HTTP-only proxy such as Cloudflare, upload to the
+   server's IP address; the public URL stays the domain.
 
 ## USSR source wrapper
 

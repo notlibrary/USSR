@@ -820,8 +820,9 @@ static int ftp_check_base(CURL *curl, const char *base, const char *login,
                  "chroot for this user; otherwise create it first", path);
     } else if (rc == CURLE_REMOTE_ACCESS_DENIED || rc == CURLE_FTP_COULDNT_RETR_FILE) {
         snprintf(err, cap, "remote directory %s cannot be opened by this FTP login "
-                 "(it starts in %s): create it, or let the login enter it "
-                 "(owner or group with rwx, e.g. chown LOGIN %s)",
+                 "(it starts in %s): it is missing, or the login may not enter it. "
+                 "Entering needs the x bit, not only rw: on the server, "
+                 "chown LOGIN %s and chmod 755 it (ls -ld shows drwxr-xr-x)",
                  path, entry != NULL ? entry : "an unknown directory", path);
     } else if (rc != CURLE_OK) {
         snprintf(err, cap, "cannot open FTP directory %s: %s", url,
@@ -922,12 +923,94 @@ static int scan_upload_directory(CURL *curl, const char *directory,
 #endif
 }
 
+static int copy_column(sqlite3_stmt *stmt, int column, char **out);
+
+/* Fetch one uploaded file back through its public HTTPS URL. */
+static int verify_public_file(const char *root, const char *url, long long want_size)
+{
+    char err[512] = {0};
+    char *tmp = join_path(root, ".ural-verify.tmp");
+    struct stat st;
+    int result = 0;
+    if (tmp == NULL)
+        return -1;
+    if (curl_download(url, tmp, err, sizeof err) != 0) {
+        fprintf(stderr, "ural: uploaded, but %s is not served: %s\n", url, err);
+        if (strstr(err, "HTTP 403") != NULL)
+            fputs("ural: the web server may not read the uploaded files: let the FTP "
+                  "server create them world-readable (vsftpd local_umask=022) or "
+                  "chmod 644 them, and give their directories 755\n", stderr);
+        else if (strstr(err, "HTTP 404") != NULL)
+            fputs("ural: the FTP directory is not the one the web server serves at "
+                  "this URL: check the FTP path against the public URL given to pack\n",
+                  stderr);
+        result = -1;
+    } else if (want_size >= 0 && stat(tmp, &st) == 0 && (long long)st.st_size != want_size) {
+        fprintf(stderr, "ural: %s is served but differs from the uploaded file "
+                "(%lld bytes, not %lld): a cache such as Cloudflare may hold an old copy\n",
+                url, (long long)st.st_size, want_size);
+        result = -1;
+    }
+    URAL_UNLINK(tmp);
+    free(tmp);
+    return result;
+}
+
+/* After an upload, read the index and one archive back as clients will. */
+static int verify_upload(const char *root, const char *index_path)
+{
+    sqlite3 *db = NULL;
+    sqlite3_stmt *stmt = NULL;
+    char *public_url = NULL, *archive_url = NULL, *index_url;
+    struct stat st;
+    int result = 0;
+    if (sqlite3_open_v2(index_path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        sqlite3_close(db);
+        return 0;
+    }
+    if (sqlite3_prepare_v2(db, "SELECT public_url FROM repository_config LIMIT 1",
+                           -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW)
+        copy_column(stmt, 0, &public_url);
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT archive_url FROM repository_index LIMIT 1",
+                           -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW)
+        copy_column(stmt, 0, &archive_url);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    if (public_url == NULL) {
+        fputs("ural: the index records no public URL; skipping the HTTPS check\n", stderr);
+        free(archive_url);
+        return 0;
+    }
+    index_url = url_join(public_url, "ussr.boxes");
+    if (index_url == NULL) {
+        result = -1;
+    } else {
+        printf("checking %s\n", index_url);
+        result = verify_public_file(root, index_url,
+                                    stat(index_path, &st) == 0 ? (long long)st.st_size : -1);
+    }
+    if (result == 0 && archive_url != NULL) {
+        printf("checking %s\n", archive_url);
+        result = verify_public_file(root, archive_url, -1);
+    }
+    if (result == 0)
+        printf("the repository is served at %s\n", public_url);
+    free(index_url);
+    free(public_url);
+    free(archive_url);
+    return result;
+}
+
 static int command_upload(const char *root, const char *url,
                           const char *login, const char *password)
 {
     CURL *curl;
     char err[512] = {0};
-    int result = 0;
+    int result = 0, served = 1;
     if (!valid_base_url(url, "ftp://")) {
         fprintf(stderr, "ural: upload destination must be an FTP base URL without embedded credentials, query, or fragment\n");
         return 1;
@@ -953,15 +1036,19 @@ static int command_upload(const char *root, const char *url,
         struct stat st;
         if (index == NULL)
             result = -1;
-        else if (stat(index, &st) == 0)
+        else if (stat(index, &st) == 0) {
             result = ftp_upload_file(curl, index, url, login, password,
                                      "ussr.boxes", err, sizeof err);
-        else
+            if (result == 0 && verify_upload(root, index) != 0)
+                served = 0;
+        } else
             fprintf(stderr, "ural: no ussr.boxes in %s; run ural pack first\n", root);
         free(index);
     }
     if (result != 0)
         fprintf(stderr, "ural: %s\n", err[0] ? err : "upload failed");
+    else if (!served)
+        result = -1;
     curl_easy_cleanup(curl);
     curl_global_cleanup();
     return result == 0 ? 0 : 1;
