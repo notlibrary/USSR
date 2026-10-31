@@ -135,7 +135,7 @@ static const help_entry_t g_help[] = {
     { "alias", "shell", "alias(_): \"ll\" \"ls\" \"-l\"",
       "ll(_): x then runs ls(_): \"-l\" x; \"\" removes it, one argument "
       "gives its words, none lists them. Expanded in lines typed at "
-      "the REPL only, never in scripts; put them in moscow.su" },
+      "the REPL only, never in scripts; put them in kiev.su" },
     { "keybind", "shell", "keybind(_): \"Alt+F1\" \"help(_):\"",
       "bind a REPL key to a line; \"\" unbinds; one argument reads a "
       "binding, none lists them. Keys: Ctrl/Alt(Mod)/Shift + a..z, 0..9, "
@@ -237,7 +237,7 @@ static void help_keys(void)
            "  keybind(_): \"Alt+F1\" \"\"        remove it\n"
            "  keybind(_):                     list them\n"
            "Mod means Alt: terminals never see the Super/Windows key.\n"
-           "Put bindings in moscow.su to have them in every session.\n");
+           "Put bindings in kiev.su to have them in every session.\n");
 }
 
 static void help_ai(void)

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Shell conveniences: startup files (moscow.su in the home folder and the
-# current folder, USSR_MOSCOW) and command aliases.
+# Shell conveniences: startup files (kiev.su in the home folder and the
+# current folder, USSR_KIEV) and command aliases.
 # Run from the repository root:  sh tests/shell/run_shell_tests.sh [ussr]
 USSR=${1:-./ussr}
 [ -x "$USSR" ] || USSR=./ussr.exe
@@ -39,52 +39,52 @@ $got"
 home=$tmp/home
 work=$tmp/work
 mkdir -p "$home" "$work"
-unset USSR_MOSCOW
+unset USSR_KIEV
 export HOME="$home"
 
 # --- startup files --------------------------------------------------------
 
-printf 'print(_): "home moscow"\n' >"$home/moscow.su"
-printf 'print(_): "work moscow"\n' >"$work/moscow.su"
+printf 'print(_): "home kiev"\n' >"$home/kiev.su"
+printf 'print(_): "work kiev"\n' >"$work/kiev.su"
 printf 'print(_): "script"\n' >"$work/s.su"
 
 out=$(cd "$work" && "$USSR" s.su </dev/null 2>&1)
-expect "home moscow.su runs, then the current folder's" \
-"home moscow
-work moscow
+expect "home kiev.su runs, then the current folder's" \
+"home kiev
+work kiev
 script" "$out"
 
 out=$(cd "$home" && "$USSR" "$work/s.su" </dev/null 2>&1)
 expect "the home file runs once when it is the current folder's" \
-"home moscow
+"home kiev
 script" "$out"
 
-rm "$work/moscow.su"
+rm "$work/kiev.su"
 out=$(cd "$work" && "$USSR" s.su </dev/null 2>&1)
-expect "home moscow.su alone" \
-"home moscow
+expect "home kiev.su alone" \
+"home kiev
 script" "$out"
 
 printf 'print(_): "chosen"\n' >"$tmp/chosen.su"
-printf 'print(_): "work moscow"\n' >"$work/moscow.su"
-out=$(cd "$work" && USSR_MOSCOW="$tmp/chosen.su" "$USSR" s.su </dev/null 2>&1)
-expect "USSR_MOSCOW names the only startup file" \
+printf 'print(_): "work kiev"\n' >"$work/kiev.su"
+out=$(cd "$work" && USSR_KIEV="$tmp/chosen.su" "$USSR" s.su </dev/null 2>&1)
+expect "USSR_KIEV names the only startup file" \
 "chosen
 script" "$out"
 
-out=$(cd "$work" && USSR_MOSCOW= "$USSR" s.su </dev/null 2>&1)
-expect "empty USSR_MOSCOW loads none" "script" "$out"
+out=$(cd "$work" && USSR_KIEV= "$USSR" s.su </dev/null 2>&1)
+expect "empty USSR_KIEV loads none" "script" "$out"
 
-out=$(cd "$work" && USSR_MOSCOW="$tmp/missing.su" "$USSR" s.su </dev/null 2>&1)
+out=$(cd "$work" && USSR_KIEV="$tmp/missing.su" "$USSR" s.su </dev/null 2>&1)
 status=$?
 # (MSYS may rewrite the /tmp path ussr prints, so match the file name)
 case "$out" in
-    "USSR: USSR_MOSCOW: cannot read "*missing.su) ok "unreadable USSR_MOSCOW is an error" ;;
-    *) bad "unreadable USSR_MOSCOW is an error" "$out" ;;
+    "USSR: USSR_KIEV: cannot read "*missing.su) ok "unreadable USSR_KIEV is an error" ;;
+    *) bad "unreadable USSR_KIEV is an error" "$out" ;;
 esac
-expect "unreadable USSR_MOSCOW exits 1" 1 "$status"
+expect "unreadable USSR_KIEV exits 1" 1 "$status"
 
-printf 'fail(_): "bad home"\n' >"$home/moscow.su"
+printf 'fail(_): "bad home"\n' >"$home/kiev.su"
 out=$(cd "$work" && "$USSR" s.su </dev/null 2>&1)
 status=$?
 case "$out" in
@@ -96,12 +96,12 @@ expect "a failing home file sets the exit status" 1 "$status"
 
 case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*)
-        printf 'print(_): "profile moscow"\n' >"$home/moscow.su"
+        printf 'print(_): "profile kiev"\n' >"$home/kiev.su"
         out=$(cd "$work" && env -u HOME USERPROFILE="$home" "$USSR" s.su \
               </dev/null 2>&1)
         expect "Windows: USERPROFILE when HOME is unset" \
-"profile moscow
-work moscow
+"profile kiev
+work kiev
 script" "$out"
         # one folder, two spellings: HOME as an 8.3 short path (as CI
         # runners have it, C:\Users\RUNNER~1) and the current folder long
@@ -110,13 +110,13 @@ script" "$out"
             printf 'print(_): "script"\n' >"$home/s.su"
             out=$(cd "$home" && HOME="$short" "$USSR" s.su </dev/null 2>&1)
             expect "Windows: a short-path HOME is the same folder" \
-"profile moscow
+"profile kiev
 script" "$out"
             rm -f "$home/s.su"
         fi
         ;;
 esac
-rm -f "$home/moscow.su" "$work/moscow.su"
+rm -f "$home/kiev.su" "$work/kiev.su"
 
 # --- history file -----------------------------------------------------------
 
@@ -136,7 +136,7 @@ fi
 # --- aliases ----------------------------------------------------------------
 
 # As in an interactive shell, aliases apply to typed REPL lines only; they
-# usually come from moscow.su. Output follows the prompt on the same line,
+# usually come from kiev.su. Output follows the prompt on the same line,
 # so keep just the output.
 repl() {
     (cd "$work" && printf '%s\n' "$@" | "$USSR" 2>&1) | tr -d '\r' |
@@ -144,7 +144,7 @@ repl() {
         sed '/^$/d'
 }
 
-cat >"$home/moscow.su" <<'EOF'
+cat >"$home/kiev.su" <<'EOF'
 alias(_): "say" "print"
 alias(_): "shout" "say"
 alias(_): "hello" "echo" "hello"
@@ -155,7 +155,7 @@ out=$(repl \
     'shout(_): "alias chain"' \
     'hello(_): "world"' \
     'twice(r): x [ mul(r): x 2 ] dbl(v): 21 print(_): v')
-expect "REPL with moscow.su aliases: builtin, chain, program, function" \
+expect "REPL with kiev.su aliases: builtin, chain, program, function" \
 "builtin target
 alias chain
 hello world
@@ -176,7 +176,7 @@ case "$out" in
     *"in eval"*) bad "eval inside a REPL line does not expand" "$out" ;;
     *) ok "eval inside a REPL line does not expand" ;;
 esac
-rm "$home/moscow.su"
+rm "$home/kiev.su"
 
 out=$(repl \
     'alias(_): "ll" "echo" "[ll]"' \

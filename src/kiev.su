@@ -1,7 +1,7 @@
 # USSR startup configuration.
-# ussr runs moscow.su from your home folder, then the one in the current
+# ussr runs kiev.su from your home folder, then the one in the current
 # folder (unless it is the same file), before a script or the REPL.
-# USSR_MOSCOW names the only one to run instead; empty runs none.
+# USSR_KIEV names the only one to run instead; empty runs none.
 # Put persistent shell setup commands here. Examples:
 # set(home): "/home/user"
 # cd(_): home

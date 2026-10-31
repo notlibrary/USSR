@@ -9,6 +9,9 @@
   Omsk, Ukraine, Novgorod, Dubna.
 
 ### Changed
+- The startup file `moscow.su` is now `kiev.su`, and `USSR_MOSCOW` is
+  `USSR_KIEV`: Moscow is the name of the amd64 kernel. Rename a personal
+  `~/moscow.su` to `~/kiev.su`; the old names are no longer read.
 - Siberia is split in two: `src/siberia/siberia.su` is the spreadsheet
   and the document editor (`siberia.su --pad` before) is Novosibirsk,
   `src/novosibirsk/novosibirsk.su`, which includes Siberia for the shared

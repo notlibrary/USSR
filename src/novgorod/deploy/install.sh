@@ -60,15 +60,15 @@ fi
 
 say "build"
 make -f ussr-ubuntu.mk -j"$(nproc)" RYAZAN_REQUIRE_TLS=1 ussr >/dev/null
-USSR_MOSCOW= ./ussr -e 'tls_backend(b): print(_): b'
-USSR_MOSCOW= ./ussr tests/dubna_test.su | grep -c '^PASS' | sed 's/$/ dubna checks passed/'
-if USSR_MOSCOW= ./ussr tests/dubna_test.su | grep -q '^FAIL'; then
-    USSR_MOSCOW= ./ussr tests/dubna_test.su | grep '^FAIL'
+USSR_KIEV= ./ussr -e 'tls_backend(b): print(_): b'
+USSR_KIEV= ./ussr tests/dubna_test.su | grep -c '^PASS' | sed 's/$/ dubna checks passed/'
+if USSR_KIEV= ./ussr tests/dubna_test.su | grep -q '^FAIL'; then
+    USSR_KIEV= ./ussr tests/dubna_test.su | grep '^FAIL'
     fail "Dubna's tests failed on this build"
 fi
-USSR_MOSCOW= ./ussr tests/novgorod_test.su | grep -c '^PASS' | sed 's/$/ novgorod checks passed/'
-if USSR_MOSCOW= ./ussr tests/novgorod_test.su | grep -q '^FAIL'; then
-    USSR_MOSCOW= ./ussr tests/novgorod_test.su | grep '^FAIL'
+USSR_KIEV= ./ussr tests/novgorod_test.su | grep -c '^PASS' | sed 's/$/ novgorod checks passed/'
+if USSR_KIEV= ./ussr tests/novgorod_test.su | grep -q '^FAIL'; then
+    USSR_KIEV= ./ussr tests/novgorod_test.su | grep '^FAIL'
     fail "Novgorod's tests failed on this build"
 fi
 
@@ -116,7 +116,7 @@ if [ "${NO_SYSTEMD:-}" != 1 ]; then
 else
     say "starting Novgorod in the background (NO_SYSTEMD=1)"
     set -a; . "$ENV_FILE"; set +a
-    USSR_MOSCOW= nohup $COMMAND "$CONNINFO" > "$DATA/novgorod.log" 2>&1 &
+    USSR_KIEV= nohup $COMMAND "$CONNINFO" > "$DATA/novgorod.log" 2>&1 &
     sleep 2
 fi
 curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" || fail "Novgorod does not answer on 127.0.0.1:$PORT"

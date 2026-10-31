@@ -60,7 +60,7 @@ and other statistical parameters you can imagine
 
 The project uses real existing geographical toponyms or cultural significant objects to name it's scripts 
 e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and framework tver.su - file manager russia.su - bootstrapped interpreter petersburg.su - gui library 
-moscow.su - main USSR configuration file etc
+kiev.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
 
 Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code now: the second wave is finished):
@@ -159,7 +159,7 @@ ussr hello.ru
 With usa the second wave is done and USSR is complete. Its programs:
 
 - ussr/ussr.exe - the USSR programming language and shell
-- moscow.su - the USSR startup configuration file
+- kiev.su - the USSR startup configuration file
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
 - russia.su - bootstrapped USSR interpreter, written in USSR
 - ural.su - USSR package manager

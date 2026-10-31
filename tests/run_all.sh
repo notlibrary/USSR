@@ -46,8 +46,8 @@ RUSSIA=tests/russia/ussr-russia
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-# Your own ~/moscow.su (aliases, key bindings) must not change results:
-# ussr reads moscow.su from HOME, so point HOME at an empty folder.
+# Your own ~/kiev.su (aliases, key bindings) must not change results:
+# ussr reads kiev.su from HOME, so point HOME at an empty folder.
 mkdir "$tmp/home"
 HOME=$tmp/home
 export HOME

@@ -3100,15 +3100,15 @@ static int run_startup_file(const char *path)
     return run_file(path, 1, startup_argv);
 }
 
-/* Startup files: USSR_MOSCOW names the only one to load ("" loads none);
- * otherwise moscow.su in the home folder (HOME, else USERPROFILE on
- * Windows) runs first, for settings wanted everywhere, then moscow.su in
+/* Startup files: USSR_KIEV names the only one to load ("" loads none);
+ * otherwise kiev.su in the home folder (HOME, else USERPROFILE on
+ * Windows) runs first, for settings wanted everywhere, then kiev.su in
  * the current folder, for the project at hand, unless it is the same
  * file. Each is optional. */
 static int run_startup_files(void)
 {
-    char *chosen = ussr_env_get("USSR_MOSCOW");
-    char *home_moscow = NULL;
+    char *chosen = ussr_env_get("USSR_KIEV");
+    char *home_kiev = NULL;
     int status = EXIT_SUCCESS;
 
     if (chosen != NULL)
@@ -3119,7 +3119,7 @@ static int run_startup_files(void)
                 status = run_startup_file(chosen);
             else
             {
-                fprintf(stderr, "USSR: USSR_MOSCOW: cannot read %s\n", chosen);
+                fprintf(stderr, "USSR: USSR_KIEV: cannot read %s\n", chosen);
                 status = EXIT_FAILURE;
             }
         }
@@ -3127,19 +3127,19 @@ static int run_startup_files(void)
         return status;
     }
 
-    home_moscow = ussr_home_file("moscow.su");
-    if (home_moscow != NULL && !file_readable(home_moscow))
+    home_kiev = ussr_home_file("kiev.su");
+    if (home_kiev != NULL && !file_readable(home_kiev))
     {
-        free(home_moscow);
-        home_moscow = NULL;
+        free(home_kiev);
+        home_kiev = NULL;
     }
 
-    if (home_moscow != NULL)
-        status = run_startup_file(home_moscow);
-    if (status == EXIT_SUCCESS && file_readable("moscow.su") &&
-        (home_moscow == NULL || !ussr_same_file(home_moscow, "moscow.su")))
-        status = run_startup_file("moscow.su");
-    free(home_moscow);
+    if (home_kiev != NULL)
+        status = run_startup_file(home_kiev);
+    if (status == EXIT_SUCCESS && file_readable("kiev.su") &&
+        (home_kiev == NULL || !ussr_same_file(home_kiev, "kiev.su")))
+        status = run_startup_file("kiev.su");
+    free(home_kiev);
     return status;
 }
 
@@ -3436,7 +3436,7 @@ int main(int argc, char **argv)
 
     if (compile_only)
     {
-        /* Compile only: no moscow.su, nothing is executed. */
+        /* Compile only: no kiev.su, nothing is executed. */
         if (eval_source != NULL || optind >= argc || argc - optind > 2)
         {
             fprintf(stderr, "Usage: %s -c script.su [program.ru]\n",
@@ -3453,7 +3453,7 @@ int main(int argc, char **argv)
     ussr_init();
     ussr_sched_init();
 
-    /* moscow.su is the USSR shell startup file, analogous to a shell rc.
+    /* kiev.su is the USSR shell startup file, analogous to a shell rc.
      * A failing (or nonzero) startup file stops ussr with its status. */
     {
         int status = run_startup_files();

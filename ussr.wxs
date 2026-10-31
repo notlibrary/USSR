@@ -21,7 +21,7 @@
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="ApplicationFiles" Guid="5990BD57-7F87-4DED-9246-3A98E31DFC76" Bitness="always64">
         <File Id="UssrEXE" Source="ussr.exe" KeyPath="yes" />
-        <File Id="MoscowSU" Source="moscow.su" />
+        <File Id="KievSU" Source="kiev.su" />
         <File Id="UserManualMD" Source="docs\USSR_USER_MANUAL.md" />
       </Component>
       <Component Id="GLFWRuntime" Guid="1C101AAE-0570-4E8B-A1C8-7949F67079B2" Bitness="always64">
