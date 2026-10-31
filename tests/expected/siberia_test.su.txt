@@ -94,35 +94,6 @@ PASS csv no cr
 PASS csv formula
 PASS csv newline in quotes
 PASS csv semicolons
-PASS type and enter
-PASS backspace joins
-PASS type inside
-PASS end delete left backspace
-PASS delete joins
-PASS set text
-PASS right by characters
-PASS utf8 backspace
-PASS wrap words
-PASS wrap long word
-PASS wrap empty
-PASS down in a paragraph
-PASS down to the next paragraph
-PASS up keeps the column
-PASS home of a wrapped line
-PASS end of a wrapped line
-PASS fodt font
-PASS fodt spaces
-PASS fodt empty paragraph
-PASS fodt load
-PASS fodt text
-PASS fodt family
-PASS fodt size
-PASS fodt bold
-PASS lo document
-PASS lo family
-PASS lo size
-PASS lo italic
-PASS txt load
 
 --- stderr ---
 

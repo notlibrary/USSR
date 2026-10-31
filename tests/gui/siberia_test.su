@@ -1,10 +1,11 @@
-# Siberia GUI test. Needs a GLFW-enabled ussr and a display; the windows
-# are never shown. Run from the repository root:
+# Siberia and Novosibirsk GUI test. Needs a GLFW-enabled ussr and a
+# display; the windows are never shown. Run from the repository root:
 #     ussr tests/gui/siberia_test.su
-# Types into the sheet and the pad, uses the toolbar, the font picker and
-# the save and open dialogs, all through Petersburg's input path. Prints
-# PASS or FAIL per check.
-$include "../../src/siberia/siberia.su"
+# Types into the sheet (Siberia) and the pad (Novosibirsk, which includes
+# Siberia), uses the toolbar, the font picker and the save and open
+# dialogs, all through Petersburg's input path. Prints PASS or FAIL per
+# check.
+$include "../../src/novosibirsk/novosibirsk.su"
 
 check(r): label got want [
     if(_): {got = want} [

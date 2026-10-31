@@ -72,7 +72,8 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - kremlin.su - GUI desktop manager, a full-screen desktop on ~/kremlin (working: `src/kremlin`)
 - novgorod.su - anonymous HTTPS image forum for programmers with lightweight markup (working: `src/novgorod`)
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
-- siberia.su - office package, spreadsheet tables and document editor
+- siberia.su - GUI spreadsheet: formulas, flat ODF (.fods) and CSV (working: `src/siberia`)
+- novosibirsk.su - GUI document editor with system fonts, split from Siberia: flat ODF text (.fodt) and .txt (working: `src/novosibirsk`)
 - stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS and FFS2 (working: `src/stalin`)
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
@@ -173,7 +174,8 @@ With usa the second wave is done and USSR is complete. Its programs:
 - novgorod.su - anonymous HTTPS image forum (ROUND stack)
 - dubna.su - PostgreSQL client (ROUND stack)
 - omsk.su - image thumbnails: PNG and baseline JPEG in pure USSR (ROUND stack)
-- siberia.su - GUI office package: spreadsheet and document editor
+- siberia.su - GUI spreadsheet
+- novosibirsk.su - GUI document editor
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP

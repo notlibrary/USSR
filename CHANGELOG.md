@@ -9,6 +9,10 @@
   Omsk, Ukraine, Novgorod, Dubna.
 
 ### Changed
+- Siberia is split in two: `src/siberia/siberia.su` is the spreadsheet
+  and the document editor (`siberia.su --pad` before) is Novosibirsk,
+  `src/novosibirsk/novosibirsk.su`, which includes Siberia for the shared
+  parts. The pad's engine checks moved to `tests/novosibirsk_test.su`.
 - Novgorod makes its 200x200 thumbnails on the server with Omsk, into
   `thumbs/`, and takes the image size from the picture itself; the footer
   links the ROUND stack to the USSR repository.

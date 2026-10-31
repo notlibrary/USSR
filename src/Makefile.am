@@ -155,6 +155,9 @@ EXTRA_DIST = \
 	siberia/README.md \
 	siberia/box.uno \
 	siberia/siberia.su \
+	novosibirsk/README.md \
+	novosibirsk/box.uno \
+	novosibirsk/novosibirsk.su \
 	sochi/CHANGELOG.md \
 	sochi/README.md \
 	sochi/box.uno \
