@@ -4,9 +4,10 @@
     python src/moscow/tools/qemu_test.py [--qemu PATH] [--transcript FILE]
 
 QEMU runs headless with the first serial port on a local TCP socket.
-The script waits for each "russia> " prompt, types a command, and checks
-what the command printed. The expectations match what the shell prints
-on the hosted ussr (the same russia.su with the k_* services stubbed).
+The script waits for each "russia> " prompt (the PS1 Moscow sets), types
+a line of USSR into src/russia/russia.su, the interpreter running as the
+shell, and checks what it printed: plain USSR as on the hosted ussr, and
+the kernel's own commands (uptime, ls, mem, ...).
 Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
@@ -22,41 +23,55 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")
 IMAGE = os.path.join(ROOT, "build", "moscow", "moscow.img")
 PROMPT = b"russia> "
 
-# command, then a regular expression the whole output must match
+# command, then a regular expression the whole output must match. The
+# shell is src/russia/russia.su, the USSR interpreter written in USSR;
+# the answers are the ones it gives on the hosted ussr, except where the
+# Moscow runtime says more (why an entry failed) or knows other files.
+FAILED = r"USSR scheduler: process \d+ \(init\) failed\nUSSR VM: execution failed \(status -1\)"
 CHECKS = [
-    ("echo   hello   world ", r"hello world"),
-    ("set NAME Ivan", r""),
-    ("echo hi $NAME and $SHELL$OS!", r"hi Ivan and russiamoscow!"),
-    ("set NAME Petr", r""),
-    ("env", r"SHELL=russia\nOS=moscow\nNAME=Petr"),
-    ("calc 1 + 2 * 3", r"7"),
-    ("calc (1+2)*3 - -4", r"13"),
-    ("calc 7 / 2", r"3"),
-    ("calc -7 / 2", r"-3"),
-    ("calc 7 % 3", r"1"),
-    ("calc 1 / 0", r"calc: division by zero"),
-    ("calc 2 +", r"calc: unexpected end"),
-    ("calc 2 3", r"calc: unexpected 3"),
-    ("calc 123456789 * 1000", r"123456789000"),
-    ("mem", r"heap \d+ KiB, free \d+ KiB"),
-    ("uptime", r"up \d+ s"),
-    ("cpu", r"\S.*"),
-    ("ls", r"ussr_rt\.bin\nmoscow\.ru\nrussia\.ru"),
-    ("uname", r"USSR Moscow amd64"),
-    ("frob", r"frob: command not found \(try help\)"),
-    ("run nothing.ru", r"USSR runtime: no file 'nothing\.ru' in the boot image\nnothing\.ru exited with 127"),
-    ("run moscow.ru",
-     r"USSR Moscow kernel for amd64\n(?:.*\n)*moscow: starting russia\.ru\n"
-     r"Russia shell\. Type help for the commands\."),
+    ('print(_): "hello, Moscow"', r"hello, Moscow"),
+    ("foo(r): x [ set(r): {x * x} ]", r""),
+    ("foo(z): 7", r""),
+    ("print(_): z", r"49"),
+    ("set(i): 0", r""),
+    ("while(_): {i < 3} [ print(_): i set(i): {i + 1} ]", r"0\n1\n2"),
+    ("set(t): 0", r""),
+    ("set(k): 1", r""),
+    ("while(_): {k <= 100} [ set(t): {t + k} set(k): {k + 1} ]", r""),
+    ('if(_): {t = 5050} [ print(_): "sum ok" ] else(_): [ print(_): "bad" ]', r"sum ok"),
+    ('concat(s): "Mos" "cow"', r""),
+    ("print(_): s", r"Moscow"),
+    ('struct(P): "x:number" "y:string"', r""),
+    ('new(p): "P" 3 "q"', r""),
+    ("print(_): p", r"P\{x=3,y=`q`\}"),
+    ('getf(v): p "y"', r""),
+    ("print(_): v", r"q"),
+    ('vec(w): ""', r""),
+    ("push(_): w 1", r""),
+    ('push(_): w "two"', r""),
+    ("print(_): w", r"\[1,`two`\]"),
+    ("encode(e): w", r""),
+    ("print(_): e", r"\[1,`two`\]"),
+    ('decode(d): "[1,`a`,2.5]"', r""),
+    ("print(_): d", r"\[1,`a`,2\.5\]"),
+    ("print(_): {7 / 2}", r"3\.5"),
+    ("print(_): {1 / 0}", r"USSR VM: division by zero \(ip \d+\)\n" + FAILED),
+    ("nosuch(_): 1", r"USSR: unknown command 'nosuch' \(not in the Moscow runtime\)\n" + FAILED),
+    # the kernel's commands, through russia.su's host calls
+    ("uptime(_):", r"up \d+ s"),
+    ("ls(_):", r"ussr_rt\.bin\nmoscow\.ru\nrussia\.ru"),
+    ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),
+    ("print(_): m", r"\[\d+,\d+\]"),
+    ("cpu(_):", r"\S.*"),
+    ("uname(_):", r"USSR Moscow amd64"),
+    ('file_exists(f): "moscow.ru"', r""),
+    ("print(_): f", r"true"),
+    ('getenv(g): "USER"', r""),
+    ("print(_): g", r"comrade"),
+    ('run(st): "nothing.ru"', r"USSR runtime: no file 'nothing\.ru' in the boot image"),
+    ("print(_): st", r"127"),
 ]
-# nested: run moscow.ru starts a second kernel and shell; its exit halts
-# the machine
-NESTED = [
-    ("echo inside", r"inside"),
-    ("help", r"Russia, the Moscow shell\. Commands:\n(?:  .*\n)*  reboot / halt        reset or stop the machine"),
-    ("history", r"  1  echo inside\n  2  help\n  3  history"),
-    ("exit", r"bye\nmoscow: the shell has exited; system halted"),
-]
+# setenv changes the prompt; Ctrl-D ends the shell and the kernel halts
 
 
 def find_qemu(given):
@@ -121,7 +136,7 @@ def main():
 
     qemu = subprocess.Popen(
         [find_qemu(args.qemu), "-drive", "format=raw,file=" + IMAGE,
-         "-display", "none", "-no-reboot", "-m", "128",
+         "-display", "none", "-no-reboot", "-m", "2048",
          "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
          "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % args.port],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -153,17 +168,21 @@ def main():
         boot = clean(serial.output_to_prompt(timeout=60))
         check("boot reaches the russia prompt",
               "USSR runtime: NASM VM for amd64, running moscow.ru" in boot
-              and "Russia shell. Type help for the commands." in boot, boot)
+              and "USSR Unified Shell Script REPL" in boot, boot)
         check("kernel lists the image",
               "image:   ussr_rt.bin moscow.ru russia.ru" in boot, boot)
-        for line, want in CHECKS + NESTED:
+        for line, want in CHECKS:
             serial.command(line)
-            if line == "exit":
-                got = clean(serial.read_until(b"system halted", timeout=20))
-            else:
-                got = clean(serial.output_to_prompt())
+            got = clean(serial.output_to_prompt())
             check(repr(line), re.fullmatch(want, got) is not None,
                   "  got: %r\n  want: %s" % (got, want))
+        serial.command('setenv(_): "PS1" "moscow$ "')
+        got = clean(serial.read_until(b"moscow$ ")[:-len(b"moscow$ ")])
+        check("setenv PS1 changes the prompt", got == "", repr(got))
+        serial.sock.sendall(bytes([4]))
+        got = clean(serial.read_until(b"system halted", timeout=20))
+        check("Ctrl-D ends the shell, the kernel halts",
+              got.endswith("moscow: the shell has exited; system halted"), repr(got))
         # the nested kernel halts the machine when its shell exits, as
         # the outer one would
         try:

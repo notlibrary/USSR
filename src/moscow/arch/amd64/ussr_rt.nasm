@@ -35,6 +35,7 @@ T_REAL          equ 2
 T_STR           equ 3
 T_BOOL          equ 4
 T_VEC           equ 5
+T_STRUCT        equ 6
 T_UNSET         equ 0xff            ; a hash entry never stored
 
 OP_ADD          equ 0x10
@@ -59,9 +60,11 @@ OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
 LSTACK_BYTES    equ 1024 * 1024     ; locals of every active call
-HCAP            equ 32768           ; intern hash slots (power of two)
-SYM_MAX         equ 16384           ; distinct names in a program
+HCAP            equ 131072           ; intern hash slots (power of two)
+SYM_MAX         equ 65536           ; distinct names in a program
 LINE_MAX        equ 1000
+CAPTURE_BUF     equ 0x30000         ; encode's text, eval's strings
+CAPTURE_MAX     equ 0x20000
 VGA             equ 0xb8000
 
 ; A value: 16 bytes.
@@ -90,7 +93,20 @@ struc PROG
 .globals:       resq 1              ; a value per symbol
 .hash:          resq 1              ; a value per symbol, T_UNSET if none
 .init:          resq 1              ; function index of init, or -1
+.siteret:       resq 1              ; u32 per instruction: an OOP's return
+                                    ; name symbol, or -1
 endstruc
+
+; A struct type (types live as long as the program that declared them).
+struc STYPE
+.next:          resq 1
+.name:          resq 1              ; string
+.nfields:       resq 1
+.fields:        resq 1              ; strings, "name" only
+endstruc
+; A struct value: its type, then a value per field.
+SOBJ_TYPE       equ 0
+SOBJ_FIELDS     equ 16
 
 struc FUNC
 .name:          resd 1
@@ -182,8 +198,10 @@ start:
 
         call serial_init
         call vga_clear
+        call gdt_init
         call idt_init
         call heap_init
+        call env_init
         sti
 
         PUTS msg_start
@@ -195,6 +213,26 @@ start:
         call print_int
         PUTS msg_halted
         jmp sys_halt
+
+
+; The environment a session starts with.
+env_init:
+        mov rsi, env_ps1
+        mov rdi, val_ps1
+        call env_set_z
+        mov rsi, env_user
+        mov rdi, val_user
+        call env_set_z
+        mov rsi, env_host
+        mov rdi, val_host
+        call env_set_z
+        mov rsi, env_home
+        mov rdi, s_root
+        call env_set_z
+        mov rsi, env_os
+        mov rdi, val_os
+        call env_set_z
+        ret
 
 ; Stops the machine. QEMU leaves with exit code 1 when started with
 ; -device isa-debug-exit,iobase=0xf4,iosize=4; otherwise ACPI power off
@@ -223,48 +261,149 @@ sys_reboot:
         int3
         jmp sys_halt
 
-; The heap: from the first 2 MiB boundary after the loaded files to the
-; end of the RAM region holding it, as the BIOS map says, at most to the
-; end of the identity map.
+; The runtime's own GDT (the boot loader's is in memory it no longer
+; owns): a null descriptor, 64-bit code at 0x08, data at 0x10.
+gdt_init:
+        lgdt [rt_gdtr]
+        mov ax, 0x10
+        mov ds, ax
+        mov es, ax
+        mov ss, ax
+        xor eax, eax
+        mov fs, ax
+        mov gs, ax
+        pop rax                         ; reload CS with a far return
+        push qword 0x08
+        push rax
+        retfq
+
+; The heap: the largest usable RAM region of the BIOS map above the
+; loaded files, from its first 2 MiB boundary after them. When RAM goes
+; past the boot loader's 4 GiB identity map, the map is first extended
+; with 2 MiB pages (up to 64 GiB); those tables sit right after the
+; files, in memory that is mapped already, and the heap starts after
+; them.
 heap_init:
         mov rsi, [boot_info]
-        mov rbx, [rsi + BI_FILES_END]
-        add rbx, 0x1fffff
-        and rbx, -0x200000
-        mov [heap_base], rbx
-        mov [heap_ptr], rbx
-        mov qword [heap_end], 0
+        mov r8, [rsi + BI_FILES_END]
+        ; the top of usable RAM
+        xor r10d, r10d
+        mov ecx, [rsi + BI_NE820]
+        lea rdi, [rsi + BI_E820]
+.top:
+        test ecx, ecx
+        jz .have_top
+        cmp dword [rdi + 16], 1
+        jne .top_next
+        mov rax, [rdi]
+        add rax, [rdi + 8]
+        cmp rax, r10
+        jbe .top_next
+        mov r10, rax
+.top_next:
+        add rdi, 24
+        dec ecx
+        jmp .top
+.have_top:
+        mov rax, 64 << 30
+        cmp r10, rax
+        jbe .top_ok
+        mov r10, rax
+.top_ok:
+        mov [ram_top], r10
+        mov rax, MAP_LIMIT
+        cmp r10, rax
+        jbe .mapped
+        ; a PDPT and one PD per GiB after the files: identity, 2 MiB pages
+        add r8, 0xfff
+        and r8, -0x1000
+        mov rcx, r10
+        add rcx, (1 << 30) - 1
+        shr rcx, 30                     ; GiBs
+        mov rdi, r8
+        lea rdx, [rcx + 1]
+        shl rdx, 9                      ; qwords of tables
+        push rcx
+        mov rcx, rdx
+        xor eax, eax
+        rep stosq
+        pop rcx
+        mov rdi, r8                     ; the PDPT
+        lea rdx, [r8 + 4096]            ; the first PD
+        xor r11d, r11d                  ; GiB
+.gib:
+        cmp r11, rcx
+        jae .tables_done
+        lea rax, [rdx + 3]
+        mov [rdi + r11 * 8], rax
+        mov rax, r11
+        shl rax, 30
+        or rax, 0x83
+        xor r9d, r9d
+.page:
+        mov [rdx + r9 * 8], rax
+        add rax, 0x200000
+        inc r9d
+        cmp r9d, 512
+        jb .page
+        add rdx, 4096
+        inc r11
+        jmp .gib
+.tables_done:
+        mov r8, rdx                     ; the heap goes after the tables
+        or rdi, 3
+        mov [PAGE_PML4], rdi
+        mov rax, cr3
+        mov cr3, rax
+.mapped:
+        add r8, 0x1fffff
+        and r8, -0x200000               ; nothing below this
+        xor r9d, r9d                    ; best start
+        xor r10d, r10d                  ; best end
+        mov rsi, [boot_info]
         mov ecx, [rsi + BI_NE820]
         lea rsi, [rsi + BI_E820]
 .next:
         test ecx, ecx
-        jz .done
+        jz .chosen
         cmp dword [rsi + 16], 1         ; usable RAM
         jne .skip
         mov rax, [rsi]
         mov rdx, rax
         add rdx, [rsi + 8]
-        cmp rax, rbx
-        ja .skip
-        cmp rdx, rbx
+        cmp rdx, [ram_top]
+        jbe .end_ok
+        mov rdx, [ram_top]
+.end_ok:
+        add rax, 0x1fffff
+        and rax, -0x200000
+        cmp rax, r8
+        jae .start_ok
+        mov rax, r8
+.start_ok:
+        cmp rdx, rax
         jbe .skip
-        mov [heap_end], rdx
+        mov r11, rdx
+        sub r11, rax
+        mov rdi, r10
+        sub rdi, r9
+        cmp r11, rdi
+        jbe .skip
+        mov r9, rax
+        mov r10, rdx
 .skip:
         add rsi, 24
         dec ecx
         jmp .next
-.done:
-        mov rax, [heap_end]
-        test rax, rax
+.chosen:
+        test r10, r10
         jnz .have
-        lea rax, [rbx + 0x1000000]      ; no map: assume 16 MiB more
+        mov r9, r8                      ; no map: assume 16 MiB
+        lea r10, [r8 + 0x1000000]
 .have:
-        mov rcx, MAP_LIMIT
-        cmp rax, rcx
-        jbe .ok
-        mov rax, rcx
-.ok:
-        mov [heap_end], rax
+        mov [heap_base], r9
+        mov [heap_ptr], r9
+        mov [heap_end], r10
         ret
 
 ; rdi = bytes -> rax: zeroed memory, 16-byte aligned. Keeps every other
@@ -446,8 +585,12 @@ serial_raw:
         ret
 
 ; dil -> both screens; "\n" is CR LF on the serial line. Keeps registers.
+; While capture_on is set the byte goes to the capture buffer instead
+; (encode builds UNO text with the printing code).
 con_putc:
         push rax
+        cmp qword [capture_on], 0
+        jne .capture
         mov eax, edi
         cmp al, 10
         jne .raw
@@ -458,6 +601,33 @@ con_putc:
         call serial_raw
         call vga_putc
         pop rax
+        ret
+.capture:
+        mov rax, [capture_len]
+        cmp rax, CAPTURE_MAX
+        jae .full
+        mov [CAPTURE_BUF + rax], dil
+        inc qword [capture_len]
+.full:
+        pop rax
+        ret
+
+; Starts capturing console output.
+capture_begin:
+        mov qword [capture_len], 0
+        mov qword [capture_on], 1
+        ret
+
+; Stops capturing -> rax: what was captured, as a string.
+capture_end:
+        push rsi
+        push rcx
+        mov qword [capture_on], 0
+        mov esi, CAPTURE_BUF
+        mov rcx, [capture_len]
+        call new_string
+        pop rcx
+        pop rsi
         ret
 
 ; rsi = bytes, rcx = length. Keeps registers.
@@ -668,6 +838,7 @@ con_poll:
 read_line:
         push rbx
         xor ebx, ebx
+        mov qword [read_line_eof], 0
 .wait:
         call con_poll
         cmp eax, -1
@@ -690,6 +861,8 @@ read_line:
         je .back
         cmp eax, 127
         je .back
+        cmp eax, 4
+        je .ctrl_d
         cmp eax, 32
         jb .wait
         cmp ebx, LINE_MAX
@@ -705,6 +878,11 @@ read_line:
         dec ebx
         call con_backspace
         jmp .wait
+.ctrl_d:
+        test ebx, ebx
+        jnz .wait
+        mov qword [read_line_eof], 1
+        jmp .end
 .cr:
         mov qword [last_cr], 1
 .end:
@@ -804,6 +982,7 @@ print_real:
         push r9
         push r10
         sub rsp, 16                     ; six digits
+        mov qword [real_plain], 1       ; no '.', 'e' or letters yet
         movq rax, xmm0
         btr rax, 63
         jnc .positive
@@ -815,9 +994,11 @@ print_real:
         jne .finite
         shl rax, 12
         jnz .nan
+        mov qword [real_plain], 0
         PUTS s_inf
         jmp .out
 .nan:
+        mov qword [real_plain], 0
         PUTS s_nan
         jmp .out
 .finite:
@@ -913,6 +1094,7 @@ print_real:
         jle .int_part
         cmp r9, rcx
         jle .out
+        mov qword [real_plain], 0
         PUTC '.'
 .frac_part:
         movzx edi, byte [rsp + rcx]
@@ -923,6 +1105,7 @@ print_real:
         jmp .out
 .small:
         PUTC '0'
+        mov qword [real_plain], 0
         PUTC '.'
         mov rcx, r8
         neg rcx
@@ -947,6 +1130,7 @@ print_real:
         call con_putc
         cmp r9, 1
         je .e
+        mov qword [real_plain], 0
         PUTC '.'
         mov ecx, 1
 .exp_digits:
@@ -956,6 +1140,7 @@ print_real:
         cmp rcx, r9
         jl .exp_digits
 .e:
+        mov qword [real_plain], 0
         PUTC 'e'
         mov rax, r8
         test rax, rax
@@ -1005,6 +1190,8 @@ print_value:
         je .bool
         cmp rax, T_VEC
         je .vec
+        cmp rax, T_STRUCT
+        je .struct
         PUTC '?'
         jmp .done
 .null:
@@ -1017,6 +1204,48 @@ print_value:
 .real:
         movq xmm0, [rsi + VAL_DATA]
         call print_real
+        test dl, dl                     ; UNO: 3.0, not 3
+        jz .done
+        cmp qword [real_plain], 0
+        je .done
+        PUTC '.'
+        PUTC '0'
+        jmp .done
+.struct:                                ; Type{field=value,...}
+        mov r8, [rsi + VAL_DATA]
+        mov rdi, [r8 + SOBJ_TYPE]
+        push rsi
+        mov rsi, [rdi + STYPE.name]
+        mov rcx, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        call con_write
+        pop rsi
+        PUTC '{'
+        xor ecx, ecx
+.field:
+        cmp rcx, [rdi + STYPE.nfields]
+        jae .struct_end
+        test rcx, rcx
+        jz .field_name
+        PUTC ','
+.field_name:
+        push rcx
+        mov rsi, [rdi + STYPE.fields]
+        mov rsi, [rsi + rcx * 8]
+        mov rcx, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        call con_write
+        pop rcx
+        PUTC '='
+        mov rsi, rcx
+        shl rsi, 4
+        lea rsi, [r8 + SOBJ_FIELDS + rsi]
+        mov dl, 1
+        call print_value
+        inc rcx
+        jmp .field
+.struct_end:
+        PUTC '}'
         jmp .done
 .str:
         test dl, dl
@@ -1389,8 +1618,58 @@ rt_load:
         inc rbp
         jmp .func
 .funcs_done:
-        ; the call-site sections are not needed: no SCAN, and builtins
-        ; take values only
+        ; 5. OOP call sites: the return name of each OOP instruction, for
+        ; builtins that need it (struct takes the type name from it)
+        mov rdi, [r14 + PROG.ncode]
+        lea rdi, [rdi * 4 + 4]
+        call alloc
+        mov [r14 + PROG.siteret], rax
+        mov rcx, [r14 + PROG.ncode]
+.no_site:
+        mov dword [rax + rcx * 4 - 4], -1
+        loop .no_site
+        call rd_u32
+        mov r15, rax
+.site:
+        test r15, r15
+        jz .sites_done
+        call rd_u32                     ; instruction
+        cmp rax, [r14 + PROG.ncode]
+        jae .bad_func
+        mov rbp, rax
+        call rd_string                  ; command name
+        call rd_string                  ; return name
+        cmp rcx, -1
+        je .site_args
+        call intern
+        mov rdx, [r14 + PROG.siteret]
+        mov [rdx + rbp * 4], eax
+.site_args:
+        call rd_u8
+        mov ebp, eax
+.site_arg:
+        test ebp, ebp
+        jz .site_next
+        call rd_u8                      ; kind
+        push rax
+        call rd_u8                      ; assignment
+        pop rax
+        cmp eax, 1
+        jne .site_arg_block
+        call rd_string
+        jmp .site_arg_next
+.site_arg_block:
+        cmp eax, 2
+        jb .site_arg_next
+        call rd_skip_block
+.site_arg_next:
+        dec ebp
+        jmp .site_arg
+.site_next:
+        dec r15
+        jmp .site
+.sites_done:
+        ; scan sites follow; the runtime has no SCAN
 
         ; per-symbol tables
         mov rdi, [r14 + PROG.nsyms]
@@ -1559,6 +1838,88 @@ rd_string:
         ret
 
 ; eax = count -> rax: u32 symbols of that many required strings
+; Skips a block of a call site (docs/RU_BYTECODE_FORMAT.md, sections 5
+; and 6): commands with their arguments, nested blocks and expressions.
+rd_skip_block:
+        push rbx
+        push rbp
+        call rd_u32
+        mov ebx, eax                    ; commands
+.command:
+        test ebx, ebx
+        jz .done
+        call rd_string                  ; path
+        call rd_string                  ; name
+        call rd_string                  ; return name
+        call rd_u8
+        mov ebp, eax                    ; arguments
+.argument:
+        test ebp, ebp
+        jz .command_next
+        call rd_u8                      ; node kind
+        push rax
+        call rd_u8                      ; assignment
+        pop rax
+        cmp eax, 0
+        je .value
+        cmp eax, 3
+        je .uno
+        cmp eax, 3
+        ja .block
+        call rd_skip_expr               ; 1 expression, 2 name?
+        jmp .argument_next
+.value:
+        call rd_skip_value
+        jmp .argument_next
+.uno:
+        call rd_string
+        jmp .argument_next
+.block:
+        call rd_skip_block
+.argument_next:
+        dec ebp
+        jmp .argument
+.command_next:
+        dec ebx
+        jmp .command
+.done:
+        pop rbp
+        pop rbx
+        ret
+
+rd_skip_value:
+        call rd_u8
+        cmp eax, 1
+        je .eight
+        cmp eax, 2
+        je .eight
+        cmp eax, 3
+        je .string
+        cmp eax, 4
+        je .byte
+        ret
+.eight:
+        jmp rd_u64
+.string:
+        jmp rd_string
+.byte:
+        jmp rd_u8
+
+rd_skip_expr:
+        call rd_u8
+        cmp eax, 0
+        je rd_skip_value
+        cmp eax, 1
+        je rd_string
+        cmp eax, 2
+        je .binary
+        call rd_u8                      ; unary: operator, operand
+        jmp rd_skip_expr
+.binary:
+        call rd_u8
+        call rd_skip_expr
+        jmp rd_skip_expr
+
 rd_names:
         push rbx
         push rbp
@@ -1770,6 +2131,7 @@ exec_file:
         test rax, rax
         jz .missing
         mov r12, [heap_ptr]
+        push qword [struct_types]
         mov rsi, rax
         call rt_load
         test rax, rax
@@ -1781,6 +2143,7 @@ exec_file:
         mov eax, 1
 .release:
         mov [heap_ptr], r12
+        pop qword [struct_types]
         pop r12
         pop rbx
         ret
@@ -1797,6 +2160,33 @@ exec_file:
 ; status (other integers 1, anything else 0); without init, 0. Errors
 ; give 1.
 vm_run:
+        mov rsi, [rdi + PROG.init]
+        cmp rsi, -1
+        je .top
+        ; init(ret): arg_cnt arg_vec
+        sub rsp, 32
+        mov qword [rsp], T_INT
+        mov qword [rsp + 8], 0
+        call vec_new
+        mov qword [rsp + 16], T_VEC
+        mov [rsp + 24], rax
+        mov rdx, rsp
+        mov ecx, 2
+        mov r8d, 1
+        call vm_exec
+        add rsp, 32
+        ret
+.top:
+        xor ecx, ecx
+        xor r8d, r8d
+        jmp vm_exec
+
+; rdi = program, rsi = function (-1: the top-level code), rdx = argument
+; values, ecx = their count, r8d = mode (1: init, its result is the
+; status; 2: try, failures are quiet) -> eax: status, 0 or 1 (init:
+; its result). A VM of its own: registers, frames and locals; the
+; program's globals and hash entries are shared.
+vm_exec:
         push rbx
         push rbp
         push r12
@@ -1804,11 +2194,21 @@ vm_run:
         push r14
         push r15
         mov r13, rdi
+        mov r10, rsi
+        mov r11, rdx
         mov edi, VM_size
         call alloc
         mov r12, rax
         mov rbx, rax
         mov [r12 + VM.prog], r13
+        mov [r12 + VM.has_init], r8
+        ; the arguments into R0 ..
+        push rcx
+        mov rsi, r11
+        mov rdi, rbx
+        shl ecx, 4
+        rep movsb
+        pop rcx
         mov edi, FRAME_size * MAX_FRAMES
         call alloc
         mov [r12 + VM.frames], rax
@@ -1820,28 +2220,24 @@ vm_run:
         mov [r12 + VM.rsp], rsp
         mov r14, [r13 + PROG.code]
         xor r15d, r15d
-        mov r9, [r13 + PROG.init]
-        cmp r9, -1
+        cmp r10, -1
         je vm_next
-        ; init(ret): arg_cnt arg_vec, returning to the final HALT
-        mov qword [rbx], T_INT
-        mov qword [rbx + 8], 0
-        call vec_new
-        mov qword [rbx + 16], T_VEC
-        mov [rbx + 24], rax
+        ; the function returns to the program's final HALT
         mov r15, [r13 + PROG.ncode]
         dec r15
-        mov qword [r12 + VM.has_init], 1
+        mov r9, r10
+        mov edx, ecx
         xor ecx, ecx
-        mov edx, 2
         mov r8d, 31
+        cmp r9, [r13 + PROG.nfuncs]
+        jae op_call.bad
         call vm_do_call
         jmp vm_next
 
 vm_halt:
         xor eax, eax
-        cmp qword [r12 + VM.has_init], 0
-        je vm_leave
+        cmp qword [r12 + VM.has_init], 1
+        jne vm_leave
         cmp qword [rbx + 31 * 16], T_INT
         jne vm_leave
         mov rax, [rbx + 31 * 16 + 8]
@@ -1873,7 +2269,13 @@ vm_error_text:                          ; the "USSR VM: " is out already
         mov eax, 1
         jmp vm_leave
 
-vm_fail:
+vm_fail:                                ; a builtin failed; it said why
+        cmp qword [r12 + VM.has_init], 2
+        jne .loud
+        mov rsp, [r12 + VM.rsp]
+        mov eax, 1
+        jmp vm_leave
+.loud:
         mov esi, e_failed
         jmp vm_error
 vm_bad_reg:
@@ -2559,6 +2961,16 @@ op_oop:
         jz .unknown
         dec r10d
         shl r10, 4
+        ; the command's return name, for builtins that want it
+        mov qword [bi_retname], 0
+        mov rax, [r13 + PROG.siteret]
+        mov eax, [rax + r15 * 4 - 4]
+        cmp eax, -1
+        je .no_name
+        mov r11, [r13 + PROG.symtext]
+        mov rax, [r11 + rax * 8]
+        mov [bi_retname], rax
+.no_name:
         mov esi, edx
         lea rdx, [r12 + VM.tmp]
         mov qword [rdx], T_NULL
@@ -3117,10 +3529,17 @@ bi_typeof:
         cmp esi, 1
         jne .bad
         mov rax, [rdi]
+        cmp rax, T_STRUCT
+        je .struct
         cmp rax, T_VEC
         ja .bad
         mov rsi, [type_names + rax * 8]
         call new_string_z
+        jmp bi_str_out
+.struct:
+        mov rax, [rdi + 8]
+        mov rax, [rax + SOBJ_TYPE]
+        mov rax, [rax + STYPE.name]
         jmp bi_str_out
 .bad:
         mov eax, e_typeof
@@ -3313,6 +3732,1875 @@ bi_k_reboot:
 bi_k_halt:
         jmp sys_halt
 
+; --- strings ------------------------------------------------------------
+
+; rsi, rdi = strings -> ZF set when equal. Keeps registers.
+str_eq:
+        push rcx
+        push rsi
+        push rdi
+        mov rcx, [rsi + STR_LEN]
+        cmp rcx, [rdi + STR_LEN]
+        jne .out
+        add rsi, STR_BYTES
+        add rdi, STR_BYTES
+        test rcx, rcx
+        jz .out                         ; ZF is set from the cmp
+        repe cmpsb
+.out:
+        pop rdi
+        pop rsi
+        pop rcx
+        ret
+
+; rsi = bytes, rcx = length, rdi = NUL-terminated text -> ZF when equal.
+; Keeps registers.
+bytes_eq_z:
+        push rax
+        push rdx
+        xor edx, edx
+.next:
+        cmp rdx, rcx
+        je .end
+        mov al, [rdi + rdx]
+        test al, al
+        jz .differ
+        cmp al, [rsi + rdx]
+        jne .differ
+        inc rdx
+        jmp .next
+.end:
+        cmp byte [rdi + rdx], 0
+        jmp .out
+.differ:
+        or edx, 1
+.out:
+        pop rdx
+        pop rax
+        ret
+
+; rsi = bytes, rcx = length -> eax: the symbol of that name in program
+; r13, or -1 when the program never mentions it.
+intern_find:
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push r8
+        push r9
+        push r10
+        push r11
+        mov eax, 2166136261
+        xor r8d, r8d
+.hash:
+        cmp r8, rcx
+        jae .hashed
+        movzx edx, byte [rsi + r8]
+        xor eax, edx
+        imul eax, eax, 16777619
+        inc r8
+        jmp .hash
+.hashed:
+        and eax, HCAP - 1
+        mov r9d, eax
+.probe:
+        mov r10, [r13 + PROG.htab]
+        mov eax, [r10 + r9 * 4]
+        test eax, eax
+        jz .none
+        dec eax
+        mov r11, [r13 + PROG.symtext]
+        mov r11, [r11 + rax * 8]
+        cmp [r11 + STR_LEN], rcx
+        jne .next_slot
+        test rcx, rcx
+        jz .found
+        push rcx
+        push rsi
+        lea rdi, [r11 + STR_BYTES]
+        repe cmpsb
+        pop rsi
+        pop rcx
+        je .found
+.next_slot:
+        inc r9d
+        and r9d, HCAP - 1
+        jmp .probe
+.none:
+        mov eax, -1
+.found:
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        ret
+
+; rsi = bytes, rcx = length -> rax: handler of the builtin of that name,
+; or 0
+builtin_find:
+        push rdi
+        push rdx
+        xor edx, edx
+.next:
+        mov rdi, [bi_table + rdx]
+        test rdi, rdi
+        jz .none
+        call bytes_eq_z
+        je .found
+        add rdx, 16
+        jmp .next
+.found:
+        mov rax, [bi_table + rdx + 8]
+        jmp .out
+.none:
+        xor eax, eax
+.out:
+        pop rdx
+        pop rdi
+        ret
+
+; --- TEMPLATE and EVAL ----------------------------------------------------
+
+; TEMPLATE a, b, format: R0 .. R(b-1) printed where the format says STR,
+; INT, REAL or BOOL (";;" is a ";"); the rest of the format as it is
+op_template:
+        REGADDR ecx, rcx
+        cmp edx, 31
+        ja vm_bad_reg
+        push rcx
+        call sym_of
+        mov rsi, [r13 + PROG.symtext]
+        mov rsi, [rsi + rax * 8]
+        mov r8, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        mov rdi, rsi                    ; start
+        lea r9, [rsi + r8]              ; end
+        mov r10d, edx                   ; values
+        xor r11d, r11d                  ; next value
+.loop:
+        cmp rsi, r9
+        jae .end
+        cmp byte [rsi], ';'
+        jne .token
+        lea rax, [rsi + 1]
+        cmp rax, r9
+        jae .token
+        cmp byte [rax], ';'
+        jne .token
+        PUTC ';'
+        add rsi, 2
+        jmp .loop
+.token:
+        cmp rsi, rdi
+        je .boundary
+        mov al, [rsi - 1]
+        cmp al, ' '
+        je .boundary
+        cmp al, 9
+        je .boundary
+        cmp al, ';'
+        jne .plain
+.boundary:
+        call template_type              ; eax: 0 none, 1..4; rcx: length
+        test eax, eax
+        jz .plain
+        cmp r11d, r10d
+        jae .mismatch
+        mov rdx, r11
+        shl rdx, 4
+        add rdx, rbx
+        call template_emit
+        jc .mismatch
+        inc r11d
+        add rsi, rcx
+        cmp rsi, r9
+        jae .loop
+        cmp byte [rsi], ';'
+        jne .loop
+        inc rsi
+        jmp .loop
+.plain:
+        push rdi
+        movzx edi, byte [rsi]
+        call con_putc
+        pop rdi
+        inc rsi
+        jmp .loop
+.end:
+        cmp r11d, r10d
+        jne .mismatch
+        pop rcx
+        mov qword [rcx], T_BOOL
+        mov qword [rcx + 8], 1
+        jmp vm_next
+.mismatch:
+        mov esi, e_template
+        jmp vm_error
+
+; rsi = cursor, r9 = end -> eax = 1 STR, 2 INT, 3 REAL, 4 BOOL or 0;
+; rcx = its length. The type word must end the format or be followed by
+; ';', a space or a tab.
+template_type:
+        push rdx
+        mov rdx, r9
+        sub rdx, rsi                    ; bytes left
+        mov eax, 1
+        mov ecx, 3
+        cmp rdx, 3
+        jb .none
+        cmp word [rsi], 'ST'
+        jne .int
+        cmp byte [rsi + 2], 'R'
+        je .follow
+.int:
+        mov eax, 2
+        cmp word [rsi], 'IN'
+        jne .real
+        cmp byte [rsi + 2], 'T'
+        je .follow
+.real:
+        mov ecx, 4
+        cmp rdx, 4
+        jb .none
+        mov eax, 3
+        cmp dword [rsi], 'REAL'
+        je .follow
+        mov eax, 4
+        cmp dword [rsi], 'BOOL'
+        je .follow
+        jmp .none
+.follow:
+        cmp rdx, rcx
+        je .ok
+        push rax
+        mov al, [rsi + rcx]
+        cmp al, ';'
+        je .follow_ok
+        cmp al, ' '
+        je .follow_ok
+        cmp al, 9
+        je .follow_ok
+        pop rax
+        jmp .none
+.follow_ok:
+        pop rax
+.ok:
+        pop rdx
+        ret
+.none:
+        xor eax, eax
+        pop rdx
+        ret
+
+; eax = type, rdx = value: prints it; carry set when it is not that type
+template_emit:
+        push rax
+        push rcx
+        push rsi
+        cmp eax, 1
+        je .str
+        cmp eax, 2
+        je .int
+        cmp eax, 3
+        je .real
+        cmp qword [rdx], T_BOOL
+        jne .bad
+        mov rsi, rdx
+        push rdx
+        xor edx, edx
+        call print_value
+        pop rdx
+        jmp .ok
+.str:
+        cmp qword [rdx], T_STR
+        jne .bad
+        jmp .print
+.int:
+        cmp qword [rdx], T_INT
+        jne .bad
+        jmp .print
+.real:
+        cmp qword [rdx], T_REAL
+        jne .bad
+.print:
+        mov rsi, rdx
+        push rdx
+        xor edx, edx
+        call print_value
+        pop rdx
+.ok:
+        pop rsi
+        pop rcx
+        pop rax
+        clc
+        ret
+.bad:
+        pop rsi
+        pop rcx
+        pop rax
+        stc
+        ret
+
+; EVAL a, name: runs the text in R0, then Ra = the variable name. The
+; Moscow runtime evaluates what russia.su hands its host: lines of
+; builtin calls, `name(ret): arg ...`, whose arguments are variable names,
+; "strings", integers, true, false or null.
+op_eval:
+        REGADDR ecx, rcx
+        push rcx
+        push r9
+        cmp qword [rbx], T_STR
+        jne .bad
+        mov rsi, [rbx + 8]
+        call eval_text
+        test eax, eax
+        jnz vm_fail
+        pop r9
+        call sym_of
+        xor edx, edx
+        call var_cell
+        pop rcx
+        COPYVAL rcx, rax, rdx
+        jmp vm_next
+.bad:
+        mov esi, e_eval
+        jmp vm_error
+
+EV_MAX_ARGS     equ 16
+EV_ARGS         equ 0                   ; values
+EV_OUT          equ EV_MAX_ARGS * 16
+EV_NAME         equ EV_OUT + 16         ; bytes, length
+EV_RET          equ EV_NAME + 16
+EV_COUNT        equ EV_RET + 16
+EV_SIZE         equ EV_COUNT + 16
+
+; rsi = string -> eax: 0, or -1 after a message
+eval_text:
+        push rbp
+        push r14
+        push r15
+        sub rsp, EV_SIZE
+        mov rbp, rsp
+        lea r14, [rsi + STR_BYTES]      ; cursor
+        mov r15, [rsi + STR_LEN]
+        add r15, r14                    ; end
+.command:
+        call ev_skip_blank_lines
+        cmp r14, r15
+        jae .ok
+        call ev_ident
+        jc .syntax
+        mov [rbp + EV_NAME], rsi
+        mov [rbp + EV_NAME + 8], rcx
+        cmp r14, r15
+        jae .syntax
+        cmp byte [r14], '('
+        jne .syntax
+        inc r14
+        call ev_ident
+        jc .syntax
+        mov [rbp + EV_RET], rsi
+        mov [rbp + EV_RET + 8], rcx
+        cmp r14, r15
+        jae .syntax
+        cmp byte [r14], ')'
+        jne .syntax
+        inc r14
+        cmp r14, r15
+        jae .syntax
+        cmp byte [r14], ':'
+        jne .syntax
+        inc r14
+        mov qword [rbp + EV_COUNT], 0
+.argument:
+        call ev_skip_spaces
+        cmp r14, r15
+        jae .call
+        cmp byte [r14], 10
+        je .call
+        mov rax, [rbp + EV_COUNT]
+        cmp rax, EV_MAX_ARGS
+        jae .syntax
+        shl rax, 4
+        lea rdx, [rbp + EV_ARGS + rax]
+        call ev_value
+        jc .syntax
+        inc qword [rbp + EV_COUNT]
+        jmp .argument
+.call:
+        mov rsi, [rbp + EV_NAME]
+        mov rcx, [rbp + EV_NAME + 8]
+        call builtin_find
+        test rax, rax
+        jz .unknown
+        mov r8, rax
+        mov rsi, [rbp + EV_RET]
+        mov rcx, [rbp + EV_RET + 8]
+        call new_string
+        mov [bi_retname], rax
+        lea rdi, [rbp + EV_ARGS]
+        mov esi, [rbp + EV_COUNT]
+        lea rdx, [rbp + EV_OUT]
+        mov qword [rdx], T_NULL
+        mov qword [rdx + 8], 0
+        call r8
+        test eax, eax
+        jnz .failed
+        ; the result into the return variable, when the program has it
+        mov rsi, [rbp + EV_RET]
+        mov rcx, [rbp + EV_RET + 8]
+        call intern_find
+        cmp eax, -1
+        je .command
+        xor edx, edx
+        call var_cell
+        lea rsi, [rbp + EV_OUT]
+        COPYVAL rax, rsi, rdx
+        jmp .command
+.unknown:
+        PUTS msg_unknown1
+        mov rsi, [rbp + EV_NAME]
+        mov rcx, [rbp + EV_NAME + 8]
+        call con_write
+        PUTS msg_unknown2
+        jmp .failed
+.syntax:
+        PUTS msg_eval1
+        mov rsi, r14
+        mov rcx, r15
+        sub rcx, r14
+        call con_write
+        PUTS msg_eval2
+.failed:
+        mov eax, -1
+        jmp .out
+.ok:
+        xor eax, eax
+.out:
+        add rsp, EV_SIZE
+        pop r15
+        pop r14
+        pop rbp
+        ret
+
+ev_skip_spaces:
+        cmp r14, r15
+        jae .done
+        cmp byte [r14], ' '
+        je .skip
+        cmp byte [r14], 9
+        je .skip
+        cmp byte [r14], 13
+        je .skip
+.done:
+        ret
+.skip:
+        inc r14
+        jmp ev_skip_spaces
+
+ev_skip_blank_lines:
+        cmp r14, r15
+        jae .done
+        mov al, [r14]
+        cmp al, ' '
+        je .skip
+        cmp al, 9
+        je .skip
+        cmp al, 10
+        je .skip
+        cmp al, 13
+        je .skip
+.done:
+        ret
+.skip:
+        inc r14
+        jmp ev_skip_blank_lines
+
+; -> rsi, rcx: a name at r14 (letters, digits, _), r14 past it; carry
+; set when there is none
+ev_ident:
+        mov rsi, r14
+.next:
+        cmp r14, r15
+        jae .end
+        movzx eax, byte [r14]
+        call is_name_byte
+        jnc .end
+        inc r14
+        jmp .next
+.end:
+        mov rcx, r14
+        sub rcx, rsi
+        test rcx, rcx
+        jz .none
+        clc
+        ret
+.none:
+        stc
+        ret
+
+; al -> carry set for letters, digits and _
+is_name_byte:
+        cmp al, '_'
+        je .yes
+        cmp al, '0'
+        jb .no
+        cmp al, '9'
+        jbe .yes
+        or al, 0x20
+        cmp al, 'a'
+        jb .no
+        cmp al, 'z'
+        jbe .yes
+.no:
+        clc
+        ret
+.yes:
+        stc
+        ret
+
+; rdx = where: one argument at r14 as a value; carry set on bad syntax
+ev_value:
+        mov al, [r14]
+        cmp al, '"'
+        je .string
+        cmp al, '-'
+        je .number
+        cmp al, '0'
+        jb .name
+        cmp al, '9'
+        jbe .number
+.name:
+        call ev_ident
+        jc .bad
+        mov rdi, s_null
+        call bytes_eq_z
+        je .null
+        mov rdi, s_true
+        call bytes_eq_z
+        je .true
+        mov rdi, s_false
+        call bytes_eq_z
+        je .false
+        call intern_find
+        cmp eax, -1
+        je .null
+        push rdx
+        xor edx, edx
+        call var_cell
+        pop rdx
+        COPYVAL rdx, rax, rcx
+        clc
+        ret
+.null:
+        mov qword [rdx], T_NULL
+        mov qword [rdx + 8], 0
+        clc
+        ret
+.true:
+        mov qword [rdx], T_BOOL
+        mov qword [rdx + 8], 1
+        clc
+        ret
+.false:
+        mov qword [rdx], T_BOOL
+        mov qword [rdx + 8], 0
+        clc
+        ret
+.number:
+        xor ecx, ecx                    ; negative?
+        cmp byte [r14], '-'
+        jne .digits
+        mov ecx, 1
+        inc r14
+.digits:
+        xor eax, eax
+        mov rsi, r14
+.digit:
+        cmp r14, r15
+        jae .number_end
+        movzx edi, byte [r14]
+        sub edi, '0'
+        cmp edi, 9
+        ja .number_end
+        imul rax, rax, 10
+        add rax, rdi
+        inc r14
+        jmp .digit
+.number_end:
+        cmp r14, rsi
+        je .bad
+        test ecx, ecx
+        jz .positive
+        neg rax
+.positive:
+        mov qword [rdx], T_INT
+        mov [rdx + 8], rax
+        clc
+        ret
+.string:                                ; "..." with \" \\ \n \t \r
+        inc r14
+        xor ecx, ecx
+.char:
+        cmp r14, r15
+        jae .bad
+        mov al, [r14]
+        inc r14
+        cmp al, '"'
+        je .string_end
+        cmp al, '\'
+        jne .store
+        cmp r14, r15
+        jae .bad
+        mov al, [r14]
+        inc r14
+        cmp al, 'n'
+        jne .not_n
+        mov al, 10
+        jmp .store
+.not_n:
+        cmp al, 't'
+        jne .not_t
+        mov al, 9
+        jmp .store
+.not_t:
+        cmp al, 'r'
+        jne .store
+        mov al, 13
+.store:
+        cmp rcx, CAPTURE_MAX
+        jae .bad
+        mov [CAPTURE_BUF + rcx], al
+        inc rcx
+        jmp .char
+.string_end:
+        mov esi, CAPTURE_BUF
+        call new_string
+        mov qword [rdx], T_STR
+        mov [rdx + 8], rax
+        clc
+        ret
+.bad:
+        stc
+        ret
+
+; --- structs --------------------------------------------------------------
+
+; rsi = name string -> rax: its type, or 0
+struct_find:
+        mov rax, [struct_types]
+.next:
+        test rax, rax
+        jz .done
+        push rdi
+        mov rdi, [rax + STYPE.name]
+        call str_eq
+        pop rdi
+        je .done
+        mov rax, [rax + STYPE.next]
+        jmp .next
+.done:
+        ret
+
+; struct(Name): "field:type" ... ; Name is the return name
+bi_struct:
+        push rbx
+        push r12
+        push rdx
+        mov rbx, rdi                    ; specs
+        mov r12d, esi
+        mov rsi, [bi_retname]
+        test rsi, rsi
+        jz .no_name
+        call struct_find
+        test rax, rax
+        jnz .have_type
+        mov edi, STYPE_size
+        call alloc
+        mov [rax + STYPE.name], rsi
+        mov rdx, [struct_types]
+        mov [rax + STYPE.next], rdx
+        mov [struct_types], rax
+.have_type:
+        mov r8, rax
+        mov [r8 + STYPE.nfields], r12
+        lea rdi, [r12 * 8 + 8]
+        call alloc
+        mov [r8 + STYPE.fields], rax
+        xor r9d, r9d
+.spec:
+        cmp r9d, r12d
+        jae .done
+        mov rax, r9
+        shl rax, 4
+        cmp qword [rbx + rax], T_STR
+        jne .bad_spec
+        mov rsi, [rbx + rax + 8]
+        mov rcx, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        xor edx, edx
+.colon:
+        cmp rdx, rcx
+        je .named
+        cmp byte [rsi + rdx], ':'
+        je .named
+        inc rdx
+        jmp .colon
+.named:
+        mov rcx, rdx
+        call new_string
+        mov rdx, [r8 + STYPE.fields]
+        mov [rdx + r9 * 8], rax
+        inc r9d
+        jmp .spec
+.done:
+        pop rdx
+        pop r12
+        pop rbx
+        xor eax, eax
+        ret
+.no_name:
+        pop rdx
+        pop r12
+        pop rbx
+        mov eax, e_struct_name
+        jmp bi_error
+.bad_spec:
+        pop rdx
+        pop r12
+        pop rbx
+        mov eax, e_struct_spec
+        jmp bi_error
+
+; new(o): "Type" value ...  (one value per field, in order)
+bi_new:
+        test esi, esi
+        jz .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        push rdi
+        push rsi
+        mov rsi, [rdi + 8]
+        call struct_find
+        pop rsi
+        pop rdi
+        test rax, rax
+        jz .unknown
+        mov r8, rax
+        lea ecx, [esi - 1]
+        cmp rcx, [r8 + STYPE.nfields]
+        jne .count
+        push rdi
+        push rcx
+        mov rdi, rcx
+        shl rdi, 4
+        add rdi, SOBJ_FIELDS
+        call alloc
+        pop rcx
+        pop rdi
+        mov [rax + SOBJ_TYPE], r8
+        push rax
+        lea rsi, [rdi + 16]
+        lea rdi, [rax + SOBJ_FIELDS]
+        shl rcx, 4
+        rep movsb
+        pop rax
+        mov qword [rdx], T_STRUCT
+        mov [rdx + 8], rax
+        xor eax, eax
+        ret
+.bad:
+        mov eax, e_new
+        jmp bi_error
+.unknown:
+        PUTS msg_ussr
+        PUTS e_unknown_type
+        mov rsi, [rdi + 8]
+        call print_string
+        PUTS msg_quote_nl
+        mov eax, -1
+        ret
+.count:
+        mov eax, e_new_count
+        jmp bi_error
+
+; rsi = string: its text
+print_string:
+        push rsi
+        push rcx
+        mov rcx, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        call con_write
+        pop rcx
+        pop rsi
+        ret
+
+; rdi = arguments (struct, field name) -> rax: the field's value cell, or
+; 0 after a message
+struct_field:
+        cmp qword [rdi], T_STRUCT
+        jne .bad
+        cmp qword [rdi + 16], T_STR
+        jne .bad
+        push rsi
+        push rcx
+        push r8
+        push r9
+        mov r8, [rdi + 8]               ; the object
+        mov r9, [r8 + SOBJ_TYPE]
+        mov rsi, [rdi + 24]             ; the name
+        xor ecx, ecx
+.next:
+        cmp rcx, [r9 + STYPE.nfields]
+        jae .missing
+        push rdi
+        mov rdi, [r9 + STYPE.fields]
+        mov rdi, [rdi + rcx * 8]
+        call str_eq
+        pop rdi
+        je .found
+        inc rcx
+        jmp .next
+.found:
+        shl rcx, 4
+        lea rax, [r8 + SOBJ_FIELDS + rcx]
+        jmp .out
+.missing:
+        PUTS msg_ussr
+        push rsi
+        mov rsi, [r9 + STYPE.name]
+        call print_string
+        pop rsi
+        PUTS e_no_field
+        call print_string
+        PUTS msg_quote_nl
+        xor eax, eax
+.out:
+        pop r9
+        pop r8
+        pop rcx
+        pop rsi
+        ret
+.bad:
+        PUTS msg_ussr
+        PUTS e_getf
+        PUTC 10
+        xor eax, eax
+        ret
+
+bi_getf:
+        cmp esi, 2
+        jne struct_field.bad_count
+        call struct_field
+        test rax, rax
+        jz .failed
+        COPYVAL rdx, rax, rcx
+        xor eax, eax
+        ret
+.failed:
+        mov eax, -1
+        ret
+
+bi_setf:
+        cmp esi, 3
+        jne struct_field.bad_count
+        call struct_field
+        test rax, rax
+        jz bi_getf.failed
+        lea rsi, [rdi + 32]
+        COPYVAL rax, rsi, rcx
+        xor eax, eax
+        ret
+
+struct_field.bad_count:
+        mov eax, e_getf
+        jmp bi_error
+
+; --- UNO ------------------------------------------------------------------
+
+bi_encode:
+        cmp esi, 1
+        jne .bad
+        push rdx
+        call capture_begin
+        mov rsi, rdi
+        mov dl, 1
+        call print_value
+        call capture_end
+        pop rdx
+        jmp bi_str_out
+.bad:
+        mov eax, e_encode
+        jmp bi_error
+
+bi_decode:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        push rdx
+        mov rsi, [rdi + 8]
+        mov r8, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        add r8, rsi                     ; end
+        call uno_read
+        jc .failed
+        call uno_skip_ws
+        cmp rsi, r8
+        jne .trailing
+        mov rcx, rdx
+        pop rdx
+        mov [rdx], rax
+        mov [rdx + 8], rcx
+        xor eax, eax
+        ret
+.trailing:
+        pop rdx
+        mov eax, e_decode
+        jmp bi_error
+.failed:
+        pop rdx
+        mov eax, -1
+        ret
+.bad:
+        mov eax, e_decode
+        jmp bi_error
+
+; rsi = cursor, r8 = end
+uno_skip_ws:
+        cmp rsi, r8
+        jae .done
+        cmp byte [rsi], ' '
+        ja .done
+        inc rsi
+        jmp uno_skip_ws
+.done:
+        ret
+
+; rsi = cursor, r8 = end -> rax = tag, rdx = payload, rsi past the value;
+; carry set after a message
+uno_read:
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .bad
+        mov al, [rsi]
+        cmp al, '['
+        je .vector
+        cmp al, '`'
+        je .string
+        cmp al, '-'
+        je .number
+        cmp al, '0'
+        jb .word
+        cmp al, '9'
+        jbe .number
+.word:
+        push r14
+        push r15
+        mov r14, rsi
+        mov r15, r8
+        call ev_ident
+        mov rsi, r14
+        pop r15
+        pop r14
+        jc .bad
+        ; rsi past the word; the word itself at rsi - rcx
+        push rsi
+        sub rsi, rcx
+        mov rdi, s_true
+        call bytes_eq_z
+        je .true
+        mov rdi, s_false
+        call bytes_eq_z
+        je .false
+        mov rdi, s_null
+        call bytes_eq_z
+        je .null
+        call new_string                 ; the type's name
+        pop rsi
+        jmp uno_object
+.true:
+        pop rsi
+        mov eax, T_BOOL
+        mov edx, 1
+        clc
+        ret
+.false:
+        pop rsi
+        mov eax, T_BOOL
+        xor edx, edx
+        clc
+        ret
+.null:
+        pop rsi
+        xor eax, eax
+        xor edx, edx
+        clc
+        ret
+.string:
+        inc rsi
+        mov rdi, rsi
+.string_char:
+        cmp rsi, r8
+        jae .bad
+        cmp byte [rsi], '`'
+        je .string_end
+        cmp byte [rsi], 10
+        je .bad
+        inc rsi
+        jmp .string_char
+.string_end:
+        mov rcx, rsi
+        sub rcx, rdi
+        push rsi
+        mov rsi, rdi
+        call new_string
+        pop rsi
+        inc rsi
+        mov rdx, rax
+        mov eax, T_STR
+        clc
+        ret
+.number:
+        xor ecx, ecx
+        cmp byte [rsi], '-'
+        jne .int_digits
+        mov ecx, 1
+        inc rsi
+.int_digits:
+        xor eax, eax
+        mov rdi, rsi
+.int_digit:
+        cmp rsi, r8
+        jae .int_end
+        movzx edx, byte [rsi]
+        sub edx, '0'
+        cmp edx, 9
+        ja .int_end
+        imul rax, rax, 10
+        add rax, rdx
+        inc rsi
+        jmp .int_digit
+.int_end:
+        cmp rsi, rdi
+        je .bad
+        ; a fraction makes it a real
+        lea rdx, [rsi + 1]
+        cmp rdx, r8
+        jae .integer
+        cmp byte [rsi], '.'
+        jne .integer
+        movzx edx, byte [rsi + 1]
+        sub edx, '0'
+        cmp edx, 9
+        ja .integer
+        inc rsi
+        cvtsi2sd xmm0, rax
+        movsd xmm1, [f_one]
+.frac:
+        cmp rsi, r8
+        jae .frac_end
+        movzx edx, byte [rsi]
+        sub edx, '0'
+        cmp edx, 9
+        ja .frac_end
+        divsd xmm1, [f_ten]
+        cvtsi2sd xmm2, edx
+        mulsd xmm2, xmm1
+        addsd xmm0, xmm2
+        inc rsi
+        jmp .frac
+.frac_end:
+        test ecx, ecx
+        jz .real_out
+        movq rdx, xmm0
+        btc rdx, 63
+        jmp .real_tag
+.real_out:
+        movq rdx, xmm0
+.real_tag:
+        mov eax, T_REAL
+        clc
+        ret
+.integer:
+        test ecx, ecx
+        jz .int_out
+        neg rax
+.int_out:
+        mov rdx, rax
+        mov eax, T_INT
+        clc
+        ret
+.vector:
+        inc rsi
+        push rbx
+        call vec_new
+        mov rbx, rax
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .vector_bad
+        cmp byte [rsi], ']'
+        je .vector_end
+.item:
+        call uno_read
+        jc .vector_failed
+        sub rsp, 16
+        mov [rsp], rax
+        mov [rsp + 8], rdx
+        push rsi
+        lea rsi, [rsp + 8]
+        mov rdi, rbx
+        call vec_push
+        pop rsi
+        add rsp, 16
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .vector_bad
+        cmp byte [rsi], ','
+        jne .item_end
+        inc rsi
+        jmp .item
+.item_end:
+        cmp byte [rsi], ']'
+        jne .vector_bad
+.vector_end:
+        inc rsi
+        mov rdx, rbx
+        pop rbx
+        mov eax, T_VEC
+        clc
+        ret
+.vector_bad:
+        pop rbx
+        jmp .bad
+.vector_failed:
+        pop rbx
+        stc
+        ret
+.bad:
+        PUTS msg_ussr
+        PUTS e_uno
+        PUTC 10
+        stc
+        ret
+
+; rax = type name string, rsi at "{": Type{field=value,...}
+uno_object:
+        push rbx
+        push r12
+        mov rdi, rax                    ; the name, for a message
+        push rsi
+        mov rsi, rdi
+        call struct_find
+        pop rsi
+        test rax, rax
+        jz .unknown
+        mov r12, rax
+        mov rdi, [r12 + STYPE.nfields]
+        shl rdi, 4
+        add rdi, SOBJ_FIELDS
+        call alloc
+        mov rbx, rax
+        mov [rbx + SOBJ_TYPE], r12
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .bad
+        cmp byte [rsi], '{'
+        jne .bad
+        inc rsi
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .bad
+        cmp byte [rsi], '}'
+        je .end
+.field:
+        call uno_skip_ws
+        push r14
+        push r15
+        mov r14, rsi
+        mov r15, r8
+        call ev_ident
+        mov rsi, r14
+        pop r15
+        pop r14
+        jc .bad
+        ; which field: rsi - rcx, rcx
+        push rsi
+        sub rsi, rcx
+        call new_string
+        mov rdi, rax
+        xor ecx, ecx
+.which:
+        cmp rcx, [r12 + STYPE.nfields]
+        jae .no_field
+        mov rsi, [r12 + STYPE.fields]
+        mov rsi, [rsi + rcx * 8]
+        call str_eq
+        je .found
+        inc rcx
+        jmp .which
+.no_field:
+        pop rsi
+        jmp .bad
+.found:
+        pop rsi
+        push rcx
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .bad_pop
+        cmp byte [rsi], '='
+        jne .bad_pop
+        inc rsi
+        call uno_read
+        pop rcx
+        jc .failed
+        shl rcx, 4
+        mov [rbx + SOBJ_FIELDS + rcx], rax
+        mov [rbx + SOBJ_FIELDS + rcx + 8], rdx
+        call uno_skip_ws
+        cmp rsi, r8
+        jae .bad
+        cmp byte [rsi], ','
+        jne .close
+        inc rsi
+        jmp .field
+.close:
+        cmp byte [rsi], '}'
+        jne .bad
+.end:
+        inc rsi
+        mov rdx, rbx
+        mov eax, T_STRUCT
+        pop r12
+        pop rbx
+        clc
+        ret
+.bad_pop:
+        pop rcx
+.bad:
+        pop r12
+        pop rbx
+        jmp uno_read.bad
+.failed:
+        pop r12
+        pop rbx
+        stc
+        ret
+.unknown:
+        pop r12
+        pop rbx
+        PUTS msg_ussr
+        PUTS e_unknown_type
+        push rsi
+        mov rsi, rdi
+        call print_string
+        pop rsi
+        PUTS msg_quote_nl
+        stc
+        ret
+
+; --- try, errors, environment ----------------------------------------------
+
+; try(failed): "function" arguments ... -> 0, or 1 when the call failed
+bi_try:
+        test esi, esi
+        jz .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        push rdx
+        mov r8, [rdi + 8]               ; the name
+        mov r9, [r13 + PROG.funcs]
+        xor r10d, r10d
+.find:
+        cmp r10, [r13 + PROG.nfuncs]
+        jae .none
+        mov eax, [r9 + FUNC.name]
+        mov r11, [r13 + PROG.symtext]
+        push rsi
+        push rdi
+        mov rsi, [r11 + rax * 8]
+        mov rdi, r8
+        call str_eq
+        pop rdi
+        pop rsi
+        je .found
+        add r9, FUNC_size
+        inc r10
+        jmp .find
+.found:
+        lea rdx, [rdi + 16]
+        lea ecx, [esi - 1]
+        mov rdi, r13
+        mov rsi, r10
+        mov r8d, 2
+        call vm_exec
+        pop rdx
+        jmp bi_int_out
+.none:
+        pop rdx
+        PUTS msg_ussr
+        PUTS e_try_none
+        mov rsi, r8
+        call print_string
+        PUTS msg_quote_nl
+        mov eax, -1
+        ret
+.bad:
+        mov eax, e_try
+        jmp bi_error
+
+bi_write_stderr:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        mov rsi, [rdi + 8]
+        call print_string
+        mov rax, [rsi + STR_LEN]
+        jmp bi_int_out
+.bad:
+        mov eax, e_write_stderr
+        jmp bi_error
+
+bi_fail:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        PUTS msg_ussr
+        mov rsi, [rdi + 8]
+        call print_string
+        PUTC 10
+        mov eax, -1
+        ret
+.bad:
+        mov eax, e_fail
+        jmp bi_error
+
+bi_null:                                ; gc, alias, keybind, keybind_match
+        xor eax, eax
+        ret
+
+bi_getcwd:
+        mov rsi, s_root
+        call new_string_z
+        jmp bi_str_out
+
+; The environment: ENV_MAX fixed slots of ENV_NAME + ENV_VALUE bytes in
+; the runtime's own memory, so it outlives the programs that set it.
+ENV_MAX         equ 32
+ENV_NAME        equ 32
+ENV_VALUE       equ 224
+ENV_SLOT        equ ENV_NAME + ENV_VALUE
+
+; rdi = name string -> rax: its slot, or 0
+env_find:
+        push rcx
+        push rsi
+        mov rsi, rdi
+        mov rcx, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        mov rax, env_table
+.next:
+        cmp rax, env_table + ENV_MAX * ENV_SLOT
+        jae .none
+        cmp byte [rax], 0
+        je .skip
+        push rdi
+        mov rdi, rax
+        call bytes_eq_z
+        pop rdi
+        je .done
+.skip:
+        add rax, ENV_SLOT
+        jmp .next
+.none:
+        xor eax, eax
+.done:
+        pop rsi
+        pop rcx
+        ret
+
+bi_getenv:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        mov rdi, [rdi + 8]
+        call env_find
+        test rax, rax
+        jz bi_ok
+        lea rsi, [rax + ENV_NAME]
+        call new_string_z
+        jmp bi_str_out
+.bad:
+        mov eax, e_getenv
+        jmp bi_error
+
+; rsi = name text, rdi = value text (NUL-terminated): sets it
+env_set_z:
+        push rax
+        push rcx
+        push rsi
+        push rdi
+        push r8
+        mov r8, rdi
+        call strlen_z
+        cmp rcx, ENV_NAME - 1
+        jae .done
+        mov rax, env_table
+.slot:
+        cmp rax, env_table + ENV_MAX * ENV_SLOT
+        jae .free
+        cmp byte [rax], 0
+        je .next
+        mov rdi, rax
+        call bytes_eq_z
+        je .store
+.next:
+        add rax, ENV_SLOT
+        jmp .slot
+.free:
+        mov rax, env_table
+.free_slot:
+        cmp rax, env_table + ENV_MAX * ENV_SLOT
+        jae .done
+        cmp byte [rax], 0
+        je .store
+        add rax, ENV_SLOT
+        jmp .free_slot
+.store:
+        mov rdi, rax
+        rep movsb
+        mov byte [rdi], 0
+        lea rdi, [rax + ENV_NAME]
+        mov rsi, r8
+        call strlen_z
+        cmp rcx, ENV_VALUE - 1
+        jb .copy
+        mov ecx, ENV_VALUE - 1
+.copy:
+        rep movsb
+        mov byte [rdi], 0
+.done:
+        pop r8
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rax
+        ret
+
+bi_setenv:
+        cmp esi, 2
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        cmp qword [rdi + 16], T_STR
+        jne .bad
+        mov rsi, [rdi + 8]
+        mov rdi, [rdi + 24]
+        add rsi, STR_BYTES
+        add rdi, STR_BYTES
+        call env_set_z
+        xor eax, eax
+        jmp bi_int_out
+.bad:
+        mov eax, e_setenv
+        jmp bi_error
+
+bi_unsetenv:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        mov rdi, [rdi + 8]
+        call env_find
+        test rax, rax
+        jz .done
+        mov byte [rax], 0
+.done:
+        xor eax, eax
+        jmp bi_int_out
+.bad:
+        mov eax, e_getenv
+        jmp bi_error
+
+; --- the terminal -----------------------------------------------------------
+
+; terminal_getch(c): the next byte of the console, a line at a time:
+; the line is read (echoed, Backspace erases) when the last one is used
+; up, and ends with a 10. Ctrl-D on an empty line is the end: -1.
+bi_terminal_getch:
+        push rdx
+.again:
+        mov rax, [tg_pos]
+        cmp rax, [tg_len]
+        jb .byte
+        cmp qword [tg_newline], 0
+        jne .newline
+        call read_line
+        cmp qword [read_line_eof], 0
+        jne .eof
+        mov [tg_line], rax
+        mov rcx, [rax + STR_LEN]
+        mov [tg_len], rcx
+        mov qword [tg_pos], 0
+        mov qword [tg_newline], 1
+        jmp .again
+.byte:
+        mov rcx, [tg_line]
+        movzx eax, byte [rcx + STR_BYTES + rax]
+        inc qword [tg_pos]
+        pop rdx
+        jmp bi_int_out
+.newline:
+        mov qword [tg_newline], 0
+        mov eax, 10
+        pop rdx
+        jmp bi_int_out
+.eof:
+        mov rax, -1
+        pop rdx
+        jmp bi_int_out
+
+bi_terminal_raw:                        ; not a terminal: russia reads lines
+        mov rax, -1
+        jmp bi_int_out
+
+bi_zero:                                ; terminal_sane
+        xor eax, eax
+        jmp bi_int_out
+
+bi_terminal_key_ready:
+        mov qword [rdx], T_BOOL
+        mov qword [rdx + 8], 0
+        xor eax, eax
+        ret
+
+bi_terminal_size:
+        push rdx
+        call vec_new
+        mov rdi, rax
+        mov eax, 80
+        call vec_push_int
+        mov eax, 25
+        call vec_push_int
+        mov rax, rdi
+        pop rdx
+        jmp bi_vec_out
+
+; sleep(_): milliseconds, at the timer's 10 ms
+bi_sleep:
+        cmp esi, 1
+        jne .done
+        cmp qword [rdi], T_INT
+        jne .done
+        push rdx
+        mov rax, [rdi + 8]
+        add rax, 9
+        xor edx, edx
+        mov ecx, 10
+        div rcx
+        pop rdx
+        add rax, [ticks]
+.wait:
+        cmp [ticks], rax
+        jae .done
+        sti
+        hlt
+        jmp .wait
+.done:
+        xor eax, eax
+        ret
+
+; file_exists(b): name -> true for a file of the boot image
+bi_file_exists:
+        cmp esi, 1
+        jne .no
+        cmp qword [rdi], T_STR
+        jne .no
+        push rdx
+        mov rax, [rdi + 8]
+        lea rsi, [rax + STR_BYTES]
+        mov rcx, [rax + STR_LEN]
+        call find_file
+        pop rdx
+        test rax, rax
+        setnz al
+        movzx eax, al
+        mov qword [rdx], T_BOOL
+        mov [rdx + 8], rax
+        xor eax, eax
+        ret
+.no:
+        mov qword [rdx], T_BOOL
+        mov qword [rdx + 8], 0
+        xor eax, eax
+        ret
+
+; readfile(s): name -> a file of the boot image as a string, or null
+bi_readfile:
+        cmp esi, 1
+        jne .none
+        cmp qword [rdi], T_STR
+        jne .none
+        push rdx
+        mov rax, [rdi + 8]
+        lea rsi, [rax + STR_BYTES]
+        mov rcx, [rax + STR_LEN]
+        call find_file
+        test rax, rax
+        jz .missing
+        mov rsi, rax
+        mov rcx, rdx
+        call new_string
+        pop rdx
+        jmp bi_str_out
+.missing:
+        pop rdx
+.none:
+        xor eax, eax
+        ret
+
+; --- bytes ------------------------------------------------------------------
+
+; text_bytes(v): s -> its bytes as a vector of integers
+bi_text_bytes:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        push rdx
+        push rbx
+        mov rbx, [rdi + 8]
+        call vec_new
+        mov rdi, rax
+        ; room for all of them at once
+        mov rcx, [rbx + STR_LEN]
+        push rdi
+        lea rdi, [rcx * 8 + 8]
+        shl rdi, 1
+        call alloc
+        pop rdi
+        mov [rdi + VEC_ITEMS], rax
+        mov [rdi + VEC_CAP], rcx
+        mov [rdi + VEC_COUNT], rcx
+        xor edx, edx
+.byte:
+        cmp rdx, rcx
+        jae .done
+        mov qword [rax], T_INT
+        movzx esi, byte [rbx + STR_BYTES + rdx]
+        mov [rax + 8], rsi
+        add rax, 16
+        inc rdx
+        jmp .byte
+.done:
+        mov rax, rdi
+        pop rbx
+        pop rdx
+        jmp bi_vec_out
+.bad:
+        mov eax, e_text_bytes
+        jmp bi_error
+
+; rdi = arguments (vector [from [count]]), esi = count -> r8 = first
+; item, rcx = items; carry set when the range is wrong
+byte_range:
+        cmp qword [rdi], T_VEC
+        jne .bad
+        mov r8, [rdi + 8]
+        mov r9, [r8 + VEC_COUNT]
+        xor eax, eax                    ; from
+        cmp esi, 2
+        jb .have_from
+        cmp qword [rdi + 16], T_INT
+        jne .bad
+        mov rax, [rdi + 24]
+        cmp rax, r9
+        ja .bad
+.have_from:
+        mov rcx, r9
+        sub rcx, rax                    ; count
+        cmp esi, 3
+        jb .have_count
+        cmp qword [rdi + 32], T_INT
+        jne .bad
+        mov r10, [rdi + 40]
+        cmp r10, rcx
+        ja .bad
+        mov rcx, r10
+.have_count:
+        shl rax, 4
+        mov r8, [r8 + VEC_ITEMS]
+        add r8, rax
+        clc
+        ret
+.bad:
+        stc
+        ret
+
+; bytes_text(s): v [from [count]] -> the bytes as a string; null when one
+; of them is 0
+bi_bytes_text:
+        test esi, esi
+        jz .bad
+        cmp esi, 3
+        ja .bad
+        call byte_range
+        jc .bad
+        push rdx
+        lea rdi, [rcx + 9]
+        call alloc
+        mov [rax + STR_LEN], rcx
+        xor edx, edx
+.byte:
+        cmp rdx, rcx
+        jae .done
+        mov r9, [r8 + 8]
+        test r9b, r9b
+        jz .zero
+        mov [rax + STR_BYTES + rdx], r9b
+        add r8, 16
+        inc rdx
+        jmp .byte
+.done:
+        pop rdx
+        jmp bi_str_out
+.zero:
+        pop rdx
+        xor eax, eax
+        ret
+.bad:
+        mov eax, e_bytes_text
+        jmp bi_error
+
+; crc32(n): data [from [count]] -> CRC-32 of a string or a byte vector
+bi_crc32:
+        test esi, esi
+        jz .bad
+        cmp qword [rdi], T_STR
+        je .string
+        push rdx
+        call byte_range
+        pop rdx
+        jc .bad
+        mov eax, -1
+.item:
+        test rcx, rcx
+        jz .done
+        xor al, [r8 + 8]
+        add r8, 16
+        mov r9d, 8
+.bit:
+        shr eax, 1
+        jnc .no_poly
+        xor eax, 0xedb88320
+.no_poly:
+        dec r9d
+        jnz .bit
+        dec rcx
+        jmp .item
+.done:
+        not eax
+        jmp bi_int_out
+.string:
+        push rdx
+        mov rsi, [rdi + 8]
+        mov rcx, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        call crc32
+        pop rdx
+        jmp bi_int_out
+.bad:
+        mov eax, e_crc32
+        jmp bi_error
+
+; --- shell commands of the kernel: they print, and return the value ----------
+
+bi_help:
+        PUTS s_help
+        xor eax, eax
+        ret
+
+bi_uptime:
+        mov rax, [ticks]
+        push rdx
+        xor edx, edx
+        mov ecx, 100
+        div rcx
+        pop rdx
+        PUTS s_up
+        call print_int
+        PUTS s_seconds
+        jmp bi_int_out
+
+bi_ls:
+        call bi_k_modules
+        mov rax, [rdx + 8]
+        xor ecx, ecx
+.next:
+        cmp rcx, [rax + VEC_COUNT]
+        jae .done
+        mov rsi, rcx
+        shl rsi, 4
+        add rsi, [rax + VEC_ITEMS]
+        mov rsi, [rsi + 8]
+        call print_string
+        PUTC 10
+        inc rcx
+        jmp .next
+.done:
+        xor eax, eax
+        ret
+
+bi_mem:
+        call bi_k_mem
+        mov rax, [rdx + 8]
+        mov rax, [rax + VEC_ITEMS]
+        PUTS s_heap
+        mov rcx, [rax + 8]
+        push rax
+        mov rax, rcx
+        shr rax, 10
+        call print_int
+        PUTS s_kib_free
+        pop rax
+        mov rax, [rax + 24]
+        shr rax, 10
+        call print_int
+        PUTS s_kib_nl
+        xor eax, eax
+        ret
+
+bi_cpu:
+        call bi_k_cpu
+        mov rsi, [rdx + 8]
+        call print_string
+        PUTC 10
+        xor eax, eax
+        ret
+
+bi_uname:
+        mov rsi, s_uname
+        call new_string_z
+        mov rsi, rax
+        call print_string
+        PUTC 10
+        jmp bi_str_out
+
+bi_pwd:
+        mov rsi, s_root
+        call new_string_z
+        mov rsi, rax
+        call print_string
+        PUTC 10
+        jmp bi_str_out
+
 ; =====================================================================
 ; tables and texts
 ; =====================================================================
@@ -3357,12 +5645,16 @@ optable:
         dq op_concat
 %elif i == 0x44
         dq op_oop
+%elif i == 0x45
+        dq op_eval
 %elif i == 0x46
         dq op_random64
 %elif i == 0x47
         dq op_seed64
 %elif i == 0x49
         dq op_time
+%elif i == 0x4d
+        dq op_template
 %elif i == 0x50
         dq op_call
 %elif i == 0x51 || i == 0x52
@@ -3404,6 +5696,46 @@ bi_table:
         dq n_k_exec, bi_k_exec
         dq n_k_reboot, bi_k_reboot
         dq n_k_halt, bi_k_halt
+        dq n_struct, bi_struct
+        dq n_new, bi_new
+        dq n_getf, bi_getf
+        dq n_setf, bi_setf
+        dq n_encode, bi_encode
+        dq n_decode, bi_decode
+        dq n_try, bi_try
+        dq n_write_stderr, bi_write_stderr
+        dq n_fail, bi_fail
+        dq n_gc, bi_null
+        dq n_alias, bi_null
+        dq n_keybind, bi_null
+        dq n_keybind_match, bi_null
+        dq n_getenv, bi_getenv
+        dq n_setenv, bi_setenv
+        dq n_unsetenv, bi_unsetenv
+        dq n_getcwd, bi_getcwd
+        dq n_terminal_getch, bi_terminal_getch
+        dq n_terminal_raw, bi_terminal_raw
+        dq n_terminal_sane, bi_zero
+        dq n_terminal_key_ready, bi_terminal_key_ready
+        dq n_terminal_size, bi_terminal_size
+        dq n_sleep, bi_sleep
+        dq n_file_exists, bi_file_exists
+        dq n_readfile, bi_readfile
+        dq n_help, bi_help
+        dq n_uptime, bi_uptime
+        dq n_ls, bi_ls
+        dq n_mem, bi_mem
+        dq n_cpu, bi_cpu
+        dq n_clear, bi_k_clear
+        dq n_color, bi_k_color
+        dq n_uname, bi_uname
+        dq n_pwd, bi_pwd
+        dq n_run, bi_k_exec
+        dq n_reboot, bi_k_reboot
+        dq n_halt, bi_k_halt
+        dq n_text_bytes, bi_text_bytes
+        dq n_bytes_text, bi_bytes_text
+        dq n_crc32, bi_crc32
         dq 0, 0
 
 type_names:
@@ -3453,6 +5785,49 @@ n_k_modules:    db "k_modules", 0
 n_k_exec:       db "k_exec", 0
 n_k_reboot:     db "k_reboot", 0
 n_k_halt:       db "k_halt", 0
+n_struct:         db "struct", 0
+n_new:            db "new", 0
+n_getf:           db "getf", 0
+n_setf:           db "setf", 0
+n_encode:         db "encode", 0
+n_decode:         db "decode", 0
+n_try:            db "try", 0
+n_write_stderr:   db "write_stderr", 0
+n_fail:           db "fail", 0
+n_gc:             db "gc", 0
+n_alias:          db "alias", 0
+n_keybind:        db "keybind", 0
+n_keybind_match:  db "keybind_match", 0
+n_getenv:         db "getenv", 0
+n_setenv:         db "setenv", 0
+n_unsetenv:       db "unsetenv", 0
+n_getcwd:         db "getcwd", 0
+n_terminal_getch:  db "terminal_getch", 0
+n_terminal_raw:   db "terminal_raw", 0
+n_terminal_sane:  db "terminal_sane", 0
+n_terminal_key_ready:  db "terminal_key_ready", 0
+n_terminal_size:  db "terminal_size", 0
+n_sleep:          db "sleep", 0
+n_file_exists:    db "file_exists", 0
+n_readfile:       db "readfile", 0
+n_help:           db "help", 0
+n_uptime:         db "uptime", 0
+n_ls:             db "ls", 0
+n_mem:            db "mem", 0
+n_cpu:            db "cpu", 0
+n_clear:          db "clear", 0
+n_color:          db "color", 0
+n_uname:          db "uname", 0
+n_pwd:            db "pwd", 0
+n_run:            db "run", 0
+n_reboot:         db "reboot", 0
+n_halt:           db "halt", 0
+n_text_bytes:   db "text_bytes", 0
+n_bytes_text:   db "bytes_text", 0
+n_crc32:        db "crc32", 0
+e_text_bytes:   db "text_bytes expects a string", 0
+e_bytes_text:   db "bytes_text(s): v [from [count]]", 0
+e_crc32:        db "crc32(n): data [from [count]]", 0
 
 name_moscow:    db "moscow.ru"
 name_moscow_len equ $ - name_moscow
@@ -3533,6 +5908,70 @@ e_prompt:       db "k_prompt() expects one value", 0
 e_color:        db "k_color() expects two integers, 0..15", 0
 e_exec:         db "k_exec() expects a file name", 0
 
+
+s_struct:       db "struct", 0
+s_root:         db "/", 0
+s_up:           db "up ", 0
+s_seconds:      db " s", 10, 0
+s_heap:         db "heap ", 0
+s_kib_free:     db " KiB, free ", 0
+s_kib_nl:       db " KiB", 10, 0
+s_uname:        db "USSR Moscow amd64", 0
+s_help:         db "Moscow kernel commands (USSR commands; each prints and returns):", 10
+                db "  uptime(s):            seconds since boot", 10
+                db "  ls(v):                files of the boot image", 10
+                db "  mem(v):               [heap bytes, free bytes]", 10
+                db "  cpu(s):               the processor", 10
+                db "  uname(s):             the system", 10
+                db "  pwd(s):               the current folder (always /)", 10
+                db "  clear(_):             clear the screen", 10
+                db "  color(_): fg bg       VGA colours 0..15", 10
+                db "  run(status): ", 34, "f.ru", 34, "   run a program of the image", 10
+                db "  sleep(_): ms          wait", 10
+                db "  getenv(v): n / setenv(_): n v / unsetenv(_): n", 10
+                db "  reboot(_): / halt(_):", 10
+                db "Everything else is USSR, run by russia.su. Ctrl-D leaves it.", 10, 0
+msg_quote_nl:   db "'", 10, 0
+msg_eval1:      db "USSR: eval: the Moscow runtime cannot run '", 0
+msg_eval2:      db "'", 10, 0
+e_template:     db "template arguments do not match format", 0
+e_eval:         db "eval expects a string", 0
+e_struct_name:  db "struct(Name): needs a type name", 0
+e_struct_spec:  db "struct(...) field specs must be strings (", 34, "name:type", 34, ")", 0
+e_new:          db "new(x): ", 34, "TypeName", 34, " args...", 0
+e_new_count:    db "new(): the number of values is not the number of fields", 0
+e_unknown_type: db "unknown struct type '", 0
+e_no_field:     db " has no field '", 0
+e_getf:         db "getf() expects (struct instance, field name string)", 0
+e_encode:       db "encode(s): value", 0
+e_decode:       db "decode(v): UNO text", 0
+e_uno:          db "invalid UNO text", 0
+e_try:          db "try(failed): ", 34, "function", 34, " args ...", 0
+e_try_none:     db "try: no function '", 0
+e_write_stderr: db "write_stderr expects a string", 0
+e_fail:         db "fail() expects a message string", 0
+e_getenv:       db "getenv(v): name", 0
+e_setenv:       db "setenv(r): name value", 0
+
+env_ps1:        db "PS1", 0
+val_ps1:        db "russia> ", 0
+env_user:       db "USER", 0
+val_user:       db "comrade", 0
+env_host:       db "HOSTNAME", 0
+val_host:       db "moscow", 0
+env_home:       db "HOME", 0
+env_os:         db "OS", 0
+val_os:         db "Moscow", 0
+
+        align 8
+rt_gdt:
+        dq 0
+        dq 0x00af9a000000ffff           ; 0x08: 64-bit code
+        dq 0x00cf92000000ffff           ; 0x10: data
+rt_gdtr:
+        dw rt_gdtr - rt_gdt - 1
+        dq rt_gdt
+
 rt_end:
 
 ; =====================================================================
@@ -3542,6 +5981,7 @@ rt_end:
 absolute RT_DATA
 boot_info:      resq 1
 heap_base:      resq 1
+ram_top:        resq 1
 heap_ptr:       resq 1
 heap_end:       resq 1
 ticks:          resq 1
@@ -3557,4 +5997,15 @@ line_buf:       resb LINE_MAX + 8
 cpu_buf:        resb 128
                 alignb 16
 idt:            resb 256 * 16
+capture_on:     resq 1
+capture_len:    resq 1
+real_plain:     resq 1
+bi_retname:     resq 1
+struct_types:   resq 1
+tg_line:        resq 1
+tg_len:         resq 1
+tg_pos:         resq 1
+tg_newline:     resq 1
+read_line_eof:  resq 1
+env_table:      resb 32 * 256
 rt_data_end:

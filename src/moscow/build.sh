@@ -30,6 +30,6 @@ mkdir -p "$out"
 "$NASM" -f bin -i "$arch/" "$arch/ussr_rt.nasm" -o "$out/ussr_rt.bin"
 # no startup file may change what gets compiled
 (cd "$here" && USSR_KIEV= "$USSR" -c moscow.su "$out/moscow.ru")
-(cd "$here" && USSR_KIEV= "$USSR" -c russia.su "$out/russia.ru")
+(cd "$here/../russia" && USSR_KIEV= "$USSR" -c russia.su "$out/russia.ru")
 "$NASM" -f bin -i "$out/" -i "$arch/" "$arch/image.nasm" -o "$out/moscow.img"
 echo "build/moscow/moscow.img: $(wc -c < "$out/moscow.img") bytes"

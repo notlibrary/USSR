@@ -7,7 +7,13 @@
   (`arch/amd64/boot.nasm`) enters long mode and starts the NASM USSR
   runtime (`arch/amd64/ussr_rt.nasm`), a `.ru` bytecode VM on bare metal
   with VGA, serial, keyboard and timer services (`k_*`). It runs the
-  kernel `moscow.ru`, which runs the shell `russia.ru`; `image.nasm`
+  kernel `moscow.ru`, which runs the shell `russia.ru`: the self-hosted
+  interpreter `src/russia/russia.su`, whose REPL is the shell. Commands
+  russia.su does not know go to the runtime through its host calls, so
+  `uptime(_):`, `ls(_):`, `mem(m):`, `run(s): "f.ru"` and the rest are
+  USSR commands. Stage 2 enters long mode at once and loads the files
+  from 1 MiB up with its own ATA driver; the runtime has its own GDT,
+  maps all RAM and puts the heap in the largest region. `image.nasm`
   makes the boot disk and `tools/qemu_test.py` drives the shell in QEMU.
 - Omsk (`src/omsk/omsk.su`), image thumbnails in pure USSR: PNG (every
   colour type and depth) and sequential JPEG in, a baseline JPEG fitted

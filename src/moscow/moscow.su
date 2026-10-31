@@ -5,13 +5,16 @@
 # this program, compiled to moscow.ru, as the first process. Moscow
 # reports the machine, then runs the shell, russia.ru, from the boot
 # image and runs it again whenever it fails; when the shell exits
-# normally the machine halts.
+# normally (Ctrl-D) the machine halts. russia.ru is src/russia/russia.su,
+# the USSR interpreter written in USSR: its REPL is the shell, and the
+# commands it does not know itself (uptime, ls, mem, cpu, run, ...) go to
+# the runtime through its host calls.
 #
 #     sh src/moscow/build.sh          # builds moscow.img
 #     sh src/moscow/run.sh            # boots it in QEMU
 #
-# The k_* commands are the runtime's kernel services; russia.su lists
-# them.
+# The k_* commands are the runtime's kernel services; src/moscow/README.md
+# lists them.
 $include "../libs/strings.su"
 
 mo_kb(r): bytes [
