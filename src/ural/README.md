@@ -48,7 +48,8 @@ ural upload ./repository ftp://packages.example.org/var/www/USSR LOGIN PASSWORD
 `pack` recursively searches for package manifests, creates `.ural` archives
 and `*-box.uno` sidecars in the target directory, then updates that
 directory's `ussr.boxes`. The public HTTPS URL is mandatory and independent of
-the FTP filesystem path. `upload` recursively transfers `.ural` and
+the FTP filesystem path. Entries packed earlier for a different public URL are
+dropped from the index, since its files are served from one place. `upload` recursively transfers `.ural` and
 `*-box.uno` files (skipping hidden directories such as `.git`), keeping their
 relative paths, and then uploads the target directory's `ussr.boxes` last.
 
@@ -83,6 +84,12 @@ as command-line arguments may also be visible to local process inspectors.
 FTP upload paths are treated as absolute paths from the FTP server root, so
 `ftp://host/var/www/html/USSR` uploads into `/var/www/html/USSR`, not a path
 relative to the FTP account's home directory.
+The target directory must already exist; subdirectories below it are
+created. If an existing directory is reported missing, the FTP server locks
+the login into its home directory (vsftpd `chroot_local_user=YES`), where `/`
+is that home and no client can reach `/var/www/html`: set the user's
+`local_root` to the repository directory and upload to `ftp://host/`, or
+lift the chroot for that user.
 
 ## USSR source wrapper
 

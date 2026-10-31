@@ -639,6 +639,27 @@ static int command_pack(const char *root, const char *public_url)
         return 1;
     }
     result = scan_packages(root, root, public_url, &db, err, sizeof err);
+    /* A directory is served from one public URL: rows packed earlier for
+       another URL point clients at files that are not here. */
+    if (result == 0) {
+        sqlite3_stmt *stale = NULL;
+        int rc = sqlite3_prepare_v2(db.handle,
+            "DELETE FROM repository_index WHERE server_url<>?1", -1, &stale, NULL);
+        if (rc == SQLITE_OK) rc = sqlite3_bind_text(stale, 1, public_url, -1, SQLITE_TRANSIENT);
+        if (rc == SQLITE_OK) rc = sqlite3_step(stale);
+        if (rc != SQLITE_DONE) {
+            set_error(err, sizeof err, sqlite3_errmsg(db.handle));
+            result = -1;
+        } else if (sqlite3_changes(db.handle) > 0) {
+            printf("dropped %d index entries packed for another public URL\n",
+                   sqlite3_changes(db.handle));
+        }
+        sqlite3_finalize(stale);
+        if (result == 0)
+            db_exec(db.handle, "DELETE FROM repository_config WHERE server_url "
+                    "NOT IN (SELECT server_url FROM repository_index)",
+                    NULL, 0);
+    }
     if (result != 0) {
         db_exec(db.handle, "ROLLBACK", NULL, 0);
         fprintf(stderr, "ural: pack failed: %s\n", err[0] ? err : "cannot scan package directory");
@@ -760,6 +781,51 @@ done:
     return result;
 }
 
+/* The base directory must already exist. Creating it would hide a server
+   that locks the login into its home (vsftpd chroot_local_user): there "/"
+   is the home, so /var/www/html/USSR would quietly become
+   /home/LOGIN/var/www/html/USSR. Subdirectories below it are still made. */
+static int ftp_check_base(CURL *curl, const char *base, const char *login,
+                          const char *password, char *err, size_t cap)
+{
+    char *url = ural_ftp_url_join(base, "");
+    const char *path, *entry = NULL;
+    CURLcode rc;
+    if (url == NULL) {
+        set_error(err, cap, "out of memory");
+        return -1;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_USERNAME, login);
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, password);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_FTP);
+    curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR_NONE);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, 60L);
+    rc = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_FTP_ENTRY_PATH, &entry);
+    path = strstr(base, "://");
+    path = path != NULL ? strchr(path + 3, '/') : NULL;
+    if (path == NULL) path = "/";
+    while (path[0] == '/' && path[1] == '/') ++path;
+    if (rc == CURLE_REMOTE_ACCESS_DENIED || rc == CURLE_FTP_COULDNT_RETR_FILE) {
+        snprintf(err, cap, "remote directory %s does not exist as this FTP login "
+                 "sees it (login starts in %s). Create it first. If it does exist "
+                 "on the server, the FTP server locks this login into its home "
+                 "(vsftpd chroot_local_user), where / is the home: set local_root "
+                 "to that directory or disable the chroot for this user",
+                 path, entry != NULL ? entry : "an unknown directory");
+    } else if (rc != CURLE_OK) {
+        snprintf(err, cap, "cannot open FTP directory %s: %s", url,
+                 curl_easy_strerror(rc));
+    }
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    free(url);
+    return rc == CURLE_OK ? 0 : -1;
+}
+
 static int upload_if_package_file(CURL *curl, const char *root, const char *name,
                                   const char *base, const char *login,
                                   const char *password, char *err, size_t cap)
@@ -871,8 +937,10 @@ static int command_upload(const char *root, const char *url,
         curl_global_cleanup();
         return 1;
     }
-    result = scan_upload_directory(curl, root, root, url, login, password,
-                                   err, sizeof err);
+    result = ftp_check_base(curl, url, login, password, err, sizeof err);
+    if (result == 0)
+        result = scan_upload_directory(curl, root, root, url, login, password,
+                                       err, sizeof err);
     /* The index goes last so clients never see entries before their files. */
     if (result == 0) {
         char *index = join_path(root, "ussr.boxes");
@@ -984,7 +1052,8 @@ static int copy_column(sqlite3_stmt *stmt, int column, char **out)
 }
 
 static int read_remote_package(sqlite3 *index, const char *server,
-                               const char *name, remote_package_t *out)
+                               const char *name, remote_package_t *out,
+                               char *foreign, size_t foreign_cap)
 {
     sqlite3_stmt *stmt = NULL;
     int rc;
@@ -1008,6 +1077,11 @@ static int read_remote_package(sqlite3 *index, const char *server,
             continue;
         }
         candidate.server = duplicate(server);
+        if (candidate.server != NULL &&
+            (!url_belongs_to_server(candidate.metadata_url, server) ||
+             !url_belongs_to_server(candidate.archive_url, server)) &&
+            foreign != NULL && foreign_cap > 0 && foreign[0] == '\0')
+            snprintf(foreign, foreign_cap, "%s", candidate.archive_url);
         if (candidate.server == NULL ||
             !ural_manifest_validate_component(candidate.version) ||
             !url_belongs_to_server(candidate.metadata_url, server) ||
@@ -1034,6 +1108,7 @@ static int find_remote_package(sqlite3 *local, const char *state,
     sqlite3_stmt *servers = NULL;
     unsigned int index_number = 0;
     int rc, found = 0, indexes_read = 0, servers_seen = 0;
+    char foreign[512] = {0}, foreign_server[256] = {0};
     if (sqlite3_prepare_v2(local,
             "SELECT url FROM trusted_servers WHERE enabled=1 ORDER BY url",
             -1, &servers, NULL) != SQLITE_OK) {
@@ -1063,8 +1138,12 @@ static int find_remote_package(sqlite3 *local, const char *state,
         if (curl_download(index_url, index_path, server_err, sizeof server_err) == 0) {
             int open_rc = sqlite3_open_v2(index_path, &remote, SQLITE_OPEN_READONLY, NULL);
             if (open_rc == SQLITE_OK) {
+                int had_foreign = foreign[0] != '\0';
                 int read_rc = read_remote_package(remote, (const char *)server_text,
-                                                  name, out);
+                                                  name, out, foreign, sizeof foreign);
+                if (!had_foreign && foreign[0] != '\0')
+                    snprintf(foreign_server, sizeof foreign_server, "%s",
+                             (const char *)server_text);
                 if (read_rc == 0) {
                     ++indexes_read;
                     if (out->version != NULL)
@@ -1098,7 +1177,12 @@ static int find_remote_package(sqlite3 *local, const char *state,
     }
     sqlite3_finalize(servers);
     if (!found) {
-        if (indexes_read > 0)
+        if (indexes_read > 0 && foreign[0] != '\0')
+            snprintf(err, cap, "package '%s' is listed by %s but its files are at %.200s, "
+                     "outside that repository; the index was packed with another public "
+                     "URL: run ural pack DIR %s and upload again",
+                     name, foreign_server, foreign, foreign_server);
+        else if (indexes_read > 0)
             snprintf(err, cap, "package '%s' was not found on any trusted repository", name);
         else if (servers_seen == 0)
             set_error(err, cap, "no enabled trusted repositories are configured");
@@ -1803,15 +1887,25 @@ static int command_search(sqlite3 *local, const char *state, const char *query)
         }
         ++indexes_read;
         if (sqlite3_prepare_v2(remote,
-            "SELECT DISTINCT package_name,version FROM repository_index "
+            "SELECT package_name,version,metadata_url,archive_url FROM repository_index "
             "WHERE package_name LIKE ?1 ORDER BY package_name,version",
             -1, &packages, NULL) == SQLITE_OK) {
             size_t n = strlen(query) + 3;
             char *pattern = (char *)malloc(n);
+            int foreign = 0;
             if (pattern != NULL) {
                 snprintf(pattern, n, "%%%s%%", query);
                 if (sqlite3_bind_text(packages, 1, pattern, -1, SQLITE_TRANSIENT) == SQLITE_OK) {
                     while (sqlite3_step(packages) == SQLITE_ROW) {
+                        const char *metadata_url = (const char *)sqlite3_column_text(packages, 2);
+                        const char *archive_url = (const char *)sqlite3_column_text(packages, 3);
+                        /* install refuses files outside the trusted repository */
+                        if (metadata_url == NULL || archive_url == NULL ||
+                            !url_belongs_to_server(metadata_url, (const char *)server) ||
+                            !url_belongs_to_server(archive_url, (const char *)server)) {
+                            ++foreign;
+                            continue;
+                        }
                         printf("%s\t%s\t%s\n",
                                sqlite3_column_text(packages, 0),
                                sqlite3_column_text(packages, 1), server);
@@ -1820,6 +1914,10 @@ static int command_search(sqlite3 *local, const char *state, const char *query)
                 }
                 free(pattern);
             }
+            if (foreign > 0)
+                fprintf(stderr, "ural: %s lists %d matching entries whose files are "
+                        "outside it (packed for another public URL); repack with "
+                        "ural pack DIR %s\n", server, foreign, server);
         }
         sqlite3_finalize(packages);
         sqlite3_close(remote);
