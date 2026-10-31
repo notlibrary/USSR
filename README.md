@@ -195,4 +195,6 @@ Enough sentiments neuroslop is just a feature of the epoch I've got literally Ur
 
 Take it or leave it(or push MOAR if you got it too)
 
+Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
+
 P.S. СССР Средство Создания Совершенных Разработок
