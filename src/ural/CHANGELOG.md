@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- `upload` reads the index and one archive back over the public HTTPS URL
+  and fails with a hint on a 403 (umask), a 404 (wrong directory) or an old
+  cached copy.
+- The missing-directory error blames the chroot only when the login starts
+  at `/`, and says that entering a directory needs its x bit.
+- README: setting up the FTP server (chroot, permissions, `local_umask`).
 - `pack` drops index entries left from an earlier pack with another public
   URL; they sent `install` to files that were never in the repository.
 - `install` says when a package is listed but its files point outside the
