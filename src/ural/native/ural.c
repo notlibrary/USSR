@@ -810,13 +810,19 @@ static int ftp_check_base(CURL *curl, const char *base, const char *login,
     path = path != NULL ? strchr(path + 3, '/') : NULL;
     if (path == NULL) path = "/";
     while (path[0] == '/' && path[1] == '/') ++path;
-    if (rc == CURLE_REMOTE_ACCESS_DENIED || rc == CURLE_FTP_COULDNT_RETR_FILE) {
-        snprintf(err, cap, "remote directory %s does not exist as this FTP login "
-                 "sees it (login starts in %s). Create it first. If it does exist "
-                 "on the server, the FTP server locks this login into its home "
-                 "(vsftpd chroot_local_user), where / is the home: set local_root "
-                 "to that directory or disable the chroot for this user",
-                 path, entry != NULL ? entry : "an unknown directory");
+    if ((rc == CURLE_REMOTE_ACCESS_DENIED || rc == CURLE_FTP_COULDNT_RETR_FILE) &&
+        entry != NULL && strcmp(entry, "/") == 0) {
+        /* a chrooted login starts at "/" */
+        snprintf(err, cap, "remote directory %s cannot be opened and this FTP login "
+                 "starts in /. If the directory exists on the server, the server "
+                 "locks this login into its home (vsftpd chroot_local_user), where / "
+                 "is the home: set local_root to that directory or disable the "
+                 "chroot for this user; otherwise create it first", path);
+    } else if (rc == CURLE_REMOTE_ACCESS_DENIED || rc == CURLE_FTP_COULDNT_RETR_FILE) {
+        snprintf(err, cap, "remote directory %s cannot be opened by this FTP login "
+                 "(it starts in %s): create it, or let the login enter it "
+                 "(owner or group with rwx, e.g. chown LOGIN %s)",
+                 path, entry != NULL ? entry : "an unknown directory", path);
     } else if (rc != CURLE_OK) {
         snprintf(err, cap, "cannot open FTP directory %s: %s", url,
                  curl_easy_strerror(rc));
