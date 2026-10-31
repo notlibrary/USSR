@@ -977,3 +977,23 @@ pick preprocessor from russia.su(change $ to #) make compiler tiny or nano
 no REPL mode just compile to .ru
 battle test it on real C projects not on premade tests 
 use hand-made parser that's all it is the the final prog in our project
+
+We need to add O to the RUND stack to make it ROUND
+Omsk.su image thumbnailing library it must convert incoming image into 200x200 thumbnail and save it in thr thumbs folder
+and show it to user instead whole picture
+Then we must re-deploy Novgorod change stack name to ROUND and left backlink to USSR github repo in stack name
+at the bottom of the Novgorod page
+After all this done we must drop stalin and usa tests from run-all.sh
+because stalin can accidentally drop runner GPT table and USA has it's own test strategy
+then we must prepare all the Makefiles to the release because stalin has bread bwrite code
+that is included in separate file
+
+
+Continue to test usa using emscripten lan corpus test
+then finish check ural download error
+PS C:\Users\Serenity\USSR> & $ural install tver
+ural: package 'tver' was not found on any trusted repository
+I uploaded files using raw ip address not server domain because it under cloudflare
+Then upload error
+1.Upload into wrong folder 
+I want it upload /var/www/html/USSR it uploads to /home/tno/var/www/html/USSR
