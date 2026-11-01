@@ -20,6 +20,7 @@ ussr_SOURCES = \
     ryazan_openssl.c \
     ryazan_schannel.c \
     gc.c \
+    btree.c \
 	process_posix.c \
     prng64_xrp32.c \
 	autocomplete.c \
@@ -57,6 +58,7 @@ EXTRA_DIST = \
     ryazan.h \
     ryazan_backend.h \
     gc.h \
+    btree.h \
     vm.h \
     pp.h \
     bestline.h \

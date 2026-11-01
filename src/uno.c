@@ -103,6 +103,11 @@ static int uno_store_value(ussr_value_t *dst, ussr_value_t src)
         *dst = src;
         return 0;
 
+    case USSR_BTREE:
+        ussr_btree_retain(src.data.btree);
+        *dst = src;
+        return 0;
+
     default:
         *dst = src;
         return 0;
@@ -121,6 +126,9 @@ static void uno_release_value(ussr_value_t *v)
         break;
     case USSR_STRUCT:
         ussr_struct_instance_release(v->data.instance);
+        break;
+    case USSR_BTREE:
+        ussr_btree_release(v->data.btree);
         break;
     default:
         break;
@@ -503,6 +511,8 @@ static int uno_type_matches(const char *type_name, const ussr_value_t *value)
         return value->type == USSR_NULL;
     if (strcmp(type_name, "vector") == 0)
         return value->type == USSR_VECTOR;
+    if (strcmp(type_name, "btree") == 0)
+        return value->type == USSR_BTREE;
 
     /* Otherwise type_name names a struct; accept it or any subtype. */
     return value->type == USSR_STRUCT &&
@@ -1059,6 +1069,42 @@ static int uno_encode_vector(uno_buf_t *buf, const ussr_vector_t *vector)
     return uno_buf_append(buf, "]");
 }
 
+typedef struct
+{
+    uno_buf_t *buf;
+    int first;
+} uno_pairs_t;
+
+static int uno_encode_pair(const ussr_value_t *key, const ussr_value_t *value,
+                           void *ctx)
+{
+    uno_pairs_t *p = ctx;
+
+    if ((!p->first && uno_buf_append(p->buf, ",") != 0) ||
+        uno_buf_append(p->buf, "[") != 0 ||
+        uno_encode_value(p->buf, key) != 0 ||
+        uno_buf_append(p->buf, ",") != 0 ||
+        uno_encode_value(p->buf, value) != 0 ||
+        uno_buf_append(p->buf, "]") != 0)
+        return -1;
+    p->first = 0;
+    return 0;
+}
+
+/* A btree is written as its [key, value] pairs in key order (decode
+ * gives them back as a vector). */
+static int uno_encode_btree(uno_buf_t *buf, const ussr_btree_t *tree)
+{
+    uno_pairs_t p;
+
+    p.buf = buf;
+    p.first = 1;
+    if (uno_buf_append(buf, "[") != 0 ||
+        ussr_btree_each(tree, uno_encode_pair, &p) != 0)
+        return -1;
+    return uno_buf_append(buf, "]");
+}
+
 static int uno_encode_value(uno_buf_t *buf, const ussr_value_t *value)
 {
     switch (value->type)
@@ -1091,6 +1137,9 @@ static int uno_encode_value(uno_buf_t *buf, const ussr_value_t *value)
 
     case USSR_STRUCT:
         return uno_encode_struct(buf, value->data.instance);
+
+    case USSR_BTREE:
+        return uno_encode_btree(buf, value->data.btree);
     }
 
     return -1;

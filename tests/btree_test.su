@@ -1,0 +1,153 @@
+# The btree container: an ordered map kept in a B+ tree (src/btree.c).
+# Enough keys go in and out to split and merge nodes a few levels deep;
+# every check prints PASS or FAIL.
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# true when the keys of t are in strictly increasing order
+ascending(r): t [
+    btkeys(ks): t
+    len(n): ks
+    set(r): true
+    set(i): 1
+    while(_): {i < n} [
+        at(a): ks {i - 1}
+        at(b): ks i
+        if(_): {a >= b} [ set(r): false ]
+        set(i): {i + 1}
+    ]
+]
+
+init(result): arg_count arg_values [
+    btree(t):
+    typeof(ty): t
+    check(_): "typeof" ty "btree"
+    btlen(n): t
+    check(_): "empty" n 0
+    btfirst(f): t
+    check(_): "first of empty" f null
+
+    # 3000 integer keys in a scrambled order: 7919 is prime to 3000
+    set(i): 0
+    while(_): {i < 3000} [
+        set(k): {(i * 7919) % 3000}
+        btput(_): t k {k * 2}
+        set(i): {i + 1}
+    ]
+    len(n): t
+    check(_): "3000 keys" n 3000
+    btget(v): t 1234
+    check(_): "get" v 2468
+    btget(v): t 5000 "none"
+    check(_): "get with default" v "none"
+    bthas(h): t 2999
+    check(_): "has" h true
+    ascending(ok): t
+    check(_): "in order" ok true
+    btput(_): t 7 "seven"
+    btget(v): t 7
+    check(_): "replace keeps one key" v "seven"
+    btlen(n): t
+    check(_): "still 3000" n 3000
+
+    # delete the odd keys: nodes borrow and merge
+    set(i): 1
+    set(gone): 0
+    while(_): {i < 3000} [
+        btdel(d): t i
+        if(_): d [ set(gone): {gone + 1} ]
+        set(i): {i + 2}
+    ]
+    check(_): "1500 deleted" gone 1500
+    btdel(d): t 1
+    check(_): "delete twice" d false
+    btlen(n): t
+    check(_): "1500 left" n 1500
+    ascending(ok): t
+    check(_): "in order after deletes" ok true
+    btfloor(k): t 1001
+    check(_): "floor" k 1000
+    btceil(k): t 1001
+    check(_): "ceil" k 1002
+    btprev(k): t 1000
+    check(_): "prev" k 998
+    btnext(k): t 1000
+    check(_): "next" k 1002
+    btlast(k): t
+    check(_): "last" k 2998
+    btprev(k): t 0
+    check(_): "nothing before the first" k null
+    btrange(p): t 10 20
+    encode(s): p
+    check(_): "range" s "[[10,20],[12,24],[14,28],[16,32],[18,36]]"
+    btkeys(ks): t null 7 2
+    encode(s): ks
+    check(_): "keys with a limit" s "[0,2]"
+
+    # delete everything, in a scrambled order again
+    set(i): 0
+    while(_): {i < 3000} [
+        btdel(_): t {(i * 7919) % 3000}
+        set(i): {i + 1}
+    ]
+    btlen(n): t
+    check(_): "emptied" n 0
+    btput(_): t 5 "back"
+    btfirst(f): t
+    check(_): "usable after emptying" f 5
+
+    # strings sort byte by byte, after every number
+    btree(s):
+    btput(_): s "/bin/stalin.ru" 1
+    btput(_): s "/bin" 2
+    btput(_): s "/" 3
+    btput(_): s "/boot/moscow.ru" 4
+    btput(_): s "/bin/install.ru" 5
+    btput(_): s 2.5 "real"
+    btput(_): s -1 "minus"
+    btkeys(ks): s
+    encode(e): ks
+    check(_): "mixed order" e "[-1,2.5,`/`,`/bin`,`/bin/install.ru`,`/bin/stalin.ru`,`/boot/moscow.ru`]"
+    btkeys(ks): s "/bin/" "/bin0"
+    encode(e): ks
+    check(_): "a directory's entries" e "[`/bin/install.ru`,`/bin/stalin.ru`]"
+    btput(_): s 2 "two"
+    btget(v): s 2.0
+    check(_): "2 and 2.0 are one key" v "two"
+
+    # a reference type: copies share the tree
+    set(u): s
+    btdel(_): u "/"
+    bthas(h): s "/"
+    check(_): "shared" h false
+    vec(holder): ""
+    push(_): holder s
+    at(back): holder 0
+    btlen(n): back
+    btlen(m): s
+    check(_): "inside a vector" n m
+    encode(e): s
+    decode(d): e
+    len(n): d
+    check(_): "encodes as pairs" n m
+
+    # a tree that holds itself is garbage once nothing else does
+    btree(loop):
+    btput(_): loop "self" loop
+    set(loop): null
+    gc(_):
+    print(_): "gc ran"
+    set(result): 0
+]

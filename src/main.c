@@ -72,6 +72,7 @@ static int vm_truthy(const ussr_value_t *value)
         case USSR_STRING: return value->data.string != NULL && value->data.string[0] != '\0';
         case USSR_VECTOR: return value->data.vector != NULL && ussr_vector_length(value->data.vector) != 0;
         case USSR_STRUCT: return value->data.instance != NULL;
+        case USSR_BTREE: return ussr_btree_count(value->data.btree) != 0;
     }
     return 0;
 }
@@ -132,6 +133,7 @@ static const char *vm_type_label(const ussr_value_t *v)
         case USSR_BOOLEAN: return "boolean";
         case USSR_VECTOR: return "vector";
         case USSR_STRUCT: return "struct";
+        case USSR_BTREE: return "btree";
     }
     return "value";
 }
@@ -297,6 +299,7 @@ static int vm_equal(const ussr_value_t *a, const ussr_value_t *b)
         case USSR_STRING: return strcmp(a->data.string, b->data.string) == 0;
         case USSR_VECTOR: return a->data.vector == b->data.vector;
         case USSR_STRUCT: return a->data.instance == b->data.instance;
+        case USSR_BTREE: return a->data.btree == b->data.btree;
     }
     return 0;
 }
@@ -404,7 +407,9 @@ int vm_fold_binary(
     ussr_value_t *out)
 {
     if (left->type == USSR_STRUCT || left->type == USSR_VECTOR ||
-        right->type == USSR_STRUCT || right->type == USSR_VECTOR)
+        left->type == USSR_BTREE ||
+        right->type == USSR_STRUCT || right->type == USSR_VECTOR ||
+        right->type == USSR_BTREE)
         return -1;
     /* vm_binary reports a bad shift count; the VM should, at run time. */
     if ((opcode == USSR_BC_SHL || opcode == USSR_BC_SHR) &&

@@ -42,6 +42,7 @@ OBJECTS = \
     src/scheduler.o \
     src/eventq.o \
     src/gc.o \
+    src/btree.o \
 	src/prng64_xrp32.o
 
 .PHONY: all clean dist
@@ -102,7 +103,10 @@ src/scheduler.o: src/scheduler.c src/scheduler.h src/vm.h src/eventq.h src/gc.h
 src/eventq.o: src/eventq.c src/eventq.h src/process.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-src/gc.o: src/gc.c src/gc.h src/uno.h
+src/gc.o: src/gc.c src/gc.h src/uno.h src/btree.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/btree.o: src/btree.c src/btree.h src/uno.h src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/prng64_xrp32.o: src/prng64_xrp32.c src/prng64_xrp32.h
