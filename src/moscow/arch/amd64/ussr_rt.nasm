@@ -11,12 +11,18 @@
 ; The VM follows docs/USSR_VM_SPEC.md and reads the .ru format of
 ; docs/RU_BYTECODE_FORMAT.md (format 3, ABI 3; signature, versions,
 ; length and CRC-32 are checked). What it has:
-;   - every opcode except EXTERNAL, EVAL, SCAN, DECODE_UNO, GET, CHAIN,
-;     FILE, CD and TEMPLATE (those stop the program with a message);
+;   - every opcode except EXTERNAL, SCAN, GET, CHAIN, FILE and CD (those
+;     stop the program with a message);
 ;   - values null, integer (64-bit, wrapping), real (SSE2), string,
-;     boolean and vector; no structs;
-;   - the builtins len byte slice chr vec push pop at typeof, and the
-;     kernel services k_* (see bi_table at the end of the code).
+;     boolean, vector, struct and btree (btree.inc, a B+ tree map);
+;   - the builtins of bi_table at the end of the code: len byte slice
+;     chr vec push pop at typeof, structs, UNO, the bt* commands, the
+;     disk commands bread bwrite bsize bcopy bdevices (ata.inc), sha256
+;     (sha256.inc), and the kernel services k_*.
+; The kernel (moscow.ru) can take commands over with k_syscall(_): name
+; function: every program loaded after that, and every eval, runs the
+; kernel's function for that name instead (sys_call), so the shell's
+; ls, readfile, file_exists ... read the kernel's file system.
 ; Names are interned per program at load time, so variables, hash
 ; entries (name! and name?) and builtins are found by index.
 ;
@@ -36,6 +42,7 @@ T_STR           equ 3
 T_BOOL          equ 4
 T_VEC           equ 5
 T_STRUCT        equ 6
+T_BTREE         equ 7
 T_UNSET         equ 0xff            ; a hash entry never stored
 
 OP_ADD          equ 0x10
@@ -59,6 +66,11 @@ OP_SHR          equ 0x22
 OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
+SYS_MAX         equ 48                  ; kernel commands (k_syscall)
+SYS_NAME        equ 32                  ; a name, NUL padded
+SYS_ENTRY       equ 48                  ; name, program, function
+SYS_BASE        equ 0x10000             ; symbuiltin: SYS_BASE + entry + 1
+VM_AREA         equ VM_size + FRAME_size * MAX_FRAMES + LSTACK_BYTES
 LSTACK_BYTES    equ 1024 * 1024     ; locals of every active call
 HCAP            equ 131072           ; intern hash slots (power of two)
 SYM_MAX         equ 65536           ; distinct names in a program
@@ -201,12 +213,14 @@ start:
         call gdt_init
         call idt_init
         call heap_init
+        call ata_init
         call env_init
         sti
 
         PUTS msg_start
         mov esi, name_moscow
         mov ecx, name_moscow_len
+        xor r8d, r8d
         call exec_file
         PUTS msg_ended
         movsxd rax, eax
@@ -1192,7 +1206,12 @@ print_value:
         je .vec
         cmp rax, T_STRUCT
         je .struct
+        cmp rax, T_BTREE
+        je .btree
         PUTC '?'
+        jmp .done
+.btree:
+        call bt_print
         jmp .done
 .null:
         PUTS s_null
@@ -1700,6 +1719,14 @@ rt_load:
         jae .syms_done
         mov rax, [r14 + PROG.symtext]
         mov rsi, [rax + rbp * 8]
+        xor edx, edx
+        call sys_find
+        cmp eax, -1
+        je .not_sys
+        add eax, SYS_BASE + 1
+        mov [r15 + rbp * 4], eax
+        jmp .sym_next
+.not_sys:
         xor ecx, ecx
 .builtin:
         mov rdi, rcx
@@ -2121,19 +2148,24 @@ find_file:
         pop rbx
         ret
 
-; rsi = name bytes, rcx = length -> eax: the program's status (127 when
-; the image has no such file, 1 when it does not load or fails). The
-; program's memory is released when it ends.
+; rsi = name bytes, rcx = length, r8 = arguments (a vector, or 0) ->
+; eax: the program's status (127 when the image has no such file, 1
+; when it does not load or fails). The program's memory is released
+; when it ends.
 exec_file:
         push rbx
         push r12
+        push r8
         call find_file
+        pop r8
         test rax, rax
         jz .missing
         mov r12, [heap_ptr]
         push qword [struct_types]
+        push r8
         mov rsi, rax
         call rt_load
+        pop rdx
         test rax, rax
         jz .load_failed
         mov rdi, rax
@@ -2156,18 +2188,23 @@ exec_file:
         pop rbx
         ret
 
-; rdi = program -> eax: its status. init's integer result 0..255 is the
-; status (other integers 1, anything else 0); without init, 0. Errors
-; give 1.
+; rdi = program, rdx = its arguments (a vector of strings, or 0 for
+; none) -> eax: its status. init's integer result 0..255 is the status
+; (other integers 1, anything else 0); without init, 0. Errors give 1.
 vm_run:
         mov rsi, [rdi + PROG.init]
         cmp rsi, -1
         je .top
         ; init(ret): arg_cnt arg_vec
         sub rsp, 32
-        mov qword [rsp], T_INT
-        mov qword [rsp + 8], 0
+        mov rax, rdx
+        test rax, rax
+        jnz .args
         call vec_new
+.args:
+        mov rcx, [rax + VEC_COUNT]
+        mov qword [rsp], T_INT
+        mov [rsp + 8], rcx
         mov qword [rsp + 16], T_VEC
         mov [rsp + 24], rax
         mov rdx, rsp
@@ -2196,6 +2233,38 @@ vm_exec:
         mov r13, rdi
         mov r10, rsi
         mov r11, rdx
+        cmp r8d, 3                      ; a kernel command: its own area
+        jne .fresh
+        mov rax, [sys_area]
+        test rax, rax
+        jz .fresh
+        cmp qword [sys_depth], 1
+        jne .fresh
+        push rcx
+        mov rdi, rax
+        mov ecx, VM_size / 8
+        xor eax, eax
+        rep stosq
+        pop rcx
+        mov rax, [sys_area]
+        mov r12, rax
+        mov rbx, rax
+        mov [r12 + VM.prog], r13
+        mov [r12 + VM.has_init], r8
+        push rcx
+        mov rsi, r11
+        mov rdi, rbx
+        shl ecx, 4
+        rep movsb
+        pop rcx
+        lea rax, [r12 + VM_size]
+        mov [r12 + VM.frames], rax
+        add rax, FRAME_size * MAX_FRAMES
+        mov [r12 + VM.ltop], rax
+        add rax, LSTACK_BYTES
+        mov [r12 + VM.lend], rax
+        jmp .ready
+.fresh:
         mov edi, VM_size
         call alloc
         mov r12, rax
@@ -2217,6 +2286,7 @@ vm_exec:
         mov [r12 + VM.ltop], rax
         add rax, LSTACK_BYTES
         mov [r12 + VM.lend], rax
+.ready:
         mov [r12 + VM.rsp], rsp
         mov r14, [r13 + PROG.code]
         xor r15d, r15d
@@ -2235,6 +2305,10 @@ vm_exec:
         jmp vm_next
 
 vm_halt:
+        mov rax, [rbx + 31 * 16]        ; a called function's result
+        mov [vm_result], rax
+        mov rax, [rbx + 31 * 16 + 8]
+        mov [vm_result + 8], rax
         xor eax, eax
         cmp qword [r12 + VM.has_init], 1
         jne vm_leave
@@ -2382,6 +2456,8 @@ truthy:
         cmp rax, T_STR
         je .counted
         cmp rax, T_VEC
+        je .counted
+        cmp rax, T_BTREE
         je .counted
         cmp rax, T_REAL
         je .real
@@ -2579,6 +2655,23 @@ print_sym:
         pop rcx
         pop rsi
         ret
+
+; DECODE_UNO a, string: a = the value of a '...' UNO literal
+op_decode_uno:
+        REGADDR ecx, rcx
+        push rcx
+        call sym_of
+        mov rsi, [r13 + PROG.symtext]
+        mov rsi, [rsi + rax * 8]
+        mov r8, [rsi + STR_LEN]
+        add rsi, STR_BYTES
+        add r8, rsi
+        call uno_read
+        pop rcx
+        jc vm_fail
+        mov [rcx], rax
+        mov [rcx + 8], rdx
+        jmp vm_next
 
 op_vector_get:                          ; a = b[c]
         REGADDR ecx, rcx
@@ -2960,6 +3053,8 @@ op_oop:
         test r10d, r10d
         jz .unknown
         dec r10d
+        cmp r10d, SYS_BASE
+        jae .syscall
         shl r10, 4
         ; the command's return name, for builtins that want it
         mov qword [bi_retname], 0
@@ -2977,6 +3072,22 @@ op_oop:
         mov qword [rdx + 8], 0
         mov rdi, rbx
         call [bi_table + r10 + 8]
+        pop rcx
+        test eax, eax
+        jnz vm_fail
+        shl ecx, 4
+        add rcx, rbx
+        lea rax, [r12 + VM.tmp]
+        COPYVAL rcx, rax, rdx
+        jmp vm_next
+.syscall:
+        mov esi, edx
+        lea rdx, [r12 + VM.tmp]
+        mov qword [rdx], T_NULL
+        mov qword [rdx + 8], 0
+        mov rdi, rbx
+        lea eax, [r10d - SYS_BASE]
+        call sys_call
         pop rcx
         test eax, eax
         jnz vm_fail
@@ -3375,6 +3486,8 @@ bi_len:
         jne .bad
         cmp qword [rdi], T_STR
         je .counted
+        cmp qword [rdi], T_BTREE
+        je .counted
         cmp qword [rdi], T_VEC
         jne .bad
 .counted:
@@ -3531,9 +3644,15 @@ bi_typeof:
         mov rax, [rdi]
         cmp rax, T_STRUCT
         je .struct
+        cmp rax, T_BTREE
+        je .btree
         cmp rax, T_VEC
         ja .bad
         mov rsi, [type_names + rax * 8]
+        call new_string_z
+        jmp bi_str_out
+.btree:
+        mov rsi, s_btree
         call new_string_z
         jmp bi_str_out
 .struct:
@@ -3709,12 +3828,15 @@ bi_k_modules:
         pop rbx
         jmp bi_vec_out
 
+; k_exec(status): name [args ...] -> runs a program of the boot image
 bi_k_exec:
-        cmp esi, 1
-        jne .bad
+        test esi, esi
+        jz .bad
         cmp qword [rdi], T_STR
         jne .bad
         push rdx
+        call args_after_first
+        mov r8, rax
         mov rax, [rdi + 8]
         lea rsi, [rax + STR_BYTES]
         mov rcx, [rax + STR_LEN]
@@ -3724,6 +3846,315 @@ bi_k_exec:
         jmp bi_int_out
 .bad:
         mov eax, e_exec
+        jmp bi_error
+
+; rdi = arguments, esi = their count -> rax: a vector of all but the
+; first. Keeps the others.
+args_after_first:
+        push rcx
+        push rsi
+        push rdi
+        mov ecx, esi
+        mov rsi, rdi
+        call vec_new
+        mov rdi, rax
+.next:
+        dec ecx
+        jle .done
+        add rsi, 16
+        call vec_push
+        jmp .next
+.done:
+        mov rax, rdi
+        pop rdi
+        pop rsi
+        pop rcx
+        ret
+
+; k_exec_bytes(status): bytes [args ...] -> runs the .ru program in a
+; byte vector (one the kernel read from its file system) with the
+; arguments, or with the strings of one vector argument; its memory,
+; the program's copy of the bytes included, is released when it ends.
+bi_k_exec_bytes:
+        test esi, esi
+        jz .bad
+        cmp qword [rdi], T_VEC
+        jne .bad
+        push rdx
+        push rbx
+        push r12
+        push r13
+        call args_after_first
+        mov r13, rax                    ; the arguments
+        cmp esi, 2                      ; or one vector of them
+        jne .listed
+        cmp qword [rdi + 16], T_VEC
+        jne .listed
+        mov r13, [rdi + 24]
+.listed:
+        mov r12, [heap_ptr]
+        push qword [struct_types]
+        mov r8, [rdi + 8]
+        mov rcx, [r8 + VEC_COUNT]
+        lea rdi, [rcx + 8]
+        call alloc
+        mov rbx, rax
+        mov rsi, [r8 + VEC_ITEMS]
+        xor edx, edx
+.pack:
+        cmp rdx, rcx
+        jae .packed
+        mov r9, [rsi + 8]
+        mov [rbx + rdx], r9b
+        add rsi, 16
+        inc rdx
+        jmp .pack
+.packed:
+        mov rsi, rbx
+        mov rdx, rcx
+        call rt_load
+        test rax, rax
+        jz .load_failed
+        mov rdi, rax
+        mov rdx, r13
+        call vm_run
+        jmp .release
+.load_failed:
+        mov eax, 1
+.release:
+        mov [heap_ptr], r12
+        pop qword [struct_types]
+        pop r13
+        pop r12
+        pop rbx
+        pop rdx
+        movsxd rax, eax
+        jmp bi_int_out
+.bad:
+        mov eax, e_exec_bytes
+        jmp bi_error
+
+; k_syscall(_): name function -> the kernel's function (one parameter:
+; the vector of the arguments) runs whenever a program loaded from now
+; on, or an eval, calls the command name.
+bi_k_syscall:
+        cmp esi, 2
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        cmp qword [rdi + 16], T_STR
+        jne .bad
+        push rdx
+        push rbx
+        mov rax, [rdi]
+        mov rax, [rdi + 8]
+        cmp qword [rax + STR_LEN], SYS_NAME - 1
+        jae .bad_pop
+        ; the function, by name, in the calling program
+        mov r8, [rdi + 24]
+        mov r9, [r13 + PROG.funcs]
+        xor r10d, r10d
+.find:
+        cmp r10, [r13 + PROG.nfuncs]
+        jae .none
+        mov eax, [r9 + FUNC.name]
+        mov r11, [r13 + PROG.symtext]
+        push rsi
+        push rdi
+        mov rsi, [r11 + rax * 8]
+        mov rdi, r8
+        call str_eq
+        pop rdi
+        pop rsi
+        je .found
+        add r9, FUNC_size
+        inc r10
+        jmp .find
+.found:
+        ; the entry: the same name again, else a new one
+        mov rsi, [rdi + 8]
+        xor ebx, ebx
+.entry:
+        cmp rbx, [sys_count]
+        jae .new
+        imul rdi, rbx, SYS_ENTRY
+        add rdi, sys_table
+        call str_eq_z
+        je .set
+        inc rbx
+        jmp .entry
+.new:
+        cmp rbx, SYS_MAX
+        jae .full
+        inc qword [sys_count]
+        imul rdi, rbx, SYS_ENTRY
+        add rdi, sys_table
+        mov rcx, [rsi + STR_LEN]
+        push rsi
+        add rsi, STR_BYTES
+        rep movsb
+        mov byte [rdi], 0
+        pop rsi
+.set:
+        imul rdi, rbx, SYS_ENTRY
+        add rdi, sys_table
+        mov [rdi + SYS_NAME], r13
+        mov [rdi + SYS_NAME + 8], r10
+        ; the area kernel commands run in, made once
+        cmp qword [sys_area], 0
+        jne .done
+        mov edi, VM_AREA
+        call alloc
+        mov [sys_area], rax
+.done:
+        pop rbx
+        pop rdx
+        xor eax, eax
+        ret
+.none:
+        pop rbx
+        pop rdx
+        PUTS msg_ussr
+        PUTS e_try_none
+        mov rsi, r8
+        call print_string
+        PUTS msg_quote_nl
+        mov eax, -1
+        ret
+.full:
+        pop rbx
+        pop rdx
+        mov eax, e_sys_full
+        jmp bi_error
+.bad_pop:
+        pop rbx
+        pop rdx
+.bad:
+        mov eax, e_syscall
+        jmp bi_error
+
+; rsi = name (a string object, or bytes in rsi with rcx = length when
+; rdx = 1) -> eax: its kernel command entry, or -1. Keeps the others.
+sys_find:
+        push rbx
+        push rdi
+        push rcx
+        xor ebx, ebx
+.next:
+        cmp rbx, [sys_count]
+        jae .none
+        imul rdi, rbx, SYS_ENTRY
+        add rdi, sys_table
+        test edx, edx
+        jnz .bytes
+        call str_eq_z
+        jmp .compared
+.bytes:
+        mov rcx, [rsp]
+        call bytes_eq_z
+.compared:
+        je .found
+        inc rbx
+        jmp .next
+.found:
+        mov eax, ebx
+        jmp .out
+.none:
+        mov eax, -1
+.out:
+        pop rcx
+        pop rdi
+        pop rbx
+        ret
+
+; eax = kernel command entry, rdi = arguments, esi = their count, rdx =
+; the result -> runs the kernel's function with the arguments as one
+; vector; eax 0, or -1 when it failed.
+sys_call:
+        push rbx
+        push rbp
+        push r12
+        push r13
+        push r14
+        push r15
+        push rdx
+        imul rbx, rax, SYS_ENTRY
+        add rbx, sys_table
+        ; the arguments as one vector
+        mov ecx, esi
+        mov rsi, rdi
+        call vec_new
+        mov rdi, rax
+.arg:
+        test ecx, ecx
+        jz .packed
+        call vec_push
+        add rsi, 16
+        dec ecx
+        jmp .arg
+.packed:
+        sub rsp, 16
+        mov qword [rsp], T_VEC
+        mov [rsp + 8], rdi
+        mov rdx, rsp
+        mov rdi, [rbx + SYS_NAME]
+        mov rsi, [rbx + SYS_NAME + 8]
+        mov ecx, 1
+        mov r8d, 3
+        push qword [bi_retname]
+        inc qword [sys_depth]
+        call vm_exec
+        dec qword [sys_depth]
+        pop qword [bi_retname]
+        add rsp, 16
+        pop rdx
+        test eax, eax
+        jnz .failed
+        mov rax, [vm_result]
+        mov [rdx], rax
+        mov rax, [vm_result + 8]
+        mov [rdx + 8], rax
+        xor eax, eax
+        jmp .out
+.failed:
+        mov eax, -1
+.out:
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbp
+        pop rbx
+        ret
+
+; eval's way in: builtin_find leaves the entry in sys_pending
+sys_call_pending:
+        mov rax, [sys_pending]
+        jmp sys_call
+
+; clear_bytes(v): v -> every item 0; the same vector
+bi_clear_bytes:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_VEC
+        jne .bad
+        mov rax, [rdi + 8]
+        mov rcx, [rax + VEC_COUNT]
+        mov r8, [rax + VEC_ITEMS]
+.item:
+        test rcx, rcx
+        jz .done
+        mov qword [r8], T_INT
+        mov qword [r8 + 8], 0
+        add r8, 16
+        dec rcx
+        jmp .item
+.done:
+        COPYVAL rdx, rdi, rax
+        xor eax, eax
+        ret
+.bad:
+        mov eax, e_clear_bytes
         jmp bi_error
 
 bi_k_reboot:
@@ -3844,6 +4275,14 @@ intern_find:
 builtin_find:
         push rdi
         push rdx
+        mov edx, 1
+        call sys_find
+        cmp eax, -1
+        je .table
+        mov [sys_pending], rax
+        mov eax, sys_call_pending
+        jmp .out
+.table:
         xor edx, edx
 .next:
         mov rdi, [bi_table + rdx]
@@ -5601,6 +6040,10 @@ bi_pwd:
         PUTC 10
         jmp bi_str_out
 
+%include "btree.inc"
+%include "ata.inc"
+%include "sha256.inc"
+
 ; =====================================================================
 ; tables and texts
 ; =====================================================================
@@ -5621,6 +6064,8 @@ optable:
         dq op_load_hash
 %elif i == 0x05
         dq op_store_hash
+%elif i == 0x06
+        dq op_decode_uno
 %elif i == 0x08
         dq op_vector_get
 %elif i == 0x09
@@ -5736,6 +6181,29 @@ bi_table:
         dq n_text_bytes, bi_text_bytes
         dq n_bytes_text, bi_bytes_text
         dq n_crc32, bi_crc32
+        dq n_btree, bi_btree
+        dq n_btput, bi_btput
+        dq n_btget, bi_btget
+        dq n_bthas, bi_bthas
+        dq n_btdel, bi_btdel
+        dq n_btlen, bi_btlen
+        dq n_btfirst, bi_btfirst
+        dq n_btlast, bi_btlast
+        dq n_btfloor, bi_btfloor
+        dq n_btceil, bi_btceil
+        dq n_btprev, bi_btprev
+        dq n_btnext, bi_btnext
+        dq n_btrange, bi_btrange
+        dq n_btkeys, bi_btkeys
+        dq n_bread, bi_bread
+        dq n_bwrite, bi_bwrite
+        dq n_bsize, bi_bsize
+        dq n_bcopy, bi_bcopy
+        dq n_bdevices, bi_bdevices
+        dq n_sha256, bi_sha256
+        dq n_clear_bytes, bi_clear_bytes
+        dq n_k_syscall, bi_k_syscall
+        dq n_k_exec_bytes, bi_k_exec_bytes
         dq 0, 0
 
 type_names:
@@ -5825,6 +6293,13 @@ n_halt:           db "halt", 0
 n_text_bytes:   db "text_bytes", 0
 n_bytes_text:   db "bytes_text", 0
 n_crc32:        db "crc32", 0
+n_clear_bytes:  db "clear_bytes", 0
+n_k_syscall:    db "k_syscall", 0
+n_k_exec_bytes: db "k_exec_bytes", 0
+e_clear_bytes:  db "clear_bytes(v): a byte vector", 0
+e_syscall:      db "k_syscall(_): name function (a name under 31 bytes)", 0
+e_sys_full:     db "k_syscall: too many kernel commands", 0
+e_exec_bytes:   db "k_exec_bytes(status): bytes [args ...]", 0
 e_text_bytes:   db "text_bytes expects a string", 0
 e_bytes_text:   db "bytes_text(s): v [from [count]]", 0
 e_crc32:        db "crc32(n): data [from [count]]", 0
@@ -6008,4 +6483,23 @@ tg_pos:         resq 1
 tg_newline:     resq 1
 read_line_eof:  resq 1
 env_table:      resb 32 * 256
+vm_result:      resq 2
+sys_count:      resq 1
+sys_pending:    resq 1
+sys_depth:      resq 1
+sys_area:       resq 1
+sys_table:      resb SYS_MAX * SYS_ENTRY
+blk_args:       resq 3
+blk_copy:       resq 1
+sha_state:      resd 8
+sha_w:          resd 64
+sha_block:      resb 128
+                alignb 16
+ata_drive:      resb ATA_DRIVES * ATAD_SIZE
+ata_sector:     resb 512
+ata_buffer:     resb ATA_CHUNK * 512 + 512
+ata_stage:      resb DEV_PIECE
 rt_data_end:
+%if rt_data_end > CAPTURE_BUF
+%error "the runtime's variables run into the capture buffer"
+%endif

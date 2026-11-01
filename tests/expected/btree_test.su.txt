@@ -1,0 +1,35 @@
+PASS typeof
+PASS empty
+PASS first of empty
+PASS 3000 keys
+PASS get
+PASS get with default
+PASS has
+PASS in order
+PASS replace keeps one key
+PASS still 3000
+PASS 1500 deleted
+PASS delete twice
+PASS 1500 left
+PASS in order after deletes
+PASS floor
+PASS ceil
+PASS prev
+PASS next
+PASS last
+PASS nothing before the first
+PASS range
+PASS keys with a limit
+PASS emptied
+PASS usable after emptying
+PASS mixed order
+PASS a directory's entries
+PASS 2 and 2.0 are one key
+PASS shared
+PASS inside a vector
+PASS encodes as pairs
+gc ran
+
+--- stderr ---
+
+--- exit 0 ---

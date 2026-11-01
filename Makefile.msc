@@ -67,6 +67,7 @@ OBJS = \
     $(PETERSBURG_OBJ) \
     $(SRC)\eventq.obj \
     $(SRC)\gc.obj \
+    $(SRC)\btree.obj \
     $(SRC)\parser.tab.obj \
     $(SRC)\lexer.obj \
     $(SRC)\prng64_xrp32.obj \
@@ -144,8 +145,11 @@ $(SRC)\eventq.obj: $(SRC)\eventq.c $(SRC)\eventq.h $(SRC)\process.h $(SRC)\socke
 $(SRC)\socket_win32.obj: $(SRC)\socket_win32.c $(SRC)\socket.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\socket_win32.obj $(SRC)\socket_win32.c
 
-$(SRC)\gc.obj: $(SRC)\gc.c $(SRC)\gc.h $(SRC)\uno.h $(SRC)\ussr.h
+$(SRC)\gc.obj: $(SRC)\gc.c $(SRC)\gc.h $(SRC)\uno.h $(SRC)\btree.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\gc.obj $(SRC)\gc.c
+
+$(SRC)\btree.obj: $(SRC)\btree.c $(SRC)\btree.h $(SRC)\uno.h $(SRC)\ussr.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\btree.obj $(SRC)\btree.c
 
 $(SRC)\parser.tab.obj: $(SRC)\parser.tab.c $(SRC)\parser.tab.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\parser.tab.obj $(SRC)\parser.tab.c

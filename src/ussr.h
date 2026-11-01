@@ -60,7 +60,8 @@ typedef enum
     USSR_STRING,
     USSR_BOOLEAN,
     USSR_VECTOR,
-    USSR_STRUCT
+    USSR_STRUCT,
+    USSR_BTREE
 } ussr_value_type_t;
 
 /*
@@ -72,6 +73,8 @@ typedef enum
  */
 typedef struct ussr_vector_t ussr_vector_t;
 typedef struct ussr_struct_instance_t ussr_struct_instance_t;
+/* USSR_BTREE, the ordered map of btree.h, is a reference type too. */
+typedef struct ussr_btree_t ussr_btree_t;
 
 typedef struct
 {
@@ -85,6 +88,7 @@ typedef struct
         int boolean;
         ussr_vector_t *vector;
         ussr_struct_instance_t *instance;
+        ussr_btree_t *btree;
     } data;
 } ussr_value_t;
 

@@ -1,0 +1,631 @@
+# install.su - the USSR installer: puts USSR on a disk of its own.
+#
+# In the Moscow shell, booted from the install disk (build/moscow/
+# ussr.img), install(_): runs it (the kernel starts /bin/install.ru with
+# its arguments). It asks which disk to use, how to partition it, the
+# label and host name and how much to copy; makes the partition table
+# with Stalin and a Belarus file system in it; copies the system - or the
+# whole project - from the install disk's file system; and makes the new
+# disk boot Moscow by copying the boot loader, the runtime, moscow.ru and
+# russia.ru in front of the partition.
+#
+# Under ussr it installs into a disk image the same way:
+#
+#     ussr src/moscow/install.su --source build/moscow/ussr.img --target disk.img
+#
+# It only ever writes to virtual disks: under ussr to image files, never
+# to a raw disk (\\.\PhysicalDrive1, /dev/sdb); under Moscow to disks
+# whose model says QEMU. Answers come a line at a time from the terminal
+# (or standard input), so a script can drive it; at the end of input every
+# question takes its default and the final "yes" is not given.
+$include "../stalin/stalin.su"
+$include "../belarus/belarus.su"
+
+global(_): ins_moscow ins_copied ins_answers ins_eof
+
+# ---------------------------------------------------------------- talking
+
+ins_say(r): text [
+    print(_): text
+    set(r): 0
+]
+
+# One line from the terminal, without its newline; null at the end.
+ins_line(r): [
+    set(r): ""
+    set(any): false
+    while(_): true [
+        terminal_getch(c):
+        if(_): {c < 0} [
+            if(_): {any = false} [
+                set(r): null
+                set(ins_eof): true
+            ]
+            return(r): r
+        ]
+        set(any): true
+        if(_): {c = 10} [ return(r): r ]
+        if(_): {c != 13 && c > 0 && c < 256} [
+            chr(ch): c
+            concat(r): r ch
+        ]
+    ]
+]
+
+# Asks; the answer, trimmed, or the default for an empty one.
+ins_ask(r): question default [
+    set(shown): question
+    if(_): {default != ""} [ concat(shown): question " [" default "]" ]
+    concat(shown): shown ": "
+    template(_): "STR" shown
+    ins_line(r):
+    typeof(t): r
+    if(_): {t != "string"} [
+        print(_): ""
+        set(r): default
+        return(r): r
+    ]
+    str_trim(r): r
+    if(_): {r = ""} [ set(r): default ]
+    btput(_): ins_answers question r
+]
+
+# Asks for one of the keys of choices ([key, text] pairs); the key.
+ins_choose(r): question choices default [
+    len(n): choices
+    set(i): 0
+    while(_): {i < n} [
+        at(c): choices i
+        at(k): c 0
+        at(text): c 1
+        len(kl): k
+        concat(line): "  " k ") " text
+        if(_): {kl > 1} [ concat(line): "  " k "  " text ]
+        print(_): line
+        set(i): {i + 1}
+    ]
+    while(_): true [
+        ins_ask(r): question default
+        set(i): 0
+        while(_): {i < n} [
+            at(c): choices i
+            at(k): c 0
+            if(_): {k = r} [ return(r): r ]
+            set(i): {i + 1}
+        ]
+        if(_): ins_eof [
+            set(r): default
+            return(r): r
+        ]
+        concat(m): "  '" r "' is not one of the choices"
+        print(_): m
+    ]
+]
+
+ins_pair(r): k text [
+    vec(r): ""
+    push(_): r k
+    push(_): r text
+]
+
+ins_mib(r): bytes [
+    str_trunc(m): {bytes / 1048576}
+    str_from_int(r): m
+    concat(r): r " MiB"
+]
+
+ins_fail(r): m [
+    concat(line): "install: " m
+    print(_): line
+    set(r): 1
+]
+
+# ---------------------------------------------------------------- disks
+
+# true for a disk the installer may write: an image file under ussr, a
+# QEMU disk under Moscow
+ins_virtual(r): dev [
+    set(r): false
+    if(_): ins_moscow [
+        bdevices(devs):
+        len(n): devs
+        set(i): 0
+        while(_): {i < n} [
+            at(d): devs i
+            at(path): d 0
+            at(model): d 4
+            len(ml): model
+            set(m4): ""
+            if(_): {ml >= 4} [ slice(m4): model 0 4 ]
+            if(_): {path = dev && m4 = "QEMU"} [ set(r): true ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    st_is_raw(raw): dev
+    set(r): {raw = false}
+]
+
+# The disk to install onto: a device path, or null.
+ins_pick_target(r): src_dev given [
+    set(r): null
+    if(_): {ins_moscow = false} [
+        set(path): given
+        if(_): {path = ""} [ ins_ask(path): "Disk image to install onto" "ussr-disk.img" ]
+        ins_virtual(v): path
+        if(_): {v = false} [
+            concat(m): path " is a real disk: the installer writes to disk images only"
+            ins_fail(_): m
+            return(r): r
+        ]
+        if(_): {path = src_dev} [
+            ins_fail(_): "the target is the install disk itself"
+            return(r): r
+        ]
+        file_exists(e): path
+        if(_): {e = false} [
+            ins_ask(size): "It does not exist yet: a new image of how many MiB" "64"
+            concat(sz): size "M"
+            vec(cmd): ""
+            push(_): cmd "mkimg"
+            push(_): cmd path
+            push(_): cmd sz
+            stalin_main(st): cmd
+            if(_): {st != 0} [ return(r): r ]
+        ]
+        set(r): path
+        return(r): r
+    ]
+    # Moscow: the QEMU disks other than the install disk
+    bdevices(devs):
+    vec(choices): ""
+    set(first): ""
+    len(n): devs
+    set(i): 0
+    print(_): "Disks:"
+    while(_): {i < n} [
+        at(d): devs i
+        at(path): d 0
+        at(bytes): d 1
+        at(model): d 4
+        ins_mib(sz): bytes
+        ins_virtual(v): path
+        if(_): {path = src_dev} [
+            concat(line): "  " path "  " sz "  " model "  (the install disk)"
+            print(_): line
+        ]
+        elif(_): {v = false} [
+            concat(line): "  " path "  " sz "  " model "  (not a virtual disk: never written)"
+            print(_): line
+        ]
+        else(_): [
+            concat(text): sz "  " model
+            ins_pair(p): path text
+            push(_): choices p
+            if(_): {first = ""} [ set(first): path ]
+        ]
+        set(i): {i + 1}
+    ]
+    len(nc): choices
+    if(_): {nc = 0} [
+        ins_fail(_): "no disk to install onto (start QEMU with a second disk, -drive file=disk.img,format=raw,index=1)"
+        return(r): r
+    ]
+    if(_): {given != ""} [ set(first): given ]
+    ins_choose(r): "Install onto" choices first
+]
+
+# The last sector the boot area of the install disk uses (its file table
+# says), or -1 when that disk has none.
+ins_boot_end(r): dev [
+    set(r): -1
+    bread(t): dev 16 1
+    typeof(tt): t
+    if(_): {tt != "vector"} [ return(r): r ]
+    bytes_text(magic): t 0 8
+    if(_): {magic != "MOSCOWFS"} [ return(r): r ]
+    set(r): 16
+    set(i): 0
+    while(_): {i < 15} [
+        set(off): {16 + i * 32}
+        at(b0): t off
+        if(_): {b0 != 0} [
+            bl_le(lba): t {off + 16} 4
+            bl_le(sectors): t {off + 24} 4
+            if(_): {lba + sectors - 1 > r} [ set(r): {lba + sectors - 1} ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# Copies the boot loader and the boot image (sectors 1 .. end) and the
+# boot code of the MBR (its first 440 bytes) from src to dst.
+ins_boot(r): src dst end [
+    set(r): -1
+    bcopy(n): src 1 dst 1 end
+    if(_): {n != end} [
+        ins_fail(_): "cannot copy the boot loader"
+        return(r): r
+    ]
+    bread(a): src 0 1
+    bread(b): dst 0 1
+    set(i): 0
+    while(_): {i < 440} [
+        at(x): a i
+        set(b): i x
+        set(i): {i + 1}
+    ]
+    bwrite(w): dst 0 b
+    if(_): {w = 512} [ set(r): 0 ]
+]
+
+# the starts of dev's partitions now
+ins_starts(r): dev [
+    bread(s0): dev 0 1
+    bl_parts(r): dev s0
+]
+
+# the first sector of the partition nearest the disk's start (of the
+# starts given), or a very large number when there is none
+ins_first_start(r): starts [
+    set(r): 4611686018427387904
+    len(n): starts
+    set(i): 0
+    while(_): {i < n} [
+        at(s): starts i
+        if(_): {s > 0 && s < r} [ set(r): s ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- copying
+
+ins_progress(r): path rec [
+    set(r): 0
+    add(ins_copied): ins_copied 1
+    at(ty): rec 0
+    if(_): {ty = "d"} [
+        concat(line): "  " path "/"
+        if(_): {path = "/"} [ set(line): "  /" ]
+        print(_): line
+    ]
+]
+
+# the bytes under path
+ins_size_of(r): fs path [
+    set(r): 0
+    bl_walk(all): fs path
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(rec): pr 1
+        at(sz): rec 1
+        set(r): {r + sz + 4096}
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- the installer
+
+ins_main(r): args [
+    set(r): 1
+    set(ins_copied): 0
+    set(ins_eof): false
+    btree(ins_answers):
+    getenv(root): "USSR_ROOT"
+    typeof(tr): root
+    set(ins_moscow): {tr = "string"}
+    set(source): ""
+    set(given): ""
+    len(na): args
+    set(i): 0
+    while(_): {i < na} [
+        at(a): args i
+        set(v): ""
+        if(_): {i + 1 < na} [ at(v): args {i + 1} ]
+        if(_): {a = "--source"} [
+            set(source): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--target"} [
+            set(given): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--help" || a = "-h"} [
+            print(_): "install [--source IMAGE] [--target DISK]: puts USSR on a disk of its own"
+            set(r): 0
+            return(r): r
+        ]
+        add(i): i 1
+    ]
+
+    print(_): ""
+    print(_): "=== USSR installer ==="
+    print(_): ""
+
+    # where from
+    set(src_dev): ""
+    set(src_base): -1
+    if(_): ins_moscow [
+        set(src_dev): root
+        getenv(sb): "USSR_ROOT_SECTOR"
+        str_to_number(src_base): sb
+    ]
+    else(_): [
+        if(_): {source = ""} [ ins_ask(source): "Install disk image" "build/moscow/ussr.img" ]
+        set(src_dev): source
+        bl_locate(src_base): source 0
+    ]
+    if(_): {src_base < 0} [
+        concat(m): src_dev ": no Belarus file system to install from"
+        ins_fail(r): m
+        return(r): r
+    ]
+    bl_mount(src): src_dev src_base
+    typeof(ts): src
+    if(_): {ts != "btree"} [ return(r): r ]
+    btget(src_label): src "label"
+    concat(line): "Installing from " src_dev " (Belarus '" src_label "')"
+    print(_): line
+    ins_boot_end(boot_end): src_dev
+
+    # where to
+    ins_pick_target(dev): src_dev given
+    typeof(td): dev
+    if(_): {td != "string"} [ return(r): r ]
+    bsize(bytes): dev
+    ins_mib(sz): bytes
+    concat(line): "Target: " dev ", " sz
+    print(_): line
+    vec(cmd): ""
+    push(_): cmd "show"
+    push(_): cmd dev
+    stalin_main(_): cmd
+
+    # how to partition it
+    print(_): ""
+    print(_): "Partitioning:"
+    vec(choices): ""
+    ins_pair(p): "1" "the whole disk: a new MBR table, one Belarus partition, bootable (erases the disk)"
+    push(_): choices p
+    ins_pair(p): "2" "the whole disk: a new GPT table, one Belarus partition (erases the disk; Moscow boots from MBR disks only)"
+    push(_): choices p
+    ins_pair(p): "3" "keep the partitions there and add a Belarus one in the free space"
+    push(_): choices p
+    ins_pair(p): "q" "quit, changing nothing"
+    push(_): choices p
+    ins_choose(how): "Choose" choices "1"
+    if(_): {how = "q"} [
+        print(_): "Nothing changed."
+        set(r): 1
+        return(r): r
+    ]
+    ins_ask(size): "Size of the Belarus partition in MiB, or max" "max"
+
+    print(_): ""
+    ins_ask(label): "File system label" "ussr"
+    ins_ask(host): "Host name" "moscow"
+    vec(what): ""
+    ins_pair(p): "1" "everything: the system and the whole USSR project (/src)"
+    push(_): what p
+    ins_pair(p): "2" "the system only: /bin, /boot and /etc"
+    push(_): what p
+    ins_choose(scope): "What to copy" what "1"
+
+    # how much room that takes
+    set(need): 1048576
+    if(_): {scope = "1"} [ ins_size_of(need): src "/" ]
+    else(_): [
+        ins_size_of(n1): src "/bin"
+        ins_size_of(n2): src "/boot"
+        ins_size_of(n3): src "/etc"
+        set(need): {n1 + n2 + n3 + 1048576}
+    ]
+    ins_mib(needs): need
+
+    print(_): ""
+    print(_): "About to:"
+    if(_): {how = "1" || how = "2"} [
+        set(kind): "MBR"
+        if(_): {how = "2"} [ set(kind): "GPT" ]
+        concat(line): "  erase " dev " and give it a new " kind " partition table"
+        print(_): line
+    ]
+    concat(line): "  make a Belarus partition (" size " MiB) labelled '" label "' and copy " needs " into it"
+    if(_): {size = "max"} [ concat(line): "  make a Belarus partition (the rest of the disk) labelled '" label "' and copy " needs " into it" ]
+    print(_): line
+    if(_): {how = "3"} [
+        ins_starts(now): dev
+        ins_first_start(first): now
+        if(_): {boot_end > 0 && first <= boot_end} [
+            str_from_int(sf): first
+            concat(line): "  and leave it unbootable: its first partition starts at sector " sf ", inside the room the boot loader needs"
+            print(_): line
+        ]
+    ]
+    ins_ask(sure): "Type yes to go ahead" "no"
+    if(_): {sure != "yes"} [
+        print(_): "Nothing changed."
+        set(r): 1
+        return(r): r
+    ]
+
+    # the partition table
+    ins_starts(before): dev
+    if(_): {how = "1" || how = "2"} [
+        set(table): "mbr"
+        if(_): {how = "2"} [ set(table): "gpt" ]
+        vec(cmd): ""
+        push(_): cmd "init"
+        push(_): cmd dev
+        push(_): cmd table
+        push(_): cmd "--yes"
+        stalin_main(st): cmd
+        if(_): {st != 0} [
+            ins_fail(r): "the partition table could not be made"
+            return(r): r
+        ]
+        vec(before): ""
+    ]
+    vec(cmd): ""
+    push(_): cmd "add"
+    push(_): cmd dev
+    push(_): cmd "--type"
+    push(_): cmd "belarus"
+    if(_): {how != "3"} [
+        # the boot loader and the boot image go in front of it
+        push(_): cmd "--start"
+        push(_): cmd "4M"
+    ]
+    if(_): {size != "max"} [
+        push(_): cmd "--size"
+        push(_): cmd size
+    ]
+    if(_): {how = "1"} [
+        push(_): cmd "--boot"
+        push(_): cmd "on"
+    ]
+    if(_): {how = "2"} [
+        push(_): cmd "--name"
+        push(_): cmd label
+    ]
+    push(_): cmd "--yes"
+    stalin_main(st): cmd
+    if(_): {st != 0} [
+        ins_fail(r): "the partition could not be added"
+        return(r): r
+    ]
+    # the new partition: the start that was not there before
+    ins_starts(after): dev
+    set(part): 0
+    set(start): 0
+    len(n): after
+    set(i): 0
+    while(_): {i < n} [
+        at(s): after i
+        set(old): false
+        len(nb): before
+        set(j): 0
+        while(_): {j < nb} [
+            at(x): before j
+            if(_): {x = s} [ set(old): true ]
+            set(j): {j + 1}
+        ]
+        if(_): {s > 0 && old = false && part = 0} [
+            set(part): {i + 1}
+            set(start): s
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {part = 0} [
+        ins_fail(r): "cannot find the new partition"
+        return(r): r
+    ]
+    bread(s0): dev 0 1
+    bl_part_end(end): dev s0 part
+    set(blocks): {(end - start) >> 3}
+    if(_): {(blocks << 12) < need} [
+        ins_mib(have): {blocks << 12}
+        concat(m): "the partition (" have ") is smaller than the " needs " to copy"
+        ins_fail(r): m
+        return(r): r
+    ]
+
+    # the file system and the files
+    bl_mkfs(dst): dev start blocks label
+    typeof(tf): dst
+    if(_): {tf != "btree"} [
+        ins_fail(r): "the file system could not be made"
+        return(r): r
+    ]
+    str_from_int(sp): part
+    concat(line): "Belarus file system '" label "' made in partition " sp "; copying:"
+    print(_): line
+    if(_): {scope = "1"} [
+        bl_copy_tree(n): src "/" dst "/" "ins_progress"
+    ]
+    else(_): [
+        set(n): 0
+        vec(dirs): ""
+        push(_): dirs "/bin"
+        push(_): dirs "/boot"
+        push(_): dirs "/etc"
+        len(nd): dirs
+        set(k): 0
+        while(_): {k < nd} [
+            at(d): dirs k
+            bl_exists(e): src d
+            if(_): e [
+                bl_copy_tree(c): src d dst d "ins_progress"
+                if(_): {c < 0} [ set(n): -1 ]
+                if(_): {n >= 0} [ set(n): {n + c} ]
+            ]
+            set(k): {k + 1}
+        ]
+    ]
+    if(_): {n < 0} [
+        ins_fail(r): "the copy failed"
+        return(r): r
+    ]
+    concat(text): host "\n"
+    bl_mkdirs(_): dst "/etc"
+    bl_write_text(_): dst "/etc/hostname" text
+    concat(motd): "USSR Moscow on " host ", installed from " src_label ". help(_): lists the commands.\n"
+    bl_write_text(_): dst "/etc/motd" motd
+    btput(_): ins_answers "target" dev
+    btput(_): ins_answers "from" src_dev
+    time(now):
+    btput(_): ins_answers "time" now
+    encode(record): ins_answers
+    concat(record): record "\n"
+    bl_write_text(_): dst "/etc/install.uno" record
+    bl_sync(w): dst
+    if(_): {w != 0} [
+        ins_fail(r): "the file system could not be written"
+        return(r): r
+    ]
+    str_from_int(sn): n
+    concat(line): sn " files and directories copied; checking:"
+    print(_): line
+    bl_mount(check): dev start
+    bl_fsck(bad): check
+    if(_): {bad > 0} [
+        ins_fail(r): "the new file system has problems"
+        return(r): r
+    ]
+
+    # the boot loader
+    set(bootable): false
+    # the boot image goes in front of the first partition, whichever
+    ins_first_start(first): after
+    if(_): {how != "2" && boot_end > 0 && boot_end < first} [
+        ins_boot(w): src_dev dev boot_end
+        if(_): {w = 0} [ set(bootable): true ]
+    ]
+    print(_): ""
+    if(_): bootable [
+        concat(line): "Done: " dev " boots USSR Moscow now. Halt, take the install disk out and boot from it."
+        if(_): {ins_moscow = false} [
+            concat(line): "Done: " dev " boots USSR Moscow: qemu-system-x86_64 -drive format=raw,file=" dev
+        ]
+    ]
+    else(_): [
+        concat(line): "Done: USSR is on " dev "; it does not boot (no room for the boot loader in front of the partition, or GPT)."
+    ]
+    print(_): line
+    set(r): 0
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(args): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): args a
+        set(i): {i + 1}
+    ]
+    ins_main(ret): args
+]
+$endif
