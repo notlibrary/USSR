@@ -76,7 +76,7 @@ CHECKS = [
     ("print(_): bn", r"3"),
     # the kernel's commands, through russia.su's host calls
     ("uptime(_):", r"up \d+ s"),
-    ("ls(_):", r"d +0  bin\nd +0  boot\nd +0  etc\nd +0  src"),
+    ("ls(_):", r"d +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  src"),
     ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n- +\d+  stalin\.ru"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
@@ -86,8 +86,10 @@ CHECKS = [
     ("print(_): f", r"true"),
     ('file_exists(f): "/dev/hda"', r""),
     ("print(_): f", r"true"),
-    ("df(_):", r"root: /dev/hda\nlabel ussr-install, uuid \w+\nsize 60 MiB, free [\d.]+ MiB; starts at sector 8192, tree root in block \d+"),
-    ("fsck(_):", r"\d+ directories, \d+ files, \d+ bytes; \d+ tree nodes, \d+ leaves \(\d+ empty\)"),
+    ("df(_):", r"root: /dev/hda\nlabel ussr-install, uuid \w+\nsize 60 MiB, free [\d.]+ MiB; starts at sector 8192, root directory in inode \d+"),
+    ("fsck(_):", r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to 2"),
+    # russia.ru is 216 blocks: its block map has outgrown the inode
+    ('run(st): "belarus" "fsck" "/dev/hda"', r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+"),
     ('run(st): "stalin" "show" "/dev/hda"',
      r"Disk /dev/hda: 64 MiB, 131072 sectors of 512 bytes\nTable: MBR.*\n#.*\n1\* +8192 +131071 +122880 +60 MiB +belarus +belarus +ussr-install\nFree: 1\.\.8191 \(4 MiB\)"),
     ("print(_): st", r"0"),
@@ -303,7 +305,7 @@ def install(qemu, disk, work, port, log, check):
               re.search(r"\d+ files and directories copied; checking:", text) is not None
               and "  /src/ussr/src/belarus/" in text, text)
         check("the new file system checks clean",
-              re.search(r"\n\d+ directories, \d+ files, \d+ bytes; \d+ tree nodes, \d+ leaves \(\d+ empty\)\n", text)
+              re.search(r"\n\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+\n", text)
               is not None, text)
         check("the new disk is bootable",
               "Done: /dev/hdb boots USSR Moscow now." in text, text)
@@ -330,7 +332,7 @@ def install(qemu, disk, work, port, log, check):
             ('readfile(c): "/src/ussr/src/belarus/belarus.su"', r""),
             ("len(cl): c", r""),
             ("print(_): {cl > 10000}", r"true"),
-            ("fsck(_):", r"\d+ directories, \d+ files, \d+ bytes; \d+ tree nodes, \d+ leaves \(0 empty\)"),
+            ("fsck(_):", r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+"),
         ]:
             serial.command(line)
             got = clean(serial.output_to_prompt())
