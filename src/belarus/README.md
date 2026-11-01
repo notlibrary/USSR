@@ -1,7 +1,7 @@
 # Belarus
 
-Belarus is the USSR file system: one B+ tree of paths on a disk, a disk
-image, or a partition of either. It is written in USSR (`belarus.su`),
+Belarus is the USSR file system: inodes whose blocks are found through a
+B+ tree each, on a disk, a disk image, or a partition of either. It is written in USSR (`belarus.su`),
 as a library and a command line, and the same code runs under `ussr` on
 disk image files and under the [Moscow](../moscow/README.md) kernel on
 ATA disks: every sector goes through `bread`, `bwrite` and `bcopy`.
@@ -18,12 +18,12 @@ ussr src/belarus/belarus.su fsck disk.img
 ```
 
 ```
-d          0  /
-d          0  /doc
--       9570  /doc/README.md
-d          0  /etc
+d         23  /
+d         18  /doc
+-      10363  /doc/README.md
+d         17  /etc
 -          6  /etc/hostname
-2 directories, 2 files, 9576 bytes; 1 tree nodes, 1 leaves (0 empty)
+3 directories, 2 files, 10369 bytes; 5 inodes, 0 block map nodes, map depth up to 1
 ```
 
 ## Commands
@@ -55,47 +55,75 @@ Blocks are 4096 bytes, counted from the start of the partition:
 
 | Blocks | Hold |
 |--------|------|
-| 0 | the superblock, `BELARUS1` |
+| 0 | the superblock, `BELARUS1`: size, label, UUID, the root directory's inode |
 | 1 .. 16 | the free-space map, `BLFREE01` |
-| the rest | tree nodes (`BLNODE01`, a block each) and file data, in extents of whole blocks |
+| the rest | inodes (`BLINODE1`), block map nodes (`BLBMAP01`) and the data of files and directories |
 
 A metadata block starts with a 24-byte ASCII header - the magic, then
 the length of the text and its CRC-32 in 8 hex digits each - and then
 the text: a value in UNO, padded with spaces to a whole sector. A hex
 viewer shows the whole file system's structure as text.
 
-The tree maps every path to a record `[type, size, mtime, extents]`:
-type `d` or `f`, extents a list of `[first block, blocks]`. Paths sort
-byte by byte, so the entries of a directory are one range of keys
-(`/bin/` up to `/bin0`, `0` being the byte after `/`). The leaves hold
-the records and are linked in key order; a directory listing or a tree
-walk is a range scan along that chain. An internal node maps separator
-keys to child blocks, its first child under `""`. A node splits when its
-text no longer fits its block, the separator going up to the parent, up
-to a new root. Deleting is lazy: an emptied leaf stays in the tree (as
-in PostgreSQL's B-trees) until the tree is rebuilt.
+### Files: inodes and block maps
+
+Every file and directory is an inode, a block of its own whose number
+is the inode's number. It holds the type, size and modification time and
+the root of the file's **block map**: a B+ tree from the index of a block
+of the file (0, 1, 2, ...) to the LBA of the disk sector that block
+starts at. Reading or writing block *i* of a file looks *i* up in that
+tree (`bl_bmap`); reading a whole file walks the leaves, which are linked
+in index order, and reads each run of consecutive LBAs at once.
+
+```
+inode 19   [`f`,880800,1793535166,`I`,0,[[0,236],[64,237],[128,238]]]
+node  236  [`L`,237,[[0,160],[1,168],[2,176], ... ,[63,664]]]
+node  237  [`L`,238,[[64,672], ... ,[127,1176]]]
+node  238  [`L`,0,[[128,1184],[129,1192], ... ,[215,1880]]]
+```
+
+A node holds up to 128 entries. The root starts in the inode as a leaf;
+when it fills up, its entries move down into a node of their own and the
+inode keeps one entry pointing at it (ext4's inodes grow their extent
+trees the same way); from then on a full node splits in two and the
+separator goes up to its parent. Small files never leave the inode;
+`russia.ru` (216 blocks, above) has a map two levels deep with three
+leaves: type, size, time, the root's kind, then its entries.
+
+### Directories
+
+Directories are not in a B+ tree: a directory is a file whose data is
+its entries, `[name, inode]` pairs in UNO sorted by name. A path is
+looked up a name at a time from the root directory's inode, which the
+superblock names. In memory a directory is a `btree` from name to inode,
+cached while the file system is mounted and written back when it
+changed.
 
 ## In memory
 
-A mounted file system, its nodes, its node cache and its free-space map
-are all `btree` containers, the ordered map USSR has had since this file
-system needed one (`src/btree.c`; `help(_): "data"` lists the `bt*`
-commands). An internal node finds the child for a key with `btfloor`;
-the free-space map keeps free extents by first block, so `btfloor` and
-`btget` find the neighbours a freed extent joins. Nothing is written
-until `bl_sync`: the changed nodes, the free-space map, the superblock
-last.
+A mounted file system, its nodes, its directories, its node cache and
+its free-space map are all `btree` containers, the ordered map USSR has
+had since this file system needed one (`src/btree.c`; `help(_): "data"`
+lists the `bt*` commands). A block map's internal node finds the child
+for an index with `btfloor`; the free-space map keeps free extents by
+first block, so `btfloor` and `btget` find the neighbours a freed extent
+joins. Nothing is written until `bl_sync`: the changed directories, the
+changed nodes, the free-space map, the superblock last.
 
 File data never becomes USSR values when it does not have to: `put`
-copies a host file into its extents with `bcopy` byte for byte, and
+copies a host file into its blocks with `bcopy` byte for byte, and
 `bl_copy_tree` copies a whole tree from one Belarus file system to
-another extent by extent. The installer copies a system that way.
+another run by run. The installer copies a system that way.
+
+`fsck` walks every inode from the root, checks that each block map maps
+blocks 0 .. n - 1 for the file's size, that no block is used twice or
+both used and free, and that no block is lost.
 
 ## As a library
 
 `$include "../belarus/belarus.su"` gives `bl_open(fs): "disk.img"`,
 `bl_mount`, `bl_mkfs`, `bl_read_text`, `bl_read_bytes`, `bl_write_text`,
 `bl_write_bytes`, `bl_write_from`, `bl_list`, `bl_walk`, `bl_mkdirs`,
+`bl_bmap` (the LBA of a block of a file), `bl_runs`,
 `bl_remove`, `bl_copy_tree`, `bl_fsck` and `bl_sync`. The Moscow kernel
 mounts its root file system with them and serves `ls`, `cat`,
 `readfile`, `writefile` and the other file commands from it;

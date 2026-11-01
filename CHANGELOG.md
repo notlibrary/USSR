@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+- Belarus is format 2: the B+ trees map blocks of files to the disk.
+  Every file and directory has an inode whose block map, a B+ tree from
+  the index of a block of the file to its LBA, starts in the inode and
+  grows out of it into nodes of its own; reads and writes find blocks
+  through it and read along its linked leaves a run at a time. A
+  directory is a file of `[name, inode]` pairs. Removing a file gives
+  its data, map nodes and inode back; `fsck` checks every map against
+  the file's size. Format 1 disks are refused: make them again.
+- The install disk takes no build products from the tree: object files,
+  binaries, `.ural` packages and disk images stay out of `/src/ussr`
+  (when the files do not come from `git ls-files`).
+
 ### Added
 - The `btree` container: `btree(t):` makes an ordered map kept in a B+
   tree (`src/btree.c`), keys numbers or strings, values anything;

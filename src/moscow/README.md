@@ -75,7 +75,7 @@ Belarus file system 'ussr' made in partition 1; copying:
   /etc/
   /src/
 808 files and directories copied; checking:
-127 directories, 682 files, 7655319 bytes; 29 tree nodes, 28 leaves (0 empty)
+127 directories, 686 files, 7808255 bytes; 813 inodes, 8 block map nodes, map depth up to 2
 
 Done: /dev/hdb boots USSR Moscow now. Halt, take the install disk out and boot from it.
 ```
