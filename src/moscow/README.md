@@ -1,5 +1,7 @@
 # Moscow
 
+![Moscow booting in QEMU and running print(_): "Hello, world!"](../../docs/images/moscow.gif)
+
 Moscow is the USSR kernel for amd64 PCs. A NASM boot loader starts a
 NASM USSR runtime on bare metal, the runtime runs the kernel `moscow.ru`
 (compiled from `moscow.su`), and the kernel runs the shell `russia.ru`:
