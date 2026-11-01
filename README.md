@@ -5,6 +5,9 @@
 </p>
 
 # USSR Unified Shell Script REPL
+
+![Moscow, the USSR amd64 kernel, booting in QEMU and running print(_): "Hello, world!"](docs/images/moscow.gif)
+
 Programming Language with unique grammar resembling TCL and Conventional Commits
 Designed by me coded with ChatGPT after accidental prompt
 
