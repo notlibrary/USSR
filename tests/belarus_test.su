@@ -1,0 +1,160 @@
+# Belarus (src/belarus/belarus.su), the B+ tree file system, on two
+# small disk images made in tests/: enough entries to grow the tree past
+# one level, files over several blocks, deletes, a tree copied from one
+# file system to the other, and everything read back after mounting
+# again. Prints PASS or FAIL per check.
+$include "../src/belarus/belarus.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# a blank image of mib MiB
+blank(r): path mib [
+    open_file(h): path "wb"
+    close_file(_): h
+    vec(z): ""
+    set(i): 0
+    while(_): {i < 512} [
+        push(_): z 0
+        set(i): {i + 1}
+    ]
+    bwrite(_): path {(mib << 11) - 1} z
+    bsize(r): path
+]
+
+# n bytes of a repeating pattern that starts at seed
+pattern(r): n seed [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < n} [
+        push(_): r {(i * 7 + seed) & 255}
+        set(i): {i + 1}
+    ]
+]
+
+init(result): arg_count arg_values [
+    getcwd(cwd):
+    concat(a): cwd "/tests/belarus_a_tmp.img"
+    concat(b): cwd "/tests/belarus_b_tmp.img"
+    remove_file(_): a
+    remove_file(_): b
+    blank(size): a 8
+    check(_): "blank image" size 8388608
+    blank(_): b 8
+
+    bl_mkfs(fs): a 0 2048 "test"
+    typeof(t): fs
+    check(_): "mkfs" t "btree"
+    bl_is_dir(d): fs "/"
+    check(_): "root is a directory" d true
+
+    # 240 files with long names in 12 directories: the leaves split
+    set(i): 0
+    while(_): {i < 240} [
+        str_from_int(si): i
+        str_from_int(sd): {i % 12}
+        concat(dir): "/data/directory-number-" sd
+        bl_mkdirs(_): fs dir
+        concat(path): dir "/a-file-with-a-rather-long-name-" si ".txt"
+        concat(text): "file " si
+        bl_write_text(w): fs path text
+        set(i): {i + 1}
+    ]
+    check(_): "240 writes" w 0
+    btget(root): fs "root"
+    bl_node(rn): fs root
+    btget(kind): rn "kind"
+    check(_): "the root is an internal node" kind "I"
+    bl_read_text(t): fs "/data/directory-number-5/a-file-with-a-rather-long-name-101.txt"
+    check(_): "read back" t "file 101"
+    bl_list(names): fs "/data"
+    len(n): names
+    check(_): "12 directories" n 12
+    at(first): names 0
+    check(_): "listed in order" first "directory-number-0"
+    bl_list(names): fs "/data/directory-number-7"
+    len(n): names
+    check(_): "20 files in one" n 20
+
+    # a file of 3 blocks and a bit, and a binary one
+    pattern(big): 13000 3
+    bl_write_bytes(w): fs "/big.bin" big
+    check(_): "multi-block write" w 0
+    bl_read_bytes(back): fs "/big.bin"
+    encode(e1): big
+    encode(e2): back
+    check(_): "multi-block read" {e1 = e2} true
+    vec(zeros): ""
+    push(_): zeros 0
+    push(_): zeros 255
+    push(_): zeros 0
+    bl_write_bytes(_): fs "/zero.bin" zeros
+    bl_read_bytes(back): fs "/zero.bin"
+    encode(e): back
+    check(_): "bytes with 0 in them" e "[0,255,0]"
+
+    # rewriting a file gives its old blocks back
+    bl_free_count(before): fs
+    bl_write_text(_): fs "/big.bin" "small now"
+    bl_free_count(after): fs
+    check(_): "rewrite frees blocks" {after - before} 3
+    bl_read_text(t): fs "/big.bin"
+    check(_): "rewritten" t "small now"
+
+    # deletes
+    bl_remove(w): fs "/data/directory-number-7"
+    check(_): "a full directory stays" w -1
+    set(i): 7
+    while(_): {i < 240} [
+        str_from_int(si): i
+        concat(path): "/data/directory-number-7/a-file-with-a-rather-long-name-" si ".txt"
+        bl_remove(_): fs path
+        set(i): {i + 12}
+    ]
+    bl_remove(w): fs "/data/directory-number-7"
+    check(_): "an emptied one goes" w 0
+    bl_exists(e): fs "/data/directory-number-7"
+    check(_): "gone" e false
+    bl_sync(w): fs
+    check(_): "sync" w 0
+
+    # mount again from the disk
+    bl_open(fs): a
+    typeof(t): fs
+    check(_): "mount" t "btree"
+    bl_read_text(t): fs "/data/directory-number-11/a-file-with-a-rather-long-name-239.txt"
+    check(_): "read after mount" t "file 239"
+    bl_fsck(bad): fs
+    check(_): "fsck finds nothing" bad 0
+
+    # copy the whole tree into the other image
+    bl_mkfs(dst): b 0 2048 "copy"
+    bl_copy_tree(n): fs "/" dst "/" ""
+    bl_walk(all): fs "/"
+    len(want): all
+    check(_): "copy every entry" n want
+    bl_sync(_): dst
+    bl_open(dst): b
+    bl_read_text(t): dst "/data/directory-number-0/a-file-with-a-rather-long-name-0.txt"
+    check(_): "read the copy" t "file 0"
+    bl_read_bytes(back): dst "/zero.bin"
+    encode(e): back
+    check(_): "binary copy" e "[0,255,0]"
+    bl_fsck(bad): dst
+    check(_): "fsck the copy" bad 0
+
+    remove_file(_): a
+    remove_file(_): b
+    set(result): 0
+]

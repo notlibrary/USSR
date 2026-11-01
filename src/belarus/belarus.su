@@ -1,0 +1,1789 @@
+# Belarus - the USSR file system: one B+ tree of paths on a disk, a
+# disk image or a partition of either. Library and command line:
+#
+#     ussr src/belarus/belarus.su mkfs disk.img --label ussr
+#     ussr src/belarus/belarus.su put disk.img README.md /README.md
+#     ussr src/belarus/belarus.su ls disk.img /
+#     ussr src/belarus/belarus.su help            # every command
+#
+# The layout (4096-byte blocks, counted from the start of the partition):
+#   block 0              the superblock, "BELARUS1"
+#   blocks 1 .. 16       the free-space map, "BLFREE01"
+#   the other blocks     tree nodes ("BLNODE01", one block each) and the
+#                        data of files, in extents of whole blocks
+# A metadata block is a 24-byte ASCII header - the magic, the text's
+# length and its CRC-32, each 8 hex digits - and then the text: a value
+# in UNO, padded with spaces to a whole sector. A hex viewer shows it all.
+#
+# The tree maps every path ("/", "/bin", "/bin/stalin.ru") to a record
+# [type, size, mtime, extents]: type "d" or "f", extents [[block, count],
+# ...]. Paths sort byte by byte, so a directory's entries are one range
+# of keys ("/bin/" up to "/bin0"). Leaves hold records and are linked in
+# key order for range scans; an internal node maps separator keys to
+# child blocks, its first child under "". A node splits when its text
+# no longer fits its block. Deleting is lazy: an emptied leaf stays in
+# the tree, as in PostgreSQL's B-trees, until the tree is rebuilt.
+#
+# In memory a mounted file system, a node and the free-space map are all
+# btree containers (src/btree.c): a node's entries, an internal node's
+# separators (found with btfloor), the free extents by first block (the
+# neighbours btfloor and btget find coalesce on free), the node cache by
+# block. Nothing is written until bl_sync, superblock last.
+#
+# Every sector moves through bread, bwrite and bcopy, so the same code
+# runs on a disk image under ussr and on an ATA disk under the Moscow
+# kernel (/dev/hda .. /dev/hdd).
+$once
+$include "../libs/strings.su"
+
+# ---------------------------------------------------------------- helpers
+
+bl_err(r): m [
+    concat(line): "belarus: " m "\n"
+    write_stderr(_): line
+    set(r): -1
+]
+
+bl_int(r): n [
+    str_from_int(r): n
+]
+
+# 8 lower-case hex digits of n (0 .. 2^32 - 1)
+bl_hex8(r): n [
+    set(r): ""
+    set(k): 28
+    while(_): {k >= 0} [
+        slice(d): "0123456789abcdef" {(n >> k) & 15} 1
+        concat(r): r d
+        set(k): {k - 4}
+    ]
+]
+
+# the number in 8 hex digits, or -1
+bl_unhex8(r): s [
+    set(r): 0
+    set(i): 0
+    while(_): {i < 8} [
+        byte(b): s i
+        set(d): -1
+        if(_): {b >= 48 && b <= 57} [ set(d): {b - 48} ]
+        if(_): {b >= 97 && b <= 102} [ set(d): {b - 87} ]
+        if(_): {d < 0} [
+            set(r): -1
+            return(r): r
+        ]
+        set(r): {(r << 4) | d}
+        set(i): {i + 1}
+    ]
+]
+
+# the index of the last "/" in path, or -1
+bl_last_slash(r): path [
+    len(n): path
+    set(r): {n - 1}
+    while(_): {r >= 0} [
+        byte(b): path r
+        if(_): {b = 47} [ return(r): r ]
+        set(r): {r - 1}
+    ]
+]
+
+# "/a//b/" -> "/a/b"; "" and "." -> "/"
+bl_clean(r): path [
+    set(r): ""
+    set(prev): 47
+    len(n): path
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): path i
+        if(_): {b != 47 || prev != 47} [
+            slice(c): path i 1
+            concat(r): r c
+        ]
+        set(prev): b
+        set(i): {i + 1}
+    ]
+    len(m): r
+    if(_): {m > 0} [
+        byte(e): r {m - 1}
+        if(_): {e = 47} [ slice(r): r 0 {m - 1} ]
+    ]
+    if(_): {r = "" || r = "."} [ set(r): "/" ]
+    else(_): [ concat(r): "/" r ]
+]
+
+# the directory holding path ("/" for "/x")
+bl_parent(r): path [
+    bl_last_slash(i): path
+    set(r): "/"
+    if(_): {i > 0} [ slice(r): path 0 i ]
+]
+
+# the last part of path
+bl_base(r): path [
+    bl_last_slash(i): path
+    len(n): path
+    slice(r): path {i + 1} {n - i - 1}
+]
+
+# the keys of the entries inside directory dir: [lo, hi)
+bl_dir_lo(r): dir [
+    set(r): "/"
+    if(_): {dir != "/"} [ concat(r): dir "/" ]
+]
+
+bl_dir_hi(r): dir [
+    set(r): "0"
+    if(_): {dir != "/"} [ concat(r): dir "0" ]
+]
+
+bl_now(r): [
+    time(r):
+]
+
+# ---------------------------------------------------------------- blocks
+
+# the first sector of block blk
+bl_lba(r): fs blk [
+    btget(base): fs "base"
+    set(r): {base + (blk << 3)}
+]
+
+# The value in the metadata block blk, or null when the block does not
+# start with magic or its text is damaged.
+bl_read_meta(r): fs blk magic [
+    set(r): null
+    btget(dev): fs "dev"
+    bl_lba(lba): fs blk
+    bread(v): dev lba 1
+    typeof(tv): v
+    if(_): {tv != "vector"} [ return(r): r ]
+    bytes_text(h): v 0 24
+    typeof(th): h
+    if(_): {th != "string"} [ return(r): r ]
+    slice(m): h 0 8
+    if(_): {m != magic} [ return(r): r ]
+    slice(hn): h 8 8
+    bl_unhex8(n): hn
+    slice(hc): h 16 8
+    bl_unhex8(c): hc
+    if(_): {n < 0 || c < 0 || n > 65536 - 24} [ return(r): r ]
+    set(sectors): {(n + 24 + 511) >> 9}
+    if(_): {sectors > 1} [
+        bread(v): dev lba sectors
+        typeof(tv): v
+        if(_): {tv != "vector"} [ return(r): r ]
+    ]
+    crc32(got): v 24 n
+    if(_): {got != c} [ return(r): r ]
+    bytes_text(t): v 24 n
+    typeof(tt): t
+    if(_): {tt != "string"} [ return(r): r ]
+    decode(r): t
+]
+
+# Writes value into block blk (and the blocks after it, up to blocks of
+# them) as magic + text; 0, or -1 when it does not fit or the write fails.
+bl_write_meta(r): fs blk magic value blocks [
+    set(r): -1
+    encode(t): value
+    text_bytes(tb): t
+    len(n): tb
+    if(_): {n + 24 > (blocks << 12)} [
+        bl_int(sn): n
+        concat(m): magic " text of " sn " bytes does not fit"
+        bl_err(r): m
+        return(r): r
+    ]
+    crc32(c): tb
+    bl_hex8(hn): n
+    bl_hex8(hc): c
+    set(total): {(n + 24 + 511) & -512}
+    set(pad): ""
+    set(want): {total - n - 24}
+    while(_): {want > 0} [
+        set(k): want
+        if(_): {k > 512} [ set(k): 512 ]
+        slice(sp): "                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                " 0 k
+        concat(pad): pad sp
+        set(want): {want - k}
+    ]
+    concat(all): magic hn hc t pad
+    text_bytes(v): all
+    btget(dev): fs "dev"
+    bl_lba(lba): fs blk
+    bwrite(w): dev lba v
+    if(_): {w = total} [ set(r): 0 ]
+    else(_): [
+        bl_int(sb): blk
+        concat(m): "cannot write block " sb " of " dev
+        bl_err(r): m
+    ]
+]
+
+# ---------------------------------------------------------------- free space
+
+# Takes count blocks: a vector of [block, count] extents (one when the
+# space allows), or null when there is not enough room.
+bl_alloc(r): fs count [
+    set(r): null
+    btget(free): fs "free"
+    btrange(spans): free
+    len(n): spans
+    # the first span big enough
+    set(i): 0
+    while(_): {i < n} [
+        at(p): spans i
+        at(s): p 0
+        at(l): p 1
+        if(_): {l >= count} [
+            btdel(_): free s
+            if(_): {l > count} [ btput(_): free {s + count} {l - count} ]
+            vec(r): ""
+            vec(e): ""
+            push(_): e s
+            push(_): e count
+            push(_): r e
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    # else pieces, in order
+    set(have): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(p): spans i
+        at(l): p 1
+        set(have): {have + l}
+        set(i): {i + 1}
+    ]
+    if(_): {have < count} [ return(r): r ]
+    vec(r): ""
+    set(left): count
+    set(i): 0
+    while(_): {left > 0} [
+        at(p): spans i
+        at(s): p 0
+        at(l): p 1
+        set(take): l
+        if(_): {take > left} [ set(take): left ]
+        btdel(_): free s
+        if(_): {l > take} [ btput(_): free {s + take} {l - take} ]
+        vec(e): ""
+        push(_): e s
+        push(_): e take
+        push(_): r e
+        set(left): {left - take}
+        set(i): {i + 1}
+    ]
+]
+
+# Gives count blocks from start back, joining the free spans around them.
+bl_free(r): fs start count [
+    set(r): 0
+    btget(free): fs "free"
+    btfloor(p): free start
+    typeof(tp): p
+    if(_): {tp = "integer"} [
+        btget(pl): free p
+        if(_): {p + pl = start} [
+            btdel(_): free p
+            set(start): p
+            set(count): {count + pl}
+        ]
+    ]
+    set(after): {start + count}
+    btget(al): free after
+    typeof(ta): al
+    if(_): {ta = "integer"} [
+        btdel(_): free after
+        set(count): {count + al}
+    ]
+    btput(_): free start count
+]
+
+bl_free_extents(r): fs extents [
+    set(r): 0
+    len(n): extents
+    set(i): 0
+    while(_): {i < n} [
+        at(e): extents i
+        at(s): e 0
+        at(c): e 1
+        bl_free(_): fs s c
+        set(i): {i + 1}
+    ]
+]
+
+# blocks free
+bl_free_count(r): fs [
+    set(r): 0
+    btget(free): fs "free"
+    btrange(spans): free
+    len(n): spans
+    set(i): 0
+    while(_): {i < n} [
+        at(p): spans i
+        at(l): p 1
+        set(r): {r + l}
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- nodes
+
+# The node in block blk (cached): a btree with "kind" ("L" leaf, "I"
+# internal), "map" (the entries), "next" (leaves: the next leaf, or 0),
+# "block" and "dirty"; null when the block is not a node.
+bl_node(r): fs blk [
+    btget(cache): fs "nodes"
+    btget(r): cache blk
+    typeof(t): r
+    if(_): {t = "btree"} [ return(r): r ]
+    bl_read_meta(v): fs blk "BLNODE01"
+    set(r): null
+    typeof(tv): v
+    if(_): {tv != "vector"} [
+        bl_int(sb): blk
+        concat(m): "block " sb " is not a tree node"
+        bl_err(_): m
+        return(r): r
+    ]
+    btree(r):
+    at(kind): v 0
+    at(next): v 1
+    at(pairs): v 2
+    btput(_): r "kind" kind
+    btput(_): r "next" next
+    btput(_): r "block" blk
+    btput(_): r "dirty" false
+    btree(map):
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(p): pairs i
+        at(k): p 0
+        at(x): p 1
+        btput(_): map k x
+        set(i): {i + 1}
+    ]
+    btput(_): r "map" map
+    btput(_): cache blk r
+]
+
+bl_node_new(r): fs kind [
+    set(r): null
+    bl_alloc(ext): fs 1
+    typeof(te): ext
+    if(_): {te != "vector"} [
+        bl_err(_): "no room for a tree node"
+        return(r): r
+    ]
+    at(e): ext 0
+    at(blk): e 0
+    btree(r):
+    btput(_): r "kind" kind
+    btput(_): r "next" 0
+    btput(_): r "block" blk
+    btput(_): r "dirty" true
+    btree(map):
+    btput(_): r "map" map
+    btget(cache): fs "nodes"
+    btput(_): cache blk r
+]
+
+# what a node is on disk
+bl_node_value(r): node [
+    vec(r): ""
+    btget(kind): node "kind"
+    btget(next): node "next"
+    btget(map): node "map"
+    push(_): r kind
+    push(_): r next
+    push(_): r map
+]
+
+bl_node_fits(r): node [
+    bl_node_value(v): node
+    encode(t): v
+    len(n): t
+    set(r): {n + 24 <= 4096}
+]
+
+# the blocks from the root to the leaf that holds (or would hold) key
+bl_path_to(r): fs key [
+    vec(r): ""
+    btget(blk): fs "root"
+    set(go): true
+    while(_): go [
+        push(_): r blk
+        bl_node(node): fs blk
+        typeof(tn): node
+        if(_): {tn != "btree"} [
+            set(r): null
+            return(r): r
+        ]
+        btget(kind): node "kind"
+        if(_): {kind = "L"} [ set(go): false ]
+        else(_): [
+            btget(map): node "map"
+            btfloor(sep): map key
+            btget(blk): map sep
+        ]
+    ]
+]
+
+# Splits the node in two: the new right node gets the upper half of the
+# entries. Returns [separator, right block].
+bl_split(r): fs node [
+    set(r): null
+    btget(kind): node "kind"
+    btget(map): node "map"
+    btrange(pairs): map
+    len(n): pairs
+    if(_): {n < 2} [
+        bl_err(_): "a tree entry is too big for a node"
+        return(r): r
+    ]
+    bl_node_new(right): fs kind
+    typeof(tr): right
+    if(_): {tr != "btree"} [ return(r): r ]
+    btget(rmap): right "map"
+    set(half): {n >> 1}
+    at(p): pairs half
+    at(sep): p 0
+    set(i): half
+    while(_): {i < n} [
+        at(p): pairs i
+        at(k): p 0
+        at(x): p 1
+        btdel(_): map k
+        # an internal node's first child goes under ""
+        if(_): {i = half && kind = "I"} [ set(k): "" ]
+        btput(_): rmap k x
+        set(i): {i + 1}
+    ]
+    btget(rblk): right "block"
+    if(_): {kind = "L"} [
+        btget(next): node "next"
+        btput(_): right "next" next
+        btput(_): node "next" rblk
+    ]
+    btput(_): node "dirty" true
+    vec(r): ""
+    push(_): r sep
+    push(_): r rblk
+]
+
+# After an insert into the last node of path: splits what overflows,
+# up to a new root.
+bl_settle(r): fs path [
+    set(r): 0
+    len(depth): path
+    set(i): {depth - 1}
+    while(_): {i >= 0} [
+        at(blk): path i
+        bl_node(node): fs blk
+        bl_node_fits(ok): node
+        if(_): ok [ return(r): r ]
+        bl_split(s): fs node
+        typeof(ts): s
+        if(_): {ts != "vector"} [
+            set(r): -1
+            return(r): r
+        ]
+        at(sep): s 0
+        at(rblk): s 1
+        if(_): {i = 0} [
+            bl_node_new(root): fs "I"
+            typeof(tr): root
+            if(_): {tr != "btree"} [
+                set(r): -1
+                return(r): r
+            ]
+            btget(rmap): root "map"
+            btput(_): rmap "" blk
+            btput(_): rmap sep rblk
+            btget(nb): root "block"
+            btput(_): fs "root" nb
+        ]
+        else(_): [
+            at(pblk): path {i - 1}
+            bl_node(parent): fs pblk
+            btget(pmap): parent "map"
+            btput(_): pmap sep rblk
+            btput(_): parent "dirty" true
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+# the record of key, or null
+bl_get(r): fs key [
+    set(r): null
+    bl_path_to(path): fs key
+    typeof(tp): path
+    if(_): {tp != "vector"} [ return(r): r ]
+    len(n): path
+    at(blk): path {n - 1}
+    bl_node(leaf): fs blk
+    btget(map): leaf "map"
+    btget(r): map key
+]
+
+bl_put(r): fs key rec [
+    set(r): -1
+    bl_path_to(path): fs key
+    typeof(tp): path
+    if(_): {tp != "vector"} [ return(r): r ]
+    len(n): path
+    at(blk): path {n - 1}
+    bl_node(leaf): fs blk
+    btget(map): leaf "map"
+    btput(_): map key rec
+    btput(_): leaf "dirty" true
+    btput(_): fs "dirty" true
+    bl_settle(r): fs path
+]
+
+bl_unput(r): fs key [
+    set(r): false
+    bl_path_to(path): fs key
+    typeof(tp): path
+    if(_): {tp != "vector"} [ return(r): r ]
+    len(n): path
+    at(blk): path {n - 1}
+    bl_node(leaf): fs blk
+    btget(map): leaf "map"
+    btdel(r): map key
+    if(_): r [
+        btput(_): leaf "dirty" true
+        btput(_): fs "dirty" true
+    ]
+]
+
+# [key, record] pairs with lo <= key < hi (hi null: to the end), from the
+# leaf that holds lo along the leaf chain
+bl_scan(r): fs lo hi [
+    vec(r): ""
+    bl_path_to(path): fs lo
+    typeof(tp): path
+    if(_): {tp != "vector"} [ return(r): r ]
+    len(n): path
+    at(blk): path {n - 1}
+    while(_): {blk != 0} [
+        bl_node(leaf): fs blk
+        btget(map): leaf "map"
+        btrange(pairs): map lo hi
+        len(m): pairs
+        set(i): 0
+        while(_): {i < m} [
+            at(p): pairs i
+            push(_): r p
+            set(i): {i + 1}
+        ]
+        set(blk): 0
+        set(past): null
+        typeof(th): hi
+        if(_): {th = "string"} [ btceil(past): map hi ]
+        typeof(tpast): past
+        if(_): {tpast = "null"} [ btget(blk): leaf "next" ]
+    ]
+]
+
+# ---------------------------------------------------------------- mount
+
+bl_fs_new(r): dev base [
+    btree(r):
+    btput(_): r "dev" dev
+    btput(_): r "base" base
+    btree(nodes):
+    btput(_): r "nodes" nodes
+    btree(free):
+    btput(_): r "free" free
+    btput(_): r "dirty" false
+]
+
+# The first sector of the Belarus file system on dev: partition number
+# part (1..), or 0 for the first partition holding one (the whole device
+# when it starts at sector 0). -1 when there is none.
+bl_locate(r): dev part [
+    set(r): -1
+    bread(s0): dev 0 1
+    typeof(t0): s0
+    if(_): {t0 != "vector"} [ return(r): r ]
+    bytes_text(m): s0 0 8
+    if(_): {m = "BELARUS1" && part = 0} [
+        set(r): 0
+        return(r): r
+    ]
+    bl_parts(starts): dev s0
+    len(n): starts
+    set(i): 0
+    while(_): {i < n} [
+        at(lba): starts i
+        if(_): {part = i + 1} [
+            set(r): lba
+            return(r): r
+        ]
+        if(_): {part = 0 && lba > 0} [
+            bread(s): dev lba 1
+            typeof(ts): s
+            if(_): {ts = "vector"} [
+                bytes_text(m): s 0 8
+                if(_): {m = "BELARUS1"} [
+                    set(r): lba
+                    return(r): r
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# little-endian unsigned integer of n bytes of v at i
+bl_le(r): v i n [
+    set(r): 0
+    set(k): {n - 1}
+    while(_): {k >= 0} [
+        at(b): v {i + k}
+        set(r): {(r << 8) | b}
+        set(k): {k - 1}
+    ]
+]
+
+# the first sectors of the partitions of an MBR or GPT disk, in table
+# order (0 for an unused slot)
+bl_parts(r): dev s0 [
+    vec(r): ""
+    at(a): s0 510
+    at(b): s0 511
+    if(_): {a != 85 || b != 170} [ return(r): r ]
+    at(t1): s0 450
+    if(_): {t1 = 238} [
+        # protective MBR: the GPT header is in sector 1
+        bread(h): dev 1 1
+        typeof(th): h
+        if(_): {th != "vector"} [ return(r): r ]
+        bytes_text(sig): h 0 8
+        if(_): {sig != "EFI PART"} [ return(r): r ]
+        bl_le(elba): h 72 8
+        bl_le(count): h 80 4
+        bl_le(esize): h 84 4
+        if(_): {count > 128} [ set(count): 128 ]
+        set(per): {512 / esize}
+        str_trunc(per): per
+        set(i): 0
+        while(_): {i < count} [
+            set(sec): {elba + (i / per)}
+            str_trunc(sec): sec
+            set(off): {(i % per) * esize}
+            bread(e): dev sec 1
+            bl_le(first): e {off + 32} 8
+            push(_): r first
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    set(i): 0
+    while(_): {i < 4} [
+        set(off): {446 + i * 16}
+        at(t): s0 {off + 4}
+        set(first): 0
+        if(_): {t != 0} [ bl_le(first): s0 {off + 8} 4 ]
+        push(_): r first
+        set(i): {i + 1}
+    ]
+]
+
+# Mounts the file system at sector base of dev: the fs, or null.
+bl_mount(r): dev base [
+    bl_fs_new(r): dev base
+    bl_read_meta(sb): r 0 "BELARUS1"
+    typeof(ts): sb
+    if(_): {ts != "vector"} [
+        concat(m): dev ": no Belarus file system there"
+        bl_err(_): m
+        set(r): null
+        return(r): r
+    ]
+    # the superblock is a list of [name, value] pairs
+    len(n): sb
+    set(i): 0
+    while(_): {i < n} [
+        at(p): sb i
+        at(k): p 0
+        at(x): p 1
+        if(_): {k != "dev" && k != "base"} [ btput(_): r k x ]
+        set(i): {i + 1}
+    ]
+    bl_read_meta(spans): r 1 "BLFREE01"
+    typeof(tf): spans
+    if(_): {tf != "vector"} [
+        concat(m): dev ": the free-space map is damaged"
+        bl_err(_): m
+        set(r): null
+        return(r): r
+    ]
+    btget(free): r "free"
+    len(n): spans
+    set(i): 0
+    while(_): {i < n} [
+        at(p): spans i
+        at(s): p 0
+        at(l): p 1
+        btput(_): free s l
+        set(i): {i + 1}
+    ]
+]
+
+# Opens a device spec: "disk.img" (the first Belarus file system on it)
+# or "disk.img@2" (partition 2). The fs, or null.
+bl_open(r): spec [
+    set(r): null
+    set(dev): spec
+    set(part): 0
+    bl_last_at(at): spec
+    if(_): {at > 0} [
+        len(n): spec
+        slice(dev): spec 0 at
+        slice(ps): spec {at + 1} {n - at - 1}
+        str_to_number(part): ps
+        typeof(tp): part
+        if(_): {tp != "integer"} [
+            concat(m): "bad partition number in " spec
+            bl_err(_): m
+            return(r): r
+        ]
+    ]
+    bl_locate(base): dev part
+    if(_): {base < 0} [
+        concat(m): dev ": no Belarus file system found"
+        bl_err(_): m
+        return(r): r
+    ]
+    bl_mount(r): dev base
+]
+
+bl_last_at(r): s [
+    len(n): s
+    set(r): {n - 1}
+    while(_): {r >= 0} [
+        byte(b): s r
+        if(_): {b = 64} [ return(r): r ]
+        set(r): {r - 1}
+    ]
+]
+
+# Writes every changed node, the free-space map and the superblock.
+bl_sync(r): fs [
+    set(r): 0
+    btget(cache): fs "nodes"
+    btrange(all): cache
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(p): all i
+        at(blk): p 0
+        at(node): p 1
+        btget(d): node "dirty"
+        if(_): d [
+            bl_node_value(v): node
+            bl_write_meta(w): fs blk "BLNODE01" v 1
+            if(_): {w != 0} [ set(r): -1 ]
+            btput(_): node "dirty" false
+        ]
+        set(i): {i + 1}
+    ]
+    btget(free): fs "free"
+    bl_write_meta(w): fs 1 "BLFREE01" free 16
+    if(_): {w != 0} [ set(r): -1 ]
+    btree(sb):
+    btrange(fields): fs
+    len(n): fields
+    set(i): 0
+    while(_): {i < n} [
+        at(p): fields i
+        at(k): p 0
+        at(x): p 1
+        if(_): {k != "dev" && k != "base" && k != "nodes" && k != "free" && k != "dirty"} [
+            btput(_): sb k x
+        ]
+        set(i): {i + 1}
+    ]
+    bl_write_meta(w): fs 0 "BELARUS1" sb 1
+    if(_): {w != 0} [ set(r): -1 ]
+    btput(_): fs "dirty" false
+]
+
+# Makes a Belarus file system of blocks 4096-byte blocks at sector base
+# of dev. The mounted fs, or null.
+bl_mkfs(r): dev base blocks label [
+    set(r): null
+    if(_): {blocks < 64} [
+        bl_err(_): "a Belarus file system needs at least 64 blocks (256 KiB)"
+        return(r): r
+    ]
+    bl_fs_new(fs): dev base
+    btput(_): fs "magic" "belarus"
+    btput(_): fs "version" 1
+    btput(_): fs "block" 4096
+    btput(_): fs "blocks" blocks
+    btput(_): fs "label" label
+    bl_now(now):
+    btput(_): fs "created" now
+    random64(x):
+    bl_hex8(u1): {x & 4294967295}
+    bl_hex8(u2): {(x >> 32) & 4294967295}
+    concat(uuid): u1 u2
+    btput(_): fs "uuid" uuid
+    btget(free): fs "free"
+    btput(_): free 17 {blocks - 17}
+    bl_node_new(root): fs "L"
+    btget(rb): root "block"
+    btput(_): fs "root" rb
+    vec(rec): ""
+    push(_): rec "d"
+    push(_): rec 0
+    push(_): rec now
+    vec(none): ""
+    push(_): rec none
+    btget(map): root "map"
+    btput(_): map "/" rec
+    bl_sync(w): fs
+    if(_): {w = 0} [ set(r): fs ]
+]
+
+# ---------------------------------------------------------------- files
+
+bl_rec(r): type size extents [
+    vec(r): ""
+    push(_): r type
+    push(_): r size
+    bl_now(now):
+    push(_): r now
+    push(_): r extents
+]
+
+bl_is_dir(r): fs path [
+    bl_clean(p): path
+    bl_get(rec): fs p
+    set(r): false
+    typeof(t): rec
+    if(_): {t = "vector"} [
+        at(ty): rec 0
+        set(r): {ty = "d"}
+    ]
+]
+
+bl_exists(r): fs path [
+    bl_clean(p): path
+    bl_get(rec): fs p
+    typeof(t): rec
+    set(r): {t = "vector"}
+]
+
+# A new entry's parent must be a directory: 0, or -1 after saying why.
+bl_check_parent(r): fs p [
+    set(r): 0
+    bl_parent(dir): p
+    bl_is_dir(d): fs dir
+    if(_): {d = false} [
+        concat(m): dir " is not a directory"
+        bl_err(r): m
+    ]
+]
+
+bl_mkdir(r): fs path [
+    bl_clean(p): path
+    set(r): 0
+    bl_get(rec): fs p
+    typeof(t): rec
+    if(_): {t = "vector"} [
+        at(ty): rec 0
+        if(_): {ty != "d"} [
+            concat(m): p " exists and is a file"
+            bl_err(r): m
+        ]
+        return(r): r
+    ]
+    bl_check_parent(r): fs p
+    if(_): {r != 0} [ return(r): r ]
+    vec(none): ""
+    bl_rec(rec): "d" 0 none
+    bl_put(r): fs p rec
+]
+
+# mkdir -p
+bl_mkdirs(r): fs path [
+    bl_clean(p): path
+    set(r): 0
+    if(_): {p = "/"} [ return(r): r ]
+    bl_parent(up): p
+    bl_mkdirs(r): fs up
+    if(_): {r = 0} [ bl_mkdir(r): fs p ]
+]
+
+# Makes room for a file of size bytes at p (freeing what it had): the
+# extents, or null.
+bl_make_file(r): fs p size [
+    set(r): null
+    bl_check_parent(c): fs p
+    if(_): {c != 0} [ return(r): r ]
+    bl_get(old): fs p
+    typeof(t): old
+    if(_): {t = "vector"} [
+        at(ty): old 0
+        if(_): {ty = "d"} [
+            concat(m): p " is a directory"
+            bl_err(_): m
+            return(r): r
+        ]
+        at(ext): old 3
+        bl_free_extents(_): fs ext
+    ]
+    set(blocks): {(size + 4095) >> 12}
+    vec(r): ""
+    if(_): {blocks > 0} [
+        bl_alloc(r): fs blocks
+        typeof(ta): r
+        if(_): {ta != "vector"} [
+            concat(m): "no room for " p
+            bl_err(_): m
+            return(r): r
+        ]
+    ]
+]
+
+# Writes a byte vector as the file at path: 0 or -1.
+bl_write_bytes(r): fs path bytes [
+    set(r): -1
+    bl_clean(p): path
+    len(size): bytes
+    bl_make_file(ext): fs p size
+    typeof(te): ext
+    if(_): {te != "vector"} [ return(r): r ]
+    btget(dev): fs "dev"
+    len(ne): ext
+    set(done): 0
+    set(i): 0
+    while(_): {i < ne} [
+        at(e): ext i
+        at(s): e 0
+        at(c): e 1
+        set(take): {c << 12}
+        if(_): {take > size - done} [ set(take): {size - done} ]
+        set(sectors): {(take + 511) >> 9}
+        vec(chunk): ""
+        set(k): 0
+        while(_): {k < take} [
+            at(b): bytes {done + k}
+            push(_): chunk b
+            set(k): {k + 1}
+        ]
+        while(_): {k < (sectors << 9)} [
+            push(_): chunk 0
+            set(k): {k + 1}
+        ]
+        if(_): {sectors > 0} [
+            bl_lba(lba): fs s
+            bwrite(w): dev lba chunk
+            if(_): {w < 0} [
+                concat(m): "cannot write " p
+                bl_err(r): m
+                return(r): r
+            ]
+        ]
+        set(done): {done + take}
+        set(i): {i + 1}
+    ]
+    bl_rec(rec): "f" size ext
+    bl_put(r): fs p rec
+]
+
+bl_write_text(r): fs path text [
+    text_bytes(v): text
+    bl_write_bytes(r): fs path v
+]
+
+# Copies count bytes of another device or file (from byte offset from)
+# into the file at path, sector by sector with bcopy: 0 or -1.
+bl_write_from(r): fs path src from size [
+    set(r): -1
+    bl_clean(p): path
+    bl_make_file(ext): fs p size
+    typeof(te): ext
+    if(_): {te != "vector"} [ return(r): r ]
+    btget(dev): fs "dev"
+    len(ne): ext
+    set(done): 0
+    set(i): 0
+    while(_): {i < ne} [
+        at(e): ext i
+        at(s): e 0
+        at(c): e 1
+        set(take): {c << 12}
+        if(_): {take > size - done} [ set(take): {size - done} ]
+        bl_lba(lba): fs s
+        # byte-sized "sectors": the file's tail need not fill one
+        bcopy(n): src {from + done} dev {lba << 9} take 1
+        if(_): {n != take} [
+            concat(m): "cannot copy into " p
+            bl_err(r): m
+            return(r): r
+        ]
+        set(done): {done + take}
+        set(i): {i + 1}
+    ]
+    bl_rec(rec): "f" size ext
+    bl_put(r): fs p rec
+]
+
+# The file at path as a byte vector, or null.
+bl_read_bytes(r): fs path [
+    set(r): null
+    bl_clean(p): path
+    bl_get(rec): fs p
+    typeof(t): rec
+    if(_): {t != "vector"} [
+        concat(m): "no file " p
+        bl_err(_): m
+        return(r): r
+    ]
+    at(ty): rec 0
+    if(_): {ty != "f"} [
+        concat(m): p " is a directory"
+        bl_err(_): m
+        return(r): r
+    ]
+    at(size): rec 1
+    at(ext): rec 3
+    btget(dev): fs "dev"
+    len(ne): ext
+    set(done): 0
+    set(i): 0
+    while(_): {i < ne} [
+        at(e): ext i
+        at(s): e 0
+        at(c): e 1
+        set(take): {c << 12}
+        if(_): {take > size - done} [ set(take): {size - done} ]
+        bl_lba(lba): fs s
+        set(part): null
+        if(_): {take > 0} [ bread(part): dev {lba << 9} take 1 ]
+        if(_): {take = 0} [ vec(part): "" ]
+        typeof(tpart): part
+        if(_): {tpart != "vector"} [
+            concat(m): "cannot read " p
+            bl_err(_): m
+            set(r): null
+            return(r): r
+        ]
+        if(_): {i = 0} [ set(r): part ]
+        else(_): [
+            set(k): 0
+            while(_): {k < take} [
+                at(b): part k
+                push(_): r b
+                set(k): {k + 1}
+            ]
+        ]
+        set(done): {done + take}
+        set(i): {i + 1}
+    ]
+    if(_): {ne = 0} [ vec(r): "" ]
+]
+
+# The file at path as text, or null (also for a file holding a 0 byte).
+bl_read_text(r): fs path [
+    bl_read_bytes(v): fs path
+    set(r): null
+    typeof(t): v
+    if(_): {t = "vector"} [
+        len(n): v
+        set(r): ""
+        if(_): {n > 0} [ bytes_text(r): v ]
+    ]
+]
+
+# The names in directory path, in order, or null.
+bl_list(r): fs path [
+    set(r): null
+    bl_clean(p): path
+    bl_is_dir(d): fs p
+    if(_): {d = false} [
+        concat(m): "no directory " p
+        bl_err(_): m
+        return(r): r
+    ]
+    bl_dir_lo(lo): p
+    bl_dir_hi(hi): p
+    bl_scan(pairs): fs lo hi
+    len(skip): lo
+    vec(r): ""
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): pairs i
+        at(k): pr 0
+        len(kl): k
+        slice(rest): k skip {kl - skip}
+        str_find(slash): rest "/" 0
+        if(_): {slash < 0 && rest != ""} [ push(_): r rest ]
+        set(i): {i + 1}
+    ]
+]
+
+# Every [path, record] under path (itself included), in order.
+bl_walk(r): fs path [
+    bl_clean(p): path
+    vec(r): ""
+    bl_get(rec): fs p
+    typeof(t): rec
+    if(_): {t != "vector"} [ return(r): r ]
+    vec(self): ""
+    push(_): self p
+    push(_): self rec
+    push(_): r self
+    at(ty): rec 0
+    if(_): {ty != "d"} [ return(r): r ]
+    bl_dir_lo(lo): p
+    bl_dir_hi(hi): p
+    bl_scan(pairs): fs lo hi
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): pairs i
+        at(k): pr 0
+        if(_): {k != p} [ push(_): r pr ]
+        set(i): {i + 1}
+    ]
+]
+
+# Removes a file or an empty directory: 0 or -1.
+bl_remove(r): fs path [
+    set(r): -1
+    bl_clean(p): path
+    if(_): {p = "/"} [
+        bl_err(r): "the root directory stays"
+        return(r): r
+    ]
+    bl_get(rec): fs p
+    typeof(t): rec
+    if(_): {t != "vector"} [
+        concat(m): "no file " p
+        bl_err(r): m
+        return(r): r
+    ]
+    at(ty): rec 0
+    if(_): {ty = "d"} [
+        bl_list(names): fs p
+        len(n): names
+        if(_): {n > 0} [
+            concat(m): p " is not empty"
+            bl_err(r): m
+            return(r): r
+        ]
+    ]
+    at(ext): rec 3
+    bl_free_extents(_): fs ext
+    bl_unput(_): fs p
+    set(r): 0
+]
+
+# Copies a file or a whole tree from one Belarus file system to another
+# (or within one), extent by extent with bcopy. Calls report (when not
+# "") with each path copied. The number of entries copied, or -1.
+bl_copy_tree(r): src from dst to report [
+    set(r): -1
+    bl_clean(f): from
+    bl_clean(t): to
+    bl_walk(all): src f
+    len(n): all
+    if(_): {n = 0} [
+        concat(m): "no file " f
+        bl_err(_): m
+        return(r): r
+    ]
+    len(fl): f
+    set(copied): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rec): pr 1
+        len(kl): k
+        slice(rest): k fl {kl - fl}
+        if(_): {f = "/" && k != "/"} [ concat(rest): "/" rest ]
+        if(_): {f = "/" && k = "/"} [ set(rest): "" ]
+        concat(target): t rest
+        bl_clean(target): target
+        at(ty): rec 0
+        if(_): {ty = "d"} [
+            bl_mkdirs(w): dst target
+        ]
+        else(_): [
+            at(size): rec 1
+            at(ext): rec 3
+            bl_make_file(dext): dst target size
+            set(w): -1
+            typeof(td): dext
+            if(_): {td = "vector"} [
+                set(w): 0
+                bl_copy_extents(w): src ext dst dext size
+                if(_): {w = 0} [
+                    bl_rec(nrec): "f" size dext
+                    bl_put(w): dst target nrec
+                ]
+            ]
+        ]
+        if(_): {w != 0} [ return(r): r ]
+        if(_): {report != ""} [ try(_): report target rec ]
+        set(copied): {copied + 1}
+        set(i): {i + 1}
+    ]
+    set(r): copied
+]
+
+# Moves size bytes from the source extents to the destination ones: the
+# two lists cover the same blocks in the same order, in pieces of
+# different lengths. 0 or -1.
+bl_copy_extents(r): src sext dst dext size [
+    set(r): 0
+    set(blocks): {(size + 4095) >> 12}
+    btget(sdev): src "dev"
+    btget(ddev): dst "dev"
+    set(si): 0
+    set(so): 0
+    set(di): 0
+    set(dof): 0
+    set(left): blocks
+    while(_): {left > 0} [
+        at(se): sext si
+        at(ss): se 0
+        at(sc): se 1
+        at(de): dext di
+        at(ds): de 0
+        at(dc): de 1
+        set(n): {sc - so}
+        if(_): {dc - dof < n} [ set(n): {dc - dof} ]
+        if(_): {left < n} [ set(n): left ]
+        bl_lba(sl): src {ss + so}
+        bl_lba(dl): dst {ds + dof}
+        bcopy(w): sdev sl ddev dl {n << 3}
+        if(_): {w != (n << 3)} [
+            bl_err(r): "a copy failed"
+            return(r): r
+        ]
+        set(left): {left - n}
+        set(so): {so + n}
+        set(dof): {dof + n}
+        if(_): {so = sc} [
+            set(si): {si + 1}
+            set(so): 0
+        ]
+        if(_): {dof = dc} [
+            set(di): {di + 1}
+            set(dof): 0
+        ]
+    ]
+]
+
+# Checks a mounted file system: every node reads, the leaves are in key
+# order along their chain, every directory has its parent, and no block
+# is both free and used. Prints what it finds; the number of problems.
+bl_fsck(r): fs [
+    set(r): 0
+    btree(used):
+    btput(_): used 0 1
+    btput(_): used 1 16
+    vec(stack): ""
+    btget(root): fs "root"
+    push(_): stack root
+    set(nodes): 0
+    set(leaves): 0
+    set(empty): 0
+    while(_): stack [
+        pop(blk): stack
+        bl_node(node): fs blk
+        typeof(tn): node
+        if(_): {tn != "btree"} [
+            set(r): {r + 1}
+        ]
+        else(_): [
+            set(nodes): {nodes + 1}
+            btput(_): used blk 1
+            btget(kind): node "kind"
+            btget(map): node "map"
+            btrange(pairs): map
+            len(n): pairs
+            if(_): {kind = "I"} [
+                set(i): 0
+                while(_): {i < n} [
+                    at(p): pairs i
+                    at(c): p 1
+                    push(_): stack c
+                    set(i): {i + 1}
+                ]
+            ]
+            else(_): [
+                set(leaves): {leaves + 1}
+                if(_): {n = 0} [ set(empty): {empty + 1} ]
+            ]
+        ]
+    ]
+    bl_walk(all): fs "/"
+    len(n): all
+    set(files): 0
+    set(dirs): 0
+    set(bytes): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rec): pr 1
+        at(ty): rec 0
+        if(_): {ty = "d"} [ set(dirs): {dirs + 1} ]
+        else(_): [
+            set(files): {files + 1}
+            at(sz): rec 1
+            set(bytes): {bytes + sz}
+        ]
+        if(_): {k != "/"} [
+            bl_parent(up): k
+            bl_is_dir(okp): fs up
+            if(_): {okp = false} [
+                concat(m): k ": its directory is missing"
+                print(_): m
+                set(r): {r + 1}
+            ]
+        ]
+        at(ext): rec 3
+        len(ne): ext
+        set(j): 0
+        while(_): {j < ne} [
+            at(e): ext j
+            at(s): e 0
+            at(c): e 1
+            btput(_): used s c
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    # used extents must not overlap each other or the free ones
+    btget(free): fs "free"
+    btrange(fp): free
+    len(nf): fp
+    set(i): 0
+    while(_): {i < nf} [
+        at(p): fp i
+        at(s): p 0
+        at(c): p 1
+        bthas(clash): used s
+        if(_): clash [
+            bl_int(ss): s
+            concat(m): "block " ss " is both free and used"
+            print(_): m
+            set(r): {r + 1}
+        ]
+        btput(_): used s {0 - c}
+        set(i): {i + 1}
+    ]
+    btrange(all_spans): used
+    len(nu): all_spans
+    set(end): 0
+    set(i): 0
+    while(_): {i < nu} [
+        at(p): all_spans i
+        at(s): p 0
+        at(c): p 1
+        if(_): {c < 0} [ set(c): {0 - c} ]
+        if(_): {s < end} [
+            bl_int(ss): s
+            concat(m): "block " ss " is used twice"
+            print(_): m
+            set(r): {r + 1}
+        ]
+        set(end): {s + c}
+        set(i): {i + 1}
+    ]
+    btget(blocks): fs "blocks"
+    if(_): {end > blocks} [
+        print(_): "an extent runs past the end"
+        set(r): {r + 1}
+    ]
+    bl_int(sn): nodes
+    bl_int(sl): leaves
+    bl_int(se): empty
+    bl_int(sf): files
+    bl_int(sd): dirs
+    bl_int(sb): bytes
+    concat(m): sd " directories, " sf " files, " sb " bytes; " sn " tree nodes, " sl " leaves (" se " empty)"
+    print(_): m
+]
+
+# ---------------------------------------------------------------- command line
+
+bl_usage(r): [
+    set(r): 0
+    print(_): "belarus - the USSR file system (B+ tree of paths)"
+    print(_): ""
+    print(_): "  belarus mkfs DEV [--label L] [--part N]   new file system (whole DEV, or partition N)"
+    print(_): "  belarus info DEV                          the superblock and free space"
+    print(_): "  belarus ls DEV [PATH]                     a directory"
+    print(_): "  belarus tree DEV [PATH]                   everything under PATH"
+    print(_): "  belarus cat DEV PATH                      a file's text"
+    print(_): "  belarus put DEV FILE PATH                 a host file into the file system"
+    print(_): "  belarus putlist DEV LIST [PREFIX]         the host files named in LIST (one per line)"
+    print(_): "  belarus get DEV PATH FILE                 a file out to the host"
+    print(_): "  belarus write DEV PATH TEXT               TEXT as the file PATH"
+    print(_): "  belarus mkdir DEV PATH                    a directory (and its parents)"
+    print(_): "  belarus rm DEV PATH                       a file or an empty directory"
+    print(_): "  belarus fsck DEV                          checks the tree and the free space"
+    print(_): ""
+    print(_): "DEV is a disk or disk image: the first Belarus file system on it, or"
+    print(_): "DEV@N for partition N. Make the partition with stalin (--type belarus)."
+]
+
+bl_human(r): bytes [
+    set(r): ""
+    if(_): {bytes >= 1048576} [
+        str_from_number(r): {bytes / 1048576} 1
+        concat(r): r " MiB"
+    ]
+    else(_): [
+        str_from_number(r): {bytes / 1024} 1
+        concat(r): r " KiB"
+    ]
+]
+
+bl_cmd_mkfs(r): p [
+    set(r): 2
+    len(np): p
+    if(_): {np < 2} [
+        bl_err(_): "mkfs DEV [--label L] [--part N]"
+        return(r): r
+    ]
+    at(dev): p 1
+    set(label): "ussr"
+    set(part): 0
+    set(i): 2
+    while(_): {i + 1 < np} [
+        at(o): p i
+        at(v): p {i + 1}
+        if(_): {o = "--label"} [ set(label): v ]
+        if(_): {o = "--part"} [ str_to_number(part): v ]
+        set(i): {i + 2}
+    ]
+    bsize(bytes): dev
+    if(_): {bytes < 0} [
+        concat(m): "cannot open " dev
+        bl_err(_): m
+        return(r): r
+    ]
+    set(base): 0
+    set(sectors): {bytes >> 9}
+    if(_): {part > 0} [
+        bread(s0): dev 0 1
+        bl_parts(starts): dev s0
+        len(n): starts
+        if(_): {part > n} [
+            bl_err(_): "no such partition"
+            return(r): r
+        ]
+        at(base): starts {part - 1}
+        bl_part_end(end): dev s0 part
+        set(sectors): {end - base}
+        if(_): {base = 0} [
+            bl_err(_): "no such partition"
+            return(r): r
+        ]
+    ]
+    set(blocks): {sectors >> 3}
+    bl_mkfs(fs): dev base blocks label
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_int(sb): blocks
+    bl_human(hs): {blocks << 12}
+    concat(m): dev ": Belarus file system '" label "', " sb " blocks (" hs ")"
+    print(_): m
+    set(r): 0
+]
+
+# the sector after partition part ends (MBR or GPT)
+bl_part_end(r): dev s0 part [
+    set(r): 0
+    at(t1): s0 450
+    if(_): {t1 = 238} [
+        bread(h): dev 1 1
+        bl_le(elba): h 72 8
+        bl_le(esize): h 84 4
+        set(i): {part - 1}
+        set(per): {512 / esize}
+        str_trunc(per): per
+        set(sec): {elba + (i / per)}
+        str_trunc(sec): sec
+        set(off): {(i % per) * esize}
+        bread(e): dev sec 1
+        bl_le(last): e {off + 40} 8
+        set(r): {last + 1}
+        return(r): r
+    ]
+    set(off): {446 + (part - 1) * 16}
+    bl_le(first): s0 {off + 8} 4
+    bl_le(count): s0 {off + 12} 4
+    set(r): {first + count}
+]
+
+bl_open_or_fail(r): p [
+    set(r): null
+    len(np): p
+    if(_): {np < 2} [
+        bl_err(_): "which device?"
+        return(r): r
+    ]
+    at(dev): p 1
+    bl_open(r): dev
+]
+
+bl_cmd_info(r): fs [
+    set(r): 0
+    btget(label): fs "label"
+    btget(uuid): fs "uuid"
+    btget(blocks): fs "blocks"
+    btget(root): fs "root"
+    btget(base): fs "base"
+    bl_free_count(free): fs
+    bl_human(hs): {blocks << 12}
+    bl_human(hf): {free << 12}
+    bl_int(sbase): base
+    bl_int(sroot): root
+    concat(m): "label " label ", uuid " uuid
+    print(_): m
+    concat(m): "size " hs ", free " hf "; starts at sector " sbase ", tree root in block " sroot
+    print(_): m
+]
+
+bl_type_char(r): rec [
+    at(ty): rec 0
+    set(r): "-"
+    if(_): {ty = "d"} [ set(r): "d" ]
+]
+
+bl_cmd_ls(r): fs path [
+    set(r): 1
+    bl_clean(p): path
+    bl_get(rec): fs p
+    typeof(t): rec
+    if(_): {t != "vector"} [
+        concat(m): "no file " p
+        bl_err(_): m
+        return(r): r
+    ]
+    at(ty): rec 0
+    vec(names): ""
+    if(_): {ty = "d"} [ bl_list(names): fs p ]
+    else(_): [
+        bl_base(b): p
+        push(_): names b
+    ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        set(full): p
+        if(_): {ty = "d"} [
+            if(_): {p = "/"} [ concat(full): "/" name ]
+            else(_): [ concat(full): p "/" name ]
+        ]
+        bl_get(e): fs full
+        bl_type_char(c): e
+        at(size): e 1
+        bl_int(ss): size
+        len(sl): ss
+        str_repeat(sp): " " {10 - sl}
+        concat(line): c " " sp ss "  " name
+        print(_): line
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+bl_cmd_tree(r): fs path [
+    set(r): 0
+    bl_walk(all): fs path
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rec): pr 1
+        bl_type_char(c): rec
+        at(size): rec 1
+        bl_int(ss): size
+        len(sl): ss
+        str_repeat(sp): " " {10 - sl}
+        concat(line): c " " sp ss "  " k
+        print(_): line
+        set(i): {i + 1}
+    ]
+]
+
+# Puts the host file file at path (making its directories).
+bl_put_host(r): fs file path [
+    set(r): -1
+    bsize(size): file
+    if(_): {size < 0} [
+        concat(m): "cannot read " file
+        bl_err(_): m
+        return(r): r
+    ]
+    bl_clean(p): path
+    bl_parent(up): p
+    bl_mkdirs(w): fs up
+    if(_): {w != 0} [ return(r): r ]
+    bl_write_from(r): fs p file 0 size
+]
+
+bl_cmd_putlist(r): fs list prefix [
+    set(r): 1
+    readfile(text): list
+    typeof(tt): text
+    if(_): {tt != "string"} [
+        concat(m): "cannot read " list
+        bl_err(_): m
+        return(r): r
+    ]
+    len(n): text
+    set(start): 0
+    set(count): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 10
+        if(_): {i < n} [ byte(b): text i ]
+        if(_): {b = 10} [
+            slice(line): text start {i - start}
+            str_trim(line): line
+            if(_): {line != ""} [
+                concat(target): prefix "/" line
+                bl_put_host(w): fs line target
+                if(_): {w != 0} [ return(r): r ]
+                set(count): {count + 1}
+            ]
+            set(start): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    bl_int(sc): count
+    concat(m): sc " files put under " prefix
+    print(_): m
+    set(r): 0
+]
+
+# Writes the file at path out to the host file file.
+bl_get_host(r): fs path file [
+    set(r): -1
+    bl_read_bytes(v): fs path
+    typeof(t): v
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): v
+    # bwrite grows a file in whole "sectors": make it, then write bytes
+    open_file(h): file "wb"
+    close_file(_): h
+    if(_): {n > 0} [ bwrite(_): file 0 v 1 ]
+    set(r): 0
+]
+
+belarus_main(r): args [
+    set(r): 2
+    len(np): args
+    set(cmd): "help"
+    if(_): {np > 0} [ at(cmd): args 0 ]
+    if(_): {cmd = "help" || cmd = "--help" || cmd = "-h"} [
+        bl_usage(r):
+        return(r): r
+    ]
+    if(_): {cmd = "mkfs"} [
+        bl_cmd_mkfs(r): args
+        return(r): r
+    ]
+    bl_open_or_fail(fs): args
+    typeof(tf): fs
+    if(_): {tf != "btree"} [ return(r): r ]
+    set(a2): "/"
+    set(a3): ""
+    set(a4): ""
+    if(_): {np > 2} [ at(a2): args 2 ]
+    if(_): {np > 3} [ at(a3): args 3 ]
+    if(_): {np > 4} [ at(a4): args 4 ]
+    set(r): -1
+    if(_): {cmd = "info"} [ bl_cmd_info(r): fs ]
+    elif(_): {cmd = "ls"} [ bl_cmd_ls(r): fs a2 ]
+    elif(_): {cmd = "tree"} [ bl_cmd_tree(r): fs a2 ]
+    elif(_): {cmd = "fsck"} [
+        bl_fsck(bad): fs
+        set(r): 0
+        if(_): {bad > 0} [ set(r): 1 ]
+    ]
+    elif(_): {cmd = "cat"} [
+        bl_read_text(t): fs a2
+        set(r): 1
+        typeof(tt): t
+        if(_): {tt = "string"} [
+            print_raw(_): t
+            set(r): 0
+        ]
+    ]
+    elif(_): {cmd = "get"} [
+        bl_get_host(r): fs a2 a3
+    ]
+    elif(_): {cmd = "put"} [
+        bl_put_host(r): fs a2 a3
+    ]
+    elif(_): {cmd = "putlist"} [
+        set(prefix): a3
+        if(_): {prefix = "/"} [ set(prefix): "" ]
+        bl_cmd_putlist(r): fs a2 prefix
+    ]
+    elif(_): {cmd = "write"} [
+        bl_parent(up): a2
+        bl_mkdirs(w): fs up
+        bl_write_text(r): fs a2 a3
+    ]
+    elif(_): {cmd = "mkdir"} [ bl_mkdirs(r): fs a2 ]
+    elif(_): {cmd = "rm"} [ bl_remove(r): fs a2 ]
+    else(_): [
+        concat(m): "unknown command '" cmd "' (belarus help lists them)"
+        bl_err(_): m
+        return(r): r
+    ]
+    if(_): {r < 0} [ set(r): 1 ]
+    btget(dirty): fs "dirty"
+    if(_): dirty [
+        bl_sync(w): fs
+        if(_): {w != 0} [ set(r): 1 ]
+    ]
+]
+
+# print without the newline print adds (the text has its own)
+print_raw(r): t [
+    len(n): t
+    set(r): 0
+    if(_): {n = 0} [ return(r): r ]
+    byte(last): t {n - 1}
+    if(_): {last = 10} [ slice(t): t 0 {n - 1} ]
+    print(_): t
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(args): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): args a
+        set(i): {i + 1}
+    ]
+    belarus_main(ret): args
+]
+$endif
