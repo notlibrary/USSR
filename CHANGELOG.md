@@ -3,6 +3,37 @@
 ## [Unreleased]
 
 ### Added
+- The `btree` container: `btree(t):` makes an ordered map kept in a B+
+  tree (`src/btree.c`), keys numbers or strings, values anything;
+  `btput`, `btget`, `bthas`, `btdel`, `btlen`, `btfirst`, `btlast`,
+  `btfloor`, `btceil`, `btprev`, `btnext`, `btrange` and `btkeys` work on
+  it, `len` and `typeof` know it, `encode` writes its `[key, value]`
+  pairs and the collector finds trees only cycles keep. `bcopy(n): src
+  slba dst dlba count [sector]` copies sectors between disks or images.
+- Belarus (`src/belarus`), the USSR file system: one B+ tree of paths
+  whose nodes are blocks of UNO text behind an ASCII header with a
+  CRC-32, file data in extents of 4 KiB blocks. A library and a command
+  line (`mkfs`, `ls`, `tree`, `cat`, `put`, `putlist`, `get`, `write`,
+  `mkdir`, `rm`, `fsck`, `info`) on whole disks, images and MBR or GPT
+  partitions. Stalin knows the partition type `belarus` and shows the
+  file system and its label.
+- Moscow boots from a Belarus disk: `build.sh` makes `ussr.img`, the
+  install disk, with the boot image in its first 4 MiB and a Belarus
+  partition holding `/bin` (install, stalin, belarus), `/boot`, `/etc`
+  and the whole project in `/src/ussr`. The runtime has an ATA driver
+  under ussr's block commands (`/dev/hda` .. `/dev/hdd`), the btree
+  container, `sha256`, `clear_bytes`, `DECODE_UNO`, `k_exec_bytes` and
+  `k_syscall`, with which the kernel takes over `ls`, `cat`, `readfile`,
+  `writefile`, `file_exists`, `run`, `df`, `fsck` and the other file
+  commands and serves them from its root file system.
+- The installer (`src/moscow/install.su`), a USSR script: `install(_):`
+  in the Moscow shell asks which disk, how to partition it (a new MBR or
+  GPT table, or the free space), the size, label, host name and how much
+  to copy, makes the partition with Stalin and the file system with
+  Belarus, copies the system or the whole project and the boot loader,
+  and the disk boots on its own. It writes only to virtual disks (QEMU
+  disks in Moscow, image files under ussr). `tools/qemu_test.py` installs
+  onto a qcow2 disk and boots it.
 - Moscow (`src/moscow`), the amd64 kernel: a two-stage NASM boot loader
   (`arch/amd64/boot.nasm`) enters long mode and starts the NASM USSR
   runtime (`arch/amd64/ussr_rt.nasm`), a `.ru` bytecode VM on bare metal

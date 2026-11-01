@@ -64,8 +64,11 @@ size_t ussr_gc_object_count(void)
     ussr_vector_t *v = ussr_uno_gc_vectors();
     ussr_struct_instance_t *s = ussr_uno_gc_instances();
 
+    ussr_btree_t *t = ussr_btree_gc_list();
+
     while (v != NULL) { ++count; v = v->gc_next; }
     while (s != NULL) { ++count; s = s->gc_next; }
+    while (t != NULL) { ++count; t = ussr_btree_gc_next(t); }
 
     return count;
 }
@@ -80,8 +83,11 @@ void ussr_gc_begin(void)
     ussr_vector_t *v = ussr_uno_gc_vectors();
     ussr_struct_instance_t *s = ussr_uno_gc_instances();
 
+    ussr_btree_t *t = ussr_btree_gc_list();
+
     while (v != NULL) { v->gc_mark = 0; v = v->gc_next; }
     while (s != NULL) { s->gc_mark = 0; s = s->gc_next; }
+    while (t != NULL) { ussr_btree_gc_set_mark(t, 0); t = ussr_btree_gc_next(t); }
 }
 
 static void gc_mark_vector(ussr_vector_t *vector)
@@ -110,6 +116,20 @@ static void gc_mark_instance(ussr_struct_instance_t *instance)
         ussr_gc_mark_value(&instance->fields[i]);
 }
 
+static void gc_mark_btree_value(ussr_value_t *value)
+{
+    ussr_gc_mark_value(value);
+}
+
+static void gc_mark_btree(ussr_btree_t *tree)
+{
+    if (tree == NULL || ussr_btree_gc_marked(tree))
+        return;
+
+    ussr_btree_gc_set_mark(tree, 1);
+    ussr_btree_each_value(tree, gc_mark_btree_value);
+}
+
 void ussr_gc_mark_value(const ussr_value_t *value)
 {
     if (value == NULL)
@@ -119,6 +139,8 @@ void ussr_gc_mark_value(const ussr_value_t *value)
         gc_mark_vector(value->data.vector);
     else if (value->type == USSR_STRUCT)
         gc_mark_instance(value->data.instance);
+    else if (value->type == USSR_BTREE)
+        gc_mark_btree(value->data.btree);
 }
 
 /*
@@ -127,6 +149,13 @@ void ussr_gc_mark_value(const ussr_value_t *value)
  */
 static void gc_unref_garbage_child(const ussr_value_t *value)
 {
+    if (value->type == USSR_BTREE &&
+        value->data.btree != NULL &&
+        !ussr_btree_gc_marked(value->data.btree))
+    {
+        ussr_btree_gc_drop_ref(value->data.btree);
+        return;
+    }
     if (value->type == USSR_VECTOR &&
         value->data.vector != NULL &&
         !value->data.vector->gc_mark &&
@@ -143,11 +172,17 @@ static void gc_unref_garbage_child(const ussr_value_t *value)
     }
 }
 
+static void gc_unref_garbage_child_mutable(ussr_value_t *value)
+{
+    gc_unref_garbage_child(value);
+}
+
 size_t ussr_gc_sweep(void)
 {
     size_t collected = 0;
     ussr_vector_t *v;
     ussr_struct_instance_t *s;
+    ussr_btree_t *t;
     size_t i;
 
     /* Pass 1: detach garbage-to-garbage child references. */
@@ -164,6 +199,12 @@ size_t ussr_gc_sweep(void)
             continue;
         for (i = 0; i < s->field_count; ++i)
             gc_unref_garbage_child(&s->fields[i]);
+    }
+
+    for (t = ussr_btree_gc_list(); t != NULL; t = ussr_btree_gc_next(t))
+    {
+        if (!ussr_btree_gc_marked(t))
+            ussr_btree_each_value(t, gc_unref_garbage_child_mutable);
     }
 
     /* Pass 2: reclaim. Unlink from the registry while iterating. */
@@ -191,6 +232,19 @@ size_t ussr_gc_sweep(void)
             ++collected;
         }
         s = next;
+    }
+
+    t = ussr_btree_gc_list();
+    while (t != NULL)
+    {
+        ussr_btree_t *next = ussr_btree_gc_next(t);
+        if (!ussr_btree_gc_marked(t))
+        {
+            ussr_btree_gc_unregister(t);
+            ussr_btree_destroy_raw(t);
+            ++collected;
+        }
+        t = next;
     }
 
     gc_collected_total += collected;

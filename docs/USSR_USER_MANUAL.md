@@ -553,6 +553,40 @@ pop(last): items         # "two"; items now holds only 1
 
 Vectors are reference types too, same aliasing behavior as structs.
 
+### 8.3.1 B+ trees
+
+A `btree` is an ordered map kept in a B+ tree: keys are numbers or
+strings (numbers first, by value, so `1` and `1.0` are one key; then
+strings, byte by byte), values are anything.
+
+```
+btree(t):
+btput(_): t "/bin/stalin.ru" 1
+btput(_): t "/bin" 2
+btput(_): t "/boot" 3
+btget(v): t "/bin"              # 2
+btfloor(k): t "/bin/x"          # "/bin": the largest key <= "/bin/x"
+btkeys(ks): t "/bin/" "/bin0"   # ["/bin/stalin.ru"]: lo <= key < hi
+btrange(ps): t                  # [["/bin",2],["/bin/stalin.ru",1],["/boot",3]]
+btdel(gone): t "/boot"          # true
+```
+
+- `btput(t): t key value` — store (or replace) the value under key; the
+  result is the tree.
+- `btget(v): t key [default]` — the value, or default (null).
+- `bthas(b): t key`, `btdel(b): t key` — is it there; remove it.
+- `btlen(n): t` (or `len`) — the number of keys.
+- `btfirst(k): t`, `btlast(k): t` — the smallest and largest key.
+- `btfloor`, `btceil`, `btprev`, `btnext` `(k): t key` — the nearest key
+  `<=`, `>=`, `<`, `>` key; null when there is none.
+- `btrange(v): t [lo [hi [max]]]` — `[key, value]` pairs with
+  `lo <= key < hi` in order (null bounds are open), at most max of them;
+  `btkeys` gives the keys only.
+
+Trees are reference types like vectors; `typeof` says `btree` and
+`encode` writes the `[key, value]` pairs. The Belarus file system
+(`src/belarus`) keeps its nodes, caches and free space in them.
+
 ### 8.4 UNO — encoding, decoding, and literals
 
 `encode`/`decode` convert between a live struct/vector and its text
@@ -1142,12 +1176,17 @@ administrator or root rights to read or write):
 bread(v): dev lba [count [sector]]   # count sectors (1) of sector bytes (512) from lba; null on error
 bwrite(n): dev lba bytes [sector]    # whole sectors at lba; bytes written or -1; grows an image
 bsize(n): dev                        # bytes, -1 when unknown
+bcopy(n): src slba dst dlba count [sector]  # sectors between devices; sectors copied or -1
 bdevices(v):                         # [path bytes kind bus model sector] per device;
                                      # kind: HDD, SSD, flash, virtual or disk
 ```
 
 `bwrite` only opens files that exist (make an image with `open_file` or
-`stalin mkimg`). `bdevices` asks Windows (IOCTL_STORAGE_QUERY_PROPERTY: bus,
+`stalin mkimg`). Any sector size works, 1 included: `bread(v): f off n 1`
+reads n bytes at byte offset off, and `bcopy` with sector 1 copies part
+of a file into an image without making a byte vector of it. On the
+Moscow kernel the same commands work on its ATA disks, `/dev/hda` ..
+`/dev/hdd`. `bdevices` asks Windows (IOCTL_STORAGE_QUERY_PROPERTY: bus,
 seek penalty, removable media) or Linux (`/sys/block`); other systems give
 an empty vector.
 

@@ -60,6 +60,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(PETERSBURG_OBJ) \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
+       $(SRC_DIR)/btree.o \
        $(SRC_DIR)/prng64_xrp32.o \
        $(SRC_DIR)/keybind.o \
        $(SRC_DIR)/alias.o \
@@ -180,7 +181,10 @@ $(SRC_DIR)/socket_posix.o: $(SRC_DIR)/socket_posix.c $(SRC_DIR)/socket.h
 $(SRC_DIR)/socket_win32.o: $(SRC_DIR)/socket_win32.c $(SRC_DIR)/socket.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SRC_DIR)/gc.o: $(SRC_DIR)/gc.c $(SRC_DIR)/gc.h $(SRC_DIR)/uno.h
+$(SRC_DIR)/gc.o: $(SRC_DIR)/gc.c $(SRC_DIR)/gc.h $(SRC_DIR)/uno.h $(SRC_DIR)/btree.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/btree.o: $(SRC_DIR)/btree.c $(SRC_DIR)/btree.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c $(SRC_DIR)/prng64_xrp32.h

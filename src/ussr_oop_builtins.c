@@ -575,9 +575,17 @@ static int oop_do_len(
         return 0;
     }
 
+    if (vec_v.type == USSR_BTREE)
+    {
+        *out_result = ussr_integer(
+            (ussr_int_t)ussr_btree_count(vec_v.data.btree));
+        ussr_value_free(&vec_v);
+        return 0;
+    }
+
     if (!oop_expect_vector(&vec_v, &vector))
     {
-        fprintf(stderr, "USSR: len() expects a vector or a string\n");
+        fprintf(stderr, "USSR: len() expects a vector, btree or string\n");
         ussr_value_free(&vec_v);
         return -1;
     }
@@ -2829,6 +2837,8 @@ static int oop_do_write_bytes(
 /*   bwrite(n): dev lba bytes [sector]   -> writes the bytes (a     */
 /*             whole number of sectors) at sector lba; bytes        */
 /*             written, or -1 (non-fatal)                           */
+/*   bcopy(n): src slba dst dlba count [sector] -> copies sectors   */
+/*             between devices; sectors copied, or -1               */
 /*   bsize(n): dev                       -> size in bytes, -1 when  */
 /*             unknown                                              */
 /*   bdevices(v):                        -> one [path bytes kind    */
@@ -3032,6 +3042,70 @@ static int oop_do_bwrite(
     ussr_value_free(&path_v);
     free(data);
     *out_result = ussr_integer(status == 0 ? (ussr_int_t)length : -1);
+    return 0;
+}
+
+/* bcopy(n): src slba dst dlba count [sector]: sectors from one device
+ * to another (or the same one, where the ranges must not overlap) in
+ * 1 MiB pieces, so whole extents move without becoming byte vectors. */
+static int oop_do_bcopy(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t src_v;
+    ussr_value_t dst_v;
+    const char *src;
+    const char *dst;
+    ussr_int_t a[2] = { 0, 0 };
+    ussr_int_t b[3] = { 0, 0, 512 };
+    unsigned char *buffer;
+    long long done = 0;
+    long long chunk;
+    int status = 0;
+
+    if (argument_count < 5 || argument_count > 6)
+    {
+        fprintf(stderr, "USSR: bcopy(n): src slba dst dlba count [sector]\n");
+        return -1;
+    }
+    if (!oop_block_numbers("bcopy", arguments, 1, 2, a, 1) ||
+        !oop_block_numbers("bcopy", arguments, 3, argument_count, b, 3))
+        return -1;
+    if (a[0] < 0 || b[0] < 0 || b[1] < 0 || b[2] <= 0 || b[2] > 65536)
+    {
+        fprintf(stderr, "USSR: bcopy: bad lba, count or sector size\n");
+        return -1;
+    }
+    if (!oop_path_argument("bcopy", arguments, 0, &src_v, &src))
+        return -1;
+    if (!oop_path_argument("bcopy", arguments, 2, &dst_v, &dst))
+    {
+        ussr_value_free(&src_v);
+        return -1;
+    }
+    chunk = (1 << 20) / b[2];
+    if (chunk < 1)
+        chunk = 1;
+    buffer = malloc((size_t)(chunk * b[2]));
+    if (buffer == NULL)
+        status = -1;
+    while (status == 0 && done < b[1])
+    {
+        long long n = b[1] - done < chunk ? b[1] - done : chunk;
+        size_t bytes = (size_t)(n * b[2]);
+
+        if (oop_block_io(src, 0, (a[0] + done) * b[2], buffer, bytes) != 0 ||
+            oop_block_io(dst, 1, (b[0] + done) * b[2], buffer, bytes) != 0)
+            status = -1;
+        else
+            done += n;
+    }
+    free(buffer);
+    ussr_value_free(&src_v);
+    ussr_value_free(&dst_v);
+    *out_result = ussr_integer(status == 0 ? (ussr_int_t)done : -1);
     return 0;
 }
 
@@ -3805,6 +3879,7 @@ static int oop_do_typeof(
     case USSR_STRING: name = "string"; break;
     case USSR_BOOLEAN: name = "boolean"; break;
     case USSR_VECTOR: name = "vector"; break;
+    case USSR_BTREE: name = "btree"; break;
     case USSR_STRUCT:
         name = value.data.instance != NULL &&
                value.data.instance->type != NULL
@@ -4692,6 +4767,14 @@ int ussr_oop_dispatch(
 {
     int status;
 
+    if (command[0] == 'b' && command[1] == 't')
+    {
+        status = ussr_btree_dispatch(command, arguments, argument_count,
+                                     out_result);
+        if (status != 0)
+            return status;
+    }
+
     if (strcmp(command, "struct") == 0)
         status = oop_do_struct(return_name, arguments, argument_count, out_result);
     else if (strcmp(command, "new") == 0)
@@ -4748,6 +4831,8 @@ int ussr_oop_dispatch(
         status = oop_do_bwrite(arguments, argument_count, out_result);
     else if (strcmp(command, "bsize") == 0)
         status = oop_do_bsize(arguments, argument_count, out_result);
+    else if (strcmp(command, "bcopy") == 0)
+        status = oop_do_bcopy(arguments, argument_count, out_result);
     else if (strcmp(command, "bdevices") == 0)
         status = oop_do_bdevices(argument_count, out_result);
     else if (strcmp(command, "text_bytes") == 0)

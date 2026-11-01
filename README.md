@@ -5,6 +5,9 @@
 </p>
 
 # USSR Unified Shell Script REPL
+
+![Moscow, the USSR amd64 kernel, booting in QEMU and running print(_): "Hello, world!"](docs/images/moscow.gif)
+
 Programming Language with unique grammar resembling TCL and Conventional Commits
 Designed by me coded with ChatGPT after accidental prompt
 
@@ -74,8 +77,10 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
 - siberia.su - GUI spreadsheet: formulas, flat ODF (.fods) and CSV (working: `src/siberia`)
 - novosibirsk.su - GUI document editor with system fonts, split from Siberia: flat ODF text (.fodt) and .txt (working: `src/novosibirsk`)
-- moscow.su - amd64 kernel: a NASM two-stage boot loader starts a NASM USSR runtime (a `.ru` VM on bare metal) that runs moscow.ru, which runs russia.su (the self-hosted interpreter) as its shell with kernel commands like uptime(_): and ls(_):; one boot image, tested in QEMU (working: `src/moscow`)
-- stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS and FFS2 (working: `src/stalin`)
+- moscow.su - amd64 kernel: a NASM two-stage boot loader starts a NASM USSR runtime (a `.ru` VM on bare metal) that runs moscow.ru, which mounts a Belarus root file system and runs russia.su (the self-hosted interpreter) as its shell with kernel commands like ls(_):, cat(_):, run(_): and install(_):; boots from the Belarus install disk, tested in QEMU (working: `src/moscow`)
+- belarus.su - the USSR file system: one B+ tree of paths, nodes in UNO text, data in extents; mkfs, ls, put, cat, fsck on disks and images, and Moscow's root (working: `src/belarus`)
+- install.su - the USSR installer: `install(_):` in Moscow asks about the disk and partitions, makes a Belarus partition with Stalin and copies USSR onto a virtual disk that then boots (working: `src/moscow/install.su`)
+- stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS, FFS2 and Belarus (working: `src/stalin`)
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
 
@@ -164,11 +169,14 @@ ussr hello.ru
 With usa the second wave is done and USSR is complete. Its programs:
 
 - ussr/ussr.exe - the USSR programming language and shell
+- russia.su - bootstrapped USSR interpreter, written in USSR
+- moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell on a Belarus root (`sh src/moscow/build.sh`)
+- belarus.su - the USSR file system, a B+ tree of paths
+- install.su - the installer: `install(_):` puts USSR on a disk of its own
+- ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
-- russia.su - bootstrapped USSR interpreter, written in USSR
 - ural.su - USSR package manager
-- ukraine.su - HTTP server and web framework
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
 - Mbl.su - vi-like console text editor
 - tver.su - GUI two-panel file manager
@@ -181,7 +189,6 @@ With usa the second wave is done and USSR is complete. Its programs:
 - omsk.su - image thumbnails: PNG and baseline JPEG in pure USSR (ROUND stack)
 - siberia.su - GUI spreadsheet
 - novosibirsk.su - GUI document editor
-- moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell (`sh src/moscow/build.sh`)
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP
@@ -198,5 +205,7 @@ AI is like a plastic cheap ubiquitous thing that wins the entire world
 Enough sentiments neuroslop is just a feature of the epoch I've got literally Ural mountains of it 
 
 Take it or leave it(or push MOAR if you got it too)
+
+Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
 P.S. СССР Средство Создания Совершенных Разработок

@@ -38,7 +38,7 @@ st_types(r): [
     struct(StPart): "num:number" "start:number" "end:number" "type:string" "name:string" "uuid:string" "attrs:number" "boot:boolean" "logical:boolean"
     # name, GPT type GUID, MBR type (hex), description; the first row
     # with a GUID or MBR code names it when a table is shown
-    set(st_type_table): '[[`linux`,`0FC63DAF-8483-4772-8E79-3D69D8477DE4`,`83`,`Linux filesystem: ext2, ext3, ext4`],[`swap`,`0657FD6D-A4AB-43C4-84E5-0933C84B4F4F`,`82`,`Linux swap`],[`home`,`933AC7E1-2EB4-4F13-B844-0E14E2AEF915`,``,`Linux /home`],[`lvm`,`E6D6D379-F507-44C2-A23C-238F2A3DF928`,`8E`,`Linux LVM`],[`raid`,`A19D880F-05FC-4D3B-A006-743F0F84911E`,`FD`,`Linux RAID`],[`ntfs`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`07`,`Microsoft basic data: NTFS, exFAT`],[`fat32`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0C`,`FAT32 (LBA)`],[`fat16`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0E`,`FAT16 (LBA)`],[`fat32-chs`,``,`0B`,`FAT32 (CHS)`],[`fat16-chs`,``,`06`,`FAT16 (CHS)`],[`efi`,`C12A7328-F81F-11D2-BA4B-00A0C93EC93B`,`EF`,`EFI system partition`],[`msr`,`E3C9E316-0B5C-4DB8-817D-F92DF00215AE`,``,`Microsoft reserved`],[`winre`,`DE94BBA4-06D1-4D40-A16A-BFD50179D6AC`,`27`,`Windows recovery`],[`bios-boot`,`21686148-6449-6E6F-744E-656564454649`,``,`BIOS boot (GRUB)`],[`ufs`,`516E7CB6-6ECF-11D6-8FF8-00022D09712B`,`A5`,`FreeBSD UFS (MBR: FreeBSD slice)`],[`freebsd-boot`,`83BD6B9D-7F41-11DC-BE0B-001560B84F0F`,``,`FreeBSD boot`],[`freebsd-swap`,`516E7CB5-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD swap`],[`freebsd-zfs`,`516E7CBA-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD ZFS`],[`ffs2`,`824CC7A0-36A8-11E3-890A-952519AD3F61`,`A6`,`OpenBSD FFS2 (MBR: OpenBSD slice)`],[`netbsd`,`49F48D5A-B10E-11DC-B99B-0019D1879648`,`A9`,`NetBSD FFS`],[`extended`,``,`05`,`MBR extended partition`],[`extended-lba`,``,`0F`,`MBR extended partition (LBA)`]]'
+    set(st_type_table): '[[`linux`,`0FC63DAF-8483-4772-8E79-3D69D8477DE4`,`83`,`Linux filesystem: ext2, ext3, ext4`],[`swap`,`0657FD6D-A4AB-43C4-84E5-0933C84B4F4F`,`82`,`Linux swap`],[`home`,`933AC7E1-2EB4-4F13-B844-0E14E2AEF915`,``,`Linux /home`],[`lvm`,`E6D6D379-F507-44C2-A23C-238F2A3DF928`,`8E`,`Linux LVM`],[`raid`,`A19D880F-05FC-4D3B-A006-743F0F84911E`,`FD`,`Linux RAID`],[`ntfs`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`07`,`Microsoft basic data: NTFS, exFAT`],[`fat32`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0C`,`FAT32 (LBA)`],[`fat16`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0E`,`FAT16 (LBA)`],[`fat32-chs`,``,`0B`,`FAT32 (CHS)`],[`fat16-chs`,``,`06`,`FAT16 (CHS)`],[`efi`,`C12A7328-F81F-11D2-BA4B-00A0C93EC93B`,`EF`,`EFI system partition`],[`msr`,`E3C9E316-0B5C-4DB8-817D-F92DF00215AE`,``,`Microsoft reserved`],[`winre`,`DE94BBA4-06D1-4D40-A16A-BFD50179D6AC`,`27`,`Windows recovery`],[`belarus`,`B3E1A2C5-5553-4252-8E4C-42454C415255`,`7F`,`Belarus (USSR B+ tree file system)`],[`bios-boot`,`21686148-6449-6E6F-744E-656564454649`,``,`BIOS boot (GRUB)`],[`ufs`,`516E7CB6-6ECF-11D6-8FF8-00022D09712B`,`A5`,`FreeBSD UFS (MBR: FreeBSD slice)`],[`freebsd-boot`,`83BD6B9D-7F41-11DC-BE0B-001560B84F0F`,``,`FreeBSD boot`],[`freebsd-swap`,`516E7CB5-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD swap`],[`freebsd-zfs`,`516E7CBA-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD ZFS`],[`ffs2`,`824CC7A0-36A8-11E3-890A-952519AD3F61`,`A6`,`OpenBSD FFS2 (MBR: OpenBSD slice)`],[`netbsd`,`49F48D5A-B10E-11DC-B99B-0019D1879648`,`A9`,`NetBSD FFS`],[`extended`,``,`05`,`MBR extended partition`],[`extended-lba`,``,`0F`,`MBR extended partition (LBA)`]]'
     set(st_type_alias): '[[`ext2`,`linux`],[`ext3`,`linux`],[`ext4`,`linux`],[`linux-swap`,`swap`],[`windows`,`ntfs`],[`exfat`,`ntfs`],[`fat`,`fat32`],[`vfat`,`fat32`],[`esp`,`efi`],[`ufs2`,`ufs`],[`ufs1`,`ufs`],[`freebsd`,`ufs`],[`openbsd`,`ffs2`],[`ffs`,`netbsd`]]'
     set(st_typed): true
 ]
@@ -1036,6 +1036,29 @@ st_probe_ufs_all(r): start n bsd [
 
 # The file system in n sectors from start: [fs label bytes]; fs is "" when
 # nothing is recognised. code is the partition type (BSD types say FFS).
+# The [name, value] pairs of a Belarus superblock (src/belarus): after
+# the magic, its text length in 8 hex digits, a CRC and the text in UNO.
+st_belarus_super(r): b [
+    vec(r): ""
+    set(n): 0
+    set(i): 8
+    while(_): {i < 16} [
+        at(c): b i
+        set(d): {c - 48}
+        if(_): {c >= 97} [ set(d): {c - 87} ]
+        set(n): {(n << 4) | d}
+        add(i): i 1
+    ]
+    if(_): {n <= 0 || n > 488} [
+        return(r): r
+    ]
+    bytes_text(t): b 24 n
+    typeof(tt): t
+    if(_): {tt = "string"} [
+        decode(r): t
+    ]
+]
+
 st_probe(r): start n code [
     vec(r): ""
     push(_): r ""
@@ -1052,6 +1075,22 @@ st_probe(r): start n code [
     st_ascii(fat16): b 54 5
     st_ascii(xfs): b 0 4
     st_le(bps): b 11 2
+    st_ascii(bel): b 0 8
+    if(_): {bel = "BELARUS1"} [
+        set(r): 0 "belarus"
+        st_belarus_super(sb): b
+        len(nsb): sb
+        set(i): 0
+        while(_): {i < nsb} [
+            at(p): sb i
+            at(k): p 0
+            at(x): p 1
+            if(_): {k = "label"} [ set(r): 1 x ]
+            if(_): {k = "blocks"} [ set(r): 2 {x << 12} ]
+            add(i): i 1
+        ]
+        return(r): r
+    ]
     if(_): {oem = "NTFS"} [
         set(r): 0 "ntfs"
         st_le(total): b 40 8

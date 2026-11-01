@@ -1049,6 +1049,8 @@ void ussr_value_free(ussr_value_t *value)
         ussr_vector_release(value->data.vector);
     else if (value->type == USSR_STRUCT)
         ussr_struct_instance_release(value->data.instance);
+    else if (value->type == USSR_BTREE)
+        ussr_btree_release(value->data.btree);
 
     *value = ussr_null();
 }
@@ -1091,6 +1093,11 @@ ussr_value_t ussr_value_copy(const ussr_value_t *value)
         case USSR_STRUCT:
             ussr_struct_instance_retain(value->data.instance);
             copy.data.instance = value->data.instance;
+            break;
+
+        case USSR_BTREE:
+            ussr_btree_retain(value->data.btree);
+            copy.data.btree = value->data.btree;
             break;
     }
 
@@ -1541,6 +1548,7 @@ void ussr_print_value(const ussr_value_t *value)
 
         case USSR_VECTOR:
         case USSR_STRUCT:
+        case USSR_BTREE:
         {
             char *text = ussr_uno_encode(value);
             printf("%s\n", text != NULL ? text : "<unencodable>");
@@ -1607,6 +1615,9 @@ static int ussr_values_equal(
 
         case USSR_STRUCT:
             return left->data.instance == right->data.instance;
+
+        case USSR_BTREE:
+            return left->data.btree == right->data.btree;
     }
 
     return 0;
@@ -1640,6 +1651,9 @@ static int ussr_value_truthy(const ussr_value_t *value)
 
         case USSR_STRUCT:
             return 1;
+
+        case USSR_BTREE:
+            return ussr_btree_count(value->data.btree) > 0;
     }
 
     return 0;
