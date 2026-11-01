@@ -161,14 +161,19 @@ EXTRA_DIST = \
 	novosibirsk/box.uno \
 	novosibirsk/novosibirsk.su \
 	moscow/README.md \
+	moscow/arch/amd64/ata.inc \
 	moscow/arch/amd64/boot.nasm \
+	moscow/arch/amd64/btree.inc \
 	moscow/arch/amd64/image.nasm \
 	moscow/arch/amd64/layout.inc \
+	moscow/arch/amd64/sha256.inc \
 	moscow/arch/amd64/ussr_rt.nasm \
 	moscow/build.sh \
+	moscow/install.su \
 	moscow/moscow.su \
 	moscow/run.sh \
-	moscow/russia.su \
+	belarus/README.md \
+	belarus/belarus.su \
 	moscow/tools/qemu_test.py \
 	moscow/tools/rudump.py \
 	sochi/CHANGELOG.md \

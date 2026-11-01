@@ -3,24 +3,308 @@
 # The boot loader (arch/amd64/boot.nasm) puts the machine in long mode
 # and starts the NASM USSR runtime (arch/amd64/ussr_rt.nasm), which runs
 # this program, compiled to moscow.ru, as the first process. Moscow
-# reports the machine, then runs the shell, russia.ru, from the boot
-# image and runs it again whenever it fails; when the shell exits
-# normally (Ctrl-D) the machine halts. russia.ru is src/russia/russia.su,
-# the USSR interpreter written in USSR: its REPL is the shell, and the
-# commands it does not know itself (uptime, ls, mem, cpu, run, ...) go to
-# the runtime through its host calls.
+# reports the machine, mounts its root file system - the first Belarus
+# file system on the disks (src/belarus) - and then runs the shell,
+# russia.ru, from the boot image, again whenever it fails; when the
+# shell exits normally (Ctrl-D) the machine halts. russia.ru is
+# src/russia/russia.su, the USSR interpreter written in USSR: its REPL
+# is the shell, and the commands it does not know itself go to the
+# runtime through its host calls.
 #
-#     sh src/moscow/build.sh          # builds moscow.img
-#     sh src/moscow/run.sh            # boots it in QEMU
+# Moscow is also the file system's keeper: it takes the file commands
+# over with k_syscall, so in the shell ls, cat, readfile, writefile,
+# file_exists, list_dir, is_dir, make_dir and remove_file work on the
+# root file system, run starts a program of /bin and install starts the
+# installer (/bin/install.ru). A kernel command runs in the calling
+# program's memory and keeps nothing between calls but the root's device
+# and first sector: it mounts the file system each time.
+#
+#     sh src/moscow/build.sh          # builds moscow.img and ussr.img
+#     sh src/moscow/run.sh            # boots ussr.img in QEMU
 #
 # The k_* commands are the runtime's kernel services; src/moscow/README.md
 # lists them.
-$include "../libs/strings.su"
+$include "../belarus/belarus.su"
+
+global(_): mo_dev mo_base
 
 mo_kb(r): bytes [
     str_trunc(kb): {bytes / 1024}
     str_from_int(r): kb
     concat(r): r " KiB"
+]
+
+# The root file system: the first Belarus file system on the disks.
+mo_find_root(r): [
+    set(r): false
+    set(mo_dev): ""
+    set(mo_base): -1
+    bdevices(devs):
+    len(n): devs
+    set(i): 0
+    while(_): {i < n} [
+        at(d): devs i
+        at(dev): d 0
+        bl_locate(base): dev 0
+        if(_): {base >= 0} [
+            set(mo_dev): dev
+            set(mo_base): base
+            set(r): true
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# the root, mounted for one command, or null
+mo_fs(r): [
+    set(r): null
+    if(_): {mo_base < 0} [
+        bl_err(_): "no root file system"
+        return(r): r
+    ]
+    bl_mount(r): mo_dev mo_base
+]
+
+# argument i of a kernel command, or def
+mo_arg(r): a i def [
+    set(r): def
+    len(n): a
+    if(_): {i < n} [ at(r): a i ]
+]
+
+mo_sync(r): fs [
+    set(r): 0
+    btget(dirty): fs "dirty"
+    if(_): dirty [ bl_sync(r): fs ]
+]
+
+# --- the kernel's commands: each gets its arguments as one vector
+
+sys_ls(r): a [
+    set(r): null
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 "/"
+    bl_cmd_ls(st): fs path
+    if(_): {st = 0} [
+        bl_is_dir(d): fs path
+        if(_): d [ bl_list(r): fs path ]
+        else(_): [ bl_clean(r): path ]
+    ]
+]
+
+sys_tree(r): a [
+    set(r): 0
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 "/"
+    bl_cmd_tree(r): fs path
+]
+
+sys_cat(r): a [
+    set(r): null
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_read_text(r): fs path
+    typeof(tr): r
+    if(_): {tr = "string"} [ print_raw(_): r ]
+]
+
+sys_readfile(r): a [
+    set(r): null
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_exists(e): fs path
+    if(_): e [ bl_read_text(r): fs path ]
+]
+
+sys_writefile(r): a [
+    set(r): -1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    mo_arg(text): a 1 ""
+    bl_clean(p): path
+    bl_parent(up): p
+    bl_mkdirs(_): fs up
+    typeof(tt): text
+    if(_): {tt = "vector"} [ bl_write_bytes(r): fs path text ]
+    else(_): [ bl_write_text(r): fs path text ]
+    mo_sync(_): fs
+]
+
+sys_file_exists(r): a [
+    set(r): false
+    mo_arg(path): a 0 ""
+    len(n): path
+    if(_): {n > 5} [
+        slice(p5): path 0 5
+        if(_): {p5 = "/dev/"} [
+            bsize(b): path
+            set(r): {b >= 0}
+            return(r): r
+        ]
+    ]
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_exists(r): fs path
+]
+
+sys_is_dir(r): a [
+    set(r): false
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_is_dir(r): fs path
+]
+
+sys_list_dir(r): a [
+    set(r): null
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 "/"
+    bl_list(r): fs path
+]
+
+sys_make_dir(r): a [
+    set(r): -1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_mkdirs(r): fs path
+    mo_sync(_): fs
+]
+
+sys_remove_file(r): a [
+    set(r): -1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_remove(r): fs path
+    mo_sync(_): fs
+]
+
+sys_df(r): a [
+    set(r): 0
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    concat(m): "root: " mo_dev
+    print(_): m
+    bl_cmd_info(r): fs
+]
+
+sys_fsck(r): a [
+    set(r): -1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_fsck(r): fs
+]
+
+# run(status): name [args ...]: /bin/name.ru (or the path given) from
+# the root file system, else a program of the boot image
+sys_run(r): a [
+    set(r): 127
+    len(n): a
+    if(_): {n = 0} [
+        bl_err(_): "run(status): program [args ...]"
+        return(r): r
+    ]
+    at(name): a 0
+    vec(args): ""
+    set(i): 1
+    while(_): {i < n} [
+        at(x): a i
+        push(_): args x
+        set(i): {i + 1}
+    ]
+    mo_run(r): name args
+]
+
+mo_run(r): name args [
+    set(r): 127
+    set(path): name
+    str_find(slash): name "/" 0
+    if(_): {slash < 0} [
+        concat(path): "/bin/" name
+        len(nl): name
+        set(ext): ""
+        if(_): {nl > 3} [ slice(ext): name {nl - 3} 3 ]
+        if(_): {ext != ".ru"} [ concat(path): path ".ru" ]
+    ]
+    set(bytes): null
+    if(_): {mo_base >= 0} [
+        mo_fs(fs):
+        bl_exists(e): fs path
+        if(_): e [ bl_read_bytes(bytes): fs path ]
+    ]
+    typeof(tb): bytes
+    if(_): {tb = "vector"} [
+        k_exec_bytes(r): bytes args
+        return(r): r
+    ]
+    # not on the disk: the boot image has russia.ru and moscow.ru
+    len(na): args
+    if(_): {na = 0} [ k_exec(r): name ]
+    else(_): [
+        concat(m): name ": no such program in /bin"
+        bl_err(r): m
+        set(r): 127
+    ]
+]
+
+# install(status): [args ...] runs the installer, /bin/install.ru
+sys_install(r): a [
+    mo_run(r): "/bin/install.ru" a
+]
+
+sys_help(r): a [
+    set(r): 0
+    print(_): "Moscow kernel commands (USSR commands; each prints and returns):"
+    print(_): "  help(_):                this list"
+    print(_): "  ls(_): [path]           a directory of the root file system"
+    print(_): "  tree(_): [path]         everything under a path"
+    print(_): "  cat(_): path            a file's text"
+    print(_): "  readfile(s): path       a file as a string; writefile(r): path text"
+    print(_): "  make_dir(r): path       remove_file(r): path   file_exists(b): path"
+    print(_): "  run(status): name ...   /bin/name.ru (stalin, belarus, install, ...)"
+    print(_): "  install(status):        install USSR onto another disk"
+    print(_): "  df(_):  fsck(_):        the root file system, its free space, a check"
+    print(_): "  uptime(_): mem(_): cpu(_): uname(_): pwd(_): clear(_): color(_): fg bg"
+    print(_): "  reboot(_): halt(_):     restart or stop the machine (Ctrl-D halts too)"
+]
+
+mo_syscalls(r): [
+    set(r): 0
+    k_syscall(_): "help" "sys_help"
+    k_syscall(_): "ls" "sys_ls"
+    k_syscall(_): "tree" "sys_tree"
+    k_syscall(_): "cat" "sys_cat"
+    k_syscall(_): "readfile" "sys_readfile"
+    k_syscall(_): "writefile" "sys_writefile"
+    k_syscall(_): "file_exists" "sys_file_exists"
+    k_syscall(_): "is_dir" "sys_is_dir"
+    k_syscall(_): "list_dir" "sys_list_dir"
+    k_syscall(_): "make_dir" "sys_make_dir"
+    k_syscall(_): "remove_file" "sys_remove_file"
+    k_syscall(_): "run" "sys_run"
+    k_syscall(_): "install" "sys_install"
+    k_syscall(_): "df" "sys_df"
+    k_syscall(_): "fsck" "sys_fsck"
 ]
 
 init(ret): arg_cnt arg_vec [
@@ -49,6 +333,45 @@ init(ret): arg_cnt arg_vec [
     ]
     concat(line): "image:   " list
     print(_): line
+    bdevices(devs):
+    len(nd): devs
+    set(i): 0
+    while(_): {i < nd} [
+        at(d): devs i
+        at(dev): d 0
+        at(bytes): d 1
+        at(model): d 4
+        str_trunc(mib): {bytes / 1048576}
+        str_from_int(sm): mib
+        concat(line): "disk:    " dev ", " sm " MiB, " model
+        print(_): line
+        set(i): {i + 1}
+    ]
+    mo_find_root(found):
+    if(_): found [
+        mo_fs(root):
+        btget(label): root "label"
+        str_from_int(sb): mo_base
+        concat(line): "root:    " mo_dev " from sector " sb ", Belarus '" label "'"
+        print(_): line
+        bl_read_text(host): root "/etc/hostname"
+        typeof(th): host
+        if(_): {th = "string"} [
+            str_trim(host): host
+            if(_): {host != ""} [ setenv(_): "HOSTNAME" host ]
+        ]
+        # the installer copies from here
+        setenv(_): "USSR_ROOT" mo_dev
+        str_from_int(sb): mo_base
+        setenv(_): "USSR_ROOT_SECTOR" sb
+        bl_read_text(motd): root "/etc/motd"
+        typeof(tm): motd
+        if(_): {tm = "string"} [ print_raw(_): motd ]
+    ]
+    else(_): [
+        print(_): "root:    no Belarus file system on the disks; the boot image only"
+    ]
+    mo_syscalls(_):
     set(ret): 0
     set(go): true
     while(_): go [
