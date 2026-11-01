@@ -65,6 +65,7 @@ The project uses real existing geographical toponyms or cultural significant obj
 e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and framework tver.su - file manager russia.su - bootstrapped interpreter petersburg.su - gui library 
 kiev.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
+install.su - Moscow kernel installer and top level packages fonts tests docs highlight
 
 Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code now: the second wave is finished):
 
@@ -167,10 +168,9 @@ With usa the second wave is done and USSR is complete. Its programs:
 - ussr/ussr.exe - the USSR programming language and shell
 - russia.su - bootstrapped USSR interpreter, written in USSR
 - moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell on a Belarus root (`sh src/moscow/build.sh`)
-- belarus.su - the USSR file system, a B+ tree of paths
-- install.su - the installer: `install(_):` puts USSR on a disk of its own
 - ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
+- belarus.su - the USSR file system, a B+ tree of paths
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
 - ural.su - USSR package manager
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
@@ -189,6 +189,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP
 - usa.su - C compiler to `.ru` bytecode
+- install.su - the moscow OS installer: `install(_):` puts USSR on a disk of its own
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
 If you want to add 3rd party USSR package project create a repo then add the box.uno then pack and upload it 
