@@ -65,6 +65,7 @@ The project uses real existing geographical toponyms or cultural significant obj
 e.g. tula.su - 2D CAD ural.su - package manager ukraine.su - httpd daemon and framework tver.su - file manager russia.su - bootstrapped interpreter petersburg.su - gui library 
 kiev.su - main USSR configuration file etc
 few exceptions are Mbl.su - text editor and no-name std library with shared functions package called library
+install.su - Moscow kernel installer and top level packages fonts tests docs highlight
 
 Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code now: the second wave is finished):
 
@@ -78,7 +79,7 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - siberia.su - GUI spreadsheet: formulas, flat ODF (.fods) and CSV (working: `src/siberia`)
 - novosibirsk.su - GUI document editor with system fonts, split from Siberia: flat ODF text (.fodt) and .txt (working: `src/novosibirsk`)
 - moscow.su - amd64 kernel: a NASM two-stage boot loader starts a NASM USSR runtime (a `.ru` VM on bare metal) that runs moscow.ru, which mounts a Belarus root file system and runs russia.su (the self-hosted interpreter) as its shell with kernel commands like ls(_):, cat(_):, run(_): and install(_):; boots from the Belarus install disk, tested in QEMU (working: `src/moscow`)
-- belarus.su - the USSR file system: one B+ tree of paths, nodes in UNO text, data in extents; mkfs, ls, put, cat, fsck on disks and images, and Moscow's root (working: `src/belarus`)
+- belarus.su - the USSR file system: inodes whose block maps are B+ trees from file block index to disk LBA, directories as files of entries; mkfs, ls, put, cat, fsck on disks and images, and Moscow's root (working: `src/belarus`)
 - install.su - the USSR installer: `install(_):` in Moscow asks about the disk and partitions, makes a Belarus partition with Stalin and copies USSR onto a virtual disk that then boots (working: `src/moscow/install.su`)
 - stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS, FFS2 and Belarus (working: `src/stalin`)
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
@@ -171,10 +172,9 @@ With usa the second wave is done and USSR is complete. Its programs:
 - ussr/ussr.exe - the USSR programming language and shell
 - russia.su - bootstrapped USSR interpreter, written in USSR
 - moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell on a Belarus root (`sh src/moscow/build.sh`)
-- belarus.su - the USSR file system, a B+ tree of paths
-- install.su - the installer: `install(_):` puts USSR on a disk of its own
 - ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
+- belarus.su - the USSR file system: per-file B+ tree block maps
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
 - ural.su - USSR package manager
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
@@ -193,6 +193,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP
 - usa.su - C compiler to `.ru` bytecode
+- install.su - the moscow OS installer: `install(_):` puts USSR on a disk of its own
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
 If you want to add 3rd party USSR package project create a repo then add the box.uno then pack and upload it 

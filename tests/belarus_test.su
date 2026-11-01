@@ -1,8 +1,8 @@
-# Belarus (src/belarus/belarus.su), the B+ tree file system, on two
-# small disk images made in tests/: enough entries to grow the tree past
-# one level, files over several blocks, deletes, a tree copied from one
-# file system to the other, and everything read back after mounting
-# again. Prints PASS or FAIL per check.
+# Belarus (src/belarus/belarus.su), the file system of inodes and
+# per-file block-map B+ trees, on two small disk images made in tests/:
+# hundreds of entries, a block map two levels deep, files over several
+# blocks, deletes, a tree copied from one file system to the other, and
+# everything read back after mounting again. Prints PASS or FAIL per check.
 $include "../src/belarus/belarus.su"
 
 check(r): label got want [
@@ -72,10 +72,6 @@ init(result): arg_count arg_values [
         set(i): {i + 1}
     ]
     check(_): "240 writes" w 0
-    btget(root): fs "root"
-    bl_node(rn): fs root
-    btget(kind): rn "kind"
-    check(_): "the root is an internal node" kind "I"
     bl_read_text(t): fs "/data/directory-number-5/a-file-with-a-rather-long-name-101.txt"
     check(_): "read back" t "file 101"
     bl_list(names): fs "/data"
@@ -103,6 +99,31 @@ init(result): arg_count arg_values [
     bl_read_bytes(back): fs "/zero.bin"
     encode(e): back
     check(_): "bytes with 0 in them" e "[0,255,0]"
+
+    # a file of 300 blocks: its block map outgrows the inode and splits
+    bl_free_count(before): fs
+    bl_create(ino): fs "/huge.bin" "f"
+    bl_allocate(_): fs ino {300 * 4096}
+    bl_map_path(mp): fs ino 0
+    len(depth): mp
+    check(_): "the block map has two levels" depth 2
+    bl_inode(node): fs ino
+    btget(kind): node "kind"
+    check(_): "the inode holds the internal root" kind "I"
+    bl_map_nodes(mn): fs ino
+    len(nn): mn
+    check(_): "four half-full leaves under it" nn 4
+    bl_bmap(l0): fs ino 0
+    bl_bmap(l299): fs ino 299
+    check(_): "block 299 is 299 blocks on" {l299 - l0} {299 * 8}
+    bl_bmap(none): fs ino 300
+    check(_): "no block 300" none null
+    bl_bmap_all(pairs): fs ino
+    len(np): pairs
+    check(_): "300 blocks along the leaf chain" np 300
+    bl_remove(_): fs "/huge.bin"
+    bl_free_count(after): fs
+    check(_): "removing it frees data, map and inode" after before
 
     # rewriting a file gives its old blocks back
     bl_free_count(before): fs

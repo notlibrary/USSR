@@ -2,7 +2,6 @@ PASS blank image
 PASS mkfs
 PASS root is a directory
 PASS 240 writes
-PASS the root is an internal node
 PASS read back
 PASS 12 directories
 PASS listed in order
@@ -10,6 +9,13 @@ PASS 20 files in one
 PASS multi-block write
 PASS multi-block read
 PASS bytes with 0 in them
+PASS the block map has two levels
+PASS the inode holds the internal root
+PASS four half-full leaves under it
+PASS block 299 is 299 blocks on
+PASS no block 300
+PASS 300 blocks along the leaf chain
+PASS removing it frees data, map and inode
 PASS rewrite frees blocks
 PASS rewritten
 PASS a full directory stays
@@ -18,12 +24,12 @@ PASS gone
 PASS sync
 PASS mount
 PASS read after mount
-13 directories, 222 files, 1671 bytes; 9 tree nodes, 8 leaves (0 empty)
+13 directories, 222 files, 1671 bytes; 235 inodes, 0 block map nodes, map depth up to 1
 PASS fsck finds nothing
 PASS copy every entry
 PASS read the copy
 PASS binary copy
-13 directories, 222 files, 1671 bytes; 11 tree nodes, 10 leaves (0 empty)
+13 directories, 222 files, 1671 bytes; 235 inodes, 0 block map nodes, map depth up to 1
 PASS fsck the copy
 
 --- stderr ---

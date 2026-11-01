@@ -83,10 +83,17 @@ for f in install stalin belarus; do
 done
 belarus write "$dev" /etc/hostname "moscow-install"
 belarus write "$dev" /etc/motd "USSR install disk: install(_): puts USSR on a disk of its own; help(_): lists the commands."
+# the project: the files git tracks (every file in the tree when this is
+# no git checkout), never build products - objects, binaries, packages,
+# disk images - whichever way they got there
 list=$out/files.txt
-if git -C "$root" ls-files >"$list" 2>/dev/null && [ -s "$list" ]; then :; else
-    (cd "$root" && find . -path ./build -prune -o -path ./.git -prune -o -type f -print | sed 's|^\./||') >"$list"
+if git -C "$root" ls-files >"$list.all" 2>/dev/null && [ -s "$list.all" ]; then :; else
+    (cd "$root" && find . \( -path ./build -o -path ./.git -o -path ./.claude \
+        -o -path ./autom4te.cache \) -prune -o -type f -print | sed 's|^\./||') >"$list.all"
 fi
+grep -viE '\.(obj|o|a|ural|exe|dll|so|lib|pdb|ilk|exp|res|msi|wixpdb|img|qcow2|iso|ru|tmp|log)$' \
+    "$list.all" >"$list"
+rm -f "$list.all"
 belarus putlist "$dev" "$(hp "$list")" /src/ussr
 belarus fsck "$dev"
 echo "build/moscow/ussr.img: $(wc -c < "$img") bytes"
