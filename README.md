@@ -79,6 +79,10 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
 
+Moscow, the amd64 kernel, booting in QEMU with russia.su as its shell:
+
+![Moscow booting in QEMU and running print(_): "Hello, world!"](docs/images/moscow.gif)
+
 The **ROUND stack** is the project's mainline: Ryazan (TLS) under Ukraine
 (HTTP) under Novgorod (the forum), with Omsk (image thumbnails) making
 Novgorod's 200x200 previews and Dubna (the PostgreSQL client) under
