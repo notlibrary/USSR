@@ -21,6 +21,7 @@ ussr_SOURCES = \
     ryazan_schannel.c \
     gc.c \
     btree.c \
+    cffi.c \
 	process_posix.c \
     prng64_xrp32.c \
 	autocomplete.c \
@@ -32,7 +33,7 @@ ussr_SOURCES = \
 	completion_fs_posix.c
 	
 AM_CPPFLAGS = -I$(srcdir) $(PETERSBURG_CPPFLAGS) $(RYAZAN_CPPFLAGS)
-ussr_LDADD = $(PETERSBURG_LIBS) $(RYAZAN_LIBS) -lm
+ussr_LDADD = $(PETERSBURG_LIBS) $(RYAZAN_LIBS) $(CFFI_LIBS) -lm
 
 # lexer.l includes parser.tab.h (bison's name, as ussr-ubuntu.mk and
 # Makefile.msc generate it); automake's yacc rules write parser.h, so the
@@ -59,6 +60,7 @@ EXTRA_DIST = \
     ryazan_backend.h \
     gc.h \
     btree.h \
+    cffi.h \
     vm.h \
     pp.h \
     bestline.h \

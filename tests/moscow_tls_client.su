@@ -1,0 +1,39 @@
+# Moscow as a TLS client: Ryazan over the kernel's TCP and BearSSL
+# (src/moscow/tls.su), to an HTTPS server on the machine QEMU runs on
+# (10.0.2.2), its certificate checked against RYAZAN_CA_FILE as the name
+# "localhost". qemu_test.py starts the server and runs this in Moscow:
+#   run(st): "/src/ussr/tests/moscow_tls_client.su" PORT
+$include "../src/ryazan/ryazan.su"
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 1
+    at(port_text): arg_vec 0
+    str_to_number(port): port_text
+    setenv(_): "RYAZAN_CA_FILE" "/src/ussr/tests/ryazan/localhost.cert.pem"
+    socket_tcp(s):
+    socket_connect(c): s "10.0.2.2" port
+    if(_): {c != 0} [
+        print(_): "FAIL connect"
+        return(ret): ret
+    ]
+    tls_client(w): s "localhost"
+    ryazan_handshake(h): s
+    if(_): {w != 0 || h != 0} [
+        tls_error(why):
+        concat(m): "FAIL handshake: " why
+        print(_): m
+        return(ret): ret
+    ]
+    tls_info(info):  s
+    concat(m): "PASS handshake: " info
+    print(_): m
+    ryazan_write(_): s "GET /moscow HTTP/1.0\r\nHost: localhost\r\n\r\n"
+    ryazan_read_all(resp): s
+    ryazan_close(_): s
+    ryazan_status(code): resp
+    ryazan_body(body): resp
+    concat(m): "PASS response " body
+    if(_): {code != 200} [ concat(m): "FAIL response " resp ]
+    print(_): m
+    set(ret): 0
+]

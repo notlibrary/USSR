@@ -1,0 +1,486 @@
+# Murmansk - the firewall of Moscow's network stack (src/moscow/net.su).
+#
+# Rules are read in order and the first that matches a packet decides;
+# when none does, the direction's policy does. Packets of what the
+# machine already has going - a TCP connection it accepted or opened, the
+# answer to its ping or to its DHCP request - are the network stack's to
+# let through, and never come here: Murmansk is asked about new things,
+# a SYN to a listening port, a ping, a datagram nobody waits for, and
+# about what the machine itself starts. A packet it denies is dropped
+# without an answer, counted, and the last ones are logged.
+#
+#   allow in tcp 8080                  clients may connect to port 8080
+#   allow in tcp 8000-8099 from 10.0.2.0/24
+#   deny in tcp 23                     no telnet (a deny before an allow)
+#   allow in icmp                      answer ping
+#   allow out tcp 443 to 192.168.1.0/24
+#   policy in deny                     what no rule matches: dropped
+#   policy out allow
+#
+# The rule text: allow|deny in|out [tcp|udp|icmp|any] [port|lo-hi]
+# [from|to address[/bits]] (from for in, to for out; any port and any
+# address when left out); # starts a comment.
+#
+#   murmansk_reset(_):                 no rules; in deny, out allow
+#   murmansk_add(r): text              0, or -1 (murmansk_error says why)
+#   murmansk_delete(r): n              rule n (from 1) goes: 0, or -1
+#   murmansk_load_text(r): text        the rules of a file: errors, 0 none
+#   murmansk_text(s):                  the rules as a file holds them
+#   murmansk_allows(b): dir proto ip port
+#                                      dir "in" or "out", proto "tcp"
+#                                      "udp" "icmp", ip the other end
+#                                      (a number), port the local one
+#                                      (in) or the remote one (out)
+#   murmansk_check(b): ...             murmansk_allows, counted and logged
+#   murmansk_report(s):                rules, hits, drops, the last drops
+#
+# Plain USSR with no network of its own: the hosted ussr runs its tests.
+
+$once
+$include "../libs/strings.su"
+
+global(_): mu_rules mu_in mu_out mu_drops mu_log mu_logn mu_error
+
+murmansk_error(r): [
+    set(r): mu_error
+    if(_): {r = null} [ set(r): "" ]
+]
+
+mu_fail(r): m [
+    set(mu_error): m
+    set(r): -1
+]
+
+murmansk_reset(r): [
+    set(r): 0
+    btree(mu_rules):
+    set(mu_in): "deny"
+    set(mu_out): "allow"
+    set(mu_drops): 0
+    btree(mu_log):
+    set(mu_logn): 0
+    set(mu_error): ""
+]
+
+# the words of a line, "#" and what follows left out
+mu_words(r): s [
+    vec(r): ""
+    len(n): s
+    set(w): ""
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 32
+        if(_): {i < n} [ byte(b): s i ]
+        if(_): {b = 35} [ set(i): n ]
+        if(_): {b = 32 || b = 9 || b = 13 || b = 10 || b = 35 || i = n} [
+            if(_): {w != ""} [ push(_): r w ]
+            set(w): ""
+        ]
+        else(_): [
+            slice(c): s i 1
+            concat(w): w c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# a number of digits only, or -1
+mu_number(r): s [
+    set(r): -1
+    len(n): s
+    if(_): {n = 0 || n > 9} [ return(r): r ]
+    set(v): 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b < 48 || b > 57} [ return(r): r ]
+        set(v): {v * 10 + b - 48}
+        set(i): {i + 1}
+    ]
+    set(r): v
+]
+
+# "a.b.c.d" -> its number, or -1
+mu_ip(r): s [
+    set(r): -1
+    vec(parts): ""
+    len(n): s
+    set(from): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 46
+        if(_): {i < n} [ byte(b): s i ]
+        if(_): {b = 46} [
+            slice(p): s from {i - from}
+            push(_): parts p
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    len(np): parts
+    if(_): {np != 4} [ return(r): r ]
+    set(v): 0
+    set(i): 0
+    while(_): {i < 4} [
+        at(p): parts i
+        mu_number(x): p
+        if(_): {x < 0 || x > 255} [ return(r): r ]
+        set(v): {(v << 8) | x}
+        set(i): {i + 1}
+    ]
+    set(r): v
+]
+
+mu_ip_text(r): ip [
+    str_from_int(a): {(ip >> 24) & 255}
+    str_from_int(b): {(ip >> 16) & 255}
+    str_from_int(c): {(ip >> 8) & 255}
+    str_from_int(d): {ip & 255}
+    concat(r): a "." b "." c "." d
+]
+
+# the mask of a prefix length
+mu_mask(r): bits [
+    set(r): 0
+    if(_): {bits > 0} [ set(r): {(4294967295 << (32 - bits)) & 4294967295} ]
+]
+
+# A rule from its text: a btree (action, dir, proto, lo, hi, net, bits,
+# hits), or null with mu_error set.
+mu_parse(r): text [
+    set(r): null
+    mu_words(w): text
+    len(n): w
+    if(_): {n < 2} [
+        mu_fail(_): "a rule is: allow|deny in|out [tcp|udp|icmp|any] [port|lo-hi] [from|to a.b.c.d[/bits]]"
+        return(r): r
+    ]
+    at(action): w 0
+    at(dir): w 1
+    if(_): {action != "allow" && action != "deny"} [
+        concat(m): "a rule starts with allow or deny, not " action
+        mu_fail(_): m
+        return(r): r
+    ]
+    if(_): {dir != "in" && dir != "out"} [
+        concat(m): "in or out, not " dir
+        mu_fail(_): m
+        return(r): r
+    ]
+    set(proto): "any"
+    set(lo): 0
+    set(hi): 65535
+    set(net): 0
+    set(bits): 0
+    set(i): 2
+    if(_): {i < n} [
+        at(x): w i
+        if(_): {x = "tcp" || x = "udp" || x = "icmp" || x = "any"} [
+            set(proto): x
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {i < n} [
+        at(x): w i
+        if(_): {x != "from" && x != "to"} [
+            if(_): {proto != "tcp" && proto != "udp"} [
+                concat(m): "a port needs tcp or udp: " x
+                mu_fail(_): m
+                return(r): r
+            ]
+            str_find(dash): x "-" 0
+            if(_): {dash < 0} [
+                mu_number(lo): x
+                set(hi): lo
+            ]
+            else(_): [
+                len(xl): x
+                slice(a): x 0 dash
+                slice(b): x {dash + 1} {xl - dash - 1}
+                mu_number(lo): a
+                mu_number(hi): b
+            ]
+            if(_): {lo < 0 || hi < 0 || hi > 65535 || lo > hi} [
+                concat(m): "not a port or a port range: " x
+                mu_fail(_): m
+                return(r): r
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {i < n} [
+        at(x): w i
+        set(want): "from"
+        if(_): {dir = "out"} [ set(want): "to" ]
+        if(_): {x != want} [
+            concat(m): "after the port comes " want " a.b.c.d[/bits], not " x
+            mu_fail(_): m
+            return(r): r
+        ]
+        if(_): {i + 1 >= n} [
+            concat(m): want " needs an address"
+            mu_fail(_): m
+            return(r): r
+        ]
+        at(a): w {i + 1}
+        str_find(slash): a "/" 0
+        set(bits): 32
+        set(addr): a
+        if(_): {slash >= 0} [
+            len(al): a
+            slice(addr): a 0 slash
+            slice(bs): a {slash + 1} {al - slash - 1}
+            mu_number(bits): bs
+        ]
+        mu_ip(net): addr
+        if(_): {net < 0 || bits < 0 || bits > 32} [
+            concat(m): "not an address or a network: " a
+            mu_fail(_): m
+            return(r): r
+        ]
+        mu_mask(mask): bits
+        set(net): {net & mask}
+        set(i): {i + 2}
+    ]
+    if(_): {i < n} [
+        at(x): w i
+        concat(m): "more than a rule holds: " x
+        mu_fail(_): m
+        return(r): r
+    ]
+    btree(r):
+    btput(_): r "action" action
+    btput(_): r "dir" dir
+    btput(_): r "proto" proto
+    btput(_): r "lo" lo
+    btput(_): r "hi" hi
+    btput(_): r "net" net
+    btput(_): r "bits" bits
+    btput(_): r "hits" 0
+]
+
+# a rule as its text says it, shortest form
+mu_rule_text(r): rule [
+    btget(action): rule "action"
+    btget(dir): rule "dir"
+    btget(proto): rule "proto"
+    btget(lo): rule "lo"
+    btget(hi): rule "hi"
+    btget(net): rule "net"
+    btget(bits): rule "bits"
+    concat(r): action " " dir
+    if(_): {proto != "any" || lo != 0 || hi != 65535} [ concat(r): r " " proto ]
+    if(_): {lo != 0 || hi != 65535} [
+        str_from_int(ls): lo
+        concat(r): r " " ls
+        if(_): {hi != lo} [
+            str_from_int(hs): hi
+            concat(r): r "-" hs
+        ]
+    ]
+    if(_): {bits > 0} [
+        set(word): "from"
+        if(_): {dir = "out"} [ set(word): "to" ]
+        mu_ip_text(a): net
+        concat(r): r " " word " " a
+        if(_): {bits < 32} [
+            str_from_int(b): bits
+            concat(r): r "/" b
+        ]
+    ]
+]
+
+# "policy in deny" and the like: 0, -1, or 1 when the line is no policy
+mu_policy(r): text [
+    set(r): 1
+    mu_words(w): text
+    len(n): w
+    if(_): {n = 0} [ return(r): r ]
+    at(first): w 0
+    if(_): {first != "policy"} [ return(r): r ]
+    set(r): -1
+    if(_): {n != 3} [
+        mu_fail(_): "a policy is: policy in|out allow|deny"
+        return(r): r
+    ]
+    at(dir): w 1
+    at(action): w 2
+    if(_): {(dir != "in" && dir != "out") || (action != "allow" && action != "deny")} [
+        mu_fail(_): "a policy is: policy in|out allow|deny"
+        return(r): r
+    ]
+    if(_): {dir = "in"} [ set(mu_in): action ]
+    else(_): [ set(mu_out): action ]
+    set(r): 0
+]
+
+murmansk_add(r): text [
+    mu_policy(r): text
+    if(_): {r != 1} [ return(r): r ]
+    mu_parse(rule): text
+    set(r): -1
+    if(_): {rule = null} [ return(r): r ]
+    btlen(n): mu_rules
+    btput(_): mu_rules {n + 1} rule
+    set(r): 0
+]
+
+murmansk_delete(r): n [
+    set(r): -1
+    btlen(count): mu_rules
+    typeof(t): n
+    if(_): {t != "integer"} [
+        mu_fail(r): "delete takes a rule's number"
+        return(r): r
+    ]
+    if(_): {n < 1 || n > count} [
+        mu_fail(r): "no rule of that number"
+        return(r): r
+    ]
+    set(i): n
+    while(_): {i < count} [
+        btget(next): mu_rules {i + 1}
+        btput(_): mu_rules i next
+        set(i): {i + 1}
+    ]
+    btdel(_): mu_rules count
+    set(r): 0
+]
+
+# The rules of a file, one a line; the number of lines that are wrong
+# (they are left out, the first one's error kept).
+murmansk_load_text(r): text [
+    set(r): 0
+    set(first): ""
+    len(n): text
+    set(from): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 10
+        if(_): {i < n} [ byte(b): text i ]
+        if(_): {b = 10} [
+            slice(line): text from {i - from}
+            mu_words(w): line
+            len(nw): w
+            if(_): {nw > 0} [
+                murmansk_add(st): line
+                if(_): {st != 0} [
+                    set(r): {r + 1}
+                    if(_): {first = ""} [ set(first): mu_error ]
+                ]
+            ]
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {first != ""} [ set(mu_error): first ]
+]
+
+murmansk_text(r): [
+    set(r): "# Murmansk, the firewall: the first rule that matches decides\n"
+    concat(r): r "policy in " mu_in "\npolicy out " mu_out "\n"
+    btlen(n): mu_rules
+    set(i): 1
+    while(_): {i <= n} [
+        btget(rule): mu_rules i
+        mu_rule_text(t): rule
+        concat(r): r t "\n"
+        set(i): {i + 1}
+    ]
+]
+
+# the first rule for this packet, or null
+mu_match(r): dir proto ip port [
+    set(r): null
+    btlen(n): mu_rules
+    set(i): 1
+    while(_): {i <= n} [
+        btget(rule): mu_rules i
+        btget(rd): rule "dir"
+        btget(rp): rule "proto"
+        btget(lo): rule "lo"
+        btget(hi): rule "hi"
+        btget(net): rule "net"
+        btget(bits): rule "bits"
+        mu_mask(mask): bits
+        set(ok): {rd = dir && (rp = "any" || rp = proto)}
+        if(_): ok [ set(ok): {port >= lo && port <= hi && (ip & mask) = net} ]
+        if(_): ok [
+            set(r): rule
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+murmansk_allows(r): dir proto ip port [
+    mu_match(rule): dir proto ip port
+    if(_): {rule = null} [
+        set(p): mu_in
+        if(_): {dir = "out"} [ set(p): mu_out ]
+        set(r): {p = "allow"}
+        return(r): r
+    ]
+    btget(a): rule "action"
+    set(r): {a = "allow"}
+]
+
+# murmansk_allows, with the rule's hits counted and a drop logged
+murmansk_check(r): dir proto ip port [
+    mu_match(rule): dir proto ip port
+    set(why): "policy"
+    if(_): {rule = null} [
+        set(p): mu_in
+        if(_): {dir = "out"} [ set(p): mu_out ]
+        set(r): {p = "allow"}
+    ]
+    else(_): [
+        btget(a): rule "action"
+        set(r): {a = "allow"}
+        btget(h): rule "hits"
+        btput(_): rule "hits" {h + 1}
+        mu_rule_text(why): rule
+    ]
+    if(_): {r = false} [
+        set(mu_drops): {mu_drops + 1}
+        mu_ip_text(a): ip
+        str_from_int(ps): port
+        concat(line): dir " " proto " " a
+        if(_): {proto != "icmp"} [ concat(line): line " port " ps ]
+        concat(line): line ": denied by " why
+        set(mu_logn): {mu_logn + 1}
+        btput(_): mu_log mu_logn line
+        btlen(ln): mu_log
+        if(_): {ln > 16} [
+            btfirst(old): mu_log
+            btdel(_): mu_log old
+        ]
+    ]
+]
+
+murmansk_report(r): [
+    concat(r): "policy in " mu_in ", out " mu_out "\n"
+    btlen(n): mu_rules
+    set(i): 1
+    while(_): {i <= n} [
+        btget(rule): mu_rules i
+        mu_rule_text(t): rule
+        btget(h): rule "hits"
+        str_from_int(is): i
+        str_from_int(hs): h
+        concat(r): r is ". " t "   (" hs " hits)\n"
+        set(i): {i + 1}
+    ]
+    str_from_int(ds): mu_drops
+    concat(r): r ds " packets dropped"
+    btrange(last): mu_log
+    len(nl): last
+    if(_): {nl > 0} [ concat(r): r "; the last:" ]
+    set(i): 0
+    while(_): {i < nl} [
+        at(pr): last i
+        at(line): pr 1
+        concat(r): r "\n  " line
+        set(i): {i + 1}
+    ]
+]

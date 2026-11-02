@@ -23,6 +23,11 @@ forwarded to it, its posts in a Dubna KV store (--kvdb); the script reads
 its pages and posts to it, and after the next boot Novgorod serves the
 post again from the store (--no-novgorod skips this).
 
+Then TLS: Moscow, a client through Ryazan and BearSSL (/lib/tls.so,
+loaded by the kernel's ELF loader), fetches a page from an HTTPS server
+on this machine, and Novgorod serves HTTPS, its certificate checked by
+this script (--no-tls skips this).
+
 Then it installs: a second boot with an empty qcow2 virtual hard disk
 as /dev/hdb runs install(_):, answers its questions, and a third boot
 starts from that disk alone and checks what the installer put there.
@@ -35,8 +40,11 @@ import shutil
 import socket
 import subprocess
 import sys
+import ssl
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.error
 import urllib.request
 
@@ -92,7 +100,7 @@ CHECKS = [
     # the kernel's commands, through russia.su's host calls
     ("uptime(_):", r"up \d+ s"),
     # the shell keeps its history in $HOME/.ussr_history, HOME being /
-    ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  src"),
+    ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  lib\nd +\d+  src"),
     ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n- +\d+  stalin\.ru"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
@@ -136,6 +144,15 @@ CHECKS = [
     ("net(_):", r"e1000 52:54:00:12:34:56, 10\.0\.2\.15/24 \(DHCP\), gateway 10\.0\.2\.2"),
     ('ping(n): "10.0.2.2" 2', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\nreply from 10\.0\.2\.2: seq 2, \d+ ms\n2 sent, 2 answered"),
     ("print(_): n", r"2"),
+    # Murmansk, the firewall
+    ("fw(_):", r"policy in deny, out allow\n1\. allow in icmp   \(0 hits\)\n2\. allow in tcp 8080   \(0 hits\)\n3\. allow in tcp 8443   \(0 hits\)\n\d+ packets dropped(; the last:(\n  .*)+)?"),
+    ('fw(_): "deny out icmp to 10.0.2.2"', r"(.|\n)*4\. deny out icmp to 10\.0\.2\.2   \(0 hits\)(.|\n)*"),
+    ('ping(n): "10.0.2.2" 1', r"ping 10\.0\.2\.2: Murmansk denies it \(fw\(_\): lists the rules\)"),
+    ('fw(_): "delete 4"', r"(.|\n)*3\. allow in tcp 8443(.|\n)*"),
+    ('fw(_): "allow sideways"', r"fw: in or out, not sideways\n(.|\n)*"),
+    ('ping(n): "10.0.2.2" 1', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\n1 sent, 1 answered"),
+    # C libraries: /lib/ctest.so through the runtime's ELF loader
+    ('run(st): "/src/ussr/tests/cffi_moscow_test.su"', r"(PASS [^\n]*\n){16}PASS [^\n]*"),
     ('localtime(t): 1793535166', r""),
     ("print(_): t", r"\[2026,11,1,12,12,46,0,304\]"),
     ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),
@@ -284,6 +301,8 @@ def main():
                     help="no editing with Mbl across a reboot")
     ap.add_argument("--no-novgorod", action="store_true",
                     help="no Novgorod over the network")
+    ap.add_argument("--no-tls", action="store_true",
+                    help="no TLS client and HTTPS server")
     ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
     args = ap.parse_args()
     global ACCEL
@@ -323,6 +342,8 @@ def main():
               "root:    /dev/hda from sector 8192, Belarus 'ussr-install'" in boot, boot)
         check("the network card gets an address from DHCP",
               "net:     e1000 52:54:00:12:34:56, 10.0.2.15/24 (DHCP), gateway 10.0.2.2" in boot, boot)
+        check("Murmansk loads its rules",
+              "fw:      Murmansk, 3 rules from /etc/murmansk.rules; in deny, out allow" in boot, boot)
         for line, want in CHECKS:
             serial.command(line)
             got = clean(serial.output_to_prompt())
@@ -349,7 +370,10 @@ def main():
     if not args.no_mbl:
         mbl(qemu, disk, args.port + 10, log, check)
     if not args.no_novgorod:
+        firewall(qemu, disk, args.port + 30, log, check)
         novgorod(qemu, disk, args.port + 20, log, check)
+    if not args.no_tls:
+        secure(qemu, disk, args.port + 40, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
 
@@ -469,6 +493,29 @@ def http(url, data=None, headers=None, timeout=120):
 POST_TEXT = "Served by **Moscow**: Ukraine over the kernel's own TCP/IP."
 
 
+def firewall(qemu, disk, port, log, check):
+    """A server on a port no rule opens: Ukraine listens, and a client
+    of this machine gets nothing, Murmansk dropping its SYN."""
+    web = port + 4
+    m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 18992)])
+    serial = m.serial
+    try:
+        serial.output_to_prompt(timeout=60)
+        serial.command('run(st): "/src/ussr/tests/ukraine_http.su"')
+        said = clean(serial.read_until(b"ukraine: listening on", timeout=600))
+        check("Ukraine listens on 18992", "ukraine: listening on" in said, said)
+        try:
+            status, headers, body = http("http://127.0.0.1:%d/health" % web, timeout=15)
+            got = "HTTP %r %r" % (status, body[:60])
+        except OSError as e:
+            got = None
+        check("Murmansk keeps a port no rule opens shut", got is None, repr(got))
+    except (TimeoutError, EOFError) as e:
+        check("firewall conversation", False, str(e))
+    finally:
+        m.close()
+
+
 NOVGOROD = ('run(st): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" '
             '"--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static" '
             '"--kvdb" "/home/novgorod/posts.kv"')
@@ -549,6 +596,88 @@ def novgorod(qemu, disk, port, log, check):
         check("Novgorod's post after the reboot", False, str(e))
     finally:
         m.close()
+
+
+CERT = os.path.join(ROOT, "tests", "ryazan", "localhost.cert.pem")
+KEY = os.path.join(ROOT, "tests", "ryazan", "localhost.key.pem")
+
+
+class Hello(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"hello from the host"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def secure(qemu, disk, port, log, check):
+    """TLS both ways: Moscow's client against an HTTPS server here (QEMU
+    shows this machine as 10.0.2.2), and Novgorod over HTTPS."""
+    server = HTTPServer(("127.0.0.1", 0), Hello)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(CERT, KEY)
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host_port = server.server_address[1]
+    web = port + 4
+    base = "https://127.0.0.1:%d" % web
+    client = ssl.create_default_context(cafile=CERT)
+    m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 8443)])
+    serial = m.serial
+    try:
+        boot = clean(serial.output_to_prompt(timeout=60))
+        check("the kernel loads BearSSL", "tls:     BearSSL from /lib/tls.so" in boot, boot)
+        serial.command('run(st): "/src/ussr/tests/moscow_tls_client.su" "%d"' % host_port)
+        got = clean(serial.output_to_prompt(timeout=600))
+        check("Moscow, a TLS client, checks the host's certificate",
+              re.search(r"PASS handshake: TLS 1\.2, cipher suite 0x[0-9A-F]{4}", got) is not None, repr(got))
+        check("and reads its page over TLS", "PASS response hello from the host" in got, repr(got))
+        serial.command('run(st): "novgorod" "--host" "0.0.0.0" "--port" "8443" "--data" "/home/novgorod" '
+                       '"--static" "/src/ussr/src/novgorod/static" "--kvdb" "/home/novgorod/posts.kv" '
+                       '"--cert" "/src/ussr/tests/ryazan/localhost.cert.pem" '
+                       '"--secret" "/src/ussr/tests/ryazan/localhost.key.pem"')
+        said = clean(serial.read_until(b"ukraine: listening (HTTPS) on 0.0.0.0", timeout=1200))
+        check("Novgorod listens over HTTPS", "listening (HTTPS)" in said, said)
+        status, headers, body = https(base + "/", client)
+        check("GET / over HTTPS, the certificate checked here", status == 200
+              and '<a href="/c/">/c/ C and systems</a>' in body.decode("utf-8", "replace"), repr(status))
+        boundary = "----moscowtls"
+        fields = [("board", "prog"), ("thread", "0"), ("subject", "TLS"),
+                  ("text", "Encrypted by **BearSSL** in Moscow."), ("website", ""),
+                  ("mime", ""), ("imgw", ""), ("imgh", ""), ("img", "")]
+        form = "".join('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                       % (boundary, k, v) for k, v in fields) + "--%s--\r\n" % boundary
+        status, headers, body = https(base + "/post", client, form.encode(),
+                                      {"Content-Type": "multipart/form-data; boundary=" + boundary})
+        location = headers.get("Location") if headers else None
+        check("POST over HTTPS", status == 303 and location is not None
+              and location.startswith("/prog/res/"), "%r %r" % (status, location))
+        if location:
+            status, headers, body = https(base + location.split("#")[0], client)
+            check("the thread over HTTPS", status == 200
+                  and "Encrypted by <b>BearSSL</b> in Moscow." in body.decode("utf-8", "replace"), repr(status))
+    except (TimeoutError, EOFError, OSError) as e:
+        check("TLS conversation", False, str(e))
+    finally:
+        m.close()
+        server.shutdown()
+
+
+def https(url, context, data=None, headers=None, timeout=180):
+    """(status, headers, body) over HTTPS checked with context, no
+    redirects followed."""
+    opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPSHandler(context=context))
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
 
 
 def install(qemu, disk, work, port, log, check):

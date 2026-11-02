@@ -206,15 +206,46 @@ retransmits what is overdue and then does its own work; a server
 waiting for a client is the stack's clock. TCP keeps to what a server on
 a quiet network needs: both handshakes, in-order data (a segment out of
 order is dropped and acknowledged again), the peer's window, go-back-N
-retransmission with a doubling timeout, FIN both ways and RST. Received
-data is a string (USSR strings hold no byte 0: such bytes are dropped).
-There is one address; `socket_bind` listens on it whatever host is
-given, and `socket_connect` takes addresses (no DNS yet). Ukraine
-serves each client in a task of its own: `wait_readable` on a listening
-socket comes back after a moment even without a client, and russia.su
-lets its other tasks run there, as ussr's scheduler does. HTTPS (Ryazan)
-and PostgreSQL (Dubna) are not there yet: TLS needs the host's TLS
-library.
+retransmission with a doubling timeout, FIN both ways and RST. What
+comes in and what waits to be acknowledged are byte vectors, so any
+bytes travel; `socket_recv` gives them as text (a USSR string holds no
+byte 0), `socket_recv_bytes` as they are. There is one address;
+`socket_bind` listens on it whatever host is given, and
+`socket_connect` takes addresses (no DNS yet). Ukraine serves each
+client in a task of its own: `wait_readable` on a listening socket
+comes back after a moment even without a client, and russia.su lets its
+other tasks run there, as ussr's scheduler does. Murmansk
+([src/murmansk](../murmansk/README.md)) is the firewall: what comes in
+needs a rule (the install disk opens ping, 8080 and 8443).
+
+## Secure sockets: BearSSL
+
+The `tls_*` commands Ryazan is written on are the kernel's too
+(`src/moscow/tls.su`), so Ryazan, Ukraine's `uk_server_tls` and
+Novgorod's HTTPS run unchanged. The cryptography is
+[BearSSL](https://bearssl.org)'s: `build.sh` fetches BearSSL 0.6 (its
+SHA-256 checked), compiles it freestanding with the glue
+`src/moscow/lib/tls.c` into `/lib/tls.so`, and the kernel loads it at
+boot through its ELF loader (`c_load`'s, `arch/amd64/cffi.inc`):
+
+    tls:     BearSSL from /lib/tls.so
+
+BearSSL only computes; the kernel moves the bytes. The engine's records
+go out on the TCP connection, what comes in goes into the engine, and
+the program's data goes in and out on the other side, each call of
+`tls_handshake`, `tls_recv`, `tls_send` pumping both ways.
+
+    russia> run(_): "novgorod" "--host" "0.0.0.0" "--port" "8443" "--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static" "--kvdb" "/home/novgorod/posts.kv" "--cert" "/src/ussr/tests/ryazan/localhost.cert.pem" "--secret" "/src/ussr/tests/ryazan/localhost.key.pem"
+
+serves https://127.0.0.1:8443/ (`run.sh --web 8443`). A server takes a
+PEM certificate chain and its PEM private key (PKCS#12, Schannel's
+`.p12`, is not read here); a client checks the server's chain and name
+against the PEM certificates of `RYAZAN_CA_FILE`, else
+`/etc/ssl/certs.pem`, at the date of the machine's clock. TLS 1.0 to
+1.2 (BearSSL has no 1.3), ECDHE and RSA key exchange, AES-GCM,
+ChaCha20-Poly1305 and AES-CBC. `tls_request` (the blocking HTTP
+client) is not in Moscow; `ryazan_connect`, `ryazan_write` and
+`ryazan_read` are.
 
 ## Boot
 
@@ -330,6 +361,7 @@ The kernel's own services, used by `moscow.su`:
 | `net_recv(v):` | the next Ethernet frame as a byte vector, or null |
 | `net_send(n): head [tail [from [count]]]` | one frame: a byte vector, then a string or byte vector (or part of one) |
 | `net_sum(n): data [from [count]]` | the 16-bit one's complement sum of IP checksums, folded |
+| `k_elf_load(lib): bytes` | loads a freestanding x86-64 ELF shared object (`c_load` reads the file); `c_sym`, `c_call`, `c_alloc`, `c_free`, `c_read`, `c_write`, `c_string` as in ussr (`arch/amd64/cffi.inc`) |
 | `k_reboot(_):`, `k_halt(_):` | reset; stop |
 
 The heap is a bump heap with marks: `k_exec` (and `run`) release

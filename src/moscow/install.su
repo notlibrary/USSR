@@ -294,6 +294,8 @@ ins_progress(r): path rec [
 # the bytes under path
 ins_size_of(r): fs path [
     set(r): 0
+    bl_exists(e): fs path
+    if(_): {e = false} [ return(r): r ]
     bl_walk(all): fs path
     len(n): all
     set(i): 0
@@ -409,7 +411,7 @@ ins_main(r): args [
     vec(what): ""
     ins_pair(p): "1" "everything: the system and the whole USSR project (/src)"
     push(_): what p
-    ins_pair(p): "2" "the system only: /bin, /boot and /etc"
+    ins_pair(p): "2" "the system only: /bin, /boot, /etc and /lib"
     push(_): what p
     ins_choose(scope): "What to copy" what "1"
 
@@ -420,7 +422,8 @@ ins_main(r): args [
         ins_size_of(n1): src "/bin"
         ins_size_of(n2): src "/boot"
         ins_size_of(n3): src "/etc"
-        set(need): {n1 + n2 + n3 + 1048576}
+        ins_size_of(n4): src "/lib"
+        set(need): {n1 + n2 + n3 + n4 + 1048576}
     ]
     ins_mib(needs): need
 
@@ -551,6 +554,8 @@ ins_main(r): args [
         push(_): dirs "/bin"
         push(_): dirs "/boot"
         push(_): dirs "/etc"
+        # C libraries: /lib/tls.so is the kernel's TLS
+        push(_): dirs "/lib"
         len(nd): dirs
         set(k): 0
         while(_): {k < nd} [

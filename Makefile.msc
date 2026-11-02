@@ -68,6 +68,7 @@ OBJS = \
     $(SRC)\eventq.obj \
     $(SRC)\gc.obj \
     $(SRC)\btree.obj \
+    $(SRC)\cffi.obj \
     $(SRC)\parser.tab.obj \
     $(SRC)\lexer.obj \
     $(SRC)\prng64_xrp32.obj \
@@ -150,6 +151,9 @@ $(SRC)\gc.obj: $(SRC)\gc.c $(SRC)\gc.h $(SRC)\uno.h $(SRC)\btree.h $(SRC)\ussr.h
 
 $(SRC)\btree.obj: $(SRC)\btree.c $(SRC)\btree.h $(SRC)\uno.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\btree.obj $(SRC)\btree.c
+
+$(SRC)\cffi.obj: $(SRC)\cffi.c $(SRC)\cffi.h $(SRC)\uno.h $(SRC)\ussr.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\cffi.obj $(SRC)\cffi.c
 
 $(SRC)\parser.tab.obj: $(SRC)\parser.tab.c $(SRC)\parser.tab.h $(SRC)\ussr.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\parser.tab.obj $(SRC)\parser.tab.c

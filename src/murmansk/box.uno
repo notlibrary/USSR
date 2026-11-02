@@ -1,0 +1,1 @@
+'Package{name=`murmansk`,version=`0.1.0`,description=`The firewall of the Moscow network stack: ordered allow and deny rules with policies, stateful, its rules in /etc/murmansk.rules`,entry=`murmansk.su`,dependencies=[`library`],files=[`murmansk.su`,`README.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

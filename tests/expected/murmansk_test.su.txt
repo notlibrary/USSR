@@ -1,0 +1,38 @@
+PASS in: denied by default
+PASS out: allowed by default
+PASS a rule
+PASS its port opens
+PASS the next one stays shut
+PASS udp is not tcp
+PASS a deny before an allow
+PASS another network gets the allow
+PASS past the range
+PASS ping
+PASS out to a network
+PASS out elsewhere: the policy
+PASS no direction
+PASS why
+PASS a port needs tcp or udp
+PASS a port too big
+PASS in takes from
+PASS a bad address
+PASS the saved rules load
+PASS and say the same
+PASS loaded rules act
+PASS a wrong line is counted
+PASS the lines around it load
+PASS delete
+PASS the deleted rule is gone
+PASS no rule 5
+PASS hits counted
+PASS drops counted
+PASS the log says why
+policy in deny, out allow
+1. deny in tcp 81   (1 hits)
+2 packets dropped; the last:
+  in tcp 10.0.2.2 port 80: denied by policy
+  in tcp 10.0.2.2 port 81: denied by deny in tcp 81
+
+--- stderr ---
+
+--- exit 0 ---

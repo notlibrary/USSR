@@ -27,6 +27,8 @@
 # lists them.
 $include "../belarus/belarus.su"
 $include "net.su"
+$include "../murmansk/murmansk.su"
+$include "tls.su"
 
 global(_): mo_dev mo_base mo_files
 
@@ -426,6 +428,103 @@ sys_bsize(r): a [
     ]
 ]
 
+# --- Murmansk, the firewall (src/murmansk)
+
+# the rules in /etc/murmansk.rules; a line saying what came of it
+mo_fw_load(r): fs [
+    murmansk_reset(_):
+    bl_read_text(text): fs "/etc/murmansk.rules"
+    typeof(t): text
+    set(from): "no /etc/murmansk.rules"
+    set(bad): 0
+    if(_): {t = "string"} [
+        murmansk_load_text(bad): text
+        set(from): "/etc/murmansk.rules"
+    ]
+    btlen(n): mu_rules
+    str_from_int(ns): n
+    concat(r): "fw:      Murmansk, " ns " rules from " from "; in " mu_in ", out " mu_out
+    if(_): {bad > 0} [
+        str_from_int(bs): bad
+        murmansk_error(why):
+        concat(r): r " (" bs " wrong lines left out: " why ")"
+    ]
+]
+
+# the rules back from text kept before a program ran: what it changed
+# lived in its memory, given back now
+mo_fw_restore(r): text [
+    set(drops): mu_drops
+    murmansk_reset(_):
+    murmansk_load_text(r): text
+    set(mu_drops): drops
+]
+
+# fw(s): [command] -> the firewall's report, which it prints. A command
+# is a rule to add at the end ("allow in tcp 8080"), "delete N", "policy
+# in|out allow|deny", "save" (into /etc/murmansk.rules) or "load".
+sys_fw(r): a [
+    mo_arg(cmd): a 0 ""
+    mu_words(w): cmd
+    len(n): w
+    set(st): 0
+    set(first): ""
+    if(_): {n > 0} [ at(first): w 0 ]
+    if(_): {first = "delete" && n = 2} [
+        at(x): w 1
+        mu_number(k): x
+        murmansk_delete(st): k
+    ]
+    elif(_): {first = "save"} [
+        murmansk_text(text):
+        mo_fs(fs):
+        typeof(t): fs
+        set(st): -1
+        if(_): {t = "btree"} [
+            bl_write_text(st): fs "/etc/murmansk.rules" text
+            mo_sync(_): fs
+        ]
+        if(_): {st = 0} [ print(_): "saved in /etc/murmansk.rules" ]
+        else(_): [ mu_fail(_): "/etc/murmansk.rules could not be written" ]
+    ]
+    elif(_): {first = "load"} [
+        mo_fs(fs):
+        typeof(t): fs
+        if(_): {t = "btree"} [
+            mo_fw_load(line): fs
+            print(_): line
+        ]
+    ]
+    elif(_): {n > 0} [ murmansk_add(st): cmd ]
+    if(_): {st != 0} [
+        murmansk_error(why):
+        concat(m): "fw: " why "\n"
+        write_stderr(_): m
+    ]
+    murmansk_report(r):
+    print(_): r
+]
+
+# c_load(lib): path -> a C library of the root file system (an ELF shared
+# object built freestanding, see arch/amd64/cffi.inc), its number, or
+# null; a bare name is looked for in /lib. c_sym, c_call and the others
+# are the runtime's.
+sys_c_load(r): a [
+    set(r): null
+    mo_arg(path): a 0 ""
+    str_find(slash): path "/" 0
+    if(_): {slash < 0} [ concat(path): "/lib/" path ]
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_is_dir(d): fs path
+    bl_exists(e): fs path
+    if(_): {e = false || d} [ return(r): r ]
+    bl_read_bytes(bytes): fs path
+    typeof(tb): bytes
+    if(_): {tb = "vector"} [ k_elf_load(r): bytes ]
+]
+
 # rename_path(r): from to -> 0, 1 when it failed (there is something at
 # to already, among other things)
 sys_rename_path(r): a [
@@ -593,9 +692,13 @@ mo_run(r): name args [
         bl_read_bytes(bytes): fs path
         typeof(tb): bytes
         if(_): {tb = "vector"} [
+            murmansk_text(fwkeep):
             k_exec_bytes(r): bytes args
-            # what the program allocated is given back: its sockets too
+            # what the program allocated is given back: its sockets too,
+            # and the firewall's rules, kept as text across it
             net_reset(_):
+            tls_reset(_):
+            mo_fw_restore(_): fwkeep
             return(r): r
         ]
     ]
@@ -630,6 +733,7 @@ sys_help(r): a [
     print(_): "  df(_):  fsck(_):        the root file system, its free space, a check"
     print(_): "  uptime(_): mem(_): cpu(_): uname(_): pwd(_): clear(_): color(_): fg bg"
     print(_): "  net(_): ping(n): host   the network card and address; ICMP echo"
+    print(_): "  fw(s): [rule|delete N|policy in|out allow|deny|save|load]  Murmansk, the firewall"
     print(_): "  socket_tcp bind listen accept recv send close connect, wait_readable"
     print(_): "  reboot(_): halt(_):     restart or stop the machine (Ctrl-D halts too)"
 ]
@@ -661,6 +765,9 @@ mo_syscalls(r): [
     k_syscall(_): "bread" "sys_bread"
     k_syscall(_): "bwrite" "sys_bwrite"
     k_syscall(_): "bsize" "sys_bsize"
+    k_syscall(_): "fw" "sys_fw"
+    k_syscall(_): "c_load" "sys_c_load"
+    tls_syscalls(_):
     net_syscalls(_):
 ]
 
@@ -704,6 +811,8 @@ init(ret): arg_cnt arg_vec [
         print(_): line
         set(i): {i + 1}
     ]
+    # in deny, out allow until the rules come from the disk
+    murmansk_reset(_):
     net_start(netok):
     net_describe(nd):
     concat(line): "net:     " nd
@@ -715,6 +824,11 @@ init(ret): arg_cnt arg_vec [
         str_from_int(sb): mo_base
         concat(line): "root:    " mo_dev " from sector " sb ", Belarus '" label "'"
         print(_): line
+        mo_fw_load(fwline): root
+        print(_): fwline
+        tls_start(tlsok): root
+        if(_): tlsok [ print(_): "tls:     BearSSL from /lib/tls.so" ]
+        else(_): [ print(_): "tls:     none (no /lib/tls.so)" ]
         bl_read_text(host): root "/etc/hostname"
         typeof(th): host
         if(_): {th = "string"} [
@@ -739,8 +853,11 @@ init(ret): arg_cnt arg_vec [
     set(go): true
     while(_): go [
         print(_): "moscow: starting russia.ru"
+        murmansk_text(fwkeep):
         k_exec(status): "russia.ru"
         net_reset(_):
+        tls_reset(_):
+        mo_fw_restore(_): fwkeep
         if(_): {status = 0} [ set(go): false ]
         else(_): [
             str_from_int(ss): status

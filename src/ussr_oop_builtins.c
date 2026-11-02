@@ -9,6 +9,7 @@
 #include "alias.h"
 #include "help.h"
 #include "keybind.h"
+#include "cffi.h"
 
 #include <errno.h>
 #include <math.h>
@@ -4771,6 +4772,14 @@ int ussr_oop_dispatch(
     {
         status = ussr_btree_dispatch(command, arguments, argument_count,
                                      out_result);
+        if (status != 0)
+            return status;
+    }
+
+    if (command[0] == 'c' && command[1] == '_')
+    {
+        status = ussr_cffi_dispatch(command, arguments, argument_count,
+                                    out_result);
         if (status != 0)
             return status;
     }

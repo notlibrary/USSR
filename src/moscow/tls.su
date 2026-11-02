@@ -1,0 +1,519 @@
+# tls.su - secure sockets in Moscow: the tls_* commands the hosted ussr
+# has (src/ryazan.c), which Ryazan, Ukraine and Novgorod are written on,
+# here over the kernel's own TCP (net.su). The cryptography and the TLS
+# state machine are BearSSL's, in /lib/tls.so (src/moscow/lib/tls.c and
+# BearSSL, built by build.sh), called with c_call; this file moves the
+# bytes: the engine's records go out on the connection, what comes in
+# goes into the engine, and the program's data goes in and out on the
+# other side.
+#
+#   tls_backend(s):                    "bearssl", or "none" without /lib/tls.so
+#   tls_server(r): h chain key         a server session on accepted socket h:
+#                                      chain a PEM certificate chain, key
+#                                      the PEM private key ("" when it is in
+#                                      the chain's file); 0 or -1
+#   tls_client(r): h host              a client session on connected h, the
+#                                      server checked against the PEM
+#                                      certificates of RYAZAN_CA_FILE, else
+#                                      /etc/ssl/certs.pem; 0 or -1
+#   tls_handshake(r): h                1 done, 0 wait until readable, -1
+#   tls_recv(s): h max                 decrypted text (0 bytes left out); ""
+#                                      once the peer closed; null: wait
+#   tls_recv_bytes(v): h max           the same as bytes
+#   tls_send(n): h text                bytes taken, 0: wait, -1
+#   tls_send_bytes(n): h bytes
+#   tls_flush(r): h                    1 when all went out
+#   tls_close(r): h                    close_notify, the session gone
+#   tls_pending(n): h   tls_info(s): h   tls_error(s):
+#
+# PKCS#12 files (.p12, what Schannel takes) are not read: give the PEM
+# certificate and key. Certificates are checked against the clock, which
+# Moscow reads from the machine's RTC (UTC).
+
+global(_): tls_lib tls_fn tls_zero tls_creds tls_anchors tls_last_error
+
+# BearSSL's engine states
+tls_closed(r): [ set(r): 1 ]
+
+tls_set_error(r): m [
+    set(tls_last_error): m
+    set(r): -1
+]
+
+sys_tls_error(r): a [
+    set(r): tls_last_error
+    if(_): {r = null} [ set(r): "" ]
+]
+
+# /lib/tls.so from the root file system, at boot: its functions' addresses
+tls_start(r): fs [
+    set(r): false
+    set(tls_lib): null
+    btree(tls_fn):
+    btree(tls_creds):
+    btree(tls_anchors):
+    set(tls_last_error): ""
+    bl_exists(e): fs "/lib/tls.so"
+    if(_): {e = false} [ return(r): r ]
+    bl_read_bytes(bytes): fs "/lib/tls.so"
+    k_elf_load(tls_lib): bytes
+    if(_): {tls_lib = null} [ return(r): r ]
+    vec(names): ""
+    push(_): names "tls_conn_size"
+    push(_): names "tls_creds_size"
+    push(_): names "tls_anchors_size"
+    push(_): names "tls_creds_load"
+    push(_): names "tls_creds_ready"
+    push(_): names "tls_anchors_load"
+    push(_): names "tls_server_start"
+    push(_): names "tls_client_start"
+    push(_): names "tls_state"
+    push(_): names "tls_error"
+    push(_): names "tls_sendrec"
+    push(_): names "tls_recvrec"
+    push(_): names "tls_sendapp"
+    push(_): names "tls_recvapp"
+    push(_): names "tls_flush"
+    push(_): names "tls_close"
+    push(_): names "tls_info"
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        c_sym(f): tls_lib name
+        if(_): {f = null} [
+            set(tls_lib): null
+            return(r): r
+        ]
+        btput(_): tls_fn name f
+        set(i): {i + 1}
+    ]
+    # zeros, for buffers: c_read of them is a vector of zero bytes
+    c_alloc(tls_zero): 16384
+    set(r): true
+]
+
+# the credentials and anchors a program loaded live in its memory: they
+# go when it ends
+tls_reset(r): [
+    set(r): 0
+    btree(tls_creds):
+    btree(tls_anchors):
+]
+
+tls_f(r): name [ btget(r): tls_fn name ]
+
+# the session on socket h: [socket, conn], or null
+tls_session(r): h [
+    set(r): null
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(conn): s "tls"
+    if(_): {conn = null} [ return(r): r ]
+    vec(r): ""
+    push(_): r s
+    push(_): r conn
+]
+
+# a PEM file of the root file system as text, or null
+tls_file(r): path [
+    set(r): null
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_exists(e): fs path
+    if(_): e [ bl_read_text(r): fs path ]
+]
+
+# count random bytes, for the engine's generator
+tls_seed(r): count [
+    vec(r): ""
+    while(_): {count > 0} [
+        random64(x):
+        set(k): 0
+        while(_): {k < 8 && count > 0} [
+            push(_): r {(x >> (k * 8)) & 255}
+            set(k): {k + 1}
+            set(count): {count - 1}
+        ]
+    ]
+]
+
+# Moves bytes between the engine and the connection until neither has
+# anything for the other: records out on the TCP connection, what came
+# in into the engine.
+tls_pump(r): s conn [
+    set(r): 0
+    tls_f(f_state): "tls_state"
+    tls_f(f_sendrec): "tls_sendrec"
+    tls_f(f_recvrec): "tls_recvrec"
+    btget(rx): s "rx"
+    set(go): true
+    while(_): go [
+        set(go): false
+        c_call(st): f_state conn
+        if(_): {(st & 2) != 0} [
+            c_read(buf): tls_zero 16384
+            c_call(n): f_sendrec conn buf 16384
+            if(_): {n > 0} [
+                k_bytes_cut(out): buf 0 n
+                net_send_bytes(_): s out
+                set(go): true
+            ]
+        ]
+        len(have): rx
+        if(_): {(st & 4) != 0 && have > 0} [
+            set(k): have
+            if(_): {k > 16384} [ set(k): 16384 ]
+            k_bytes_cut(part): rx 0 k
+            c_call(m): f_recvrec conn part k
+            if(_): {m > 0} [
+                k_bytes_drop(_): rx m
+                set(go): true
+            ]
+        ]
+    ]
+    net_poll(_):
+]
+
+# why the engine stopped, as a sentence
+tls_why(r): conn [
+    tls_f(f): "tls_error"
+    c_call(e): f conn
+    str_from_int(es): e
+    concat(r): "TLS failed (BearSSL error " es ")"
+    if(_): {e = 0} [ set(r): "the peer closed the TLS session" ]
+]
+
+# a session with conn on socket h
+tls_attach(r): h conn [
+    net_sock(s): h
+    btput(_): s "tls" conn
+    set(r): 0
+]
+
+sys_tls_backend(r): a [
+    set(r): "none"
+    if(_): {tls_lib != null} [ set(r): "bearssl" ]
+]
+
+# tls_server(r): h chain [key]
+sys_tls_server(r): a [
+    set(r): -1
+    if(_): {tls_lib = null} [
+        tls_set_error(r): "no TLS: /lib/tls.so is not there"
+        return(r): r
+    ]
+    mo_arg(h): a 0 -1
+    mo_arg(chain): a 1 ""
+    mo_arg(key): a 2 ""
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [
+        tls_set_error(r): "tls_server: no such socket"
+        return(r): r
+    ]
+    concat(ck): chain "|" key
+    btget(creds): tls_creds ck
+    if(_): {creds = null} [
+        tls_f(f): "tls_creds_size"
+        c_call(size): f
+        c_alloc(creds): size
+        c_alloc(scratch): 65536
+        tls_f(load): "tls_creds_load"
+        vec(files): ""
+        push(_): files chain
+        if(_): {key != ""} [ push(_): files key ]
+        len(nf): files
+        set(i): 0
+        while(_): {i < nf} [
+            at(path): files i
+            tls_file(pem): path
+            if(_): {pem = null} [
+                concat(m): "tls_server: no file " path
+                tls_set_error(r): m
+                return(r): r
+            ]
+            len(pl): pem
+            c_call(w): load creds pem pl scratch 65536
+            if(_): {w != 0} [
+                concat(m): "tls_server: " path " is no PEM certificate or key"
+                tls_set_error(r): m
+                return(r): r
+            ]
+            set(i): {i + 1}
+        ]
+        c_free(_): scratch
+        tls_f(ready): "tls_creds_ready"
+        c_call(ok): ready creds
+        if(_): {ok = 0} [
+            tls_set_error(r): "tls_server: a PEM certificate chain and its PEM private key are needed (PKCS#12 is not read in Moscow)"
+            return(r): r
+        ]
+        btput(_): tls_creds ck creds
+    ]
+    tls_f(f): "tls_conn_size"
+    c_call(size): f
+    c_alloc(conn): size
+    tls_seed(seed): 32
+    tls_f(start): "tls_server_start"
+    c_call(w): start conn creds seed 32
+    if(_): {w != 0} [
+        c_free(_): conn
+        str_from_int(ws): w
+        concat(m): "tls_server: BearSSL error " ws
+        tls_set_error(r): m
+        return(r): r
+    ]
+    tls_attach(r): h conn
+]
+
+# the anchors of a PEM file, loaded once
+tls_load_anchors(r): path [
+    btget(r): tls_anchors path
+    if(_): {r != null} [ return(r): r ]
+    tls_file(pem): path
+    if(_): {pem = null} [ return(r): r ]
+    tls_f(f): "tls_anchors_size"
+    c_call(size): f
+    c_alloc(r): size
+    c_alloc(scratch): 65536
+    len(pl): pem
+    tls_f(load): "tls_anchors_load"
+    c_call(n): load r pem pl scratch 65536
+    c_free(_): scratch
+    if(_): {n < 1} [
+        set(r): null
+        return(r): r
+    ]
+    btput(_): tls_anchors path r
+]
+
+# tls_client(r): h host
+sys_tls_client(r): a [
+    set(r): -1
+    if(_): {tls_lib = null} [
+        tls_set_error(r): "no TLS: /lib/tls.so is not there"
+        return(r): r
+    ]
+    mo_arg(h): a 0 -1
+    mo_arg(host): a 1 ""
+    getenv(ca): "RYAZAN_CA_FILE"
+    typeof(tc): ca
+    if(_): {tc != "string"} [ set(ca): "/etc/ssl/certs.pem" ]
+    tls_load_anchors(anchors): ca
+    if(_): {anchors = null} [
+        concat(m): "tls_client: no trusted certificates in " ca " (RYAZAN_CA_FILE names a PEM file)"
+        tls_set_error(r): m
+        return(r): r
+    ]
+    tls_f(f): "tls_conn_size"
+    c_call(size): f
+    c_alloc(conn): size
+    tls_seed(seed): 32
+    time(now):
+    str_trunc(days): {now / 86400}
+    set(secs): {now - days * 86400}
+    tls_f(start): "tls_client_start"
+    c_call(w): start conn host anchors seed 32 {days + 719528} secs
+    if(_): {w != 0} [
+        c_free(_): conn
+        str_from_int(ws): w
+        concat(m): "tls_client: BearSSL error " ws
+        tls_set_error(r): m
+        return(r): r
+    ]
+    tls_attach(r): h conn
+]
+
+# tls_handshake(r): h -> 1 done, 0 wait for the peer, -1
+sys_tls_handshake(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    tls_session(ss): h
+    if(_): {ss = null} [ return(r): r ]
+    at(s): ss 0
+    at(conn): ss 1
+    tls_pump(_): s conn
+    tls_f(f): "tls_state"
+    c_call(st): f conn
+    if(_): {(st & 1) != 0} [
+        tls_why(m): conn
+        tls_set_error(r): m
+        return(r): r
+    ]
+    set(r): 0
+    if(_): {(st & 8) != 0} [ set(r): 1 ]
+    else(_): [
+        # the peer went away in the middle
+        btget(fin): s "fin_rcvd"
+        btget(reset): s "reset"
+        if(_): {fin || reset} [ tls_set_error(r): "the peer closed the connection in the handshake" ]
+    ]
+]
+
+# up to max decrypted bytes: a vector; empty when the session or the
+# connection ended; null: nothing yet
+tls_recv_vector(r): h max [
+    set(r): null
+    tls_session(ss): h
+    if(_): {ss = null} [
+        vec(r): ""
+        return(r): r
+    ]
+    at(s): ss 0
+    at(conn): ss 1
+    tls_pump(_): s conn
+    if(_): {max > 16384} [ set(max): 16384 ]
+    c_read(buf): tls_zero max
+    tls_f(f): "tls_recvapp"
+    c_call(n): f conn buf max
+    if(_): {n > 0} [
+        k_bytes_cut(r): buf 0 n
+        # what it read may make room for more records
+        tls_pump(_): s conn
+        return(r): r
+    ]
+    tls_f(fs): "tls_state"
+    c_call(st): fs conn
+    btget(fin): s "fin_rcvd"
+    btget(reset): s "reset"
+    btget(rx): s "rx"
+    len(left): rx
+    if(_): {(st & 1) != 0 || ((fin || reset) && left = 0)} [ vec(r): "" ]
+]
+
+sys_tls_recv(r): a [
+    mo_arg(h): a 0 -1
+    mo_arg(max): a 1 4096
+    tls_recv_vector(v): h max
+    set(r): v
+    typeof(t): v
+    if(_): {t = "vector"} [
+        bytes_text(r): v
+        if(_): {r = null} [
+            len(n): v
+            net_text(r): v 0 n
+        ]
+    ]
+]
+
+sys_tls_recv_bytes(r): a [
+    mo_arg(h): a 0 -1
+    mo_arg(max): a 1 4096
+    tls_recv_vector(r): h max
+]
+
+# tls_send(n): h data -> bytes the engine took (it sends them), 0 when it
+# has no room yet, -1
+sys_tls_send(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    mo_arg(data): a 1 ""
+    tls_session(ss): h
+    if(_): {ss = null} [ return(r): r ]
+    at(s): ss 0
+    at(conn): ss 1
+    tls_pump(_): s conn
+    typeof(td): data
+    if(_): {td = "string"} [ text_bytes(data): data ]
+    len(n): data
+    if(_): {n > 16384} [
+        k_bytes_cut(data): data 0 16384
+        set(n): 16384
+    ]
+    tls_f(fs): "tls_state"
+    c_call(st): fs conn
+    if(_): {(st & 1) != 0} [
+        tls_why(m): conn
+        tls_set_error(r): m
+        return(r): r
+    ]
+    tls_f(f): "tls_sendapp"
+    c_call(r): f conn data n
+    tls_pump(_): s conn
+]
+
+sys_tls_send_bytes(r): a [
+    sys_tls_send(r): a
+]
+
+sys_tls_flush(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    tls_session(ss): h
+    if(_): {ss = null} [ return(r): r ]
+    at(s): ss 0
+    at(conn): ss 1
+    tls_f(f): "tls_flush"
+    c_call(_): f conn
+    tls_pump(_): s conn
+    set(r): 1
+]
+
+sys_tls_close(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    tls_session(ss): h
+    if(_): {ss = null} [ return(r): r ]
+    at(s): ss 0
+    at(conn): ss 1
+    tls_f(f): "tls_close"
+    c_call(_): f conn
+    tls_pump(_): s conn
+    btdel(_): s "tls"
+    c_free(_): conn
+    set(r): 0
+]
+
+sys_tls_pending(r): a [ set(r): 0 ]
+
+# "TLS 1.2, cipher suite 0xC02F"
+sys_tls_info(r): a [
+    set(r): ""
+    mo_arg(h): a 0 -1
+    tls_session(ss): h
+    if(_): {ss = null} [ return(r): r ]
+    at(conn): ss 1
+    tls_f(f): "tls_info"
+    c_call(v): f conn
+    set(version): {v >> 16}
+    set(suite): {v & 65535}
+    set(hex): "0123456789ABCDEF"
+    set(sh): ""
+    set(i): 12
+    while(_): {i >= 0} [
+        slice(c): hex {(suite >> i) & 15} 1
+        concat(sh): sh c
+        set(i): {i - 4}
+    ]
+    set(name): "TLS"
+    if(_): {version = 771} [ set(name): "TLS 1.2" ]
+    elif(_): {version = 770} [ set(name): "TLS 1.1" ]
+    elif(_): {version = 769} [ set(name): "TLS 1.0" ]
+    concat(r): name ", cipher suite 0x" sh
+]
+
+sys_tls_request(r): a [
+    set(r): null
+    tls_set_error(_): "tls_request is not in Moscow: ryazan_connect, ryazan_write and ryazan_read are"
+]
+
+tls_syscalls(r): [
+    set(r): 0
+    k_syscall(_): "tls_backend" "sys_tls_backend"
+    k_syscall(_): "tls_error" "sys_tls_error"
+    k_syscall(_): "tls_server" "sys_tls_server"
+    k_syscall(_): "tls_client" "sys_tls_client"
+    k_syscall(_): "tls_handshake" "sys_tls_handshake"
+    k_syscall(_): "tls_recv" "sys_tls_recv"
+    k_syscall(_): "tls_recv_bytes" "sys_tls_recv_bytes"
+    k_syscall(_): "tls_send" "sys_tls_send"
+    k_syscall(_): "tls_send_bytes" "sys_tls_send_bytes"
+    k_syscall(_): "tls_flush" "sys_tls_flush"
+    k_syscall(_): "tls_close" "sys_tls_close"
+    k_syscall(_): "tls_pending" "sys_tls_pending"
+    k_syscall(_): "tls_info" "sys_tls_info"
+    k_syscall(_): "tls_request" "sys_tls_request"
+]

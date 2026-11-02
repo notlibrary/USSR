@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added
+- TLS in Moscow: Ryazan's `tls_*` commands in the kernel
+  (`src/moscow/tls.su`) over BearSSL 0.6, which `build.sh` fetches (its
+  SHA-256 checked) and compiles freestanding with `src/moscow/lib/tls.c`
+  into `/lib/tls.so`, loaded at boot through the ELF loader. Novgorod
+  serves HTTPS in Moscow and Moscow is a TLS client (Ryazan), both
+  checked by `qemu_test.py`; PEM credentials and trust anchors.
+- Moscow's TCP carries any bytes: its buffers are byte vectors, kept
+  with the runtime's `k_bytes_append`, `k_bytes_cut` and `k_bytes_drop`.
+- C libraries as USSR commands: `c_load`, `c_sym`, `c_call` (up to 12
+  integer, string or byte-buffer arguments), `c_alloc`, `c_free`,
+  `c_read`, `c_write`, `c_string`. The hosted ussr loads `.dll`/`.so`
+  with LoadLibrary/dlopen (`src/cffi.c`); Moscow's runtime has an ELF
+  loader for freestanding shared objects (`arch/amd64/cffi.inc`:
+  relocations, imports from a small C runtime, constructors), and
+  `build.sh` builds `src/moscow/lib/*.c` into `/lib`. russia.su passes
+  up to sixteen arguments to host commands.
+- Murmansk (`src/murmansk`), the firewall of Moscow's network stack:
+  ordered `allow`/`deny` rules by direction, protocol, port range and
+  network, a policy for each direction, stateful (connections, ping and
+  DHCP answers pass), silent drops counted and logged. Rules come from
+  `/etc/murmansk.rules` at boot (the install disk opens ping and ports
+  8080 and 8443); `fw(_):` lists, adds, deletes and saves them.
+
 ### Fixed
 - Moscow's runtime: a kernel command called from inside another one
   (a program `run` calls the kernel) took a fresh 1 MiB VM area every

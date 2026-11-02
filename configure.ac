@@ -56,5 +56,10 @@ AS_IF([test "x$with_openssl" != xno], [
 ])
 AC_SUBST([RYAZAN_CPPFLAGS])
 AC_SUBST([RYAZAN_LIBS])
+
+# c_load (src/cffi.c): dlopen, in libc since glibc 2.34 and in libdl before
+CFFI_LIBS=
+AC_CHECK_LIB([dl], [dlopen], [CFFI_LIBS="-ldl"])
+AC_SUBST([CFFI_LIBS])
 AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT
