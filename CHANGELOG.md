@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- Moscow's DHCP client in a file of its own (`src/moscow/dhcp.su`) that
+  keeps the lease: renews at T1, rebinds at T2, starts again on a NAK or
+  when the lease ends, sends its host name, and releases. `dhcp(_):`
+  shows the lease, `dhcp(_): "renew"` and `dhcp(_): "release"`.
 - TLS in Moscow: Ryazan's `tls_*` commands in the kernel
   (`src/moscow/tls.su`) over BearSSL 0.6, which `build.sh` fetches (its
   SHA-256 checked) and compiles freestanding with `src/moscow/lib/tls.c`

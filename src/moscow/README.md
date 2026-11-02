@@ -188,6 +188,15 @@ ICMP, DHCP and TCP over it. At boot DHCP gives the address:
 
     net:     e1000 52:54:00:12:34:56, 10.0.2.15/24 (DHCP), gateway 10.0.2.2
 
+The DHCP client (`src/moscow/dhcp.su`) keeps the lease: it asks the
+server again at T1 (half the lease unless the server says otherwise),
+asks any server at T2, and starts again from DISCOVER on a NAK or when
+the lease runs out. `dhcp(_):` shows the lease, `dhcp(_): "renew"`
+renews it now, and `dhcp(_): "release"` gives the address back:
+
+    russia> dhcp(_):
+    10.0.2.15 from 10.0.2.2, lease 86400s, renews in 43187s, ends in 86387s
+
 The socket commands are the hosted ussr's, so the ROUND programs run
 unchanged. Novgorod, the forum, from its source, on a port QEMU
 forwards from this machine:
