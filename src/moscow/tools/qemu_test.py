@@ -136,6 +136,13 @@ CHECKS = [
     ("net(_):", r"e1000 52:54:00:12:34:56, 10\.0\.2\.15/24 \(DHCP\), gateway 10\.0\.2\.2"),
     ('ping(n): "10.0.2.2" 2', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\nreply from 10\.0\.2\.2: seq 2, \d+ ms\n2 sent, 2 answered"),
     ("print(_): n", r"2"),
+    # Murmansk, the firewall
+    ("fw(_):", r"policy in deny, out allow\n1\. allow in icmp   \(0 hits\)\n2\. allow in tcp 8080   \(0 hits\)\n3\. allow in tcp 8443   \(0 hits\)\n\d+ packets dropped(; the last:(\n  .*)+)?"),
+    ('fw(_): "deny out icmp to 10.0.2.2"', r"(.|\n)*4\. deny out icmp to 10\.0\.2\.2   \(0 hits\)(.|\n)*"),
+    ('ping(n): "10.0.2.2" 1', r"ping 10\.0\.2\.2: Murmansk denies it \(fw\(_\): lists the rules\)"),
+    ('fw(_): "delete 4"', r"(.|\n)*3\. allow in tcp 8443(.|\n)*"),
+    ('fw(_): "allow sideways"', r"fw: in or out, not sideways\n(.|\n)*"),
+    ('ping(n): "10.0.2.2" 1', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\n1 sent, 1 answered"),
     ('localtime(t): 1793535166', r""),
     ("print(_): t", r"\[2026,11,1,12,12,46,0,304\]"),
     ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),
@@ -323,6 +330,8 @@ def main():
               "root:    /dev/hda from sector 8192, Belarus 'ussr-install'" in boot, boot)
         check("the network card gets an address from DHCP",
               "net:     e1000 52:54:00:12:34:56, 10.0.2.15/24 (DHCP), gateway 10.0.2.2" in boot, boot)
+        check("Murmansk loads its rules",
+              "fw:      Murmansk, 3 rules from /etc/murmansk.rules; in deny, out allow" in boot, boot)
         for line, want in CHECKS:
             serial.command(line)
             got = clean(serial.output_to_prompt())
@@ -349,6 +358,7 @@ def main():
     if not args.no_mbl:
         mbl(qemu, disk, args.port + 10, log, check)
     if not args.no_novgorod:
+        firewall(qemu, disk, args.port + 30, log, check)
         novgorod(qemu, disk, args.port + 20, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
@@ -467,6 +477,29 @@ def http(url, data=None, headers=None, timeout=120):
 
 
 POST_TEXT = "Served by **Moscow**: Ukraine over the kernel's own TCP/IP."
+
+
+def firewall(qemu, disk, port, log, check):
+    """A server on a port no rule opens: Ukraine listens, and a client
+    of this machine gets nothing, Murmansk dropping its SYN."""
+    web = port + 4
+    m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 18992)])
+    serial = m.serial
+    try:
+        serial.output_to_prompt(timeout=60)
+        serial.command('run(st): "/src/ussr/tests/ukraine_http.su"')
+        said = clean(serial.read_until(b"ukraine: listening on", timeout=600))
+        check("Ukraine listens on 18992", "ukraine: listening on" in said, said)
+        try:
+            status, headers, body = http("http://127.0.0.1:%d/health" % web, timeout=15)
+            got = "HTTP %r %r" % (status, body[:60])
+        except OSError as e:
+            got = None
+        check("Murmansk keeps a port no rule opens shut", got is None, repr(got))
+    except (TimeoutError, EOFError) as e:
+        check("firewall conversation", False, str(e))
+    finally:
+        m.close()
 
 
 NOVGOROD = ('run(st): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" '

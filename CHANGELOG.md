@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- Murmansk (`src/murmansk`), the firewall of Moscow's network stack:
+  ordered `allow`/`deny` rules by direction, protocol, port range and
+  network, a policy for each direction, stateful (connections, ping and
+  DHCP answers pass), silent drops counted and logged. Rules come from
+  `/etc/murmansk.rules` at boot (the install disk opens ping and ports
+  8080 and 8443); `fw(_):` lists, adds, deletes and saves them.
+
 ### Fixed
 - Moscow's runtime: a kernel command called from inside another one
   (a program `run` calls the kernel) took a fresh 1 MiB VM area every

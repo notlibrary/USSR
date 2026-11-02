@@ -83,6 +83,11 @@ for f in install stalin belarus; do
 done
 belarus write "$dev" /etc/hostname "moscow-install"
 belarus write "$dev" /etc/motd "USSR install disk: install(_): puts USSR on a disk of its own; help(_): lists the commands."
+# Murmansk, the firewall: nothing comes in but ping and the forum's ports
+printf '%s\n' "# Murmansk, the firewall: the first rule that matches decides" \
+    "policy in deny" "policy out allow" "allow in icmp" \
+    "allow in tcp 8080" "allow in tcp 8443" >"$out/murmansk.rules"
+belarus put "$dev" "$(hp "$out/murmansk.rules")" /etc/murmansk.rules
 # the project: the files git tracks (every file in the tree when this is
 # no git checkout), never build products - objects, binaries, packages,
 # disk images - whichever way they got there

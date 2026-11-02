@@ -1,0 +1,105 @@
+# Murmansk, the firewall (src/murmansk/murmansk.su): rules from text,
+# the first match deciding, ports, networks, policies, the file form,
+# counting and the drop log. Run from the repository root:
+#   ussr tests/murmansk_test.su
+$include "../src/murmansk/murmansk.su"
+
+check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(line): "PASS " label ]
+    else(_): [
+        encode(g): got
+        encode(w): want
+        concat(line): "FAIL " label ": got " g ", want " w
+    ]
+    print(_): line
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    murmansk_reset(_):
+    mu_ip(host): "10.0.2.2"
+    mu_ip(far): "192.168.1.7"
+    murmansk_allows(a): "in" "tcp" host 8080
+    check(_): "in: denied by default" a false
+    murmansk_allows(a): "out" "tcp" far 443
+    check(_): "out: allowed by default" a true
+
+    murmansk_add(w): "allow in tcp 8080"
+    check(_): "a rule" w 0
+    murmansk_allows(a): "in" "tcp" host 8080
+    check(_): "its port opens" a true
+    murmansk_allows(a): "in" "tcp" host 8081
+    check(_): "the next one stays shut" a false
+    murmansk_allows(a): "in" "udp" host 8080
+    check(_): "udp is not tcp" a false
+
+    # the first match decides
+    murmansk_add(_): "deny in tcp 9000-9099 from 10.0.2.0/24"
+    murmansk_add(_): "allow in tcp 9000-9099"
+    murmansk_allows(a): "in" "tcp" host 9050
+    check(_): "a deny before an allow" a false
+    murmansk_allows(a): "in" "tcp" far 9050
+    check(_): "another network gets the allow" a true
+    murmansk_allows(a): "in" "tcp" far 9100
+    check(_): "past the range" a false
+
+    murmansk_add(_): "allow in icmp"
+    murmansk_allows(a): "in" "icmp" far 0
+    check(_): "ping" a true
+
+    murmansk_add(_): "policy out deny"
+    murmansk_add(_): "allow out tcp 443 to 192.168.1.0/24"
+    murmansk_allows(a): "out" "tcp" far 443
+    check(_): "out to a network" a true
+    murmansk_allows(a): "out" "tcp" host 443
+    check(_): "out elsewhere: the policy" a false
+
+    # mistakes
+    murmansk_add(w): "allow sideways tcp 1"
+    check(_): "no direction" w -1
+    murmansk_error(e):
+    check(_): "why" e "in or out, not sideways"
+    murmansk_add(w): "allow in icmp 7"
+    check(_): "a port needs tcp or udp" w -1
+    murmansk_add(w): "allow in tcp 70000"
+    check(_): "a port too big" w -1
+    murmansk_add(w): "allow in tcp 80 to 10.0.0.0/8"
+    check(_): "in takes from" w -1
+    murmansk_add(w): "allow in tcp 80 from 10.0.0.300"
+    check(_): "a bad address" w -1
+
+    # the file form, and back
+    murmansk_text(t):
+    murmansk_reset(_):
+    murmansk_load_text(bad): t
+    check(_): "the saved rules load" bad 0
+    murmansk_text(t2):
+    check(_): "and say the same" t2 t
+    murmansk_allows(a): "in" "tcp" host 9050
+    check(_): "loaded rules act" a false
+    murmansk_load_text(bad): "allow in tcp 22 # ssh\n\nnonsense here\nallow in udp 53\n"
+    check(_): "a wrong line is counted" bad 1
+    murmansk_allows(a): "in" "udp" host 53
+    check(_): "the lines around it load" a true
+
+    # delete, counting, the log
+    murmansk_reset(_):
+    murmansk_add(_): "allow in tcp 80"
+    murmansk_add(_): "deny in tcp 81"
+    murmansk_delete(w): 1
+    check(_): "delete" w 0
+    murmansk_check(a): "in" "tcp" host 80
+    check(_): "the deleted rule is gone" a false
+    murmansk_check(a): "in" "tcp" host 81
+    murmansk_delete(w): 5
+    check(_): "no rule 5" w -1
+    murmansk_report(rep):
+    str_find(at): rep "1. deny in tcp 81   (1 hits)" 0
+    check(_): "hits counted" {at >= 0} true
+    str_find(at): rep "2 packets dropped" 0
+    check(_): "drops counted" {at >= 0} true
+    str_find(at): rep "in tcp 10.0.2.2 port 81: denied by deny in tcp 81" 0
+    check(_): "the log says why" {at >= 0} true
+    print(_): rep
+]
