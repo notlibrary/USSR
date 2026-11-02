@@ -1,0 +1,37 @@
+PASS open makes the file
+PASS two meta pages
+PASS put
+PASS get before the commit
+PASS abort forgets it
+PASS commit
+PASS count
+PASS the tree is deep
+PASS get a key
+PASS a number key
+PASS a vector value
+PASS a big value with line ends and backquotes
+PASS its length
+PASS a range
+PASS in order
+PASS numbers first, at most max
+PASS max
+PASS reopened: count
+PASS reopened: get
+PASS reopened: the big value
+PASS delete
+PASS delete what is not there
+PASS commit the deletes
+PASS count after deletes
+PASS replaced
+PASS deleted
+PASS a range over all
+PASS pages are used again
+PASS a free list
+PASS uncommitted: gone
+PASS a torn meta: the commit before
+PASS its change is not there
+PASS the rest is
+
+--- stderr ---
+
+--- exit 0 ---

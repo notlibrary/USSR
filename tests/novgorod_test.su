@@ -335,12 +335,51 @@ engine_checks(r): [
     set(r): 0
 ]
 
+# --kvdb: the posts in a Dubna KV store
+kv_checks(r): [
+    set(kv): "tests/novgorod_kv_tmp.db"
+    remove_file(_): kv
+    nv_setup(_):
+    set(nv_kvdb): kv
+    nv_open(count): dir
+    eq(_): "kv: an empty store" count 0
+    post(resp): "c" "0" "Kept" "first, with `code`\nand a second line" ""
+    has(_): "kv: thread posted" resp "Location: /c/res/1#p1\r\n"
+    post(resp): "c" "1" "" ">>1 a reply" ""
+    has(_): "kv: reply posted" resp "Location: /c/res/1#p2\r\n"
+    concat(f): dir "/posts/1.post"
+    file_exists(nofile): f
+    eq(_): "kv: no post file" nofile false
+    # a fresh start reads the store
+    nv_setup(_):
+    set(nv_kvdb): kv
+    nv_open(count): dir
+    eq(_): "kv: reload count" count 2
+    fetch(page): "/c/res/1"
+    has(_): "kv: the text came back" page "<code>code</code>"
+    post(resp): "prog" "0" "" "third" ""
+    has(_): "kv: numbers go on" resp "Location: /prog/res/3#p3\r\n"
+    dubna_kv_get(seq): nv_kv "seq"
+    eq(_): "kv: the next number" seq 4
+    # a pruned thread leaves the store
+    nv_find_post(op): 1
+    getf(thread): op "owner"
+    nv_remove_thread(_): thread
+    dubna_kv_range(left): nv_kv "post/" "post0" -1
+    len(nl): left
+    eq(_): "kv: pruned posts are gone" nl 1
+    remove_file(_): kv
+    set(r): 0
+]
+
 init(ret): arg_cnt arg_vec [
     set(dir): "tests/novgorod_tmp"
     markup_checks(_):
     nv_types(_):
     scrub(_):
     engine_checks(_):
+    scrub(_):
+    kv_checks(_):
     scrub(_):
     set(ret): 0
 ]

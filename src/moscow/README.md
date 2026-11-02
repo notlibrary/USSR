@@ -139,6 +139,7 @@ The file commands are the kernel's (`moscow.su` takes them over with
 | `net(v):`, `ping(n): host [count]` | the network card and address; ICMP echo |
 | `socket_tcp`, `socket_bind`, `socket_listen`, `socket_accept`, `socket_recv`, `socket_send`, `socket_close`, `socket_connect`, `wait_readable`, `wait_writable` | TCP as in ussr, over the kernel's own stack |
 | `rename_path(r): from to`, `localtime(v): [seconds]` | as in ussr (UTC) |
+| `bread`, `bwrite`, `bsize` on a path outside `/dev` | inside a file of the root file system, as ussr does on a host file: Dubna KV keeps its pages so |
 | `uptime(s):` | seconds since boot |
 | `mem(v):` | `[heap bytes, free bytes]` |
 | `cpu(s):` | CPUID vendor and brand |
@@ -192,11 +193,12 @@ unchanged. Novgorod, the forum, from its source, on a port QEMU
 forwards from this machine:
 
     sh src/moscow/run.sh --web 8080
-    russia> run(_): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" "--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static"
+    russia> run(_): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" "--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static" "--kvdb" "/home/novgorod/posts.kv"
 
 and then http://127.0.0.1:8080/ in a browser on this machine. Its
-posts are files of the Belarus root (`/home/novgorod/posts`): they are
-there after the next boot.
+posts go into a Dubna KV store, `/home/novgorod/posts.kv` (without
+`--kvdb`, into files under `/home/novgorod/posts`): they are there
+after the next boot.
 
 How it works: nothing runs by itself, the card is polled. Every socket
 command first reads what has come and answers it (ARP, ping, TCP),

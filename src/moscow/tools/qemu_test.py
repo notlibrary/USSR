@@ -19,8 +19,9 @@ note on the disk and opens it again (--no-mbl skips this).
 
 Then the network: Novgorod, the forum (src/novgorod/novgorod.su), runs
 from its source over Moscow's TCP/IP stack with a port of this machine
-forwarded to it; the script reads its pages, posts to it, and the next
-boot finds the post on the disk (--no-novgorod skips this).
+forwarded to it, its posts in a Dubna KV store (--kvdb); the script reads
+its pages and posts to it, and after the next boot Novgorod serves the
+post again from the store (--no-novgorod skips this).
 
 Then it installs: a second boot with an empty qcow2 virtual hard disk
 as /dev/hdb runs install(_):, answers its questions, and a third boot
@@ -431,6 +432,11 @@ def mbl(qemu, disk, port, log, check):
               and rows[0][0].rstrip() == NOTE[0], repr([status, rows[0][0]]))
         serial.sock.sendall(b":q\r")
         serial.output_to_prompt(timeout=60)
+        # the shell's own struct types live on under the ones the
+        # editor's russia declared and gave back
+        serial.command('print(_): "the shell is well"')
+        got = clean(serial.output_to_prompt())
+        check("the shell is well after the editor", got == "the shell is well", repr(got))
         serial.command("fsck(_):")
         got = clean(serial.output_to_prompt())
         check("the disk checks clean after it",
@@ -463,17 +469,22 @@ def http(url, data=None, headers=None, timeout=120):
 POST_TEXT = "Served by **Moscow**: Ukraine over the kernel's own TCP/IP."
 
 
+NOVGOROD = ('run(st): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" '
+            '"--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static" '
+            '"--kvdb" "/home/novgorod/posts.kv"')
+
+
 def novgorod(qemu, disk, port, log, check):
-    """Starts Novgorod in Moscow with host port port + 4 forwarded to its
-    8080, reads and posts over HTTP, then boots again for the post."""
+    """Starts Novgorod in Moscow, its posts in a Dubna KV store, with host
+    port port + 4 forwarded to its 8080; reads and posts over HTTP, then
+    boots again and reads the post back from the store."""
     web = port + 4
     base = "http://127.0.0.1:%d" % web
     m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 8080)])
     serial = m.serial
     try:
         serial.output_to_prompt(timeout=60)
-        serial.command('run(st): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" '
-                       '"--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static"')
+        serial.command(NOVGOROD)
         t0 = time.time()
         said = clean(serial.read_until(b"ukraine: listening on 0.0.0.0", timeout=1200))
         check("Novgorod starts from its source and listens (%.0f s)" % (time.time() - t0),
@@ -509,21 +520,32 @@ def novgorod(qemu, disk, port, log, check):
         # the server runs until it is stopped: the machine is turned off
         m.close()
 
-    m = Machine(qemu, [(disk, "raw")], port + 2, log)
+    m = Machine(qemu, [(disk, "raw")], port + 2, log, forward=[(web, 8080)])
     serial = m.serial
     try:
         serial.output_to_prompt(timeout=60)
-        serial.command('cat(_): "/home/novgorod/posts/1.post"')
-        got = clean(serial.output_to_prompt())
-        check("after the reboot the post is on the disk", POST_TEXT in got, repr(got))
         serial.command("fsck(_):")
         got = clean(serial.output_to_prompt())
         check("the disk checks clean after it",
               re.fullmatch(r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+", got)
               is not None, repr(got))
-        serial.sock.sendall(bytes([4]))
-        serial.read_until(b"system halted", timeout=20)
-    except (TimeoutError, EOFError) as e:
+        serial.command('ls(_): "/home/novgorod/posts"')
+        got = clean(serial.output_to_prompt())
+        check("no post files: the post is in the store", got == "", repr(got))
+        serial.command('bsize(n): "/home/novgorod/posts.kv"')
+        serial.output_to_prompt()
+        serial.command("print(_): {n % 4096 = 0 && n >= 4 * 4096}")
+        got = clean(serial.output_to_prompt())
+        check("the store is whole pages: metas, a leaf, the free list, the value", got == "true", repr(got))
+        serial.command(NOVGOROD)
+        said = clean(serial.read_until(b"ukraine: listening on 0.0.0.0", timeout=1200))
+        check("after the reboot Novgorod finds the post in the store",
+              "novgorod: 1 posts in /home/novgorod" in said, said)
+        status, headers, body = http(base + "/c/res/1")
+        page = body.decode("utf-8", "replace")
+        check("the thread is served again", status == 200
+              and "Served by <b>Moscow</b>" in page, "%r %r" % (status, page[-1500:]))
+    except (TimeoutError, EOFError, OSError) as e:
         check("Novgorod's post after the reboot", False, str(e))
     finally:
         m.close()

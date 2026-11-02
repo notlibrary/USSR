@@ -1576,6 +1576,213 @@ bl_rename(r): fs from to [
     set(r): 0
 ]
 
+# --- reading and writing inside a file, as bread and bwrite do on a
+# disk: what a store such as Dubna KV keeps its pages with
+
+# [lba, bytes] runs of the disk under bytes [off, off + count) of a
+# file: as few as its blocks allow
+bl_extents(r): fs ino off count [
+    vec(r): ""
+    set(pos): off
+    set(end): {off + count}
+    set(lba0): -1
+    set(len0): 0
+    while(_): {pos < end} [
+        set(idx): {pos >> 12}
+        set(inb): {pos & 4095}
+        set(take): {4096 - inb}
+        if(_): {take > end - pos} [ set(take): {end - pos} ]
+        bl_bmap(blba): fs ino idx
+        if(_): {blba = null} [
+            set(r): null
+            return(r): r
+        ]
+        set(byte): {(blba << 9) + inb}
+        if(_): {lba0 >= 0 && byte = lba0 + len0} [ set(len0): {len0 + take} ]
+        else(_): [
+            if(_): {lba0 >= 0} [
+                vec(run): ""
+                push(_): run lba0
+                push(_): run len0
+                push(_): r run
+            ]
+            set(lba0): byte
+            set(len0): take
+        ]
+        set(pos): {pos + take}
+    ]
+    if(_): {lba0 >= 0} [
+        vec(run): ""
+        push(_): run lba0
+        push(_): run len0
+        push(_): r run
+    ]
+]
+
+# the bytes [from, from + n) of v, as a new vector
+bl_cut(r): v from n [
+    vec(r): ""
+    set(k): 0
+    while(_): {k < n} [
+        at(x): v {from + k}
+        push(_): r x
+        set(k): {k + 1}
+    ]
+]
+
+# count bytes of file path from byte off, as a vector: null when the
+# file is not there or is shorter
+bl_pread(r): fs path off count [
+    set(r): null
+    bl_get(rec): fs path
+    typeof(t): rec
+    if(_): {t != "vector"} [ return(r): r ]
+    at(ty): rec 0
+    at(size): rec 1
+    at(ino): rec 3
+    if(_): {ty != "f" || off < 0 || count < 0 || off + count > size} [ return(r): r ]
+    vec(r): ""
+    if(_): {count = 0} [ return(r): r ]
+    btget(dev): fs "dev"
+    bl_extents(runs): fs ino off count
+    typeof(tr): runs
+    if(_): {tr != "vector"} [
+        set(r): null
+        return(r): r
+    ]
+    len(n): runs
+    set(i): 0
+    while(_): {i < n} [
+        at(run): runs i
+        at(byte): run 0
+        at(take): run 1
+        bread(part): dev byte take 1
+        typeof(tp): part
+        if(_): {tp != "vector"} [
+            set(r): null
+            return(r): r
+        ]
+        if(_): {n = 1} [ set(r): part ]
+        else(_): [
+            set(k): 0
+            while(_): {k < take} [
+                at(x): part k
+                push(_): r x
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# Writes the byte vector bytes into file path from byte off, making the
+# file and growing it as needed (what lies between its old end and off
+# reads as 0): the bytes written, or -1.
+bl_pwrite(r): fs path off bytes [
+    set(r): -1
+    bl_get(rec): fs path
+    typeof(t): rec
+    set(size): 0
+    if(_): {t != "vector"} [
+        bl_create(ino): fs path "f"
+        if(_): {ino = 0} [ return(r): r ]
+    ]
+    else(_): [
+        at(ty): rec 0
+        at(size): rec 1
+        at(ino): rec 3
+        if(_): {ty != "f"} [
+            concat(m): path " is a directory"
+            bl_err(r): m
+            return(r): r
+        ]
+    ]
+    len(n): bytes
+    set(end): {off + n}
+    if(_): {off < 0} [ return(r): r ]
+    if(_): {end > size} [
+        # the new blocks, zeroed
+        set(have): {(size + 4095) >> 12}
+        set(need): {(end + 4095) >> 12}
+        if(_): {need > have} [
+            bl_alloc(ext): fs {need - have}
+            typeof(te): ext
+            if(_): {te != "vector"} [
+                bl_err(r): "no room for the data"
+                return(r): r
+            ]
+            btget(dev): fs "dev"
+            vec(zero): ""
+            set(k): 0
+            while(_): {k < 4096} [
+                push(_): zero 0
+                set(k): {k + 1}
+            ]
+            set(idx): have
+            len(ne): ext
+            set(i): 0
+            while(_): {i < ne} [
+                at(e): ext i
+                at(s): e 0
+                at(c): e 1
+                bl_lba(lba): fs s
+                set(k): 0
+                while(_): {k < c} [
+                    bl_bmap_put(w): fs ino idx {lba + (k << 3)}
+                    if(_): {w != 0} [ return(r): r ]
+                    bwrite(_): dev {lba + (k << 3)} zero
+                    set(idx): {idx + 1}
+                    set(k): {k + 1}
+                ]
+                set(i): {i + 1}
+            ]
+        ]
+        # the rest of the old last block, past the old end
+        if(_): {off > size && (size & 4095) != 0} [
+            set(gap): {4096 - (size & 4095)}
+            if(_): {gap > off - size} [ set(gap): {off - size} ]
+            bl_bmap(blba): fs ino {size >> 12}
+            btget(dev): fs "dev"
+            vec(zero): ""
+            set(k): 0
+            while(_): {k < gap} [
+                push(_): zero 0
+                set(k): {k + 1}
+            ]
+            bwrite(_): dev {(blba << 9) + (size & 4095)} zero 1
+        ]
+        bl_inode(node): fs ino
+        btput(_): node "size" end
+        bl_touch(_): node
+    ]
+    bl_inode(node): fs ino
+    bl_now(now):
+    btput(_): node "mtime" now
+    bl_touch(_): node
+    btput(_): fs "dirty" true
+    if(_): {n = 0} [
+        set(r): 0
+        return(r): r
+    ]
+    btget(dev): fs "dev"
+    bl_extents(runs): fs ino off n
+    len(nr): runs
+    set(done): 0
+    set(i): 0
+    while(_): {i < nr} [
+        at(run): runs i
+        at(byte): run 0
+        at(take): run 1
+        set(piece): bytes
+        if(_): {nr > 1} [ bl_cut(piece): bytes done take ]
+        bwrite(w): dev byte piece 1
+        if(_): {w < 0} [ return(r): r ]
+        set(done): {done + take}
+        set(i): {i + 1}
+    ]
+    set(r): n
+]
+
 # Copies a file or a whole tree from one Belarus file system to another
 # (or within one), run by run with bcopy. Calls the function named report
 # (when not "") with each path and its record. The number of entries

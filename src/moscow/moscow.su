@@ -351,6 +351,81 @@ sys_close_file(r): a [
     ]
 ]
 
+# --- bread, bwrite and bsize: the runtime's on a disk (/dev/hda ...),
+# and on any other path inside a file of the root file system, so a
+# program keeps a store of pages (Dubna KV) in a file as on the hosted
+# ussr
+
+mo_is_dev(r): path [
+    set(r): false
+    typeof(t): path
+    if(_): {t != "string"} [ return(r): r ]
+    len(n): path
+    if(_): {n > 5} [
+        slice(p5): path 0 5
+        set(r): {p5 = "/dev/"}
+    ]
+]
+
+# bread(v): path lba [count [sector]]
+sys_bread(r): a [
+    set(r): null
+    mo_arg(path): a 0 ""
+    mo_arg(lba): a 1 0
+    mo_arg(count): a 2 1
+    mo_arg(sector): a 3 512
+    mo_is_dev(d): path
+    if(_): d [
+        bread(r): path lba count sector
+        return(r): r
+    ]
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_pread(r): fs path {lba * sector} {count * sector}
+]
+
+# bwrite(n): path lba bytes [sector]
+sys_bwrite(r): a [
+    set(r): -1
+    mo_arg(path): a 0 ""
+    mo_arg(lba): a 1 0
+    mo_arg(bytes): a 2 null
+    mo_arg(sector): a 3 512
+    mo_is_dev(d): path
+    if(_): d [
+        bwrite(r): path lba bytes sector
+        return(r): r
+    ]
+    typeof(tb): bytes
+    if(_): {tb != "vector"} [ return(r): r ]
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_pwrite(r): fs path {lba * sector} bytes
+    mo_sync(_): fs
+]
+
+# bsize(n): path -> a disk's or a file's size in bytes, -1
+sys_bsize(r): a [
+    set(r): -1
+    mo_arg(path): a 0 ""
+    mo_is_dev(d): path
+    if(_): d [
+        bsize(r): path
+        return(r): r
+    ]
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_get(rec): fs path
+    typeof(tr): rec
+    if(_): {tr = "vector"} [
+        at(ty): rec 0
+        if(_): {ty = "f"} [ at(r): rec 1 ]
+    ]
+]
+
 # rename_path(r): from to -> 0, 1 when it failed (there is something at
 # to already, among other things)
 sys_rename_path(r): a [
@@ -583,6 +658,9 @@ mo_syscalls(r): [
     k_syscall(_): "close_file" "sys_close_file"
     k_syscall(_): "rename_path" "sys_rename_path"
     k_syscall(_): "localtime" "sys_localtime"
+    k_syscall(_): "bread" "sys_bread"
+    k_syscall(_): "bwrite" "sys_bwrite"
+    k_syscall(_): "bsize" "sys_bsize"
     net_syscalls(_):
 ]
 

@@ -9,6 +9,9 @@
 #     --db CONNINFO       keep posts in PostgreSQL through Dubna (a
 #                         conninfo string or postgres:// URL; images and
 #                         boards.txt stay in the data folder)
+#     --kvdb FILE         keep posts in a Dubna KV store, a file of B+
+#                         tree pages in the manner of LMDB (images and
+#                         boards.txt stay in the data folder)
 #     --cert FILE --secret PASS            server certificate (PKCS#12);
 #                         without one the public test certificate is used
 #     --http              plain HTTP instead of HTTPS
@@ -32,7 +35,7 @@ $include "markup.su"
 $include "../omsk/omsk.su"
 $include "../dubna/dubna.su"
 
-global(_): nv_prefix nvm_prefix nv_db nv_db_table uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
+global(_): nv_prefix nvm_prefix nv_db nv_db_table nv_kvdb nv_kv uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
 global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_thumb_side
 
 # ---------------------------------------------------------------- setup
@@ -61,6 +64,8 @@ nv_setup(r): [
     set(uk_max_body): 2600000
     set(nv_hsts): false
     set(nv_db): ""
+    set(nv_kvdb): ""
+    set(nv_kv): null
     set(nv_prefix): ""
     set(nvm_prefix): ""
     set(nv_db_table): "novgorod_posts"
@@ -496,6 +501,10 @@ nv_open(r): dir [
         nv_db_load(r):
         return(r): r
     ]
+    if(_): {nv_kvdb != ""} [
+        nv_kv_load(r):
+        return(r): r
+    ]
     list_dir(names): posts_dir
     vec(loaded): ""
     len(n): names
@@ -598,6 +607,10 @@ nv_store(r): p [
         nv_db_store(r): p
         return(r): r
     ]
+    if(_): {nv_kvdb != ""} [
+        nv_kv_store(r): p
+        return(r): r
+    ]
     len(sn): nv_seq
     at(no): nv_seq {sn - 1}
     random64(tag):
@@ -634,6 +647,7 @@ nv_remove_thread(r): thread [
         getf(op_no): op "no"
         nv_db_delete_thread(_): op_no
     ]
+    if(_): {nv_kvdb != ""} [ nv_kv_delete_thread(_): thread ]
     getf(posts): thread "posts"
     len(n): posts
     set(i): 0
@@ -802,6 +816,103 @@ nv_db_delete_thread(r): op_no [
     nv_db_check(ok): res "pruning a thread"
     if(_): ok [
         dubna_count(r): res
+    ]
+]
+
+# ---------------------------------------------------------------- Dubna KV
+
+# With --kvdb, posts live in a Dubna KV store (src/dubna/kv.su): a file of
+# copy-on-write B+ tree pages, its commits safe from a crash. "post/N"
+# (N in ten digits, so the keys sort as the numbers) holds a post as
+# posts/N.post holds it, "seq" the next number. boards.txt and the images
+# stay in the data folder.
+
+nv_kv_key(r): no [
+    nv_s(r): no
+    len(n): r
+    while(_): {n < 10} [
+        concat(r): "0" r
+        len(n): r
+    ]
+    concat(r): "post/" r
+]
+
+nv_kv_fail(r): what [
+    set(r): {0 - 1}
+    dubna_kv_error(why):
+    concat(msg): "novgorod: " what ": " why "\n"
+    write_stderr(_): msg
+]
+
+# Opens the store (making it) and loads every post; the count, or -1.
+nv_kv_load(r): [
+    dubna_kv_open(nv_kv): nv_kvdb
+    if(_): {nv_kv = null} [
+        nv_kv_fail(r): "opening the store"
+        return(r): r
+    ]
+    dubna_kv_range(all): nv_kv "post/" "post0" -1
+    set(top): 0
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(file): pr 1
+        nv_parse_post(p): file
+        if(_): {p != null} [
+            nv_attach(_): p
+            getf(no): p "no"
+            if(_): {no > top} [ set(top): no ]
+        ]
+        add(i): i 1
+    ]
+    set(next): {top + 1}
+    dubna_kv_get(saved): nv_kv "seq"
+    typeof(ts): saved
+    if(_): {ts = "integer"} [
+        if(_): {saved > next} [ set(next): saved ]
+    ]
+    push(_): nv_seq next
+    len(r): nv_posts
+]
+
+# The post under the next number, committed with the number after it;
+# the number, or -1.
+nv_kv_store(r): p [
+    len(sn): nv_seq
+    at(no): nv_seq {sn - 1}
+    setf(_): p "no" no
+    nv_post_file(file): p
+    nv_kv_key(key): no
+    dubna_kv_put(w1): nv_kv key file
+    dubna_kv_put(w2): nv_kv "seq" {no + 1}
+    set(w3): -1
+    if(_): {w1 = 0 && w2 = 0} [ dubna_kv_commit(w3): nv_kv ]
+    if(_): {w3 != 0} [
+        dubna_kv_abort(_): nv_kv
+        nv_kv_fail(r): "saving a post"
+        return(r): r
+    ]
+    push(_): nv_seq {no + 1}
+    set(r): no
+]
+
+nv_kv_delete_thread(r): thread [
+    set(r): 0
+    getf(posts): thread "posts"
+    len(n): posts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): posts i
+        getf(no): p "no"
+        nv_kv_key(key): no
+        dubna_kv_del(_): nv_kv key
+        add(i): i 1
+    ]
+    dubna_kv_commit(w): nv_kv
+    if(_): {w != 0} [
+        dubna_kv_abort(_): nv_kv
+        nv_kv_fail(r): "pruning a thread"
     ]
 ]
 
@@ -1921,6 +2032,10 @@ init(ret): arg_cnt arg_vec [
             set(nv_db): v
             add(i): i 1
         ]
+        elif(_): {a = "--kvdb"} [
+            set(nv_kvdb): v
+            add(i): i 1
+        ]
         elif(_): {a = "--static"} [
             set(static_dir): v
             add(i): i 1
@@ -1940,6 +2055,11 @@ init(ret): arg_cnt arg_vec [
             return(ret): ret
         ]
         add(i): i 1
+    ]
+    if(_): {nv_db != "" && nv_kvdb != ""} [
+        write_stderr(_): "novgorod: posts go to --db or to --kvdb, not both\n"
+        set(ret): 2
+        return(ret): ret
     ]
     if(_): {port = null} [
         write_stderr(_): "novgorod: --port takes a number\n"

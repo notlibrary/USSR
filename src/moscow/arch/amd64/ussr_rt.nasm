@@ -67,6 +67,7 @@ OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
 SYS_MAX         equ 48                  ; kernel commands (k_syscall)
+SYS_AREAS       equ 4                   ; their VM areas: depths kept
 SYS_NAME        equ 32                  ; a name, NUL padded
 SYS_ENTRY       equ 48                  ; name, program, function
 SYS_BASE        equ 0x10000             ; symbuiltin: SYS_BASE + entry + 1
@@ -2683,20 +2684,27 @@ vm_exec:
         mov r13, rdi
         mov r10, rsi
         mov r11, rdx
-        cmp r8d, 3                      ; a kernel command: its own area
+        ; a kernel command runs in the area of its depth (a command a
+        ; program calls from inside another one goes one deeper), made
+        ; with the first k_syscall, before any program's memory: so a
+        ; program that calls the kernel again and again uses no more
+        cmp r8d, 3
         jne .fresh
-        mov rax, [sys_area]
+        mov rax, [sys_depth]
+        dec rax
+        cmp rax, SYS_AREAS
+        jae .fresh
+        mov rax, [sys_areas + rax * 8]
         test rax, rax
         jz .fresh
-        cmp qword [sys_depth], 1
-        jne .fresh
         push rcx
+        push rax
         mov rdi, rax
         mov ecx, VM_size / 8
         xor eax, eax
         rep stosq
+        pop rax
         pop rcx
-        mov rax, [sys_area]
         mov r12, rax
         mov rbx, rax
         mov [r12 + VM.prog], r13
@@ -4452,12 +4460,17 @@ bi_k_syscall:
         add rdi, sys_table
         mov [rdi + SYS_NAME], r13
         mov [rdi + SYS_NAME + 8], r10
-        ; the area kernel commands run in, made once
-        cmp qword [sys_area], 0
+        ; the areas kernel commands run in, one per depth, made once
+        cmp qword [sys_areas], 0
         jne .done
+        xor ebx, ebx
+.area:
         mov edi, VM_AREA
         call alloc
-        mov [sys_area], rax
+        mov [sys_areas + rbx * 8], rax
+        inc ebx
+        cmp ebx, SYS_AREAS
+        jb .area
 .done:
         pop rbx
         pop rdx
@@ -5307,9 +5320,10 @@ bi_struct:
         mov rsi, [bi_retname]
         test rsi, rsi
         jz .no_name
-        call struct_find
-        test rax, rax
-        jnz .have_type
+        ; always a new type, at the head of the list: a type of the same
+        ; name stays as it is underneath (a program run by another may
+        ; declare the caller's names; when it ends the list's head goes
+        ; back, and the caller's types must be untouched by then)
         mov edi, STYPE_size
         call alloc
         mov [rax + STYPE.name], rsi
@@ -7016,7 +7030,7 @@ vm_result:      resq 2
 sys_count:      resq 1
 sys_pending:    resq 1
 sys_depth:      resq 1
-sys_area:       resq 1
+sys_areas:      resq SYS_AREAS
 sys_table:      resb SYS_MAX * SYS_ENTRY
 blk_args:       resq 3
 net_up:         resq 1
