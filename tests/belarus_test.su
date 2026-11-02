@@ -147,6 +147,49 @@ init(result): arg_count arg_values [
     check(_): "an emptied one goes" w 0
     bl_exists(e): fs "/data/directory-number-7"
     check(_): "gone" e false
+    # renames move the entry; the inode and the data stay
+    bl_write_text(_): fs "/data/note.txt" "moved text"
+    bl_mkdir(_): fs "/elsewhere"
+    bl_get(before): fs "/data/note.txt"
+    bl_rename(w): fs "/data/note.txt" "/elsewhere/./note2.txt"
+    check(_): "rename" w 0
+    bl_read_text(t): fs "/elsewhere/note2.txt"
+    check(_): "the file reads under its new name" t "moved text"
+    bl_get(after): fs "/elsewhere/note2.txt"
+    at(i1): before 3
+    at(i2): after 3
+    check(_): "the same inode" i2 i1
+    bl_exists(e): fs "/data/note.txt"
+    check(_): "the old name is gone" e false
+    bl_rename(w): fs "/elsewhere/note2.txt" "/data/directory-number-1/../directory-number-0"
+    check(_): "no rename onto a name that is there" w -1
+    bl_rename(w): fs "/elsewhere" "/elsewhere/inside"
+    check(_): "no directory inside itself" w -1
+    # bytes inside a file, as bread and bwrite give them on a disk
+    text_bytes(abc): "abcdefghij"
+    bl_pwrite(w): fs "/pages.db" 4090 abc
+    check(_): "pwrite makes the file, across a block edge" w 10
+    bl_get(rec): fs "/pages.db"
+    at(sz): rec 1
+    check(_): "its size" sz 4100
+    bl_pread(v): fs "/pages.db" 4088 12
+    bytes_text(t): v 2 10
+    at(z): v 0
+    check(_): "pread across the edge" t "abcdefghij"
+    check(_): "before the write: 0" z 0
+    text_bytes(xy): "XY"
+    bl_pwrite(w): fs "/pages.db" 9000 xy
+    bl_pread(v): fs "/pages.db" 4098 4904
+    at(z): v 2
+    bytes_text(t): v 4902 2
+    check(_): "a gap past the old end reads 0" z 0
+    check(_): "and the write after it" t "XY"
+    bl_pwrite(w): fs "/pages.db" 4092 xy
+    bl_pread(v): fs "/pages.db" 4090 6
+    bytes_text(t): v
+    check(_): "an overwrite in place" t "abXYef"
+    bl_pread(v): fs "/pages.db" 9000 3
+    check(_): "no reading past the end" v null
     bl_sync(w): fs
     check(_): "sync" w 0
 

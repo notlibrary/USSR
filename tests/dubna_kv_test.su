@@ -1,0 +1,192 @@
+# Dubna KV, the LMDB-like store of src/dubna/kv.su, on a scratch file:
+# puts and gets, a tree several pages deep, ranges, big values with
+# backquotes and line ends, deletes, abort, a reopen after commit, page
+# reuse and a torn meta page. Run from the repository root:
+#   ussr tests/dubna_kv_test.su
+$include "../src/dubna/dubna.su"
+
+check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        encode(g): got
+        encode(w): want
+        concat(line): "FAIL " label ": got " g ", want " w
+    ]
+    print(_): line
+]
+
+key(r): i [
+    str_from_int(s): i
+    len(n): s
+    while(_): {n < 5} [
+        concat(s): "0" s
+        len(n): s
+    ]
+    concat(r): "post/" s
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    set(path): "tests/dubna_kv_tmp.db"
+    remove_file(_): path
+    dubna_kv_open(db): path
+    typeof(t): db
+    check(_): "open makes the file" t "btree"
+    bsize(size): path
+    check(_): "two meta pages" size 8192
+
+    dubna_kv_put(w): db "hello" "world"
+    check(_): "put" w 0
+    dubna_kv_get(v): db "hello"
+    check(_): "get before the commit" v "world"
+    dubna_kv_abort(_): db
+    dubna_kv_get(v): db "hello"
+    check(_): "abort forgets it" v null
+
+    # enough keys for a tree three levels deep
+    set(i): 0
+    while(_): {i < 2000} [
+        key(k): i
+        str_from_int(s): i
+        concat(val): "value number " s
+        dubna_kv_put(_): db k val
+        set(i): {i + 1}
+    ]
+    dubna_kv_put(_): db 42 "a number key"
+    decode(vv): "[1,`two`,3.5]"
+    dubna_kv_put(_): db "vec" vv
+    set(big): "line one\nline `two` with a backquote\n"
+    set(i): 0
+    while(_): {i < 9} [
+        concat(big): big big
+        set(i): {i + 1}
+    ]
+    len(bigl): big
+    dubna_kv_put(_): db "big" big
+    dubna_kv_commit(w): db
+    check(_): "commit" w 0
+    dubna_kv_count(n): db
+    check(_): "count" n 2003
+    dubna_kv_info(info): db
+    at(depth): info 2
+    check(_): "the tree is deep" {depth >= 2} true
+    key(k): 1234
+    dubna_kv_get(v): db k
+    check(_): "get a key" v "value number 1234"
+    dubna_kv_get(v): db 42
+    check(_): "a number key" v "a number key"
+    dubna_kv_get(v): db "vec"
+    encode(ve): v
+    check(_): "a vector value" ve "[1,`two`,3.5]"
+    dubna_kv_get(v): db "big"
+    check(_): "a big value with line ends and backquotes" {v = big} true
+    len(vl): v
+    check(_): "its length" vl bigl
+    key(lo): 10
+    key(hi): 15
+    dubna_kv_range(rs): db lo hi -1
+    len(rn): rs
+    check(_): "a range" rn 5
+    at(first): rs 0
+    at(fk): first 0
+    check(_): "in order" fk "post/00010"
+    dubna_kv_range(rs): db null null 3
+    at(first): rs 0
+    at(fk): first 0
+    check(_): "numbers first, at most max" fk 42
+    len(rn): rs
+    check(_): "max" rn 3
+
+    # the file again, from the disk
+    dubna_kv_close(_): db
+    dubna_kv_open(db): path
+    dubna_kv_count(n): db
+    check(_): "reopened: count" n 2003
+    key(k): 1999
+    dubna_kv_get(v): db k
+    check(_): "reopened: get" v "value number 1999"
+    dubna_kv_get(v): db "big"
+    check(_): "reopened: the big value" {v = big} true
+
+    # replace and delete
+    key(k): 7
+    dubna_kv_put(_): db k "seven again"
+    dubna_kv_del(d): db "big"
+    check(_): "delete" d true
+    dubna_kv_del(d): db "nothing"
+    check(_): "delete what is not there" d false
+    set(i): 100
+    while(_): {i < 1100} [
+        key(k): i
+        dubna_kv_del(_): db k
+        set(i): {i + 1}
+    ]
+    dubna_kv_commit(w): db
+    check(_): "commit the deletes" w 0
+    dubna_kv_count(n): db
+    check(_): "count after deletes" n 1002
+    key(k): 7
+    dubna_kv_get(v): db k
+    check(_): "replaced" v "seven again"
+    key(k): 500
+    dubna_kv_get(v): db k
+    check(_): "deleted" v null
+    dubna_kv_range(rs): db null null -1
+    len(rn): rs
+    check(_): "a range over all" rn 1002
+
+    # freed pages come back: the file stops growing
+    dubna_kv_info(info): db
+    at(pages0): info 1
+    set(round): 0
+    while(_): {round < 6} [
+        set(i): 0
+        while(_): {i < 50} [
+            key(k): {2000 + i}
+            str_from_int(s): round
+            dubna_kv_put(_): db k s
+            set(i): {i + 1}
+        ]
+        dubna_kv_commit(_): db
+        set(round): {round + 1}
+    ]
+    dubna_kv_info(info): db
+    at(pages1): info 1
+    at(freecount): info 3
+    check(_): "pages are used again" {pages1 - pages0 < 40} true
+    check(_): "a free list" {freecount > 0} true
+
+    # a change that is never committed is not in the file
+    dubna_kv_put(_): db "lost" "never committed"
+    dubna_kv_close(_): db
+    dubna_kv_open(db): path
+    dubna_kv_get(v): db "lost"
+    check(_): "uncommitted: gone" v null
+
+    # a torn write of the newest meta: the older commit stands
+    dubna_kv_info(info): db
+    at(txn): info 0
+    dubna_kv_put(_): db "after" "the last commit"
+    dubna_kv_commit(_): db
+    vec(junk): ""
+    set(i): 0
+    while(_): {i < 4096} [
+        push(_): junk 35
+        set(i): {i + 1}
+    ]
+    bwrite(_): path {(txn + 1) & 1} junk 4096
+    dubna_kv_open(db): path
+    dubna_kv_info(info): db
+    at(t2): info 0
+    check(_): "a torn meta: the commit before" t2 txn
+    dubna_kv_get(v): db "after"
+    check(_): "its change is not there" v null
+    key(k): 7
+    dubna_kv_get(v): db k
+    check(_): "the rest is" v "seven again"
+
+    remove_file(_): path
+]

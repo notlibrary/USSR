@@ -1,0 +1,1030 @@
+# Dubna KV - a key-value store in one file, in the manner of LMDB: a
+# copy-on-write B+ tree of 4096-byte pages behind two meta pages. dubna.su
+# includes it, so whatever includes Dubna has both its databases.
+#
+#   dubna_kv_open(db): path           the store in file path (made when it
+#                                     is not there), or null
+#   dubna_kv_get(v): db key           the value, or null
+#   dubna_kv_put(r): db key value     0, or -1 (dubna_kv_error says why)
+#   dubna_kv_del(b): db key           true when the key was there
+#   dubna_kv_range(v): db lo hi max   [key, value] pairs, lo <= key < hi,
+#                                     in order, at most max (-1: all);
+#                                     null bounds are open
+#   dubna_kv_count(n): db             the number of keys
+#   dubna_kv_commit(r): db            makes the changes durable: 0, or -1
+#   dubna_kv_abort(r): db             forgets the changes since the commit
+#   dubna_kv_close(r): db             aborts what is not committed
+#   dubna_kv_info(v): db              [txn, pages, depth, free pages]
+#   dubna_kv_error(m):                why the last call failed
+#
+# Keys are numbers or strings, in the btree container's order (numbers
+# first, then strings byte by byte); a string key holds no backquote or
+# line end and is at most 200 bytes. Values are strings, numbers,
+# booleans, vectors or structs; a string value may hold anything but
+# byte 0 (strings inside vectors and structs keep UNO's rule: no
+# backquote or line end).
+#
+# On the disk: page 0 and page 1 are meta pages, [txn, root, pages, free
+# list, count]; every other page is a tree node, ["L", [[key, value],
+# ...]] or ["B", [[key, child], ...]], or a run of data pages holding one
+# big value. Each starts with an 8-byte magic and the length and CRC-32
+# of its text in 8 hex digits, then the text (UNO for nodes), padded
+# with spaces: a hex viewer shows the whole store. A value is in its leaf
+# as ["=", value] when it is short, else ["s", page, length] (a string,
+# raw) or ["u", page, length] (anything else, as UNO).
+#
+# A write never touches a page the last commit can reach: the path from
+# the root to a changed leaf is copied to new pages (pages freed by
+# earlier commits, else the end of the file), and the commit writes them,
+# then the meta page the older commit is in (txn % 2). Opening takes the
+# valid meta with the highest txn, so a crash loses at most the commit
+# that was being written. A page set free in commit n is used again from
+# commit n + 2 on: by then neither meta can reach it.
+#
+# "Memory mapped": pages are read when a lookup first comes to them and
+# stay in a page cache (a btree from page number to node), as an mmap
+# would keep them; changed pages wait there until the commit. The file is
+# read and written with bread and bwrite, on the hosted ussr a file of the
+# host and in Moscow a file of the Belarus root.
+
+global(_): dkv_last_error dkv_spaces
+
+dkv_error(r): m [
+    set(dkv_last_error): m
+    set(r): -1
+]
+
+dubna_kv_error(r): [
+    set(r): dkv_last_error
+    if(_): {r = null} [ set(r): "" ]
+]
+
+# --- pages
+
+dkv_hex8(r): n [
+    set(hex): "0123456789abcdef"
+    set(r): ""
+    set(i): 28
+    while(_): {i >= 0} [
+        slice(c): hex {(n >> i) & 15} 1
+        concat(r): r c
+        set(i): {i - 4}
+    ]
+]
+
+dkv_unhex8(r): s [
+    set(r): 0
+    set(i): 0
+    while(_): {i < 8} [
+        byte(b): s i
+        set(d): -1
+        if(_): {b >= 48 && b <= 57} [ set(d): {b - 48} ]
+        if(_): {b >= 97 && b <= 102} [ set(d): {b - 87} ]
+        if(_): {d < 0} [
+            set(r): -1
+            return(r): r
+        ]
+        set(r): {(r << 4) | d}
+        set(i): {i + 1}
+    ]
+]
+
+# pages pages: magic, the length and CRC of text, text, spaces; as bytes
+dkv_frame(r): magic text pages [
+    # a bare argument reads an unset name as null (an expression would not)
+    set(made): dkv_spaces
+    if(_): {made = null} [
+        set(dkv_spaces): " "
+        set(sl): 1
+        while(_): {sl < 4096} [
+            concat(dkv_spaces): dkv_spaces dkv_spaces
+            len(sl): dkv_spaces
+        ]
+    ]
+    len(n): text
+    crc32(c): text
+    dkv_hex8(hl): n
+    dkv_hex8(hc): {c & 4294967295}
+    concat(s): magic hl hc text
+    len(have): s
+    set(want): {pages << 12}
+    while(_): {have < want} [
+        set(k): {want - have}
+        if(_): {k > 4096} [ set(k): 4096 ]
+        slice(pad): dkv_spaces 0 k
+        concat(s): s pad
+        set(have): {have + k}
+    ]
+    text_bytes(r): s
+]
+
+# the text of pages read from the file, or null
+dkv_unframe(r): bytes magic [
+    set(r): null
+    typeof(t): bytes
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): bytes
+    if(_): {n < 24} [ return(r): r ]
+    bytes_text(head): bytes 0 24
+    if(_): {head = null} [ return(r): r ]
+    slice(m): head 0 8
+    if(_): {m != magic} [ return(r): r ]
+    slice(hl): head 8 8
+    slice(hc): head 16 8
+    dkv_unhex8(size): hl
+    dkv_unhex8(crc): hc
+    if(_): {size < 0 || size > n - 24} [ return(r): r ]
+    bytes_text(text): bytes 24 size
+    if(_): {text = null} [ return(r): r ]
+    crc32(c): text
+    if(_): {(c & 4294967295) = crc} [ set(r): text ]
+]
+
+# pages it takes to frame n bytes of text
+dkv_pages_for(r): n [ set(r): {(n + 24 + 4095) >> 12} ]
+
+dkv_read(r): db page count [
+    btget(path): db "path"
+    bread(r): path page count 4096
+]
+
+dkv_write(r): db page bytes [
+    btget(path): db "path"
+    bwrite(r): path page bytes 4096
+]
+
+# --- the store
+
+# a page for a new node: one freed two commits ago, else the end
+dkv_new_page(r): db [
+    btget(free): db "free"
+    btlen(n): free
+    if(_): {n > 0} [
+        btfirst(r): free
+        btdel(_): free r
+        return(r): r
+    ]
+    btget(r): db "pages"
+    btput(_): db "pages" {r + 1}
+]
+
+# count pages in a row, at the end of the file
+dkv_new_run(r): db count [
+    btget(r): db "pages"
+    btput(_): db "pages" {r + count}
+]
+
+# a page the last commit can reach, given up now: free from commit + 2
+dkv_drop(r): db page count [
+    set(r): 0
+    btget(freed): db "freed"
+    set(i): 0
+    while(_): {i < count} [
+        btput(_): freed {page + i} true
+        set(i): {i + 1}
+    ]
+]
+
+dkv_node_new(r): db kind [
+    btree(r):
+    btput(_): r "kind" kind
+    btree(map):
+    btput(_): r "map" map
+    dkv_new_page(p): db
+    btput(_): r "page" p
+    btput(_): r "dirty" true
+    btget(cache): db "cache"
+    btput(_): cache p r
+]
+
+# the node in page p, from the page cache or the file; null when the
+# page is not a node
+dkv_node(r): db p [
+    btget(cache): db "cache"
+    btget(r): cache p
+    if(_): {r != null} [ return(r): r ]
+    dkv_read(bytes): db p 1
+    dkv_unframe(text): bytes "DKVNODE1"
+    if(_): {text = null} [
+        str_from_int(ps): p
+        concat(m): "page " ps " is not a node"
+        dkv_error(_): m
+        return(r): r
+    ]
+    decode(v): text
+    at(kind): v 0
+    at(pairs): v 1
+    btree(r):
+    btput(_): r "kind" kind
+    btree(map):
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): pairs i
+        at(k): pr 0
+        at(x): pr 1
+        btput(_): map k x
+        set(i): {i + 1}
+    ]
+    btput(_): r "map" map
+    btput(_): r "page" p
+    btput(_): r "dirty" false
+    btput(_): cache p r
+]
+
+# The node as this transaction may change it: itself when it is new in
+# it, else a copy in a new page (the old one freed at the commit).
+dkv_writable(r): db node [
+    btget(d): node "dirty"
+    if(_): d [
+        set(r): node
+        return(r): r
+    ]
+    btget(kind): node "kind"
+    btget(old): node "page"
+    dkv_node_new(r): db kind
+    btget(map): node "map"
+    btget(nmap): r "map"
+    btrange(pairs): map
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): pairs i
+        at(k): pr 0
+        at(x): pr 1
+        btput(_): nmap k x
+        set(i): {i + 1}
+    ]
+    btget(cache): db "cache"
+    btdel(_): cache old
+    dkv_drop(_): db old 1
+]
+
+# the UNO of a node
+dkv_node_text(r): node [
+    btget(kind): node "kind"
+    btget(map): node "map"
+    btrange(pairs): map
+    vec(v): ""
+    push(_): v kind
+    push(_): v pairs
+    encode(r): v
+]
+
+# the child of a branch for key: the last one whose key is <= key, the
+# first when key is before them all; [its key, its page]
+dkv_route(r): map key [
+    btfloor(k): map key
+    if(_): {k = null} [ btfirst(k): map ]
+    btget(child): map k
+    vec(r): ""
+    push(_): r k
+    push(_): r child
+]
+
+# 1 when a string key or value is short and clean enough to go into a
+# node: no backquote, no line end
+dkv_clean(r): s max [
+    set(r): 0
+    len(n): s
+    if(_): {n > max} [ return(r): r ]
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 96 || b = 10 || b = 13} [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    set(r): 1
+]
+
+# --- open
+
+dkv_meta_text(r): db [
+    vec(v): ""
+    btget(txn): db "txn"
+    btget(root): db "root"
+    btget(pages): db "pages"
+    btget(fl): db "freelist"
+    btget(count): db "count"
+    push(_): v txn
+    push(_): v root
+    push(_): v pages
+    push(_): v fl
+    push(_): v count
+    encode(r): v
+]
+
+# the meta in page slot, or null
+dkv_meta(r): db slot [
+    dkv_read(bytes): db slot 1
+    dkv_unframe(text): bytes "DKVMETA1"
+    set(r): null
+    if(_): {text != null} [ decode(r): text ]
+]
+
+# the state the newest valid meta describes, the page cache empty
+dkv_load(r): db [
+    set(r): -1
+    dkv_meta(m0): db 0
+    dkv_meta(m1): db 1
+    set(m): m0
+    if(_): {m0 = null} [ set(m): m1 ]
+    elif(_): {m1 != null} [
+        at(t0): m0 0
+        at(t1): m1 0
+        if(_): {t1 > t0} [ set(m): m1 ]
+    ]
+    if(_): {m = null} [
+        dkv_error(r): "no valid meta page: not a Dubna KV file"
+        return(r): r
+    ]
+    at(txn): m 0
+    at(root): m 1
+    at(pages): m 2
+    at(fl): m 3
+    at(count): m 4
+    btput(_): db "txn" txn
+    btput(_): db "root" root
+    btput(_): db "pages" pages
+    btput(_): db "freelist" fl
+    btput(_): db "count" count
+    btree(cache):
+    btput(_): db "cache" cache
+    btree(freed):
+    btput(_): db "freed" freed
+    btree(data):
+    btput(_): db "data" data
+    # the free list: [usable now, usable from the next commit]
+    btree(free):
+    btree(soon):
+    at(flp): fl 0
+    if(_): {flp > 0} [
+        dkv_read_data(lists): db flp
+        typeof(tl): lists
+        if(_): {tl != "vector"} [
+            dkv_error(r): "the free list cannot be read"
+            return(r): r
+        ]
+        at(a): lists 0
+        at(b): lists 1
+        len(na): a
+        set(i): 0
+        while(_): {i < na} [
+            at(p): a i
+            btput(_): free p true
+            set(i): {i + 1}
+        ]
+        len(nb): b
+        set(i): 0
+        while(_): {i < nb} [
+            at(p): b i
+            btput(_): soon p true
+            set(i): {i + 1}
+        ]
+    ]
+    btput(_): db "free" free
+    btput(_): db "soon" soon
+    set(r): 0
+]
+
+dubna_kv_open(r): path [
+    set(r): null
+    btree(db):
+    btput(_): db "path" path
+    bsize(size): path
+    if(_): {size < 0} [
+        writefile(_): path ""
+        bsize(size): path
+    ]
+    if(_): {size < 0} [
+        concat(m): "cannot make " path
+        dkv_error(_): m
+        return(r): r
+    ]
+    if(_): {size = 0} [
+        # a new store: both metas at txn 0, the tree empty
+        btput(_): db "txn" 0
+        btput(_): db "root" 0
+        btput(_): db "pages" 2
+        vec(fl): ""
+        push(_): fl 0
+        push(_): fl 0
+        btput(_): db "freelist" fl
+        btput(_): db "count" 0
+        dkv_meta_text(mt): db
+        dkv_frame(mb): "DKVMETA1" mt 1
+        dkv_write(w0): db 0 mb
+        dkv_write(w1): db 1 mb
+        if(_): {w0 < 0 || w1 < 0} [
+            concat(m): "cannot write " path
+            dkv_error(_): m
+            return(r): r
+        ]
+    ]
+    dkv_load(st): db
+    if(_): {st = 0} [ set(r): db ]
+]
+
+dubna_kv_abort(r): db [
+    dkv_load(r): db
+]
+
+dubna_kv_close(r): db [
+    set(r): 0
+    btput(_): db "closed" true
+]
+
+# --- values
+
+# what a leaf holds for value: inline, or in data pages of its own
+# (written at the commit)
+dkv_value_in(r): db value [
+    typeof(t): value
+    set(big): false
+    set(text): ""
+    if(_): {t = "string"} [
+        dkv_clean(ok): value 200
+        if(_): {ok = 0} [
+            set(big): true
+            set(kind): "s"
+            set(text): value
+        ]
+    ]
+    else(_): [
+        encode(text): value
+        len(tl): text
+        if(_): {tl > 1000} [
+            set(big): true
+            set(kind): "u"
+        ]
+    ]
+    vec(r): ""
+    if(_): {big = false} [
+        push(_): r "="
+        push(_): r value
+        return(r): r
+    ]
+    len(n): text
+    dkv_pages_for(np): n
+    dkv_new_run(p): db np
+    btget(data): db "data"
+    vec(job): ""
+    push(_): job text
+    push(_): job np
+    btput(_): data p job
+    push(_): r kind
+    push(_): r p
+    push(_): r n
+]
+
+# the value a leaf entry stands for
+dkv_value_out(r): db x [
+    at(kind): x 0
+    if(_): {kind = "="} [
+        at(r): x 1
+        return(r): r
+    ]
+    at(p): x 1
+    btget(data): db "data"
+    bthas(pending): data p
+    if(_): pending [
+        btget(job): data p
+        at(text): job 0
+    ]
+    else(_): [
+        dkv_read_text(text): db p
+    ]
+    set(r): text
+    if(_): {kind = "u" && text != null} [ decode(r): text ]
+]
+
+# the text of a run of data pages starting at p, or null
+dkv_read_text(r): db p [
+    set(r): null
+    dkv_read(first): db p 1
+    typeof(t): first
+    if(_): {t != "vector"} [ return(r): r ]
+    bytes_text(head): first 0 24
+    if(_): {head = null} [ return(r): r ]
+    slice(hl): head 8 8
+    dkv_unhex8(n): hl
+    if(_): {n < 0} [ return(r): r ]
+    dkv_pages_for(np): n
+    set(all): first
+    if(_): {np > 1} [ dkv_read(all): db p np ]
+    dkv_unframe(r): all "DKVDATA1"
+]
+
+dkv_read_data(r): db p [
+    dkv_read_text(text): db p
+    set(r): null
+    if(_): {text != null} [ decode(r): text ]
+]
+
+# the data pages of an entry that leaves the tree
+dkv_drop_value(r): db x [
+    set(r): 0
+    at(kind): x 0
+    if(_): {kind = "="} [ return(r): r ]
+    at(p): x 1
+    at(n): x 2
+    btget(data): db "data"
+    bthas(pending): data p
+    if(_): pending [
+        # written in this transaction: never on the disk
+        btdel(_): data p
+        return(r): r
+    ]
+    dkv_pages_for(np): n
+    dkv_drop(_): db p np
+]
+
+# --- lookups
+
+dkv_key_ok(r): key [
+    set(r): true
+    typeof(t): key
+    if(_): {t = "integer" || t = "real"} [ return(r): r ]
+    if(_): {t = "string"} [
+        dkv_clean(ok): key 200
+        if(_): {ok = 1} [ return(r): r ]
+    ]
+    set(r): false
+    dkv_error(_): "a key is a number, or a string under 200 bytes without a backquote or line end"
+]
+
+# the leaf entry for key, or null
+dkv_find(r): db key [
+    set(r): null
+    btget(p): db "root"
+    while(_): {p > 0} [
+        dkv_node(node): db p
+        if(_): {node = null} [ return(r): r ]
+        btget(kind): node "kind"
+        btget(map): node "map"
+        if(_): {kind = "L"} [
+            btget(r): map key
+            return(r): r
+        ]
+        dkv_route(rt): map key
+        at(p): rt 1
+    ]
+]
+
+dubna_kv_get(r): db key [
+    set(r): null
+    dkv_key_ok(ok): key
+    if(_): {ok = false} [ return(r): r ]
+    dkv_find(x): db key
+    if(_): {x != null} [ dkv_value_out(r): db x ]
+]
+
+dubna_kv_count(r): db [
+    btget(r): db "count"
+]
+
+# [key, value] pairs under page p with lo <= key < hi, onto out, up to max
+dkv_collect(r): db p lo hi max out [
+    set(r): 0
+    dkv_node(node): db p
+    if(_): {node = null} [ return(r): r ]
+    btget(kind): node "kind"
+    btget(map): node "map"
+    if(_): {kind = "L"} [
+        btrange(pairs): map lo hi
+        len(n): pairs
+        set(i): 0
+        while(_): {i < n} [
+            len(have): out
+            if(_): {max >= 0 && have >= max} [ return(r): r ]
+            at(pr): pairs i
+            at(k): pr 0
+            at(x): pr 1
+            dkv_value_out(v): db x
+            vec(kv): ""
+            push(_): kv k
+            push(_): kv v
+            push(_): out kv
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    # the children that can hold keys in [lo, hi): from the one lo routes
+    # to, up to the last whose key is before hi
+    set(from): lo
+    if(_): {lo != null} [
+        btfloor(from): map lo
+    ]
+    btrange(kids): map from hi
+    len(n): kids
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): kids i
+        at(child): pr 1
+        dkv_collect(_): db child lo hi max out
+        set(i): {i + 1}
+    ]
+]
+
+dubna_kv_range(r): db lo hi max [
+    vec(r): ""
+    btget(root): db "root"
+    if(_): {root > 0} [ dkv_collect(_): db root lo hi max r ]
+]
+
+# the depth of the tree (0 empty)
+dkv_depth(r): db [
+    set(r): 0
+    btget(p): db "root"
+    while(_): {p > 0} [
+        set(r): {r + 1}
+        dkv_node(node): db p
+        btget(kind): node "kind"
+        if(_): {kind = "L"} [ return(r): r ]
+        btget(map): node "map"
+        btfirst(k): map
+        btget(p): map k
+    ]
+]
+
+dubna_kv_info(r): db [
+    vec(r): ""
+    btget(txn): db "txn"
+    btget(pages): db "pages"
+    btget(free): db "free"
+    btget(soon): db "soon"
+    btlen(nf): free
+    btlen(ns): soon
+    dkv_depth(depth): db
+    push(_): r txn
+    push(_): r pages
+    push(_): r depth
+    push(_): r {nf + ns}
+]
+
+# --- changes
+
+# a node too big for its page: split in two, [left page, the right
+# half's first key, right page]; else [page, null, 0]
+dkv_fit(r): db node [
+    vec(r): ""
+    btget(page): node "page"
+    push(_): r page
+    dkv_node_text(text): node
+    len(n): text
+    if(_): {n <= 4072} [
+        push(_): r null
+        push(_): r 0
+        return(r): r
+    ]
+    btget(kind): node "kind"
+    btget(map): node "map"
+    btkeys(keys): map
+    len(nk): keys
+    str_trunc(half): {nk / 2}
+    at(sep): keys half
+    dkv_node_new(right): db kind
+    btget(rmap): right "map"
+    set(i): half
+    while(_): {i < nk} [
+        at(k): keys i
+        btget(x): map k
+        btput(_): rmap k x
+        btdel(_): map k
+        set(i): {i + 1}
+    ]
+    btget(rp): right "page"
+    push(_): r sep
+    push(_): r rp
+]
+
+# Puts key under page p (copying the path): [p's new page, the first
+# key of a split-off right sibling, its page] as dkv_fit gives them.
+dkv_insert(r): db p key x [
+    dkv_node(old): db p
+    dkv_writable(node): db old
+    btget(kind): node "kind"
+    btget(map): node "map"
+    if(_): {kind = "L"} [
+        btget(was): map key
+        if(_): {was != null} [ dkv_drop_value(_): db was ]
+        else(_): [
+            btget(count): db "count"
+            btput(_): db "count" {count + 1}
+        ]
+        btput(_): map key x
+    ]
+    else(_): [
+        dkv_route(rt): map key
+        at(ck): rt 0
+        at(child): rt 1
+        dkv_insert(res): db child key x
+        at(np): res 0
+        at(sep): res 1
+        at(sp): res 2
+        btput(_): map ck np
+        if(_): {sp > 0} [ btput(_): map sep sp ]
+    ]
+    dkv_fit(r): db node
+]
+
+dubna_kv_put(r): db key value [
+    set(r): -1
+    dkv_key_ok(ok): key
+    if(_): {ok = false} [ return(r): r ]
+    typeof(tv): value
+    if(_): {tv = "null"} [
+        dkv_error(r): "null is no value: dubna_kv_del removes a key"
+        return(r): r
+    ]
+    dkv_value_in(x): db value
+    btget(root): db "root"
+    if(_): {root = 0} [
+        dkv_node_new(leaf): db "L"
+        btget(root): leaf "page"
+    ]
+    dkv_insert(res): db root key x
+    at(np): res 0
+    at(sep): res 1
+    at(sp): res 2
+    btput(_): db "root" np
+    if(_): {sp > 0} [
+        # the root split: a new root above both halves
+        dkv_node_new(top): db "B"
+        btget(tmap): top "map"
+        dkv_node(left): db np
+        btget(lmap): left "map"
+        btfirst(lk): lmap
+        btput(_): tmap lk np
+        btput(_): tmap sep sp
+        btget(tp): top "page"
+        btput(_): db "root" tp
+    ]
+    set(r): 0
+]
+
+# Removes key under page p: [p's new page, removed, p is empty now]
+dkv_remove(r): db p key [
+    vec(r): ""
+    dkv_node(old): db p
+    btget(kind): old "kind"
+    btget(omap): old "map"
+    if(_): {kind = "L"} [
+        bthas(has): omap key
+        if(_): {has = false} [
+            push(_): r p
+            push(_): r false
+            push(_): r false
+            return(r): r
+        ]
+        dkv_writable(node): db old
+        btget(map): node "map"
+        btget(was): map key
+        dkv_drop_value(_): db was
+        btdel(_): map key
+        btget(count): db "count"
+        btput(_): db "count" {count - 1}
+        btget(np): node "page"
+        btlen(left): map
+        push(_): r np
+        push(_): r true
+        push(_): r {left = 0}
+        return(r): r
+    ]
+    dkv_route(rt): omap key
+    at(ck): rt 0
+    at(child): rt 1
+    dkv_remove(res): db child key
+    at(gone): res 1
+    if(_): {gone = false} [
+        push(_): r p
+        push(_): r false
+        push(_): r false
+        return(r): r
+    ]
+    dkv_writable(node): db old
+    btget(map): node "map"
+    at(cp): res 0
+    at(empty): res 2
+    if(_): empty [
+        # an empty child leaves its parent, and the file
+        btdel(_): map ck
+        btget(cache): db "cache"
+        btdel(_): cache cp
+        dkv_free_new(_): db cp
+    ]
+    else(_): [ btput(_): map ck cp ]
+    btget(np): node "page"
+    btlen(left): map
+    push(_): r np
+    push(_): r true
+    push(_): r {left = 0}
+]
+
+# a page this transaction made and no longer needs: free again now
+dkv_free_new(r): db p [
+    set(r): 0
+    btget(free): db "free"
+    btput(_): free p true
+]
+
+dubna_kv_del(r): db key [
+    set(r): false
+    dkv_key_ok(ok): key
+    if(_): {ok = false} [ return(r): r ]
+    btget(root): db "root"
+    if(_): {root = 0} [ return(r): r ]
+    dkv_remove(res): db root key
+    at(np): res 0
+    at(r): res 1
+    at(empty): res 2
+    btput(_): db "root" np
+    if(_): empty [
+        btget(cache): db "cache"
+        btdel(_): cache np
+        dkv_free_new(_): db np
+        btput(_): db "root" 0
+        return(r): r
+    ]
+    # a root branch with one child gives way to it
+    while(_): {true} [
+        btget(root): db "root"
+        dkv_node(node): db root
+        btget(kind): node "kind"
+        btget(map): node "map"
+        btlen(n): map
+        if(_): {kind = "L" || n > 1} [ return(r): r ]
+        btfirst(k): map
+        btget(child): map k
+        btget(d): node "dirty"
+        btget(cache): db "cache"
+        btdel(_): cache root
+        if(_): d [ dkv_free_new(_): db root ]
+        else(_): [ dkv_drop(_): db root 1 ]
+        btput(_): db "root" child
+    ]
+]
+
+# --- commit
+
+# the pages in a btree of page -> bytes, written in runs of neighbours
+dkv_flush(r): db writes [
+    set(r): 0
+    btkeys(ps): writes
+    len(n): ps
+    set(i): 0
+    while(_): {i < n} [
+        at(first): ps i
+        btget(run): writes first
+        set(next): {first + 1}
+        set(j): {i + 1}
+        # neighbouring single pages go in one bwrite
+        len(rl): run
+        set(np): {rl >> 12}
+        set(next): {first + np}
+        set(go): true
+        while(_): {go && j < n} [
+            at(pj): ps j
+            set(go): false
+            if(_): {pj = next} [
+                btget(b): writes pj
+                len(bl): b
+                set(k): 0
+                while(_): {k < bl} [
+                    at(x): b k
+                    push(_): run x
+                    set(k): {k + 1}
+                ]
+                set(next): {pj + (bl >> 12)}
+                set(j): {j + 1}
+                set(go): true
+            ]
+        ]
+        dkv_write(w): db first run
+        if(_): {w < 0} [
+            dkv_error(r): "a page could not be written"
+            return(r): r
+        ]
+        set(i): j
+    ]
+]
+
+dubna_kv_commit(r): db [
+    set(r): -1
+    btget(cache): db "cache"
+    btget(data): db "data"
+    btget(free): db "free"
+    btget(soon): db "soon"
+    btget(freed): db "freed"
+    btget(fl): db "freelist"
+    # the old free list's pages are given up too
+    at(flp): fl 0
+    at(fln): fl 1
+    if(_): {flp > 0} [
+        dkv_pages_for(np): fln
+        dkv_drop(_): db flp np
+    ]
+    # usable from the next commit: what was soon; usable after it: what
+    # this transaction freed
+    vec(now): ""
+    btkeys(a): free
+    len(na): a
+    set(i): 0
+    while(_): {i < na} [
+        at(p): a i
+        push(_): now p
+        set(i): {i + 1}
+    ]
+    btkeys(b): soon
+    len(nb): b
+    set(i): 0
+    while(_): {i < nb} [
+        at(p): b i
+        push(_): now p
+        set(i): {i + 1}
+    ]
+    btkeys(later): freed
+    vec(lists): ""
+    push(_): lists now
+    push(_): lists later
+    encode(ltext): lists
+    len(ll): ltext
+    dkv_pages_for(lnp): ll
+    dkv_new_run(lp): db lnp
+    btree(writes):
+    dkv_frame(lb): "DKVDATA1" ltext lnp
+    btput(_): writes lp lb
+    # the changed nodes
+    btrange(entries): cache
+    len(ne): entries
+    set(i): 0
+    while(_): {i < ne} [
+        at(pr): entries i
+        at(node): pr 1
+        btget(d): node "dirty"
+        if(_): d [
+            at(p): pr 0
+            dkv_node_text(text): node
+            dkv_frame(bytes): "DKVNODE1" text 1
+            btput(_): writes p bytes
+        ]
+        set(i): {i + 1}
+    ]
+    # the new big values
+    btrange(jobs): data
+    len(nj): jobs
+    set(i): 0
+    while(_): {i < nj} [
+        at(pr): jobs i
+        at(p): pr 0
+        at(job): pr 1
+        at(text): job 0
+        at(np): job 1
+        dkv_frame(bytes): "DKVDATA1" text np
+        btput(_): writes p bytes
+        set(i): {i + 1}
+    ]
+    dkv_flush(w): db writes
+    if(_): {w < 0} [ return(r): r ]
+    # then the meta page the older commit is in
+    btget(txn): db "txn"
+    set(txn): {txn + 1}
+    vec(nfl): ""
+    push(_): nfl lp
+    push(_): nfl ll
+    btput(_): db "txn" txn
+    btput(_): db "freelist" nfl
+    dkv_meta_text(mt): db
+    dkv_frame(mb): "DKVMETA1" mt 1
+    dkv_write(w): db {txn & 1} mb
+    if(_): {w < 0} [
+        btput(_): db "txn" {txn - 1}
+        btput(_): db "freelist" fl
+        dkv_error(r): "the meta page could not be written"
+        return(r): r
+    ]
+    # the cached pages are the file's now; the free lists move on
+    len(ne): entries
+    set(i): 0
+    while(_): {i < ne} [
+        at(pr): entries i
+        at(node): pr 1
+        btput(_): node "dirty" false
+        set(i): {i + 1}
+    ]
+    btree(data):
+    btput(_): db "data" data
+    btree(free):
+    len(nn): now
+    set(i): 0
+    while(_): {i < nn} [
+        at(p): now i
+        btput(_): free p true
+        set(i): {i + 1}
+    ]
+    btput(_): db "free" free
+    btput(_): db "soon" freed
+    btree(fresh):
+    btput(_): db "freed" fresh
+    set(r): 0
+]

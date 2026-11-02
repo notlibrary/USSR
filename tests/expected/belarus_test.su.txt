@@ -21,18 +21,34 @@ PASS rewritten
 PASS a full directory stays
 PASS an emptied one goes
 PASS gone
+PASS rename
+PASS the file reads under its new name
+PASS the same inode
+PASS the old name is gone
+PASS no rename onto a name that is there
+PASS no directory inside itself
+PASS pwrite makes the file, across a block edge
+PASS its size
+PASS pread across the edge
+PASS before the write: 0
+PASS a gap past the old end reads 0
+PASS and the write after it
+PASS an overwrite in place
+PASS no reading past the end
 PASS sync
 PASS mount
 PASS read after mount
-13 directories, 222 files, 1671 bytes; 235 inodes, 0 block map nodes, map depth up to 1
+14 directories, 224 files, 10683 bytes; 238 inodes, 0 block map nodes, map depth up to 1
 PASS fsck finds nothing
 PASS copy every entry
 PASS read the copy
 PASS binary copy
-13 directories, 222 files, 1671 bytes; 235 inodes, 0 block map nodes, map depth up to 1
+14 directories, 224 files, 10683 bytes; 238 inodes, 0 block map nodes, map depth up to 1
 PASS fsck the copy
 
 --- stderr ---
 belarus: /data/directory-number-7 is not empty
+belarus: /data/directory-number-0 exists
+belarus: /elsewhere cannot go inside itself
 
 --- exit 0 ---

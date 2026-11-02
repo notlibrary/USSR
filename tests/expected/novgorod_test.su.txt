@@ -74,6 +74,15 @@ PASS prefix ok
 PASS prefix trailing slash
 PASS prefix no slash
 PASS prefix quote
+PASS kv: an empty store
+PASS kv: thread posted
+PASS kv: reply posted
+PASS kv: no post file
+PASS kv: reload count
+PASS kv: the text came back
+PASS kv: numbers go on
+PASS kv: the next number
+PASS kv: pruned posts are gone
 
 --- stderr ---
 

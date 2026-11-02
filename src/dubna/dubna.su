@@ -30,9 +30,15 @@
 # Bytes travel as vectors of 0..255 (socket_send_bytes, tls_recv_bytes, ...)
 # because the protocol is full of zero bytes, which USSR strings cannot hold.
 # One connection serves one task at a time.
+#
+# Dubna KV (kv.su, included here) is the other database: a key-value store
+# in one file, B+ tree pages like LMDB's: dubna_kv_open, get, put, del,
+# range, commit. See its header.
 $once
 $include "../libs/strings.su"
 $include "../ryazan/ryazan.su"
+# Dubna KV: the store in a file of its own, B+ tree pages like LMDB's
+$include "kv.su"
 
 global(_): dubna_last_error dubna_typed
 

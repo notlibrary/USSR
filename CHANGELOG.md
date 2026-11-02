@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- Moscow's runtime: a kernel command called from inside another one
+  (a program `run` calls the kernel) took a fresh 1 MiB VM area every
+  time, so the installer ran out of memory once its disk calls went
+  through the kernel; each depth now has its area, made at boot.
+- Moscow's runtime: declaring a struct whose name a calling program had
+  declared changed that program's type, in memory the inner program gave
+  back when it ended; the shell broke after running the Mbl editor. A
+  declaration now makes a new type over the old one.
+
 ### Changed
 - Belarus is format 2: the B+ trees map blocks of files to the disk.
   Every file and directory has an inode whose block map, a B+ tree from
@@ -17,6 +27,30 @@
 - Belarus paths take `.` and `..`: `/src/Mbl/../libs` is `/src/libs`.
 
 ### Added
+- Dubna KV (`src/dubna/kv.su`): a key-value store in one file in the
+  manner of LMDB, a copy-on-write B+ tree of 4096-byte pages behind two
+  meta pages, kept in memory in `btree` containers; `dubna_kv_open`,
+  `get`, `put`, `del`, `range`, `count`, `commit`, `abort`. A crash or a
+  torn meta page loses at most the commit being written; freed pages
+  come back two commits later. `novgorod --kvdb FILE` keeps the posts
+  in one, on a host and in Moscow.
+- Belarus reads and writes inside a file (`bl_pread`, `bl_pwrite`), and
+  Moscow's `bread`, `bwrite` and `bsize` reach files of the root file
+  system that way, as ussr does with host files.
+- Moscow has a network: an e1000 driver in the runtime (found on PCI,
+  polled; `net_info`, `net_recv`, `net_send`, `net_sum`) and a TCP/IP
+  stack in USSR, `src/moscow/net.su`: Ethernet, ARP, IPv4, ICMP echo,
+  a DHCP client and TCP (handshakes both ways, windows,
+  retransmission, FIN and RST). The kernel gives programs ussr's socket
+  commands (`socket_tcp` ... `socket_connect`, `wait_readable`) on it,
+  and `net(_):` and `ping(_):`. Novgorod runs in Moscow from its source
+  and serves its pages and takes posts over HTTP; `qemu_test.py` checks
+  it through a forwarded port, and the post after a reboot.
+- Moscow has `rename_path` (Belarus `bl_rename`: a rename moves the
+  entry, never onto an existing name) and `localtime`.
+- russia.su passes up to twelve arguments to host commands (six
+  before), and `wait_readable` and `wait_writable` let its other tasks
+  run, as ussr's scheduler does.
 - Moscow's console is a terminal. `terminal_raw` switches it to raw
   mode: `terminal_getch` returns each byte unechoed, the keyboard's
   arrows, Home, End, Insert, Delete and Page keys come as ANSI

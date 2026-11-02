@@ -44,6 +44,7 @@ ussr src/novgorod/novgorod.su --host 0.0.0.0 --port 443 --cert forum.p12 --secre
 | `--prefix /board` | none | serve under a path: a reverse proxy strips it, Novgorod writes it into links and redirects |
 | `--hsts` | off | send `Strict-Transport-Security` |
 | `--db CONNINFO` | files | keep posts in PostgreSQL through Dubna: `host=... dbname=... user=... password=...` or `postgres://user:pass@host/db?sslmode=require` |
+| `--kvdb FILE` | files | keep posts in a Dubna KV store: one file of B+ tree pages, in the manner of LMDB |
 
 ## Behind Apache at /board
 
@@ -128,6 +129,18 @@ in files are not copied into the database.
 ussr src/novgorod/novgorod.su --db "postgres://forum:secret@localhost/forum?sslmode=require"
 ```
 
+With `--kvdb FILE`, posts live in a Dubna KV store, a file of
+copy-on-write B+ tree pages (see [Dubna](../dubna/README.md)), no
+server needed: key `post/N` (N in ten digits) holds a post as
+`posts/N.post` would, `seq` the next number; each post is one commit,
+so a crash loses no post that was answered. boards.txt and the images
+stay in the data folder. It works the same in Moscow, where the store
+is a file of the Belarus root:
+
+```bash
+ussr src/novgorod/novgorod.su --kvdb forum.kv
+```
+
 ## Files
 
 | File | |
@@ -141,4 +154,5 @@ ussr src/novgorod/novgorod.su --db "postgres://forum:secret@localhost/forum?sslm
 | `tests/TESTPLAN.md` | what is tested and how |
 
 Tests: `ussr tests/novgorod_test.su` (also part of `tests/run_all.sh`);
-`DUBNA_TEST_URL=... ussr tests/novgorod_db_live.su` for `--db`.
+`DUBNA_TEST_URL=... ussr tests/novgorod_db_live.su` for `--db`;
+`--kvdb` is in `novgorod_test.su`.
