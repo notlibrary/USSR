@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- TLS in Moscow: Ryazan's `tls_*` commands in the kernel
+  (`src/moscow/tls.su`) over BearSSL 0.6, which `build.sh` fetches (its
+  SHA-256 checked) and compiles freestanding with `src/moscow/lib/tls.c`
+  into `/lib/tls.so`, loaded at boot through the ELF loader. Novgorod
+  serves HTTPS in Moscow and Moscow is a TLS client (Ryazan), both
+  checked by `qemu_test.py`; PEM credentials and trust anchors.
+- Moscow's TCP carries any bytes: its buffers are byte vectors, kept
+  with the runtime's `k_bytes_append`, `k_bytes_cut` and `k_bytes_drop`.
 - C libraries as USSR commands: `c_load`, `c_sym`, `c_call` (up to 12
   integer, string or byte-buffer arguments), `c_alloc`, `c_free`,
   `c_read`, `c_write`, `c_string`. The hosted ussr loads `.dll`/`.so`

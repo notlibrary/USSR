@@ -28,6 +28,7 @@
 $include "../belarus/belarus.su"
 $include "net.su"
 $include "../murmansk/murmansk.su"
+$include "tls.su"
 
 global(_): mo_dev mo_base mo_files
 
@@ -696,6 +697,7 @@ mo_run(r): name args [
             # what the program allocated is given back: its sockets too,
             # and the firewall's rules, kept as text across it
             net_reset(_):
+            tls_reset(_):
             mo_fw_restore(_): fwkeep
             return(r): r
         ]
@@ -765,6 +767,7 @@ mo_syscalls(r): [
     k_syscall(_): "bsize" "sys_bsize"
     k_syscall(_): "fw" "sys_fw"
     k_syscall(_): "c_load" "sys_c_load"
+    tls_syscalls(_):
     net_syscalls(_):
 ]
 
@@ -823,6 +826,9 @@ init(ret): arg_cnt arg_vec [
         print(_): line
         mo_fw_load(fwline): root
         print(_): fwline
+        tls_start(tlsok): root
+        if(_): tlsok [ print(_): "tls:     BearSSL from /lib/tls.so" ]
+        else(_): [ print(_): "tls:     none (no /lib/tls.so)" ]
         bl_read_text(host): root "/etc/hostname"
         typeof(th): host
         if(_): {th = "string"} [
@@ -850,6 +856,7 @@ init(ret): arg_cnt arg_vec [
         murmansk_text(fwkeep):
         k_exec(status): "russia.ru"
         net_reset(_):
+        tls_reset(_):
         mo_fw_restore(_): fwkeep
         if(_): {status = 0} [ set(go): false ]
         else(_): [

@@ -66,7 +66,7 @@ OP_SHR          equ 0x22
 OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
-SYS_MAX         equ 48                  ; kernel commands (k_syscall)
+SYS_MAX         equ 96                  ; kernel commands (k_syscall)
 SYS_AREAS       equ 4                   ; their VM areas: depths kept
 SYS_NAME        equ 32                  ; a name, NUL padded
 SYS_ENTRY       equ 48                  ; name, program, function
@@ -6549,6 +6549,7 @@ bi_pwd:
 %include "ata.inc"
 %include "net.inc"
 %include "cffi.inc"
+%include "bytes.inc"
 %include "sha256.inc"
 
 ; =====================================================================
@@ -6717,6 +6718,9 @@ bi_table:
         dq n_net_send, bi_net_send
         dq n_net_sum, bi_net_sum
         dq n_k_elf_load, bi_k_elf_load
+        dq n_k_bytes_append, bi_k_bytes_append
+        dq n_k_bytes_cut, bi_k_bytes_cut
+        dq n_k_bytes_drop, bi_k_bytes_drop
         dq n_c_sym, bi_c_sym
         dq n_c_call, bi_c_call
         dq n_c_alloc, bi_c_alloc
@@ -6846,6 +6850,9 @@ n_net_recv:     db "net_recv", 0
 n_net_send:     db "net_send", 0
 n_net_sum:      db "net_sum", 0
 n_k_elf_load:   db "k_elf_load", 0
+n_k_bytes_append: db "k_bytes_append", 0
+n_k_bytes_cut:  db "k_bytes_cut", 0
+n_k_bytes_drop: db "k_bytes_drop", 0
 n_c_sym:        db "c_sym", 0
 n_c_call:       db "c_call", 0
 n_c_alloc:      db "c_alloc", 0

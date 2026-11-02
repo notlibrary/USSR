@@ -22,9 +22,11 @@
 # TCP keeps to what a server on a quiet network needs: a three-way
 # handshake both ways, in-order data (a segment out of order is dropped
 # and acknowledged again), the peer's window, go-back-N retransmission
-# with a doubling timeout, FIN both ways and RST. Received data is a
-# string (USSR strings hold no byte 0: such bytes are dropped); what a
-# program sends waits in the connection until it is acknowledged.
+# with a doubling timeout, FIN both ways and RST. What comes and what
+# waits to be acknowledged are byte vectors (k_bytes_append, k_bytes_cut,
+# k_bytes_drop: the runtime's), so any bytes travel, TLS records too;
+# socket_recv gives text (without 0 bytes, which a USSR string cannot
+# hold), socket_recv_bytes the bytes.
 
 global(_): net_mac net_ip net_mask net_gw net_dns net_how net_ipid
 global(_): net_arp net_socks net_conns net_listen net_next net_port
@@ -668,8 +670,10 @@ net_new_sock(r): kind [
     btput(_): s "lport" 0
     btput(_): s "rip" 0
     btput(_): s "rport" 0
-    btput(_): s "rx" ""
-    btput(_): s "txq" ""
+    vec(rx): ""
+    btput(_): s "rx" rx
+    vec(txq): ""
+    btput(_): s "txq" txq
     btput(_): s "fin_rcvd" false
     btput(_): s "fin_sent" false
     btput(_): s "fin_acked" false
@@ -873,8 +877,7 @@ net_tcp_in(r): f off plen src [
             net_seq_diff(drop): ack txseq
             if(_): {drop > tn} [ set(drop): tn ]
             if(_): {drop > 0} [
-                slice(txq): txq drop {tn - drop}
-                btput(_): c "txq" txq
+                k_bytes_drop(_): txq drop
                 net_seq_add(txseq): txseq drop
                 btput(_): c "txseq" txseq
             ]
@@ -900,12 +903,8 @@ net_tcp_in(r): f off plen src [
     if(_): {dlen > 0} [
         set(need_ack): true
         if(_): {seq = rcv_nxt && fin_rcvd = false} [
-            bytes_text(text): f doff dlen
-            typeof(tt): text
-            if(_): {tt != "string"} [ net_text(text): f doff dlen ]
             btget(rx): c "rx"
-            concat(rx): rx text
-            btput(_): c "rx" rx
+            k_bytes_append(_): rx f doff dlen
             net_seq_add(rcv_nxt): rcv_nxt dlen
             btput(_): c "rcv_nxt" rcv_nxt
         ]
@@ -1144,18 +1143,17 @@ net_ready(r): s [
         return(r): r
     ]
     btget(rx): s "rx"
+    len(have): rx
     btget(fin): s "fin_rcvd"
     btget(reset): s "reset"
-    if(_): {rx = "" && fin = false && reset = false && state != "closed"} [ set(r): false ]
+    if(_): {have = 0 && fin = false && reset = false && state != "closed"} [ set(r): false ]
 ]
 
-# socket_recv(s): h max -> up to max bytes; "" when the peer has finished
-# (or reset); null when nothing has come yet
-sys_socket_recv(r): a [
-    set(r): ""
+# up to max bytes that have come on h, as a byte vector; empty when the
+# peer has finished (or reset); null when nothing has come yet
+net_recv_bytes(r): h max [
+    vec(r): ""
     net_poll(_):
-    mo_arg(h): a 0 -1
-    mo_arg(max): a 1 4096
     net_sock(s): h
     typeof(t): s
     if(_): {t != "btree"} [ return(r): r ]
@@ -1163,19 +1161,36 @@ sys_socket_recv(r): a [
     len(n): rx
     if(_): {n > 0} [
         if(_): {max > n} [ set(max): n ]
-        slice(r): rx 0 max
-        slice(rx): rx max {n - max}
-        btput(_): s "rx" rx
+        k_bytes_cut(r): rx 0 max
+        k_bytes_drop(_): rx max
         return(r): r
     ]
     net_ready(ended): s
     if(_): {ended = false} [ set(r): null ]
 ]
 
+# socket_recv(s): h max -> up to max bytes as text (0 bytes left out); ""
+# when the peer has finished (or reset); null when nothing has come yet
+sys_socket_recv(r): a [
+    mo_arg(h): a 0 -1
+    mo_arg(max): a 1 4096
+    net_recv_bytes(v): h max
+    set(r): v
+    typeof(t): v
+    if(_): {t = "vector"} [
+        bytes_text(r): v
+        if(_): {r = null} [
+            len(n): v
+            net_text(r): v 0 n
+        ]
+    ]
+]
+
+# socket_recv_bytes(v): h max -> the same as bytes
 sys_socket_recv_bytes(r): a [
-    sys_socket_recv(r): a
-    typeof(t): r
-    if(_): {t = "string"} [ text_bytes(r): r ]
+    mo_arg(h): a 0 -1
+    mo_arg(max): a 1 4096
+    net_recv_bytes(r): h max
 ]
 
 # socket_send(n): h text -> the bytes taken, -1 when it is closed
@@ -1192,12 +1207,15 @@ sys_socket_send(r): a [
     btget(fin_sent): s "fin_sent"
     if(_): {state != "est" || closed || reset || fin_sent} [ return(r): r ]
     typeof(td): data
-    if(_): {td = "vector"} [ bytes_text(data): data ]
-    typeof(td): data
-    if(_): {td != "string"} [ return(r): r ]
+    if(_): {td != "string" && td != "vector"} [ return(r): r ]
+    net_send_bytes(r): s data
+]
+
+# queues data (a string or a byte vector) on connection s and sends what
+# the window lets go: its length
+net_send_bytes(r): s data [
     btget(txq): s "txq"
-    concat(txq): txq data
-    btput(_): s "txq" txq
+    k_bytes_append(_): txq data
     net_tcp_output(_): s
     net_poll(_):
     len(r): data

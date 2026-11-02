@@ -111,7 +111,7 @@ suite() {
     for f in tests/*.su tests/*.ua tests/math/*.su tests/oop/*.su; do
         case "$f" in
             tests/socket_*|tests/ukraine_*|tests/ryazan_*|tests/*_live.su|tests/chain.su|tests/script.su) continue ;;
-            tests/cffi_moscow_*) continue ;;  # Moscow only: qemu_test.py runs it
+            tests/cffi_moscow_*|tests/moscow_*) continue ;;  # Moscow only: qemu_test.py runs them
             tests/stalin_*|tests/usa_*|tests/usa/*) continue ;;
         esac
         want="tests/expected/${f#tests/}.txt"
