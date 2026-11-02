@@ -1,0 +1,372 @@
+# dhcp.su - Moscow's DHCP client (RFC 2131), on net.su's UDP and IPv4.
+#
+# At boot it asks for an address: DISCOVER, OFFER, REQUEST, ACK. It keeps
+# the lease: the server, how long the address is lent, and when to renew
+# (T1, half the lease unless the server says) and rebind (T2, seven
+# eighths). net_poll is the clock: past T1 it asks the server again,
+# past T2 any server, and when the lease runs out the address is gone and
+# it starts from DISCOVER. A NAK starts from DISCOVER too.
+#
+#     russia> dhcp(_):              # the lease
+#     russia> dhcp(_): "renew"      # ask the server for it again now
+#     russia> dhcp(_): "release"    # give the address back
+#
+# A program that ends does not end the lease: it belongs to the machine.
+
+global(_): dhcp_server dhcp_lease dhcp_t1 dhcp_t2 dhcp_got dhcp_next
+global(_): dhcp_state
+
+dhcp_forget(r): [
+    set(r): 0
+    set(dhcp_server): 0
+    set(dhcp_lease): 0
+    set(dhcp_t1): 0
+    set(dhcp_t2): 0
+    set(dhcp_got): 0
+    set(dhcp_next): 0
+    set(dhcp_state): "none"
+]
+
+# a message from the client: type 1 DISCOVER, 3 REQUEST, 7 RELEASE.
+# ciaddr is the address held (renewing, rebinding, releasing), else 0;
+# want and server go into options 50 and 54 when not 0; dst is where the
+# message goes.
+dhcp_send(r): type xid ciaddr want server dst [
+    vec(m): ""
+    push(_): m 1
+    push(_): m 1
+    push(_): m 6
+    push(_): m 0
+    net_p32(_): m xid
+    net_p16(_): m 0
+    set(flags): 0
+    if(_): {ciaddr = 0} [ set(flags): 32768 ]
+    net_p16(_): m flags
+    net_p32(_): m ciaddr
+    net_zeros(_): m 12
+    net_push_all(_): m net_mac
+    net_zeros(_): m 202
+    net_p32(_): m 1669485411
+    push(_): m 53
+    push(_): m 1
+    push(_): m type
+    if(_): {want != 0} [
+        push(_): m 50
+        push(_): m 4
+        net_p32(_): m want
+    ]
+    if(_): {server != 0} [
+        push(_): m 54
+        push(_): m 4
+        net_p32(_): m server
+    ]
+    if(_): {type != 7} [
+        # host name "moscow"
+        push(_): m 12
+        push(_): m 6
+        set(name): "moscow"
+        set(i): 0
+        while(_): {i < 6} [
+            byte(b): name i
+            push(_): m b
+            set(i): {i + 1}
+        ]
+        # asks for mask, router, DNS, lease, T1, T2
+        push(_): m 55
+        push(_): m 6
+        push(_): m 1
+        push(_): m 3
+        push(_): m 6
+        push(_): m 51
+        push(_): m 58
+        push(_): m 59
+    ]
+    push(_): m 255
+    len(ml): m
+    vec(h): ""
+    net_p16(_): h 68
+    net_p16(_): h 67
+    net_p16(_): h {8 + ml}
+    net_p16(_): h 0
+    net_ip_send(r): dst 17 h m 0 ml
+]
+
+# the next answer to xid within ticks: [type, yiaddr, options], or null;
+# options a btree of code -> its bytes
+dhcp_wait(r): xid ticks [
+    set(r): null
+    net_now(now):
+    set(until): {now + ticks}
+    while(_): {now < until} [
+        set(net_dhcp): null
+        net_poll_frames(_):
+        typeof(t): net_dhcp
+        if(_): {t = "vector"} [
+            at(f): net_dhcp 0
+            at(o): net_dhcp 1
+            at(n): net_dhcp 2
+            net_r32(x): f {o + 4}
+            at(op): f o
+            if(_): {x = xid && op = 2 && n > 240} [
+                net_r32(yi): f {o + 16}
+                btree(opts):
+                set(i): {o + 240}
+                set(end): {o + n}
+                set(type): 0
+                while(_): {i < end} [
+                    at(code): f i
+                    if(_): {code = 255} [ set(i): end ]
+                    elif(_): {code = 0} [ set(i): {i + 1} ]
+                    else(_): [
+                        at(k): f {i + 1}
+                        vec(val): ""
+                        set(j): 0
+                        while(_): {j < k && i + 2 + j < end} [
+                            at(b): f {i + 2 + j}
+                            push(_): val b
+                            set(j): {j + 1}
+                        ]
+                        btput(_): opts code val
+                        if(_): {code = 53} [ at(type): val 0 ]
+                        set(i): {i + 2 + k}
+                    ]
+                ]
+                vec(r): ""
+                push(_): r type
+                push(_): r yi
+                push(_): r opts
+                return(r): r
+            ]
+        ]
+        sleep(_): 10
+        net_now(now):
+    ]
+]
+
+# a 4-byte option as a number, def when it is not there
+dhcp_opt(r): opts code def [
+    set(r): def
+    bthas(h): opts code
+    if(_): h [
+        btget(v): opts code
+        len(n): v
+        if(_): {n >= 4} [ net_r32(r): v 0 ]
+    ]
+]
+
+dhcp_xid(r): [
+    random64(x):
+    set(r): {x & 2147483647}
+]
+
+# an ACK: the address and the lease are the machine's
+dhcp_bind(r): yi opts [
+    set(r): true
+    set(net_ip): yi
+    dhcp_opt(net_mask): opts 1 4294967040
+    dhcp_opt(net_gw): opts 3 0
+    dhcp_opt(net_dns): opts 6 0
+    dhcp_opt(srv): opts 54 dhcp_server
+    set(dhcp_server): srv
+    dhcp_opt(dhcp_lease): opts 51 86400
+    str_trunc(half): {dhcp_lease / 2}
+    str_trunc(most): {dhcp_lease * 7 / 8}
+    dhcp_opt(dhcp_t1): opts 58 half
+    dhcp_opt(dhcp_t2): opts 59 most
+    net_now(dhcp_got):
+    set(dhcp_next): 0
+    set(dhcp_state): "bound"
+    set(net_how): "DHCP"
+]
+
+# the address and the lease are gone
+dhcp_unbind(r): why [
+    set(r): 0
+    set(net_ip): 0
+    btree(net_arp):
+    dhcp_forget(_):
+    set(dhcp_state): why
+    set(net_how): why
+]
+
+# DISCOVER, OFFER, REQUEST, ACK: true when it gave an address
+dhcp_ask(r): [
+    set(r): false
+    dhcp_xid(xid):
+    set(tries): 0
+    while(_): {tries < 2} [
+        dhcp_send(_): 1 xid 0 0 0 4294967295
+        dhcp_wait(offer): xid 150
+        typeof(t): offer
+        if(_): {t = "vector"} [
+            at(type): offer 0
+            at(yi): offer 1
+            at(opts): offer 2
+            if(_): {type = 2} [
+                dhcp_opt(server): opts 54 0
+                dhcp_send(_): 3 xid 0 yi server 4294967295
+                dhcp_wait(ack): xid 150
+                typeof(ta): ack
+                if(_): {ta = "vector"} [
+                    at(atype): ack 0
+                    at(aopts): ack 2
+                    if(_): {atype = 5} [
+                        set(dhcp_server): server
+                        dhcp_bind(r): yi aopts
+                        return(r): r
+                    ]
+                ]
+            ]
+        ]
+        set(tries): {tries + 1}
+    ]
+]
+
+# the address held, asked for again: of the server (renewing) or, with
+# dst 255.255.255.255, of any (rebinding). "ack", "nak" or "none".
+dhcp_again(r): dst [
+    set(r): "none"
+    dhcp_xid(xid):
+    dhcp_send(_): 3 xid net_ip 0 0 dst
+    dhcp_wait(ack): xid 150
+    typeof(t): ack
+    if(_): {t != "vector"} [ return(r): r ]
+    at(type): ack 0
+    at(yi): ack 1
+    at(opts): ack 2
+    if(_): {type = 5} [
+        dhcp_bind(_): yi opts
+        set(r): "ack"
+    ]
+    elif(_): {type = 6} [ set(r): "nak" ]
+]
+
+# at boot: true when DHCP gave an address
+net_dhcp_run(r): [
+    dhcp_forget(_):
+    set(net_dhcp_on): true
+    dhcp_ask(r):
+    set(net_dhcp_on): false
+]
+
+# seconds of the lease gone by
+dhcp_age(r): [
+    net_now(now):
+    str_trunc(r): {(now - dhcp_got) / 100}
+]
+
+# net_poll's part: renews at T1, rebinds at T2, starts again when the
+# lease is out; a try that gets no answer is tried again a minute later
+dhcp_tick(r): [
+    set(r): 0
+    if(_): {dhcp_state != "bound"} [ return(r): r ]
+    net_now(now):
+    if(_): {now < dhcp_next} [ return(r): r ]
+    dhcp_age(age):
+    if(_): {age < dhcp_t1} [ return(r): r ]
+    dhcp_renew(_):
+    if(_): {dhcp_state = "bound"} [
+        dhcp_age(age2):
+        if(_): {age2 >= dhcp_t1} [
+            net_now(now2):
+            set(dhcp_next): {now2 + 6000}
+        ]
+    ]
+]
+
+# one step of keeping the address: "ack", "nak", "none" or, when it had
+# to start from DISCOVER, "new" or "lost"
+dhcp_renew(r): [
+    set(net_dhcp_on): true
+    set(r): "none"
+    if(_): {dhcp_state = "bound"} [
+        dhcp_age(age):
+        if(_): {age < dhcp_t2} [
+            dhcp_again(r): dhcp_server
+        ]
+        if(_): {r = "none" && age >= dhcp_t2} [ dhcp_again(r): 4294967295 ]
+        dhcp_age(age):
+        if(_): {r = "nak" || (r = "none" && age >= dhcp_lease)} [
+            dhcp_unbind(_): "none"
+        ]
+    ]
+    if(_): {dhcp_state != "bound"} [
+        dhcp_ask(got):
+        set(r): "lost"
+        if(_): got [ set(r): "new" ]
+        elif(_): {net_ip = 0} [ set(net_how): "none" ]
+    ]
+    set(net_dhcp_on): false
+]
+
+# gives the address back
+dhcp_release(r): [
+    set(r): -1
+    if(_): {dhcp_state != "bound"} [ return(r): r ]
+    dhcp_xid(xid):
+    dhcp_send(r): 7 xid net_ip 0 dhcp_server dhcp_server
+    dhcp_unbind(_): "released"
+]
+
+dhcp_secs_text(r): s [
+    if(_): {s < 0} [ set(s): 0 ]
+    str_from_int(n): s
+    concat(r): n "s"
+]
+
+# one line about the lease
+dhcp_describe(r): [
+    set(r): "no lease"
+    if(_): {dhcp_state = "released"} [ set(r): "no lease: the address was given back" ]
+    if(_): {dhcp_state != "bound"} [ return(r): r ]
+    net_ip_text(a): net_ip
+    net_ip_text(sv): dhcp_server
+    dhcp_age(age):
+    dhcp_secs_text(ls): dhcp_lease
+    dhcp_secs_text(t1): {dhcp_t1 - age}
+    dhcp_secs_text(left): {dhcp_lease - age}
+    concat(r): a " from " sv ", lease " ls ", renews in " t1 ", ends in " left
+]
+
+# dhcp(v): [renew|release] -> [state, address, server, lease, seconds
+# left], and prints the lease
+sys_dhcp(r): a [
+    mo_arg(cmd): a 0 ""
+    typeof(tm): net_mac
+    if(_): {tm != "vector"} [
+        print(_): "no network card"
+        set(r): null
+        return(r): r
+    ]
+    if(_): {cmd = "renew"} [
+        if(_): {dhcp_state = "released" || net_how = "static"} [
+            dhcp_forget(_):
+        ]
+        dhcp_renew(how):
+        print(_): how
+    ]
+    elif(_): {cmd = "release"} [
+        dhcp_release(st):
+        if(_): {st < 0} [ print(_): "no lease to give back" ]
+    ]
+    elif(_): {cmd != ""} [
+        concat(m): "dhcp: renew or release, not " cmd
+        print(_): m
+    ]
+    else(_): [ net_poll(_): ]
+    dhcp_describe(line):
+    print(_): line
+    vec(r): ""
+    push(_): r dhcp_state
+    net_ip_text(ip): net_ip
+    push(_): r ip
+    net_ip_text(sv): dhcp_server
+    push(_): r sv
+    push(_): r dhcp_lease
+    set(left): 0
+    if(_): {dhcp_state = "bound"} [
+        dhcp_age(age):
+        set(left): {dhcp_lease - age}
+    ]
+    push(_): r left
+]
