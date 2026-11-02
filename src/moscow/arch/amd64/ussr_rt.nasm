@@ -198,6 +198,7 @@ start:
         rep stosq
         mov [boot_info], rbx
         mov qword [vga_attr], 0x07
+        mov qword [vga_base], 0x07
 
         ; SSE: no FPU emulation, monitor coprocessor, OSFXSR, OSXMMEXCPT
         mov rax, cr0
@@ -705,25 +706,77 @@ vga_cell:
         pop rax
         ret
 
-; al -> the screen. Keeps registers.
+; al -> the screen, text in UTF-8. Keeps registers. ESC starts an ANSI
+; escape, which is carried out (ansi_byte) rather than shown. A character written in
+; the last column leaves the cursor past it, as a terminal does: the line
+; wraps at the next character, not before a CR LF.
 vga_putc:
         push rax
         push rcx
         push rdi
         push rsi
+        cmp qword [ansi_state], 0
+        jne .escape
+        cmp al, 27
+        je .esc
         cmp al, 10
         je .newline
         cmp al, 13
         je .cr
         cmp al, 8
         je .back
+        ; UTF-8: a character takes one cell, as terminal programs count
+        ; them; the VGA font has only ASCII of it, the rest is a block
+        cmp al, 0x80
+        jb .wrap
+        cmp al, 0xc0
+        jb .done                        ; a continuation byte
+        mov al, 0xfe
+.wrap:
+        cmp qword [vga_col], 80
+        jb .put
+        call vga_newline
+.put:
         call vga_cell
         mov ah, [vga_attr]
         mov [rdi], ax
         inc qword [vga_col]
-        cmp qword [vga_col], 80
-        jb .done
+        jmp .done
 .newline:
+        call vga_newline
+        jmp .done
+.cr:
+        mov qword [vga_col], 0
+        jmp .done
+.back:
+        cmp qword [vga_col], 80
+        jb .left
+        mov qword [vga_col], 79
+.left:
+        cmp qword [vga_col], 0
+        je .done
+        dec qword [vga_col]
+        jmp .done
+.esc:
+        mov qword [ansi_state], 1
+        jmp .done
+.escape:
+        call ansi_byte
+.done:
+        call vga_cursor
+        pop rsi
+        pop rdi
+        pop rcx
+        pop rax
+        ret
+
+; The cursor to the start of the next line, scrolling at the bottom.
+; Keeps registers.
+vga_newline:
+        push rax
+        push rcx
+        push rdi
+        push rsi
         mov qword [vga_col], 0
         inc qword [vga_row]
         cmp qword [vga_row], 25
@@ -737,29 +790,321 @@ vga_putc:
         mov ecx, 80
         rep stosw
         mov qword [vga_row], 24
-        jmp .done
-.cr:
-        mov qword [vga_col], 0
-        jmp .done
-.back:
-        cmp qword [vga_col], 0
-        je .done
-        dec qword [vga_col]
 .done:
-        call vga_cursor
         pop rsi
         pop rdi
         pop rcx
         pop rax
         ret
 
+; rdi = the first cell (0 .. 1999), rcx = cells -> blanks in the current
+; colours. Keeps the others.
+vga_fill:
+        push rax
+        shl rdi, 1
+        add rdi, VGA
+        mov ah, [vga_attr]
+        mov al, ' '
+        rep stosw
+        pop rax
+        ret
+
+; -> rax: the cursor's cell (0 .. 1999), its column taken as 79 when it
+; is past the last one
+vga_here:
+        mov rax, [vga_col]
+        cmp rax, 79
+        jbe .in
+        mov eax, 79
+.in:
+        push rcx
+        mov rcx, [vga_row]
+        imul rcx, rcx, 80
+        add rax, rcx
+        pop rcx
+        ret
+
+; al: the next byte of an escape sequence. After ESC only [ goes on (to
+; a CSI: ESC [ parameters final byte); anything else ends it. The CSIs
+; carried out are the ones full-screen programs use: H f (cursor to
+; row;column), A B C D (up, down, right, left), G (column), d (row), J
+; (erase in display), K (erase in line) and m (SGR: 0 1 7 22 27, colours
+; 30-37 40-47 90-97 100-107, 39 49). The rest, ?25l among them, are
+; read and dropped. Uses rax, rcx, rdi, rsi.
+ansi_byte:
+        cmp qword [ansi_state], 1
+        jne .csi
+        mov qword [ansi_state], 0
+        cmp al, '['
+        jne .out
+        mov qword [ansi_state], 2
+        xor eax, eax
+        mov [ansi_np], rax
+        mov rdi, ansi_p
+        mov ecx, ANSI_PARAMS
+        rep stosq
+.out:
+        ret
+.csi:
+        cmp al, '0'
+        jb .not_digit
+        cmp al, '9'
+        ja .not_digit
+        mov rcx, [ansi_np]
+        cmp rcx, ANSI_PARAMS
+        jae .out
+        movzx eax, al
+        sub eax, '0'
+        mov rsi, [ansi_p + rcx * 8]
+        imul rsi, rsi, 10
+        add rsi, rax
+        cmp rsi, 9999
+        jbe .digit
+        mov esi, 9999
+.digit:
+        mov [ansi_p + rcx * 8], rsi
+        ret
+.not_digit:
+        cmp al, ';'
+        jne .not_separator
+        inc qword [ansi_np]
+        ret
+.not_separator:
+        cmp al, 0x40                    ; ? and the other in-between bytes
+        jb .out
+        mov qword [ansi_state], 0
+        inc qword [ansi_np]             ; now the number of parameters
+        cmp al, 'H'
+        je .position
+        cmp al, 'f'
+        je .position
+        cmp al, 'J'
+        je .erase_display
+        cmp al, 'K'
+        je .erase_line
+        cmp al, 'm'
+        je .sgr
+        cmp al, 'A'
+        je .up
+        cmp al, 'B'
+        je .down
+        cmp al, 'C'
+        je .right
+        cmp al, 'D'
+        je .left
+        cmp al, 'G'
+        je .column
+        cmp al, 'd'
+        je .row
+        ret
+.position:
+        mov rax, [ansi_p]
+        call .to_row
+        mov rax, [ansi_p + 8]
+        jmp .to_column
+.row:
+        mov rax, [ansi_p]
+.to_row:                                ; rax: a row from 1, 0 meaning 1
+        test rax, rax
+        jz .row_set
+        dec rax
+.row_set:
+        cmp rax, 24
+        jbe .row_ok
+        mov eax, 24
+.row_ok:
+        mov [vga_row], rax
+        ret
+.column:
+        mov rax, [ansi_p]
+.to_column:
+        test rax, rax
+        jz .column_set
+        dec rax
+.column_set:
+        cmp rax, 79
+        jbe .column_ok
+        mov eax, 79
+.column_ok:
+        mov [vga_col], rax
+        ret
+.up:
+        call .count
+        mov rax, [vga_row]
+        sub rax, rcx
+        jns .row_ok
+        xor eax, eax
+        jmp .row_ok
+.down:
+        call .count
+        mov rax, [vga_row]
+        add rax, rcx
+        jmp .row_set
+.right:
+        call .count
+        mov rax, [vga_col]
+        add rax, rcx
+        jmp .column_set
+.left:
+        call .count
+        mov rax, [vga_col]
+        cmp rax, 79
+        jbe .left_from
+        mov eax, 79
+.left_from:
+        sub rax, rcx
+        jns .column_ok
+        xor eax, eax
+        jmp .column_ok
+.count:                                 ; rcx: the first parameter, at least 1
+        mov rcx, [ansi_p]
+        test rcx, rcx
+        jnz .counted
+        mov ecx, 1
+.counted:
+        ret
+.erase_display:
+        call vga_here
+        mov rcx, [ansi_p]
+        cmp rcx, 1
+        je .display_start
+        jb .display_end
+        xor edi, edi                    ; 2, 3: all of it
+        mov ecx, 2000
+        jmp vga_fill
+.display_end:
+        mov rdi, rax
+        mov ecx, 2000
+        sub rcx, rax
+        jmp vga_fill
+.display_start:
+        xor edi, edi
+        lea rcx, [rax + 1]
+        jmp vga_fill
+.erase_line:
+        call vga_here
+        mov rdi, [vga_row]
+        imul rdi, rdi, 80               ; the line's first cell
+        mov rcx, [ansi_p]
+        cmp rcx, 1
+        je .line_start
+        jb .line_end
+        mov ecx, 80
+        jmp vga_fill
+.line_end:
+        mov rcx, rdi
+        add rcx, 80
+        sub rcx, rax
+        mov rdi, rax
+        jmp vga_fill
+.line_start:
+        lea rcx, [rax + 1]
+        sub rcx, rdi
+        jmp vga_fill
+.sgr:
+        xor ecx, ecx
+.sgr_next:
+        cmp rcx, [ansi_np]
+        jae .out
+        cmp rcx, ANSI_PARAMS
+        jae .out
+        mov rax, [ansi_p + rcx * 8]
+        call ansi_sgr
+        inc rcx
+        jmp .sgr_next
+
+; rax: one SGR parameter -> vga_attr. Uses rax, rdi.
+ansi_sgr:
+        test rax, rax
+        jnz .not_reset
+        mov rax, [vga_base]
+        mov [vga_attr], rax
+        mov qword [ansi_rev], 0
+        ret
+.not_reset:
+        cmp rax, 7
+        jne .not_reverse
+        cmp qword [ansi_rev], 0
+        jne .out
+        mov qword [ansi_rev], 1
+        jmp .swap
+.not_reverse:
+        cmp rax, 27
+        jne .not_unreverse
+        cmp qword [ansi_rev], 0
+        je .out
+        mov qword [ansi_rev], 0
+.swap:
+        movzx eax, byte [vga_attr]
+        rol al, 4
+        and eax, 0x7f                   ; bit 7 would blink
+        mov [vga_attr], rax
+        ret
+.not_unreverse:
+        cmp rax, 1
+        jne .not_bold
+        or qword [vga_attr], 8
+        ret
+.not_bold:
+        cmp rax, 22
+        jne .not_normal
+        and qword [vga_attr], ~8
+        ret
+.not_normal:
+        cmp rax, 39
+        jne .not_fg_default
+        mov rdi, [vga_base]
+        and edi, 0x0f
+        jmp .fg
+.not_fg_default:
+        cmp rax, 49
+        jne .not_bg_default
+        mov rdi, [vga_base]
+        and edi, 0x70
+        jmp .bg
+.not_bg_default:
+        lea rdi, [rax - 30]
+        cmp rdi, 7
+        jbe .fg_colour
+        lea rdi, [rax - 90]
+        cmp rdi, 7
+        jbe .fg_bright
+        lea rdi, [rax - 40]
+        cmp rdi, 7
+        jbe .bg_colour
+        lea rdi, [rax - 100]
+        cmp rdi, 7
+        jbe .bg_colour                  ; no bright backgrounds: bit 7 blinks
+.out:
+        ret
+.fg_bright:
+        movzx edi, byte [ansi_colours + rdi]
+        or edi, 8
+        jmp .fg
+.fg_colour:
+        movzx edi, byte [ansi_colours + rdi]
+.fg:
+        mov rax, [vga_attr]
+        and eax, 0xf0
+        or eax, edi
+        mov [vga_attr], rax
+        ret
+.bg_colour:
+        movzx edi, byte [ansi_colours + rdi]
+        shl edi, 4
+.bg:
+        mov rax, [vga_attr]
+        and eax, 0x0f
+        or eax, edi
+        mov [vga_attr], rax
+        ret
+
 vga_cursor:
         push rax
         push rcx
         push rdx
-        mov rcx, [vga_row]
-        imul rcx, rcx, 80
-        add rcx, [vga_col]
+        call vga_here
+        mov rcx, rax
         mov dx, 0x3d4
         mov al, 0x0f
         out dx, al
@@ -794,25 +1139,85 @@ vga_clear:
         pop rax
         ret
 
-; -> eax: a character from COM1 or the PS/2 keyboard, or -1 when there
-; is none yet.
+; -> eax: the next byte of the console - COM1 or the PS/2 keyboard - or
+; -1 when there is none yet. Clobbers rdx. In raw mode (terminal_raw) the
+; keyboard's arrows, Home, End, Insert, Delete, Page Up and Page Down
+; come as the ANSI sequences a terminal sends for them; Ctrl with a
+; letter or one of @[\]^_ gives its control code in either mode.
 con_poll:
+        call kq_pop
+        cmp eax, -1
+        jne .out
+        call con_fill
+        call kq_pop
+.out:
+        ret
+
+; -> eax: the first byte waiting in the key queue, taken, or -1
+kq_pop:
+        mov rax, [kq_head]
+        cmp rax, [kq_tail]
+        je .empty
+        push rcx
+        lea rcx, [rax + 1]
+        and ecx, KQ_SIZE - 1
+        mov [kq_head], rcx
+        movzx eax, byte [kq_buf + rax]
+        pop rcx
+        ret
+.empty:
+        mov eax, -1
+        ret
+
+; al -> the end of the key queue (dropped when it is full). Keeps
+; registers.
+kq_push:
+        push rcx
+        push rdx
+        mov rcx, [kq_tail]
+        lea rdx, [rcx + 1]
+        and edx, KQ_SIZE - 1
+        cmp rdx, [kq_head]
+        je .full
+        mov [kq_buf + rcx], al
+        mov [kq_tail], rdx
+.full:
+        pop rdx
+        pop rcx
+        ret
+
+; Whatever COM1 or the keyboard has, a byte or a key, into the key
+; queue. Clobbers rdx.
+con_fill:
+        push rax
+        push rcx
+        push rsi
         mov dx, COM1 + 5
         in al, dx
         test al, 1
         jz .keyboard
         mov dx, COM1
         in al, dx
-        movzx eax, al
-        ret
+        call kq_push
+        jmp .done
 .keyboard:
         in al, 0x64
         test al, 1
-        jz .none
+        jz .done
         test al, 0x20                   ; mouse data: drop it
         jnz .drop
         in al, 0x60
         movzx eax, al
+        cmp al, 0xe0
+        je .prefix
+        mov rcx, [kbd_e0]
+        mov qword [kbd_e0], 0
+        cmp al, 0x1d                    ; Ctrl, left or (after 0xe0) right
+        je .ctrl_down
+        cmp al, 0x9d
+        je .ctrl_up
+        test rcx, rcx
+        jnz .extended
         cmp al, 0x2a
         je .shift_down
         cmp al, 0x36
@@ -821,10 +1226,10 @@ con_poll:
         je .shift_up
         cmp al, 0xb6
         je .shift_up
-        test al, 0x80                   ; key releases, 0xe0 prefixes
-        jnz .none
+        test al, 0x80                   ; key releases
+        jnz .done
         cmp al, KEYMAP_SIZE
-        jae .none
+        jae .done
         cmp qword [kbd_shift], 0
         jne .shifted
         movzx eax, byte [keymap + rax]
@@ -833,18 +1238,62 @@ con_poll:
         movzx eax, byte [keymap_shift + rax]
 .key:
         test eax, eax
-        jz .none
-        ret
+        jz .done
+        cmp qword [kbd_ctrl], 0
+        je .push
+        mov ecx, eax
+        and ecx, ~0x20                  ; a b ... and A B ... alike
+        cmp ecx, '@'
+        jb .push
+        cmp ecx, '_'
+        ja .push
+        and eax, 0x1f
+.push:
+        call kq_push
+        jmp .done
+.extended:
+        cmp qword [term_raw], 0
+        je .done                        ; reading lines: no sequences
+        test al, 0x80
+        jnz .done
+        mov rsi, ext_keys
+.find:
+        cmp byte [rsi], 0
+        je .done
+        cmp [rsi], al
+        je .found
+        add rsi, EXT_KEY
+        jmp .find
+.found:
+        inc rsi
+.sequence:
+        mov al, [rsi]
+        test al, al
+        jz .done
+        call kq_push
+        inc rsi
+        jmp .sequence
+.prefix:
+        mov qword [kbd_e0], 1
+        jmp .done
+.ctrl_down:
+        mov qword [kbd_ctrl], 1
+        jmp .done
+.ctrl_up:
+        mov qword [kbd_ctrl], 0
+        jmp .done
 .shift_down:
         mov qword [kbd_shift], 1
-        jmp .none
+        jmp .done
 .shift_up:
         mov qword [kbd_shift], 0
-        jmp .none
+        jmp .done
 .drop:
         in al, 0x60
-.none:
-        mov eax, -1
+.done:
+        pop rsi
+        pop rcx
+        pop rax
         ret
 
 ; -> rax: a string, the next console line without its end. Echoes what
@@ -3703,6 +4152,8 @@ bi_k_color:
         and ecx, 15
         or eax, ecx
         mov [vga_attr], rax
+        mov [vga_base], rax
+        mov qword [ansi_rev], 0
         xor eax, eax
         ret
 .bad:
@@ -5670,11 +6121,14 @@ bi_unsetenv:
 
 ; --- the terminal -----------------------------------------------------------
 
-; terminal_getch(c): the next byte of the console, a line at a time:
-; the line is read (echoed, Backspace erases) when the last one is used
-; up, and ends with a 10. Ctrl-D on an empty line is the end: -1.
+; terminal_getch(c): the next byte of the console. In raw mode
+; (terminal_raw) each byte as it comes, not echoed; else a line at a
+; time: the line is read (echoed, Backspace erases) when the last one is
+; used up, and ends with a 10. Ctrl-D on an empty line is the end: -1.
 bi_terminal_getch:
         push rdx
+        cmp qword [term_raw], 0
+        jne .raw
 .again:
         mov rax, [tg_pos]
         cmp rax, [tg_len]
@@ -5705,32 +6159,59 @@ bi_terminal_getch:
         mov rax, -1
         pop rdx
         jmp bi_int_out
-
-bi_terminal_raw:                        ; not a terminal: russia reads lines
-        mov rax, -1
+.raw:
+        call con_poll
+        cmp eax, -1
+        jne .key
+        sti
+        hlt                             ; the timer wakes us
+        jmp .raw
+.key:
+        pop rdx
         jmp bi_int_out
 
-bi_zero:                                ; terminal_sane
+; terminal_raw(r): -> 0: keys go to terminal_getch one byte at a time,
+; unechoed, with the keyboard's special keys as ANSI sequences
+bi_terminal_raw:
+        mov qword [term_raw], 1
         xor eax, eax
         jmp bi_int_out
 
+; terminal_sane(r): -> 0: back to lines
+bi_terminal_sane:
+        mov qword [term_raw], 0
+        xor eax, eax
+        jmp bi_int_out
+
+; terminal_key_ready(b): -> true when a byte is waiting
 bi_terminal_key_ready:
+        push rdx
+        mov rax, [kq_head]
+        cmp rax, [kq_tail]
+        jne .ready
+        call con_fill
+        mov rax, [kq_head]
+        cmp rax, [kq_tail]
+.ready:
+        setne al
+        movzx eax, al
+        pop rdx
         mov qword [rdx], T_BOOL
-        mov qword [rdx + 8], 0
+        mov [rdx + 8], rax
         xor eax, eax
         ret
 
+; terminal_size(s): -> "rows cols", the VGA text screen's
 bi_terminal_size:
-        push rdx
-        call vec_new
-        mov rdi, rax
-        mov eax, 80
-        call vec_push_int
-        mov eax, 25
-        call vec_push_int
-        mov rax, rdi
-        pop rdx
-        jmp bi_vec_out
+        mov rsi, s_terminal_size
+        call new_string_z
+        jmp bi_str_out
+
+; terminal_escape(s): -> the ESC character, as a string
+bi_terminal_escape:
+        mov rsi, s_escape
+        call new_string_z
+        jmp bi_str_out
 
 ; sleep(_): milliseconds, at the timer's 10 ms
 bi_sleep:
@@ -6160,7 +6641,8 @@ bi_table:
         dq n_getcwd, bi_getcwd
         dq n_terminal_getch, bi_terminal_getch
         dq n_terminal_raw, bi_terminal_raw
-        dq n_terminal_sane, bi_zero
+        dq n_terminal_sane, bi_terminal_sane
+        dq n_terminal_escape, bi_terminal_escape
         dq n_terminal_key_ready, bi_terminal_key_ready
         dq n_terminal_size, bi_terminal_size
         dq n_sleep, bi_sleep
@@ -6233,6 +6715,28 @@ keymap_shift:
 
 hex_digits:     db "0123456789abcdef"
 
+KQ_SIZE         equ 64              ; the key queue, a power of two
+ANSI_PARAMS     equ 4
+
+; ANSI colour numbers (black red green yellow blue magenta cyan white)
+; as VGA's
+ansi_colours:   db 0, 4, 2, 6, 1, 5, 3, 7
+
+; the keys after an 0xe0 prefix: scan code, then the sequence, raw mode
+EXT_KEY         equ 6
+ext_keys:
+        db 0x48, 27, "[A", 0, 0
+        db 0x50, 27, "[B", 0, 0
+        db 0x4d, 27, "[C", 0, 0
+        db 0x4b, 27, "[D", 0, 0
+        db 0x47, 27, "[H", 0, 0
+        db 0x4f, 27, "[F", 0, 0
+        db 0x52, 27, "[2~", 0
+        db 0x53, 27, "[3~", 0
+        db 0x49, 27, "[5~", 0
+        db 0x51, 27, "[6~", 0
+        db 0
+
 n_len:          db "len", 0
 n_byte:         db "byte", 0
 n_slice:        db "slice", 0
@@ -6273,6 +6777,9 @@ n_getcwd:         db "getcwd", 0
 n_terminal_getch:  db "terminal_getch", 0
 n_terminal_raw:   db "terminal_raw", 0
 n_terminal_sane:  db "terminal_sane", 0
+n_terminal_escape:  db "terminal_escape", 0
+s_terminal_size:  db "25 80", 0
+s_escape:       db 27, 0
 n_terminal_key_ready:  db "terminal_key_ready", 0
 n_terminal_size:  db "terminal_size", 0
 n_sleep:          db "sleep", 0
@@ -6463,7 +6970,18 @@ ticks:          resq 1
 vga_row:        resq 1
 vga_col:        resq 1
 vga_attr:       resq 1
+vga_base:       resq 1              ; the colours k_color set; SGR 0 goes back
+ansi_state:     resq 1              ; 0, 1 after ESC, 2 in ESC [ ...
+ansi_np:        resq 1
+ansi_p:         resq ANSI_PARAMS
+ansi_rev:       resq 1
 kbd_shift:      resq 1
+kbd_ctrl:       resq 1
+kbd_e0:         resq 1
+term_raw:       resq 1
+kq_head:        resq 1
+kq_tail:        resq 1
+kq_buf:         resb KQ_SIZE
 last_cr:        resq 1
 rng_state:      resq 1
 ld_rsp:         resq 1

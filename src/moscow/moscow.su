@@ -13,9 +13,10 @@
 #
 # Moscow is also the file system's keeper: it takes the file commands
 # over with k_syscall, so in the shell ls, cat, readfile, writefile,
-# file_exists, list_dir, is_dir, make_dir and remove_file work on the
-# root file system, run starts a program of /bin and install starts the
-# installer (/bin/install.ru). A kernel command runs in the calling
+# file_exists, list_dir, is_dir, make_dir, remove_file and the handle
+# calls (open_file, read_line, read_file, write_file, close_file) work on
+# the root file system, run starts a program of /bin - or a .su source,
+# through russia.ru - and install starts the installer (/bin/install.ru). A kernel command runs in the calling
 # program's memory and keeps nothing between calls but the root's device
 # and first sector: it mounts the file system each time.
 #
@@ -26,7 +27,7 @@
 # lists them.
 $include "../belarus/belarus.su"
 
-global(_): mo_dev mo_base
+global(_): mo_dev mo_base mo_files
 
 mo_kb(r): bytes [
     str_trunc(kb): {bytes / 1024}
@@ -215,6 +216,140 @@ sys_fsck(r): a [
     bl_fsck(r): fs
 ]
 
+# --- files by handle, as the hosted ussr has them: open_file gives a
+# number, read_line, read_file and write_file use it, close_file ends it.
+# Reading takes the file's text when it is opened; what is written is
+# kept and goes onto the disk when the handle is closed. mo_files maps
+# each open handle to a btree of path, write (opened "w" or "a"), text,
+# pos and changed; "next" is the next handle.
+
+mo_file(r): h [
+    set(r): null
+    typeof(th): h
+    if(_): {th != "integer"} [ return(r): r ]
+    bthas(has): mo_files h
+    if(_): has [ btget(r): mo_files h ]
+]
+
+# open_file(h): path [mode] -> a handle, or -1 (no such file to read)
+sys_open_file(r): a [
+    set(r): -1
+    mo_arg(path): a 0 ""
+    mo_arg(mode): a 1 "r"
+    str_find(w): mode "w" 0
+    str_find(ap): mode "a" 0
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree" || path = ""} [ return(r): r ]
+    bl_is_dir(d): fs path
+    if(_): d [ return(r): r ]
+    set(text): ""
+    if(_): {w < 0} [
+        bl_exists(e): fs path
+        if(_): e [ bl_read_text(text): fs path ]
+        elif(_): {ap < 0} [ return(r): r ]
+    ]
+    btget(r): mo_files "next"
+    btput(_): mo_files "next" {r + 1}
+    btree(f):
+    btput(_): f "path" path
+    btput(_): f "write" {w >= 0 || ap >= 0}
+    btput(_): f "text" text
+    btput(_): f "pos" 0
+    btput(_): f "changed" {w >= 0}
+    btput(_): mo_files r f
+]
+
+# read_line(s): h -> the next line without its LF (or CR LF), null at
+# the end
+sys_read_line(r): a [
+    set(r): null
+    mo_arg(h): a 0 -1
+    mo_file(f): h
+    typeof(tf): f
+    if(_): {tf != "btree"} [ return(r): r ]
+    btget(text): f "text"
+    btget(pos): f "pos"
+    len(n): text
+    if(_): {pos >= n} [ return(r): r ]
+    str_find(nl): text "\n" pos
+    set(next): {nl + 1}
+    if(_): {nl < 0} [
+        set(nl): n
+        set(next): n
+    ]
+    slice(r): text pos {nl - pos}
+    len(k): r
+    if(_): {k > 0} [
+        byte(last): r {k - 1}
+        if(_): {last = 13} [ slice(r): r 0 {k - 1} ]
+    ]
+    btput(_): f "pos" next
+]
+
+# read_file(s): h [n] -> the rest of the file, or its next n bytes
+sys_read_file(r): a [
+    set(r): null
+    mo_arg(h): a 0 -1
+    mo_file(f): h
+    typeof(tf): f
+    if(_): {tf != "btree"} [ return(r): r ]
+    btget(text): f "text"
+    btget(pos): f "pos"
+    len(n): text
+    mo_arg(k): a 1 {n - pos}
+    if(_): {k > n - pos} [ set(k): {n - pos} ]
+    if(_): {k < 0} [ set(k): 0 ]
+    slice(r): text pos k
+    btput(_): f "pos" {pos + k}
+]
+
+# write_file(n): h data -> the bytes written, -1 for no such handle
+sys_write_file(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    mo_file(f): h
+    typeof(tf): f
+    if(_): {tf != "btree"} [ return(r): r ]
+    btget(wr): f "write"
+    if(_): {wr = false} [ return(r): r ]
+    mo_arg(data): a 1 ""
+    typeof(td): data
+    if(_): {td != "string"} [ encode(data): data ]
+    btget(text): f "text"
+    concat(text): text data
+    btput(_): f "text" text
+    btput(_): f "changed" true
+    len(r): data
+]
+
+# close_file(ok): h -> 0, or -1 for no such handle or a failed write
+sys_close_file(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    mo_file(f): h
+    typeof(tf): f
+    if(_): {tf != "btree"} [ return(r): r ]
+    btdel(_): mo_files h
+    set(r): 0
+    btget(changed): f "changed"
+    if(_): changed [
+        mo_fs(fs):
+        typeof(t): fs
+        if(_): {t != "btree"} [
+            set(r): -1
+            return(r): r
+        ]
+        btget(path): f "path"
+        btget(text): f "text"
+        bl_clean(p): path
+        bl_parent(up): p
+        bl_mkdirs(_): fs up
+        bl_write_text(r): fs p text
+        mo_sync(_): fs
+    ]
+]
+
 # run(status): name [args ...]: /bin/name.ru (or the path given) from
 # the root file system, else a program of the boot image
 sys_run(r): a [
@@ -235,27 +370,74 @@ sys_run(r): a [
     mo_run(r): name args
 ]
 
+# the last three bytes of s, "" when it is shorter
+mo_ext(r): s [
+    set(r): ""
+    len(n): s
+    if(_): {n > 3} [ slice(r): s {n - 3} 3 ]
+]
+
+# A program: a .ru file runs as it is, a .su file through russia.ru, the
+# USSR interpreter (from /bin, else /boot), which reads the source from
+# the disk. A bare name is looked for as /bin/name.ru, /bin/name.su and
+# then the project's own src/name/name.su under /src/ussr, so
+# run(_): "Mbl" "notes.txt" starts the editor from its source.
 mo_run(r): name args [
     set(r): 127
-    set(path): name
+    vec(tries): ""
     str_find(slash): name "/" 0
-    if(_): {slash < 0} [
-        concat(path): "/bin/" name
-        len(nl): name
-        set(ext): ""
-        if(_): {nl > 3} [ slice(ext): name {nl - 3} 3 ]
-        if(_): {ext != ".ru"} [ concat(path): path ".ru" ]
+    mo_ext(ext): name
+    if(_): {slash >= 0} [ push(_): tries name ]
+    elif(_): {ext = ".ru" || ext = ".su"} [
+        concat(p): "/bin/" name
+        push(_): tries p
     ]
-    set(bytes): null
+    else(_): [
+        concat(p): "/bin/" name ".ru"
+        push(_): tries p
+        concat(p): "/bin/" name ".su"
+        push(_): tries p
+        concat(p): "/src/ussr/src/" name "/" name ".su"
+        push(_): tries p
+    ]
+    set(path): ""
     if(_): {mo_base >= 0} [
         mo_fs(fs):
-        bl_exists(e): fs path
-        if(_): e [ bl_read_bytes(bytes): fs path ]
+        len(nt): tries
+        set(i): 0
+        while(_): {i < nt && path = ""} [
+            at(p): tries i
+            set(d): true
+            bl_exists(e): fs p
+            if(_): e [ bl_is_dir(d): fs p ]
+            if(_): {e && d = false} [ set(path): p ]
+            set(i): {i + 1}
+        ]
     ]
-    typeof(tb): bytes
-    if(_): {tb = "vector"} [
-        k_exec_bytes(r): bytes args
-        return(r): r
+    if(_): {path != ""} [
+        mo_ext(ext): path
+        if(_): {ext = ".su"} [
+            # russia.ru path args ...
+            vec(rargs): ""
+            push(_): rargs path
+            len(na): args
+            set(i): 0
+            while(_): {i < na} [
+                at(x): args i
+                push(_): rargs x
+                set(i): {i + 1}
+            ]
+            set(args): rargs
+            set(path): "/bin/russia.ru"
+            bl_exists(e): fs path
+            if(_): {e = false} [ set(path): "/boot/russia.ru" ]
+        ]
+        bl_read_bytes(bytes): fs path
+        typeof(tb): bytes
+        if(_): {tb = "vector"} [
+            k_exec_bytes(r): bytes args
+            return(r): r
+        ]
     ]
     # not on the disk: the boot image has russia.ru and moscow.ru
     len(na): args
@@ -281,7 +463,9 @@ sys_help(r): a [
     print(_): "  cat(_): path            a file's text"
     print(_): "  readfile(s): path       a file as a string; writefile(r): path text"
     print(_): "  make_dir(r): path       remove_file(r): path   file_exists(b): path"
-    print(_): "  run(status): name ...   /bin/name.ru (stalin, belarus, install, ...)"
+    print(_): "  run(status): name ...   /bin/name.ru (stalin, belarus, install, ...), a .su"
+    print(_): "                          through russia: run(_): \"Mbl\" \"/home/notes.txt\" edits"
+    print(_): "  open_file(h): path mode read_line(s): h write_file(n): h text close_file(r): h"
     print(_): "  install(status):        install USSR onto another disk"
     print(_): "  df(_):  fsck(_):        the root file system, its free space, a check"
     print(_): "  uptime(_): mem(_): cpu(_): uname(_): pwd(_): clear(_): color(_): fg bg"
@@ -305,6 +489,11 @@ mo_syscalls(r): [
     k_syscall(_): "install" "sys_install"
     k_syscall(_): "df" "sys_df"
     k_syscall(_): "fsck" "sys_fsck"
+    k_syscall(_): "open_file" "sys_open_file"
+    k_syscall(_): "read_line" "sys_read_line"
+    k_syscall(_): "read_file" "sys_read_file"
+    k_syscall(_): "write_file" "sys_write_file"
+    k_syscall(_): "close_file" "sys_close_file"
 ]
 
 init(ret): arg_cnt arg_vec [
@@ -371,6 +560,8 @@ init(ret): arg_cnt arg_vec [
     else(_): [
         print(_): "root:    no Belarus file system on the disks; the boot image only"
     ]
+    btree(mo_files):
+    btput(_): mo_files "next" 3
     mo_syscalls(_):
     set(ret): 0
     set(go): true

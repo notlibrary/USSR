@@ -14,8 +14,27 @@
 - The install disk takes no build products from the tree: object files,
   binaries, `.ural` packages and disk images stay out of `/src/ussr`
   (when the files do not come from `git ls-files`).
+- Belarus paths take `.` and `..`: `/src/Mbl/../libs` is `/src/libs`.
 
 ### Added
+- Moscow's console is a terminal. `terminal_raw` switches it to raw
+  mode: `terminal_getch` returns each byte unechoed, the keyboard's
+  arrows, Home, End, Insert, Delete and Page keys come as ANSI
+  sequences, Ctrl with a letter as its control code;
+  `terminal_key_ready` and `terminal_escape` are there, and
+  `terminal_size` answers `"25 80"` as ussr does. The VGA screen carries
+  out ANSI escapes (cursor positioning and moves, erase in display and
+  line, SGR reverse, bold and colours) and puts a UTF-8 character in one
+  cell. The shell reads lines in raw mode now: Up and Down walk its
+  history, kept in `/.ussr_history`.
+- Moscow files by handle: `open_file`, `read_line`, `read_file`,
+  `write_file` and `close_file` work on the Belarus root as in ussr.
+- `run` in Moscow starts `.su` programs from their source through
+  russia.ru and finds a bare name as `/bin/name.ru`, `/bin/name.su` or
+  the project's `src/name/name.su`: `run(_): "Mbl" "/home/notes.txt"`
+  edits a file with the Mbl editor, unchanged, and the note is there
+  after a halt and the next boot (checked by `qemu_test.py` through the
+  serial line and the VGA text memory).
 - The `btree` container: `btree(t):` makes an ordered map kept in a B+
   tree (`src/btree.c`), keys numbers or strings, values anything;
   `btput`, `btget`, `bthas`, `btdel`, `btlen`, `btfirst`, `btlast`,
