@@ -106,10 +106,11 @@ same way, and refuses raw disks:
     russia> uptime(_):
     up 12 s
     russia> ls(_):
-    d          0  bin
-    d          0  boot
-    d          0  etc
-    d          0  src
+    -        112  .ussr_history
+    d         57  bin
+    d         54  boot
+    d         31  etc
+    d         14  src
     russia> run(st): "stalin" "show" "/dev/hda"
     Disk /dev/hda: 64 MiB, 131072 sectors of 512 bytes
     Table: MBR, disk signature 0x3CB66ED4
@@ -131,7 +132,8 @@ The file commands are the kernel's (`moscow.su` takes them over with
 | `cat(s): path`, `readfile(s): path` | a file's text |
 | `writefile(r): path text` | writes a file (and its directories) |
 | `make_dir`, `remove_file`, `file_exists`, `is_dir`, `list_dir` | as in ussr |
-| `run(status): name [args ...]` | `/bin/name.ru` with the arguments (else a program of the boot image); 127 when missing |
+| `run(status): name [args ...]` | a program with the arguments: `/bin/name.ru`, `/bin/name.su` or the project's `/src/ussr/src/name/name.su`, or a path; a `.su` runs from its source through russia.ru; else a program of the boot image; 127 when missing |
+| `open_file(h): path [mode]`, `read_line(s): h`, `read_file(s): h [n]`, `write_file(n): h text`, `close_file(r): h` | files by handle, as in ussr: `r`/`rb` read (-1 for no such file), `w` writes anew, `a` appends; what is written reaches the disk at `close_file` |
 | `install(status):` | the installer, `/bin/install.ru` |
 | `df(_):`, `fsck(n):` | the root file system and its free space; a check |
 | `uptime(s):` | seconds since boot |
@@ -146,6 +148,32 @@ The file commands are the kernel's (`moscow.su` takes them over with
 
 Ctrl-D on an empty line ends the shell, and Moscow halts the machine
 (QEMU exits when started with `isa-debug-exit`).
+
+The console is a terminal: the shell reads its lines in raw mode, so
+Up and Down go through the history, which it keeps in
+`$HOME/.ussr_history` (`HOME` is `/`), and full-screen programs draw
+with ANSI escapes on the VGA screen as on a serial terminal.
+
+## Editing a file: Mbl
+
+The Mbl editor (`src/Mbl/Mbl.su`, a vi-like editor) runs unchanged,
+from its source:
+
+    russia> run(_): "Mbl" "/home/notes.txt"
+
+`i` inserts, Esc goes back, `:wq` writes and quits (the header of
+`Mbl.su` lists the keys). The note is a file of the Belarus root: it
+is there after `halt(_):` and the next boot:
+
+    russia> cat(_): "/home/notes.txt"
+
+The name finds `/src/ussr/src/Mbl/Mbl.su`, the project as the install
+disk carries it; russia.ru compiles it, its `$include` of
+`../libs/strings.su` included, and runs it. Any program of the
+project runs that way, by name or by path. On the VGA screen a UTF-8
+character takes one cell, as Mbl counts them; the VGA font has only
+the ASCII ones, the others show as a block (a serial terminal shows
+them all).
 
 ## Boot
 
@@ -222,12 +250,25 @@ pop at typeof struct new getf setf encode decode try write_stderr fail
 text_bytes bytes_text crc32 sha256 clear_bytes btree btput btget bthas
 btdel btlen btfirst btlast btfloor btceil btprev btnext btrange btkeys
 bread bwrite bsize bcopy bdevices getenv setenv unsetenv getcwd terminal_getch
-terminal_raw terminal_sane terminal_key_ready terminal_size sleep
-file_exists readfile` (`gc`, `alias`, `keybind` answer null). Library
-code such as `src/libs/strings.su` is compiled into the `.ru`.
-`terminal_getch` hands out a line at a time: the line is read with echo
-and Backspace, as a cooked terminal does, so russia.su reads it as from
-a pipe.
+terminal_raw terminal_sane terminal_key_ready terminal_size terminal_escape
+sleep file_exists readfile` (`gc`, `alias`, `keybind` answer null).
+Library code such as `src/libs/strings.su` is compiled into the `.ru`.
+
+The terminal: `terminal_raw(r):` (0) switches the console to raw mode,
+where `terminal_getch` returns each byte as it comes, unechoed, and
+`terminal_key_ready` says whether one is waiting; `terminal_sane(r):`
+switches back, and then `terminal_getch` hands out a line at a time,
+read with echo and Backspace as a cooked terminal does. In raw mode the
+keyboard's arrows, Home, End, Insert, Delete, Page Up and Page Down
+send the ANSI sequences a terminal sends (`ESC [ A` ...); Ctrl with a
+letter gives its control code in either mode; serial input is raw
+bytes already. Output goes to COM1 as it is and to the VGA screen
+through an ANSI interpreter: `ESC [ row ; col H`, cursor moves (`A B C
+D G d`), erasing (`J`, `K`) and SGR (`m`: reverse, bold, the 16
+colours) are carried out, the other sequences dropped; a line wraps at
+the character after the last column, as on a terminal.
+`terminal_size(s):` is `"25 80"` and `terminal_escape(s):` the ESC
+character, as ussr gives them.
 
 The kernel's own services, used by `moscow.su`:
 

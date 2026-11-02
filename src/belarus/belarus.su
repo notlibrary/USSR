@@ -99,26 +99,37 @@ bl_last_slash(r): path [
 
 # "/a//b/" -> "/a/b"; "" and "." -> "/"
 bl_clean(r): path [
-    set(r): ""
-    set(prev): 47
+    # the parts between slashes; "." stays, ".." goes back one
+    vec(parts): ""
     len(n): path
     set(i): 0
-    while(_): {i < n} [
-        byte(b): path i
-        if(_): {b != 47 || prev != 47} [
-            slice(c): path i 1
-            concat(r): r c
+    set(from): 0
+    while(_): {i <= n} [
+        set(end): {i = n}
+        if(_): {i < n} [
+            byte(b): path i
+            set(end): {b = 47}
         ]
-        set(prev): b
+        if(_): end [
+            slice(c): path from {i - from}
+            if(_): {c = ".."} [
+                len(np): parts
+                if(_): {np > 0} [ pop(_): parts ]
+            ]
+            elif(_): {c != "" && c != "."} [ push(_): parts c ]
+            set(from): {i + 1}
+        ]
         set(i): {i + 1}
     ]
-    len(m): r
-    if(_): {m > 0} [
-        byte(e): r {m - 1}
-        if(_): {e = 47} [ slice(r): r 0 {m - 1} ]
+    set(r): ""
+    len(np): parts
+    set(i): 0
+    while(_): {i < np} [
+        at(c): parts i
+        concat(r): r "/" c
+        set(i): {i + 1}
     ]
-    if(_): {r = "" || r = "."} [ set(r): "/" ]
-    else(_): [ concat(r): "/" r ]
+    if(_): {r = ""} [ set(r): "/" ]
 ]
 
 # the directory holding path ("/" for "/x")

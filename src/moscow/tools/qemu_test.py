@@ -11,6 +11,11 @@ shell, and checks what it printed: plain USSR as on the hosted ussr, the
 kernel's commands on its Belarus root file system (ls, cat, writefile,
 run, ...) and the btree container.
 
+Then the Mbl editor (src/Mbl/Mbl.su, run from its source) writes a note,
+checked on the serial line and in the VGA text memory (read through the
+QEMU monitor); halt(_): stops the machine and the next boot finds the
+note on the disk and opens it again (--no-mbl skips this).
+
 Then it installs: a second boot with an empty qcow2 virtual hard disk
 as /dev/hdb runs install(_):, answers its questions, and a third boot
 starts from that disk alone and checks what the installer put there.
@@ -76,12 +81,36 @@ CHECKS = [
     ("print(_): bn", r"3"),
     # the kernel's commands, through russia.su's host calls
     ("uptime(_):", r"up \d+ s"),
-    ("ls(_):", r"d +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  src"),
+    # the shell keeps its history in $HOME/.ussr_history, HOME being /
+    ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  src"),
     ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n- +\d+  stalin\.ru"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
     ('readfile(n): "/home/notes.txt"', r""),
     ("print(_): n", r"Belarus in Moscow"),
+    # Up recalls the last line from the history: the shell reads keys raw
+    ("\x1b[A", r"Belarus in Moscow"),
+    # files by handle
+    ('open_file(h): "/home/log.txt" "w"', r""),
+    ('write_file(_): h "one\\ntwo\\r\\n"', r""),
+    ('write_file(_): h "three"', r""),
+    ("close_file(_): h", r""),
+    ('open_file(h): "/home/log.txt" "a"', r""),
+    ('write_file(_): h "!"', r""),
+    ("close_file(_): h", r""),
+    ('open_file(h): "/home/log.txt" "rb"', r""),
+    ("read_line(a): h", r""),
+    ("read_line(b): h", r""),
+    ("read_line(c): h", r""),
+    ("read_line(d): h", r""),
+    ("close_file(_): h", r""),
+    ("print(_): a", r"one"),
+    ("print(_): b", r"two"),
+    ("print(_): c", r"three!"),
+    ("typeof(t): d", r""),
+    ("print(_): t", r"null"),
+    ('open_file(h): "/home/none.txt" "r"', r""),
+    ("print(_): h", r"-1"),
     ('file_exists(f): "/boot/moscow.ru"', r""),
     ("print(_): f", r"true"),
     ('file_exists(f): "/dev/hda"', r""),
@@ -175,10 +204,12 @@ def clean(data):
 class Machine:
     """QEMU with the given disks (path, format), COM1 on a socket."""
 
-    def __init__(self, qemu, disks, port, log):
+    def __init__(self, qemu, disks, port, log, monitor=None):
         cmd = [qemu, "-display", "none", "-no-reboot", "-m", "2048",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
                "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port]
+        if monitor:
+            cmd += ["-monitor", "tcp:127.0.0.1:%d,server=on,wait=off" % monitor]
         for i, (path, fmt) in enumerate(disks):
             cmd += ["-drive", "format=%s,index=%d,media=disk,file=%s" % (fmt, i, path)]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -193,11 +224,31 @@ class Machine:
             self.proc.kill()
             raise EOFError("cannot connect to QEMU's serial port")
         self.serial = Serial(sock, log)
+        self.monitor = None
+        if monitor:
+            self.monitor = Serial(socket.create_connection(("127.0.0.1", monitor), timeout=5), [])
+            self.monitor.read_until(b"(qemu) ")
+
+    def screen(self):
+        """The VGA text screen through the monitor: 25 rows of
+        (text, attributes), the text in code page 437."""
+        self.monitor.sock.sendall(b"xp /2000hx 0xb8000\n")
+        out = self.monitor.read_until(b"(qemu) ", timeout=20).decode("latin-1")
+        cells = [int(w, 16) for line in out.splitlines() if ": 0x" in line
+                 for w in line.split(":", 1)[1].split()]
+        rows = []
+        for r in range(25):
+            row = cells[r * 80:(r + 1) * 80]
+            rows.append((bytes(c & 0xff for c in row).decode("cp437"),
+                         [c >> 8 for c in row]))
+        return rows
 
     def close(self):
         if self.proc.poll() is None:
             self.proc.kill()
         self.serial.sock.close()
+        if self.monitor:
+            self.monitor.sock.close()
 
 
 def main():
@@ -206,8 +257,11 @@ def main():
     ap.add_argument("--transcript")
     ap.add_argument("--port", type=int, default=45321)
     ap.add_argument("--no-install", action="store_true",
-                    help="only the shell checks, no install onto a second disk")
+                    help="no install onto a second disk")
+    ap.add_argument("--no-mbl", action="store_true",
+                    help="no editing with Mbl across a reboot")
     args = ap.parse_args()
+    sys.stdout.reconfigure(errors="backslashreplace")
     if not os.path.exists(IMAGE):
         print("no %s: run sh src/moscow/build.sh first" % IMAGE)
         return 2
@@ -263,6 +317,8 @@ def main():
     finally:
         m.close()
 
+    if not args.no_mbl:
+        mbl(qemu, disk, args.port + 10, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
 
@@ -272,6 +328,90 @@ def main():
     shutil.rmtree(work, ignore_errors=True)
     print("%d failed" % failures)
     return 1 if failures else 0
+
+
+NOTE = ["Moscow, 2 November 2026: written in Mbl, kept on Belarus.",
+        "Привет из Москвы"]
+
+
+def mbl_frame(serial, timeout=120.0):
+    """Reads one screen Mbl draws, up to the cursor's final position;
+    returns its status line."""
+    serial.read_until(b"\x1b[7m", timeout)
+    status = serial.read_until(b"\x1b[0m\x1b[K\x1b[", timeout)
+    serial.read_until(b"H", timeout)
+    return status[:-len(b"\x1b[0m\x1b[K\x1b[")].decode("utf-8", "replace")
+
+
+def mbl(qemu, disk, port, log, check):
+    """Writes a note with the Mbl editor, src/Mbl/Mbl.su run from its
+    source by russia, halts, boots again and finds the note there."""
+    m = Machine(qemu, [(disk, "raw")], port, log, monitor=port + 1)
+    serial = m.serial
+    try:
+        serial.output_to_prompt(timeout=60)
+        serial.command('run(st): "Mbl" "/home/diary.txt"')
+        status = mbl_frame(serial)
+        check("Mbl starts on a new file", status.startswith(" NORMAL  /home/diary.txt"), repr(status))
+        # Mbl reads the byte after ESC (is it an arrow key?): h, a move,
+        # lets it go back to normal mode
+        keys = "i" + NOTE[0] + "\r" + NOTE[1] + "\x1bh"
+        serial.sock.sendall(keys.encode())
+        while "NORMAL" not in status or "[+]" not in status:
+            status = mbl_frame(serial)
+        rows = m.screen()
+        check("VGA: the first line of the note", rows[0][0].rstrip() == NOTE[0], repr(rows[0][0]))
+        check("VGA: a UTF-8 character a cell", rows[1][0].rstrip() == "■■■■■■ ■■ ■■■■■■", repr(rows[1][0]))
+        check("VGA: ~ past the end", rows[2][0].rstrip() == "~" and rows[23][0].rstrip() == "~",
+              repr([rows[2][0], rows[23][0]]))
+        check("VGA: the status line, reversed", rows[24][0].startswith(" NORMAL  /home/diary.txt [+]")
+              and rows[24][1][0] == 0x70 and rows[0][1][0] == 0x07,
+              "%r %x %x" % (rows[24][0], rows[24][1][0], rows[0][1][0]))
+        serial.sock.sendall(b":wq\r")
+        got = clean(serial.output_to_prompt(timeout=60))
+        rows = m.screen()
+        check("VGA: Mbl clears the screen as it quits",
+              rows[0][0].rstrip() == "russia>" and rows[1][0].strip() == "", repr(rows[:2]))
+        serial.command("print(_): st")
+        got = clean(serial.output_to_prompt())
+        check("Mbl exits with 0", got == "0", repr(got))
+        serial.command("halt(_):")
+        try:
+            code = m.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            code = None
+        check("halt(_): stops the machine", code == 1, "exit status %r" % code)
+    except (TimeoutError, EOFError) as e:
+        check("Mbl conversation", False, str(e))
+    finally:
+        m.close()
+
+    # the next boot: the note is on the disk
+    m = Machine(qemu, [(disk, "raw")], port + 2, log, monitor=port + 3)
+    serial = m.serial
+    try:
+        serial.output_to_prompt(timeout=60)
+        serial.command('cat(_): "/home/diary.txt"')
+        got = clean(serial.output_to_prompt())
+        check("after the reboot the note is there", got == "\n".join(NOTE), repr(got))
+        serial.command('run(st): "/src/ussr/src/Mbl/Mbl.su" "/home/diary.txt"')
+        status = mbl_frame(serial)
+        rows = m.screen()
+        check("Mbl opens the note", status.startswith(" NORMAL  /home/diary.txt    ")
+              and rows[0][0].rstrip() == NOTE[0], repr([status, rows[0][0]]))
+        serial.sock.sendall(b":q\r")
+        serial.output_to_prompt(timeout=60)
+        serial.command("fsck(_):")
+        got = clean(serial.output_to_prompt())
+        check("the disk checks clean after it",
+              re.fullmatch(r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+", got)
+              is not None, repr(got))
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("Mbl after the reboot", False, str(e))
+    finally:
+        m.close()
 
 
 def install(qemu, disk, work, port, log, check):
