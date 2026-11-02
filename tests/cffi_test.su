@@ -1,0 +1,76 @@
+# C libraries as USSR commands (src/cffi.c; Moscow: cffi.inc): the C
+# runtime of the host is loaded and its functions called with integers,
+# strings and byte buffers. Run from the repository root:
+#   ussr tests/cffi_test.su
+check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(line): "PASS " label ]
+    else(_): [
+        encode(g): got
+        encode(w): want
+        concat(line): "FAIL " label ": got " g ", want " w
+    ]
+    print(_): line
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    # the C runtime: msvcrt.dll on Windows, the C library elsewhere
+    set(lib): null
+    vec(tries): ""
+    push(_): tries "msvcrt.dll"
+    push(_): tries "libc.so.6"
+    push(_): tries "/usr/lib/libSystem.dylib"
+    push(_): tries "libc.so"
+    set(i): 0
+    while(_): {lib = null && i < 4} [
+        at(name): tries i
+        c_load(lib): name
+        set(i): {i + 1}
+    ]
+    typeof(t): lib
+    check(_): "c_load the C runtime" t "integer"
+    c_load(none): "no-such-library-anywhere.dll"
+    check(_): "a library that is not there" none null
+
+    c_sym(strlen): lib "strlen"
+    typeof(t): strlen
+    check(_): "c_sym strlen" t "integer"
+    c_sym(none): lib "no_such_function_at_all"
+    check(_): "a function that is not there" none null
+    c_call(n): strlen "Moscow"
+    check(_): "strlen of a string" n 6
+    c_sym(atoi): lib "atoi"
+    c_call(n): atoi "1917"
+    check(_): "atoi" n 1917
+
+    # a buffer the function fills comes back into the vector
+    c_sym(memset): lib "memset"
+    vec(buf): ""
+    set(i): 0
+    while(_): {i < 5} [
+        push(_): buf 0
+        set(i): {i + 1}
+    ]
+    c_call(_): memset buf 65 3
+    bytes_text(t): buf 0 3
+    check(_): "memset fills a byte vector" t "AAA"
+    at(z): buf 4
+    check(_): "the rest stays" z 0
+
+    # memory of its own
+    c_alloc(p): 16
+    c_write(w): p "hello, C"
+    check(_): "c_write" w 8
+    c_call(n): strlen p
+    check(_): "a C function reads it" n 8
+    c_string(s): p
+    check(_): "c_string" s "hello, C"
+    c_read(v): p 5
+    bytes_text(t): v
+    check(_): "c_read" t "hello"
+    c_sym(toupper): lib "toupper"
+    c_call(u): toupper 113
+    check(_): "an integer argument" u 81
+    c_free(_): p
+]

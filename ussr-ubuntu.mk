@@ -61,6 +61,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/eventq.o \
        $(SRC_DIR)/gc.o \
        $(SRC_DIR)/btree.o \
+       $(SRC_DIR)/cffi.o \
        $(SRC_DIR)/prng64_xrp32.o \
        $(SRC_DIR)/keybind.o \
        $(SRC_DIR)/alias.o \
@@ -77,6 +78,8 @@ OBJS += $(SRC_DIR)/completion_fs_win32.o $(SRC_DIR)/socket_win32.o $(SRC_DIR)/wi
 LDLIBS += -lws2_32 -lsecur32 -lcrypt32 -lncrypt -ladvapi32
 else
 OBJS += $(SRC_DIR)/completion_fs_posix.o $(SRC_DIR)/socket_posix.o $(SRC_DIR)/process_posix.o
+# c_load: dlopen (in libc since glibc 2.34, in libdl before)
+LDLIBS += -ldl
 endif
 
 all: $(TARGET)
@@ -185,6 +188,9 @@ $(SRC_DIR)/gc.o: $(SRC_DIR)/gc.c $(SRC_DIR)/gc.h $(SRC_DIR)/uno.h $(SRC_DIR)/btr
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/btree.o: $(SRC_DIR)/btree.c $(SRC_DIR)/btree.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/cffi.o: $(SRC_DIR)/cffi.c $(SRC_DIR)/cffi.h $(SRC_DIR)/uno.h $(SRC_DIR)/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c $(SRC_DIR)/prng64_xrp32.h

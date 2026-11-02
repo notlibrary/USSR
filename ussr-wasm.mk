@@ -43,6 +43,7 @@ OBJECTS = \
     src/eventq.o \
     src/gc.o \
     src/btree.o \
+    src/cffi.o \
 	src/prng64_xrp32.o
 
 .PHONY: all clean dist
@@ -107,6 +108,9 @@ src/gc.o: src/gc.c src/gc.h src/uno.h src/btree.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/btree.o: src/btree.c src/btree.h src/uno.h src/ussr.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/cffi.o: src/cffi.c src/cffi.h src/uno.h src/ussr.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/prng64_xrp32.o: src/prng64_xrp32.c src/prng64_xrp32.h

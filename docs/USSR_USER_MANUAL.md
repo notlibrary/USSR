@@ -710,6 +710,45 @@ Two things worth knowing:
   value on Windows) — the same "exit code > 127 means it died
   abnormally" convention shells generally use.
 
+### 9.1 C libraries
+
+A shared library's functions are USSR commands away: load it, find a
+function by name, call it with integers, strings and byte buffers.
+
+```
+c_load(libc): "msvcrt.dll"            # libc.so.6 on Linux; null if missing
+c_sym(strlen): libc "strlen"          # an address, or null
+c_call(n): strlen "Moscow"            # 6
+vec(buf): ""                          # a buffer the function fills
+push(_): buf 0
+push(_): buf 0
+c_sym(memset): libc "memset"
+c_call(_): memset buf 65 2            # buf is now [65,65]
+```
+
+| Command | Does |
+|---------|------|
+| `c_load(lib): path` | loads a library (`.dll`, `.so`, `.dylib`; in Moscow an ELF shared object, a bare name looked for in `/lib`); null when it cannot |
+| `c_sym(f): lib name` | the address of a function or variable it exports, or null |
+| `c_call(r): f [args ...]` | calls `f` with up to 12 arguments; the integer it returns |
+| `c_alloc(p): n`, `c_free(_): p` | `n` zeroed bytes of memory; giving them back |
+| `c_read(v): p n`, `c_write(n): p data`, `c_string(s): p` | bytes at an address as a vector; a string's or a byte vector's bytes to it; the NUL-terminated string there |
+
+The arguments of `c_call` are integers (addresses too), `true` and
+`false` (1, 0), null (0), strings (the address of their bytes,
+NUL-terminated) and vectors of bytes (the address of a copy whose bytes
+go back into the vector when the call returns). Only integer and
+pointer parameters, as x86-64 passes them; the result is the integer
+the function returns. There are no checks past these: a wrong address
+or a wrong signature crashes the program, as it would in C.
+
+In Moscow, `c_load` takes an ELF shared object built freestanding
+(`clang --target=x86_64-unknown-elf -ffreestanding -fno-builtin -fPIC
+-mno-red-zone`, linked with `ld.lld -shared --hash-style=sysv`); its
+imports come from the few C functions the kernel gives (`memcpy`,
+`memmove`, `memset`, `memcmp`, `strlen`), and `src/moscow/build.sh`
+builds `src/moscow/lib/*.c` into `/lib`.
+
 ---
 
 ## 10. `eval`: running code from a string

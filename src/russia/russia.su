@@ -32,6 +32,7 @@ global(_): rt_conly rt_coout rt_cosrc rt_crctab cv_nhash cv_fhash rt_bopt
 global(_): rt_hint cv_gcache cv_nkind vm_ffok vm_ffcache rt_gui cv_fnret
 # a program's arguments: set by ex_ext_ev, read by ex_ext_b's eval
 global(_): rt_xa1 rt_xa2 rt_xa3 rt_xa4 rt_xa5 rt_xa6 rt_xa7 rt_xa8 rt_xa9 rt_xa10 rt_xa11 rt_xa12
+global(_): rt_xa13 rt_xa14 rt_xa15 rt_xa16
 # a folded constant: set by cf_fold and its helpers, read by cv_e_t
 global(_): cf_v
 
@@ -3141,6 +3142,10 @@ ex_ext(r): nd nm [
     set(rt_xa10): null
     set(rt_xa11): null
     set(rt_xa12): null
+    set(rt_xa13): null
+    set(rt_xa14): null
+    set(rt_xa15): null
+    set(rt_xa16): null
     ex_ext_ev(_): rt_xk 0 rt_xn
     set(rt_xrv): null
     ex_ext_b(r): nd nm rt_xn
@@ -3148,7 +3153,7 @@ ex_ext(r): nd nm [
 ex_ext_ev(r): kids i n [
     set(r): 0
     if(_): {i < n} [
-        if(_): {i < 12} [
+        if(_): {i < 16} [
             at(rt_xen): kids i
             ex_val(rt_xev): rt_xen
             if(_): {i = 0} [ set(rt_xa1): rt_xev ]
@@ -3163,6 +3168,10 @@ ex_ext_ev(r): kids i n [
             if(_): {i = 9} [ set(rt_xa10): rt_xev ]
             if(_): {i = 10} [ set(rt_xa11): rt_xev ]
             if(_): {i = 11} [ set(rt_xa12): rt_xev ]
+            if(_): {i = 12} [ set(rt_xa13): rt_xev ]
+            if(_): {i = 13} [ set(rt_xa14): rt_xev ]
+            if(_): {i = 14} [ set(rt_xa15): rt_xev ]
+            if(_): {i = 15} [ set(rt_xa16): rt_xev ]
         ]
         add(rt_xi2): i 1
         ex_ext_ev(r): kids rt_xi2 n
@@ -3184,6 +3193,10 @@ ex_ext_b(r): nd nm n [
     if(_): {n > 9} [ concat(rt_xes): rt_xes " rt_xa10" ]
     if(_): {n > 10} [ concat(rt_xes): rt_xes " rt_xa11" ]
     if(_): {n > 11} [ concat(rt_xes): rt_xes " rt_xa12" ]
+    if(_): {n > 12} [ concat(rt_xes): rt_xes " rt_xa13" ]
+    if(_): {n > 13} [ concat(rt_xes): rt_xes " rt_xa14" ]
+    if(_): {n > 14} [ concat(rt_xes): rt_xes " rt_xa15" ]
+    if(_): {n > 15} [ concat(rt_xes): rt_xes " rt_xa16" ]
     eval(rt_xer): rt_xes
     getf(rt_xrn): nd "s2"
     rt_write(_): rt_xrn rt_xrv
@@ -6150,7 +6163,7 @@ vm_bind_i(r): prm sv ab i n [
         set(r): 0
     ]
 ]
-# An external command: name (rt_na0) and up to twelve values from the
+# An external command: name (rt_na0) and up to sixteen values from the
 # argument registers, run through the host's eval of the same call (its
 # argument variables are this function's locals, which eval sees).
 vm_ext(r): nb [
@@ -6166,6 +6179,10 @@ vm_ext(r): nb [
     set(vm_xa10): null
     set(vm_xa11): null
     set(vm_xa12): null
+    set(vm_xa13): null
+    set(vm_xa14): null
+    set(vm_xa15): null
+    set(vm_xa16): null
     if(_): {nb > 1} [ vm_reg(vm_xa1): {vm_nbase + 1} ]
     if(_): {nb > 2} [ vm_reg(vm_xa2): {vm_nbase + 2} ]
     if(_): {nb > 3} [ vm_reg(vm_xa3): {vm_nbase + 3} ]
@@ -6178,7 +6195,11 @@ vm_ext(r): nb [
     if(_): {nb > 10} [ vm_reg(vm_xa10): {vm_nbase + 10} ]
     if(_): {nb > 11} [ vm_reg(vm_xa11): {vm_nbase + 11} ]
     if(_): {nb > 12} [ vm_reg(vm_xa12): {vm_nbase + 12} ]
-    if(_): {nb > 13} [ rt_fatal(_): ]
+    if(_): {nb > 13} [ vm_reg(vm_xa13): {vm_nbase + 13} ]
+    if(_): {nb > 14} [ vm_reg(vm_xa14): {vm_nbase + 14} ]
+    if(_): {nb > 15} [ vm_reg(vm_xa15): {vm_nbase + 15} ]
+    if(_): {nb > 16} [ vm_reg(vm_xa16): {vm_nbase + 16} ]
+    if(_): {nb > 17} [ rt_fatal(_): ]
     set(vm_xrv): null
     concat(vm_xs): rt_na0 "(vm_xrv):"
     if(_): {nb > 1} [ concat(vm_xs): vm_xs " vm_xa1" ]
@@ -6193,6 +6214,10 @@ vm_ext(r): nb [
     if(_): {nb > 10} [ concat(vm_xs): vm_xs " vm_xa10" ]
     if(_): {nb > 11} [ concat(vm_xs): vm_xs " vm_xa11" ]
     if(_): {nb > 12} [ concat(vm_xs): vm_xs " vm_xa12" ]
+    if(_): {nb > 13} [ concat(vm_xs): vm_xs " vm_xa13" ]
+    if(_): {nb > 14} [ concat(vm_xs): vm_xs " vm_xa14" ]
+    if(_): {nb > 15} [ concat(vm_xs): vm_xs " vm_xa15" ]
+    if(_): {nb > 16} [ concat(vm_xs): vm_xs " vm_xa16" ]
     eval(vm_xer): vm_xs
     set(r): vm_xrv
     # waiting on a socket is a scheduler point, as in ussr: the other

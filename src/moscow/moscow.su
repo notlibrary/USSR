@@ -504,6 +504,26 @@ sys_fw(r): a [
     print(_): r
 ]
 
+# c_load(lib): path -> a C library of the root file system (an ELF shared
+# object built freestanding, see arch/amd64/cffi.inc), its number, or
+# null; a bare name is looked for in /lib. c_sym, c_call and the others
+# are the runtime's.
+sys_c_load(r): a [
+    set(r): null
+    mo_arg(path): a 0 ""
+    str_find(slash): path "/" 0
+    if(_): {slash < 0} [ concat(path): "/lib/" path ]
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    bl_is_dir(d): fs path
+    bl_exists(e): fs path
+    if(_): {e = false || d} [ return(r): r ]
+    bl_read_bytes(bytes): fs path
+    typeof(tb): bytes
+    if(_): {tb = "vector"} [ k_elf_load(r): bytes ]
+]
+
 # rename_path(r): from to -> 0, 1 when it failed (there is something at
 # to already, among other things)
 sys_rename_path(r): a [
@@ -744,6 +764,7 @@ mo_syscalls(r): [
     k_syscall(_): "bwrite" "sys_bwrite"
     k_syscall(_): "bsize" "sys_bsize"
     k_syscall(_): "fw" "sys_fw"
+    k_syscall(_): "c_load" "sys_c_load"
     net_syscalls(_):
 ]
 

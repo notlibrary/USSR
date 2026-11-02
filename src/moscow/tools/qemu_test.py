@@ -143,6 +143,8 @@ CHECKS = [
     ('fw(_): "delete 4"', r"(.|\n)*3\. allow in tcp 8443(.|\n)*"),
     ('fw(_): "allow sideways"', r"fw: in or out, not sideways\n(.|\n)*"),
     ('ping(n): "10.0.2.2" 1', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\n1 sent, 1 answered"),
+    # C libraries: /lib/ctest.so through the runtime's ELF loader
+    ('run(st): "/src/ussr/tests/cffi_moscow_test.su"', r"(PASS [^\n]*\n){16}PASS [^\n]*"),
     ('localtime(t): 1793535166', r""),
     ("print(_): t", r"\[2026,11,1,12,12,46,0,304\]"),
     ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),

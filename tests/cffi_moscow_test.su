@@ -1,0 +1,78 @@
+# The C interface in Moscow: /lib/ctest.so (src/moscow/lib/ctest.c, built
+# freestanding by src/moscow/build.sh) loaded by the runtime's ELF loader
+# and called. qemu_test.py runs it in Moscow:
+#   run(st): "/src/ussr/tests/cffi_moscow_test.su"
+check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(line): "PASS " label ]
+    else(_): [
+        encode(g): got
+        encode(w): want
+        concat(line): "FAIL " label ": got " g ", want " w
+    ]
+    print(_): line
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    c_load(lib): "ctest.so"
+    typeof(t): lib
+    check(_): "c_load /lib/ctest.so" t "integer"
+    c_load(none): "/lib/nothing.so"
+    check(_): "a library that is not there" none null
+    c_sym(f): lib "ctest_constructed"
+    c_call(n): f
+    check(_): "its constructor ran, once" n 1
+    c_sym(f): lib "no_such_function"
+    check(_): "a symbol it does not have" f null
+
+    c_sym(f): lib "ctest_add"
+    c_call(n): f 40 2
+    check(_): "two arguments" n 42
+    c_call(n): f -5 3
+    check(_): "a negative one" n -2
+    c_sym(f): lib "ctest_twelve"
+    c_call(n): f 1 1 1 1 1 1 1 1 1 1 1 1
+    check(_): "twelve: registers and the stack" n 78
+    c_call(n): f 0 0 0 0 0 0 0 0 0 0 0 1
+    check(_): "the twelfth is the twelfth" n 12
+
+    c_sym(f): lib "ctest_length"
+    c_call(n): f "Moscow"
+    check(_): "a string, and an import (strlen)" n 6
+
+    vec(buf): ""
+    set(i): 0
+    while(_): {i < 6} [
+        push(_): buf 0
+        set(i): {i + 1}
+    ]
+    c_sym(f): lib "ctest_fill"
+    c_call(_): f buf 4 120
+    bytes_text(t): buf 0 4
+    check(_): "a buffer filled through memset" t "xxxx"
+    at(x): buf 4
+    check(_): "and written by the library" x 4
+
+    c_sym(f): lib "ctest_name"
+    c_call(p): f 2
+    c_string(s): p
+    check(_): "a relocated pointer to its data" s "two"
+    c_sym(names): lib "ctest_names"
+    c_read(v): names 8
+    typeof(tv): v
+    check(_): "c_read its data" tv "vector"
+
+    c_alloc(p): 32
+    c_write(w): p "abc"
+    check(_): "c_write" w 3
+    c_sym(f): lib "ctest_length"
+    c_call(n): f p
+    check(_): "its memory, read by C" n 3
+    c_free(_): p
+    c_alloc(q): 32
+    check(_): "a freed block is taken again" q p
+    c_read(v): q 3
+    bytes_text(t): v
+    check(_): "zeroed" {t = null} true
+]

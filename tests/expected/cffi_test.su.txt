@@ -1,0 +1,17 @@
+PASS c_load the C runtime
+PASS a library that is not there
+PASS c_sym strlen
+PASS a function that is not there
+PASS strlen of a string
+PASS atoi
+PASS memset fills a byte vector
+PASS the rest stays
+PASS c_write
+PASS a C function reads it
+PASS c_string
+PASS c_read
+PASS an integer argument
+
+--- stderr ---
+
+--- exit 0 ---

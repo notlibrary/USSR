@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- C libraries as USSR commands: `c_load`, `c_sym`, `c_call` (up to 12
+  integer, string or byte-buffer arguments), `c_alloc`, `c_free`,
+  `c_read`, `c_write`, `c_string`. The hosted ussr loads `.dll`/`.so`
+  with LoadLibrary/dlopen (`src/cffi.c`); Moscow's runtime has an ELF
+  loader for freestanding shared objects (`arch/amd64/cffi.inc`:
+  relocations, imports from a small C runtime, constructors), and
+  `build.sh` builds `src/moscow/lib/*.c` into `/lib`. russia.su passes
+  up to sixteen arguments to host commands.
 - Murmansk (`src/murmansk`), the firewall of Moscow's network stack:
   ordered `allow`/`deny` rules by direction, protocol, port range and
   network, a policy for each direction, stateful (connections, ping and

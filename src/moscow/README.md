@@ -330,6 +330,7 @@ The kernel's own services, used by `moscow.su`:
 | `net_recv(v):` | the next Ethernet frame as a byte vector, or null |
 | `net_send(n): head [tail [from [count]]]` | one frame: a byte vector, then a string or byte vector (or part of one) |
 | `net_sum(n): data [from [count]]` | the 16-bit one's complement sum of IP checksums, folded |
+| `k_elf_load(lib): bytes` | loads a freestanding x86-64 ELF shared object (`c_load` reads the file); `c_sym`, `c_call`, `c_alloc`, `c_free`, `c_read`, `c_write`, `c_string` as in ussr (`arch/amd64/cffi.inc`) |
 | `k_reboot(_):`, `k_halt(_):` | reset; stop |
 
 The heap is a bump heap with marks: `k_exec` (and `run`) release

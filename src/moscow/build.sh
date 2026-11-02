@@ -88,6 +88,29 @@ printf '%s\n' "# Murmansk, the firewall: the first rule that matches decides" \
     "policy in deny" "policy out allow" "allow in icmp" \
     "allow in tcp 8080" "allow in tcp 8443" >"$out/murmansk.rules"
 belarus put "$dev" "$(hp "$out/murmansk.rules")" /etc/murmansk.rules
+# C libraries for c_load (src/moscow/lib/*.c): freestanding ELF shared
+# objects into /lib, when clang and ld.lld are there
+CLANG=${CLANG:-clang}
+LLD=${LLD:-ld.lld}
+for t in "$CLANG" "/c/Program Files/LLVM/bin/clang"; do
+    command -v "$t" >/dev/null 2>&1 && CLANG=$t && break
+done
+for t in "$LLD" "/c/Program Files/LLVM/bin/ld.lld"; do
+    command -v "$t" >/dev/null 2>&1 && LLD=$t && break
+done
+if command -v "$CLANG" >/dev/null 2>&1 && command -v "$LLD" >/dev/null 2>&1; then
+    mkdir -p "$out/lib"
+    for c in "$here"/lib/*.c; do
+        name=$(basename "$c" .c)
+        "$CLANG" --target=x86_64-unknown-elf -ffreestanding -fno-builtin -fPIC \
+            -mno-red-zone -fno-stack-protector -fuse-init-array -O2 \
+            -c "$c" -o "$out/lib/$name.o"
+        "$LLD" -shared --hash-style=sysv -o "$out/lib/$name.so" "$out/lib/$name.o"
+        belarus put "$dev" "$(hp "$out/lib/$name.so")" "/lib/$name.so"
+    done
+else
+    echo "build.sh: no clang and ld.lld: no C libraries in /lib" >&2
+fi
 # the project: the files git tracks (every file in the tree when this is
 # no git checkout), never build products - objects, binaries, packages,
 # disk images - whichever way they got there

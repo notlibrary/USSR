@@ -215,6 +215,7 @@ start:
         call gdt_init
         call idt_init
         call heap_init
+        call cffi_init
         call ata_init
         call net_init
         call env_init
@@ -2613,6 +2614,8 @@ exec_file:
         jz .missing
         mov r12, [heap_ptr]
         push qword [struct_types]
+        push qword [clib_count]
+        push qword [cfree_head]
         push r8
         mov rsi, rax
         call rt_load
@@ -2626,6 +2629,8 @@ exec_file:
         mov eax, 1
 .release:
         mov [heap_ptr], r12
+        pop qword [cfree_head]
+        pop qword [clib_count]
         pop qword [struct_types]
         pop r12
         pop rbx
@@ -4354,6 +4359,8 @@ bi_k_exec_bytes:
 .listed:
         mov r12, [heap_ptr]
         push qword [struct_types]
+        push qword [clib_count]
+        push qword [cfree_head]
         mov r8, [rdi + 8]
         mov rcx, [r8 + VEC_COUNT]
         lea rdi, [rcx + 8]
@@ -4383,6 +4390,8 @@ bi_k_exec_bytes:
         mov eax, 1
 .release:
         mov [heap_ptr], r12
+        pop qword [cfree_head]
+        pop qword [clib_count]
         pop qword [struct_types]
         pop r13
         pop r12
@@ -6539,6 +6548,7 @@ bi_pwd:
 %include "btree.inc"
 %include "ata.inc"
 %include "net.inc"
+%include "cffi.inc"
 %include "sha256.inc"
 
 ; =====================================================================
@@ -6706,6 +6716,14 @@ bi_table:
         dq n_net_recv, bi_net_recv
         dq n_net_send, bi_net_send
         dq n_net_sum, bi_net_sum
+        dq n_k_elf_load, bi_k_elf_load
+        dq n_c_sym, bi_c_sym
+        dq n_c_call, bi_c_call
+        dq n_c_alloc, bi_c_alloc
+        dq n_c_free, bi_c_free
+        dq n_c_read, bi_c_read
+        dq n_c_write, bi_c_write
+        dq n_c_string, bi_c_string
         dq 0, 0
 
 type_names:
@@ -6827,6 +6845,14 @@ n_net_info:     db "net_info", 0
 n_net_recv:     db "net_recv", 0
 n_net_send:     db "net_send", 0
 n_net_sum:      db "net_sum", 0
+n_k_elf_load:   db "k_elf_load", 0
+n_c_sym:        db "c_sym", 0
+n_c_call:       db "c_call", 0
+n_c_alloc:      db "c_alloc", 0
+n_c_free:       db "c_free", 0
+n_c_read:       db "c_read", 0
+n_c_write:      db "c_write", 0
+n_c_string:     db "c_string", 0
 e_net_sum:      db "net_sum(n): data [from [count]] (a string or a byte vector)", 0
 e_clear_bytes:  db "clear_bytes(v): a byte vector", 0
 e_syscall:      db "k_syscall(_): name function (a name under 31 bytes)", 0
@@ -7042,6 +7068,22 @@ net_rx_next:    resq 1
 net_tx_ring:    resq 1
 net_tx_bufs:    resq 1
 net_tx_next:    resq 1
+clib_count:     resq 1
+clib_table:     resb CLIB_MAX * CLIB_SIZE
+c_scratch:      resq 1
+c_scratch_top:  resq 1
+c_args:         resq C_ARGS
+cfree_head:     resq 1
+elf_dyn:        resq 1
+elf_hash:       resq 1
+elf_strtab:     resq 1
+elf_symtab:     resq 1
+elf_rela:       resq 1
+elf_relasz:     resq 1
+elf_jmprel:     resq 1
+elf_pltrelsz:   resq 1
+elf_init:       resq 1
+elf_initsz:     resq 1
 blk_copy:       resq 1
 sha_state:      resd 8
 sha_w:          resd 64
