@@ -163,7 +163,7 @@
   missing or only their `box.uno`); `Makefile.msc` and `ussr-ubuntu.mk`
   list every header each object includes, so editing one rebuilds them.
 
-## [0.4.9] - 2026-10-29
+## [0.4.9] - 2026-11-03
 
 The second wave of the project is finished: every subproject listed in
 the README has code, and with usa, the C compiler, USSR is complete.

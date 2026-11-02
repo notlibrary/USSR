@@ -997,3 +997,51 @@ I uploaded files using raw ip address not server domain because it under cloudfl
 Then upload error
 1.Upload into wrong folder 
 I want it upload /var/www/html/USSR it uploads to /home/tno/var/www/html/USSR
+
+Now milestone firs rename moscow.su to kiev.su then split
+siberia.su to siberia.su(spreadsheet) and novosibirsk.su(pad editor)
+Do not forget to edit readme
+
+Now the the main thing let's do amd64 kernel called moscow.ru with NASM
+first we need 64 bit multistaged bootloader which boots NASM ussr runtime which runs moscow.ru which then runs russia.ru as 
+a shell so a final .img has 1. nasm bootloader 2. nasm ussr runtime 3. moscow.ru kernel russia.ru shell
+the paths from moscow/arch/amd64 boot.nasm ussr_rt.nasm
+			   moscow moscow.su russia.su
+Use qemu and nasm to test whole thing
+
+Now we need to build the Belarus.su file system on b+ trees and use it in an install image
+First we need to add b+ tree to USSR language as container
+After all this done we build USSR installer which run by `install(_):` command
+we need to learn kernel read and write Belarus files 
+Then belarus is done we can copy all our project entirely to fresh fs and use it as installer image
+So kernel boots from belarus image user types `install(_):` 
+it makes Belarus partition with stalin and copy all USSR programs from image to it
+it must work on both virtual image and virtual HDD do not run against real hw
+it must dialog with user asking it about partitioning and other install questions
+installer must be usual USSR script
+Good Luck
+
+When I say based on B+ tree I mean the B+ tree connects actual file LBA 
+and index of file block in current write/read operation I do not mean connection between path and file body
+It can be done by other structure Other flaw is lot of thrash files in img ignore .obj and .o  .ural when build it 
+
+I'm back Continue to improve kernel terminal capabilities The goal is to run Mbl text editor not changing it windows linux
+portability even better to run it from .su file test is to write the note halt reboot and then see if it is there
+
+Going in without firewall is a very bad practice to complete the network stack 
+1. we need firewall murmansk.su
+2. we need the way to open secure socket 
+somehow bring openssl(and any C library) binary and interface to use it's functions as USSR command
+
+Now we must do GUI windows support using this method of calling C libraries we used for SSL
+to call some OpenGL library GLFW or any other lib (GLes see https://github.com/eug/awesome-opengl) that fits purpose of doing GUI windows
+1. We must do GUI terminal for USSR shell called Mbltishi.su(xterm, Putty, Windows CMD terminal analog)
+2. Run kremlin desktop on moscow kernel then run Mbltishi terminal window from kremlin desktop 
+3. Make a GIF where USSR shell ran in Mbltishi terminal window on top of the kremlin desktop writes "hello world"
+Screen resolution is 1024x768 1536x1024 or 1920x1080
+
+Additional bonus is to run tver on belarus fs on the same kremlin desktop
+
+This is the hard task
+
+Also fix the CHANGELOG.md move unreleased to 0.4.9 we are 0.4.8 still workng on 0.4.9
