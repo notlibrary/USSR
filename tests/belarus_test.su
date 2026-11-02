@@ -147,6 +147,24 @@ init(result): arg_count arg_values [
     check(_): "an emptied one goes" w 0
     bl_exists(e): fs "/data/directory-number-7"
     check(_): "gone" e false
+    # renames move the entry; the inode and the data stay
+    bl_write_text(_): fs "/data/note.txt" "moved text"
+    bl_mkdir(_): fs "/elsewhere"
+    bl_get(before): fs "/data/note.txt"
+    bl_rename(w): fs "/data/note.txt" "/elsewhere/./note2.txt"
+    check(_): "rename" w 0
+    bl_read_text(t): fs "/elsewhere/note2.txt"
+    check(_): "the file reads under its new name" t "moved text"
+    bl_get(after): fs "/elsewhere/note2.txt"
+    at(i1): before 3
+    at(i2): after 3
+    check(_): "the same inode" i2 i1
+    bl_exists(e): fs "/data/note.txt"
+    check(_): "the old name is gone" e false
+    bl_rename(w): fs "/elsewhere/note2.txt" "/data/directory-number-1/../directory-number-0"
+    check(_): "no rename onto a name that is there" w -1
+    bl_rename(w): fs "/elsewhere" "/elsewhere/inside"
+    check(_): "no directory inside itself" w -1
     bl_sync(w): fs
     check(_): "sync" w 0
 

@@ -1522,6 +1522,60 @@ bl_remove(r): fs path [
     set(r): 0
 ]
 
+# Renames or moves a file or a directory: its entry leaves one directory
+# and joins another, the inode and the data stay. 0, or -1 when there is
+# nothing at from, something at to already, no directory to put it in or
+# a directory would go inside itself.
+bl_rename(r): fs from to [
+    set(r): -1
+    bl_clean(a): from
+    bl_clean(b): to
+    bl_get(rec): fs a
+    typeof(t): rec
+    if(_): {t != "vector" || a = "/"} [
+        concat(m): "no file " a
+        bl_err(r): m
+        return(r): r
+    ]
+    bl_exists(there): fs b
+    if(_): there [
+        concat(m): b " exists"
+        bl_err(r): m
+        return(r): r
+    ]
+    concat(inside): a "/"
+    len(il): inside
+    len(bl): b
+    if(_): {bl > il} [
+        slice(bp): b 0 il
+        if(_): {bp = inside} [
+            concat(m): a " cannot go inside itself"
+            bl_err(r): m
+            return(r): r
+        ]
+    ]
+    bl_parent(bup): b
+    bl_is_dir(ok): fs bup
+    if(_): {ok = false} [
+        concat(m): bup " is not a directory"
+        bl_err(r): m
+        return(r): r
+    ]
+    at(ino): rec 3
+    bl_parent(aup): a
+    bl_base(aname): a
+    bl_base(bname): b
+    bl_lookup(adino): fs aup
+    bl_dir(adir): fs adino
+    btdel(_): adir aname
+    bl_dir_changed(_): fs adino
+    bl_lookup(bdino): fs bup
+    bl_dir(bdir): fs bdino
+    btput(_): bdir bname ino
+    bl_dir_changed(_): fs bdino
+    set(r): 0
+]
+
 # Copies a file or a whole tree from one Belarus file system to another
 # (or within one), run by run with bcopy. Calls the function named report
 # (when not "") with each path and its record. The number of entries

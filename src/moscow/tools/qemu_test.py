@@ -2,7 +2,8 @@
 """Boots build/moscow/ussr.img in QEMU and drives the Russia shell.
 
     python src/moscow/tools/qemu_test.py [--qemu PATH] [--transcript FILE]
-                                         [--no-install]
+                                         [--accel whpx|kvm] [--no-mbl]
+                                         [--no-novgorod] [--no-install]
 
 QEMU runs headless with the first serial port on a local TCP socket.
 The script waits for each "russia> " prompt (the PS1 Moscow sets), types
@@ -15,6 +16,11 @@ Then the Mbl editor (src/Mbl/Mbl.su, run from its source) writes a note,
 checked on the serial line and in the VGA text memory (read through the
 QEMU monitor); halt(_): stops the machine and the next boot finds the
 note on the disk and opens it again (--no-mbl skips this).
+
+Then the network: Novgorod, the forum (src/novgorod/novgorod.su), runs
+from its source over Moscow's TCP/IP stack with a port of this machine
+forwarded to it; the script reads its pages, posts to it, and the next
+boot finds the post on the disk (--no-novgorod skips this).
 
 Then it installs: a second boot with an empty qcow2 virtual hard disk
 as /dev/hdb runs install(_):, answers its questions, and a third boot
@@ -30,10 +36,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 IMAGE = os.path.join(ROOT, "build", "moscow", "ussr.img")
 PROMPT = b"russia> "
+ACCEL = None            # --accel: QEMU's -accel (whpx, kvm), else TCG
 
 # command, then a regular expression the whole output must match. The
 # shell is src/russia/russia.su, the USSR interpreter written in USSR;
@@ -122,6 +131,12 @@ CHECKS = [
     ('run(st): "stalin" "show" "/dev/hda"',
      r"Disk /dev/hda: 64 MiB, 131072 sectors of 512 bytes\nTable: MBR.*\n#.*\n1\* +8192 +131071 +122880 +60 MiB +belarus +belarus +ussr-install\nFree: 1\.\.8191 \(4 MiB\)"),
     ("print(_): st", r"0"),
+    # the network
+    ("net(_):", r"e1000 52:54:00:12:34:56, 10\.0\.2\.15/24 \(DHCP\), gateway 10\.0\.2\.2"),
+    ('ping(n): "10.0.2.2" 2', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\nreply from 10\.0\.2\.2: seq 2, \d+ ms\n2 sent, 2 answered"),
+    ("print(_): n", r"2"),
+    ('localtime(t): 1793535166', r""),
+    ("print(_): t", r"\[2026,11,1,12,12,46,0,304\]"),
     ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),
     ("cpu(_):", r"\S.*"),
     ("uname(_):", r"USSR Moscow amd64"),
@@ -204,12 +219,18 @@ def clean(data):
 class Machine:
     """QEMU with the given disks (path, format), COM1 on a socket."""
 
-    def __init__(self, qemu, disks, port, log, monitor=None):
+    def __init__(self, qemu, disks, port, log, monitor=None, forward=()):
         cmd = [qemu, "-display", "none", "-no-reboot", "-m", "2048",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
                "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port]
         if monitor:
             cmd += ["-monitor", "tcp:127.0.0.1:%d,server=on,wait=off" % monitor]
+        # an e1000 on QEMU's user network (10.0.2.0/24), with host ports
+        # forwarded to the guest's
+        netdev = "user,id=n0" + "".join(",hostfwd=tcp:127.0.0.1:%d-:%d" % f for f in forward)
+        cmd += ["-netdev", netdev, "-device", "e1000,netdev=n0"]
+        if ACCEL:
+            cmd += ["-accel", ACCEL]
         for i, (path, fmt) in enumerate(disks):
             cmd += ["-drive", "format=%s,index=%d,media=disk,file=%s" % (fmt, i, path)]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -260,7 +281,12 @@ def main():
                     help="no install onto a second disk")
     ap.add_argument("--no-mbl", action="store_true",
                     help="no editing with Mbl across a reboot")
+    ap.add_argument("--no-novgorod", action="store_true",
+                    help="no Novgorod over the network")
+    ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
     args = ap.parse_args()
+    global ACCEL
+    ACCEL = args.accel
     sys.stdout.reconfigure(errors="backslashreplace")
     if not os.path.exists(IMAGE):
         print("no %s: run sh src/moscow/build.sh first" % IMAGE)
@@ -294,6 +320,8 @@ def main():
               "image:   ussr_rt.bin moscow.ru russia.ru" in boot, boot)
         check("kernel mounts the Belarus root",
               "root:    /dev/hda from sector 8192, Belarus 'ussr-install'" in boot, boot)
+        check("the network card gets an address from DHCP",
+              "net:     e1000 52:54:00:12:34:56, 10.0.2.15/24 (DHCP), gateway 10.0.2.2" in boot, boot)
         for line, want in CHECKS:
             serial.command(line)
             got = clean(serial.output_to_prompt())
@@ -319,6 +347,8 @@ def main():
 
     if not args.no_mbl:
         mbl(qemu, disk, args.port + 10, log, check)
+    if not args.no_novgorod:
+        novgorod(qemu, disk, args.port + 20, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
 
@@ -410,6 +440,91 @@ def mbl(qemu, disk, port, log, check):
         serial.read_until(b"system halted", timeout=20)
     except (TimeoutError, EOFError) as e:
         check("Mbl after the reboot", False, str(e))
+    finally:
+        m.close()
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+def http(url, data=None, headers=None, timeout=120):
+    """(status, headers, body) of a request, redirects not followed."""
+    opener = urllib.request.build_opener(NoRedirect)
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
+
+
+POST_TEXT = "Served by **Moscow**: Ukraine over the kernel's own TCP/IP."
+
+
+def novgorod(qemu, disk, port, log, check):
+    """Starts Novgorod in Moscow with host port port + 4 forwarded to its
+    8080, reads and posts over HTTP, then boots again for the post."""
+    web = port + 4
+    base = "http://127.0.0.1:%d" % web
+    m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 8080)])
+    serial = m.serial
+    try:
+        serial.output_to_prompt(timeout=60)
+        serial.command('run(st): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" '
+                       '"--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static"')
+        t0 = time.time()
+        said = clean(serial.read_until(b"ukraine: listening on 0.0.0.0", timeout=1200))
+        check("Novgorod starts from its source and listens (%.0f s)" % (time.time() - t0),
+              "novgorod: 0 posts in /home/novgorod" in said, said)
+        status, headers, body = http(base + "/")
+        page = body.decode("utf-8", "replace")
+        check("GET / over Moscow's TCP", status == 200
+              and '<a href="/c/">/c/ C and systems</a>' in page, "%r %r" % (status, page[:300]))
+        status, headers, body = http(base + "/static/novgorod.css")
+        with open(os.path.join(ROOT, "src", "novgorod", "static", "novgorod.css"), "rb") as f:
+            css = f.read()
+        check("GET /static/novgorod.css, %d bytes in segments" % len(css),
+              status == 200 and body == css, "%r %d bytes" % (status, len(body)))
+        boundary = "----moscowtest"
+        fields = [("board", "c"), ("thread", "0"), ("subject", "Moscow"),
+                  ("text", POST_TEXT), ("website", ""), ("mime", ""),
+                  ("imgw", ""), ("imgh", ""), ("img", "")]
+        form = "".join('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                       % (boundary, k, v) for k, v in fields) + "--%s--\r\n" % boundary
+        status, headers, body = http(base + "/post", form.encode(),
+                                     {"Content-Type": "multipart/form-data; boundary=" + boundary})
+        check("POST /post makes thread 1", status == 303
+              and headers.get("Location") == "/c/res/1#p1", "%r %r %r" % (status, dict(headers), body[:300]))
+        status, headers, body = http(base + "/c/res/1")
+        page = body.decode("utf-8", "replace")
+        check("the thread shows the post", status == 200 and "Moscow" in page
+              and "Served by <b>Moscow</b>" in page, "%r %r" % (status, page[-1500:]))
+        status, headers, body = http(base + "/nothing/here/at/all")
+        check("an unknown page is 404", status == 404, repr(status))
+    except (TimeoutError, EOFError, OSError) as e:
+        check("Novgorod over the network", False, str(e))
+    finally:
+        # the server runs until it is stopped: the machine is turned off
+        m.close()
+
+    m = Machine(qemu, [(disk, "raw")], port + 2, log)
+    serial = m.serial
+    try:
+        serial.output_to_prompt(timeout=60)
+        serial.command('cat(_): "/home/novgorod/posts/1.post"')
+        got = clean(serial.output_to_prompt())
+        check("after the reboot the post is on the disk", POST_TEXT in got, repr(got))
+        serial.command("fsck(_):")
+        got = clean(serial.output_to_prompt())
+        check("the disk checks clean after it",
+              re.fullmatch(r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+", got)
+              is not None, repr(got))
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("Novgorod's post after the reboot", False, str(e))
     finally:
         m.close()
 

@@ -1,0 +1,1319 @@
+# net.su - Moscow's network stack, in USSR: Ethernet, ARP, IPv4, ICMP
+# (echo), UDP (DHCP) and TCP, over the runtime's e1000 driver (net_info,
+# net_recv, net_send and net_sum, arch/amd64/net.inc). moscow.su includes
+# it and gives programs the hosted ussr's socket commands through it,
+# so Ukraine and Novgorod serve from Moscow as they serve from Linux.
+#
+# Nothing runs by itself: the card is polled. Every socket command and
+# wait_readable read what has come (net_poll), answer ARP and ping, move
+# TCP along and retransmit what is overdue. A program waiting for a
+# client is the stack's clock.
+#
+# The address comes from DHCP at boot (QEMU's user network gives
+# 10.0.2.15), else it is 10.0.2.15/24 with gateway 10.0.2.2. One
+# address: socket_bind listens on it whatever host is given.
+#
+# TCP keeps to what a server on a quiet network needs: a three-way
+# handshake both ways, in-order data (a segment out of order is dropped
+# and acknowledged again), the peer's window, go-back-N retransmission
+# with a doubling timeout, FIN both ways and RST. Received data is a
+# string (USSR strings hold no byte 0: such bytes are dropped); what a
+# program sends waits in the connection until it is acknowledged.
+
+global(_): net_mac net_ip net_mask net_gw net_dns net_how net_ipid
+global(_): net_arp net_socks net_conns net_listen net_next net_port
+global(_): net_pings net_dhcp
+
+# TCP flags
+net_fin(r): [ set(r): 1 ]
+net_syn(r): [ set(r): 2 ]
+net_rst(r): [ set(r): 4 ]
+net_psh(r): [ set(r): 8 ]
+net_ackf(r): [ set(r): 16 ]
+
+# --- bytes and numbers
+
+net_r16(r): f i [
+    at(a): f i
+    at(b): f {i + 1}
+    set(r): {(a << 8) | b}
+]
+
+net_r32(r): f i [
+    net_r16(a): f i
+    net_r16(b): f {i + 2}
+    set(r): {(a << 16) | b}
+]
+
+net_p16(r): v x [
+    push(_): v {(x >> 8) & 255}
+    push(_): v {x & 255}
+    set(r): 0
+]
+
+net_p32(r): v x [
+    net_p16(_): v {(x >> 16) & 65535}
+    net_p16(_): v {x & 65535}
+    set(r): 0
+]
+
+# n bytes of 0
+net_zeros(r): v n [
+    set(r): 0
+    set(i): 0
+    while(_): {i < n} [
+        push(_): v 0
+        set(i): {i + 1}
+    ]
+]
+
+# the 6 bytes of a MAC from f at i, as a vector
+net_mac_at(r): f i [
+    vec(r): ""
+    set(k): 0
+    while(_): {k < 6} [
+        at(b): f {i + k}
+        push(_): r b
+        set(k): {k + 1}
+    ]
+]
+
+net_push_all(r): v w [
+    set(r): 0
+    len(n): w
+    set(i): 0
+    while(_): {i < n} [
+        at(b): w i
+        push(_): v b
+        set(i): {i + 1}
+    ]
+]
+
+# the one's complement sum folded to 16 bits
+net_fold(r): s [
+    set(r): s
+    while(_): {r > 65535} [ set(r): {(r & 65535) + (r >> 16)} ]
+]
+
+# the sum of an address's two 16-bit halves
+net_ipsum(r): ip [ set(r): {(ip >> 16) + (ip & 65535)} ]
+
+net_seq_add(r): a n [ set(r): {(a + n) & 4294967295} ]
+
+# a - b on the sequence-number circle: negative when a is before b
+net_seq_diff(r): a b [
+    set(r): {(a - b) & 4294967295}
+    if(_): {r >= 2147483648} [ set(r): {r - 4294967296} ]
+]
+
+net_ip_text(r): ip [
+    str_from_int(a): {(ip >> 24) & 255}
+    str_from_int(b): {(ip >> 16) & 255}
+    str_from_int(c): {(ip >> 8) & 255}
+    str_from_int(d): {ip & 255}
+    concat(r): a "." b "." c "." d
+]
+
+# "a.b.c.d" -> its number, or -1
+net_ip_parse(r): s [
+    set(r): -1
+    typeof(t): s
+    if(_): {t != "string"} [ return(r): r ]
+    len(n): s
+    set(ip): 0
+    set(part): 0
+    set(digits): 0
+    set(dots): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 46
+        if(_): {i < n} [ byte(b): s i ]
+        if(_): {b = 46} [
+            if(_): {digits = 0 || part > 255} [ return(r): r ]
+            set(ip): {(ip << 8) | part}
+            set(part): 0
+            set(digits): 0
+            if(_): {i < n} [ set(dots): {dots + 1} ]
+        ]
+        elif(_): {b >= 48 && b <= 57} [
+            set(part): {part * 10 + b - 48}
+            set(digits): {digits + 1}
+            if(_): {digits > 3} [ return(r): r ]
+        ]
+        else(_): [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    if(_): {dots = 3} [ set(r): ip ]
+]
+
+net_mac_text(r): mac [
+    set(r): ""
+    set(hex): "0123456789abcdef"
+    set(i): 0
+    while(_): {i < 6} [
+        at(b): mac i
+        slice(h): hex {b >> 4} 1
+        slice(l): hex {b & 15} 1
+        if(_): {i > 0} [ concat(r): r ":" ]
+        concat(r): r h l
+        set(i): {i + 1}
+    ]
+]
+
+net_now(r): [ k_ticks(r): ]
+
+# --- the state
+
+# Forgets the sockets and what was learnt: at boot, and when a program
+# ends (its memory, which held them, is given back then).
+net_reset(r): [
+    set(r): 0
+    btree(net_arp):
+    btree(net_socks):
+    btree(net_conns):
+    btree(net_listen):
+    btree(net_pings):
+    set(net_dhcp): null
+]
+
+# Finds the card and an address. 0, or -1 without a card.
+net_start(r): [
+    set(r): -1
+    net_reset(_):
+    set(net_next): 3
+    set(net_port): 49152
+    set(net_ipid): 1
+    set(net_ip): 0
+    set(net_mask): 0
+    set(net_gw): 0
+    set(net_dns): 0
+    set(net_how): "none"
+    net_info(info):
+    typeof(t): info
+    if(_): {t != "vector"} [ return(r): r ]
+    at(net_mac): info 0
+    net_dhcp_run(ok):
+    if(_): {ok = false} [
+        net_ip_parse(net_ip): "10.0.2.15"
+        net_ip_parse(net_mask): "255.255.255.0"
+        net_ip_parse(net_gw): "10.0.2.2"
+        net_ip_parse(net_dns): "10.0.2.3"
+        set(net_how): "static"
+    ]
+    set(r): 0
+]
+
+# one line about the card and the address
+net_describe(r): [
+    set(r): "no network card"
+    if(_): {net_how = "none"} [ return(r): r ]
+    net_mac_text(m): net_mac
+    net_ip_text(a): net_ip
+    set(bits): 0
+    set(k): net_mask
+    while(_): {k > 0} [
+        set(bits): {bits + (k & 1)}
+        set(k): {k >> 1}
+    ]
+    str_from_int(bs): bits
+    net_ip_text(g): net_gw
+    concat(r): "e1000 " m ", " a "/" bs " (" net_how "), gateway " g
+]
+
+# --- sending
+
+# the MAC to send an IP packet for ip to: on this network the host's,
+# else the gateway's; asked with ARP when not known. null when nobody
+# answers.
+net_mac_for(r): ip [
+    vec(r): ""
+    if(_): {ip = 4294967295} [
+        net_p16(_): r 65535
+        net_p32(_): r 4294967295
+        return(r): r
+    ]
+    set(hop): ip
+    if(_): {(ip & net_mask) != (net_ip & net_mask)} [ set(hop): net_gw ]
+    bthas(known): net_arp hop
+    if(_): known [
+        btget(r): net_arp hop
+        return(r): r
+    ]
+    set(tries): 0
+    while(_): {tries < 3} [
+        net_arp_send(_): 1 hop null
+        net_now(t0):
+        set(t1): {t0 + 50}
+        set(now): t0
+        while(_): {now < t1} [
+            net_poll_frames(_):
+            bthas(known): net_arp hop
+            if(_): known [
+                btget(r): net_arp hop
+                return(r): r
+            ]
+            sleep(_): 10
+            net_now(now):
+        ]
+        set(tries): {tries + 1}
+    ]
+    set(r): null
+]
+
+# op 1 asks who has ip, op 2 answers mac with it
+net_arp_send(r): op ip mac [
+    vec(h): ""
+    if(_): {op = 1} [
+        net_p16(_): h 65535
+        net_p32(_): h 4294967295
+    ]
+    else(_): [ net_push_all(_): h mac ]
+    net_push_all(_): h net_mac
+    net_p16(_): h 2054
+    net_p16(_): h 1
+    net_p16(_): h 2048
+    push(_): h 6
+    push(_): h 4
+    net_p16(_): h op
+    net_push_all(_): h net_mac
+    net_p32(_): h net_ip
+    if(_): {op = 1} [ net_zeros(_): h 6 ]
+    else(_): [ net_push_all(_): h mac ]
+    net_p32(_): h ip
+    net_send(r): h
+]
+
+# An IPv4 packet: the header to dst for protocol proto, then head (a
+# byte vector: the protocol's own header) and count bytes of tail (a
+# string or a byte vector) from from. The bytes sent, or -1.
+net_ip_send(r): dst proto head tail from count [
+    set(r): -1
+    net_mac_for(mac): dst
+    typeof(tm): mac
+    if(_): {tm != "vector"} [ return(r): r ]
+    len(hl): head
+    set(total): {20 + hl + count}
+    set(id): net_ipid
+    set(net_ipid): {(net_ipid + 1) & 65535}
+    set(s): {17664 + total + id + 16384 + (64 << 8) + proto}
+    net_ipsum(si): net_ip
+    net_ipsum(di): dst
+    net_fold(s): {s + si + di}
+    vec(h): ""
+    net_push_all(_): h mac
+    net_push_all(_): h net_mac
+    net_p16(_): h 2048
+    push(_): h 69
+    push(_): h 0
+    net_p16(_): h total
+    net_p16(_): h id
+    net_p16(_): h 16384
+    push(_): h 64
+    push(_): h proto
+    net_p16(_): h {s ^ 65535}
+    net_p32(_): h net_ip
+    net_p32(_): h dst
+    net_push_all(_): h head
+    net_send(r): h tail from count
+]
+
+# --- receiving
+
+# every frame waiting on the card, handled
+net_poll_frames(r): [
+    set(r): 0
+    net_recv(f):
+    typeof(t): f
+    while(_): {t = "vector"} [
+        net_input(_): f
+        set(r): {r + 1}
+        net_recv(f):
+        typeof(t): f
+    ]
+]
+
+# what has come, then the timers: what every socket command does first
+net_poll(r): [
+    set(r): 0
+    if(_): {net_how = "none"} [ return(r): r ]
+    net_poll_frames(r):
+    net_tcp_timers(_):
+]
+
+net_input(r): f [
+    set(r): 0
+    len(n): f
+    if(_): {n < 42} [ return(r): r ]
+    net_r16(type): f 12
+    if(_): {type = 2054} [ net_arp_in(_): f ]
+    elif(_): {type = 2048} [ net_ip_in(_): f n ]
+]
+
+net_arp_in(r): f [
+    set(r): 0
+    net_r16(op): f 20
+    net_r32(spa): f 28
+    net_r32(tpa): f 38
+    net_mac_at(sha): f 22
+    if(_): {spa != 0} [ btput(_): net_arp spa sha ]
+    if(_): {op = 1 && tpa = net_ip && net_ip != 0} [ net_arp_send(_): 2 spa sha ]
+]
+
+net_ip_in(r): f n [
+    set(r): 0
+    at(vihl): f 14
+    if(_): {(vihl >> 4) != 4} [ return(r): r ]
+    set(ihl): {(vihl & 15) * 4}
+    net_r16(total): f 16
+    net_r16(frag): f 20
+    at(proto): f 23
+    net_r32(src): f 26
+    net_r32(dst): f 30
+    if(_): {total < ihl || total + 14 > n} [ return(r): r ]
+    # pieces of a fragmented packet: not put together
+    if(_): {(frag & 16383) != 0} [ return(r): r ]
+    set(mine): {dst = net_ip || dst = 4294967295 || net_ip = 0}
+    if(_): {mine = false} [ return(r): r ]
+    if(_): {src != 0} [
+        net_mac_at(sha): f 6
+        btput(_): net_arp src sha
+    ]
+    set(off): {14 + ihl}
+    set(plen): {total - ihl}
+    if(_): {proto = 1} [ net_icmp_in(_): f off plen src ]
+    elif(_): {proto = 17} [ net_udp_in(_): f off plen src ]
+    elif(_): {proto = 6} [ net_tcp_in(_): f off plen src ]
+]
+
+# --- ICMP: echo
+
+net_icmp_in(r): f off plen src [
+    set(r): 0
+    if(_): {plen < 8} [ return(r): r ]
+    at(type): f off
+    net_r16(id): f {off + 4}
+    net_r16(seq): f {off + 6}
+    if(_): {type = 8} [
+        net_sum(ds): f {off + 8} {plen - 8}
+        net_fold(s): {id + seq + ds}
+        vec(h): ""
+        push(_): h 0
+        push(_): h 0
+        net_p16(_): h {s ^ 65535}
+        net_p16(_): h id
+        net_p16(_): h seq
+        net_ip_send(_): src 1 h f {off + 8} {plen - 8}
+    ]
+    elif(_): {type = 0 && id = 21843} [
+        net_now(now):
+        btput(_): net_pings seq now
+    ]
+]
+
+# ping(n): host [count]: echo requests a second apart; the answers
+sys_ping(r): a [
+    set(r): 0
+    net_poll(_):
+    mo_arg(host): a 0 ""
+    mo_arg(count): a 1 4
+    net_ip_parse(ip): host
+    if(_): {ip < 0 || net_how = "none"} [
+        bl_err(_): "ping(n): a.b.c.d [count], with a network card"
+        return(r): r
+    ]
+    btree(net_pings):
+    set(data): "USSR Moscow ping 0123456789abcdef"
+    len(dl): data
+    net_sum(ds): data
+    set(i): 1
+    while(_): {i <= count} [
+        net_fold(s): {(8 << 8) + 21843 + i + ds}
+        vec(h): ""
+        push(_): h 8
+        push(_): h 0
+        net_p16(_): h {s ^ 65535}
+        net_p16(_): h 21843
+        net_p16(_): h i
+        net_now(t0):
+        net_ip_send(sent): ip 1 h data 0 dl
+        set(got): false
+        net_now(now):
+        while(_): {got = false && now < t0 + 100} [
+            net_poll(_):
+            bthas(got): net_pings i
+            if(_): {got = false} [ sleep(_): 10 ]
+            net_now(now):
+        ]
+        str_from_int(si): i
+        if(_): got [
+            btget(t1): net_pings i
+            str_from_int(ms): {(t1 - t0) * 10}
+            concat(m): "reply from " host ": seq " si ", " ms " ms"
+            set(r): {r + 1}
+        ]
+        elif(_): {sent < 0} [ concat(m): "seq " si ": no route to " host ]
+        else(_): [ concat(m): "seq " si ": no reply" ]
+        print(_): m
+        if(_): {i < count} [
+            while(_): {now < t0 + 100} [
+                net_poll(_):
+                sleep(_): 10
+                net_now(now):
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    str_from_int(cs): count
+    str_from_int(rs): r
+    concat(m): cs " sent, " rs " answered"
+    print(_): m
+]
+
+# --- UDP: a DHCP client
+
+net_udp_in(r): f off plen src [
+    set(r): 0
+    if(_): {plen < 8} [ return(r): r ]
+    net_r16(dport): f {off + 2}
+    if(_): {dport = 68} [
+        vec(net_dhcp): ""
+        push(_): net_dhcp f
+        push(_): net_dhcp {off + 8}
+        push(_): net_dhcp {plen - 8}
+    ]
+]
+
+# a DHCP message from the client: type 1 DISCOVER, 3 REQUEST
+net_dhcp_send(r): type xid want server [
+    vec(m): ""
+    push(_): m 1
+    push(_): m 1
+    push(_): m 6
+    push(_): m 0
+    net_p32(_): m xid
+    net_p16(_): m 0
+    net_p16(_): m 32768
+    net_zeros(_): m 16
+    net_push_all(_): m net_mac
+    net_zeros(_): m 202
+    net_p32(_): m 1669485411
+    push(_): m 53
+    push(_): m 1
+    push(_): m type
+    if(_): {type = 3} [
+        push(_): m 50
+        push(_): m 4
+        net_p32(_): m want
+        push(_): m 54
+        push(_): m 4
+        net_p32(_): m server
+    ]
+    push(_): m 55
+    push(_): m 3
+    push(_): m 1
+    push(_): m 3
+    push(_): m 6
+    push(_): m 255
+    len(ml): m
+    vec(h): ""
+    net_p16(_): h 68
+    net_p16(_): h 67
+    net_p16(_): h {8 + ml}
+    net_p16(_): h 0
+    net_ip_send(r): 4294967295 17 h m 0 ml
+]
+
+# the next DHCP answer to xid within ticks: [type, yiaddr, options], or
+# null; options a btree of code -> its bytes
+net_dhcp_wait(r): xid ticks [
+    set(r): null
+    net_now(now):
+    set(until): {now + ticks}
+    while(_): {now < until} [
+        set(net_dhcp): null
+        net_poll_frames(_):
+        typeof(t): net_dhcp
+        if(_): {t = "vector"} [
+            at(f): net_dhcp 0
+            at(o): net_dhcp 1
+            at(n): net_dhcp 2
+            net_r32(x): f {o + 4}
+            at(op): f o
+            if(_): {x = xid && op = 2 && n > 240} [
+                net_r32(yi): f {o + 16}
+                btree(opts):
+                set(i): {o + 240}
+                set(end): {o + n}
+                set(type): 0
+                while(_): {i < end} [
+                    at(code): f i
+                    if(_): {code = 255} [ set(i): end ]
+                    elif(_): {code = 0} [ set(i): {i + 1} ]
+                    else(_): [
+                        at(k): f {i + 1}
+                        vec(val): ""
+                        set(j): 0
+                        while(_): {j < k && i + 2 + j < end} [
+                            at(b): f {i + 2 + j}
+                            push(_): val b
+                            set(j): {j + 1}
+                        ]
+                        btput(_): opts code val
+                        if(_): {code = 53} [ at(type): val 0 ]
+                        set(i): {i + 2 + k}
+                    ]
+                ]
+                vec(r): ""
+                push(_): r type
+                push(_): r yi
+                push(_): r opts
+                return(r): r
+            ]
+        ]
+        sleep(_): 10
+        net_now(now):
+    ]
+]
+
+# a 4-byte option as a number, def when it is not there
+net_dhcp_ip(r): opts code def [
+    set(r): def
+    bthas(h): opts code
+    if(_): h [
+        btget(v): opts code
+        len(n): v
+        if(_): {n >= 4} [ net_r32(r): v 0 ]
+    ]
+]
+
+# DISCOVER, OFFER, REQUEST, ACK: true when it gave an address
+net_dhcp_run(r): [
+    set(r): false
+    random64(x):
+    set(xid): {x & 2147483647}
+    set(tries): 0
+    while(_): {tries < 2} [
+        net_dhcp_send(_): 1 xid 0 0
+        net_dhcp_wait(offer): xid 150
+        typeof(t): offer
+        if(_): {t = "vector"} [
+            at(type): offer 0
+            at(yi): offer 1
+            at(opts): offer 2
+            if(_): {type = 2} [
+                net_dhcp_ip(server): opts 54 0
+                net_dhcp_send(_): 3 xid yi server
+                net_dhcp_wait(ack): xid 150
+                typeof(ta): ack
+                if(_): {ta = "vector"} [
+                    at(atype): ack 0
+                    at(aopts): ack 2
+                    if(_): {atype = 5} [
+                        set(net_ip): yi
+                        net_dhcp_ip(net_mask): aopts 1 4294967040
+                        net_dhcp_ip(net_gw): aopts 3 0
+                        net_dhcp_ip(net_dns): aopts 6 0
+                        set(net_how): "DHCP"
+                        set(r): true
+                        return(r): r
+                    ]
+                ]
+            ]
+        ]
+        set(tries): {tries + 1}
+    ]
+]
+
+# --- TCP
+
+net_sock(r): h [
+    set(r): null
+    typeof(t): h
+    if(_): {t != "integer"} [ return(r): r ]
+    bthas(has): net_socks h
+    if(_): has [ btget(r): net_socks h ]
+]
+
+net_new_sock(r): kind [
+    set(r): net_next
+    set(net_next): {net_next + 1}
+    btree(s):
+    btput(_): s "handle" r
+    btput(_): s "state" kind
+    btput(_): s "lport" 0
+    btput(_): s "rip" 0
+    btput(_): s "rport" 0
+    btput(_): s "rx" ""
+    btput(_): s "txq" ""
+    btput(_): s "fin_rcvd" false
+    btput(_): s "fin_sent" false
+    btput(_): s "fin_acked" false
+    btput(_): s "closed" false
+    btput(_): s "reset" false
+    btput(_): s "rto_at" 0
+    btput(_): s "rto" 50
+    btput(_): s "tries" 0
+    btput(_): s "linger" 0
+    btput(_): net_socks r s
+]
+
+net_key(r): rip rport lport [
+    str_from_int(a): rip
+    str_from_int(b): rport
+    str_from_int(c): lport
+    concat(r): a ":" b ":" c
+]
+
+# One segment of connection c: flags, seq, and count bytes of data from
+# from. A SYN carries the MSS option.
+net_tcp_seg(r): c flags seq data from count [
+    btget(rip): c "rip"
+    btget(rport): c "rport"
+    btget(lport): c "lport"
+    btget(ack): c "rcv_nxt"
+    set(hl): 20
+    if(_): {(flags & 2) != 0} [ set(hl): 24 ]
+    set(win): 65535
+    set(tl): {hl + count}
+    net_ipsum(si): net_ip
+    net_ipsum(di): rip
+    set(s): {si + di + 6 + tl + lport + rport}
+    set(s): {s + (seq >> 16) + (seq & 65535) + (ack >> 16) + (ack & 65535)}
+    set(s): {s + (((hl >> 2) << 12) | flags) + win}
+    if(_): {hl = 24} [ set(s): {s + 516 + 1460} ]
+    if(_): {count > 0} [
+        net_sum(ds): data from count
+        set(s): {s + ds}
+    ]
+    net_fold(s): s
+    vec(h): ""
+    net_p16(_): h lport
+    net_p16(_): h rport
+    net_p32(_): h seq
+    net_p32(_): h ack
+    push(_): h {(hl >> 2) << 4}
+    push(_): h flags
+    net_p16(_): h win
+    net_p16(_): h {s ^ 65535}
+    net_p16(_): h 0
+    if(_): {hl = 24} [
+        net_p16(_): h 516
+        net_p16(_): h 1460
+    ]
+    net_ip_send(r): rip 6 h data from count
+]
+
+# a bare segment: an ACK, a SYN, a SYN-ACK, a FIN
+net_tcp_ctl(r): c flags seq [
+    net_tcp_seg(r): c flags seq "" 0 0
+]
+
+# what a segment to nobody gets: RST
+net_tcp_refuse(r): src sport dport seq ack fl dlen [
+    btree(c):
+    btput(_): c "rip" src
+    btput(_): c "rport" sport
+    btput(_): c "lport" dport
+    if(_): {(fl & 16) != 0} [
+        btput(_): c "rcv_nxt" 0
+        net_tcp_ctl(r): c 4 ack
+    ]
+    else(_): [
+        set(n): dlen
+        if(_): {(fl & 2) != 0} [ set(n): {n + 1} ]
+        if(_): {(fl & 1) != 0} [ set(n): {n + 1} ]
+        net_seq_add(a): seq n
+        btput(_): c "rcv_nxt" a
+        net_tcp_ctl(r): c 20 0
+    ]
+]
+
+net_iss(r): [
+    random64(x):
+    set(r): {x & 1073741823}
+]
+
+net_tcp_in(r): f off plen src [
+    set(r): 0
+    if(_): {plen < 20} [ return(r): r ]
+    net_r16(sport): f off
+    net_r16(dport): f {off + 2}
+    net_r32(seq): f {off + 4}
+    net_r32(ack): f {off + 8}
+    at(hb): f {off + 12}
+    set(hl): {(hb >> 4) * 4}
+    at(fl): f {off + 13}
+    net_r16(win): f {off + 14}
+    set(dlen): {plen - hl}
+    set(doff): {off + hl}
+    if(_): {dlen < 0} [ return(r): r ]
+    set(syn): {(fl & 2) != 0}
+    set(fin): {(fl & 1) != 0}
+    set(rst): {(fl & 4) != 0}
+    set(ackf): {(fl & 16) != 0}
+    net_key(key): src sport dport
+    set(c): null
+    bthas(known): net_conns key
+    if(_): known [
+        btget(h): net_conns key
+        net_sock(c): h
+    ]
+    typeof(tc): c
+    if(_): {tc != "btree"} [
+        if(_): rst [ return(r): r ]
+        bthas(listening): net_listen dport
+        if(_): {syn && ackf = false && listening} [
+            btget(lh): net_listen dport
+            net_new_sock(h): "syn_rcvd"
+            net_sock(c): h
+            btput(_): c "rip" src
+            btput(_): c "rport" sport
+            btput(_): c "lport" dport
+            btput(_): c "parent" lh
+            net_seq_add(rn): seq 1
+            btput(_): c "rcv_nxt" rn
+            net_iss(iss):
+            btput(_): c "snd_una" iss
+            net_seq_add(sn): iss 1
+            btput(_): c "snd_nxt" sn
+            btput(_): c "txseq" sn
+            btput(_): c "snd_wnd" win
+            btput(_): net_conns key h
+            net_tcp_ctl(_): c 18 iss
+            net_now(now):
+            btput(_): c "rto_at" {now + 50}
+            return(r): r
+        ]
+        net_tcp_refuse(_): src sport dport seq ack fl dlen
+        return(r): r
+    ]
+    btget(state): c "state"
+    btget(h): c "handle"
+    if(_): rst [
+        btput(_): c "reset" true
+        btput(_): c "state" "closed"
+        btdel(_): net_conns key
+        btget(closed): c "closed"
+        if(_): {state = "syn_rcvd" || closed} [ btdel(_): net_socks h ]
+        return(r): r
+    ]
+    btget(snd_nxt): c "snd_nxt"
+    if(_): {state = "syn_sent"} [
+        if(_): {syn && ackf && ack = snd_nxt} [
+            net_seq_add(rn): seq 1
+            btput(_): c "rcv_nxt" rn
+            btput(_): c "snd_una" ack
+            btput(_): c "snd_wnd" win
+            btput(_): c "state" "est"
+            btput(_): c "rto_at" 0
+            btput(_): c "tries" 0
+            net_tcp_ctl(_): c 16 snd_nxt
+        ]
+        return(r): r
+    ]
+    if(_): {state = "syn_rcvd"} [
+        if(_): {ackf && ack = snd_nxt} [
+            btput(_): c "state" "est"
+            btput(_): c "snd_una" ack
+            btput(_): c "rto_at" 0
+            btput(_): c "tries" 0
+            btget(lh): c "parent"
+            net_sock(l): lh
+            typeof(tl): l
+            if(_): {tl = "btree"} [
+                btget(q): l "queue"
+                btput(_): q h h
+            ]
+            set(state): "est"
+        ]
+        else(_): [ return(r): r ]
+    ]
+    if(_): syn [
+        # the peer's SYN-ACK again: our ACK was lost
+        net_tcp_ctl(_): c 16 snd_nxt
+        return(r): r
+    ]
+    set(need_ack): false
+    if(_): ackf [
+        btget(una): c "snd_una"
+        net_seq_diff(d1): ack una
+        net_seq_diff(d2): ack snd_nxt
+        if(_): {d1 > 0 && d2 <= 0} [
+            btput(_): c "snd_una" ack
+            btget(txseq): c "txseq"
+            btget(txq): c "txq"
+            len(tn): txq
+            net_seq_diff(drop): ack txseq
+            if(_): {drop > tn} [ set(drop): tn ]
+            if(_): {drop > 0} [
+                slice(txq): txq drop {tn - drop}
+                btput(_): c "txq" txq
+                net_seq_add(txseq): txseq drop
+                btput(_): c "txseq" txseq
+            ]
+            btget(fin_sent): c "fin_sent"
+            if(_): fin_sent [
+                btget(fseq): c "fin_seq"
+                net_seq_diff(d3): ack fseq
+                if(_): {d3 >= 1} [ btput(_): c "fin_acked" true ]
+            ]
+            btput(_): c "tries" 0
+            btput(_): c "rto" 50
+            set(rto_at): 0
+            if(_): {d2 < 0} [
+                net_now(now):
+                set(rto_at): {now + 50}
+            ]
+            btput(_): c "rto_at" rto_at
+        ]
+        btput(_): c "snd_wnd" win
+    ]
+    btget(rcv_nxt): c "rcv_nxt"
+    btget(fin_rcvd): c "fin_rcvd"
+    if(_): {dlen > 0} [
+        set(need_ack): true
+        if(_): {seq = rcv_nxt && fin_rcvd = false} [
+            bytes_text(text): f doff dlen
+            typeof(tt): text
+            if(_): {tt != "string"} [ net_text(text): f doff dlen ]
+            btget(rx): c "rx"
+            concat(rx): rx text
+            btput(_): c "rx" rx
+            net_seq_add(rcv_nxt): rcv_nxt dlen
+            btput(_): c "rcv_nxt" rcv_nxt
+        ]
+    ]
+    if(_): fin [
+        set(need_ack): true
+        net_seq_add(fend): seq dlen
+        if(_): {fend = rcv_nxt && fin_rcvd = false} [
+            btput(_): c "fin_rcvd" true
+            net_seq_add(rcv_nxt): rcv_nxt 1
+            btput(_): c "rcv_nxt" rcv_nxt
+        ]
+    ]
+    if(_): need_ack [
+        btget(sn): c "snd_nxt"
+        net_tcp_ctl(_): c 16 sn
+    ]
+    net_tcp_output(_): c
+    net_tcp_reap(_): c
+]
+
+# the bytes of f from i, n of them, without the 0s, as a string
+net_text(r): f i n [
+    set(r): ""
+    set(k): 0
+    while(_): {k < n} [
+        at(b): f {i + k}
+        if(_): {b != 0} [
+            chr(ch): b
+            concat(r): r ch
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+# sends what the window lets go, then FIN once all is out and the
+# program closed
+net_tcp_output(r): c [
+    set(r): 0
+    btget(state): c "state"
+    if(_): {state != "est"} [ return(r): r ]
+    btget(una): c "snd_una"
+    btget(nxt): c "snd_nxt"
+    btget(txseq): c "txseq"
+    btget(txq): c "txq"
+    btget(wnd): c "snd_wnd"
+    if(_): {wnd < 1} [ set(wnd): 1 ]
+    len(tn): txq
+    net_seq_diff(inflight): nxt una
+    net_seq_diff(sent): nxt txseq
+    btget(fin_sent): c "fin_sent"
+    if(_): fin_sent [ set(sent): tn ]
+    set(avail): {tn - sent}
+    while(_): {avail > 0 && inflight < wnd} [
+        set(n): avail
+        if(_): {n > 1460} [ set(n): 1460 ]
+        if(_): {n > wnd - inflight} [ set(n): {wnd - inflight} ]
+        net_tcp_seg(_): c 24 nxt txq sent n
+        net_seq_add(nxt): nxt n
+        set(inflight): {inflight + n}
+        set(sent): {sent + n}
+        set(avail): {avail - n}
+    ]
+    btput(_): c "snd_nxt" nxt
+    btget(closed): c "closed"
+    if(_): {closed && avail = 0 && fin_sent = false} [
+        net_tcp_ctl(_): c 17 nxt
+        btput(_): c "fin_seq" nxt
+        btput(_): c "fin_sent" true
+        net_seq_add(nxt): nxt 1
+        btput(_): c "snd_nxt" nxt
+    ]
+    btget(rto_at): c "rto_at"
+    net_seq_diff(out): nxt una
+    if(_): {out > 0 && rto_at = 0} [
+        net_now(now):
+        btget(rto): c "rto"
+        btput(_): c "rto_at" {now + rto}
+    ]
+]
+
+# A connection both ends have finished, or one closed by the program
+# whose FIN was acknowledged a while ago, goes.
+net_tcp_reap(r): c [
+    set(r): 0
+    btget(h): c "handle"
+    btget(closed): c "closed"
+    btget(fin_acked): c "fin_acked"
+    btget(fin_rcvd): c "fin_rcvd"
+    btget(reset): c "reset"
+    btget(rip): c "rip"
+    btget(rport): c "rport"
+    btget(lport): c "lport"
+    net_key(key): rip rport lport
+    if(_): {(fin_acked && fin_rcvd) || reset} [
+        btdel(_): net_conns key
+        btput(_): c "state" "closed"
+        if(_): closed [ btdel(_): net_socks h ]
+        return(r): r
+    ]
+    if(_): {closed && fin_acked} [
+        btget(linger): c "linger"
+        net_now(now):
+        if(_): {linger = 0} [ btput(_): c "linger" {now + 300} ]
+        elif(_): {now >= linger} [
+            btdel(_): net_conns key
+            btdel(_): net_socks h
+        ]
+    ]
+]
+
+# retransmissions that are due, lingering connections that are done
+net_tcp_timers(r): [
+    set(r): 0
+    btkeys(hs): net_conns
+    len(n): hs
+    if(_): {n = 0} [ return(r): r ]
+    net_now(now):
+    set(i): 0
+    while(_): {i < n} [
+        at(key): hs i
+        btget(h): net_conns key
+        net_sock(c): h
+        typeof(tc): c
+        if(_): {tc = "btree"} [
+            btget(rto_at): c "rto_at"
+            if(_): {rto_at > 0 && now >= rto_at} [ net_tcp_retransmit(_): c ]
+            net_tcp_reap(_): c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+net_tcp_retransmit(r): c [
+    set(r): 0
+    btget(tries): c "tries"
+    set(tries): {tries + 1}
+    btput(_): c "tries" tries
+    if(_): {tries > 8} [
+        btput(_): c "reset" true
+        btget(sn): c "snd_nxt"
+        net_tcp_ctl(_): c 4 sn
+        net_tcp_reap(_): c
+        return(r): r
+    ]
+    btget(rto): c "rto"
+    set(rto): {rto * 2}
+    if(_): {rto > 800} [ set(rto): 800 ]
+    btput(_): c "rto" rto
+    net_now(now):
+    btput(_): c "rto_at" {now + rto}
+    btget(state): c "state"
+    btget(una): c "snd_una"
+    if(_): {state = "syn_rcvd"} [ net_tcp_ctl(_): c 18 una ]
+    elif(_): {state = "syn_sent"} [ net_tcp_ctl(_): c 2 una ]
+    elif(_): {state = "est"} [
+        btput(_): c "snd_nxt" una
+        btget(fin_acked): c "fin_acked"
+        if(_): {fin_acked = false} [ btput(_): c "fin_sent" false ]
+        net_tcp_output(_): c
+    ]
+]
+
+# --- the socket commands, as the hosted ussr has them
+
+# socket_tcp(h): -> a new TCP socket
+sys_socket_tcp(r): a [
+    net_new_sock(r): "new"
+]
+
+# socket_bind(r): h host port -> 0; the host is this machine's address
+# whatever is given
+sys_socket_bind(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    mo_arg(port): a 2 0
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree" || net_how = "none"} [ return(r): r ]
+    typeof(tp): port
+    if(_): {tp != "integer"} [ return(r): r ]
+    btput(_): s "lport" port
+    set(r): 0
+]
+
+# socket_listen(r): h backlog -> 0, -1 when the port is taken
+sys_socket_listen(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(port): s "lport"
+    bthas(taken): net_listen port
+    if(_): {port = 0 || taken} [ return(r): r ]
+    btput(_): s "state" "listen"
+    btree(q):
+    btput(_): s "queue" q
+    btput(_): net_listen port h
+    set(r): 0
+]
+
+# socket_accept(c): h -> a connection that has come, or -1
+sys_socket_accept(r): a [
+    set(r): -1
+    net_poll(_):
+    mo_arg(h): a 0 -1
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(state): s "state"
+    if(_): {state != "listen"} [ return(r): r ]
+    btget(q): s "queue"
+    btlen(n): q
+    while(_): {n > 0} [
+        btfirst(c): q
+        btdel(_): q c
+        net_sock(cs): c
+        typeof(tc): cs
+        if(_): {tc = "btree"} [
+            set(r): c
+            return(r): r
+        ]
+        btlen(n): q
+    ]
+]
+
+# whether h has something for recv or accept: data, its end, a client
+net_ready(r): s [
+    set(r): true
+    btget(state): s "state"
+    if(_): {state = "listen"} [
+        btget(q): s "queue"
+        btlen(n): q
+        set(r): {n > 0}
+        return(r): r
+    ]
+    btget(rx): s "rx"
+    btget(fin): s "fin_rcvd"
+    btget(reset): s "reset"
+    if(_): {rx = "" && fin = false && reset = false && state != "closed"} [ set(r): false ]
+]
+
+# socket_recv(s): h max -> up to max bytes; "" when the peer has finished
+# (or reset); null when nothing has come yet
+sys_socket_recv(r): a [
+    set(r): ""
+    net_poll(_):
+    mo_arg(h): a 0 -1
+    mo_arg(max): a 1 4096
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(rx): s "rx"
+    len(n): rx
+    if(_): {n > 0} [
+        if(_): {max > n} [ set(max): n ]
+        slice(r): rx 0 max
+        slice(rx): rx max {n - max}
+        btput(_): s "rx" rx
+        return(r): r
+    ]
+    net_ready(ended): s
+    if(_): {ended = false} [ set(r): null ]
+]
+
+sys_socket_recv_bytes(r): a [
+    sys_socket_recv(r): a
+    typeof(t): r
+    if(_): {t = "string"} [ text_bytes(r): r ]
+]
+
+# socket_send(n): h text -> the bytes taken, -1 when it is closed
+sys_socket_send(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    mo_arg(data): a 1 ""
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(state): s "state"
+    btget(closed): s "closed"
+    btget(reset): s "reset"
+    btget(fin_sent): s "fin_sent"
+    if(_): {state != "est" || closed || reset || fin_sent} [ return(r): r ]
+    typeof(td): data
+    if(_): {td = "vector"} [ bytes_text(data): data ]
+    typeof(td): data
+    if(_): {td != "string"} [ return(r): r ]
+    btget(txq): s "txq"
+    concat(txq): txq data
+    btput(_): s "txq" txq
+    net_tcp_output(_): s
+    net_poll(_):
+    len(r): data
+]
+
+sys_socket_send_bytes(r): a [
+    sys_socket_send(r): a
+]
+
+# socket_close(r): h -> 0: a connection sends what is left, then FIN
+sys_socket_close(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    set(r): 0
+    btget(state): s "state"
+    if(_): {state = "listen"} [
+        btget(port): s "lport"
+        btdel(_): net_listen port
+        btdel(_): net_socks h
+        return(r): r
+    ]
+    if(_): {state = "new" || state = "closed"} [
+        btdel(_): net_socks h
+        return(r): r
+    ]
+    btput(_): s "closed" true
+    net_tcp_output(_): s
+    net_tcp_reap(_): s
+    net_poll(_):
+]
+
+# socket_connect(r): h host port -> 0 once connected, -1
+sys_socket_connect(r): a [
+    set(r): -1
+    mo_arg(h): a 0 -1
+    mo_arg(host): a 1 ""
+    mo_arg(port): a 2 0
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree" || net_how = "none"} [ return(r): r ]
+    if(_): {host = "localhost"} [ set(host): "127.0.0.1" ]
+    net_ip_parse(ip): host
+    if(_): {ip < 0} [
+        concat(m): host ": only addresses a.b.c.d (no DNS yet)"
+        bl_err(_): m
+        return(r): r
+    ]
+    btget(lport): s "lport"
+    if(_): {lport = 0} [
+        set(lport): net_port
+        set(net_port): {net_port + 1}
+        if(_): {net_port > 65000} [ set(net_port): 49152 ]
+    ]
+    btput(_): s "lport" lport
+    btput(_): s "rip" ip
+    btput(_): s "rport" port
+    btput(_): s "rcv_nxt" 0
+    net_iss(iss):
+    btput(_): s "snd_una" iss
+    net_seq_add(sn): iss 1
+    btput(_): s "snd_nxt" sn
+    btput(_): s "txseq" sn
+    btput(_): s "snd_wnd" 1460
+    btput(_): s "state" "syn_sent"
+    net_key(key): ip port lport
+    btput(_): net_conns key h
+    net_tcp_ctl(_): s 2 iss
+    net_now(now):
+    btput(_): s "rto_at" {now + 50}
+    set(until): {now + 1000}
+    while(_): {now < until} [
+        net_poll(_):
+        btget(state): s "state"
+        if(_): {state = "est"} [
+            set(r): 0
+            return(r): r
+        ]
+        if(_): {state = "closed"} [ return(r): r ]
+        sleep(_): 10
+        net_now(now):
+    ]
+]
+
+# wait_readable(r): h -> 0 when h has something. A listening socket also
+# comes back after a moment without one, so that the program's other
+# tasks (russia's scheduler runs them between commands) go on.
+sys_wait_readable(r): a [
+    set(r): 0
+    mo_arg(h): a 0 -1
+    net_sock(s): h
+    typeof(t): s
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(state): s "state"
+    set(patience): 6000
+    if(_): {state = "listen"} [ set(patience): 5 ]
+    net_now(now):
+    set(until): {now + patience}
+    while(_): {now < until} [
+        net_poll(_):
+        net_ready(ok): s
+        if(_): ok [ return(r): r ]
+        sleep(_): 10
+        net_now(now):
+    ]
+]
+
+sys_wait_writable(r): a [
+    set(r): 0
+    net_poll(_):
+]
+
+# net(v): -> [address, MAC, how], and prints them
+sys_net(r): a [
+    net_poll(_):
+    net_describe(m):
+    print(_): m
+    vec(r): ""
+    if(_): {net_how != "none"} [
+        net_ip_text(ip): net_ip
+        net_mac_text(mac): net_mac
+        push(_): r ip
+        push(_): r mac
+        push(_): r net_how
+    ]
+]
+
+net_syscalls(r): [
+    set(r): 0
+    k_syscall(_): "socket_tcp" "sys_socket_tcp"
+    k_syscall(_): "socket_bind" "sys_socket_bind"
+    k_syscall(_): "socket_listen" "sys_socket_listen"
+    k_syscall(_): "socket_accept" "sys_socket_accept"
+    k_syscall(_): "socket_recv" "sys_socket_recv"
+    k_syscall(_): "socket_recv_bytes" "sys_socket_recv_bytes"
+    k_syscall(_): "socket_send" "sys_socket_send"
+    k_syscall(_): "socket_send_bytes" "sys_socket_send_bytes"
+    k_syscall(_): "socket_close" "sys_socket_close"
+    k_syscall(_): "socket_connect" "sys_socket_connect"
+    k_syscall(_): "wait_readable" "sys_wait_readable"
+    k_syscall(_): "wait_writable" "sys_wait_writable"
+    k_syscall(_): "ping" "sys_ping"
+    k_syscall(_): "net" "sys_net"
+]

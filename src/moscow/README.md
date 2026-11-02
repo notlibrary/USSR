@@ -136,6 +136,9 @@ The file commands are the kernel's (`moscow.su` takes them over with
 | `open_file(h): path [mode]`, `read_line(s): h`, `read_file(s): h [n]`, `write_file(n): h text`, `close_file(r): h` | files by handle, as in ussr: `r`/`rb` read (-1 for no such file), `w` writes anew, `a` appends; what is written reaches the disk at `close_file` |
 | `install(status):` | the installer, `/bin/install.ru` |
 | `df(_):`, `fsck(n):` | the root file system and its free space; a check |
+| `net(v):`, `ping(n): host [count]` | the network card and address; ICMP echo |
+| `socket_tcp`, `socket_bind`, `socket_listen`, `socket_accept`, `socket_recv`, `socket_send`, `socket_close`, `socket_connect`, `wait_readable`, `wait_writable` | TCP as in ussr, over the kernel's own stack |
+| `rename_path(r): from to`, `localtime(v): [seconds]` | as in ussr (UTC) |
 | `uptime(s):` | seconds since boot |
 | `mem(v):` | `[heap bytes, free bytes]` |
 | `cpu(s):` | CPUID vendor and brand |
@@ -174,6 +177,42 @@ project runs that way, by name or by path. On the VGA screen a UTF-8
 character takes one cell, as Mbl counts them; the VGA font has only
 the ASCII ones, the others show as a block (a serial terminal shows
 them all).
+
+## The network: Novgorod from Moscow
+
+Moscow has a TCP/IP stack of its own: the runtime drives the network
+card (an Intel e1000, QEMU's usual one: `arch/amd64/net.inc`), and
+`src/moscow/net.su`, USSR in the kernel, speaks Ethernet, ARP, IPv4,
+ICMP, DHCP and TCP over it. At boot DHCP gives the address:
+
+    net:     e1000 52:54:00:12:34:56, 10.0.2.15/24 (DHCP), gateway 10.0.2.2
+
+The socket commands are the hosted ussr's, so the ROUND programs run
+unchanged. Novgorod, the forum, from its source, on a port QEMU
+forwards from this machine:
+
+    sh src/moscow/run.sh --web 8080
+    russia> run(_): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" "--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static"
+
+and then http://127.0.0.1:8080/ in a browser on this machine. Its
+posts are files of the Belarus root (`/home/novgorod/posts`): they are
+there after the next boot.
+
+How it works: nothing runs by itself, the card is polled. Every socket
+command first reads what has come and answers it (ARP, ping, TCP),
+retransmits what is overdue and then does its own work; a server
+waiting for a client is the stack's clock. TCP keeps to what a server on
+a quiet network needs: both handshakes, in-order data (a segment out of
+order is dropped and acknowledged again), the peer's window, go-back-N
+retransmission with a doubling timeout, FIN both ways and RST. Received
+data is a string (USSR strings hold no byte 0: such bytes are dropped).
+There is one address; `socket_bind` listens on it whatever host is
+given, and `socket_connect` takes addresses (no DNS yet). Ukraine
+serves each client in a task of its own: `wait_readable` on a listening
+socket comes back after a moment even without a client, and russia.su
+lets its other tasks run there, as ussr's scheduler does. HTTPS (Ryazan)
+and PostgreSQL (Dubna) are not there yet: TLS needs the host's TLS
+library.
 
 ## Boot
 
@@ -285,6 +324,10 @@ The kernel's own services, used by `moscow.su`:
 | `k_exec(status): name [args ...]` | runs a `.ru` of the image to its end; 127 when missing |
 | `k_exec_bytes(status): bytes [args ...]` | runs the `.ru` in a byte vector (args: strings, or one vector of them) |
 | `k_syscall(_): name function` | the kernel's `function` answers `name` from now on |
+| `net_info(v):` | `[mac, link up]` of the network card, or null |
+| `net_recv(v):` | the next Ethernet frame as a byte vector, or null |
+| `net_send(n): head [tail [from [count]]]` | one frame: a byte vector, then a string or byte vector (or part of one) |
+| `net_sum(n): data [from [count]]` | the 16-bit one's complement sum of IP checksums, folded |
 | `k_reboot(_):`, `k_halt(_):` | reset; stop |
 
 The heap is a bump heap with marks: `k_exec` (and `run`) release

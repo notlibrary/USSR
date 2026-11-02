@@ -215,6 +215,7 @@ start:
         call idt_init
         call heap_init
         call ata_init
+        call net_init
         call env_init
         sti
 
@@ -6523,6 +6524,7 @@ bi_pwd:
 
 %include "btree.inc"
 %include "ata.inc"
+%include "net.inc"
 %include "sha256.inc"
 
 ; =====================================================================
@@ -6686,6 +6688,10 @@ bi_table:
         dq n_clear_bytes, bi_clear_bytes
         dq n_k_syscall, bi_k_syscall
         dq n_k_exec_bytes, bi_k_exec_bytes
+        dq n_net_info, bi_net_info
+        dq n_net_recv, bi_net_recv
+        dq n_net_send, bi_net_send
+        dq n_net_sum, bi_net_sum
         dq 0, 0
 
 type_names:
@@ -6803,6 +6809,11 @@ n_crc32:        db "crc32", 0
 n_clear_bytes:  db "clear_bytes", 0
 n_k_syscall:    db "k_syscall", 0
 n_k_exec_bytes: db "k_exec_bytes", 0
+n_net_info:     db "net_info", 0
+n_net_recv:     db "net_recv", 0
+n_net_send:     db "net_send", 0
+n_net_sum:      db "net_sum", 0
+e_net_sum:      db "net_sum(n): data [from [count]] (a string or a byte vector)", 0
 e_clear_bytes:  db "clear_bytes(v): a byte vector", 0
 e_syscall:      db "k_syscall(_): name function (a name under 31 bytes)", 0
 e_sys_full:     db "k_syscall: too many kernel commands", 0
@@ -7008,6 +7019,15 @@ sys_depth:      resq 1
 sys_area:       resq 1
 sys_table:      resb SYS_MAX * SYS_ENTRY
 blk_args:       resq 3
+net_up:         resq 1
+net_mmio:       resq 1
+net_mac:        resq 1
+net_rx_ring:    resq 1
+net_rx_bufs:    resq 1
+net_rx_next:    resq 1
+net_tx_ring:    resq 1
+net_tx_bufs:    resq 1
+net_tx_next:    resq 1
 blk_copy:       resq 1
 sha_state:      resd 8
 sha_w:          resd 64

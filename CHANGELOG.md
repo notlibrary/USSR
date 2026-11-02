@@ -17,6 +17,20 @@
 - Belarus paths take `.` and `..`: `/src/Mbl/../libs` is `/src/libs`.
 
 ### Added
+- Moscow has a network: an e1000 driver in the runtime (found on PCI,
+  polled; `net_info`, `net_recv`, `net_send`, `net_sum`) and a TCP/IP
+  stack in USSR, `src/moscow/net.su`: Ethernet, ARP, IPv4, ICMP echo,
+  a DHCP client and TCP (handshakes both ways, windows,
+  retransmission, FIN and RST). The kernel gives programs ussr's socket
+  commands (`socket_tcp` ... `socket_connect`, `wait_readable`) on it,
+  and `net(_):` and `ping(_):`. Novgorod runs in Moscow from its source
+  and serves its pages and takes posts over HTTP; `qemu_test.py` checks
+  it through a forwarded port, and the post after a reboot.
+- Moscow has `rename_path` (Belarus `bl_rename`: a rename moves the
+  entry, never onto an existing name) and `localtime`.
+- russia.su passes up to twelve arguments to host commands (six
+  before), and `wait_readable` and `wait_writable` let its other tasks
+  run, as ussr's scheduler does.
 - Moscow's console is a terminal. `terminal_raw` switches it to raw
   mode: `terminal_getch` returns each byte unechoed, the keyboard's
   arrows, Home, End, Insert, Delete and Page keys come as ANSI
