@@ -27,6 +27,7 @@
 # lists them.
 $include "../belarus/belarus.su"
 $include "net.su"
+$include "dhcp.su"
 $include "../murmansk/murmansk.su"
 $include "tls.su"
 

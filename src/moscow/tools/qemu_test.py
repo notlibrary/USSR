@@ -144,6 +144,16 @@ CHECKS = [
     ("net(_):", r"e1000 52:54:00:12:34:56, 10\.0\.2\.15/24 \(DHCP\), gateway 10\.0\.2\.2"),
     ('ping(n): "10.0.2.2" 2', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\nreply from 10\.0\.2\.2: seq 2, \d+ ms\n2 sent, 2 answered"),
     ("print(_): n", r"2"),
+    # the DHCP client: the lease, renewed, given back and taken again
+    ("dhcp(_):", r"10\.0\.2\.15 from 10\.0\.2\.2, lease 86400s, renews in 43\d\d\ds, ends in 86\d\d\ds"),
+    ('dhcp(d): "renew"', r"ack\n10\.0\.2\.15 from 10\.0\.2\.2, lease 86400s, renews in 43200s, ends in 86400s"),
+    ("print(_): d", r"\[`bound`,`10\.0\.2\.15`,`10\.0\.2\.2`,86400,86400\]"),
+    ('dhcp(_): "release"', r"no lease: the address was given back"),
+    ("net(_):", r"e1000 52:54:00:12:34:56, 0\.0\.0\.0/24 \(released\), gateway 10\.0\.2\.2"),
+    ('dhcp(_): "release"', r"no lease to give back\nno lease: the address was given back"),
+    ('dhcp(_): "renew"', r"new\n10\.0\.2\.15 from 10\.0\.2\.2, lease 86400s, renews in 43200s, ends in 86400s"),
+    ('dhcp(_): "sideways"', r"dhcp: renew or release, not sideways\n10\.0\.2\.15 from (.|\n)*"),
+    ('ping(n): "10.0.2.2" 1', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\n1 sent, 1 answered"),
     # Murmansk, the firewall
     ("fw(_):", r"policy in deny, out allow\n1\. allow in icmp   \(0 hits\)\n2\. allow in tcp 8080   \(0 hits\)\n3\. allow in tcp 8443   \(0 hits\)\n\d+ packets dropped(; the last:(\n  .*)+)?"),
     ('fw(_): "deny out icmp to 10.0.2.2"', r"(.|\n)*4\. deny out icmp to 10\.0\.2\.2   \(0 hits\)(.|\n)*"),

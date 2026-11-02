@@ -9,9 +9,10 @@
 # TCP along and retransmit what is overdue. A program waiting for a
 # client is the stack's clock.
 #
-# The address comes from DHCP at boot (QEMU's user network gives
-# 10.0.2.15), else it is 10.0.2.15/24 with gateway 10.0.2.2. One
-# address: socket_bind listens on it whatever host is given.
+# The address comes from DHCP at boot (dhcp.su, which keeps and renews
+# the lease; QEMU's user network gives 10.0.2.15), else it is
+# 10.0.2.15/24 with gateway 10.0.2.2. One address: socket_bind listens on
+# it whatever host is given.
 #
 # Murmansk (src/murmansk), the firewall, is asked about everything new
 # that comes in - a SYN to a port, a ping, a stray segment or datagram -
@@ -197,6 +198,7 @@ net_start(r): [
     set(net_dns): 0
     set(net_how): "none"
     set(net_dhcp_on): false
+    set(net_mac): null
     net_info(info):
     typeof(t): info
     if(_): {t != "vector"} [ return(r): r ]
@@ -347,6 +349,7 @@ net_poll(r): [
     if(_): {net_how = "none"} [ return(r): r ]
     net_poll_frames(r):
     net_tcp_timers(_):
+    dhcp_tick(_):
 ]
 
 net_input(r): f [
@@ -486,7 +489,7 @@ sys_ping(r): a [
     print(_): m
 ]
 
-# --- UDP: a DHCP client
+# --- UDP: only DHCP's answers (dhcp.su, the client)
 
 net_udp_in(r): f off plen src [
     set(r): 0
@@ -501,154 +504,6 @@ net_udp_in(r): f off plen src [
     ]
     # no UDP sockets yet: a datagram is only counted when it is denied
     murmansk_check(_): "in" "udp" src dport
-]
-
-# a DHCP message from the client: type 1 DISCOVER, 3 REQUEST
-net_dhcp_send(r): type xid want server [
-    vec(m): ""
-    push(_): m 1
-    push(_): m 1
-    push(_): m 6
-    push(_): m 0
-    net_p32(_): m xid
-    net_p16(_): m 0
-    net_p16(_): m 32768
-    net_zeros(_): m 16
-    net_push_all(_): m net_mac
-    net_zeros(_): m 202
-    net_p32(_): m 1669485411
-    push(_): m 53
-    push(_): m 1
-    push(_): m type
-    if(_): {type = 3} [
-        push(_): m 50
-        push(_): m 4
-        net_p32(_): m want
-        push(_): m 54
-        push(_): m 4
-        net_p32(_): m server
-    ]
-    push(_): m 55
-    push(_): m 3
-    push(_): m 1
-    push(_): m 3
-    push(_): m 6
-    push(_): m 255
-    len(ml): m
-    vec(h): ""
-    net_p16(_): h 68
-    net_p16(_): h 67
-    net_p16(_): h {8 + ml}
-    net_p16(_): h 0
-    net_ip_send(r): 4294967295 17 h m 0 ml
-]
-
-# the next DHCP answer to xid within ticks: [type, yiaddr, options], or
-# null; options a btree of code -> its bytes
-net_dhcp_wait(r): xid ticks [
-    set(r): null
-    net_now(now):
-    set(until): {now + ticks}
-    while(_): {now < until} [
-        set(net_dhcp): null
-        net_poll_frames(_):
-        typeof(t): net_dhcp
-        if(_): {t = "vector"} [
-            at(f): net_dhcp 0
-            at(o): net_dhcp 1
-            at(n): net_dhcp 2
-            net_r32(x): f {o + 4}
-            at(op): f o
-            if(_): {x = xid && op = 2 && n > 240} [
-                net_r32(yi): f {o + 16}
-                btree(opts):
-                set(i): {o + 240}
-                set(end): {o + n}
-                set(type): 0
-                while(_): {i < end} [
-                    at(code): f i
-                    if(_): {code = 255} [ set(i): end ]
-                    elif(_): {code = 0} [ set(i): {i + 1} ]
-                    else(_): [
-                        at(k): f {i + 1}
-                        vec(val): ""
-                        set(j): 0
-                        while(_): {j < k && i + 2 + j < end} [
-                            at(b): f {i + 2 + j}
-                            push(_): val b
-                            set(j): {j + 1}
-                        ]
-                        btput(_): opts code val
-                        if(_): {code = 53} [ at(type): val 0 ]
-                        set(i): {i + 2 + k}
-                    ]
-                ]
-                vec(r): ""
-                push(_): r type
-                push(_): r yi
-                push(_): r opts
-                return(r): r
-            ]
-        ]
-        sleep(_): 10
-        net_now(now):
-    ]
-]
-
-# a 4-byte option as a number, def when it is not there
-net_dhcp_ip(r): opts code def [
-    set(r): def
-    bthas(h): opts code
-    if(_): h [
-        btget(v): opts code
-        len(n): v
-        if(_): {n >= 4} [ net_r32(r): v 0 ]
-    ]
-]
-
-# DISCOVER, OFFER, REQUEST, ACK: true when it gave an address
-net_dhcp_run(r): [
-    set(r): false
-    set(net_dhcp_on): true
-    net_dhcp_ask(r):
-    set(net_dhcp_on): false
-]
-
-net_dhcp_ask(r): [
-    set(r): false
-    random64(x):
-    set(xid): {x & 2147483647}
-    set(tries): 0
-    while(_): {tries < 2} [
-        net_dhcp_send(_): 1 xid 0 0
-        net_dhcp_wait(offer): xid 150
-        typeof(t): offer
-        if(_): {t = "vector"} [
-            at(type): offer 0
-            at(yi): offer 1
-            at(opts): offer 2
-            if(_): {type = 2} [
-                net_dhcp_ip(server): opts 54 0
-                net_dhcp_send(_): 3 xid yi server
-                net_dhcp_wait(ack): xid 150
-                typeof(ta): ack
-                if(_): {ta = "vector"} [
-                    at(atype): ack 0
-                    at(aopts): ack 2
-                    if(_): {atype = 5} [
-                        set(net_ip): yi
-                        net_dhcp_ip(net_mask): aopts 1 4294967040
-                        net_dhcp_ip(net_gw): aopts 3 0
-                        net_dhcp_ip(net_dns): aopts 6 0
-                        set(net_how): "DHCP"
-                        set(r): true
-                        return(r): r
-                    ]
-                ]
-            ]
-        ]
-        set(tries): {tries + 1}
-    ]
 ]
 
 # --- TCP
@@ -1369,4 +1224,5 @@ net_syscalls(r): [
     k_syscall(_): "wait_writable" "sys_wait_writable"
     k_syscall(_): "ping" "sys_ping"
     k_syscall(_): "net" "sys_net"
+    k_syscall(_): "dhcp" "sys_dhcp"
 ]
