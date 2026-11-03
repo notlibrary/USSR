@@ -1,0 +1,30 @@
+# moscow_echo.su - a task that reads the console, for qemu_test.py: with
+# fg(_) it has the console and echoes each line; "bye" ends it (status
+# 3). In the background it reads the end of its input: status 5.
+init(result): arg_count arg_values [
+    set(result): 5
+    set(line): ""
+    set(go): true
+    while(_): go [
+        terminal_getch(c):
+        if(_): {c = -1} [
+            print(_): "echo: the end of the input"
+            set(go): false
+        ]
+        else(_): [
+            if(_): {c = 10} [
+                concat(m): "echo: " line
+                print(_): m
+                if(_): {line = "bye"} [
+                    set(result): 3
+                    set(go): false
+                ]
+                set(line): ""
+            ]
+            else(_): [
+                chr(ch): c
+                concat(line): line ch
+            ]
+        ]
+    ]
+]

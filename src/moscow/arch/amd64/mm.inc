@@ -39,6 +39,7 @@ POOL_WINDOWS    equ USER_SIZE / POOL_WINDOW
 KPOOL_MAX       equ 384 << 20           ; the kernel's own heap
 PTE_P           equ 1
 PTE_W           equ 2
+PTE_U           equ 4                   ; ring 3 may use it: the private half
 PTE_PS          equ 0x80
 PTE_ADDR        equ 0x000ffffffffff000
 
@@ -143,7 +144,7 @@ pt_walk:
         test rax, PTE_P
         jnz .down
         call pmm_alloc
-        or rax, PTE_P | PTE_W
+        or rax, PTE_P | PTE_W | PTE_U
         mov [rdx], rax
 .down:
         and rax, [pte_addr_mask]
@@ -168,6 +169,13 @@ map_page:
         push rax
         call pmm_alloc
         or rax, PTE_P | PTE_W
+        push rcx
+        mov rcx, KV_BASE
+        cmp rsi, rcx
+        pop rcx
+        jae .kernel
+        or rax, PTE_U                   ; a task's: its C code may use it
+.kernel:
         mov rsi, rax
         pop rax
         mov [rax], rsi
@@ -206,7 +214,10 @@ pt_free_entries:
         jz .next
         and rax, [pte_addr_mask]
         cmp ecx, 1
-        je .frame
+        jne .table
+        inc qword [pt_leaves]           ; a page of the heap's
+        jmp .frame
+.table:
         push rsi
         push rdx
         push rcx
@@ -303,6 +314,9 @@ pf_isr:
         push rsi
         push rdi
         mov rsi, cr2
+        ; a page that is there: ring 3 at the kernel's
+        test qword [rsp + 32], 1
+        jnz .fatal
         ; the kernel's values: shared, their tables in every space
         mov rax, KV_BASE
         cmp rsi, rax
@@ -311,6 +325,8 @@ pf_isr:
         add rax, rcx
         cmp rsi, rax
         jae .private
+        test qword [rsp + 32], 4        ; not ring 3's
+        jnz .fatal
         inc qword [kv_pages]            ; mapped for good: k_gc counts them
         jmp .map
 .private:
@@ -326,6 +342,8 @@ pf_isr:
         add rax, rcx
         cmp rsi, rax
         jae .fatal
+        mov rcx, [cur_task]
+        inc qword [rcx + TASK.pages]
 .map:
         mov rdi, cr3
         and rdi, [pte_addr_mask]

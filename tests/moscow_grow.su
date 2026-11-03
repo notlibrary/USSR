@@ -1,0 +1,21 @@
+# moscow_grow.su - a task that wants more and more memory, for
+# qemu_test.py: after a second it keeps 64 MiB of strings. With limit(_)
+# under that it ends when it goes over (status 1).
+init(result): arg_count arg_values [
+    set(result): 0
+    sleep(_): 1000
+    vec(keep): ""
+    set(chunk): "x"
+    set(k): 0
+    while(_): {k < 12} [
+        concat(chunk): chunk chunk
+        set(k): {k + 1}
+    ]
+    set(i): 0
+    while(_): {i < 16384} [
+        concat(s): chunk ""
+        push(_): keep s
+        set(i): {i + 1}
+    ]
+    print(_): "grow: 64 MiB, and no limit stopped it"
+]

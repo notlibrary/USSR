@@ -28,6 +28,14 @@ the README has code, and with usa, the C compiler, USSR is complete.
   program run that made them and go when it ends, or when its task ends
   or is killed. `qemu_test.py` checks switching, waiting, kill, memory
   given back, the shared network and the collector.
+- Moscow's console, priorities, limits and ring 3. `fg(status): id`
+  gives a task the console (Ctrl-C ends it, Ctrl-Z gives it back with
+  the task in the background); `prio(old): id n` gives a task a slice
+  of n ticks; `limit(old): id kib` ends a task that goes over that much
+  memory of its own. C code a program loads runs in ring 3 with a TSS
+  and ring 3 segments: it can use only its task's private pages, and
+  what reaches beyond them (the kernel's memory, `cli`, I/O) stops the
+  call, not the kernel.
 - Windows in Moscow: Petersburg (`src/petersburg.c`, unchanged) built
   into `/lib/gui.so` with a small C library, OpenGL 1.1 in software
   and a GLFW of its own on the Bochs/QEMU VGA framebuffer (32-bit,

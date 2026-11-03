@@ -1,0 +1,36 @@
+# moscow_ring3.su - C code a program loads runs in ring 3, for
+# qemu_test.py: run(st): "/src/ussr/tests/moscow_ring3.su" what
+#   (what: "own", "peek", "poke" or "cli"). "own" uses only what is its
+#   own and ends with status 0; the others reach for what is the
+#   kernel's (its page tables at 0x1000, the CPU's interrupt flag), are
+#   stopped, and c_call fails: the program ends with an error.
+init(result): arg_count arg_values [
+    set(result): 0
+    at(what): arg_values 0
+    c_load(lib): "ctest.so"
+    c_sym(ticks): lib "ctest_ticks"
+    c_call(t): ticks
+    if(_): {t > 0} [ print(_): "ring3: moscow_ticks answers" ]
+    c_sym(peek): lib "ctest_peek"
+    c_sym(poke): lib "ctest_poke"
+    c_alloc(p): 16
+    c_call(_): poke p 1937
+    c_call(v): peek p
+    if(_): {v = 1937} [ print(_): "ring3: its own memory is its own" ]
+    if(_): {what = "peek"} [
+        print(_): "ring3: reading the kernel's page tables"
+        c_call(v): peek 4096
+        print(_): "ring3: read them, it should not have"
+    ]
+    if(_): {what = "poke"} [
+        print(_): "ring3: writing the kernel's page tables"
+        c_call(_): poke 4096 0
+        print(_): "ring3: wrote them, it should not have"
+    ]
+    if(_): {what = "cli"} [
+        print(_): "ring3: interrupts off"
+        c_sym(cli): lib "ctest_cli"
+        c_call(_): cli
+        print(_): "ring3: turned them off, it should not have"
+    ]
+]

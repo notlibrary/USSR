@@ -163,6 +163,24 @@ CHECKS = [
     ('ping(n): "10.0.2.2" 1', r"reply from 10\.0\.2\.2: seq 1, \d+ ms\n1 sent, 1 answered"),
     # C libraries: /lib/ctest.so through the runtime's ELF loader
     ('run(st): "/src/ussr/tests/cffi_moscow_test.su"', r"(PASS [^\n]*\n){16}PASS [^\n]*"),
+    # a program's C code runs in ring 3: its own memory is fine, the
+    # kernel's page tables and cli are not; the kernel goes on
+    ('run(st): "/src/ussr/tests/moscow_ring3.su" "own"', r"ring3: moscow_ticks answers\nring3: its own memory is its own"),
+    ("print(_): st", r"0"),
+    ('run(st): "/src/ussr/tests/moscow_ring3.su" "poke"',
+     r"ring3: moscow_ticks answers\nring3: its own memory is its own\nring3: writing the kernel's page tables\n"
+     r"USSR runtime: page fault at 0x0+1000\n"
+     r"USSR runtime: C code in ring 3 stopped: exception 14, rip 0x[0-9a-f]+, address 0x0+1000\n"
+     r"USSR: c_call: the C code broke the rules of ring 3 and was stopped\n"
+     r"USSR VM: execution failed \(ip \d+\)"),
+    ("print(_): st", r"1"),
+    ('run(st): "/src/ussr/tests/moscow_ring3.su" "cli"',
+     r"ring3: moscow_ticks answers\nring3: its own memory is its own\nring3: interrupts off\n"
+     r"USSR runtime: C code in ring 3 stopped: exception 13, rip 0x[0-9a-f]+, address 0x[0-9a-f]+\n"
+     r"USSR: c_call: the C code broke the rules of ring 3 and was stopped\n"
+     r"USSR VM: execution failed \(ip \d+\)"),
+    ("print(_): st", r"1"),
+    ('ls(_): "/etc"', r"(.*\n)*-  +\d+  murmansk\.rules"),
     ('localtime(t): 1793535166', r""),
     ("print(_): t", r"\[2026,11,1,12,12,46,0,304\]"),
     ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),
@@ -698,7 +716,8 @@ def tasks(qemu, disk, port, log, check):
     the shell answers; a program next to the shell runs, ends and gives
     its status and its memory back; kill ends one; Novgorod serves from a
     task of its own while the shell uses the same network; the kernel's
-    collector keeps its heap small."""
+    collector keeps its heap small. fg gives a task the console (Ctrl-Z,
+    Ctrl-C); limit ends a task over it; prio gives more CPU."""
     web = port + 4
     base = "http://127.0.0.1:%d" % web
     m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 8080)])
@@ -750,6 +769,63 @@ def tasks(qemu, disk, port, log, check):
               % (before, after, shell_before, shell_after, kv_before, kv_after))
         got = say("kill(r): 0")
         check("task 0 is not to be killed", "kill: no task 0 to end" in got, got)
+        # the console to a task: fg; Ctrl-Z gives it back, Ctrl-C ends it
+        say('spawn(e): "/src/ussr/tests/moscow_echo.su"')
+        serial.command("fg(st): e")
+        time.sleep(2)
+        serial.sock.sendall(b"hello\r")
+        got = clean(serial.read_until(b"echo: hello", timeout=60))
+        check("fg: the task reads the console", got.endswith("echo: hello"), got)
+        serial.sock.sendall(b"bye\r")
+        serial.output_to_prompt(timeout=60)
+        got = say("print(_): st")
+        check("and fg gives its status when it ends", got == "3", got)
+        say('spawn(e): "/src/ussr/tests/moscow_echo.su"')
+        serial.command("fg(st): e")
+        time.sleep(2)
+        serial.sock.sendall(bytes([26]))
+        got = clean(serial.output_to_prompt(timeout=60))
+        got += "\n" + say("print(_): st")
+        check("Ctrl-Z gives the console back, the task goes on in the background",
+              "^Z" in got and "goes on in the background" in got and "-2" in got.split("\n"), got)
+        got = say("wait(st): e", timeout=60) + "\n" + say("print(_): st")
+        check("in the background it reads the end of its input",
+              got.endswith("5"), got)
+        say('spawn(b): "/src/ussr/tests/moscow_busy.su"')
+        serial.command("fg(st): b")
+        time.sleep(2)
+        serial.sock.sendall(bytes([3]))
+        got = clean(serial.output_to_prompt(timeout=60))
+        got += "\n" + say("print(_): st")
+        check("Ctrl-C ends the console's task, even one that never reads: 130",
+              "^C" in got and got.endswith("130"), got)
+        # a memory limit
+        say('spawn(g): "/src/ussr/tests/moscow_grow.su"')
+        say("limit(_): g 16384")
+        got = say("wait(st): g", timeout=120) + "\n" + say("print(_): st")
+        check("a task over its memory limit ends: status 1",
+              "went over its memory limit" in got and got.endswith("\n1"), got)
+        # priorities: a slice of 4 ticks against 1
+        say('spawn(b1): "/src/ussr/tests/moscow_busy.su"')
+        say('spawn(b2): "/src/ussr/tests/moscow_busy.su"')
+        say("prio(_): b2 4")
+
+        def cpu(text, name):
+            m = re.search(r"^ +%s  run +(\d+) " % name, text, re.M)
+            return int(m.group(1)) if m else 0
+        got0 = say("tasks(_):")
+        ids = re.findall(r"^ +(\d+)  run .*moscow_busy\.su$", got0, re.M)
+        time.sleep(8)
+        got1 = say("tasks(_):")
+        say("kill(_): b1")
+        say("kill(_): b2")
+        if len(ids) == 2:
+            d1 = cpu(got1, ids[0]) - cpu(got0, ids[0])
+            d2 = cpu(got1, ids[1]) - cpu(got0, ids[1])
+        else:
+            d1 = d2 = 0
+        check("prio 4 gets about 4 times the CPU of prio 1 (%d ms, %d ms)" % (d2, d1),
+              d1 > 0 and 2.5 < d2 / d1 < 6, got0 + "\n" + got1)
         # Novgorod in a task: the network is its own
         serial.command(NOVGOROD.replace("run(st):", "spawn(nv):"))
         said = clean(serial.read_until(b"ukraine: listening on 0.0.0.0", timeout=1200))
