@@ -354,6 +354,8 @@ def main():
                     help="no Novgorod over the network")
     ap.add_argument("--no-tls", action="store_true",
                     help="no TLS client and HTTPS server")
+    ap.add_argument("--no-tasks", action="store_true",
+                    help="no programs as tasks side by side")
     ap.add_argument("--no-gui", action="store_true",
                     help="no Kremlin, Mbltishi and Tver on the framebuffer")
     ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
@@ -427,6 +429,8 @@ def main():
         novgorod(qemu, disk, args.port + 20, log, check)
     if not args.no_tls:
         secure(qemu, disk, args.port + 40, log, check)
+    if not args.no_tasks:
+        tasks(qemu, disk, args.port + 60, log, check)
     if not args.no_gui:
         gui(qemu, disk, work, args.port + 50, log, check)
     if not args.no_install:
@@ -668,6 +672,89 @@ class Hello(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+
+def shell_kib(text):
+    m = re.search(r"^ +0  run +\d+ +(\d+)  moscow$", text, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def free_kib(text):
+    m = re.search(r"free (\d+) KiB", text)
+    return int(m.group(1)) if m else -1
+
+
+def tasks(qemu, disk, port, log, check):
+    """Tasks: a program that never waits is switched out by the timer, so
+    the shell answers; a program next to the shell runs, ends and gives
+    its status and its memory back; kill ends one; Novgorod serves from a
+    task of its own while the network is refused to the others."""
+    web = port + 4
+    base = "http://127.0.0.1:%d" % web
+    m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 8080)])
+    serial = m.serial
+
+    def say(line, timeout=120):
+        serial.command(line)
+        return clean(serial.output_to_prompt(timeout=timeout))
+
+    try:
+        serial.output_to_prompt(timeout=60)
+        got = say("tasks(_):")
+        check("tasks(_): the kernel's task", re.search(r"^ +0  run +\d+ +\d+  moscow$", got, re.M)
+              is not None, got)
+        before = free_kib(say("mem(_):"))
+        shell_before = shell_kib(say("tasks(_):"))
+        got = say('spawn(b): "/src/ussr/tests/moscow_busy.su"')
+        check("spawn starts a task", got == "[1] /src/ussr/tests/moscow_busy.su", got)
+        time.sleep(5)
+        t0 = time.time()
+        got = say('print(_): "the shell answers"', timeout=60)
+        check("the shell answers next to a task that never waits (%.1f s)" % (time.time() - t0),
+              got == "the shell answers", got)
+        got = say("tasks(_):")
+        busy = re.search(r"^ +1  run +(\d+) +(\d+)  /src/ussr/tests/moscow_busy\.su$", got, re.M)
+        check("the busy task has had the CPU, in an address space of its own",
+              busy is not None and int(busy.group(1)) > 500 and int(busy.group(2)) > 0, got)
+        got = say('spawn(t): "/src/ussr/tests/moscow_tick.su"')
+        check("a second task", got == "[2] /src/ussr/tests/moscow_tick.su", got)
+        got = say("wait(st): t", timeout=300)
+        got += "\n" + say("print(_): st")
+        check("the ticking task runs, reads the end of its input, ends with its status",
+              got.count("tick") == 6 and "\n-1\n" in "\n" + got and got.endswith("\n7"), got)
+        got = say("kill(r): b")
+        got += "\n" + say("wait(st): b") + "\n" + say("print(_): st")
+        check("kill ends the busy task: status 137", got.endswith("137"), got)
+        got = say("tasks(_):")
+        check("only the kernel's task is left", got.count("\n") == 1, got)
+        after = free_kib(say("mem(_):"))
+        shell_after = shell_kib(say("tasks(_):"))
+        # what the shell itself took meanwhile (its REPL lines) aside
+        lost = before - after - (shell_after - shell_before)
+        check("the tasks' memory is given back (%d KiB unaccounted)" % lost,
+              before > 0 and abs(lost) < 4096,
+              "free %d -> %d, the shell %d -> %d KiB" % (before, after, shell_before, shell_after))
+        got = say("kill(r): 0")
+        check("task 0 is not to be killed", "kill: no task 0 to end" in got, got)
+        # Novgorod in a task: the network is its own
+        serial.command(NOVGOROD.replace("run(st):", "spawn(nv):"))
+        said = clean(serial.read_until(b"ukraine: listening on 0.0.0.0", timeout=1200))
+        check("Novgorod listens from a task of its own",
+              re.search(r"novgorod: \d+ posts", said) is not None, said)
+        status, headers, body = http(base + "/")
+        check("GET / from Novgorod's task", status == 200, repr(status))
+        got = say('ping(n): "10.0.2.2" 1')
+        check("the shell's ping is refused: the network is Novgorod's",
+              "USSR: the network is another task's now: ping" in got, got)
+        got = say("kill(r): nv") + "\n" + say('ping(n): "10.0.2.2" 1', timeout=60)
+        check("killed, Novgorod gives the network back",
+              "reply from 10.0.2.2: seq 1" in got, got)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError, OSError) as e:
+        check("tasks conversation", False, str(e))
+    finally:
+        m.close()
 
 
 def gui(qemu, disk, work, port, log, check):

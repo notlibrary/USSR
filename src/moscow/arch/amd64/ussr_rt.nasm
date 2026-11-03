@@ -26,9 +26,12 @@
 ; Names are interned per program at load time, so variables, hash
 ; entries (name! and name?) and builtins are found by index.
 ;
-; Memory is a bump heap. k_exec marks it before loading a program and
-; releases everything the program allocated when it ends, so a shell
-; that exits gives all of its memory back.
+; Memory (mm.inc): 4 KiB page frames, page tables with a private half
+; per task, TLSF heaps. The kernel has a heap of its own; every program a
+; program runs (k_exec, k_exec_bytes) gets a heap of its own, demand
+; paged, given back whole when it ends, so a shell that exits gives all
+; of its memory back. Tasks (task.inc) run programs side by side, each in
+; its own address space, switched by the timer.
 %include "layout.inc"
 
         bits 64
@@ -420,8 +423,27 @@ heap_init:
         lea r10, [r8 + 0x1000000]
 .have:
         mov [heap_base], r9
-        mov [heap_ptr], r9
         mov [heap_end], r10
+        ; the kernel's heap: half the region, at most KPOOL_MAX; the rest
+        ; is page frames
+        mov rsi, r10
+        sub rsi, r9
+        shr rsi, 1
+        and rsi, -0x200000
+        mov rax, KPOOL_MAX
+        cmp rsi, rax
+        jbe .kpool_size
+        mov rsi, rax
+.kpool_size:
+        mov [kpool_size], rsi
+        mov rdi, r9
+        call pool_init
+        mov [kpool], rax
+        mov [cur_pool], rax
+        mov rsi, r9
+        add rsi, [kpool_size]
+        mov rdx, r10
+        call pmm_init
         ret
 
 ; rdi = bytes -> rax: zeroed memory, 16-byte aligned. Keeps every other
@@ -429,13 +451,16 @@ heap_init:
 alloc:
         push rcx
         push rdi
+        push rsi
         add rdi, 15
         and rdi, -16
-        mov rax, [heap_ptr]
-        lea rcx, [rax + rdi]
-        cmp rcx, [heap_end]
-        ja .oom
-        mov [heap_ptr], rcx
+        mov rsi, rdi
+        mov rdi, [cur_pool]
+        call pool_alloc
+        mov rdi, rsi
+        pop rsi
+        test rax, rax
+        jz .oom
         mov rcx, rdi
         push rax
         mov rdi, rax
@@ -447,6 +472,16 @@ alloc:
         pop rcx
         ret
 .oom:
+        ; a task other than the kernel's ends; the kernel stops
+        cmp qword [tasks_on], 0
+        je .stop
+        mov rax, [cur_task]
+        cmp qword [rax + TASK.id], 0
+        je .stop
+        PUTS msg_oom_task
+        mov eax, 1
+        jmp task_exit
+.stop:
         PUTS msg_oom
         jmp sys_halt
 
@@ -1374,12 +1409,15 @@ read_line:
         push rbx
         xor ebx, ebx
         mov qword [read_line_eof], 0
+        call con_not_mine
+        jnc .wait
+        mov qword [read_line_eof], 1
+        jmp .empty
 .wait:
         call con_poll
         cmp eax, -1
         jne .got
-        sti
-        hlt                             ; the timer wakes us
+        call con_wait                   ; a key, or the timer, wakes us
         jmp .wait
 .got:
         cmp eax, 10
@@ -1423,6 +1461,7 @@ read_line:
 .end:
         mov edi, 10
         call con_putc
+.empty:
         mov esi, line_buf
         mov ecx, ebx
         call new_string
@@ -1849,6 +1888,10 @@ idt_init:
         inc ecx
         cmp ecx, 32
         jb .exceptions
+        mov ecx, 14
+        mov eax, pf_isr
+        call idt_set
+        mov ecx, 32
 .rest:
         mov eax, timer_isr
         cmp ecx, 32
@@ -1919,6 +1962,16 @@ idt_set:
 timer_isr:
         push rax
         inc qword [ticks]
+        cmp qword [tasks_on], 0
+        je .eoi
+        mov rax, [cur_task]
+        inc qword [rax + TASK.ticks]
+        mov rax, [ticks]
+        sub rax, [slice_start]
+        cmp rax, TASK_SLICE
+        jb .eoi
+        mov qword [need_resched], 1
+.eoi:
         mov al, 0x20
         out 0x20, al
         pop rax
@@ -2681,7 +2734,6 @@ exec_file:
         pop r8
         test rax, rax
         jz .missing
-        mov r12, [heap_ptr]
         push qword [struct_types]
         push qword [clib_count]
         push qword [cfree_head]
@@ -2697,7 +2749,6 @@ exec_file:
 .load_failed:
         mov eax, 1
 .release:
-        mov [heap_ptr], r12
         pop qword [cfree_head]
         pop qword [clib_count]
         pop qword [struct_types]
@@ -2904,6 +2955,9 @@ vm_bad_types:
 ; next instruction. Handlers get a in ecx, b in edx, c in r8d and the
 ; immediate in r9d.
 vm_next:
+        cmp qword [need_resched], 0
+        jne .preempt
+.go:
         cmp r15, [r13 + PROG.ncode]
         jae .bad_ip
         lea rsi, [r14 + r15 * 8]
@@ -2914,6 +2968,9 @@ vm_next:
         movzx r8d, byte [rsi + 3]
         mov r9d, [rsi + 4]
         jmp [optable + rax * 8]
+.preempt:
+        call task_preempt
+        jmp .go
 .bad_ip:
         mov esi, e_ip
         jmp vm_error
@@ -4254,8 +4311,11 @@ bi_k_mem:
         mov rax, [heap_end]
         sub rax, [heap_base]
         call vec_push_int
-        mov rax, [heap_end]
-        sub rax, [heap_ptr]
+        mov rax, [pmm_free_n]
+        shl rax, 12
+        mov rcx, [kpool]
+        add rax, [kpool_size]
+        sub rax, [rcx + POOL_USED]
         call vec_push_int
         mov rax, rdi
         pop rdx
@@ -4374,7 +4434,15 @@ bi_k_exec:
         mov rax, [rdi + 8]
         lea rsi, [rax + STR_BYTES]
         mov rcx, [rax + STR_LEN]
+        call tasks_init
+        push rax
+        call prog_heap_push
+        mov [rsp], rax
         call exec_file
+        mov ecx, eax
+        pop rax
+        call prog_heap_pop
+        mov eax, ecx
         pop rdx
         movsxd rax, eax
         jmp bi_int_out
@@ -4426,7 +4494,9 @@ bi_k_exec_bytes:
         jne .listed
         mov r13, [rdi + 24]
 .listed:
-        mov r12, [heap_ptr]
+        call tasks_init
+        call prog_heap_push
+        mov r12, rax                    ; the heap before
         push qword [struct_types]
         push qword [clib_count]
         push qword [cfree_head]
@@ -4458,10 +4528,13 @@ bi_k_exec_bytes:
 .load_failed:
         mov eax, 1
 .release:
-        mov [heap_ptr], r12
         pop qword [cfree_head]
         pop qword [clib_count]
         pop qword [struct_types]
+        mov ecx, eax
+        mov rax, r12
+        call prog_heap_pop
+        mov eax, ecx
         pop r13
         pop r12
         pop rbx
@@ -4476,6 +4549,31 @@ bi_k_exec_bytes:
 ; the vector of the arguments) runs whenever a program loaded from now
 ; on, or an eval, calls the command name.
 bi_k_syscall:
+        mov byte [sys_new_class], 0
+        cmp esi, 3
+        jne .two
+        cmp qword [rdi + 32], T_STR
+        jne .bad
+        mov rax, [rdi + 40]
+        cmp qword [rax + STR_LEN], 3
+        jb .bad
+        mov eax, [rax + STR_BYTES]
+        mov ecx, eax
+        and eax, 0xffffff
+        mov byte [sys_new_class], 1
+        cmp eax, 'net'
+        je .class_q
+        mov byte [sys_new_class], 2
+        cmp eax, 'gui'
+        jne .bad
+.class_q:
+        shr ecx, 24
+        cmp cl, '?'
+        jne .classed
+        or byte [sys_new_class], 0x80
+.classed:
+        mov esi, 2
+.two:
         cmp esi, 2
         jne .bad
         cmp qword [rdi], T_STR
@@ -4534,6 +4632,8 @@ bi_k_syscall:
         mov byte [rdi], 0
         pop rsi
 .set:
+        mov al, [sys_new_class]
+        mov [sys_class + rbx], al
         imul rdi, rbx, SYS_ENTRY
         add rdi, sys_table
         mov [rdi + SYS_NAME], r13
@@ -4614,6 +4714,13 @@ sys_find:
 ; the result -> runs the kernel's function with the arguments as one
 ; vector; eax 0, or -1 when it failed.
 sys_call:
+        push rax
+        movzx eax, byte [sys_class + rax]
+        call own_check
+        pop rax
+        jnc .own_ok
+        jmp sys_refused
+.own_ok:
         push rbx
         push rbp
         push r12
@@ -4668,6 +4775,26 @@ sys_call:
         pop r12
         pop rbp
         pop rbx
+        ret
+
+; eax = kernel command entry, rdx = result: the command is not run, its
+; class (own_refused) another task's; a message, null
+sys_refused:
+        push rsi
+        mov esi, msg_own_net
+        cmp qword [own_refused], 1
+        je .said
+        mov esi, msg_own_gui
+.said:
+        call con_puts
+        imul rsi, rax, SYS_ENTRY
+        add rsi, sys_table
+        call con_puts
+        PUTC 10
+        pop rsi
+        mov qword [rdx], T_NULL
+        mov qword [rdx + 8], 0
+        xor eax, eax
         ret
 
 ; eval's way in: builtin_find leaves the entry in sys_pending
@@ -6220,6 +6347,8 @@ bi_unsetenv:
 ; used up, and ends with a 10. Ctrl-D on an empty line is the end: -1.
 bi_terminal_getch:
         push rdx
+        call con_not_mine
+        jc .eof
         cmp qword [term_raw], 0
         jne .raw
 .again:
@@ -6256,8 +6385,7 @@ bi_terminal_getch:
         call con_poll
         cmp eax, -1
         jne .key
-        sti
-        hlt                             ; the timer wakes us
+        call con_wait                   ; a key, or the timer, wakes us
         jmp .raw
 .key:
         pop rdx
@@ -6279,6 +6407,11 @@ bi_terminal_sane:
 ; terminal_key_ready(b): -> true when a byte is waiting
 bi_terminal_key_ready:
         push rdx
+        call con_not_mine
+        jnc .console
+        xor eax, eax
+        jmp .ready_out
+.console:
         mov rax, [kq_head]
         cmp rax, [kq_tail]
         jne .ready
@@ -6288,6 +6421,7 @@ bi_terminal_key_ready:
 .ready:
         setne al
         movzx eax, al
+.ready_out:
         pop rdx
         mov qword [rdx], T_BOOL
         mov [rdx + 8], rax
@@ -6425,6 +6559,10 @@ bi_sleep:
         div rcx
         pop rdx
         add rax, [ticks]
+        cmp qword [tasks_on], 0
+        je .wait
+        call task_sleep_until
+        jmp .done
 .wait:
         cmp [ticks], rax
         jae .done
@@ -6725,6 +6863,8 @@ bi_pwd:
 %include "cffi.inc"
 %include "bytes.inc"
 %include "sha256.inc"
+%include "mm.inc"
+%include "task.inc"
 
 ; =====================================================================
 ; tables and texts
@@ -6817,6 +6957,11 @@ bi_table:
         dq n_k_clear, bi_k_clear
         dq n_k_color, bi_k_color
         dq n_k_ticks, bi_k_ticks
+        dq n_k_spawn, bi_k_spawn
+        dq n_k_tasks, bi_k_tasks
+        dq n_k_kill, bi_k_kill
+        dq n_k_wait, bi_k_wait
+        dq n_k_task, bi_k_task
         dq n_k_console, bi_k_console
         dq n_k_mem, bi_k_mem
         dq n_k_cpu, bi_k_cpu
@@ -6968,6 +7113,11 @@ n_k_prompt:     db "k_prompt", 0
 n_k_clear:      db "k_clear", 0
 n_k_color:      db "k_color", 0
 n_k_ticks:      db "k_ticks", 0
+n_k_spawn:      db "k_spawn", 0
+n_k_tasks:      db "k_tasks", 0
+n_k_kill:       db "k_kill", 0
+n_k_wait:       db "k_wait", 0
+n_k_task:       db "k_task", 0
 n_k_console:    db "k_console", 0
 e_k_console:    db "k_console(_): write read size (C functions, or 0 0 0)", 0
 s_ansi_clear:   db 27, "[2J", 27, "[H", 0
@@ -7200,7 +7350,34 @@ absolute RT_DATA
 boot_info:      resq 1
 heap_base:      resq 1
 ram_top:        resq 1
-heap_ptr:       resq 1
+kpool:          resq 1              ; the kernel's heap
+kpool_size:     resq 1
+cur_pool:       resq 1              ; the heap alloc takes from
+pmm_next:       resq 1              ; page frames
+pmm_end:        resq 1
+pmm_list:       resq 1
+pmm_total:      resq 1
+pmm_free_n:     resq 1
+pf_count:       resq 1
+tasks_on:       resq 1              ; task.inc
+task_table:     resq 1
+cur_task:       resq 1
+next_id:        resq 1
+kprog:          resq 1
+need_resched:   resq 1
+slice_start:    resq 1
+kglob_now:      resq 1
+khash_now:      resq 1
+pristine_types: resq 1
+pristine_clibs: resq 1
+pristine_cfree: resq 1
+pristine_globals: resq 1
+pristine_hash:  resq 1
+own_task:       resq OWN_CLASSES
+own_depth:      resq OWN_CLASSES
+own_refused:    resq 1
+sys_new_class:  resq 1
+ts_text:        resb 32
 heap_end:       resq 1
 ticks:          resq 1
 vga_row:        resq 1
@@ -7248,6 +7425,7 @@ sys_pending:    resq 1
 sys_depth:      resq 1
 sys_areas:      resq SYS_AREAS
 sys_table:      resb SYS_MAX * SYS_ENTRY
+sys_class:      resb SYS_MAX
 blk_args:       resq 3
 net_up:         resq 1
 net_mmio:       resq 1
@@ -7260,6 +7438,7 @@ net_tx_bufs:    resq 1
 net_tx_next:    resq 1
 clib_count:     resq 1
 clib_table:     resb CLIB_MAX * CLIB_SIZE
+pristine_clib_table: resb CLIB_MAX * CLIB_SIZE
 c_scratch:      resq 1
 c_scratch_top:  resq 1
 c_args:         resq C_ARGS

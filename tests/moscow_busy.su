@@ -1,0 +1,6 @@
+# moscow_busy.su - a task that never waits, for qemu_test.py: Moscow's
+# timer takes the CPU from it every 10 ms, so the shell still answers.
+set(n): 0
+while(_): true [
+    set(n): {n + 1}
+]

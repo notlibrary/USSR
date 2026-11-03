@@ -9,7 +9,7 @@
 ; separator keys and one child more than keys, child i covering the keys
 ; from keys[i-1] up to keys[i]. An insert that overflows a node splits
 ; it, up to a new root. A delete takes the key out of its leaf and stops
-; there: the bump heap gives no memory back anyway, an emptied leaf
+; there: a program's memory goes back when it ends, an emptied leaf
 ; stays in the chain and the scans step over it.
 
 BT_MAX          equ 32
