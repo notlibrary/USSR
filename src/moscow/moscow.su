@@ -32,7 +32,7 @@ $include "../murmansk/murmansk.su"
 $include "tls.su"
 $include "gui.su"
 
-global(_): mo_dev mo_base mo_files
+global(_): mo_dev mo_base mo_files mo_cwd
 
 mo_kb(r): bytes [
     str_trunc(kb): {bytes / 1024}
@@ -207,6 +207,71 @@ sys_make_dir(r): a [
     mo_arg(path): a 0 ""
     bl_mkdirs(r): fs path
     mo_sync(_): fs
+]
+
+# cd(r): path -> 0, or 1 when it is not a directory: the folder getcwd
+# answers (file commands take absolute paths; programs such as Tver
+# build theirs from getcwd)
+sys_cd(r): a [
+    set(r): 1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 "/"
+    typeof(tp): path
+    if(_): {tp != "string"} [ return(r): r ]
+    byte(b0): path 0
+    if(_): {b0 != 47} [
+        set(base): mo_cwd
+        if(_): {base = null} [ set(base): "/" ]
+        concat(path): base "/" path
+    ]
+    bl_clean(path): path
+    bl_is_dir(d): fs path
+    if(_): d [
+        set(mo_cwd): path
+        set(r): 0
+    ]
+]
+
+# getcwd(s): -> the folder cd went to, "/" at first
+sys_getcwd(r): a [
+    set(r): mo_cwd
+    if(_): {r = null} [ set(r): "/" ]
+]
+
+# copy_file(r): from to -> 0, or 1 when it failed (the hosted ussr's)
+sys_copy_file(r): a [
+    set(r): 1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(from): a 0 ""
+    mo_arg(to): a 1 ""
+    bl_exists(e): fs from
+    if(_): {e = false} [ return(r): r ]
+    bl_is_dir(d): fs from
+    if(_): d [ return(r): r ]
+    bl_read_bytes(bytes): fs from
+    typeof(tb): bytes
+    if(_): {tb != "vector"} [ return(r): r ]
+    bl_write_bytes(st): fs to bytes
+    mo_sync(_): fs
+    if(_): {st = 0} [ set(r): 0 ]
+]
+
+# remove_dir(r): path -> 0, or 1 (not an empty directory)
+sys_remove_dir(r): a [
+    set(r): 1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_is_dir(d): fs path
+    if(_): {d = false} [ return(r): r ]
+    bl_remove(st): fs path
+    mo_sync(_): fs
+    if(_): {st = 0} [ set(r): 0 ]
 ]
 
 sys_remove_file(r): a [
@@ -789,6 +854,10 @@ mo_syscalls(r): [
     k_syscall(_): "write_file" "sys_write_file"
     k_syscall(_): "close_file" "sys_close_file"
     k_syscall(_): "rename_path" "sys_rename_path"
+    k_syscall(_): "copy_file" "sys_copy_file"
+    k_syscall(_): "cd" "sys_cd"
+    k_syscall(_): "getcwd" "sys_getcwd"
+    k_syscall(_): "remove_dir" "sys_remove_dir"
     k_syscall(_): "localtime" "sys_localtime"
     k_syscall(_): "bread" "sys_bread"
     k_syscall(_): "bwrite" "sys_bwrite"
@@ -893,6 +962,7 @@ init(ret): arg_cnt arg_vec [
     ]
     btree(mo_files):
     btput(_): mo_files "next" 3
+    set(mo_cwd): "/"
     mo_syscalls(_):
     set(ret): 0
     # an installed system starts with the desktop; the shell after it
