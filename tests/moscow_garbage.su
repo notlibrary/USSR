@@ -1,0 +1,26 @@
+# moscow_garbage.su - kernel calls that leave garbage, for qemu_test.py:
+# every readfile copies a file into the kernel's value heap and out
+# again, so the kernel's collector has work; the heap stays small.
+init(result): arg_count arg_values [
+    set(result): 0
+    k_gc(g0):
+    set(i): 0
+    set(total): 0
+    while(_): {i < 3000} [
+        readfile(t): "/src/ussr/README.md"
+        len(n): t
+        set(total): {total + n}
+        list_dir(l): "/src/ussr/src"
+        set(i): {i + 1}
+    ]
+    k_gc(g1):
+    at(used): g1 0
+    at(runs0): g0 1
+    at(runs1): g1 1
+    print(_): "garbage: read"
+    print(_): total
+    print(_): "garbage: collections"
+    print(_): {runs1 - runs0}
+    print(_): "garbage: kernel values in use, KiB"
+    print(_): {used / 1024}
+]

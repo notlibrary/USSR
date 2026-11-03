@@ -173,8 +173,7 @@ net_now(r): [ k_ticks(r): ]
 
 # --- the state
 
-# Forgets the sockets and what was learnt: at boot, and when a program
-# ends (its memory, which held them, is given back then).
+# Forgets the sockets and what was learnt: at boot.
 net_reset(r): [
     set(r): 0
     btree(net_arp):
@@ -506,6 +505,46 @@ net_udp_in(r): f off plen src [
     murmansk_check(_): "in" "udp" src dport
 ]
 
+# The sockets of a program run of task id at depth and deeper (or of the
+# whole task, depth 0) are forgotten: the run, or the task, ended.
+net_drop(r): id depth [
+    set(r): 0
+    btree(gone):
+    btkeys(hs): net_socks
+    len(n): hs
+    set(i): 0
+    while(_): {i < n} [
+        at(h): hs i
+        btget(s): net_socks h
+        btget(own): s "owner"
+        typeof(to): own
+        if(_): {to = "integer"} [
+            if(_): {own / 64 = id && own % 64 >= depth} [
+                btput(_): gone h true
+                btget(state): s "state"
+                if(_): {state = "listen"} [
+                    btget(port): s "lport"
+                    btdel(_): net_listen port
+                ]
+                btdel(_): net_socks h
+                set(r): {r + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {r = 0} [ return(r): r ]
+    btkeys(ks): net_conns
+    len(nk): ks
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): ks i
+        btget(h): net_conns k
+        bthas(g): gone h
+        if(_): g [ btdel(_): net_conns k ]
+        set(i): {i + 1}
+    ]
+]
+
 # --- TCP
 
 net_sock(r): h [
@@ -521,6 +560,9 @@ net_new_sock(r): kind [
     set(net_next): {net_next + 1}
     btree(s):
     btput(_): s "handle" r
+    # the program run it is for (k_owner: task id * 64 + depth)
+    k_owner(own):
+    btput(_): s "owner" own
     btput(_): s "state" kind
     btput(_): s "lport" 0
     btput(_): s "rip" 0
@@ -656,6 +698,10 @@ net_tcp_in(r): f off plen src [
             btput(_): c "rport" sport
             btput(_): c "lport" dport
             btput(_): c "parent" lh
+            # the listener's program's, whichever task read the SYN
+            net_sock(ls): lh
+            btget(lo): ls "owner"
+            btput(_): c "owner" lo
             net_seq_add(rn): seq 1
             btput(_): c "rcv_nxt" rn
             net_iss(iss):
@@ -1210,19 +1256,19 @@ sys_net(r): a [
 
 net_syscalls(r): [
     set(r): 0
-    k_syscall(_): "socket_tcp" "sys_socket_tcp" "net"
-    k_syscall(_): "socket_bind" "sys_socket_bind" "net"
-    k_syscall(_): "socket_listen" "sys_socket_listen" "net"
-    k_syscall(_): "socket_accept" "sys_socket_accept" "net"
-    k_syscall(_): "socket_recv" "sys_socket_recv" "net"
-    k_syscall(_): "socket_recv_bytes" "sys_socket_recv_bytes" "net"
-    k_syscall(_): "socket_send" "sys_socket_send" "net"
-    k_syscall(_): "socket_send_bytes" "sys_socket_send_bytes" "net"
-    k_syscall(_): "socket_close" "sys_socket_close" "net"
-    k_syscall(_): "socket_connect" "sys_socket_connect" "net"
-    k_syscall(_): "wait_readable" "sys_wait_readable" "net"
-    k_syscall(_): "wait_writable" "sys_wait_writable" "net"
-    k_syscall(_): "ping" "sys_ping" "net?"
-    k_syscall(_): "net" "sys_net" "net?"
-    k_syscall(_): "dhcp" "sys_dhcp" "net?"
+    k_syscall(_): "socket_tcp" "sys_socket_tcp"
+    k_syscall(_): "socket_bind" "sys_socket_bind"
+    k_syscall(_): "socket_listen" "sys_socket_listen"
+    k_syscall(_): "socket_accept" "sys_socket_accept"
+    k_syscall(_): "socket_recv" "sys_socket_recv"
+    k_syscall(_): "socket_recv_bytes" "sys_socket_recv_bytes"
+    k_syscall(_): "socket_send" "sys_socket_send"
+    k_syscall(_): "socket_send_bytes" "sys_socket_send_bytes"
+    k_syscall(_): "socket_close" "sys_socket_close"
+    k_syscall(_): "socket_connect" "sys_socket_connect"
+    k_syscall(_): "wait_readable" "sys_wait_readable"
+    k_syscall(_): "wait_writable" "sys_wait_writable"
+    k_syscall(_): "ping" "sys_ping"
+    k_syscall(_): "net" "sys_net"
+    k_syscall(_): "dhcp" "sys_dhcp"
 ]

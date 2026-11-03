@@ -16,10 +16,18 @@ the README has code, and with usa, the C compiler, USSR is complete.
   stack, address space, kernel variables and runtime state; the timer
   switches tasks every 10 ms at a VM instruction outside kernel
   commands, and waits (sleep, console input, a task's end) are kept as
-  russia's and ussr's kqueue-like event queue keep them. The network and
-  the screen are one task's at a time (`k_syscall`'s class); Novgorod
-  serves from a task while the shell goes on. `qemu_test.py` checks
-  switching, waiting, kill, memory given back and network ownership.
+  russia's and ussr's kqueue-like event queue keep them.
+- Kernel commands are system calls: arguments copied into the kernel's
+  value heap (shared by every address space, demand paged), results
+  copied out into the caller's; a mark-and-sweep collector frees the
+  value heap (roots: the kernel's variables and the VM areas of the
+  commands every task is in). One kernel state serves every task: the
+  shell pings while Novgorod serves from a task, Kremlin launches
+  Mbltishi and Tver as tasks and goes on, and every task has a console
+  of its own. Sockets, windows and TLS credentials belong to the
+  program run that made them and go when it ends, or when its task ends
+  or is killed. `qemu_test.py` checks switching, waiting, kill, memory
+  given back, the shared network and the collector.
 - Windows in Moscow: Petersburg (`src/petersburg.c`, unchanged) built
   into `/lib/gui.so` with a small C library, OpenGL 1.1 in software
   and a GLFW of its own on the Bochs/QEMU VGA framebuffer (32-bit,

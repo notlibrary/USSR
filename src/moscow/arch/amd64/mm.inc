@@ -182,6 +182,8 @@ space_new:
         call pmm_alloc
         mov rcx, [PAGE_PML4]
         mov [rax], rcx
+        mov rcx, [PAGE_PML4 + 16]       ; the kernel's values (gc.inc)
+        mov [rax + 16], rcx
         pop rcx
         ret
 
@@ -301,6 +303,17 @@ pf_isr:
         push rsi
         push rdi
         mov rsi, cr2
+        ; the kernel's values: shared, their tables in every space
+        mov rax, KV_BASE
+        cmp rsi, rax
+        jb .private
+        mov rcx, KV_SIZE
+        add rax, rcx
+        cmp rsi, rax
+        jae .private
+        inc qword [kv_pages]            ; mapped for good: k_gc counts them
+        jmp .map
+.private:
         mov rax, USER_BASE
         cmp rsi, rax
         jb .fatal
@@ -313,6 +326,7 @@ pf_isr:
         add rax, rcx
         cmp rsi, rax
         jae .fatal
+.map:
         mov rdi, cr3
         and rdi, [pte_addr_mask]
         call map_page

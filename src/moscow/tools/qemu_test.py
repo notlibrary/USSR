@@ -679,6 +679,15 @@ def shell_kib(text):
     return int(m.group(1)) if m else 0
 
 
+def kv_kib(say):
+    """KiB of the kernel's value heap mapped so far: its pages stay"""
+    say("k_gc(kvg):")
+    say("at(kvm): kvg 2")
+    got = say("print(_): {kvm / 1024}")
+    m = re.search(r"([\d.]+)\s*$", got)
+    return float(m.group(1)) if m else 0
+
+
 def free_kib(text):
     m = re.search(r"free (\d+) KiB", text)
     return int(m.group(1)) if m else -1
@@ -688,7 +697,8 @@ def tasks(qemu, disk, port, log, check):
     """Tasks: a program that never waits is switched out by the timer, so
     the shell answers; a program next to the shell runs, ends and gives
     its status and its memory back; kill ends one; Novgorod serves from a
-    task of its own while the network is refused to the others."""
+    task of its own while the shell uses the same network; the kernel's
+    collector keeps its heap small."""
     web = port + 4
     base = "http://127.0.0.1:%d" % web
     m = Machine(qemu, [(disk, "raw")], port, log, forward=[(web, 8080)])
@@ -705,6 +715,7 @@ def tasks(qemu, disk, port, log, check):
               is not None, got)
         before = free_kib(say("mem(_):"))
         shell_before = shell_kib(say("tasks(_):"))
+        kv_before = kv_kib(say)
         got = say('spawn(b): "/src/ussr/tests/moscow_busy.su"')
         check("spawn starts a task", got == "[1] /src/ussr/tests/moscow_busy.su", got)
         time.sleep(5)
@@ -729,11 +740,14 @@ def tasks(qemu, disk, port, log, check):
         check("only the kernel's task is left", got.count("\n") == 1, got)
         after = free_kib(say("mem(_):"))
         shell_after = shell_kib(say("tasks(_):"))
-        # what the shell itself took meanwhile (its REPL lines) aside
-        lost = before - after - (shell_after - shell_before)
+        kv_after = kv_kib(say)
+        # what the shell itself took meanwhile (its REPL lines) and the
+        # pages the kernel's value heap mapped (they stay its) aside
+        lost = before - after - (shell_after - shell_before) - (kv_after - kv_before)
         check("the tasks' memory is given back (%d KiB unaccounted)" % lost,
               before > 0 and abs(lost) < 4096,
-              "free %d -> %d, the shell %d -> %d KiB" % (before, after, shell_before, shell_after))
+              "free %d -> %d, the shell %d -> %d, kernel values %d -> %d KiB"
+              % (before, after, shell_before, shell_after, kv_before, kv_after))
         got = say("kill(r): 0")
         check("task 0 is not to be killed", "kill: no task 0 to end" in got, got)
         # Novgorod in a task: the network is its own
@@ -744,11 +758,27 @@ def tasks(qemu, disk, port, log, check):
         status, headers, body = http(base + "/")
         check("GET / from Novgorod's task", status == 200, repr(status))
         got = say('ping(n): "10.0.2.2" 1')
-        check("the shell's ping is refused: the network is Novgorod's",
-              "USSR: the network is another task's now: ping" in got, got)
-        got = say("kill(r): nv") + "\n" + say('ping(n): "10.0.2.2" 1', timeout=60)
-        check("killed, Novgorod gives the network back",
+        check("the shell pings while Novgorod serves: one network stack for both",
               "reply from 10.0.2.2: seq 1" in got, got)
+        status, headers, body = http(base + "/")
+        check("and Novgorod still answers", status == 200, repr(status))
+        say("kill(r): nv")
+        try:
+            status, headers, body = http(base + "/", timeout=10)
+            gone = False
+        except OSError:
+            gone = True
+        check("killed, its socket goes with it", gone, "still answered %r" % (status,))
+        got = say('ping(n): "10.0.2.2" 1', timeout=60)
+        check("the network goes on", "reply from 10.0.2.2: seq 1" in got, got)
+        # the kernel's collector: kernel calls that leave garbage
+        got = say('run(_): "/src/ussr/tests/moscow_garbage.su"', timeout=900)
+        runs = re.search(r"garbage: collections\n(\d+)", got)
+        used = re.search(r"garbage: kernel values in use, KiB\n([\d.]+)", got)
+        check("the kernel's collector keeps its heap small (%s collections, %s KiB in use)"
+              % (runs and runs.group(1), used and used.group(1)),
+              runs is not None and int(runs.group(1)) > 0 and used is not None
+              and float(used.group(1)) < 65536, got)
         serial.sock.sendall(bytes([4]))
         serial.read_until(b"system halted", timeout=20)
     except (TimeoutError, EOFError, OSError) as e:
@@ -814,6 +844,12 @@ def gui(qemu, disk, work, port, log, check):
         m.keys('print(_): "hello world"\n')
         said = clean(serial.read_until(b"\r\nhello world\r\n", timeout=120))
         check("the shell in Mbltishi runs what is typed in its window", "hello world" in said, said)
+        # Kremlin launched it as a task of its own, and goes on next to it
+        m.keys("tasks(_):\n")
+        said = clean(serial.read_until(b"Mbltishi.su\r\n", timeout=120))
+        check("Mbltishi is a task of its own next to Kremlin's",
+              re.search(r"^ +0  (run|wait) .*moscow$", said, re.M) is not None
+              and re.search(r"^ +\d+  run .*Mbltishi\.su$", said, re.M) is not None, said)
         m.monitor_command("sendkey ctrl-d")
         wait_for("Mbltishi closes with the shell",
                  lambda s: pixel(s, 500, 330) != (0, 0, 0) and pixel(s, 80, 745) == (179, 38, 30), 300)

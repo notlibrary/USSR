@@ -13,8 +13,8 @@
 # it; a program started from another (launch, run) puts its windows over
 # the other's, and they go when it ends.
 #
-#   launch(r): target [params [hidden]]   Kremlin's: runs a program (a
-#                                          .su through russia), 0 or -1
+#   launch(r): target [params [hidden]]   Kremlin's: starts a program (a
+#                                          .su through russia) as a task, 0 or -1
 #   terminal_open(t): canvas [px]          a terminal on a canvas, Pobeda
 #                                          at px pixels per em (16)
 #   terminal_run(st): t [program args...]  the console in terminal t while
@@ -26,7 +26,7 @@
 # /etc/gui.conf: "screen=1024x768" (or 1536x1024, 1920x1080) and
 # "desktop=on" - Kremlin at boot, as on an installed system.
 
-global(_): gui_lib gui_fn gui_width gui_height gui_desktop gui_depth gui_terms
+global(_): gui_lib gui_fn gui_width gui_height gui_desktop gui_terms
 global(_): gui_trace
 
 gui_f(r): name [ btget(r): gui_fn name ]
@@ -39,8 +39,7 @@ gui_start(r): fs [
     set(gui_width): 1024
     set(gui_height): 768
     set(gui_desktop): false
-    set(gui_depth): 0
-    vec(gui_terms): ""
+    btree(gui_terms):
     set(gui_trace): false
     bl_exists(e): fs "/lib/gui.so"
     if(_): {e = false} [ return(r): r ]
@@ -230,6 +229,7 @@ gui_native(r): name a [
         at(path): a 0
         gui_hand(_): path
     ]
+    gui_for(_):
     set(kinds): ""
     vec(args): ""
     len(n): a
@@ -307,6 +307,7 @@ gui_native(r): name a [
 sys_pb_take_events(r): a [
     set(r): null
     if(_): {gui_lib = null} [ return(r): r ]
+    gui_for(_):
     gui_f(f): "gui_events"
     c_call(p): f
     c_string(text): p
@@ -315,25 +316,23 @@ sys_pb_take_events(r): a [
 
 # --- programs inside programs
 
-# a program starts at depth d: its windows will be its own
-gui_enter(r): d [
+# who the next calls into the library are for: the running program run
+gui_for(r): [
     set(r): 0
-    set(gui_depth): d
-    if(_): {gui_lib = null} [ return(r): r ]
     gui_f(f): "gui_owner"
-    c_call(_): f d
+    k_owner(own):
+    c_call(_): f own
 ]
 
-# the program at depth d ended: its windows go, and with the last one
-# the screen goes back to text (unless the desktop is the session)
-gui_leave(r): d [
+# a program run of task id at depth (or deeper) ended, or the task: its
+# windows and terminals go, and with the last window the screen goes back
+# to text
+gui_drop(r): id depth [
     set(r): 0
-    set(gui_depth): {d - 1}
     if(_): {gui_lib = null} [ return(r): r ]
     gui_f(fe): "gui_end"
-    c_call(left): fe d
-    gui_f(fo): "gui_owner"
-    c_call(_): fo {d - 1}
+    c_call(left): fe id depth
+    if(_): {depth = 0} [ btdel(_): gui_terms id ]
     if(_): {left = 0} [ gui_off(_): ]
 ]
 
@@ -385,8 +384,8 @@ gui_base(r): path [
 
 # launch(r): target [params [hidden]]: what Kremlin starts. "ussr" (the
 # interpreter, by any path) runs the script its parameters name; a
-# program runs with its parameters. Moscow runs one program at a time:
-# this comes back when it ends. 0, or -1 when there is no such program.
+# program runs with its parameters - as a task of its own, next to the
+# one that launched it. 0, or -1 when there is no such program.
 sys_launch(r): a [
     set(r): -1
     mo_arg(target): a 0 ""
@@ -406,8 +405,14 @@ sys_launch(r): a [
         ]
         set(words): rest
     ]
-    mo_run(st): target words
-    if(_): {st != 127} [ set(r): 0 ]
+    mo_find(found): target words
+    typeof(tf): found
+    if(_): {tf != "vector"} [ return(r): r ]
+    at(fargs): found 1
+    at(bytes): found 2
+    gui_base(tname): target
+    k_spawn(id): bytes fargs tname
+    if(_): {id >= 0} [ set(r): 0 ]
 ]
 
 # --- the terminal (src/mbltishi)
@@ -449,17 +454,29 @@ sys_terminal_run(r): a [
     gui_f(fw): "gui_con_write"
     gui_f(fr): "gui_con_read"
     gui_f(fs): "gui_con_size"
-    # terminals inside terminals: the outer one again afterwards
-    len(depth): gui_terms
+    # the task's console (k_console is the task's); terminals inside
+    # terminals: the outer one again afterwards
+    k_task(id):
+    btget(stack): gui_terms id
+    typeof(ts): stack
+    if(_): {ts != "vector"} [
+        vec(stack): ""
+        btput(_): gui_terms id stack
+    ]
+    len(depth): stack
     set(outer): -1
-    if(_): {depth > 0} [ at(outer): gui_terms {depth - 1} ]
-    push(_): gui_terms t
-    c_call(_): fa t
-    k_console(_): fw fr fs
+    if(_): {depth > 0} [ at(outer): stack {depth - 1} ]
+    push(_): stack t
+    btput(_): gui_terms id stack
+    c_call(_): fa t 1
+    k_console(_): fw fr fs t
     mo_run(r): prog args
-    pop(_): gui_terms
-    c_call(_): fa outer
+    btget(stack): gui_terms id
+    pop(_): stack
+    btput(_): gui_terms id stack
+    c_call(_): fa t 0
     if(_): {outer < 0} [ k_console(_): 0 0 0 ]
+    else(_): [ k_console(_): fw fr fs outer ]
 ]
 
 sys_terminal_close(r): a [
@@ -544,60 +561,60 @@ sys_pb_show(r): a [ gui_native(r): "petersburg_show" a ]
 
 gui_syscalls(r): [
     set(r): 0
-    k_syscall(_): "petersburg_alive" "sys_pb_alive" "gui"
-    k_syscall(_): "petersburg_canvas_arc" "sys_pb_canvas_arc" "gui"
-    k_syscall(_): "petersburg_canvas_circle" "sys_pb_canvas_circle" "gui"
-    k_syscall(_): "petersburg_canvas_clear" "sys_pb_canvas_clear" "gui"
-    k_syscall(_): "petersburg_canvas_count" "sys_pb_canvas_count" "gui"
-    k_syscall(_): "petersburg_canvas_fill" "sys_pb_canvas_fill" "gui"
-    k_syscall(_): "petersburg_canvas_font_text" "sys_pb_canvas_font_text" "gui"
-    k_syscall(_): "petersburg_canvas_line" "sys_pb_canvas_line" "gui"
-    k_syscall(_): "petersburg_canvas_rect" "sys_pb_canvas_rect" "gui"
-    k_syscall(_): "petersburg_canvas_text" "sys_pb_canvas_text" "gui"
-    k_syscall(_): "petersburg_canvas_text_scaled" "sys_pb_canvas_text_scaled" "gui"
-    k_syscall(_): "petersburg_close" "sys_pb_close" "gui"
-    k_syscall(_): "petersburg_create_button" "sys_pb_create_button" "gui"
-    k_syscall(_): "petersburg_create_canvas" "sys_pb_create_canvas" "gui"
-    k_syscall(_): "petersburg_create_checkbox" "sys_pb_create_checkbox" "gui"
-    k_syscall(_): "petersburg_create_combobox" "sys_pb_create_combobox" "gui"
-    k_syscall(_): "petersburg_create_image" "sys_pb_create_image" "gui"
-    k_syscall(_): "petersburg_create_label" "sys_pb_create_label" "gui"
-    k_syscall(_): "petersburg_create_list" "sys_pb_create_list" "gui"
-    k_syscall(_): "petersburg_create_textbox" "sys_pb_create_textbox" "gui"
-    k_syscall(_): "petersburg_create_toolbar" "sys_pb_create_toolbar" "gui"
-    k_syscall(_): "petersburg_create_window" "sys_pb_create_window" "gui"
-    k_syscall(_): "petersburg_destroy" "sys_pb_destroy" "gui"
-    k_syscall(_): "petersburg_font_height" "sys_pb_font_height" "gui"
-    k_syscall(_): "petersburg_font_info" "sys_pb_font_info" "gui"
-    k_syscall(_): "petersburg_font_load" "sys_pb_font_load" "gui"
-    k_syscall(_): "petersburg_font_width" "sys_pb_font_width" "gui"
-    k_syscall(_): "petersburg_fullscreen" "sys_pb_fullscreen" "gui"
-    k_syscall(_): "petersburg_get_checked" "sys_pb_get_checked" "gui"
-    k_syscall(_): "petersburg_get_focus" "sys_pb_get_focus" "gui"
-    k_syscall(_): "petersburg_get_height" "sys_pb_get_height" "gui"
-    k_syscall(_): "petersburg_get_index" "sys_pb_get_index" "gui"
-    k_syscall(_): "petersburg_get_mark" "sys_pb_get_mark" "gui"
-    k_syscall(_): "petersburg_get_selection" "sys_pb_get_selection" "gui"
-    k_syscall(_): "petersburg_get_text" "sys_pb_get_text" "gui"
-    k_syscall(_): "petersburg_get_width" "sys_pb_get_width" "gui"
-    k_syscall(_): "petersburg_grid" "sys_pb_grid" "gui"
-    k_syscall(_): "petersburg_inject" "sys_pb_inject" "gui"
-    k_syscall(_): "petersburg_maximize" "sys_pb_maximize" "gui"
-    k_syscall(_): "petersburg_message_box" "sys_pb_message_box" "gui"
-    k_syscall(_): "petersburg_on" "sys_pb_on" "gui"
-    k_syscall(_): "petersburg_pack" "sys_pb_pack" "gui"
-    k_syscall(_): "petersburg_reload_image" "sys_pb_reload_image" "gui"
-    k_syscall(_): "petersburg_run" "sys_pb_run" "gui"
-    k_syscall(_): "petersburg_set_checked" "sys_pb_set_checked" "gui"
-    k_syscall(_): "petersburg_set_focus" "sys_pb_set_focus" "gui"
-    k_syscall(_): "petersburg_set_index" "sys_pb_set_index" "gui"
-    k_syscall(_): "petersburg_set_mark" "sys_pb_set_mark" "gui"
-    k_syscall(_): "petersburg_set_text" "sys_pb_set_text" "gui"
-    k_syscall(_): "petersburg_show" "sys_pb_show" "gui"
-    k_syscall(_): "petersburg_take_events" "sys_pb_take_events" "gui"
+    k_syscall(_): "petersburg_alive" "sys_pb_alive"
+    k_syscall(_): "petersburg_canvas_arc" "sys_pb_canvas_arc"
+    k_syscall(_): "petersburg_canvas_circle" "sys_pb_canvas_circle"
+    k_syscall(_): "petersburg_canvas_clear" "sys_pb_canvas_clear"
+    k_syscall(_): "petersburg_canvas_count" "sys_pb_canvas_count"
+    k_syscall(_): "petersburg_canvas_fill" "sys_pb_canvas_fill"
+    k_syscall(_): "petersburg_canvas_font_text" "sys_pb_canvas_font_text"
+    k_syscall(_): "petersburg_canvas_line" "sys_pb_canvas_line"
+    k_syscall(_): "petersburg_canvas_rect" "sys_pb_canvas_rect"
+    k_syscall(_): "petersburg_canvas_text" "sys_pb_canvas_text"
+    k_syscall(_): "petersburg_canvas_text_scaled" "sys_pb_canvas_text_scaled"
+    k_syscall(_): "petersburg_close" "sys_pb_close"
+    k_syscall(_): "petersburg_create_button" "sys_pb_create_button"
+    k_syscall(_): "petersburg_create_canvas" "sys_pb_create_canvas"
+    k_syscall(_): "petersburg_create_checkbox" "sys_pb_create_checkbox"
+    k_syscall(_): "petersburg_create_combobox" "sys_pb_create_combobox"
+    k_syscall(_): "petersburg_create_image" "sys_pb_create_image"
+    k_syscall(_): "petersburg_create_label" "sys_pb_create_label"
+    k_syscall(_): "petersburg_create_list" "sys_pb_create_list"
+    k_syscall(_): "petersburg_create_textbox" "sys_pb_create_textbox"
+    k_syscall(_): "petersburg_create_toolbar" "sys_pb_create_toolbar"
+    k_syscall(_): "petersburg_create_window" "sys_pb_create_window"
+    k_syscall(_): "petersburg_destroy" "sys_pb_destroy"
+    k_syscall(_): "petersburg_font_height" "sys_pb_font_height"
+    k_syscall(_): "petersburg_font_info" "sys_pb_font_info"
+    k_syscall(_): "petersburg_font_load" "sys_pb_font_load"
+    k_syscall(_): "petersburg_font_width" "sys_pb_font_width"
+    k_syscall(_): "petersburg_fullscreen" "sys_pb_fullscreen"
+    k_syscall(_): "petersburg_get_checked" "sys_pb_get_checked"
+    k_syscall(_): "petersburg_get_focus" "sys_pb_get_focus"
+    k_syscall(_): "petersburg_get_height" "sys_pb_get_height"
+    k_syscall(_): "petersburg_get_index" "sys_pb_get_index"
+    k_syscall(_): "petersburg_get_mark" "sys_pb_get_mark"
+    k_syscall(_): "petersburg_get_selection" "sys_pb_get_selection"
+    k_syscall(_): "petersburg_get_text" "sys_pb_get_text"
+    k_syscall(_): "petersburg_get_width" "sys_pb_get_width"
+    k_syscall(_): "petersburg_grid" "sys_pb_grid"
+    k_syscall(_): "petersburg_inject" "sys_pb_inject"
+    k_syscall(_): "petersburg_maximize" "sys_pb_maximize"
+    k_syscall(_): "petersburg_message_box" "sys_pb_message_box"
+    k_syscall(_): "petersburg_on" "sys_pb_on"
+    k_syscall(_): "petersburg_pack" "sys_pb_pack"
+    k_syscall(_): "petersburg_reload_image" "sys_pb_reload_image"
+    k_syscall(_): "petersburg_run" "sys_pb_run"
+    k_syscall(_): "petersburg_set_checked" "sys_pb_set_checked"
+    k_syscall(_): "petersburg_set_focus" "sys_pb_set_focus"
+    k_syscall(_): "petersburg_set_index" "sys_pb_set_index"
+    k_syscall(_): "petersburg_set_mark" "sys_pb_set_mark"
+    k_syscall(_): "petersburg_set_text" "sys_pb_set_text"
+    k_syscall(_): "petersburg_show" "sys_pb_show"
+    k_syscall(_): "petersburg_take_events" "sys_pb_take_events"
     k_syscall(_): "launch" "sys_launch"
-    k_syscall(_): "terminal_open" "sys_terminal_open" "gui"
-    k_syscall(_): "terminal_run" "sys_terminal_run" "gui"
-    k_syscall(_): "terminal_close" "sys_terminal_close" "gui"
-    k_syscall(_): "gui" "sys_gui" "gui?"
+    k_syscall(_): "terminal_open" "sys_terminal_open"
+    k_syscall(_): "terminal_run" "sys_terminal_run"
+    k_syscall(_): "terminal_close" "sys_terminal_close"
+    k_syscall(_): "gui" "sys_gui"
 ]

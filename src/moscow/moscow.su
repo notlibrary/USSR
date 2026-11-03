@@ -797,17 +797,15 @@ mo_run(r): name args [
     if(_): {tf = "vector"} [
         at(args): found 1
         at(bytes): found 2
-        murmansk_text(fwkeep):
-        # its windows are its own (gui.su)
-        set(depth): {gui_depth + 1}
-        gui_enter(_): depth
         k_exec_bytes(r): bytes args
-        gui_leave(_): depth
-        # what the program allocated is given back: its sockets too,
-        # and the firewall's rules, kept as text across it
-        net_reset(_):
-        tls_reset(_):
-        mo_fw_restore(_): fwkeep
+        # what the program run made goes with it: its sockets, windows,
+        # TLS credentials (k_owner is the running program's again)
+        k_owner(own):
+        k_task(id):
+        set(depth): {own % 64 + 1}
+        net_drop(_): id depth
+        tls_drop(_): id depth
+        gui_drop(_): id depth
         return(r): r
     ]
     # not on the disk: the boot image has russia.ru and moscow.ru
@@ -821,6 +819,17 @@ mo_run(r): name args [
 ]
 
 # --- tasks: programs side by side (arch/amd64/task.inc)
+
+# __task_ended: id -> the runtime's call when a task ends or is killed:
+# what it had in the kernel goes
+mo_task_ended(r): a [
+    set(r): 0
+    mo_arg(id): a 0 -1
+    if(_): {id <= 0} [ return(r): r ]
+    net_drop(_): id 0
+    tls_drop(_): id 0
+    gui_drop(_): id 0
+]
 
 # spawn(id): name [args ...] -> a task running the program next to the
 # shell, in an address space of its own; its id, or -1
@@ -971,6 +980,7 @@ mo_syscalls(r): [
     k_syscall(_): "tasks" "sys_tasks"
     k_syscall(_): "kill" "sys_kill"
     k_syscall(_): "wait" "sys_wait"
+    k_syscall(_): "__task_ended" "mo_task_ended"
     k_syscall(_): "df" "sys_df"
     k_syscall(_): "fsck" "sys_fsck"
     k_syscall(_): "open_file" "sys_open_file"
@@ -1124,11 +1134,11 @@ init(ret): arg_cnt arg_vec [
     set(go): true
     while(_): go [
         print(_): "moscow: starting russia.ru"
-        murmansk_text(fwkeep):
         k_exec(status): "russia.ru"
-        net_reset(_):
-        tls_reset(_):
-        mo_fw_restore(_): fwkeep
+        # what the shell's run made goes with it
+        net_drop(_): 0 1
+        tls_drop(_): 0 1
+        gui_drop(_): 0 1
         if(_): {status = 0} [ set(go): false ]
         else(_): [
             str_from_int(ss): status
