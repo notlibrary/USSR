@@ -4,11 +4,14 @@
  * /lib/ctest.so), it exercises what the loader does: arguments in
  * registers and on the stack, imports from Moscow's C runtime (strlen,
  * memset), pointers in its data that need relocating, a constructor.
+ * Loaded by a program it runs in ring 3: ctest_peek and ctest_poke at the
+ * kernel's memory, and ctest_cli, are stopped there (moscow_ring3.su).
  */
 #include <stddef.h>
 
 size_t strlen(const char *s);
 void *memset(void *p, int c, size_t n);
+long moscow_ticks(void);
 
 /* how often the constructor ran: once, when the library was loaded */
 int ctest_starts;
@@ -43,3 +46,13 @@ void ctest_fill(unsigned char *buf, int n, int v)
 }
 
 const char *ctest_name(int i) { return i >= 0 && i < 3 ? ctest_names[i] : "none"; }
+
+/* the timer, from Moscow (int 0x81 in ring 3) */
+long ctest_ticks(void) { return moscow_ticks(); }
+
+/* memory at any address: its own is fine, the kernel's is not ring 3's */
+long ctest_peek(long addr) { return *(volatile long *)addr; }
+void ctest_poke(long addr, long v) { *(volatile long *)addr = v; }
+
+/* an instruction only the kernel may run */
+void ctest_cli(void) { __asm__ volatile("cli"); }

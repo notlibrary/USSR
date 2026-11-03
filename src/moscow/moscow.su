@@ -931,6 +931,50 @@ sys_wait(r): a [
     k_wait(r): id
 ]
 
+# fg(status): id -> the task gets the console until it ends: its status;
+# Ctrl-C ends it (130), Ctrl-Z gives the console back with the task
+# still running (-2); -1 when there is none
+sys_fg(r): a [
+    mo_arg(id): a 0 -1
+    k_fg(r): id
+    if(_): {r = -2} [
+        str_from_int(ids): id
+        concat(m): "[" ids "] goes on in the background"
+        print(_): m
+    ]
+    if(_): {r = -1} [
+        str_from_int(ids): id
+        concat(m): "fg: no task " ids " to give the console to"
+        bl_err(_): m
+    ]
+]
+
+# prio(old): id n -> the task's slice is n ticks (1 .. 20): next to tasks
+# that never wait it gets n times the CPU of one at 1; the old slice
+sys_prio(r): a [
+    mo_arg(id): a 0 -1
+    mo_arg(n): a 1 1
+    k_prio(r): id n
+    if(_): {r < 0} [
+        str_from_int(ids): id
+        concat(m): "prio: no task " ids
+        bl_err(_): m
+    ]
+]
+
+# limit(old): id kib -> the task may have this much memory of its own (0:
+# no limit); over it, it ends; the old limit
+sys_limit(r): a [
+    mo_arg(id): a 0 -1
+    mo_arg(kib): a 1 0
+    k_limit(r): id kib
+    if(_): {r < 0} [
+        str_from_int(ids): id
+        concat(m): "limit: no task " ids " (task 0 has none)"
+        bl_err(_): m
+    ]
+]
+
 # install(status): [args ...] runs the installer, /bin/install.ru
 sys_install(r): a [
     mo_run(r): "/bin/install.ru" a
@@ -951,6 +995,8 @@ sys_help(r): a [
     print(_): "  install(status):        install USSR onto another disk"
     print(_): "  spawn(id): name ...     the program as a task of its own, next to the shell"
     print(_): "  tasks(_):  kill(r): id  wait(status): id   the tasks, ending one, its end"
+    print(_): "  fg(status): id          the console to a task (Ctrl-C ends it, Ctrl-Z: back)"
+    print(_): "  prio(old): id n  limit(old): id kib   its slice (1 .. 20 ticks), its memory"
     print(_): "  df(_):  fsck(_):        the root file system, its free space, a check"
     print(_): "  uptime(_): mem(_): cpu(_): uname(_): pwd(_): clear(_): color(_): fg bg"
     print(_): "  net(_): ping(n): host   the network card and address; ICMP echo"
@@ -980,6 +1026,9 @@ mo_syscalls(r): [
     k_syscall(_): "tasks" "sys_tasks"
     k_syscall(_): "kill" "sys_kill"
     k_syscall(_): "wait" "sys_wait"
+    k_syscall(_): "fg" "sys_fg"
+    k_syscall(_): "prio" "sys_prio"
+    k_syscall(_): "limit" "sys_limit"
     k_syscall(_): "__task_ended" "mo_task_ended"
     k_syscall(_): "df" "sys_df"
     k_syscall(_): "fsck" "sys_fsck"

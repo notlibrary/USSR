@@ -26,6 +26,23 @@
 ; that program: when it ends they are forgotten (exec_file and
 ; k_exec_bytes keep clib_count and cfree_head across it).
 
+; A library a program loads lies in its task's private half and runs in
+; ring 3: its pages are the only ones ring 3 may touch (mm.inc gives
+; them PTE_U), so it cannot write the kernel's memory, the other tasks'
+; or the hardware's; an exception there (a fault, cli, in, out) stops the
+; call and c_call fails, the kernel goes on. c_call gives it a stack and
+; its buffers in the program's heap and returns to the kernel through
+; int C3_BACK; its C runtime (memcpy .. strlen) is a copy next to it, and
+; moscow_ticks is int C3_TICKS. Libraries the kernel loads (gui.so,
+; tls.so) run in ring 0 and have the kernel's exports.
+
+C3_BACK         equ 0x80                ; ring 3: the function returned
+C3_TICKS        equ 0x81                ; ring 3: rax = ticks
+C3_STACK        equ 64 * 1024
+TSS_SIZE        equ 104
+USER_CS         equ 0x23
+USER_SS         equ 0x1b
+
 CLIB_MAX        equ 16
 CLIB_SIZE       equ 32                  ; base, symtab, strtab, symbols
 C_ARGS          equ 12
@@ -56,6 +73,7 @@ cffi_init:
 
 ; --- the C runtime libraries get: System V calls, rax the result
 
+c3_rt_begin:                            ; position independent: copied for ring 3
 c_memcpy:
 c_memmove:
         mov rax, rdi
@@ -109,6 +127,11 @@ c_strlen:
         jmp .next
 .done:
         ret
+
+c3_ticks:
+        int C3_TICKS
+        ret
+c3_rt_end:
 
 ; the kernel's own, for libraries that drive hardware (lib/gui.c):
 ; moscow_ticks() -> timer ticks, 100 a second; moscow_gui(on) gives the
@@ -269,6 +292,29 @@ k_elf_load_in:
         add rax, 4095
         and rax, -4096
         mov rbp, rax                    ; the base
+        ; in a task's private half: ring 3's, with its C runtime by it
+        mov qword [elf_user], 0
+        mov rcx, USER_BASE
+        cmp rbp, rcx
+        jb .kernel_lib
+        mov rcx, KV_BASE
+        cmp rbp, rcx
+        jae .kernel_lib
+        mov qword [elf_user], 1
+        mov edi, c3_rt_end - c3_rt_begin
+        call alloc
+        mov [elf_user_rt], rax
+        push rsi
+        push rdi
+        push rcx
+        mov rdi, rax
+        mov esi, c3_rt_begin
+        mov ecx, c3_rt_end - c3_rt_begin
+        rep movsb
+        pop rcx
+        pop rdi
+        pop rsi
+.kernel_lib:
         ; the segments
         mov rcx, r14
         mov rsi, r13
@@ -405,10 +451,30 @@ k_elf_load_in:
         mov rax, [rbx]
         test rax, rax
         jz .ctor_next
+        cmp qword [elf_user], 0
+        jne .ctor_user
         mov r13, rsp
         and rsp, -16
         call rax
         mov rsp, r13
+        jmp .ctor_next
+.ctor_user:
+        push rdi
+        mov rdi, c_args
+        mov ecx, C_ARGS
+        push rax
+        xor eax, eax
+        rep stosq
+        pop rax
+        pop rdi
+        mov r13, rax
+        push qword [cur_pool]
+        call c_pool_select
+        mov rax, [cur_pool]
+        mov [c3_pool], rax
+        call c3_call
+        pop qword [cur_pool]
+        jc .ctor_broke
 .ctor_next:
         add rbx, 8
         dec r12
@@ -423,6 +489,9 @@ k_elf_load_in:
         pop rbx
         pop rdx
         jmp bi_int_out
+.ctor_broke:
+        call c3_report
+        jmp .null
 .unresolved:
         PUTS msg_ussr
         PUTS e_elf_needs
@@ -547,6 +616,19 @@ elf_symbol:
         jmp .export
 .found:
         mov rax, [rdi + 8]
+        cmp qword [elf_user], 0
+        je .found_ok
+        cmp rax, c_ticks
+        jne .user_rt
+        mov eax, c3_ticks
+.user_rt:
+        cmp rax, c3_rt_begin            ; the hardware's are not ring 3's
+        jb .missing
+        cmp rax, c3_rt_end
+        jae .missing
+        sub rax, c3_rt_begin
+        add rax, [elf_user_rt]
+.found_ok:
         clc
         jmp .out
 .none:
@@ -660,7 +742,28 @@ bi_c_call:
         test rax, rax
         jz .bad_fn
         mov r13, rax                    ; the function
+        ; a task's: ring 3, its buffers in the program's heap
+        mov qword [c3_on], 0
         mov rax, [c_scratch]
+        mov rcx, USER_BASE
+        cmp r13, rcx
+        jb .scratch
+        mov rcx, KV_BASE
+        cmp r13, rcx
+        jae .scratch
+        push qword [cur_pool]
+        call c_pool_select
+        mov rdi, [cur_pool]
+        pop qword [cur_pool]
+        mov [c3_pool], rdi
+        mov rsi, C_SCRATCH
+        call pool_alloc
+        test rax, rax
+        jz .too_big
+        mov [c3_scratch], rax
+        mov qword [c3_on], 1
+.scratch:
+        mov [c_scratch_base], rax
         mov [c_scratch_top], rax
         ; the arguments as integers into c_args
         mov r14d, 1
@@ -680,13 +783,34 @@ bi_c_call:
 .string:
         mov rax, [rdi + 8]
         add rax, STR_BYTES              ; NUL-terminated already
+        cmp qword [c3_on], 0
+        je .store
+        ; ring 3's copy, among its buffers
+        mov r8, [rdi + 8]
+        mov rcx, [r8 + STR_LEN]
+        mov rax, [c_scratch_top]
+        lea r9, [rax + rcx + 16]
+        mov r10, [c_scratch_base]
+        add r10, C_SCRATCH
+        cmp r9, r10
+        ja .too_big
+        and r9, -16
+        mov [c_scratch_top], r9
+        push rsi
+        push rdi
+        lea rsi, [r8 + STR_BYTES]
+        mov rdi, rax
+        rep movsb
+        mov byte [rdi], 0
+        pop rdi
+        pop rsi
         jmp .store
 .vector:
         mov r8, [rdi + 8]
         mov rcx, [r8 + VEC_COUNT]
         mov rax, [c_scratch_top]
         lea r9, [rax + rcx + 16]
-        mov r10, [c_scratch]
+        mov r10, [c_scratch_base]
         add r10, C_SCRATCH
         cmp r9, r10
         ja .too_big
@@ -709,6 +833,13 @@ bi_c_call:
         inc r14d
         jmp .arg
 .args_done:
+        cmp qword [c3_on], 0
+        je .ring0
+        call c3_call
+        jc .broke
+        mov r15, rax
+        jmp .back_in
+.ring0:
         ; the call: six in registers, the rest on the stack, aligned
         mov rbp, rsp
         and rsp, -16
@@ -736,6 +867,7 @@ bi_c_call:
         cld
         mov rsp, rbp
         mov r15, rax                    ; the result
+.back_in:
         ; the buffers back into their vectors
         mov r14d, 1
 .back:
@@ -764,6 +896,7 @@ bi_c_call:
         inc r14d
         jmp .back
 .returned:
+        call c3_scratch_free
         mov rax, r15
         pop r15
         pop r14
@@ -773,10 +906,17 @@ bi_c_call:
         pop rbx
         pop rdx
         jmp bi_int_out
+.broke:
+        call c3_report
+        call c3_scratch_free
+        mov eax, e_c_broke
+        jmp .fail
 .too_big:
+        call c3_scratch_free
         mov eax, e_c_big
         jmp .fail
 .bad_arg:
+        call c3_scratch_free
         mov eax, e_c_arg
         jmp .fail
 .bad_fn:
@@ -793,6 +933,149 @@ bi_c_call:
 .usage:
         mov eax, e_c_call
         jmp bi_error
+
+; --- ring 3
+
+; r13 = a function in a task's private half, c_args its arguments,
+; c3_pool the program's heap -> rax: its result, the function run in
+; ring 3 on a stack of its own; CF set when it broke the rules (c3_vector,
+; c3_rip and c3_addr say how). Keeps rbx, rbp, r12 .. r15.
+c3_call:
+        push rbx
+        push rbp
+        push r12
+        push r13
+        push r14
+        push r15
+        pushfq
+        mov rdi, [c3_pool]
+        mov rsi, C3_STACK
+        call pool_alloc
+        test rax, rax
+        jz .no_stack
+        mov [c3_stack], rax
+        mov word [rax], 0x80cd          ; int C3_BACK: the way back
+        lea rdx, [rax + C3_STACK]
+        and rdx, -16
+        sub rdx, 56                     ; the way back, arguments 7 .. 12
+        mov [rdx], rax
+        mov rcx, 6
+.stack_arg:
+        mov rax, [c_args + rcx * 8]
+        mov [rdx + rcx * 8 - 40], rax
+        inc rcx
+        cmp rcx, C_ARGS
+        jb .stack_arg
+        cli
+        mov [c3_ksp], rsp
+        mov [tss + 4], rsp              ; rsp0: interrupts from ring 3
+        push qword USER_SS
+        push rdx
+        push qword 0x202                ; interrupts on, no I/O
+        push qword USER_CS
+        push r13
+        mov rdi, [c_args]
+        mov rsi, [c_args + 8]
+        mov rdx, [c_args + 16]
+        mov rcx, [c_args + 24]
+        mov r8, [c_args + 32]
+        mov r9, [c_args + 40]
+        xor eax, eax                    ; nothing of the kernel's goes along
+        xor ebx, ebx
+        xor ebp, ebp
+        xor r10d, r10d
+        xor r11d, r11d
+        xor r12d, r12d
+        xor r13d, r13d
+        xor r14d, r14d
+        xor r15d, r15d
+        iretq
+.no_stack:
+        popfq
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbp
+        pop rbx
+        mov qword [c3_vector], -1
+        stc
+        ret
+
+; int C3_BACK from ring 3: the function returned, rax its result
+c3_back_isr:
+        mov rsp, [c3_ksp]
+        xor ecx, ecx
+        jmp c3_resume
+
+; an exception in ring 3 (exc_common): [rsp] the vector, [rsp + 16] rip
+c3_fault:
+        mov rax, [rsp]
+        mov [c3_vector], rax
+        mov rax, [rsp + 16]
+        mov [c3_rip], rax
+        mov rax, cr2
+        mov [c3_addr], rax
+        mov rsp, [c3_ksp]
+        mov rax, -1
+        mov ecx, 1
+c3_resume:
+        mov dx, 0x10
+        mov ds, dx
+        mov es, dx
+        mov ss, dx
+        push rax
+        push rcx
+        mov rdi, [c3_pool]
+        mov rsi, [c3_stack]
+        call pool_free
+        pop rcx
+        pop rax
+        popfq
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbp
+        pop rbx
+        neg ecx                         ; CF: it broke
+        ret
+
+; int C3_TICKS from ring 3 (moscow_ticks): rax = timer ticks
+c3_ticks_isr:
+        mov rax, [ticks]
+        iretq
+
+; c_call's ring 3 buffers given back. Keeps every register.
+c3_scratch_free:
+        cmp qword [c3_on], 0
+        je .done
+        push rsi
+        push rdi
+        mov rdi, [c3_pool]
+        mov rsi, [c3_scratch]
+        call pool_free
+        pop rdi
+        pop rsi
+        mov qword [c3_on], 0
+.done:
+        ret
+
+; What broke in ring 3, on the console. Keeps every register.
+c3_report:
+        push rax
+        PUTS msg_c3_broke
+        mov rax, [c3_vector]
+        call print_int
+        PUTS msg_exc_rip
+        mov rax, [c3_rip]
+        call print_hex
+        PUTS msg_c3_addr
+        mov rax, [c3_addr]
+        call print_hex
+        PUTC 10
+        pop rax
+        ret
 
 ; c_alloc(p): n -> n zeroed bytes; a block c_free gave back is taken
 ; again when it is the same size
@@ -954,6 +1237,9 @@ e_c_call:       db "c_call(r): f [up to 12 arguments]", 0
 e_c_fn:         db "c_call: no function (address 0)", 0
 e_c_arg:        db "c_call: an argument is an integer, a string, a byte vector, true, false or null", 0
 e_c_big:        db "c_call: byte vectors over 1 MiB in all", 0
+e_c_broke:      db "c_call: the C code broke the rules of ring 3 and was stopped", 0
+msg_c3_broke:   db "USSR runtime: C code in ring 3 stopped: exception ", 0
+msg_c3_addr:    db ", address ", 0
 e_c_alloc:      db "c_alloc(p): n", 0
 e_c_read:       db "c_read(v): p n", 0
 e_c_write:      db "c_write(n): p data (a string or a byte vector)", 0

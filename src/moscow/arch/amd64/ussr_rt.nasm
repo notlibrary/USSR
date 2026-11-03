@@ -33,7 +33,8 @@
 ; of its memory back. Tasks (task.inc) run programs side by side, each in
 ; its own address space, switched by the timer. Kernel commands are
 ; system calls (gc.inc): values copied in and out, the kernel's own in a
-; shared heap with a collector.
+; shared heap with a collector. C code a program loads runs in ring 3
+; (cffi.inc), with the TSS and ring 3 segments of gdt_init.
 %include "layout.inc"
 
         bits 64
@@ -285,9 +286,38 @@ sys_reboot:
         jmp sys_halt
 
 ; The runtime's own GDT (the boot loader's is in memory it no longer
-; owns): a null descriptor, 64-bit code at 0x08, data at 0x10.
+; owns): a null descriptor, 64-bit code at 0x08, data at 0x10, ring 3's
+; data at 0x18 and code at 0x20 (cffi.inc runs tasks' C code there), and
+; the TSS at 0x28, whose rsp0 is the stack interrupts from ring 3 use.
 gdt_init:
+        push rax
+        push rcx
+        push rdx
+        mov rax, tss
+        mov word [tss + 102], TSS_SIZE  ; no I/O bitmap
+        mov rcx, rax
+        shl rcx, 16
+        mov rdx, 0xffffff0000
+        and rcx, rdx                    ; base 23:0 at 16
+        or rcx, TSS_SIZE - 1            ; the limit
+        mov rdx, 0x0000890000000000     ; present, 64-bit TSS
+        or rcx, rdx
+        mov rdx, rax
+        shr rdx, 24
+        and edx, 0xff
+        shl rdx, 56                     ; base 31:24
+        or rcx, rdx
+        mov [rt_gdt_tss], rcx
+        shr rax, 32
+        mov [rt_gdt_tss + 8], rax
+        pop rdx
+        pop rcx
+        pop rax
         lgdt [rt_gdtr]
+        push rax
+        mov ax, 0x28
+        ltr ax
+        pop rax
         mov ax, 0x10
         mov ds, ax
         mov es, ax
@@ -471,6 +501,28 @@ alloc:
         xor eax, eax
         rep stosq
         pop rax
+        ; a task over its limit ends (not inside a kernel command)
+        cmp qword [tasks_on], 0
+        je .fits
+        mov rcx, [cur_task]
+        mov rdi, [rcx + TASK.limit]
+        test rdi, rdi
+        jz .fits
+        cmp [rcx + TASK.pages], rdi
+        jbe .fits
+        cmp qword [sys_depth], 0
+        jne .fits
+        mov rdi, [cur_pool]             ; its own heap's, not the kernel's
+        mov rcx, KV_BASE
+        cmp rdi, rcx
+        jae .fits
+        mov rcx, USER_BASE
+        cmp rdi, rcx
+        jb .fits
+        PUTS msg_over_limit
+        mov eax, 1
+        jmp task_exit
+.fits:
         pop rdi
         pop rcx
         ret
@@ -1417,12 +1469,16 @@ read_line:
         mov qword [read_line_eof], 1
         jmp .empty
 .wait:
+        call con_not_mine               ; sent to the background meanwhile
+        jc .background
         call con_poll
         cmp eax, -1
         jne .got
         call con_wait                   ; a key, or the timer, wakes us
         jmp .wait
 .got:
+        call fg_key
+        jc .background
         cmp eax, 10
         jne .not_lf
         cmp qword [last_cr], 0
@@ -1459,6 +1515,10 @@ read_line:
         jnz .wait
         mov qword [read_line_eof], 1
         jmp .end
+.background:
+        xor ebx, ebx
+        mov qword [read_line_eof], 1
+        jmp .empty
 .cr:
         mov qword [last_cr], 1
 .end:
@@ -1911,6 +1971,14 @@ idt_init:
         inc ecx
         cmp ecx, 256
         jb .rest
+        mov ecx, C3_BACK
+        mov eax, c3_back_isr
+        call idt_set
+        mov byte [idt + C3_BACK * 16 + 5], 0xee     ; ring 3 may call it
+        mov ecx, C3_TICKS
+        mov eax, c3_ticks_isr
+        call idt_set
+        mov byte [idt + C3_TICKS * 16 + 5], 0xee
         lidt [idtr]
 
         ; PICs: IRQs 0..15 at vectors 32..47; only the timer unmasked
@@ -1967,11 +2035,13 @@ timer_isr:
         inc qword [ticks]
         cmp qword [tasks_on], 0
         je .eoi
-        mov rax, [cur_task]
-        inc qword [rax + TASK.ticks]
+        push rcx
+        mov rcx, [cur_task]
+        inc qword [rcx + TASK.ticks]
         mov rax, [ticks]
         sub rax, [slice_start]
-        cmp rax, TASK_SLICE
+        cmp rax, [rcx + TASK.prio]
+        pop rcx
         jb .eoi
         mov qword [need_resched], 1
 .eoi:
@@ -2011,6 +2081,8 @@ exc_stub_%[v]:
 
 ; [rsp] vector, [rsp + 8] error code, [rsp + 16] rip
 exc_common:
+        test qword [rsp + 24], 3        ; from ring 3: the C code broke the rules
+        jnz c3_fault
         PUTS msg_exc
         mov rax, [rsp]
         call print_int
@@ -6398,12 +6470,16 @@ bi_terminal_getch:
         pop rdx
         jmp bi_int_out
 .raw:
+        call con_not_mine
+        jc .eof
         call con_poll
         cmp eax, -1
         jne .key
         call con_wait                   ; a key, or the timer, wakes us
         jmp .raw
 .key:
+        call fg_key
+        jc .eof
         pop rdx
         jmp bi_int_out
 
@@ -6992,6 +7068,9 @@ bi_table:
         dq n_k_task, bi_k_task
         dq n_k_owner, bi_k_owner
         dq n_k_gc, bi_k_gc
+        dq n_k_fg, bi_k_fg
+        dq n_k_prio, bi_k_prio
+        dq n_k_limit, bi_k_limit
         dq n_k_console, bi_k_console
         dq n_k_mem, bi_k_mem
         dq n_k_cpu, bi_k_cpu
@@ -7150,6 +7229,9 @@ n_k_wait:       db "k_wait", 0
 n_k_task:       db "k_task", 0
 n_k_owner:      db "k_owner", 0
 n_k_gc:         db "k_gc", 0
+n_k_fg:         db "k_fg", 0
+n_k_prio:       db "k_prio", 0
+n_k_limit:      db "k_limit", 0
 n_k_console:    db "k_console", 0
 e_k_console:    db "k_console(_): write read size [handle] (C functions, or 0 0 0)", 0
 e_too_deep:     db "kernel commands nested too deep", 0
@@ -7369,6 +7451,10 @@ rt_gdt:
         dq 0
         dq 0x00af9a000000ffff           ; 0x08: 64-bit code
         dq 0x00cf92000000ffff           ; 0x10: data
+        dq 0x00cff2000000ffff           ; 0x18: ring 3's data
+        dq 0x00affa000000ffff           ; 0x20: ring 3's 64-bit code
+rt_gdt_tss:
+        dq 0, 0                         ; 0x28: the TSS, made by gdt_init
 rt_gdtr:
         dw rt_gdtr - rt_gdt - 1
         dq rt_gdt
@@ -7404,6 +7490,22 @@ kcaller_pool:   resq 1              ; a kernel command's caller's heap
 gc_next:        resq 1
 gc_runs:        resq 1
 kv_pages:       resq 1
+fg_id:          resq 1                  ; the task the console reads for
+fg_kill:        resq 1                  ; Ctrl-C came for it
+pt_leaves:      resq 1                  ; pages pt_free_entries gave back
+        alignb 16
+tss:            resb TSS_SIZE
+c3_ksp:         resq 1                  ; the kernel's stack while C runs in ring 3
+c3_stack:       resq 1                  ; ring 3's stack, a block of c3_pool
+c3_pool:        resq 1
+c3_scratch:     resq 1                  ; c_call's buffers in ring 3, a block of c3_pool
+c3_on:          resq 1                  ; this c_call is ring 3's
+c3_vector:      resq 1                  ; how the last one broke
+c3_rip:         resq 1
+c3_addr:        resq 1
+c_scratch_base: resq 1
+elf_user:       resq 1                  ; the library loading is a task's: ring 3
+elf_user_rt:    resq 1                  ; its copy of the C runtime
 con_hook_ctx:   resq 1              ; k_console's handle for the hooks
 pristine_types: resq 1
 pristine_clibs: resq 1

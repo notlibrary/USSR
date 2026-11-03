@@ -10,8 +10,8 @@
 ; starts another from a program's bytes; it runs until its program
 ; ends, or kill ends it.
 ;
-; Switching: the PIT ticks at 100 Hz; when a task has had its TASK_SLICE
-; the VM gives the CPU away at its next instruction (vm_next), unless it
+; Switching: the PIT ticks at 100 Hz; when a task has had its slice
+; (TASK.prio ticks, TASK_SLICE at the start; k_prio) the VM gives the CPU away at its next instruction (vm_next), unless it
 ; is inside a kernel command, which runs to the end or to where it
 ; waits. Waiting is the scheduler's business, as russia's scheduler and
 ; ussr's kqueue-like event queue (src/eventq.c) do it: a task that
@@ -38,6 +38,8 @@ W_NONE          equ 0
 W_TICK          equ 1
 W_TASK          equ 2
 W_INPUT         equ 3
+W_FG            equ 4                   ; the console's task ends, stops or is to end
+PRIO_MAX        equ 20
 
 ; --- per-task state of the runtime: swapped with the task
 
@@ -85,6 +87,9 @@ struc TASK
 .spawn_buf:     resq 1                  ; the program and arguments, until it starts
 .spawn_len:     resq 1
 .name:          resb 32
+.prio:          resq 1                  ; its slice, in ticks (1 .. PRIO_MAX)
+.pages:         resq 1                  ; private pages it has
+.limit:         resq 1                  ; pages it may have, 0: no limit
 .vars:          resq TASK_VARS
 .clib:          resb CLIB_MAX * CLIB_SIZE
 endstruc
@@ -158,6 +163,7 @@ tasks_init:
         mov [task_table], rax
         mov qword [rax + TASK.id], 0
         mov qword [rax + TASK.state], TS_READY
+        mov qword [rax + TASK.prio], TASK_SLICE
         mov qword [rax + TASK.cr3], PAGE_PML4
         mov rcx, [ticks]
         mov [rax + TASK.started], rcx
@@ -454,9 +460,20 @@ task_can_run:
         je .task
         cmp rcx, W_INPUT
         je .input
+        cmp rcx, W_FG
+        je .fg
         clc
         pop rcx
         ret
+.fg:
+        mov rcx, [rax + TASK.wait_id]
+        cmp rcx, [fg_id]
+        jne .yes                        ; stopped: the console is back
+        cmp qword [fg_kill], 0
+        jne .yes
+        call fg_keys
+        jnc .yes
+        jmp .task
 .tick:
         mov rcx, [ticks]
         cmp rcx, [rax + TASK.wake]
@@ -712,13 +729,89 @@ con_not_mine:
         jne .mine
         push rax
         mov rax, [cur_task]
-        cmp qword [rax + TASK.id], 0
+        mov rax, [rax + TASK.id]
+        cmp rax, [fg_id]
         pop rax
         je .mine
         stc
         ret
 .mine:
         clc
+        ret
+
+; eax = a byte the console's task read: Ctrl-C ends it (130), Ctrl-Z
+; gives the console back to the shell (CF set: the reader is in the
+; background now and reads the end of its input). Task 0 and terminals
+; read them as bytes. Keeps every register.
+fg_key:
+        cmp eax, 3
+        je .special
+        cmp eax, 26
+        je .special
+.plain:
+        clc
+        ret
+.special:
+        cmp qword [fg_id], 0
+        je .plain
+        cmp qword [con_hook_read], 0
+        jne .plain
+        push rax
+        mov rax, [cur_task]
+        mov rax, [rax + TASK.id]
+        cmp rax, [fg_id]
+        pop rax
+        jne .plain
+        cmp eax, 3
+        je .interrupt
+        mov qword [fg_id], 0
+        PUTS msg_fg_stopped
+        stc
+        ret
+.interrupt:
+        PUTS msg_fg_interrupt
+        mov eax, 130
+        jmp task_exit
+
+; For the shell waiting in k_fg while the console's task may not read:
+; the bytes waiting are looked through for Ctrl-C and Ctrl-Z; one found
+; is taken with what came before it, and acted on (Ctrl-C: fg_kill;
+; Ctrl-Z: fg_id 0). CF clear when one was. Keeps every register.
+fg_keys:
+        push rax
+        push rcx
+        mov ecx, 32
+.fill:
+        call con_fill
+        dec ecx
+        jnz .fill
+        mov rcx, [kq_head]
+.scan:
+        cmp rcx, [kq_tail]
+        je .none
+        movzx eax, byte [kq_buf + rcx]
+        inc rcx
+        and ecx, KQ_SIZE - 1
+        cmp eax, 3
+        je .interrupt
+        cmp eax, 26
+        jne .scan
+        mov [kq_head], rcx
+        mov qword [fg_id], 0
+        PUTS msg_fg_stopped
+        jmp .found
+.interrupt:
+        mov [kq_head], rcx
+        mov qword [fg_kill], 1
+.found:
+        pop rcx
+        pop rax
+        clc
+        ret
+.none:
+        pop rcx
+        pop rax
+        stc
         ret
 
 ; --- heaps per program run
@@ -780,7 +873,10 @@ prog_heap_pop:
         and rdi, [pte_addr_mask]
         push rdx
         mov rdx, POOL_WINDOW
+        mov qword [pt_leaves], 0
         call window_free
+        mov rdx, [pt_leaves]
+        sub [rcx + TASK.pages], rdx
         pop rdx
         mov [cur_pool], rax
         pop rsi
@@ -899,6 +995,7 @@ task_spawn:
         mov [rbx + TASK.stack], rax
         call space_new
         mov [rbx + TASK.cr3], rax
+        mov qword [rbx + TASK.prio], TASK_SLICE
         ; the runtime's state it starts with: the kernel's as it booted
         mov rax, [kpool]
         mov [rbx + TASK.vars + TVI_POOL * 8], rax
@@ -1016,6 +1113,7 @@ task_exit:
         mov rbx, [cur_task]
         movsxd rax, eax
         mov [rbx + TASK.status], rax
+        mov qword [rbx + TASK.limit], 0 ; ending: what it takes now is the kernel's
         sti
         mov rax, [rbx + TASK.id]
         call task_ended_hook
@@ -1257,14 +1355,8 @@ bi_k_kill:
         mov eax, 137
         jmp task_exit
 .other:
-        mov qword [rax + TASK.status], 137
-        mov qword [rax + TASK.state], TS_ZOMBIE
-        mov qword [rax + TASK.reaped], 0
-        call task_reap
-        push rax
-        mov rax, [rax + TASK.id]
-        call task_ended_hook
-        pop rax
+        mov ecx, 137
+        call task_end_other
         xor eax, eax
         jmp .out
 .refuse:
@@ -1273,6 +1365,169 @@ bi_k_kill:
         jmp bi_int_out
 .bad:
         mov eax, e_k_kill
+        jmp bi_error
+
+; rax = another task (not a zombie), ecx = its status: it ends now, what
+; it holds is given back and the kernel hears of it. Keeps every register.
+task_end_other:
+        mov [rax + TASK.status], rcx
+        mov qword [rax + TASK.state], TS_ZOMBIE
+        mov qword [rax + TASK.reaped], 0
+        call task_reap
+        push rax
+        mov rax, [rax + TASK.id]
+        call task_ended_hook
+        pop rax
+        ret
+
+; k_fg(status): id -> the task gets the console (its reads are the
+; keyboard's and COM1's) and the caller waits until it ends: its status,
+; as k_wait gives it. Ctrl-C ends it (130); Ctrl-Z gives the console back
+; with the task still running: -2. -1 when there is no such task.
+bi_k_fg:
+        cmp esi, 1
+        jne .bad
+        cmp qword [rdi], T_INT
+        jne .bad
+        mov rax, -1
+        cmp qword [tasks_on], 0
+        je .out
+        push rbx
+        mov rbx, [rdi + 8]
+        test rbx, rbx
+        jz .none
+        mov rax, rbx
+        call task_by_id
+        test rax, rax
+        jz .none
+        cmp rax, [cur_task]
+        je .none
+        mov [fg_id], rbx
+        mov qword [fg_kill], 0
+.again:
+        mov rax, rbx
+        call task_by_id
+        test rax, rax
+        jz .gone
+        cmp qword [rax + TASK.state], TS_ZOMBIE
+        je .ended
+        cmp [fg_id], rbx
+        jne .stopped
+        cmp qword [fg_kill], 0
+        je .wait
+        mov qword [fg_kill], 0
+        PUTS msg_fg_interrupt
+        push rcx
+        mov ecx, 130
+        call task_end_other
+        pop rcx
+        jmp .again
+.wait:
+        push rcx
+        mov rcx, [cur_task]
+        mov qword [rcx + TASK.state], TS_BLOCKED
+        mov qword [rcx + TASK.wait], W_FG
+        mov [rcx + TASK.wait_id], rbx
+        pop rcx
+        call schedule
+        jmp .again
+.ended:
+        mov qword [fg_id], 0
+        call task_reap
+        push qword [rax + TASK.status]
+        mov qword [rax + TASK.state], TS_FREE
+        pop rax
+        pop rbx
+        jmp .out
+.stopped:
+        pop rbx
+        mov rax, -2
+        jmp .out
+.gone:
+        mov qword [fg_id], 0
+.none:
+        pop rbx
+        mov rax, -1
+.out:
+        jmp bi_int_out
+.bad:
+        mov eax, e_k_fg
+        jmp bi_error
+
+; k_prio(old): id n -> the task's slice is n ticks of 10 ms (1 .. 20, 1
+; at the start): with others that never wait it has n times the CPU of
+; a task at 1. The slice it had, or -1 when there is no such task.
+bi_k_prio:
+        cmp esi, 2
+        jne .bad
+        cmp qword [rdi], T_INT
+        jne .bad
+        cmp qword [rdi + 16], T_INT
+        jne .bad
+        mov rcx, [rdi + 24]
+        cmp rcx, 1
+        jl .bad
+        cmp rcx, PRIO_MAX
+        jg .bad
+        mov rax, -1
+        cmp qword [tasks_on], 0
+        je .out
+        mov rax, [rdi + 8]
+        call task_by_id
+        test rax, rax
+        jz .none
+        cmp qword [rax + TASK.state], TS_ZOMBIE
+        je .none
+        push qword [rax + TASK.prio]
+        mov [rax + TASK.prio], rcx
+        pop rax
+        jmp .out
+.none:
+        mov rax, -1
+.out:
+        jmp bi_int_out
+.bad:
+        mov eax, e_k_prio
+        jmp bi_error
+
+; k_limit(old): id kib -> the task may have this much private memory (0:
+; no limit); one that goes over ends (status 1) when it next allocates.
+; Task 0, the kernel's, has none. The limit it had, or -1 when there is
+; no such task.
+bi_k_limit:
+        cmp esi, 2
+        jne .bad
+        cmp qword [rdi], T_INT
+        jne .bad
+        cmp qword [rdi + 16], T_INT
+        jne .bad
+        mov rcx, [rdi + 24]
+        test rcx, rcx
+        js .bad
+        add rcx, 3
+        shr rcx, 2                      ; KiB -> pages
+        mov rax, -1
+        cmp qword [tasks_on], 0
+        je .out
+        mov rax, [rdi + 8]
+        test rax, rax
+        jz .none
+        call task_by_id
+        test rax, rax
+        jz .none
+        cmp qword [rax + TASK.state], TS_ZOMBIE
+        je .none
+        push qword [rax + TASK.limit]
+        mov [rax + TASK.limit], rcx
+        pop rax
+        shl rax, 2
+        jmp .out
+.none:
+        mov rax, -1
+.out:
+        jmp bi_int_out
+.bad:
+        mov eax, e_k_limit
         jmp bi_error
 
 ; k_wait(status): id -> waits for the task to end; its status, or -1
@@ -1334,6 +1589,12 @@ msg_no_frames:  db "USSR runtime: out of memory (no free page frames)", 10, 0
 msg_pf:         db "USSR runtime: page fault at ", 0
 msg_too_deep:   db "USSR runtime: programs nested too deep", 10, 0
 msg_oom_task:   db "USSR runtime: the task is out of memory and ends", 10, 0
+msg_over_limit: db "USSR runtime: the task went over its memory limit and ends", 10, 0
+msg_fg_stopped: db "^Z", 10, 0
+msg_fg_interrupt: db "^C", 10, 0
+e_k_fg:         db "k_fg(status): id", 0
+e_k_prio:       db "k_prio(old): id n (n: 1 .. 20 ticks)", 0
+e_k_limit:      db "k_limit(old): id kib", 0
 s_task_ended:   db "__task_ended"
 s_task_ended_len equ $ - s_task_ended
 name_task0:     db "moscow"

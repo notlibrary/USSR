@@ -402,8 +402,38 @@ console input, a task's end - and the scheduler checks them each time it
 picks the next task, round robin. With nothing to run the CPU halts
 until the next interrupt.
 
-The console is task 0's, and a task's own when it has a terminal
-(Mbltishi); another task reads the end of its input.
+The console is the shell's, and a task's own when it has a terminal
+(Mbltishi); another task reads the end of its input. `fg(status): id`
+gives the console to a task until it ends, with its status; Ctrl-C ends
+it (130), even one that never reads, and Ctrl-Z gives the console back
+to the shell with the task going on in the background (-2).
+
+    russia> spawn(e): "/src/ussr/tests/moscow_echo.su"
+    [1] /src/ussr/tests/moscow_echo.su
+    russia> fg(st): e
+    hello
+    echo: hello
+    ^Z
+    [1] goes on in the background
+
+`prio(old): id n` gives a task a slice of n ticks (1 .. 20; 1, 10 ms,
+at the start): next to tasks that never wait it gets n times the CPU of
+one at 1. `limit(old): id kib` caps the memory of its own a task may
+have (its private pages, counted as the page fault handler maps them and
+as its heaps go back); one over it ends with status 1 at its next
+allocation.
+
+C code a program loads (`c_load`) runs in ring 3. Its library, its
+buffers and the stack `c_call` gives it lie in the task's private half,
+whose pages are the only ones the page tables let ring 3 use: the
+kernel's memory, the other tasks' and the hardware's are out of its
+reach, and so are `cli`, `in` and `out`. An exception there stops the
+call and `c_call` fails, the kernel goes on; the TSS gives interrupts
+from ring 3 the kernel's stack, and the function returns through
+`int 0x80`. Its C runtime (memcpy .. strlen) is a copy next to it, and
+`moscow_ticks` is `int 0x81`. Libraries the kernel loads for the
+hardware (Petersburg's gui.so, BearSSL's tls.so) run in ring 0. There is
+no swap: Moscow keeps every page in RAM.
 
 Kernel commands are system calls (`arch/amd64/gc.inc`). The kernel is
 one program every task calls, with one network stack, one screen, one
