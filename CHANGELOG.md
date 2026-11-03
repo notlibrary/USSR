@@ -6,6 +6,26 @@ The second wave of the project is finished: every subproject listed in
 the README has code, and with usa, the C compiler, USSR is complete.
 
 ### Added
+- Windows in Moscow: Petersburg (`src/petersburg.c`, unchanged) built
+  into `/lib/gui.so` with a small C library, OpenGL 1.1 in software
+  and a GLFW of its own on the Bochs/QEMU VGA framebuffer (32-bit,
+  1024x768, 1536x1024 or 1920x1080) with the PS/2 keyboard and mouse:
+  windows with title bars, dragged and closed. `src/moscow/gui.su`
+  makes every `petersburg_*` native a kernel command, so Kremlin, Tver
+  and other Petersburg programs run from their source; windows belong
+  to the program that made them; text mode comes back with the last
+  one. `/etc/gui.conf`; an installed system boots into Kremlin (a key in
+  the first 3 seconds gives the shell). `qemu_test.py` drives Kremlin,
+  Mbltishi and Tver with QEMU's mouse and keyboard.
+- Mbltishi (`src/Mbltishi`), the desktop's terminal: the USSR shell in
+  a window, on Moscow's terminal (`terminal_open`, `terminal_run`; the
+  runtime's `k_console` hooks the console to C functions), Pobeda
+  glyphs and the console's ANSI sequences. Kremlin's Terminal pin starts
+  it on Moscow.
+- Moscow: `launch`, `cd`/`getcwd`, `copy_file`, `remove_dir`; `is_dir`
+  and `list_dir` answer as the hosted ussr does (1/0, folders with a
+  trailing `/`); `OS=Moscow`, `HOME` and `USSR_HOME` are set at boot;
+  a bare `run(_): "russia"` is the shell from `/boot`.
 - Moscow's DHCP client in a file of its own (`src/moscow/dhcp.su`) that
   keeps the lease: renews at T1, rebinds at T2, starts again on a NAK or
   when the lease ends, sends its host name, and releases. `dhcp(_):`

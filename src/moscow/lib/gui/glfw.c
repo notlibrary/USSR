@@ -74,9 +74,13 @@ static struct
     int packet_n;
     int packet_size;
     int dirty;
-    int placed;
     GLFWvidmode mode;
 } glfw;
+
+/* titles in a TrueType font (moscow.c, once the kernel has handed one
+ * over): 1 when it drew, else the bitmap font, which has capitals only */
+static int (*glfw_title_draw)(int x, int y, const char *text, int max_width,
+                              uint32_t color);
 
 /* the terminal (moscow.c) may take a window's keys: 1 when it did */
 static int (*glfw_key_filter)(GLFWwindow *window, int key, int action, int mods,
@@ -338,7 +342,9 @@ static void glfw_frame(const GLFWwindow *w)
     /* the border, the bar, the title and the close box */
     glfw_fill(tx - 1, ty - 1, tw + 2, w->height + GLFW_TITLE + 3, 0x101218);
     glfw_fill(tx, ty, tw, GLFW_TITLE, bar);
-    glfw_text(tx + 10, ty + 9, w->title, tw - 50, 0xf0f2f6);
+    if (glfw_title_draw == NULL ||
+        !glfw_title_draw(tx + 10, ty + 4, w->title, tw - 50, 0xf0f2f6))
+        glfw_text(tx + 10, ty + 9, w->title, tw - 50, 0xf0f2f6);
     glfw_fill(tx + tw - 22, ty + 4, 16, 16, focused ? 0xb03a2e : 0x5a5f6a);
     {
         int k;
@@ -523,14 +529,29 @@ GLFWwindow *glfwCreateWindow(int width, int height, const char *title,
     memcpy(w->title, title, n);
     w->decorated = glfw.hint_decorated;
     w->visible = glfw.hint_visible;
-    /* cascaded, inside the screen */
-    w->x = 60 + (glfw.placed % 8) * 32;
-    w->y = 40 + GLFW_TITLE + (glfw.placed % 8) * 28;
-    ++glfw.placed;
+    /* in the middle of the screen, a step down and right of a window
+     * already there */
+    w->x = (glfw.width - w->width) / 2;
+    w->y = (glfw.height - w->height + GLFW_TITLE) / 2;
+    {
+        GLFWwindow *o;
+        int moved = 1;
+        while (moved)
+        {
+            moved = 0;
+            for (o = glfw.bottom; o != NULL; o = o->above)
+                if (o->visible && o->x == w->x && o->y == w->y)
+                {
+                    w->x += 32;
+                    w->y += 28;
+                    moved = 1;
+                }
+        }
+    }
     if (w->x + w->width > glfw.width)
-        w->x = (glfw.width - w->width) / 2;
+        w->x = glfw.width - w->width;
     if (w->y + w->height > glfw.height)
-        w->y = (glfw.height - w->height + GLFW_TITLE) / 2;
+        w->y = glfw.height - w->height;
     if (w->x < 0) w->x = 0;
     if (w->y < GLFW_TITLE) w->y = w->decorated ? GLFW_TITLE : 0;
     glfw_push_top(w);

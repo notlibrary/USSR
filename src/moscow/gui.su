@@ -69,6 +69,7 @@ gui_start(r): fs [
     push(_): names "gui_con_write"
     push(_): names "gui_con_read"
     push(_): names "gui_con_size"
+    push(_): names "gui_title_font"
     len(n): names
     set(i): 0
     while(_): {i < n} [
@@ -158,6 +159,14 @@ gui_on(r): [
     if(_): {gui_lib = null} [ return(r): r ]
     gui_f(f): "gui_video_start"
     c_call(r): f gui_width gui_height
+    if(_): {r < 0} [ return(r): r ]
+    # titles as they are written (Mbltishi, not MBLTISHI): in Pobeda
+    set(font): "/src/ussr/fonts/pobeda.ttf"
+    gui_hand(st): font
+    if(_): {st = 0} [
+        gui_f(ft): "gui_title_font"
+        c_call(_): ft font
+    ]
 ]
 
 gui_off(r): [

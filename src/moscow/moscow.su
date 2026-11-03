@@ -869,6 +869,25 @@ mo_syscalls(r): [
     gui_syscalls(_):
 ]
 
+# true when a key comes within ticks (100 a second); it is taken
+mo_key_within(r): ticks [
+    set(r): false
+    k_ticks(now):
+    set(until): {now + ticks}
+    while(_): {now < until} [
+        terminal_key_ready(k):
+        if(_): k [
+            terminal_raw(_):
+            terminal_getch(_):
+            terminal_sane(_):
+            set(r): true
+            return(r): r
+        ]
+        sleep(_): 20
+        k_ticks(now):
+    ]
+]
+
 init(ret): arg_cnt arg_vec [
     k_color(_): 14 1
     print(_): "USSR Moscow kernel for amd64"
@@ -965,11 +984,17 @@ init(ret): arg_cnt arg_vec [
     set(mo_cwd): "/"
     mo_syscalls(_):
     set(ret): 0
-    # an installed system starts with the desktop; the shell after it
+    # an installed system starts with the desktop, the shell after it;
+    # a key within 3 seconds (the keyboard or the serial line) skips it
     if(_): {gui_desktop && gui_lib != null} [
-        print(_): "moscow: starting the desktop, Kremlin"
-        vec(noargs): ""
-        mo_run(_): "kremlin" noargs
+        print(_): "moscow: the desktop, Kremlin, in 3 seconds (a key: the shell)"
+        mo_key_within(skip): 300
+        if(_): skip [ print(_): "moscow: no desktop" ]
+        else(_): [
+            print(_): "moscow: starting the desktop, Kremlin"
+            vec(noargs): ""
+            mo_run(_): "kremlin" noargs
+        ]
     ]
     set(go): true
     while(_): go [

@@ -187,6 +187,18 @@ ANSWERS = [
 ]
 
 
+# sendkey names of the characters the GUI checks type
+SENDKEY = {" ": "spc", "(": "shift-9", ")": "shift-0", "_": "shift-minus",
+           ":": "shift-semicolon", '"': "shift-apostrophe", ".": "dot",
+           "/": "slash", "\n": "ret"}
+
+
+def pixel(shot, x, y):
+    w, h, rgb = shot
+    i = (y * w + x) * 3
+    return tuple(rgb[i:i + 3])
+
+
 def find_qemu(given):
     if given:
         return given
@@ -292,6 +304,35 @@ class Machine:
                          [c >> 8 for c in row]))
         return rows
 
+    def monitor_command(self, line, timeout=60):
+        self.monitor.sock.sendall(line.encode() + b"\n")
+        return self.monitor.read_until(b"(qemu) ", timeout=timeout).decode("latin-1")
+
+    def pixels(self, work):
+        """The screen as the monitor dumps it: (width, height, RGB bytes)."""
+        path = os.path.join(work, "screen.ppm")
+        if os.path.exists(path):
+            os.remove(path)
+        self.monitor_command("screendump " + path.replace("\\", "/"))
+        for _ in range(50):
+            if os.path.exists(path) and os.path.getsize(path) > 15:
+                break
+            time.sleep(0.1)
+        with open(path, "rb") as f:
+            data = f.read()
+        magic, size, depth, rest = data.split(b"\n", 3)
+        w, h = (int(x) for x in size.split())
+        return w, h, rest
+
+    def keys(self, text):
+        """Types text on the PS/2 keyboard (QEMU's sendkey)."""
+        for ch in text:
+            name = SENDKEY.get(ch)
+            if name is None:
+                name = "shift-" + ch.lower() if ch.isupper() else ch
+            self.monitor_command("sendkey " + name)
+            time.sleep(0.05)
+
     def close(self):
         if self.proc.poll() is None:
             self.proc.kill()
@@ -313,6 +354,8 @@ def main():
                     help="no Novgorod over the network")
     ap.add_argument("--no-tls", action="store_true",
                     help="no TLS client and HTTPS server")
+    ap.add_argument("--no-gui", action="store_true",
+                    help="no Kremlin, Mbltishi and Tver on the framebuffer")
     ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
     args = ap.parse_args()
     global ACCEL
@@ -384,6 +427,8 @@ def main():
         novgorod(qemu, disk, args.port + 20, log, check)
     if not args.no_tls:
         secure(qemu, disk, args.port + 40, log, check)
+    if not args.no_gui:
+        gui(qemu, disk, work, args.port + 50, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
 
@@ -625,6 +670,94 @@ class Hello(BaseHTTPRequestHandler):
         pass
 
 
+def gui(qemu, disk, work, port, log, check):
+    """Windows on the framebuffer: Kremlin, the desktop; Mbltishi, the
+    terminal, started from its panel, with the shell in it; Tver, the
+    file manager, over the Belarus root; then text mode again. The mouse
+    starts in the middle of the screen and QEMU moves it by pixels."""
+    m = Machine(qemu, [(disk, "raw")], port, log, monitor=port + 1)
+    serial = m.serial
+
+    def wait_for(label, test, timeout=600):
+        end = time.time() + timeout
+        while True:
+            shot = m.pixels(work)
+            if test(shot):
+                check(label, True)
+                return True
+            if time.time() > end:
+                w, h, _ = shot
+                check(label, False, "screen %dx%d" % (w, h))
+                return False
+            time.sleep(2)
+
+    def dark(c):
+        return max(c) < 12
+
+    def click(dx, dy):
+        # in steps: QEMU's PS/2 mouse carries a burst of packets only so
+        # far, and a button sent meanwhile lands short of the target
+        steps = max(1, (max(abs(dx), abs(dy)) + 99) // 100)
+        for i in range(steps):
+            m.monitor_command("mouse_move %d %d" % (dx * (i + 1) // steps - dx * i // steps,
+                                                    dy * (i + 1) // steps - dy * i // steps))
+            time.sleep(0.3)
+        time.sleep(1.0)
+        m.monitor_command("mouse_button 1")
+        time.sleep(0.2)
+        m.monitor_command("mouse_button 0")
+
+    try:
+        boot = clean(serial.output_to_prompt(timeout=60))
+        check("the kernel loads Petersburg",
+              "gui:     Petersburg from /lib/gui.so, 1024x768" in boot, boot)
+        serial.sock.sendall(b'run(_): "kremlin"\r')
+        # the panel's KREMLIN button, red, at the bottom left
+        if not wait_for("Kremlin's desktop fills the 1024x768 screen",
+                        lambda s: s[0] == 1024 and s[1] == 768 and pixel(s, 80, 745) == (179, 38, 30)):
+            return
+        # the Terminal pin: Mbltishi with the shell, whose console the
+        # serial line has too
+        click(-390, 369)
+        said = clean(serial.read_until(b"Enter a command list or press Ctrl-D to exit.", timeout=600))
+        check("Kremlin's Terminal starts Mbltishi with the USSR shell",
+              "USSR Unified Shell Script REPL" in said, said)
+        wait_for("Mbltishi's window is over the desktop",
+                 lambda s: dark(pixel(s, 500, 330)) and not dark(pixel(s, 1000, 20)), 120)
+        m.keys('print(_): "hello world"\n')
+        said = clean(serial.read_until(b"\r\nhello world\r\n", timeout=120))
+        check("the shell in Mbltishi runs what is typed in its window", "hello world" in said, said)
+        m.monitor_command("sendkey ctrl-d")
+        wait_for("Mbltishi closes with the shell",
+                 lambda s: pixel(s, 500, 330) != (0, 0, 0) and pixel(s, 80, 745) == (179, 38, 30), 300)
+        # the Files pin: Tver on the root
+        click(78, 0)
+        wait_for("Kremlin's Files starts Tver over the Belarus root",
+                 lambda s: pixel(s, 300, 400) == (18, 20, 28) and pixel(s, 700, 400) == (18, 20, 28), 600)
+        # its close box
+        click(748, -680)
+        wait_for("Tver closes with its window's box",
+                 lambda s: pixel(s, 300, 400) != (18, 20, 28), 300)
+        # Ctrl+Q, then Enter in the dialog: the shell, in text mode
+        # (the prompts of the shell that ran in Mbltishi are not this one)
+        serial.buf = b""
+        m.monitor_command("sendkey ctrl-q")
+        time.sleep(5)
+        m.monitor_command("sendkey ret")
+        serial.output_to_prompt(timeout=300)
+        time.sleep(1)
+        rows = m.screen()
+        check("Kremlin exits to the shell, in text mode again",
+              any(text.startswith("russia>") for text, _ in rows),
+              "\n".join(text for text, _ in rows))
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("GUI conversation", False, str(e))
+    finally:
+        m.close()
+
+
 def secure(qemu, disk, port, log, check):
     """TLS both ways: Moscow's client against an HTTPS server here (QEMU
     shows this machine as 10.0.2.2), and Novgorod over HTTPS."""
@@ -736,7 +869,13 @@ def install(qemu, disk, work, port, log, check):
     m = Machine(qemu, [(target, "qcow2")], port + 1, log)
     serial = m.serial
     try:
-        boot = clean(serial.output_to_prompt(timeout=60))
+        # the desktop by default: a key on the serial line takes the shell
+        boot = clean(serial.read_until(b"(a key: the shell)", timeout=60))
+        serial.sock.sendall(b"\r")
+        boot += "\n" + clean(serial.output_to_prompt(timeout=60))
+        check("the installed system starts the desktop by default",
+              "moscow: the desktop, Kremlin, in 3 seconds (a key: the shell)" in boot
+              and "moscow: no desktop" in boot, boot)
         check("the installed disk boots",
               "root:    /dev/hda from sector 8192, Belarus 'comrade'" in boot
               and "USSR Moscow on kremlin, installed from ussr-install." in boot, boot)
@@ -744,6 +883,7 @@ def install(qemu, disk, work, port, log, check):
             ('getenv(h): "HOSTNAME"', r""),
             ("print(_): h", r"kremlin"),
             ('cat(_): "/etc/hostname"', r"kremlin"),
+            ('cat(_): "/etc/gui.conf"', r"screen=1024x768\ndesktop=on"),
             ('ls(_): "/src/ussr/src/belarus"', r"- +\d+  README\.md\n- +\d+  belarus\.su"),
             ('readfile(c): "/src/ussr/src/belarus/belarus.su"', r""),
             ("len(cl): c", r""),

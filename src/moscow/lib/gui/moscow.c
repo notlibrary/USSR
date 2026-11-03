@@ -59,6 +59,88 @@ static void gui_own(long id)
     ++gui_owned.count;
 }
 
+/* --- window titles in a TrueType font: Pobeda, as the kernel hands it */
+
+#define GUI_TITLE_PX 14
+#define GUI_TITLE_GLYPHS 256
+
+typedef struct
+{
+    uint32_t cp;
+    int done;
+    unsigned char *alpha;
+    int width, height, left, top;
+    double advance;
+} gui_title_glyph_t;
+
+static long gui_title_handle;
+static gui_title_glyph_t gui_title_glyphs[GUI_TITLE_GLYPHS];
+
+static gui_title_glyph_t *gui_title_glyph(ttf_font_t *font, uint32_t cp)
+{
+    gui_title_glyph_t *g = &gui_title_glyphs[cp % GUI_TITLE_GLYPHS];
+    int glyph;
+    if (g->done && g->cp == cp)
+        return g;
+    free(g->alpha);
+    memset(g, 0, sizeof(*g));
+    g->cp = cp;
+    g->done = 1;
+    glyph = ttf_glyph_index(font, cp);
+    g->advance = ttf_advance(font, glyph) * (double)GUI_TITLE_PX / font->units_per_em;
+    g->alpha = ttf_render_glyph(font, glyph, (float)GUI_TITLE_PX, &g->width, &g->height,
+                                &g->left, &g->top);
+    return g;
+}
+
+/* UTF-8 text onto the screen being composed, its line box from y */
+static int gui_title_text(int x, int y, const char *text, int max_width, uint32_t color)
+{
+    ttf_font_t *font = petersburg_font(gui_title_handle);
+    const unsigned char *s = (const unsigned char *)text;
+    double pen = x;
+    int baseline;
+    if (font == NULL)
+        return 0;
+    baseline = y + (int)(font->ascent * (double)GUI_TITLE_PX / font->units_per_em + 0.5);
+    while (*s != '\0')
+    {
+        gui_title_glyph_t *g = gui_title_glyph(font, ttf_utf8_next(&s));
+        int gx = (int)(pen + 0.5) + g->left, gy = baseline + g->top, r, c;
+        if (pen + g->advance > x + max_width)
+            break;
+        for (r = 0; g->alpha != NULL && r < g->height; ++r)
+        {
+            int sy = gy + r;
+            if (sy < 0 || sy >= glfw.height)
+                continue;
+            for (c = 0; c < g->width; ++c)
+            {
+                int sx = gx + c;
+                unsigned a = g->alpha[r * g->width + c];
+                uint32_t *p;
+                if (a == 0 || sx < 0 || sx >= glfw.width)
+                    continue;
+                p = &glfw.screen[(size_t)sy * glfw.width + sx];
+                *p = a == 255 ? color : gl_mix(*p, color, a);
+            }
+        }
+        pen += g->advance;
+    }
+    return 1;
+}
+
+/* the font for window titles, handed over first; 0, or -1 */
+long gui_title_font(const char *path)
+{
+    gui_title_handle = petersburg_font_load(path);
+    if (gui_title_handle == 0)
+        return -1;
+    glfw_title_draw = gui_title_text;
+    glfw.dirty = 1;
+    return 0;
+}
+
 /* the heap, from the kernel at boot */
 long gui_start(void *arena, long size)
 {

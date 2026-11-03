@@ -256,6 +256,64 @@ ChaCha20-Poly1305 and AES-CBC. `tls_request` (the blocking HTTP
 client) is not in Moscow; `ryazan_connect`, `ryazan_write` and
 `ryazan_read` are.
 
+## Windows: Kremlin, Mbltishi, Tver
+
+![Kremlin, the desktop, on Moscow: Mbltishi, the terminal, started from its panel, runs the USSR shell, which prints hello world](../../docs/images/kremlin.gif)
+
+Petersburg, USSR's GUI toolkit, is the kernel's too, so Petersburg
+programs run from their source as they run on Windows and Linux:
+
+    russia> run(_): "kremlin"
+
+starts the desktop at 1024x768. Its TERMINAL pin opens Mbltishi
+([src/Mbltishi](../Mbltishi/README.md)), a terminal window with the
+USSR shell in it; FILES opens Tver over the Belarus root.
+
+Petersburg's C code (`src/petersburg.c`, the hosted ussr's own) is
+compiled for Moscow into `/lib/gui.so` (`src/moscow/lib/gui.c`) with
+what it takes from a hosted system there:
+
+- `lib/gui/libc.c`: the heap (an arena of 128 MiB the kernel gives it),
+  formatted text, the files the kernel hands over for `fopen` (fonts,
+  images), stderr on the serial port;
+- `lib/gui/gl.c`: OpenGL 1.1 in software, the part Petersburg draws
+  with (quads, lines, alpha textures for TrueType glyphs, glDrawPixels,
+  scissor);
+- `lib/gui/glfw.c`: GLFW on the machine: the Bochs/QEMU standard VGA's
+  linear framebuffer at 32 bits (its picture starts 256 KiB into video
+  memory, so text mode comes back intact), the PS/2 keyboard as GLFW
+  key codes and the PS/2 mouse (a wheel one when it answers as one),
+  windows composed bottom to top with title bars in Pobeda, dragged by
+  them and closed by their box;
+- `lib/gui/term.c`: Mbltishi's terminal, a grid of Pobeda glyphs that
+  carries out the console's ANSI sequences;
+- `lib/gui/moscow.c`: what `gui.su` calls.
+
+`src/moscow/gui.su` makes every `petersburg_*` native a kernel command;
+russia.su delivers the events itself (`petersburg_take_events`). The
+screen goes graphic with the first window and back to text with the
+last. A window belongs to the program that made it: a program started
+from another (`launch`, which Kremlin calls, or `run`) puts its windows
+over the other's, gets only its own events, and its windows go when it
+ends. Moscow runs one program at a time, so Kremlin waits while what it
+started runs; the screen stays alive meanwhile.
+
+`terminal_run(st): t [program args...]` gives the console to terminal
+`t` while the program runs: `k_console`, a runtime command, hooks a C
+function to what is printed, one to what is read and one to
+`terminal_size`. The PS/2 controller and the screen are the GUI's
+while it is on (`moscow_gui`, which the runtime gives C libraries with
+`moscow_ticks` and `moscow_term_raw`); the serial line stays the
+console's.
+
+`/etc/gui.conf` sets the screen (`screen=1024x768`, `1536x1024` or
+`1920x1080`; `gui(_): "1920x1080"` for the next start) and whether the
+desktop starts at boot (`desktop=on`). The installer writes
+`desktop=on` on a full install: an installed system boots into Kremlin,
+and a key in the first 3 seconds (the keyboard or the serial line)
+gives the shell instead. The install disk boots to the shell, on VGA
+and COM1, as before.
+
 ## Boot
 
 - **Stage 1** (the MBR, 512 bytes) reads stage 2 with the BIOS extended
