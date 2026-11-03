@@ -20,11 +20,12 @@
 ; scheduler checks the waits each time it picks the next task, round
 ; robin. With nothing to run the CPU halts until the next interrupt.
 ;
-; The console is task 0's: other tasks read the end of their input.
-; Hardware that keeps state - the network card, the screen - is one
-; task's at a time: kernel commands of the class "net" or "gui"
-; (k_syscall's third argument) belong to the first task that uses them
-; until the program that did ends.
+; The kernel is one program every task calls (gc.inc): its sockets,
+; windows and sessions are shared; what a program made goes when it ends
+; and what a task made when the task ends (the kernel's __task_ended).
+; The console is task 0's, and a task's own when it has a terminal
+; (k_console's hooks are the task's): other tasks read the end of their
+; input.
 
 MAX_TASKS       equ 32
 TASK_STACK      equ 256 * 1024
@@ -37,18 +38,35 @@ W_NONE          equ 0
 W_TICK          equ 1
 W_TASK          equ 2
 W_INPUT         equ 3
-OWN_CLASSES     equ 3                   ; 1 net, 2 gui
 
 ; --- per-task state of the runtime: swapped with the task
 
 task_var_list:
-        dq cur_pool, struct_types, clib_count, cfree_head, sys_depth
-        dq sys_areas, sys_areas + 8, sys_areas + 16, sys_areas + 24
-        dq vm_result, vm_result + 8, bi_retname
-        dq tg_line, tg_len, tg_pos, tg_newline, read_line_eof, last_cr
-        dq c_scratch_top, kglob_now, khash_now
+tv_pool:        dq cur_pool
+tv_types:       dq struct_types
+tv_clibs:       dq clib_count
+tv_cfree:       dq cfree_head
+tv_depth:       dq sys_depth
+tv_areas:
+%assign i 0
+%rep SYS_AREAS
+                dq sys_areas + i * 8
+%assign i i + 1
+%endrep
+                dq vm_result, vm_result + 8, bi_retname
+                dq tg_line, tg_len, tg_pos, tg_newline, read_line_eof, last_cr
+tv_scratch:     dq c_scratch_top
+                dq con_hook_write, con_hook_read, con_hook_size, con_hook_ctx
+                dq kcaller_pool
 task_var_end:
 TASK_VARS       equ (task_var_end - task_var_list) / 8
+TVI_POOL        equ (tv_pool - task_var_list) / 8
+TVI_TYPES       equ (tv_types - task_var_list) / 8
+TVI_CLIBS       equ (tv_clibs - task_var_list) / 8
+TVI_CFREE       equ (tv_cfree - task_var_list) / 8
+TVI_DEPTH       equ (tv_depth - task_var_list) / 8
+TVI_AREAS       equ (tv_areas - task_var_list) / 8
+TVI_SCRATCH     equ (tv_scratch - task_var_list) / 8
 
 struc TASK
 .id:            resq 1
@@ -77,12 +95,6 @@ vars_save:
         push rdx
         push rsi
         push rdi
-        ; the kernel's variables are the kernel program's globals
-        mov rcx, [kprog]
-        mov rdx, [rcx + PROG.globals]
-        mov [kglob_now], rdx
-        mov rdx, [rcx + PROG.hash]
-        mov [khash_now], rdx
         xor ecx, ecx
 .var:
         mov rdx, [task_var_list + rcx * 8]
@@ -115,11 +127,6 @@ vars_load:
         inc ecx
         cmp ecx, TASK_VARS
         jb .var
-        mov rcx, [kprog]
-        mov rdx, [kglob_now]
-        mov [rcx + PROG.globals], rdx
-        mov rdx, [khash_now]
-        mov [rcx + PROG.hash], rdx
         lea rsi, [rax + TASK.clib]
         mov rdi, clib_table
         mov ecx, CLIB_MAX * CLIB_SIZE
@@ -133,9 +140,9 @@ vars_load:
 ; --- starting
 
 ; The first program run inside the kernel (the shell) makes the tasks:
-; the running one is task 0, and the kernel's state as it is now - its
-; variables, struct types, C libraries - is kept, copied into the
-; kernel's heap, for the tasks spawned later. r13 = the kernel program.
+; the running one is task 0, and the runtime's state as it is now - the
+; kernel's struct types and C libraries - is what spawned tasks start
+; with. r13 = the kernel program.
 ; Keeps every register.
 tasks_init:
         cmp qword [tasks_on], 0
@@ -172,19 +179,6 @@ tasks_init:
         mov rsi, clib_table
         mov ecx, CLIB_MAX * CLIB_SIZE
         rep movsb
-        mov rsi, [r13 + PROG.globals]
-        mov rcx, [r13 + PROG.nsyms]
-        call values_copy
-        mov [pristine_globals], rax
-        mov rsi, [r13 + PROG.hash]
-        mov rcx, [r13 + PROG.nsyms]
-        call values_copy
-        mov [pristine_hash], rax
-        mov ecx, OWN_CLASSES
-.own:
-        mov qword [own_task + rcx * 8 - 8], -1
-        dec ecx
-        jnz .own
         mov qword [tasks_on], 1
         mov rax, [ticks]
         mov [slice_start], rax
@@ -562,7 +556,7 @@ task_reap:
         call pool_free
         xor ecx, ecx
 .area:
-        mov rsi, [rax + TASK.vars + 5 * 8 + rcx * 8]   ; sys_areas
+        mov rsi, [rax + TASK.vars + TVI_AREAS * 8 + rcx * 8]
         call pool_free
         inc ecx
         cmp ecx, SYS_AREAS
@@ -714,6 +708,8 @@ con_wait:
 con_not_mine:
         cmp qword [tasks_on], 0
         je .mine
+        cmp qword [con_hook_read], 0
+        jne .mine
         push rax
         mov rax, [cur_task]
         cmp qword [rax + TASK.id], 0
@@ -787,74 +783,11 @@ prog_heap_pop:
         call window_free
         pop rdx
         mov [cur_pool], rax
-        ; ownership taken at this depth or deeper ends
-        push rax
-        mov rax, [rcx + TASK.id]
-        call own_release_deeper
-        pop rax
         pop rsi
         pop rdi
         pop rdx
         pop rcx
 .done:
-        ret
-
-; rax = task id, rdx = depth: the classes it took at a depth deeper than
-; rdx are free again. Keeps every register.
-own_release_deeper:
-        push rcx
-        xor ecx, ecx
-.class:
-        cmp [own_task + rcx * 8], rax
-        jne .next
-        cmp [own_depth + rcx * 8], rdx
-        jle .next
-        mov qword [own_task + rcx * 8], -1
-.next:
-        inc ecx
-        cmp ecx, OWN_CLASSES
-        jb .class
-        pop rcx
-        ret
-
-; eax = the class of a kernel command about to run (0 none; 1, 2 taken
-; by the first user; 0x81, 0x82 used only when it is free or ours) ->
-; CF set when another task has it. Keeps every register.
-own_check:
-        cmp qword [tasks_on], 0
-        je .ok
-        test eax, eax
-        jz .ok
-        push rax
-        push rcx
-        push rdx
-        mov ecx, eax
-        and ecx, 0x7f
-        mov rdx, [cur_task]
-        mov rdx, [rdx + TASK.id]
-        cmp qword [own_task + rcx * 8], -1
-        je .free
-        cmp [own_task + rcx * 8], rdx
-        je .mine
-        mov [own_refused], rcx
-        pop rdx
-        pop rcx
-        pop rax
-        stc
-        ret
-.free:
-        test eax, 0x80
-        jnz .mine
-        mov [own_task + rcx * 8], rdx
-        mov rdx, [cur_task]
-        mov rdx, [rdx + TASK.depth]
-        mov [own_depth + rcx * 8], rdx
-.mine:
-        pop rdx
-        pop rcx
-        pop rax
-.ok:
-        clc
         ret
 
 ; --- spawn, the start and the end of a task
@@ -964,33 +897,19 @@ task_spawn:
         test rax, rax
         jz .full
         mov [rbx + TASK.stack], rax
-        xor ecx, ecx
-.area:
-        mov rsi, VM_AREA
-        call pool_alloc
-        test rax, rax
-        jz .full
-        mov [rbx + TASK.vars + 5 * 8 + rcx * 8], rax
-        inc ecx
-        cmp ecx, SYS_AREAS
-        jb .area
         call space_new
         mov [rbx + TASK.cr3], rax
         ; the runtime's state it starts with: the kernel's as it booted
         mov rax, [kpool]
-        mov [rbx + TASK.vars + 0 * 8], rax              ; cur_pool
+        mov [rbx + TASK.vars + TVI_POOL * 8], rax
         mov rax, [pristine_types]
-        mov [rbx + TASK.vars + 1 * 8], rax              ; struct_types
+        mov [rbx + TASK.vars + TVI_TYPES * 8], rax
         mov rax, [pristine_clibs]
-        mov [rbx + TASK.vars + 2 * 8], rax              ; clib_count
+        mov [rbx + TASK.vars + TVI_CLIBS * 8], rax
         mov rax, [pristine_cfree]
-        mov [rbx + TASK.vars + 3 * 8], rax              ; cfree_head
+        mov [rbx + TASK.vars + TVI_CFREE * 8], rax
         mov rax, [c_scratch]
-        mov [rbx + TASK.vars + 18 * 8], rax             ; c_scratch_top
-        mov rax, [pristine_globals]
-        mov [rbx + TASK.vars + 19 * 8], rax             ; until task_entry copies them
-        mov rax, [pristine_hash]
-        mov [rbx + TASK.vars + 20 * 8], rax
+        mov [rbx + TASK.vars + TVI_SCRATCH * 8], rax
         lea rdi, [rbx + TASK.clib]
         mov rsi, pristine_clib_table
         mov ecx, CLIB_MAX * CLIB_SIZE
@@ -1040,19 +959,6 @@ task_entry:
         sti
         mov rbx, [cur_task]
         call prog_heap_push
-        ; the kernel's variables, its own
-        mov rsi, [pristine_globals]
-        mov rcx, [kprog]
-        mov rcx, [rcx + PROG.nsyms]
-        call values_copy
-        mov rcx, [kprog]
-        mov [rcx + PROG.globals], rax
-        mov rsi, [pristine_hash]
-        mov rcx, [kprog]
-        mov rcx, [rcx + PROG.nsyms]
-        call values_copy
-        mov rcx, [kprog]
-        mov [rcx + PROG.hash], rax
         ; the program file
         mov rdi, [rbx + TASK.spawn_len]
         add rdi, 8
@@ -1110,10 +1016,10 @@ task_exit:
         mov rbx, [cur_task]
         movsxd rax, eax
         mov [rbx + TASK.status], rax
-        ; ownership it took
+        sti
         mov rax, [rbx + TASK.id]
-        mov rdx, -1
-        call own_release_deeper
+        call task_ended_hook
+        cli
         mov qword [rbx + TASK.state], TS_ZOMBIE
         mov qword [rbx + TASK.reaped], 0
         ; its stack and address space go once another task runs
@@ -1351,17 +1257,14 @@ bi_k_kill:
         mov eax, 137
         jmp task_exit
 .other:
-        push rdx
-        push rax
-        mov rax, [rax + TASK.id]
-        mov rdx, -1
-        call own_release_deeper
-        pop rax
-        pop rdx
         mov qword [rax + TASK.status], 137
         mov qword [rax + TASK.state], TS_ZOMBIE
         mov qword [rax + TASK.reaped], 0
         call task_reap
+        push rax
+        mov rax, [rax + TASK.id]
+        call task_ended_hook
+        pop rax
         xor eax, eax
         jmp .out
 .refuse:
@@ -1431,8 +1334,8 @@ msg_no_frames:  db "USSR runtime: out of memory (no free page frames)", 10, 0
 msg_pf:         db "USSR runtime: page fault at ", 0
 msg_too_deep:   db "USSR runtime: programs nested too deep", 10, 0
 msg_oom_task:   db "USSR runtime: the task is out of memory and ends", 10, 0
-msg_own_net:    db "USSR: the network is another task's now: ", 0
-msg_own_gui:    db "USSR: the screen is another task's now: ", 0
+s_task_ended:   db "__task_ended"
+s_task_ended_len equ $ - s_task_ended
 name_task0:     db "moscow"
 name_task0_len  equ $ - name_task0
 s_ts_run:       db "run", 0
@@ -1443,3 +1346,58 @@ e_k_kill:       db "k_kill(r): id", 0
 e_k_wait:       db "k_wait(status): id", 0
                 align 8
 pte_addr_mask:  dq PTE_ADDR
+
+; rax = task id: the kernel forgets what the task had (its function for
+; "__task_ended", when it has one), in the running task. Keeps every
+; register.
+task_ended_hook:
+        push rax
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push r8
+        push r9
+        push r10
+        push r11
+        push rax
+        mov rsi, s_task_ended
+        mov ecx, s_task_ended_len
+        mov edx, 1
+        call sys_find
+        pop rcx
+        cmp eax, -1
+        je .none
+        sub rsp, 32
+        mov qword [rsp], T_INT
+        mov [rsp + 8], rcx
+        mov rdi, rsp
+        mov esi, 1
+        lea rdx, [rsp + 16]
+        call sys_call
+        add rsp, 32
+.none:
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rax
+        ret
+
+; k_owner(n): -> who is running: task id * 64 + the depth of the program
+; (its runs inside the task), what the kernel tags sockets and windows
+; with
+bi_k_owner:
+        xor eax, eax
+        cmp qword [tasks_on], 0
+        je .out
+        mov rcx, [cur_task]
+        mov rax, [rcx + TASK.id]
+        shl rax, 6
+        add rax, [rcx + TASK.depth]
+.out:
+        jmp bi_int_out

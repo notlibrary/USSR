@@ -10,17 +10,43 @@
  * box, and drawing what changed, at most every 30 ms. */
 
 #define GUI_OWNED 4096
-#define GUI_DEPTHS 16
+#define GUI_RUNS 64
 
+/* an owner is the kernel's key for a program run: task id * 64 + its
+ * depth inside the task */
 static struct
 {
     long ids[GUI_OWNED];
-    unsigned char owners[GUI_OWNED];
+    long owners[GUI_OWNED];
     int count;
 } gui_owned;
 
 static long gui_owner_now;
-static unsigned char gui_run_requested[GUI_DEPTHS];
+static long gui_run_keys[GUI_RUNS];     /* the owners with a Petersburg run going */
+static int gui_run_count;
+
+static int gui_run_requested(long key)
+{
+    int i;
+    for (i = 0; i < gui_run_count; ++i)
+        if (gui_run_keys[i] == key)
+            return 1;
+    return 0;
+}
+
+static void gui_run_set(long key, int on)
+{
+    int i;
+    for (i = 0; i < gui_run_count; ++i)
+        if (gui_run_keys[i] == key)
+        {
+            if (!on)
+                gui_run_keys[i] = gui_run_keys[--gui_run_count];
+            return;
+        }
+    if (on && gui_run_count < GUI_RUNS)
+        gui_run_keys[gui_run_count++] = key;
+}
 static int gui_changed;
 static long gui_last_render;
 static ussr_value_t gui_result;
@@ -55,7 +81,7 @@ static void gui_own(long id)
             return;
     }
     gui_owned.ids[gui_owned.count] = id;
-    gui_owned.owners[gui_owned.count] = (unsigned char)gui_owner_now;
+    gui_owned.owners[gui_owned.count] = gui_owner_now;
     ++gui_owned.count;
 }
 
@@ -148,9 +174,10 @@ long gui_start(void *arena, long size)
     return 0;
 }
 
-long gui_owner(long depth)
+/* who the next calls are for (the kernel's owner key) */
+long gui_owner(long key)
 {
-    gui_owner_now = depth < 0 ? 0 : depth >= GUI_DEPTHS ? GUI_DEPTHS - 1 : depth;
+    gui_owner_now = key;
     return 0;
 }
 
@@ -278,7 +305,7 @@ long gui_call(const char *name, const char *kinds, long a0, long a1, long a2,
         gui_own((long)gui_result.data.integer);
     if (status > 0 && (strcmp(name, "petersburg_run") == 0 ||
                        strcmp(name, "petersburg_show") == 0))
-        gui_run_requested[gui_owner_now] = 1;
+        gui_run_set(gui_owner_now, 1);
     if (!gui_is_query(name))
         gui_changed = 1;
     petersburg_last_error = 0;
@@ -351,12 +378,12 @@ const char *gui_events(void)
     char item[160];
 
     gui_pump();
-    if (gui_run_requested[gui_owner_now])
+    if (gui_run_requested(gui_owner_now))
         for (w = petersburg_widgets; w != NULL; w = w->next)
             if (w->type == PETERSBURG_WINDOW && gui_owner_of(w->id) == gui_owner_now)
                 running = 1;
     if (!running)
-        gui_run_requested[gui_owner_now] = 0;
+        gui_run_set(gui_owner_now, 0);
     snprintf(item, sizeof(item), "[%d", running);
     gui_append(&len, item);
     for (i = 0; i < petersburg_event_count; ++i)
@@ -382,18 +409,25 @@ const char *gui_events(void)
     return gui_events_text;
 }
 
-/* a program ended: its windows (with all in them) go */
-long gui_end(long depth)
+/* a program run of task (at depth and deeper) ended, or the task: its
+ * windows (with all in them) go */
+static int gui_owned_by(long owner, long task, long depth)
+{
+    return owner >= 0 && owner / 64 == task && owner % 64 >= depth;
+}
+
+long gui_end(long task, long depth)
 {
     petersburg_widget_t *w;
     int again = 1;
+    int i;
     while (again)
     {
         again = 0;
         for (w = petersburg_widgets; w != NULL; w = w->next)
-            if (w->type == PETERSBURG_WINDOW && gui_owner_of(w->id) >= depth)
+            if (w->type == PETERSBURG_WINDOW &&
+                gui_owned_by(gui_owner_of(w->id), task, depth))
             {
-                int i;
                 for (i = 0; i < TERM_MAX; ++i)
                     if (terms[i].used && terms[i].window == w->id)
                         gui_term_close(i);
@@ -402,9 +436,11 @@ long gui_end(long depth)
                 break;
             }
     }
-    if (depth >= 0 && depth < GUI_DEPTHS)
-        for (; depth < GUI_DEPTHS; ++depth)
-            gui_run_requested[depth] = 0;
+    for (i = 0; i < gui_run_count; )
+        if (gui_owned_by(gui_run_keys[i], task, depth))
+            gui_run_keys[i] = gui_run_keys[--gui_run_count];
+        else
+            ++i;
     gui_changed = 1;
     gui_pump();
     return gui_windows();
@@ -412,10 +448,11 @@ long gui_end(long depth)
 
 /* a console byte for the terminal, -1 when none has been typed; keeps
  * the screen going meanwhile */
-long gui_con_read(void)
+long gui_con_read(long unused, long h)
 {
-    term_t *t = term_active;
+    term_t *t = term_get(h);
     int c;
+    (void)unused;
     gui_pump();
     if (t == NULL || t->in_head == t->in_tail)
         return -1;

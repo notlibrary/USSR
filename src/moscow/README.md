@@ -292,14 +292,16 @@ what it takes from a hosted system there:
 `src/moscow/gui.su` makes every `petersburg_*` native a kernel command;
 russia.su delivers the events itself (`petersburg_take_events`). The
 screen goes graphic with the first window and back to text with the
-last. A window belongs to the program that made it: a program started
-from another (`launch`, which Kremlin calls, or `run`) puts its windows
-over the other's, gets only its own events, and its windows go when it
-ends. Moscow runs one program at a time, so Kremlin waits while what it
-started runs; the screen stays alive meanwhile.
+last. A window belongs to the program run that made it (its task and
+depth): it gets only its own events, and its windows go when it ends.
+`launch`, which Kremlin calls, starts a program as a task of its own,
+so the desktop goes on next to Mbltishi and Tver; `run` starts one
+inside the caller, whose windows wait under it.
 
-`terminal_run(st): t [program args...]` gives the console to terminal
-`t` while the program runs: `k_console`, a runtime command, hooks a C
+`terminal_run(st): t [program args...]` gives the task's console to
+terminal `t` while the program runs (each task has a console of its
+own, so two Mbltishi windows run two shells): `k_console`, a runtime
+command, hooks a C
 function to what is printed, one to what is read and one to
 `terminal_size`. The PS/2 controller and the screen are the GUI's
 while it is on (`moscow_gui`, which the runtime gives C libraries with
@@ -386,9 +388,9 @@ next to the shell; `tasks(_):` lists them, `kill(r): id` ends one
 status (`arch/amd64/task.inc`).
 
 A task has its own stack, its own address space (page tables with its
-private half: its heaps are out of the others' reach), its own copy of
-the kernel's variables, made from the kernel as it booted, and its own
-runtime state (struct types, C libraries, the kernel command areas).
+private half: its heaps are out of the others' reach), its own console
+and its own runtime state (struct types, C libraries, the areas its
+kernel commands run in).
 Task 0 is the one the machine booted with: the kernel and the shell.
 The PIT ticks at 100 Hz; when a task has had its 10 ms, the VM gives
 the CPU away at its next instruction, unless the task is inside a kernel
@@ -400,12 +402,26 @@ console input, a task's end - and the scheduler checks them each time it
 picks the next task, round robin. With nothing to run the CPU halts
 until the next interrupt.
 
-The console is task 0's; another task reads the end of its input.
-Hardware that keeps state is one task's at a time: the network's
-commands (sockets, TLS) belong to the first task that uses them until
-the program that did ends, and `ping`, `net` and `dhcp` are refused to
-the others meanwhile; the same for the screen (Petersburg). So Novgorod
-serves from a task while the shell goes on.
+The console is task 0's, and a task's own when it has a terminal
+(Mbltishi); another task reads the end of its input.
+
+Kernel commands are system calls (`arch/amd64/gc.inc`). The kernel is
+one program every task calls, with one network stack, one screen, one
+set of files: Novgorod serves from a task while the shell pings. While
+a command runs, what it allocates comes from the kernel's value heap, a
+TLSF pool in PML4 slot 2 that every address space shares; its arguments
+are copied in, so the kernel keeps nothing of a task's memory, and its
+result is copied out into the caller's heap, so a program keeps nothing
+of the kernel's. The value heap has a mark-and-sweep collector that
+runs when a command returns and the heap has grown since the last time
+(by half, at least 32 MiB): its roots are the kernel's variables and
+the VM areas of the commands every task is inside, and it follows
+strings, vectors, structs and btrees; `k_gc(v):` gives the bytes in use,
+the collections so far and the bytes of pages the value heap has mapped
+(they stay its). What a program run made in the kernel -
+sockets, windows and terminals, TLS credentials - is tagged with its
+owner (`k_owner`: task id and depth) and goes when the run ends; what a
+task made goes when the task ends or is killed (`__task_ended`).
 
 It reads `.ru` files as `ussr -c` writes them (format 3, VM ABI 3,
 checked with the CRC) and runs them as `docs/USSR_VM_SPEC.md` describes:

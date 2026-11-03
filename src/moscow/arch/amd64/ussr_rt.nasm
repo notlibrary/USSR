@@ -31,7 +31,9 @@
 ; program runs (k_exec, k_exec_bytes) gets a heap of its own, demand
 ; paged, given back whole when it ends, so a shell that exits gives all
 ; of its memory back. Tasks (task.inc) run programs side by side, each in
-; its own address space, switched by the timer.
+; its own address space, switched by the timer. Kernel commands are
+; system calls (gc.inc): values copied in and out, the kernel's own in a
+; shared heap with a collector.
 %include "layout.inc"
 
         bits 64
@@ -70,7 +72,7 @@ OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
 SYS_MAX         equ 160                 ; kernel commands (k_syscall)
-SYS_AREAS       equ 4                   ; their VM areas: depths kept
+SYS_AREAS       equ 8                   ; their VM areas: depths kept
 SYS_NAME        equ 32                  ; a name, NUL padded
 SYS_ENTRY       equ 48                  ; name, program, function
 SYS_BASE        equ 0x10000             ; symbuiltin: SYS_BASE + entry + 1
@@ -444,6 +446,7 @@ heap_init:
         add rsi, [kpool_size]
         mov rdx, r10
         call pmm_init
+        call kv_init
         ret
 
 ; rdi = bytes -> rax: zeroed memory, 16-byte aligned. Keeps every other
@@ -2818,10 +2821,27 @@ vm_exec:
         mov rax, [sys_depth]
         dec rax
         cmp rax, SYS_AREAS
-        jae .fresh
+        jae .too_deep
+        push rax
         mov rax, [sys_areas + rax * 8]
         test rax, rax
-        jz .fresh
+        jnz .have_area
+        ; in the kernel's own heap: the collector reads it
+        push rdi
+        push rsi
+        mov rdi, [kpool]
+        mov rsi, VM_AREA
+        call pool_alloc
+        pop rsi
+        pop rdi
+        test rax, rax
+        jz .too_deep_pop
+        push rcx
+        mov rcx, [rsp + 8]
+        mov [sys_areas + rcx * 8], rax
+        pop rcx
+.have_area:
+        add rsp, 8
         push rcx
         push rax
         mov rdi, rax
@@ -2847,6 +2867,11 @@ vm_exec:
         add rax, LSTACK_BYTES
         mov [r12 + VM.lend], rax
         jmp .ready
+.too_deep_pop:
+        add rsp, 8
+.too_deep:
+        mov esi, e_too_deep
+        jmp vm_error
 .fresh:
         mov edi, VM_size
         call alloc
@@ -4438,6 +4463,7 @@ bi_k_exec:
         push rax
         call prog_heap_push
         mov [rsp], rax
+        call args_to_heap
         call exec_file
         mov ecx, eax
         pop rax
@@ -4497,6 +4523,9 @@ bi_k_exec_bytes:
         call tasks_init
         call prog_heap_push
         mov r12, rax                    ; the heap before
+        xchg r8, r13
+        call args_to_heap
+        xchg r8, r13
         push qword [struct_types]
         push qword [clib_count]
         push qword [cfree_head]
@@ -4549,31 +4578,6 @@ bi_k_exec_bytes:
 ; the vector of the arguments) runs whenever a program loaded from now
 ; on, or an eval, calls the command name.
 bi_k_syscall:
-        mov byte [sys_new_class], 0
-        cmp esi, 3
-        jne .two
-        cmp qword [rdi + 32], T_STR
-        jne .bad
-        mov rax, [rdi + 40]
-        cmp qword [rax + STR_LEN], 3
-        jb .bad
-        mov eax, [rax + STR_BYTES]
-        mov ecx, eax
-        and eax, 0xffffff
-        mov byte [sys_new_class], 1
-        cmp eax, 'net'
-        je .class_q
-        mov byte [sys_new_class], 2
-        cmp eax, 'gui'
-        jne .bad
-.class_q:
-        shr ecx, 24
-        cmp cl, '?'
-        jne .classed
-        or byte [sys_new_class], 0x80
-.classed:
-        mov esi, 2
-.two:
         cmp esi, 2
         jne .bad
         cmp qword [rdi], T_STR
@@ -4632,23 +4636,10 @@ bi_k_syscall:
         mov byte [rdi], 0
         pop rsi
 .set:
-        mov al, [sys_new_class]
-        mov [sys_class + rbx], al
         imul rdi, rbx, SYS_ENTRY
         add rdi, sys_table
         mov [rdi + SYS_NAME], r13
         mov [rdi + SYS_NAME + 8], r10
-        ; the areas kernel commands run in, one per depth, made once
-        cmp qword [sys_areas], 0
-        jne .done
-        xor ebx, ebx
-.area:
-        mov edi, VM_AREA
-        call alloc
-        mov [sys_areas + rbx * 8], rax
-        inc ebx
-        cmp ebx, SYS_AREAS
-        jb .area
 .done:
         pop rbx
         pop rdx
@@ -4714,13 +4705,6 @@ sys_find:
 ; the result -> runs the kernel's function with the arguments as one
 ; vector; eax 0, or -1 when it failed.
 sys_call:
-        push rax
-        movzx eax, byte [sys_class + rax]
-        call own_check
-        pop rax
-        jnc .own_ok
-        jmp sys_refused
-.own_ok:
         push rbx
         push rbp
         push r12
@@ -4728,9 +4712,16 @@ sys_call:
         push r14
         push r15
         push rdx
+        ; the kernel's values come from its own heap; the caller's is
+        ; kept for the result (and for C memory the command takes)
+        push qword [kcaller_pool]
+        mov rcx, [cur_pool]
+        mov [kcaller_pool], rcx
+        mov rcx, [kv_pool]
+        mov [cur_pool], rcx
         imul rbx, rax, SYS_ENTRY
         add rbx, sys_table
-        ; the arguments as one vector
+        ; the arguments as one vector, copied in
         mov ecx, esi
         mov rsi, rdi
         call vec_new
@@ -4738,7 +4729,19 @@ sys_call:
 .arg:
         test ecx, ecx
         jz .packed
+        sub rsp, 16
+        push rdi
+        push rcx
+        lea rdi, [rsp + 16]
+        xor ecx, ecx
+        call value_copy
+        pop rcx
+        pop rdi
+        push rsi
+        lea rsi, [rsp + 8]
         call vec_push
+        pop rsi
+        add rsp, 16
         add rsi, 16
         dec ecx
         jmp .arg
@@ -4757,13 +4760,22 @@ sys_call:
         dec qword [sys_depth]
         pop qword [bi_retname]
         add rsp, 16
+        mov rcx, [kcaller_pool]
+        mov [cur_pool], rcx
+        pop qword [kcaller_pool]
         pop rdx
         test eax, eax
         jnz .failed
-        mov rax, [vm_result]
-        mov [rdx], rax
-        mov rax, [vm_result + 8]
-        mov [rdx + 8], rax
+        ; the result, copied out into the caller's heap
+        push rsi
+        push rdi
+        mov rsi, vm_result
+        mov rdi, rdx
+        xor ecx, ecx
+        call value_copy
+        pop rdi
+        pop rsi
+        call gc_maybe
         xor eax, eax
         jmp .out
 .failed:
@@ -4777,24 +4789,28 @@ sys_call:
         pop rbx
         ret
 
-; eax = kernel command entry, rdx = result: the command is not run, its
-; class (own_refused) another task's; a message, null
-sys_refused:
+; r8 = arguments (a vector, or 0) -> r8: a copy in the current heap, so
+; that a program run from the kernel keeps nothing of the kernel's.
+; Keeps the others.
+args_to_heap:
+        test r8, r8
+        jz .done
         push rsi
-        mov esi, msg_own_net
-        cmp qword [own_refused], 1
-        je .said
-        mov esi, msg_own_gui
-.said:
-        call con_puts
-        imul rsi, rax, SYS_ENTRY
-        add rsi, sys_table
-        call con_puts
-        PUTC 10
+        push rdi
+        push rcx
+        sub rsp, 32
+        mov qword [rsp], T_VEC
+        mov [rsp + 8], r8
+        mov rsi, rsp
+        lea rdi, [rsp + 16]
+        xor ecx, ecx
+        call value_copy
+        mov r8, [rsp + 24]
+        add rsp, 32
+        pop rcx
+        pop rdi
         pop rsi
-        mov qword [rdx], T_NULL
-        mov qword [rdx + 8], 0
-        xor eax, eax
+.done:
         ret
 
 ; eval's way in: builtin_find leaves the entry in sys_pending
@@ -6488,8 +6504,18 @@ dec_put:
 ; typed or -1, size() -> rows << 16 | columns - or 0 0 0 for the screen
 ; and the keyboard again
 bi_k_console:
+        mov qword [con_hook_ctx], 0
+        cmp esi, 4
+        jne .three
+        cmp qword [rdi + 48], T_INT
+        jne .bad
+        mov rax, [rdi + 56]
+        mov [con_hook_ctx], rax
+        jmp .args
+.three:
         cmp esi, 3
         jne .bad
+.args:
         cmp qword [rdi], T_INT
         jne .bad
         cmp qword [rdi + 16], T_INT
@@ -6525,6 +6551,7 @@ c_hook:
         sub rsp, 512
         and rsp, -16
         fxsave [rsp]
+        mov rsi, [con_hook_ctx]
         call rax
         fxrstor [rsp]
         lea rsp, [rbp - 64]
@@ -6865,6 +6892,7 @@ bi_pwd:
 %include "sha256.inc"
 %include "mm.inc"
 %include "task.inc"
+%include "gc.inc"
 
 ; =====================================================================
 ; tables and texts
@@ -6962,6 +6990,8 @@ bi_table:
         dq n_k_kill, bi_k_kill
         dq n_k_wait, bi_k_wait
         dq n_k_task, bi_k_task
+        dq n_k_owner, bi_k_owner
+        dq n_k_gc, bi_k_gc
         dq n_k_console, bi_k_console
         dq n_k_mem, bi_k_mem
         dq n_k_cpu, bi_k_cpu
@@ -7118,8 +7148,11 @@ n_k_tasks:      db "k_tasks", 0
 n_k_kill:       db "k_kill", 0
 n_k_wait:       db "k_wait", 0
 n_k_task:       db "k_task", 0
+n_k_owner:      db "k_owner", 0
+n_k_gc:         db "k_gc", 0
 n_k_console:    db "k_console", 0
-e_k_console:    db "k_console(_): write read size (C functions, or 0 0 0)", 0
+e_k_console:    db "k_console(_): write read size [handle] (C functions, or 0 0 0)", 0
+e_too_deep:     db "kernel commands nested too deep", 0
 s_ansi_clear:   db 27, "[2J", 27, "[H", 0
 n_k_mem:        db "k_mem", 0
 n_k_cpu:        db "k_cpu", 0
@@ -7366,17 +7399,15 @@ next_id:        resq 1
 kprog:          resq 1
 need_resched:   resq 1
 slice_start:    resq 1
-kglob_now:      resq 1
-khash_now:      resq 1
+kv_pool:        resq 1              ; gc.inc: the kernel's values
+kcaller_pool:   resq 1              ; a kernel command's caller's heap
+gc_next:        resq 1
+gc_runs:        resq 1
+kv_pages:       resq 1
+con_hook_ctx:   resq 1              ; k_console's handle for the hooks
 pristine_types: resq 1
 pristine_clibs: resq 1
 pristine_cfree: resq 1
-pristine_globals: resq 1
-pristine_hash:  resq 1
-own_task:       resq OWN_CLASSES
-own_depth:      resq OWN_CLASSES
-own_refused:    resq 1
-sys_new_class:  resq 1
 ts_text:        resb 32
 heap_end:       resq 1
 ticks:          resq 1
@@ -7425,7 +7456,6 @@ sys_pending:    resq 1
 sys_depth:      resq 1
 sys_areas:      resq SYS_AREAS
 sys_table:      resb SYS_MAX * SYS_ENTRY
-sys_class:      resb SYS_MAX
 blk_args:       resq 3
 net_up:         resq 1
 net_mmio:       resq 1

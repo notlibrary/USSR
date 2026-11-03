@@ -214,7 +214,8 @@ sys_tls_server(r): a [
         tls_set_error(r): "tls_server: no such socket"
         return(r): r
     ]
-    concat(ck): chain "|" key
+    tls_key(ck): chain
+    concat(ck): ck "|" key
     btget(creds): tls_creds ck
     if(_): {creds = null} [
         tls_f(f): "tls_creds_size"
@@ -271,7 +272,8 @@ sys_tls_server(r): a [
 
 # the anchors of a PEM file, loaded once
 tls_load_anchors(r): path [
-    btget(r): tls_anchors path
+    tls_key(ak): path
+    btget(r): tls_anchors ak
     if(_): {r != null} [ return(r): r ]
     tls_file(pem): path
     if(_): {pem = null} [ return(r): r ]
@@ -287,7 +289,41 @@ tls_load_anchors(r): path [
         set(r): null
         return(r): r
     ]
-    btput(_): tls_anchors path r
+    btput(_): tls_anchors ak r
+]
+
+# path, for the caches of what a program run loaded (in its own memory):
+# the owner first
+tls_key(r): path [
+    k_owner(own):
+    str_from_int(os): own
+    concat(r): os "|" path
+]
+
+# a program run of task id at depth (or deeper) ended: what it loaded is
+# forgotten
+tls_drop(r): id depth [
+    set(r): 0
+    tls_drop_in(_): tls_creds id depth
+    tls_drop_in(_): tls_anchors id depth
+]
+
+tls_drop_in(r): tree id depth [
+    set(r): 0
+    btkeys(ks): tree
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        str_find(bar): k "|" 0
+        if(_): {bar > 0} [
+            slice(os): k 0 bar
+            str_to_number(own): os
+            str_trunc(own): own
+            if(_): {own / 64 = id && own % 64 >= depth} [ btdel(_): tree k ]
+        ]
+        set(i): {i + 1}
+    ]
 ]
 
 # tls_client(r): h host
@@ -502,18 +538,18 @@ sys_tls_request(r): a [
 
 tls_syscalls(r): [
     set(r): 0
-    k_syscall(_): "tls_backend" "sys_tls_backend" "net"
-    k_syscall(_): "tls_error" "sys_tls_error" "net"
-    k_syscall(_): "tls_server" "sys_tls_server" "net"
-    k_syscall(_): "tls_client" "sys_tls_client" "net"
-    k_syscall(_): "tls_handshake" "sys_tls_handshake" "net"
-    k_syscall(_): "tls_recv" "sys_tls_recv" "net"
-    k_syscall(_): "tls_recv_bytes" "sys_tls_recv_bytes" "net"
-    k_syscall(_): "tls_send" "sys_tls_send" "net"
-    k_syscall(_): "tls_send_bytes" "sys_tls_send_bytes" "net"
-    k_syscall(_): "tls_flush" "sys_tls_flush" "net"
-    k_syscall(_): "tls_close" "sys_tls_close" "net"
-    k_syscall(_): "tls_pending" "sys_tls_pending" "net"
-    k_syscall(_): "tls_info" "sys_tls_info" "net"
-    k_syscall(_): "tls_request" "sys_tls_request" "net"
+    k_syscall(_): "tls_backend" "sys_tls_backend"
+    k_syscall(_): "tls_error" "sys_tls_error"
+    k_syscall(_): "tls_server" "sys_tls_server"
+    k_syscall(_): "tls_client" "sys_tls_client"
+    k_syscall(_): "tls_handshake" "sys_tls_handshake"
+    k_syscall(_): "tls_recv" "sys_tls_recv"
+    k_syscall(_): "tls_recv_bytes" "sys_tls_recv_bytes"
+    k_syscall(_): "tls_send" "sys_tls_send"
+    k_syscall(_): "tls_send_bytes" "sys_tls_send_bytes"
+    k_syscall(_): "tls_flush" "sys_tls_flush"
+    k_syscall(_): "tls_close" "sys_tls_close"
+    k_syscall(_): "tls_pending" "sys_tls_pending"
+    k_syscall(_): "tls_info" "sys_tls_info"
+    k_syscall(_): "tls_request" "sys_tls_request"
 ]

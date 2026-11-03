@@ -48,12 +48,12 @@ typedef struct
     unsigned char input[TERM_INPUT];
     int in_head, in_tail;
     int closed;
+    int attached;           /* a program has the console in it */
     int dirty;
     term_glyph_t glyphs[TERM_GLYPHS];
 } term_t;
 
 static term_t terms[TERM_MAX];
-static term_t *term_active;
 
 /* the kernel's raw mode (terminal_raw): keys as ANSI sequences then */
 extern long moscow_term_raw(void);
@@ -382,7 +382,7 @@ static int term_key(GLFWwindow *w, int key, int action, int mods, unsigned ch)
     const char *seq = NULL;
     int raw;
 
-    if (t == NULL || t != term_active)
+    if (t == NULL || !t->attached)
         return 0;
     if (action == GLFW_RELEASE)
         return 1;
@@ -470,7 +470,7 @@ static void term_draw(term_t *t, GLFWwindow *native)
         for (c = 0; c < t->cols; ++c)
         {
             term_cell_t *cell = &t->cells[r * t->cols + c];
-            int cursor = t->cursor_on && r == t->cy && c == t->cx && term_active == t &&
+            int cursor = t->cursor_on && r == t->cy && c == t->cx && t->attached &&
                          glfw.focused == native;
             uint32_t fg = term_palette[cell->fg & 15], bg = term_palette[cell->bg & 15];
             int x0 = ox + c * t->cell_w, y0 = oy + r * t->cell_h, y, x;
@@ -558,10 +558,19 @@ long gui_term_open(long canvas, const char *font_path, long px)
     return i;
 }
 
-/* the console goes to terminal h (or nowhere, -1) */
-long gui_term_attach(long h)
+static term_t *term_get(long h)
 {
-    term_active = h >= 0 && h < TERM_MAX && terms[h].used ? &terms[h] : NULL;
+    return h >= 0 && h < TERM_MAX && terms[h].used ? &terms[h] : NULL;
+}
+
+/* terminal h has a program's console in it (on), or not any more */
+long gui_term_attach(long h, long on)
+{
+    term_t *t = term_get(h);
+    if (t == NULL)
+        return -1;
+    t->attached = on != 0;
+    t->dirty = 1;
     return 0;
 }
 
@@ -570,8 +579,6 @@ long gui_term_close(long h)
     int i;
     if (h < 0 || h >= TERM_MAX || !terms[h].used)
         return -1;
-    if (term_active == &terms[h])
-        term_active = NULL;
     free(terms[h].cells);
     for (i = 0; i < TERM_GLYPHS; ++i)
         free(terms[h].glyphs[i].alpha);
@@ -579,17 +586,23 @@ long gui_term_close(long h)
     return 0;
 }
 
-/* the console's bytes, from the kernel's print */
-void gui_con_write(long byte)
+/* The console hooks (k_console): h is the terminal of the task whose
+ * console it is. */
+
+/* a byte the kernel printed */
+void gui_con_write(long byte, long h)
 {
-    if (term_active != NULL)
-        term_byte(term_active, (unsigned char)byte);
+    term_t *t = term_get(h);
+    if (t != NULL)
+        term_byte(t, (unsigned char)byte);
 }
 
-/* rows << 16 | columns of the console's terminal, 0 when there is none */
-long gui_con_size(void)
+/* rows << 16 | columns of the terminal, 0 when there is none */
+long gui_con_size(long unused, long h)
 {
-    if (term_active == NULL)
+    term_t *t = term_get(h);
+    (void)unused;
+    if (t == NULL)
         return 0;
-    return ((long)term_active->rows << 16) | term_active->cols;
+    return ((long)t->rows << 16) | t->cols;
 }

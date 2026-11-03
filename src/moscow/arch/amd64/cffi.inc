@@ -169,7 +169,37 @@ cstr_eq:
 ; --- the loader
 
 ; k_elf_load(lib): bytes -> a library number (from 1), or null
+; In a kernel command, a library and C memory belong to the program that
+; called it (its heap), not to the kernel's collected values.
 bi_k_elf_load:
+        push qword [cur_pool]
+        call c_pool_select
+        call k_elf_load_in
+        pop qword [cur_pool]
+        ret
+
+bi_c_alloc:
+        push qword [cur_pool]
+        call c_pool_select
+        call c_alloc_in
+        pop qword [cur_pool]
+        ret
+
+; inside a kernel command: the caller's heap. Keeps every register.
+c_pool_select:
+        push rax
+        mov rax, [cur_pool]
+        cmp rax, [kv_pool]
+        jne .done
+        mov rax, [kcaller_pool]
+        test rax, rax
+        jz .done
+        mov [cur_pool], rax
+.done:
+        pop rax
+        ret
+
+k_elf_load_in:
         cmp esi, 1
         jne .usage
         cmp qword [rdi], T_VEC
@@ -766,7 +796,7 @@ bi_c_call:
 
 ; c_alloc(p): n -> n zeroed bytes; a block c_free gave back is taken
 ; again when it is the same size
-bi_c_alloc:
+c_alloc_in:
         cmp esi, 1
         jne .usage
         cmp qword [rdi], T_INT
