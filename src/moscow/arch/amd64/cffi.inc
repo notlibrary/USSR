@@ -110,14 +110,36 @@ c_strlen:
 .done:
         ret
 
+; the kernel's own, for libraries that drive hardware (lib/gui.c):
+; moscow_ticks() -> timer ticks, 100 a second; moscow_gui(on) gives the
+; screen and the PS/2 port to the library (1) or back (0);
+; moscow_term_raw() -> 1 in terminal_raw's mode
+c_ticks:
+        mov rax, [ticks]
+        ret
+
+c_gui:
+        mov [gui_on], rdi
+        ret
+
+c_term_raw:
+        mov rax, [term_raw]
+        ret
+
 ; name, address
 c_exports:
+        dq s_ticks, c_ticks
+        dq s_gui, c_gui
+        dq s_term_raw, c_term_raw
         dq s_memcpy, c_memcpy
         dq s_memmove, c_memmove
         dq s_memset, c_memset
         dq s_memcmp, c_memcmp
         dq s_strlen, c_strlen
         dq 0, 0
+s_ticks:        db "moscow_ticks", 0
+s_gui:          db "moscow_gui", 0
+s_term_raw:     db "moscow_term_raw", 0
 s_memcpy:       db "memcpy", 0
 s_memmove:      db "memmove", 0
 s_memset:       db "memset", 0

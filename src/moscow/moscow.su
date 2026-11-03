@@ -30,6 +30,7 @@ $include "net.su"
 $include "dhcp.su"
 $include "../murmansk/murmansk.su"
 $include "tls.su"
+$include "gui.su"
 
 global(_): mo_dev mo_base mo_files
 
@@ -694,7 +695,11 @@ mo_run(r): name args [
         typeof(tb): bytes
         if(_): {tb = "vector"} [
             murmansk_text(fwkeep):
+            # its windows are its own (gui.su)
+            set(depth): {gui_depth + 1}
+            gui_enter(_): depth
             k_exec_bytes(r): bytes args
+            gui_leave(_): depth
             # what the program allocated is given back: its sockets too,
             # and the firewall's rules, kept as text across it
             net_reset(_):
@@ -736,6 +741,8 @@ sys_help(r): a [
     print(_): "  net(_): ping(n): host   the network card and address; ICMP echo"
     print(_): "  fw(s): [rule|delete N|policy in|out allow|deny|save|load]  Murmansk, the firewall"
     print(_): "  socket_tcp bind listen accept recv send close connect, wait_readable"
+    print(_): "  run(_): \"kremlin\"      the desktop; Petersburg windows (gui.su), gui(s): [WxH]"
+    print(_): "  launch(r): prog [params]  terminal_open(t): canvas  terminal_run(st): t [prog]"
     print(_): "  reboot(_): halt(_):     restart or stop the machine (Ctrl-D halts too)"
 ]
 
@@ -770,6 +777,7 @@ mo_syscalls(r): [
     k_syscall(_): "c_load" "sys_c_load"
     tls_syscalls(_):
     net_syscalls(_):
+    gui_syscalls(_):
 ]
 
 init(ret): arg_cnt arg_vec [
@@ -830,6 +838,15 @@ init(ret): arg_cnt arg_vec [
         tls_start(tlsok): root
         if(_): tlsok [ print(_): "tls:     BearSSL from /lib/tls.so" ]
         else(_): [ print(_): "tls:     none (no /lib/tls.so)" ]
+        gui_start(guiok): root
+        if(_): guiok [
+            str_from_int(gw): gui_width
+            str_from_int(gh): gui_height
+            concat(line): "gui:     Petersburg from /lib/gui.so, " gw "x" gh
+            if(_): gui_desktop [ concat(line): line ", the desktop at boot" ]
+            print(_): line
+        ]
+        else(_): [ print(_): "gui:     none (no /lib/gui.so)" ]
         bl_read_text(host): root "/etc/hostname"
         typeof(th): host
         if(_): {th = "string"} [
@@ -851,6 +868,12 @@ init(ret): arg_cnt arg_vec [
     btput(_): mo_files "next" 3
     mo_syscalls(_):
     set(ret): 0
+    # an installed system starts with the desktop; the shell after it
+    if(_): {gui_desktop && gui_lib != null} [
+        print(_): "moscow: starting the desktop, Kremlin"
+        vec(noargs): ""
+        mo_run(_): "kremlin" noargs
+    ]
     set(go): true
     while(_): go [
         print(_): "moscow: starting russia.ru"
