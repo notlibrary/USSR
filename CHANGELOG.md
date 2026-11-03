@@ -6,6 +6,20 @@ The second wave of the project is finished: every subproject listed in
 the README has code, and with usa, the C compiler, USSR is complete.
 
 ### Added
+- Moscow's memory and tasks. Physical memory is 4 KiB page frames; every
+  address space has page tables of its own over the shared identity map,
+  its private half paged on demand by the page fault handler. Heaps are
+  TLSF (Two-Level Segregated Fit): the kernel's, and one per program run
+  in a 16 GiB window, every page given back when the program ends.
+  `spawn(id): program [args ...]` runs a program as a task of its own,
+  `tasks(_):`, `kill(r): id`, `wait(status): id`: each task has its own
+  stack, address space, kernel variables and runtime state; the timer
+  switches tasks every 10 ms at a VM instruction outside kernel
+  commands, and waits (sleep, console input, a task's end) are kept as
+  russia's and ussr's kqueue-like event queue keep them. The network and
+  the screen are one task's at a time (`k_syscall`'s class); Novgorod
+  serves from a task while the shell goes on. `qemu_test.py` checks
+  switching, waiting, kill, memory given back and network ownership.
 - Windows in Moscow: Petersburg (`src/petersburg.c`, unchanged) built
   into `/lib/gui.so` with a small C library, OpenGL 1.1 in software
   and a GLFW of its own on the Bochs/QEMU VGA framebuffer (32-bit,

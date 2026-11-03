@@ -722,8 +722,11 @@ mo_ext(r): s [
 # the disk. A bare name is looked for as /bin/name.ru, /bin/name.su and
 # then the project's own src/name/name.su under /src/ussr, so
 # run(_): "Mbl" "notes.txt" starts the editor from its source.
-mo_run(r): name args [
-    set(r): 127
+# Where a program comes from: [path, args, bytes], a .su run through
+# russia.ru with its own path first in the arguments; null when it is
+# not on the disk.
+mo_find(r): name args [
+    set(r): null
     vec(tries): ""
     str_find(slash): name "/" 0
     mo_ext(ext): name
@@ -779,19 +782,33 @@ mo_run(r): name args [
         bl_read_bytes(bytes): fs path
         typeof(tb): bytes
         if(_): {tb = "vector"} [
-            murmansk_text(fwkeep):
-            # its windows are its own (gui.su)
-            set(depth): {gui_depth + 1}
-            gui_enter(_): depth
-            k_exec_bytes(r): bytes args
-            gui_leave(_): depth
-            # what the program allocated is given back: its sockets too,
-            # and the firewall's rules, kept as text across it
-            net_reset(_):
-            tls_reset(_):
-            mo_fw_restore(_): fwkeep
-            return(r): r
+            vec(r): ""
+            push(_): r path
+            push(_): r args
+            push(_): r bytes
         ]
+    ]
+]
+
+mo_run(r): name args [
+    set(r): 127
+    mo_find(found): name args
+    typeof(tf): found
+    if(_): {tf = "vector"} [
+        at(args): found 1
+        at(bytes): found 2
+        murmansk_text(fwkeep):
+        # its windows are its own (gui.su)
+        set(depth): {gui_depth + 1}
+        gui_enter(_): depth
+        k_exec_bytes(r): bytes args
+        gui_leave(_): depth
+        # what the program allocated is given back: its sockets too,
+        # and the firewall's rules, kept as text across it
+        net_reset(_):
+        tls_reset(_):
+        mo_fw_restore(_): fwkeep
+        return(r): r
     ]
     # not on the disk: the boot image has russia.ru and moscow.ru
     len(na): args
@@ -801,6 +818,108 @@ mo_run(r): name args [
         bl_err(r): m
         set(r): 127
     ]
+]
+
+# --- tasks: programs side by side (arch/amd64/task.inc)
+
+# spawn(id): name [args ...] -> a task running the program next to the
+# shell, in an address space of its own; its id, or -1
+sys_spawn(r): a [
+    set(r): -1
+    len(n): a
+    if(_): {n = 0} [
+        bl_err(_): "spawn(id): program [args ...]"
+        return(r): r
+    ]
+    at(name): a 0
+    vec(args): ""
+    set(i): 1
+    while(_): {i < n} [
+        at(x): a i
+        typeof(tx): x
+        if(_): {tx != "string"} [ str_from_number(x): x 6 ]
+        push(_): args x
+        set(i): {i + 1}
+    ]
+    mo_find(found): name args
+    typeof(tf): found
+    if(_): {tf != "vector"} [
+        concat(m): name ": no such program"
+        bl_err(_): m
+        return(r): r
+    ]
+    at(fargs): found 1
+    at(bytes): found 2
+    k_spawn(r): bytes fargs name
+    if(_): {r < 0} [ bl_err(_): "spawn: no room for another task" ]
+    else(_): [
+        str_from_int(ids): r
+        concat(m): "[" ids "] " name
+        print(_): m
+    ]
+]
+
+# tasks(v): -> [[id, name, state, cpu ms, KiB], ...], and prints them
+sys_tasks(r): a [
+    k_tasks(r):
+    print(_): "   ID  STATE       CPU ms     KiB  NAME"
+    len(n): r
+    set(i): 0
+    while(_): {i < n} [
+        at(t): r i
+        at(id): t 0
+        at(nm): t 1
+        at(st): t 2
+        at(ms): t 3
+        at(kb): t 4
+        str_from_int(ids): id
+        str_from_int(mss): ms
+        str_from_int(kbs): kb
+        mo_pad(ids): ids 5
+        mo_pad_right(st): st 10
+        mo_pad(mss): mss 8
+        mo_pad(kbs): kbs 8
+        concat(line): ids "  " st mss kbs "  " nm
+        print(_): line
+        set(i): {i + 1}
+    ]
+]
+
+# s padded on the left to width
+mo_pad(r): s width [
+    set(r): s
+    len(n): r
+    while(_): {n < width} [
+        concat(r): " " r
+        set(n): {n + 1}
+    ]
+]
+
+# s padded on the right to width
+mo_pad_right(r): s width [
+    set(r): s
+    len(n): r
+    while(_): {n < width} [
+        concat(r): r " "
+        set(n): {n + 1}
+    ]
+]
+
+# kill(r): id -> 0 when the task is ended, -1 when there is none
+sys_kill(r): a [
+    mo_arg(id): a 0 -1
+    k_kill(r): id
+    if(_): {r < 0} [
+        str_from_int(ids): id
+        concat(m): "kill: no task " ids " to end (task 0 is the kernel's)"
+        bl_err(_): m
+    ]
+]
+
+# wait(status): id -> waits for the task to end: its status, or -1
+sys_wait(r): a [
+    mo_arg(id): a 0 -1
+    k_wait(r): id
 ]
 
 # install(status): [args ...] runs the installer, /bin/install.ru
@@ -821,6 +940,8 @@ sys_help(r): a [
     print(_): "                          through russia: run(_): \"Mbl\" \"/home/notes.txt\" edits"
     print(_): "  open_file(h): path mode read_line(s): h write_file(n): h text close_file(r): h"
     print(_): "  install(status):        install USSR onto another disk"
+    print(_): "  spawn(id): name ...     the program as a task of its own, next to the shell"
+    print(_): "  tasks(_):  kill(r): id  wait(status): id   the tasks, ending one, its end"
     print(_): "  df(_):  fsck(_):        the root file system, its free space, a check"
     print(_): "  uptime(_): mem(_): cpu(_): uname(_): pwd(_): clear(_): color(_): fg bg"
     print(_): "  net(_): ping(n): host   the network card and address; ICMP echo"
@@ -846,6 +967,10 @@ mo_syscalls(r): [
     k_syscall(_): "remove_file" "sys_remove_file"
     k_syscall(_): "run" "sys_run"
     k_syscall(_): "install" "sys_install"
+    k_syscall(_): "spawn" "sys_spawn"
+    k_syscall(_): "tasks" "sys_tasks"
+    k_syscall(_): "kill" "sys_kill"
+    k_syscall(_): "wait" "sys_wait"
     k_syscall(_): "df" "sys_df"
     k_syscall(_): "fsck" "sys_fsck"
     k_syscall(_): "open_file" "sys_open_file"

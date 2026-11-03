@@ -1,0 +1,15 @@
+# moscow_tick.su - a task that runs next to the shell, for qemu_test.py:
+# five ticks a fifth of a second apart, then the status 7. A task that
+# is not the console's reads the end of its input.
+init(result): arg_count arg_values [
+    terminal_getch(c):
+    print(_): "tick: the console gives this task"
+    print(_): c
+    set(i): 0
+    while(_): {i < 5} [
+        print(_): "tick"
+        sleep(_): 200
+        set(i): {i + 1}
+    ]
+    set(result): 7
+]

@@ -353,11 +353,59 @@ system and hands it to `k_exec_bytes`. Without a Belarus disk (booting
 COM1 at 115200, the PS/2 keyboard), the PIT at 100 Hz and the heap, then
 loads `moscow.ru` and runs it.
 
-Memory: the heap is the largest usable RAM region of the BIOS map above
-the loaded files. When RAM goes past the boot loader's 4 GiB identity
-map, the runtime maps the rest (2 MiB pages, up to 64 GiB) with tables
-taken from the heap. russia.ru needs a few hundred MiB for a long
-session; the scripts give QEMU 2 GiB.
+Memory (`arch/amd64/mm.inc`): RAM is the largest usable region of the
+BIOS map above the loaded files. When it goes past the boot loader's
+4 GiB identity map, the runtime maps the rest (2 MiB pages, up to
+64 GiB). The kernel's own heap takes half of it, up to 384 MiB; the rest
+is 4 KiB page frames. Every address space shares the identity map (PML4
+slot 0: the runtime, the kernel's heap, the devices) and has a private
+512 GiB of its own (slot 1), mapped a page at a time on first touch: the
+page fault handler gives an address of the running task's heaps a zeroed
+frame and stops the machine for anything else. Heaps are TLSF, Two-Level
+Segregated Fit: free blocks in lists by size class, a bitmap per level,
+so an allocation, a split or a merge is a few steps whatever the heap
+holds. Every program run gets a heap of its own, a 16 GiB window of the
+private half, and gives every page of it back when it ends; `mem(_):`
+counts the free frames and the kernel heap's free bytes. russia.ru
+needs a few hundred MiB for a long session; the scripts give QEMU
+2 GiB.
+
+## Tasks
+
+    russia> spawn(t): "novgorod" "--http" "--port" "8080" ...
+    [1] novgorod
+    russia> tasks(_):
+       ID  STATE       CPU ms     KiB  NAME
+        0  run           4120   35136  moscow
+        1  wait          2350   61884  novgorod
+    russia> kill(r): t
+
+`spawn(id): program [args ...]` runs a program as a task of its own,
+next to the shell; `tasks(_):` lists them, `kill(r): id` ends one
+(status 137) and `wait(status): id` waits for one to end and gives its
+status (`arch/amd64/task.inc`).
+
+A task has its own stack, its own address space (page tables with its
+private half: its heaps are out of the others' reach), its own copy of
+the kernel's variables, made from the kernel as it booted, and its own
+runtime state (struct types, C libraries, the kernel command areas).
+Task 0 is the one the machine booted with: the kernel and the shell.
+The PIT ticks at 100 Hz; when a task has had its 10 ms, the VM gives
+the CPU away at its next instruction, unless the task is inside a kernel
+command, which runs to its end or to where it waits. Waits are the
+scheduler's, as russia's scheduler and ussr's kqueue-like event queue
+(`src/eventq.c`) keep them: a task that sleeps, waits for a key or for
+another task leaves the run queue with what it waits for - a time,
+console input, a task's end - and the scheduler checks them each time it
+picks the next task, round robin. With nothing to run the CPU halts
+until the next interrupt.
+
+The console is task 0's; another task reads the end of its input.
+Hardware that keeps state is one task's at a time: the network's
+commands (sockets, TLS) belong to the first task that uses them until
+the program that did ends, and `ping`, `net` and `dhcp` are refused to
+the others meanwhile; the same for the screen (Petersburg). So Novgorod
+serves from a task while the shell goes on.
 
 It reads `.ru` files as `ussr -c` writes them (format 3, VM ABI 3,
 checked with the CRC) and runs them as `docs/USSR_VM_SPEC.md` describes:
@@ -367,8 +415,8 @@ load time, so variables and builtins are found by index; the call-site
 table gives builtins their return name (`struct(Name):`). Values are
 null, 64-bit integers, reals (SSE2, printed like `%g`), strings,
 booleans, vectors, structs and btrees (`btree.inc`, the same B+ tree
-map as ussr's `src/btree.c`; it deletes lazily, the bump heap giving no
-memory back anyway). `EVAL` runs what russia.su hands its host (lines
+map as ussr's `src/btree.c`; it deletes lazily: a program's memory goes
+back when it ends). `EVAL` runs what russia.su hands its host (lines
 of builtin calls with variable, string, number or literal arguments);
 `TEMPLATE` prints; `DECODE_UNO` loads `'...'` literals; `try` runs a
 function in a VM of its own and reports whether it failed. Not
