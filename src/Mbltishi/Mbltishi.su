@@ -1,0 +1,72 @@
+# Mbltishi.su - Mbltishi, the terminal of USSR's desktop: a window that
+# runs the USSR shell (or any program) with the console in it, as xterm,
+# PuTTY or the Windows console run theirs. Mbl's town neighbour: Mbl
+# edits in it, Kremlin starts it from the panel.
+#
+#     run(_): "Mbltishi"                    the shell, russia.ru
+#     run(_): "Mbltishi" "Mbl" "notes.txt"  another program
+#
+# The window is a Petersburg canvas; the terminal on it is Moscow's own
+# (terminal_open, terminal_run: src/moscow/gui.su and lib/gui/term.c), a
+# grid of characters in Pobeda, the project's monospace font, that
+# carries out the ANSI sequences of the console. When the program ends
+# the window closes; closing the window ends the program (it reads the
+# end of its input, as Ctrl-D).
+$include "../petersburg/petersburg.su"
+
+$define MB_WIDTH 840
+$define MB_HEIGHT 500
+$define MB_FONT_PX 16
+
+init(result): arg_count arg_values [
+    set(result): 0
+    getenv(_mb_os): "OS"
+    if(_): {_mb_os != "Moscow"} [
+        print(_): "Mbltishi runs in Moscow, the USSR kernel (src/moscow); here use this system's terminal"
+        set(result): 1
+        return(_): result
+    ]
+    set(_mb_prog): "russia"
+    vec(_mb_args): ""
+    set(_mb_i): 0
+    while(_): {_mb_i < arg_count} [
+        at(_mb_a): arg_values _mb_i
+        if(_): {_mb_i = 0} [ set(_mb_prog): _mb_a ]
+        else(_): [ push(_): _mb_args _mb_a ]
+        set(_mb_i): {_mb_i + 1}
+    ]
+    concat(_mb_title): "Mbltishi - " _mb_prog
+    if(_): {_mb_prog = "russia"} [ set(_mb_title): "Mbltishi - USSR shell" ]
+    createwindow(_mb_w): _mb_title MB_WIDTH MB_HEIGHT
+    canvas(_mb_c): _mb_w
+    pack(_): _mb_c true
+    show(_): _mb_w
+    terminal_open(_mb_t): _mb_c MB_FONT_PX
+    if(_): {_mb_t < 0} [
+        close(_): _mb_w
+        print(_): "Mbltishi: no terminal (Moscow's /lib/gui.so and fonts/pobeda.ttf are needed)"
+        set(result): 1
+        return(_): result
+    ]
+    # the program, with the console in the window, until it ends
+    len(_mb_na): _mb_args
+    if(_): {_mb_na = 0} [ terminal_run(result): _mb_t _mb_prog ]
+    elif(_): {_mb_na = 1} [
+        at(_mb_a0): _mb_args 0
+        terminal_run(result): _mb_t _mb_prog _mb_a0
+    ]
+    elif(_): {_mb_na = 2} [
+        at(_mb_a0): _mb_args 0
+        at(_mb_a1): _mb_args 1
+        terminal_run(result): _mb_t _mb_prog _mb_a0 _mb_a1
+    ]
+    else(_): [
+        at(_mb_a0): _mb_args 0
+        at(_mb_a1): _mb_args 1
+        at(_mb_a2): _mb_args 2
+        terminal_run(result): _mb_t _mb_prog _mb_a0 _mb_a1 _mb_a2
+    ]
+    terminal_close(_): _mb_t
+    alive(_mb_open): _mb_w
+    if(_): _mb_open [ close(_): _mb_w ]
+]

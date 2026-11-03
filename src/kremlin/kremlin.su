@@ -409,6 +409,12 @@ km_windows(r): [
     set(r): {_kwi_os = "Windows_NT"}
 ]
 
+# On Moscow, the USSR kernel, which says so in OS.
+km_moscow(r): [
+    getenv(_kmo_os): "OS"
+    set(r): {_kmo_os = "Moscow"}
+]
+
 # The user's home folder with "/" separators.
 km_home(r): [
     km_windows(_kho_win):
@@ -1481,8 +1487,16 @@ km_seed(r): root [
     km_quote(_ksd_qu): _ksd_ussr
     km_home(_ksd_home):
     km_windows(_ksd_win):
+    km_moscow(_ksd_mos):
     vec(_ksd_pins): ""
-    if(_): _ksd_win [
+    if(_): {_ksd_mos && _ksd_src != ""} [
+        # Moscow's terminal is Mbltishi, a window of its own
+        km_join(_ksd_mb): _ksd_src "Mbltishi/Mbltishi.su"
+        km_quote(_ksd_qm): _ksd_mb
+        concat(_ksd_term): _ksd_qu " " _ksd_qm
+        km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" _ksd_term false
+    ]
+    elif(_): _ksd_win [
         km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" _ksd_qu true
     ]
     else(_): [

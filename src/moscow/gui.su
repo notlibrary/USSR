@@ -27,6 +27,7 @@
 # "desktop=on" - Kremlin at boot, as on an installed system.
 
 global(_): gui_lib gui_fn gui_width gui_height gui_desktop gui_depth gui_terms
+global(_): gui_trace
 
 gui_f(r): name [ btget(r): gui_fn name ]
 
@@ -40,6 +41,7 @@ gui_start(r): fs [
     set(gui_desktop): false
     set(gui_depth): 0
     vec(gui_terms): ""
+    set(gui_trace): false
     bl_exists(e): fs "/lib/gui.so"
     if(_): {e = false} [ return(r): r ]
     bl_read_bytes(bytes): fs "/lib/gui.so"
@@ -236,7 +238,7 @@ gui_native(r): name a [
         ]
         elif(_): {t = "real"} [
             concat(kinds): kinds "n"
-            concat(xs): "" x
+            str_from_number(xs): x 6
             push(_): args xs
         ]
         elif(_): {t = "boolean"} [
@@ -264,6 +266,11 @@ gui_native(r): name a [
     at(a6): args 6
     gui_f(fc): "gui_call"
     c_call(st): fc name kinds a0 a1 a2 a3 a4 a5 a6
+    if(_): gui_trace [
+        str_from_int(sts): st
+        concat(tl): "gui: " name " " kinds " -> " sts
+        print(_): tl
+    ]
     if(_): {st < 0} [
         gui_said(_):
         return(r): r
@@ -458,6 +465,10 @@ sys_terminal_close(r): a [
 # the GUI next starts
 sys_gui(r): a [
     mo_arg(size): a 0 ""
+    if(_): {size = "trace"} [
+        set(gui_trace): {gui_trace = false}
+        set(size): ""
+    ]
     if(_): {size != ""} [
         gui_size(st): size
         if(_): {st < 0} [ print(_): "gui: WIDTHxHEIGHT, from 640x480 to 1920x1200" ]

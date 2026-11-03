@@ -1,0 +1,1 @@
+'Package{name=`mbltishi`,version=`0.1.0`,description=`Terminal window of the USSR desktop: the USSR shell in a Petersburg window on Moscow`,entry=`Mbltishi.su`,dependencies=[`petersburg`],files=[`Mbltishi.su`,`README.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

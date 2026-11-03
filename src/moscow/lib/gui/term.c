@@ -310,7 +310,11 @@ static void term_byte(term_t *t, unsigned char b)
     if (b == 27)
         t->state = 1;
     else if (b == '\n')
+    {
+        /* the console's line end, as Moscow's screen takes it: CR LF */
+        t->cx = 0;
         term_newline(t);
+    }
     else if (b == '\r')
     {
         t->cx = 0;

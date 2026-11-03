@@ -165,13 +165,15 @@ sys_file_exists(r): a [
     bl_exists(r): fs path
 ]
 
+# is_dir(n): path -> 1 for a directory, else 0, as the hosted ussr
 sys_is_dir(r): a [
-    set(r): false
+    set(r): 0
     mo_fs(fs):
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
-    bl_is_dir(r): fs path
+    bl_is_dir(d): fs path
+    if(_): d [ set(r): 1 ]
 ]
 
 sys_list_dir(r): a [
@@ -180,7 +182,21 @@ sys_list_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 "/"
-    bl_list(r): fs path
+    bl_list(names): fs path
+    typeof(tn): names
+    if(_): {tn != "vector"} [ return(r): r ]
+    # folders end with "/", as the hosted ussr gives them
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        concat(full): path "/" name
+        bl_is_dir(d): fs full
+        if(_): d [ concat(name): name "/" ]
+        push(_): r name
+        set(i): {i + 1}
+    ]
 ]
 
 sys_make_dir(r): a [
@@ -656,6 +672,10 @@ mo_run(r): name args [
         push(_): tries p
         concat(p): "/bin/" name ".su"
         push(_): tries p
+        # the boot image's programs: "russia" is the shell, not russia.su
+        # run by itself
+        concat(p): "/boot/" name ".ru"
+        push(_): tries p
         concat(p): "/src/ussr/src/" name "/" name ".su"
         push(_): tries p
     ]
@@ -855,6 +875,13 @@ init(ret): arg_cnt arg_vec [
         ]
         # the installer copies from here
         setenv(_): "USSR_ROOT" mo_dev
+        # what programs look for: the system's name (Windows says
+        # Windows_NT here), the home folder, the USSR source
+        setenv(_): "OS" "Moscow"
+        getenv(home): "HOME"
+        if(_): {home = null} [ setenv(_): "HOME" "/home" ]
+        bl_is_dir(hassrc): root "/src/ussr/src"
+        if(_): hassrc [ setenv(_): "USSR_HOME" "/src/ussr" ]
         str_from_int(sb): mo_base
         setenv(_): "USSR_ROOT_SECTOR" sb
         bl_read_text(motd): root "/etc/motd"
