@@ -578,6 +578,14 @@ ins_main(r): args [
     bl_write_text(_): dst "/etc/hostname" text
     concat(motd): "USSR Moscow on " host ", installed from " src_label ". help(_): lists the commands.\n"
     bl_write_text(_): dst "/etc/motd" motd
+    # the installed system starts with the desktop, when it has its
+    # source (Kremlin runs from it); the install disk keeps text
+    set(gconf): "screen=1024x768\n"
+    bl_read_text(have): src "/etc/gui.conf"
+    typeof(th): have
+    if(_): {th = "string"} [ concat(gconf): have "\n" ]
+    if(_): {scope = "1"} [ concat(gconf): gconf "desktop=on\n" ]
+    bl_write_text(_): dst "/etc/gui.conf" gconf
     btput(_): ins_answers "target" dev
     btput(_): ins_answers "from" src_dev
     time(now):

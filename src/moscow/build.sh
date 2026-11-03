@@ -88,6 +88,8 @@ printf '%s\n' "# Murmansk, the firewall: the first rule that matches decides" \
     "policy in deny" "policy out allow" "allow in icmp" \
     "allow in tcp 8080" "allow in tcp 8443" >"$out/murmansk.rules"
 belarus put "$dev" "$(hp "$out/murmansk.rules")" /etc/murmansk.rules
+# Petersburg's screen (gui.su); an installed system adds desktop=on
+belarus write "$dev" /etc/gui.conf "screen=1024x768"
 # C libraries for c_load (src/moscow/lib/*.c): freestanding ELF shared
 # objects into /lib, when clang and ld.lld are there
 CLANG=${CLANG:-clang}

@@ -66,7 +66,7 @@ OP_SHR          equ 0x22
 OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
-SYS_MAX         equ 96                  ; kernel commands (k_syscall)
+SYS_MAX         equ 160                 ; kernel commands (k_syscall)
 SYS_AREAS       equ 4                   ; their VM areas: depths kept
 SYS_NAME        equ 32                  ; a name, NUL padded
 SYS_ENTRY       equ 48                  ; name, program, function
@@ -617,6 +617,16 @@ con_putc:
         mov al, 10
 .raw:
         call serial_raw
+        cmp qword [con_hook_write], 0
+        je .vga
+        push rax
+        push rdi
+        movzx edi, al
+        mov rax, [con_hook_write]
+        call c_hook
+        pop rdi
+        pop rax
+.vga:
         call vga_putc
         pop rax
         ret
@@ -684,6 +694,24 @@ con_backspace:
         call serial_raw
         mov al, 8
         call serial_raw
+        cmp qword [con_hook_write], 0
+        je .screen
+        push rdi
+        push rax
+        mov edi, 8
+        mov rax, [con_hook_write]
+        call c_hook
+        mov edi, ' '
+        mov rax, [con_hook_write]
+        call c_hook
+        mov edi, 8
+        mov rax, [con_hook_write]
+        call c_hook
+        pop rax
+        pop rdi
+.screen:
+        cmp qword [gui_on], 0
+        jne .done
         cmp qword [vga_col], 0
         je .done
         dec qword [vga_col]
@@ -714,6 +742,10 @@ vga_cell:
 ; the last column leaves the cursor past it, as a terminal does: the line
 ; wraps at the next character, not before a CR LF.
 vga_putc:
+        cmp qword [gui_on], 0
+        je .on
+        ret
+.on:
         push rax
         push rcx
         push rdi
@@ -1103,6 +1135,10 @@ ansi_sgr:
         ret
 
 vga_cursor:
+        cmp qword [gui_on], 0
+        je .on
+        ret
+.on:
         push rax
         push rcx
         push rdx
@@ -1126,6 +1162,29 @@ vga_cursor:
         ret
 
 vga_clear:
+        cmp qword [con_hook_write], 0
+        je .screen
+        push rax
+        push rdi
+        push rsi
+        mov rsi, s_ansi_clear
+.hook:
+        movzx edi, byte [rsi]
+        test edi, edi
+        jz .hooked
+        mov rax, [con_hook_write]
+        call c_hook
+        inc rsi
+        jmp .hook
+.hooked:
+        pop rsi
+        pop rdi
+        pop rax
+.screen:
+        cmp qword [gui_on], 0
+        je .on
+        ret
+.on:
         push rax
         push rcx
         push rdi
@@ -1153,6 +1212,14 @@ con_poll:
         jne .out
         call con_fill
         call kq_pop
+        cmp eax, -1
+        jne .out
+        cmp qword [con_hook_read], 0
+        je .out
+        push rdi
+        mov rax, [con_hook_read]
+        call c_hook
+        pop rdi
 .out:
         ret
 
@@ -1204,6 +1271,8 @@ con_fill:
         call kq_push
         jmp .done
 .keyboard:
+        cmp qword [gui_on], 0
+        jne .done
         in al, 0x64
         test al, 1
         jz .done
@@ -6227,9 +6296,114 @@ bi_terminal_key_ready:
 
 ; terminal_size(s): -> "rows cols", the VGA text screen's
 bi_terminal_size:
+        cmp qword [con_hook_size], 0
+        je .vga
+        push rdi
+        mov rax, [con_hook_size]
+        call c_hook
+        pop rdi
+        test rax, rax
+        jz .vga
+        push rdx
+        push rbx
+        mov rbx, rax
+        mov rdi, term_size_text
+        mov rax, rbx
+        shr rax, 16
+        call dec_put
+        mov byte [rdi], ' '
+        inc rdi
+        movzx eax, bx
+        call dec_put
+        mov byte [rdi], 0
+        pop rbx
+        pop rdx
+        mov rsi, term_size_text
+        call new_string_z
+        jmp bi_str_out
+.vga:
         mov rsi, s_terminal_size
         call new_string_z
         jmp bi_str_out
+
+; rax -> its decimal digits at rdi, rdi past them. Clobbers rax, rcx, rdx.
+dec_put:
+        push rbx
+        mov rbx, rsp
+        mov ecx, 10
+.digit:
+        xor edx, edx
+        div rcx
+        add dl, '0'
+        dec rsp
+        mov [rsp], dl
+        test rax, rax
+        jnz .digit
+.copy:
+        mov al, [rsp]
+        mov [rdi], al
+        inc rdi
+        inc rsp
+        cmp rsp, rbx
+        jne .copy
+        pop rbx
+        ret
+
+; k_console(_): write read size: the console's hooks, C functions of a
+; library (c_sym) - write(byte) gets what is printed, read() -> a byte
+; typed or -1, size() -> rows << 16 | columns - or 0 0 0 for the screen
+; and the keyboard again
+bi_k_console:
+        cmp esi, 3
+        jne .bad
+        cmp qword [rdi], T_INT
+        jne .bad
+        cmp qword [rdi + 16], T_INT
+        jne .bad
+        cmp qword [rdi + 32], T_INT
+        jne .bad
+        mov rax, [rdi + 8]
+        mov [con_hook_write], rax
+        mov rax, [rdi + 24]
+        mov [con_hook_read], rax
+        mov rax, [rdi + 40]
+        mov [con_hook_size], rax
+        xor eax, eax
+        jmp bi_int_out
+.bad:
+        mov eax, e_k_console
+        jmp bi_error
+
+; rax = a C function, rdi = its argument -> rax: its result. Keeps the
+; other registers and the SSE state: the C code runs as in c_call, on
+; this stack, aligned.
+c_hook:
+        push rbp
+        mov rbp, rsp
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push r8
+        push r9
+        push r10
+        push r11
+        sub rsp, 512
+        and rsp, -16
+        fxsave [rsp]
+        call rax
+        fxrstor [rsp]
+        lea rsp, [rbp - 64]
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbp
+        ret
 
 ; terminal_escape(s): -> the ESC character, as a string
 bi_terminal_escape:
@@ -6643,6 +6817,7 @@ bi_table:
         dq n_k_clear, bi_k_clear
         dq n_k_color, bi_k_color
         dq n_k_ticks, bi_k_ticks
+        dq n_k_console, bi_k_console
         dq n_k_mem, bi_k_mem
         dq n_k_cpu, bi_k_cpu
         dq n_k_modules, bi_k_modules
@@ -6793,6 +6968,9 @@ n_k_prompt:     db "k_prompt", 0
 n_k_clear:      db "k_clear", 0
 n_k_color:      db "k_color", 0
 n_k_ticks:      db "k_ticks", 0
+n_k_console:    db "k_console", 0
+e_k_console:    db "k_console(_): write read size (C functions, or 0 0 0)", 0
+s_ansi_clear:   db 27, "[2J", 27, "[H", 0
 n_k_mem:        db "k_mem", 0
 n_k_cpu:        db "k_cpu", 0
 n_k_modules:    db "k_modules", 0
@@ -7037,6 +7215,11 @@ kbd_shift:      resq 1
 kbd_ctrl:       resq 1
 kbd_e0:         resq 1
 term_raw:       resq 1
+gui_on:         resq 1              ; the GUI has the screen and the PS/2 port
+con_hook_write: resq 1              ; k_console's hooks: C functions
+con_hook_read:  resq 1
+con_hook_size:  resq 1
+term_size_text: resb 32
 kq_head:        resq 1
 kq_tail:        resq 1
 kq_buf:         resb KQ_SIZE

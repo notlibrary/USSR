@@ -1,8 +1,31 @@
 # USSR programming language CHANGELOG
 
-## [Unreleased]
+## [0.4.9] - 2026-11-03
+
+The second wave of the project is finished: every subproject listed in
+the README has code, and with usa, the C compiler, USSR is complete.
 
 ### Added
+- Windows in Moscow: Petersburg (`src/petersburg.c`, unchanged) built
+  into `/lib/gui.so` with a small C library, OpenGL 1.1 in software
+  and a GLFW of its own on the Bochs/QEMU VGA framebuffer (32-bit,
+  1024x768, 1536x1024 or 1920x1080) with the PS/2 keyboard and mouse:
+  windows with title bars, dragged and closed. `src/moscow/gui.su`
+  makes every `petersburg_*` native a kernel command, so Kremlin, Tver
+  and other Petersburg programs run from their source; windows belong
+  to the program that made them; text mode comes back with the last
+  one. `/etc/gui.conf`; an installed system boots into Kremlin (a key in
+  the first 3 seconds gives the shell). `qemu_test.py` drives Kremlin,
+  Mbltishi and Tver with QEMU's mouse and keyboard.
+- Mbltishi (`src/Mbltishi`), the desktop's terminal: the USSR shell in
+  a window, on Moscow's terminal (`terminal_open`, `terminal_run`; the
+  runtime's `k_console` hooks the console to C functions), Pobeda
+  glyphs and the console's ANSI sequences. Kremlin's Terminal pin starts
+  it on Moscow.
+- Moscow: `launch`, `cd`/`getcwd`, `copy_file`, `remove_dir`; `is_dir`
+  and `list_dir` answer as the hosted ussr does (1/0, folders with a
+  trailing `/`); `OS=Moscow`, `HOME` and `USSR_HOME` are set at boot;
+  a bare `run(_): "russia"` is the shell from `/boot`.
 - Moscow's DHCP client in a file of its own (`src/moscow/dhcp.su`) that
   keeps the lease: renews at T1, rebinds at T2, starts again on a NAK or
   when the lease ends, sends its host name, and releases. `dhcp(_):`
@@ -29,32 +52,6 @@
   DHCP answers pass), silent drops counted and logged. Rules come from
   `/etc/murmansk.rules` at boot (the install disk opens ping and ports
   8080 and 8443); `fw(_):` lists, adds, deletes and saves them.
-
-### Fixed
-- Moscow's runtime: a kernel command called from inside another one
-  (a program `run` calls the kernel) took a fresh 1 MiB VM area every
-  time, so the installer ran out of memory once its disk calls went
-  through the kernel; each depth now has its area, made at boot.
-- Moscow's runtime: declaring a struct whose name a calling program had
-  declared changed that program's type, in memory the inner program gave
-  back when it ended; the shell broke after running the Mbl editor. A
-  declaration now makes a new type over the old one.
-
-### Changed
-- Belarus is format 2: the B+ trees map blocks of files to the disk.
-  Every file and directory has an inode whose block map, a B+ tree from
-  the index of a block of the file to its LBA, starts in the inode and
-  grows out of it into nodes of its own; reads and writes find blocks
-  through it and read along its linked leaves a run at a time. A
-  directory is a file of `[name, inode]` pairs. Removing a file gives
-  its data, map nodes and inode back; `fsck` checks every map against
-  the file's size. Format 1 disks are refused: make them again.
-- The install disk takes no build products from the tree: object files,
-  binaries, `.ural` packages and disk images stay out of `/src/ussr`
-  (when the files do not come from `git ls-files`).
-- Belarus paths take `.` and `..`: `/src/Mbl/../libs` is `/src/libs`.
-
-### Added
 - Dubna KV (`src/dubna/kv.su`): a key-value store in one file in the
   manner of LMDB, a copy-on-write B+ tree of 4096-byte pages behind two
   meta pages, kept in memory in `btree` containers; `dubna_kv_open`,
@@ -144,31 +141,6 @@
   colour type and depth) and sequential JPEG in, a baseline JPEG fitted
   into a square box out. The RUND stack becomes the ROUND stack: Ryazan,
   Omsk, Ukraine, Novgorod, Dubna.
-
-### Changed
-- The startup file `moscow.su` is now `kiev.su`, and `USSR_MOSCOW` is
-  `USSR_KIEV`: Moscow is the name of the amd64 kernel. Rename a personal
-  `~/moscow.su` to `~/kiev.su`; the old names are no longer read.
-- Siberia is split in two: `src/siberia/siberia.su` is the spreadsheet
-  and the document editor (`siberia.su --pad` before) is Novosibirsk,
-  `src/novosibirsk/novosibirsk.su`, which includes Siberia for the shared
-  parts. The pad's engine checks moved to `tests/novosibirsk_test.su`.
-- Novgorod makes its 200x200 thumbnails on the server with Omsk, into
-  `thumbs/`, and takes the image size from the picture itself; the footer
-  links the ROUND stack to the USSR repository.
-- `tests/run_all.sh` no longer runs the Stalin test (it writes partition
-  tables) or usa's (usa is tested its own way).
-- `src/Makefile.am` ships every file of every `.su` package in `make
-  dist` (Novgorod's deploy kit, Ukraine, Dubna, Omsk, Sochi and usa were
-  missing or only their `box.uno`); `Makefile.msc` and `ussr-ubuntu.mk`
-  list every header each object includes, so editing one rebuilds them.
-
-## [0.4.9] - 2026-11-03
-
-The second wave of the project is finished: every subproject listed in
-the README has code, and with usa, the C compiler, USSR is complete.
-
-### Added
 - usa (`src/usa/usa.su`), a C compiler written in USSR: C99 in, `.ru`
   bytecode out. A preprocessor forked from russia's `pp.su` with `#`
   directives (`#if` expressions, `#`/`##`, variadic macros), a
@@ -192,6 +164,34 @@ the README has code, and with usa, the C compiler, USSR is complete.
   and menu events, scaled text; hex integer literals (`0xCAFEBABE 0xDEADBEEF`).
 
 ### Changed
+- Belarus is format 2: the B+ trees map blocks of files to the disk.
+  Every file and directory has an inode whose block map, a B+ tree from
+  the index of a block of the file to its LBA, starts in the inode and
+  grows out of it into nodes of its own; reads and writes find blocks
+  through it and read along its linked leaves a run at a time. A
+  directory is a file of `[name, inode]` pairs. Removing a file gives
+  its data, map nodes and inode back; `fsck` checks every map against
+  the file's size. Format 1 disks are refused: make them again.
+- The install disk takes no build products from the tree: object files,
+  binaries, `.ural` packages and disk images stay out of `/src/ussr`
+  (when the files do not come from `git ls-files`).
+- Belarus paths take `.` and `..`: `/src/Mbl/../libs` is `/src/libs`.
+- The startup file `moscow.su` is now `kiev.su`, and `USSR_MOSCOW` is
+  `USSR_KIEV`: Moscow is the name of the amd64 kernel. Rename a personal
+  `~/moscow.su` to `~/kiev.su`; the old names are no longer read.
+- Siberia is split in two: `src/siberia/siberia.su` is the spreadsheet
+  and the document editor (`siberia.su --pad` before) is Novosibirsk,
+  `src/novosibirsk/novosibirsk.su`, which includes Siberia for the shared
+  parts. The pad's engine checks moved to `tests/novosibirsk_test.su`.
+- Novgorod makes its 200x200 thumbnails on the server with Omsk, into
+  `thumbs/`, and takes the image size from the picture itself; the footer
+  links the ROUND stack to the USSR repository.
+- `tests/run_all.sh` no longer runs the Stalin test (it writes partition
+  tables) or usa's (usa is tested its own way).
+- `src/Makefile.am` ships every file of every `.su` package in `make
+  dist` (Novgorod's deploy kit, Ukraine, Dubna, Omsk, Sochi and usa were
+  missing or only their `box.uno`); `Makefile.msc` and `ussr-ubuntu.mk`
+  list every header each object includes, so editing one rebuilds them.
 - The optimization cycle (docs/OPTIMIZATIONS.md): getf/at/setf/len fast
   paths, the integer fast path, shared reference-counted strings, O(1)
   string length, whole-program optimization in the builds, and russia.su's
@@ -200,6 +200,14 @@ the README has code, and with usa, the C compiler, USSR is complete.
   releases; releases install winflexbison from GitHub.
 
 ### Fixed
+- Moscow's runtime: a kernel command called from inside another one
+  (a program `run` calls the kernel) took a fresh 1 MiB VM area every
+  time, so the installer ran out of memory once its disk calls went
+  through the kernel; each depth now has its area, made at boot.
+- Moscow's runtime: declaring a struct whose name a calling program had
+  declared changed that program's type, in memory the inner program gave
+  back when it ended; the shell broke after running the Mbl editor. A
+  declaration now makes a new type over the old one.
 - The VM's `LOAD_VAR` leaked its register's old value.
 
 ## [0.4.8] - 2026-10-22

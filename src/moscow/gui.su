@@ -1,0 +1,603 @@
+# gui.su - windows in Moscow: Petersburg, USSR's GUI toolkit, as kernel
+# commands. Its C code (src/petersburg.c, the hosted ussr's own) is in
+# /lib/gui.so with what it stands on there - OpenGL in software and GLFW
+# on the VGA framebuffer with the PS/2 keyboard and mouse
+# (src/moscow/lib/gui.c) - and this file calls it with c_call: every
+# petersburg_* native the hosted ussr has is a kernel command here, so
+# Petersburg programs - Kremlin, Tver, Klin - run from their source
+# through russia.su, which delivers their events itself
+# (petersburg_take_events).
+#
+# The screen goes graphic with the first window and back to text when
+# the last one is gone. Every window belongs to the program that made
+# it; a program started from another (launch, run) puts its windows over
+# the other's, and they go when it ends.
+#
+#   launch(r): target [params [hidden]]   Kremlin's: runs a program (a
+#                                          .su through russia), 0 or -1
+#   terminal_open(t): canvas [px]          a terminal on a canvas, Pobeda
+#                                          at px pixels per em (16)
+#   terminal_run(st): t [program args...]  the console in terminal t while
+#                                          program (the shell) runs
+#   terminal_close(r): t
+#   gui(s): [WIDTHxHEIGHT]                 the screen's size, which the
+#                                          next start of the GUI takes
+#
+# /etc/gui.conf: "screen=1024x768" (or 1536x1024, 1920x1080) and
+# "desktop=on" - Kremlin at boot, as on an installed system.
+
+global(_): gui_lib gui_fn gui_width gui_height gui_desktop gui_depth gui_terms
+global(_): gui_trace
+
+gui_f(r): name [ btget(r): gui_fn name ]
+
+# /lib/gui.so, at boot; true when it is there
+gui_start(r): fs [
+    set(r): false
+    set(gui_lib): null
+    btree(gui_fn):
+    set(gui_width): 1024
+    set(gui_height): 768
+    set(gui_desktop): false
+    set(gui_depth): 0
+    vec(gui_terms): ""
+    set(gui_trace): false
+    bl_exists(e): fs "/lib/gui.so"
+    if(_): {e = false} [ return(r): r ]
+    bl_read_bytes(bytes): fs "/lib/gui.so"
+    k_elf_load(gui_lib): bytes
+    if(_): {gui_lib = null} [ return(r): r ]
+    vec(names): ""
+    push(_): names "gui_start"
+    push(_): names "gui_owner"
+    push(_): names "gui_windows"
+    push(_): names "gui_pump"
+    push(_): names "gui_call"
+    push(_): names "gui_result_kind"
+    push(_): names "gui_result_int"
+    push(_): names "gui_result_text"
+    push(_): names "gui_message"
+    push(_): names "gui_events"
+    push(_): names "gui_end"
+    push(_): names "gui_video_start"
+    push(_): names "gui_video_stop"
+    push(_): names "gui_file_put"
+    push(_): names "gui_file_has"
+    push(_): names "gui_term_open"
+    push(_): names "gui_term_attach"
+    push(_): names "gui_term_close"
+    push(_): names "gui_con_write"
+    push(_): names "gui_con_read"
+    push(_): names "gui_con_size"
+    push(_): names "gui_title_font"
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        c_sym(f): gui_lib name
+        if(_): {f = null} [
+            set(gui_lib): null
+            return(r): r
+        ]
+        btput(_): gui_fn name f
+        set(i): {i + 1}
+    ]
+    # the library's heap: windows of 1920x1080 take 8 MiB each
+    c_alloc(arena): 134217728
+    gui_f(f): "gui_start"
+    c_call(_): f arena 134217728
+    gui_conf(_): fs
+    set(r): true
+]
+
+# /etc/gui.conf: the screen's size, the desktop at boot
+gui_conf(r): fs [
+    set(r): 0
+    bl_exists(e): fs "/etc/gui.conf"
+    if(_): {e = false} [ return(r): r ]
+    bl_read_text(text): fs "/etc/gui.conf"
+    gui_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        str_trim(line): line
+        str_find(eq): line "=" 0
+        if(_): {eq > 0} [
+            slice(key): line 0 eq
+            len(ll): line
+            slice(val): line {eq + 1} {ll - eq - 1}
+            if(_): {key = "screen"} [ gui_size(_): val ]
+            if(_): {key = "desktop"} [ set(gui_desktop): {val = "on"} ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# text -> its lines
+gui_lines(r): text [
+    vec(r): ""
+    len(n): text
+    set(from): 0
+    set(i): 0
+    while(_): {i <= n} [
+        set(b): 10
+        if(_): {i < n} [ byte(b): text i ]
+        if(_): {b = 10} [
+            slice(line): text from {i - from}
+            push(_): r line
+            set(from): {i + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# "WIDTHxHEIGHT" -> the size the GUI starts with; 0, or -1
+gui_size(r): text [
+    set(r): -1
+    str_find(x): text "x" 0
+    if(_): {x <= 0} [ return(r): r ]
+    len(n): text
+    slice(ws): text 0 x
+    slice(hs): text {x + 1} {n - x - 1}
+    str_to_number(w): ws
+    str_to_number(h): hs
+    typeof(tw): w
+    typeof(th): h
+    if(_): {tw = "null" || th = "null"} [ return(r): r ]
+    str_trunc(w): w
+    str_trunc(h): h
+    if(_): {w < 640 || h < 480 || w > 1920 || h > 1200} [ return(r): r ]
+    set(gui_width): w
+    set(gui_height): h
+    set(r): 0
+]
+
+# the screen graphic: 0, or -1 (no /lib/gui.so, no Bochs VGA)
+gui_on(r): [
+    set(r): -1
+    if(_): {gui_lib = null} [ return(r): r ]
+    gui_f(f): "gui_video_start"
+    c_call(r): f gui_width gui_height
+    if(_): {r < 0} [ return(r): r ]
+    # titles as they are written (Mbltishi, not MBLTISHI): in Pobeda
+    set(font): "/src/ussr/fonts/pobeda.ttf"
+    gui_hand(st): font
+    if(_): {st = 0} [
+        gui_f(ft): "gui_title_font"
+        c_call(_): ft font
+    ]
+]
+
+gui_off(r): [
+    set(r): 0
+    if(_): {gui_lib = null} [ return(r): r ]
+    gui_f(f): "gui_video_stop"
+    c_call(r): f
+]
+
+# what the library said on stderr, onto the console
+gui_said(r): [
+    gui_f(f): "gui_message"
+    c_call(p): f
+    c_string(r): p
+    if(_): {r != ""} [ write_stderr(_): r ]
+]
+
+# path of the root file system handed to the library, for its fopen
+# (images, fonts); 0, or -1
+gui_hand(r): path [
+    set(r): -1
+    typeof(t): path
+    if(_): {t != "string"} [ return(r): r ]
+    mo_fs(fs):
+    typeof(tf): fs
+    if(_): {tf != "btree"} [ return(r): r ]
+    bl_exists(e): fs path
+    if(_): {e = false} [ return(r): r ]
+    bl_read_bytes(bytes): fs path
+    len(n): bytes
+    c_alloc(p): {n + 1}
+    c_write(_): p bytes
+    gui_f(f): "gui_file_put"
+    c_call(r): f path p n
+    c_free(_): p
+]
+
+# a Petersburg native: name and its arguments as the program gave them
+gui_native(r): name a [
+    set(r): null
+    if(_): {gui_lib = null} [
+        concat(m): "USSR: " name " needs /lib/gui.so (sh src/moscow/build.sh with clang)\n"
+        write_stderr(_): m
+        return(r): r
+    ]
+    gui_f(fw): "gui_windows"
+    c_call(nw): fw
+    if(_): {nw = 0 && (name = "petersburg_create_window" || name = "petersburg_message_box")} [
+        gui_on(st):
+        if(_): {st < 0} [
+            write_stderr(_): "USSR: no screen for windows (a Bochs/QEMU standard VGA is needed)\n"
+            return(r): r
+        ]
+    ]
+    # files the native reads come from the root file system
+    if(_): {name = "petersburg_create_image" || name = "petersburg_reload_image"} [
+        at(path): a 1
+        gui_hand(_): path
+    ]
+    if(_): {name = "petersburg_font_load" || name = "petersburg_font_info"} [
+        at(path): a 0
+        gui_hand(_): path
+    ]
+    set(kinds): ""
+    vec(args): ""
+    len(n): a
+    set(i): 0
+    while(_): {i < n} [
+        at(x): a i
+        typeof(t): x
+        if(_): {t = "integer"} [
+            concat(kinds): kinds "i"
+            push(_): args x
+        ]
+        elif(_): {t = "string"} [
+            concat(kinds): kinds "s"
+            push(_): args x
+        ]
+        elif(_): {t = "real"} [
+            concat(kinds): kinds "n"
+            str_from_number(xs): x 6
+            push(_): args xs
+        ]
+        elif(_): {t = "boolean"} [
+            concat(kinds): kinds "b"
+            set(b): 0
+            if(_): x [ set(b): 1 ]
+            push(_): args b
+        ]
+        else(_): [
+            concat(kinds): kinds "z"
+            push(_): args 0
+        ]
+        set(i): {i + 1}
+    ]
+    while(_): {i < 7} [
+        push(_): args 0
+        set(i): {i + 1}
+    ]
+    at(a0): args 0
+    at(a1): args 1
+    at(a2): args 2
+    at(a3): args 3
+    at(a4): args 4
+    at(a5): args 5
+    at(a6): args 6
+    gui_f(fc): "gui_call"
+    c_call(st): fc name kinds a0 a1 a2 a3 a4 a5 a6
+    if(_): gui_trace [
+        str_from_int(sts): st
+        concat(tl): "gui: " name " " kinds " -> " sts
+        print(_): tl
+    ]
+    if(_): {st < 0} [
+        gui_said(_):
+        return(r): r
+    ]
+    gui_f(fk): "gui_result_kind"
+    c_call(k): fk
+    if(_): {k = 105 || k = 110} [
+        gui_f(fi): "gui_result_int"
+        c_call(r): fi
+    ]
+    elif(_): {k = 98} [
+        gui_f(fi): "gui_result_int"
+        c_call(bi): fi
+        set(r): {bi != 0}
+    ]
+    elif(_): {k = 115} [
+        gui_f(ft): "gui_result_text"
+        c_call(p): ft
+        c_string(r): p
+    ]
+]
+
+# petersburg_take_events(v): the running program's events, the screen
+# kept alive
+sys_pb_take_events(r): a [
+    set(r): null
+    if(_): {gui_lib = null} [ return(r): r ]
+    gui_f(f): "gui_events"
+    c_call(p): f
+    c_string(text): p
+    decode(r): text
+]
+
+# --- programs inside programs
+
+# a program starts at depth d: its windows will be its own
+gui_enter(r): d [
+    set(r): 0
+    set(gui_depth): d
+    if(_): {gui_lib = null} [ return(r): r ]
+    gui_f(f): "gui_owner"
+    c_call(_): f d
+]
+
+# the program at depth d ended: its windows go, and with the last one
+# the screen goes back to text (unless the desktop is the session)
+gui_leave(r): d [
+    set(r): 0
+    set(gui_depth): {d - 1}
+    if(_): {gui_lib = null} [ return(r): r ]
+    gui_f(fe): "gui_end"
+    c_call(left): fe d
+    gui_f(fo): "gui_owner"
+    c_call(_): fo {d - 1}
+    if(_): {left = 0} [ gui_off(_): ]
+]
+
+# "a b \"c d\"" -> ["a", "b", "c d"]
+gui_words(r): text [
+    vec(r): ""
+    typeof(t): text
+    if(_): {t != "string"} [ return(r): r ]
+    len(n): text
+    set(word): ""
+    set(inword): false
+    set(quoted): false
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        slice(ch): text i 1
+        if(_): {b = 34} [
+            set(quoted): {quoted = false}
+            set(inword): true
+        ]
+        elif(_): {(b = 32 || b = 9) && quoted = false} [
+            if(_): inword [ push(_): r word ]
+            set(word): ""
+            set(inword): false
+        ]
+        else(_): [
+            concat(word): word ch
+            set(inword): true
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): inword [ push(_): r word ]
+]
+
+# the file name at the end of a path
+gui_base(r): path [
+    set(r): path
+    len(n): path
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        byte(b): path i
+        if(_): {b = 47 || b = 92} [
+            slice(r): path {i + 1} {n - i - 1}
+            return(r): r
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+# launch(r): target [params [hidden]]: what Kremlin starts. "ussr" (the
+# interpreter, by any path) runs the script its parameters name; a
+# program runs with its parameters. Moscow runs one program at a time:
+# this comes back when it ends. 0, or -1 when there is no such program.
+sys_launch(r): a [
+    set(r): -1
+    mo_arg(target): a 0 ""
+    mo_arg(params): a 1 ""
+    gui_base(base): target
+    gui_words(words): params
+    if(_): {base = "ussr" || base = "ussr.exe"} [
+        len(nw): words
+        if(_): {nw = 0} [ return(r): r ]
+        at(target): words 0
+        vec(rest): ""
+        set(i): 1
+        while(_): {i < nw} [
+            at(w): words i
+            push(_): rest w
+            set(i): {i + 1}
+        ]
+        set(words): rest
+    ]
+    mo_run(st): target words
+    if(_): {st != 127} [ set(r): 0 ]
+]
+
+# --- the terminal (src/mbltishi)
+
+# terminal_open(t): canvas [px]
+sys_terminal_open(r): a [
+    set(r): -1
+    if(_): {gui_lib = null} [ return(r): r ]
+    mo_arg(canvas): a 0 -1
+    mo_arg(px): a 1 16
+    set(font): "/src/ussr/fonts/pobeda.ttf"
+    gui_hand(st): font
+    if(_): {st < 0} [
+        write_stderr(_): "terminal_open: no /src/ussr/fonts/pobeda.ttf\n"
+        return(r): r
+    ]
+    gui_f(f): "gui_term_open"
+    c_call(r): f canvas font px
+    if(_): {r < 0} [ gui_said(_): ]
+]
+
+# terminal_run(st): t [program [args ...]]: the console is terminal t
+# while the program runs - the shell, russia.ru, when none is named;
+# its status
+sys_terminal_run(r): a [
+    set(r): 127
+    if(_): {gui_lib = null} [ return(r): r ]
+    mo_arg(t): a 0 -1
+    mo_arg(prog): a 1 "russia"
+    vec(args): ""
+    len(n): a
+    set(i): 2
+    while(_): {i < n} [
+        at(x): a i
+        push(_): args x
+        set(i): {i + 1}
+    ]
+    gui_f(fa): "gui_term_attach"
+    gui_f(fw): "gui_con_write"
+    gui_f(fr): "gui_con_read"
+    gui_f(fs): "gui_con_size"
+    # terminals inside terminals: the outer one again afterwards
+    len(depth): gui_terms
+    set(outer): -1
+    if(_): {depth > 0} [ at(outer): gui_terms {depth - 1} ]
+    push(_): gui_terms t
+    c_call(_): fa t
+    k_console(_): fw fr fs
+    mo_run(r): prog args
+    pop(_): gui_terms
+    c_call(_): fa outer
+    if(_): {outer < 0} [ k_console(_): 0 0 0 ]
+]
+
+sys_terminal_close(r): a [
+    set(r): -1
+    if(_): {gui_lib = null} [ return(r): r ]
+    mo_arg(t): a 0 -1
+    gui_f(f): "gui_term_close"
+    c_call(r): f t
+]
+
+# gui(s): [WIDTHxHEIGHT] -> the screen's size; a new one is taken when
+# the GUI next starts
+sys_gui(r): a [
+    mo_arg(size): a 0 ""
+    if(_): {size = "trace"} [
+        set(gui_trace): {gui_trace = false}
+        set(size): ""
+    ]
+    if(_): {size != ""} [
+        gui_size(st): size
+        if(_): {st < 0} [ print(_): "gui: WIDTHxHEIGHT, from 640x480 to 1920x1200" ]
+    ]
+    str_from_int(ws): gui_width
+    str_from_int(hs): gui_height
+    concat(r): ws "x" hs
+    if(_): {gui_lib = null} [ concat(r): r " (no /lib/gui.so)" ]
+    print(_): r
+]
+
+# --- the natives, each a kernel command
+
+sys_pb_alive(r): a [ gui_native(r): "petersburg_alive" a ]
+sys_pb_canvas_arc(r): a [ gui_native(r): "petersburg_canvas_arc" a ]
+sys_pb_canvas_circle(r): a [ gui_native(r): "petersburg_canvas_circle" a ]
+sys_pb_canvas_clear(r): a [ gui_native(r): "petersburg_canvas_clear" a ]
+sys_pb_canvas_count(r): a [ gui_native(r): "petersburg_canvas_count" a ]
+sys_pb_canvas_fill(r): a [ gui_native(r): "petersburg_canvas_fill" a ]
+sys_pb_canvas_font_text(r): a [ gui_native(r): "petersburg_canvas_font_text" a ]
+sys_pb_canvas_line(r): a [ gui_native(r): "petersburg_canvas_line" a ]
+sys_pb_canvas_rect(r): a [ gui_native(r): "petersburg_canvas_rect" a ]
+sys_pb_canvas_text(r): a [ gui_native(r): "petersburg_canvas_text" a ]
+sys_pb_canvas_text_scaled(r): a [ gui_native(r): "petersburg_canvas_text_scaled" a ]
+sys_pb_close(r): a [ gui_native(r): "petersburg_close" a ]
+sys_pb_create_button(r): a [ gui_native(r): "petersburg_create_button" a ]
+sys_pb_create_canvas(r): a [ gui_native(r): "petersburg_create_canvas" a ]
+sys_pb_create_checkbox(r): a [ gui_native(r): "petersburg_create_checkbox" a ]
+sys_pb_create_combobox(r): a [ gui_native(r): "petersburg_create_combobox" a ]
+sys_pb_create_image(r): a [ gui_native(r): "petersburg_create_image" a ]
+sys_pb_create_label(r): a [ gui_native(r): "petersburg_create_label" a ]
+sys_pb_create_list(r): a [ gui_native(r): "petersburg_create_list" a ]
+sys_pb_create_textbox(r): a [ gui_native(r): "petersburg_create_textbox" a ]
+sys_pb_create_toolbar(r): a [ gui_native(r): "petersburg_create_toolbar" a ]
+sys_pb_create_window(r): a [ gui_native(r): "petersburg_create_window" a ]
+sys_pb_destroy(r): a [ gui_native(r): "petersburg_destroy" a ]
+sys_pb_font_height(r): a [ gui_native(r): "petersburg_font_height" a ]
+sys_pb_font_info(r): a [ gui_native(r): "petersburg_font_info" a ]
+sys_pb_font_load(r): a [ gui_native(r): "petersburg_font_load" a ]
+sys_pb_font_width(r): a [ gui_native(r): "petersburg_font_width" a ]
+sys_pb_fullscreen(r): a [ gui_native(r): "petersburg_fullscreen" a ]
+sys_pb_get_checked(r): a [ gui_native(r): "petersburg_get_checked" a ]
+sys_pb_get_focus(r): a [ gui_native(r): "petersburg_get_focus" a ]
+sys_pb_get_height(r): a [ gui_native(r): "petersburg_get_height" a ]
+sys_pb_get_index(r): a [ gui_native(r): "petersburg_get_index" a ]
+sys_pb_get_mark(r): a [ gui_native(r): "petersburg_get_mark" a ]
+sys_pb_get_selection(r): a [ gui_native(r): "petersburg_get_selection" a ]
+sys_pb_get_text(r): a [ gui_native(r): "petersburg_get_text" a ]
+sys_pb_get_width(r): a [ gui_native(r): "petersburg_get_width" a ]
+sys_pb_grid(r): a [ gui_native(r): "petersburg_grid" a ]
+sys_pb_inject(r): a [ gui_native(r): "petersburg_inject" a ]
+sys_pb_maximize(r): a [ gui_native(r): "petersburg_maximize" a ]
+sys_pb_message_box(r): a [ gui_native(r): "petersburg_message_box" a ]
+sys_pb_on(r): a [ gui_native(r): "petersburg_on" a ]
+sys_pb_pack(r): a [ gui_native(r): "petersburg_pack" a ]
+sys_pb_reload_image(r): a [ gui_native(r): "petersburg_reload_image" a ]
+sys_pb_run(r): a [ gui_native(r): "petersburg_run" a ]
+sys_pb_set_checked(r): a [ gui_native(r): "petersburg_set_checked" a ]
+sys_pb_set_focus(r): a [ gui_native(r): "petersburg_set_focus" a ]
+sys_pb_set_index(r): a [ gui_native(r): "petersburg_set_index" a ]
+sys_pb_set_mark(r): a [ gui_native(r): "petersburg_set_mark" a ]
+sys_pb_set_text(r): a [ gui_native(r): "petersburg_set_text" a ]
+sys_pb_show(r): a [ gui_native(r): "petersburg_show" a ]
+
+gui_syscalls(r): [
+    set(r): 0
+    k_syscall(_): "petersburg_alive" "sys_pb_alive"
+    k_syscall(_): "petersburg_canvas_arc" "sys_pb_canvas_arc"
+    k_syscall(_): "petersburg_canvas_circle" "sys_pb_canvas_circle"
+    k_syscall(_): "petersburg_canvas_clear" "sys_pb_canvas_clear"
+    k_syscall(_): "petersburg_canvas_count" "sys_pb_canvas_count"
+    k_syscall(_): "petersburg_canvas_fill" "sys_pb_canvas_fill"
+    k_syscall(_): "petersburg_canvas_font_text" "sys_pb_canvas_font_text"
+    k_syscall(_): "petersburg_canvas_line" "sys_pb_canvas_line"
+    k_syscall(_): "petersburg_canvas_rect" "sys_pb_canvas_rect"
+    k_syscall(_): "petersburg_canvas_text" "sys_pb_canvas_text"
+    k_syscall(_): "petersburg_canvas_text_scaled" "sys_pb_canvas_text_scaled"
+    k_syscall(_): "petersburg_close" "sys_pb_close"
+    k_syscall(_): "petersburg_create_button" "sys_pb_create_button"
+    k_syscall(_): "petersburg_create_canvas" "sys_pb_create_canvas"
+    k_syscall(_): "petersburg_create_checkbox" "sys_pb_create_checkbox"
+    k_syscall(_): "petersburg_create_combobox" "sys_pb_create_combobox"
+    k_syscall(_): "petersburg_create_image" "sys_pb_create_image"
+    k_syscall(_): "petersburg_create_label" "sys_pb_create_label"
+    k_syscall(_): "petersburg_create_list" "sys_pb_create_list"
+    k_syscall(_): "petersburg_create_textbox" "sys_pb_create_textbox"
+    k_syscall(_): "petersburg_create_toolbar" "sys_pb_create_toolbar"
+    k_syscall(_): "petersburg_create_window" "sys_pb_create_window"
+    k_syscall(_): "petersburg_destroy" "sys_pb_destroy"
+    k_syscall(_): "petersburg_font_height" "sys_pb_font_height"
+    k_syscall(_): "petersburg_font_info" "sys_pb_font_info"
+    k_syscall(_): "petersburg_font_load" "sys_pb_font_load"
+    k_syscall(_): "petersburg_font_width" "sys_pb_font_width"
+    k_syscall(_): "petersburg_fullscreen" "sys_pb_fullscreen"
+    k_syscall(_): "petersburg_get_checked" "sys_pb_get_checked"
+    k_syscall(_): "petersburg_get_focus" "sys_pb_get_focus"
+    k_syscall(_): "petersburg_get_height" "sys_pb_get_height"
+    k_syscall(_): "petersburg_get_index" "sys_pb_get_index"
+    k_syscall(_): "petersburg_get_mark" "sys_pb_get_mark"
+    k_syscall(_): "petersburg_get_selection" "sys_pb_get_selection"
+    k_syscall(_): "petersburg_get_text" "sys_pb_get_text"
+    k_syscall(_): "petersburg_get_width" "sys_pb_get_width"
+    k_syscall(_): "petersburg_grid" "sys_pb_grid"
+    k_syscall(_): "petersburg_inject" "sys_pb_inject"
+    k_syscall(_): "petersburg_maximize" "sys_pb_maximize"
+    k_syscall(_): "petersburg_message_box" "sys_pb_message_box"
+    k_syscall(_): "petersburg_on" "sys_pb_on"
+    k_syscall(_): "petersburg_pack" "sys_pb_pack"
+    k_syscall(_): "petersburg_reload_image" "sys_pb_reload_image"
+    k_syscall(_): "petersburg_run" "sys_pb_run"
+    k_syscall(_): "petersburg_set_checked" "sys_pb_set_checked"
+    k_syscall(_): "petersburg_set_focus" "sys_pb_set_focus"
+    k_syscall(_): "petersburg_set_index" "sys_pb_set_index"
+    k_syscall(_): "petersburg_set_mark" "sys_pb_set_mark"
+    k_syscall(_): "petersburg_set_text" "sys_pb_set_text"
+    k_syscall(_): "petersburg_show" "sys_pb_show"
+    k_syscall(_): "petersburg_take_events" "sys_pb_take_events"
+    k_syscall(_): "launch" "sys_launch"
+    k_syscall(_): "terminal_open" "sys_terminal_open"
+    k_syscall(_): "terminal_run" "sys_terminal_run"
+    k_syscall(_): "terminal_close" "sys_terminal_close"
+    k_syscall(_): "gui" "sys_gui"
+]

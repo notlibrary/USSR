@@ -30,8 +30,9 @@ $include "net.su"
 $include "dhcp.su"
 $include "../murmansk/murmansk.su"
 $include "tls.su"
+$include "gui.su"
 
-global(_): mo_dev mo_base mo_files
+global(_): mo_dev mo_base mo_files mo_cwd
 
 mo_kb(r): bytes [
     str_trunc(kb): {bytes / 1024}
@@ -164,13 +165,15 @@ sys_file_exists(r): a [
     bl_exists(r): fs path
 ]
 
+# is_dir(n): path -> 1 for a directory, else 0, as the hosted ussr
 sys_is_dir(r): a [
-    set(r): false
+    set(r): 0
     mo_fs(fs):
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
-    bl_is_dir(r): fs path
+    bl_is_dir(d): fs path
+    if(_): d [ set(r): 1 ]
 ]
 
 sys_list_dir(r): a [
@@ -179,7 +182,21 @@ sys_list_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 "/"
-    bl_list(r): fs path
+    bl_list(names): fs path
+    typeof(tn): names
+    if(_): {tn != "vector"} [ return(r): r ]
+    # folders end with "/", as the hosted ussr gives them
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        concat(full): path "/" name
+        bl_is_dir(d): fs full
+        if(_): d [ concat(name): name "/" ]
+        push(_): r name
+        set(i): {i + 1}
+    ]
 ]
 
 sys_make_dir(r): a [
@@ -190,6 +207,71 @@ sys_make_dir(r): a [
     mo_arg(path): a 0 ""
     bl_mkdirs(r): fs path
     mo_sync(_): fs
+]
+
+# cd(r): path -> 0, or 1 when it is not a directory: the folder getcwd
+# answers (file commands take absolute paths; programs such as Tver
+# build theirs from getcwd)
+sys_cd(r): a [
+    set(r): 1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 "/"
+    typeof(tp): path
+    if(_): {tp != "string"} [ return(r): r ]
+    byte(b0): path 0
+    if(_): {b0 != 47} [
+        set(base): mo_cwd
+        if(_): {base = null} [ set(base): "/" ]
+        concat(path): base "/" path
+    ]
+    bl_clean(path): path
+    bl_is_dir(d): fs path
+    if(_): d [
+        set(mo_cwd): path
+        set(r): 0
+    ]
+]
+
+# getcwd(s): -> the folder cd went to, "/" at first
+sys_getcwd(r): a [
+    set(r): mo_cwd
+    if(_): {r = null} [ set(r): "/" ]
+]
+
+# copy_file(r): from to -> 0, or 1 when it failed (the hosted ussr's)
+sys_copy_file(r): a [
+    set(r): 1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(from): a 0 ""
+    mo_arg(to): a 1 ""
+    bl_exists(e): fs from
+    if(_): {e = false} [ return(r): r ]
+    bl_is_dir(d): fs from
+    if(_): d [ return(r): r ]
+    bl_read_bytes(bytes): fs from
+    typeof(tb): bytes
+    if(_): {tb != "vector"} [ return(r): r ]
+    bl_write_bytes(st): fs to bytes
+    mo_sync(_): fs
+    if(_): {st = 0} [ set(r): 0 ]
+]
+
+# remove_dir(r): path -> 0, or 1 (not an empty directory)
+sys_remove_dir(r): a [
+    set(r): 1
+    mo_fs(fs):
+    typeof(t): fs
+    if(_): {t != "btree"} [ return(r): r ]
+    mo_arg(path): a 0 ""
+    bl_is_dir(d): fs path
+    if(_): {d = false} [ return(r): r ]
+    bl_remove(st): fs path
+    mo_sync(_): fs
+    if(_): {st = 0} [ set(r): 0 ]
 ]
 
 sys_remove_file(r): a [
@@ -655,6 +737,10 @@ mo_run(r): name args [
         push(_): tries p
         concat(p): "/bin/" name ".su"
         push(_): tries p
+        # the boot image's programs: "russia" is the shell, not russia.su
+        # run by itself
+        concat(p): "/boot/" name ".ru"
+        push(_): tries p
         concat(p): "/src/ussr/src/" name "/" name ".su"
         push(_): tries p
     ]
@@ -694,7 +780,11 @@ mo_run(r): name args [
         typeof(tb): bytes
         if(_): {tb = "vector"} [
             murmansk_text(fwkeep):
+            # its windows are its own (gui.su)
+            set(depth): {gui_depth + 1}
+            gui_enter(_): depth
             k_exec_bytes(r): bytes args
+            gui_leave(_): depth
             # what the program allocated is given back: its sockets too,
             # and the firewall's rules, kept as text across it
             net_reset(_):
@@ -736,6 +826,8 @@ sys_help(r): a [
     print(_): "  net(_): ping(n): host   the network card and address; ICMP echo"
     print(_): "  fw(s): [rule|delete N|policy in|out allow|deny|save|load]  Murmansk, the firewall"
     print(_): "  socket_tcp bind listen accept recv send close connect, wait_readable"
+    print(_): "  run(_): \"kremlin\"      the desktop; Petersburg windows (gui.su), gui(s): [WxH]"
+    print(_): "  launch(r): prog [params]  terminal_open(t): canvas  terminal_run(st): t [prog]"
     print(_): "  reboot(_): halt(_):     restart or stop the machine (Ctrl-D halts too)"
 ]
 
@@ -762,6 +854,10 @@ mo_syscalls(r): [
     k_syscall(_): "write_file" "sys_write_file"
     k_syscall(_): "close_file" "sys_close_file"
     k_syscall(_): "rename_path" "sys_rename_path"
+    k_syscall(_): "copy_file" "sys_copy_file"
+    k_syscall(_): "cd" "sys_cd"
+    k_syscall(_): "getcwd" "sys_getcwd"
+    k_syscall(_): "remove_dir" "sys_remove_dir"
     k_syscall(_): "localtime" "sys_localtime"
     k_syscall(_): "bread" "sys_bread"
     k_syscall(_): "bwrite" "sys_bwrite"
@@ -770,6 +866,26 @@ mo_syscalls(r): [
     k_syscall(_): "c_load" "sys_c_load"
     tls_syscalls(_):
     net_syscalls(_):
+    gui_syscalls(_):
+]
+
+# true when a key comes within ticks (100 a second); it is taken
+mo_key_within(r): ticks [
+    set(r): false
+    k_ticks(now):
+    set(until): {now + ticks}
+    while(_): {now < until} [
+        terminal_key_ready(k):
+        if(_): k [
+            terminal_raw(_):
+            terminal_getch(_):
+            terminal_sane(_):
+            set(r): true
+            return(r): r
+        ]
+        sleep(_): 20
+        k_ticks(now):
+    ]
 ]
 
 init(ret): arg_cnt arg_vec [
@@ -830,6 +946,15 @@ init(ret): arg_cnt arg_vec [
         tls_start(tlsok): root
         if(_): tlsok [ print(_): "tls:     BearSSL from /lib/tls.so" ]
         else(_): [ print(_): "tls:     none (no /lib/tls.so)" ]
+        gui_start(guiok): root
+        if(_): guiok [
+            str_from_int(gw): gui_width
+            str_from_int(gh): gui_height
+            concat(line): "gui:     Petersburg from /lib/gui.so, " gw "x" gh
+            if(_): gui_desktop [ concat(line): line ", the desktop at boot" ]
+            print(_): line
+        ]
+        else(_): [ print(_): "gui:     none (no /lib/gui.so)" ]
         bl_read_text(host): root "/etc/hostname"
         typeof(th): host
         if(_): {th = "string"} [
@@ -838,6 +963,13 @@ init(ret): arg_cnt arg_vec [
         ]
         # the installer copies from here
         setenv(_): "USSR_ROOT" mo_dev
+        # what programs look for: the system's name (Windows says
+        # Windows_NT here), the home folder, the USSR source
+        setenv(_): "OS" "Moscow"
+        getenv(home): "HOME"
+        if(_): {home = null} [ setenv(_): "HOME" "/home" ]
+        bl_is_dir(hassrc): root "/src/ussr/src"
+        if(_): hassrc [ setenv(_): "USSR_HOME" "/src/ussr" ]
         str_from_int(sb): mo_base
         setenv(_): "USSR_ROOT_SECTOR" sb
         bl_read_text(motd): root "/etc/motd"
@@ -849,8 +981,21 @@ init(ret): arg_cnt arg_vec [
     ]
     btree(mo_files):
     btput(_): mo_files "next" 3
+    set(mo_cwd): "/"
     mo_syscalls(_):
     set(ret): 0
+    # an installed system starts with the desktop, the shell after it;
+    # a key within 3 seconds (the keyboard or the serial line) skips it
+    if(_): {gui_desktop && gui_lib != null} [
+        print(_): "moscow: the desktop, Kremlin, in 3 seconds (a key: the shell)"
+        mo_key_within(skip): 300
+        if(_): skip [ print(_): "moscow: no desktop" ]
+        else(_): [
+            print(_): "moscow: starting the desktop, Kremlin"
+            vec(noargs): ""
+            mo_run(_): "kremlin" noargs
+        ]
+    ]
     set(go): true
     while(_): go [
         print(_): "moscow: starting russia.ru"

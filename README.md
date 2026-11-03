@@ -6,7 +6,7 @@
 
 # USSR Unified Shell Script REPL
 
-![Moscow, the USSR amd64 kernel, booting in QEMU and running print(_): "Hello, world!"](docs/images/moscow.gif)
+![Kremlin, the USSR desktop, on Moscow: Mbltishi, the terminal, runs the USSR shell, which prints hello world](docs/images/kremlin.gif)
 
 Programming Language with unique grammar resembling TCL and Conventional Commits
 Designed by me coded with ChatGPT after accidental prompt
@@ -78,7 +78,8 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - ryazan.su - secure socket library: TLS and HTTPS on Schannel or OpenSSL (working: `src/ryazan`; ukraine.su serves HTTPS and `prompt(_):` reaches AI providers through it)
 - siberia.su - GUI spreadsheet: formulas, flat ODF (.fods) and CSV (working: `src/siberia`)
 - novosibirsk.su - GUI document editor with system fonts, split from Siberia: flat ODF text (.fodt) and .txt (working: `src/novosibirsk`)
-- moscow.su - amd64 kernel: a NASM two-stage boot loader starts a NASM USSR runtime (a `.ru` VM on bare metal) that runs moscow.ru, which mounts a Belarus root file system and runs russia.su (the self-hosted interpreter) as its shell with kernel commands like ls(_):, cat(_):, run(_): and install(_):; a terminal console (raw keys, ANSI on VGA) that runs the Mbl editor from its source; an e1000 driver and its own TCP/IP stack (DHCP, ARP, ICMP, TCP) behind the Murmansk firewall that serve Novgorod over HTTP and, with BearSSL loaded as a C library, HTTPS; boots from the Belarus install disk, tested in QEMU (working: `src/moscow`)
+- Mbltishi.su - the desktop's terminal: the USSR shell in a Petersburg window on Moscow, started from Kremlin (working: `src/Mbltishi`)
+- moscow.su - amd64 kernel: a NASM two-stage boot loader starts a NASM USSR runtime (a `.ru` VM on bare metal) that runs moscow.ru, which mounts a Belarus root file system and runs russia.su (the self-hosted interpreter) as its shell with kernel commands like ls(_):, cat(_):, run(_): and install(_):; a terminal console (raw keys, ANSI on VGA) that runs the Mbl editor from its source; an e1000 driver and its own TCP/IP stack (DHCP, ARP, ICMP, TCP) behind the Murmansk firewall that serve Novgorod over HTTP and, with BearSSL loaded as a C library, HTTPS; windows: Petersburg in `/lib/gui.so` on a software OpenGL and a GLFW of its own on the VGA framebuffer, so Kremlin, Mbltishi and Tver run on it, and an installed system boots into the desktop; boots from the Belarus install disk, tested in QEMU (working: `src/moscow`)
 - belarus.su - the USSR file system: inodes whose block maps are B+ trees from file block index to disk LBA, directories as files of entries; mkfs, ls, put, cat, fsck on disks and images, and Moscow's root (working: `src/belarus`)
 - murmansk.su - the firewall of Moscow's network stack: ordered allow/deny rules and policies, stateful, rules in /etc/murmansk.rules, `fw(_):` (working: `src/murmansk`)
 - install.su - the USSR installer: `install(_):` in Moscow asks about the disk and partitions, makes a Belarus partition with Stalin and copies USSR onto a virtual disk that then boots (working: `src/moscow/install.su`)
@@ -180,6 +181,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - ural.su - USSR package manager
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
 - Mbl.su - vi-like console text editor
+- Mbltishi.su - terminal window of the desktop (on Moscow)
 - tver.su - GUI two-panel file manager
 - tula.su - GUI 2D CAD with DXF
 - klin.su - GUI calculator: casual, scientific and programmer modes
