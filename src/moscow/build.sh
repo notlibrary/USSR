@@ -26,6 +26,11 @@ USSR=${1:-}
 if [ -z "$USSR" ]; then
     if [ -x "$root/ussr" ]; then USSR=$root/ussr; else USSR=$root/ussr.exe; fi
 fi
+# the steps below run in other folders: a relative path stays good
+case "$USSR" in
+    /*|[A-Za-z]:*) ;;
+    */*) USSR=$(pwd)/$USSR ;;
+esac
 NASM=${NASM:-nasm}
 if ! command -v "$NASM" >/dev/null 2>&1; then
     for n in "$LOCALAPPDATA/bin/NASM/nasm.exe" "/c/Program Files/NASM/nasm.exe"; do
