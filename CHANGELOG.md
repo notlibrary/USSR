@@ -1,6 +1,6 @@
 # USSR programming language CHANGELOG
 
-## [0.4.9] - 2026-11-03
+## [0.4.9] - 2026-11-04
 
 The second wave of the project is finished: every subproject listed in
 the README has code, and with usa, the C compiler, USSR is complete.

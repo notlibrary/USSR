@@ -4,10 +4,9 @@ name: CI
 # a debug build (no optimisation, so it compiles fast) and
 # tests/run_default.sh, the main suites with the ussr binary only.
 #
-# Everything else runs in release.yml when a tag is pushed: release builds
-# on Linux and Windows, tests/run_all.sh with the russia.su parity pass,
-# the GUI tests and the Ryazan TLS loopback. Run that set by hand with
-# "sh tests/run_all.sh" before tagging.
+# Everything else runs in run-all.yml, started by hand before tagging: both
+# platforms, tests/run_all.sh with the russia.su parity pass, the GUI tests,
+# the Ryazan TLS loopback and Moscow in QEMU.
 
 on:
   push:

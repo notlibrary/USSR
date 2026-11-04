@@ -7,14 +7,11 @@ on:
 
 env:
   APP_NAME: ussr-win-bin-amd64
-  # The GLFW release the Windows build links and ships (same as ci.yml)
+  # The GLFW release the Windows build links and ships (same as run-all.yml)
   GLFW_VERSION: 3.5.1
   # win_bison and win_flex for the Windows build (lexxmark/winflexbison)
   WINFLEXBISON_VERSION: 2.5.25
   WINFLEXBISON_SHA256: 8D324B62BE33604B2C45AD1DD34AB93D722534448F55A16CA7292DE32B6AC135
-  # Seconds one russia.su run may take before it counts as hung (the
-  # russia.su pass of tests/run_all.sh interprets each test inside ussr).
-  USSR_RUSSIA_TIMEOUT: "300"
 
 jobs:
   create-release:
@@ -39,7 +36,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      # Test sources and expectations are LF; keep them that way (as ci.yml).
+      # Sources are LF; keep them that way.
       - name: Keep LF line endings
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
@@ -126,20 +123,6 @@ jobs:
           if (-not (Test-Path $glfwDll)) { throw "GLFW runtime DLL not found at $glfwDll" }
           Copy-Item $glfwDll .\glfw3.dll -Force
 
-      # The full test set (pull requests run only tests/run_default.sh):
-      # ussr and the russia.su parity pass. The GUI tests run on Linux.
-      - name: Test on Windows (all, without GUI)
-        if: runner.os == 'Windows'
-        shell: bash
-        env:
-          USSR_SKIP_GUI: "1"
-        run: sh tests/run_all.sh ./ussr.exe
-
-      - name: Ryazan TLS loopback (Schannel)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: timeout 120 ./ussr.exe tests/ryazan_loopback.su
-
       - name: Package for Windows
         if: runner.os == 'Windows'
         shell: powershell
@@ -170,14 +153,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flex bison autoconf automake libtool \
             cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev \
-            libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth
+            libglfw3-dev libgl1-mesa-dev nasm clang lld
 
-      - name: Build and test Ural
+      - name: Build Ural
         if: runner.os != 'Windows'
         run: |
           cmake -S src/ural -B build/ural -DURAL_STATIC_DEPS=OFF
           cmake --build build/ural --parallel
-          ctest --test-dir build/ural --output-on-failure
 
       # ussr-ubuntu.mk runs bison and flex itself; PETERSBURG_BUNDLE=1 fails
       # without GLFW and ships libglfw.so.3 in lib/ next to ussr.
@@ -186,18 +168,27 @@ jobs:
         shell: bash
         run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 RYAZAN_REQUIRE_TLS=1 ussr
 
-      - name: Ryazan TLS loopback (OpenSSL)
+      # The Moscow install disk, USSR049.img for the tag 0.4.9. build.sh goes
+      # on without a C library it cannot build; a release does not.
+      - name: Build the Moscow install disk
         if: runner.os != 'Windows'
-        run: timeout 120 ./ussr tests/ryazan_loopback.su
-
-      # The full test set: ussr, the russia.su parity pass and the GUI tests
-      # on a virtual display.
-      - name: Test on Linux (all, GUI on a virtual display)
-        if: runner.os != 'Windows'
+        id: moscow
         shell: bash
-        env:
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" sh tests/run_all.sh ./ussr
+        run: |
+          sh src/moscow/build.sh ./ussr
+          for lib in ctest gui tls; do
+            test -f "build/moscow/lib/$lib.so" || { echo "no /lib/$lib.so on the disk" >&2; exit 1; }
+          done
+          image="USSR${GITHUB_REF_NAME//./}.img"
+          cp build/moscow/ussr.img "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the Moscow install disk to Release
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.PAT8 }}
+          files: ${{ steps.moscow.outputs.image }}
 
       - name: Package for Linux
         if: runner.os != 'Windows'

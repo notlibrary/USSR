@@ -16,6 +16,7 @@ Designed by me coded with ChatGPT after accidental prompt
 I share 0.1 version with `hello.su` first program in it
 
 Perhaps it evolves fast to something big No promises or insight unfortunately
+It's 3 in 1 now actually cross-platform shell + widget library programming language + scripts packages and OS 
 
 .su file extension means "script user" not that you think
 
