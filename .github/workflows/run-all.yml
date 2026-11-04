@@ -1,0 +1,146 @@
+name: Run All Tests
+
+# Every automated test, started by hand from the Actions tab before tagging;
+# release.yml builds and uploads without running them:
+#   - Linux: Ural's tests, the Ryazan TLS loopback, tests/run_all.sh with the
+#     russia.su parity pass and the GUI tests on a virtual display
+#   - Windows: the Ryazan TLS loopback, tests/run_all.sh without the GUI tests
+#   - Moscow: the install disk built as a release builds it, then
+#     tools/qemu_test.py, the kernel in QEMU
+
+on:
+  workflow_dispatch:
+
+env:
+  # The GLFW release the Windows build links (same as release.yml)
+  GLFW_VERSION: 3.5.1
+  # win_bison and win_flex for the Windows build (lexxmark/winflexbison)
+  WINFLEXBISON_VERSION: 2.5.25
+  WINFLEXBISON_SHA256: 8D324B62BE33604B2C45AD1DD34AB93D722534448F55A16CA7292DE32B6AC135
+  # Seconds one russia.su run may take before it counts as hung (the
+  # russia.su pass of tests/run_all.sh interprets each test inside ussr).
+  USSR_RUSSIA_TIMEOUT: "300"
+
+jobs:
+  linux:
+    name: Linux (all, GUI on a virtual display)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison \
+            cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev \
+            libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth
+
+      - name: Build and test Ural
+        run: |
+          cmake -S src/ural -B build/ural -DURAL_STATIC_DEPS=OFF
+          cmake --build build/ural --parallel
+          ctest --test-dir build/ural --output-on-failure
+
+      - name: Build
+        run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 RYAZAN_REQUIRE_TLS=1 ussr
+
+      - name: Ryazan TLS loopback (OpenSSL)
+        run: timeout 120 ./ussr tests/ryazan_loopback.su
+
+      - name: Test (all, GUI on a virtual display)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" sh tests/run_all.sh ./ussr
+
+  windows:
+    name: Windows (all, without GUI)
+    runs-on: windows-latest
+    steps:
+      # Test sources and expectations are LF; keep them that way.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      # winflexbison from its GitHub release, not Chocolatey: when the
+      # community feed times out, choco installs nothing and still succeeds,
+      # and the build fails later on a missing win_bison.
+      - name: Install Flex and Bison
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $PWD 'build\winflexbison'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $zip = Join-Path $dir 'winflexbison.zip'
+          $url = "https://github.com/lexxmark/winflexbison/releases/download/v$env:WINFLEXBISON_VERSION/win_flex_bison-$env:WINFLEXBISON_VERSION.zip"
+          for ($try = 1; $try -le 3; $try++) {
+            try { Invoke-WebRequest $url -OutFile $zip; break }
+            catch { if ($try -eq 3) { throw }; Start-Sleep -Seconds (10 * $try) }
+          }
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          if ($hash -ne $env:WINFLEXBISON_SHA256) { throw "winflexbison.zip SHA-256 $hash, expected $env:WINFLEXBISON_SHA256" }
+          Expand-Archive $zip -DestinationPath $dir -Force
+          & (Join-Path $dir 'win_bison.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'win_bison does not run' }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Initialize MSVC Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install GLFW
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          $glfwArchive = Join-Path $PWD "build\glfw-$env:GLFW_VERSION.bin.WIN64.zip"
+          Invoke-WebRequest "https://github.com/glfw/glfw/releases/download/$env:GLFW_VERSION/glfw-$env:GLFW_VERSION.bin.WIN64.zip" -OutFile $glfwArchive
+          Expand-Archive $glfwArchive -DestinationPath build\glfw -Force
+
+      - name: Build
+        shell: powershell
+        run: |
+          win_bison -d -o src\parser.tab.c src\parser.y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          win_flex -o src\lexer.c src\lexer.l
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $glfwRoot = Join-Path $PWD "build\glfw\glfw-$env:GLFW_VERSION.bin.WIN64"
+          nmake /nologo /f Makefile.msc PREGENERATED=1 GLFW_DIR=$glfwRoot ussr.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $glfwDll = Join-Path $glfwRoot 'lib-vc2022\glfw3.dll'
+          if (-not (Test-Path $glfwDll)) { throw "GLFW runtime DLL not found at $glfwDll" }
+          Copy-Item $glfwDll .\glfw3.dll -Force
+
+      - name: Ryazan TLS loopback (Schannel)
+        shell: bash
+        run: timeout 120 ./ussr.exe tests/ryazan_loopback.su
+
+      - name: Test (all, without GUI)
+        shell: bash
+        env:
+          USSR_SKIP_GUI: "1"
+        run: sh tests/run_all.sh ./ussr.exe
+
+  moscow:
+    name: Moscow (the install disk in QEMU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison nasm clang lld qemu-system-x86 qemu-utils
+
+      - name: Build
+        run: make -f ussr-ubuntu.mk -j"$(nproc)" ussr
+
+      - name: Build the install disk
+        run: |
+          sh src/moscow/build.sh ./ussr
+          for lib in ctest gui tls; do
+            test -f "build/moscow/lib/$lib.so" || { echo "no /lib/$lib.so on the disk" >&2; exit 1; }
+          done
+
+      # QEMU's software CPU: what the timeouts in qemu_test.py are set for
+      - name: Test
+        run: python3 src/moscow/tools/qemu_test.py
