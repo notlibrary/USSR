@@ -1037,11 +1037,29 @@ Now we must do GUI windows support using this method of calling C libraries we u
 to call some OpenGL library GLFW or any other lib (GLes see https://github.com/eug/awesome-opengl) that fits purpose of doing GUI windows
 1. We must do GUI terminal for USSR shell called Mbltishi.su(xterm, Putty, Windows CMD terminal analog)
 2. Run kremlin desktop on moscow kernel then run Mbltishi terminal window from kremlin desktop 
-3. Make a GIF where USSR shell ran in Mbltishi terminal window on top of the kremlin desktop writes "hello world"
+3. Make a GIF where USSR shell ran in Mbltishi terminal window on top of the kremlin desktop and terminal writes "hello world"
+Put this gif on top of README second bottom gif stays vga as it is
 Screen resolution is 1024x768 1536x1024 or 1920x1080
-
+GUI is on by default on already installed system installer works in vga or serial console
 Additional bonus is to run tver on belarus fs on the same kremlin desktop
 
 This is the hard task
 
 Also fix the CHANGELOG.md move unreleased to 0.4.9 we are 0.4.8 still workng on 0.4.9
+
+Now moscow kernel MMU page directory memory allocation scheduler 
+and multi-tasking task switching time
+TLSF Two-Level Segregated Fit algorithm for in-process memory allocation
+memory pages and virtual memory for global functioning
+moscow scheduler can just repeat russia and USSR kqueque solution
+Thats all I know I hope it's enough
+
+Now let's prepare release
+We need 3 workflow files 
+1. CI that auto runs small check after push/pull
+2. Run all test which triggers on workflow dispatch
+3. Release which makes release build including USSR049.img artifact(total 7 released artifacts)
+So you need to drop run all on release workflow
+4. Manual version bump workflow 
+1,4 is ok 2,3 needs attention
+Do it and we build 0.4.9
