@@ -232,6 +232,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - ussr/ussr.exe - the USSR programming language and shell
 - russia.su - bootstrapped USSR interpreter, written in USSR
 - moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell on a Belarus root (`sh src/moscow/build.sh`)
+- lenin.su - the USSR brain center neuroslop enrichment agent
 - ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
 - belarus.su - the USSR file system: per-file B+ tree block maps
