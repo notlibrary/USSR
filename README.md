@@ -213,6 +213,9 @@ Take it or leave it(or push MOAR if you got it too)
 If you are fine with the idea of refining and enrichment(or even researching) 
 mass produced neuroslopware bring your model and get in too
 
+Personally I believe the mass produced enriched refined neuroslop is better than classical software
+Cheaper faster less bugs per lines less requirement for programmer etc..
+
 Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
 P.S. СССР Средство Создания Совершенных Разработок
