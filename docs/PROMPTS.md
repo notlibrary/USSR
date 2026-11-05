@@ -1065,3 +1065,15 @@ So you need to drop run all on release workflow
 Do it and we build 0.4.9
 
 I want to run USSR and ural using Moscow kernel
+
+New idea neuroslop code enrichment and refining AI agent Lenin
+The brain center of the USSR
+User gives prompt centrifuge models API keys and Optimization criteria(speed,size) and working dir and generation cycles repeat count 
+User gets best possible optimal coding solution
+First it refines user prompt to precisely reflect things in reality
+then it gives prompt to few "centrifuge" models from different developers
+which works few times then extracts best highest quality enriched answer which is better
+than the classic software Practice what you preach
+It's now one of 3 main tracks of the project first one is ROUND stack forum
+second one is Kremlin GUI desktop(and apps)+USSR shell third one is Lenin neuroslop code enrichment and refining AI agent 
+with underlying Moscow OS kernel Make a separate section in README.md explaining this

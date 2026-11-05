@@ -16,7 +16,7 @@ Designed by me coded with ChatGPT after accidental prompt
 I share 0.1 version with `hello.su` first program in it
 
 Perhaps it evolves fast to something big No promises or insight unfortunately
-It's 3 in 1 now actually cross-platform shell + widget library programming language + scripts packages and OS 
+It's 3 in 1 now actually cross-platform shell + widget library programming language + scripts packages and OS + coding agent 
 
 .su file extension means "script user" not that you think
 
@@ -215,8 +215,10 @@ mass produced neuroslopware bring your model and get in too
 
 Personally I believe the mass produced enriched refined neuroslop is better than classical software
 Cheaper faster less bugs per lines less requirement for programmer etc..
-By classical software I mean a guy who sits 25-50 years in row improving some open source component
+By classical software I mean a guy who sits 25-50 years in room in row improving some open source component
 with end goal to get monopoly/dictatorship on it even it's technically stay open source
+So in reality it needs 10.000 tons of highly enriched neuroslop not the code from eg. Linus Torvalds
+Bill Gates or Richard Hipp
 
 Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
