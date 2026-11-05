@@ -1,0 +1,781 @@
+# linux.su - the Linux system calls of Moscow that need the kernel: files,
+# directories and the console, for the programs native.inc runs. The
+# runtime's gate answers memory, time and the like itself and calls
+# __linux for the rest: sys_linux(r): [number, six arguments], all integers,
+# gives what the program's rax gets: a value, or -errno.
+#
+# Each program run (k_owner) has a table in lx_fds: its open descriptors by
+# number and its "cwd". An open file holds its text and goes onto the disk
+# when it is last closed or the program ends, as open_file's handles do.
+
+global(_): lx_fds
+
+lx_init(r): [
+    set(r): 0
+    btree(lx_fds):
+]
+
+lx_con(r): [
+    btree(r):
+    btput(_): r "kind" "con"
+    btput(_): r "buf" ""
+    btput(_): r "refs" 1
+]
+
+# the running program's table, made with the console on 0, 1 and 2
+lx_table(r): [
+    k_owner(own):
+    bthas(has): lx_fds own
+    if(_): has [
+        btget(r): lx_fds own
+        return(r): r
+    ]
+    btree(r):
+    lx_con(c):
+    btput(_): c "refs" 3
+    btput(_): r 0 c
+    btput(_): r 1 c
+    btput(_): r 2 c
+    set(cwd): mo_cwd
+    if(_): {cwd = null} [ set(cwd): "/" ]
+    btput(_): r "cwd" cwd
+    btput(_): lx_fds own r
+]
+
+# the program's path, absolute and clean
+lx_path(r): t path [
+    set(r): path
+    set(rel): true
+    len(n): path
+    if(_): {n > 0} [
+        byte(b0): path 0
+        set(rel): {b0 != 47}
+    ]
+    if(_): rel [
+        btget(cwd): t "cwd"
+        concat(r): cwd "/" path
+    ]
+    bl_clean(r): r
+]
+
+# n zero bytes, as text
+lx_zeros(r): n [
+    set(r): ""
+    if(_): {n <= 0} [ return(r): r ]
+    vec(v): ""
+    set(i): 0
+    while(_): {i < n} [
+        push(_): v 0
+        set(i): {i + 1}
+    ]
+    bytes_text(r): v
+]
+
+# the lowest free descriptor from low
+lx_free_fd(r): t low [
+    set(r): low
+    bthas(has): t r
+    while(_): has [
+        set(r): {r + 1}
+        bthas(has): t r
+    ]
+]
+
+# an open file written to goes onto the disk: 0, or -errno
+lx_flush(r): f [
+    set(r): 0
+    btget(kind): f "kind"
+    if(_): {kind != "file"} [ return(r): r ]
+    btget(changed): f "changed"
+    if(_): {changed = false} [ return(r): r ]
+    mo_fs(fs):
+    typeof(tfs): fs
+    if(_): {tfs != "btree"} [
+        set(r): -5
+        return(r): r
+    ]
+    btget(path): f "path"
+    btget(text): f "text"
+    bl_write_text(st): fs path text
+    if(_): {st < 0} [
+        set(r): -28
+        return(r): r
+    ]
+    mo_sync(_): fs
+    btput(_): f "changed" false
+]
+
+lx_close_entry(r): f [
+    set(r): 0
+    btget(refs): f "refs"
+    btput(_): f "refs" {refs - 1}
+    if(_): {refs <= 1} [ lx_flush(r): f ]
+]
+
+# the end of a program run of task id at depth or deeper, or of the task:
+# what it left open goes onto the disk
+lx_drop(r): id depth [
+    set(r): 0
+    btkeys(ks): lx_fds
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(own): ks i
+        if(_): {own >> 6 = id && own % 64 >= depth} [
+            btget(t): lx_fds own
+            btkeys(fds): t
+            len(nf): fds
+            set(j): 0
+            while(_): {j < nf} [
+                at(fd): fds j
+                typeof(tk): fd
+                if(_): {tk = "integer"} [
+                    btget(f): t fd
+                    lx_close_entry(_): f
+                ]
+                set(j): {j + 1}
+            ]
+            btdel(_): lx_fds own
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- open
+
+lx_open(r): t path flags [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    if(_): {p = ""} [
+        set(r): -2
+        return(r): r
+    ]
+    lx_path(full): t p
+    btree(f):
+    btput(_): f "refs" 1
+    btput(_): f "pos" 0
+    btput(_): f "path" full
+    btput(_): f "flags" flags
+    if(_): {full = "/dev/null"} [
+        btput(_): f "kind" "null"
+        lx_free_fd(r): t 3
+        btput(_): t r f
+        return(r): r
+    ]
+    mo_fs(fs):
+    typeof(tfs): fs
+    if(_): {tfs != "btree"} [
+        set(r): -5
+        return(r): r
+    ]
+    set(writes): {flags % 4 != 0}
+    set(create): {((flags >> 6) & 1) = 1}
+    set(excl): {((flags >> 7) & 1) = 1}
+    set(trunc): {((flags >> 9) & 1) = 1}
+    set(append): {((flags >> 10) & 1) = 1}
+    set(wantdir): {((flags >> 16) & 1) = 1}
+    bl_exists(e): fs full
+    if(_): e [
+        if(_): {create && excl} [
+            set(r): -17
+            return(r): r
+        ]
+        bl_is_dir(d): fs full
+        if(_): d [
+            if(_): writes [
+                set(r): -21
+                return(r): r
+            ]
+            bl_list(names): fs full
+            btput(_): f "kind" "dir"
+            btput(_): f "names" names
+            lx_free_fd(r): t 3
+            btput(_): t r f
+            return(r): r
+        ]
+        if(_): wantdir [
+            set(r): -20
+            return(r): r
+        ]
+        set(text): ""
+        if(_): {trunc = false} [ bl_read_text(text): fs full ]
+    ]
+    else(_): [
+        if(_): {create = false} [
+            set(r): -2
+            return(r): r
+        ]
+        bl_parent(up): full
+        bl_is_dir(d): fs up
+        if(_): {d = false} [
+            set(r): -2
+            return(r): r
+        ]
+        # it is there from now on, for stat and the next open
+        set(text): ""
+        bl_write_text(st): fs full ""
+        if(_): {st < 0} [
+            set(r): -28
+            return(r): r
+        ]
+        mo_sync(_): fs
+    ]
+    btput(_): f "kind" "file"
+    btput(_): f "text" text
+    btput(_): f "write" writes
+    btput(_): f "append" append
+    btput(_): f "changed" {writes && trunc}
+    lx_free_fd(r): t 3
+    btput(_): t r f
+]
+
+# --- read and write
+
+lx_read(r): t fd buf n [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind = "con"} [
+        btget(line): f "buf"
+        len(ln): line
+        if(_): {ln = 0} [
+            k_getline(line):
+            k_line_eof(eof):
+            if(_): eof [
+                set(r): 0
+                return(r): r
+            ]
+            concat(line): line "\n"
+        ]
+        k_uput(r): buf line 0 n
+        if(_): {r > 0} [
+            len(ln): line
+            slice(rest): line r {ln - r}
+            btput(_): f "buf" rest
+        ]
+        return(r): r
+    ]
+    if(_): {kind = "null"} [
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {kind = "dir"} [
+        set(r): -21
+        return(r): r
+    ]
+    btget(flags): f "flags"
+    if(_): {flags % 4 = 1} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(text): f "text"
+    btget(pos): f "pos"
+    k_uput(r): buf text pos n
+    if(_): {r > 0} [ btput(_): f "pos" {pos + r} ]
+]
+
+lx_write(r): t fd buf n [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind = "con"} [
+        k_ucon(r): buf n
+        return(r): r
+    ]
+    if(_): {kind = "null"} [
+        set(r): n
+        return(r): r
+    ]
+    if(_): {kind = "dir"} [
+        set(r): -21
+        return(r): r
+    ]
+    btget(wr): f "write"
+    if(_): {wr = false} [
+        set(r): -9
+        return(r): r
+    ]
+    k_ustr(data): buf n
+    if(_): {data = null} [
+        set(r): -14
+        return(r): r
+    ]
+    btget(text): f "text"
+    btget(pos): f "pos"
+    len(size): text
+    btget(append): f "append"
+    if(_): append [ set(pos): size ]
+    if(_): {pos >= size} [
+        # past the end: zeros up to it
+        lx_zeros(gap): {pos - size}
+        concat(text): text gap data
+    ]
+    else(_): [
+        slice(head): text 0 pos
+        set(after): {pos + n}
+        set(tail): ""
+        if(_): {after < size} [ slice(tail): text after {size - after} ]
+        concat(text): head data tail
+    ]
+    btput(_): f "text" text
+    btput(_): f "pos" {pos + n}
+    btput(_): f "changed" true
+    set(r): n
+]
+
+# readv and writev: iov is pairs of address and length
+lx_vector(r): t fd iov count writing [
+    set(r): 0
+    set(i): 0
+    while(_): {i < count} [
+        k_upeek(base): {iov + i * 16}
+        k_upeek(n): {iov + i * 16 + 8}
+        if(_): {base = null || n = null} [
+            set(r): -14
+            return(r): r
+        ]
+        if(_): {n > 0} [
+            if(_): writing [ lx_write(k): t fd base n ]
+            else(_): [ lx_read(k): t fd base n ]
+            if(_): {k < 0} [
+                if(_): {r = 0} [ set(r): k ]
+                return(r): r
+            ]
+            set(r): {r + k}
+            if(_): {k < n} [ return(r): r ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+lx_seek(r): t fd off whence [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind != "file"} [
+        set(r): -29
+        return(r): r
+    ]
+    btget(text): f "text"
+    btget(pos): f "pos"
+    len(size): text
+    set(r): -22
+    if(_): {whence = 0} [ set(r): off ]
+    elif(_): {whence = 1} [ set(r): {pos + off} ]
+    elif(_): {whence = 2} [ set(r): {size + off} ]
+    if(_): {r < 0} [
+        set(r): -22
+        return(r): r
+    ]
+    btput(_): f "pos" r
+]
+
+# --- stat
+
+# struct stat of x86-64: mode at 24, size at 48, the times at 72, 88, 104
+lx_put_stat(r): addr ino mode size mtime [
+    set(r): 0
+    set(i): 0
+    while(_): {i < 18} [
+        k_upoke(r): {addr + i * 8} 0 8
+        if(_): {r < 0} [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    k_upoke(_): {addr + 8} ino 8
+    k_upoke(_): {addr + 16} 1 8
+    k_upoke(_): {addr + 24} mode 4
+    k_upoke(_): {addr + 48} size 8
+    k_upoke(_): {addr + 56} 4096 8
+    k_upoke(_): {addr + 64} {(size + 511) >> 9} 8
+    k_upoke(_): {addr + 72} mtime 8
+    k_upoke(_): {addr + 88} mtime 8
+    k_upoke(_): {addr + 104} mtime 8
+]
+
+lx_stat(r): t path addr [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    if(_): {p = ""} [
+        set(r): -2
+        return(r): r
+    ]
+    lx_path(full): t p
+    if(_): {full = "/dev/null"} [
+        lx_put_stat(r): addr 1 8630 0 0
+        return(r): r
+    ]
+    mo_fs(fs):
+    typeof(tfs): fs
+    if(_): {tfs != "btree"} [
+        set(r): -5
+        return(r): r
+    ]
+    bl_get(rec): fs full
+    typeof(tr): rec
+    if(_): {tr != "vector"} [
+        set(r): -2
+        return(r): r
+    ]
+    at(ty): rec 0
+    at(size): rec 1
+    at(mtime): rec 2
+    at(ino): rec 3
+    set(mode): 33188
+    if(_): {ty = "d"} [ set(mode): 16877 ]
+    lx_put_stat(r): addr ino mode size mtime
+]
+
+lx_fstat(r): t fd addr [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind = "file"} [
+        btget(text): f "text"
+        len(size): text
+        lx_put_stat(r): addr {fd + 100} 33188 size 0
+    ]
+    elif(_): {kind = "dir"} [ lx_put_stat(r): addr {fd + 100} 16877 0 0 ]
+    else(_): [ lx_put_stat(r): addr {fd + 100} 8592 0 0 ]
+]
+
+# getdents64: records of ino, off, reclen, type and the name, as many as fit
+lx_getdents(r): t fd buf count [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind != "dir"} [
+        set(r): -20
+        return(r): r
+    ]
+    btget(names): f "names"
+    btget(pos): f "pos"
+    btget(path): f "path"
+    len(n): names
+    mo_fs(fs):
+    set(r): 0
+    while(_): {pos < n} [
+        at(name): names pos
+        len(ln): name
+        set(rec): {((ln + 27) >> 3) << 3}
+        if(_): {r + rec > count} [
+            if(_): {r = 0} [ set(r): -22 ]
+            btput(_): f "pos" pos
+            return(r): r
+        ]
+        concat(full): path "/" name
+        bl_is_dir(d): fs full
+        set(ty): 8
+        if(_): d [ set(ty): 4 ]
+        set(e): {buf + r}
+        k_upoke(st): e {pos + 1} 8
+        if(_): {st < 0} [
+            set(r): -14
+            return(r): r
+        ]
+        k_upoke(_): {e + 8} {pos + 1} 8
+        k_upoke(_): {e + 16} rec 2
+        k_upoke(_): {e + 18} ty 1
+        k_uput(_): {e + 19} name 0 ln
+        k_upoke(_): {e + 19 + ln} 0 1
+        set(r): {r + rec}
+        set(pos): {pos + 1}
+    ]
+    btput(_): f "pos" pos
+]
+
+# --- paths
+
+lx_mkdir(r): t path [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    lx_path(full): t p
+    mo_fs(fs):
+    bl_exists(e): fs full
+    if(_): e [
+        set(r): -17
+        return(r): r
+    ]
+    bl_parent(up): full
+    bl_is_dir(d): fs up
+    if(_): {d = false} [
+        set(r): -2
+        return(r): r
+    ]
+    bl_mkdir(st): fs full
+    mo_sync(_): fs
+    set(r): 0
+    if(_): {st < 0} [ set(r): -28 ]
+]
+
+# wantdir: rmdir, else unlink
+lx_remove(r): t path wantdir [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    lx_path(full): t p
+    mo_fs(fs):
+    bl_exists(e): fs full
+    if(_): {e = false} [
+        set(r): -2
+        return(r): r
+    ]
+    bl_is_dir(d): fs full
+    if(_): {d && wantdir = false} [
+        set(r): -21
+        return(r): r
+    ]
+    if(_): {d = false && wantdir} [
+        set(r): -20
+        return(r): r
+    ]
+    if(_): d [
+        bl_list(names): fs full
+        len(n): names
+        if(_): {n > 0} [
+            set(r): -39
+            return(r): r
+        ]
+    ]
+    bl_remove(st): fs full
+    mo_sync(_): fs
+    set(r): 0
+    if(_): {st != 0} [ set(r): -5 ]
+]
+
+lx_rename(r): t from to [
+    k_ustrz(a): from
+    k_ustrz(b): to
+    if(_): {a = null || b = null} [
+        set(r): -14
+        return(r): r
+    ]
+    lx_path(fa): t a
+    lx_path(fb): t b
+    mo_fs(fs):
+    bl_exists(e): fs fa
+    if(_): {e = false} [
+        set(r): -2
+        return(r): r
+    ]
+    # over a file that is there, as rename does
+    bl_exists(there): fs fb
+    if(_): there [
+        bl_is_dir(d): fs fb
+        if(_): d [
+            set(r): -21
+            return(r): r
+        ]
+        bl_remove(_): fs fb
+    ]
+    bl_rename(st): fs fa fb
+    mo_sync(_): fs
+    set(r): 0
+    if(_): {st != 0} [ set(r): -5 ]
+]
+
+lx_access(r): t path [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    if(_): {p = ""} [
+        set(r): -2
+        return(r): r
+    ]
+    lx_path(full): t p
+    set(r): 0
+    if(_): {full = "/dev/null"} [ return(r): r ]
+    mo_fs(fs):
+    bl_exists(e): fs full
+    if(_): {e = false} [ set(r): -2 ]
+]
+
+lx_getcwd(r): t buf n [
+    btget(cwd): t "cwd"
+    len(k): cwd
+    if(_): {k + 1 > n} [
+        set(r): -34
+        return(r): r
+    ]
+    k_uput(st): buf cwd 0 k
+    if(_): {st < 0} [
+        set(r): st
+        return(r): r
+    ]
+    k_upoke(_): {buf + k} 0 1
+    set(r): {k + 1}
+]
+
+lx_chdir(r): t path [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    lx_path(full): t p
+    mo_fs(fs):
+    bl_is_dir(d): fs full
+    set(r): -20
+    if(_): d [
+        btput(_): t "cwd" full
+        set(r): 0
+    ]
+]
+
+lx_dup(r): t fd low [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(refs): f "refs"
+    btput(_): f "refs" {refs + 1}
+    lx_free_fd(r): t low
+    btput(_): t r f
+]
+
+lx_dup2(r): t fd to [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    set(r): to
+    if(_): {fd = to} [ return(r): r ]
+    bthas(open): t to
+    if(_): open [
+        btget(old): t to
+        btdel(_): t to
+        lx_close_entry(_): old
+    ]
+    btget(f): t fd
+    btget(refs): f "refs"
+    btput(_): f "refs" {refs + 1}
+    btput(_): t to f
+]
+
+lx_close(r): t fd [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btdel(_): t fd
+    lx_close_entry(r): f
+]
+
+lx_truncate(r): t fd size [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    btget(wr): f "write"
+    if(_): {kind != "file" || wr = false} [
+        set(r): -22
+        return(r): r
+    ]
+    btget(text): f "text"
+    len(n): text
+    if(_): {size < n} [ slice(text): text 0 size ]
+    else(_): [
+        lx_zeros(gap): {size - n}
+        concat(text): text gap
+    ]
+    btput(_): f "text" text
+    btput(_): f "changed" true
+    set(r): 0
+]
+
+# __linux: [number, six arguments]
+sys_linux(r): v [
+    at(n): v 0
+    at(a): v 1
+    at(b): v 2
+    at(c): v 3
+    at(d): v 4
+    lx_table(t):
+    if(_): {n = 1} [ lx_write(r): t a b c ]
+    elif(_): {n = 0} [ lx_read(r): t a b c ]
+    elif(_): {n = 20} [ lx_vector(r): t a b c true ]
+    elif(_): {n = 19} [ lx_vector(r): t a b c false ]
+    elif(_): {n = 2} [ lx_open(r): t a b ]
+    elif(_): {n = 257} [ lx_open(r): t b c ]
+    elif(_): {n = 3} [ lx_close(r): t a ]
+    elif(_): {n = 8} [ lx_seek(r): t a b c ]
+    elif(_): {n = 4 || n = 6} [ lx_stat(r): t a b ]
+    elif(_): {n = 5} [ lx_fstat(r): t a b ]
+    elif(_): {n = 262} [
+        # newfstatat: AT_EMPTY_PATH is fstat
+        k_ustrz(p): b
+        if(_): {p = "" && ((d >> 12) & 1) = 1} [ lx_fstat(r): t a c ]
+        else(_): [ lx_stat(r): t b c ]
+    ]
+    elif(_): {n = 217} [ lx_getdents(r): t a b c ]
+    elif(_): {n = 21} [ lx_access(r): t a ]
+    elif(_): {n = 269} [ lx_access(r): t b ]
+    elif(_): {n = 79} [ lx_getcwd(r): t a b ]
+    elif(_): {n = 80} [ lx_chdir(r): t a ]
+    elif(_): {n = 83} [ lx_mkdir(r): t a ]
+    elif(_): {n = 258} [ lx_mkdir(r): t b ]
+    elif(_): {n = 84} [ lx_remove(r): t a true ]
+    elif(_): {n = 87} [ lx_remove(r): t a false ]
+    elif(_): {n = 263} [ lx_remove(r): t b {((c >> 9) & 1) = 1} ]
+    elif(_): {n = 82} [ lx_rename(r): t a b ]
+    elif(_): {n = 264} [ lx_rename(r): t b d ]
+    elif(_): {n = 32} [ lx_dup(r): t a 0 ]
+    elif(_): {n = 33} [ lx_dup2(r): t a b ]
+    elif(_): {n = 72} [
+        # fcntl: F_DUPFD and F_DUPFD_CLOEXEC; the flags are not kept
+        set(r): 0
+        if(_): {b = 0 || b = 1030} [ lx_dup(r): t a c ]
+    ]
+    elif(_): {n = 77} [ lx_truncate(r): t a b ]
+    elif(_): {n = 74 || n = 75} [
+        bthas(has): t a
+        set(r): -9
+        if(_): has [
+            btget(f): t a
+            lx_flush(r): f
+        ]
+    ]
+    elif(_): {n = 90 || n = 91 || n = 92 || n = 93 || n = 94 || n = 268} [ set(r): 0 ]
+    elif(_): {n = 89 || n = 267} [ set(r): -22 ]
+    else(_): [ set(r): -38 ]
+]

@@ -60,6 +60,7 @@ tv_areas:
 tv_scratch:     dq c_scratch_top
                 dq con_hook_write, con_hook_read, con_hook_size, con_hook_ctx
                 dq kcaller_pool
+                dq c3_ksp, native_on, n_fsbase, n_brk_start, n_brk, n_mmap, n_window
 task_var_end:
 TASK_VARS       equ (task_var_end - task_var_list) / 8
 TVI_POOL        equ (tv_pool - task_var_list) / 8
@@ -430,6 +431,13 @@ task_switch:
 .same_space:
         mov rax, rdi
         call vars_load
+        mov rax, [c3_ksp]
+        mov [tss + 4], rax
+        mov rax, [n_fsbase]
+        mov rdx, rax
+        shr rdx, 32
+        mov ecx, MSR_FS_BASE
+        wrmsr
         mov rsp, [rdi + TASK.rsp]
         pop r11
         pop r10
@@ -1095,6 +1103,14 @@ task_entry:
         mov qword [rbx + TASK.spawn_buf], 0
         mov rsi, r12
         mov rdx, [rbx + TASK.spawn_len]
+        cmp rdx, 4
+        jb .ru
+        cmp dword [r12], 0x464c457f
+        jne .ru
+        mov r8, r13
+        call native_run
+        jmp task_exit
+.ru:
         call rt_load
         test rax, rax
         jz .failed

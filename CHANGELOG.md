@@ -1,5 +1,20 @@
 # USSR programming language CHANGELOG
 
+## [Unreleased]
+
+### Added
+- Moscow runs Linux programs: a static PIE x86-64 ELF program runs unchanged
+  in ring 3, and the kernel answers its system calls (memory, time, files,
+  directories, the console). `build.sh` builds `ussr` against musl into
+  `/bin/ussr`, so `run(st): "ussr" "script.su"`, `ussr -c` and its REPL work
+  on Moscow. The timer preempts these programs, `limit` and `fg` apply, and
+  an exception ends the program (139), not the machine.
+
+### Fixed
+- Moscow kept a program run's sockets and TLS credentials after it ended: the
+  test of their owner divided with `/`, which gives a real. A killed Novgorod's
+  port can be listened on again; `qemu_test.py` now checks that.
+
 ## [0.4.9] - 2026-11-04
 
 The second wave of the project is finished: every subproject listed in

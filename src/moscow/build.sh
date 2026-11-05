@@ -164,6 +164,66 @@ if command -v "$CLANG" >/dev/null 2>&1 && command -v "$LLD" >/dev/null 2>&1; the
 else
     echo "build.sh: no clang and ld.lld: no C libraries in /lib" >&2
 fi
+# Linux programs for /bin (arch/amd64/native.inc): ussr and the test program,
+# static PIE against musl (https://musl.libc.org, MIT), fetched once into
+# build/moscow, checked against its SHA-256 and built with -fPIC: a distro's
+# libc.a may not be position independent. Needs a Linux host with gcc, flex
+# and bison; elsewhere what an earlier build left in build/moscow/native goes
+# on the disk, if anything.
+MUSL=musl-1.2.5
+MUSL_SHA256=a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4
+native=$out/native
+native_build() {
+    [ "$(uname -s)" = Linux ] || return 1
+    for t in gcc make flex bison curl; do
+        command -v "$t" >/dev/null 2>&1 || return 1
+    done
+    mkdir -p "$out/dl" "$native"
+    prefix=$native/musl
+    if [ ! -x "$prefix/bin/musl-gcc" ]; then
+        tgz=$out/dl/$MUSL.tar.gz
+        if [ ! -f "$tgz" ]; then
+            curl -fsSL --retry 3 -o "$tgz" "https://musl.libc.org/releases/$MUSL.tar.gz" || return 1
+        fi
+        sum=$(sha256sum "$tgz" | cut -d' ' -f1)
+        if [ "$sum" != "$MUSL_SHA256" ]; then
+            echo "build.sh: $MUSL.tar.gz has SHA-256 $sum, not $MUSL_SHA256" >&2
+            rm -f "$tgz"
+            return 1
+        fi
+        rm -rf "$native/musl-src"
+        mkdir -p "$native/musl-src"
+        tar -xzf "$tgz" -C "$native/musl-src" || return 1
+        (cd "$native/musl-src/$MUSL" &&
+            ./configure --prefix="$prefix" --syslibdir="$prefix/lib" --disable-shared \
+                CFLAGS="-fPIC -O2" >/dev/null &&
+            make -j"$(nproc)" >/dev/null 2>&1 && make install >/dev/null 2>&1) || return 1
+        # a gcc that links libatomic this way finds nothing it needs in it
+        ar rcs "$prefix/lib/libatomic_asneeded.a"
+    fi
+    musl=$prefix/bin/musl-gcc
+    lib=$prefix/lib
+    # the flags, not -static-pie: not every gcc takes that from musl's specs
+    pie="-nostartfiles -static -Wl,-pie,--no-dynamic-linker,-z,text $lib/rcrt1.o $lib/crti.o"
+    # a copy of the sources: the host build's objects share their names
+    rm -rf "$native/src"
+    mkdir -p "$native/src"
+    (cd "$root" && tar -cf - src/*.c src/*.h src/parser.y src/lexer.l ussr-ubuntu.mk configure.ac) |
+        tar -xf - -C "$native/src" || return 1
+    (cd "$native/src" && make -f ussr-ubuntu.mk -j"$(nproc)" CC="$musl" PETERSBURG_LIBS= RYAZAN_LIBS= \
+        CFLAGS="-std=c11 -O2 -fPIE -D_GNU_SOURCE -w" LDFLAGS="$pie" LDLIBS="$lib/crtn.o" ussr \
+        >"$native/ussr.log" 2>&1) || { tail -20 "$native/ussr.log" >&2; return 1; }
+    strip "$native/src/ussr" 2>/dev/null
+    cp "$native/src/ussr" "$native/ussr"
+    "$musl" -fPIE -O1 -w $pie -o "$native/moscow_native" "$root/tests/moscow_native.c" "$lib/crtn.o" || return 1
+}
+native_build || echo "build.sh: Linux programs not built here" >&2
+if [ -f "$native/ussr" ] && [ -f "$native/moscow_native" ]; then
+    belarus put "$dev" "$(hp "$native/ussr")" /bin/ussr
+    belarus put "$dev" "$(hp "$native/moscow_native")" /bin/moscow_native
+else
+    echo "build.sh: no /bin/ussr" >&2
+fi
 # the project: the files git tracks (every file in the tree when this is
 # no git checkout), never build products - objects, binaries, packages,
 # disk images - whichever way they got there

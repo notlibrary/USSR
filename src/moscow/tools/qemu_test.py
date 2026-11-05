@@ -101,7 +101,7 @@ CHECKS = [
     ("uptime(_):", r"up \d+ s"),
     # the shell keeps its history in $HOME/.ussr_history, HOME being /
     ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  lib\nd +\d+  src"),
-    ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n- +\d+  stalin\.ru"),
+    ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n(- +\d+  moscow_native\n)?- +\d+  stalin\.ru(\n- +\d+  ussr)?"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
     ('readfile(n): "/home/notes.txt"', r""),
@@ -374,6 +374,8 @@ def main():
                     help="no TLS client and HTTPS server")
     ap.add_argument("--no-tasks", action="store_true",
                     help="no programs as tasks side by side")
+    ap.add_argument("--no-native", action="store_true",
+                    help="no Linux programs in ring 3")
     ap.add_argument("--no-gui", action="store_true",
                     help="no Kremlin, Mbltishi and Tver on the framebuffer")
     ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
@@ -449,6 +451,8 @@ def main():
         secure(qemu, disk, args.port + 40, log, check)
     if not args.no_tasks:
         tasks(qemu, disk, args.port + 60, log, check)
+    if not args.no_native:
+        native(qemu, disk, args.port + 70, log, check)
     if not args.no_gui:
         gui(qemu, disk, work, args.port + 50, log, check)
     if not args.no_install:
@@ -845,6 +849,13 @@ def tasks(qemu, disk, port, log, check):
         except OSError:
             gone = True
         check("killed, its socket goes with it", gone, "still answered %r" % (status,))
+        serial.command('spawn(nv): "novgorod" "--http" "--host" "0.0.0.0" "--port" "8080" '
+                       '"--data" "/home/novgorod" "--static" "/src/ussr/src/novgorod/static" '
+                       '"--kvdb" "/home/novgorod/posts.kv"')
+        serial.read_until(b"listening", timeout=240)
+        status, headers, body = http(base + "/")
+        check("and its port is free: a new Novgorod listens on it", status == 200, repr(status))
+        say("kill(r): nv")
         got = say('ping(n): "10.0.2.2" 1', timeout=60)
         check("the network goes on", "reply from 10.0.2.2: seq 1" in got, got)
         # the kernel's collector: kernel calls that leave garbage
@@ -859,6 +870,103 @@ def tasks(qemu, disk, port, log, check):
         serial.read_until(b"system halted", timeout=20)
     except (TimeoutError, EOFError, OSError) as e:
         check("tasks conversation", False, str(e))
+    finally:
+        m.close()
+
+
+def native(qemu, disk, port, log, check):
+    """Linux programs: a static PIE ELF program runs in ring 3 and the kernel
+    answers its system calls. The test program goes through memory, time and
+    files; a bad pointer ends only it; the timer takes the CPU from one that
+    never waits; limit and Ctrl-C reach it. Then ussr itself, the same C as on
+    a host: a script, -c for a .ru that Moscow's VM runs, its REPL."""
+    m = Machine(qemu, [(disk, "raw")], port, log)
+    serial = m.serial
+
+    def say(line, timeout=120):
+        serial.command(line)
+        return clean(serial.output_to_prompt(timeout=timeout))
+
+    try:
+        serial.output_to_prompt(timeout=60)
+        say('file_exists(f): "/bin/ussr"')
+        if say("print(_): f") != "true":
+            print("SKIP no /bin/ussr: built on a Linux host (build.sh)")
+            return
+        before = free_kib(say("mem(_):"))
+        shell_before = shell_kib(say("tasks(_):"))
+        kv_before = kv_kib(say)
+        got = say('run(st): "/bin/moscow_native" "x"')
+        check("a Linux program runs: arguments, environment, malloc, mmap, SSE",
+              "native: 2 args, argv0 /bin/moscow_native, HOME=/home" in got
+              and "native: malloc 7" in got and "native: mmap 9" in got
+              and "native: real 20" in got and "native: clock ok" in got, got)
+        check("its files: write, read back, stat, a directory, an error",
+              "native: read back: written by a Linux program" in got
+              and "native: stat size 27, dir 0" in got and "native: /etc has motd: 1" in got
+              and "native: open of nothing: errno 2" in got
+              and "native: cwd /home/nd" in got, got)
+        got = say("print(_): st")
+        check("its exit status", got == "11", got)
+        got = say('cat(_): "/home/native.txt"')
+        check("what it wrote is on the disk for the kernel",
+              "written by a Linux program" in got, got)
+        after = free_kib(say("mem(_):"))
+        shell_after = shell_kib(say("tasks(_):"))
+        kv_after = kv_kib(say)
+        lost = before - after - (shell_after - shell_before) - (kv_after - kv_before)
+        check("its memory comes back (%d KiB unaccounted)" % lost, abs(lost) < 4096,
+              "free %d -> %d, the shell %d -> %d, kernel values %d -> %d KiB"
+              % (before, after, shell_before, shell_after, kv_before, kv_after))
+        serial.command('run(st): "/bin/moscow_native" "read"')
+        serial.read_until(b"native: cwd", timeout=120)
+        time.sleep(2)
+        serial.sock.sendall(b"typed here\r")
+        got = clean(serial.output_to_prompt(timeout=120))
+        check("it reads the console", "native: stdin: typed here" in got, got)
+        got = say('run(st): "/bin/moscow_native" "bad"')
+        got += "\n" + say("print(_): st")
+        check("a bad pointer ends only it: status 139",
+              "the program stopped: exception 14" in got and got.endswith("139"), got)
+        say('spawn(b): "/bin/moscow_native" "busy"')
+        time.sleep(4)
+        got = say('print(_): "the shell answers"', timeout=60)
+        # (what the program printed before its loop may come in between)
+        check("the timer takes the CPU from a program in ring 3",
+              got.endswith("the shell answers"), got)
+        serial.command("fg(st): b")
+        time.sleep(2)
+        serial.sock.sendall(bytes([3]))
+        got = clean(serial.output_to_prompt(timeout=60))
+        got += "\n" + say("print(_): st")
+        check("Ctrl-C ends it: 130", "^C" in got and got.endswith("130"), got)
+        say('spawn(g): "/bin/moscow_native" "grow"')
+        say("limit(_): g 16384")
+        got = say("wait(st): g", timeout=120) + "\n" + say("print(_): st")
+        check("over its memory limit it ends: status 1",
+              "went over its memory limit" in got and got.endswith("\n1"), got)
+        say('writefile(_): "/home/h.su" "print(_): \\"ussr on Moscow\\"\\nset(s): 0\\n'
+            'set(i): 0\\nwhile(_): {i < 1000} [\\n set(s): {s + i}\\n set(i): {i + 1}\\n]\\n'
+            'print(_): s\\n"')
+        got = say('run(st): "ussr" "/home/h.su"') + "\n" + say("print(_): st")
+        check("ussr runs a script", got == "ussr on Moscow\n499500\n0", got)
+        say('run(st): "ussr" "-c" "/home/h.su" "/home/h.ru"')
+        got = say('run(st): "/home/h.ru"')
+        check("ussr -c writes a program Moscow's VM runs",
+              got == "ussr on Moscow\n499500", got)
+        serial.command('run(st): "ussr"')
+        serial.read_until(b"ussr> ", timeout=120)
+        serial.sock.sendall(b'print(_): "in the repl"\r')
+        got = clean(serial.read_until(b"ussr> ", timeout=60))
+        check("ussr's REPL", "in the repl" in got, got)
+        serial.sock.sendall(bytes([4]))
+        serial.output_to_prompt(timeout=60)
+        got = say("print(_): st")
+        check("and Ctrl-D ends it", got == "0", got)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError, OSError) as e:
+        check("Linux programs conversation", False, str(e))
     finally:
         m.close()
 

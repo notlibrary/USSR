@@ -31,6 +31,7 @@ $include "dhcp.su"
 $include "../murmansk/murmansk.su"
 $include "tls.su"
 $include "gui.su"
+$include "linux.su"
 
 global(_): mo_dev mo_base mo_files mo_cwd
 
@@ -740,6 +741,9 @@ mo_find(r): name args [
         push(_): tries p
         concat(p): "/bin/" name ".su"
         push(_): tries p
+        # a Linux program
+        concat(p): "/bin/" name
+        push(_): tries p
         # the boot image's programs: "russia" is the shell, not russia.su
         # run by itself
         concat(p): "/boot/" name ".ru"
@@ -782,6 +786,26 @@ mo_find(r): name args [
         bl_read_bytes(bytes): fs path
         typeof(tb): bytes
         if(_): {tb = "vector"} [
+            # a Linux program has its path as argv[0]
+            len(nb): bytes
+            set(elf): false
+            if(_): {nb > 3} [
+                at(b0): bytes 0
+                at(b1): bytes 1
+                set(elf): {b0 = 127 && b1 = 69}
+            ]
+            if(_): elf [
+                vec(rargs): ""
+                push(_): rargs path
+                len(na): args
+                set(i): 0
+                while(_): {i < na} [
+                    at(x): args i
+                    push(_): rargs x
+                    set(i): {i + 1}
+                ]
+                set(args): rargs
+            ]
             vec(r): ""
             push(_): r path
             push(_): r args
@@ -806,6 +830,7 @@ mo_run(r): name args [
         net_drop(_): id depth
         tls_drop(_): id depth
         gui_drop(_): id depth
+        lx_drop(_): id depth
         return(r): r
     ]
     # not on the disk: the boot image has russia.ru and moscow.ru
@@ -829,6 +854,7 @@ mo_task_ended(r): a [
     net_drop(_): id 0
     tls_drop(_): id 0
     gui_drop(_): id 0
+    lx_drop(_): id 0
 ]
 
 # spawn(id): name [args ...] -> a task running the program next to the
@@ -1030,6 +1056,7 @@ mo_syscalls(r): [
     k_syscall(_): "prio" "sys_prio"
     k_syscall(_): "limit" "sys_limit"
     k_syscall(_): "__task_ended" "mo_task_ended"
+    k_syscall(_): "__linux" "sys_linux"
     k_syscall(_): "df" "sys_df"
     k_syscall(_): "fsck" "sys_fsck"
     k_syscall(_): "open_file" "sys_open_file"
@@ -1164,6 +1191,7 @@ init(ret): arg_cnt arg_vec [
         print(_): "root:    no Belarus file system on the disks; the boot image only"
     ]
     btree(mo_files):
+    lx_init(_):
     btput(_): mo_files "next" 3
     set(mo_cwd): "/"
     mo_syscalls(_):
@@ -1188,6 +1216,7 @@ init(ret): arg_cnt arg_vec [
         net_drop(_): 0 1
         tls_drop(_): 0 1
         gui_drop(_): 0 1
+        lx_drop(_): 0 1
         if(_): {status = 0} [ set(go): false ]
         else(_): [
             str_from_int(ss): status
