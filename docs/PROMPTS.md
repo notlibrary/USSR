@@ -1063,3 +1063,5 @@ So you need to drop run all on release workflow
 4. Manual version bump workflow 
 1,4 is ok 2,3 needs attention
 Do it and we build 0.4.9
+
+I want to run USSR and ural using Moscow kernel

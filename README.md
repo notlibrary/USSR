@@ -210,6 +210,8 @@ AI is like a plastic cheap ubiquitous thing that wins the entire world
 Enough sentiments neuroslop is just a feature of the epoch I've got literally Ural mountains of it 
 
 Take it or leave it(or push MOAR if you got it too)
+If you are fine with the idea of refining and enrichment(or even researching) 
+mass produced neuroslopware bring your model and get in too
 
 Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
