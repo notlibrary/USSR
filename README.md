@@ -87,6 +87,7 @@ Newer subprojects (each has a `box.uno` in `src/<name>/`; all of them have code 
 - stalin.su - partition editor: lists HDD/SSD/flash devices, edits GPT and MBR tables, recognises ext4, NTFS, UFS, FFS2 and Belarus (working: `src/stalin`)
 - usa.su - C compiler written in USSR: C99 in, `.ru` bytecode out, with its own C library; builds pikchr, lemon and tpm (working: `src/usa`)
 - sochi.su - Preferans for three by the Sochi rules, peer to peer over UDP with LAN discovery and chat (working: `src/sochi`)
+- lenin.su - the brain center: refines a prompt, spins it through a centrifuge of AI models, measures the answers with your test and extracts the best (working: `src/lenin`)
 
 Moscow, the amd64 kernel, booting in QEMU with russia.su as its shell:
 
@@ -167,6 +168,62 @@ and runs on the same VM as everything else:
 ussr src/usa/usa.su hello.c        # writes hello.ru
 ussr hello.ru
 ```
+
+## Lenin, the brain center of the USSR
+
+Lenin is the neuroslop code enrichment and refining AI agent (working:
+`src/lenin`, see [its README](src/lenin/README.md)).
+
+USSR itself is made by prompting an AI and refining the results with the next
+AI "centrifuge" by hand. Lenin is that process as a program. Practice what you
+preach: if enriched neuroslop is better than classical software then the
+enrichment has to be a tool and it has to show it.
+
+```bash
+ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
+     --criteria speed --test "python test.py {file}" --ext .py "what you want"
+```
+
+You give it:
+
+- the prompt
+- the centrifuge models, from different developers (the API keys stay in
+  environment variables, the file only names them)
+- the optimization criteria (speed, size)
+- the working directory
+- the generation cycles repeat count
+- a test that says whether an answer works, and if you have one a classic
+  solution to measure against
+
+You get the best of what the models gave, by your test:
+
+1. It refines the prompt so it precisely reflects things in reality
+2. It gives the refined prompt to the centrifuge models
+3. They work on it for the given number of cycles, each cycle seeing the best
+   answer so far and how it measured
+4. It runs every answer through your test and extracts the one that passes and
+   is best by your criteria
+
+What it does and does not show:
+
+- An answer that fails the test cannot win. That part is measured, not an
+  opinion of a model
+- Best means best by the test you wrote. With a weak test the winner is whatever
+  gets past it: given a canned answer `assert 2+3==5` to a task of printing a sum,
+  and a test that only looked at the exit status, Lenin picks it for its size.
+  Without a test the models only vote, and the report says nothing was run
+- With a baseline, the report says whether the winner beat that classic solution
+  on that one task
+- Whether this adds up to better than classical software is not shown yet. So far
+  Lenin has run against canned models only, to test Lenin itself. `src/lenin/examples/wordcount`
+  is the first benchmark, waiting for real models and real keys
+
+The project now has three main tracks, with the Moscow OS kernel underneath
+(Lenin runs on a hosted `ussr` for now: on Moscow it has no TLS to reach a model):
+
+1. The ROUND stack forum: Ryazan, Ukraine, Novgorod, Omsk and Dubna
+2. The Kremlin GUI desktop and its apps, with the USSR shell
+3. Lenin, the neuroslop code enrichment and refining AI agent
 
 ## The project is complete
 

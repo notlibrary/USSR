@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- Lenin (`src/lenin`), the agent that enriches and refines neuroslop code: it
+  refines a prompt, gives it to several models for a number of cycles, measures
+  every answer with your test (size, speed), extracts the best and reports, with
+  a baseline to compare against if you have one. Without a test the models vote
+  blind and the report says nothing was run. Keys stay in environment variables.
 - Moscow runs Linux programs: a static PIE x86-64 ELF program runs unchanged
   in ring 3, and the kernel answers its system calls (memory, time, files,
   directories, the console). `build.sh` builds `ussr` against musl into

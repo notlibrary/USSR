@@ -1,0 +1,5 @@
+# provider model KEY_ENV [url]: the key's environment variable, not the key;
+# - for no key. Different developers disagree in more useful ways.
+anthropic claude-opus-5-5 ANTHROPIC_API_KEY
+openai    gpt-x           OPENAI_API_KEY
+openai    llama3.2        -  http://localhost:11434/v1/chat/completions

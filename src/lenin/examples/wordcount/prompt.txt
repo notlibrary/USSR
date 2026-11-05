@@ -1,0 +1,6 @@
+Write a Python 3 script with no third-party modules. It reads all of standard
+input as UTF-8 and prints the 3 most frequent words, one per line, as the word,
+one space, its count. A word is a run of letters; case does not count, so print
+words in lower case. Equal counts go in alphabetical order. With fewer than 3
+words print what there is, and print nothing for none. It must be fast on input
+of several megabytes.
