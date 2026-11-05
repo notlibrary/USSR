@@ -9,8 +9,15 @@
   `/bin/ussr`, so `run(st): "ussr" "script.su"`, `ussr -c` and its REPL work
   on Moscow. The timer preempts these programs, `limit` and `fg` apply, and
   an exception ends the program (139), not the machine.
+- Ural runs on Moscow: `/bin/ural` is the same C with SQLite, curl, OpenSSL and
+  zlib linked in, and packs, searches, installs and uninstalls packages over
+  verified HTTPS. For it, Linux programs gain TCP and UDP sockets, name lookups
+  (`/etc/hosts`, `/etc/resolv.conf`), `poll`, pipes, `pread` and `pwrite`; the
+  disk gains Mozilla's root certificates in `/etc/ssl/certs.pem`.
 
 ### Fixed
+- Linux programs on Moscow got nothing when they read a file with a zero byte
+  in it, and `fstat` gave a different inode from `stat`.
 - Moscow kept a program run's sockets and TLS credentials after it ended: the
   test of their owner divided with `/`, which gives a real. A killed Novgorod's
   port can be listened on again; `qemu_test.py` now checks that.

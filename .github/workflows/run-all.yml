@@ -140,7 +140,9 @@ jobs:
           for lib in ctest gui tls; do
             test -f "build/moscow/lib/$lib.so" || { echo "no /lib/$lib.so on the disk" >&2; exit 1; }
           done
-          test -f build/moscow/native/ussr || { echo "no /bin/ussr on the disk" >&2; exit 1; }
+          for prog in ussr ural; do
+            test -f "build/moscow/native/$prog" || { echo "no /bin/$prog on the disk" >&2; exit 1; }
+          done
 
       # QEMU's software CPU: what the timeouts in qemu_test.py are set for
       - name: Test

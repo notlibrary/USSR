@@ -29,7 +29,8 @@ int main(int argc, char **argv)
     char *p;
     void *m;
     double d = 2.5;
-    int i, found = 0;
+    unsigned char blob[8];
+    int i, fd, found = 0;
 
     printf("native: %d args, argv0 %s, HOME=%s\n", argc, argv[0], getenv("HOME"));
     p = malloc(100000);
@@ -66,6 +67,20 @@ int main(int argc, char **argv)
             found = 1;
     closedir(dir);
     printf("native: /etc has motd: %d\n", found);
+    /* zero bytes, and a place in the file (SQLite reads and writes so) */
+    fd = open("/home/native.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    memset(blob, 0, sizeof blob);
+    blob[1] = 200;
+    write(fd, blob, sizeof blob);
+    pwrite(fd, "z", 1, 2);
+    close(fd);
+    fd = open("/home/native.bin", O_RDONLY);
+    memset(blob, 1, sizeof blob);
+    i = (int)read(fd, blob, sizeof blob);
+    printf("native: binary %d %d %d %d\n", i, blob[0], blob[1], blob[2]);
+    pread(fd, blob, 1, 1);
+    printf("native: pread %d\n", blob[0]);
+    close(fd);
     errno = 0;
     open("/no/such", O_RDONLY);
     printf("native: open of nothing: errno %d\n", errno);

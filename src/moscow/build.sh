@@ -164,15 +164,39 @@ if command -v "$CLANG" >/dev/null 2>&1 && command -v "$LLD" >/dev/null 2>&1; the
 else
     echo "build.sh: no clang and ld.lld: no C libraries in /lib" >&2
 fi
-# Linux programs for /bin (arch/amd64/native.inc): ussr and the test program,
-# static PIE against musl (https://musl.libc.org, MIT), fetched once into
-# build/moscow, checked against its SHA-256 and built with -fPIC: a distro's
-# libc.a may not be position independent. Needs a Linux host with gcc, flex
-# and bison; elsewhere what an earlier build left in build/moscow/native goes
-# on the disk, if anything.
+# Linux programs for /bin (arch/amd64/native.inc): ussr, ural and the test
+# program, static PIE against musl (https://musl.libc.org, MIT) built with
+# -fPIC: a distro's libc.a may not be position independent. What they are
+# built from is fetched once into build/moscow and checked against its
+# SHA-256. Needs a Linux host with gcc, flex, bison and perl; elsewhere what an
+# earlier build left in build/moscow/native goes on the disk, if anything.
 MUSL=musl-1.2.5
 MUSL_SHA256=a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4
+ZLIB=zlib-1.3.2
+ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+OPENSSL=openssl-3.5.9
+OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+CURL=curl-8.23.0
+CURL_SHA256=e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49
+SQLITE=sqlite-autoconf-3540100
+SQLITE_SHA256=926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e
+# Mozilla's root certificates as curl.se extracts them: /etc/ssl/certs.pem
+CACERT=cacert-2026-11-05.pem
+CACERT_SHA256=427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285
 native=$out/native
+# fetched url file sha256: into build/moscow/dl, checked
+fetched() {
+    f=$out/dl/$2
+    if [ ! -f "$f" ]; then
+        curl -fsSL --retry 3 -o "$f" "$1" || return 1
+    fi
+    sum=$(sha256sum "$f" | cut -d' ' -f1)
+    if [ "$sum" != "$3" ]; then
+        echo "build.sh: $2 has SHA-256 $sum, not $3" >&2
+        rm -f "$f"
+        return 1
+    fi
+}
 native_build() {
     [ "$(uname -s)" = Linux ] || return 1
     for t in gcc make flex bison curl; do
@@ -181,16 +205,8 @@ native_build() {
     mkdir -p "$out/dl" "$native"
     prefix=$native/musl
     if [ ! -x "$prefix/bin/musl-gcc" ]; then
+        fetched "https://musl.libc.org/releases/$MUSL.tar.gz" "$MUSL.tar.gz" "$MUSL_SHA256" || return 1
         tgz=$out/dl/$MUSL.tar.gz
-        if [ ! -f "$tgz" ]; then
-            curl -fsSL --retry 3 -o "$tgz" "https://musl.libc.org/releases/$MUSL.tar.gz" || return 1
-        fi
-        sum=$(sha256sum "$tgz" | cut -d' ' -f1)
-        if [ "$sum" != "$MUSL_SHA256" ]; then
-            echo "build.sh: $MUSL.tar.gz has SHA-256 $sum, not $MUSL_SHA256" >&2
-            rm -f "$tgz"
-            return 1
-        fi
         rm -rf "$native/musl-src"
         mkdir -p "$native/musl-src"
         tar -xzf "$tgz" -C "$native/musl-src" || return 1
@@ -216,13 +232,66 @@ native_build() {
     strip "$native/src/ussr" 2>/dev/null
     cp "$native/src/ussr" "$native/ussr"
     "$musl" -fPIE -O1 -w $pie -o "$native/moscow_native" "$root/tests/moscow_native.c" "$lib/crtn.o" || return 1
+    native_ural
+}
+# ural and what it links: zlib, OpenSSL, curl, SQLite
+native_ural() {
+    deps=$native/deps
+    mkdir -p "$deps"
+    picflags="-fPIC -O2 -D_GNU_SOURCE"
+    if [ ! -f "$deps/lib/libz.a" ]; then
+        fetched "https://zlib.net/$ZLIB.tar.gz" "$ZLIB.tar.gz" "$ZLIB_SHA256" || return 1
+        tar -xzf "$out/dl/$ZLIB.tar.gz" -C "$native" || return 1
+        (cd "$native/$ZLIB" && CC="$musl" CFLAGS="$picflags" ./configure --static --prefix="$deps" >/dev/null &&
+            make -j"$(nproc)" >/dev/null 2>&1 && make install >/dev/null 2>&1) || return 1
+    fi
+    if [ ! -f "$deps/lib/libssl.a" ]; then
+        fetched "https://github.com/openssl/openssl/releases/download/$OPENSSL/$OPENSSL.tar.gz" \
+            "$OPENSSL.tar.gz" "$OPENSSL_SHA256" || return 1
+        tar -xzf "$out/dl/$OPENSSL.tar.gz" -C "$native" || return 1
+        (cd "$native/$OPENSSL" && CC="$musl" ./Configure linux-x86_64 no-shared no-tests no-docs no-async \
+            no-dso no-engine no-afalgeng no-secure-memory no-quic no-dtls no-ssl3 no-legacy no-ui-console \
+            no-comp -fPIC -O2 --prefix="$deps" --libdir=lib >/dev/null &&
+            make -j"$(nproc)" build_libs >/dev/null 2>&1 && make install_dev >/dev/null 2>&1) || return 1
+    fi
+    if [ ! -f "$deps/lib/libcurl.a" ]; then
+        fetched "https://curl.se/download/$CURL.tar.gz" "$CURL.tar.gz" "$CURL_SHA256" || return 1
+        tar -xzf "$out/dl/$CURL.tar.gz" -C "$native" || return 1
+        (cd "$native/$CURL" && CC="$musl" CFLAGS="$picflags" CPPFLAGS="-I$deps/include" LDFLAGS="-L$deps/lib" \
+            ./configure --prefix="$deps" --disable-shared --enable-static --with-openssl="$deps" \
+                --with-zlib="$deps" --disable-threaded-resolver --disable-ipv6 --disable-unix-sockets \
+                --disable-ldap --disable-rtsp --disable-dict --disable-telnet --disable-tftp \
+                --disable-pop3 --disable-imap --disable-smtp --disable-gopher --disable-mqtt \
+                --disable-smb --disable-manual --disable-docs --disable-ntlm --disable-alt-svc \
+                --without-libpsl --without-brotli --without-zstd --without-nghttp2 --without-libidn2 \
+                --without-ca-bundle --without-ca-path >/dev/null 2>&1 &&
+            make -j"$(nproc)" -C lib >/dev/null 2>&1 && make -C lib install >/dev/null 2>&1 &&
+            make -C include install >/dev/null 2>&1) || return 1
+    fi
+    if [ ! -f "$native/$SQLITE/sqlite3.c" ]; then
+        fetched "https://www.sqlite.org/2026/$SQLITE.tar.gz" "$SQLITE.tar.gz" "$SQLITE_SHA256" || return 1
+        tar -xzf "$out/dl/$SQLITE.tar.gz" -C "$native" || return 1
+    fi
+    nat=$root/src/ural/native
+    "$musl" -std=c11 -O2 -fPIE -w -D_GNU_SOURCE -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION \
+        -DCURL_STATICLIB -I"$deps/include" -I"$native/$SQLITE" -I"$nat" $pie -o "$native/ural" \
+        "$nat/ural.c" "$nat/ural_db.c" "$nat/ural_archive.c" "$nat/ural_manifest.c" "$nat/ural_url.c" \
+        "$native/$SQLITE/sqlite3.c" -L"$deps/lib" -lcurl -lssl -lcrypto -lz -lm "$lib/crtn.o" || return 1
+    strip "$native/ural" 2>/dev/null
+    return 0
 }
 native_build || echo "build.sh: Linux programs not built here" >&2
-if [ -f "$native/ussr" ] && [ -f "$native/moscow_native" ]; then
-    belarus put "$dev" "$(hp "$native/ussr")" /bin/ussr
-    belarus put "$dev" "$(hp "$native/moscow_native")" /bin/moscow_native
+for f in ussr ural moscow_native; do
+    if [ -f "$native/$f" ]; then
+        belarus put "$dev" "$(hp "$native/$f")" "/bin/$f"
+    else
+        echo "build.sh: no /bin/$f" >&2
+    fi
+done
+if fetched "https://curl.se/ca/$CACERT" "$CACERT" "$CACERT_SHA256" 2>/dev/null; then
+    belarus put "$dev" "$(hp "$out/dl/$CACERT")" /etc/ssl/certs.pem
 else
-    echo "build.sh: no /bin/ussr" >&2
+    echo "build.sh: no /etc/ssl/certs.pem" >&2
 fi
 # the project: the files git tracks (every file in the tree when this is
 # no git checkout), never build products - objects, binaries, packages,
