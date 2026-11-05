@@ -348,6 +348,36 @@ changes back before it returns. `run` reads the program from the file
 system and hands it to `k_exec_bytes`. Without a Belarus disk (booting
 `moscow.img` alone) the kernel still runs the shell, with no root.
 
+## Linux programs
+
+    russia> run(st): "ussr" "/home/hello.su"
+    hello
+    russia> run(st): "ussr" "-c" "/home/hello.su" "/home/hello.ru"
+    russia> run(st): "/home/hello.ru"
+    hello
+
+Moscow runs static PIE x86-64 ELF programs built for Linux, unchanged, in
+ring 3 (`arch/amd64/native.inc`). `build.sh` builds `ussr` against musl and
+puts it in `/bin/ussr`: the same C as on a host, with its script runner, its
+`-c` and its REPL, without the GUI and TLS (no GLFW or OpenSSL in it).
+
+`run` and `spawn` take a program file that starts with the ELF signature as
+one of these. It gets a window of its task's private half: its image at
+4 GiB, its `brk` after that, `mmap` at 8 GiB, its stack at the top, with argv,
+envp and auxv as Linux lays them out. Only static PIE fits: the low addresses
+are the kernel's identity map. The `SYSCALL` instruction comes to a gate that
+answers memory, time and ids itself; files, directories and the console go to
+the kernel command `__linux` (`linux.su`), over Belarus and the console. A
+file is held in memory while it is open and written when it is last closed
+or the program ends. The timer takes the CPU from these programs even under
+`run`, `limit` and `fg` apply to them, and an exception ends the program with
+status 139, not the machine.
+
+What is not there yet: sockets, `fork`, `exec`, pipes, signals (they are
+accepted and never come), threads, a raw terminal (`ioctl` says the console
+is no terminal, so programs read it in lines), mapping files. Each gives
+`ENOSYS` or the like.
+
 ## The runtime
 
 `ussr_rt.nasm` is the USSR VM in assembly. It loads its own GDT and IDT

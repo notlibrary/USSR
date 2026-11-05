@@ -37,8 +37,10 @@
 #include <termios.h>
 #include <poll.h>
 #include <unistd.h>
-#ifdef __linux__
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<linux/fs.h>)
 #include <linux/fs.h>
+#endif
 #endif
 #endif
 

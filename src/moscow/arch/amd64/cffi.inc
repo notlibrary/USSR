@@ -1010,6 +1010,8 @@ c3_back_isr:
 
 ; an exception in ring 3 (exc_common): [rsp] the vector, [rsp + 16] rip
 c3_fault:
+        cmp qword [native_on], 0
+        jne native_fault
         mov rax, [rsp]
         mov [c3_vector], rax
         mov rax, [rsp + 16]

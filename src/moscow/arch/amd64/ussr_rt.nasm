@@ -220,6 +220,7 @@ start:
         call vga_clear
         call gdt_init
         call idt_init
+        call native_init
         call heap_init
         call cffi_init
         call ata_init
@@ -2047,6 +2048,13 @@ timer_isr:
 .eoi:
         mov al, 0x20
         out 0x20, al
+        cmp qword [need_resched], 0
+        je .out
+        test qword [rsp + 16], 3
+        jz .out
+        cmp qword [native_on], 0
+        jne native_preempt
+.out:
         pop rax
         iretq
 
@@ -4619,6 +4627,14 @@ bi_k_exec_bytes:
 .packed:
         mov rsi, rbx
         mov rdx, rcx
+        cmp rcx, 4
+        jb .ru
+        cmp dword [rbx], 0x464c457f
+        jne .ru
+        mov r8, r13
+        call native_run
+        jmp .release
+.ru:
         call rt_load
         test rax, rax
         jz .load_failed
@@ -6969,6 +6985,7 @@ bi_pwd:
 %include "mm.inc"
 %include "task.inc"
 %include "gc.inc"
+%include "native.inc"
 
 ; =====================================================================
 ; tables and texts
@@ -7068,6 +7085,13 @@ bi_table:
         dq n_k_task, bi_k_task
         dq n_k_owner, bi_k_owner
         dq n_k_gc, bi_k_gc
+        dq n_k_ustr, bi_k_ustr
+        dq n_k_ustrz, bi_k_ustrz
+        dq n_k_uput, bi_k_uput
+        dq n_k_upoke, bi_k_upoke
+        dq n_k_upeek, bi_k_upeek
+        dq n_k_ucon, bi_k_ucon
+        dq n_k_line_eof, bi_k_line_eof
         dq n_k_fg, bi_k_fg
         dq n_k_prio, bi_k_prio
         dq n_k_limit, bi_k_limit
@@ -7229,6 +7253,13 @@ n_k_wait:       db "k_wait", 0
 n_k_task:       db "k_task", 0
 n_k_owner:      db "k_owner", 0
 n_k_gc:         db "k_gc", 0
+n_k_ustr:       db "k_ustr", 0
+n_k_ustrz:      db "k_ustrz", 0
+n_k_uput:       db "k_uput", 0
+n_k_upoke:      db "k_upoke", 0
+n_k_upeek:      db "k_upeek", 0
+n_k_ucon:       db "k_ucon", 0
+n_k_line_eof:   db "k_line_eof", 0
 n_k_fg:         db "k_fg", 0
 n_k_prio:       db "k_prio", 0
 n_k_limit:      db "k_limit", 0
@@ -7490,6 +7521,16 @@ kcaller_pool:   resq 1              ; a kernel command's caller's heap
 gc_next:        resq 1
 gc_runs:        resq 1
 kv_pages:       resq 1
+native_on:      resq 1                  ; the task's program is a Linux one
+n_fsbase:       resq 1                  ; its thread pointer
+n_brk_start:    resq 1
+n_brk:          resq 1
+n_mmap:         resq 1                  ; the next address mmap gives
+n_window:       resq 1
+n_user_rsp:     resq 1                  ; for the first moments of a system call
+n_linux_cmd:    resq 1                  ; __linux's number + 1
+n_epoch:        resq 1                  ; the clock at boot
+n_env_ptrs:     resq 16
 fg_id:          resq 1                  ; the task the console reads for
 fg_kill:        resq 1                  ; Ctrl-C came for it
 pt_leaves:      resq 1                  ; pages pt_free_entries gave back
