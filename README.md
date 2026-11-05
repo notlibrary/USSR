@@ -168,6 +168,37 @@ ussr src/usa/usa.su hello.c        # writes hello.ru
 ussr hello.ru
 ```
 
+## Lenin, the brain center of the USSR
+
+Lenin is the neuroslop code enrichment and refining AI agent. It is an idea
+and a track of the project, there is no code yet (no `src/lenin`).
+
+USSR itself is made by prompting an AI and refining the results with the next
+AI "centrifuge" by hand. Lenin is that process as a program. Practice what you
+preach: if enriched neuroslop is better than classical software then the
+enrichment has to be a tool and it has to show it.
+
+You give it:
+
+- the prompt
+- the centrifuge models, from different developers, and their API keys
+- the optimization criteria (speed, size)
+- the working directory
+- the generation cycles repeat count
+
+You get the best optimal coding solution it can find:
+
+1. It refines the prompt so it precisely reflects things in reality
+2. It gives the refined prompt to the centrifuge models
+3. They work on it for the given number of cycles
+4. It extracts the highest quality enriched answer by your criteria
+
+The project now has three main tracks, all on the underlying Moscow OS kernel:
+
+1. The ROUND stack forum: Ryazan, Ukraine, Novgorod, Omsk and Dubna
+2. The Kremlin GUI desktop and its apps, with the USSR shell
+3. Lenin, the neuroslop code enrichment and refining AI agent
+
 ## The project is complete
 
 With usa the second wave is done and USSR is complete. Its programs:
