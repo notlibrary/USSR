@@ -7091,6 +7091,7 @@ bi_table:
         dq n_k_upoke, bi_k_upoke
         dq n_k_upeek, bi_k_upeek
         dq n_k_ucon, bi_k_ucon
+        dq n_k_bytes_str, bi_k_bytes_str
         dq n_k_line_eof, bi_k_line_eof
         dq n_k_fg, bi_k_fg
         dq n_k_prio, bi_k_prio
@@ -7259,6 +7260,7 @@ n_k_uput:       db "k_uput", 0
 n_k_upoke:      db "k_upoke", 0
 n_k_upeek:      db "k_upeek", 0
 n_k_ucon:       db "k_ucon", 0
+n_k_bytes_str:  db "k_bytes_str", 0
 n_k_line_eof:   db "k_line_eof", 0
 n_k_fg:         db "k_fg", 0
 n_k_prio:       db "k_prio", 0
@@ -7531,6 +7533,7 @@ n_user_rsp:     resq 1                  ; for the first moments of a system call
 n_linux_cmd:    resq 1                  ; __linux's number + 1
 n_epoch:        resq 1                  ; the clock at boot
 n_env_ptrs:     resq 16
+n_rng:          resb 48                 ; the state, the counter, the ticks
 fg_id:          resq 1                  ; the task the console reads for
 fg_kill:        resq 1                  ; Ctrl-C came for it
 pt_leaves:      resq 1                  ; pages pt_free_entries gave back

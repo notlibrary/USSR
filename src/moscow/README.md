@@ -356,10 +356,17 @@ system and hands it to `k_exec_bytes`. Without a Belarus disk (booting
     russia> run(st): "/home/hello.ru"
     hello
 
+    russia> run(st): "ural" "server" "add" "https://packages.example.org/USSR"
+    russia> run(st): "ural" "install" "ukraine"
+
 Moscow runs static PIE x86-64 ELF programs built for Linux, unchanged, in
-ring 3 (`arch/amd64/native.inc`). `build.sh` builds `ussr` against musl and
-puts it in `/bin/ussr`: the same C as on a host, with its script runner, its
-`-c` and its REPL, without the GUI and TLS (no GLFW or OpenSSL in it).
+ring 3 (`arch/amd64/native.inc`). `build.sh` builds two against musl for
+`/bin`: `ussr`, the same C as on a host with its script runner, its `-c` and
+its REPL, without the GUI and TLS (no GLFW or OpenSSL in it); and `ural`, the
+package manager, with SQLite, curl, OpenSSL and zlib linked in, 8 MiB. Their
+sources are pinned by SHA-256 in `build.sh`. `/etc/ssl/certs.pem` holds
+Mozilla's root certificates (curl.se's extract), and programs get its path as
+`SSL_CERT_FILE`. Ural's state is in `/home/.ussr`, as on a host.
 
 `run` and `spawn` take a program file that starts with the ELF signature as
 one of these. It gets a window of its task's private half: its image at
@@ -367,16 +374,24 @@ one of these. It gets a window of its task's private half: its image at
 envp and auxv as Linux lays them out. Only static PIE fits: the low addresses
 are the kernel's identity map. The `SYSCALL` instruction comes to a gate that
 answers memory, time and ids itself; files, directories and the console go to
-the kernel command `__linux` (`linux.su`), over Belarus and the console. A
-file is held in memory while it is open and written when it is last closed
-or the program ends. The timer takes the CPU from these programs even under
+the kernel command `__linux` (`linux.su`), over Belarus, the console and
+Moscow's TCP/IP stack. TCP sockets and UDP ones for name lookups reach the
+network; `/etc/resolv.conf` is the name server DHCP gave unless a file says
+otherwise, and `/etc/hosts` is read as usual. A file is held in memory while
+it is open and written when it is last closed, synced or the program ends. The timer takes the CPU from these programs even under
 `run`, `limit` and `fg` apply to them, and an exception ends the program with
 status 139, not the machine.
 
-What is not there yet: sockets, `fork`, `exec`, pipes, signals (they are
-accepted and never come), threads, a raw terminal (`ioctl` says the console
-is no terminal, so programs read it in lines), mapping files. Each gives
-`ENOSYS` or the like.
+What is not there yet: listening sockets, `fork`, `exec`, signals (they are
+accepted and never come), threads, IPv6, a raw terminal (`ioctl` says the
+console is no terminal, so programs read it in lines), mapping files. Each
+gives `ENOSYS` or the like. A pipe works only inside one program, there being
+no second one to share it. File locks always succeed.
+
+`getrandom`, which TLS keys come from, is a SHA-256 chain over the time stamp
+counter and the ticks: the counter is all the entropy Moscow collects so far,
+so keys made soon after boot are weaker than on a host. The kernel's own TLS
+(BearSSL) seeds from the VM's `random64`, which is weaker still.
 
 ## The runtime
 

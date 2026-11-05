@@ -31,7 +31,7 @@
 
 global(_): net_mac net_ip net_mask net_gw net_dns net_how net_ipid
 global(_): net_arp net_socks net_conns net_listen net_next net_port
-global(_): net_pings net_dhcp net_dhcp_on
+global(_): net_pings net_dhcp net_dhcp_on net_udp
 
 # TCP flags
 net_fin(r): [ set(r): 1 ]
@@ -181,6 +181,7 @@ net_reset(r): [
     btree(net_conns):
     btree(net_listen):
     btree(net_pings):
+    btree(net_udp):
     set(net_dhcp): null
 ]
 
@@ -501,8 +502,77 @@ net_udp_in(r): f off plen src [
         push(_): net_dhcp {plen - 8}
         return(r): r
     ]
-    # no UDP sockets yet: a datagram is only counted when it is denied
+    # a socket's, from where it has sent to: an answer, as TCP's are
+    bthas(has): net_udp dport
+    if(_): has [
+        btget(u): net_udp dport
+        btget(peers): u "peers"
+        bthas(known): peers src
+        if(_): known [
+            net_r16(sport): f off
+            k_bytes_cut(data): f {off + 8} {plen - 8}
+            vec(d): ""
+            push(_): d src
+            push(_): d sport
+            push(_): d data
+            btget(q): u "q"
+            push(_): q d
+            return(r): r
+        ]
+    ]
+    # a datagram nobody waits for is only counted when it is denied
     murmansk_check(_): "in" "udp" src dport
+]
+
+# --- UDP sockets, for Linux programs (linux.su): net_udp maps a local port
+# to a btree of "q", the datagrams come ([ip, port, bytes]), and "peers"
+
+# a socket on port lport (0: a free one) -> the port, or -1 when it is taken
+net_udp_open(r): lport [
+    set(r): -1
+    if(_): {net_how = "none"} [ return(r): r ]
+    if(_): {lport = 0} [
+        set(lport): net_port
+        set(net_port): {net_port + 1}
+        if(_): {net_port > 65000} [ set(net_port): 49152 ]
+    ]
+    bthas(taken): net_udp lport
+    if(_): taken [ return(r): r ]
+    btree(u):
+    vec(q): ""
+    btree(peers):
+    btput(_): u "q" q
+    btput(_): u "peers" peers
+    btput(_): net_udp lport u
+    set(r): lport
+]
+
+net_udp_close(r): lport [
+    set(r): 0
+    bthas(has): net_udp lport
+    if(_): has [ btdel(_): net_udp lport ]
+]
+
+# a datagram from lport: the bytes sent, -1 when Murmansk denies it or
+# there is no way there yet
+net_udp_send(r): lport ip port data [
+    set(r): -1
+    bthas(has): net_udp lport
+    if(_): {has = false} [ return(r): r ]
+    murmansk_check(ok): "out" "udp" ip port
+    if(_): {ok = false} [ return(r): r ]
+    btget(u): net_udp lport
+    btget(peers): u "peers"
+    btput(_): peers ip true
+    text_bytes(m): data
+    len(ml): m
+    vec(h): ""
+    net_p16(_): h lport
+    net_p16(_): h port
+    net_p16(_): h {8 + ml}
+    net_p16(_): h 0
+    net_ip_send(st): ip 17 h m 0 ml
+    if(_): {st >= 0} [ set(r): ml ]
 ]
 
 # The sockets of a program run of task id at depth and deeper (or of the

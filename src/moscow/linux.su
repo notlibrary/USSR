@@ -6,7 +6,9 @@
 #
 # Each program run (k_owner) has a table in lx_fds: its open descriptors by
 # number and its "cwd". An open file holds its text and goes onto the disk
-# when it is last closed or the program ends, as open_file's handles do.
+# when it is last closed, synced or the program ends, as open_file's handles
+# do. Sockets are the kernel's: TCP over net.su's connections, UDP for name
+# lookups. A descriptor's "kind": con, file, dir, null, random, pipe, tcp, udp.
 
 global(_): lx_fds
 
@@ -40,6 +42,16 @@ lx_table(r): [
     if(_): {cwd = null} [ set(cwd): "/" ]
     btput(_): r "cwd" cwd
     btput(_): lx_fds own r
+    # HOME, for the programs that keep their state in it
+    mo_fs(fs):
+    typeof(tfs): fs
+    if(_): {tfs = "btree"} [
+        bl_exists(e): fs "/home"
+        if(_): {e = false} [
+            bl_mkdir(_): fs "/home"
+            mo_sync(_): fs
+        ]
+    ]
 ]
 
 # the program's path, absolute and clean
@@ -68,7 +80,7 @@ lx_zeros(r): n [
         push(_): v 0
         set(i): {i + 1}
     ]
-    bytes_text(r): v
+    k_bytes_str(r): v
 ]
 
 # the lowest free descriptor from low
@@ -109,7 +121,19 @@ lx_close_entry(r): f [
     set(r): 0
     btget(refs): f "refs"
     btput(_): f "refs" {refs - 1}
-    if(_): {refs <= 1} [ lx_flush(r): f ]
+    if(_): {refs > 1} [ return(r): r ]
+    btget(kind): f "kind"
+    if(_): {kind = "file"} [ lx_flush(r): f ]
+    elif(_): {kind = "tcp"} [
+        btget(h): f "h"
+        vec(a): ""
+        push(_): a h
+        sys_socket_close(_): a
+    ]
+    elif(_): {kind = "udp"} [
+        btget(p): f "lport"
+        net_udp_close(_): p
+    ]
 ]
 
 # the end of a program run of task id at depth or deeper, or of the task:
@@ -159,8 +183,9 @@ lx_open(r): t path flags [
     btput(_): f "pos" 0
     btput(_): f "path" full
     btput(_): f "flags" flags
-    if(_): {full = "/dev/null"} [
+    if(_): {full = "/dev/null" || full = "/dev/urandom" || full = "/dev/random"} [
         btput(_): f "kind" "null"
+        if(_): {full != "/dev/null"} [ btput(_): f "kind" "random" ]
         lx_free_fd(r): t 3
         btput(_): t r f
         return(r): r
@@ -178,6 +203,19 @@ lx_open(r): t path flags [
     set(append): {((flags >> 10) & 1) = 1}
     set(wantdir): {((flags >> 16) & 1) = 1}
     bl_exists(e): fs full
+    if(_): {e = false && full = "/etc/resolv.conf" && writes = false} [
+        # the name server DHCP gave, as if it were written there
+        net_ip_text(dns): net_dns
+        concat(line): "nameserver " dns "\n"
+        btput(_): f "kind" "file"
+        btput(_): f "text" line
+        btput(_): f "write" false
+        btput(_): f "append" false
+        btput(_): f "changed" false
+        lx_free_fd(r): t 3
+        btput(_): t r f
+        return(r): r
+    ]
     if(_): e [
         if(_): {create && excl} [
             set(r): -17
@@ -201,7 +239,10 @@ lx_open(r): t path flags [
             return(r): r
         ]
         set(text): ""
-        if(_): {trunc = false} [ bl_read_text(text): fs full ]
+        if(_): {trunc = false} [
+            bl_read_bytes(v): fs full
+            k_bytes_str(text): v
+        ]
     ]
     else(_): [
         if(_): {create = false} [
@@ -228,6 +269,11 @@ lx_open(r): t path flags [
     btput(_): f "write" writes
     btput(_): f "append" append
     btput(_): f "changed" {writes && trunc}
+    btput(_): f "nonblock" {((flags >> 11) & 1) = 1}
+    # the inode stat gives: SQLite takes another for a file moved under it
+    bl_get(rec): fs full
+    at(ino): rec 3
+    btput(_): f "ino" ino
     lx_free_fd(r): t 3
     btput(_): t r f
 ]
@@ -270,6 +316,22 @@ lx_read(r): t fd buf n [
         set(r): -21
         return(r): r
     ]
+    if(_): {kind = "tcp"} [
+        lx_tcp_recv(r): f buf n 0
+        return(r): r
+    ]
+    if(_): {kind = "udp"} [
+        lx_udp_recv(r): f buf n 0 0
+        return(r): r
+    ]
+    if(_): {kind = "pipe"} [
+        lx_pipe_read(r): f buf n
+        return(r): r
+    ]
+    if(_): {kind = "random"} [
+        lx_random(r): buf n
+        return(r): r
+    ]
     btget(flags): f "flags"
     if(_): {flags % 4 = 1} [
         set(r): -9
@@ -293,12 +355,24 @@ lx_write(r): t fd buf n [
         k_ucon(r): buf n
         return(r): r
     ]
-    if(_): {kind = "null"} [
+    if(_): {kind = "null" || kind = "random"} [
         set(r): n
         return(r): r
     ]
     if(_): {kind = "dir"} [
         set(r): -21
+        return(r): r
+    ]
+    if(_): {kind = "tcp"} [
+        lx_tcp_send(r): f buf n
+        return(r): r
+    ]
+    if(_): {kind = "udp"} [
+        lx_udp_send(r): f buf n 0
+        return(r): r
+    ]
+    if(_): {kind = "pipe"} [
+        lx_pipe_write(r): f buf n
         return(r): r
     ]
     btget(wr): f "write"
@@ -454,9 +528,14 @@ lx_fstat(r): t fd addr [
     if(_): {kind = "file"} [
         btget(text): f "text"
         len(size): text
-        lx_put_stat(r): addr {fd + 100} 33188 size 0
+        bthas(known): f "ino"
+        set(ino): {fd + 100}
+        if(_): known [ btget(ino): f "ino" ]
+        lx_put_stat(r): addr ino 33188 size 0
     ]
     elif(_): {kind = "dir"} [ lx_put_stat(r): addr {fd + 100} 16877 0 0 ]
+    elif(_): {kind = "tcp" || kind = "udp"} [ lx_put_stat(r): addr {fd + 100} 49663 0 0 ]
+    elif(_): {kind = "pipe"} [ lx_put_stat(r): addr {fd + 100} 4480 0 0 ]
     else(_): [ lx_put_stat(r): addr {fd + 100} 8592 0 0 ]
 ]
 
@@ -616,7 +695,7 @@ lx_access(r): t path [
     ]
     lx_path(full): t p
     set(r): 0
-    if(_): {full = "/dev/null"} [ return(r): r ]
+    if(_): {full = "/dev/null" || full = "/dev/urandom" || full = "/etc/resolv.conf"} [ return(r): r ]
     mo_fs(fs):
     bl_exists(e): fs full
     if(_): {e = false} [ set(r): -2 ]
@@ -723,6 +802,554 @@ lx_truncate(r): t fd size [
     set(r): 0
 ]
 
+# --- random bytes, for /dev/urandom
+
+lx_random(r): buf n [
+    set(r): n
+    if(_): {r > 256} [ set(r): 256 ]
+    set(i): 0
+    while(_): {i < r} [
+        random64(x):
+        k_upoke(st): {buf + i} {x & 255} 1
+        if(_): {st < 0} [
+            set(r): st
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- pipes and eventfd: a buffer inside the program
+
+lx_pipe_read(r): f buf n [
+    btget(p): f "pipe"
+    btget(text): p "buf"
+    len(have): text
+    if(_): {have = 0} [
+        # nobody else writes to it: only this program holds it
+        set(r): -11
+        return(r): r
+    ]
+    k_uput(r): buf text 0 n
+    if(_): {r > 0} [
+        slice(rest): text r {have - r}
+        btput(_): p "buf" rest
+    ]
+]
+
+lx_pipe_write(r): f buf n [
+    btget(p): f "pipe"
+    k_ustr(data): buf n
+    if(_): {data = null} [
+        set(r): -14
+        return(r): r
+    ]
+    btget(text): p "buf"
+    concat(text): text data
+    btput(_): p "buf" text
+    set(r): n
+]
+
+lx_new_pipe(r): [
+    btree(p):
+    btput(_): p "buf" ""
+    btree(r):
+    btput(_): r "kind" "pipe"
+    btput(_): r "pipe" p
+    btput(_): r "refs" 1
+    btput(_): r "flags" 2
+]
+
+lx_pipe(r): t pair [
+    lx_new_pipe(f):
+    btget(p): f "pipe"
+    lx_free_fd(a): t 3
+    btput(_): t a f
+    btree(g):
+    btput(_): g "kind" "pipe"
+    btput(_): g "pipe" p
+    btput(_): g "refs" 1
+    btput(_): g "flags" 2
+    lx_free_fd(b): t 3
+    btput(_): t b g
+    k_upoke(r): pair a 4
+    if(_): {r < 0} [ return(r): r ]
+    k_upoke(r): {pair + 4} b 4
+]
+
+lx_eventfd(r): t [
+    lx_new_pipe(f):
+    lx_free_fd(r): t 3
+    btput(_): t r f
+]
+
+# --- sockets
+
+# sockaddr_in at addr -> [ip, port], null for a bad address or another family
+lx_addr(r): addr [
+    set(r): null
+    k_upeek(v): addr
+    if(_): {v = null} [ return(r): r ]
+    if(_): {(v & 65535) != 2} [ return(r): r ]
+    vec(r): ""
+    set(ip): {(((v >> 32) & 255) << 24) + (((v >> 40) & 255) << 16) + (((v >> 48) & 255) << 8) + ((v >> 56) & 255)}
+    push(_): r ip
+    push(_): r {(((v >> 16) & 255) << 8) + ((v >> 24) & 255)}
+]
+
+lx_put_addr(r): addr lenp ip port [
+    set(r): 0
+    if(_): {addr = 0} [ return(r): r ]
+    k_upoke(r): addr 2 2
+    if(_): {r < 0} [ return(r): r ]
+    k_upoke(_): {addr + 2} {(port >> 8) & 255} 1
+    k_upoke(_): {addr + 3} {port & 255} 1
+    k_upoke(_): {addr + 4} {(ip >> 24) & 255} 1
+    k_upoke(_): {addr + 5} {(ip >> 16) & 255} 1
+    k_upoke(_): {addr + 6} {(ip >> 8) & 255} 1
+    k_upoke(_): {addr + 7} {ip & 255} 1
+    k_upoke(_): {addr + 8} 0 8
+    if(_): {lenp != 0} [ k_upoke(_): lenp 16 4 ]
+]
+
+lx_socket(r): t domain type [
+    if(_): {domain != 2} [
+        set(r): -97
+        return(r): r
+    ]
+    set(base): {type & 15}
+    btree(f):
+    btput(_): f "refs" 1
+    btput(_): f "flags" 2
+    btput(_): f "nonblock" {((type >> 11) & 1) = 1}
+    if(_): {base = 1} [
+        net_new_sock(h): "new"
+        btput(_): f "kind" "tcp"
+        btput(_): f "h" h
+    ]
+    elif(_): {base = 2} [
+        net_udp_open(p): 0
+        if(_): {p < 0} [
+            set(r): -99
+            return(r): r
+        ]
+        btput(_): f "kind" "udp"
+        btput(_): f "lport" p
+        btput(_): f "rip" -1
+    ]
+    else(_): [
+        set(r): -94
+        return(r): r
+    ]
+    lx_free_fd(r): t 3
+    btput(_): t r f
+]
+
+lx_connect(r): t fd addr [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    lx_addr(sa): addr
+    typeof(ts): sa
+    if(_): {ts != "vector"} [
+        set(r): -97
+        return(r): r
+    ]
+    at(ip): sa 0
+    at(port): sa 1
+    btget(kind): f "kind"
+    if(_): {kind = "udp"} [
+        btput(_): f "rip" ip
+        btput(_): f "rport" port
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {kind != "tcp"} [
+        set(r): -88
+        return(r): r
+    ]
+    # waits until it is connected: for a non-blocking caller that is the
+    # connection made at once
+    btget(h): f "h"
+    net_ip_text(host): ip
+    vec(a): ""
+    push(_): a h
+    push(_): a host
+    push(_): a port
+    sys_socket_connect(st): a
+    set(r): 0
+    if(_): {st < 0} [ set(r): -111 ]
+]
+
+lx_tcp_send(r): f buf n [
+    k_ustr(data): buf n
+    if(_): {data = null} [
+        set(r): -14
+        return(r): r
+    ]
+    btget(h): f "h"
+    vec(a): ""
+    push(_): a h
+    push(_): a data
+    sys_socket_send(r): a
+    if(_): {r < 0} [ set(r): -32 ]
+]
+
+# flags: MSG_PEEK (2) leaves the bytes there, MSG_DONTWAIT (64) does not wait
+lx_tcp_recv(r): f buf n flags [
+    btget(h): f "h"
+    btget(nb): f "nonblock"
+    if(_): {((flags >> 6) & 1) = 1} [ set(nb): true ]
+    set(peek): {((flags >> 1) & 1) = 1}
+    while(_): true [
+        if(_): peek [
+            net_poll(_):
+            net_sock(s): h
+            typeof(ts): s
+            vec(v): ""
+            if(_): {ts = "btree"} [
+                btget(rx): s "rx"
+                len(have): rx
+                set(k): n
+                if(_): {k > have} [ set(k): have ]
+                if(_): {k > 0} [ k_bytes_cut(v): rx 0 k ]
+                else(_): [
+                    net_ready(ended): s
+                    if(_): {ended = false} [ set(v): null ]
+                ]
+            ]
+        ]
+        else(_): [ net_recv_bytes(v): h n ]
+        typeof(tv): v
+        if(_): {tv = "vector"} [
+            set(r): 0
+            len(k): v
+            if(_): {k > 0} [
+                k_bytes_str(s): v
+                k_uput(r): buf s 0 k
+            ]
+            return(r): r
+        ]
+        if(_): nb [
+            set(r): -11
+            return(r): r
+        ]
+        sleep(_): 10
+    ]
+]
+
+# to a given address, or the connected one
+lx_udp_send(r): f buf n addr [
+    k_ustr(data): buf n
+    if(_): {data = null} [
+        set(r): -14
+        return(r): r
+    ]
+    btget(ip): f "rip"
+    btget(port): f "rport"
+    if(_): {addr != 0} [
+        lx_addr(sa): addr
+        typeof(ts): sa
+        if(_): {ts != "vector"} [
+            set(r): -97
+            return(r): r
+        ]
+        at(ip): sa 0
+        at(port): sa 1
+    ]
+    if(_): {ip < 0} [
+        set(r): -89
+        return(r): r
+    ]
+    btget(lport): f "lport"
+    net_udp_send(r): lport ip port data
+    # the first frame to a host asks ARP and may wait; a lost datagram is
+    # the program's to send again
+    if(_): {r < 0} [ set(r): n ]
+]
+
+lx_udp_recv(r): f buf n name namelen [
+    btget(lport): f "lport"
+    btget(nb): f "nonblock"
+    btget(u): net_udp lport
+    while(_): true [
+        net_poll(_):
+        btget(q): u "q"
+        len(have): q
+        if(_): {have > 0} [
+            at(d): q 0
+            vec(rest): ""
+            set(i): 1
+            while(_): {i < have} [
+                at(x): q i
+                push(_): rest x
+                set(i): {i + 1}
+            ]
+            btput(_): u "q" rest
+            at(ip): d 0
+            at(port): d 1
+            at(data): d 2
+            len(k): data
+            if(_): {k > n} [ set(k): n ]
+            set(r): 0
+            if(_): {k > 0} [
+                k_bytes_str(s): data
+                k_uput(r): buf s 0 k
+            ]
+            lx_put_addr(_): name namelen ip port
+            return(r): r
+        ]
+        if(_): nb [
+            set(r): -11
+            return(r): r
+        ]
+        sleep(_): 10
+    ]
+]
+
+lx_sendto(r): t fd buf n flags addr [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind = "udp"} [ lx_udp_send(r): f buf n addr ]
+    elif(_): {kind = "tcp"} [ lx_tcp_send(r): f buf n ]
+    else(_): [ set(r): -88 ]
+]
+
+lx_recvfrom(r): t fd buf n flags name namelen [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind = "udp"} [ lx_udp_recv(r): f buf n name namelen ]
+    elif(_): {kind = "tcp"} [ lx_tcp_recv(r): f buf n flags ]
+    else(_): [ set(r): -88 ]
+]
+
+# sendmsg and recvmsg: msghdr's name at 0, its length at 8, iov at 16, its
+# count at 24, msg_flags at 48; one buffer at a time is enough for musl
+lx_sendmsg(r): t fd msg [
+    k_upeek(name): msg
+    k_upeek(iov): {msg + 16}
+    k_upeek(count): {msg + 24}
+    if(_): {name = null || iov = null || count = null} [
+        set(r): -14
+        return(r): r
+    ]
+    set(r): 0
+    set(i): 0
+    while(_): {i < count} [
+        k_upeek(base): {iov + i * 16}
+        k_upeek(n): {iov + i * 16 + 8}
+        if(_): {base = null || n = null} [
+            set(r): -14
+            return(r): r
+        ]
+        lx_sendto(k): t fd base n 0 name
+        if(_): {k < 0} [
+            set(r): k
+            return(r): r
+        ]
+        set(r): {r + k}
+        set(i): {i + 1}
+    ]
+]
+
+lx_recvmsg(r): t fd msg flags [
+    k_upeek(name): msg
+    k_upeek(iov): {msg + 16}
+    if(_): {name = null || iov = null} [
+        set(r): -14
+        return(r): r
+    ]
+    k_upeek(base): iov
+    k_upeek(n): {iov + 8}
+    set(lenp): 0
+    if(_): {name != 0} [ set(lenp): {msg + 8} ]
+    lx_recvfrom(r): t fd base n flags name lenp
+    if(_): {r >= 0} [ k_upoke(_): {msg + 48} 0 4 ]
+]
+
+lx_sockname(r): t fd addr lenp peer [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    set(ip): net_ip
+    set(port): 0
+    if(_): {kind = "udp"} [
+        btget(port): f "lport"
+        if(_): peer [
+            btget(ip): f "rip"
+            btget(port): f "rport"
+        ]
+    ]
+    elif(_): {kind = "tcp"} [
+        btget(h): f "h"
+        net_sock(s): h
+        typeof(ts): s
+        if(_): {ts != "btree"} [
+            set(r): -107
+            return(r): r
+        ]
+        btget(port): s "lport"
+        if(_): peer [
+            btget(ip): s "rip"
+            btget(port): s "rport"
+        ]
+    ]
+    else(_): [
+        set(r): -88
+        return(r): r
+    ]
+    lx_put_addr(r): addr lenp ip port
+]
+
+# --- poll
+
+# the events of events that f has now: POLLIN 1, POLLOUT 4, POLLHUP 16
+lx_ready(r): f events [
+    btget(kind): f "kind"
+    set(can_in): true
+    set(hup): false
+    if(_): {kind = "con"} [
+        btget(line): f "buf"
+        len(ln): line
+        set(can_in): {ln > 0}
+        if(_): {ln = 0} [ terminal_key_ready(can_in): ]
+    ]
+    elif(_): {kind = "tcp"} [
+        btget(h): f "h"
+        net_sock(s): h
+        typeof(ts): s
+        if(_): {ts = "btree"} [
+            btget(state): s "state"
+            net_ready(can_in): s
+            if(_): {state = "new"} [ set(can_in): false ]
+            set(hup): {state = "closed"}
+        ]
+        else(_): [ set(hup): true ]
+    ]
+    elif(_): {kind = "udp"} [
+        btget(lport): f "lport"
+        btget(u): net_udp lport
+        btget(q): u "q"
+        len(nq): q
+        set(can_in): {nq > 0}
+    ]
+    elif(_): {kind = "pipe"} [
+        btget(p): f "pipe"
+        btget(text): p "buf"
+        len(ln): text
+        set(can_in): {ln > 0}
+    ]
+    set(r): {events & 4}
+    if(_): {can_in} [ set(r): {r + (events & 1)} ]
+    if(_): hup [ set(r): {r + 16} ]
+]
+
+# timeout in ms, negative: as long as it takes
+lx_poll(r): t fds n timeout [
+    net_now(now):
+    set(until): {now + ((timeout + 9) >> 3)}
+    while(_): true [
+        net_poll(_):
+        set(r): 0
+        set(i): 0
+        while(_): {i < n} [
+            set(e): {fds + i * 8}
+            k_upeek(v): e
+            if(_): {v = null} [
+                set(r): -14
+                return(r): r
+            ]
+            set(fd): {v & 4294967295}
+            set(events): {(v >> 32) & 65535}
+            set(got): 0
+            if(_): {fd < 2147483648} [
+                bthas(has): t fd
+                if(_): has [
+                    btget(f): t fd
+                    lx_ready(got): f events
+                ]
+                else(_): [ set(got): 32 ]
+            ]
+            k_upoke(_): {e + 6} got 2
+            if(_): {got != 0} [ set(r): {r + 1} ]
+            set(i): {i + 1}
+        ]
+        if(_): {r > 0 || timeout = 0} [ return(r): r ]
+        net_now(now):
+        if(_): {timeout > 0 && now >= until} [ return(r): r ]
+        sleep(_): 10
+    ]
+]
+
+# ppoll's timeout, a timespec or nothing, in ms
+lx_ppoll_ms(r): ts [
+    set(r): -1
+    if(_): {ts = 0} [ return(r): r ]
+    k_upeek(sec): ts
+    k_upeek(ns): {ts + 8}
+    if(_): {sec = null || ns = null} [ return(r): r ]
+    set(r): {sec * 1000 + (ns >> 20)}
+]
+
+# --- reading and writing at a place
+
+lx_pio(r): t fd buf n off writing [
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    btget(kind): f "kind"
+    if(_): {kind != "file"} [
+        set(r): -29
+        return(r): r
+    ]
+    btget(pos): f "pos"
+    btput(_): f "pos" off
+    if(_): writing [ lx_write(r): t fd buf n ]
+    else(_): [ lx_read(r): t fd buf n ]
+    btput(_): f "pos" pos
+]
+
+# fcntl: F_DUPFD, F_GETFL, F_SETFL and locks (one program at a file: every
+# lock is free); close-on-exec means nothing without exec
+lx_fcntl(r): t fd cmd arg [
+    set(r): 0
+    bthas(has): t fd
+    if(_): {has = false} [
+        set(r): -9
+        return(r): r
+    ]
+    btget(f): t fd
+    if(_): {cmd = 0 || cmd = 1030} [ lx_dup(r): t fd arg ]
+    elif(_): {cmd = 3} [
+        btget(fl): f "flags"
+        btget(nb): f "nonblock"
+        set(r): {fl & 3}
+        if(_): nb [ set(r): {r + 2048} ]
+    ]
+    elif(_): {cmd = 4} [ btput(_): f "nonblock" {((arg >> 11) & 1) = 1} ]
+    elif(_): {cmd = 5} [ k_upoke(_): arg 2 2 ]
+]
+
 # __linux: [number, six arguments]
 sys_linux(r): v [
     at(n): v 0
@@ -730,6 +1357,8 @@ sys_linux(r): v [
     at(b): v 2
     at(c): v 3
     at(d): v 4
+    at(a5): v 5
+    at(a6): v 6
     lx_table(t):
     if(_): {n = 1} [ lx_write(r): t a b c ]
     elif(_): {n = 0} [ lx_read(r): t a b c ]
@@ -761,11 +1390,31 @@ sys_linux(r): v [
     elif(_): {n = 264} [ lx_rename(r): t b d ]
     elif(_): {n = 32} [ lx_dup(r): t a 0 ]
     elif(_): {n = 33} [ lx_dup2(r): t a b ]
-    elif(_): {n = 72} [
-        # fcntl: F_DUPFD and F_DUPFD_CLOEXEC; the flags are not kept
-        set(r): 0
-        if(_): {b = 0 || b = 1030} [ lx_dup(r): t a c ]
+    elif(_): {n = 72} [ lx_fcntl(r): t a b c ]
+    elif(_): {n = 17} [ lx_pio(r): t a b c d false ]
+    elif(_): {n = 18} [ lx_pio(r): t a b c d true ]
+    elif(_): {n = 7} [ lx_poll(r): t a b c ]
+    elif(_): {n = 271} [
+        lx_ppoll_ms(ms): c
+        lx_poll(r): t a b ms
     ]
+    elif(_): {n = 41} [ lx_socket(r): t a b ]
+    elif(_): {n = 42} [ lx_connect(r): t a b ]
+    elif(_): {n = 44} [ lx_sendto(r): t a b c d a5 ]
+    elif(_): {n = 45} [ lx_recvfrom(r): t a b c d a5 a6 ]
+    elif(_): {n = 46} [ lx_sendmsg(r): t a b ]
+    elif(_): {n = 47} [ lx_recvmsg(r): t a b c ]
+    elif(_): {n = 51} [ lx_sockname(r): t a b c false ]
+    elif(_): {n = 52} [ lx_sockname(r): t a b c true ]
+    elif(_): {n = 55} [
+        # getsockopt: no error waits on any socket here
+        k_upoke(r): d 0 4
+        if(_): {r >= 0} [ k_upoke(r): a5 4 4 ]
+    ]
+    elif(_): {n = 49 || n = 54 || n = 48} [ set(r): 0 ]
+    elif(_): {n = 22} [ lx_pipe(r): t a ]
+    elif(_): {n = 293} [ lx_pipe(r): t a ]
+    elif(_): {n = 284 || n = 290} [ lx_eventfd(r): t ]
     elif(_): {n = 77} [ lx_truncate(r): t a b ]
     elif(_): {n = 74 || n = 75} [
         bthas(has): t a

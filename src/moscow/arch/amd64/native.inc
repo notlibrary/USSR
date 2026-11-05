@@ -905,45 +905,50 @@ n_sys_umask:
         mov eax, 18                     ; 022
         ret
 
-; poll(fds, n, timeout): everything is ready; reading the console waits
-n_sys_poll:
-        mov rax, rdi
-        mov rcx, rsi
-        shl rcx, 3
-        call n_uok
-        jc .fault
-        xor ecx, ecx
-.next:
-        cmp rcx, rsi
-        jae .done
-        mov ax, [rdi + rcx * 8 + 4]
-        mov [rdi + rcx * 8 + 6], ax
-        inc rcx
-        jmp .next
-.done:
-        mov rax, rsi
-        ret
-.fault:
-        mov rax, -E_FAULT
-        ret
-
-; getrandom(buf, n, flags)
+; getrandom(buf, n, flags): SHA-256 over the last state, the time stamp
+; counter and the ticks, for each 32 bytes. The counter is all the entropy
+; there is (no RDRAND on every CPU, no device noise collected yet).
 n_sys_getrandom:
         mov rax, rdi
         mov rcx, rsi
         call n_uok
         jc .fault
-        mov rdx, rsi
-.next:
-        test rdx, rdx
+        mov r12, rdi
+        mov r13, rsi
+.block:
+        test r13, r13
         jz .done
-        call random64
-        mov [rdi], al
-        inc rdi
-        dec rdx
-        jmp .next
+        rdtsc
+        shl rdx, 32
+        or rax, rdx
+        mov [n_rng + 32], rax
+        mov rax, [ticks]
+        mov [n_rng + 40], rax
+        mov esi, n_rng
+        mov ecx, 48
+        call sha256_bytes
+        mov esi, sha_state
+        mov edi, n_rng
+        mov ecx, 32
+        rep movsb
+        ; what goes out is not the state: one more round over it
+        mov esi, n_rng
+        mov ecx, 33
+        call sha256_bytes
+        mov rcx, r13
+        cmp rcx, 32
+        jbe .take
+        mov ecx, 32
+.take:
+        sub r13, rcx
+        mov esi, sha_state
+        mov rdi, r12
+        add r12, rcx
+        rep movsb
+        jmp .block
 .done:
-        mov rax, rsi
+        mov rax, r12
+        sub rax, [rbp]                  ; the buf argument, in the gate's frame
         ret
 .fault:
         mov rax, -E_FAULT
@@ -1123,6 +1128,33 @@ bi_k_ucon:
         mov rax, -E_FAULT
         jmp bi_int_out
 
+; k_bytes_str(s): v -> a byte vector as a string, zero bytes too (bytes_text
+; gives up at one)
+bi_k_bytes_str:
+        cmp esi, 1
+        jne n_bi_null
+        cmp qword [rdi], T_VEC
+        jne n_bi_null
+        mov r8, [rdi + 8]
+        mov rcx, [r8 + VEC_COUNT]
+        push rdx
+        lea rdi, [rcx + 9]
+        call alloc
+        mov [rax + STR_LEN], rcx
+        mov rsi, [r8 + VEC_ITEMS]
+        xor edx, edx
+.byte:
+        cmp rdx, rcx
+        jae .done
+        mov r9, [rsi + 8]
+        mov [rax + STR_BYTES + rdx], r9b
+        add rsi, 16
+        inc rdx
+        jmp .byte
+.done:
+        pop rdx
+        jmp bi_str_out
+
 ; k_line_eof(b): -> true when the last k_getline found the end of the input
 bi_k_line_eof:
         mov rax, [read_line_eof]
@@ -1159,8 +1191,9 @@ n_table:
         dq 107, n_sys_zero              ; geteuid
         dq 108, n_sys_zero              ; getegid
         dq 16, n_sys_notty              ; ioctl: the console is lines
+        dq 73, n_sys_zero               ; flock: one program at a file
+        dq 280, n_sys_zero              ; utimensat
         dq 95, n_sys_umask
-        dq 7, n_sys_poll
         dq 318, n_sys_getrandom
         dq 63, n_sys_uname
         dq 60, n_sys_exit
@@ -1173,13 +1206,14 @@ n_table:
 N_AUX           equ 8                   ; pairs native_run lays out, AT_NULL's too
 
 n_env:
-        dq s_env_home, s_env_user, s_env_path, s_env_term, s_env_host, s_env_os, 0
+        dq s_env_home, s_env_user, s_env_path, s_env_term, s_env_host, s_env_os, s_env_certs, 0
 s_env_home:     db "HOME=/home", 0
 s_env_user:     db "USER=comrade", 0
 s_env_path:     db "PATH=/bin", 0
 s_env_term:     db "TERM=dumb", 0
 s_env_host:     db "HOSTNAME=moscow", 0
 s_env_os:       db "OS=Moscow", 0
+s_env_certs:    db "SSL_CERT_FILE=/etc/ssl/certs.pem", 0
 n_un_fields:
         dq s_un_sys, s_un_node, s_un_rel, s_un_ver, s_un_mach
 s_un_sys:       db "Moscow", 0

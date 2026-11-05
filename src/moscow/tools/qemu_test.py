@@ -34,6 +34,7 @@ starts from that disk alone and checks what the installer put there.
 Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
+import functools
 import os
 import re
 import shutil
@@ -44,7 +45,7 @@ import ssl
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
 
@@ -101,7 +102,7 @@ CHECKS = [
     ("uptime(_):", r"up \d+ s"),
     # the shell keeps its history in $HOME/.ussr_history, HOME being /
     ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  lib\nd +\d+  src"),
-    ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n(- +\d+  moscow_native\n)?- +\d+  stalin\.ru(\n- +\d+  ussr)?"),
+    ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n(- +\d+  moscow_native\n)?- +\d+  stalin\.ru(\n- +\d+  ural)?(\n- +\d+  ussr)?"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
     ('readfile(n): "/home/notes.txt"', r""),
@@ -180,7 +181,7 @@ CHECKS = [
      r"USSR: c_call: the C code broke the rules of ring 3 and was stopped\n"
      r"USSR VM: execution failed \(ip \d+\)"),
     ("print(_): st", r"1"),
-    ('ls(_): "/etc"', r"(.*\n)*-  +\d+  murmansk\.rules"),
+    ('ls(_): "/etc"', r"(.*\n)*-  +\d+  murmansk\.rules(\nd +\d+  ssl)?"),
     ('localtime(t): 1793535166', r""),
     ("print(_): t", r"\[2026,11,1,12,12,46,0,304\]"),
     ("mem(m):", r"heap \d+ KiB, free \d+ KiB"),
@@ -376,6 +377,8 @@ def main():
                     help="no programs as tasks side by side")
     ap.add_argument("--no-native", action="store_true",
                     help="no Linux programs in ring 3")
+    ap.add_argument("--no-ural", action="store_true",
+                    help="no package install with ural over HTTPS")
     ap.add_argument("--no-gui", action="store_true",
                     help="no Kremlin, Mbltishi and Tver on the framebuffer")
     ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
@@ -453,6 +456,8 @@ def main():
         tasks(qemu, disk, args.port + 60, log, check)
     if not args.no_native:
         native(qemu, disk, args.port + 70, log, check)
+    if not args.no_ural:
+        ural(qemu, disk, args.port + 80, log, check)
     if not args.no_gui:
         gui(qemu, disk, work, args.port + 50, log, check)
     if not args.no_install:
@@ -904,6 +909,7 @@ def native(qemu, disk, port, log, check):
         check("its files: write, read back, stat, a directory, an error",
               "native: read back: written by a Linux program" in got
               and "native: stat size 27, dir 0" in got and "native: /etc has motd: 1" in got
+              and "native: binary 8 0 200 122" in got and "native: pread 200" in got
               and "native: open of nothing: errno 2" in got
               and "native: cwd /home/nd" in got, got)
         got = say("print(_): st")
@@ -969,6 +975,109 @@ def native(qemu, disk, port, log, check):
         check("Linux programs conversation", False, str(e))
     finally:
         m.close()
+
+
+class Repository(SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+def host_belarus(*args):
+    """belarus.su on this machine, through the ussr that built the disk."""
+    ussr = os.path.join(ROOT, "ussr.exe" if os.name == "nt" else "ussr")
+    env = dict(os.environ, USSR_KIEV="", USSR_MOSCOW="")
+    subprocess.run([ussr, os.path.join("src", "belarus", "belarus.su")] + list(args),
+                   cwd=ROOT, env=env, check=True, stdout=subprocess.DEVNULL)
+
+
+def ural(qemu, disk, port, log, check):
+    """Ural, the package manager, as on a host: the same C, with SQLite, curl
+    and OpenSSL in it. On Moscow it packs a repository; this machine serves
+    those files over HTTPS (QEMU shows it as 10.0.2.2, /etc/hosts calls it
+    ural.test); after a reboot Ural refuses the server while its certificate
+    is not trusted, then installs from it, and uninstalls. On a copy of the
+    disk: the other phases do not see its /etc/hosts or its test certificate."""
+    work = tempfile.mkdtemp(prefix="moscow_ural_")
+    copy = os.path.join(work, "ural.img")
+    shutil.copyfile(disk, copy)
+    site = os.path.join(work, "site", "repo")
+    os.makedirs(site)
+    handler = functools.partial(Repository, directory=os.path.join(work, "site"))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(os.path.join(ROOT, "tests", "ural", "ural.test.cert.pem"),
+                        os.path.join(ROOT, "tests", "ural", "ural.test.key.pem"))
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = "https://ural.test:%d/repo" % server.server_address[1]
+
+    m = Machine(qemu, [(copy, "raw")], port, log)
+    serial = m.serial
+
+    def say(line, timeout=300):
+        serial.command(line)
+        return clean(serial.output_to_prompt(timeout=timeout))
+
+    try:
+        serial.output_to_prompt(timeout=60)
+        say('file_exists(f): "/bin/ural"')
+        if say("print(_): f") != "true":
+            print("SKIP no /bin/ural: built on a Linux host (build.sh)")
+            return
+        got = say('run(st): "ural" "init"') + "\n" + say("print(_): st")
+        check("ural starts and makes its SQLite database", got.endswith("0"), got)
+        say('writefile(_): "/home/repo/hello/box.uno" "\'Package{name=`hello`,version=`1.0.0`,'
+            'description=`a test`,entry=`hello.su`,dependencies=[],files=[],'
+            'license=`MIT`,minimum_ussr=`0.1.0`,source=``}\'"')
+        say('writefile(_): "/home/repo/hello/hello.su" "print(_): \\"hello from a package\\"\\n"')
+        got = say('run(st): "ural" "pack" "/home/repo" "%s"' % url)
+        got += "\n" + say("print(_): st")
+        check("ural pack makes a repository: ZIP, manifest, SQLite index", got.endswith("0"), got)
+        got = say('ls(_): "/home/repo"')
+        check("the repository's files are on the disk",
+              "hello-1.0.0.ural" in got and "hello-box.uno" in got and "ussr.boxes" in got, got)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+        m.proc.wait(timeout=20)
+        m.close()
+        for name in re.findall(r"^- +\d+  (\S+)$", got, re.M):
+            host_belarus("get", copy, "/home/repo/" + name, os.path.join(site, name))
+
+        m = Machine(qemu, [(copy, "raw")], port, log)
+        serial = m.serial
+        serial.output_to_prompt(timeout=60)
+        say('writefile(_): "/etc/hosts" "10.0.2.2 ural.test\\n"')
+        got = say('run(st): "ural" "server" "add" "%s"' % url)
+        got += "\n" + say("print(_): st")
+        check("ural server add", got.endswith("0"), got)
+        got = say('run(st): "ural" "install" "hello"') + "\n" + say("print(_): st")
+        check("a certificate it does not trust stops ural", not got.endswith("\n0"), got)
+        say('readfile(a): "/etc/ssl/certs.pem"')
+        say('readfile(b): "/src/ussr/tests/ural/ural.test.cert.pem"')
+        say("concat(c): a b")
+        say('writefile(_): "/etc/ssl/certs.pem" c')
+        got = say('run(st): "ural" "search" "hello"')
+        check("ural search reads the index over HTTPS", "hello" in got, got)
+        got = say('run(st): "ural" "install" "hello"') + "\n" + say("print(_): st")
+        check("ural install: name lookup, HTTPS, hashes, ZIP, its records",
+              got.endswith("\n0"), got)
+        got = say('run(st): "ural" "list"')
+        check("ural list has it", "hello" in got and "1.0.0" in got, got)
+        got = say('run(st): "ussr" "/home/.ussr/packages/hello/hello.su"')
+        check("what it installed runs", got == "hello from a package", got)
+        got = say('run(st): "ural" "uninstall" "hello"') + "\n" + say("print(_): st")
+        check("ural uninstall", got.endswith("0"), got)
+        say('file_exists(f): "/home/.ussr/packages/hello/hello.su"')
+        got = say("print(_): f")
+        check("and the file is gone", got == "false", got)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError, OSError, subprocess.SubprocessError) as e:
+        check("ural conversation", False, str(e))
+    finally:
+        m.close()
+        server.shutdown()
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def gui(qemu, disk, work, port, log, check):
