@@ -519,7 +519,7 @@ net_drop(r): id depth [
         btget(own): s "owner"
         typeof(to): own
         if(_): {to = "integer"} [
-            if(_): {own / 64 = id && own % 64 >= depth} [
+            if(_): {own >> 6 = id && own % 64 >= depth} [
                 btput(_): gone h true
                 btget(state): s "state"
                 if(_): {state = "listen"} [

@@ -320,7 +320,7 @@ tls_drop_in(r): tree id depth [
             slice(os): k 0 bar
             str_to_number(own): os
             str_trunc(own): own
-            if(_): {own / 64 = id && own % 64 >= depth} [ btdel(_): tree k ]
+            if(_): {own >> 6 = id && own % 64 >= depth} [ btdel(_): tree k ]
         ]
         set(i): {i + 1}
     ]
