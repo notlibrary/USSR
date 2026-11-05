@@ -1,0 +1,673 @@
+# lenin.su - Lenin, the brain center of the USSR: an agent that enriches and
+# refines neuroslop code. It refines a prompt, gives it to "centrifuge" models
+# from different developers for a number of cycles, each cycle seeing the best
+# so far and how it measured, and extracts the best file by your criterion.
+#
+#     ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
+#          --criteria size --test "python {file}" --ext .py "the prompt"
+#
+# "Best" comes from measuring: a candidate that fails --test cannot win, then
+# size is its bytes and speed its runs of --test a second. Only without --test
+# the models vote, and the report says that nothing was run. See README.md.
+
+$include "../libs/strings.su"
+
+global(_): lenin_reply
+
+# --- text
+
+lenin_lines(r): text [
+    vec(r): ""
+    chr(nl): 10
+    len(n): text
+    set(from): 0
+    while(_): {from <= n} [
+        str_find(i): text nl from
+        if(_): {i < 0} [ set(i): n ]
+        slice(line): text from {i - from}
+        push(_): r line
+        set(from): {i + 1}
+    ]
+]
+
+# the words of a line, split at spaces and tabs
+lenin_words(r): line [
+    vec(r): ""
+    len(n): line
+    set(i): 0
+    set(from): -1
+    while(_): {i <= n} [
+        set(space): true
+        if(_): {i < n} [
+            byte(b): line i
+            set(space): {b = 32 || b = 9 || b = 13}
+        ]
+        if(_): {space && from >= 0} [
+            slice(w): line from {i - from}
+            push(_): r w
+            set(from): -1
+        ]
+        elif(_): {space = false && from < 0} [ set(from): i ]
+        set(i): {i + 1}
+    ]
+]
+
+lenin_replace(r): text from to [
+    set(r): ""
+    len(n): text
+    len(nf): from
+    set(at_): 0
+    while(_): {at_ <= n} [
+        str_find(i): text from at_
+        if(_): {i < 0} [
+            slice(tail): text at_ {n - at_}
+            concat(r): r tail
+            return(r): r
+        ]
+        slice(part): text at_ {i - at_}
+        concat(r): r part to
+        set(at_): {i + nf}
+    ]
+]
+
+# letters, digits, - and . of a name, the rest _: for a file name
+lenin_safe(r): name [
+    set(r): ""
+    len(n): name
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): name i
+        set(ok): {(b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 45 || b = 46}
+        if(_): {ok = false} [ set(b): 95 ]
+        chr(c): b
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+]
+
+# what is in the first fenced block of a reply, else all of it
+lenin_code(r): reply [
+    set(fence): "```"
+    str_find(a): reply fence 0
+    if(_): {a < 0} [
+        str_trim(r): reply
+        return(r): r
+    ]
+    chr(nl): 10
+    str_find(start): reply nl a
+    if(_): {start < 0} [
+        str_trim(r): reply
+        return(r): r
+    ]
+    set(start): {start + 1}
+    str_find(b): reply fence start
+    len(n): reply
+    if(_): {b < 0} [ set(b): n ]
+    slice(r): reply start {b - start}
+]
+
+lenin_read(r): path [
+    set(r): null
+    open_file(h): path "rb"
+    if(_): {h < 0} [ return(r): r ]
+    close_file(_): h
+    readfile(r): path
+]
+
+# the end of a text, for showing a model what went wrong
+lenin_tail(r): text max [
+    len(n): text
+    set(r): text
+    if(_): {n > max} [ slice(r): text {n - max} max ]
+]
+
+# --- the models
+
+# a file of lines "provider model key_env [url]"; key_env "-": no key. Gives a
+# vector of [provider, model, key_env, url], null when it cannot be read.
+lenin_load_models(r): path [
+    lenin_read(text): path
+    set(r): null
+    if(_): {text = null} [ return(r): r ]
+    lenin_lines(lines): text
+    vec(r): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        lenin_words(w): line
+        len(nw): w
+        if(_): {nw >= 3} [
+            at(first): w 0
+            byte(b0): first 0
+            if(_): {b0 != 35} [
+                at(mkey): w 2
+                at(mmodel): w 1
+                set(url): ""
+                if(_): {nw > 3} [ at(url): w 3 ]
+                vec(m): ""
+                push(_): m first
+                push(_): m mmodel
+                push(_): m mkey
+                push(_): m url
+                push(_): r m
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# the environment prompt reads, for model m: false when its key is not set
+lenin_use_model(r): m system [
+    at(provider): m 0
+    at(model): m 1
+    at(key_env): m 2
+    at(url): m 3
+    set(r): true
+    setenv(_): "USSR_AI_PROVIDER" provider
+    setenv(_): "USSR_AI_MODEL" model
+    setenv(_): "USSR_AI_MAX_TOKENS" "8192"
+    setenv(_): "USSR_AI_TIMEOUT" "600"
+    setenv(_): "USSR_AI_SYSTEM" system
+    if(_): {url = ""} [ unsetenv(_): "USSR_AI_URL" ]
+    else(_): [ setenv(_): "USSR_AI_URL" url ]
+    if(_): {key_env = "-"} [
+        # not unset: prompt would fall back on OPENAI_API_KEY and send your
+        # real key to this model's URL
+        setenv(_): "USSR_AI_KEY" "none"
+    ]
+    else(_): [
+        getenv(key): key_env
+        if(_): {key = null || key = ""} [
+            concat(m2): "lenin: " key_env " is not set: skipping " model
+            print(_): m2
+            set(r): false
+            return(r): r
+        ]
+        setenv(_): "USSR_AI_KEY" key
+    ]
+]
+
+lenin_prompt_call(r): question [
+    set(r): 0
+    prompt(answer): question
+    set(lenin_reply): answer
+]
+
+# model m's answer, null when it failed: one model failing ends no run
+lenin_ask(r): m system question [
+    set(r): null
+    lenin_use_model(ok): m system
+    if(_): {ok = false} [ return(r): r ]
+    set(lenin_reply): null
+    try(failed): "lenin_prompt_call" question
+    unsetenv(_): "USSR_AI_KEY"
+    if(_): {failed = 0} [ set(r): lenin_reply ]
+]
+
+# --- measuring
+
+# a line through the shell -> its exit status
+lenin_shell(r): line [
+    getenv(os): "OS"
+    if(_): {os = "Windows_NT"} [ cmd(r): "/c" line ]
+    else(_): [ sh(r): "-c" line ]
+]
+
+# the test line for a file: {file} in it, else the file goes at its end. Its
+# output goes to log.
+lenin_test_line(r): test file log [
+    # cmd's tools take a / for an option
+    getenv(os): "OS"
+    if(_): {os = "Windows_NT"} [
+        chr(bs): 92
+        lenin_replace(file): file "/" bs
+        lenin_replace(log): log "/" bs
+    ]
+    str_find(i): test "{file}" 0
+    if(_): {i >= 0} [ lenin_replace(line): test "{file}" file ]
+    else(_): [ concat(line): test " " file ]
+    concat(r): line " > " log " 2>&1"
+]
+
+# a candidate: a btree of model, cycle, path, code, size, tested, passed, rate,
+# and log, what its test said when it failed
+lenin_measure(r): name path code test log window [
+    btree(r):
+    btput(_): r "model" name
+    btput(_): r "path" path
+    btput(_): r "code" code
+    len(size): code
+    btput(_): r "size" size
+    btput(_): r "tested" false
+    btput(_): r "passed" true
+    btput(_): r "rate" 0
+    btput(_): r "log" ""
+    if(_): {test = ""} [ return(r): r ]
+    btput(_): r "tested" true
+    lenin_test_line(line): test path log
+    lenin_shell(st): line
+    if(_): {st != 0} [
+        btput(_): r "passed" false
+        lenin_read(said): log
+        if(_): {said = null} [ set(said): "" ]
+        lenin_tail(said): said 2000
+        btput(_): r "log" said
+        return(r): r
+    ]
+    if(_): {window <= 0} [ return(r): r ]
+    # the clock has whole seconds: runs a second, over the window
+    time(t0):
+    set(runs): 0
+    set(now): t0
+    while(_): {now - t0 < window} [
+        lenin_shell(st): line
+        if(_): {st != 0} [
+            btput(_): r "passed" false
+            btput(_): r "log" "it failed when run again: it does not always pass"
+            return(r): r
+        ]
+        set(runs): {runs + 1}
+        time(now):
+    ]
+    btput(_): r "rate" {runs / (now - t0)}
+]
+
+# does a beat b? One that passes first; then the criterion; then the other one
+lenin_better(r): a b criteria [
+    btget(pa): a "passed"
+    btget(pb): b "passed"
+    if(_): {pa != pb} [
+        set(r): pa
+        return(r): r
+    ]
+    btget(sa): a "size"
+    btget(sb): b "size"
+    btget(ra): a "rate"
+    btget(rb): b "rate"
+    if(_): {criteria = "speed" && ra != rb} [
+        set(r): {ra > rb}
+        return(r): r
+    ]
+    if(_): {sa != sb} [
+        set(r): {sa < sb}
+        return(r): r
+    ]
+    set(r): {ra > rb}
+]
+
+lenin_best(r): candidates criteria [
+    set(r): null
+    len(n): candidates
+    set(i): 0
+    while(_): {i < n} [
+        at(c): candidates i
+        if(_): {r = null} [ set(r): c ]
+        else(_): [
+            lenin_better(b): c r criteria
+            if(_): b [ set(r): c ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# without a test the models choose: each is shown the answers under letters,
+# not whose they are. Gives the candidate with the most votes (the first of
+# them on a tie), or null when nobody voted.
+lenin_vote(r): models candidates task [
+    set(r): null
+    len(nc): candidates
+    set(listing): ""
+    set(i): 0
+    while(_): {i < nc} [
+        at(c): candidates i
+        btget(code): c "code"
+        chr(letter): {65 + i}
+        chr(nl): 10
+        concat(listing): listing "=== " letter " ===" nl code nl
+        set(i): {i + 1}
+    ]
+    chr(nl): 10
+    concat(q): "The task:" nl task nl nl "The answers:" nl listing nl "Which answer does the task best? Reply with its letter only."
+    vec(votes): ""
+    set(i): 0
+    while(_): {i < nc} [
+        push(_): votes 0
+        set(i): {i + 1}
+    ]
+    set(system): "You judge code. Look for what is wrong with each answer before you choose. Reply with one letter."
+    len(nm): models
+    set(j): 0
+    set(any): false
+    while(_): {j < nm} [
+        at(m): models j
+        lenin_ask(answer): m system q
+        if(_): {answer != null} [
+            str_trim(answer): answer
+            len(la): answer
+            # the letter alone: "Answer B" is no vote for A
+            if(_): {la = 1} [
+                byte(b): answer 0
+                set(k): {b - 65}
+                if(_): {k >= 0 && k < nc} [
+                    set(any): true
+                    vec(next): ""
+                    set(i): 0
+                    while(_): {i < nc} [
+                        at(v): votes i
+                        if(_): {i = k} [ set(v): {v + 1} ]
+                        push(_): next v
+                        set(i): {i + 1}
+                    ]
+                    set(votes): next
+                ]
+            ]
+        ]
+        set(j): {j + 1}
+    ]
+    if(_): {any = false} [ return(r): r ]
+    set(top): -1
+    set(i): 0
+    while(_): {i < nc} [
+        at(v): votes i
+        if(_): {v > top} [
+            set(top): v
+            at(r): candidates i
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- the pipeline
+
+lenin_refine_system(r): [
+    set(r): "You turn a request for code into a precise prompt for a programmer. State the language, the inputs, the outputs, the limits and how to tell it works. Keep to what the request says or plainly implies: do not invent requirements, and list any assumption you make as an assumption. Reply with the prompt only."
+]
+
+lenin_make_system(r): criteria [
+    concat(r): "You write code. Reply with one complete file in one fenced code block, with nothing else after it. What counts is that it works and then its " criteria "."
+]
+
+# what a model is asked in a cycle: the task, and after the first cycle the
+# best so far and how it measured
+lenin_question(r): task best criteria [
+    set(r): task
+    if(_): {best = null} [ return(r): r ]
+    btget(code): best "code"
+    btget(passed): best "passed"
+    btget(tested): best "tested"
+    btget(size): best "size"
+    btget(rate): best "rate"
+    btget(said): best "log"
+    chr(nl): 10
+    str_from_int(ss): size
+    str_from_number(rs): rate 2
+    set(state): "It was not run."
+    if(_): tested [
+        set(state): "It failed its test. The test said:"
+        if(_): passed [ concat(state): "It passes its test, " ss " bytes, " rs " runs a second." ]
+        else(_): [ concat(state): state nl said ]
+    ]
+    concat(r): task nl nl "The best answer so far:" nl "```" nl code nl "```" nl state nl nl "Give a better one, by " criteria ", that still does the task."
+]
+
+lenin_describe(r): c [
+    btget(passed): c "passed"
+    btget(tested): c "tested"
+    btget(size): c "size"
+    btget(rate): c "rate"
+    str_from_int(ss): size
+    str_from_number(rs): rate 2
+    set(state): "not run"
+    if(_): tested [
+        set(state): "FAILED"
+        if(_): passed [ set(state): "passed" ]
+    ]
+    concat(r): state " | " ss " | " rs
+]
+
+# args: a btree of models, prompt, criteria, dir, cycles, test, ext, baseline,
+# window, refine. Writes dir/refined.md, the candidates, dir/best<ext> and
+# dir/report.md. Gives 0 when there is a winner, 1 when none.
+lenin_run(r): args [
+    set(r): 1
+    btget(models): args "models"
+    btget(task0): args "prompt"
+    btget(criteria): args "criteria"
+    btget(dir): args "dir"
+    btget(cycles): args "cycles"
+    btget(test): args "test"
+    btget(ext): args "ext"
+    btget(baseline): args "baseline"
+    btget(window): args "window"
+    btget(refine): args "refine"
+    if(_): {criteria != "speed"} [ set(window): 0 ]
+    is_dir(there): dir
+    if(_): {there = 0} [ make_dir(_): dir ]
+    len(nm): models
+    set(task): task0
+    chr(nl): 10
+    concat(sep): dir "/"
+    set(calls): {nm * cycles}
+    if(_): refine [ set(calls): {calls + 1} ]
+    if(_): {test = ""} [ set(calls): {calls + nm} ]
+    str_from_int(cs): calls
+    concat(said): "lenin: up to " cs " paid model calls"
+    print(_): said
+    if(_): {test != ""} [
+        print(_): "lenin: --test runs code no person has read, with your rights: use a sandbox"
+    ]
+    # 1. the prompt, refined
+    if(_): refine [
+        at(m0): models 0
+        lenin_refine_system(sys):
+        lenin_ask(better): m0 sys task0
+        if(_): {better != null} [
+            str_trim(task): better
+            print(_): "lenin: prompt refined"
+        ]
+        else(_): [ print(_): "lenin: refining failed: the prompt goes as it is" ]
+    ]
+    concat(path): sep "refined.md"
+    writefile(_): path task
+    # 2, 3. the centrifuge
+    lenin_make_system(sys): criteria
+    vec(all): ""
+    set(best): null
+    set(c): 1
+    while(_): {c <= cycles} [
+        lenin_question(q): task best criteria
+        set(j): 0
+        while(_): {j < nm} [
+            at(m): models j
+            at(mname): m 1
+            str_from_int(cn): c
+            lenin_safe(safe): mname
+            concat(file): sep "cycle" cn "_" safe ext
+            concat(log): sep "cycle" cn "_" safe ".log"
+            concat(said): "lenin: cycle " cn ": " mname
+            print(_): said
+            lenin_ask(reply): m sys q
+            if(_): {reply != null} [
+                lenin_code(code): reply
+                writefile(_): file code
+                lenin_measure(cand): mname file code test log window
+                btput(_): cand "cycle" c
+                push(_): all cand
+                lenin_describe(d): cand
+                concat(said): "lenin:   " d
+                print(_): said
+            ]
+            set(j): {j + 1}
+        ]
+        lenin_best(best): all criteria
+        set(c): {c + 1}
+    ]
+    len(ncand): all
+    if(_): {ncand = 0} [
+        print(_): "lenin: no model answered: no result"
+        return(r): r
+    ]
+    # 4. the extract
+    set(how): "measured: the candidate that passes its test and is best by the criterion"
+    if(_): {test = ""} [
+        lenin_vote(voted): models all task
+        set(how): "by the models' vote: nothing was run, so nothing here is shown to work"
+        if(_): {voted != null} [ set(best): voted ]
+        else(_): [ set(how): "the smallest answer: nothing was run and no model voted" ]
+    ]
+    btget(bestpassed): best "passed"
+    btget(bestcode): best "code"
+    btget(bestmodel): best "model"
+    btget(bestcycle): best "cycle"
+    concat(bestpath): sep "best" ext
+    writefile(_): bestpath bestcode
+    # the classic solution, measured the same way
+    set(base): null
+    if(_): {baseline != ""} [
+        lenin_read(basecode): baseline
+        if(_): {basecode = null} [
+            concat(said): "lenin: cannot read the baseline " baseline
+            print(_): said
+        ]
+        else(_): [
+            concat(baselog): sep "baseline.log"
+            lenin_measure(base): "baseline" baseline basecode test baselog window
+        ]
+    ]
+    # the report
+    str_from_int(bc): bestcycle
+    concat(rep): "# Lenin's report" nl nl "Criterion: " criteria nl "Chosen: " how nl nl "| cycle | model | state | bytes | runs/s |" nl "|---|---|---|---|---|" nl
+    set(i): 0
+    while(_): {i < ncand} [
+        at(x): all i
+        btget(xc): x "cycle"
+        btget(xm): x "model"
+        lenin_describe(d): x
+        str_from_int(xcs): xc
+        concat(rep): rep "| " xcs " | " xm " | " d " |" nl
+        set(i): {i + 1}
+    ]
+    if(_): {bestpassed = false} [
+        concat(rep): rep nl "No candidate passed its test: the one in best" ext " does not work." nl
+    ]
+    else(_): [ concat(rep): rep nl "Best: cycle " bc ", " bestmodel "." nl ]
+    if(_): {base != null} [
+        lenin_describe(bd): base
+        concat(rep): rep nl "Baseline, " baseline ": " bd nl
+        lenin_better(wins): best base criteria
+        if(_): wins [ concat(rep): rep "The best candidate beats the baseline on this test, by " criteria ". That is one task and one test." nl ]
+        else(_): [ concat(rep): rep "The baseline stands: no candidate beat it, by " criteria "." nl ]
+    ]
+    concat(path): sep "report.md"
+    writefile(_): path rep
+    print(_): rep
+    set(r): 0
+    if(_): {bestpassed = false} [ set(r): 1 ]
+]
+
+lenin_usage(r): [
+    set(r): 2
+    print(_): "usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]"
+    print(_): "             [--test COMMAND] [--ext .EXT] [--baseline FILE] [--window SECONDS]"
+    print(_): "             [--no-refine] [--prompt-file FILE] [prompt ...]"
+    print(_): "--models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key"
+    print(_): "--test: a command that exits 0 when a candidate works; {file} is the candidate"
+]
+
+lenin_main(r): argv [
+    btree(args):
+    btput(_): args "criteria" "size"
+    btput(_): args "dir" "lenin-out"
+    btput(_): args "cycles" 2
+    btput(_): args "test" ""
+    btput(_): args "ext" ".txt"
+    btput(_): args "baseline" ""
+    btput(_): args "window" 3
+    btput(_): args "refine" true
+    set(modelfile): ""
+    set(task): ""
+    len(n): argv
+    set(i): 0
+    while(_): {i < n} [
+        at(a): argv i
+        set(more): {i + 1 < n}
+        set(value): ""
+        if(_): more [ at(value): argv {i + 1} ]
+        set(took): more
+        if(_): {a = "--models"} [ set(modelfile): value ]
+        elif(_): {a = "--dir"} [ btput(_): args "dir" value ]
+        elif(_): {a = "--criteria"} [ btput(_): args "criteria" value ]
+        elif(_): {a = "--test"} [ btput(_): args "test" value ]
+        elif(_): {a = "--ext"} [ btput(_): args "ext" value ]
+        elif(_): {a = "--baseline"} [ btput(_): args "baseline" value ]
+        elif(_): {a = "--cycles"} [
+            str_to_number(v): value
+            str_trunc(v): v
+            btput(_): args "cycles" v
+        ]
+        elif(_): {a = "--window"} [
+            str_to_number(v): value
+            str_trunc(v): v
+            btput(_): args "window" v
+        ]
+        elif(_): {a = "--prompt-file"} [
+            lenin_read(task): value
+            if(_): {task = null} [
+                concat(m): "lenin: cannot read " value
+                print(_): m
+                set(r): 2
+                return(r): r
+            ]
+        ]
+        else(_): [
+            set(took): false
+            if(_): {a = "--no-refine"} [ btput(_): args "refine" false ]
+            elif(_): {a = "--help" || a = "-h"} [
+                lenin_usage(r):
+                return(r): r
+            ]
+            elif(_): {task = ""} [ set(task): a ]
+            else(_): [ concat(task): task " " a ]
+        ]
+        set(i): {i + 1}
+        if(_): took [ set(i): {i + 1} ]
+    ]
+    btget(criteria): args "criteria"
+    btget(cycles): args "cycles"
+    if(_): {modelfile = "" || task = "" || cycles < 1 || (criteria != "speed" && criteria != "size")} [
+        lenin_usage(r):
+        return(r): r
+    ]
+    lenin_load_models(models): modelfile
+    set(nm): 0
+    if(_): {models != null} [ len(nm): models ]
+    if(_): {nm = 0} [
+        concat(m): "lenin: no models in " modelfile
+        print(_): m
+        set(r): 2
+        return(r): r
+    ]
+    btget(test): args "test"
+    if(_): {criteria = "speed" && test = ""} [
+        print(_): "lenin: speed needs --test: there is nothing to time without one"
+        set(r): 2
+        return(r): r
+    ]
+    btput(_): args "models" models
+    btput(_): args "prompt" task
+    lenin_run(r): args
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(argv): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): argv a
+        set(i): {i + 1}
+    ]
+    lenin_main(ret): argv
+]
+$endif

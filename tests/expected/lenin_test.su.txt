@@ -1,0 +1,82 @@
+PASS replace
+PASS a model's name as a file name
+PASS the code of a fenced reply
+PASS a reply with no fence
+PASS words at spaces and tabs
+PASS the models file
+PASS a model's URL
+PASS no models file
+PASS one that passes beats a smaller one that fails
+PASS by size the smaller
+PASS by speed the faster
+lenin: LENIN_TEST_NO_SUCH_KEY is not set: skipping m
+PASS a model without its key gives nothing
+lenin: up to 9 paid model calls
+lenin: --test runs code no person has read, with your rights: use a sandbox
+lenin: prompt refined
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0
+lenin: cycle 1: big
+lenin:   passed | 47 | 0
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0
+lenin: cycle 2: wrong
+lenin:   FAILED | 7 | 0
+lenin: cycle 2: big
+lenin:   passed | 47 | 0
+lenin: cycle 2: down
+lenin: cycle 2: slim
+lenin:   passed | 5 | 0
+# Lenin's report
+
+Criterion: size
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s |
+|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 |
+| 1 | big | passed | 47 | 0 |
+| 1 | slim | passed | 5 | 0 |
+| 2 | wrong | FAILED | 7 | 0 |
+| 2 | big | passed | 47 | 0 |
+| 2 | slim | passed | 5 | 0 |
+
+Best: cycle 1, slim.
+
+PASS the run finds a winner
+PASS the winner passes and is the smallest
+PASS the report names it
+PASS the report has what failed
+PASS the vote goes to the letter
+PASS talk is no vote
+lenin: up to 8 paid model calls
+lenin: cycle 1: wrong
+lenin:   not run | 7 | 0
+lenin: cycle 1: big
+lenin:   not run | 47 | 0
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   not run | 5 | 0
+# Lenin's report
+
+Criterion: size
+Chosen: the smallest answer: nothing was run and no model voted
+
+| cycle | model | state | bytes | runs/s |
+|---|---|---|---|---|
+| 1 | wrong | not run | 7 | 0 |
+| 1 | big | not run | 47 | 0 |
+| 1 | slim | not run | 5 | 0 |
+
+Best: cycle 1, slim.
+
+PASS without a test the report says so
+
+--- stderr ---
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
+
+--- exit 0 ---

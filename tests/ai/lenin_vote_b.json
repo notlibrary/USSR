@@ -1,0 +1,1 @@
+{"id": "t", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "B\n"}, "finish_reason": "stop"}]}

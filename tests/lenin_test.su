@@ -1,0 +1,192 @@
+# Lenin: its text helpers, and a whole run with no network: USSR_AI_URL points
+# curl at canned file:// replies in tests/ai/, as tests/prompt.su does. One model
+# answers with code that fails the test, two with code that passes, one is down.
+# Run from the repository root:
+#     ussr tests/lenin_test.su
+$include "../src/lenin/lenin.su"
+
+check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(line): "PASS " label ]
+    else(_): [
+        encode(g): got
+        encode(w): want
+        concat(line): "FAIL " label ": got " g ", want " w
+    ]
+    print(_): line
+]
+
+fixture(url): name [
+    getcwd(d):
+    byte(b): d 0
+    set(u): "file:///"
+    if(_): {b = 47} [ set(u): "file://" ]
+    concat(url): u d "/tests/ai/" name
+]
+
+model(r): name file [
+    fixture(url): file
+    vec(r): ""
+    push(_): r "openai"
+    push(_): r name
+    push(_): r "-"
+    push(_): r url
+]
+
+clean(r): dir [
+    set(r): 0
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        concat(p): dir "/" name
+        remove_file(_): p
+        set(i): {i + 1}
+    ]
+    remove_dir(_): dir
+]
+
+# a test any shell has: the candidate holds the word "good"
+word_test(r): [
+    getenv(os): "OS"
+    set(r): "grep good {file}"
+    if(_): {os = "Windows_NT"} [ set(r): "findstr good {file}" ]
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    set(dir): "tests/lenin-tmp"
+    clean(_): dir
+    make_dir(_): dir
+
+    # the helpers
+    lenin_replace(s): "run {file} now" "{file}" "a.py"
+    check(_): "replace" s "run a.py now"
+    lenin_safe(s): "org/model:1-a"
+    check(_): "a model's name as a file name" s "org_model_1-a"
+    chr(nl): 10
+    concat(reply): "Here:" nl "```python" nl "x = 1" nl "```" nl "Done."
+    lenin_code(s): reply
+    concat(want): "x = 1" nl
+    check(_): "the code of a fenced reply" s want
+    lenin_code(s): "  no fence  "
+    check(_): "a reply with no fence" s "no fence"
+    lenin_words(w): "openai  gpt	-"
+    len(n): w
+    check(_): "words at spaces and tabs" n 3
+
+    # models.conf
+    concat(conf): dir "/models.conf"
+    concat(text): "# a comment" nl nl "anthropic claude-x ANTHROPIC_API_KEY" nl "openai local - http://localhost/v1" nl
+    writefile(_): conf text
+    lenin_load_models(ms): conf
+    len(n): ms
+    check(_): "the models file" n 2
+    at(m1): ms 1
+    at(u): m1 3
+    check(_): "a model's URL" u "http://localhost/v1"
+    lenin_load_models(none): "tests/lenin-tmp/no-such-file"
+    check(_): "no models file" none null
+
+    # who beats whom
+    lenin_measure(fail): "x" "p" "aaaaaaaaaa" "" "l" 0
+    btput(_): fail "passed" false
+    btput(_): fail "tested" true
+    lenin_measure(big): "y" "p" "aaaaaaaaaaaaaaaaaaaaaaaaa" "" "l" 0
+    btput(_): big "rate" 10
+    lenin_measure(small): "z" "p" "aaaaaaaaaaaaaaaaaaaa" "" "l" 0
+    btput(_): small "rate" 2
+    lenin_better(b): small fail "size"
+    check(_): "one that passes beats a smaller one that fails" b true
+    lenin_better(b): small big "size"
+    check(_): "by size the smaller" b true
+    lenin_better(b): big small "speed"
+    check(_): "by speed the faster" b true
+
+    # a key that is not set skips the model, and no call goes out
+    vec(nokey): ""
+    push(_): nokey "openai"
+    push(_): nokey "m"
+    push(_): nokey "LENIN_TEST_NO_SUCH_KEY"
+    push(_): nokey ""
+    unsetenv(_): "LENIN_TEST_NO_SUCH_KEY"
+    lenin_ask(a): nokey "s" "q"
+    check(_): "a model without its key gives nothing" a null
+
+    # a whole run
+    vec(models): ""
+    model(m): "wrong" "lenin_wrong.json"
+    push(_): models m
+    model(m): "big" "lenin_big.json"
+    push(_): models m
+    model(m): "down" "lenin_down.json"
+    push(_): models m
+    model(m): "slim" "lenin_slim.json"
+    push(_): models m
+    concat(rundir): dir "/run"
+    btree(args):
+    btput(_): args "models" models
+    btput(_): args "prompt" "say good"
+    btput(_): args "criteria" "size"
+    btput(_): args "dir" rundir
+    btput(_): args "cycles" 2
+    word_test(t):
+    btput(_): args "test" t
+    btput(_): args "ext" ".txt"
+    btput(_): args "baseline" ""
+    btput(_): args "window" 0
+    btput(_): args "refine" true
+    lenin_run(st): args
+    check(_): "the run finds a winner" st 0
+    concat(p): rundir "/best.txt"
+    readfile(best): p
+    concat(want): "good" nl
+    check(_): "the winner passes and is the smallest" best want
+    concat(p): rundir "/report.md"
+    readfile(rep): p
+    str_find(i): rep "Best: cycle 1, slim." 0
+    check(_): "the report names it" {i >= 0} true
+    str_find(i): rep "| wrong | FAILED |" 0
+    check(_): "the report has what failed" {i >= 0} true
+
+    # the blind vote: a reply that is not one letter does not count
+    vec(voters): ""
+    model(m): "v1" "lenin_vote_b.json"
+    push(_): voters m
+    model(m): "v2" "lenin_vote_talk.json"
+    push(_): voters m
+    vec(answers): ""
+    push(_): answers fail
+    push(_): answers small
+    lenin_vote(won): voters answers "the task"
+    btget(wm): won "model"
+    check(_): "the vote goes to the letter" wm "z"
+    vec(talkers): ""
+    model(m): "v2" "lenin_vote_talk.json"
+    push(_): talkers m
+    lenin_vote(won): talkers answers "the task"
+    check(_): "talk is no vote" won null
+
+    # no test: the models vote, and the report says nothing was run
+    btput(_): args "test" ""
+    btput(_): args "cycles" 1
+    btput(_): args "refine" false
+    concat(rundir2): dir "/vote"
+    btput(_): args "dir" rundir2
+    lenin_run(st): args
+    concat(p): rundir2 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "nothing was run" 0
+    check(_): "without a test the report says so" {i >= 0} true
+
+    clean(_): rundir
+    clean(_): rundir2
+    clean(_): dir
+    unsetenv(_): "USSR_AI_URL"
+    unsetenv(_): "USSR_AI_SYSTEM"
+    unsetenv(_): "USSR_AI_MODEL"
+    unsetenv(_): "USSR_AI_PROVIDER"
+]
