@@ -215,6 +215,8 @@ mass produced neuroslopware bring your model and get in too
 
 Personally I believe the mass produced enriched refined neuroslop is better than classical software
 Cheaper faster less bugs per lines less requirement for programmer etc..
+By classical software I mean a guy who sits 25-50 years in row improving some open source component
+with end goal to get monopoly/dictatorship on it even it's technically stay open source
 
 Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
