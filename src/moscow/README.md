@@ -525,7 +525,8 @@ with.
 
 Builtins with the hosted ussr's meaning: `len byte slice chr vec push
 pop at typeof struct new getf setf encode decode try write_stderr fail
-text_bytes bytes_text crc32 sha256 clear_bytes btree btput btget bthas
+re_test re_find re_pos re_all re_replace re_split (`arch/amd64/regex.inc`, the
+same engine as `src/regex.c`) text_bytes bytes_text crc32 sha256 clear_bytes btree btput btget bthas
 btdel btlen btfirst btlast btfloor btceil btprev btnext btrange btkeys
 bread bwrite bsize bcopy bdevices getenv setenv unsetenv getcwd terminal_getch
 terminal_raw terminal_sane terminal_key_ready terminal_size terminal_escape

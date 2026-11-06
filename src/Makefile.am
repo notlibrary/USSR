@@ -29,6 +29,7 @@ ussr_SOURCES = \
 	alias.c \
 	history.c \
 	ai.c \
+	regex.c \
 	help.c \
 	completion_fs_posix.c
 	
@@ -51,6 +52,7 @@ EXTRA_DIST = \
     ussr_ru.h \
     uno.h \
     ussr_oop_builtins.h \
+    regex.h \
     scheduler.h \
     petersburg.h \
     ttf.h \

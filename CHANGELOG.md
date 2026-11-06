@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- Regular expressions: `re_test`, `re_find`, `re_pos`, `re_all`, `re_replace` and
+  `re_split`, builtin in `ussr`, in `russia.su` and in Moscow's runtime. UTF-8
+  aware, with groups, lazy repeats and the `i`, `m` and `s` flags. They run in
+  linear time on a Pike VM, so no pattern can hang them; there are no
+  backreferences and no lookaround.
 - Lenin (`src/lenin`), the agent that enriches and refines neuroslop code: it
   refines a prompt, gives it to several models for a number of cycles, measures
   every answer with your test (size, speed), extracts the best and reports, with

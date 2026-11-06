@@ -6986,6 +6986,7 @@ bi_pwd:
 %include "task.inc"
 %include "gc.inc"
 %include "native.inc"
+%include "regex.inc"
 
 ; =====================================================================
 ; tables and texts
@@ -7068,6 +7069,12 @@ bi_table:
         dq n_byte, bi_byte
         dq n_slice, bi_slice
         dq n_chr, bi_chr
+        dq n_re_test, bi_re_test
+        dq n_re_find, bi_re_find
+        dq n_re_pos, bi_re_pos
+        dq n_re_all, bi_re_all
+        dq n_re_replace, bi_re_replace
+        dq n_re_split, bi_re_split
         dq n_vec, bi_vec
         dq n_push, bi_push
         dq n_pop, bi_pop
@@ -7534,6 +7541,38 @@ n_linux_cmd:    resq 1                  ; __linux's number + 1
 n_epoch:        resq 1                  ; the clock at boot
 n_env_ptrs:     resq 16
 n_rng:          resb 48                 ; the state, the counter, the ticks
+re_mem:         resq RE_MEM_MAX         ; what the regular expression command took
+re_mem_n:       resq 1
+re_err:         resq 1
+re_sp:          resq 1
+re_out:         resq 1
+re_name:        resq 1
+re_p:           resq 1                  ; the pattern, as it is read
+re_pend:        resq 1
+re_code:        resq 1
+re_len:         resq 1
+re_ranges:      resq 1
+re_nranges:     resq 1
+re_groups:      resq 1
+re_slots:       resq 1
+re_depth:       resq 1
+re_icase:       resq 1
+re_multi:       resq 1
+re_dotall:      resq 1
+re_threads:     resq 2
+re_counts:      resq 2
+re_saves:       resq 1
+re_stack:       resq 1
+re_marks:       resq 1
+re_spans:       resq 1
+re_generation:  resq 1
+re_text:        resq 1
+re_tlen:        resq 1
+re_from:        resq 1
+re_repl:        resq 1
+re_buf:         resq 1
+re_buf_len:     resq 1
+re_buf_room:    resq 1
 fg_id:          resq 1                  ; the task the console reads for
 fg_kill:        resq 1                  ; Ctrl-C came for it
 pt_leaves:      resq 1                  ; pages pt_free_entries gave back

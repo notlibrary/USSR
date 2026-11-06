@@ -59,6 +59,12 @@ static const help_entry_t g_help[] = {
     { "byte", "strings", "byte(b): s i", "byte at index i" },
     { "slice", "strings", "slice(t): s i n", "n bytes of s from index i" },
     { "chr", "strings", "chr(s): byte", "one-byte string for 1..255" },
+    { "re_test", "strings", "re_test(b): pattern text [flags]", "does a regular expression match anywhere" },
+    { "re_find", "strings", "re_find(m): pattern text [from] [flags]", "the first match and its groups as strings, or null" },
+    { "re_pos", "strings", "re_pos(p): pattern text [from] [flags]", "the first match's start and end per group, or null" },
+    { "re_all", "strings", "re_all(v): pattern text [flags]", "every match as a string" },
+    { "re_replace", "strings", "re_replace(s): pattern text replacement [flags]", "every match replaced; \\0 .. \\9 are its groups" },
+    { "re_split", "strings", "re_split(v): pattern text [flags]", "the text split at each match" },
 
     /* structs, vectors, UNO */
     { "struct", "data", "struct(Name): \"field:type\" ...", "declare a struct" },

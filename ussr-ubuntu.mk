@@ -67,6 +67,7 @@ OBJS = $(SRC_DIR)/parser.tab.o \
        $(SRC_DIR)/alias.o \
        $(SRC_DIR)/history.o \
        $(SRC_DIR)/ai.o \
+       $(SRC_DIR)/regex.o \
        $(SRC_DIR)/ryazan.o \
        $(SRC_DIR)/ryazan_openssl.o \
        $(SRC_DIR)/ryazan_schannel.o \
@@ -140,6 +141,9 @@ $(SRC_DIR)/ryazan_schannel.o: $(SRC_DIR)/ryazan_schannel.c $(SRC_DIR)/ryazan_bac
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/ai.o: $(SRC_DIR)/ai.c $(SRC_DIR)/ai.h $(SRC_DIR)/process.h $(SRC_DIR)/ussr_oop_builtins.h $(SRC_DIR)/ryazan.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SRC_DIR)/regex.o: $(SRC_DIR)/regex.c $(SRC_DIR)/regex.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/alias.o: $(SRC_DIR)/alias.c $(SRC_DIR)/alias.h $(SRC_DIR)/ussr.h
