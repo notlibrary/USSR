@@ -160,6 +160,13 @@ typedef struct
     ussr_bc_scan_site_t *scan_sites;
     size_t scan_site_count;
     size_t scan_site_capacity;
+
+    /* Where each instruction came from, for runtime errors: code_count
+     * entries, or NULL (a .ru file or UUASM text has no source lines).
+     * source_files holds interned names, which are never freed. An entry
+     * of NULL or 0 means the instruction has no command of its own. */
+    const char **source_files;
+    int *source_lines;
 } ussr_bc_program_t;
 
 /*

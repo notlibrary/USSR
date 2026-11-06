@@ -1,0 +1,9 @@
+# a failure caught by try reports no location: its caller decides
+fails(r): [
+    add(r): nothing 1
+]
+
+init(ret): arg_cnt arg_vec [
+    try(failed): "fails"
+    print(_): failed
+]

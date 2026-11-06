@@ -68,3 +68,34 @@ ps_output.txt
 
 # Moscow boot images (sh src/moscow/build.sh)
 /build/moscow/
+
+# Autotools output (autoreconf; configure.ac and the Makefile.am files are the source)
+Makefile.in
+aclocal.m4
+autom4te.cache/
+/compile
+/config.guess
+/config.h
+/config.h.in
+/config.log
+/config.status
+/config.sub
+/configure
+/depcomp
+/install-sh
+/missing
+/stamp-h1
+/ylwrap
+
+# Build output and installers
+/build/
+/ussr
+*.msi
+*.wixpdb
+
+# Ural's package databases, compiled bytecode and files the tests leave
+*.boxes
+/src/russia/russia.ru
+kvr_tmp.db
+tests/gui/*_tmp.*
+.vibe_probe.tmp

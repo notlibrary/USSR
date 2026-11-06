@@ -1,0 +1,7 @@
+
+--- stderr ---
+tests/oop/errors_concat_number.su:4: runtime error: concat needs strings, got string, integer (str_from_int or encode makes a string of a number)
+  in init
+USSR scheduler: process 2 (init) failed
+USSR VM: execution failed (status -1)
+--- exit 1 ---

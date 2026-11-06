@@ -1,0 +1,13 @@
+# a failure in a function: the calls it was in
+inner(r): v [
+    pop(r): v
+]
+
+outer(r): v [
+    inner(r): v
+]
+
+init(ret): arg_cnt arg_vec [
+    vec(v):
+    outer(_): v
+]

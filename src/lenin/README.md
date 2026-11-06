@@ -69,6 +69,41 @@ outputs, on several inputs, with edge cases: see `examples/wordcount/test.py`.
 answers, and the report says that nothing there is shown to work. A vote tells
 you what models like, and they like confident code. Use it for a first look.
 
+## The record
+
+One run says little, so every run adds a few lines to a file that outlives it:
+what each model answered, how it measured and who won. It answers what a single
+report cannot: which model passes most often, whether later cycles win, and how
+often anything beats your baseline.
+
+```bash
+ussr src/lenin/lenin.su --stats
+```
+
+```text
+# Lenin's record: 12 runs of 4 tasks
+
+| model | answers | no answer | tested | passed | pass rate | runs won |
+|---|---|---|---|---|---|---|
+| claude-opus-5-5 | 36 | 0 | 36 | 31 | 86% | 7 |
+
+| method | runs | a passing winner | won after cycle 1 | baseline beaten | baseline stands |
+|---|---|---|---|---|---|
+| chain | 6 | 5 | 3 | 1 | 2 |
+| rounds | 6 | 6 | 2 | 0 | 3 |
+
+Refining: a later cycle won 5 of 11 runs with a passing winner (45%).
+Classic code: the best answer beat the baseline in 1 of 6 runs that had one (16%).
+```
+
+"Runs won" counts only answers that passed a test: a vote shows nothing works.
+The numbers count what happened, on your tasks and tests. They are as good as those
+tests, and under 20 measured runs Lenin says they are too few to conclude anything.
+
+The file is `~/.lenin/history.tsv`, or `LENIN_HISTORY`, or `--history FILE`;
+`--no-history` keeps a run out of it. It is plain tab-separated text with no keys
+and no answers, but it does hold model names and the first 60 bytes of each prompt.
+
 ## Models
 
 `--models` is a file of lines `provider model KEY_ENV [url]`:
@@ -117,6 +152,9 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 | `--window SECONDS` | how long to time speed | 3 |
 | `--no-refine` | send the prompt as it is | refines |
 | `--prompt-file FILE` | the prompt from a file | the arguments |
+| `--history FILE` | the record every run adds to | `LENIN_HISTORY`, else `~/.lenin/history.tsv` |
+| `--no-history` | keep this run out of the record | records it |
+| `--stats` | print what the record says, and run nothing | |
 
 ## A benchmark
 

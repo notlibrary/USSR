@@ -19,6 +19,9 @@ extern "C" {
  * filesystem data, then gives Bestline candidate strings.
  */
 void ussr_autocomplete_init(void);
+
+/* The names of the builtin commands, ending in NULL. */
+const char *const *ussr_autocomplete_builtins(void);
 void ussr_autocomplete_cleanup(void);
 
 /* The currently accumulated REPL source, used as local context. */

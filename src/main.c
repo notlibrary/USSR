@@ -1399,6 +1399,9 @@ static int vm_do_load(
     return 1;
 }
 
+/* How many try calls are running: their failures are not reported. */
+static int vm_try_depth = 0;
+
 /* try(failed): "function" args ...
  * Calls one of the program's functions with args in a nested VM, in this
  * process (it shares the globals), and catches its failure: failed is 1
@@ -1470,7 +1473,11 @@ static int vm_try_call(
     nested.ip = (uint32_t)(program->code_count - 1);
     status = vm_call(&nested, program, &call);
     if (status == 0)
+    {
+        ++vm_try_depth;
         status = vm_execute(&nested, program, 0);
+        --vm_try_depth;
+    }
 
     /* A failure leaves the calls it was in (and any eval inside them)
      * on the locals stack: unwind to where the call started. */
@@ -1623,6 +1630,288 @@ static void vm_prof_step(const ussr_bc_program_t *program,
     vm_prof_t0 = __rdtsc();
 }
 #endif
+
+/*
+ * Runtime errors. A failing instruction may or may not have printed why;
+ * vm_report_error adds where: "file:line: runtime error: what", then the
+ * calls it was in. The "USSR scheduler" and "USSR VM" lines still follow.
+ * A failure caught by try is not reported: try's caller decides.
+ */
+static void vm_source_at(
+    const ussr_bc_program_t *program,
+    uint32_t ip,
+    const char **file,
+    int *line)
+{
+    *file = NULL;
+    *line = 0;
+    if (program->source_lines != NULL && ip < program->code_count)
+    {
+        *file = program->source_files[ip];
+        *line = program->source_lines[ip];
+    }
+}
+
+/* The variable that register reg was loaded from for instruction ip, if
+ * the same source line loaded it: for naming what was null. */
+static const char *vm_operand_name(
+    const ussr_bc_program_t *program,
+    uint32_t ip,
+    unsigned reg)
+{
+    const char *file;
+    int line, here;
+    unsigned steps;
+
+    vm_source_at(program, ip, &file, &here);
+    for (steps = 0; steps < 32 && ip > 0; ++steps)
+    {
+        const ussr_bc_instruction_t *ins = &program->code[--ip];
+
+        vm_source_at(program, ip, &file, &line);
+        if (line != here)
+            return NULL;
+        if (ins->a != reg)
+            continue;
+        if (ins->opcode == USSR_BC_LOAD_VAR &&
+            ins->immediate < program->string_count)
+            return program->strings[ins->immediate];
+        if (ins->opcode != USSR_BC_STORE_VAR &&
+            ins->opcode != USSR_BC_STORE_HASH)
+            return NULL;
+    }
+    return NULL;
+}
+
+/* Edit distance, for "did you mean"; anything over limit is limit + 1. */
+static size_t vm_edit_distance(const char *a, const char *b, size_t limit)
+{
+    size_t la = strlen(a), lb = strlen(b), i, j;
+    size_t row[65];
+
+    if (la > 64 || lb > 64)
+        return limit + 1;
+    if ((la > lb ? la - lb : lb - la) > limit)
+        return limit + 1;
+    for (j = 0; j <= lb; ++j)
+        row[j] = j;
+    for (i = 1; i <= la; ++i)
+    {
+        size_t diagonal = row[0];
+
+        row[0] = i;
+        for (j = 1; j <= lb; ++j)
+        {
+            size_t above = row[j];
+            size_t best = diagonal + (a[i - 1] != b[j - 1] ? 1 : 0);
+
+            if (above + 1 < best)
+                best = above + 1;
+            if (row[j - 1] + 1 < best)
+                best = row[j - 1] + 1;
+            row[j] = best;
+            diagonal = above;
+        }
+    }
+    return row[lb];
+}
+
+/* The builtin or function of this program closest to name, or NULL. */
+static const char *vm_did_you_mean(
+    const ussr_bc_program_t *program,
+    const char *name)
+{
+    const char *const *builtins = ussr_autocomplete_builtins();
+    const char *best = NULL;
+    size_t limit = strlen(name) <= 3 ? 1 : 2;
+    size_t best_distance = limit + 1;
+    size_t i;
+
+    for (i = 0; i < program->function_count; ++i)
+    {
+        size_t d = vm_edit_distance(name, program->functions[i].name, limit);
+
+        if (d < best_distance)
+        {
+            best_distance = d;
+            best = program->functions[i].name;
+        }
+    }
+    for (i = 0; builtins[i] != NULL; ++i)
+    {
+        size_t d = vm_edit_distance(name, builtins[i], limit);
+
+        if (d < best_distance)
+        {
+            best_distance = d;
+            best = builtins[i];
+        }
+    }
+    return best;
+}
+
+static void vm_report_operand(
+    const ussr_bc_program_t *program,
+    const ussr_vm_t *vm,
+    uint32_t ip,
+    unsigned reg)
+{
+    const char *variable;
+
+    if (vm->registers[reg].type != USSR_NULL)
+        return;
+    variable = vm_operand_name(program, ip, reg);
+    if (variable != NULL)
+        fprintf(stderr, " ('%s' is null: is it set?)", variable);
+}
+
+static void vm_report_error(const ussr_vm_t *vm, const ussr_bc_program_t *program)
+{
+    uint32_t ip = vm->ip > 0 ? vm->ip - 1 : 0;
+    const char *file;
+    int line;
+    size_t i;
+
+    if (vm_try_depth > 0)
+        return;
+
+    /* An interpreter written in USSR (russia.su) fails the script it runs
+     * by failing itself: lines in its own source would say nothing about
+     * that script, so it sets this global to true. */
+    {
+        const ussr_value_t *hide = ussr_get_variable_at(
+            "__hide_runtime_errors", USSR_VAR_GLOBAL, 0);
+
+        if (hide != NULL && hide->type == USSR_BOOLEAN && hide->data.boolean)
+            return;
+    }
+
+    vm_source_at(program, ip, &file, &line);
+    if (file != NULL && line > 0)
+        fprintf(stderr, "%s:%d: runtime error: ", file, line);
+    else
+        fprintf(stderr, "ip %lu: runtime error: ", (unsigned long)ip);
+
+    if (ip >= program->code_count)
+        fprintf(stderr, "execution left the program");
+    else
+    {
+        const ussr_bc_instruction_t *ins = &program->code[ip];
+        const char *name = ins->immediate < program->string_count
+            ? program->strings[ins->immediate] : NULL;
+        const char *verb = NULL;
+
+        switch (ins->opcode)
+        {
+            case USSR_BC_ADD: verb = "add"; break;
+            case USSR_BC_SUB: verb = "subtract"; break;
+            case USSR_BC_MUL: verb = "multiply"; break;
+            case USSR_BC_DIV: verb = "divide"; break;
+            case USSR_BC_MOD: verb = "take the remainder of"; break;
+            case USSR_BC_LT: case USSR_BC_LE:
+            case USSR_BC_GT: case USSR_BC_GE: verb = "compare"; break;
+            case USSR_BC_XOR: case USSR_BC_BAND: case USSR_BC_BOR:
+                verb = "apply a bit operator to"; break;
+            case USSR_BC_SHL: case USSR_BC_SHR: verb = "shift"; break;
+            default: break;
+        }
+
+        if (verb != NULL && ins->b < USSR_VM_REGISTER_COUNT &&
+            ins->c < USSR_VM_REGISTER_COUNT)
+        {
+            fprintf(stderr, "cannot %s %s and %s", verb,
+                    vm_type_label(&vm->registers[ins->b]),
+                    vm_type_label(&vm->registers[ins->c]));
+            vm_report_operand(program, vm, ip, ins->b);
+            if (ins->c != ins->b)
+                vm_report_operand(program, vm, ip, ins->c);
+        }
+        else if (ins->opcode == USSR_BC_CALL &&
+                 ins->immediate < program->function_count)
+        {
+            if (vm->frame_count >= USSR_VM_MAX_CALLS)
+                fprintf(stderr, "calls nested too deep (limit %u) calling %s",
+                        USSR_VM_MAX_CALLS,
+                        program->functions[ins->immediate].name);
+            else
+                fprintf(stderr, "cannot call %s",
+                        program->functions[ins->immediate].name);
+        }
+        else if (ins->opcode == USSR_BC_EXTERNAL && name != NULL)
+        {
+            const char *near_name = vm_did_you_mean(program, name);
+
+            fprintf(stderr, "cannot run command '%s'", name);
+            if (near_name != NULL && strcmp(near_name, name) != 0)
+                fprintf(stderr, " (did you mean '%s'?)", near_name);
+        }
+        else if (ins->opcode == USSR_BC_OOP && name != NULL &&
+                 strcmp(ussr_missing_command, name) == 0)
+        {
+            const char *near_name = vm_did_you_mean(program, name);
+
+            fprintf(stderr, "cannot run command '%s'", name);
+            if (near_name != NULL && strcmp(near_name, name) != 0)
+                fprintf(stderr, " (did you mean '%s'?)", near_name);
+        }
+        else if (ins->opcode == USSR_BC_CONCAT && ins->c < USSR_VM_REGISTER_COUNT)
+        {
+            fprintf(stderr, "concat needs strings, got ");
+            for (i = 0; i < ins->c; ++i)
+                fprintf(stderr, "%s%s", i > 0 ? ", " : "",
+                        vm_type_label(&vm->registers[i]));
+            fprintf(stderr, " (str_from_int or encode makes a string of a number)");
+        }
+        else if (ins->opcode == USSR_BC_NEG && ins->b < USSR_VM_REGISTER_COUNT)
+        {
+            fprintf(stderr, "cannot negate %s", vm_type_label(&vm->registers[ins->b]));
+            vm_report_operand(program, vm, ip, ins->b);
+        }
+        else if (ins->opcode == USSR_BC_OOP && name != NULL)
+        {
+            fprintf(stderr, "%s failed", name);
+            if (ins->b > 0 && ins->b < USSR_VM_REGISTER_COUNT)
+            {
+                fprintf(stderr, " with arguments of type ");
+                for (i = 0; i < ins->b; ++i)
+                    fprintf(stderr, "%s%s", i > 0 ? ", " : "",
+                            vm_type_label(&vm->registers[i]));
+            }
+        }
+        else if (ins->opcode == USSR_BC_EVAL)
+            fprintf(stderr, "eval failed");
+        else
+            fprintf(stderr, "instruction failed (opcode 0x%02x)", ins->opcode);
+    }
+    fputc('\n', stderr);
+
+    /* The calls, innermost first; a runaway recursion shows its ends. */
+    for (i = vm->frame_count; i > 0; --i)
+    {
+        const ussr_vm_frame_t *frame = &vm->frames[i - 1];
+        const char *function =
+            frame->function_index < program->function_count
+                ? program->functions[frame->function_index].name : "?";
+        size_t shown = vm->frame_count - i;
+
+        if (vm->frame_count > 10 && shown == 8)
+        {
+            fprintf(stderr, "  ... %zu more calls\n", vm->frame_count - 10);
+            i = 3;
+            continue;
+        }
+        /* init (and a try's function) return to the final HALT: no
+         * command called them. */
+        vm_source_at(program, frame->return_ip - 1, &file, &line);
+        if (frame->return_ip == 0 || frame->return_ip > program->code_count ||
+            program->code[frame->return_ip - 1].opcode != USSR_BC_CALL ||
+            program->code[frame->return_ip - 1].immediate != frame->function_index ||
+            file == NULL || line <= 0)
+            fprintf(stderr, "  in %s\n", function);
+        else
+            fprintf(stderr, "  in %s, called at %s:%d\n", function, file, line);
+    }
+}
 
 int vm_execute(
     ussr_vm_t *vm,
@@ -2416,7 +2705,12 @@ int vm_execute(
     }
     result=USSR_VM_STATUS_DONE;
 done:
-    return result == USSR_VM_STATUS_DONE ? USSR_VM_STATUS_DONE : USSR_VM_STATUS_ERROR;
+    if (result != USSR_VM_STATUS_DONE)
+    {
+        vm_report_error(vm, program);
+        return USSR_VM_STATUS_ERROR;
+    }
+    return USSR_VM_STATUS_DONE;
 }
 
 int vm_execute_uuasm(

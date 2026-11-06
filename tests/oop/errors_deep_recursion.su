@@ -1,0 +1,9 @@
+# endless recursion: the limit, and only the ends of the calls
+deeper(r): n [
+    add(m): n 1
+    deeper(r): m
+]
+
+init(ret): arg_cnt arg_vec [
+    deeper(_): 0
+]

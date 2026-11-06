@@ -114,6 +114,13 @@ suite() {
             tests/cffi_moscow_*|tests/moscow_*) continue ;;  # Moscow only: qemu_test.py runs them
             tests/stalin_*|tests/usa_*|tests/usa/*) continue ;;
         esac
+        # ussr's call limit (this recursion runs for minutes through russia.su)
+        # and try (russia.su has none yet): ussr only
+        if [ "$label" = russia ]; then
+            case "$f" in
+                tests/oop/errors_deep_recursion.su|tests/oop/errors_try_quiet.su) continue ;;
+            esac
+        fi
         want="tests/expected/${f#tests/}.txt"
         input="tests/expected/${f#tests/}.in"
         [ -f "$input" ] || input=/dev/null
@@ -125,6 +132,14 @@ suite() {
             cat "$tmp/err"
             printf '\n--- exit %s ---\n' "$got_status"
         } | tr -d '\r' >"$tmp/got"
+        # russia.su reports no source lines yet: compare its runtime errors
+        # without the lines ussr adds for them.
+        if [ "$label" = russia ]; then
+            sed -E '/^[^ ]+:[0-9]+: runtime error: /d; /^  in [^ ,]+(, called at [^ ]+:[0-9]+)?$/d; /^  \.\.\. [0-9]+ more calls$/d' "$want" 2>/dev/null |
+                tr -d '\r' >"$tmp/want"
+        else
+            tr -d '\r' <"$want" 2>/dev/null >"$tmp/want"
+        fi
         if [ "$update" = 1 ]; then
             mkdir -p "$(dirname "$want")"
             cp "$tmp/got" "$want"
@@ -132,10 +147,10 @@ suite() {
         fi
         if [ ! -f "$want" ]; then
             bad "$f" "no expectation: $want (run with --update)"
-        elif tr -d '\r' <"$want" | cmp -s "$tmp/got" -; then
+        elif cmp -s "$tmp/got" "$tmp/want"; then
             ok "$f"
         else
-            bad "$f" "$(tr -d '\r' <"$want" | diff - "$tmp/got" | head -n 40)"
+            bad "$f" "$(diff "$tmp/want" "$tmp/got" | head -n 40)"
         fi
     done
 

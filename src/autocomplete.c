@@ -691,6 +691,11 @@ static void ac_add_candidate_prefix_bonus(
     }
 }
 
+const char *const *ussr_autocomplete_builtins(void)
+{
+    return ac_builtin_commands;
+}
+
 void ussr_autocomplete_init(void)
 {
     memset(&state, 0, sizeof(state));

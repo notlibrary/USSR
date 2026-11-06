@@ -1,0 +1,5 @@
+# a mistyped command: where it is, and the name it is close to
+init(ret): arg_cnt arg_vec [
+    print(_): "before"
+    prnt(_): "after"
+]

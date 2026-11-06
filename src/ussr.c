@@ -63,6 +63,8 @@ static const char *ussr_parse_name = "<input>";
 static ussr_line_lookup_t ussr_parse_lookup = NULL;
 static const void *ussr_parse_context = NULL;
 
+char ussr_missing_command[128] = "";
+
 const char *ussr_source_name_intern(const char *name)
 {
     /* A short list: one entry per distinct file name ever parsed. */
@@ -2689,16 +2691,13 @@ ussr_external_build_argv(
         {
             path = ussr_strdup(full_path_buffer);
         }
-        else
-        {
-            path = ussr_strdup(win_cmd_buffer);
-        }
     }
 #endif
 
     if (path == NULL)
     {
         fprintf(stderr, "USSR: command not found: %s\n", command);
+        snprintf(ussr_missing_command, sizeof(ussr_missing_command), "%s", command);
         return -1;
     }
 
@@ -2899,6 +2898,7 @@ ussr_execute_external_io(
     if (path == NULL)
     {
         fprintf(stderr, "USSR: command not found: %s\n", command);
+        snprintf(ussr_missing_command, sizeof(ussr_missing_command), "%s", command);
         return -1;
     }
 

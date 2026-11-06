@@ -4044,6 +4044,30 @@ static int uuasm_compile_source(
     bc_scope_warnings(program);
     bc_names_free(&bc_program_globals);
 
+    /* The line table is a convenience for error messages: a program
+     * without one still runs. */
+    program->source_files = malloc(program->code_count * sizeof(*program->source_files));
+    program->source_lines = malloc(program->code_count * sizeof(*program->source_lines));
+    if (program->source_files == NULL || program->source_lines == NULL)
+    {
+        free((void *)program->source_files);
+        free(program->source_lines);
+        program->source_files = NULL;
+        program->source_lines = NULL;
+    }
+    else
+    {
+        size_t k;
+
+        for (k = 0; k < program->code_count; ++k)
+        {
+            const ussr_command_t *from = bc_code_commands[k];
+
+            program->source_files[k] = from != NULL ? from->source_file : NULL;
+            program->source_lines[k] = from != NULL ? from->source_line : 0;
+        }
+    }
+
     return 0;
 }
 
@@ -4151,6 +4175,8 @@ void ussr_bc_program_free(
     free(program->functions);
     free(program->oop_sites);
     free(program->scan_sites);
+    free((void *)program->source_files);
+    free(program->source_lines);
 
     memset(program, 0, sizeof(*program));
 }

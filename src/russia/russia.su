@@ -21,6 +21,7 @@ $include "check.su"
 # Interpreter state shared across the stages (lx_ lexer, ps_ parser, rt_
 # tree runtime, cv_ compiler, vm_ VM, sc_ scheduler); every other variable
 # a function sets is local to it.
+global(_): __hide_runtime_errors
 global(_): rt_hash cv_own cv_pglob cv_pall cv_gall cv_regpush ps_quiet ps_errline ps_i ps_nddef rt_flow vm_suspend vm_ip vm_qleft vm_sp
 global(_): sc_runq sc_tick lx_tokens ps_stop
 global(_): ps_root rt_store rt_fdefs rt_rv rt_tn rt_xrv vm_flow cv_code
@@ -8567,6 +8568,8 @@ init_src(r): avec [
     ]
 ]
 init(ret): arg_cnt arg_vec [
+    # this file's lines say nothing about the script it runs (see ussr's main.c)
+    set(__hide_runtime_errors): true
     # .ua/.uuasm targets are assembled and run by uuasm.su; an optional
     # trailing "dump" prints the assembled program instead.
     if(_): {arg_cnt > 0} [
