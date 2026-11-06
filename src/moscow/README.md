@@ -37,6 +37,18 @@ PC with a BIOS (or CSM) whose disk answers on the legacy ATA ports (IDE,
 or SATA in IDE mode); USB and AHCI drivers are not there yet. The
 installer, though, writes only to virtual disks.
 
+## The ISO
+
+`build/moscow/ussr.iso` holds the same files as the install disk's Belarus root,
+in ISO 9660 with Joliet and Rock Ridge, so Windows, Linux and the rest read them
+under their long names. A release ships it as `USSR049.ISO` for the tag 0.4.9, next to
+`USSR049.img`. `build.sh` makes it when `xorriso` is there, and
+`tools/iso_test.py` reads its Joliet tree back with no ISO library and compares
+every file.
+
+It does not boot. Moscow's loader reads an ATA hard disk and a CD speaks ATAPI, so
+to boot USSR use the `.img`. The ISO is for reading and copying the files.
+
 ## Installing
 
 Boot the install disk with a second, empty virtual disk and type

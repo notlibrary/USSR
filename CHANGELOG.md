@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- `USSRmajorminorpatch.ISO`, the eighth release artifact: the install disk's files
+  in ISO 9660 with Joliet long names, for reading on any system. It does not boot.
 - Regular expressions: `re_test`, `re_find`, `re_pos`, `re_all`, `re_replace` and
   `re_split`, builtin in `ussr`, in `russia.su` and in Moscow's runtime. UTF-8
   aware, with groups, lazy repeats and the `i`, `m` and `s` flags. They run in

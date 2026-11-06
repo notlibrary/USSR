@@ -153,7 +153,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flex bison autoconf automake libtool \
             cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev \
-            libglfw3-dev libgl1-mesa-dev nasm clang lld
+            libglfw3-dev libgl1-mesa-dev nasm clang lld xorriso
 
       - name: Build Ural
         if: runner.os != 'Windows'
@@ -168,8 +168,9 @@ jobs:
         shell: bash
         run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 RYAZAN_REQUIRE_TLS=1 ussr
 
-      # The Moscow install disk, USSR049.img for the tag 0.4.9. build.sh goes
-      # on without a C library it cannot build; a release does not.
+      # The Moscow install disk, USSR049.img for the tag 0.4.9, and the same
+      # files as USSR049.ISO. build.sh goes on without a C library or a program
+      # it cannot build; a release does not.
       - name: Build the Moscow install disk
         if: runner.os != 'Windows'
         id: moscow
@@ -182,16 +183,22 @@ jobs:
           for prog in ussr ural; do
             test -f "build/moscow/native/$prog" || { echo "no /bin/$prog on the disk" >&2; exit 1; }
           done
+          test -f build/moscow/ussr.iso || { echo "no ussr.iso" >&2; exit 1; }
           image="USSR${GITHUB_REF_NAME//./}.img"
           cp build/moscow/ussr.img "$image"
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          iso="USSR${GITHUB_REF_NAME//./}.ISO"
+          cp build/moscow/ussr.iso "$iso"
+          echo "iso=$iso" >> "$GITHUB_OUTPUT"
 
       - name: Upload the Moscow install disk to Release
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.PAT8 }}
-          files: ${{ steps.moscow.outputs.image }}
+          files: |
+            ${{ steps.moscow.outputs.image }}
+            ${{ steps.moscow.outputs.iso }}
 
       - name: Package for Linux
         if: runner.os != 'Windows'
