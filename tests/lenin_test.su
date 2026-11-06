@@ -255,6 +255,57 @@ init(result): arg_count arg_values [
     str_find(i): rep "nothing was run" 0
     check(_): "without a test the report says so" {i >= 0} true
 
+    # the record: what a run adds, and what --stats makes of it
+    concat(hist): dir "/history.tsv"
+    btput(_): args "history" hist
+    concat(rundir5): dir "/record"
+    btput(_): args "dir" rundir5
+    lenin_run(st): args
+    word_test(wt):
+    btput(_): args "test" wt
+    lenin_run(st): args
+    btput(_): args "test" ""
+    readfile(said): hist
+    lenin_lines(lines): said
+    set(runs_seen): 0
+    set(answers_seen): 0
+    set(missed_seen): 0
+    len(nlines): lines
+    set(i): 0
+    while(_): {i < nlines} [
+        at(line): lines i
+        lenin_fields(f): line
+        at(kind): f 0
+        if(_): {kind = "run"} [ set(runs_seen): {runs_seen + 1} ]
+        if(_): {kind = "answer"} [
+            set(answers_seen): {answers_seen + 1}
+            at(state): f 4
+            if(_): {state = "noanswer"} [ set(missed_seen): {missed_seen + 1} ]
+        ]
+        set(i): {i + 1}
+    ]
+    check(_): "the record has both runs" runs_seen 2
+    check(_): "the record has a model that did not answer" {missed_seen > 0} true
+    check(_): "the record has the answers" {answers_seen > missed_seen} true
+    lenin_stats(st): hist
+    check(_): "stats reads it" st 0
+    concat(nofile): dir "/no-such-history.tsv"
+    lenin_stats(st): nofile
+    check(_): "stats with no history yet is no error" st 0
+    lenin_task_id(id1): "a task"
+    lenin_task_id(id2): "another task"
+    check(_): "tasks have different numbers" {id1 != id2} true
+    chr(tab_): 9
+    concat(messy): "one" tab_ "two" nl "three"
+    lenin_cell(cell): messy 100
+    check(_): "a field stays on one line" cell "one two three"
+    # a cut does not split a letter: this is two bytes, then two bytes
+    lenin_cell(cell): "ЖЖ" 3
+    len(celln): cell
+    check(_): "a cut keeps letters whole" celln 2
+    btdel(_): args "history"
+
+    clean(_): rundir5
     clean(_): rundir
     clean(_): rundir2
     clean(_): rundir3

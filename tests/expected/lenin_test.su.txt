@@ -108,6 +108,8 @@ usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
              [--method rounds|chain]
              [--test COMMAND] [--ext .EXT] [--baseline FILE] [--window SECONDS]
              [--no-refine] [--prompt-file FILE] [prompt ...]
+             [--history FILE] [--no-history]
+       lenin --stats [--history FILE]
 --models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key
 --test: a command that exits 0 when a candidate works; {file} is the candidate
 PASS a method there is not
@@ -136,8 +138,85 @@ Chosen: the smallest answer: nothing was run and no model voted
 Best: cycle 1, slim.
 
 PASS without a test the report says so
+lenin: up to 8 paid model calls
+lenin: cycle 1: wrong
+lenin:   not run | 7 | 0
+lenin: cycle 1: big
+lenin:   not run | 47 | 0
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   not run | 5 | 0
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: the smallest answer: nothing was run and no model voted
+
+| cycle | model | state | bytes | runs/s |
+|---|---|---|---|---|
+| 1 | wrong | not run | 7 | 0 |
+| 1 | big | not run | 47 | 0 |
+| 1 | slim | not run | 5 | 0 |
+
+Best: cycle 1, slim.
+
+lenin: this run was added to tests/lenin-tmp/history.tsv; --stats reads it
+lenin: up to 4 paid model calls
+lenin: --test runs code no person has read, with your rights: use a sandbox
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0
+lenin: cycle 1: big
+lenin:   passed | 47 | 0
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s |
+|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 |
+| 1 | big | passed | 47 | 0 |
+| 1 | slim | passed | 5 | 0 |
+
+Best: cycle 1, slim.
+
+lenin: this run was added to tests/lenin-tmp/history.tsv; --stats reads it
+PASS the record has both runs
+PASS the record has a model that did not answer
+PASS the record has the answers
+# Lenin's record: 2 runs of 1 tasks
+
+| model | answers | no answer | tested | passed | pass rate | runs won |
+|---|---|---|---|---|---|---|
+| big | 2 | 0 | 1 | 1 | 100% | 0 |
+| down | 0 | 2 | 0 | 0 | - | 0 |
+| slim | 2 | 0 | 1 | 1 | 100% | 1 |
+| wrong | 2 | 0 | 1 | 0 | 0% | 0 |
+
+| method | runs | a passing winner | won after cycle 1 | baseline beaten | baseline stands |
+|---|---|---|---|---|---|
+| rounds | 2 | 1 | 0 | 0 | 0 |
+
+Refining: a later cycle won 0 of 1 runs with a passing winner (0%).
+Classic code: the best answer beat the baseline in 0 of 0 runs that had one (-).
+
+Under 20 measured runs: too few to conclude anything.
+
+PASS stats reads it
+lenin: no history in tests/lenin-tmp/no-such-history.tsv yet
+PASS stats with no history yet is no error
+PASS tasks have different numbers
+PASS a field stays on one line
+PASS a cut keeps letters whole
 
 --- stderr ---
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down

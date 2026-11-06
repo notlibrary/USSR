@@ -414,6 +414,354 @@ lenin_question(r): task best criteria [
     concat(r): task nl nl title nl "```" nl code nl "```" nl state nl nl "Give a better one, by " criteria ", that still does the task."
 ]
 
+# --- the record: every run adds to one file, so that many runs can answer
+# what one cannot: do later cycles win, does anything beat a classic baseline?
+# Lines of tab-separated fields:
+#   run  id time task method criteria cycles models tested winner cycle passed baseline title
+#   answer  id cycle model state bytes rate won
+# state is passed, FAILED, notrun or noanswer; baseline is none, beaten or stands.
+
+# LENIN_HISTORY, else .lenin/history.tsv in the home directory
+lenin_history_path(r): [
+    getenv(r): "LENIN_HISTORY"
+    if(_): {r != null && r != ""} [ return(r): r ]
+    getenv(home): "HOME"
+    if(_): {home = null || home = ""} [ getenv(home): "USERPROFILE" ]
+    if(_): {home = null || home = ""} [
+        set(r): "lenin-history.tsv"
+        return(r): r
+    ]
+    concat(r): home "/.lenin/history.tsv"
+]
+
+# the fields of a line, split at tabs; empty fields count
+lenin_fields(r): line [
+    vec(r): ""
+    chr(tab): 9
+    len(n): line
+    set(from): 0
+    while(_): {from <= n} [
+        str_find(i): line tab from
+        if(_): {i < 0} [ set(i): n ]
+        slice(field): line from {i - from}
+        push(_): r field
+        set(from): {i + 1}
+    ]
+]
+
+# a number for a prompt, so runs of one task can be told apart without it
+lenin_task_id(r): text [
+    set(h): 2166136261
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        set(h): {(h * 16777619 + b) & 4294967295}
+        set(i): {i + 1}
+    ]
+    str_from_int(r): h
+]
+
+# text for one field: on one line, no tabs, at most max bytes, no cut letter
+lenin_cell(r): text max [
+    set(r): ""
+    len(n): text
+    if(_): {n > max} [
+        set(n): max
+        set(more): true
+        while(_): more [
+            set(more): false
+            if(_): {n > 0} [
+                byte(b): text n
+                if(_): {(b & 192) = 128} [
+                    set(n): {n - 1}
+                    set(more): true
+                ]
+            ]
+        ]
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): {b = 9 || b = 10 || b = 13} [ set(b): 32 ]
+        chr(c): b
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+]
+
+# makes the directory a file goes in, one level
+lenin_make_parent(r): path [
+    set(r): 0
+    len(i): path
+    set(i): {i - 1}
+    while(_): {i > 0} [
+        byte(b): path i
+        if(_): {b = 47 || b = 92} [
+            slice(parent): path 0 i
+            is_dir(there): parent
+            if(_): {there = 0} [ make_dir(_): parent ]
+            return(r): r
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+lenin_state_word(r): c [
+    btget(passed): c "passed"
+    btget(tested): c "tested"
+    set(r): "notrun"
+    if(_): tested [
+        set(r): "FAILED"
+        if(_): passed [ set(r): "passed" ]
+    ]
+]
+
+# adds this run to args' "history" file, if it has one. Keys are not in it, nor
+# the prompt: a number for it and its first 60 bytes.
+lenin_record(r): args all missed best base_state [
+    set(r): 0
+    btget(path): args "history"
+    if(_): {path = null || path = ""} [ return(r): r ]
+    btget(task0): args "prompt"
+    btget(method): args "method"
+    btget(criteria): args "criteria"
+    btget(cycles): args "cycles"
+    btget(models): args "models"
+    btget(test): args "test"
+    chr(tab): 9
+    chr(nl): 10
+    time(now):
+    str_from_int(nows): now
+    lenin_task_id(task_id): task0
+    concat(run_id): nows "-" task_id
+    str_from_int(cs): cycles
+    len(nm): models
+    str_from_int(nms): nm
+    set(tested): "0"
+    if(_): {test != ""} [ set(tested): "1" ]
+    set(wmodel): "-"
+    set(wcycle): "0"
+    set(wpassed): "0"
+    if(_): {best != null} [
+        btget(wmodel): best "model"
+        btget(wc): best "cycle"
+        str_from_int(wcycle): wc
+        lenin_state_word(wstate): best
+        if(_): {wstate = "passed"} [ set(wpassed): "1" ]
+    ]
+    lenin_cell(title): task0 60
+    concat(text): "run" tab run_id tab nows tab task_id tab method tab criteria tab cs tab
+    concat(text): text nms tab tested tab wmodel tab wcycle tab wpassed tab base_state tab title nl
+    len(ncand): all
+    set(i): 0
+    while(_): {i < ncand} [
+        at(x): all i
+        btget(xm): x "model"
+        btget(xc): x "cycle"
+        btget(xs): x "size"
+        btget(xr): x "rate"
+        str_from_int(xcs): xc
+        str_from_int(xss): xs
+        str_from_number(xrs): xr 2
+        lenin_state_word(xst): x
+        set(won): "0"
+        if(_): {xm = wmodel && xcs = wcycle} [ set(won): "1" ]
+        concat(text): text "answer" tab run_id tab xcs tab xm tab xst tab xss tab xrs tab won nl
+        set(i): {i + 1}
+    ]
+    len(nmiss): missed
+    set(i): 0
+    while(_): {i < nmiss} [
+        at(x): missed i
+        at(xm): x 0
+        at(xcs): x 1
+        concat(text): text "answer" tab run_id tab xcs tab xm tab "noanswer" tab "0" tab "0" tab "0" nl
+        set(i): {i + 1}
+    ]
+    lenin_make_parent(_): path
+    lenin_read(old): path
+    open_file(h): path "ab"
+    if(_): {h < 0} [
+        concat(said): "lenin: cannot add this run to " path
+        print(_): said
+        return(r): r
+    ]
+    if(_): {old = null} [
+        write_file(_): h "# Lenin's history: see the record in src/lenin/lenin.su"
+        write_file(_): h nl
+    ]
+    write_file(_): h text
+    close_file(_): h
+    concat(said): "lenin: this run was added to " path "; --stats reads it"
+    print(_): said
+]
+
+lenin_bump(r): t key [
+    set(r): 0
+    btget(v): t key 0
+    btput(_): t key {v + 1}
+]
+
+# part of whole, as a whole percentage: text
+lenin_percent(r): part whole [
+    set(r): "-"
+    if(_): {whole = 0} [ return(r): r ]
+    str_trunc(p): {part * 100 / whole}
+    str_from_int(r): p
+    concat(r): r "%"
+]
+
+lenin_count(r): t key [
+    btget(v): t key 0
+    str_from_int(r): v
+]
+
+# prints what the history in path says; gives 0, as no history yet is no error
+lenin_stats(r): path [
+    set(r): 0
+    lenin_read(text): path
+    if(_): {text = null} [
+        concat(said): "lenin: no history in " path " yet"
+        print(_): said
+        return(r): r
+    ]
+    btree(tasks):
+    btree(answers):
+    btree(noanswer):
+    btree(tested):
+    btree(passed):
+    btree(wins):
+    btree(runs):
+    btree(measured):
+    btree(later):
+    btree(beaten):
+    btree(stands):
+    set(total): 0
+    set(total_measured): 0
+    set(total_later): 0
+    set(total_beaten): 0
+    set(total_stands): 0
+    lenin_lines(lines): text
+    len(nl_): lines
+    set(i): 0
+    while(_): {i < nl_} [
+        at(line): lines i
+        lenin_fields(f): line
+        len(nf): f
+        at(kind): f 0
+        if(_): {kind = "run" && nf >= 14} [
+            at(task): f 3
+            at(method): f 4
+            at(wcycle): f 10
+            at(wpassed): f 11
+            at(base): f 12
+            btput(_): tasks task true
+            lenin_bump(_): runs method
+            set(total): {total + 1}
+            if(_): {wpassed = "1"} [
+                lenin_bump(_): measured method
+                set(total_measured): {total_measured + 1}
+                str_to_number(wc): wcycle
+                if(_): {wc > 1} [
+                    lenin_bump(_): later method
+                    set(total_later): {total_later + 1}
+                ]
+            ]
+            if(_): {base = "beaten"} [
+                lenin_bump(_): beaten method
+                set(total_beaten): {total_beaten + 1}
+            ]
+            if(_): {base = "stands"} [
+                lenin_bump(_): stands method
+                set(total_stands): {total_stands + 1}
+            ]
+        ]
+        elif(_): {kind = "answer" && nf >= 8} [
+            at(model): f 3
+            at(state): f 4
+            at(won): f 7
+            if(_): {state = "noanswer"} [ lenin_bump(_): noanswer model ]
+            else(_): [ lenin_bump(_): answers model ]
+            if(_): {state = "passed" || state = "FAILED"} [ lenin_bump(_): tested model ]
+            if(_): {state = "passed"} [
+                lenin_bump(_): passed model
+                if(_): {won = "1"} [ lenin_bump(_): wins model ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    chr(nl): 10
+    btlen(ntasks): tasks
+    str_from_int(ts): total
+    str_from_int(tks): ntasks
+    concat(out): "# Lenin's record: " ts " runs of " tks " tasks" nl nl
+    concat(out): out "| model | answers | no answer | tested | passed | pass rate | runs won |" nl
+    concat(out): out "|---|---|---|---|---|---|---|" nl
+    # every model seen, answering or not
+    btree(names):
+    btkeys(k): answers
+    len(n): k
+    set(i): 0
+    while(_): {i < n} [
+        at(name): k i
+        btput(_): names name true
+        set(i): {i + 1}
+    ]
+    btkeys(k): noanswer
+    len(n): k
+    set(i): 0
+    while(_): {i < n} [
+        at(name): k i
+        btput(_): names name true
+        set(i): {i + 1}
+    ]
+    btkeys(k): names
+    len(n): k
+    set(i): 0
+    while(_): {i < n} [
+        at(name): k i
+        lenin_count(a): answers name
+        lenin_count(na): noanswer name
+        lenin_count(te): tested name
+        lenin_count(pa): passed name
+        lenin_count(wi): wins name
+        btget(pn): passed name 0
+        btget(tn): tested name 0
+        lenin_percent(rate): pn tn
+        concat(out): out "| " name " | " a " | " na " | " te " | " pa " | " rate " | " wi " |" nl
+        set(i): {i + 1}
+    ]
+    concat(out): out nl "| method | runs | a passing winner | won after cycle 1 | baseline beaten | baseline stands |" nl
+    concat(out): out "|---|---|---|---|---|---|" nl
+    btkeys(k): runs
+    len(n): k
+    set(i): 0
+    while(_): {i < n} [
+        at(name): k i
+        lenin_count(ru): runs name
+        lenin_count(me): measured name
+        lenin_count(la): later name
+        lenin_count(be): beaten name
+        lenin_count(st): stands name
+        concat(out): out "| " name " | " ru " | " me " | " la " | " be " | " st " |" nl
+        set(i): {i + 1}
+    ]
+    str_from_int(ms): total_measured
+    str_from_int(ls): total_later
+    lenin_percent(lp): total_later total_measured
+    concat(out): out nl "Refining: a later cycle won " ls " of " ms " runs with a passing winner (" lp ")." nl
+    set(with_base): {total_beaten + total_stands}
+    str_from_int(bs): total_beaten
+    str_from_int(wbs): with_base
+    lenin_percent(bp): total_beaten with_base
+    concat(out): out "Classic code: the best answer beat the baseline in " bs " of " wbs " runs that had one (" bp ")." nl
+    if(_): {total_measured < 20} [
+        concat(out): out nl "Under 20 measured runs: too few to conclude anything." nl
+    ]
+    print(_): out
+]
+
 lenin_describe(r): c [
     btget(passed): c "passed"
     btget(tested): c "tested"
@@ -484,6 +832,7 @@ lenin_run(r): args [
     # 2, 3. the centrifuge
     lenin_make_system(sys): criteria
     vec(all): ""
+    vec(missed): ""
     set(best): null
     # what the next model is shown
     set(current): null
@@ -519,6 +868,12 @@ lenin_run(r): args [
                     else(_): [ lenin_best(current): all criteria ]
                 ]
             ]
+            else(_): [
+                vec(miss): ""
+                push(_): miss mname
+                push(_): miss cn
+                push(_): missed miss
+            ]
             set(j): {j + 1}
         ]
         lenin_best(best): all criteria
@@ -528,6 +883,7 @@ lenin_run(r): args [
     len(ncand): all
     if(_): {ncand = 0} [
         print(_): "lenin: no model answered: no result"
+        lenin_record(_): args all missed null "none"
         return(r): r
     ]
     # 4. the extract
@@ -546,6 +902,7 @@ lenin_run(r): args [
     writefile(_): bestpath bestcode
     # the classic solution, measured the same way
     set(base): null
+    set(base_state): "none"
     if(_): {baseline != ""} [
         lenin_read(basecode): baseline
         if(_): {basecode = null} [
@@ -578,12 +935,19 @@ lenin_run(r): args [
         lenin_describe(bd): base
         concat(rep): rep nl "Baseline, " baseline ": " bd nl
         lenin_better(wins): best base criteria
-        if(_): wins [ concat(rep): rep "The best candidate beats the baseline on this test, by " criteria ". That is one task and one test." nl ]
-        else(_): [ concat(rep): rep "The baseline stands: no candidate beat it, by " criteria "." nl ]
+        if(_): wins [
+            set(base_state): "beaten"
+            concat(rep): rep "The best candidate beats the baseline on this test, by " criteria ". That is one task and one test." nl
+        ]
+        else(_): [
+            set(base_state): "stands"
+            concat(rep): rep "The baseline stands: no candidate beat it, by " criteria "." nl
+        ]
     ]
     concat(path): sep "report.md"
     writefile(_): path rep
     print(_): rep
+    lenin_record(_): args all missed best base_state
     set(r): 0
     if(_): {bestpassed = false} [ set(r): 1 ]
 ]
@@ -594,6 +958,8 @@ lenin_usage(r): [
     print(_): "             [--method rounds|chain]"
     print(_): "             [--test COMMAND] [--ext .EXT] [--baseline FILE] [--window SECONDS]"
     print(_): "             [--no-refine] [--prompt-file FILE] [prompt ...]"
+    print(_): "             [--history FILE] [--no-history]"
+    print(_): "       lenin --stats [--history FILE]"
     print(_): "--models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key"
     print(_): "--test: a command that exits 0 when a candidate works; {file} is the candidate"
 ]
@@ -611,6 +977,9 @@ lenin_main(r): argv [
     btput(_): args "refine" true
     set(modelfile): ""
     set(task): ""
+    set(histfile): ""
+    set(keep_history): true
+    set(stats): false
     len(n): argv
     set(i): 0
     while(_): {i < n} [
@@ -626,6 +995,7 @@ lenin_main(r): argv [
         elif(_): {a = "--test"} [ btput(_): args "test" value ]
         elif(_): {a = "--ext"} [ btput(_): args "ext" value ]
         elif(_): {a = "--baseline"} [ btput(_): args "baseline" value ]
+        elif(_): {a = "--history"} [ set(histfile): value ]
         elif(_): {a = "--cycles"} [
             str_to_number(v): value
             str_trunc(v): v
@@ -648,6 +1018,8 @@ lenin_main(r): argv [
         else(_): [
             set(took): false
             if(_): {a = "--no-refine"} [ btput(_): args "refine" false ]
+            elif(_): {a = "--no-history"} [ set(keep_history): false ]
+            elif(_): {a = "--stats"} [ set(stats): true ]
             elif(_): {a = "--help" || a = "-h"} [
                 lenin_usage(r):
                 return(r): r
@@ -658,6 +1030,12 @@ lenin_main(r): argv [
         set(i): {i + 1}
         if(_): took [ set(i): {i + 1} ]
     ]
+    if(_): {histfile = ""} [ lenin_history_path(histfile): ]
+    if(_): stats [
+        lenin_stats(r): histfile
+        return(r): r
+    ]
+    if(_): keep_history [ btput(_): args "history" histfile ]
     btget(criteria): args "criteria"
     btget(cycles): args "cycles"
     btget(method): args "method"
