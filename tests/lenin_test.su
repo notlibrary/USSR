@@ -131,6 +131,7 @@ init(result): arg_count arg_values [
     btput(_): args "models" models
     btput(_): args "prompt" "say good"
     btput(_): args "criteria" "size"
+    btput(_): args "method" "rounds"
     btput(_): args "dir" rundir
     btput(_): args "cycles" 2
     word_test(t):
@@ -151,6 +152,78 @@ init(result): arg_count arg_values [
     check(_): "the report names it" {i >= 0} true
     str_find(i): rep "| wrong | FAILED |" 0
     check(_): "the report has what failed" {i >= 0} true
+
+    # rounds: in a cycle nobody sees what the others in it just said
+    concat(p): rundir "/cycle1_slim.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "good deal" 0
+    check(_): "rounds: the last model in a cycle sees nothing of it" {i < 0} true
+    concat(p): rundir "/cycle2_wrong.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "The best answer so far:" 0
+    check(_): "rounds: the next cycle sees the best" {i >= 0} true
+
+    # chain: each model gets the best so far, right after the one before it
+    btput(_): args "method" "chain"
+    btput(_): args "cycles" 1
+    btput(_): args "refine" false
+    concat(rundir3): dir "/chain"
+    btput(_): args "dir" rundir3
+    lenin_run(st): args
+    check(_): "chain: a winner" st 0
+    concat(p): rundir3 "/cycle1_wrong.prompt.md"
+    readfile(sent): p
+    check(_): "chain: the first model has only the task" sent "say good"
+    concat(p): rundir3 "/cycle1_big.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "not it" 0
+    check(_): "chain: the next one sees the answer before it" {i >= 0} true
+    str_find(i): sent "It failed its test" 0
+    check(_): "chain: and that it failed" {i >= 0} true
+    concat(p): rundir3 "/cycle1_slim.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "good deal" 0
+    check(_): "chain: a model that is down is passed over" {i >= 0} true
+    str_find(i): sent "not it" 0
+    check(_): "chain: what passed replaces what failed" {i < 0} true
+    concat(p): rundir3 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "Method: chain" 0
+    check(_): "chain: the report says so" {i >= 0} true
+
+    # chain with no test: the latest answer goes on, not the smallest
+    btput(_): args "test" ""
+    vec(two): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): two m
+    model(m): "big" "lenin_big.json"
+    push(_): two m
+    model(m): "last" "lenin_wrong.json"
+    push(_): two m
+    btput(_): args "models" two
+    concat(rundir4): dir "/chain2"
+    btput(_): args "dir" rundir4
+    lenin_run(st): args
+    concat(p): rundir4 "/cycle1_last.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "good deal" 0
+    check(_): "chain with no test: the latest goes on" {i >= 0} true
+    str_find(i): sent "The answer so far:" 0
+    check(_): "and it is not called the best" {i >= 0} true
+    btput(_): args "models" models
+    btput(_): args "method" "rounds"
+    word_test(t):
+    btput(_): args "test" t
+
+    # a method there is not
+    vec(argv): ""
+    push(_): argv "--models"
+    push(_): argv conf
+    push(_): argv "--method"
+    push(_): argv "sideways"
+    push(_): argv "the task"
+    lenin_main(st): argv
+    check(_): "a method there is not" st 2
 
     # the blind vote: a reply that is not one letter does not count
     vec(voters): ""
@@ -184,6 +257,8 @@ init(result): arg_count arg_values [
 
     clean(_): rundir
     clean(_): rundir2
+    clean(_): rundir3
+    clean(_): rundir4
     clean(_): dir
     unsetenv(_): "USSR_AI_URL"
     unsetenv(_): "USSR_AI_SYSTEM"

@@ -199,7 +199,8 @@ You get the best of what the models gave, by your test:
 
 1. It refines the prompt so it precisely reflects things in reality
 2. It gives the refined prompt to the centrifuge models
-3. They work on it for the given number of cycles, each cycle seeing the best
+3. They work on it for the given number of cycles, each cycle (or with
+   `--method chain` each centrifuge, one after another) seeing the best
    answer so far and how it measured
 4. It runs every answer through your test and extracts the one that passes and
    is best by your criteria

@@ -15,9 +15,9 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
    prompt: language, inputs, outputs, limits, how to tell it works. Assumptions
    it makes are listed as assumptions. It goes to `out/refined.md`, so read it.
    `--no-refine` sends yours as it is.
-2. **Spins the centrifuge.** Every model answers. From the second cycle on,
-   each sees the best answer so far and how it measured, or what its test said
-   when it failed, and is asked for a better one.
+2. **Spins the centrifuge.** Every model answers. Each sees the best answer so
+   far and how it measured, or what its test said when it failed, and is asked
+   for a better one. `--method` says how often that best changes: see below.
 3. **Measures.** Each answer is one file, written to `out/`. `--test` runs on it
    and exits 0 when it works. Size is its bytes. Speed is how many times the
    test runs a second over `--window` seconds (3 by default), start-up included:
@@ -28,6 +28,33 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
 
 `--baseline FILE` measures a solution you already have, a classic one, the same
 way, and the report says whether anything beat it.
+
+## Methods
+
+`--method rounds`, the default: every model in a cycle gets the same prompt, with
+the best from the cycles before it. They work independently, so you get as many
+different ideas as there are models, and the first cycle spreads the widest.
+
+`--method chain`: one centrifuge after another. Each is given the current best, what
+the model just before it did included, so each refines the last. With two models and
+two cycles that is A, B, A, B, and every step sees everything before it.
+
+```bash
+ussr src/lenin/lenin.su --models models.conf --method chain --cycles 2 \
+     --test "python test.py {file}" --ext .py "what you want"
+```
+
+Which does better is a question for your task. A chain builds on what works; it can
+also settle on the first thing that passes, since all after it start from there. Both
+cost the same: models times cycles. A model that fails is passed over and the next
+gets the same best.
+
+With no `--test` nothing measures an answer, so "best" could only mean "smallest", and
+a stub is small. There the chain passes on the latest answer, called "the answer so
+far" and not "the best", and the models still vote at the end.
+
+Each model's prompt is written next to its answer, `cycle1_name.prompt.md`, so you can
+read what it was really given.
 
 ## What "best" means
 
@@ -83,6 +110,7 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 | `--dir DIR` | where everything goes | `lenin-out` |
 | `--cycles N` | generation cycles | 2 |
 | `--criteria speed\|size` | what decides among those that pass; speed needs `--test` | `size` |
+| `--method rounds\|chain` | when the best is passed on: after each cycle, or each model | `rounds` |
 | `--test COMMAND` | exits 0 when `{file}` works; `{file}` goes at the end if not given | none: a vote |
 | `--ext .EXT` | candidates' file extension | `.txt` |
 | `--baseline FILE` | a solution to compare with | none |
