@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- Runtime errors say where: `file:line: runtime error: what`, then the calls they
+  were in. A mistyped command gets `did you mean`, a null operand is named, and
+  concat says which types it got. A failure caught by `try` reports no location.
+  `.ru` files have no source lines yet (`ip N:`), and `russia.su` reports errors in
+  the scripts it runs as before, with no lines. On Windows a missing command now says `command not found`.
+- Lenin keeps a record: every run adds to `~/.lenin/history.tsv`, and `--stats`
+  reports pass rates and wins by model, and how often later cycles win or a
+  baseline is beaten.
 - Lenin's `--method chain`: the centrifuges work one after another, and each gets
   the current best answer, what the one before it did included. Each model's prompt
   is now written next to its answer.
