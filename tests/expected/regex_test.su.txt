@@ -1,0 +1,97 @@
+PASS found anywhere
+PASS not found
+PASS offsets
+PASS no match is null
+PASS the whole match
+PASS a range
+PASS negated
+PASS digits
+PASS word characters
+PASS not spaces
+PASS not digits
+PASS a shorthand and a dash in a class
+PASS a ] first in a class
+PASS any
+PASS star is greedy
+PASS star? is lazy
+PASS plus
+PASS plus? is lazy
+PASS optional
+PASS exactly
+PASS between
+PASS between, lazy
+PASS at least
+PASS from none
+PASS none at all
+PASS a { that repeats nothing
+PASS a group repeated
+PASS alternatives
+PASS the first alternative that works, not the longest
+PASS groups: the whole
+PASS groups: the first
+PASS groups: the second
+PASS a group that took no part
+PASS and the one that did
+PASS a span per group
+PASS with -1 for no part
+PASS and its offsets
+PASS (?: does not capture
+PASS a loop that can match nothing ends
+PASS a group keeps its last
+PASS both ends
+PASS start of text
+PASS end of text
+PASS lines are not ends, by default
+PASS with m they are
+PASS a word boundary
+PASS not one
+PASS case counts
+PASS i: it does not
+PASS i in a class
+PASS i in a negated class
+PASS . takes no newline
+PASS s: it does
+PASS an escaped dot
+PASS escaped parentheses
+PASS a tab
+PASS a hex byte
+PASS a backslash
+PASS . takes a whole character
+PASS a class of Cyrillic
+PASS offsets are bytes
+PASS a count counts characters
+PASS a negated class takes four bytes too
+PASS from an offset
+PASS from the end
+PASS from past the end
+PASS ^ is the text's start
+PASS also with a from
+PASS a boundary sees what is before from
+PASS from and flags
+PASS all
+PASS all of none
+PASS empty matches move on
+PASS by characters, not bytes
+PASS all, with flags
+PASS replace all
+PASS groups
+PASS the whole match
+PASS a backslash
+PASS a group with no part is nothing
+PASS around each character
+PASS around a whole character
+PASS with flags
+PASS nothing to replace
+PASS split
+PASS empty pieces stay
+PASS an empty match splits between characters
+PASS nothing to split at
+PASS split with flags
+PASS (a+)+$ ends at once
+PASS (a|a)*c ends at once
+PASS (a*)*(a*)*(a*)*x ends at once
+regex: all passed
+
+--- stderr ---
+
+--- exit 0 ---

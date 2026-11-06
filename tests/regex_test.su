@@ -1,0 +1,320 @@
+# Regular expressions: one list of expectations for every engine. ussr runs it
+# with src/regex.c, russia.su with its host's, and Moscow with its NASM one:
+# qemu_test.py runs it there and wants all PASS. A failed check does not stop the
+# script, so that one failure shows them all.
+global(_): failures
+
+check(r): label got want [
+    set(r): 0
+    typeof(tg): got
+    typeof(tw): want
+    set(same): false
+    if(_): {tg = tw} [
+        # encode takes no newlines or backticks, and vectors have no =
+        if(_): {tg = "vector"} [
+            encode(g): got
+            encode(w): want
+            set(same): {g = w}
+        ]
+        else(_): [ set(same): {got = want} ]
+    ]
+    if(_): same [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label ": got, want:"
+        print(_): line
+        print(_): got
+        print(_): want
+        set(failures): {failures + 1}
+    ]
+]
+
+pairs(r): a b [
+    vec(r): ""
+    push(_): r a
+    push(_): r b
+]
+
+init(result): arg_count arg_values [
+    set(failures): 0
+
+    # literals and where they are
+    re_test(b): "cat" "concatenate"
+    check(_): "found anywhere" b true
+    re_test(b): "dog" "concatenate"
+    check(_): "not found" b false
+    re_pos(p): "cat" "concatenate"
+    pairs(w): 3 6
+    check(_): "offsets" p w
+    re_pos(p): "dog" "concatenate"
+    check(_): "no match is null" p null
+    re_find(m): "cat" "concatenate"
+    at(s): m 0
+    check(_): "the whole match" s "cat"
+
+    # classes and shorthands
+    re_find(m): "[0-9]+" "abc 123 def"
+    at(s): m 0
+    check(_): "a range" s "123"
+    re_find(m): "[^a-z ]+" "abc 123 def"
+    at(s): m 0
+    check(_): "negated" s "123"
+    re_find(m): "\\d+" "abc 123"
+    at(s): m 0
+    check(_): "digits" s "123"
+    re_find(m): "\\w+" "  foo_1 bar"
+    at(s): m 0
+    check(_): "word characters" s "foo_1"
+    re_find(m): "\\S+" "  foo bar"
+    at(s): m 0
+    check(_): "not spaces" s "foo"
+    re_find(m): "\\D+" "12ab34"
+    at(s): m 0
+    check(_): "not digits" s "ab"
+    re_find(m): "[\\d-]+" "a 1-2 b"
+    at(s): m 0
+    check(_): "a shorthand and a dash in a class" s "1-2"
+    re_find(m): "[]a]+" "x]a]"
+    at(s): m 0
+    check(_): "a ] first in a class" s "]a]"
+    re_find(m): "a.c" "abc"
+    at(s): m 0
+    check(_): "any" s "abc"
+
+    # repeats
+    re_find(m): "ab*" "abbbc"
+    at(s): m 0
+    check(_): "star is greedy" s "abbb"
+    re_find(m): "ab*?" "abbbc"
+    at(s): m 0
+    check(_): "star? is lazy" s "a"
+    re_find(m): "ab+" "abbbc"
+    at(s): m 0
+    check(_): "plus" s "abbb"
+    re_find(m): "ab+?" "abbbc"
+    at(s): m 0
+    check(_): "plus? is lazy" s "ab"
+    re_find(m): "colou?r" "the color"
+    at(s): m 0
+    check(_): "optional" s "color"
+    re_find(m): "a{2}" "aaaa"
+    at(s): m 0
+    check(_): "exactly" s "aa"
+    re_find(m): "a{2,3}" "aaaa"
+    at(s): m 0
+    check(_): "between" s "aaa"
+    re_find(m): "a{2,3}?" "aaaa"
+    at(s): m 0
+    check(_): "between, lazy" s "aa"
+    re_find(m): "a{2,}" "aaaaa"
+    at(s): m 0
+    check(_): "at least" s "aaaaa"
+    re_find(m): "ba{0,2}" "baaa"
+    at(s): m 0
+    check(_): "from none" s "baa"
+    re_find(m): "xa{0}y" "xy"
+    at(s): m 0
+    check(_): "none at all" s "xy"
+    re_find(m): "a{x" "a{x"
+    at(s): m 0
+    check(_): "a { that repeats nothing" s "a{x"
+    re_find(m): "(ab){2}" "ababab"
+    at(s): m 0
+    check(_): "a group repeated" s "abab"
+
+    # alternatives and groups
+    re_find(m): "cat|dog" "hot dog"
+    at(s): m 0
+    check(_): "alternatives" s "dog"
+    re_find(m): "a|ab" "ab"
+    at(s): m 0
+    check(_): "the first alternative that works, not the longest" s "a"
+    re_find(m): "(\\w+)@(\\w+)\\.org" "mail ann@ussr.org now"
+    at(s): m 0
+    check(_): "groups: the whole" s "ann@ussr.org"
+    at(s): m 1
+    check(_): "groups: the first" s "ann"
+    at(s): m 2
+    check(_): "groups: the second" s "ussr"
+    re_find(m): "(a)|(b)" "b"
+    at(s): m 1
+    check(_): "a group that took no part" s null
+    at(s): m 2
+    check(_): "and the one that did" s "b"
+    re_pos(p): "(a)|(b)" "b"
+    len(n): p
+    check(_): "a span per group" n 6
+    at(x): p 2
+    check(_): "with -1 for no part" x -1
+    at(x): p 4
+    check(_): "and its offsets" x 0
+    re_find(m): "(?:ab)+(c)" "ababc"
+    len(n): m
+    check(_): "(?: does not capture" n 2
+    re_find(m): "(a*)*b" "aab"
+    at(s): m 0
+    check(_): "a loop that can match nothing ends" s "aab"
+    re_find(m): "((a)|b)+" "ab"
+    at(s): m 1
+    check(_): "a group keeps its last" s "b"
+
+    # anchors and boundaries
+    re_test(b): "^abc$" "abc"
+    check(_): "both ends" b true
+    re_test(b): "^b" "abc"
+    check(_): "start of text" b false
+    re_test(b): "b$" "abc"
+    check(_): "end of text" b false
+    chr(nl): 10
+    concat(two): "one" nl "two"
+    re_test(b): "^two$" two
+    check(_): "lines are not ends, by default" b false
+    re_test(b): "^two$" two "m"
+    check(_): "with m they are" b true
+    re_find(m): "\\bcat\\b" "concat cat"
+    re_pos(p): "\\bcat\\b" "concat cat"
+    pairs(w): 7 10
+    check(_): "a word boundary" p w
+    re_pos(p): "\\Bcat" "concat cat"
+    pairs(w): 3 6
+    check(_): "not one" p w
+
+    # flags
+    re_test(b): "HELLO" "say hello"
+    check(_): "case counts" b false
+    re_test(b): "HELLO" "say hello" "i"
+    check(_): "i: it does not" b true
+    re_test(b): "[A-Z]+" "abc" "i"
+    check(_): "i in a class" b true
+    re_test(b): "[^A-Z]" "abc" "i"
+    check(_): "i in a negated class" b false
+    re_test(b): "a.b" "a\nb"
+    check(_): ". takes no newline" b false
+    re_test(b): "a.b" "a\nb" "s"
+    check(_): "s: it does" b true
+
+    # escapes
+    re_find(m): "a\\.b" "axb a.b"
+    at(s): m 0
+    check(_): "an escaped dot" s "a.b"
+    re_find(m): "\\(\\d\\)" "f(1)"
+    at(s): m 0
+    check(_): "escaped parentheses" s "(1)"
+    re_test(b): "a\\tb" "a	b"
+    check(_): "a tab" b true
+    re_test(b): "\\x41" "A"
+    check(_): "a hex byte" b true
+    re_test(b): "\\\\" "a\\b"
+    check(_): "a backslash" b true
+
+    # UTF-8: characters, offsets in bytes
+    re_find(m): "К.т" "Кот"
+    at(s): m 0
+    check(_): ". takes a whole character" s "Кот"
+    re_find(m): "[а-я]+" "Кот и пёс"
+    at(s): m 0
+    check(_): "a class of Cyrillic" s "от"
+    re_pos(p): "и" "Кот и"
+    pairs(w): 7 9
+    check(_): "offsets are bytes" p w
+    re_find(m): "^.{3}$" "Кот"
+    at(s): m 0
+    check(_): "a count counts characters" s "Кот"
+    re_find(m): "[^а]" "а😀"
+    at(s): m 0
+    check(_): "a negated class takes four bytes too" s "😀"
+
+    # from
+    re_pos(p): "a" "banana" 2
+    pairs(w): 3 4
+    check(_): "from an offset" p w
+    re_pos(p): "a" "banana" 6
+    check(_): "from the end" p null
+    re_pos(p): "a" "banana" 99
+    check(_): "from past the end" p null
+    re_test(b): "^a" "banana"
+    check(_): "^ is the text's start" b false
+    re_pos(p): "^a" "abab" 2
+    check(_): "also with a from" p null
+    re_pos(p): "\\bb" "ab b" 1
+    pairs(w): 3 4
+    check(_): "a boundary sees what is before from" p w
+    re_find(m): "A" "bab" 1 "i"
+    at(s): m 0
+    check(_): "from and flags" s "a"
+
+    # re_all
+    re_all(v): "\\d+" "1 22 333"
+    encode(s): v
+    check(_): "all" s "[`1`,`22`,`333`]"
+    re_all(v): "x" "abc"
+    len(n): v
+    check(_): "all of none" n 0
+    re_all(v): "a*" "baa"
+    encode(s): v
+    check(_): "empty matches move on" s "[``,`aa`,``]"
+    re_all(v): "" "Кот"
+    len(n): v
+    check(_): "by characters, not bytes" n 4
+    re_all(v): "B" "abcb" "i"
+    len(n): v
+    check(_): "all, with flags" n 2
+
+    # re_replace
+    re_replace(s): "\\d" "a1b2" "#"
+    check(_): "replace all" s "a#b#"
+    re_replace(s): "(\\w+)=(\\w+)" "a=1 b=2" "\\2=\\1"
+    check(_): "groups" s "1=a 2=b"
+    re_replace(s): "\\w+" "hi" "<\\0>"
+    check(_): "the whole match" s "<hi>"
+    re_replace(s): "a" "a" "\\\\"
+    check(_): "a backslash" s "\\"
+    re_replace(s): "(a)|b" "b" "[\\1]"
+    check(_): "a group with no part is nothing" s "[]"
+    re_replace(s): "x*" "ab" "-"
+    check(_): "around each character" s "-a-b-"
+    re_replace(s): "x*" "Я" "-"
+    check(_): "around a whole character" s "-Я-"
+    re_replace(s): "HI" "hi hi" "yo" "i"
+    check(_): "with flags" s "yo yo"
+    re_replace(s): "z" "abc" "y"
+    check(_): "nothing to replace" s "abc"
+
+    # re_split
+    re_split(v): ",\\s*" "a, b,c"
+    encode(s): v
+    check(_): "split" s "[`a`,`b`,`c`]"
+    re_split(v): "," "a,,b,"
+    encode(s): v
+    check(_): "empty pieces stay" s "[`a`,``,`b`,``]"
+    re_split(v): "" "abc"
+    encode(s): v
+    check(_): "an empty match splits between characters" s "[`a`,`b`,`c`]"
+    re_split(v): "x" "abc"
+    encode(s): v
+    check(_): "nothing to split at" s "[`abc`]"
+    re_split(v): "X" "axb" "i"
+    len(n): v
+    check(_): "split with flags" n 2
+
+    # time: these take forever where the engine backtracks
+    set(many): "a"
+    set(i): 0
+    while(_): {i < 12} [
+        concat(many): many many
+        set(i): {i + 1}
+    ]
+    concat(many_b): many "b"
+    re_test(b): "(a+)+$" many_b
+    check(_): "(a+)+$ ends at once" b false
+    re_test(b): "(a|a)*c" many
+    check(_): "(a|a)*c ends at once" b false
+    re_test(b): "(a*)*(a*)*(a*)*x" many
+    check(_): "(a*)*(a*)*(a*)*x ends at once" b false
+
+    if(_): {failures = 0} [ print(_): "regex: all passed" ]
+    else(_): [ print(_): "regex: FAILED" ]
+    set(result): failures
+]

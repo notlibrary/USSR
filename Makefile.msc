@@ -77,6 +77,7 @@ OBJS = \
 	$(SRC)\alias.obj \
 	$(SRC)\history.obj \
 	$(SRC)\ai.obj \
+	$(SRC)\regex.obj \
 	$(SRC)\help.obj \
 	$(SRC)\completion_fs_win32.obj \
 	$(SRC)\socket_win32.obj \
@@ -168,6 +169,9 @@ $(SRC)\prng64_xrp32.obj: $(SRC)\prng64_xrp32.c $(SRC)\prng64_xrp32.h
 
 $(SRC)\keybind.obj: $(SRC)\keybind.c $(SRC)\keybind.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\keybind.obj $(SRC)\keybind.c
+
+$(SRC)\regex.obj: $(SRC)\regex.c $(SRC)\regex.h
+	$(CC) $(CFLAGS) /c /Fo:$(SRC)\regex.obj $(SRC)\regex.c
 
 $(SRC)\ai.obj: $(SRC)\ai.c $(SRC)\ai.h $(SRC)\process.h $(SRC)\ussr_oop_builtins.h $(SRC)\ryazan.h
 	$(CC) $(CFLAGS) /c /Fo:$(SRC)\ai.obj $(SRC)\ai.c

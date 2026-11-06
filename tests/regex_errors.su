@@ -1,0 +1,51 @@
+# Patterns that do not compile, and a bad flag: each says why, and the script
+# goes on through try. Only for ussr: russia.su has no try yet.
+bad(r): pattern [
+    re_test(r): pattern "text"
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    try(failed): "bad" "("
+    print(_): failed
+    try(failed): "bad" ")"
+    print(_): failed
+    try(failed): "bad" "a)"
+    print(_): failed
+    try(failed): "bad" "[a"
+    print(_): failed
+    try(failed): "bad" "*a"
+    print(_): failed
+    try(failed): "bad" "+"
+    print(_): failed
+    try(failed): "bad" "?"
+    print(_): failed
+    try(failed): "bad" "a**"
+    print(_): failed
+    try(failed): "bad" "a{2}{3}"
+    print(_): failed
+    try(failed): "bad" "(a)\\1"
+    print(_): failed
+    try(failed): "bad" "(?=a)"
+    print(_): failed
+    try(failed): "bad" "\\q"
+    print(_): failed
+    try(failed): "bad" "\\"
+    print(_): failed
+    try(failed): "bad" "\\xZ"
+    print(_): failed
+    try(failed): "bad" "[z-a]"
+    print(_): failed
+    try(failed): "bad" "a{3,2}"
+    print(_): failed
+    try(failed): "bad" "a{1001}"
+    print(_): failed
+    try(failed): "bad" "(a{1000}){1000}"
+    print(_): failed
+    try(failed): "flag"
+    print(_): failed
+]
+
+flag(r): [
+    re_test(r): "a" "a" "x"
+]

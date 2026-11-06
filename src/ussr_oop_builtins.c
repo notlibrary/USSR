@@ -4,6 +4,7 @@
 #endif
 
 #include "ussr_oop_builtins.h"
+#include "regex.h"
 #include "uno.h"
 #include "ai.h"
 #include "alias.h"
@@ -4389,6 +4390,283 @@ static int oop_do_chr(
     return out_result->data.string != NULL ? 0 : -1;
 }
 
+/* --- regular expressions: re_test re_find re_pos re_all re_replace re_split */
+
+/* the string text[from, to) as a value */
+static int oop_re_piece(const char *text, long from, long to, ussr_value_t *out)
+{
+    char *copy = (char *)malloc((size_t)(to - from) + 1);
+
+    if (copy == NULL)
+        return -1;
+    memcpy(copy, text + from, (size_t)(to - from));
+    copy[to - from] = '\0';
+    *out = ussr_string(copy);
+    free(copy);
+    return out->data.string != NULL ? 0 : -1;
+}
+
+static int oop_re_push(ussr_vector_t *vector, ussr_value_t item)
+{
+    int status = ussr_vector_push(vector, item);
+
+    ussr_value_free(&item);
+    return status;
+}
+
+/* a growing string */
+typedef struct
+{
+    char *data;
+    size_t length;
+    size_t room;
+} oop_re_text_t;
+
+static int oop_re_append(oop_re_text_t *t, const char *bytes, size_t n)
+{
+    if (t->length + n + 1 > t->room)
+    {
+        size_t room = (t->length + n + 1) * 2;
+        char *data = (char *)realloc(t->data, room);
+
+        if (data == NULL)
+            return -1;
+        t->data = data;
+        t->room = room;
+    }
+    memcpy(t->data + t->length, bytes, n);
+    t->length += n;
+    t->data[t->length] = '\0';
+    return 0;
+}
+
+/* the replacement with \0 .. \9 and \\ */
+static int oop_re_expand(oop_re_text_t *t, const char *repl, const char *text,
+                         const long *spans, int groups)
+{
+    for (; *repl != '\0'; repl++)
+    {
+        if (repl[0] == '\\' && repl[1] >= '0' && repl[1] <= '9')
+        {
+            int g = repl[1] - '0';
+
+            repl++;
+            if (g <= groups && spans[g * 2] >= 0 &&
+                oop_re_append(t, text + spans[g * 2], (size_t)(spans[g * 2 + 1] - spans[g * 2])) != 0)
+                return -1;
+        }
+        else if (repl[0] == '\\' && repl[1] == '\\')
+        {
+            repl++;
+            if (oop_re_append(t, "\\", 1) != 0)
+                return -1;
+        }
+        else if (oop_re_append(t, repl, 1) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+/* where to look next after a match at [s, e) */
+static size_t oop_re_next(const char *text, size_t length, long s, long e)
+{
+    return e > s ? (size_t)e : (size_t)e + ussr_regex_char_length(text, length, (size_t)e);
+}
+
+static int oop_do_re(
+    const char *command,
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    int replace = strcmp(command, "re_replace") == 0;
+    int with_from = strcmp(command, "re_find") == 0 || strcmp(command, "re_pos") == 0;
+    size_t fixed = replace ? 3 : 2;
+    ussr_value_t values[5];
+    size_t evaluated = 0, i;
+    const char *pattern = NULL, *text = NULL, *repl = NULL, *flags = NULL;
+    size_t length, from = 0, next = fixed;
+    ussr_regex_t *re = NULL;
+    long *spans = NULL;
+    char error[128];
+    int status = -1, groups;
+
+    if (argument_count < fixed || argument_count > fixed + (with_from ? 2u : 1u))
+    {
+        fprintf(stderr, "USSR: %s(r): pattern text%s%s [flags]\n", command,
+                replace ? " replacement" : "", with_from ? " [from]" : "");
+        return -1;
+    }
+    for (i = 0; i < argument_count; i++)
+    {
+        if (oop_eval(&arguments[i], &values[i]) != 0)
+            goto done;
+        evaluated++;
+    }
+    if (!oop_expect_string(&values[0], &pattern) || !oop_expect_string(&values[1], &text) ||
+        (replace && !oop_expect_string(&values[2], &repl)))
+    {
+        fprintf(stderr, "USSR: %s: the pattern, the text%s are strings\n", command,
+                replace ? " and the replacement" : "");
+        goto done;
+    }
+    length = strlen(text);
+    if (with_from && next < argument_count && values[next].type != USSR_STRING)
+    {
+        ussr_int_t at;
+
+        if (!oop_expect_integer(&values[next], &at) || at < 0)
+        {
+            fprintf(stderr, "USSR: %s: from is an offset in bytes\n", command);
+            goto done;
+        }
+        from = (size_t)at;
+        next++;
+    }
+    if (next < argument_count)
+    {
+        if (next != argument_count - 1 || !oop_expect_string(&values[next], &flags))
+        {
+            fprintf(stderr, "USSR: %s: the flags are a string\n", command);
+            goto done;
+        }
+    }
+    re = ussr_regex_compile(pattern, flags, error, sizeof error);
+    if (re == NULL)
+    {
+        fprintf(stderr, "USSR: %s: bad pattern: %s\n", command, error);
+        goto done;
+    }
+    groups = ussr_regex_groups(re);
+    spans = (long *)malloc((size_t)(groups + 1) * 2 * sizeof(long));
+    if (spans == NULL)
+        goto done;
+
+    if (strcmp(command, "re_test") == 0)
+    {
+        *out_result = ussr_boolean(ussr_regex_search(re, text, length, 0, spans) == 1);
+        status = 0;
+    }
+    else if (with_from)
+    {
+        ussr_vector_t *vector;
+        int g;
+
+        if (ussr_regex_search(re, text, length, from, spans) != 1)
+        {
+            *out_result = ussr_null();
+            status = 0;
+            goto done;
+        }
+        vector = ussr_vector_create(NULL);
+        if (vector == NULL)
+            goto done;
+        for (g = 0; g <= groups; g++)
+        {
+            if (strcmp(command, "re_pos") == 0)
+            {
+                if (ussr_vector_push(vector, ussr_integer(spans[g * 2])) != 0 ||
+                    ussr_vector_push(vector, ussr_integer(spans[g * 2 + 1])) != 0)
+                {
+                    ussr_vector_release(vector);
+                    goto done;
+                }
+            }
+            else
+            {
+                ussr_value_t piece = ussr_null();
+
+                if ((spans[g * 2] >= 0 && oop_re_piece(text, spans[g * 2], spans[g * 2 + 1], &piece) != 0) ||
+                    oop_re_push(vector, piece) != 0)
+                {
+                    ussr_vector_release(vector);
+                    goto done;
+                }
+            }
+        }
+        *out_result = ussr_vector_value(vector);
+        status = 0;
+    }
+    else if (replace)
+    {
+        oop_re_text_t t = { NULL, 0, 0 };
+        size_t at = 0, copied = 0;
+
+        if (oop_re_append(&t, "", 0) != 0)
+            goto done;
+        while (at <= length && ussr_regex_search(re, text, length, at, spans) == 1)
+        {
+            if (oop_re_append(&t, text + copied, (size_t)spans[0] - copied) != 0 ||
+                oop_re_expand(&t, repl, text, spans, groups) != 0)
+            {
+                free(t.data);
+                goto done;
+            }
+            copied = (size_t)spans[1];
+            at = oop_re_next(text, length, spans[0], spans[1]);
+        }
+        if (oop_re_append(&t, text + copied, length - copied) != 0)
+        {
+            free(t.data);
+            goto done;
+        }
+        *out_result = ussr_string(t.data);
+        free(t.data);
+        status = out_result->data.string != NULL ? 0 : -1;
+    }
+    else
+    {
+        /* re_all and re_split */
+        int split = strcmp(command, "re_split") == 0;
+        ussr_vector_t *vector = ussr_vector_create(NULL);
+        size_t at = 0;
+        long piece_from = 0;
+        ussr_value_t piece;
+
+        if (vector == NULL)
+            goto done;
+        while (at <= length && ussr_regex_search(re, text, length, at, spans) == 1)
+        {
+            if (!split)
+            {
+                if (oop_re_piece(text, spans[0], spans[1], &piece) != 0 || oop_re_push(vector, piece) != 0)
+                {
+                    ussr_vector_release(vector);
+                    goto done;
+                }
+            }
+            /* an empty match splits nothing at either end, or where a piece
+             * has just begun */
+            else if (spans[1] > spans[0] ||
+                     (spans[0] > piece_from && (size_t)spans[0] < length))
+            {
+                if (oop_re_piece(text, piece_from, spans[0], &piece) != 0 || oop_re_push(vector, piece) != 0)
+                {
+                    ussr_vector_release(vector);
+                    goto done;
+                }
+                piece_from = spans[1];
+            }
+            at = oop_re_next(text, length, spans[0], spans[1]);
+        }
+        if (split && (oop_re_piece(text, piece_from, (long)length, &piece) != 0 || oop_re_push(vector, piece) != 0))
+        {
+            ussr_vector_release(vector);
+            goto done;
+        }
+        *out_result = ussr_vector_value(vector);
+        status = 0;
+    }
+
+done:
+    free(spans);
+    ussr_regex_free(re);
+    for (i = 0; i < evaluated; i++)
+        ussr_value_free(&values[i]);
+    return status;
+}
+
 static int oop_do_fail(
     ussr_argument_t *arguments,
     size_t argument_count
@@ -4868,6 +5146,10 @@ int ussr_oop_dispatch(
         status = oop_do_launch(arguments, argument_count, out_result);
     else if (strcmp(command, "localtime") == 0)
         status = oop_do_localtime(arguments, argument_count, out_result);
+    else if (strcmp(command, "re_test") == 0 || strcmp(command, "re_find") == 0 ||
+             strcmp(command, "re_pos") == 0 || strcmp(command, "re_all") == 0 ||
+             strcmp(command, "re_replace") == 0 || strcmp(command, "re_split") == 0)
+        status = oop_do_re(command, arguments, argument_count, out_result);
     else if (strcmp(command, "chr") == 0)
         status = oop_do_chr(arguments, argument_count, out_result);
     else if (strcmp(command, "fail") == 0)

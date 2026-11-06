@@ -1030,6 +1030,59 @@ prefix, no added newline) and returns the bytes written.
 at end of file. Prefer it to scanning a whole file byte by byte: reading a
 variable copies its string, so per-byte loops over large strings are slow.
 
+**Regular expressions.** Six commands, built in on every platform and on
+Moscow, with no include:
+
+```
+re_test(b): pattern text [flags]             # true when it matches anywhere
+re_find(m): pattern text [from] [flags]      # [whole, group1, ...] as strings, or null
+re_pos(p): pattern text [from] [flags]       # [start, end, start1, end1, ...], or null
+re_all(v): pattern text [flags]              # every match, as strings
+re_replace(s): pattern text replacement [flags]   # \0 .. \9 are the groups, \\ a backslash
+re_split(v): pattern text [flags]            # the text between the matches
+```
+
+```
+re_find(m): "(\\w+)@(\\w+)\\.org" "mail ann@ussr.org now"   # [`ann@ussr.org`,`ann`,`ussr`]
+re_replace(s): "(\\w+)=(\\w+)" "a=1 b=2" "\\2=\\1"          # 1=a 2=b
+re_split(v): ",\\s*" "a, b,c"                              # [`a`,`b`,`c`]
+re_test(b): "hello" "SAY HELLO" "i"                        # true
+```
+
+The backslashes are doubled because a USSR string takes `\\` for one.
+
+| Pattern | Meaning |
+|---------|---------|
+| `.` | any character but a newline |
+| `[abc]` `[a-z]` `[^abc]` | one of these, a range, none of these |
+| `\d \w \s` `\D \W \S` | digit, word character, white space (ASCII), and not those; in classes too |
+| `^` `$` | the start and the end of the text |
+| `\b` `\B` | at a word boundary, not at one |
+| `* + ?` `{n}` `{n,}` `{n,m}` | repeats, greedy; a `?` after one makes it lazy; n and m up to 1000 |
+| `a\|b` | either; the first that works wins, not the longest |
+| `(...)` `(?:...)` | a group that captures (32 at most), one that does not |
+| `\n \t \r \f \v` `\xHH` | control characters, a byte value as a character |
+| `\.` and the like | a punctuation character itself |
+
+Flags are a string of `i` (ASCII case does not count), `m` (`^` and `$` also at
+lines) and `s` (`.` takes newlines). Text is UTF-8: `.`, classes and counts take
+whole characters, and a byte that is not valid UTF-8 counts as one. Offsets are in
+bytes, as `len` and `slice` count them. `from` starts the search later, but `^` is
+still the text's start and `\b` still sees what is before it. Case folding is ASCII
+only: `i` does not match `Я` with `я`.
+
+Finding the same place twice is impossible: after an empty match the search moves on
+a character, so `re_replace(s): "x*" "ab" "-"` gives `-a-b-`. In `re_split` an empty
+match splits between characters but not at either end, so `re_split(v): "" "abc"`
+gives `a`, `b`, `c`. Empty pieces from real separators stay: `,` on `a,,b,` gives
+`a`, ``, `b`, ``.
+
+A search takes time proportional to the pattern's size times the text's, whatever the
+pattern: it runs a Pike VM and never backtracks, so `(a+)+$` is no danger, on a server
+or in the kernel. The price is that there are **no backreferences and no lookaround**:
+`\1` and `(?=` in a pattern are errors. A pattern that does not compile stops the
+command with the reason (`USSR: re_find: bad pattern: missing )`); `try` catches it.
+
 **io.su — directories and paths.** These report failure through their
 result instead of stopping the script:
 

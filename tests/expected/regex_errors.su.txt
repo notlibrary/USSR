@@ -1,0 +1,42 @@
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+
+--- stderr ---
+USSR: re_test: bad pattern: missing )
+USSR: re_test: bad pattern: unmatched )
+USSR: re_test: bad pattern: unmatched )
+USSR: re_test: bad pattern: missing ]
+USSR: re_test: bad pattern: nothing to repeat
+USSR: re_test: bad pattern: nothing to repeat
+USSR: re_test: bad pattern: nothing to repeat
+USSR: re_test: bad pattern: nothing to repeat
+USSR: re_test: bad pattern: nothing to repeat
+USSR: re_test: bad pattern: backreferences are not supported
+USSR: re_test: bad pattern: of (? only (?: is supported
+USSR: re_test: bad pattern: unknown escape
+USSR: re_test: bad pattern: \ at the end
+USSR: re_test: bad pattern: \x takes two hex digits
+USSR: re_test: bad pattern: bad range
+USSR: re_test: bad pattern: bad {n,m}
+USSR: re_test: bad pattern: bad {n,m}
+USSR: re_test: bad pattern: too big
+USSR: re_test: bad pattern: the flags are i, m and s
+
+--- exit 0 ---
