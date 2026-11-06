@@ -1,0 +1,17 @@
+
+--- stderr ---
+tests/oop/errors_deep_recursion.su:4: runtime error: calls nested too deep (limit 1024) calling deeper
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  in deeper, called at tests/oop/errors_deep_recursion.su:4
+  ... 1014 more calls
+  in deeper, called at tests/oop/errors_deep_recursion.su:8
+  in init
+USSR scheduler: process 2 (init) failed
+USSR VM: execution failed (status -1)
+--- exit 1 ---

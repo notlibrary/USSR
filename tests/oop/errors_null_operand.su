@@ -1,0 +1,5 @@
+# arithmetic on a name never set: it says which name
+init(ret): arg_cnt arg_vec [
+    set(total): 1
+    add(sum): totl 1
+]

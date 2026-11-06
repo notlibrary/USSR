@@ -1,6 +1,7 @@
 
 --- stderr ---
 USSR: Point.x expects type 'number'
+tests/oop/errors_type_mismatch.su:10: runtime error: new failed with arguments of type string, string, integer
 USSR scheduler: process 2 (init) failed
 USSR VM: execution failed (status -1)
 --- exit 1 ---

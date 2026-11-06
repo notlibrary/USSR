@@ -1,6 +1,7 @@
 
 --- stderr ---
 USSR: vector expects element type 'Point'
+tests/oop/errors_vector_type.su:15: runtime error: push failed with arguments of type vector, struct
 USSR scheduler: process 2 (init) failed
 USSR VM: execution failed (status -1)
 --- exit 1 ---

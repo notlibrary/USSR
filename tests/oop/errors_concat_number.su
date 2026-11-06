@@ -1,0 +1,5 @@
+# concat takes strings
+init(ret): arg_cnt arg_vec [
+    set(n): 5
+    concat(s): "n = " n
+]

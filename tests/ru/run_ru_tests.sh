@@ -13,6 +13,13 @@ trap 'rm -rf "$tmp"' EXIT
 ok() { pass=$((pass + 1)); printf 'PASS %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; [ -n "$2" ] && printf '%s\n' "$2"; }
 
+# A .ru file has no source lines: compare runtime errors without where they
+# happened, "file:line:" against "ip N:" and the calls under them.
+no_location() {
+    sed -E 's/^([^ ]+:[0-9]+|ip [0-9]+): runtime error: /runtime error: /; /^  in [^ ,]+(, called at [^ ]+:[0-9]+)?$/d; /^  \.\.\. [0-9]+ more calls$/d' "$1" >"$1.n"
+    mv "$1.n" "$1"
+}
+
 # roundtrip NAME SOURCE STDIN [ARGS...]
 roundtrip() {
     name=$1; src=$2; input=$3; shift 3
@@ -23,6 +30,8 @@ roundtrip() {
     a=$?
     printf '%b' "$input" | "$USSR" "$tmp/rt.ru" "$@" >"$tmp/b.out" 2>"$tmp/b.err"
     b=$?
+    no_location "$tmp/a.err"
+    no_location "$tmp/b.err"
     if [ "$a" = "$b" ] && cmp -s "$tmp/a.out" "$tmp/b.out" &&
        cmp -s "$tmp/a.err" "$tmp/b.err"; then
         ok "$name (exit $a)"

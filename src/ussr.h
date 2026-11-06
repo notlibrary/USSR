@@ -185,6 +185,9 @@ typedef enum
     USSR_VAR_GLOBAL = 2
 } ussr_var_place_t;
 
+/* The last command name the external command search did not find. */
+extern char ussr_missing_command[128];
+
 const ussr_value_t *ussr_get_variable_at(
     const char *name,
     ussr_var_place_t place,
