@@ -2,6 +2,7 @@
 # refines neuroslop code. It refines a prompt, gives it to "centrifuge" models
 # from different developers for a number of cycles, each cycle seeing the best
 # so far and how it measured, and extracts the best file by your criterion.
+# With --method chain the best is passed on after every model, not every cycle.
 #
 #     ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
 #          --criteria size --test "python {file}" --ext .py "the prompt"
@@ -408,7 +409,9 @@ lenin_question(r): task best criteria [
         if(_): passed [ concat(state): "It passes its test, " ss " bytes, " rs " runs a second." ]
         else(_): [ concat(state): state nl said ]
     ]
-    concat(r): task nl nl "The best answer so far:" nl "```" nl code nl "```" nl state nl nl "Give a better one, by " criteria ", that still does the task."
+    set(title): "The answer so far:"
+    if(_): tested [ set(title): "The best answer so far:" ]
+    concat(r): task nl nl title nl "```" nl code nl "```" nl state nl nl "Give a better one, by " criteria ", that still does the task."
 ]
 
 lenin_describe(r): c [
@@ -426,14 +429,22 @@ lenin_describe(r): c [
     concat(r): state " | " ss " | " rs
 ]
 
-# args: a btree of models, prompt, criteria, dir, cycles, test, ext, baseline,
-# window, refine. Writes dir/refined.md, the candidates, dir/best<ext> and
-# dir/report.md. Gives 0 when there is a winner, 1 when none.
+# args: a btree of models, prompt, criteria, method, dir, cycles, test, ext,
+# baseline, window, refine. Writes dir/refined.md, the candidates with the prompt
+# each was made from, dir/best<ext> and dir/report.md. Gives 0 when there is a
+# winner, 1 when none.
+#
+# method rounds: every model in a cycle gets the best from the cycles before it.
+# method chain: one model after another, each getting the best so far, what the
+# one before it did included. With no test there is no best to pass on, only the
+# smallest, and a stub is small: the chain then passes on the latest answer.
 lenin_run(r): args [
     set(r): 1
     btget(models): args "models"
     btget(task0): args "prompt"
     btget(criteria): args "criteria"
+    btget(method): args "method"
+    set(chain): {method = "chain"}
     btget(dir): args "dir"
     btget(cycles): args "cycles"
     btget(test): args "test"
@@ -474,11 +485,14 @@ lenin_run(r): args [
     lenin_make_system(sys): criteria
     vec(all): ""
     set(best): null
+    # what the next model is shown
+    set(current): null
     set(c): 1
     while(_): {c <= cycles} [
-        lenin_question(q): task best criteria
+        lenin_question(q): task current criteria
         set(j): 0
         while(_): {j < nm} [
+            if(_): chain [ lenin_question(q): task current criteria ]
             at(m): models j
             at(mname): m 1
             str_from_int(cn): c
@@ -487,6 +501,9 @@ lenin_run(r): args [
             concat(log): sep "cycle" cn "_" safe ".log"
             concat(said): "lenin: cycle " cn ": " mname
             print(_): said
+            # what it was sent, for reading afterwards
+            concat(sent): sep "cycle" cn "_" safe ".prompt.md"
+            writefile(_): sent q
             lenin_ask(reply): m sys q
             if(_): {reply != null} [
                 lenin_code(code): reply
@@ -497,10 +514,15 @@ lenin_run(r): args [
                 lenin_describe(d): cand
                 concat(said): "lenin:   " d
                 print(_): said
+                if(_): chain [
+                    if(_): {test = ""} [ set(current): cand ]
+                    else(_): [ lenin_best(current): all criteria ]
+                ]
             ]
             set(j): {j + 1}
         ]
         lenin_best(best): all criteria
+        if(_): {chain = false} [ set(current): best ]
         set(c): {c + 1}
     ]
     len(ncand): all
@@ -537,7 +559,7 @@ lenin_run(r): args [
     ]
     # the report
     str_from_int(bc): bestcycle
-    concat(rep): "# Lenin's report" nl nl "Criterion: " criteria nl "Chosen: " how nl nl "| cycle | model | state | bytes | runs/s |" nl "|---|---|---|---|---|" nl
+    concat(rep): "# Lenin's report" nl nl "Criterion: " criteria nl "Method: " method nl "Chosen: " how nl nl "| cycle | model | state | bytes | runs/s |" nl "|---|---|---|---|---|" nl
     set(i): 0
     while(_): {i < ncand} [
         at(x): all i
@@ -569,6 +591,7 @@ lenin_run(r): args [
 lenin_usage(r): [
     set(r): 2
     print(_): "usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]"
+    print(_): "             [--method rounds|chain]"
     print(_): "             [--test COMMAND] [--ext .EXT] [--baseline FILE] [--window SECONDS]"
     print(_): "             [--no-refine] [--prompt-file FILE] [prompt ...]"
     print(_): "--models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key"
@@ -578,6 +601,7 @@ lenin_usage(r): [
 lenin_main(r): argv [
     btree(args):
     btput(_): args "criteria" "size"
+    btput(_): args "method" "rounds"
     btput(_): args "dir" "lenin-out"
     btput(_): args "cycles" 2
     btput(_): args "test" ""
@@ -598,6 +622,7 @@ lenin_main(r): argv [
         if(_): {a = "--models"} [ set(modelfile): value ]
         elif(_): {a = "--dir"} [ btput(_): args "dir" value ]
         elif(_): {a = "--criteria"} [ btput(_): args "criteria" value ]
+        elif(_): {a = "--method"} [ btput(_): args "method" value ]
         elif(_): {a = "--test"} [ btput(_): args "test" value ]
         elif(_): {a = "--ext"} [ btput(_): args "ext" value ]
         elif(_): {a = "--baseline"} [ btput(_): args "baseline" value ]
@@ -635,7 +660,8 @@ lenin_main(r): argv [
     ]
     btget(criteria): args "criteria"
     btget(cycles): args "cycles"
-    if(_): {modelfile = "" || task = "" || cycles < 1 || (criteria != "speed" && criteria != "size")} [
+    btget(method): args "method"
+    if(_): {modelfile = "" || task = "" || cycles < 1 || (criteria != "speed" && criteria != "size") || (method != "rounds" && method != "chain")} [
         lenin_usage(r):
         return(r): r
     ]

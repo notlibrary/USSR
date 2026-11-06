@@ -31,6 +31,7 @@ lenin:   passed | 5 | 0
 # Lenin's report
 
 Criterion: size
+Method: rounds
 Chosen: measured: the candidate that passes its test and is best by the criterion
 
 | cycle | model | state | bytes | runs/s |
@@ -48,6 +49,68 @@ PASS the run finds a winner
 PASS the winner passes and is the smallest
 PASS the report names it
 PASS the report has what failed
+PASS rounds: the last model in a cycle sees nothing of it
+PASS rounds: the next cycle sees the best
+lenin: up to 4 paid model calls
+lenin: --test runs code no person has read, with your rights: use a sandbox
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0
+lenin: cycle 1: big
+lenin:   passed | 47 | 0
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0
+# Lenin's report
+
+Criterion: size
+Method: chain
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s |
+|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 |
+| 1 | big | passed | 47 | 0 |
+| 1 | slim | passed | 5 | 0 |
+
+Best: cycle 1, slim.
+
+PASS chain: a winner
+PASS chain: the first model has only the task
+PASS chain: the next one sees the answer before it
+PASS chain: and that it failed
+PASS chain: a model that is down is passed over
+PASS chain: what passed replaces what failed
+PASS chain: the report says so
+lenin: up to 6 paid model calls
+lenin: cycle 1: slim
+lenin:   not run | 5 | 0
+lenin: cycle 1: big
+lenin:   not run | 47 | 0
+lenin: cycle 1: last
+lenin:   not run | 7 | 0
+# Lenin's report
+
+Criterion: size
+Method: chain
+Chosen: the smallest answer: nothing was run and no model voted
+
+| cycle | model | state | bytes | runs/s |
+|---|---|---|---|---|
+| 1 | slim | not run | 5 | 0 |
+| 1 | big | not run | 47 | 0 |
+| 1 | last | not run | 7 | 0 |
+
+Best: cycle 1, slim.
+
+PASS chain with no test: the latest goes on
+PASS and it is not called the best
+usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
+             [--method rounds|chain]
+             [--test COMMAND] [--ext .EXT] [--baseline FILE] [--window SECONDS]
+             [--no-refine] [--prompt-file FILE] [prompt ...]
+--models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key
+--test: a command that exits 0 when a candidate works; {file} is the candidate
+PASS a method there is not
 PASS the vote goes to the letter
 PASS talk is no vote
 lenin: up to 8 paid model calls
@@ -61,6 +124,7 @@ lenin:   not run | 5 | 0
 # Lenin's report
 
 Criterion: size
+Method: rounds
 Chosen: the smallest answer: nothing was run and no model voted
 
 | cycle | model | state | bytes | runs/s |
@@ -74,6 +138,7 @@ Best: cycle 1, slim.
 PASS without a test the report says so
 
 --- stderr ---
+USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down

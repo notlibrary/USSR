@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Lenin's `--method chain`: the centrifuges work one after another, and each gets
+  the current best answer, what the one before it did included. Each model's prompt
+  is now written next to its answer.
 - `USSRmajorminorpatch.ISO`, the eighth release artifact: the install disk's files
   in ISO 9660 with Joliet long names, for reading on any system. It does not boot.
 - Regular expressions: `re_test`, `re_find`, `re_pos`, `re_all`, `re_replace` and
