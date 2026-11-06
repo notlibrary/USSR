@@ -13,6 +13,10 @@
 #                          a Belarus file system with the programs (/bin),
 #                          the boot files (/boot), /etc and the whole
 #                          project (/src/ussr, the files git tracks)
+# build/moscow/ussr.iso    the same files as an ISO 9660 image with Joliet,
+#                          so any system reads them under their long names,
+#                          when xorriso is there. It does not boot: Moscow's
+#                          loader reads an ATA disk, not an ATAPI CD
 #
 # Needs nasm (NASM=path to override) and a ussr binary (first argument,
 # else ./ussr or ./ussr.exe at the root).
@@ -307,3 +311,38 @@ rm -f "$list.all"
 belarus putlist "$dev" "$(hp "$list")" /src/ussr
 belarus fsck "$dev"
 echo "build/moscow/ussr.img: $(wc -c < "$img") bytes"
+
+# the ISO: the same files as the disk above, with Joliet's long names (up to
+# 103 characters) and Rock Ridge's
+iso=$out/ussr.iso
+rm -f "$iso"
+if command -v xorriso >/dev/null 2>&1; then
+    stage=$out/iso
+    rm -rf "$stage"
+    mkdir -p "$stage/src/ussr"
+    for f in ussr_rt.bin moscow.ru russia.ru; do
+        mkdir -p "$stage/boot"
+        cp "$out/$f" "$stage/boot/$f"
+    done
+    mkdir -p "$stage/bin" "$stage/etc/ssl"
+    for f in install stalin belarus; do
+        cp "$out/$f.ru" "$stage/bin/$f.ru"
+    done
+    for f in ussr ural moscow_native; do
+        [ -f "$native/$f" ] && cp "$native/$f" "$stage/bin/$f"
+    done
+    printf '%s' "moscow-install" >"$stage/etc/hostname"
+    printf '%s' "USSR install disk: install(_): puts USSR on a disk of its own; help(_): lists the commands." >"$stage/etc/motd"
+    printf '%s' "screen=1024x768" >"$stage/etc/gui.conf"
+    cp "$out/murmansk.rules" "$stage/etc/murmansk.rules"
+    if [ -f "$out/dl/$CACERT" ]; then cp "$out/dl/$CACERT" "$stage/etc/ssl/certs.pem"; fi
+    if ls "$out"/lib/*.so >/dev/null 2>&1; then
+        mkdir -p "$stage/lib"
+        cp "$out"/lib/*.so "$stage/lib/"
+    fi
+    (cd "$root" && tar -cf - -T "$list") | tar -xf - -C "$stage/src/ussr"
+    xorriso -as mkisofs -quiet -iso-level 3 -R -J -joliet-long -V USSR -o "$iso" "$stage"
+    echo "build/moscow/ussr.iso: $(wc -c < "$iso") bytes"
+else
+    echo "build.sh: no xorriso: no ussr.iso" >&2
+fi

@@ -129,7 +129,7 @@ jobs:
       - name: Install build dependencies and QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison nasm clang lld qemu-system-x86 qemu-utils
+          sudo apt-get install -y flex bison nasm clang lld qemu-system-x86 qemu-utils xorriso
 
       - name: Build
         run: make -f ussr-ubuntu.mk -j"$(nproc)" ussr
@@ -143,6 +143,9 @@ jobs:
           for prog in ussr ural; do
             test -f "build/moscow/native/$prog" || { echo "no /bin/$prog on the disk" >&2; exit 1; }
           done
+
+      - name: Read the ISO's Joliet tree
+        run: python3 src/moscow/tools/iso_test.py build/moscow/ussr.iso build/moscow/iso
 
       # QEMU's software CPU: what the timeouts in qemu_test.py are set for
       - name: Test
