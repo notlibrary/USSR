@@ -117,7 +117,7 @@ ural install ukraine russia
 USSR is a bug-ridden project critical simple system crippling bugs may appear RANDOMLY in any time any place AI won't help much too big context
 Examples: it can't print negative numbers else branches is broken e.t.c
 
-USSR is a neuroslopware it's created entirely by prompting an AI followed by enrichment and refining results with the next AI "centrifuge"
+USSR is a neuroslopware it's created entirely by prompting an AI with refined prompt followed by enrichment results with the next AI "centrifuge"
 
 <img width="1536" height="1024" alt="USSR Compilation Pipeline Infographic" src="https://github.com/user-attachments/assets/bd7b768f-d02b-4fc3-bde6-009b68e75875" />
 
@@ -171,13 +171,13 @@ ussr hello.ru
 
 ## Lenin, the brain center of the USSR
 
-Lenin is the neuroslop code enrichment and refining AI agent (working:
+Lenin is the neuroslop code refining and enrichment AI agent (working:
 `src/lenin`, see [its README](src/lenin/README.md)).
 
-USSR itself is made by prompting an AI and refining the results with the next
+USSR itself is made by prompting an AI and enrichment the results with the next
 AI "centrifuge" by hand. Lenin is that process as a program. Practice what you
-preach: if enriched neuroslop is better than classical software then the
-enrichment has to be a tool and it has to show it.
+preach: if refined and enriched neuroslop is better than classical software then the
+refining and enrichment has to be a tool and it has to show it.
 
 ```bash
 ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
@@ -258,7 +258,7 @@ The project now has three main tracks, with the Moscow OS kernel underneath
 
 1. The ROUND stack forum: Ryazan, Ukraine, Novgorod, Omsk and Dubna
 2. The Kremlin GUI desktop and its apps, with the USSR shell
-3. Lenin, the neuroslop code enrichment and refining AI agent
+3. Lenin, the neuroslop code refining and enrichment AI agent
 
 ## The project is complete
 
@@ -267,7 +267,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - ussr/ussr.exe - the USSR programming language and shell
 - russia.su - bootstrapped USSR interpreter, written in USSR
 - moscow.su - amd64 kernel: the NASM USSR runtime runs russia.su as its shell on a Belarus root (`sh src/moscow/build.sh`)
-- lenin.su - the USSR brain center neuroslop enrichment agent
+- lenin.su - the USSR brain center neuroslop refining and enrichment agent
 - ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
 - belarus.su - the USSR file system: per-file B+ tree block maps
@@ -306,7 +306,7 @@ Take it or leave it(or push MOAR if you got it too)
 If you are fine with the idea of refining and enrichment(or even researching) 
 mass produced neuroslopware bring your model and get in too
 
-Personally I believe the mass produced enriched refined neuroslop is better than classical software
+Personally I believe the mass produced refined and enriched neuroslop is better than classical software
 Cheaper faster less bugs per lines less requirement for programmer etc..
 By classical software I mean a guy who sits 25-50 years in room in row improving some open source component
 with end goal to get monopoly/dictatorship on it even it's technically stay open source
