@@ -3,7 +3,9 @@
 # from different developers for a number of cycles, each cycle seeing the best
 # so far and how it measured, and extracts the best file by your criterion.
 # With --method chain the best is passed on after every model, not every cycle;
-# --method enrich is that chain, stopping once a cycle finds nothing better.
+# --method enrich is that chain, stopping after --patience cycles find nothing
+# better, and refining again first if the best still fails. --holdout is a test
+# the models never see; --target and --budget stop a run sooner.
 # --refine N refines the prompt N rounds against drafts; --task adds sub-tasks.
 # --score is a "what is better" test suite: how much of it passes ranks them.
 #
@@ -17,6 +19,9 @@
 $include "../libs/strings.su"
 
 global(_): lenin_reply
+# paid calls made in this run, and the most it may make (-1: no limit)
+global(_): lenin_calls
+global(_): lenin_budget
 
 # --- text
 
@@ -236,11 +241,22 @@ lenin_prompt_call(r): question [
     set(lenin_reply): answer
 ]
 
-# model m's answer, null when it failed: one model failing ends no run
+# true once the run has made as many calls as --budget allows
+lenin_spent(r): [
+    set(r): false
+    if(_): {lenin_budget = null || lenin_calls = null} [ return(r): r ]
+    if(_): {lenin_budget >= 0} [ set(r): {lenin_calls >= lenin_budget} ]
+]
+
+# model m's answer, null when it failed: one model failing ends no run. Over
+# the budget no call goes out.
 lenin_ask(r): m system question [
     set(r): null
+    lenin_spent(spent):
+    if(_): spent [ return(r): r ]
     lenin_use_model(ok): m system
     if(_): {ok = false} [ return(r): r ]
+    if(_): {lenin_calls != null} [ set(lenin_calls): {lenin_calls + 1} ]
     set(lenin_reply): null
     try(failed): "lenin_prompt_call" question
     unsetenv(_): "USSR_AI_KEY"
@@ -276,8 +292,10 @@ lenin_test_line(r): test file log [
 # score, and log, what its test said when it failed. test exits 0 when the
 # file works. score is a "what is better" suite: the last number it prints is
 # how much of it passes, so a candidate that fails can still be nearer; with
-# no test, it passes when the suite exits 0. score -1: no suite.
-lenin_measure(r): name path code test score log window [
+# no test, it passes when the suite exits 0. score -1: no suite. holdout is a
+# hidden test: it must pass too, and what it says goes to no model. hidden is
+# none, passed or FAILED.
+lenin_measure(r): name path code test score holdout log window [
     btree(r):
     btput(_): r "model" name
     btput(_): r "path" path
@@ -288,6 +306,7 @@ lenin_measure(r): name path code test score log window [
     btput(_): r "passed" true
     btput(_): r "rate" 0
     btput(_): r "score" -1
+    btput(_): r "hidden" "none"
     btput(_): r "log" ""
     if(_): {test = "" && score = ""} [ return(r): r ]
     btput(_): r "tested" true
@@ -320,6 +339,17 @@ lenin_measure(r): name path code test score log window [
         ]
     ]
     btget(passed): r "passed"
+    if(_): {holdout != "" && passed} [
+        concat(hlog): log ".holdout"
+        lenin_test_line(hline): holdout path hlog
+        lenin_shell(st): hline
+        if(_): {st = 0} [ btput(_): r "hidden" "passed" ]
+        else(_): [
+            btput(_): r "hidden" "FAILED"
+            btput(_): r "passed" false
+            set(passed): false
+        ]
+    ]
     if(_): {passed = false || window <= 0} [ return(r): r ]
     lenin_test_line(line): timed path log
     # the clock has whole seconds: runs a second, over the window
@@ -470,6 +500,7 @@ lenin_state(r): c [
     btget(size): c "size"
     btget(rate): c "rate"
     btget(score): c "score" -1
+    btget(hidden): c "hidden" "none"
     btget(said): c "log"
     chr(nl): 10
     str_from_int(ss): size
@@ -478,15 +509,78 @@ lenin_state(r): c [
     if(_): tested [
         set(r): "It failed its test."
         if(_): passed [ concat(r): "It passes its test, " ss " bytes, " rs " runs a second." ]
+        # one bit and no output: the hidden test stays hidden
+        if(_): {hidden = "FAILED"} [ set(r): "It passes the test you are shown but fails a hidden one, whose output is kept from you: make it work for every input the task allows, not only those." ]
         if(_): {score >= 0} [
             str_from_int(qs): score
             concat(r): r " Its test suite scores " qs "."
         ]
-        if(_): {passed = false} [ concat(r): r " The test said:" nl said ]
+        if(_): {passed = false && hidden != "FAILED"} [ concat(r): r " The test said:" nl said ]
     ]
 ]
 
-lenin_question(r): task best criteria [
+# what the answers that failed said about themselves, the last few, other than
+# best: so the next model does not make the same mistakes
+lenin_defects(r): all best max [
+    set(r): ""
+    chr(nl): 10
+    set(bpath): ""
+    if(_): {best != null} [ btget(bpath): best "path" ]
+    vec(seen): ""
+    set(k): 0
+    len(i): all
+    set(i): {i - 1}
+    while(_): {i >= 0 && k < max} [
+        at(x): all i
+        btget(xp): x "passed"
+        btget(xt): x "tested"
+        btget(path): x "path"
+        if(_): {xt && xp = false && path != bpath} [
+            btget(xh): x "hidden" "none"
+            btget(xlog): x "log"
+            set(what): ""
+            if(_): {xh = "FAILED"} [ set(what): "it passed the test shown but failed the hidden one" ]
+            else(_): [
+                lenin_tail(t): xlog 300
+                lenin_cell(what): t 300
+                str_trim(what): what
+                if(_): {what = ""} [ set(what): "it failed, and its test said nothing" ]
+            ]
+            lenin_has(dup): seen what
+            if(_): {dup = false} [
+                push(_): seen what
+                btget(xm): x "model"
+                btget(xc): x "cycle"
+                str_from_int(xcs): xc
+                concat(r): r "- cycle " xcs ", " xm ": " what nl
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+# what goes with the best to the next model, besides the task: the sub-tasks
+# found so far and the known defects
+lenin_handoff(r): all best reqs [
+    set(r): ""
+    chr(nl): 10
+    len(n): reqs
+    if(_): {n > 0} [
+        concat(r): "Requirements so far:" nl
+        set(i): 0
+        while(_): {i < n} [
+            at(t): reqs i
+            concat(r): r "- " t nl
+            set(i): {i + 1}
+        ]
+        concat(r): r nl
+    ]
+    lenin_defects(d): all best 3
+    if(_): {d != ""} [ concat(r): r "Known defects of other answers, not to repeat:" nl d nl ]
+]
+
+lenin_question(r): task best criteria notes [
     set(r): task
     if(_): {best = null} [ return(r): r ]
     btget(code): best "code"
@@ -495,7 +589,7 @@ lenin_question(r): task best criteria [
     lenin_state(state): best
     set(title): "The answer so far:"
     if(_): tested [ set(title): "The best answer so far:" ]
-    concat(r): task nl nl title nl "```" nl code nl "```" nl state nl nl "Give a better one, by " criteria ", that still does the task."
+    concat(r): task nl nl title nl "```" nl code nl "```" nl state nl nl notes "Give a better one, by " criteria ", that still does the task."
 ]
 
 # --- the record: every run adds to one file, so that many runs can answer
@@ -862,6 +956,8 @@ lenin_describe(r): c [
         set(state): "FAILED"
         if(_): passed [ set(state): "passed" ]
     ]
+    btget(hidden): c "hidden" "none"
+    if(_): {hidden = "FAILED"} [ set(state): "FAILED hidden" ]
     concat(r): state " | " ss " | " rs " | " qs
 ]
 
@@ -926,6 +1022,7 @@ lenin_refine(r): args sep [
     btget(rounds): args "refine_rounds" 1
     btget(test): args "test"
     btget(score): args "score" ""
+    btget(holdout): args "holdout" ""
     btget(ext): args "ext"
     btget(criteria): args "criteria"
     at(m0): models 0
@@ -942,6 +1039,8 @@ lenin_refine(r): args sep [
     ]
     set(nfound): 0
     concat(tpath): sep "tasks.md"
+    btput(_): args "all_tasks" tasks
+    btput(_): args "task_notes" notes
     if(_): {refine = false} [
         if(_): {nt > 0} [ writefile(_): tpath notes ]
         return(r): r
@@ -976,10 +1075,9 @@ lenin_refine(r): args sep [
             concat(dfile): round "_draft" ext
             writefile(_): dfile code
             concat(dlog): round "_draft.log"
-            lenin_measure(draft): "draft" dfile code test score dlog 0
+            lenin_measure(draft): "draft" dfile code test score holdout dlog 0
             lenin_state(state): draft
-            concat(q): "The request:" nl request nl nl "The prompt made from it:" nl r nl nl
-            concat(q): q "Code written from the prompt:" nl "```" nl code nl "```" nl state
+            lenin_find_question(q): request r code state
             lenin_ask(listed): m0 ssys q
             if(_): {listed = null} [ print(_): "lenin: no sub-tasks came: refining stops here" ]
         ]
@@ -1024,6 +1122,29 @@ lenin_refine(r): args sep [
         set(k): {k + 1}
     ]
     if(_): {nt + nfound > 0} [ writefile(_): tpath notes ]
+    vec(all_tasks): ""
+    set(i): 0
+    while(_): {i < nt} [
+        at(t): tasks i
+        push(_): all_tasks t
+        set(i): {i + 1}
+    ]
+    len(nf): found
+    set(i): 0
+    while(_): {i < nf} [
+        at(t): found i
+        push(_): all_tasks t
+        set(i): {i + 1}
+    ]
+    btput(_): args "all_tasks" all_tasks
+    btput(_): args "task_notes" notes
+]
+
+# what the model that finds sub-tasks is asked about code written from a prompt
+lenin_find_question(r): request prompt code state [
+    chr(nl): 10
+    concat(r): "The request:" nl request nl nl "The prompt made from it:" nl prompt nl nl
+    concat(r): r "Code written from the prompt:" nl "```" nl code nl "```" nl state
 ]
 
 # args: a btree of models, prompt, criteria, method, dir, cycles, test, ext,
@@ -1047,6 +1168,12 @@ lenin_run(r): args [
     btget(cycles): args "cycles"
     btget(test): args "test"
     btget(score): args "score" ""
+    btget(holdout): args "holdout" ""
+    btget(patience): args "patience" 1
+    btget(target): args "target" -1
+    btget(budget): args "budget" -1
+    set(lenin_calls): 0
+    set(lenin_budget): budget
     set(measured): {test != "" || score != ""}
     btget(ext): args "ext"
     btget(baseline): args "baseline"
@@ -1062,11 +1189,17 @@ lenin_run(r): args [
     set(calls): {nm * cycles}
     if(_): {refine && rounds > 0} [ set(calls): {calls + 1 + 2 * (rounds - 1)} ]
     if(_): {measured = false} [ set(calls): {calls + nm} ]
+    # enrich refines again when it stalls on a failing best: once a cycle at most
+    if(_): {enrich && refine && rounds > 0} [ set(calls): {calls + cycles - 1} ]
     str_from_int(cs): calls
     concat(said): "lenin: up to " cs " paid model calls"
+    if(_): {budget >= 0 && budget < calls} [
+        str_from_int(bs): budget
+        concat(said): "lenin: up to " bs " paid model calls, the budget"
+    ]
     print(_): said
     if(_): measured [
-        print(_): "lenin: --test and --score run code no person has read, with your rights: use a sandbox"
+        print(_): "lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox"
     ]
     # 1. the prompt, refined
     if(_): {rounds < 1} [ btput(_): args "refine" false ]
@@ -1076,51 +1209,91 @@ lenin_run(r): args [
     writefile(_): path task
     # 2, 3. the centrifuge
     lenin_make_system(sys): criteria
+    lenin_subtask_system(ssys):
+    btget(reqs): args "all_tasks" null
+    if(_): {reqs = null} [ vec(reqs): "" ]
+    btget(task_notes): args "task_notes" ""
+    btget(task0): args "prompt"
+    btget(utasks): args "tasks" null
+    if(_): {utasks = null} [ vec(utasks): "" ]
+    lenin_fold(request): task0 utasks
     vec(all): ""
     vec(missed): ""
     set(best): null
     # what the next model is shown
     set(current): null
     set(stopped): ""
+    # cycles in a row that found nothing better
+    set(stale): 0
+    set(go): true
     set(c): 1
-    while(_): {c <= cycles} [
+    while(_): {go && c <= cycles} [
         set(before): ""
         if(_): {best != null} [ btget(before): best "path" ]
-        lenin_question(q): task current criteria
+        lenin_handoff(notes): all current reqs
+        lenin_question(q): task current criteria notes
+        str_from_int(cn): c
         set(j): 0
-        while(_): {j < nm} [
-            if(_): chain [ lenin_question(q): task current criteria ]
-            at(m): models j
-            at(mname): m 1
-            str_from_int(cn): c
-            lenin_safe(safe): mname
-            concat(file): sep "cycle" cn "_" safe ext
-            concat(log): sep "cycle" cn "_" safe ".log"
-            concat(said): "lenin: cycle " cn ": " mname
-            print(_): said
-            # what it was sent, for reading afterwards
-            concat(sent): sep "cycle" cn "_" safe ".prompt.md"
-            writefile(_): sent q
-            lenin_ask(reply): m sys q
-            if(_): {reply != null} [
-                lenin_code(code): reply
-                writefile(_): file code
-                lenin_measure(cand): mname file code test score log window
-                btput(_): cand "cycle" c
-                push(_): all cand
-                lenin_describe(d): cand
-                concat(said): "lenin:   " d
+        while(_): {go && j < nm} [
+            lenin_spent(spent):
+            if(_): spent [
+                str_from_int(bs): budget
+                concat(stopped): "Stopped in cycle " cn ": the budget of " bs " calls is spent."
+                concat(said): "lenin: " stopped
                 print(_): said
-                if(_): chain [
-                    if(_): {measured = false} [ set(current): cand ]
-                    else(_): [ lenin_best(current): all criteria ]
-                ]
+                set(go): false
             ]
             else(_): [
-                vec(miss): ""
-                push(_): miss mname
-                push(_): miss cn
-                push(_): missed miss
+                if(_): chain [
+                    lenin_handoff(notes): all current reqs
+                    lenin_question(q): task current criteria notes
+                ]
+                at(m): models j
+                at(mname): m 1
+                lenin_safe(safe): mname
+                concat(file): sep "cycle" cn "_" safe ext
+                concat(log): sep "cycle" cn "_" safe ".log"
+                concat(said): "lenin: cycle " cn ": " mname
+                print(_): said
+                # what it was sent, for reading afterwards
+                concat(sent): sep "cycle" cn "_" safe ".prompt.md"
+                writefile(_): sent q
+                lenin_ask(reply): m sys q
+                if(_): {reply != null} [
+                    lenin_code(code): reply
+                    writefile(_): file code
+                    lenin_measure(cand): mname file code test score holdout log window
+                    btput(_): cand "cycle" c
+                    push(_): all cand
+                    lenin_describe(d): cand
+                    concat(said): "lenin:   " d
+                    print(_): said
+                    if(_): chain [
+                        if(_): {measured = false} [ set(current): cand ]
+                        else(_): [ lenin_best(current): all criteria ]
+                    ]
+                    # the requirements are met: no need to go on
+                    if(_): {target >= 0} [
+                        btget(cp): cand "passed"
+                        btget(cq): cand "score" -1
+                        if(_): {cp && cq >= target} [
+                            str_from_int(ts): target
+                            concat(stopped): "Stopped in cycle " cn ": an answer passes and scores " ts ", the target."
+                            concat(said): "lenin: " stopped
+                            print(_): said
+                            set(go): false
+                        ]
+                    ]
+                ]
+                else(_): [
+                    lenin_spent(spent):
+                    if(_): {spent = false} [
+                        vec(miss): ""
+                        push(_): miss mname
+                        push(_): miss cn
+                        push(_): missed miss
+                    ]
+                ]
             ]
             set(j): {j + 1}
         ]
@@ -1129,12 +1302,57 @@ lenin_run(r): args [
         # the best the tests can tell apart: no better one came this cycle
         set(after): ""
         if(_): {best != null} [ btget(after): best "path" ]
-        if(_): {enrich && after = before && c < cycles} [
-            str_from_int(cn): c
-            concat(stopped): "Stopped after cycle " cn ": it found nothing better than the cycles before it, by the test."
-            concat(said): "lenin: " stopped
-            print(_): said
-            set(c): cycles
+        if(_): {after = before} [ set(stale): {stale + 1} ]
+        else(_): [ set(stale): 0 ]
+        if(_): {enrich && go && stale >= patience && c < cycles} [
+            str_from_int(ps): patience
+            concat(why): "Stopped after cycle " cn ": " ps " cycles in a row found nothing better, by the test."
+            if(_): {patience = 1} [ concat(why): "Stopped after cycle " cn ": it found nothing better than the cycles before it, by the test." ]
+            # more answers to an unclear task do not make it clear: when the
+            # best still fails, ask what the prompt leaves out before stopping
+            set(more): false
+            set(bp): true
+            if(_): {best != null} [ btget(bp): best "passed" ]
+            if(_): {refine && rounds > 0 && bp = false} [
+                at(m0): models 0
+                btget(bcode): best "code"
+                lenin_state(bstate): best
+                lenin_find_question(fq): request task bcode bstate
+                concat(said): "lenin: cycle " cn " found nothing better and the best still fails: back to refining"
+                print(_): said
+                lenin_ask(listed): m0 ssys fq
+                set(nn): 0
+                if(_): {listed != null} [
+                    lenin_subtasks(new): listed reqs
+                    len(nn): new
+                ]
+                if(_): {nn > 0} [
+                    set(i): 0
+                    while(_): {i < nn} [
+                        at(t): new i
+                        push(_): reqs t
+                        concat(task_notes): task_notes "- " t " (cycle " cn ", the best still failing)" nl
+                        set(i): {i + 1}
+                    ]
+                    lenin_fold(task): task new
+                    concat(rp): sep "refine_cycle" cn ".md"
+                    writefile(_): rp task
+                    concat(tp): sep "tasks.md"
+                    writefile(_): tp task_notes
+                    str_from_int(ns): nn
+                    concat(said): "lenin: refining added " ns " sub-tasks: the centrifuge goes on with the new prompt"
+                    print(_): said
+                    set(stale): 0
+                    set(more): true
+                ]
+                else(_): [ concat(why): why " Refining found nothing the prompt leaves out." ]
+            ]
+            if(_): {more = false} [
+                set(stopped): why
+                concat(said): "lenin: " stopped
+                print(_): said
+                set(go): false
+            ]
         ]
         set(c): {c + 1}
     ]
@@ -1146,6 +1364,7 @@ lenin_run(r): args [
     ]
     # 4. the extract
     set(how): "measured: the candidate that passes its test and is best by the criterion"
+    if(_): {holdout != ""} [ set(how): "measured: the candidate that passes its test and the hidden one, and is best by the criterion" ]
     if(_): {score != ""} [ set(how): "measured: the candidate that passes, then scores highest on the suite, then is best by the criterion" ]
     if(_): {measured = false} [
         lenin_vote(voted): models all task
@@ -1170,7 +1389,7 @@ lenin_run(r): args [
         ]
         else(_): [
             concat(baselog): sep "baseline.log"
-            lenin_measure(base): "baseline" baseline basecode test score baselog window
+            lenin_measure(base): "baseline" baseline basecode test score holdout baselog window
         ]
     ]
     # the report
@@ -1191,6 +1410,19 @@ lenin_run(r): args [
     ]
     else(_): [ concat(rep): rep nl "Best: cycle " bc ", " bestmodel "." nl ]
     if(_): {stopped != ""} [ concat(rep): rep stopped nl ]
+    # what the test the models saw let through
+    set(hid): 0
+    set(i): 0
+    while(_): {i < ncand} [
+        at(x): all i
+        btget(xh): x "hidden" "none"
+        if(_): {xh = "FAILED"} [ set(hid): {hid + 1} ]
+        set(i): {i + 1}
+    ]
+    if(_): {holdout != ""} [
+        str_from_int(hs): hid
+        concat(rep): rep "Hidden test: " hs " of the answers passed the test the models saw and failed the hidden one." nl
+    ]
     if(_): {base != null} [
         lenin_describe(bd): base
         concat(rep): rep nl "Baseline, " baseline ": " bd nl
@@ -1217,7 +1449,8 @@ lenin_usage(r): [
     print(_): "usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]"
     print(_): "             [--method rounds|chain|enrich]"
     print(_): "             [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]"
-    print(_): "             [--window SECONDS] [--refine N] [--no-refine]"
+    print(_): "             [--window SECONDS] [--refine N] [--no-refine] [--holdout COMMAND]"
+    print(_): "             [--patience N] [--target SCORE] [--budget CALLS]"
     print(_): "             [--task TEXT] [--tasks FILE] [--prompt-file FILE] [prompt ...]"
     print(_): "             [--history FILE] [--no-history]"
     print(_): "       lenin --stats [--history FILE]"
@@ -1261,6 +1494,10 @@ lenin_main(r): argv [
     btput(_): args "refine" true
     btput(_): args "refine_rounds" 1
     btput(_): args "score" ""
+    btput(_): args "holdout" ""
+    btput(_): args "patience" 1
+    btput(_): args "target" -1
+    btput(_): args "budget" -1
     vec(tasks): ""
     set(modelfile): ""
     set(task): ""
@@ -1275,12 +1512,20 @@ lenin_main(r): argv [
         set(value): ""
         if(_): more [ at(value): argv {i + 1} ]
         set(took): more
+        len(len_a): a
         if(_): {a = "--models"} [ set(modelfile): value ]
         elif(_): {a = "--dir"} [ btput(_): args "dir" value ]
         elif(_): {a = "--criteria"} [ btput(_): args "criteria" value ]
         elif(_): {a = "--method"} [ btput(_): args "method" value ]
         elif(_): {a = "--test"} [ btput(_): args "test" value ]
         elif(_): {a = "--score"} [ btput(_): args "score" value ]
+        elif(_): {a = "--holdout"} [ btput(_): args "holdout" value ]
+        elif(_): {a = "--patience" || a = "--target" || a = "--budget"} [
+            str_to_number(v): value
+            str_trunc(v): v
+            slice(key): a 2 {len_a - 2}
+            btput(_): args key v
+        ]
         elif(_): {a = "--task"} [ push(_): tasks value ]
         elif(_): {a = "--tasks"} [
             lenin_read(text): value
@@ -1369,6 +1614,24 @@ lenin_main(r): argv [
     btget(score): args "score"
     if(_): {criteria = "speed" && test = "" && score = ""} [
         print(_): "lenin: speed needs --test or --score: there is nothing to time without one"
+        set(r): 2
+        return(r): r
+    ]
+    btget(holdout): args "holdout"
+    btget(patience): args "patience"
+    btget(target): args "target"
+    if(_): {holdout != "" && test = "" && score = ""} [
+        print(_): "lenin: --holdout goes with --test or --score: it hides a test, it is not the only one"
+        set(r): 2
+        return(r): r
+    ]
+    if(_): {target >= 0 && score = ""} [
+        print(_): "lenin: --target is a --score: give the suite too"
+        set(r): 2
+        return(r): r
+    ]
+    if(_): {patience < 1} [
+        print(_): "lenin: --patience is 1 or more cycles"
         set(r): 2
         return(r): r
     ]

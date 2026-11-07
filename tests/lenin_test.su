@@ -92,12 +92,12 @@ init(result): arg_count arg_values [
     check(_): "no models file" none null
 
     # who beats whom
-    lenin_measure(fail): "x" "p" "aaaaaaaaaa" "" "" "l" 0
+    lenin_measure(fail): "x" "p" "aaaaaaaaaa" "" "" "" "l" 0
     btput(_): fail "passed" false
     btput(_): fail "tested" true
-    lenin_measure(big): "y" "p" "aaaaaaaaaaaaaaaaaaaaaaaaa" "" "" "l" 0
+    lenin_measure(big): "y" "p" "aaaaaaaaaaaaaaaaaaaaaaaaa" "" "" "" "l" 0
     btput(_): big "rate" 10
-    lenin_measure(small): "z" "p" "aaaaaaaaaaaaaaaaaaaa" "" "" "l" 0
+    lenin_measure(small): "z" "p" "aaaaaaaaaaaaaaaaaaaa" "" "" "" "l" 0
     btput(_): small "rate" 2
     lenin_better(b): small fail "size"
     check(_): "one that passes beats a smaller one that fails" b true
@@ -365,6 +365,174 @@ init(result): arg_count arg_values [
     btput(_): args "method" "rounds"
     btput(_): args "cycles" 1
 
+    # a hidden test: it must pass too, and the models are never shown what it said
+    getenv(os): "OS"
+    set(deal_test): "grep deal {file}"
+    set(never_test): "grep excellent {file}"
+    if(_): {os = "Windows_NT"} [
+        set(deal_test): "findstr deal {file}"
+        set(never_test): "findstr excellent {file}"
+    ]
+    vec(two): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): two m
+    model(m): "big" "lenin_big.json"
+    push(_): two m
+    btput(_): args "models" two
+    word_test(t):
+    btput(_): args "test" t
+    btput(_): args "holdout" deal_test
+    btput(_): args "method" "chain"
+    btput(_): args "cycles" 2
+    btput(_): args "refine" false
+    concat(rundir10): dir "/hidden"
+    btput(_): args "dir" rundir10
+    lenin_run(st): args
+    check(_): "hidden: a winner" st 0
+    concat(p): rundir10 "/best.txt"
+    readfile(best): p
+    str_find(i): best "deal" 0
+    check(_): "hidden: what fails it cannot win" {i >= 0} true
+    concat(p): rundir10 "/cycle1_big.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "fails a hidden one" 0
+    check(_): "hidden: the next model hears that it failed" {i >= 0} true
+    str_find(i): sent "The test said:" 0
+    check(_): "hidden: and not what it said" {i < 0} true
+    concat(p): rundir10 "/cycle2_slim.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "Known defects of other answers" 0
+    check(_): "handoff: the known defects go along" {i >= 0} true
+    str_find(i): sent "cycle 1, slim: it passed the test shown but failed the hidden one" 0
+    check(_): "handoff: which answer, and what was wrong" {i >= 0} true
+    concat(p): rundir10 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "| slim | FAILED hidden |" 0
+    check(_): "hidden: the report has it" {i >= 0} true
+    str_find(i): rep "Hidden test: 2 of the answers" 0
+    check(_): "hidden: and counts it" {i >= 0} true
+    btput(_): args "holdout" ""
+
+    # --target: the requirements are met, so the run stops
+    vec(three): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): three m
+    model(m): "rich" "lenin_rich.json"
+    push(_): three m
+    model(m): "wrong" "lenin_wrong.json"
+    push(_): three m
+    btput(_): args "models" three
+    btput(_): args "test" ""
+    btput(_): args "score" score_cmd
+    btput(_): args "target" 2
+    btput(_): args "method" "rounds"
+    concat(rundir11): dir "/target"
+    btput(_): args "dir" rundir11
+    lenin_run(st): args
+    check(_): "target: a winner" st 0
+    concat(p): rundir11 "/cycle1_wrong.prompt.md"
+    open_file(h): p "rb"
+    check(_): "target: nothing is asked once it is met" {h < 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    concat(p): rundir11 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "scores 2, the target" 0
+    check(_): "target: the report says so" {i >= 0} true
+    btput(_): args "target" -1
+    btput(_): args "score" ""
+
+    # --budget: no more calls than that
+    btput(_): args "test" t
+    btput(_): args "budget" 2
+    concat(rundir12): dir "/budget"
+    btput(_): args "dir" rundir12
+    lenin_run(st): args
+    concat(p): rundir12 "/cycle1_wrong.prompt.md"
+    open_file(h): p "rb"
+    check(_): "budget: the third call does not go out" {h < 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    concat(p): rundir12 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "the budget of 2 calls is spent" 0
+    check(_): "budget: the report says so" {i >= 0} true
+    btput(_): args "budget" -1
+
+    # --patience: enrich stops after that many cycles with nothing better
+    vec(one): ""
+    model(m): "tasky" "lenin_tasky.json"
+    push(_): one m
+    btput(_): args "models" one
+    btput(_): args "method" "enrich"
+    btput(_): args "cycles" 6
+    btput(_): args "patience" 2
+    concat(rundir13): dir "/patience"
+    btput(_): args "dir" rundir13
+    lenin_run(st): args
+    concat(p): rundir13 "/cycle3_tasky.prompt.md"
+    open_file(h): p "rb"
+    check(_): "patience: a second cycle with nothing better runs" {h >= 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    concat(p): rundir13 "/cycle4_tasky.prompt.md"
+    open_file(h): p "rb"
+    check(_): "patience: and then it stops" {h < 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    btput(_): args "patience" 1
+
+    # back to refining: the best still fails when enrich stalls
+    btput(_): args "test" never_test
+    btput(_): args "refine" true
+    btput(_): args "refine_rounds" 1
+    btput(_): args "cycles" 6
+    concat(rundir14): dir "/stall"
+    btput(_): args "dir" rundir14
+    lenin_run(st): args
+    check(_): "stall: nothing passes" st 1
+    concat(p): rundir14 "/tasks.md"
+    readfile(said): p
+    str_find(i): said "- handles bad input (cycle 2, the best still failing)" 0
+    check(_): "stall: refining finds what the prompt leaves out" {i >= 0} true
+    concat(p): rundir14 "/cycle3_tasky.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "It must also:" 0
+    check(_): "stall: the next cycle has the new prompt" {i >= 0} true
+    str_find(i): sent "Requirements so far:" 0
+    check(_): "handoff: the requirements go along" {i >= 0} true
+    concat(p): rundir14 "/cycle4_tasky.prompt.md"
+    open_file(h): p "rb"
+    check(_): "stall: it stops when refining finds nothing new" {h < 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    concat(p): rundir14 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "Refining found nothing the prompt leaves out." 0
+    check(_): "stall: the report says why it stopped" {i >= 0} true
+
+    # what goes with what
+    vec(argv): ""
+    push(_): argv "--models"
+    push(_): argv conf
+    push(_): argv "--holdout"
+    push(_): argv "x"
+    push(_): argv "the task"
+    lenin_main(st): argv
+    check(_): "a hidden test alone" st 2
+    vec(argv): ""
+    push(_): argv "--models"
+    push(_): argv conf
+    push(_): argv "--test"
+    push(_): argv "x"
+    push(_): argv "--target"
+    push(_): argv "3"
+    push(_): argv "the task"
+    lenin_main(st): argv
+    check(_): "a target with no suite" st 2
+
+    btput(_): args "models" models
+    btput(_): args "method" "rounds"
+    btput(_): args "refine" false
+    btput(_): args "cycles" 1
+    word_test(t):
+    btput(_): args "test" t
+
     # a method there is not
     vec(argv): ""
     push(_): argv "--models"
@@ -459,6 +627,11 @@ init(result): arg_count arg_values [
     clean(_): rundir7
     clean(_): rundir8
     clean(_): rundir9
+    clean(_): rundir10
+    clean(_): rundir11
+    clean(_): rundir12
+    clean(_): rundir13
+    clean(_): rundir14
     clean(_): rundir5
     clean(_): rundir
     clean(_): rundir2

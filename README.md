@@ -199,7 +199,16 @@ It does the two operations of [neuroslop enrichment](research/README.md):
   the next model, or back to the same one, until nothing better comes that the
   tests can detect: `--method enrich`, with `--score` for a suite that counts
   how many of its checks pass, so that nearer beats further before anything
-  passes in full.
+  passes in full. A hidden test, `--holdout`, keeps the models from fitting
+  their code to the test they are shown, and when enrichment stalls on a
+  failing best, Lenin goes back to refining the prompt.
+
+**Enrichment is not voting.** It picks an answer on what a test showed, not on
+how many models like it: one answer that passes beats ten that agree and fail.
+Without a test Lenin can only let the models vote, and says that nothing it
+picked that way was shown to work.
+[research/refine_and_enrich.md](research/refine_and_enrich.md) sets the method
+out at length.
 
 ```bash
 ussr src/lenin/lenin.su --models models.conf --refine 3 --task "it supports bold text" \

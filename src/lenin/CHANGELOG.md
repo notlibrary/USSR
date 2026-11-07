@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- From research/refine_and_enrich.md: `--holdout`, a hidden test no model sees;
+  `--patience`, `--target` and `--budget` to stop; the handoff carries the
+  requirements so far and the known defects of other answers; and enrich refines
+  again when it stalls on a failing best. The docs say enrichment is not voting.
 - Refining as research/README.md defines it: `--task` and `--tasks FILE` add
   sub-tasks to the prompt, and `--refine N` refines in rounds, each drafting code
   from the prompt, testing it, and adding what the draft shows is missing, until

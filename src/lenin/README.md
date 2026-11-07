@@ -11,6 +11,8 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
 
 Lenin does the two operations [research/README.md](../../research/README.md)
 defines: **refining**, on the prompt, and **enrichment**, on the answers.
+[research/refine_and_enrich.md](../../research/refine_and_enrich.md) sets out the
+method at length; what Lenin takes from it is marked below with its section.
 
 ## What it does
 
@@ -77,10 +79,10 @@ ussr src/lenin/lenin.su --models models.conf --method enrich --cycles 10 \
      --score "python suite.py {file}" --ext .py "what you want"
 ```
 
-- `--method enrich` is the chain below. It stops at the first cycle that finds
-  nothing better than the cycles before it, so `--cycles` is the most it does,
-  not what it does. It needs `--test` or `--score`: without one nothing can be
-  better.
+- `--method enrich` is the chain below. It stops once `--patience` cycles in a
+  row (1 by default) find nothing better than the cycles before them, so
+  `--cycles` is the most it does, not what it does. It needs `--test` or
+  `--score`: without one nothing can be better.
 - `--score COMMAND` is the "what is better" suite. It runs on every answer and
   prints, as the last number of its output, how many of its checks pass:
   `9 checks, passed 7`. More passing ranks first, before size or speed, so an
@@ -92,6 +94,60 @@ ussr src/lenin/lenin.su --models models.conf --method enrich --cycles 10 \
 With one model, enrich is that model improving its own answer, cycle after
 cycle. It stops where its suite stops telling answers apart: an answer can be
 better in ways the suite does not check, and Lenin cannot see those.
+
+### Enrichment is not voting
+
+Enrichment picks an answer on evidence: what a test run on it showed. Voting
+picks what most models like. One answer that passes beats ten that agree and
+fail, and models that share a mistake vote for it together. So enrichment needs
+`--test` or `--score`, and without them Lenin does not enrich: it falls back on a
+blind vote of the models, and its report says nothing there was shown to work.
+That vote is a first look, not a result.
+
+### The handoff (§8.6)
+
+The next model gets the task, the best answer so far and how it measured, and
+two more things, so that nothing learnt is lost on the way:
+
+- **Requirements so far**: the sub-tasks, yours and found, as a list.
+- **Known defects**: what the test said about the last three answers that
+  failed, other than the best, so the next model does not repeat them.
+
+### A hidden test (§5.5)
+
+A model is shown what its test said, so it can write code that passes exactly
+the inputs it was shown. `--holdout COMMAND` is a second test that must pass as
+well, whose output no model ever sees: a model is told only that an answer fails
+"a hidden one". Put in it inputs the visible test does not have. The report
+counts the answers that passed the visible test and failed the hidden one,
+which is how many were fitted to the test rather than the task.
+
+```bash
+ussr src/lenin/lenin.su --models models.conf --method enrich --cycles 10 \
+     --test "python test.py {file}" --holdout "python hidden.py {file}" \
+     --ext .py "what you want"
+```
+
+Its output is in `out/*.log.holdout`, for you to read. Keep the hidden test
+itself out of the models' reach too: not in the prompt, not in a file they are
+given.
+
+### When to stop (§7)
+
+- `--patience N`: enrich stops after N cycles in a row with nothing better.
+- `--target SCORE`: any method stops once an answer passes and its `--score`
+  reaches SCORE, say all the checks of the suite.
+- `--budget CALLS`: no more paid calls than that, refining and votes included.
+  The calls that are left are not made, and the report says so.
+
+### Back to refining (§4)
+
+More answers to an unclear task do not make it clear. When enrich would stop and
+its best still fails, Lenin first refines once more: the first model is given
+the request, the prompt and that best answer with what its test said, and lists
+what the prompt leaves out. New sub-tasks go into the prompt, written to
+`out/refine_cycleN.md` and `tasks.md`, and the centrifuge goes on. If none are
+new, it stops. This needs refining on, which is the default.
 
 ## Methods
 
@@ -117,7 +173,8 @@ With no `--test` nothing measures an answer, so "best" could only mean "smallest
 a stub is small. There the chain passes on the latest answer, called "the answer so
 far" and not "the best", and the models still vote at the end.
 
-`--method enrich`: the chain, stopping once a cycle finds nothing better. See
+`--method enrich`: the chain, stopping after `--patience` cycles with nothing
+better, and refining again first when its best still fails. See
 [Enrichment](#enrichment).
 
 Each model's prompt is written next to its answer, `cycle1_name.prompt.md`, so you can
@@ -134,7 +191,11 @@ outputs, on several inputs, with edge cases: see `examples/wordcount/test.py`.
 
 **Without `--test`** nothing is run. The models vote blind on each other's
 answers, and the report says that nothing there is shown to work. A vote tells
-you what models like, and they like confident code. Use it for a first look.
+you what models like, and they like confident code. Use it for a first look:
+it is [not enrichment](#enrichment-is-not-voting).
+
+**A visible test can be fitted.** Models are shown what it said. A hidden test,
+`--holdout`, is one they cannot fit to.
 
 ## The record
 
@@ -194,9 +255,10 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 ## Before you run it
 
 - **It costs money.** A run is one call to refine, two for each more round of
-  `--refine`, models times cycles, and with no test or suite one vote per model. Lenin prints the number first and does not ask.
-- **`--test` and `--score` run code nobody has read, with your rights.** So do
-  the drafts of `--refine`. A model can write
+  `--refine`, models times cycles, one when enrich refines again, and with no
+  test or suite one vote per model. `--budget` caps it. Lenin prints the number first and does not ask.
+- **`--test`, `--score` and `--holdout` run code nobody has read, with your
+  rights.** So do the drafts of `--refine`. A model can write
   anything into it. Use a container, a virtual machine or a throwaway user.
 - **A test that hangs stops Lenin**: USSR has no way to kill a command it
   started. Put a limit in the test: `timeout 10 python {file}`.
@@ -216,6 +278,10 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 | `--method rounds\|chain\|enrich` | when the best is passed on: after each cycle, or each model; enrich stops when nothing better comes | `rounds` |
 | `--test COMMAND` | exits 0 when `{file}` works; `{file}` goes at the end if not given | none: a vote |
 | `--score COMMAND` | a suite that prints last how many of its checks `{file}` passes; more ranks first | none |
+| `--holdout COMMAND` | a hidden test: it must pass too, and no model sees what it says | none |
+| `--patience N` | enrich stops after N cycles in a row with nothing better | 1 |
+| `--target SCORE` | stop once an answer passes and its score reaches SCORE | none |
+| `--budget CALLS` | the most paid model calls a run makes | no limit |
 | `--ext .EXT` | candidates' file extension | `.txt` |
 | `--baseline FILE` | a solution to compare with | none |
 | `--window SECONDS` | how long to time speed | 3 |
