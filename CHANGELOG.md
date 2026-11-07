@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- Lenin refines and enriches as `research/README.md` defines them. Refining:
+  `--task` adds sub-tasks to the prompt, and `--refine N` refines in rounds of a
+  draft, its test and what it shows is missing, until a round finds nothing new.
+  Enrichment: `--score` ranks answers by how much of a test suite they pass, and
+  `--method enrich` passes the best on until a cycle finds nothing better.
 - Runtime errors say where: `file:line: runtime error: what`, then the calls they
   were in. A mistyped command gets `did you mean`, a null operand is named, and
   concat says which types it got. A failure caught by `try` reports no location.

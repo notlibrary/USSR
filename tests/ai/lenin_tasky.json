@@ -1,0 +1,1 @@
+{"id": "t", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "- handles bad input\n```\ngood\n```\n"}, "finish_reason": "stop"}]}

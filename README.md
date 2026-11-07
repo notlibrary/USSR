@@ -184,31 +184,56 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
      --criteria speed --test "python test.py {file}" --ext .py "what you want"
 ```
 
+It does the two operations of [neuroslop enrichment](research/README.md):
+
+- **Refining** is a prompt operation. Prompt A, "make a text editor", and
+  sub-task A, "it supports bold text", make prompt B, "make a text editor that
+  supports bold text", until the prompt reflects what you really want. The
+  sub-tasks are yours (`--task`), or found: with `--refine N` a model drafts code
+  from the prompt, your test runs on it, and the model lists what the draft shows
+  the prompt leaves out. That goes into the prompt, round after round, until a
+  round finds nothing new.
+- **Enrichment** chooses the better answer from several models used several
+  times, with a test suite that says what is better, since writing that suite
+  takes less intelligence than solving the problem. The current best goes on to
+  the next model, or back to the same one, until nothing better comes that the
+  tests can detect: `--method enrich`, with `--score` for a suite that counts
+  how many of its checks pass, so that nearer beats further before anything
+  passes in full.
+
+```bash
+ussr src/lenin/lenin.su --models models.conf --refine 3 --task "it supports bold text" \
+     --method enrich --cycles 10 --score "python suite.py {file}" --ext .py "make a text editor"
+```
+
 You give it:
 
-- the prompt
+- the prompt, and any sub-tasks of it you know
 - the centrifuge models, from different developers (the API keys stay in
   environment variables, the file only names them)
 - the optimization criteria (speed, size)
 - the working directory
 - the generation cycles repeat count
-- a test that says whether an answer works, and if you have one a classic
-  solution to measure against
+- a test that says whether an answer works, or a suite that says how much of it
+  works, and if you have one a classic solution to measure against
 
 You get the best of what the models gave, by your test:
 
-1. It refines the prompt so it precisely reflects things in reality
+1. It refines the prompt so it precisely reflects things in reality: once, or
+   in rounds of drafts and the sub-tasks they show are missing
 2. It gives the refined prompt to the centrifuge models
 3. They work on it for the given number of cycles, each cycle (or with
    `--method chain` each centrifuge, one after another) seeing the best
-   answer so far and how it measured
-4. It runs every answer through your test and extracts the one that passes and
-   is best by your criteria
+   answer so far and how it measured. `--method enrich` stops once a cycle
+   finds nothing better
+4. It runs every answer through your test and extracts the one that passes,
+   scores highest on your suite and is best by your criteria
 
 What it does and does not show:
 
 - An answer that fails the test cannot win. That part is measured, not an
-  opinion of a model
+  opinion of a model. What refining finds missing is the opinion of a model:
+  `tasks.md` lists it for you to read
 - Best means best by the test you wrote. With a weak test the winner is whatever
   gets past it: given a canned answer `assert 2+3==5` to a task of printing a sum,
   and a test that only looked at the exit status, Lenin picks it for its size.
