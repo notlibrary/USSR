@@ -117,7 +117,7 @@ ural install ukraine russia
 USSR is a bug-ridden project critical simple system crippling bugs may appear RANDOMLY in any time any place AI won't help much too big context
 Examples: it can't print negative numbers else branches is broken e.t.c
 
-USSR is a neuroslopware it's created entirely by prompting an AI with refined prompt followed by enrichment results with the next AI "centrifuge"
+USSR is a neuroslopware it's created entirely by prompting an AI with beforehand refined prompt followed by enrichment results with the next AI "centrifuge"
 
 <img width="1536" height="1024" alt="USSR Compilation Pipeline Infographic" src="https://github.com/user-attachments/assets/bd7b768f-d02b-4fc3-bde6-009b68e75875" />
 

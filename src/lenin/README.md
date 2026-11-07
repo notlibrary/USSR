@@ -1,7 +1,7 @@
 # Lenin
 
-Lenin is the brain center of the USSR: an agent that enriches and refines
-neuroslop code. USSR is made by prompting an AI and refining the result with
+Lenin is the brain center of the USSR: an agent that refines and enriches
+neuroslop code. USSR is made by prompting an AI with beforehand refined prompt and enriching the result with
 the next AI "centrifuge". Lenin is that process as a program.
 
 ```bash
