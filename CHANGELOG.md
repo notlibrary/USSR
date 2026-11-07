@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- Lenin, from `research/refine_and_enrich.md`: a hidden test (`--holdout`) whose
+  output no model sees; `--patience`, `--target` and `--budget` to stop a run; the
+  handoff to the next model carries the requirements so far and the known
+  defects of other answers; and when enrich stalls on a failing best it refines
+  the prompt again. The docs say plainly that enrichment is not voting.
 - Lenin refines and enriches as `research/README.md` defines them. Refining:
   `--task` adds sub-tasks to the prompt, and `--refine N` refines in rounds of a
   draft, its test and what it shows is missing, until a round finds nothing new.

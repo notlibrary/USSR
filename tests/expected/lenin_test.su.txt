@@ -12,7 +12,7 @@ PASS by speed the faster
 lenin: LENIN_TEST_NO_SUCH_KEY is not set: skipping m
 PASS a model without its key gives nothing
 lenin: up to 9 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: prompt refined
 lenin: cycle 1: wrong
 lenin:   FAILED | 7 | 0 | -
@@ -52,7 +52,7 @@ PASS the report has what failed
 PASS rounds: the last model in a cycle sees nothing of it
 PASS rounds: the next cycle sees the best
 lenin: up to 4 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: wrong
 lenin:   FAILED | 7 | 0 | -
 lenin: cycle 1: big
@@ -112,7 +112,7 @@ PASS only new sub-tasks, once each
 PASS and which
 PASS a tasks file, a line each
 lenin: up to 1 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: slim
 lenin:   passed | 5 | 0 | -
 # Lenin's report
@@ -130,7 +130,7 @@ Best: cycle 1, slim.
 PASS your sub-tasks go to the centrifuge
 PASS tasks.md says whose they are
 lenin: up to 8 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: prompt refined
 lenin: refining, round 2: a draft from the prompt
 lenin: round 2 added 1 sub-tasks
@@ -156,7 +156,7 @@ PASS the found sub-task is in the prompt
 PASS the draft is kept
 PASS refining stops when a round finds nothing new
 lenin: up to 3 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: slim
 lenin:   passed | 5 | 0 | 1
 lenin: cycle 1: rich
@@ -182,7 +182,7 @@ PASS the higher score wins over the smaller
 PASS what passes none of the suite fails
 PASS a suite is no vote
 lenin: up to 5 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: tasky
 lenin:   passed | 5 | 0 | -
 lenin: cycle 2: tasky
@@ -208,10 +208,156 @@ PASS enrich: it stops once nothing better came
 PASS enrich: the report says where it stopped
 lenin: enrich needs --test or --score: without one nothing can be better
 PASS enrich with nothing to measure
+lenin: up to 4 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: slim
+lenin:   FAILED hidden | 5 | 0 | -
+lenin: cycle 1: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 2: slim
+lenin:   FAILED hidden | 5 | 0 | -
+lenin: cycle 2: big
+lenin:   passed | 47 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: chain
+Chosen: measured: the candidate that passes its test and the hidden one, and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | FAILED hidden | 5 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 2 | slim | FAILED hidden | 5 | 0 | - |
+| 2 | big | passed | 47 | 0 | - |
+
+Best: cycle 1, big.
+Hidden test: 2 of the answers passed the test the models saw and failed the hidden one.
+
+PASS hidden: a winner
+PASS hidden: what fails it cannot win
+PASS hidden: the next model hears that it failed
+PASS hidden: and not what it said
+PASS handoff: the known defects go along
+PASS handoff: which answer, and what was wrong
+PASS hidden: the report has it
+PASS hidden: and counts it
+lenin: up to 6 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | 1
+lenin: cycle 1: rich
+lenin:   passed | 10 | 0 | 2
+lenin: Stopped in cycle 1: an answer passes and scores 2, the target.
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes, then scores highest on the suite, then is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | passed | 5 | 0 | 1 |
+| 1 | rich | passed | 10 | 0 | 2 |
+
+Best: cycle 1, rich.
+Stopped in cycle 1: an answer passes and scores 2, the target.
+
+PASS target: a winner
+PASS target: nothing is asked once it is met
+PASS target: the report says so
+lenin: up to 2 paid model calls, the budget
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | -
+lenin: cycle 1: rich
+lenin:   passed | 10 | 0 | -
+lenin: Stopped in cycle 1: the budget of 2 calls is spent.
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | passed | 5 | 0 | - |
+| 1 | rich | passed | 10 | 0 | - |
+
+Best: cycle 1, slim.
+Stopped in cycle 1: the budget of 2 calls is spent.
+
+PASS budget: the third call does not go out
+PASS budget: the report says so
+lenin: up to 6 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: tasky
+lenin:   passed | 5 | 0 | -
+lenin: cycle 2: tasky
+lenin:   passed | 5 | 0 | -
+lenin: cycle 3: tasky
+lenin:   passed | 5 | 0 | -
+lenin: Stopped after cycle 3: 2 cycles in a row found nothing better, by the test.
+# Lenin's report
+
+Criterion: size
+Method: enrich
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | tasky | passed | 5 | 0 | - |
+| 2 | tasky | passed | 5 | 0 | - |
+| 3 | tasky | passed | 5 | 0 | - |
+
+Best: cycle 1, tasky.
+Stopped after cycle 3: 2 cycles in a row found nothing better, by the test.
+
+PASS patience: a second cycle with nothing better runs
+PASS patience: and then it stops
+lenin: up to 12 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: prompt refined
+lenin: cycle 1: tasky
+lenin:   FAILED | 5 | 0 | -
+lenin: cycle 2: tasky
+lenin:   FAILED | 5 | 0 | -
+lenin: cycle 2 found nothing better and the best still fails: back to refining
+lenin: refining added 1 sub-tasks: the centrifuge goes on with the new prompt
+lenin: cycle 3: tasky
+lenin:   FAILED | 5 | 0 | -
+lenin: cycle 3 found nothing better and the best still fails: back to refining
+lenin: Stopped after cycle 3: it found nothing better than the cycles before it, by the test. Refining found nothing the prompt leaves out.
+# Lenin's report
+
+Criterion: size
+Method: enrich
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | tasky | FAILED | 5 | 0 | - |
+| 2 | tasky | FAILED | 5 | 0 | - |
+| 3 | tasky | FAILED | 5 | 0 | - |
+
+No candidate passed its test: the one in best.txt does not work.
+Stopped after cycle 3: it found nothing better than the cycles before it, by the test. Refining found nothing the prompt leaves out.
+
+PASS stall: nothing passes
+PASS stall: refining finds what the prompt leaves out
+PASS stall: the next cycle has the new prompt
+PASS handoff: the requirements go along
+PASS stall: it stops when refining finds nothing new
+PASS stall: the report says why it stopped
+lenin: --holdout goes with --test or --score: it hides a test, it is not the only one
+PASS a hidden test alone
+lenin: --target is a --score: give the suite too
+PASS a target with no suite
 usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
              [--method rounds|chain|enrich]
              [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]
-             [--window SECONDS] [--refine N] [--no-refine]
+             [--window SECONDS] [--refine N] [--no-refine] [--holdout COMMAND]
+             [--patience N] [--target SCORE] [--budget CALLS]
              [--task TEXT] [--tasks FILE] [--prompt-file FILE] [prompt ...]
              [--history FILE] [--no-history]
        lenin --stats [--history FILE]
@@ -268,7 +414,7 @@ Best: cycle 1, slim.
 
 lenin: this run was added to tests/lenin-tmp/history.tsv; --stats reads it
 lenin: up to 4 paid model calls
-lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: wrong
 lenin:   FAILED | 7 | 0 | -
 lenin: cycle 1: big
