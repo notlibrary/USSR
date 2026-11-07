@@ -15,7 +15,9 @@
   the current best answer, what the one before it did included. Each model's prompt
   is now written next to its answer.
 - `USSRmajorminorpatch.ISO`, the eighth release artifact: the install disk's files
-  in ISO 9660 with Joliet long names, for reading on any system. It does not boot.
+  in ISO 9660 with Joliet long names, for reading on any system. It boots: El
+  Torito, an ATAPI driver in the loader and the kernel, and the system runs from
+  the disk image on the CD, what it writes kept in memory. `install(_):` works from it.
 - Regular expressions: `re_test`, `re_find`, `re_pos`, `re_all`, `re_replace` and
   `re_split`, builtin in `ussr`, in `russia.su` and in Moscow's runtime. UTF-8
   aware, with groups, lazy repeats and the `i`, `m` and `s` flags. They run in

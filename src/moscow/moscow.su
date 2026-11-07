@@ -48,18 +48,26 @@ mo_find_root(r): [
     set(mo_base): -1
     bdevices(devs):
     len(n): devs
-    set(i): 0
-    while(_): {i < n} [
-        at(d): devs i
-        at(dev): d 0
-        bl_locate(base): dev 0
-        if(_): {base >= 0} [
-            set(mo_dev): dev
-            set(mo_base): base
-            set(r): true
-            return(r): r
+    # booted from a CD, its image is the root, whatever else is on the disks
+    set(pass): 0
+    while(_): {pass < 2} [
+        set(i): 0
+        while(_): {i < n} [
+            at(d): devs i
+            at(dev): d 0
+            at(model): d 4
+            if(_): {pass = 1 || model = "USSR live CD"} [
+                bl_locate(base): dev 0
+                if(_): {base >= 0} [
+                    set(mo_dev): dev
+                    set(mo_base): base
+                    set(r): true
+                    return(r): r
+                ]
+            ]
+            set(i): {i + 1}
         ]
-        set(i): {i + 1}
+        set(pass): {pass + 1}
     ]
 ]
 

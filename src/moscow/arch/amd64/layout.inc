@@ -11,7 +11,8 @@
 ; Stage 2 uses the BIOS only for A20 and the memory map, then switches to
 ; long mode and reads the file table and the files with its own ATA PIO
 ; driver (primary master, LBA28): files go from 1 MiB up, as large as
-; they are, with no real-mode window in the way.
+; they are, with no real-mode window in the way. Booted from a CD, whose ISO
+; holds this whole image as its El Torito boot file, it reads them over ATAPI.
 ;
 ; Memory (identity mapped, 2 MiB pages, the first 4 GiB):
 ;   0x00500                  boot information for the runtime (BI_*)
@@ -50,6 +51,11 @@ BIF_SIZE        equ 32
 BI_FILES_END    equ 0x200               ; u64: first byte after the files
 BI_E820         equ 0x208               ; 24-byte BIOS entries
 E820_MAX        equ 64
+BI_CD_DRIVE     equ 0x808               ; u64: the boot CD's IDE position + 1, or 0
+BI_CD_BASE      equ 0x810               ; u64: the image's first 2048-byte block on it
+BI_CD_BYTES     equ 0x818               ; u64: the image's size
+CD_BUFFER       equ 0x70000             ; stage 2: one 2048-byte block of the CD
+ELTORITO_TABLE  equ 0x7c00 + 8          ; the boot information table, in stage 1
 
 RT_DATA         equ 0x10000             ; runtime variables
 RT_STACK_TOP    equ 0x80000

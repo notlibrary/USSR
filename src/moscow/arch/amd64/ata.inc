@@ -11,6 +11,12 @@
 ; write that covers a disk sector only in part reads that sector first.
 ; The driver polls (the drives' interrupts are off) and flushes the
 ; drive's cache after every write.
+;
+; Booted from a CD (boot.nasm), the disk image on it is a drive here too, under
+; the name of its IDE position: its sectors are read over ATAPI, 2048 bytes at a
+; time, from where the image lies on the disc. A CD takes no writes, so they go to
+; memory, 64 KiB regions of the kernel's heap, and reads look there first: the
+; system runs as from a disk, and what it wrote is gone at the next boot.
 
 ATA_DRIVES      equ 4
 ATA_CHUNK       equ 64                  ; sectors per transfer (32 KiB)
@@ -179,8 +185,307 @@ ata_init:
         inc edi
         jmp .drive
 .done:
+        ; the image the boot CD holds
+        mov rax, [BOOTINFO + BI_CD_DRIVE]
+        test rax, rax
+        jz .no_cd
+        mov [ata_cd_drive], rax
+        mov rbx, rax
+        dec rbx
+        shl rbx, 6
+        add rbx, ata_drive
+        mov rax, [BOOTINFO + BI_CD_BASE]
+        mov [ata_cd_base], rax
+        mov rax, [BOOTINFO + BI_CD_BYTES]
+        shr rax, 9
+        mov [rbx + ATAD_SECTORS], rax
+        mov qword [rbx + ATAD_PRESENT], 1
+        mov qword [ata_cd_cached], -1
+        lea rdi, [rbx + ATAD_MODEL]
+        mov esi, s_live_cd
+        mov ecx, s_live_cd_end - s_live_cd
+        rep movsb
+.no_cd:
         pop rdi
         pop rbx
+        ret
+
+; --- the boot CD
+
+; dx = base port: waits for DRQ; CF set on ERR or a timeout. Keeps the others.
+cd_wait_drq:
+        push rcx
+        push rdx
+        add dx, 7
+        mov ecx, ATA_TIMEOUT
+.poll:
+        in al, dx
+        test al, 0x80
+        jnz .next
+        test al, 0x01
+        jnz .bad
+        test al, 0x08
+        jnz .good
+.next:
+        dec ecx
+        jnz .poll
+.bad:
+        pop rdx
+        pop rcx
+        stc
+        ret
+.good:
+        pop rdx
+        pop rcx
+        clc
+        ret
+
+; rax = a 2048-byte block of the image -> into ata_cd_block. CF set on an error.
+; Keeps the others.
+cd_read_block:
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        push r9
+        push r10
+        lea r10, [rax]
+        add r10, [ata_cd_base]
+        mov r9d, 8                      ; UNIT ATTENTION, and the like
+        mov edi, [ata_cd_drive]
+        dec edi
+.attempt:
+        push rdi
+        call ata_ports
+        pop rdi
+        mov al, 0xa0
+        test edi, 1
+        jz .select
+        mov al, 0xb0
+.select:
+        push rdx
+        add dx, 6
+        out dx, al
+        pop rdx
+        call ata_wait_idle
+        jc .retry
+        push rdx
+        inc dx
+        xor eax, eax
+        out dx, al                      ; features: PIO
+        inc dx
+        out dx, al
+        add dx, 2
+        out dx, al                      ; bytes a transfer: 2048
+        inc dx
+        mov al, 0x08
+        out dx, al
+        add dx, 2
+        mov al, 0xa0                    ; PACKET
+        out dx, al
+        pop rdx
+        call cd_wait_drq
+        jc .retry
+        sub rsp, 16                     ; READ (12), one block
+        mov byte [rsp], 0xa8
+        mov byte [rsp + 1], 0
+        mov eax, r10d
+        bswap eax
+        mov [rsp + 2], eax
+        mov dword [rsp + 6], 0x01000000
+        mov word [rsp + 10], 0
+        mov rsi, rsp
+        mov ecx, 6
+        rep outsw
+        add rsp, 16
+        call cd_wait_drq
+        jc .retry
+        push rdi
+        mov rdi, ata_cd_block
+        mov ecx, 1024
+        rep insw
+        pop rdi
+        mov rax, r10
+        sub rax, [ata_cd_base]
+        mov [ata_cd_cached], rax
+        clc
+        jmp .out
+.retry:
+        dec r9d
+        jnz .attempt
+        stc
+.out:
+        pop r10
+        pop r9
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        ret
+
+; dx = base port: waits until it is not busy, whatever ERR says; CF on a timeout
+ata_wait_idle:
+        push rcx
+        push rdx
+        add dx, 7
+        mov ecx, ATA_TIMEOUT
+.poll:
+        in al, dx
+        test al, 0x80
+        jz .done
+        dec ecx
+        jnz .poll
+        stc
+        jmp .out
+.done:
+        clc
+.out:
+        pop rdx
+        pop rcx
+        ret
+
+; rax = a sector -> rax: where its copy in memory is, 0 when it has none; with
+; r8d = 1 it is made. CF set when memory runs out. Keeps the others.
+cd_overlay:
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rdi
+        mov rbx, rax
+        mov rsi, [ata_cd_regions]
+        test rsi, rsi
+        jnz .table
+        xor eax, eax
+        test r8d, r8d
+        jz .out_clc
+        ; a pointer per 64 KiB of the image
+        mov rax, [ata_cd_drive]
+        dec rax
+        shl rax, 6
+        mov rsi, [ata_drive + rax + ATAD_SECTORS]
+        add rsi, 127
+        shr rsi, 7
+        shl rsi, 3
+        add rsi, 15
+        and rsi, -16
+        mov rdx, rsi
+        mov rdi, [kpool]
+        call pool_alloc
+        test rax, rax
+        jz .full
+        mov rdi, rax
+        mov rcx, rdx
+        mov rsi, rax
+        xor eax, eax
+        rep stosb
+        mov [ata_cd_regions], rsi
+.table:
+        mov rax, rbx
+        shr rax, 7
+        lea rdi, [rsi + rax * 8]        ; the region's pointer
+        mov rsi, [rdi]
+        test rsi, rsi
+        jnz .region
+        xor eax, eax
+        test r8d, r8d
+        jz .out_clc
+        push rdi
+        mov rdi, [kpool]
+        mov rsi, 65536 + 32             ; the sectors, then which of them are here
+        call pool_alloc
+        pop rdi
+        test rax, rax
+        jz .full
+        mov rsi, rax
+        mov [rdi], rax
+        xor eax, eax
+        mov [rsi + 65536], rax
+        mov [rsi + 65536 + 8], rax
+.region:
+        mov rcx, rbx
+        and ecx, 127
+        mov rdx, rcx
+        shr rdx, 6                      ; which qword of the bits
+        and ecx, 63
+        mov rax, 1
+        shl rax, cl
+        test [rsi + 65536 + rdx * 8], rax
+        jnz .here
+        test r8d, r8d
+        jnz .make
+        xor eax, eax
+        jmp .out_clc
+.make:
+        or [rsi + 65536 + rdx * 8], rax
+.here:
+        mov rax, rbx
+        and eax, 127
+        shl eax, 9
+        add rax, rsi
+.out_clc:
+        clc
+        jmp .out
+.full:
+        stc
+.out:
+        pop rdi
+        pop rsi
+        pop rdx
+        pop rcx
+        pop rbx
+        ret
+
+; rax = first sector, r10d = sectors, rbx = buffer, r8d = 1 to write: the image
+; on the CD. CF set on an error.
+cd_transfer:
+        push rcx
+        push rsi
+        push rdi
+        push r9
+        mov r9, rax
+.sector:
+        test r10d, r10d
+        jz .ok
+        mov rax, r9
+        call cd_overlay
+        jc .out
+        test r8d, r8d
+        jz .read
+        mov rdi, rax
+        mov rsi, rbx
+        jmp .copy
+.read:
+        mov rsi, rax
+        test rax, rax
+        jnz .from
+        mov rax, r9
+        shr rax, 2
+        cmp rax, [ata_cd_cached]
+        je .cached
+        call cd_read_block
+        jc .out
+.cached:
+        mov rax, r9
+        and eax, 3
+        shl eax, 9
+        lea rsi, [ata_cd_block + rax]
+.from:
+        mov rdi, rbx
+.copy:
+        mov ecx, 512
+        rep movsb
+        add rbx, 512
+        inc r9
+        dec r10d
+        jmp .sector
+.ok:
+        clc
+.out:
+        pop r9
+        pop rdi
+        pop rsi
+        pop rcx
         ret
 
 ; edi = drive, rax = first sector, ecx = sectors (1 .. 256), rsi =
@@ -193,6 +498,13 @@ ata_transfer:
         mov r9, rax
         mov r10d, ecx
         mov rbx, rsi
+        lea rax, [rdi + 1]
+        cmp rax, [ata_cd_drive]
+        jne .ata
+        mov rax, r9
+        call cd_transfer
+        jmp .out
+.ata:
         lea rax, [r9 + r10]
         cmp rax, 0x10000000             ; LBA28
         ja .fail
@@ -849,6 +1161,8 @@ n_bcopy:        db "bcopy", 0
 n_bdevices:     db "bdevices", 0
 dev_name:       db "/dev/hda", 0
 s_hdd:          db "HDD", 0
+s_live_cd:      db "USSR live CD", 0
+s_live_cd_end:
 s_virtual:      db "virtual", 0
 s_ata:          db "ATA", 0
 e_bread:        db "bread(v): device lba [count [sector]]", 0

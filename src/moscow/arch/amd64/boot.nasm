@@ -12,6 +12,14 @@
 ; memory from 1 MiB up, and stage 2 jumps to the runtime with the boot
 ; information block's address in rdi.
 ;
+; From a CD: the ISO's El Torito boot file is the whole disk image, no emulation.
+; The BIOS has loaded stage 1 and stage 2 together and put the image's place on
+; the CD in the boot information table (bytes 8 .. 63 of the file), so stage 1
+; goes straight to stage 2, which reads the rest over ATAPI: it looks through the
+; four IDE positions for the drive where the file table is. Stage 1 asks the BIOS
+; whether this is such a boot (int 13h, ax = 4b01): the table cannot say, as an
+; install from the CD copies it onto a hard disk.
+;
 ; Progress goes to the screen through the BIOS and to the first serial
 ; port, so a headless QEMU shows where a boot stopped.
 %include "layout.inc"
@@ -22,6 +30,10 @@
 ; --- stage 1 -----------------------------------------------------------
 
 stage1:
+        jmp short stage1_start
+        nop
+        times 64 - ($ - $$) db 0        ; El Torito's boot information table
+stage1_start:
         cli
         xor ax, ax
         mov ds, ax
@@ -34,6 +46,21 @@ stage1:
         cld
         mov [boot_drive], dl
 
+        ; a no-emulation CD: the BIOS loaded stage 2 already
+        mov si, TOC_BUFFER
+        mov byte [si], 0x13
+        mov ax, 0x4b01
+        int 0x13
+        jc .hard_disk
+        test byte [si + 1], 0x0f        ; media type 0: no emulation
+        jnz .hard_disk
+        mov dl, [boot_drive]
+        cmp [si + 2], dl                ; it is this drive
+        jne .hard_disk
+        mov byte [boot_cd], 1
+        jmp 0:stage2
+.hard_disk:
+        mov dl, [boot_drive]
         mov ah, 0x41                    ; extended disk services?
         mov bx, 0x55aa
         int 0x13
@@ -94,6 +121,7 @@ dap_offset:  dw 0
 dap_segment: dw 0
 dap_lba:     dq 0
 boot_drive:  db 0
+boot_cd:     db 0
 
 msg_no_ext:  db "Moscow: no BIOS extended disk reads", 13, 10, 0
 msg_read1:   db "Moscow: cannot read stage 2", 13, 10, 0
@@ -272,11 +300,27 @@ long_entry:
         mov rsi, msg_long
         call puts64
 
+        xor eax, eax
+        mov [BOOTINFO + BI_CD_DRIVE], rax
+        mov [BOOTINFO + BI_CD_BASE], rax
+        mov [BOOTINFO + BI_CD_BYTES], rax
+        cmp byte [boot_cd], 0
+        je .read_table
+        call cd_find
+        jc .disk_fail
+        mov eax, [cd_index]
+        inc eax
+        mov [BOOTINFO + BI_CD_DRIVE], rax
+        mov eax, [ELTORITO_TABLE + 4]
+        mov [BOOTINFO + BI_CD_BASE], rax
+        mov eax, [ELTORITO_TABLE + 8]
+        mov [BOOTINFO + BI_CD_BYTES], rax
+.read_table:
         ; the file table
         mov eax, TOC_LBA
         mov ecx, 1
         mov rdi, TOC_BUFFER
-        call ata_read
+        call read_sectors
         jc .disk_fail
         mov rax, 'MOSCOWFS'
         cmp [TOC_BUFFER], rax
@@ -307,7 +351,7 @@ long_entry:
         mov ecx, [r13 + 24]             ; sectors
         mov rdi, r12
         push rcx
-        call ata_read
+        call read_sectors
         pop rcx
         jc .disk_fail
         shl rcx, 9
@@ -338,6 +382,189 @@ fail64:
         cli
         hlt
         jmp .stop
+
+; eax = first 512-byte sector of the image, ecx = sectors, rdi = destination,
+; from where the image is. Carry set on a device error.
+read_sectors:
+        cmp byte [boot_cd], 0
+        je ata_read
+        ; falls through
+
+; The same from the CD, a 2048-byte block at a time
+cd_read:
+        test ecx, ecx
+        jz .ok
+        mov edx, eax
+        shr edx, 2
+        add edx, [ELTORITO_TABLE + 4]
+        cmp edx, [cd_cached]
+        je .have
+        push rax
+        push rcx
+        mov eax, edx
+        call cd_block
+        pop rcx
+        pop rax
+        jc .out
+.have:
+        push rax
+        push rcx
+        and eax, 3
+        shl eax, 9
+        lea rsi, [rax + CD_BUFFER]
+        mov ecx, 512
+        rep movsb
+        pop rcx
+        pop rax
+        inc eax
+        dec ecx
+        jmp cd_read
+.ok:
+        clc
+.out:
+        ret
+
+; The drive with this image on it, from the four IDE positions: CF set when no
+; drive has it. Sets cd_port, cd_select and cd_index.
+cd_find:
+        xor ebx, ebx
+.try:
+        cmp ebx, 4
+        jae .none
+        mov [cd_index], ebx
+        mov ax, 0x1f0
+        cmp ebx, 2
+        jb .channel
+        mov ax, 0x170
+.channel:
+        mov [cd_port], ax
+        mov al, 0xa0
+        test ebx, 1
+        jz .master
+        mov al, 0xb0
+.master:
+        mov [cd_select], al
+        mov dword [cd_cached], -1
+        mov eax, TOC_LBA
+        mov ecx, 1
+        mov rdi, TOC_BUFFER
+        call cd_read
+        jc .next
+        mov rax, 'MOSCOWFS'
+        cmp [TOC_BUFFER], rax
+        je .found
+.next:
+        inc ebx
+        jmp .try
+.found:
+        clc
+        ret
+.none:
+        stc
+        ret
+
+; eax = a 2048-byte block of the CD -> into CD_BUFFER, cd_cached set. CF set on an
+; error. A drive answers UNIT ATTENTION to the first command after a disc comes:
+; so a few tries. Keeps rdi, rbx.
+cd_block:
+        push rdi
+        push r9
+        push r10
+        mov r10d, eax
+        mov r9d, 8
+.attempt:
+        movzx edx, word [cd_port]
+        add dx, 6
+        mov al, [cd_select]
+        out dx, al
+        inc dx                          ; the status, 400 ns for the select
+        in al, dx
+        in al, dx
+        in al, dx
+        in al, dx
+        cmp al, 0xff                    ; nothing there
+        je .fail
+        mov ecx, 2000000
+.idle:
+        in al, dx
+        test al, 0x80
+        jz .idle_done
+        dec ecx
+        jnz .idle
+        jmp .fail
+.idle_done:
+        movzx edx, word [cd_port]
+        inc dx
+        xor eax, eax
+        out dx, al                      ; features: PIO
+        inc dx
+        out dx, al                      ; sector count
+        add dx, 2
+        out dx, al                      ; bytes a transfer, low
+        inc dx
+        mov al, 0x08
+        out dx, al                      ; and high: 2048
+        add dx, 2
+        mov al, 0xa0                    ; PACKET
+        out dx, al
+        call cd_wait_drq
+        jc .retry
+        ; READ (12), one block
+        sub rsp, 16
+        mov byte [rsp], 0xa8
+        mov byte [rsp + 1], 0
+        mov eax, r10d
+        bswap eax
+        mov [rsp + 2], eax
+        mov dword [rsp + 6], 0x01000000
+        mov word [rsp + 10], 0
+        mov rsi, rsp
+        movzx edx, word [cd_port]
+        mov ecx, 6
+        rep outsw
+        add rsp, 16
+        call cd_wait_drq
+        jc .retry
+        mov rdi, CD_BUFFER
+        movzx edx, word [cd_port]
+        mov ecx, 1024
+        rep insw
+        mov [cd_cached], r10d
+        clc
+        jmp .out
+.retry:
+        dec r9d
+        jnz .attempt
+.fail:
+        stc
+.out:
+        pop r10
+        pop r9
+        pop rdi
+        ret
+
+; Waits for DRQ on the CD's channel; CF set on ERR or a timeout
+cd_wait_drq:
+        movzx edx, word [cd_port]
+        add dx, 7
+        mov ecx, 2000000
+.poll:
+        in al, dx
+        test al, 0x80
+        jnz .next
+        test al, 0x01
+        jnz .bad
+        test al, 0x08
+        jnz .good
+.next:
+        dec ecx
+        jnz .poll
+.bad:
+        stc
+        ret
+.good:
+        clc
+        ret
 
 ; ATA PIO, primary master, LBA28: eax = first sector, ecx = sectors,
 ; rdi = destination. Carry set on a device error.
@@ -466,9 +693,13 @@ puts64:
 
         align 8
 screen_pos:  dq 0xb8000 + 160 * 20
-msg_long:    db "Moscow boot: long mode, reading the files (ATA)", 13, 10, 0
+cd_index:    dd 0
+cd_cached:   dd -1
+cd_port:     dw 0
+cd_select:   db 0
+msg_long:    db "Moscow boot: long mode, reading the files", 13, 10, 0
 msg_loaded:  db "Moscow boot: files loaded from 1 MiB, starting the runtime", 13, 10, 0
-msg_disk:    db "Moscow boot: ATA read error", 13, 10, 0
+msg_disk:    db "Moscow boot: disk read error", 13, 10, 0
 msg_toc:     db "Moscow boot: no file table (MOSCOWFS)", 13, 10, 0
 
         times (1 + STAGE2_SECTORS) * 512 - ($ - $$) db 0
