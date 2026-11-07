@@ -12,36 +12,36 @@ PASS by speed the faster
 lenin: LENIN_TEST_NO_SUCH_KEY is not set: skipping m
 PASS a model without its key gives nothing
 lenin: up to 9 paid model calls
-lenin: --test runs code no person has read, with your rights: use a sandbox
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
 lenin: prompt refined
 lenin: cycle 1: wrong
-lenin:   FAILED | 7 | 0
+lenin:   FAILED | 7 | 0 | -
 lenin: cycle 1: big
-lenin:   passed | 47 | 0
+lenin:   passed | 47 | 0 | -
 lenin: cycle 1: down
 lenin: cycle 1: slim
-lenin:   passed | 5 | 0
+lenin:   passed | 5 | 0 | -
 lenin: cycle 2: wrong
-lenin:   FAILED | 7 | 0
+lenin:   FAILED | 7 | 0 | -
 lenin: cycle 2: big
-lenin:   passed | 47 | 0
+lenin:   passed | 47 | 0 | -
 lenin: cycle 2: down
 lenin: cycle 2: slim
-lenin:   passed | 5 | 0
+lenin:   passed | 5 | 0 | -
 # Lenin's report
 
 Criterion: size
 Method: rounds
 Chosen: measured: the candidate that passes its test and is best by the criterion
 
-| cycle | model | state | bytes | runs/s |
-|---|---|---|---|---|
-| 1 | wrong | FAILED | 7 | 0 |
-| 1 | big | passed | 47 | 0 |
-| 1 | slim | passed | 5 | 0 |
-| 2 | wrong | FAILED | 7 | 0 |
-| 2 | big | passed | 47 | 0 |
-| 2 | slim | passed | 5 | 0 |
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 1 | slim | passed | 5 | 0 | - |
+| 2 | wrong | FAILED | 7 | 0 | - |
+| 2 | big | passed | 47 | 0 | - |
+| 2 | slim | passed | 5 | 0 | - |
 
 Best: cycle 1, slim.
 
@@ -52,25 +52,25 @@ PASS the report has what failed
 PASS rounds: the last model in a cycle sees nothing of it
 PASS rounds: the next cycle sees the best
 lenin: up to 4 paid model calls
-lenin: --test runs code no person has read, with your rights: use a sandbox
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: wrong
-lenin:   FAILED | 7 | 0
+lenin:   FAILED | 7 | 0 | -
 lenin: cycle 1: big
-lenin:   passed | 47 | 0
+lenin:   passed | 47 | 0 | -
 lenin: cycle 1: down
 lenin: cycle 1: slim
-lenin:   passed | 5 | 0
+lenin:   passed | 5 | 0 | -
 # Lenin's report
 
 Criterion: size
 Method: chain
 Chosen: measured: the candidate that passes its test and is best by the criterion
 
-| cycle | model | state | bytes | runs/s |
-|---|---|---|---|---|
-| 1 | wrong | FAILED | 7 | 0 |
-| 1 | big | passed | 47 | 0 |
-| 1 | slim | passed | 5 | 0 |
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 1 | slim | passed | 5 | 0 | - |
 
 Best: cycle 1, slim.
 
@@ -83,104 +83,210 @@ PASS chain: what passed replaces what failed
 PASS chain: the report says so
 lenin: up to 6 paid model calls
 lenin: cycle 1: slim
-lenin:   not run | 5 | 0
+lenin:   not run | 5 | 0 | -
 lenin: cycle 1: big
-lenin:   not run | 47 | 0
+lenin:   not run | 47 | 0 | -
 lenin: cycle 1: last
-lenin:   not run | 7 | 0
+lenin:   not run | 7 | 0 | -
 # Lenin's report
 
 Criterion: size
 Method: chain
 Chosen: the smallest answer: nothing was run and no model voted
 
-| cycle | model | state | bytes | runs/s |
-|---|---|---|---|---|
-| 1 | slim | not run | 5 | 0 |
-| 1 | big | not run | 47 | 0 |
-| 1 | last | not run | 7 | 0 |
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | not run | 5 | 0 | - |
+| 1 | big | not run | 47 | 0 | - |
+| 1 | last | not run | 7 | 0 | - |
 
 Best: cycle 1, slim.
 
 PASS chain with no test: the latest goes on
 PASS and it is not called the best
-usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
-             [--method rounds|chain]
-             [--test COMMAND] [--ext .EXT] [--baseline FILE] [--window SECONDS]
-             [--no-refine] [--prompt-file FILE] [prompt ...]
-             [--history FILE] [--no-history]
-       lenin --stats [--history FILE]
---models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key
---test: a command that exits 0 when a candidate works; {file} is the candidate
-PASS a method there is not
-PASS the vote goes to the letter
-PASS talk is no vote
-lenin: up to 8 paid model calls
-lenin: cycle 1: wrong
-lenin:   not run | 7 | 0
-lenin: cycle 1: big
-lenin:   not run | 47 | 0
-lenin: cycle 1: down
+PASS a suite's score is its last number
+PASS a number alone
+PASS no number
+PASS a sub-task folds into the prompt
+PASS only new sub-tasks, once each
+PASS and which
+PASS a tasks file, a line each
+lenin: up to 1 paid model calls
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
 lenin: cycle 1: slim
-lenin:   not run | 5 | 0
-# Lenin's report
-
-Criterion: size
-Method: rounds
-Chosen: the smallest answer: nothing was run and no model voted
-
-| cycle | model | state | bytes | runs/s |
-|---|---|---|---|---|
-| 1 | wrong | not run | 7 | 0 |
-| 1 | big | not run | 47 | 0 |
-| 1 | slim | not run | 5 | 0 |
-
-Best: cycle 1, slim.
-
-PASS without a test the report says so
-lenin: up to 8 paid model calls
-lenin: cycle 1: wrong
-lenin:   not run | 7 | 0
-lenin: cycle 1: big
-lenin:   not run | 47 | 0
-lenin: cycle 1: down
-lenin: cycle 1: slim
-lenin:   not run | 5 | 0
-# Lenin's report
-
-Criterion: size
-Method: rounds
-Chosen: the smallest answer: nothing was run and no model voted
-
-| cycle | model | state | bytes | runs/s |
-|---|---|---|---|---|
-| 1 | wrong | not run | 7 | 0 |
-| 1 | big | not run | 47 | 0 |
-| 1 | slim | not run | 5 | 0 |
-
-Best: cycle 1, slim.
-
-lenin: this run was added to tests/lenin-tmp/history.tsv; --stats reads it
-lenin: up to 4 paid model calls
-lenin: --test runs code no person has read, with your rights: use a sandbox
-lenin: cycle 1: wrong
-lenin:   FAILED | 7 | 0
-lenin: cycle 1: big
-lenin:   passed | 47 | 0
-lenin: cycle 1: down
-lenin: cycle 1: slim
-lenin:   passed | 5 | 0
+lenin:   passed | 5 | 0 | -
 # Lenin's report
 
 Criterion: size
 Method: rounds
 Chosen: measured: the candidate that passes its test and is best by the criterion
 
-| cycle | model | state | bytes | runs/s |
-|---|---|---|---|---|
-| 1 | wrong | FAILED | 7 | 0 |
-| 1 | big | passed | 47 | 0 |
-| 1 | slim | passed | 5 | 0 |
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | passed | 5 | 0 | - |
+
+Best: cycle 1, slim.
+
+PASS your sub-tasks go to the centrifuge
+PASS tasks.md says whose they are
+lenin: up to 8 paid model calls
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: prompt refined
+lenin: refining, round 2: a draft from the prompt
+lenin: round 2 added 1 sub-tasks
+lenin: refining, round 3: a draft from the prompt
+lenin: round 3 found nothing new: the prompt says what the request asks
+lenin: cycle 1: tasky
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | tasky | passed | 5 | 0 | - |
+
+Best: cycle 1, tasky.
+
+PASS round 2 finds a sub-task in its draft
+PASS round 3 finds nothing new
+PASS the found sub-task is in the prompt
+PASS the draft is kept
+PASS refining stops when a round finds nothing new
+lenin: up to 3 paid model calls
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | 1
+lenin: cycle 1: rich
+lenin:   passed | 10 | 0 | 2
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0 | 0
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes, then scores highest on the suite, then is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | passed | 5 | 0 | 1 |
+| 1 | rich | passed | 10 | 0 | 2 |
+| 1 | wrong | FAILED | 7 | 0 | 0 |
+
+Best: cycle 1, rich.
+
+PASS the suite finds a winner
+PASS the higher score wins over the smaller
+PASS what passes none of the suite fails
+PASS a suite is no vote
+lenin: up to 5 paid model calls
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: tasky
+lenin:   passed | 5 | 0 | -
+lenin: cycle 2: tasky
+lenin:   passed | 5 | 0 | -
+lenin: Stopped after cycle 2: it found nothing better than the cycles before it, by the test.
+# Lenin's report
+
+Criterion: size
+Method: enrich
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | tasky | passed | 5 | 0 | - |
+| 2 | tasky | passed | 5 | 0 | - |
+
+Best: cycle 1, tasky.
+Stopped after cycle 2: it found nothing better than the cycles before it, by the test.
+
+PASS enrich: a winner
+PASS enrich: the next cycle gets the best
+PASS enrich: it stops once nothing better came
+PASS enrich: the report says where it stopped
+lenin: enrich needs --test or --score: without one nothing can be better
+PASS enrich with nothing to measure
+usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
+             [--method rounds|chain|enrich]
+             [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]
+             [--window SECONDS] [--refine N] [--no-refine]
+             [--task TEXT] [--tasks FILE] [--prompt-file FILE] [prompt ...]
+             [--history FILE] [--no-history]
+       lenin --stats [--history FILE]
+--models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key
+--test: a command that exits 0 when a candidate works; {file} is the candidate
+--score: a test suite that prints, last, how many of its checks {file} passes
+PASS a method there is not
+PASS the vote goes to the letter
+PASS talk is no vote
+lenin: up to 8 paid model calls
+lenin: cycle 1: wrong
+lenin:   not run | 7 | 0 | -
+lenin: cycle 1: big
+lenin:   not run | 47 | 0 | -
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   not run | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: the smallest answer: nothing was run and no model voted
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | not run | 7 | 0 | - |
+| 1 | big | not run | 47 | 0 | - |
+| 1 | slim | not run | 5 | 0 | - |
+
+Best: cycle 1, slim.
+
+PASS without a test the report says so
+lenin: up to 8 paid model calls
+lenin: cycle 1: wrong
+lenin:   not run | 7 | 0 | -
+lenin: cycle 1: big
+lenin:   not run | 47 | 0 | -
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   not run | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: the smallest answer: nothing was run and no model voted
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | not run | 7 | 0 | - |
+| 1 | big | not run | 47 | 0 | - |
+| 1 | slim | not run | 5 | 0 | - |
+
+Best: cycle 1, slim.
+
+lenin: this run was added to tests/lenin-tmp/history.tsv; --stats reads it
+lenin: up to 4 paid model calls
+lenin: --test and --score run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 1: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 1 | slim | passed | 5 | 0 | - |
 
 Best: cycle 1, slim.
 

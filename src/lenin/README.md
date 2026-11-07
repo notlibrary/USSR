@@ -9,12 +9,16 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
      --criteria size --test "python test.py {file}" --ext .py "what you want"
 ```
 
+Lenin does the two operations [research/README.md](../../research/README.md)
+defines: **refining**, on the prompt, and **enrichment**, on the answers.
+
 ## What it does
 
 1. **Refines the prompt.** The first model turns your request into a precise
    prompt: language, inputs, outputs, limits, how to tell it works. Assumptions
    it makes are listed as assumptions. It goes to `out/refined.md`, so read it.
-   `--no-refine` sends yours as it is.
+   `--no-refine` sends yours as it is. With `--task` and `--refine N` it refines
+   further: see [Refining](#refining).
 2. **Spins the centrifuge.** Every model answers. Each sees the best answer so
    far and how it measured, or what its test said when it failed, and is asked
    for a better one. `--method` says how often that best changes: see below.
@@ -28,6 +32,66 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
 
 `--baseline FILE` measures a solution you already have, a classic one, the same
 way, and the report says whether anything beat it.
+
+## Refining
+
+Refining is a prompt operation. Prompt A, "make a text editor", and sub-task A,
+"it supports bold text", make prompt B, "make a text editor that supports bold
+text". It is repeated until the prompt reflects what you really want. Sub-tasks
+come two ways:
+
+- **Yours**: `--task "it supports bold text"`, as many as you like, or
+  `--tasks FILE` with one per line. They go into the prompt before the first
+  model refines it; with `--no-refine` they go after it as they are, under "It
+  must also:".
+- **Found**: `--refine N` refines in N rounds. Round 1 is the refining above.
+  Each round after it has the first model write a draft from the prompt, runs
+  your test on the draft, and asks the model what the draft shows the prompt
+  leaves out: what the code got wrong or left out because the prompt did not say
+  it. Those sub-tasks go into the prompt, and the next round drafts again.
+  Refining stops when a round finds nothing new.
+
+```bash
+ussr src/lenin/lenin.su --models models.conf --refine 3 \
+     --task "it supports bold text" --test "python test.py {file}" --ext .py \
+     "make a text editor"
+```
+
+`out/tasks.md` lists every sub-task and where it came from, "(yours)" or
+"(round 2)". Each round's prompt is `out/refine2.md`, `out/refine3.md` and so on,
+with its draft next to it. Drafts only show what is missing from the prompt:
+they do not compete with the centrifuge's answers. A round costs two calls.
+
+What it does not do: a model decides what the draft leaves out, and it can be
+wrong, or add what you never asked for. It is told not to. Read `tasks.md`.
+
+## Enrichment
+
+Enrichment chooses the better answer from several models, each used more than
+once, with a test suite that says what is better. Writing such a suite takes less
+intelligence than solving the problem. The current best goes to the next model, or
+back to the same one, until no better answer comes that the tests can detect.
+
+```bash
+ussr src/lenin/lenin.su --models models.conf --method enrich --cycles 10 \
+     --score "python suite.py {file}" --ext .py "what you want"
+```
+
+- `--method enrich` is the chain below. It stops at the first cycle that finds
+  nothing better than the cycles before it, so `--cycles` is the most it does,
+  not what it does. It needs `--test` or `--score`: without one nothing can be
+  better.
+- `--score COMMAND` is the "what is better" suite. It runs on every answer and
+  prints, as the last number of its output, how many of its checks pass:
+  `9 checks, passed 7`. More passing ranks first, before size or speed, so an
+  answer that passes 7 of 9 beats one that passes 3, and the next model is
+  shown the better one and what its suite said. Without `--test`, an answer
+  passes when the suite exits 0, that is when all of it passes. With `--test`,
+  the test decides what passes and the suite ranks.
+
+With one model, enrich is that model improving its own answer, cycle after
+cycle. It stops where its suite stops telling answers apart: an answer can be
+better in ways the suite does not check, and Lenin cannot see those.
 
 ## Methods
 
@@ -52,6 +116,9 @@ gets the same best.
 With no `--test` nothing measures an answer, so "best" could only mean "smallest", and
 a stub is small. There the chain passes on the latest answer, called "the answer so
 far" and not "the best", and the models still vote at the end.
+
+`--method enrich`: the chain, stopping once a cycle finds nothing better. See
+[Enrichment](#enrichment).
 
 Each model's prompt is written next to its answer, `cycle1_name.prompt.md`, so you can
 read what it was really given.
@@ -126,9 +193,10 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 
 ## Before you run it
 
-- **It costs money.** A run is one call to refine, models times cycles, and with
-  no test one vote per model. Lenin prints the number first and does not ask.
-- **`--test` runs code nobody has read, with your rights.** A model can write
+- **It costs money.** A run is one call to refine, two for each more round of
+  `--refine`, models times cycles, and with no test or suite one vote per model. Lenin prints the number first and does not ask.
+- **`--test` and `--score` run code nobody has read, with your rights.** So do
+  the drafts of `--refine`. A model can write
   anything into it. Use a container, a virtual machine or a throwaway user.
 - **A test that hangs stops Lenin**: USSR has no way to kill a command it
   started. Put a limit in the test: `timeout 10 python {file}`.
@@ -144,13 +212,17 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 | `--models FILE` | the centrifuge | required |
 | `--dir DIR` | where everything goes | `lenin-out` |
 | `--cycles N` | generation cycles | 2 |
-| `--criteria speed\|size` | what decides among those that pass; speed needs `--test` | `size` |
-| `--method rounds\|chain` | when the best is passed on: after each cycle, or each model | `rounds` |
+| `--criteria speed\|size` | what decides among those that pass and score the same; speed needs `--test` or `--score` | `size` |
+| `--method rounds\|chain\|enrich` | when the best is passed on: after each cycle, or each model; enrich stops when nothing better comes | `rounds` |
 | `--test COMMAND` | exits 0 when `{file}` works; `{file}` goes at the end if not given | none: a vote |
+| `--score COMMAND` | a suite that prints last how many of its checks `{file}` passes; more ranks first | none |
 | `--ext .EXT` | candidates' file extension | `.txt` |
 | `--baseline FILE` | a solution to compare with | none |
 | `--window SECONDS` | how long to time speed | 3 |
-| `--no-refine` | send the prompt as it is | refines |
+| `--refine N` | refining rounds; after the first, each drafts and adds what it shows is missing | 1 |
+| `--no-refine` | send the prompt as it is (`--refine 0`) | refines |
+| `--task TEXT` | a sub-task for the prompt; give it more than once | none |
+| `--tasks FILE` | sub-tasks, one a line | none |
 | `--prompt-file FILE` | the prompt from a file | the arguments |
 | `--history FILE` | the record every run adds to | `LENIN_HISTORY`, else `~/.lenin/history.tsv` |
 | `--no-history` | keep this run out of the record | records it |

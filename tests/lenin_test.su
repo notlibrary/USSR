@@ -92,12 +92,12 @@ init(result): arg_count arg_values [
     check(_): "no models file" none null
 
     # who beats whom
-    lenin_measure(fail): "x" "p" "aaaaaaaaaa" "" "l" 0
+    lenin_measure(fail): "x" "p" "aaaaaaaaaa" "" "" "l" 0
     btput(_): fail "passed" false
     btput(_): fail "tested" true
-    lenin_measure(big): "y" "p" "aaaaaaaaaaaaaaaaaaaaaaaaa" "" "l" 0
+    lenin_measure(big): "y" "p" "aaaaaaaaaaaaaaaaaaaaaaaaa" "" "" "l" 0
     btput(_): big "rate" 10
-    lenin_measure(small): "z" "p" "aaaaaaaaaaaaaaaaaaaa" "" "l" 0
+    lenin_measure(small): "z" "p" "aaaaaaaaaaaaaaaaaaaa" "" "" "l" 0
     btput(_): small "rate" 2
     lenin_better(b): small fail "size"
     check(_): "one that passes beats a smaller one that fails" b true
@@ -215,6 +215,156 @@ init(result): arg_count arg_values [
     word_test(t):
     btput(_): args "test" t
 
+    # refining: prompt A and sub-task A make prompt B
+    lenin_last_number(k): "9 checks, passed 7"
+    check(_): "a suite's score is its last number" k 7
+    lenin_last_number(k): "12"
+    check(_): "a number alone" k 12
+    lenin_last_number(k): "no number"
+    check(_): "no number" k -1
+    vec(subs): ""
+    push(_): subs "supports bold text"
+    lenin_fold(folded): "make a text editor" subs
+    concat(want): "make a text editor" nl nl "It must also:" nl "- supports bold text"
+    check(_): "a sub-task folds into the prompt" folded want
+    concat(listed): "- saves files" nl "* supports bold text" nl "NONE" nl "- saves files" nl "not a task"
+    lenin_subtasks(new): listed subs
+    len(nnew): new
+    check(_): "only new sub-tasks, once each" nnew 1
+    at(first_): new 0
+    check(_): "and which" first_ "saves files"
+    concat(listed): "- one" nl "  two" nl nl "* three"
+    lenin_task_file(tf): listed
+    len(ntf): tf
+    check(_): "a tasks file, a line each" ntf 3
+
+    # your sub-tasks, with no refining: they go after the prompt as they are
+    vec(one): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): one m
+    btput(_): args "models" one
+    btput(_): args "tasks" subs
+    btput(_): args "refine" false
+    btput(_): args "cycles" 1
+    concat(rundir6): dir "/tasks"
+    btput(_): args "dir" rundir6
+    lenin_run(st): args
+    concat(p): rundir6 "/refined.md"
+    readfile(sent): p
+    concat(want): "say good" nl nl "It must also:" nl "- supports bold text"
+    check(_): "your sub-tasks go to the centrifuge" sent want
+    concat(p): rundir6 "/tasks.md"
+    readfile(said): p
+    str_find(i): said "- supports bold text (yours)" 0
+    check(_): "tasks.md says whose they are" {i >= 0} true
+    vec(none_): ""
+    btput(_): args "tasks" none_
+
+    # refining in rounds: a draft, what it shows is missing, until nothing new
+    vec(one): ""
+    model(m): "tasky" "lenin_tasky.json"
+    push(_): one m
+    btput(_): args "models" one
+    btput(_): args "refine" true
+    btput(_): args "refine_rounds" 4
+    concat(rundir7): dir "/rounds"
+    btput(_): args "dir" rundir7
+    lenin_run(st): args
+    concat(p): rundir7 "/tasks.md"
+    readfile(said): p
+    str_find(i): said "- handles bad input (round 2)" 0
+    check(_): "round 2 finds a sub-task in its draft" {i >= 0} true
+    str_find(i): said "(round 3)" 0
+    check(_): "round 3 finds nothing new" {i < 0} true
+    concat(p): rundir7 "/refined.md"
+    readfile(sent): p
+    str_find(i): sent "It must also:" 0
+    check(_): "the found sub-task is in the prompt" {i >= 0} true
+    concat(p): rundir7 "/refine2_draft.txt"
+    open_file(h): p "rb"
+    check(_): "the draft is kept" {h >= 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    concat(p): rundir7 "/refine4.md"
+    open_file(h): p "rb"
+    check(_): "refining stops when a round finds nothing new" {h < 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    btput(_): args "refine" false
+    btput(_): args "refine_rounds" 1
+
+    # a "what is better" suite: more of it passing beats fewer bytes
+    getenv(os): "OS"
+    set(score_cmd): "grep -c good {file}"
+    if(_): {os = "Windows_NT"} [
+        # cmd gets a quote as \", so the quotes find needs go in a script
+        chr(q_): 34
+        chr(crlf): 13
+        chr(bs): 92
+        concat(script): "@" q_ "%SystemRoot%" bs "system32" bs "find.exe" q_ " /c " q_ "good" q_ " %1" crlf nl
+        concat(cmdfile): dir "/count.cmd"
+        writefile(_): cmdfile script
+        lenin_replace(cmdfile): cmdfile "/" bs
+        concat(score_cmd): cmdfile " {file}"
+    ]
+    vec(two): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): two m
+    model(m): "rich" "lenin_rich.json"
+    push(_): two m
+    model(m): "wrong" "lenin_wrong.json"
+    push(_): two m
+    btput(_): args "models" two
+    btput(_): args "test" ""
+    btput(_): args "score" score_cmd
+    concat(rundir8): dir "/score"
+    btput(_): args "dir" rundir8
+    lenin_run(st): args
+    check(_): "the suite finds a winner" st 0
+    concat(p): rundir8 "/best.txt"
+    readfile(best): p
+    concat(want): "good" nl "good" nl
+    check(_): "the higher score wins over the smaller" best want
+    concat(p): rundir8 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "| wrong | FAILED | 7 | 0 | 0 |" 0
+    check(_): "what passes none of the suite fails" {i >= 0} true
+    str_find(i): rep "nothing was run" 0
+    check(_): "a suite is no vote" {i < 0} true
+
+    # enrich: the chain, until a cycle finds nothing better
+    btput(_): args "models" one
+    btput(_): args "score" ""
+    word_test(t):
+    btput(_): args "test" t
+    btput(_): args "method" "enrich"
+    btput(_): args "cycles" 5
+    concat(rundir9): dir "/enrich"
+    btput(_): args "dir" rundir9
+    lenin_run(st): args
+    check(_): "enrich: a winner" st 0
+    concat(p): rundir9 "/cycle2_tasky.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "The best answer so far:" 0
+    check(_): "enrich: the next cycle gets the best" {i >= 0} true
+    concat(p): rundir9 "/cycle3_tasky.prompt.md"
+    open_file(h): p "rb"
+    check(_): "enrich: it stops once nothing better came" {h < 0} true
+    if(_): {h >= 0} [ close_file(_): h ]
+    concat(p): rundir9 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "Stopped after cycle 2" 0
+    check(_): "enrich: the report says where it stopped" {i >= 0} true
+    vec(argv): ""
+    push(_): argv "--models"
+    push(_): argv conf
+    push(_): argv "--method"
+    push(_): argv "enrich"
+    push(_): argv "the task"
+    lenin_main(st): argv
+    check(_): "enrich with nothing to measure" st 2
+    btput(_): args "models" models
+    btput(_): args "method" "rounds"
+    btput(_): args "cycles" 1
+
     # a method there is not
     vec(argv): ""
     push(_): argv "--models"
@@ -305,6 +455,10 @@ init(result): arg_count arg_values [
     check(_): "a cut keeps letters whole" celln 2
     btdel(_): args "history"
 
+    clean(_): rundir6
+    clean(_): rundir7
+    clean(_): rundir8
+    clean(_): rundir9
     clean(_): rundir5
     clean(_): rundir
     clean(_): rundir2
