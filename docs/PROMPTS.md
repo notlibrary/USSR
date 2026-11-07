@@ -1077,3 +1077,12 @@ than the classic software Practice what you preach
 It's now one of 3 main tracks of the project first one is ROUND stack forum
 second one is Kremlin GUI desktop(and apps)+USSR shell third one is Lenin neuroslop code enrichment and refining AI agent 
 with underlying Moscow OS kernel Make a separate section in README.md explaining this
+
+Please add regular expressions support to USSR programming language and moscow kernel
+
+Now we need make USSRmajorminorpatch.ISO fs file 
+Make it build product #8 like an .img
+Use joilet so it supports long file names
+
+Make lenin support refinement and enrichment such as they defined in research/README.md
+Fix global README.md about it and document this
