@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Reads an ISO 9660 image's Joliet tree with no ISO library and compares it with
-a folder: every file there, under its full long name, with the same bytes.
+a folder: every file there, under its full long name, with the same bytes. Then
+its El Torito boot record: a no-emulation boot file with a boot sector, that the
+BIOS loads 16 sectors of, and a boot information table saying where it lies.
 
     python src/moscow/tools/iso_test.py build/moscow/ussr.iso build/moscow/iso
 
@@ -14,6 +16,8 @@ import sys
 
 SECTOR = 2048
 UCS2_ESCAPES = (b"%/@", b"%/C", b"%/E")  # levels 1, 2 and 3
+# what the build adds that is not in the folder
+BOOT_FILES = ("boot/ussr.img", "boot/boot.catalog")
 
 
 def descriptors(f):
@@ -66,6 +70,43 @@ def walk(f, extent, length, path, files):
             files[path + name] = (child, bytes_)
 
 
+def boot_record(f):
+    """Checks the El Torito boot: a list of what is wrong with it."""
+    sector = 16
+    catalog = None
+    while True:
+        f.seek(sector * SECTOR)
+        d = f.read(SECTOR)
+        if len(d) < SECTOR or d[1:6] != b"CD001" or d[0] == 255:
+            break
+        if d[0] == 0 and d[7:30] == b"EL TORITO SPECIFICATION":
+            catalog = int.from_bytes(d[71:75], "little")
+        sector += 1
+    if catalog is None:
+        return ["no El Torito boot record"]
+    f.seek(catalog * SECTOR)
+    c = f.read(64)
+    wrong = []
+    if c[0] != 1 or c[30:32] != b"\x55\xaa":
+        wrong.append("the boot catalog has no validation entry")
+    if sum(int.from_bytes(c[i:i + 2], "little") for i in range(0, 32, 2)) & 0xffff:
+        wrong.append("the boot catalog's checksum is wrong")
+    if c[32] != 0x88:
+        wrong.append("the initial entry is not bootable")
+    if c[33] != 0:
+        wrong.append("the boot is not no-emulation")
+    if int.from_bytes(c[38:40], "little") != 16:
+        wrong.append("the BIOS does not load 16 sectors")
+    lba = int.from_bytes(c[40:44], "little")
+    f.seek(lba * SECTOR)
+    head = f.read(512)
+    if head[510:512] != b"\x55\xaa":
+        wrong.append("the boot file has no boot sector")
+    if int.from_bytes(head[12:16], "little") != lba:
+        wrong.append("the boot information table does not say where the file is")
+    return wrong
+
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -104,7 +145,10 @@ def main():
             if size != len(bytes_) or sha(f.read(size)) != sha(bytes_):
                 print("FAIL different bytes: %s" % path)
                 failed += 1
-    extra = set(files) - set(want)
+        for why in boot_record(f):
+            print("FAIL %s" % why)
+            failed += 1
+    extra = set(files) - set(want) - set(BOOT_FILES)
     for path in sorted(extra):
         print("FAIL not in the folder: %s" % path)
         failed += 1

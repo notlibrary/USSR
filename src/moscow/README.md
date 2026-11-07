@@ -46,8 +46,20 @@ under their long names. A release ships it as `USSR049.ISO` for the tag 0.4.9, n
 `tools/iso_test.py` reads its Joliet tree back with no ISO library and compares
 every file.
 
-It does not boot. Moscow's loader reads an ATA hard disk and a CD speaks ATAPI, so
-to boot USSR use the `.img`. The ISO is for reading and copying the files.
+It boots, on a BIOS PC or in QEMU, from a CD drive on the IDE channels. The whole
+`ussr.img` is inside as `/boot/ussr.img`, the El Torito boot file: the BIOS loads
+its loader, the loader reads the rest over ATAPI, and the kernel sees that image as
+a disk, `/dev/hdc` or wherever the drive is, with its Belarus root. A CD takes no
+writes, so they go to memory: everything works, and what you wrote is gone at the
+next boot. `install(_):` from it puts USSR on a disk, QEMU's virtual ones only, as
+from the install disk.
+
+```bash
+qemu-system-x86_64 -m 2048 -cdrom USSR049.ISO
+```
+
+UEFI without its legacy BIOS mode and SATA drives in AHCI mode are not supported. So
+far it has only booted in QEMU.
 
 ## Installing
 

@@ -144,7 +144,7 @@ jobs:
             test -f "build/moscow/native/$prog" || { echo "no /bin/$prog on the disk" >&2; exit 1; }
           done
 
-      - name: Read the ISO's Joliet tree
+      - name: Read the ISO's Joliet tree and boot record
         run: python3 src/moscow/tools/iso_test.py build/moscow/ussr.iso build/moscow/iso
 
       # QEMU's software CPU: what the timeouts in qemu_test.py are set for

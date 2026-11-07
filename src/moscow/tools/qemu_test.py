@@ -51,6 +51,7 @@ import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 IMAGE = os.path.join(ROOT, "build", "moscow", "ussr.img")
+ISO = os.path.join(ROOT, "build", "moscow", "ussr.iso")
 PROMPT = b"russia> "
 ACCEL = None            # --accel: QEMU's -accel (whpx, kvm), else TCG
 
@@ -301,7 +302,7 @@ def clean(data):
 class Machine:
     """QEMU with the given disks (path, format), COM1 on a socket."""
 
-    def __init__(self, qemu, disks, port, log, monitor=None, forward=()):
+    def __init__(self, qemu, disks, port, log, monitor=None, forward=(), cdrom=None):
         cmd = [qemu, "-display", "none", "-no-reboot", "-m", "2048",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
                "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port]
@@ -315,6 +316,8 @@ class Machine:
             cmd += ["-accel", ACCEL]
         for i, (path, fmt) in enumerate(disks):
             cmd += ["-drive", "format=%s,index=%d,media=disk,file=%s" % (fmt, i, path)]
+        if cdrom:
+            cmd += ["-cdrom", cdrom, "-boot", "d"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         sock = None
         for _ in range(100):
@@ -402,6 +405,8 @@ def main():
                     help="no Linux programs in ring 3")
     ap.add_argument("--no-ural", action="store_true",
                     help="no package install with ural over HTTPS")
+    ap.add_argument("--no-cd", action="store_true",
+                    help="no boot from the ISO")
     ap.add_argument("--no-gui", action="store_true",
                     help="no Kremlin, Mbltishi and Tver on the framebuffer")
     ap.add_argument("--accel", help="QEMU accelerator: whpx (Windows), kvm (Linux)")
@@ -483,6 +488,8 @@ def main():
         ural(qemu, disk, args.port + 80, log, check)
     if not args.no_gui:
         gui(qemu, disk, work, args.port + 50, log, check)
+    if not args.no_cd:
+        failures += cd_boot(qemu, work, args.port + 90, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
 
@@ -1260,6 +1267,94 @@ def https(url, context, data=None, headers=None, timeout=180):
             return r.status, r.headers, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.headers, e.read()
+
+
+def cd_boot(qemu, work, port, log, check):
+    """The ISO alone in the CD drive: it boots, the system runs from the disk image
+    in it, what it writes stays in memory until the next boot, and it installs onto
+    an empty disk that then boots without the CD."""
+    if not os.path.exists(ISO):
+        print("SKIP no %s: build.sh makes it when xorriso is there" % ISO)
+        return 0
+    target = os.path.join(work, "cd_target.qcow2")
+    r = subprocess.run([find_qemu_img(qemu), "create", "-f", "qcow2", target, "96M"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        check("qemu-img makes a qcow2 disk", False, r.stderr.decode("utf-8", "replace"))
+        return 1
+    m = Machine(qemu, [], port, log, cdrom=ISO)
+    serial = m.serial
+
+    def say(line, timeout=120):
+        serial.command(line)
+        return clean(serial.output_to_prompt(timeout=timeout))
+
+    try:
+        boot = clean(serial.output_to_prompt(timeout=180))
+        check("the ISO boots with no disk at all", "USSR Moscow kernel for amd64" in boot, boot)
+        check("the CD's image is a disk", "disk:    /dev/hdc, 64 MiB, USSR live CD" in boot, boot)
+        check("and it is the root", re.search(r"root:    /dev/hdc from sector \d+, Belarus", boot) is not None, boot)
+        got = say('cat(_): "/etc/hostname"')
+        check("files come off the CD", got == "moscow-install", got)
+        say('writefile(_): "/home/live.txt" "kept in memory"')
+        got = say('cat(_): "/home/live.txt"')
+        check("a write goes to memory and reads back", got == "kept in memory", got)
+        got = say("fsck(_):", timeout=300)
+        check("the file system checks clean", re.search(r"\d+ directories, \d+ files", got) is not None, got)
+        say('writefile(_): "/home/h.su" "print(_): 42\\n"')
+        say('file_exists(f): "/bin/ussr"')
+        if say("print(_): f") == "true":
+            got = say('run(st): "ussr" "/home/h.su"', timeout=300)
+            check("a Linux program of /bin runs from it", got == "42", got)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("CD conversation", False, str(e))
+    finally:
+        m.close()
+
+    # the next boot: what was written is gone, and it installs
+    m = Machine(qemu, [(target, "qcow2")], port + 1, log, cdrom=ISO)
+    serial = m.serial
+    try:
+        boot = clean(serial.output_to_prompt(timeout=180))
+        check("the CD is the root over an empty disk", "root:    /dev/hdc" in boot, boot)
+        say('file_exists(f): "/home/live.txt"')
+        got = say("print(_): f")
+        check("nothing written is left after a reboot", got == "false", got)
+        serial.command("install(_):")
+        said = []
+        for question, answer in [(b"Install onto [/dev/hda]: ", "")] + ANSWERS[1:]:
+            said.append(clean(serial.read_until(question, timeout=120)))
+            serial.command(answer)
+        said.append(clean(serial.output_to_prompt(timeout=1200)))
+        text = "\n".join(said)
+        check("it installs from the CD",
+             "/dev/hdc  64 MiB  USSR live CD  (the install disk)" in text
+             and "Done: /dev/hda boots USSR Moscow now." in text, text[-1500:])
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("CD install conversation", False, str(e))
+    finally:
+        m.close()
+
+    # the installed disk, with no CD: stage 1 must not take it for one
+    m = Machine(qemu, [(target, "qcow2")], port + 2, log)
+    serial = m.serial
+    try:
+        boot = clean(serial.read_until(b"(a key: the shell)", timeout=120))
+        serial.sock.sendall(b"\r")
+        boot += "\n" + clean(serial.output_to_prompt(timeout=120))
+        check("the disk installed from the CD boots alone",
+             "root:    /dev/hda" in boot, boot)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("installed from CD conversation", False, str(e))
+    finally:
+        m.close()
+    return 0
 
 
 def install(qemu, disk, work, port, log, check):

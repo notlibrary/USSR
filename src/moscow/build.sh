@@ -15,8 +15,9 @@
 #                          project (/src/ussr, the files git tracks)
 # build/moscow/ussr.iso    the same files as an ISO 9660 image with Joliet,
 #                          so any system reads them under their long names,
-#                          when xorriso is there. It does not boot: Moscow's
-#                          loader reads an ATA disk, not an ATAPI CD
+#                          when xorriso is there. It boots: ussr.img is in it
+#                          as /boot/ussr.img, the El Torito boot file, and the
+#                          kernel runs from that image (arch/amd64/ata.inc)
 #
 # Needs nasm (NASM=path to override) and a ussr binary (first argument,
 # else ./ussr or ./ussr.exe at the root).
@@ -341,7 +342,10 @@ if command -v xorriso >/dev/null 2>&1; then
         cp "$out"/lib/*.so "$stage/lib/"
     fi
     (cd "$root" && tar -cf - -T "$list") | tar -xf - -C "$stage/src/ussr"
-    xorriso -as mkisofs -quiet -iso-level 3 -R -J -joliet-long -V USSR -o "$iso" "$stage"
+    # the BIOS loads the boot sector and stage 2: 16 sectors of 512 (TOC_LBA)
+    xorriso -as mkisofs -quiet -iso-level 3 -R -J -joliet-long -V USSR -o "$iso" \
+        -graft-points -b boot/ussr.img -c boot/boot.catalog -no-emul-boot \
+        -boot-load-size 16 -boot-info-table "boot/ussr.img=$img" "/=$stage"
     echo "build/moscow/ussr.iso: $(wc -c < "$iso") bytes"
 else
     echo "build.sh: no xorriso: no ussr.iso" >&2

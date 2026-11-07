@@ -7674,6 +7674,11 @@ sha_w:          resd 64
 sha_block:      resb 128
                 alignb 16
 ata_drive:      resb ATA_DRIVES * ATAD_SIZE
+ata_cd_drive:   resq 1                  ; the boot CD's position + 1, or 0
+ata_cd_base:    resq 1                  ; the image's first block on the disc
+ata_cd_cached:  resq 1                  ; the block in ata_cd_block
+ata_cd_regions: resq 1                  ; what was written: see ata.inc
+ata_cd_block:   resb 2048
 ata_sector:     resb 512
 ata_buffer:     resb ATA_CHUNK * 512 + 512
 ata_stage:      resb DEV_PIECE
