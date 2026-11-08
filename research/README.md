@@ -17,3 +17,6 @@ it can be done by writing an initial good prompt or prompting sub-tasks against 
 test suite while making this suite requires less intelligence than solving problem itself and sequential transfer current best 
 solution to the next model or iteration with current model until reached the best option that tests can detect
  
+We seek an applied mathematician with algorithmic background to develop
+advanced refining and enrichment methodologies
+Dive into this research folder with anything you got
