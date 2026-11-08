@@ -174,7 +174,7 @@ ussr hello.ru
 Lenin is the neuroslop code refining and enrichment AI agent (working:
 `src/lenin`, see [its README](src/lenin/README.md)).
 
-USSR itself is made by prompting an AI and enrichment the results with the next
+USSR itself is made by prompting an AI with beforehand refined prompt and enrichment the results with the next
 AI "centrifuge" by hand. Lenin is that process as a program. Practice what you
 preach: if refined and enriched neuroslop is better than classical software then the
 refining and enrichment has to be a tool and it has to show it.
