@@ -20,3 +20,4 @@ solution to the next model or iteration with current model until reached the bes
 We seek an applied mathematician with algorithmic background to develop
 advanced refining and enrichment methodologies
 Dive into this research folder with anything you got
+Also try to prove the existence of the enrichment window
