@@ -120,7 +120,7 @@ Examples: it can't print negative numbers else branches is broken e.t.c
 USSR has piece of ware for each decade of the computing since PDP-11 vi fans of 70s to vibe AI coders of 20s
 
 It doesn't want to replace(you can't replace the lies that let a thousand days go)
-Linux or Windows instead it refines enriches and complements with it 
+Linux or Windows instead it follows refines enriches and complements with it while following it's own 3 tracks 
 
 
 USSR is a neuroslopware it's created entirely by prompting an AI with beforehand refined prompt followed by enrichment results with the next AI "centrifuge"
