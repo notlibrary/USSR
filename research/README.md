@@ -21,3 +21,7 @@ We seek an applied mathematician with algorithmic background to develop
 advanced refining and enrichment methodologies
 Dive into this research folder with anything you got
 Also try to prove the existence of the enrichment window
+
+Refinement and enrichment provably works only for coding agents in problems where you can easy find
+"what is better test" general purpose agents depends on field of expertise
+eg. enrichment with an engineering agent can take a very long time because of long field lab tests
