@@ -1,5 +1,8 @@
 # Ryazan
 
+-Что в мещках?
+-Сахар
+
 Ryazan is USSR's secure socket library: TLS clients and servers on ordinary
 USSR socket handles, and HTTPS requests in one call. ukraine.su serves HTTPS
 through it, and `prompt(_):` reaches AI providers through it.
