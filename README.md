@@ -117,6 +117,9 @@ ural install ukraine russia
 USSR is a bug-ridden project critical simple system crippling bugs may appear RANDOMLY in any time any place AI won't help much too big context
 Examples: it can't print negative numbers else branches is broken e.t.c
 
+USSR inherits it's mother state traits and dramatic fate giant size uselessness dictatorship dissolution betrayed population
+interpreter in suicide war against own assembler
+
 USSR has a piece of ware for each decade of the computing since the PDP-11 vi fans of 70s to the AI vibe coders of 20s
 
 It doesn't want to replace(you can't replace the lies that let a thousand days go)
