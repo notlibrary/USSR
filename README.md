@@ -59,7 +59,7 @@ You can shout it commands without a pencil standing on construction site fab or 
 
 Because of AI development we achieved near impossible performance USSR interpreter written in USSR russia.su is up
 in less than a man month there are even own vi clone Mbl.su (vi->wi->mi->Mbl quality is mediocre but nobody cares
-the whole thing is running forward like a steam engine now it's all about quantity now how much tests lines of code rosetta tasks interpreted commands gigabytes
+the whole thing is running forward like a steam engine now it's all about quantity how much tests lines of code rosetta tasks interpreted commands gigabytes
 and other statistical parameters you can imagine
 
 The project uses real existing geographical toponyms or cultural significant objects to name it's scripts 
@@ -117,7 +117,7 @@ ural install ukraine russia
 USSR is a bug-ridden project critical simple system crippling bugs may appear RANDOMLY in any time any place AI won't help much too big context
 Examples: it can't print negative numbers else branches is broken e.t.c
 
-USSR inherits it's mother state traits and dramatic fate giant size uselessness dictatorship dissolution betrayed population
+USSR inherits it's mother state traits dramatic fate giant size uselessness dictatorship dissolution betrayed population
 interpreter in suicide war against own assembler
 
 USSR has a piece of ware for each decade of the computing since the PDP-11 vi fans of 70s to the AI vibe coders of 20s
