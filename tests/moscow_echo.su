@@ -1,8 +1,12 @@
 # moscow_echo.su - a task that reads the console, for qemu_test.py: with
 # fg(_) it has the console and echoes each line; "bye" ends it (status
-# 3). In the background it reads the end of its input: status 5.
+# 3). In the background it reads the end of its input: status 5. It
+# waits a second first, for the fg that follows spawn: compiled for the
+# NASM runtime it starts at once, and would read the end of its input in
+# the background before it.
 init(result): arg_count arg_values [
     set(result): 5
+    sleep(_): 1000
     set(line): ""
     set(go): true
     while(_): go [

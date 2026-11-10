@@ -76,6 +76,7 @@ SYS_MAX         equ 160                 ; kernel commands (k_syscall)
 SYS_AREAS       equ 8                   ; their VM areas: depths kept
 SYS_NAME        equ 32                  ; a name, NUL padded
 SYS_ENTRY       equ 48                  ; name, program, function
+RU_MISSING_MAX  equ 120                 ; k_ru_missing: the name's bytes, at most
 SYS_BASE        equ 0x10000             ; symbuiltin: SYS_BASE + entry + 1
 VM_AREA         equ VM_size + FRAME_size * MAX_FRAMES + LSTACK_BYTES
 LSTACK_BYTES    equ 1024 * 1024     ; locals of every active call
@@ -2403,6 +2404,49 @@ rt_load:
         jmp .sym
 .syms_done:
 
+        ; k_ru_check armed this load: it only looks for a builtin call
+        ; (OOP) of a name that is neither a builtin nor a kernel command,
+        ; for k_ru_missing, and fails quietly. Nothing of the program runs.
+        cmp qword [ru_strict], 0
+        je .checked
+        mov qword [ru_strict], 0
+        mov r15, [r14 + PROG.code]
+        xor ebp, ebp
+.check:
+        cmp rbp, [r14 + PROG.ncode]
+        jae .check_done
+        lea rsi, [r15 + rbp * 8]
+        inc rbp
+        cmp byte [rsi], 0x44
+        jne .check
+        mov eax, [rsi + 4]
+        cmp rax, [r14 + PROG.nstrings]
+        jae .check
+        mov rdx, [r14 + PROG.strsym]
+        mov eax, [rdx + rax * 4]
+        cmp eax, -1
+        je .check
+        mov rdx, [r14 + PROG.symbuiltin]
+        cmp dword [rdx + rax * 4], 0
+        jne .check
+        ; the name, for k_ru_missing
+        mov rdx, [r14 + PROG.symtext]
+        mov rsi, [rdx + rax * 8]
+        mov rcx, [rsi + STR_LEN]
+        cmp rcx, RU_MISSING_MAX
+        jbe .fits
+        mov ecx, RU_MISSING_MAX
+.fits:
+        mov [ru_missing_len], rcx
+        add rsi, STR_BYTES
+        mov edi, ru_missing
+        rep movsb
+.check_done:
+        mov rsp, [ld_rsp]
+        xor eax, eax
+        jmp rt_load.out
+.checked:
+
         ; init(ret): arg_cnt arg_vec, if there is one
         mov qword [r14 + PROG.init], -1
         mov r15, [r14 + PROG.funcs]
@@ -4661,6 +4705,27 @@ bi_k_exec_bytes:
 .bad:
         mov eax, e_exec_bytes
         jmp bi_error
+
+; k_ru_check(_): -> the next .ru loaded is only checked, not run: its
+; load fails quietly (k_exec_bytes gives 1), and k_ru_missing(s): then
+; gives a command it calls that the runtime does not have, or "".
+bi_k_ru_check:
+        mov qword [ru_strict], 1
+        mov qword [ru_missing_len], 0
+        xor eax, eax
+        jmp bi_int_out
+
+; k_ru_missing(s): -> a command the last checked .ru calls and the runtime
+; does not have, or "" when it has them all
+bi_k_ru_missing:
+        push rsi
+        push rcx
+        mov esi, ru_missing
+        mov rcx, [ru_missing_len]
+        call new_string
+        pop rcx
+        pop rsi
+        jmp bi_str_out
 
 ; k_syscall(_): name function -> the kernel's function (one parameter:
 ; the vector of the arguments) runs whenever a program loaded from now
@@ -7174,6 +7239,8 @@ bi_table:
         dq n_clear_bytes, bi_clear_bytes
         dq n_k_syscall, bi_k_syscall
         dq n_k_exec_bytes, bi_k_exec_bytes
+        dq n_k_ru_check, bi_k_ru_check
+        dq n_k_ru_missing, bi_k_ru_missing
         dq n_net_info, bi_net_info
         dq n_net_recv, bi_net_recv
         dq n_net_send, bi_net_send
@@ -7328,6 +7395,8 @@ n_crc32:        db "crc32", 0
 n_clear_bytes:  db "clear_bytes", 0
 n_k_syscall:    db "k_syscall", 0
 n_k_exec_bytes: db "k_exec_bytes", 0
+n_k_ru_check:   db "k_ru_check", 0
+n_k_ru_missing: db "k_ru_missing", 0
 n_net_info:     db "net_info", 0
 n_net_recv:     db "net_recv", 0
 n_net_send:     db "net_send", 0
@@ -7619,6 +7688,9 @@ kq_buf:         resb KQ_SIZE
 last_cr:        resq 1
 rng_state:      resq 1
 ld_rsp:         resq 1
+ru_strict:      resq 1
+ru_missing_len: resq 1
+ru_missing:     resb RU_MISSING_MAX + 8
 chr_buf:        resq 1
 line_buf:       resb LINE_MAX + 8
 cpu_buf:        resb 128

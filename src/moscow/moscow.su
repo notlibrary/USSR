@@ -726,16 +726,223 @@ mo_ext(r): s [
     if(_): {n > 3} [ slice(r): s {n - 3} 3 ]
 ]
 
-# A program: a .ru file runs as it is, a .su file through russia.ru, the
-# USSR interpreter (from /bin, else /boot), which reads the source from
-# the disk. A bare name is looked for as /bin/name.ru, /bin/name.su and
-# then the project's own src/name/name.su under /src/ussr, so
-# run(_): "Mbl" "notes.txt" starts the editor from its source.
-# Where a program comes from: [path, args, bytes], a .su run through
-# russia.ru with its own path first in the arguments; null when it is
-# not on the disk.
+# Moscow has three runtimes for USSR:
+#   1. the native ussr, /bin/ussr, a Linux program (arch/amd64/native.inc)
+#   2. the NASM USSR runtime, which runs .ru bytecode (ussr_rt.nasm)
+#   3. russia.ru, the USSR interpreter written in USSR, itself on 2
+# A .ru runs on 2. A .su is compiled by 1 (ussr -c) and runs on 2, from
+# the russia shell too; only when there is no /bin/ussr to compile with
+# does it run on 3. "ussr" itself is 1: run(_): "ussr" "a.su" runs a.su
+# there, from start to end.
+
+# the .su at path compiled for runtime 2 by runtime 1: [status, bytes,
+# missing]: status -1 and bytes null when there is no /bin/ussr to compile
+# with, or when the .ru calls a command runtime 2 does not have, missing
+# (else ""); otherwise ussr -c's exit status, with the .ru's bytes when it
+# is 0
+mo_compile(r): fs path [
+    vec(r): ""
+    set(miss): ""
+    set(st): -1
+    set(bytes): null
+    set(ussr): "/bin/ussr"
+    bl_exists(e): fs ussr
+    if(_): e [
+        bl_read_bytes(ub): fs ussr
+        typeof(tu): ub
+        set(elf): false
+        if(_): {tu = "vector"} [
+            len(nb): ub
+            if(_): {nb > 3} [
+                at(b0): ub 0
+                at(b1): ub 1
+                set(elf): {b0 = 127 && b1 = 69}
+            ]
+        ]
+        if(_): elf [
+            # one task compiles one program at a time: the .ru is read
+            # and removed before it runs
+            k_task(id):
+            str_from_int(ids): id
+            concat(out): "/tmp/moscow-" ids ".ru"
+            bl_is_dir(td): fs "/tmp"
+            if(_): {td = false} [
+                bl_mkdirs(_): fs "/tmp"
+                mo_sync(_): fs
+            ]
+            vec(cargs): ""
+            push(_): cargs ussr
+            push(_): cargs "-c"
+            push(_): cargs path
+            push(_): cargs out
+            k_exec_bytes(st): ub cargs
+            k_owner(own):
+            set(depth): {own % 64 + 1}
+            net_drop(_): id depth
+            tls_drop(_): id depth
+            gui_drop(_): id depth
+            lx_drop(_): id depth
+            # ussr wrote the .ru: the root as it is now
+            mo_fs(fs2):
+            typeof(tf): fs2
+            if(_): {tf = "btree"} [
+                bl_exists(made): fs2 out
+                if(_): made [
+                    if(_): {st = 0} [ bl_read_bytes(bytes): fs2 out ]
+                    bl_remove(_): fs2 out
+                    mo_sync(_): fs2
+                ]
+            ]
+            typeof(tb): bytes
+            if(_): {st = 0 && tb != "vector"} [
+                bl_err(_): "ussr -c wrote no .ru"
+                set(st): 1
+                set(bytes): null
+            ]
+            # a command the NASM runtime does not have (async, say) is for
+            # russia.ru, which has more of the language: the load is only
+            # checked here, nothing runs
+            if(_): {st = 0} [
+                k_ru_check(_):
+                k_exec_bytes(_): bytes
+                k_ru_missing(miss):
+                if(_): {miss != ""} [
+                    set(st): -1
+                    set(bytes): null
+                ]
+            ]
+        ]
+    ]
+    push(_): r st
+    push(_): r bytes
+    push(_): r miss
+]
+
+# A program: a .ru file runs as it is on runtime 2; a .su is compiled to
+# a .ru by /bin/ussr and runs on 2, else through russia.ru (3), which
+# reads the source from the disk. A bare name is looked for as
+# /bin/name.ru, /bin/name.su and then the project's own src/name/name.su
+# under /src/ussr, so run(_): "Mbl" "notes.txt" starts the editor from
+# its source.
+# Where a program comes from: [path, args, bytes, runtime], runtime 1 for
+# a Linux program, 2 or 3; a .su run through russia.ru has its own path
+# first in the arguments. Null when it is not on the disk; bytes null
+# when it did not compile, and then a fifth item, ussr -c's status.
 mo_find(r): name args [
     set(r): null
+    set(fs): null
+    if(_): {mo_base >= 0} [ mo_fs(fs): ]
+    mo_locate(path): fs name
+    if(_): {path != ""} [
+        mo_ext(ext): path
+        set(runtime): 2
+        if(_): {ext = ".su"} [
+            mo_compile(made): fs path
+            at(cst): made 0
+            at(cbytes): made 1
+            if(_): {cst > 0} [
+                # it does not compile: ussr said why, and russia would too
+                vec(r): ""
+                push(_): r path
+                push(_): r args
+                push(_): r null
+                push(_): r 2
+                push(_): r cst
+                return(r): r
+            ]
+            if(_): {cst = 0} [
+                vec(r): ""
+                push(_): r path
+                push(_): r args
+                push(_): r cbytes
+                push(_): r 2
+                return(r): r
+            ]
+            set(runtime): 3
+            # russia.ru path args ...
+            vec(rargs): ""
+            push(_): rargs path
+            len(na): args
+            set(i): 0
+            while(_): {i < na} [
+                at(x): args i
+                push(_): rargs x
+                set(i): {i + 1}
+            ]
+            set(args): rargs
+            set(path): "/bin/russia.ru"
+            bl_exists(e): fs path
+            if(_): {e = false} [ set(path): "/boot/russia.ru" ]
+        ]
+        bl_read_bytes(bytes): fs path
+        typeof(tb): bytes
+        if(_): {tb = "vector"} [
+            # a Linux program has its path as argv[0]
+            mo_is_elf(elf): bytes
+            if(_): elf [
+                set(runtime): 1
+                vec(rargs): ""
+                push(_): rargs path
+                len(na): args
+                set(i): 0
+                while(_): {i < na} [
+                    at(x): args i
+                    push(_): rargs x
+                    set(i): {i + 1}
+                ]
+                set(args): rargs
+            ]
+            vec(r): ""
+            push(_): r path
+            push(_): r args
+            push(_): r bytes
+            push(_): r runtime
+        ]
+    ]
+]
+
+mo_is_elf(r): bytes [
+    set(r): false
+    len(nb): bytes
+    if(_): {nb > 3} [
+        at(b0): bytes 0
+        at(b1): bytes 1
+        set(r): {b0 = 127 && b1 = 69}
+    ]
+]
+
+# runtime(r): name -> which runtime run(_) gives the program: 1 the native
+# ussr (a Linux program), 2 the NASM runtime (a .ru, or a .su that
+# /bin/ussr compiles), 3 russia.ru (a .su with no /bin/ussr, or one
+# calling a command 2 does not have), 0 none. A .su is compiled to know.
+sys_runtime(r): a [
+    set(r): 0
+    mo_arg(name): a 0 ""
+    if(_): {mo_base < 0 || name = ""} [ return(r): r ]
+    mo_fs(fs):
+    mo_locate(path): fs name
+    if(_): {path = ""} [ return(r): r ]
+    mo_ext(ext): path
+    set(r): 2
+    if(_): {ext = ".su"} [
+        # as run(_) does it: compiled and checked, so this is what it gets
+        mo_compile(made): fs path
+        at(cst): made 0
+        set(r): 2
+        if(_): {cst < 0} [ set(r): 3 ]
+        return(r): r
+    ]
+    bl_read_bytes(bytes): fs path
+    typeof(tb): bytes
+    if(_): {tb = "vector"} [
+        mo_is_elf(elf): bytes
+        if(_): elf [ set(r): 1 ]
+    ]
+]
+
+# the path of a program on the root, "" when it is not there
+mo_locate(r): fs name [
+    set(r): ""
     vec(tries): ""
     str_find(slash): name "/" 0
     mo_ext(ext): name
@@ -759,66 +966,28 @@ mo_find(r): name args [
         concat(p): "/src/ussr/src/" name "/" name ".su"
         push(_): tries p
     ]
-    set(path): ""
-    if(_): {mo_base >= 0} [
-        mo_fs(fs):
-        len(nt): tries
-        set(i): 0
-        while(_): {i < nt && path = ""} [
-            at(p): tries i
-            set(d): true
-            bl_exists(e): fs p
-            if(_): e [ bl_is_dir(d): fs p ]
-            if(_): {e && d = false} [ set(path): p ]
-            set(i): {i + 1}
-        ]
+    if(_): {fs = null} [ return(r): r ]
+    len(nt): tries
+    set(i): 0
+    while(_): {i < nt && r = ""} [
+        at(p): tries i
+        set(d): true
+        bl_exists(e): fs p
+        if(_): e [ bl_is_dir(d): fs p ]
+        if(_): {e && d = false} [ set(r): p ]
+        set(i): {i + 1}
     ]
-    if(_): {path != ""} [
-        mo_ext(ext): path
-        if(_): {ext = ".su"} [
-            # russia.ru path args ...
-            vec(rargs): ""
-            push(_): rargs path
-            len(na): args
-            set(i): 0
-            while(_): {i < na} [
-                at(x): args i
-                push(_): rargs x
-                set(i): {i + 1}
-            ]
-            set(args): rargs
-            set(path): "/bin/russia.ru"
-            bl_exists(e): fs path
-            if(_): {e = false} [ set(path): "/boot/russia.ru" ]
-        ]
-        bl_read_bytes(bytes): fs path
-        typeof(tb): bytes
-        if(_): {tb = "vector"} [
-            # a Linux program has its path as argv[0]
-            len(nb): bytes
-            set(elf): false
-            if(_): {nb > 3} [
-                at(b0): bytes 0
-                at(b1): bytes 1
-                set(elf): {b0 = 127 && b1 = 69}
-            ]
-            if(_): elf [
-                vec(rargs): ""
-                push(_): rargs path
-                len(na): args
-                set(i): 0
-                while(_): {i < na} [
-                    at(x): args i
-                    push(_): rargs x
-                    set(i): {i + 1}
-                ]
-                set(args): rargs
-            ]
-            vec(r): ""
-            push(_): r path
-            push(_): r args
-            push(_): r bytes
-        ]
+]
+
+# what a found program that did not compile gives: ussr -c's status, else 0
+mo_unbuilt(r): found [
+    set(r): 0
+    at(bytes): found 2
+    typeof(tb): bytes
+    if(_): {tb != "vector"} [
+        set(r): 1
+        len(n): found
+        if(_): {n > 4} [ at(r): found 4 ]
     ]
 ]
 
@@ -827,6 +996,11 @@ mo_run(r): name args [
     mo_find(found): name args
     typeof(tf): found
     if(_): {tf = "vector"} [
+        mo_unbuilt(bad): found
+        if(_): {bad != 0} [
+            set(r): bad
+            return(r): r
+        ]
         at(args): found 1
         at(bytes): found 2
         k_exec_bytes(r): bytes args
@@ -891,6 +1065,8 @@ sys_spawn(r): a [
         bl_err(_): m
         return(r): r
     ]
+    mo_unbuilt(bad): found
+    if(_): {bad != 0} [ return(r): r ]
     at(fargs): found 1
     at(bytes): found 2
     k_spawn(r): bytes fargs name
@@ -1024,7 +1200,9 @@ sys_help(r): a [
     print(_): "  readfile(s): path       a file as a string; writefile(r): path text"
     print(_): "  make_dir(r): path       remove_file(r): path   file_exists(b): path"
     print(_): "  run(status): name ...   /bin/name.ru (stalin, belarus, install, ...), a .su"
-    print(_): "                          through russia: run(_): \"Mbl\" \"/home/notes.txt\" edits"
+    print(_): "                          compiled: run(_): \"Mbl\" \"/home/notes.txt\" edits"
+    print(_): "  runtime(r): name        what runs it: 1 /bin/ussr, 2 NASM (a .ru, or a .su"
+    print(_): "                          /bin/ussr -c compiles), 3 russia.ru (no /bin/ussr)"
     print(_): "  open_file(h): path mode read_line(s): h write_file(n): h text close_file(r): h"
     print(_): "  install(status):        install USSR onto another disk"
     print(_): "  spawn(id): name ...     the program as a task of its own, next to the shell"
@@ -1055,6 +1233,7 @@ mo_syscalls(r): [
     k_syscall(_): "make_dir" "sys_make_dir"
     k_syscall(_): "remove_file" "sys_remove_file"
     k_syscall(_): "run" "sys_run"
+    k_syscall(_): "runtime" "sys_runtime"
     k_syscall(_): "install" "sys_install"
     k_syscall(_): "spawn" "sys_spawn"
     k_syscall(_): "tasks" "sys_tasks"

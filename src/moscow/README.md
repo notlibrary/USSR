@@ -156,7 +156,8 @@ The file commands are the kernel's (`moscow.su` takes them over with
 | `cat(s): path`, `readfile(s): path` | a file's text |
 | `writefile(r): path text` | writes a file (and its directories) |
 | `make_dir`, `remove_file`, `file_exists`, `is_dir`, `list_dir` | as in ussr |
-| `run(status): name [args ...]` | a program with the arguments: `/bin/name.ru`, `/bin/name.su` or the project's `/src/ussr/src/name/name.su`, or a path; a `.su` runs from its source through russia.ru; else a program of the boot image; 127 when missing |
+| `run(status): name [args ...]` | a program with the arguments: `/bin/name.ru`, `/bin/name.su` or the project's `/src/ussr/src/name/name.su`, or a path; a `.su` is compiled by `/bin/ussr -c` and runs on the NASM runtime, or through russia.ru when there is no `/bin/ussr` (see [Three runtimes](#three-runtimes)); else a program of the boot image; 127 when missing |
+| `runtime(r): name` | which runtime `run` gives the program: 1 `/bin/ussr`, 2 the NASM runtime, 3 russia.ru, 0 when it is not there; a `.su` is compiled and checked to tell |
 | `open_file(h): path [mode]`, `read_line(s): h`, `read_file(s): h [n]`, `write_file(n): h text`, `close_file(r): h` | files by handle, as in ussr: `r`/`rb` read (-1 for no such file), `w` writes anew, `a` appends; what is written reaches the disk at `close_file` |
 | `install(status):` | the installer, `/bin/install.ru` |
 | `df(_):`, `fsck(n):` | the root file system and its free space; a check |
@@ -196,8 +197,9 @@ is there after `halt(_):` and the next boot:
     russia> cat(_): "/home/notes.txt"
 
 The name finds `/src/ussr/src/Mbl/Mbl.su`, the project as the install
-disk carries it; russia.ru compiles it, its `$include` of
-`../libs/strings.su` included, and runs it. Any program of the
+disk carries it; `/bin/ussr -c` compiles it, its `$include` of
+`../libs/strings.su` included, and the NASM runtime runs it (russia.ru
+does, on a disk with no `/bin/ussr`). Any program of the
 project runs that way, by name or by path. On the VGA screen a UTF-8
 character takes one cell, as Mbl counts them; the VGA font has only
 the ASCII ones, the others show as a block (a serial terminal shows
@@ -371,6 +373,37 @@ and first sector: it mounts the file system each time, and writes
 changes back before it returns. `run` reads the program from the file
 system and hands it to `k_exec_bytes`. Without a Belarus disk (booting
 `moscow.img` alone) the kernel still runs the shell, with no root.
+
+## Three runtimes
+
+USSR code runs on one of three runtimes in Moscow:
+
+| | runtime | what it runs |
+|---|---|---|
+| 1 | `/bin/ussr`, the native ussr: the same C as on a host, a Linux program (musl's crt) | what you give it: `run(_): "ussr" "a.su"` |
+| 2 | the NASM USSR runtime, `ussr_rt.nasm`, on the bare machine | every `.ru`, and every `.su` that `/bin/ussr` compiles |
+| 3 | russia.ru, the USSR interpreter written in USSR, itself a `.ru` on 2 | a `.su` that 2 cannot run: no `/bin/ussr`, or it calls what 2 does not have |
+
+`run` picks one, from the russia shell too:
+
+- A `.ru` runs on 2.
+- A `.su` is compiled by `/bin/ussr -c` into `/tmp/moscow-<task>.ru`, which is
+  read, removed, and run on 2. Its arguments and its status are what they
+  would be through russia. When it does not compile, ussr says why and `run`
+  gives ussr's status: russia would say the same, so it is not tried.
+- A `.su` goes through russia.ru, on 3, in the rest of the cases: on a disk
+  without `/bin/ussr` (one built off a Linux host: see
+  [Linux programs](#linux-programs)), or when the compiled `.ru` calls a
+  command runtime 2 does not have, such as `async` (Ukraine and so Novgorod
+  use it). Before a compiled `.ru` runs, `k_ru_check` has the runtime load
+  it without running it and `k_ru_missing` names such a command.
+- `ussr` itself is 1: `run(_): "ussr" "a.su"` runs `a.su` on the native ussr
+  from start to end, the kernel's commands not among its builtins.
+
+`runtime(r): name` says which one a program gets, without running it.
+`spawn` and the windows' `launch` pick the same way. Compiling takes one run
+of `/bin/ussr` before each start of a `.su`; a `.ru` written once with
+`run(_): "ussr" "-c" "a.su" "a.ru"` skips it.
 
 ## Linux programs
 
@@ -587,6 +620,8 @@ The kernel's own services, used by `moscow.su`:
 | `k_modules(v):` | file names in the boot image |
 | `k_exec(status): name [args ...]` | runs a `.ru` of the image to its end; 127 when missing |
 | `k_exec_bytes(status): bytes [args ...]` | runs the `.ru` in a byte vector (args: strings, or one vector of them) |
+| `k_ru_check(_):` | the next `.ru` loaded is only checked, not run: its load fails quietly (`k_exec_bytes` gives 1) |
+| `k_ru_missing(s):` | a command the last checked `.ru` calls that the runtime does not have, or `""` |
 | `k_syscall(_): name function` | the kernel's `function` answers `name` from now on |
 | `net_info(v):` | `[mac, link up]` of the network card, or null |
 | `net_recv(v):` | the next Ethernet frame as a byte vector, or null |
