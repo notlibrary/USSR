@@ -724,6 +724,7 @@ char *ussr_ai_prompt(const char *question, char *error, size_t error_size)
         process.stdin_data = config.data;
         process.stdout_data = &output;
         process.capture_stdout = 1;
+        process.output_path = NULL;
         if (ussr_process_run(&process, &exit_code) != 0 || output == NULL)
         {
             snprintf(error, error_size, "could not run %s", curl);

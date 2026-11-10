@@ -19,6 +19,8 @@
 $include "../libs/strings.su"
 
 global(_): lenin_reply
+# true: tests run with no shell, their words as they are (Moscow has none)
+global(_): lenin_direct
 # paid calls made in this run, and the most it may make (-1: no limit)
 global(_): lenin_calls
 global(_): lenin_budget
@@ -272,6 +274,89 @@ lenin_shell(r): line [
     else(_): [ sh(r): "-c" line ]
 ]
 
+# true where there is no shell to run a test line: Moscow, the USSR kernel,
+# has no /bin/sh
+lenin_no_shell(r): [
+    set(r): false
+    getenv(os): "OS"
+    if(_): {os = "Windows_NT"} [ return(r): r ]
+    file_exists(sh): "/bin/sh"
+    set(r): {sh = false}
+]
+
+# a test run with no shell: its words, {file} in one of them or the file
+# after the last, are a program on PATH and its arguments; what it prints,
+# stdout and stderr, goes to log (USSR_EXTERNAL_OUTPUT). No quotes, pipes or
+# redirections: there is nothing to read them. -> its exit status, 127 when
+# its first word is not a program's name
+lenin_direct_run(r): test file log [
+    set(r): 127
+    lenin_words(words): test
+    len(nw): words
+    if(_): {nw = 0} [ return(r): r ]
+    at(prog): words 0
+    # the program's name goes into code: a name, nothing else
+    len(np): prog
+    set(ok): {np > 0}
+    set(i): 0
+    while(_): {i < np} [
+        byte(b): prog i
+        set(ch): {(b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 95}
+        if(_): {ch = false} [ set(ok): false ]
+        set(i): {i + 1}
+    ]
+    if(_): {ok = false} [
+        concat(said): "lenin: with no shell a test is a program's name on PATH and its arguments, not " prog
+        print(_): said
+        return(r): r
+    ]
+    set(code): ""
+    concat(code): prog "(st):"
+    set(placed): false
+    set(i): 1
+    while(_): {i < nw} [
+        at(w): words i
+        str_find(k): w "{file}" 0
+        if(_): {k >= 0} [
+            lenin_replace(w): w "{file}" file
+            set(placed): true
+        ]
+        lenin_quote(q): w
+        concat(code): code " " q
+        set(i): {i + 1}
+    ]
+    if(_): {placed = false} [
+        lenin_quote(q): file
+        concat(code): code " " q
+    ]
+    setenv(_): "USSR_EXTERNAL_OUTPUT" log
+    eval(st): code
+    unsetenv(_): "USSR_EXTERNAL_OUTPUT"
+    set(r): st
+]
+
+# text as a USSR string in double quotes, for eval: \ and " escaped
+lenin_quote(r): text [
+    chr(bs): 92
+    chr(dq): 34
+    concat(bb): bs bs
+    concat(bq): bs dq
+    lenin_replace(t): text bs bb
+    lenin_replace(t): t dq bq
+    concat(r): dq t dq
+]
+
+# command run on file, what it prints to log -> its exit status: through
+# the shell, or with none (lenin_direct)
+lenin_check(r): command file log [
+    if(_): {lenin_direct = true} [
+        lenin_direct_run(r): command file log
+        return(r): r
+    ]
+    lenin_test_line(line): command file log
+    lenin_shell(r): line
+]
+
 # the test line for a file: {file} in it, else the file goes at its end. Its
 # output goes to log.
 lenin_test_line(r): test file log [
@@ -312,8 +397,7 @@ lenin_measure(r): name path code test score holdout log window [
     btput(_): r "tested" true
     set(timed): test
     if(_): {test != ""} [
-        lenin_test_line(line): test path log
-        lenin_shell(st): line
+        lenin_check(st): test path log
         if(_): {st != 0} [
             btput(_): r "passed" false
             lenin_read(said): log
@@ -325,8 +409,7 @@ lenin_measure(r): name path code test score holdout log window [
     if(_): {score != ""} [
         if(_): {test = ""} [ set(timed): score ]
         concat(slog): log ".score"
-        lenin_test_line(sline): score path slog
-        lenin_shell(st): sline
+        lenin_check(st): score path slog
         lenin_read(said): slog
         if(_): {said = null} [ set(said): "" ]
         lenin_last_number(n): said
@@ -341,8 +424,7 @@ lenin_measure(r): name path code test score holdout log window [
     btget(passed): r "passed"
     if(_): {holdout != "" && passed} [
         concat(hlog): log ".holdout"
-        lenin_test_line(hline): holdout path hlog
-        lenin_shell(st): hline
+        lenin_check(st): holdout path hlog
         if(_): {st = 0} [ btput(_): r "hidden" "passed" ]
         else(_): [
             btput(_): r "hidden" "FAILED"
@@ -351,13 +433,12 @@ lenin_measure(r): name path code test score holdout log window [
         ]
     ]
     if(_): {passed = false || window <= 0} [ return(r): r ]
-    lenin_test_line(line): timed path log
     # the clock has whole seconds: runs a second, over the window
     time(t0):
     set(runs): 0
     set(now): t0
     while(_): {now - t0 < window} [
-        lenin_shell(st): line
+        lenin_check(st): timed path log
         if(_): {st != 0} [
             btput(_): r "passed" false
             btput(_): r "log" "it failed when run again: it does not always pass"
@@ -1173,6 +1254,10 @@ lenin_run(r): args [
     btget(target): args "target" -1
     btget(budget): args "budget" -1
     set(lenin_calls): 0
+    # no shell, as in Moscow: the tests run as a program and its arguments
+    btget(direct): args "direct" null
+    if(_): {direct = null} [ lenin_no_shell(direct): ]
+    set(lenin_direct): direct
     set(lenin_budget): budget
     set(measured): {test != "" || score != ""}
     btget(ext): args "ext"
@@ -1200,6 +1285,9 @@ lenin_run(r): args [
     print(_): said
     if(_): measured [
         print(_): "lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox"
+        if(_): {lenin_direct = true} [
+            print(_): "lenin: no shell: a test runs as a program on PATH and its arguments"
+        ]
     ]
     # 1. the prompt, refined
     if(_): {rounds < 1} [ btput(_): args "refine" false ]
@@ -1450,7 +1538,7 @@ lenin_usage(r): [
     print(_): "             [--method rounds|chain|enrich]"
     print(_): "             [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]"
     print(_): "             [--window SECONDS] [--refine N] [--no-refine] [--holdout COMMAND]"
-    print(_): "             [--patience N] [--target SCORE] [--budget CALLS]"
+    print(_): "             [--patience N] [--target SCORE] [--budget CALLS] [--direct]"
     print(_): "             [--task TEXT] [--tasks FILE] [--prompt-file FILE] [prompt ...]"
     print(_): "             [--history FILE] [--no-history]"
     print(_): "       lenin --stats [--history FILE]"
@@ -1576,6 +1664,7 @@ lenin_main(r): argv [
             set(took): false
             if(_): {a = "--no-refine"} [ btput(_): args "refine" false ]
             elif(_): {a = "--no-history"} [ set(keep_history): false ]
+            elif(_): {a = "--direct"} [ btput(_): args "direct" true ]
             elif(_): {a = "--stats"} [ set(stats): true ]
             elif(_): {a = "--help" || a = "-h"} [
                 lenin_usage(r):

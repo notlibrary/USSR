@@ -20,6 +20,9 @@ typedef struct
     const char *stdin_data;
     char **stdout_data;
     int capture_stdout;
+    /* POSIX: when not NULL, stdout and stderr go to this file, made anew
+     * (the external commands' USSR_EXTERNAL_OUTPUT) */
+    const char *output_path;
 } ussr_process_t;
 
 /* Returns 0 when the process was launched and waited successfully.
@@ -34,8 +37,8 @@ int ussr_process_run(
 /*
  * Asynchronous child handle used by the scheduler's event queue.
  *
- * The fork-exec model stays intact: ussr_process_spawn() performs the
- * same fork+exec (POSIX) / CreateProcess (Windows) launch as
+ * ussr_process_spawn() performs the same posix_spawn (POSIX) /
+ * CreateProcess (Windows) launch as
  * ussr_process_run(), but returns immediately without waiting.  The
  * event queue then watches the handle and reaps the child when it
  * exits, waking whichever USSR process spawned it — so one process
@@ -67,5 +70,21 @@ int ussr_child_wait(ussr_child_t *child, int *exit_code);
 
 /* Abandon the handle without an exit code (error paths). */
 void ussr_child_close(ussr_child_t *child);
+
+#ifndef _WIN32
+/* posix_spawn of program with argv and the environment, with in_fd,
+ * out_fd and err_fd (each -1 for the inherited one) as its standard
+ * descriptors. Returns 0 and the pid, or -1 when it could not start.
+ * POSIX only: Moscow, the USSR kernel, starts programs this way and has
+ * no fork. */
+int ussr_process_spawn_fds(
+    const char *program,
+    char *const *argv,
+    int in_fd,
+    int out_fd,
+    int err_fd,
+    int *pid
+);
+#endif
 
 #endif /* USSR_PROCESS_H */

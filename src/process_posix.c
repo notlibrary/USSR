@@ -7,10 +7,48 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
 extern int fileno(FILE *stream);
+extern char **environ;
+
+int ussr_process_spawn_fds(
+    const char *program,
+    char *const *argv,
+    int in_fd,
+    int out_fd,
+    int err_fd,
+    int *pid
+)
+{
+    posix_spawn_file_actions_t actions;
+    pid_t child;
+    int rc = 0;
+
+    if (program == NULL || argv == NULL || pid == NULL)
+        return -1;
+    if (posix_spawn_file_actions_init(&actions) != 0)
+        return -1;
+    if (in_fd >= 0)
+        rc = posix_spawn_file_actions_adddup2(&actions, in_fd, STDIN_FILENO);
+    if (rc == 0 && out_fd >= 0)
+        rc = posix_spawn_file_actions_adddup2(&actions, out_fd, STDOUT_FILENO);
+    if (rc == 0 && err_fd >= 0)
+        rc = posix_spawn_file_actions_adddup2(&actions, err_fd, STDERR_FILENO);
+    if (rc == 0)
+        rc = posix_spawn(&child, program, &actions, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (rc != 0)
+    {
+        errno = rc;
+        return -1;
+    }
+    *pid = (int)child;
+    return 0;
+}
 
 static int write_all(FILE *file, const char *data)
 {
@@ -147,33 +185,40 @@ int ussr_process_run(
         }
     }
 
-    pid = fork();
-
-    if (pid < 0)
     {
-        if (input_file != NULL)
-            fclose(input_file);
-        if (output_file != NULL)
-            fclose(output_file);
-        return -1;
-    }
+        int out_fd = output_file != NULL ? fileno(output_file) : -1;
+        int err_fd = -1;
+        int file_fd = -1;
+        int child;
 
-    if (pid == 0)
-    {
-        if (input_file != NULL)
+        if (process->output_path != NULL && output_file == NULL)
         {
-            if (dup2(fileno(input_file), STDIN_FILENO) < 0)
-                _exit(126);
+            file_fd = open(process->output_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (file_fd < 0)
+            {
+                if (input_file != NULL)
+                    fclose(input_file);
+                return -1;
+            }
+            out_fd = err_fd = file_fd;
         }
-
-        if (output_file != NULL)
+        if (ussr_process_spawn_fds(process->program, process->argv,
+                input_file != NULL ? fileno(input_file) : -1,
+                out_fd, err_fd, &child) != 0)
         {
-            if (dup2(fileno(output_file), STDOUT_FILENO) < 0)
-                _exit(126);
+            /* as an exec that failed in the child always did */
+            if (file_fd >= 0)
+                close(file_fd);
+            if (input_file != NULL)
+                fclose(input_file);
+            if (output_file != NULL)
+                fclose(output_file);
+            *exit_code = 126;
+            return 0;
         }
-
-        execv(process->program, process->argv);
-        _exit(126);
+        if (file_fd >= 0)
+            close(file_fd);
+        pid = (pid_t)child;
     }
 
     if (input_file != NULL)
@@ -223,7 +268,6 @@ int ussr_process_spawn(
     ussr_child_t *child
 )
 {
-    pid_t pid;
 
     if (program == NULL || argv == NULL || child == NULL)
         return -1;
@@ -235,19 +279,12 @@ int ussr_process_spawn(
     fflush(stdout);
     fflush(stderr);
 
-    pid = fork();
-
-    if (pid < 0)
-        return -1;
-
-    if (pid == 0)
+    /* inherited stdin, stdout and stderr */
+    if (ussr_process_spawn_fds(program, argv, -1, -1, -1, &child->pid) != 0)
     {
-        /* Child: inherit stdin/stdout/stderr, then exec. */
-        execv(program, argv);
-        _exit(126);
+        child->pid = -1;
+        return -1;
     }
-
-    child->pid = (int)pid;
     return 0;
 }
 

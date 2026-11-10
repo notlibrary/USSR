@@ -38,6 +38,7 @@ security bugs live, so it drives the operating system's TLS stack:
 | Windows  | Schannel | always (`Makefile.msc`, or `ussr-ubuntu.mk` under MinGW) |
 | Linux, BSD, macOS | OpenSSL 1.1.1+ | when `pkg-config openssl` finds it (`libssl-dev`); `RYAZAN_REQUIRE_TLS=1` makes it mandatory; autotools: `--with-openssl` / `--without-openssl` |
 | Moscow (the USSR kernel) | BearSSL 0.6 | `src/moscow/build.sh` builds it into `/lib/tls.so`, which the kernel loads; PEM credentials only ([src/moscow](../moscow/README.md)) |
+| Moscow's `/bin/ussr` (a Linux program) | OpenSSL 3.5.9 | `src/moscow/build.sh` links it statically, the same OpenSSL `ural` has |
 | anything else | none | `tls_backend(b):` answers `"none"`, and the calls fail with a message |
 
 ## Trust

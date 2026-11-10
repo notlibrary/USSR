@@ -61,6 +61,12 @@ tv_scratch:     dq c_scratch_top
                 dq con_hook_write, con_hook_read, con_hook_size, con_hook_ctx
                 dq kcaller_pool
                 dq c3_ksp, native_on, n_fsbase, n_brk_start, n_brk, n_mmap, n_window
+                dq n_vf_active, n_vf_pid, n_vf_fsbase
+%assign i 0
+%rep 15
+                dq n_vf_frame + i * 8
+%assign i i + 1
+%endrep
 task_var_end:
 TASK_VARS       equ (task_var_end - task_var_list) / 8
 TVI_POOL        equ (tv_pool - task_var_list) / 8

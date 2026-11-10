@@ -21,6 +21,16 @@
 ; The timer takes the CPU from a Linux program in ring 3 even when a kernel
 ; command (run) started it: that command waits at k_exec_bytes until it ends.
 ; An exception there ends the program with status 139; the kernel goes on.
+;
+; Starting programs, as musl's posix_spawn does it: clone(CLONE_VM |
+; CLONE_VFORK) on a stack of its own, the child's file actions on a copy of
+; the descriptors, then execve. The child runs in the parent's memory until
+; execve, which runs the new program nested, in the next window, to its end
+; (linux.su); then the parent goes on from its clone with the child's pid,
+; and wait4 gives its status. So the parent waits for the child to end, not
+; only to start. execve outside a vfork child runs the program the same way
+; and ends with its status: it has become it. fork, a copy of the memory,
+; is not here (ENOSYS).
 
 NATIVE_BASE     equ 1 << 32
 NATIVE_BRK_END  equ 8 << 30
@@ -40,6 +50,17 @@ E_NODEV         equ 19
 E_INVAL         equ 22
 E_NOTTY         equ 25
 E_IO            equ 5
+E_AGAIN         equ 11
+E_NOSYS         equ 38
+CLONE_VM        equ 0x100
+CLONE_VFORK     equ 0x4000
+; __linux's own numbers, past Linux's: a vfork child's descriptors, its end
+LX_VFORK_BEGIN  equ 1001
+LX_VFORK_EXIT   equ 1002
+; native_syscall's frame from rbp: rdi rsi rdx r10 r8 r9 r15 r14 r13 r12
+; rbp rbx r11 rcx, then the program's rsp
+N_FRAME         equ 15
+FRAME_RSP       equ 14 * 8
 
 ; SYSCALL on: from ring 3 to the kernel's segments (STAR's 0x08), back with
 ; SYSRET to 0x18 and 0x20 (STAR's 0x10 + 8 and + 16: gdt_init's order).
@@ -117,6 +138,14 @@ native_run:
         push r14
         push r15
         pushfq
+        ; a program started from another one's system call (execve):
+        ; the one that called keeps its state
+        mov ecx, N_SAVED
+.save:
+        mov rax, [n_saved_list + rcx * 8 - 8]
+        push qword [rax]
+        loop .save
+        mov qword [n_vf_active], 0
         sub rsp, 8 * (NATIVE_ARGS + 8)
         mov rbx, rsi
         mov r12, rdx
@@ -349,8 +378,7 @@ native_run:
         PUTS msg_native_refused
         mov eax, 126
         add rsp, 8 * (NATIVE_ARGS + 8)
-        popfq
-        jmp native_pops
+        jmp native_restore
 
 ; eax = status: the Linux program has ended, native_run returns it. From
 ; the system call gate or an exception, whatever the stack holds.
@@ -370,6 +398,27 @@ native_exit:
         wrmsr
         pop rax
         add rsp, 8 * (NATIVE_ARGS + 8)
+; eax = status: what native_run kept goes back, the thread pointer and the
+; interrupt stack with it
+native_restore:
+        mov edx, eax
+        xor ecx, ecx
+.restore:
+        mov rax, [n_saved_list + rcx * 8]
+        pop qword [rax]
+        inc ecx
+        cmp ecx, N_SAVED
+        jb .restore
+        mov rax, [c3_ksp]
+        mov [tss + 4], rax
+        push rdx
+        mov rax, [n_fsbase]
+        mov rdx, rax
+        shr rdx, 32
+        mov ecx, MSR_FS_BASE
+        wrmsr
+        pop rdx
+        mov eax, edx
         popfq
 native_pops:
         pop r15
@@ -754,8 +803,94 @@ n_sys_arch_prctl:
         ret
 
 n_sys_exit:
+        cmp qword [n_vf_active], 0
+        jne .child
         movzx eax, dil
         jmp native_exit
+.child:
+        ; a vfork child that ends before execve (one that could not start
+        ; the program): its status is for wait4, the parent goes on
+        movzx edi, dil
+        mov eax, LX_VFORK_EXIT
+        call n_kernel
+        jmp n_vfork_end
+
+; clone(flags, stack, ...): CLONE_VM | CLONE_VFORK only, as posix_spawn
+; uses it; anything else would need a copy of the memory (ENOSYS)
+n_sys_clone:
+        mov rax, rdi
+        and eax, CLONE_VM | CLONE_VFORK
+        cmp eax, CLONE_VM | CLONE_VFORK
+        je n_vfork_begin
+        mov rax, -E_NOSYS
+        ret
+
+; vfork(): the same, on the parent's stack
+n_sys_vfork:
+        xor esi, esi
+        jmp n_vfork_begin
+
+; rsi = the child's stack, or 0 for the parent's: the parent's place is
+; kept, the child gets a copy of the descriptors (linux.su) and 0
+n_vfork_begin:
+        cmp qword [n_vf_active], 0
+        jne .busy
+        mov ecx, N_FRAME
+.keep:
+        mov rax, [rbp + rcx * 8 - 8]
+        mov [n_vf_frame + rcx * 8 - 8], rax
+        loop .keep
+        mov rax, [n_fsbase]
+        mov [n_vf_fsbase], rax
+        push rsi
+        mov eax, LX_VFORK_BEGIN
+        call n_kernel
+        pop rsi
+        test rax, rax
+        js .out
+        mov [n_vf_pid], rax
+        mov qword [n_vf_active], 1
+        test rsi, rsi
+        jz .stack
+        mov [rbp + FRAME_RSP], rsi
+.stack:
+        xor eax, eax
+.out:
+        ret
+.busy:
+        mov rax, -E_AGAIN
+        ret
+
+; execve(path, argv, envp): linux.su runs the program nested to its end and
+; gives its status, or -errno when it could not start it
+n_sys_execve:
+        mov eax, 59
+        call n_kernel
+        test rax, rax
+        js .failed
+        cmp qword [n_vf_active], 0
+        jne n_vfork_end
+        ; this program has become the other one, which has ended
+        jmp native_exit
+.failed:
+        ret
+
+; the vfork child is done: the parent goes on from its clone, with the pid
+n_vfork_end:
+        mov ecx, N_FRAME
+.back:
+        mov rax, [n_vf_frame + rcx * 8 - 8]
+        mov [rbp + rcx * 8 - 8], rax
+        loop .back
+        mov rax, [n_vf_fsbase]
+        mov [n_fsbase], rax
+        mov rdx, rax
+        shr rdx, 32
+        mov ecx, MSR_FS_BASE
+        wrmsr
+        mov qword [n_vf_active], 0
+        mov rax, [n_vf_pid]
+        ret
 
 ; tkill(tid, sig), kill(pid, sig): only itself, and it ends (abort)
 n_sys_tkill:
@@ -1164,6 +1299,16 @@ bi_k_line_eof:
         ret
 
 ; number, handler
+; what native_run keeps for the program that started another
+n_saved_list:   dq c3_ksp, native_on, n_fsbase, n_brk_start, n_brk, n_mmap, n_window
+                dq n_vf_active, n_vf_pid, n_vf_fsbase
+%assign i 0
+%rep N_FRAME
+                dq n_vf_frame + i * 8
+%assign i i + 1
+%endrep
+N_SAVED         equ ($ - n_saved_list) / 8
+
 n_table:
         dq 12, n_sys_brk
         dq 9, n_sys_mmap
@@ -1198,6 +1343,9 @@ n_table:
         dq 63, n_sys_uname
         dq 60, n_sys_exit
         dq 231, n_sys_exit
+        dq 56, n_sys_clone
+        dq 58, n_sys_vfork
+        dq 59, n_sys_execve
         dq 200, n_sys_tkill
         dq 62, n_sys_tkill
         dq 234, n_sys_tgkill

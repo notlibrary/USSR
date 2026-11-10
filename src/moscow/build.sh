@@ -231,13 +231,17 @@ native_build() {
     mkdir -p "$native/src"
     (cd "$root" && tar -cf - src/*.c src/*.h src/parser.y src/lexer.l ussr-ubuntu.mk configure.ac) |
         tar -xf - -C "$native/src" || return 1
-    (cd "$native/src" && make -f ussr-ubuntu.mk -j"$(nproc)" CC="$musl" PETERSBURG_LIBS= RYAZAN_LIBS= \
-        CFLAGS="-std=c11 -O2 -fPIE -D_GNU_SOURCE -w" LDFLAGS="$pie" LDLIBS="$lib/crtn.o" ussr \
+    # ural first: it builds the OpenSSL that ussr's Ryazan (tls_*, https://
+    # of prompt) links, so Lenin reaches a model from Moscow
+    native_ural || return 1
+    deps=$native/deps
+    (cd "$native/src" && make -f ussr-ubuntu.mk -j"$(nproc)" CC="$musl" PETERSBURG_LIBS= RYAZAN_LIBS=static \
+        CFLAGS="-std=c11 -O2 -fPIE -D_GNU_SOURCE -w -DUSSR_TLS_OPENSSL -I$deps/include" LDFLAGS="$pie" \
+        LDLIBS="-L$deps/lib -lssl -lcrypto $lib/crtn.o" ussr \
         >"$native/ussr.log" 2>&1) || { tail -20 "$native/ussr.log" >&2; return 1; }
     strip "$native/src/ussr" 2>/dev/null
     cp "$native/src/ussr" "$native/ussr"
     "$musl" -fPIE -O1 -w $pie -o "$native/moscow_native" "$root/tests/moscow_native.c" "$lib/crtn.o" || return 1
-    native_ural
 }
 # ural and what it links: zlib, OpenSSL, curl, SQLite
 native_ural() {

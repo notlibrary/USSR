@@ -709,6 +709,19 @@ Two things worth knowing:
   (Windows), you get `128 + signal-number` (or an analogous mapped
   value on Windows) — the same "exit code > 127 means it died
   abnormally" convention shells generally use.
+- With `USSR_EXTERNAL_OUTPUT` set to a path, a command's standard
+  output and error go to that file, made anew for each command, not to
+  your terminal: a redirection where there is no shell to make it
+  (Moscow). POSIX only.
+
+```
+setenv(_): "USSR_EXTERNAL_OUTPUT" "/tmp/test.log"
+python(status): "test.py" "answer.py"
+unsetenv(_): "USSR_EXTERNAL_OUTPUT"
+```
+
+Programs start with `posix_spawn` on POSIX systems, `CreateProcess` on
+Windows.
 
 ### 9.1 C libraries
 
