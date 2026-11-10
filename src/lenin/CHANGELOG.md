@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Runs in Moscow on `/bin/ussr`: HTTPS to the models through its OpenSSL, and
+  with no shell each test runs as a program and its arguments (`--direct`, the
+  default where there is no `/bin/sh`), its output to the log by
+  `USSR_EXTERNAL_OUTPUT`.
 - From research/refine_and_enrich.md: `--holdout`, a hidden test no model sees;
   `--patience`, `--target` and `--budget` to stop; the handoff carries the
   requirements so far and the known defects of other answers; and enrich refines

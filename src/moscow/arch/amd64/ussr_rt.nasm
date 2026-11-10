@@ -7605,6 +7605,10 @@ n_brk_start:    resq 1
 n_brk:          resq 1
 n_mmap:         resq 1                  ; the next address mmap gives
 n_window:       resq 1
+n_vf_active:    resq 1                  ; a vfork child runs, until its execve
+n_vf_pid:       resq 1                  ; its pid
+n_vf_fsbase:    resq 1                  ; the parent's thread pointer
+n_vf_frame:     resq 15                 ; the parent's system call frame
 n_user_rsp:     resq 1                  ; for the first moments of a system call
 n_linux_cmd:    resq 1                  ; __linux's number + 1
 n_epoch:        resq 1                  ; the clock at boot

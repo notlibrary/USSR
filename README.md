@@ -263,7 +263,8 @@ What it does and does not show:
   is the first benchmark, waiting for real models and real keys
 
 The project now has three main tracks, with the Moscow OS kernel underneath
-(Lenin runs on a hosted `ussr` for now: on Moscow it has no TLS to reach a model):
+(Lenin runs in Moscow too, on its `/bin/ussr`: OpenSSL for the models' HTTPS, and
+`posix_spawn` to run each test as a program, Moscow having no shell):
 
 1. The ROUND stack forum: Ryazan, Ukraine, Novgorod, Omsk and Dubna
 2. The Kremlin GUI desktop and its apps, with the USSR shell

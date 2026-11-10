@@ -9,12 +9,26 @@
 # when it is last closed, synced or the program ends, as open_file's handles
 # do. Sockets are the kernel's: TCP over net.su's connections, UDP for name
 # lookups. A descriptor's "kind": con, file, dir, null, random, pipe, tcp, udp.
+#
+# Starting programs (native.inc has the vfork side): a vfork child gets a
+# copy of the descriptors while the parent's wait in lx_vfork; execve runs
+# the program nested, one window deeper, with a copy of the child's, and
+# the parent's come back; wait4 gives the status lx_zombies kept.
 
 global(_): lx_fds
+# a vfork child's run (k_owner) -> [the parent's table, the child's pid]
+global(_): lx_vfork
+# k_owner -> its children that ended: pid -> status
+global(_): lx_zombies
+global(_): lx_next_pid
 
 lx_init(r): [
     set(r): 0
     btree(lx_fds):
+    btree(lx_vfork):
+    btree(lx_zombies):
+    # above the task ids getpid gives
+    set(lx_next_pid): 1000
 ]
 
 lx_con(r): [
@@ -163,6 +177,203 @@ lx_drop(r): id depth [
         ]
         set(i): {i + 1}
     ]
+    # its children's statuses that nobody waited for
+    btkeys(ks): lx_zombies
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(own): ks i
+        if(_): {own >> 6 = id && own % 64 >= depth} [ btdel(_): lx_zombies own ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- starting programs
+
+# a table with the same open descriptors, each held once more
+lx_copy_table(r): t [
+    btree(r):
+    btkeys(ks): t
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(v): t k
+        typeof(tk): k
+        if(_): {tk = "integer"} [
+            btget(refs): v "refs"
+            btput(_): v "refs" {refs + 1}
+        ]
+        btput(_): r k v
+        set(i): {i + 1}
+    ]
+]
+
+# what a table holds is let go
+lx_release_table(r): t [
+    set(r): 0
+    btkeys(ks): t
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        typeof(tk): k
+        if(_): {tk = "integer"} [
+            btget(f): t k
+            lx_close_entry(_): f
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# vfork: the child works on a copy of the descriptors -> its pid
+lx_vfork_begin(r): t [
+    k_owner(own):
+    lx_copy_table(child): t
+    set(lx_next_pid): {lx_next_pid + 1}
+    set(r): lx_next_pid
+    vec(kept): ""
+    push(_): kept t
+    push(_): kept r
+    btput(_): lx_vfork own kept
+    btput(_): lx_fds own child
+]
+
+# the vfork child of run own is done with the parent's memory: the
+# parent's descriptors come back -> the child's pid, -1 when none ran
+lx_vfork_done(r): own [
+    set(r): -1
+    bthas(has): lx_vfork own
+    if(_): {has = false} [ return(r): r ]
+    btget(kept): lx_vfork own
+    at(parent): kept 0
+    at(r): kept 1
+    btget(child): lx_fds own
+    lx_release_table(_): child
+    btput(_): lx_fds own parent
+    btdel(_): lx_vfork own
+]
+
+lx_zombie(r): own pid status [
+    set(r): 0
+    bthas(has): lx_zombies own
+    if(_): {has = false} [
+        btree(z):
+        btput(_): lx_zombies own z
+    ]
+    btget(z): lx_zombies own
+    btput(_): z pid status
+]
+
+# exit in a vfork child, before any execve: the status is for wait4
+lx_vfork_exit(r): status [
+    set(r): 0
+    k_owner(own):
+    lx_vfork_done(pid): own
+    if(_): {pid >= 0} [ lx_zombie(_): own pid status ]
+]
+
+# execve(path, argv, envp): the program runs nested, a window deeper, to
+# its end, with a copy of these descriptors; its status, or -errno when it
+# could not start. The environment is the kernel's (native.inc), not envp.
+lx_execve(r): t path argv envp [
+    k_ustrz(p): path
+    if(_): {p = null} [
+        set(r): -14
+        return(r): r
+    ]
+    lx_path(full): t p
+    mo_fs(fs):
+    typeof(tfs): fs
+    if(_): {tfs != "btree"} [
+        set(r): -5
+        return(r): r
+    ]
+    bl_exists(e): fs full
+    if(_): {e = false} [
+        set(r): -2
+        return(r): r
+    ]
+    bl_is_dir(d): fs full
+    if(_): d [
+        set(r): -13
+        return(r): r
+    ]
+    bl_read_bytes(bytes): fs full
+    typeof(tb): bytes
+    if(_): {tb != "vector"} [
+        set(r): -5
+        return(r): r
+    ]
+    mo_is_elf(elf): bytes
+    if(_): {elf = false} [
+        set(r): -8
+        return(r): r
+    ]
+    vec(args): ""
+    set(i): 0
+    set(go): true
+    while(_): {go && i < 64} [
+        k_upeek(at_): {argv + i * 8}
+        if(_): {at_ = null} [
+            set(r): -14
+            return(r): r
+        ]
+        if(_): {at_ = 0} [ set(go): false ]
+        else(_): [
+            k_ustrz(s): at_
+            if(_): {s = null} [
+                set(r): -14
+                return(r): r
+            ]
+            push(_): args s
+        ]
+        set(i): {i + 1}
+    ]
+    len(na): args
+    if(_): {na = 0} [ push(_): args full ]
+    k_owner(own):
+    k_task(id):
+    set(depth): {own % 64 + 1}
+    lx_copy_table(et): t
+    lx_vfork_done(pid): own
+    btput(_): lx_fds {own + 1} et
+    k_exec_bytes(r): bytes args
+    # what it made goes with it, as run does
+    net_drop(_): id depth
+    tls_drop(_): id depth
+    gui_drop(_): id depth
+    lx_drop(_): id depth
+    if(_): {pid >= 0} [ lx_zombie(_): own pid r ]
+]
+
+# wait4(pid, wstatus, options, rusage): a child that ended -> its pid, its
+# status as Linux packs it (the exit status times 256); ECHILD without one
+lx_wait4(r): pid wstatus [
+    set(r): -10
+    k_owner(own):
+    bthas(has): lx_zombies own
+    if(_): {has = false} [ return(r): r ]
+    btget(z): lx_zombies own
+    set(which): pid
+    if(_): {pid <= 0} [
+        btkeys(ks): z
+        len(n): ks
+        if(_): {n = 0} [ return(r): r ]
+        at(which): ks 0
+    ]
+    bthas(there): z which
+    if(_): {there = false} [ return(r): r ]
+    btget(st): z which
+    btdel(_): z which
+    if(_): {wstatus != 0} [
+        k_upoke(w): wstatus {(st & 255) << 8} 4
+        if(_): {w < 0} [
+            set(r): w
+            return(r): r
+        ]
+    ]
+    set(r): which
 ]
 
 # --- open
@@ -1416,6 +1627,10 @@ sys_linux(r): v [
     elif(_): {n = 293} [ lx_pipe(r): t a ]
     elif(_): {n = 284 || n = 290} [ lx_eventfd(r): t ]
     elif(_): {n = 77} [ lx_truncate(r): t a b ]
+    elif(_): {n = 1001} [ lx_vfork_begin(r): t ]
+    elif(_): {n = 1002} [ lx_vfork_exit(r): a ]
+    elif(_): {n = 59} [ lx_execve(r): t a b c ]
+    elif(_): {n = 61} [ lx_wait4(r): a b ]
     elif(_): {n = 74 || n = 75} [
         bthas(has): t a
         set(r): -9

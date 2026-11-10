@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- Lenin in Moscow: `/bin/ussr` links OpenSSL, so `prompt` and `tls_*` reach
+  HTTPS from the kernel, and Moscow's Linux programs can start others the way
+  musl's `posix_spawn` does (`clone` with `CLONE_VM | CLONE_VFORK`, `execve`,
+  `wait4`; no `fork`). `ussr` starts programs with `posix_spawn` everywhere, and
+  `USSR_EXTERNAL_OUTPUT` sends an external command's output to a file. With no
+  shell Lenin runs each test as a program and its arguments (`--direct`).
 - Moscow picks one of its three runtimes for a program: a `.ru` runs on the NASM
   runtime, and so does a `.su`, compiled by `/bin/ussr -c`, from the russia shell
   too; russia.ru interprets a `.su` on a disk without `/bin/ussr`, or one that

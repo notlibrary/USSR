@@ -264,8 +264,13 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
   started. Put a limit in the test: `timeout 10 python {file}`.
 - It handles **one file per answer**, the first fenced block of the reply.
 - Models are asked **one after another**, not at once.
-- It runs on a hosted `ussr`. On Moscow, `ussr` has no TLS or curl yet, so it
-  reaches no provider.
+- It runs on a hosted `ussr`, and in Moscow, the USSR kernel, on its
+  `/bin/ussr`: `run(_): "ussr" "lenin_go.su" ...`, a script that includes
+  `lenin.su` and calls `lenin_main` (see
+  [src/moscow](../moscow/README.md#linux-programs)). Moscow has no shell, so
+  there a test is a program and its arguments, `ussr test.su`, with no quotes,
+  pipes or redirections: `--direct`, which is the default wherever there is
+  no `/bin/sh`.
 
 ## Options
 
@@ -293,6 +298,7 @@ Models come through `prompt(_):`: Anthropic or anything OpenAI-compatible.
 | `--history FILE` | the record every run adds to | `LENIN_HISTORY`, else `~/.lenin/history.tsv` |
 | `--no-history` | keep this run out of the record | records it |
 | `--stats` | print what the record says, and run nothing | |
+| `--direct` | run the tests with no shell: the first word a program of `PATH`, the rest its arguments, output to the log by `USSR_EXTERNAL_OUTPUT` | where there is no `/bin/sh` |
 
 ## A benchmark
 

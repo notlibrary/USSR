@@ -419,8 +419,10 @@ of `/bin/ussr` before each start of a `.su`; a `.ru` written once with
 Moscow runs static PIE x86-64 ELF programs built for Linux, unchanged, in
 ring 3 (`arch/amd64/native.inc`). `build.sh` builds two against musl for
 `/bin`: `ussr`, the same C as on a host with its script runner, its `-c` and
-its REPL, without the GUI and TLS (no GLFW or OpenSSL in it); and `ural`, the
-package manager, with SQLite, curl, OpenSSL and zlib linked in, 8 MiB. Their
+its REPL, and Ryazan's TLS over OpenSSL (`tls_*`, and `https://` for
+`prompt`), without the GUI (no GLFW in it); and `ural`, the package manager,
+with SQLite, curl, OpenSSL and zlib linked in, 8 MiB. Both link the OpenSSL
+3.5.9 `build.sh` builds. Their
 sources are pinned by SHA-256 in `build.sh`. `/etc/ssl/certs.pem` holds
 Mozilla's root certificates (curl.se's extract), and programs get its path as
 `SSL_CERT_FILE`. Ural's state is in `/home/.ussr`, as on a host.
@@ -439,11 +441,35 @@ it is open and written when it is last closed, synced or the program ends. The t
 `run`, `limit` and `fg` apply to them, and an exception ends the program with
 status 139, not the machine.
 
-What is not there yet: listening sockets, `fork`, `exec`, signals (they are
-accepted and never come), threads, IPv6, a raw terminal (`ioctl` says the
-console is no terminal, so programs read it in lines), mapping files. Each
-gives `ENOSYS` or the like. A pipe works only inside one program, there being
-no second one to share it. File locks always succeed.
+A program starts another as musl's `posix_spawn` does it: `clone` with
+`CLONE_VM | CLONE_VFORK` on a stack of its own, the child's file actions
+(`dup2`, `open`, `close`) on a copy of the descriptors, then `execve`. The
+kernel runs the new program nested, in the next window, with those
+descriptors, to its end; then the parent goes on from its `clone` with the
+child's pid, and `wait4` gives the status. So `ussr`'s external commands work
+here (`moscow_native(st): "child"`), with their output sent to a file by
+`USSR_EXTERNAL_OUTPUT`, which is how a program redirects without a shell.
+`execve` outside a vfork child runs the program the same way and ends with
+its status, as if it had become it. The parent waits for the child to end,
+not only to start: a child that waits for its parent to feed it never gets
+it. `posix_spawn`, `vfork` and `execve` work; `fork`, which needs a copy of
+the memory, does not (`ENOSYS`), and there is no `/bin/sh`.
+
+    russia> run(st): "ussr" "/home/lenin_go.su" "--models" "/home/models.conf" "--test" "ussr /home/test.su" "say good"
+
+runs Lenin (`src/lenin`) here: `lenin_go.su` includes `lenin.su` and calls
+`lenin_main(r): v`, after `setenv(_): "RYAZAN_CA_FILE" ...` if the model's
+server has a certificate of its own. Lenin asks the models over HTTPS through
+`/bin/ussr`'s OpenSSL, and with no shell it runs each test as a program of
+`PATH` and its arguments (`--direct`), so a test is `ussr test.su` and not a
+shell line. `run(_): "lenin"` would not do: Moscow's choice of runtime gives
+a `.su` that calls `prompt` to russia.ru, which has no TLS.
+
+What is not there yet: listening sockets, `fork`, signals (they are accepted
+and never come), threads, IPv6, a raw terminal (`ioctl` says the console is
+no terminal, so programs read it in lines), mapping files. Each gives
+`ENOSYS` or the like. A pipe works inside one program, and from a parent to
+the child it starts before that child runs. File locks always succeed.
 
 `getrandom`, which TLS keys come from, is a SHA-256 chain over the time stamp
 counter and the ticks: the counter is all the entropy Moscow collects so far,

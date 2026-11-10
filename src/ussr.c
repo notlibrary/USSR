@@ -30,6 +30,7 @@ extern int fileno(FILE *stream);
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 #ifdef _WIN32
 #include <io.h>
@@ -2783,6 +2784,35 @@ ussr_external_spawn_values(
             command, values, value_count, &path, &argv) != 0)
         return -1;
 
+#ifndef _WIN32
+    {
+        /* USSR_EXTERNAL_OUTPUT: the command's stdout and stderr to a file
+         * made anew, where there is no shell to redirect them */
+        char *output_path = ussr_env_get("USSR_EXTERNAL_OUTPUT");
+
+        if (output_path != NULL && output_path[0] != '\0')
+        {
+            int fd = open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+            free(output_path);
+            if (fd < 0)
+            {
+                free_external_resources(argv, value_count, NULL, 0, path);
+                return -1;
+            }
+            fflush(stdout);
+            fflush(stderr);
+            child->pid = -1;
+            status = ussr_process_spawn_fds(path, argv, -1, fd, fd, &child->pid);
+            close(fd);
+            if (status != 0)
+                child->pid = -1;
+            free_external_resources(argv, value_count, NULL, 0, path);
+            return status;
+        }
+        free(output_path);
+    }
+#endif
     status = ussr_process_spawn(
         path,
         argv,
@@ -2837,10 +2867,19 @@ ussr_execute_external(
     proc.stdin_data = NULL;
     proc.stdout_data = NULL;
     proc.capture_stdout = 0;
-
+    /* USSR_EXTERNAL_OUTPUT: a file for the command's stdout and stderr,
+     * where there is no shell to redirect them */
+    char *output_path = ussr_env_get("USSR_EXTERNAL_OUTPUT");
+    if (output_path != NULL && output_path[0] == '\0')
+    {
+        free(output_path);
+        output_path = NULL;
+    }
+    proc.output_path = output_path;
 
     int run_status = ussr_process_run(&proc, (int *)&exit_code);
-    
+    free(output_path);
+
     if (run_status != 0)
     {
         free_external_resources(argv, argument_count, values, argument_count, path);
@@ -2963,22 +3002,17 @@ ussr_execute_external_io(
     if (output_file == NULL)
         goto io_fail;
 
-    pid = fork();
-    if (pid < 0)
     {
-        perror("USSR: fork");
-        goto io_fail;
-    }
+        int child;
 
-    if (pid == 0)
-    {
-        if (input_file != NULL && dup2(fileno(input_file), STDIN_FILENO) < 0)
-            _exit(126);
-        if (dup2(fileno(output_file), STDOUT_FILENO) < 0)
-            _exit(126);
-
-        execv(path, argv);
-        _exit(126);
+        if (ussr_process_spawn_fds(path, argv,
+                input_file != NULL ? fileno(input_file) : -1,
+                fileno(output_file), -1, &child) != 0)
+        {
+            perror("USSR: posix_spawn");
+            goto io_fail;
+        }
+        pid = (pid_t)child;
     }
 
     do

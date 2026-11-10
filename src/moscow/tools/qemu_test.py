@@ -35,6 +35,7 @@ Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
 import functools
+import json
 import os
 import re
 import shutil
@@ -718,6 +719,39 @@ CERT = os.path.join(ROOT, "tests", "ryazan", "localhost.cert.pem")
 KEY = os.path.join(ROOT, "tests", "ryazan", "localhost.key.pem")
 
 
+class FakeModel(BaseHTTPRequestHandler):
+    """An OpenAI-compatible model for Lenin in Moscow, over HTTPS: "slim"
+    answers what the test wants, "wrong" does not; refining gets a prompt."""
+    calls = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        system = next((m["content"] for m in body["messages"] if m["role"] == "system"), "")
+        FakeModel.calls.append(body["model"])
+        if "precise prompt" in system:
+            text = "Write a file that holds the word good and nothing else."
+        elif body["model"] == "slim":
+            text = "```\ngood\n```\n"
+        else:
+            text = "Here:\n```\nbad\n```\n"
+        out = json.dumps({"id": "m", "object": "chat.completion", "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": text},
+             "finish_reason": "stop"}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *args):
+        pass
+
+
+def ussr_text(text):
+    """text as a USSR string literal for the serial console"""
+    return '"%s"' % text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
 class Hello(BaseHTTPRequestHandler):
     def do_GET(self):
         body = b"hello from the host"
@@ -840,8 +874,9 @@ def tasks(qemu, disk, port, log, check):
               "^C" in got and got.endswith("130"), got)
         # a memory limit
         say('spawn(g): "/src/ussr/tests/moscow_grow.su"')
-        say("limit(_): g 16384")
-        got = say("wait(st): g", timeout=120) + "\n" + say("print(_): st")
+        # it may go over the limit before wait comes: what limit printed counts
+        got = say("limit(_): g 16384")
+        got += "\n" + say("wait(st): g", timeout=120) + "\n" + say("print(_): st")
         check("a task over its memory limit ends: status 1",
               "went over its memory limit" in got and got.endswith("\n1"), got)
         # priorities: a slice of 4 ticks against 1
@@ -990,8 +1025,9 @@ def native(qemu, disk, port, log, check):
         got += "\n" + say("print(_): st")
         check("Ctrl-C ends it: 130", "^C" in got and got.endswith("130"), got)
         say('spawn(g): "/bin/moscow_native" "grow"')
-        say("limit(_): g 16384")
-        got = say("wait(st): g", timeout=120) + "\n" + say("print(_): st")
+        # it may go over the limit before wait comes: what limit printed counts
+        got = say("limit(_): g 16384")
+        got += "\n" + say("wait(st): g", timeout=120) + "\n" + say("print(_): st")
         check("over its memory limit it ends: status 1",
               "went over its memory limit" in got and got.endswith("\n1"), got)
         say('writefile(_): "/home/h.su" "print(_): \\"ussr on Moscow\\"\\nset(s): 0\\n'
@@ -1039,6 +1075,66 @@ def native(qemu, disk, port, log, check):
         serial.output_to_prompt(timeout=60)
         got = say("print(_): st")
         check("and Ctrl-D ends it", got == "0", got)
+        # starting programs: posix_spawn and execve, as musl does them
+        got = say('run(st): "/bin/moscow_native" "spawn"', timeout=300) + "\n" + say("print(_): st")
+        check("posix_spawn: the child runs, its output to a file, waitpid gives its status",
+              "spawn: pid given, status 9" in got and "spawn: it wrote child: hello" in got, got)
+        check("a program that is not there: posix_spawn says so, the parent goes on",
+              "spawn: /bin/no_such_program: No such file or directory" in got
+              and "spawn: the parent goes on" in got and got.endswith("\n0"), got)
+        got = say('run(st): "/bin/moscow_native" "exec"', timeout=300) + "\n" + say("print(_): st")
+        check("execv: the program becomes the other one, its status is the run's",
+              got == "child: from exec\n9", got)
+        say('writefile(_): "/home/ext.su" %s' % ussr_text(
+            'moscow_native(s): "child" "via ussr"\nprint(_): s\n'
+            'setenv(_): "USSR_EXTERNAL_OUTPUT" "/home/ext.out"\n'
+            'moscow_native(s): "child" "to a file"\nunsetenv(_): "USSR_EXTERNAL_OUTPUT"\n'
+            'readfile(t): "/home/ext.out"\nprint(_): t\n'
+            'tls_backend(b):\nprint(_): b\n'))
+        got = say('run(st): "ussr" "/home/ext.su"', timeout=300)
+        check("ussr runs a program of PATH: posix_spawn in Moscow",
+              got.startswith("child: via ussr\n9\n"), got)
+        check("USSR_EXTERNAL_OUTPUT: its output to a file, no shell needed",
+              "\nchild: to a file\n" in got, got)
+        check("ussr has TLS in Moscow: OpenSSL", got.endswith("\nopenssl"), got)
+        # Lenin in Moscow: its models over HTTPS, its tests with no shell
+        server = HTTPServer(("127.0.0.1", 0), FakeModel)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(CERT, KEY)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = "https://localhost:%d/v1/chat/completions" % server.server_address[1]
+        try:
+            # the certificate is for localhost: here that is the host
+            say('writefile(_): "/etc/hosts" "10.0.2.2 localhost\\n"')
+            say('writefile(_): "/home/models.conf" %s' % ussr_text(
+                "openai slim - %s\nopenai wrong - %s\n" % (url, url)))
+            say('writefile(_): "/home/lt.su" %s' % ussr_text(
+                'init(r): n v [\n set(r): 1\n at(f): v 0\n readfile(t): f\n chr(nl): 10\n'
+                ' concat(want): "good" nl\n if(_): {t = want} [ set(r): 0 ]\n'
+                ' else(_): [\n  concat(m): "not good: " t\n  print(_): m\n ]\n]\n'))
+            say('writefile(_): "/home/lenin_go.su" %s' % ussr_text(
+                '$include "/src/ussr/src/lenin/lenin.su"\n'
+                'init(r): n v [\n'
+                ' setenv(_): "RYAZAN_CA_FILE" "/src/ussr/tests/ryazan/localhost.cert.pem"\n'
+                ' lenin_main(r): v\n]\n'))
+            got = say('run(st): "ussr" "/home/lenin_go.su" "--models" "/home/models.conf" '
+                      '"--dir" "/home/lenin-out" "--cycles" "1" "--no-history" '
+                      '"--test" "ussr /home/lt.su" "--ext" ".txt" "say good"', timeout=900)
+            got += "\n" + say("print(_): st")
+            check("Lenin in Moscow asks its models over HTTPS",
+                  FakeModel.calls.count("slim") >= 2 and "wrong" in FakeModel.calls,
+                  "calls %r\n%s" % (FakeModel.calls, got))
+            check("with no shell it runs the tests as programs",
+                  "no shell: a test runs as a program" in got, got)
+            check("and picks the answer that passes",
+                  "| 1 | slim | passed |" in got and "| 1 | wrong | FAILED |" in got
+                  and "Best: cycle 1, slim." in got and got.endswith("\n0"), got)
+            got = say('readfile(t): "/home/lenin-out/cycle1_wrong.log"') + say("print(_): t")
+            check("the failed test's output is kept for the next model", "not good: bad" in got, got)
+        finally:
+            say('remove_file(_): "/etc/hosts"')
+            server.shutdown()
         serial.sock.sendall(bytes([4]))
         serial.read_until(b"system halted", timeout=20)
     except (TimeoutError, EOFError, OSError) as e:

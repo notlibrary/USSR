@@ -4,23 +4,52 @@
  * qemu_test.py: moscow_native [what]. Without what it goes through memory,
  * time, files and directories and ends with status 11; with "read" it also
  * reads the console, "busy" never ends, "bad" writes the kernel's memory and
- * "grow" wants more and more memory.
+ * "grow" wants more and more memory. "spawn" starts itself as "child" with
+ * posix_spawn, its output to a file, and waits for it; "exec" becomes the
+ * child with execv.
  */
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+extern char **environ;
+
+/* posix_spawn as ussr uses it: the child's stdout to out, then waitpid */
+static int spawned(const char *program, const char *word, const char *out)
+{
+    posix_spawn_file_actions_t fa;
+    char *args[] = { "moscow_native", "child", (char *)word, 0 };
+    pid_t pid;
+    int rc, status = -1;
+
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 1, out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    rc = posix_spawn(&pid, program, &fa, 0, args, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    if (rc != 0) {
+        printf("spawn: %s: %s\n", program, strerror(rc));
+        return -1;
+    }
+    if (waitpid(pid, &status, 0) != pid)
+        printf("spawn: waitpid failed\n");
+    printf("spawn: pid %s, status %d\n", pid > 1 ? "given" : "none", WEXITSTATUS(status));
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
     const char *what = argc > 1 ? argv[1] : "";
     char line[128], cwd[64];
+    char said[128];
     struct timespec ts;
     struct stat st;
     struct dirent *e;
@@ -32,6 +61,28 @@ int main(int argc, char **argv)
     unsigned char blob[8];
     int i, fd, found = 0;
 
+    if (!strcmp(what, "child")) {
+        printf("child: %s\n", argc > 2 ? argv[2] : "");
+        return 9;
+    }
+    if (!strcmp(what, "spawn")) {
+        spawned("/bin/moscow_native", "hello", "/home/spawn.out");
+        f = fopen("/home/spawn.out", "r");
+        if (f && fgets(said, sizeof said, f))
+            printf("spawn: it wrote %s", said);
+        if (f)
+            fclose(f);
+        spawned("/bin/no_such_program", "x", "/home/spawn2.out");
+        printf("spawn: the parent goes on\n");
+        return 0;
+    }
+    if (!strcmp(what, "exec")) {
+        char *args[] = { "moscow_native", "child", "from exec", 0 };
+        fflush(stdout);
+        execv("/bin/moscow_native", args);
+        printf("exec: %s\n", strerror(errno));
+        return 1;
+    }
     printf("native: %d args, argv0 %s, HOME=%s\n", argc, argv[0], getenv("HOME"));
     p = malloc(100000);
     memset(p, 7, 100000);
