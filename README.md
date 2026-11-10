@@ -183,41 +183,45 @@ ussr hello.ru
 Lenin is the neuroslop code refining and enrichment AI agent (working:
 `src/lenin`, see [its README](src/lenin/README.md)).
 
-USSR itself is made by prompting an AI with beforehand refined prompt and enrichment the results with the next
-AI "centrifuge" by hand. Lenin is that process as a program. Practice what you
-preach: if refined and enriched neuroslop is better than classical software then the
-refining and enrichment has to be a tool and it has to show it.
+USSR itself is made by prompting an AI with a prompt refined beforehand, then
+enriching what comes back with the next AI of the "centrifuge", by hand. Lenin
+is that process as a program. Practice what you preach: if refined and enriched
+neuroslop is better than classical software, then refining and enrichment have
+to be a tool, and the tool has to show it.
 
 ```bash
 ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
-     --criteria speed --test "python test.py {file}" --ext .py "what you want"
+     --test "python test.py {file}" --ext .py "what you want"
 ```
 
-It does the two operations of [neuroslop enrichment](research/README.md):
+It does the two operations of [neuroslop enrichment](research/README.md), set out
+at length in [research/refine_and_enrich.md](research/refine_and_enrich.md):
 
-- **Refining** is a prompt operation. Prompt A, "make a text editor", and
-  sub-task A, "it supports bold text", make prompt B, "make a text editor that
-  supports bold text", until the prompt reflects what you really want. The
-  sub-tasks are yours (`--task`), or found: with `--refine N` a model drafts code
-  from the prompt, your test runs on it, and the model lists what the draft shows
-  the prompt leaves out. That goes into the prompt, round after round, until a
-  round finds nothing new.
-- **Enrichment** chooses the better answer from several models used several
-  times, with a test suite that says what is better, since writing that suite
-  takes less intelligence than solving the problem. The current best goes on to
-  the next model, or back to the same one, until nothing better comes that the
-  tests can detect: `--method enrich`, with `--score` for a suite that counts
-  how many of its checks pass, so that nearer beats further before anything
-  passes in full. A hidden test, `--holdout`, keeps the models from fitting
-  their code to the test they are shown, and when enrichment stalls on a
-  failing best, Lenin goes back to refining the prompt.
+- **Refining** works on the prompt. Prompt A, "make a text editor", and sub-task
+  A, "it supports bold text", make prompt B, "make a text editor that supports
+  bold text", until the prompt says what you really want. Sub-tasks are yours
+  (`--task`), or found: with `--refine N` a model drafts code from the prompt,
+  your test runs on it, and the model lists what the draft shows the prompt
+  leaves out, round after round, until a round finds nothing new.
+- **Enrichment** works on the answers. Several models, used more than once, each
+  get the best answer so far and how it measured, and a test suite says which
+  answer is better, since writing that suite takes less intelligence than
+  solving the problem. `--score` counts how many of its checks pass, so nearer
+  beats further before anything passes in full; a hidden test, `--holdout`,
+  keeps the models from fitting their code to the test they are shown.
 
-**Enrichment is not voting.** It picks an answer on what a test showed, not on
-how many models like it: one answer that passes beats ten that agree and fail.
+**Enrichment is not voting.** It picks an answer on what a test showed, not on how
+many models like it: one answer that passes beats ten that agree and fail.
 Without a test Lenin can only let the models vote, and says that nothing it
 picked that way was shown to work.
-[research/refine_and_enrich.md](research/refine_and_enrich.md) sets the method
-out at length.
+
+`--method` decides how the answers build on each other:
+
+| Method | What each model is shown | When it stops |
+|---|---|---|
+| `rounds` (default) | the best from the cycles before this one: the models of a cycle work independently | after `--cycles` |
+| `chain` | the best so far, the model just before it included: each improves on the last | after `--cycles` |
+| `enrich` | as `chain`, and it needs a test or a suite | when `--patience` cycles in a row bring nothing better; if the best still fails, it refines the prompt once more first |
 
 ```bash
 ussr src/lenin/lenin.su --models models.conf --refine 3 --task "it supports bold text" \
@@ -227,44 +231,40 @@ ussr src/lenin/lenin.su --models models.conf --refine 3 --task "it supports bold
 You give it:
 
 - the prompt, and any sub-tasks of it you know
-- the centrifuge models, from different developers (the API keys stay in
-  environment variables, the file only names them)
-- the optimization criteria (speed, size)
-- the working directory
-- the generation cycles repeat count
+- the centrifuge: models from different developers, in a file that names the
+  environment variables their keys are in, never the keys
 - a test that says whether an answer works, or a suite that says how much of it
-  works, and if you have one a classic solution to measure against
+  works, and a hidden test if you like
+- the criterion among answers that pass (size or speed), the method, the cycles
+  and the output directory
+- if you have one, a classic solution to measure against
 
-You get the best of what the models gave, by your test:
-
-1. It refines the prompt so it precisely reflects things in reality: once, or
-   in rounds of drafts and the sub-tasks they show are missing
-2. It gives the refined prompt to the centrifuge models
-3. They work on it for the given number of cycles, each cycle (or with
-   `--method chain` each centrifuge, one after another) seeing the best
-   answer so far and how it measured. `--method enrich` stops once a cycle
-   finds nothing better
-4. It runs every answer through your test and extracts the one that passes,
-   scores highest on your suite and is best by your criteria
+You get the best of what the models gave, by your test, in `best<ext>`, and
+`report.md` with every answer and its numbers. Every run also adds to a record
+that `--stats` reads: which model passes most often, whether later cycles win,
+which method does better, and how often anything beats your baseline.
+`--target` and `--budget` stop a run sooner.
 
 What it does and does not show:
 
-- An answer that fails the test cannot win. That part is measured, not an
-  opinion of a model. What refining finds missing is the opinion of a model:
-  `tasks.md` lists it for you to read
+- An answer that fails the test cannot win. That part is measured, not a model's
+  opinion. What refining finds missing *is* a model's opinion: `tasks.md` lists
+  it for you to read
 - Best means best by the test you wrote. With a weak test the winner is whatever
-  gets past it: given a canned answer `assert 2+3==5` to a task of printing a sum,
-  and a test that only looked at the exit status, Lenin picks it for its size.
-  Without a test the models only vote, and the report says nothing was run
+  gets past it: given the answer `assert 2+3==5` to a task of printing a sum, and
+  a test that only looks at the exit status, Lenin picks it for its size
 - With a baseline, the report says whether the winner beat that classic solution
   on that one task
-- Whether this adds up to better than classical software is not shown yet. So far
-  Lenin has run against canned models only, to test Lenin itself. `src/lenin/examples/wordcount`
-  is the first benchmark, waiting for real models and real keys
+- Whether this adds up to better than classical software is not shown yet. So
+  far Lenin has run against canned models only, to test Lenin itself.
+  `src/lenin/examples/wordcount` is the first benchmark, waiting for real models
+  and real keys
 
-The project now has three main tracks, with the Moscow OS kernel underneath
-(Lenin runs in Moscow too, on its `/bin/ussr`: OpenSSL for the models' HTTPS, and
-`posix_spawn` to run each test as a program, Moscow having no shell):
+Lenin runs on a hosted `ussr`, and in Moscow on its `/bin/ussr`: OpenSSL for the
+models' HTTPS, and `posix_spawn` to run each test as a program, Moscow having no
+shell.
+
+The project now has three main tracks, with the Moscow OS kernel underneath:
 
 1. The ROUND stack forum: Ryazan, Ukraine, Novgorod, Omsk and Dubna
 2. The Kremlin GUI desktop and its apps, with the USSR shell
