@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- Moscow picks one of its three runtimes for a program: a `.ru` runs on the NASM
+  runtime, and so does a `.su`, compiled by `/bin/ussr -c`, from the russia shell
+  too; russia.ru interprets a `.su` on a disk without `/bin/ussr`, or one that
+  calls a command the NASM runtime does not have (`async`: the runtime's new
+  `k_ru_check` and `k_ru_missing` tell before it runs), and
+  `run(_): "ussr" "a.su"` runs on the native ussr. `runtime(r): name` says which.
 - Lenin, from `research/refine_and_enrich.md`: a hidden test (`--holdout`) whose
   output no model sees; `--patience`, `--target` and `--budget` to stop a run; the
   handoff to the next model carries the requirements so far and the known

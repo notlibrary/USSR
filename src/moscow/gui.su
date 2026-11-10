@@ -408,6 +408,8 @@ sys_launch(r): a [
     mo_find(found): target words
     typeof(tf): found
     if(_): {tf != "vector"} [ return(r): r ]
+    mo_unbuilt(bad): found
+    if(_): {bad != 0} [ return(r): r ]
     at(fargs): found 1
     at(bytes): found 2
     gui_base(tname): target

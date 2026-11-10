@@ -925,7 +925,20 @@ def native(qemu, disk, port, log, check):
     try:
         serial.output_to_prompt(timeout=60)
         say('file_exists(f): "/bin/ussr"')
-        if say("print(_): f") != "true":
+        has_ussr = say("print(_): f") == "true"
+        # which runtime a program gets: a .su is compiled by /bin/ussr for
+        # the NASM runtime (2), and goes through russia.ru (3) without it
+        say('runtime(rt): "/src/ussr/tests/regex_test.su"')
+        got = say("print(_): rt")
+        check("a .su runs on runtime %d" % (2 if has_ussr else 3),
+              got == ("2" if has_ussr else "3"), got)
+        say('runtime(rt): "russia"')
+        got = say("print(_): rt")
+        check("a .ru runs on the NASM runtime, 2", got == "2", got)
+        say('runtime(rt): "/home/no-such-program.su"')
+        got = say("print(_): rt")
+        check("a program that is not there has none, 0", got == "0", got)
+        if not has_ussr:
             print("SKIP no /bin/ussr: built on a Linux host (build.sh)")
             return
         before = free_kib(say("mem(_):"))
@@ -990,6 +1003,33 @@ def native(qemu, disk, port, log, check):
         got = say('run(st): "/home/h.ru"')
         check("ussr -c writes a program Moscow's VM runs",
               got == "ussr on Moscow\n499500", got)
+        say('runtime(rt): "ussr"')
+        got = say("print(_): rt")
+        check("ussr itself is runtime 1", got == "1", got)
+        # run(_) of a .su from the russia shell: /bin/ussr -c compiles it and
+        # the NASM runtime runs it
+        got = say('run(st): "/home/h.su"') + "\n" + say("print(_): st")
+        check("a .su from the shell: compiled, run on the NASM runtime",
+              got == "ussr on Moscow\n499500\n0", got)
+        got = say('ls(_): "/tmp"')
+        check("the compiled .ru is not left behind", "moscow-" not in got, got)
+        say('writefile(_): "/home/args.su" "init(r): n v [\\n set(r): 3\\n'
+            ' at(a): v 0\\n print(_): n\\n print(_): a\\n]\\n"')
+        got = say('run(st): "/home/args.su" "first" "second"') + "\n" + say("print(_): st")
+        check("its arguments, and its status", got == "2\nfirst\n3", got)
+        # async is russia.ru's, not the NASM runtime's: such a program goes
+        # to russia (3), the check after compiling runs nothing of it
+        say('writefile(_): "/home/later.su" "job(r): x [\\n set(r): 0\\n print(_): x\\n]\\n'
+            'async(p): \\"job\\" \\"from a job\\"\\nawait(st): p\\nprint(_): \\"after it\\"\\n"')
+        say('runtime(rt): "/home/later.su"')
+        got = say("print(_): rt")
+        check("a .su calling what the NASM runtime lacks goes to russia, 3", got == "3", got)
+        got = say('run(st): "/home/later.su"', timeout=300) + "\n" + say("print(_): st")
+        check("and runs there, once", got == "from a job\nafter it\n0", got)
+        say('writefile(_): "/home/bad.su" "print(_): {1 +\\n"')
+        got = say('run(st): "/home/bad.su"') + "\n" + say("print(_): st")
+        check("a .su that does not compile: ussr says why, once, and run fails",
+              not got.endswith("\n0") and got.count("bad.su") == 1, got)
         serial.command('run(st): "ussr"')
         serial.read_until(b"ussr> ", timeout=120)
         serial.sock.sendall(b'print(_): "in the repl"\r')
