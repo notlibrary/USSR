@@ -1086,3 +1086,12 @@ Use joilet so it supports long file names
 
 Make lenin support refinement and enrichment such as they defined in research/README.md
 Fix global README.md about it and document this
+
+There are 3 runtimes in Moscow:
+1. crt to run ussr
+2. nasm ussr runtime
+3. russia ussr runtime in ussr
+
+Make 2 used by default even the command run from russia
+Make 1 used if ussr ran using 1 not russia
+Make 3 used in rest cases
