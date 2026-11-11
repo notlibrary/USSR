@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- `research/neuroslop_enrichment_and_refining.md`: the two operations, a model of
+  them and a proof of the enrichment window in it (`research/window.py` has the
+  numbers). From it, Lenin gets `--method funnel` (wide, then deep), a critic
+  that is not the author, a note in the report when the winner may be fitted to
+  the test, and the tests' leak in `--stats`.
 - Lenin in Moscow: `/bin/ussr` links OpenSSL, so `prompt` and `tls_*` reach
   HTTPS from the kernel, and Moscow's Linux programs can start others the way
   musl's `posix_spawn` does (`clone` with `CLONE_VM | CLONE_VFORK`, `execve`,

@@ -3,6 +3,7 @@
 # from different developers for a number of cycles, each cycle seeing the best
 # so far and how it measured, and extracts the best file by your criterion.
 # With --method chain the best is passed on after every model, not every cycle;
+# --method funnel is rounds for the first cycle and a chain after it.
 # --method enrich is that chain, stopping after --patience cycles find nothing
 # better, and refining again first if the best still fails. --holdout is a test
 # the models never see; --target and --budget stop a run sooner.
@@ -495,9 +496,27 @@ lenin_best(r): candidates criteria [
     ]
 ]
 
+# the model that says what is wrong with an answer: not its author when
+# there is another, since a model favours what it wrote
+lenin_critic(r): models author [
+    at(r): models 0
+    len(n): models
+    set(i): 0
+    while(_): {i < n} [
+        at(m): models i
+        at(name): m 1
+        if(_): {name != author} [
+            set(r): m
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
 # without a test the models choose: each is shown the answers under letters,
-# not whose they are. Gives the candidate with the most votes (the first of
-# them on a tie), or null when nobody voted.
+# not whose they are. A vote for its own answer is not counted. Gives the
+# candidate with the most votes (the first of them on a tie), or null when
+# nobody voted.
 lenin_vote(r): models candidates task [
     set(r): null
     len(nc): candidates
@@ -533,6 +552,13 @@ lenin_vote(r): models candidates task [
             if(_): {la = 1} [
                 byte(b): answer 0
                 set(k): {b - 65}
+                # its own answer: a model favours what it wrote
+                if(_): {k >= 0 && k < nc} [
+                    at(kc): candidates k
+                    btget(kauthor): kc "model"
+                    at(voter): m 1
+                    if(_): {kauthor = voter} [ set(k): -1 ]
+                ]
                 if(_): {k >= 0 && k < nc} [
                     set(any): true
                     vec(next): ""
@@ -676,9 +702,11 @@ lenin_question(r): task best criteria notes [
 # --- the record: every run adds to one file, so that many runs can answer
 # what one cannot: do later cycles win, does anything beat a classic baseline?
 # Lines of tab-separated fields:
-#   run  id time task method criteria cycles models tested winner cycle passed baseline title
+#   run  id time task method criteria cycles models tested winner cycle passed baseline title hidden
 #   answer  id cycle model state bytes rate won
-# state is passed, FAILED, notrun or noanswer; baseline is none, beaten or stands.
+# state is passed, FAILED, fitted (it passed the test and failed the hidden one),
+# notrun or noanswer; baseline is none, beaten or stands; hidden is 1 when the
+# run had a hidden test.
 
 # LENIN_HISTORY, else .lenin/history.tsv in the home directory
 lenin_history_path(r): [
@@ -769,10 +797,13 @@ lenin_make_parent(r): path [
 lenin_state_word(r): c [
     btget(passed): c "passed"
     btget(tested): c "tested"
+    btget(hidden): c "hidden" "none"
     set(r): "notrun"
     if(_): tested [
         set(r): "FAILED"
         if(_): passed [ set(r): "passed" ]
+        # it passed the test the models saw and failed the hidden one
+        if(_): {hidden = "FAILED"} [ set(r): "fitted" ]
     ]
 ]
 
@@ -812,7 +843,10 @@ lenin_record(r): args all missed best base_state [
     ]
     lenin_cell(title): task0 60
     concat(text): "run" tab run_id tab nows tab task_id tab method tab criteria tab cs tab
-    concat(text): text nms tab tested tab wmodel tab wcycle tab wpassed tab base_state tab title nl
+    btget(holdout): args "holdout" ""
+    set(hidden): "0"
+    if(_): {holdout != ""} [ set(hidden): "1" ]
+    concat(text): text nms tab tested tab wmodel tab wcycle tab wpassed tab base_state tab title tab hidden nl
     len(ncand): all
     set(i): 0
     while(_): {i < ncand} [
@@ -902,6 +936,9 @@ lenin_stats(r): path [
     set(total_later): 0
     set(total_beaten): 0
     set(total_stands): 0
+    btree(hidden_runs):
+    set(seen_passed): 0
+    set(seen_fitted): 0
     lenin_lines(lines): text
     len(nl_): lines
     set(i): 0
@@ -911,6 +948,11 @@ lenin_stats(r): path [
         len(nf): f
         at(kind): f 0
         if(_): {kind = "run" && nf >= 14} [
+            if(_): {nf >= 15} [
+                at(hid): f 14
+                at(rid): f 1
+                if(_): {hid = "1"} [ btput(_): hidden_runs rid true ]
+            ]
             at(task): f 3
             at(method): f 4
             at(wcycle): f 10
@@ -943,7 +985,12 @@ lenin_stats(r): path [
             at(won): f 7
             if(_): {state = "noanswer"} [ lenin_bump(_): noanswer model ]
             else(_): [ lenin_bump(_): answers model ]
-            if(_): {state = "passed" || state = "FAILED"} [ lenin_bump(_): tested model ]
+            if(_): {state = "passed" || state = "FAILED" || state = "fitted"} [ lenin_bump(_): tested model ]
+            # the leak: of what passed the test the models saw, what the hidden one caught
+            at(rid): f 1
+            bthas(hr): hidden_runs rid
+            if(_): {hr && state = "passed"} [ set(seen_passed): {seen_passed + 1} ]
+            if(_): {hr && state = "fitted"} [ set(seen_fitted): {seen_fitted + 1} ]
             if(_): {state = "passed"} [
                 lenin_bump(_): passed model
                 if(_): {won = "1"} [ lenin_bump(_): wins model ]
@@ -1016,6 +1063,13 @@ lenin_stats(r): path [
     str_from_int(wbs): with_base
     lenin_percent(bp): total_beaten with_base
     concat(out): out "Classic code: the best answer beat the baseline in " bs " of " wbs " runs that had one (" bp ")." nl
+    set(seen): {seen_passed + seen_fitted}
+    if(_): {seen > 0} [
+        str_from_int(fs): seen_fitted
+        str_from_int(ses): seen
+        lenin_percent(fp): seen_fitted seen
+        concat(out): out "The tests' leak: " fs " of " ses " answers that passed a test the models saw failed the hidden one (" fp ")." nl
+    ]
     if(_): {total_measured < 20} [
         concat(out): out nl "Under 20 measured runs: too few to conclude anything." nl
     ]
@@ -1159,7 +1213,9 @@ lenin_refine(r): args sep [
             lenin_measure(draft): "draft" dfile code test score holdout dlog 0
             lenin_state(state): draft
             lenin_find_question(q): request r code state
-            lenin_ask(listed): m0 ssys q
+            at(drafter): m0 1
+            lenin_critic(critic): models drafter
+            lenin_ask(listed): critic ssys q
             if(_): {listed = null} [ print(_): "lenin: no sub-tasks came: refining stops here" ]
         ]
         if(_): {listed = null} [ set(go): false ]
@@ -1245,6 +1301,8 @@ lenin_run(r): args [
     # enrich: a chain that stops once a cycle finds nothing better
     set(enrich): {method = "enrich"}
     set(chain): {method = "chain" || enrich}
+    # funnel: the first cycle wide, every model on its own; then a chain
+    set(funnel): {method = "funnel"}
     btget(dir): args "dir"
     btget(cycles): args "cycles"
     btget(test): args "test"
@@ -1316,6 +1374,7 @@ lenin_run(r): args [
     set(go): true
     set(c): 1
     while(_): {go && c <= cycles} [
+        if(_): funnel [ set(chain): {c > 1} ]
         set(before): ""
         if(_): {best != null} [ btget(before): best "path" ]
         lenin_handoff(notes): all current reqs
@@ -1402,7 +1461,8 @@ lenin_run(r): args [
             set(bp): true
             if(_): {best != null} [ btget(bp): best "passed" ]
             if(_): {refine && rounds > 0 && bp = false} [
-                at(m0): models 0
+                btget(bauthor): best "model"
+                lenin_critic(m0): models bauthor
                 btget(bcode): best "code"
                 lenin_state(bstate): best
                 lenin_find_question(fq): request task bcode bstate
@@ -1511,6 +1571,20 @@ lenin_run(r): args [
         str_from_int(hs): hid
         concat(rep): rep "Hidden test: " hs " of the answers passed the test the models saw and failed the hidden one." nl
     ]
+    # with no hidden test, picking the best of several by size or speed is
+    # where an answer that only gets past the test wins
+    set(npass): 0
+    set(i): 0
+    while(_): {i < ncand} [
+        at(x): all i
+        btget(xp): x "passed"
+        if(_): xp [ set(npass): {npass + 1} ]
+        set(i): {i + 1}
+    ]
+    if(_): {measured && holdout = "" && npass >= 2} [
+        str_from_int(nps): npass
+        concat(rep): rep "No hidden test: the winner is the best by " criteria " of " nps " answers that pass a test the models were shown, so it may be fitted to it (--holdout)." nl
+    ]
     if(_): {base != null} [
         lenin_describe(bd): base
         concat(rep): rep nl "Baseline, " baseline ": " bd nl
@@ -1535,7 +1609,7 @@ lenin_run(r): args [
 lenin_usage(r): [
     set(r): 2
     print(_): "usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]"
-    print(_): "             [--method rounds|chain|enrich]"
+    print(_): "             [--method rounds|chain|enrich|funnel]"
     print(_): "             [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]"
     print(_): "             [--window SECONDS] [--refine N] [--no-refine] [--holdout COMMAND]"
     print(_): "             [--patience N] [--target SCORE] [--budget CALLS] [--direct]"
@@ -1686,7 +1760,7 @@ lenin_main(r): argv [
     btget(cycles): args "cycles"
     btget(method): args "method"
     btput(_): args "tasks" tasks
-    if(_): {modelfile = "" || task = "" || cycles < 1 || (criteria != "speed" && criteria != "size") || (method != "rounds" && method != "chain" && method != "enrich")} [
+    if(_): {modelfile = "" || task = "" || cycles < 1 || (criteria != "speed" && criteria != "size") || (method != "rounds" && method != "chain" && method != "enrich" && method != "funnel")} [
         lenin_usage(r):
         return(r): r
     ]

@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- From research/neuroslop_enrichment_and_refining.md: `--method funnel`, wide
+  for the first cycle and a chain after it; the critic that lists what a draft
+  leaves out is another model than its author when there is one, and a vote for
+  one's own answer is not counted; the report says when the winner was picked
+  among several passing answers with no hidden test; the record marks answers
+  that passed the test and failed the hidden one as "fitted", and `--stats`
+  gives the tests' leak.
 - Runs in Moscow on `/bin/ussr`: HTTPS to the models through its OpenSSL, and
   with no shell each test runs as a program and its arguments (`--direct`, the
   default where there is no `/bin/sh`), its output to the log by
