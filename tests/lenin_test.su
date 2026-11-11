@@ -533,6 +533,112 @@ init(result): arg_count arg_values [
     word_test(t):
     btput(_): args "test" t
 
+    # funnel: the first cycle wide, each model on its own; then a chain
+    btput(_): args "method" "funnel"
+    btput(_): args "cycles" 2
+    concat(rundir15): dir "/funnel"
+    btput(_): args "dir" rundir15
+    lenin_run(st): args
+    check(_): "funnel: a winner" st 0
+    concat(p): rundir15 "/cycle1_slim.prompt.md"
+    readfile(sent): p
+    check(_): "funnel: in cycle 1 a model has only the task" sent "say good"
+    concat(p): rundir15 "/cycle2_wrong.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "The best answer so far:" 0
+    check(_): "funnel: cycle 2 starts from the best of cycle 1" {i >= 0} true
+    concat(p): rundir15 "/cycle2_big.prompt.md"
+    readfile(sent): p
+    str_find(i): sent "- cycle 2, wrong:" 0
+    check(_): "funnel: and is a chain, each seeing the one before it" {i >= 0} true
+    concat(p): rundir15 "/report.md"
+    readfile(rep): p
+    str_find(i): rep "Method: funnel" 0
+    check(_): "funnel: the report says so" {i >= 0} true
+    str_find(i): rep "No hidden test: the winner is the best by size of 4 answers" 0
+    check(_): "the report says when the winner may be fitted to the test" {i >= 0} true
+
+    # the critic is not the author: another model lists what a draft leaves out
+    vec(pair): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): pair m
+    model(m): "tasky" "lenin_tasky.json"
+    push(_): pair m
+    lenin_critic(cm): pair "slim"
+    at(cname): cm 1
+    check(_): "the critic is another model than the author" cname "tasky"
+    lenin_critic(cm): one "tasky"
+    at(cname): cm 1
+    check(_): "with one model it is that one" cname "tasky"
+    btput(_): args "models" pair
+    btput(_): args "method" "rounds"
+    btput(_): args "cycles" 1
+    btput(_): args "refine" true
+    btput(_): args "refine_rounds" 2
+    concat(rundir16): dir "/critic"
+    btput(_): args "dir" rundir16
+    lenin_run(st): args
+    concat(p): rundir16 "/tasks.md"
+    readfile(said): p
+    str_find(i): said "- handles bad input (round 2)" 0
+    check(_): "refining: the second model says what the first one's draft leaves out" {i >= 0} true
+    btput(_): args "refine" false
+    btput(_): args "refine_rounds" 1
+
+    # a vote for its own answer is not counted
+    vec(selfish): ""
+    model(m): "z" "lenin_vote_b.json"
+    push(_): selfish m
+    vec(answers): ""
+    push(_): answers fail
+    push(_): answers small
+    lenin_vote(won): selfish answers "the task"
+    check(_): "a model's vote for its own answer does not count" won null
+
+    # the record keeps what passed the test and failed the hidden one apart
+    vec(two): ""
+    model(m): "slim" "lenin_slim.json"
+    push(_): two m
+    model(m): "big" "lenin_big.json"
+    push(_): two m
+    btput(_): args "models" two
+    btput(_): args "holdout" deal_test
+    btput(_): args "method" "chain"
+    btput(_): args "cycles" 2
+    concat(leak_hist): dir "/leak.tsv"
+    btput(_): args "history" leak_hist
+    concat(rundir17): dir "/leak"
+    btput(_): args "dir" rundir17
+    lenin_run(st): args
+    readfile(said): leak_hist
+    lenin_lines(lines): said
+    set(fitted_seen): 0
+    set(hidden_flag): ""
+    len(nlines): lines
+    set(i): 0
+    while(_): {i < nlines} [
+        at(line): lines i
+        lenin_fields(f): line
+        at(kind): f 0
+        len(nf): f
+        if(_): {kind = "run" && nf >= 15} [ at(hidden_flag): f 14 ]
+        if(_): {kind = "answer"} [
+            at(state): f 4
+            if(_): {state = "fitted"} [ set(fitted_seen): {fitted_seen + 1} ]
+        ]
+        set(i): {i + 1}
+    ]
+    check(_): "the record says the run had a hidden test" hidden_flag "1"
+    check(_): "and which answers were fitted to the visible one" fitted_seen 2
+    lenin_stats(st): leak_hist
+    check(_): "stats gives the tests' leak" st 0
+    btdel(_): args "history"
+    remove_file(_): leak_hist
+    btput(_): args "holdout" ""
+    btput(_): args "models" models
+    btput(_): args "method" "rounds"
+    btput(_): args "cycles" 1
+
     # a method there is not
     vec(argv): ""
     push(_): argv "--models"
@@ -632,6 +738,9 @@ init(result): arg_count arg_values [
     clean(_): rundir12
     clean(_): rundir13
     clean(_): rundir14
+    clean(_): rundir15
+    clean(_): rundir16
+    clean(_): rundir17
     clean(_): rundir5
     clean(_): rundir
     clean(_): rundir2

@@ -44,6 +44,7 @@ Chosen: measured: the candidate that passes its test and is best by the criterio
 | 2 | slim | passed | 5 | 0 | - |
 
 Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 4 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS the run finds a winner
 PASS the winner passes and is the smallest
@@ -73,6 +74,7 @@ Chosen: measured: the candidate that passes its test and is best by the criterio
 | 1 | slim | passed | 5 | 0 | - |
 
 Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS chain: a winner
 PASS chain: the first model has only the task
@@ -176,6 +178,7 @@ Chosen: measured: the candidate that passes, then scores highest on the suite, t
 | 1 | wrong | FAILED | 7 | 0 | 0 |
 
 Best: cycle 1, rich.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS the suite finds a winner
 PASS the higher score wins over the smaller
@@ -201,6 +204,7 @@ Chosen: measured: the candidate that passes its test and is best by the criterio
 
 Best: cycle 1, tasky.
 Stopped after cycle 2: it found nothing better than the cycles before it, by the test.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS enrich: a winner
 PASS enrich: the next cycle gets the best
@@ -262,6 +266,7 @@ Chosen: measured: the candidate that passes, then scores highest on the suite, t
 
 Best: cycle 1, rich.
 Stopped in cycle 1: an answer passes and scores 2, the target.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS target: a winner
 PASS target: nothing is asked once it is met
@@ -286,6 +291,7 @@ Chosen: measured: the candidate that passes its test and is best by the criterio
 
 Best: cycle 1, slim.
 Stopped in cycle 1: the budget of 2 calls is spent.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS budget: the third call does not go out
 PASS budget: the report says so
@@ -312,6 +318,7 @@ Chosen: measured: the candidate that passes its test and is best by the criterio
 
 Best: cycle 1, tasky.
 Stopped after cycle 3: 2 cycles in a row found nothing better, by the test.
+No hidden test: the winner is the best by size of 3 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 PASS patience: a second cycle with nothing better runs
 PASS patience: and then it stops
@@ -353,8 +360,122 @@ lenin: --holdout goes with --test or --score: it hides a test, it is not the onl
 PASS a hidden test alone
 lenin: --target is a --score: give the suite too
 PASS a target with no suite
+lenin: up to 8 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 1: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 1: down
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | -
+lenin: cycle 2: wrong
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 2: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 2: down
+lenin: cycle 2: slim
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: funnel
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 1 | slim | passed | 5 | 0 | - |
+| 2 | wrong | FAILED | 7 | 0 | - |
+| 2 | big | passed | 47 | 0 | - |
+| 2 | slim | passed | 5 | 0 | - |
+
+Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 4 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
+
+PASS funnel: a winner
+PASS funnel: in cycle 1 a model has only the task
+PASS funnel: cycle 2 starts from the best of cycle 1
+PASS funnel: and is a chain, each seeing the one before it
+PASS funnel: the report says so
+PASS the report says when the winner may be fitted to the test
+PASS the critic is another model than the author
+PASS with one model it is that one
+lenin: up to 5 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: prompt refined
+lenin: refining, round 2: a draft from the prompt
+lenin: round 2 added 1 sub-tasks
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | -
+lenin: cycle 1: tasky
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | passed | 5 | 0 | - |
+| 1 | tasky | passed | 5 | 0 | - |
+
+Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
+
+PASS refining: the second model says what the first one's draft leaves out
+PASS a model's vote for its own answer does not count
+lenin: up to 4 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: slim
+lenin:   FAILED hidden | 5 | 0 | -
+lenin: cycle 1: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 2: slim
+lenin:   FAILED hidden | 5 | 0 | -
+lenin: cycle 2: big
+lenin:   passed | 47 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: chain
+Chosen: measured: the candidate that passes its test and the hidden one, and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | FAILED hidden | 5 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 2 | slim | FAILED hidden | 5 | 0 | - |
+| 2 | big | passed | 47 | 0 | - |
+
+Best: cycle 1, big.
+Hidden test: 2 of the answers passed the test the models saw and failed the hidden one.
+
+lenin: this run was added to tests/lenin-tmp/leak.tsv; --stats reads it
+PASS the record says the run had a hidden test
+PASS and which answers were fitted to the visible one
+# Lenin's record: 1 runs of 1 tasks
+
+| model | answers | no answer | tested | passed | pass rate | runs won |
+|---|---|---|---|---|---|---|
+| big | 2 | 0 | 2 | 2 | 100% | 1 |
+| slim | 2 | 0 | 2 | 0 | 0% | 0 |
+
+| method | runs | a passing winner | won after cycle 1 | baseline beaten | baseline stands |
+|---|---|---|---|---|---|
+| chain | 1 | 1 | 0 | 0 | 0 |
+
+Refining: a later cycle won 0 of 1 runs with a passing winner (0%).
+Classic code: the best answer beat the baseline in 0 of 0 runs that had one (-).
+The tests' leak: 2 of 4 answers that passed a test the models saw failed the hidden one (50%).
+
+Under 20 measured runs: too few to conclude anything.
+
+PASS stats gives the tests' leak
 usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
-             [--method rounds|chain|enrich]
+             [--method rounds|chain|enrich|funnel]
              [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]
              [--window SECONDS] [--refine N] [--no-refine] [--holdout COMMAND]
              [--patience N] [--target SCORE] [--budget CALLS] [--direct]
@@ -435,6 +556,7 @@ Chosen: measured: the candidate that passes its test and is best by the criterio
 | 1 | slim | passed | 5 | 0 | - |
 
 Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 2 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
 
 lenin: this run was added to tests/lenin-tmp/history.tsv; --stats reads it
 PASS the record has both runs
@@ -466,6 +588,8 @@ PASS a field stays on one line
 PASS a cut keeps letters whole
 
 --- stderr ---
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down
 USSR: prompt: AI provider error: this model is down

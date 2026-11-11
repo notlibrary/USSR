@@ -11,8 +11,10 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
 ```
 
 It does the two operations that [research/README.md](../../research/README.md)
-defines, and that [research/refine_and_enrich.md](../../research/refine_and_enrich.md)
-sets out at length:
+defines and [research/refine_and_enrich.md](../../research/refine_and_enrich.md)
+sets out at length.
+[research/neuroslop_enrichment_and_refining.md](../../research/neuroslop_enrichment_and_refining.md)
+has the model behind Lenin's choices, the enrichment window among them:
 
 - **Refining** works on the prompt: it is made more precise until it says what
   you really want.
@@ -49,13 +51,13 @@ winner), 1 when nothing passes or nobody answered, and 2 for a bad command line.
 
 `--method` decides who sees what, and so how answers build on each other.
 
-| | `rounds` (default) | `chain` | `enrich` |
-|---|---|---|---|
-| Order, 2 models A and B, 2 cycles | A, B; A, B | A, B, A, B | A, B, A, B, ... |
-| What a model is shown | the best from the cycles **before** this one | the best so far, the model just before it included | the same as `chain` |
-| When it stops | after `--cycles` | after `--cycles` | when `--patience` cycles in a row find nothing better, or after `--cycles` |
-| When the best still fails | goes on | goes on | refines the prompt once more, then goes on |
-| Needs | nothing | nothing | `--test` or `--score` |
+| | `rounds` (default) | `chain` | `funnel` | `enrich` |
+|---|---|---|---|---|
+| Order, 2 models A and B, 2 cycles | A, B; A, B | A, B, A, B | A, B; then A, B | A, B, A, B, ... |
+| What a model is shown | the best from the cycles **before** this one | the best so far, the model just before it included | cycle 1: nothing, as `rounds`; after it: as `chain` | the same as `chain` |
+| When it stops | after `--cycles` | after `--cycles` | after `--cycles` | when `--patience` cycles in a row find nothing better, or after `--cycles` |
+| When the best still fails | goes on | goes on | goes on | refines the prompt once more, then goes on |
+| Needs | nothing | nothing | nothing | `--test` or `--score` |
 
 **`rounds`**: every model in a cycle gets the same prompt, so they work
 independently. You get as many different ideas as you have models, and the first
@@ -64,6 +66,12 @@ cycle spreads the widest.
 **`chain`**: one model after another. Each gets the current best, so each
 improves on the last. A chain builds on what works, but it can also settle on
 the first thing that passes, since everything after starts from there.
+
+**`funnel`**: wide first, then deep. In cycle 1 every model answers on its
+own, as in `rounds`, so you get the spread of ideas while nothing passes yet.
+From cycle 2 it is a `chain` that starts from the best of them. A chain from
+the first call spends several models on variations of whoever answered first;
+the funnel does not.
 
 **`enrich`**: the chain, run until it stops improving. `--cycles` is the most it
 does, not what it does. It stops after `--patience` cycles in a row (1 by
@@ -76,11 +84,13 @@ ussr src/lenin/lenin.su --models models.conf --method rounds --cycles 2 \
      --test "python test.py {file}" --ext .py "what you want"
 ussr src/lenin/lenin.su --models models.conf --method chain --cycles 2 \
      --test "python test.py {file}" --ext .py "what you want"
+ussr src/lenin/lenin.su --models models.conf --method funnel --cycles 3 \
+     --test "python test.py {file}" --ext .py "what you want"
 ussr src/lenin/lenin.su --models models.conf --method enrich --cycles 10 --patience 2 \
      --score "python suite.py {file}" --ext .py "what you want"
 ```
 
-`rounds` and `chain` cost the same: models times cycles. Which one does better
+`rounds`, `chain` and `funnel` cost the same: models times cycles. Which one does better
 is a question for your task, and [the record](#the-record) keeps the numbers by
 method. A model that fails to answer is passed over, and the next one gets the
 same best.
@@ -110,8 +120,10 @@ Every round after it:
 
 1. The first model writes a draft from the current prompt.
 2. Your test runs on the draft.
-3. The model is shown the request, the prompt, the draft and what its test said,
-   and lists what the draft shows the prompt leaves out.
+3. A model is shown the request, the prompt, the draft and what its test said,
+   and lists what the draft shows the prompt leaves out. With two or more
+   models this critic is the second one, not the draft's author: a model
+   favours what it wrote.
 4. The new sub-tasks go into the prompt.
 
 Refining stops when a round finds nothing new. A round costs two calls.
@@ -132,9 +144,10 @@ never asked for. It is told not to, but read `tasks.md`.
 
 ### Back to refining
 
-When `enrich` would stop and its best answer still fails, the first model gets
-the request, the prompt, and that best answer with what its test said, and lists
-what the prompt leaves out. New sub-tasks go into the prompt (`refine_cycleN.md`,
+When `enrich` would stop and its best answer still fails, a model other than
+that answer's author (the first one, if there is no other) gets the request,
+the prompt, and that best answer with what its test said, and lists what the
+prompt leaves out. New sub-tasks go into the prompt (`refine_cycleN.md`,
 and `tasks.md`) and the cycles go on. If nothing is new, it stops. This needs
 refining on, which is the default.
 
@@ -154,7 +167,8 @@ fail, and models that share a mistake vote for it together.
 
 So Lenin enriches only with `--test` or `--score`. Without them it falls back on
 a blind vote: each model is shown the answers under letters, not whose they are,
-and replies with one letter. The report then says nothing was shown to work.
+and replies with one letter. A vote for its own answer is not counted. The
+report then says nothing was shown to work.
 Treat a vote as a first look, not a result.
 
 ### A score: how much passes
@@ -192,7 +206,15 @@ ussr src/lenin/lenin.su --models models.conf --method enrich --cycles 10 \
 ```
 
 The report counts the answers that passed the visible test and failed the
-hidden one: how many were fitted to the test rather than the task. The hidden
+hidden one: how many were fitted to the test rather than the task. The record
+keeps them apart too, as "fitted", and `--stats` gives their share over all
+runs: the tests' leak.
+
+Without a hidden test, when two or more answers pass, the report says so: the
+winner is then the best by size or speed among answers a visible test let
+through, which is where an answer that only gets past the test wins. More
+candidates make that likelier, not less: see
+[the enrichment window](../../research/neuroslop_enrichment_and_refining.md#4-a-model-and-the-enrichment-window). The hidden
 test's output is in `*.log.holdout`, for you. Keep the hidden test itself out of
 the models' reach too: not in the prompt, not in a file they are given.
 
@@ -310,7 +332,11 @@ ussr src/lenin/lenin.su --stats
 
 Refining: a later cycle won 5 of 11 runs with a passing winner (45%).
 Classic code: the best answer beat the baseline in 1 of 6 runs that had one (16%).
+The tests' leak: 3 of 40 answers that passed a test the models saw failed the hidden one (7%).
 ```
+
+The last line comes only from runs with `--holdout`. A leak near zero means
+more cycles are safe; a large one means stop early or fix the test.
 
 "Runs won" counts only answers that passed a test. The numbers are as good as
 your tests, and under 20 measured runs Lenin says they are too few to conclude
@@ -351,7 +377,7 @@ In the output directory (`--dir`, `lenin-out` by default):
 | `--no-refine` | send the prompt as it is (`--refine 0`) | refines |
 | **Who answers, how** | | |
 | `--models FILE` | the centrifuge | required |
-| `--method rounds\|chain\|enrich` | when the best is passed on: after each cycle, after each model, or after each model until nothing better comes | `rounds` |
+| `--method rounds\|chain\|funnel\|enrich` | when the best is passed on: after each cycle; after each model; after cycle 1 and then each model; or after each model until nothing better comes | `rounds` |
 | `--cycles N` | generation cycles; for `enrich`, the most | 2 |
 | `--patience N` | `enrich` stops after N cycles in a row with nothing better | 1 |
 | **How answers are measured** | | |

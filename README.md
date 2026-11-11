@@ -195,7 +195,11 @@ ussr src/lenin/lenin.su --models models.conf --dir out --cycles 3 \
 ```
 
 It does the two operations of [neuroslop enrichment](research/README.md), set out
-at length in [research/refine_and_enrich.md](research/refine_and_enrich.md):
+at length in [research/refine_and_enrich.md](research/refine_and_enrich.md);
+[research/neuroslop_enrichment_and_refining.md](research/neuroslop_enrichment_and_refining.md)
+has a model of them and proves the enrichment window in it: past some number of
+candidates, a test that lets wrong answers through makes the winner worse, not
+better.
 
 - **Refining** works on the prompt. Prompt A, "make a text editor", and sub-task
   A, "it supports bold text", make prompt B, "make a text editor that supports
@@ -221,6 +225,7 @@ picked that way was shown to work.
 |---|---|---|
 | `rounds` (default) | the best from the cycles before this one: the models of a cycle work independently | after `--cycles` |
 | `chain` | the best so far, the model just before it included: each improves on the last | after `--cycles` |
+| `funnel` | cycle 1 as `rounds`, wide; after it as `chain`, deep, from the best of cycle 1 | after `--cycles` |
 | `enrich` | as `chain`, and it needs a test or a suite | when `--patience` cycles in a row bring nothing better; if the best still fails, it refines the prompt once more first |
 
 ```bash
