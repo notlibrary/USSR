@@ -73,6 +73,8 @@ static struct
     unsigned char packet[4];
     int packet_n;
     int packet_size;
+    int vmmouse;            /* QEMU's absolute pointer is on */
+    int abs_x, abs_y;       /* its last position, 0..0xffff */
     int dirty;
     GLFWvidmode mode;
 } glfw;
@@ -226,6 +228,69 @@ static void ps2_mouse_start(void)
     glfw.packet_n = 0;
 }
 
+/* --- QEMU's vmmouse: the pointer where the host's is
+ *
+ * A PS/2 mouse only says how far it moved, so a pointer that leaves
+ * QEMU's window and comes back elsewhere lands where it did not go. The
+ * vmmouse (VMware's backdoor port, which QEMU's PC has on its i8042)
+ * says where it is instead; QEMU then lets the host pointer go in and
+ * out of the window freely. Each of its packets also sends a PS/2 one
+ * (a one-pixel move) to wake a driver; those buttons are not believed
+ * then, but moves are (QEMU's monitor still moves the PS/2 mouse). */
+
+#define VMPORT_MAGIC 0x564d5868u
+#define VMPORT_PORT 0x5658
+#define VMMOUSE_GETVERSION 10
+#define VMMOUSE_DATA 39
+#define VMMOUSE_STATUS 40
+#define VMMOUSE_COMMAND 41
+#define VMMOUSE_READ_ID 0x45414552u
+#define VMMOUSE_DISABLE 0x000000f5u
+#define VMMOUSE_REQUEST_RELATIVE 0x4c455252u
+#define VMMOUSE_REQUEST_ABSOLUTE 0x53424152u
+#define VMMOUSE_VERSION_ID 0x3442554au
+#define VMMOUSE_RELATIVE_PACKET 0x00010000u
+
+/* a backdoor call: command, argument; eax ebx ecx edx back */
+static void vmport(uint32_t command, uint32_t arg, uint32_t out[4])
+{
+    uint32_t a = VMPORT_MAGIC, b = arg, c = command, d = VMPORT_PORT;
+    __asm__ volatile("inl %%dx, %%eax" : "+a"(a), "+b"(b), "+c"(c), "+d"(d) : : "memory");
+    out[0] = a;
+    out[1] = b;
+    out[2] = c;
+    out[3] = d;
+}
+
+static void vmmouse_start(void)
+{
+    uint32_t r[4];
+    glfw.vmmouse = 0;
+    vmport(VMMOUSE_GETVERSION, 0, r);
+    if (r[1] != VMPORT_MAGIC || r[0] == 0xffffffffu)
+        return;
+    vmport(VMMOUSE_COMMAND, VMMOUSE_READ_ID, r);
+    vmport(VMMOUSE_STATUS, 0, r);
+    if ((r[0] & 0xffff) == 0)
+        return;
+    vmport(VMMOUSE_DATA, 1, r);
+    if (r[0] != VMMOUSE_VERSION_ID)
+        return;
+    vmport(VMMOUSE_COMMAND, VMMOUSE_REQUEST_ABSOLUTE, r);
+    glfw.abs_x = glfw.abs_y = 0;    /* where QEMU starts it */
+    glfw.vmmouse = 1;
+}
+
+static void vmmouse_stop(void)
+{
+    uint32_t r[4];
+    if (!glfw.vmmouse)
+        return;
+    vmport(VMMOUSE_COMMAND, VMMOUSE_REQUEST_RELATIVE, r);
+    vmport(VMMOUSE_COMMAND, VMMOUSE_DISABLE, r);
+    glfw.vmmouse = 0;
+}
+
 /* --- starting and stopping */
 
 /* the picture: width x height at 32 bits; 0, or -1 without a Bochs VGA */
@@ -266,6 +331,7 @@ long gui_video_start(long width, long height)
     glfw.dirty = 1;
     moscow_gui(1);
     ps2_mouse_start();
+    vmmouse_start();
     return 0;
 }
 
@@ -274,6 +340,7 @@ long gui_video_stop(void)
 {
     if (!glfw.on)
         return 0;
+    vmmouse_stop();
     ps2_mouse(0xf5);
     dispi(4, 0);
     vga_text_mode();
@@ -446,9 +513,18 @@ static void glfw_focus(GLFWwindow *w)
         w->focus(w, 1);
 }
 
+/* a desktop: no frame, the whole screen */
+static int glfw_is_desktop(const GLFWwindow *w)
+{
+    return !w->decorated && w->x <= 0 && w->y <= 0 &&
+           w->width >= glfw.width && w->height >= glfw.height;
+}
+
+/* to the top and the focus; a desktop takes the focus but stays below
+ * the windows over it, which a click on it would otherwise bury */
 static void glfw_raise(GLFWwindow *w)
 {
-    if (glfw.top != w)
+    if (glfw.top != w && !glfw_is_desktop(w))
     {
         glfw_unlink(w);
         glfw_push_top(w);
@@ -911,6 +987,39 @@ static void glfw_button(int button, int down)
         w->mouse_button(w, button, GLFW_PRESS, glfw_mods());
 }
 
+/* the pointer to x, y (kept on the screen), a dragged window with it */
+static void glfw_move_to(int x, int y)
+{
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= glfw.width) x = glfw.width - 1;
+    if (y >= glfw.height) y = glfw.height - 1;
+    if (x == glfw.cursor_x && y == glfw.cursor_y)
+        return;
+    glfw.cursor_x = x;
+    glfw.cursor_y = y;
+    glfw.dirty = 1;
+    if (glfw.dragging != NULL)
+    {
+        glfw.dragging->x = glfw.cursor_x - glfw.drag_dx;
+        glfw.dragging->y = glfw.cursor_y - glfw.drag_dy;
+        if (glfw.dragging->y < GLFW_TITLE)
+            glfw.dragging->y = GLFW_TITLE;
+    }
+}
+
+/* the wheel: z < 0 up, to the window under the pointer */
+static void glfw_wheel(int z)
+{
+    int on_bar;
+    GLFWwindow *w;
+    if (z == 0)
+        return;
+    w = glfw_window_at(glfw.cursor_x, glfw.cursor_y, &on_bar);
+    if (w != NULL && !on_bar && w->scroll != NULL)
+        w->scroll(w, 0.0, z < 0 ? 1.0 : -1.0);
+}
+
 static void glfw_mouse_packet(void)
 {
     int b0 = glfw.packet[0];
@@ -918,38 +1027,60 @@ static void glfw_mouse_packet(void)
     int dy = glfw.packet[2] - ((b0 << 3) & 0x100);
 
     if ((b0 & 0xc0) == 0)
-    {
-        glfw.cursor_x += dx;
-        glfw.cursor_y -= dy;
-        if (glfw.cursor_x < 0) glfw.cursor_x = 0;
-        if (glfw.cursor_y < 0) glfw.cursor_y = 0;
-        if (glfw.cursor_x >= glfw.width) glfw.cursor_x = glfw.width - 1;
-        if (glfw.cursor_y >= glfw.height) glfw.cursor_y = glfw.height - 1;
-        if (dx != 0 || dy != 0)
-        {
-            glfw.dirty = 1;
-            if (glfw.dragging != NULL)
-            {
-                glfw.dragging->x = glfw.cursor_x - glfw.drag_dx;
-                glfw.dragging->y = glfw.cursor_y - glfw.drag_dy;
-                if (glfw.dragging->y < GLFW_TITLE)
-                    glfw.dragging->y = GLFW_TITLE;
-            }
-        }
-    }
+        glfw_move_to(glfw.cursor_x + dx, glfw.cursor_y - dy);
+    /* with the vmmouse on its buttons are the ones that count */
+    if (glfw.vmmouse)
+        return;
     glfw_button(0, b0 & 1);
     glfw_button(1, (b0 >> 1) & 1);
     glfw_button(2, (b0 >> 2) & 1);
     if (glfw.packet_size == 4)
     {
         int z = glfw.packet[3] & 15;
-        int on_bar;
-        GLFWwindow *w;
-        if (z >= 8)
-            z -= 16;
-        w = glfw_window_at(glfw.cursor_x, glfw.cursor_y, &on_bar);
-        if (z != 0 && w != NULL && !on_bar && w->scroll != NULL)
-            w->scroll(w, 0.0, z < 0 ? 1.0 : -1.0);
+        glfw_wheel(z >= 8 ? z - 16 : z);
+    }
+}
+
+/* what the vmmouse has queued */
+static void vmmouse_input(void)
+{
+    uint32_t r[4];
+    int queued, packets;
+
+    if (!glfw.vmmouse)
+        return;
+    vmport(VMMOUSE_STATUS, 0, r);
+    if ((r[0] & 0xffff0000u) == 0xffff0000u)
+    {
+        /* it gave up (a bad read): again from the start */
+        vmmouse_start();
+        return;
+    }
+    queued = (int)(r[0] & 0xffff);
+    for (packets = 0; queued >= 4 && packets < 64; ++packets, queued -= 4)
+    {
+        uint32_t flags;
+        int x, y;
+        vmport(VMMOUSE_DATA, 4, r);
+        flags = r[0];
+        if (flags & VMMOUSE_RELATIVE_PACKET)
+            glfw_move_to(glfw.cursor_x + (int32_t)r[1], glfw.cursor_y + (int32_t)r[2]);
+        else
+        {
+            x = (int)(r[1] & 0xffff);
+            y = (int)(r[2] & 0xffff);
+            /* a packet for the buttons alone repeats the last place:
+             * a PS/2 move since (QEMU's monitor) stays */
+            if (x != glfw.abs_x || y != glfw.abs_y)
+                glfw_move_to((int)((long)x * glfw.width / 0x10000),
+                             (int)((long)y * glfw.height / 0x10000));
+            glfw.abs_x = x;
+            glfw.abs_y = y;
+        }
+        glfw_button(0, (flags & 0x20) != 0);
+        glfw_button(1, (flags & 0x10) != 0);
+        glfw_button(2, (flags & 0x08) != 0);
+        glfw_wheel((int)(int8_t)(r[3] & 0xff));
     }
 }
 
@@ -978,6 +1109,7 @@ static void glfw_input(void)
         else
             glfw_scancode(byte);
     }
+    vmmouse_input();
 }
 
 void glfwPollEvents(void)
