@@ -16,6 +16,8 @@ Also AI is not a bubble many-cored GPU-like easy paralleled chips with high
 bandwidth 2048 bit memory bus inside the data centers scattered around the world
 tons of them they do floating point matrix multiplications for the endless
 layers of the neural net this is all investment in neuroslop enrichment is about 
+Also looks like the whole system is scalable forward I saw articles on learning
+quadrillion parameters transformers(planet has 20 quadrillion of ants)
 
 With this my accidental role as investment
 consultant mitm is over It's all like aerospace industry there is nobody fool
