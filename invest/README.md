@@ -9,6 +9,7 @@ It's risky cost shittons(pay as you go for multiple models multiple times) of mo
 It brings highly enriched neuroslopware directly into your hands 
 No party in the world has enough of it 
 Chinese Americans Russians all of them need it
+If you are an altruist give it to the nearest bum egomaniac? take it to the grave
 That's all I know 
 Have a nice day and good luck
 
