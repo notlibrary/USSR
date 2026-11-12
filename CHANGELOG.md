@@ -68,6 +68,14 @@
   disk gains Mozilla's root certificates in `/etc/ssl/certs.pem`.
 
 ### Fixed
+- Kremlin's pointer drifted from the host's after it left QEMU's window and
+  came back: the PS/2 mouse only says how far it moved. The GUI now takes
+  QEMU's vmmouse, which says where the pointer is, and keeps the PS/2 mouse
+  where there is none.
+- A click on Kremlin's desktop raised it over every window, so Mbltishi was
+  hidden and the keys typed for it went to Kremlin. The desktop now takes the
+  focus but stays at the bottom; a click in a window gives that window the keys
+  back.
 - Linux programs on Moscow got nothing when they read a file with a zero byte
   in it, and `fstat` gave a different inode from `stat`.
 - Moscow kept a program run's sockets and TLS credentials after it ended: the

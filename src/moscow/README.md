@@ -308,9 +308,14 @@ what it takes from a hosted system there:
 - `lib/gui/glfw.c`: GLFW on the machine: the Bochs/QEMU standard VGA's
   linear framebuffer at 32 bits (its picture starts 256 KiB into video
   memory, so text mode comes back intact), the PS/2 keyboard as GLFW
-  key codes and the PS/2 mouse (a wheel one when it answers as one),
-  windows composed bottom to top with title bars in Pobeda, dragged by
-  them and closed by their box;
+  key codes and the mouse: QEMU's vmmouse (VMware's backdoor port
+  0x5658) when there is one, which gives the pointer's place, so it
+  follows the host's pointer in and out of QEMU's window without a grab;
+  else the PS/2 mouse (a wheel one when it answers as one), which gives
+  only moves. Windows are composed bottom to top with title bars in
+  Pobeda, dragged by them and closed by their box; a desktop (a window
+  without a frame over the whole screen, as Kremlin's) stays at the
+  bottom when clicked;
 - `lib/gui/term.c`: Mbltishi's terminal, a grid of Pobeda glyphs that
   carries out the console's ANSI sequences;
 - `lib/gui/moscow.c`: what `gui.su` calls.

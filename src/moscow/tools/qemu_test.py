@@ -1300,6 +1300,29 @@ def gui(qemu, disk, work, port, log, check):
               "USSR Unified Shell Script REPL" in said, said)
         wait_for("Mbltishi's window is over the desktop",
                  lambda s: dark(pixel(s, 500, 330)) and not dark(pixel(s, 1000, 20)), 120)
+        # the vmmouse: the pointer where the host's is, in and out of
+        # QEMU's window
+        mice = m.monitor_command("info mice")
+        check("the GUI takes QEMU's absolute pointer, the vmmouse",
+              re.search(r"\* Mouse #\d+: vmmouse \(absolute\)", mice) is not None, mice)
+        # a click on the desktop takes the keys but leaves the window over
+        # it; a click in the window gives them back
+        click(578, -53)
+        time.sleep(3)
+        wait_for("a click on the desktop leaves Mbltishi over it",
+                 lambda s: dark(pixel(s, 500, 330)), 60)
+        click(-200, -370)
+        time.sleep(2)
+        m.keys('ls(_): "/bin"\n')
+        said = clean(serial.read_until(b"ussr\r\n", timeout=120))
+        check("a click in Mbltishi gives it the keys: ls lists /bin", "moscow_native" in said
+              or "belarus.ru" in said, said)
+        # back over the Terminal pin, where the Files pin's move starts
+        for _ in range(6):
+            m.monitor_command("mouse_move -63 70")
+            time.sleep(0.3)
+        m.monitor_command("mouse_move 0 3")
+        time.sleep(1.0)
         m.keys('print(_): "hello world"\n')
         said = clean(serial.read_until(b"\r\nhello world\r\n", timeout=120))
         check("the shell in Mbltishi runs what is typed in its window", "hello world" in said, said)
