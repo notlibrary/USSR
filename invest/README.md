@@ -12,5 +12,8 @@ Chinese Americans Russians all of them need it
 That's all I know 
 Have a nice day and good luck
 
-Also AI is not a bubble many cored easy paralleled chips with high bandwidth 2048 bit memory bus inside a data center
-tons of them this is all investment in neuroslop enrichment is about 
+Also AI is not a bubble many cored easy paralleled chips with high bandwidth
+2048 bit memory bus inside a data center tons of them this is all investment in
+neuroslop enrichment is about With this my accidental role as investment
+consultant mitm is over It's all like aerospace industry there is nobody fool
+inside not a single I return to the lenin development
