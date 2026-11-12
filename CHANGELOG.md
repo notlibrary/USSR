@@ -72,6 +72,11 @@
   came back: the PS/2 mouse only says how far it moved. The GUI now takes
   QEMU's vmmouse, which says where the pointer is, and keeps the PS/2 mouse
   where there is none.
+- Nothing typed in QEMU's window reached Kremlin or Mbltishi when Kremlin was
+  started from the keyboard: the GUI read the PS/2 controller's command byte
+  without emptying it first, took the release of that Enter for it, and wrote
+  it back with the keyboard's clock off. It now empties the controller first
+  and turns the keyboard on (with set 1 translation) whatever it read.
 - A click on Kremlin's desktop raised it over every window, so Mbltishi was
   hidden and the keys typed for it went to Kremlin. The desktop now takes the
   focus but stays at the bottom; a click in a window gives that window the keys

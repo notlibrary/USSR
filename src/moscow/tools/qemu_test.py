@@ -1287,7 +1287,9 @@ def gui(qemu, disk, work, port, log, check):
         boot = clean(serial.output_to_prompt(timeout=60))
         check("the kernel loads Petersburg",
               "gui:     Petersburg from /lib/gui.so, 1024x768" in boot, boot)
-        serial.sock.sendall(b'run(_): "kremlin"\r')
+        # typed on the keyboard, as a person starts it: the release of its
+        # Enter is still in the PS/2 controller when the GUI takes it over
+        m.keys('run(_): "kremlin"\n')
         # the panel's KREMLIN button, red, at the bottom left
         if not wait_for("Kremlin's desktop fills the 1024x768 screen",
                         lambda s: s[0] == 1024 and s[1] == 768 and pixel(s, 80, 745) == (179, 38, 30)):
