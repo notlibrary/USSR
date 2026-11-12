@@ -185,6 +185,15 @@ static int ps2_read(void)
     return -1;
 }
 
+/* whatever the controller holds - the release of the Enter that started
+ * the GUI, say - away, so the next byte read is an answer */
+static void ps2_flush(void)
+{
+    int spin;
+    for (spin = 0; spin < 64 && (port_in8(0x64) & 1); ++spin)
+        (void)port_in8(0x60);
+}
+
 /* a byte to the mouse; its answer */
 static int ps2_mouse(int byte)
 {
@@ -205,11 +214,15 @@ static void ps2_mouse_start(void)
     ps2_wait_write();
     port_out8(0x64, 0xa8);              /* the second port on */
     ps2_wait_write();
+    ps2_flush();
     port_out8(0x64, 0x20);
     config = ps2_read();
     if (config >= 0)
     {
-        config &= ~0x22;                /* its clock on, no interrupt: polled */
+        /* the mouse's clock on and no interrupt from it (polled); the
+         * keyboard's clock on and scan codes translated to set 1, should
+         * a key have come in place of the answer */
+        config = (config & ~0x32) | 0x40;
         ps2_wait_write();
         port_out8(0x64, 0x60);
         ps2_wait_write();
