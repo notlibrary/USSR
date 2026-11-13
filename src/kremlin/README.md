@@ -37,7 +37,9 @@ remembers it in the settings.
   refreshes, F1 lists the keys, Ctrl+Q exits. F10 or the Windows key opens
   the KREMLIN menu, the Menu key (or Shift+F10) the actions for the
   selection. Typing letters jumps to a name; in menus a letter jumps to an
-  item.
+  item. In Moscow, Alt+Tab switches between the windows of the programs
+  started (and the desktop): hold Alt, press Tab until the one wanted is
+  marked, let go.
 - **Dialogs** take typed text (Backspace, Ctrl+Backspace or Ctrl+U clears),
   Enter for OK and Escape to cancel. A refused name keeps the dialog open
   and says why.

@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Alt+Tab in Moscow's GUI: held Alt and Tab go through the windows of every
+  program (and Kremlin's desktop) in a list of their titles; letting Alt go
+  brings the one chosen to the top with the keys.
 - `research/neuroslop_enrichment_and_refining.md`: the two operations, a model of
   them and a proof of the enrichment window in it (`research/window.py` has the
   numbers). From it, Lenin gets `--method funnel` (wide, then deep), a critic
@@ -68,6 +71,14 @@
   disk gains Mozilla's root certificates in `/etc/ssl/certs.pem`.
 
 ### Fixed
+- Klin opened in Moscow and was gone at once: since `.su` programs run
+  compiled on the NASM runtime, Petersburg's `run(_):` there only returned,
+  `init` ended and its window with it. A program that calls it now runs
+  through russia.ru, which delivers its events (`k_ru_check` counts
+  `petersburg_run` as russia.ru's).
+- With two Petersburg programs open in Moscow, each one's taking of its events
+  threw the other's away: with Klin open, Kremlin's panel stopped answering
+  clicks. A program now takes only its own; the others' wait for them.
 - Kremlin's pointer drifted from the host's after it left QEMU's window and
   came back: the PS/2 mouse only says how far it moved. The GUI now takes
   QEMU's vmmouse, which says where the pointer is, and keeps the PS/2 mouse

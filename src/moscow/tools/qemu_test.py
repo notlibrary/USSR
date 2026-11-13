@@ -1248,8 +1248,9 @@ def ural(qemu, disk, port, log, check):
 
 def gui(qemu, disk, work, port, log, check):
     """Windows on the framebuffer: Kremlin, the desktop; Mbltishi, the
-    terminal, started from its panel, with the shell in it; Tver, the
-    file manager, over the Belarus root; then text mode again. The mouse
+    terminal, started from its panel, with the shell in it; Klin, the
+    calculator, and Alt+Tab; Tver, the file manager, over the Belarus
+    root next to it; then text mode again. The mouse
     starts in the middle of the screen and QEMU moves it by pixels."""
     m = Machine(qemu, [(disk, "raw")], port, log, monitor=port + 1)
     serial = m.serial
@@ -1337,14 +1338,39 @@ def gui(qemu, disk, work, port, log, check):
         m.monitor_command("sendkey ctrl-d")
         wait_for("Mbltishi closes with the shell",
                  lambda s: pixel(s, 500, 330) != (0, 0, 0) and pixel(s, 80, 745) == (179, 38, 30), 300)
-        # the Files pin: Tver on the root
-        click(78, 0)
-        wait_for("Kremlin's Files starts Tver over the Belarus root",
+        # the Calculator pin: Klin, a Petersburg program with callbacks,
+        # which russia.ru runs (on the NASM runtime its run(_): would only
+        # return, and the window go with init)
+        klin_casual = (219, 140, 41)
+        focused_bar, idle_bar = (42, 79, 134), (58, 63, 74)
+        click(156, 0)
+        if wait_for("Kremlin's Calculator starts Klin",
+                    lambda s: pixel(s, 400, 180) == klin_casual
+                    and pixel(s, 500, 130) == focused_bar, 600):
+            time.sleep(20)
+            wait_for("Klin's window stays", lambda s: pixel(s, 400, 180) == klin_casual, 10)
+            # Alt+Tab: the desktop, then Klin again
+            m.monitor_command("sendkey alt-tab")
+            wait_for("Alt+Tab gives the desktop the keys, Klin still over it",
+                     lambda s: pixel(s, 500, 130) == idle_bar
+                     and pixel(s, 400, 180) == klin_casual, 60)
+            m.monitor_command("sendkey alt-tab")
+            wait_for("Alt+Tab again brings Klin back",
+                     lambda s: pixel(s, 500, 130) == focused_bar, 60)
+        # the Files pin, Klin still asking for its events all the while:
+        # Kremlin gets its click all the same. Tver on the root
+        click(-78, 0)
+        wait_for("Kremlin's Files starts Tver over the Belarus root, next to Klin",
                  lambda s: pixel(s, 300, 400) == (18, 20, 28) and pixel(s, 700, 400) == (18, 20, 28), 600)
         # its close box
         click(748, -680)
         wait_for("Tver closes with its window's box",
-                 lambda s: pixel(s, 300, 400) != (18, 20, 28), 300)
+                 lambda s: pixel(s, 300, 400) != (18, 20, 28)
+                 and pixel(s, 400, 180) == klin_casual, 300)
+        # Klin's
+        click(-269, 61)
+        wait_for("Klin closes with its window's box",
+                 lambda s: pixel(s, 400, 180) != klin_casual, 300)
         # Ctrl+Q, then Enter in the dialog: the shell, in text mode
         # (the prompts of the shell that ran in Mbltishi are not this one)
         serial.buf = b""
