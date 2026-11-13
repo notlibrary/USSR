@@ -486,7 +486,7 @@ static int oop_do_at(
 {
     ussr_value_t vec_v, index_v;
     ussr_vector_t *vector;
-    ussr_int_t index;
+    ussr_int_t index = 0;
 
     if (argument_count != 2)
     {

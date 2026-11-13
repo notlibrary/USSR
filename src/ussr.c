@@ -3381,7 +3381,6 @@ static int ussr_execute_scan(
     const char *spec = NULL;
     const char *p;
     const char *q;
-    const char *type;
     const char *field;
     const char *next;
     char line[4096];
@@ -4442,7 +4441,7 @@ int ussr_execute_command(
         if (ussr_execute_scan(
                 arguments[0].data.value.data.string,
                 (ussr_command_t *)(&(ussr_command_t){
-                    .name = command,
+                    .name = (char *)command,
                     .return_name = (char *)return_name,
                     .arguments = arguments,
                     .argument_count = argument_count,

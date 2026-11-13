@@ -1,8 +1,8 @@
 CC      = gcc
 CFLAGS  = -std=c11 -O2 -flto=auto -Wall -Wextra -Wpedantic
 # DEBUG=1: no optimisation or LTO, with debug symbols; quick to compile
-# (CI's pull request build). Objects share names with the release
-# build, so run "make -f ussr-ubuntu.mk clean" when switching.
+# (CI's pull request build). Switching between it and the release build
+# rebuilds every object (see BUILD_STAMP below).
 ifneq ($(DEBUG),)
 CFLAGS  = -std=c11 -O0 -g -Wall -Wextra -Wpedantic
 endif
@@ -83,9 +83,22 @@ OBJS += $(SRC_DIR)/completion_fs_posix.o $(SRC_DIR)/socket_posix.o $(SRC_DIR)/pr
 LDLIBS += -ldl
 endif
 
+# Objects record the compiler and flags they were built with. Whenever
+# those change (another gcc, DEBUG=1, GLFW or OpenSSL appearing), the
+# stamp is rewritten and every object is rebuilt, so objects from two
+# compilers are never linked together (an old non-PIE bestline.o once
+# broke the PIE link this way).
+BUILD_STAMP = $(SRC_DIR)/.build-flags
+BUILD_ID := $(strip $(CC) | $(shell $(CC) --version 2>/dev/null) | $(CFLAGS) | $(LDFLAGS) | $(LDLIBS))
+ifneq ($(strip $(file <$(BUILD_STAMP))),$(BUILD_ID))
+$(file >$(BUILD_STAMP),$(BUILD_ID))
+endif
+
 all: $(TARGET)
 
-$(TARGET): $(OBJS)
+$(OBJS): $(BUILD_STAMP)
+
+$(TARGET): $(OBJS) $(BUILD_STAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) -lm $(LDLIBS)
 
 # One bison run writes both files; a two-target rule would run it twice
@@ -201,7 +214,7 @@ $(SRC_DIR)/prng64_xrp32.o: $(SRC_DIR)/prng64_xrp32.c $(SRC_DIR)/prng64_xrp32.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(TARGET) $(SRC_DIR)/*.o $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h $(SRC_DIR)/lex.yy.c $(TARGET).tar.gz ussr-linux-bin-$(VERSION).tar.gz
+	rm -f $(TARGET) $(SRC_DIR)/*.o $(SRC_DIR)/win/*.o $(BUILD_STAMP) $(SRC_DIR)/parser.tab.c $(SRC_DIR)/parser.tab.h $(SRC_DIR)/lex.yy.c $(TARGET).tar.gz ussr-linux-bin-$(VERSION).tar.gz
 
 install: $(TARGET)
 	mkdir -p $(DESTDIR)$(PREFIX)/bin

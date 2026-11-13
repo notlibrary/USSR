@@ -1112,11 +1112,10 @@ static int ru_parse(ru_reader_t *r, ussr_bc_program_t *p,
     {
         unsigned opcode, a, b, c;
         uint32_t immediate;
-        ru_get_u8(r, &opcode);
-        ru_get_u8(r, &a);
-        ru_get_u8(r, &b);
-        ru_get_u8(r, &c);
-        ru_get_u32(r, &immediate);
+        if (ru_get_u8(r, &opcode) != 0 || ru_get_u8(r, &a) != 0 ||
+            ru_get_u8(r, &b) != 0 || ru_get_u8(r, &c) != 0 ||
+            ru_get_u32(r, &immediate) != 0)
+            return -1;
         if (!ru_known_opcode(opcode))
             return ru_fail(r, "unknown opcode");
         p->code[i].opcode = (uint8_t)opcode;

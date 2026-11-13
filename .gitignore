@@ -99,3 +99,4 @@ autom4te.cache/
 kvr_tmp.db
 tests/gui/*_tmp.*
 .vibe_probe.tmp
+/src/.build-flags
