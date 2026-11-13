@@ -2,7 +2,7 @@
 # has (src/ryazan.c), which Ryazan, Ukraine and Novgorod are written on,
 # here over the kernel's own TCP (net.su). The cryptography and the TLS
 # state machine are BearSSL's, in /lib/tls.so (src/moscow/lib/tls.c and
-# BearSSL, built by build.sh), called with c_call; this file moves the
+# BearSSL, built by moscow.mk), called with c_call; this file moves the
 # bytes: the engine's records go out on the connection, what comes in
 # goes into the engine, and the program's data goes in and out on the
 # other side.

@@ -20,7 +20,7 @@
 # program's memory and keeps nothing between calls but the root's device
 # and first sector: it mounts the file system each time.
 #
-#     sh src/moscow/build.sh          # builds moscow.img and ussr.img
+#     make -f moscow.mk               # builds moscow.img, ussr.img and ussr.iso
 #     sh src/moscow/run.sh            # boots ussr.img in QEMU
 #
 # The k_* commands are the runtime's kernel services; src/moscow/README.md

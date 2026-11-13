@@ -172,7 +172,7 @@ EXTRA_DIST = \
 	moscow/arch/amd64/layout.inc \
 	moscow/arch/amd64/sha256.inc \
 	moscow/arch/amd64/ussr_rt.nasm \
-	moscow/build.sh \
+	moscow/tools/boot_info.sh \
 	moscow/install.su \
 	moscow/moscow.su \
 	moscow/run.sh \

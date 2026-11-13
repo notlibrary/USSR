@@ -25,12 +25,23 @@ the boot files, `/etc` and the whole USSR project.
 
 ## Build and run
 
-Needs NASM, QEMU and a built `ussr` (it compiles the `.su` files and
-makes the disk with Stalin and Belarus):
+Needs GNU make, NASM, QEMU and a built `ussr` (it compiles the `.su` files
+and makes the disk with Stalin and Belarus); on Windows, make runs in WSL:
 
-    sh src/moscow/build.sh                  # -> build/moscow/ussr.img (and moscow.img)
+    make -f ussr-ubuntu.mk ussr             # the host's ussr
+    make -f moscow.mk -j8                   # -> build/moscow/ussr.img, moscow.img, ussr.iso
     sh src/moscow/run.sh                    # window + serial on the terminal
     python src/moscow/tools/qemu_test.py    # headless test over serial, install included
+
+`moscow.mk` (at the root) builds only what changed since the last run, but
+the disk and the ISO, which take the project's files every time. Each piece
+says what it needs: clang and ld.lld for the C libraries in `/lib`; Linux
+with gcc, flex, bison, perl and curl for the Linux programs in `/bin`;
+xorriso for the ISO. Without one the disk is made without that piece (what
+an earlier build left goes on it) and a line says so; `STRICT=1`, as a
+release builds, makes that an error. `make -f moscow.mk boot` makes the boot
+image alone, `img` the disk, `iso` the ISO, `clean` all but what was fetched
+and built from it.
 
 `ussr.img` is a raw disk image; `dd` it to a USB stick to boot a real
 PC with a BIOS (or CSM) whose disk answers on the legacy ATA ports (IDE,
@@ -42,7 +53,7 @@ installer, though, writes only to virtual disks.
 `build/moscow/ussr.iso` holds the same files as the install disk's Belarus root,
 in ISO 9660 with Joliet and Rock Ridge, so Windows, Linux and the rest read them
 under their long names. A release ships it as `USSR049.ISO` for the tag 0.4.9, next to
-`USSR049.img`. `build.sh` makes it when `xorriso` is there, and
+`USSR049.img`. `moscow.mk` makes it when `xorriso` is there, and
 `tools/iso_test.py` reads its Joliet tree back with no ISO library and compares
 every file.
 
@@ -258,7 +269,7 @@ needs a rule (the install disk opens ping, 8080 and 8443).
 The `tls_*` commands Ryazan is written on are the kernel's too
 (`src/moscow/tls.su`), so Ryazan, Ukraine's `uk_server_tls` and
 Novgorod's HTTPS run unchanged. The cryptography is
-[BearSSL](https://bearssl.org)'s: `build.sh` fetches BearSSL 0.6 (its
+[BearSSL](https://bearssl.org)'s: `moscow.mk` fetches BearSSL 0.6 (its
 SHA-256 checked), compiles it freestanding with the glue
 `src/moscow/lib/tls.c` into `/lib/tls.so`, and the kernel loads it at
 boot through its ELF loader (`c_load`'s, `arch/amd64/cffi.inc`):
@@ -430,13 +441,13 @@ of `/bin/ussr` before each start of a `.su`; a `.ru` written once with
     russia> run(st): "ural" "install" "ukraine"
 
 Moscow runs static PIE x86-64 ELF programs built for Linux, unchanged, in
-ring 3 (`arch/amd64/native.inc`). `build.sh` builds two against musl for
+ring 3 (`arch/amd64/native.inc`). `moscow.mk` builds two against musl for
 `/bin`: `ussr`, the same C as on a host with its script runner, its `-c` and
 its REPL, and Ryazan's TLS over OpenSSL (`tls_*`, and `https://` for
 `prompt`), without the GUI (no GLFW in it); and `ural`, the package manager,
 with SQLite, curl, OpenSSL and zlib linked in, 8 MiB. Both link the OpenSSL
-3.5.9 `build.sh` builds. Their
-sources are pinned by SHA-256 in `build.sh`. `/etc/ssl/certs.pem` holds
+3.5.9 `moscow.mk` builds. Their
+sources are pinned by SHA-256 in `moscow.mk`. `/etc/ssl/certs.pem` holds
 Mozilla's root certificates (curl.se's extract), and programs get its path as
 `SSL_CERT_FILE`. Ural's state is in `/home/.ussr`, as on a host.
 

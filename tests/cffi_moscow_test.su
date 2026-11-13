@@ -1,5 +1,5 @@
 # The C interface in Moscow: /lib/ctest.so (src/moscow/lib/ctest.c, built
-# freestanding by src/moscow/build.sh) loaded by the runtime's ELF loader
+# freestanding by moscow.mk) loaded by the runtime's ELF loader
 # and called. qemu_test.py runs it in Moscow:
 #   run(st): "/src/ussr/tests/cffi_moscow_test.su"
 check(r): label got want [

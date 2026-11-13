@@ -1,6 +1,6 @@
 /*
  * moscow_native.c - a Linux program for Moscow's system calls, built static
- * PIE against musl (src/moscow/build.sh puts it in /bin/moscow_native), for
+ * PIE against musl (moscow.mk puts it in /bin/moscow_native), for
  * qemu_test.py: moscow_native [what]. Without what it goes through memory,
  * time, files and directories and ends with status 11; with "read" it also
  * reads the console, "busy" never ends, "bad" writes the kernel's memory and
