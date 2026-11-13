@@ -207,7 +207,7 @@ gui_hand(r): path [
 gui_native(r): name a [
     set(r): null
     if(_): {gui_lib = null} [
-        concat(m): "USSR: " name " needs /lib/gui.so (sh src/moscow/build.sh with clang)\n"
+        concat(m): "USSR: " name " needs /lib/gui.so (make -f moscow.mk with clang)\n"
         write_stderr(_): m
         return(r): r
     ]

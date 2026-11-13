@@ -759,7 +759,7 @@ In Moscow, `c_load` takes an ELF shared object built freestanding
 (`clang --target=x86_64-unknown-elf -ffreestanding -fno-builtin -fPIC
 -mno-red-zone`, linked with `ld.lld -shared --hash-style=sysv`); its
 imports come from the few C functions the kernel gives (`memcpy`,
-`memmove`, `memset`, `memcmp`, `strlen`), and `src/moscow/build.sh`
+`memmove`, `memset`, `memcmp`, `strlen`), and `moscow.mk`
 builds `src/moscow/lib/*.c` into `/lib`.
 
 ---

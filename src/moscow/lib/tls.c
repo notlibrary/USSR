@@ -1,6 +1,6 @@
 /*
  * tls.c - TLS for Moscow: BearSSL (https://bearssl.org, built by
- * src/moscow/build.sh into the same /lib/tls.so) behind a few functions
+ * moscow.mk into the same /lib/tls.so) behind a few functions
  * USSR calls with c_call. BearSSL does the cryptography and the TLS state
  * machine only; the bytes travel through the kernel's TCP in USSR
  * (src/moscow/tls.su): records come out of the engine (tls_sendrec) to

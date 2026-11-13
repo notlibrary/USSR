@@ -1,6 +1,6 @@
 /*
  * ctest.c - a small C library for the C interface's tests: built
- * freestanding into an ELF shared object for Moscow (build.sh puts it in
+ * freestanding into an ELF shared object for Moscow (moscow.mk puts it in
  * /lib/ctest.so), it exercises what the loader does: arguments in
  * registers and on the stack, imports from Moscow's C runtime (strlen,
  * memset), pointers in its data that need relocating, a constructor.

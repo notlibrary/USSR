@@ -8,7 +8,7 @@
 # QEMU's user network; --web PORT forwards 127.0.0.1:PORT here to the
 # same port in Moscow, for a server such as Novgorod.
 #
-#     sh src/moscow/build.sh && sh src/moscow/run.sh [disk.img] [--hdb FILE] [--web PORT] [qemu options]
+#     make -f moscow.mk && sh src/moscow/run.sh [disk.img] [--hdb FILE] [--web PORT] [qemu options]
 #     qemu-img create -f qcow2 hdd.qcow2 128M && sh src/moscow/run.sh --hdb hdd.qcow2
 #
 # Ctrl-D ends the shell, then the kernel halts and QEMU quits (isa-debug-exit).

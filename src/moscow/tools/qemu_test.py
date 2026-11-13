@@ -416,7 +416,7 @@ def main():
     ACCEL = args.accel
     sys.stdout.reconfigure(errors="backslashreplace")
     if not os.path.exists(IMAGE):
-        print("no %s: run sh src/moscow/build.sh first" % IMAGE)
+        print("no %s: run make -f moscow.mk first" % IMAGE)
         return 2
     qemu = find_qemu(args.qemu)
     log = []
@@ -974,7 +974,7 @@ def native(qemu, disk, port, log, check):
         got = say("print(_): rt")
         check("a program that is not there has none, 0", got == "0", got)
         if not has_ussr:
-            print("SKIP no /bin/ussr: built on a Linux host (build.sh)")
+            print("SKIP no /bin/ussr: built on a Linux host (moscow.mk)")
             return
         before = free_kib(say("mem(_):"))
         shell_before = shell_kib(say("tasks(_):"))
@@ -1188,7 +1188,7 @@ def ural(qemu, disk, port, log, check):
         serial.output_to_prompt(timeout=60)
         say('file_exists(f): "/bin/ural"')
         if say("print(_): f") != "true":
-            print("SKIP no /bin/ural: built on a Linux host (build.sh)")
+            print("SKIP no /bin/ural: built on a Linux host (moscow.mk)")
             return
         got = say('run(st): "ural" "init"') + "\n" + say("print(_): st")
         check("ural starts and makes its SQLite database", got.endswith("0"), got)
@@ -1317,9 +1317,9 @@ def gui(qemu, disk, work, port, log, check):
         click(-200, -370)
         time.sleep(2)
         m.keys('ls(_): "/bin"\n')
-        said = clean(serial.read_until(b"ussr\r\n", timeout=120))
-        check("a click in Mbltishi gives it the keys: ls lists /bin", "moscow_native" in said
-              or "belarus.ru" in said, said)
+        # (stalin.ru: on every disk, the Linux programs or not)
+        said = clean(serial.read_until(b"stalin.ru\r\n", timeout=120))
+        check("a click in Mbltishi gives it the keys: ls lists /bin", "belarus.ru" in said, said)
         # back over the Terminal pin, where the Files pin's move starts
         for _ in range(6):
             m.monitor_command("mouse_move -63 70")
@@ -1461,7 +1461,7 @@ def cd_boot(qemu, work, port, log, check):
     in it, what it writes stays in memory until the next boot, and it installs onto
     an empty disk that then boots without the CD."""
     if not os.path.exists(ISO):
-        print("SKIP no %s: build.sh makes it when xorriso is there" % ISO)
+        print("SKIP no %s: moscow.mk makes it when xorriso is there" % ISO)
         return 0
     target = os.path.join(work, "cd_target.qcow2")
     r = subprocess.run([find_qemu_img(qemu), "create", "-f", "qcow2", target, "96M"],

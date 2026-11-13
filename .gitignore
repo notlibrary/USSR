@@ -66,7 +66,7 @@ tests/*_tmp.txt
 ps_output.txt
 .Mbl_probe.tmp
 
-# Moscow boot images (sh src/moscow/build.sh)
+# Moscow boot images (make -f moscow.mk)
 /build/moscow/
 
 # Autotools output (autoreconf; configure.ac and the Makefile.am files are the source)

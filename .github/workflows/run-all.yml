@@ -136,13 +136,7 @@ jobs:
 
       - name: Build the install disk
         run: |
-          sh src/moscow/build.sh ./ussr
-          for lib in ctest gui tls; do
-            test -f "build/moscow/lib/$lib.so" || { echo "no /lib/$lib.so on the disk" >&2; exit 1; }
-          done
-          for prog in ussr ural; do
-            test -f "build/moscow/native/$prog" || { echo "no /bin/$prog on the disk" >&2; exit 1; }
-          done
+          make -f moscow.mk -j"$(nproc)" USSR=./ussr STRICT=1
 
       - name: Read the ISO's Joliet tree and boot record
         run: python3 src/moscow/tools/iso_test.py build/moscow/ussr.iso build/moscow/iso

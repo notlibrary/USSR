@@ -70,7 +70,27 @@
   (`/etc/hosts`, `/etc/resolv.conf`), `poll`, pipes, `pread` and `pwrite`; the
   disk gains Mozilla's root certificates in `/etc/ssl/certs.pem`.
 
+### Changed
+- The Moscow disks are built by `moscow.mk` at the root (`make -f moscow.mk`),
+  which replaces `src/moscow/build.sh`: what was fetched and built from it
+  stays, and a second make redoes only what changed (the disk and the ISO are
+  made again each time). A piece that cannot be built is left off with a note,
+  as before; `STRICT=1`, which the release and Run All workflows use, makes it
+  an error instead of their checks after the fact. On Windows it runs in WSL.
+
 ### Fixed
+- No ISO could be made with the xorriso of Ubuntu's runners (1.5.6): libisofs
+  cannot write the El Torito boot information table for a boot file as big as
+  the 64 MiB install disk. `src/moscow/tools/boot_info.sh` writes it after
+  `xorriso`, and the ISO boots and installs as before.
+- zlib 1.3.2 for Moscow's `/bin/ural` came from a URL zlib.net no longer
+  serves (only its latest release is at the top); it comes from zlib.net's
+  `fossils/` archive now, the same file by its SHA-256.
+- Moscow's `/bin/ural` did not build: musl is built without its dynamic
+  loader, so curl's `configure` could not run the programs it links; they are
+  linked `-static` now. musl's `musl-gcc` wrapper is asked for
+  (`--enable-wrapper=gcc`) instead of left to configure, which skips it on
+  some hosts.
 - Klin opened in Moscow and was gone at once: since `.su` programs run
   compiled on the NASM runtime, Petersburg's `run(_):` there only returned,
   `init` ended and its window with it. A program that calls it now runs
