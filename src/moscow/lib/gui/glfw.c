@@ -77,6 +77,7 @@ static struct
     int abs_x, abs_y;       /* its last position, 0..0xffff */
     int dirty;
     GLFWvidmode mode;
+    int switching;          /* Alt+Tab's list is up: the one chosen, 1.. */
 } glfw;
 
 /* titles in a TrueType font (moscow.c, once the kernel has handed one
@@ -457,6 +458,100 @@ static void glfw_pointer(void)
         }
 }
 
+/* --- Alt+Tab: the windows top to bottom, the desktop last; held Alt and
+ * Tab go down the list (Shift+Tab up), letting Alt go brings the one
+ * chosen to the top with the keys, Esc keeps things as they were. The
+ * top is the window used last, so one Alt+Tab goes back to the one
+ * before. */
+
+#define GLFW_SWITCH_MAX 32
+#define GLFW_SWITCH_ROW 26
+
+static int glfw_is_desktop(const GLFWwindow *w);
+static void glfw_raise(GLFWwindow *w);
+
+/* the windows Alt+Tab goes through: the focused one first (the desktop
+ * when it was clicked), the rest top to bottom, the desktop last; how
+ * many */
+static int glfw_switch_list(GLFWwindow **list)
+{
+    GLFWwindow *w, *desktop = NULL;
+    int n = 0;
+    if (glfw.focused != NULL && glfw.focused->visible)
+        list[n++] = glfw.focused;
+    for (w = glfw.top; w != NULL && n < GLFW_SWITCH_MAX - 1; w = w->below)
+    {
+        if (!w->visible || w == glfw.focused)
+            continue;
+        if (glfw_is_desktop(w))
+        {
+            if (desktop == NULL)
+                desktop = w;
+            continue;
+        }
+        list[n++] = w;
+    }
+    if (desktop != NULL)
+        list[n++] = desktop;
+    return n;
+}
+
+/* Tab with Alt down: the next (back: the one before) */
+static void glfw_switch_step(int back)
+{
+    GLFWwindow *list[GLFW_SWITCH_MAX];
+    int n = glfw_switch_list(list);
+    if (n < 2)
+        return;
+    if (glfw.switching == 0)
+        glfw.switching = back ? n - 1 : 1;
+    else
+        glfw.switching = (glfw.switching + (back ? n - 1 : 1)) % n;
+    glfw.dirty = 1;
+}
+
+/* Alt let go: the window chosen to the top */
+static void glfw_switch_end(int choose)
+{
+    GLFWwindow *list[GLFW_SWITCH_MAX];
+    int n = glfw_switch_list(list);
+    int chosen = glfw.switching;
+    glfw.switching = 0;
+    glfw.dirty = 1;
+    if (choose && chosen < n)
+        glfw_raise(list[chosen]);
+}
+
+static void glfw_switcher_draw(void)
+{
+    GLFWwindow *list[GLFW_SWITCH_MAX];
+    int n, i, w, h, x, y;
+    if (glfw.switching == 0)
+        return;
+    n = glfw_switch_list(list);
+    if (glfw.switching >= n)
+        glfw.switching = n > 1 ? 1 : 0;
+    if (glfw.switching == 0)
+        return;
+    w = 420;
+    h = n * GLFW_SWITCH_ROW + 16;
+    x = (glfw.width - w) / 2;
+    y = (glfw.height - h) / 2;
+    glfw_fill(x - 2, y - 2, w + 4, h + 4, 0x101218);
+    glfw_fill(x, y, w, h, 0x262a33);
+    for (i = 0; i < n; ++i)
+    {
+        int ry = y + 8 + i * GLFW_SWITCH_ROW;
+        const char *title = list[i]->title[0] != '\0' ? list[i]->title : "(untitled)";
+        uint32_t color = i == glfw.switching ? 0xffffff : 0xb8bcc6;
+        if (i == glfw.switching)
+            glfw_fill(x + 6, ry, w - 12, GLFW_SWITCH_ROW - 2, 0x2a4f86);
+        if (glfw_title_draw == NULL ||
+            !glfw_title_draw(x + 16, ry + 4, title, w - 32, color))
+            glfw_text(x + 16, ry + 9, title, w - 32, color);
+    }
+}
+
 /* everything onto the screen */
 static void glfw_present(void)
 {
@@ -480,6 +575,7 @@ static void glfw_present(void)
             glfw_frame(w);
         glfw_blit(w);
     }
+    glfw_switcher_draw();
     glfw_pointer();
     for (r = 0; r < glfw.height; ++r)
         memcpy(glfw.lfb + (size_t)r * glfw.width, glfw.screen + (size_t)r * glfw.width,
@@ -912,7 +1008,28 @@ static void glfw_key_event(int key, int down)
     if (key == GLFW_KEY_LEFT_CONTROL || key == GLFW_KEY_RIGHT_CONTROL)
         glfw.ctrl = glfw.keys[GLFW_KEY_LEFT_CONTROL] || glfw.keys[GLFW_KEY_RIGHT_CONTROL];
     if (key == GLFW_KEY_LEFT_ALT || key == GLFW_KEY_RIGHT_ALT)
+    {
         glfw.alt = glfw.keys[GLFW_KEY_LEFT_ALT] || glfw.keys[GLFW_KEY_RIGHT_ALT];
+        if (!glfw.alt && glfw.switching)
+        {
+            glfw_switch_end(1);
+            return;
+        }
+    }
+    /* Alt+Tab is the window system's: no program sees it */
+    if (key == GLFW_KEY_TAB && glfw.alt)
+    {
+        if (down)
+            glfw_switch_step(glfw.shift);
+        return;
+    }
+    if (glfw.switching && key == GLFW_KEY_ESCAPE)
+    {
+        if (down)
+            glfw_switch_end(0);
+        return;
+    }
+    w = glfw.focused;
     if (w == NULL)
         return;
     ch = down ? glfw_char(key) : 0;

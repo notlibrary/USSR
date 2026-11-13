@@ -315,7 +315,12 @@ what it takes from a hosted system there:
   only moves. Windows are composed bottom to top with title bars in
   Pobeda, dragged by them and closed by their box; a desktop (a window
   without a frame over the whole screen, as Kremlin's) stays at the
-  bottom when clicked;
+  bottom when clicked. Alt+Tab switches windows, whichever program has
+  them: with Alt held, Tab goes down a list of their titles (the window
+  in use first, the others as they lie top to bottom, the desktop last)
+  and Shift+Tab back up; letting Alt go brings the one chosen to the
+  top with the keys, Esc leaves things as they were. One Alt+Tab goes
+  back to the window used before;
 - `lib/gui/term.c`: Mbltishi's terminal, a grid of Pobeda glyphs that
   carries out the console's ANSI sequences;
 - `lib/gui/moscow.c`: what `gui.su` calls.
@@ -400,8 +405,11 @@ USSR code runs on one of three runtimes in Moscow:
   without `/bin/ussr` (one built off a Linux host: see
   [Linux programs](#linux-programs)), or when the compiled `.ru` calls a
   command runtime 2 does not have, such as `async` (Ukraine and so Novgorod
-  use it). Before a compiled `.ru` runs, `k_ru_check` has the runtime load
-  it without running it and `k_ru_missing` names such a command.
+  use it), or Petersburg's `run(_):` (`petersburg_run`): russia.ru hands a
+  window's events to the program's callbacks, which the kernel command
+  alone cannot, so a Petersburg program such as Klin runs there. Before a
+  compiled `.ru` runs, `k_ru_check` has the runtime load it without
+  running it and `k_ru_missing` names such a command.
 - `ussr` itself is 1: `run(_): "ussr" "a.su"` runs `a.su` on the native ussr
   from start to end, the kernel's commands not among its builtins.
 
@@ -652,7 +660,7 @@ The kernel's own services, used by `moscow.su`:
 | `k_exec(status): name [args ...]` | runs a `.ru` of the image to its end; 127 when missing |
 | `k_exec_bytes(status): bytes [args ...]` | runs the `.ru` in a byte vector (args: strings, or one vector of them) |
 | `k_ru_check(_):` | the next `.ru` loaded is only checked, not run: its load fails quietly (`k_exec_bytes` gives 1) |
-| `k_ru_missing(s):` | a command the last checked `.ru` calls that the runtime does not have, or `""` |
+| `k_ru_missing(s):` | a command the last checked `.ru` calls that the runtime does not have (or `petersburg_run`, which is russia.ru's), or `""` |
 | `k_syscall(_): name function` | the kernel's `function` answers `name` from now on |
 | `net_info(v):` | `[mac, link up]` of the network card, or null |
 | `net_recv(v):` | the next Ethernet frame as a byte vector, or null |

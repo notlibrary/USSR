@@ -368,7 +368,9 @@ static int gui_append(size_t *len, const char *text)
 
 /* petersburg_take_events for the program now running, as UNO text: 1
  * while it has a Petersburg run going (a window of its own left), then
- * its events [callback, widget, values...]; the others' are dropped */
+ * its events [callback, widget, values...]. Another program's stay for
+ * it to take - Kremlin's clicks while Klin asks for its own all the time
+ * - unless it has no run going to take them. */
 const char *gui_events(void)
 {
     petersburg_widget_t *w;
@@ -376,6 +378,9 @@ const char *gui_events(void)
     size_t i;
     int running = 0;
     char item[160];
+    enum { GUI_QUEUE = sizeof(petersburg_events) / sizeof(petersburg_events[0]) };
+    static petersburg_event_t kept[GUI_QUEUE];
+    size_t keep = 0;
 
     gui_pump();
     if (gui_run_requested(gui_owner_now))
@@ -389,11 +394,15 @@ const char *gui_events(void)
     for (i = 0; i < petersburg_event_count; ++i)
     {
         const petersburg_event_t *e = &petersburg_events[
-            (petersburg_event_head + i) %
-            (sizeof(petersburg_events) / sizeof(petersburg_events[0]))];
+            (petersburg_event_head + i) % GUI_QUEUE];
         size_t k;
-        if (gui_owner_of(e->widget_id) != gui_owner_now)
+        long owner = gui_owner_of(e->widget_id);
+        if (owner != gui_owner_now)
+        {
+            if (owner >= 0 && gui_run_requested(owner))
+                kept[keep++] = *e;
             continue;
+        }
         snprintf(item, sizeof(item), ",[`%s`,%ld", e->callback, e->widget_id);
         gui_append(&len, item);
         for (k = 0; k < e->value_count; ++k)
@@ -404,8 +413,9 @@ const char *gui_events(void)
         gui_append(&len, "]");
     }
     gui_append(&len, "]");
+    memcpy(petersburg_events, kept, keep * sizeof(kept[0]));
     petersburg_event_head = 0;
-    petersburg_event_count = 0;
+    petersburg_event_count = keep;
     return gui_events_text;
 }
 

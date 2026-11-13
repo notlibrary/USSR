@@ -2406,7 +2406,9 @@ rt_load:
 
         ; k_ru_check armed this load: it only looks for a builtin call
         ; (OOP) of a name that is neither a builtin nor a kernel command,
-        ; for k_ru_missing, and fails quietly. Nothing of the program runs.
+        ; or of petersburg_run (russia.ru's: it hands a program's events to
+        ; its callbacks, where the kernel command only returns), for
+        ; k_ru_missing, and fails quietly. Nothing of the program runs.
         cmp qword [ru_strict], 0
         je .checked
         mov qword [ru_strict], 0
@@ -2428,7 +2430,13 @@ rt_load:
         je .check
         mov rdx, [r14 + PROG.symbuiltin]
         cmp dword [rdx + rax * 4], 0
+        je .missing
+        mov rdx, [r14 + PROG.symtext]
+        mov rsi, [rdx + rax * 8]
+        mov edi, s_pb_run
+        call str_eq_z
         jne .check
+.missing:
         ; the name, for k_ru_missing
         mov rdx, [r14 + PROG.symtext]
         mov rsi, [rdx + rax * 8]
@@ -7424,6 +7432,7 @@ e_crc32:        db "crc32(n): data [from [count]]", 0
 name_moscow:    db "moscow.ru"
 name_moscow_len equ $ - name_moscow
 s_init:         db "init", 0
+s_pb_run:       db "petersburg_run", 0
 s_null:         db "null", 0
 s_integer:      db "integer", 0
 s_real:         db "real", 0
