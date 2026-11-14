@@ -72,3 +72,38 @@
 - Compare against `sfdisk --dump` across a corpus of real-world tables
 - Fuzz tables (corrupt headers and entries) for crash-free reading
 - 4Kn and 512e images through every command
+
+## Images and formats
+- Sparse image files, and reading and writing VHD, VHDX, VMDK and QCOW2
+  containers
+- ISO hybrid images: show the El Torito boot catalog and the embedded
+  MBR/GPT
+- Clone a disk or a partition to an image and back (`stalin copy`),
+  with a hash check
+- Compare two disks or images sector by sector
+- A partition extracted to a file and written back (`dump`, `load`)
+- Shrink an image to the end of its last partition
+
+## Layout knowledge
+- More type names: ChromeOS, Android, Solaris, VMware, Ceph, the Linux
+  Discoverable Partitions GUIDs (root by architecture, `/home`,
+  `/srv`), with the automount attribute bits named
+- Named GPT attribute bits (`--attrs required,no-automount`) in place
+  of a number
+- Percent sizes (`--size 50%`) and `--end POS`
+- Templates: `stalin layout DEV uefi-linux` (EFI + root + swap),
+  `bios-gpt`, `windows`, `moscow`
+- Boot checks: is there an EFI system partition with a FAT file
+  system, is a BIOS boot partition present for GRUB on GPT
+- Warn on tables that some firmware rejects (entries array not at LBA
+  2, fewer than 128 entries)
+
+## Safety and audit
+- A journal of every write with the old sectors saved, and `stalin
+  undo` to put them back
+- Confirm by typing the device's model or size for raw disks, in
+  addition to `--yes`
+- Detect that a disk is the one the system runs from, and refuse
+- Explain mode: print what each field of the MBR and GPT headers
+  means, for teaching (`stalin explain DEV`)
+- A hexdump of any sector with fields annotated

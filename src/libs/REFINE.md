@@ -93,3 +93,43 @@
 - A `$once` guard on every file, so mixed includes are safe
 - A list of each subproject's local helper copies to move into the
   library
+
+## Text processing
+- A template engine for strings (`${name}` holes with escaping modes
+  for HTML, SQL literals and shell words)
+- Word wrap to a width (`str_wrap`), used by Kremlin labels and Sochi
+- Natural-order comparison (`file2` before `file10`) and case-folded
+  comparison for sorting
+- Transliteration between Cyrillic and Latin
+- Plural forms for Russian and English messages (`1 файл`, `2 файла`,
+  `5 файлов`)
+- A command-line argument parser (`--name value`, `-abc`, `--`,
+  generated `--help`), since Lenin, Novgorod, Stalin, Sochi and usa each
+  parse flags by hand
+- A logging module: levels, timestamps, a file sink and stderr
+- A diff of two line vectors (Myers) and a patch applier
+- Hash functions as library calls: SHA-1, SHA-256, MD5 wrappers over
+  the builtins, and SipHash for tables
+- UUID generation and parsing (Stalin has GUID code)
+- A hash map with any key type, iteration order kept
+
+## Concurrency and system
+- Channels and mutexes on the scheduler (`chan_send`, `chan_recv`,
+  `lock`), in place of each app's own lock (`uilock`)
+- `async_all` / `async_any` over a vector of tasks, with timeouts
+- A process module: run a program with arguments, capture its output
+  and exit status, feed its input, set its directory and environment
+- Signal and exit hooks (`at_exit`) to restore terminals and delete
+  temporary files
+- Terminal helpers in one place: raw mode, key decoding, colours,
+  cursor, size (Mbl and Sochi each have their own)
+- A test helper library (`assert_eq`, `assert_near`, counters, a
+  summary line) shared by `tests/`
+
+## More maths
+- Decimal fixed-point type for money
+- Numeric integration, root finding and interpolation
+- 2D geometry: segment and circle intersections, polygon area, point
+  in polygon (Tula)
+- Bit operations as functions: rotate, popcount, byte swap (Klin has
+  them)

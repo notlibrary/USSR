@@ -70,3 +70,35 @@ fit, pan, a toolbar, keyboard shortcuts, and up to 10 000 entities.
 ## Tests
 - Round-trip DXF tests against files from LibreCAD/QCAD
 - Geometry unit tests (intersections, trim) without a window
+
+## Constraints and parametrics
+- Geometric constraints: horizontal, vertical, parallel,
+  perpendicular, coincident, tangent, equal length
+- Driving dimensions: change a dimension's value and the geometry
+  follows
+- Named variables and expressions in sizes (`width = 2 * a + 10`)
+- Sketch regions detected as closed profiles, with area and centroid
+
+## Beyond flat drawings
+- Isometric drafting mode (isoplanes, iso circles)
+- 3D extrude and revolve of a profile with an OpenGL preview, and STL
+  export for printing
+- G-code export for laser cutters and CNC routers (lines and arcs, tool
+  offset), and SVG for plotters
+- Gerber export or a small schematic symbol library for electronics
+- Sheet templates: frames and title blocks (ГОСТ/ISO formats A4–A0)
+- Paper space: several scaled views of the model on one sheet
+
+## Drawing aids
+- Colours by layer or by entity, with an AutoCAD colour index table
+- Text styles and TrueType fonts through Petersburg (Pobeda for
+  drawings)
+- Raster image underlay (trace a scan), via Omsk decoding
+- Symbols library: bolts, bearings, electrical and architectural
+  symbols as blocks
+- Tolerances, surface finish and welding symbols
+- Tables and a bill of materials from block attributes
+- A "purge" of unused layers and blocks, and an "audit" of bad
+  entities
+- Keep unsupported DXF entities on save (today they are named in the
+  status line and dropped)

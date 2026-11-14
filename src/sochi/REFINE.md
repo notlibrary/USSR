@@ -66,3 +66,31 @@ and rejoin with the same nickname.
 - Rule tests checked against published Sochi scoring tables
 - Network tests with packet loss and reordering simulated
 - Bot-versus-bot tournaments as regression for bot strength
+
+## Teaching and analysis
+- A tutorial mode that explains the rules step by step with a scripted
+  deal
+- A trainer: misère problems, "how many tricks is this hand worth",
+  whist-or-pass quizzes
+- After a hand: the double-dummy result and where the play lost tricks
+- A hand editor to set up any deal and play it out against bots
+- An odds helper: suit split probabilities for the cards still out
+
+## Table and match options
+- Time controls: a clock per move with auto-play of a forced card
+- Auto-play of the only legal card (optional)
+- Table passwords and a table name in the LAN list
+- A lobby: several tables found on the LAN, with seats free and pool
+  size shown
+- Bots taking over a player who left, and giving the seat back on
+  rejoin
+- Tournament mode: several tables, a schedule and a combined score
+- Save and resume an unfinished game from a file
+- A turn bell or terminal title change when it is your move
+
+## More games on the same engine
+- Durak, Thousand (Тысяча), King and Belote on the 32/36-card deck,
+  sharing the networking, chat and terminal code
+- A generic card-table library split out of `sochi.su` (cards,
+  shuffles, tricks, views, the UDP resend logic)
+- A web client served by Ukraine, so a player needs only a browser
