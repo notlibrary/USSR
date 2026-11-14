@@ -216,7 +216,7 @@ gui_native(r): name a [
     if(_): {nw = 0 && (name = "petersburg_create_window" || name = "petersburg_message_box")} [
         gui_on(st):
         if(_): {st < 0} [
-            write_stderr(_): "USSR: no screen for windows (a Bochs/QEMU standard VGA is needed)\n"
+            write_stderr(_): "USSR: no screen for windows (a VGA with VBE is needed: QEMU's standard VGA, VirtualBox's VBoxVGA, VMSVGA or VBoxSVGA)\n"
             return(r): r
         ]
     ]
