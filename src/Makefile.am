@@ -165,15 +165,22 @@ EXTRA_DIST = \
 	novosibirsk/box.uno \
 	novosibirsk/novosibirsk.su \
 	moscow/README.md \
+	moscow/arch/amd64/acpi.inc \
 	moscow/arch/amd64/ahci.inc \
+	moscow/arch/amd64/apic.inc \
 	moscow/arch/amd64/ata.inc \
 	moscow/arch/amd64/boot.nasm \
 	moscow/arch/amd64/btree.inc \
+	moscow/arch/amd64/fbcon.inc \
+	moscow/arch/amd64/fbfont.inc \
 	moscow/arch/amd64/image.nasm \
 	moscow/arch/amd64/layout.inc \
 	moscow/arch/amd64/sha256.inc \
 	moscow/arch/amd64/ussr_rt.nasm \
 	moscow/tools/boot_info.sh \
+	moscow/tools/fbfont.py \
+	moscow/tools/mkesp.su \
+	moscow/efi/loader.c \
 	moscow/install.su \
 	moscow/moscow.su \
 	moscow/run.sh \

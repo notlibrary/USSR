@@ -75,9 +75,25 @@ from the install disk.
 qemu-system-x86_64 -m 2048 -cdrom USSR050.ISO
 ```
 
-UEFI without its legacy BIOS mode is not supported, and the CD drive must be on IDE
-(a CD on SATA boots from the BIOS but stage 2 does not find it). It boots in QEMU and
-VirtualBox.
+It boots from UEFI too: a second El Torito entry, `/boot/efiboot.img`, is an EFI
+system partition (FAT12, made by `tools/mkesp.su`) with `\EFI\BOOT\BOOTX64.EFI`, the
+UEFI loader (`efi/loader.c`). The loader finds the image through the firmware, so the
+CD drive may be on any controller, loads the boot files from it and the whole image
+into memory: the kernel's root is that RAM disk, `/dev/ram`, writes and all, gone at
+the next boot as from the CD. UEFI has no VGA text mode, so the console draws on the
+firmware's framebuffer (GOP), 80x25 cells in an 8x16 font made from Pobeda
+(`arch/amd64/fbfont.inc`, by `tools/fbfont.py`), scaled to the screen; Kremlin runs
+as from a BIOS boot and gives the screen back to the console when it ends.
+
+```bash
+qemu-system-x86_64 -m 2048 -bios edk2-x86_64-code.fd -cdrom USSR050.ISO   # or pflash, as OVMF likes
+```
+
+In VirtualBox, "Enable EFI" in the machine's System settings boots it the same way.
+A disk Moscow is installed on boots from the BIOS (or CSM) only, as yet: the
+installer does not make an EFI system partition. Under the BIOS the CD drive must be
+on IDE (a CD on SATA boots, but stage 2 does not find it). It boots in QEMU and
+VirtualBox, from BIOS and UEFI.
 
 ## Installing
 
@@ -193,8 +209,9 @@ The file commands are the kernel's (`moscow.su` takes them over with
 | `reboot(_):`, `halt(_):` | reset; stop |
 | `help(_):` | this list |
 
-Ctrl-D on an empty line ends the shell, and Moscow halts the machine
-(QEMU exits when started with `isa-debug-exit`).
+Ctrl-D on an empty line ends the shell, and Moscow powers the machine
+off: ACPI's S5 (QEMU exits with or without `isa-debug-exit`; a VirtualBox
+VM goes to "powered off").
 
 The console is a terminal: the shell reads its lines in raw mode, so
 Up and Down go through the history, which it keeps in
@@ -374,6 +391,17 @@ and COM1, as before.
 
 ## Boot
 
+From UEFI (`efi/loader.c`, built with clang and lld-link into
+`BOOTX64.EFI`): the loader looks through the firmware's block devices for
+the Moscow image - a disk whose sector 16 holds the file table, or a CD
+whose El Torito BIOS entry does - loads the files the table lists from
+1 MiB up as stage 2 does, and from a CD the whole image as a RAM disk
+anywhere below 4 GiB. The boot information gets the GOP framebuffer
+(`BI_FB_*`), ACPI's RSDP and the memory map in e820 form, the loader's
+own allocations reserved in it; boot services end, the identity page
+tables go to 0x1000 as stage 2 builds them, and the runtime starts the
+same way. What it says goes to the firmware's console, then COM1.
+
 - **Stage 1** (the MBR, 512 bytes) reads stage 2 with the BIOS extended
   disk read and jumps to it.
 - **Stage 2** asks the BIOS for A20, the e820 memory map and, from a
@@ -513,9 +541,26 @@ so keys made soon after boot are weaker than on a host. The kernel's own TLS
 ## The runtime
 
 `ussr_rt.nasm` is the USSR VM in assembly. It loads its own GDT and IDT
-(CPU exceptions print and stop), sets up the console (VGA text mode and
-COM1 at 115200, the PS/2 keyboard), the PIT at 100 Hz and the heap, then
-loads `moscow.ru` and runs it.
+(CPU exceptions print and stop), finds the ACPI tables, sets up the
+console (VGA text mode and COM1 at 115200, the PS/2 keyboard), the tick
+at 100 Hz and the heap, then loads `moscow.ru` and runs it.
+
+ACPI (`arch/amd64/acpi.inc`): the RSDP (from a UEFI loader, else the
+EBDA and 0xe0000 .. 0xfffff), the RSDT or XSDT, and in them the FADT and
+the MADT. Power off is S5: its SLP_TYP values come from the DSDT's
+`\_S5_` package (read by its bytes, no AML interpreter), SCI_EN goes on
+through the SMI port when it is off, and SLP_TYP | SLP_EN goes to PM1a's
+(and PM1b's) control port. `halt(_)` tries it after QEMU's debug exit and
+before QEMU's and VirtualBox's own power-off ports. The boot says what it
+found: `acpi:    tables (RSDP revision 2), power off by S5; the local
+APIC's timer, 1 IOAPIC`; `k_acpi(v)` gives the numbers.
+
+The APIC (`arch/amd64/apic.inc`): with one (CPUID), the local APIC's
+timer gives the tick and the 8259 PICs are masked. It runs at the bus
+clock divided by 16, counted against 10 ms of the PIT's channel 2 at
+boot; that count is its period, so 100 Hz on any machine. The IOAPICs the
+MADT lists are set up with every line masked: the drivers poll. Without
+an APIC the PIT through the PICs gives the tick, as before.
 
 Memory (`arch/amd64/mm.inc`): RAM is the largest usable region of the
 BIOS map above the loaded files. When it goes past the boot loader's
@@ -554,7 +599,7 @@ private half: its heaps are out of the others' reach), its own console
 and its own runtime state (struct types, C libraries, the areas its
 kernel commands run in).
 Task 0 is the one the machine booted with: the kernel and the shell.
-The PIT ticks at 100 Hz; when a task has had its 10 ms, the VM gives
+The tick is 100 Hz (the local APIC's timer, else the PIT); when a task has had its 10 ms, the VM gives
 the CPU away at its next instruction, unless the task is inside a kernel
 command, which runs to its end or to where it waits. Waits are the
 scheduler's, as russia's scheduler and ussr's kqueue-like event queue
@@ -692,7 +737,8 @@ The kernel's own services, used by `moscow.su`:
 | `net_send(n): head [tail [from [count]]]` | one frame: a byte vector, then a string or byte vector (or part of one) |
 | `net_sum(n): data [from [count]]` | the 16-bit one's complement sum of IP checksums, folded |
 | `k_elf_load(lib): bytes` | loads a freestanding x86-64 ELF shared object (`c_load` reads the file); `c_sym`, `c_call`, `c_alloc`, `c_free`, `c_read`, `c_write`, `c_string` as in ussr (`arch/amd64/cffi.inc`) |
-| `k_reboot(_):`, `k_halt(_):` | reset; stop |
+| `k_reboot(_):`, `k_halt(_):` | reset; stop (ACPI S5 power off) |
+| `k_acpi(v):` | `[ACPI revision or -1, S5 found, APIC on, IOAPICs, local APIC timer counts a tick, PM1a control port, SLP_TYPa]` |
 
 The heap is a bump heap with marks: `k_exec` (and `run`) release
 everything the program allocated, and the struct types it declared,

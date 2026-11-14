@@ -26,6 +26,8 @@
 #   Linux, gcc, flex, bison,   /bin/ussr, /bin/ural and /bin/moscow_native:
 #   perl, curl                 static PIE against musl, with zlib, OpenSSL,
 #                              curl and SQLite, all fetched once
+#   clang, lld-link            BOOTX64.EFI, the UEFI loader (efi/loader.c),
+#                              and the ISO's EFI system partition image
 #   xorriso                    ussr.iso
 #   curl                       /etc/ssl/certs.pem, Mozilla's roots
 # Without one the disk is made without that piece (what an earlier build
@@ -60,6 +62,8 @@ override USSR := $(abspath $(USSR))
 NASM ?= nasm
 CLANG ?= clang
 LLD ?= ld.lld
+# lld-link, or a distribution's versioned one
+LLD_LINK ?= $(firstword $(foreach t,lld-link lld-link-20 lld-link-19 lld-link-18 lld-link-17,$(if $(call have,$(t)),$(t))) lld-link)
 XORRISO ?= xorriso
 JOBS := $(shell nproc 2>/dev/null || echo 2)
 
@@ -192,6 +196,29 @@ else
 $(call missing,no $(CLANG) and $(LLD): no new C libraries for /lib)
 LIBS :=
 endif
+
+# --- UEFI: BOOTX64.EFI (src/moscow/efi/loader.c), a PE32+ EFI application,
+# and efiboot.img, a FAT12 EFI system partition with it at
+# \EFI\BOOT\BOOTX64.EFI (tools/mkesp.su): the ISO's El Torito EFI entry
+
+EFI := $(OUT)/efi/BOOTX64.EFI
+ESP_IMG := $(OUT)/efi/efiboot.img
+CFLAGS_EFI := --target=x86_64-unknown-windows -ffreestanding -fno-stack-protector \
+	-fshort-wchar -mno-red-zone -fno-builtin -O2
+
+ifeq ($(call have,$(CLANG))$(call have,$(LLD_LINK)),yesyes)
+$(EFI): $(HERE)/efi/loader.c
+	mkdir -p $(OUT)/efi
+	$(CLANG) $(CFLAGS_EFI) -c $< -o $(OUT)/efi/loader.obj
+	$(LLD_LINK) -subsystem:efi_application -entry:efi_main -nodefaultlib \
+	    -out:$@ $(OUT)/efi/loader.obj
+else
+$(call missing,no $(CLANG) and $(LLD_LINK): no new BOOTX64.EFI)
+endif
+
+$(ESP_IMG): $(EFI) $(HERE)/tools/mkesp.su $(USSR)
+	rm -f $@
+	cd $(ROOT) && $(RUN_USSR) src/moscow/tools/mkesp.su $@ $(EFI)
 
 # --- Linux programs for /bin (arch/amd64/native.inc): ussr, ural and the
 # test program, static PIE against musl (https://musl.libc.org, MIT) built
@@ -361,8 +388,15 @@ img: $(IMG)
 ISO := $(OUT)/ussr.iso
 STAGE := $(OUT)/iso
 
+# UEFI's entry when there is a BOOTX64.EFI (built here, or left by an
+# earlier build); STRICT=1 wants it
+ISO_EFI := $(if $(wildcard $(EFI))$(call have,$(LLD_LINK)),$(ESP_IMG))
+ifneq ($(STRICT),)
+ISO_EFI := $(ESP_IMG)
+endif
+
 ifeq ($(call have,$(XORRISO)),yes)
-$(ISO): $(IMG) FORCE
+$(ISO): $(IMG) $(ISO_EFI) FORCE
 	rm -rf $@ $(STAGE)
 	mkdir -p $(STAGE)/boot $(STAGE)/bin $(STAGE)/etc/ssl $(STAGE)/src/ussr
 	for f in ussr_rt.bin moscow.ru russia.ru; do cp $(OUT)/$$f $(STAGE)/boot/$$f; done
@@ -380,9 +414,12 @@ $(ISO): $(IMG) FORCE
 # the BIOS loads the boot sector and stage 2: 16 sectors of 512 (TOC_LBA);
 # the boot information table is written afterwards (boot_info.sh), as
 # xorriso cannot for a boot file this big
+# UEFI: a second El Torito entry, the EFI system partition image
 	$(XORRISO) -as mkisofs -quiet -iso-level 3 -R -J -joliet-long -V USSR -o $@ \
 	    -graft-points -b boot/ussr.img -c boot/boot.catalog -no-emul-boot \
-	    -boot-load-size 16 "boot/ussr.img=$(IMG)" "/=$(STAGE)"
+	    -boot-load-size 16 \
+	    $(if $(ISO_EFI),-eltorito-alt-boot -e boot/efiboot.img -no-emul-boot) \
+	    "boot/ussr.img=$(IMG)" $(if $(ISO_EFI),"boot/efiboot.img=$(ESP_IMG)") "/=$(STAGE)"
 	sh $(HERE)/tools/boot_info.sh $@
 	@echo "build/moscow/ussr.iso: $$(wc -c < $@) bytes"
 iso: $(ISO)

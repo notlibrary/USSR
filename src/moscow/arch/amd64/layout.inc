@@ -55,6 +55,18 @@ E820_MAX        equ 64
 BI_CD_DRIVE     equ 0x808               ; u64: the boot CD's IDE position + 1, or 0
 BI_CD_BASE      equ 0x810               ; u64: the image's first 2048-byte block on it
 BI_CD_BYTES     equ 0x818               ; u64: the image's size
+BI_RSDP         equ 0x820               ; u64: ACPI's RSDP from a UEFI loader, or 0
+; From a UEFI loader (efi/loader.c), 0 from boot.nasm: the GOP framebuffer
+; the console draws on (no VGA text mode under UEFI), 32 bits a pixel
+BI_FB_BASE      equ 0x828               ; u64: its address, or 0
+BI_FB_WIDTH     equ 0x830               ; u64: pixels
+BI_FB_HEIGHT    equ 0x838               ; u64
+BI_FB_STRIDE    equ 0x840               ; u64: pixels a line
+BI_FB_FORMAT    equ 0x848               ; u64: 1 blue first (BGRX), 0 red first
+; the boot image in memory, a disk to the kernel (/dev/ram), or 0
+BI_RAMDISK_BASE equ 0x850
+BI_RAMDISK_BYTES equ 0x858
+BI_END          equ 0x860
 CD_BUFFER       equ 0x70000             ; stage 2: one 2048-byte block of the CD
 ELTORITO_TABLE  equ 0x7c00 + 8          ; the boot information table, in stage 1
 

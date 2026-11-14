@@ -5,7 +5,9 @@
 ; bsize, bcopy and bdevices. The disks are named as Linux names them:
 ; /dev/hda (primary master), /dev/hdb (primary slave), /dev/hdc and
 ; /dev/hdd (secondary), QEMU's -drive index=N the N-th of them; then
-; /dev/sda, /dev/sdb ... the SATA disks, in the order of their ports.
+; /dev/sda, /dev/sdb ... the SATA disks, in the order of their ports; and
+; /dev/ram, the boot image a UEFI loader put in memory (BI_RAMDISK_*): the
+; live system's root, as the CD's image is after a BIOS boot.
 ;
 ; Offsets and lengths are in bytes underneath: lba * sector with any
 ; sector size, so bread(v): dev byte count 1 reads bytes anywhere, and a
@@ -22,7 +24,8 @@
 IDE_DRIVES      equ 4                   ; /dev/hda .. /dev/hdd
 SATA_FIRST      equ IDE_DRIVES          ; /dev/sda, the drive table's 5th
 AHCI_MAX        equ 8                   ; SATA disks, /dev/sda .. /dev/sdh
-ATA_DRIVES      equ IDE_DRIVES + AHCI_MAX
+RAM_DRIVE       equ IDE_DRIVES + AHCI_MAX   ; /dev/ram
+ATA_DRIVES      equ RAM_DRIVE + 1
 ATA_CHUNK       equ 64                  ; sectors per transfer (32 KiB)
 ATA_TIMEOUT     equ 20000000
 ; a drive record
@@ -199,6 +202,21 @@ ata_init:
         rep movsb
 .no_cd:
         call ahci_init
+        ; the boot image a UEFI loader put in memory
+        mov rax, [BOOTINFO + BI_RAMDISK_BASE]
+        test rax, rax
+        jz .no_ram
+        mov [ram_disk], rax
+        mov rbx, RAM_DRIVE * ATAD_SIZE + ata_drive
+        mov rax, [BOOTINFO + BI_RAMDISK_BYTES]
+        shr rax, 9
+        mov [rbx + ATAD_SECTORS], rax
+        lea rdi, [rbx + ATAD_MODEL]
+        mov esi, s_live_cd
+        mov ecx, s_live_cd_end - s_live_cd
+        rep movsb
+        mov qword [rbx + ATAD_PRESENT], 1
+.no_ram:
         pop rdi
         pop rbx
         ret
@@ -514,6 +532,8 @@ cd_transfer:
 ; buffer, r8d = 1 to write -> CF set on an error. Keeps rbx, rbp, r12 ..
 ; r15. A SATA drive's go to ahci.inc.
 ata_transfer:
+        cmp edi, RAM_DRIVE
+        je ram_transfer
         cmp edi, SATA_FIRST
         jae ahci_transfer
         push rbx
@@ -605,6 +625,36 @@ ata_transfer:
         pop rbx
         ret
 
+; As ata_transfer, for /dev/ram: copies to or from the image in memory
+ram_transfer:
+        push rax
+        push rcx
+        push rsi
+        push rdi
+        lea rdi, [rax + rcx]
+        cmp rdi, [ata_drive + RAM_DRIVE * ATAD_SIZE + ATAD_SECTORS]
+        ja .fail
+        shl rax, 9
+        add rax, [ram_disk]
+        shl ecx, 9
+        mov rdi, rsi                    ; reading: memory -> the buffer
+        mov rsi, rax
+        test r8d, r8d
+        jz .copy
+        xchg rsi, rdi                   ; writing: the buffer -> memory
+.copy:
+        rep movsb
+        clc
+        jmp .out
+.fail:
+        stc
+.out:
+        pop rdi
+        pop rsi
+        pop rcx
+        pop rax
+        ret
+
 ; rsi = string value (a device name) -> eax: the drive 0 .. 3, or -1
 ; when it is not a present disk. Keeps the others.
 ata_drive_of:
@@ -614,6 +664,9 @@ ata_drive_of:
         jne .none
         cmp dword [rsi + STR_BYTES], '/dev'
         jne .none
+        mov eax, RAM_DRIVE
+        cmp dword [rsi + STR_BYTES + 4], '/ram'
+        je .known
         cmp byte [rsi + STR_BYTES + 4], '/'
         jne .none
         cmp byte [rsi + STR_BYTES + 6], 'd'
@@ -1142,13 +1195,15 @@ bi_bdevices:
         je .next
         call vec_new
         mov rdi, rax
-        mov byte [dev_name + 5], 'h'
-        mov byte [dev_name + 7], 'a'
+        mov dword [dev_name + 4], '/hda'
         add [dev_name + 7], bl
         cmp ebx, SATA_FIRST
         jb .named
         mov byte [dev_name + 5], 's'
         sub byte [dev_name + 7], SATA_FIRST
+        cmp ebx, RAM_DRIVE
+        jne .named
+        mov dword [dev_name + 4], '/ram'
 .named:
         mov esi, dev_name
         call new_string_z
@@ -1173,6 +1228,9 @@ bi_bdevices:
         cmp ebx, SATA_FIRST
         jb .bus
         mov esi, s_sata
+        cmp ebx, RAM_DRIVE
+        jne .bus
+        mov esi, s_ram
 .bus:
         call new_string_z
         call vec_push_str
@@ -1212,6 +1270,7 @@ s_live_cd_end:
 s_virtual:      db "virtual", 0
 s_ata:          db "ATA", 0
 s_sata:         db "SATA", 0
+s_ram:          db "RAM", 0
 e_bread:        db "bread(v): device lba [count [sector]]", 0
 e_bread_numbers: db "bread/bwrite/bcopy: bad lba, count or sector size", 0
 e_bwrite:       db "bwrite(n): device lba bytes [sector]", 0

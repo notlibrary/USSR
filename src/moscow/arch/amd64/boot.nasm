@@ -475,6 +475,11 @@ long_entry:
         mov [BOOTINFO + BI_CD_DRIVE], rax
         mov [BOOTINFO + BI_CD_BASE], rax
         mov [BOOTINFO + BI_CD_BYTES], rax
+        mov [BOOTINFO + BI_RSDP], rax   ; the runtime looks in the BIOS areas
+        ; no framebuffer (VGA text mode is there) and no RAM disk
+        mov rdi, BOOTINFO + BI_FB_BASE
+        mov ecx, (BI_END - BI_FB_BASE) / 8
+        rep stosq
         cmp byte [boot_cd], 0
         je .read_table
         call cd_find

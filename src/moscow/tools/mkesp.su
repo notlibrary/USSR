@@ -1,0 +1,180 @@
+# mkesp.su - an EFI system partition image: a 1440 KiB FAT12 volume with
+# \EFI\BOOT\BOOTX64.EFI on it, the file UEFI firmware starts from a disk
+# or a CD (the ISO's El Torito EFI entry is this image).
+#
+#     ussr src/moscow/tools/mkesp.su OUT.img BOOTX64.EFI
+#
+# The layout is a 3.5" floppy's, as every FAT driver knows it: 512-byte
+# sectors, a cluster a sector, one reserved sector, two FATs of 9 sectors,
+# 224 root entries (14 sectors), so the data starts at sector 33 and
+# cluster n is sector 31 + n. Clusters 2 and 3 are the directories EFI and
+# EFI\BOOT, the file's follow. moscow.mk runs this.
+
+$define ESP_SECTORS 2880
+$define ESP_FAT_SECTORS 9
+$define ESP_ROOT_SECTOR 19
+$define ESP_DATA_SECTOR 33
+
+# n bytes of v from i, little-endian, set to x
+esp_put(r): v i n x [
+    set(k): 0
+    while(_): {k < n} [
+        set(v): {i + k} {x & 255}
+        set(x): {x >> 8}
+        add(k): k 1
+    ]
+    set(r): v
+]
+
+esp_zeros(r): n [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < n} [
+        push(_): r 0
+        add(i): i 1
+    ]
+]
+
+# text's bytes into v from i, padded with spaces to n
+esp_text(r): v i text n [
+    len(tl): text
+    set(k): 0
+    while(_): {k < n} [
+        set(c): 32
+        if(_): {k < tl} [ byte(c): text k ]
+        set(v): {i + k} c
+        add(k): k 1
+    ]
+    set(r): v
+]
+
+# a directory entry at entry index e of v: an 8.3 name, attributes, its
+# first cluster and size
+esp_entry(r): v e name ext attr cluster size [
+    set(o): {e * 32}
+    esp_text(v): v o name 8
+    esp_text(v): v {o + 8} ext 3
+    set(v): {o + 11} attr
+    esp_put(v): v {o + 26} 2 cluster
+    esp_put(v): v {o + 28} 4 size
+    set(r): v
+]
+
+# FAT12 entry n of fat set to x
+esp_fat(r): fat n x [
+    set(o): {(n * 3) >> 1}
+    at(b0): fat o
+    at(b1): fat {o + 1}
+    if(_): {(n & 1) = 0} [
+        set(fat): o {x & 255}
+        set(fat): {o + 1} {(b1 & 240) | ((x >> 8) & 15)}
+    ]
+    else(_): [
+        set(fat): o {(b0 & 15) | ((x & 15) << 4)}
+        set(fat): {o + 1} {(x >> 4) & 255}
+    ]
+    set(r): fat
+]
+
+init(result): arg_count arg_values [
+    set(result): 1
+    if(_): {arg_count != 2} [
+        print(_): "usage: ussr src/moscow/tools/mkesp.su OUT.img BOOTX64.EFI"
+        return(_): result
+    ]
+    at(out): arg_values 0
+    at(efi): arg_values 1
+    bsize(size): efi
+    if(_): {size <= 0} [
+        concat(m): "mkesp: cannot read " efi
+        print(_): m
+        return(_): result
+    ]
+    bread(data): efi 0 size 1
+    set(clusters): {(size + 511) >> 9}
+    if(_): {clusters + 2 > ESP_SECTORS - ESP_DATA_SECTOR} [
+        print(_): "mkesp: the file does not fit on the volume"
+        return(_): result
+    ]
+    # an empty image of the volume's size
+    open_file(h): out "wb"
+    if(_): {h = -1} [
+        concat(m): "mkesp: cannot create " out
+        print(_): m
+        return(_): result
+    ]
+    close_file(_): h
+    esp_zeros(z): 512
+    bwrite(w): out {ESP_SECTORS - 1} z 512
+
+    # the boot sector: a BIOS parameter block, no boot code
+    esp_zeros(b): 512
+    esp_put(b): b 0 3 0x90fceb
+    esp_text(b): b 3 "USSR" 8
+    esp_put(b): b 11 2 512
+    set(b): 13 1
+    esp_put(b): b 14 2 1
+    set(b): 16 2
+    esp_put(b): b 17 2 224
+    esp_put(b): b 19 2 ESP_SECTORS
+    set(b): 21 0xf0
+    esp_put(b): b 22 2 ESP_FAT_SECTORS
+    esp_put(b): b 24 2 18
+    esp_put(b): b 26 2 2
+    set(b): 38 0x29
+    esp_put(b): b 39 4 0x55535352
+    esp_text(b): b 43 "MOSCOW EFI" 11
+    esp_text(b): b 54 "FAT12" 8
+    set(b): 510 0x55
+    set(b): 511 0xaa
+    bwrite(w): out 0 b 512
+
+    # the FAT: the media byte, then EFI (2), BOOT (3), the file from 4
+    esp_zeros(fat): {ESP_FAT_SECTORS * 512}
+    esp_fat(fat): fat 0 0xff0
+    esp_fat(fat): fat 1 0xfff
+    esp_fat(fat): fat 2 0xfff
+    esp_fat(fat): fat 3 0xfff
+    set(c): 4
+    while(_): {c < clusters + 4} [
+        set(next): {c + 1}
+        if(_): {c = clusters + 3} [ set(next): 0xfff ]
+        esp_fat(fat): fat c next
+        add(c): c 1
+    ]
+    bwrite(w): out 1 fat 512
+    bwrite(w): out {1 + ESP_FAT_SECTORS} fat 512
+
+    # the root: the volume's label and EFI
+    esp_zeros(root): 512
+    esp_entry(root): root 0 "MOSCOW" "EFI" 0x08 0 0
+    esp_entry(root): root 1 "EFI" "" 0x10 2 0
+    bwrite(w): out ESP_ROOT_SECTOR root 512
+    # EFI: . .. BOOT
+    esp_zeros(d): 512
+    esp_entry(d): d 0 "." "" 0x10 2 0
+    esp_entry(d): d 1 ".." "" 0x10 0 0
+    esp_entry(d): d 2 "BOOT" "" 0x10 3 0
+    bwrite(w): out {ESP_DATA_SECTOR + 0} d 512
+    # EFI\BOOT: . .. BOOTX64.EFI
+    esp_zeros(d): 512
+    esp_entry(d): d 0 "." "" 0x10 3 0
+    esp_entry(d): d 1 ".." "" 0x10 2 0
+    esp_entry(d): d 2 "BOOTX64" "EFI" 0x20 4 size
+    bwrite(w): out {ESP_DATA_SECTOR + 1} d 512
+    # the file, a sector at a time, the last one padded with zeros
+    set(i): 0
+    while(_): {i < clusters} [
+        vec(part): ""
+        set(k): {i * 512}
+        while(_): {k < (i + 1) * 512} [
+            set(x): 0
+            if(_): {k < size} [ at(x): data k ]
+            push(_): part x
+            add(k): k 1
+        ]
+        bwrite(w): out {ESP_DATA_SECTOR + 2 + i} part 512
+        add(i): i 1
+    ]
+    set(result): 0
+]

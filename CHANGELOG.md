@@ -3,6 +3,23 @@
 ## [0.5.0] - 2026-11-16
 
 ### Added
+- UEFI boot for Moscow: `BOOTX64.EFI` (`src/moscow/efi/loader.c`), a UEFI loader
+  that finds the Moscow image through the firmware, loads the boot files from
+  1 MiB up and, from a CD, the whole image as a RAM disk (`/dev/ram`, the root),
+  and hands over the GOP framebuffer, ACPI's RSDP and the memory map. The ISO has
+  it as a second El Torito entry, an EFI system partition image made by
+  `tools/mkesp.su` (FAT12, in USSR). With no VGA text mode under UEFI, the
+  console draws on the framebuffer (`fbcon.inc`) in an 8x16 font made from Pobeda,
+  scaled to the screen; Kremlin runs and gives the screen back. Tried with QEMU's
+  OVMF and VirtualBox's EFI. `moscow.mk` builds the loader when clang and
+  lld-link are there.
+- ACPI and the APIC in Moscow. `acpi.inc` finds the ACPI tables (RSDP, RSDT or
+  XSDT, FADT, MADT) and powers the machine off by S5, its sleep type read from
+  the DSDT's `\_S5_`: `halt(_)` and Ctrl-D now switch off VirtualBox and real
+  machines, not only QEMU. `apic.inc` gives the 100 Hz tick from the local
+  APIC's timer, counted against the PIT at boot, with the 8259 PICs masked and
+  the MADT's IOAPICs set up masked; without an APIC the PIT stays. The boot
+  prints an `acpi:` line, and `k_acpi(v)` gives what was found.
 - SATA disks in Moscow: an AHCI driver (`src/moscow/arch/amd64/ahci.inc`) gives
   the disks on the first AHCI controller as `/dev/sda` .. `/dev/sdh` (DMA,
   LBA48) next to the IDE ones, for `bread`, `bwrite`, `bdevices`, the root file
