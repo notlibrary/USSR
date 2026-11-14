@@ -66,3 +66,39 @@ says to keep it on trusted networks until timeouts and limits exist.
 - Load tests with many concurrent clients through the scheduler
 - Fuzz request parsing
 - Add the HTTP tests to CI with port discovery
+
+## Applications on top
+- Virtual hosts: several applications by `Host` header on one port
+- A reverse proxy and load balancer handler (upstream list, health
+  checks, retries)
+- Mounting: several `uk_route` handlers under path prefixes (today one
+  application defines the single `uk_route`)
+- Background jobs and scheduled tasks beside the server
+- Per-route body limits (today the global `uk_max_body`)
+- File uploads streamed to disk, with a size limit and a progress
+  callback
+- Request and response hooks for tests: call a route without a socket
+  and inspect the result (Novgorod's test does this by hand)
+- Hot reload in development: restart handlers when a `.su` file
+  changes
+- A project scaffold: `ukraine new app` with routes, templates, static
+  files and a test
+
+## Standards and interop
+- HTTP caching headers helper (`Cache-Control`, `Vary`, `Age`)
+- Content negotiation (`Accept`, `Accept-Language`,
+  `Accept-Encoding`)
+- CORS preflight handling with an origin list
+- Basic and Bearer authentication helpers, and JWT verification
+- OpenAPI description generated from the route table
+- CGI/FastCGI/SCGI gateways to run other programs behind Ukraine
+- `HEAD` and `OPTIONS` answered by the framework for every route
+- `Date` and `Server` headers, and correct handling of `TRACE` and
+  `CONNECT` refusals
+- HTTP/3 (QUIC) as a long-range goal
+
+## Operations
+- Worker processes sharing a listening socket, for more than one core
+- Zero-downtime restart: hand the listener to a new process
+- systemd socket activation and notify
+- A status page with live connections and recent errors

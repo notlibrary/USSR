@@ -72,3 +72,39 @@ copy-on-write B+ tree in one file, with get/put/del/range/commit/abort.
   automatically
 - Protocol fuzzing with recorded server replies
 - Benchmarks: rows per second for simple, extended and COPY paths
+
+## More protocol and types
+- Large objects (`lo_*`) and streaming of `bytea` values in chunks
+- Array, range, composite and enum types decoded into vectors and
+  structs
+- `numeric` kept exact (as text or a decimal type) with a helper for
+  arithmetic
+- Time zones: `timestamptz` decoded with the session's `TimeZone`
+  parameter
+- Server parameters exposed (`dubna_setting` exists): `server_version`,
+  encoding checks, and a refusal of non-UTF-8 client encodings
+- Logical replication slots and the streaming replication protocol (to
+  feed changes into Dubna KV)
+- Protocol 3.2 negotiation and longer cancel keys
+- Notices routed to a callback, in place of being dropped or printed
+- Multi-statement results kept one by one (today the last result of a
+  simple query is kept)
+
+## Other databases behind the same API
+- A MySQL/MariaDB wire-protocol client
+- A SQLite file reader (read-only B-tree pages) in USSR
+- A Redis (RESP) client for caches
+- A tiny SQL layer over Dubna KV: `create table`, `insert`, `select ...
+  where key between`, so small apps need no server
+
+## Dubna KV, further
+- Nested transactions or savepoints inside one write transaction
+- A write-ahead option for many small commits (group commit)
+- Online backup while a writer is active (copy from a snapshot)
+- Encryption at rest with a key from the environment
+- Statistics: page fill, tree depth per sub-database, value size
+  histogram (`dubna_kv_info` gives four numbers today)
+- A `dubna_kv` command-line tool: get, put, del, range, dump, load,
+  verify
+- Larger keys (over 200 bytes) through overflow pages
+- Watches: call a function when a key or prefix changes

@@ -53,3 +53,33 @@
   TextMate grammar tests (`vscode-tmgrammar-test`)
 - Screenshots of each highlighter on the same sample file in the README
 - A theme recommendation that matches Pobeda and Mbltishi colours
+
+## Semantic highlighting
+- Tell definitions from calls, parameters from locals, and globals
+  (declared with `global(_):`) from the rest
+- Mark the result variable in `name(result): args` differently from
+  the arguments
+- Highlight expression blocks `{ ... }` and command blocks `[ ... ]`
+  with distinct bracket colours, and rainbow nesting
+- Flag unknown commands and unbalanced brackets as errors while typing
+- Highlight format strings of `template` and `scan` (`TYPE;TYPE`)
+- Embedded languages inside strings: SQL in `dubna_exec`, HTML in
+  Novgorod, regex patterns
+- Hash-namespace keys (`!name` / `?name`) as their own scope
+
+## Tools around the grammars
+- An HTML exporter: a `.su` file to a highlighted page, written in
+  USSR (for docs and Novgorod)
+- A terminal highlighter (`ussr --cat file.su`) with ANSI colours
+- A pretty-printer and formatter sharing the tree-sitter grammar
+- Code navigation queries (tags) for GitHub and editors: definitions
+  and references
+- An outline or symbols view per file
+- Injection queries for Markdown code fences tagged `ussr`
+- A playground page: type USSR, see the tree-sitter tree
+
+## More files
+- C files compiled by usa: mark the extensions usa lacks
+- Lenin's `models.conf`, Ural's `box.uno` fields with validation, and
+  KGB Markdown conventions (`key: value` facts, `[[links]]`)
+- Test expectation files and `.ru` hex dumps

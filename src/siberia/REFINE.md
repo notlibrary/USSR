@@ -71,3 +71,38 @@ UPPER LOWER), the error values and cycle detection. Files are flat ODF
   `--convert in.csv out.fods`
 - Tests that compare results with LibreOffice for every function
 - Fuzz the formula parser
+
+## Analysis tools
+- Goal seek and a simple solver (one target cell, several inputs)
+- What-if scenarios: named sets of input values
+- Trace precedents and dependents with arrows; show formulas mode
+- An error checker listing every cell with `#...!` and why
+- Subtotals and grouping (outline) of rows and columns
+- Remove duplicates, text to columns, transpose on paste
+- Paste special: values only, formats only, operations
+- Sparklines in a cell
+- Regression and moving-average functions (`TREND`, `FORECAST`,
+  `SLOPE`, `INTERCEPT`, `CORREL`)
+- Bit and base functions (`BITAND`, `DEC2HEX`, `HEX2DEC`), sharing
+  Klin's engine
+
+## Sheets as programs
+- User functions written in USSR and called from cells
+  (`=USSR("name", A1)`)
+- Macros: record and replay actions as a USSR script
+- Web and file functions: `=IMPORTCSV(path)`, `=HTTPGET(url)` (opt-in)
+- KGB link: `=KGB("cat", "legs")` reads a property from a knowledge
+  base
+- Cell protection and locked sheets
+- Print layout: page breaks, repeat header rows, fit to width
+
+## Shared code
+- Move the parts Novosibirsk includes (XML, file dialog, status bar,
+  event handlers) into a common file or into Petersburg and the
+  standard library, so neither program includes the other
+- Keep unknown `.fods` content on round trip (styles, charts, settings
+  from LibreOffice written back untouched)
+- Very large CSV files: load in chunks with a progress line
+- Text encoding choice for CSV (UTF-8, Windows-1251) and a BOM option
+- Locale: decimal comma and `;` separators on input and output, date
+  formats

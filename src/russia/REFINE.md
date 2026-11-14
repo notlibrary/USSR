@@ -21,9 +21,9 @@ lines) with:
   expansion
 - Keyboard (re)bindings: a `bind(_): "ctrl-a" "line-start"` table loaded
   from `kiev.su`, emacs and vi editing modes
-- Environment variable manipulation as first-class commands: `export`,
-  `unset`, `env`, `$VAR` expansion in arguments, and per-command
-  `VAR=x cmd`
+- Environment variable manipulation beyond today's `getenv`, `setenv`
+  and `unsetenv`: an `env` listing, `$VAR` expansion in arguments,
+  per-command `VAR=x cmd`, and export to child programs made explicit
 - A built-in line-based editor in the REPL: multi-line editing of the
   current block, `\e` to edit the last entry in Mbl, recall of whole
   definitions
@@ -85,3 +85,40 @@ lines) with:
   output and exit status for every file in `tests/`
 - Fuzz the lexer and parser against `check.su` and the C parser
 - Lexer and VM benchmarks tracked per release (lexbench.su exists)
+
+## Language growth (tried in russia first)
+- Named arguments and default values for definitions
+- Modules or namespaces, so libraries need no name prefixes
+  (`Mbl_`, `km_`, `nv_`, `sb_` are conventions today)
+- Local variables by declaration, with a warning on accidental globals
+- Closures or function values, and `map`/`filter` over vectors
+- Pattern matching on vectors, structs and UNO literals
+- String interpolation (`"total: {n}"`)
+- Exceptions with values (`try` exists): `throw` with data, `finally`
+- Iterators and a `for(x): vector [ ... ]` loop
+- Integer division and modulo operators that stay integers ("/" always
+  yields a real today)
+- Byte strings that can hold NUL, ending the "vectors of 0..255"
+  workaround in Dubna, Omsk and Novgorod
+- Vectors with insert and delete in the middle, and slices
+
+## Embedding and tools
+- russia as a library: `ru_eval(v): text` for other USSR programs
+  (Lenin sandboxes, Novgorod's "run this" snippets)
+- Resource limits per evaluation: steps, memory, time, no file or
+  socket access (a sandbox mode)
+- A formatter (`russia.su --fmt file.su`) and a linter built on
+  `check.su`
+- A documentation extractor from header comments
+- A language server built from the lexer, parser and `check.su`
+- A tracing mode that prints each command with its arguments and result
+- Coverage: which lines of a `.su` file a test run executed
+- Time-travel or reverse step in the VM debugger for small programs
+
+## Cleanliness
+- Split `russia.su` (9 300 lines) into files by stage (`lx`, `ps`,
+  `rt`, `cv`, `vm`, `sc`, `repl`) with `$include`
+- Replace the stage notes at the top ("Stage M1: lexer + token dump")
+  with the current state
+- A written list of deliberate differences from the C interpreter,
+  if any remain

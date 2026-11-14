@@ -76,3 +76,34 @@ It looks at the folder again every three seconds.
 ## Tests
 - Snapshot tests of the rendered canvas
 - Stress tests with folders of 5 000 files
+
+## Launchers and files
+- Launcher keys beyond `name`, `command` and `console`: `icon`, `dir`
+  (working directory), `env`, `hotkey`, `category`, `comment`
+- Global hotkeys from launchers (Ctrl+Alt+T for the terminal)
+- Templates in a `Templates` folder: New > from template
+- Rename in place on the icon label, in addition to the dialog
+- Recursive folder delete with a count confirmation (today only empty
+  folders are removed)
+- Properties with size on disk, dates, permissions and a checksum
+- Mounted drives and removable media as desktop icons, with eject
+- Network places: an FTP/HTTP folder shown through Ryazan
+
+## Search and information
+- Desktop search: file names and text contents under `~/kremlin`
+- A system monitor panel item: CPU, memory, scheduler tasks, and a
+  process list with kill
+- A clipboard history panel item
+- World clocks and a timer or alarm in the calendar popup
+- Calendar: week numbers, holidays from a file, and `.ics` import
+- A weather or currency widget over Ryazan HTTPS (opt-in)
+
+## Sessions and users
+- A sign-in screen and several users under Moscow
+- Shut down, restart, sleep and sign out in the KREMLIN menu on Moscow
+- First-run tour that points at the menu, pins and F1
+- Kiosk mode: one program, no menus, for a public terminal
+- Localisation of every label (Russian and English), with the date
+  format following it
+- A crash guard: if drawing fails, restart the desktop with the session
+  kept
