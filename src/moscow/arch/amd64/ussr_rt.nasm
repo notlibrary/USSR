@@ -2092,6 +2092,11 @@ exc_stub_%[v]:
 exc_common:
         test qword [rsp + 24], 3        ; from ring 3: the C code broke the rules
         jnz c3_fault
+        ; the report goes to COM1 and the screen as they are: not into a
+        ; capture, and not through a terminal's C hook (the C code may be
+        ; what broke)
+        mov qword [capture_on], 0
+        mov qword [con_hook_write], 0
         PUTS msg_exc
         mov rax, [rsp]
         call print_int
