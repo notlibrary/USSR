@@ -8,11 +8,12 @@
 ;   LBA TOC_LBA + 1 ..       the files, each starting on a sector: the
 ;                            runtime (always first), then the programs
 ;
-; Stage 2 uses the BIOS only for A20 and the memory map, then switches to
-; long mode and reads the file table and the files with its own ATA PIO
-; driver (primary master, LBA28): files go from 1 MiB up, as large as
-; they are, with no real-mode window in the way. Booted from a CD, whose ISO
-; holds this whole image as its El Torito boot file, it reads them over ATAPI.
+; Stage 2 uses the BIOS for A20, the memory map and, from a hard disk, the
+; file table and the files: BIOS reads to a buffer under 1 MiB, copied from
+; 1 MiB up in unreal mode, so the files are as large as they are and the disk
+; on whatever the BIOS boots from (IDE, SATA). Booted from a CD, whose ISO
+; holds this whole image as its El Torito boot file, it reads them over ATAPI
+; in long mode.
 ;
 ; Memory (identity mapped, 2 MiB pages, the first 4 GiB):
 ;   0x00500                  boot information for the runtime (BI_*)

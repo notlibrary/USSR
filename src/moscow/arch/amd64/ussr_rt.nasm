@@ -7056,6 +7056,7 @@ bi_pwd:
 
 %include "btree.inc"
 %include "ata.inc"
+%include "ahci.inc"
 %include "net.inc"
 %include "cffi.inc"
 %include "bytes.inc"
@@ -7772,6 +7773,11 @@ ata_cd_block:   resb 2048
 ata_sector:     resb 512
 ata_buffer:     resb ATA_CHUNK * 512 + 512
 ata_stage:      resb DEV_PIECE
+ahci_abar:      resq 1                  ; the AHCI controller's registers, or 0
+ahci_count:     resq 1                  ; its disks: /dev/sda ..
+ahci_ports:     resb AHCI_MAX           ; the port of each
+                alignb 1024
+ahci_mem:       resb AHCI_MAX * AHCI_PORT_MEM   ; command lists, FIS, tables
 rt_data_end:
 %if rt_data_end > CAPTURE_BUF
 %error "the runtime's variables run into the capture buffer"

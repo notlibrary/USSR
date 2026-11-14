@@ -5,12 +5,15 @@
 ; Stage 1 is the MBR: the BIOS loads it at 0x7c00 and it reads stage 2
 ; (the next STAGE2_SECTORS sectors) to 0x7e00 with the extended disk
 ; read. Stage 2 asks the BIOS for what only it knows (A20, the e820
-; memory map), builds identity page tables for the first 4 GiB and
-; switches from real mode straight to long mode. Everything after that
-; is 64-bit: an ATA PIO driver reads the file table and every file it
-; lists (the NASM USSR runtime first, then moscow.ru and russia.ru) to
-; memory from 1 MiB up, and stage 2 jumps to the runtime with the boot
-; information block's address in rdi.
+; memory map) and, from a hard disk, for the file table and every file
+; it lists (the NASM USSR runtime first, then moscow.ru and russia.ru):
+; extended reads, 64 sectors at a time, to a buffer under 1 MiB, copied
+; to their place from 1 MiB up in unreal mode. So the disk can be on
+; whatever the BIOS boots from - IDE, SATA (AHCI), anything else - and the
+; kernel's drivers take over after. Then stage 2 builds identity page
+; tables for the first 4 GiB, switches from real mode straight to long
+; mode and jumps to the runtime with the boot information block's
+; address in rdi.
 ;
 ; From a CD: the ISO's El Torito boot file is the whole disk image, no emulation.
 ; The BIOS has loaded stage 1 and stage 2 together and put the image's place on
@@ -144,6 +147,14 @@ stage2:
         movzx eax, byte [boot_drive]
         mov [BOOTINFO + BI_DRIVE], eax
 
+        ; from a hard disk the BIOS reads the files
+        cmp byte [boot_cd], 0
+        jne .page_tables
+        call bios_load
+        jc stage1_fail
+        mov byte [bios_loaded], 1
+.page_tables:
+
         ; identity map the first 4 GiB with 2 MiB pages
         cld
         xor ax, ax
@@ -270,6 +281,162 @@ read_memory_map:
         mov [BOOTINFO + BI_NE820], eax
         ret
 
+; --- from a hard disk: the files through the BIOS
+
+BOUNCE_SEG      equ 0x2000              ; 0x20000, under 1 MiB, in one 64 KiB
+BOUNCE_SECTORS  equ 64
+
+; The file table to TOC_BUFFER, every file it lists from RT_BASE up (each
+; on a FILE_ALIGN boundary), and the boot information for them, as the
+; long-mode loader does from a CD. CF set and si the reason on an error.
+bios_load:
+        mov dword [dap_lba], TOC_LBA
+        mov dword [dap_lba + 4], 0
+        mov word [dap_count], 1
+        mov word [dap_offset], TOC_BUFFER
+        mov word [dap_segment], 0
+        call bios_read
+        jc .read_fail
+        cmp dword [TOC_BUFFER], 'MOSC'
+        jne .toc_fail
+        cmp dword [TOC_BUFFER + 4], 'OWFS'
+        jne .toc_fail
+        mov ebx, [TOC_BUFFER + 8]
+        test ebx, ebx
+        jz .toc_fail
+        cmp ebx, TOC_MAX
+        ja .toc_fail
+        mov dword [BOOTINFO + BI_MAGIC], 'MOSC'
+        mov [BOOTINFO + BI_NFILES], ebx
+        mov dword [load_at], RT_BASE
+        mov si, TOC_BUFFER + 16         ; table entry
+        mov di, BOOTINFO + BI_FILES     ; boot information entry
+.file:
+        test ebx, ebx
+        jz .done
+        mov eax, [si]
+        mov [di + BIF_NAME], eax
+        mov eax, [si + 4]
+        mov [di + BIF_NAME + 4], eax
+        mov eax, [si + 8]
+        mov [di + BIF_NAME + 8], eax
+        mov eax, [si + 12]
+        mov [di + BIF_NAME + 12], eax
+        mov eax, [load_at]
+        mov [di + BIF_ADDR], eax
+        mov dword [di + BIF_ADDR + 4], 0
+        mov eax, [si + 20]              ; bytes
+        mov [di + BIF_SIZE_FIELD], eax
+        mov dword [di + BIF_SIZE_FIELD + 4], 0
+        mov eax, [si + 16]              ; first sector
+        mov ecx, [si + 24]              ; sectors
+        push si
+        push di
+        call bios_read_high
+        pop di
+        pop si
+        jc .read_fail
+        mov eax, [load_at]
+        add eax, FILE_ALIGN - 1
+        and eax, -FILE_ALIGN
+        mov [load_at], eax
+        add si, TOC_ENTRY_SIZE
+        add di, BIF_SIZE
+        dec ebx
+        jmp .file
+.done:
+        mov eax, [load_at]
+        mov [BOOTINFO + BI_FILES_END], eax
+        mov dword [BOOTINFO + BI_FILES_END + 4], 0
+        clc
+        ret
+.read_fail:
+        mov si, msg_bios_read
+        stc
+        ret
+.toc_fail:
+        mov si, msg_toc16
+        stc
+        ret
+
+; dap as it is -> int 13h extended read from the boot drive; CF set on an
+; error. Keeps the others.
+bios_read:
+        pushad
+        mov si, dap
+        mov ah, 0x42
+        mov dl, [boot_drive]
+        int 0x13
+        popad
+        ret
+
+; eax = first sector, ecx = sectors -> read through the bounce buffer to
+; load_at and on (load_at moves past them). CF set on an error.
+bios_read_high:
+.chunk:
+        test ecx, ecx
+        jz .ok
+        mov edx, ecx
+        cmp edx, BOUNCE_SECTORS
+        jbe .count
+        mov edx, BOUNCE_SECTORS
+.count:
+        mov [dap_lba], eax
+        mov dword [dap_lba + 4], 0
+        mov [dap_count], dx
+        mov word [dap_offset], 0
+        mov word [dap_segment], BOUNCE_SEG
+        call bios_read
+        jc .out
+        push ecx
+        mov ecx, edx
+        shl ecx, 9
+        call copy_high
+        pop ecx
+        add eax, edx
+        sub ecx, edx
+        jmp .chunk
+.ok:
+        clc
+.out:
+        ret
+
+; ecx = bytes (a multiple of 4) from the bounce buffer to load_at, which
+; moves past them. Unreal mode: protected mode just long enough to give
+; ds and es a 4 GiB limit, then real mode again with it. Keeps the others.
+copy_high:
+        push ds
+        push es
+        pushad
+        cli
+        lgdt [gdtr]
+        mov eax, cr0
+        or al, 1
+        mov cr0, eax
+        jmp short .protected
+.protected:
+        mov bx, 0x10
+        mov ds, bx
+        mov es, bx
+        and al, 0xfe
+        mov cr0, eax
+        jmp short .real
+.real:
+        xor bx, bx
+        mov ds, bx
+        mov es, bx
+        sti
+        mov esi, BOUNCE_SEG * 16
+        mov edi, [load_at]
+        add [load_at], ecx
+        shr ecx, 2
+        cld
+        a32 rep movsd
+        popad
+        pop es
+        pop ds
+        ret
+
         align 8
 gdt:
         dq 0
@@ -278,9 +445,13 @@ gdt:
 gdtr:
         dw gdtr - gdt - 1
         dd gdt
+load_at:     dd 0                       ; bios_load: where the next file goes
+bios_loaded: db 0                       ; the files are in memory already
 
 msg_hello:   db "Moscow boot: stage 2, entering long mode", 13, 10, 0
 msg_a20:     db "Moscow boot: A20 stays off", 13, 10, 0
+msg_bios_read: db "Moscow boot: disk read error (BIOS)", 13, 10, 0
+msg_toc16:   db "Moscow boot: no file table (MOSCOWFS)", 13, 10, 0
 
 ; --- long mode ------------------------------------------------------------
 
@@ -316,7 +487,9 @@ long_entry:
         mov eax, [ELTORITO_TABLE + 8]
         mov [BOOTINFO + BI_CD_BYTES], rax
 .read_table:
-        ; the file table
+        cmp byte [bios_loaded], 0
+        jne .start_runtime
+        ; the file table, from the CD
         mov eax, TOC_LBA
         mov ecx, 1
         mov rdi, TOC_BUFFER
@@ -364,6 +537,7 @@ long_entry:
         jmp .file
 .files_done:
         mov [BOOTINFO + BI_FILES_END], r12
+.start_runtime:
         mov rsi, msg_loaded
         call puts64
         mov rsp, RT_STACK_TOP
@@ -384,13 +558,8 @@ fail64:
         jmp .stop
 
 ; eax = first 512-byte sector of the image, ecx = sectors, rdi = destination,
-; from where the image is. Carry set on a device error.
+; from the CD, a 2048-byte block at a time. Carry set on a device error.
 read_sectors:
-        cmp byte [boot_cd], 0
-        je ata_read
-        ; falls through
-
-; The same from the CD, a 2048-byte block at a time
 cd_read:
         test ecx, ecx
         jz .ok
@@ -566,90 +735,6 @@ cd_wait_drq:
         clc
         ret
 
-; ATA PIO, primary master, LBA28: eax = first sector, ecx = sectors,
-; rdi = destination. Carry set on a device error.
-ata_read:
-        push rbx
-        push rdx
-.chunk:
-        test ecx, ecx
-        jz .ok
-        mov ebx, ecx
-        cmp ebx, 128
-        jbe .count
-        mov ebx, 128
-.count:
-        push rax
-        mov edx, 0x1f7
-.idle:
-        in al, dx
-        test al, 0x80                   ; BSY
-        jnz .idle
-        pop rax
-        push rax
-        mov edx, eax
-        shr edx, 24
-        and dl, 0x0f
-        or dl, 0xe0                     ; master, LBA
-        mov al, dl
-        mov dx, 0x1f6
-        out dx, al
-        mov dx, 0x1f2
-        mov al, bl
-        out dx, al
-        pop rax
-        push rax
-        mov dx, 0x1f3
-        out dx, al
-        shr eax, 8
-        mov dx, 0x1f4
-        out dx, al
-        shr eax, 8
-        mov dx, 0x1f5
-        out dx, al
-        mov dx, 0x1f7
-        mov al, 0x20                    ; READ SECTORS
-        out dx, al
-        push rcx
-        mov r8d, ebx
-.sector:
-        mov dx, 0x3f6                   ; 400 ns
-        in al, dx
-        in al, dx
-        in al, dx
-        in al, dx
-        mov dx, 0x1f7
-.wait:
-        in al, dx
-        test al, 0x80
-        jnz .wait
-        test al, 0x21                   ; ERR, DF
-        jnz .error
-        test al, 0x08                   ; DRQ
-        jz .wait
-        mov dx, 0x1f0
-        mov ecx, 256
-        rep insw
-        dec r8d
-        jnz .sector
-        pop rcx
-        pop rax
-        add eax, ebx
-        sub ecx, ebx
-        jmp .chunk
-.error:
-        pop rcx
-        pop rax
-        pop rdx
-        pop rbx
-        stc
-        ret
-.ok:
-        pop rdx
-        pop rbx
-        clc
-        ret
-
 ; rsi = NUL-terminated text -> COM1 and the top of the screen
 puts64:
         push rax
@@ -697,7 +782,7 @@ cd_index:    dd 0
 cd_cached:   dd -1
 cd_port:     dw 0
 cd_select:   db 0
-msg_long:    db "Moscow boot: long mode, reading the files", 13, 10, 0
+msg_long:    db "Moscow boot: long mode", 13, 10, 0
 msg_loaded:  db "Moscow boot: files loaded from 1 MiB, starting the runtime", 13, 10, 0
 msg_disk:    db "Moscow boot: disk read error", 13, 10, 0
 msg_toc:     db "Moscow boot: no file table (MOSCOWFS)", 13, 10, 0

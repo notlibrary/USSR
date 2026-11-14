@@ -4,6 +4,7 @@
     python src/moscow/tools/qemu_test.py [--qemu PATH] [--transcript FILE]
                                          [--accel whpx|kvm] [--no-mbl]
                                          [--no-novgorod] [--no-install]
+                                         [--no-sata]
 
 QEMU runs headless with the first serial port on a local TCP socket.
 The script waits for each "russia> " prompt (the PS1 Moscow sets), types
@@ -31,6 +32,8 @@ this script (--no-tls skips this).
 Then it installs: a second boot with an empty qcow2 virtual hard disk
 as /dev/hdb runs install(_):, answers its questions, and a third boot
 starts from that disk alone and checks what the installer put there.
+Then the same onto a disk on QEMU's AHCI controller, /dev/sda, booted
+alone from it after (--no-sata skips this).
 Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
@@ -303,7 +306,8 @@ def clean(data):
 class Machine:
     """QEMU with the given disks (path, format), COM1 on a socket."""
 
-    def __init__(self, qemu, disks, port, log, monitor=None, forward=(), cdrom=None):
+    def __init__(self, qemu, disks, port, log, monitor=None, forward=(), cdrom=None,
+                 sata=()):
         cmd = [qemu, "-display", "none", "-no-reboot", "-m", "2048",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
                "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port]
@@ -317,6 +321,12 @@ class Machine:
             cmd += ["-accel", ACCEL]
         for i, (path, fmt) in enumerate(disks):
             cmd += ["-drive", "format=%s,index=%d,media=disk,file=%s" % (fmt, i, path)]
+        # disks on an AHCI controller: /dev/sda, /dev/sdb ... in Moscow
+        if sata:
+            cmd += ["-device", "ahci,id=ahci"]
+        for i, (path, fmt) in enumerate(sata):
+            cmd += ["-drive", "id=sata%d,if=none,format=%s,file=%s" % (i, fmt, path),
+                    "-device", "ide-hd,drive=sata%d,bus=ahci.%d" % (i, i)]
         if cdrom:
             cmd += ["-cdrom", cdrom, "-boot", "d"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -392,6 +402,8 @@ def main():
     ap.add_argument("--qemu")
     ap.add_argument("--transcript")
     ap.add_argument("--port", type=int, default=45321)
+    ap.add_argument("--no-sata", action="store_true",
+                    help="no install onto a SATA (AHCI) disk and boot from it")
     ap.add_argument("--no-install", action="store_true",
                     help="no install onto a second disk")
     ap.add_argument("--no-mbl", action="store_true",
@@ -493,6 +505,8 @@ def main():
         failures += cd_boot(qemu, work, args.port + 90, log, check)
     if not args.no_install:
         failures += install(qemu, disk, work, args.port + 1, log, check)
+    if not args.no_sata:
+        sata(qemu, disk, work, args.port + 95, log, check)
 
     if args.transcript:
         with open(args.transcript, "wb") as f:
@@ -1622,6 +1636,71 @@ def install(qemu, disk, work, port, log, check):
     finally:
         m.close()
     return 0
+
+
+def sata(qemu, disk, work, port, log, check):
+    """SATA: the install disk on IDE installs onto an empty disk on an AHCI
+    controller (/dev/sda), all of it written through ahci.inc; that disk
+    then boots alone from the AHCI controller (the BIOS reads the boot
+    files, the kernel's AHCI driver the root)."""
+    target = os.path.join(work, "sata.qcow2")
+    r = subprocess.run([find_qemu_img(qemu), "create", "-f", "qcow2", target, "96M"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        check("qemu-img makes a qcow2 disk", False, r.stderr.decode("utf-8", "replace"))
+        return
+    answers = [(b"Install onto [/dev/sda]: ", "")] + ANSWERS[1:]
+    m = Machine(qemu, [(disk, "raw")], port, log, sata=[(target, "qcow2")])
+    serial = m.serial
+    try:
+        boot = clean(serial.output_to_prompt(timeout=60))
+        check("the AHCI disk is there", "disk:    /dev/sda, 96 MiB, QEMU HARDDISK" in boot, boot)
+        serial.command("bdevices(d):")
+        serial.output_to_prompt()
+        serial.command("print(_): d")
+        got = clean(serial.output_to_prompt())
+        check("bdevices says SATA for it", "[`/dev/sda`,100663296,`virtual`,`SATA`,`QEMU HARDDISK`,512]" in got, got)
+        serial.command("install(_):")
+        said = []
+        for question, answer in answers:
+            said.append(clean(serial.read_until(question, timeout=120)))
+            serial.command(answer)
+        said.append(clean(serial.output_to_prompt(timeout=900)))
+        text = "\n".join(said)
+        check("the installer offers the SATA disk", "/dev/sda  96 MiB  QEMU HARDDISK" in text, text)
+        check("it installs onto it, checked clean",
+              re.search(r"\n\d+ directories, \d+ files, \d+ bytes; \d+ inodes", text) is not None
+              and "Done: /dev/sda boots USSR Moscow now." in text, text)
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("SATA installer conversation", False, str(e))
+    finally:
+        m.close()
+
+    m = Machine(qemu, [], port + 1, log, sata=[(target, "qcow2")])
+    serial = m.serial
+    try:
+        boot = clean(serial.read_until(b"(a key: the shell)", timeout=120))
+        serial.sock.sendall(b"\r")
+        boot += "\n" + clean(serial.output_to_prompt(timeout=60))
+        check("the SATA disk boots alone, its root on /dev/sda",
+              "root:    /dev/sda from sector 8192, Belarus 'comrade'" in boot, boot)
+        for line, want in [
+            ('writefile(_): "/home/sata.txt" "written through AHCI"', r""),
+            ('cat(_): "/home/sata.txt"', r"written through AHCI"),
+            ("fsck(_):", r"\d+ directories, \d+ files, \d+ bytes; \d+ inodes, \d+ block map nodes, map depth up to \d+"),
+        ]:
+            serial.command(line)
+            got = clean(serial.output_to_prompt())
+            check("SATA: " + repr(line), re.fullmatch(want, got) is not None,
+                  "  got: %r\n  want: %s" % (got, want))
+        serial.sock.sendall(bytes([4]))
+        serial.read_until(b"system halted", timeout=20)
+    except (TimeoutError, EOFError) as e:
+        check("SATA disk conversation", False, str(e))
+    finally:
+        m.close()
 
 
 if __name__ == "__main__":
