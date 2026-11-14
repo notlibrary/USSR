@@ -44,9 +44,15 @@ image alone, `img` the disk, `iso` the ISO, `clean` all but what was fetched
 and built from it.
 
 `ussr.img` is a raw disk image; `dd` it to a USB stick to boot a real
-PC with a BIOS (or CSM) whose disk answers on the legacy ATA ports (IDE,
-or SATA in IDE mode); USB and AHCI drivers are not there yet. The
-installer, though, writes only to virtual disks.
+PC with a BIOS (or CSM): the BIOS reads the boot files from whatever it
+boots, and the kernel takes the root from an IDE disk or a SATA disk on
+an AHCI controller (USB and NVMe drivers are not there yet). The
+installer, though, writes only to virtual disks: QEMU's and VirtualBox's.
+
+In VirtualBox: the ISO on an IDE (PIIX4) CD drive, a disk on the SATA
+(AHCI) controller, `install(_):` onto `/dev/sda`, then the ISO out and
+the machine boots from the disk. The display may be VMSVGA, VBoxSVGA or
+VBoxVGA.
 
 ## The ISO
 
@@ -69,8 +75,9 @@ from the install disk.
 qemu-system-x86_64 -m 2048 -cdrom USSR050.ISO
 ```
 
-UEFI without its legacy BIOS mode and SATA drives in AHCI mode are not supported. So
-far it has only booted in QEMU.
+UEFI without its legacy BIOS mode is not supported, and the CD drive must be on IDE
+(a CD on SATA boots from the BIOS but stage 2 does not find it). It boots in QEMU and
+VirtualBox.
 
 ## Installing
 
@@ -369,14 +376,15 @@ and COM1, as before.
 
 - **Stage 1** (the MBR, 512 bytes) reads stage 2 with the BIOS extended
   disk read and jumps to it.
-- **Stage 2** uses the BIOS only for what only it knows: A20 and the
-  e820 memory map. It builds identity page tables for the first 4 GiB
-  (2 MiB pages) and goes from real mode straight to long mode. From
-  there on everything is 64-bit: an ATA PIO driver (primary master,
-  LBA28) reads the file table (`MOSCOWFS`, sector 16) and every file it
-  lists to memory from 1 MiB up, with no 640 KiB window, and stage 2
-  jumps to the runtime (always the first file) with the boot information
-  block in `rdi`.
+- **Stage 2** asks the BIOS for A20, the e820 memory map and, from a
+  hard disk, the file table (`MOSCOWFS`, sector 16) and every file it
+  lists: extended reads of 64 sectors to a buffer at 0x20000, each copied
+  to its place from 1 MiB up in unreal mode (ds and es with a 4 GiB
+  limit), so the disk can be IDE, SATA or whatever the BIOS boots. It
+  builds identity page tables for the first 4 GiB (2 MiB pages), goes
+  from real mode straight to long mode and jumps to the runtime (always
+  the first file) with the boot information block in `rdi`. From a CD it
+  reads the files in long mode, over ATAPI.
 - `arch/amd64/layout.inc` holds the sector and memory layout;
   `arch/amd64/image.nasm` assembles the disk with `incbin`.
 
@@ -623,10 +631,14 @@ function in a VM of its own and reports whether it failed. Not
 supported: `EXTERNAL`, `SCAN`, `GET`, `CHAIN`, `FILE`, `CD` (a program
 using one stops with a message). `time` reads the RTC.
 
-Disks (`ata.inc`): an ATA PIO driver (LBA28, polled, the cache flushed
-after writes) finds the four IDE positions at boot and serves ussr's
-block commands on them: `bread`, `bwrite`, `bsize`, `bcopy` and
-`bdevices`, with the disks named `/dev/hda` .. `/dev/hdd`. Offsets are
+Disks (`ata.inc`, `ahci.inc`): an ATA PIO driver (LBA28, polled, the
+cache flushed after writes) finds the four IDE positions at boot, and an
+AHCI driver the SATA disks on the first AHCI controller (PCI class
+01:06:01; up to 8, DMA with READ/WRITE DMA EXT, LBA48, polled, the cache
+flushed after writes), and both serve ussr's block commands: `bread`,
+`bwrite`, `bsize`, `bcopy` and `bdevices`, with the disks named
+`/dev/hda` .. `/dev/hdd` and `/dev/sda` .. `/dev/sdh` as Linux names
+them. The root is the first Belarus file system on them. Offsets are
 bytes underneath (lba times any sector size), so Belarus and Stalin run
 unchanged; a write that covers a disk sector in part reads it first.
 `sha256.inc` gives Stalin the hash it makes GUIDs and disk signatures

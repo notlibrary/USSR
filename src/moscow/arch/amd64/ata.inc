@@ -1,10 +1,11 @@
 ; ata.inc - disks for the Moscow runtime (ussr_rt.nasm includes it): an
 ; ATA PIO driver (LBA28, so up to 128 GiB a disk) for the four IDE
-; positions, and over it the block builtins ussr has for disks and disk
-; images: bread, bwrite, bsize, bcopy and bdevices. The disks are named
-; as Linux names them: /dev/hda (primary master), /dev/hdb (primary
-; slave), /dev/hdc and /dev/hdd (secondary). QEMU gives -drive index=N
-; the N-th of them.
+; positions, the SATA disks of ahci.inc after them, and over both the
+; block builtins ussr has for disks and disk images: bread, bwrite,
+; bsize, bcopy and bdevices. The disks are named as Linux names them:
+; /dev/hda (primary master), /dev/hdb (primary slave), /dev/hdc and
+; /dev/hdd (secondary), QEMU's -drive index=N the N-th of them; then
+; /dev/sda, /dev/sdb ... the SATA disks, in the order of their ports.
 ;
 ; Offsets and lengths are in bytes underneath: lba * sector with any
 ; sector size, so bread(v): dev byte count 1 reads bytes anywhere, and a
@@ -18,7 +19,10 @@
 ; memory, 64 KiB regions of the kernel's heap, and reads look there first: the
 ; system runs as from a disk, and what it wrote is gone at the next boot.
 
-ATA_DRIVES      equ 4
+IDE_DRIVES      equ 4                   ; /dev/hda .. /dev/hdd
+SATA_FIRST      equ IDE_DRIVES          ; /dev/sda, the drive table's 5th
+AHCI_MAX        equ 8                   ; SATA disks, /dev/sda .. /dev/sdh
+ATA_DRIVES      equ IDE_DRIVES + AHCI_MAX
 ATA_CHUNK       equ 64                  ; sectors per transfer (32 KiB)
 ATA_TIMEOUT     equ 20000000
 ; a drive record
@@ -101,13 +105,19 @@ ata_init:
         mov dx, 0x376
         out dx, al
         xor edi, edi
+        ; every drive absent until found
+        push rdi
+        mov rdi, ata_drive
+        mov ecx, ATA_DRIVES * ATAD_SIZE / 8
+        xor eax, eax
+        rep stosq
+        pop rdi
 .drive:
-        cmp edi, ATA_DRIVES
+        cmp edi, IDE_DRIVES
         jae .done
         mov rbx, rdi
         shl rbx, 6
         add rbx, ata_drive
-        mov qword [rbx + ATAD_PRESENT], 0
         call ata_ports
         push rdx
         add dx, 6
@@ -160,26 +170,8 @@ ata_init:
         test eax, eax
         jz .next
         mov [rbx + ATAD_SECTORS], rax
-        ; the model, words 27-46, two bytes a word the other way round
-        xor ecx, ecx
-.model:
-        mov ax, [ata_sector + 54 + rcx]
-        xchg al, ah
-        mov [rbx + ATAD_MODEL + rcx], ax
-        add ecx, 2
-        cmp ecx, 40
-        jb .model
-        mov byte [rbx + ATAD_MODEL + 40], 0
-        mov ecx, 40
-.trim:
-        test ecx, ecx
-        jz .trimmed
-        cmp byte [rbx + ATAD_MODEL + rcx - 1], ' '
-        ja .trimmed
-        dec ecx
-        mov byte [rbx + ATAD_MODEL + rcx], 0
-        jmp .trim
-.trimmed:
+        mov rdx, rbx
+        call ata_model
         mov qword [rbx + ATAD_PRESENT], 1
 .next:
         inc edi
@@ -206,8 +198,38 @@ ata_init:
         mov ecx, s_live_cd_end - s_live_cd
         rep movsb
 .no_cd:
+        call ahci_init
         pop rdi
         pop rbx
+        ret
+
+; rdx = a drive record: its model from the IDENTIFY data in ata_sector,
+; words 27-46, two bytes a word the other way round, without the spaces
+; after it. Keeps the others.
+ata_model:
+        push rax
+        push rcx
+        xor ecx, ecx
+.copy:
+        mov ax, [ata_sector + 54 + rcx]
+        xchg al, ah
+        mov [rdx + ATAD_MODEL + rcx], ax
+        add ecx, 2
+        cmp ecx, 40
+        jb .copy
+        mov byte [rdx + ATAD_MODEL + 40], 0
+        mov ecx, 40
+.trim:
+        test ecx, ecx
+        jz .done
+        cmp byte [rdx + ATAD_MODEL + rcx - 1], ' '
+        ja .done
+        dec ecx
+        mov byte [rdx + ATAD_MODEL + rcx], 0
+        jmp .trim
+.done:
+        pop rcx
+        pop rax
         ret
 
 ; --- the boot CD
@@ -490,8 +512,10 @@ cd_transfer:
 
 ; edi = drive, rax = first sector, ecx = sectors (1 .. 256), rsi =
 ; buffer, r8d = 1 to write -> CF set on an error. Keeps rbx, rbp, r12 ..
-; r15.
+; r15. A SATA drive's go to ahci.inc.
 ata_transfer:
+        cmp edi, SATA_FIRST
+        jae ahci_transfer
         push rbx
         push r9
         push r10
@@ -590,14 +614,24 @@ ata_drive_of:
         jne .none
         cmp dword [rsi + STR_BYTES], '/dev'
         jne .none
-        cmp word [rsi + STR_BYTES + 4], '/h'
+        cmp byte [rsi + STR_BYTES + 4], '/'
         jne .none
         cmp byte [rsi + STR_BYTES + 6], 'd'
         jne .none
         movzx eax, byte [rsi + STR_BYTES + 7]
         sub eax, 'a'
-        cmp eax, ATA_DRIVES
+        cmp byte [rsi + STR_BYTES + 5], 'h'
+        je .ide
+        cmp byte [rsi + STR_BYTES + 5], 's'
+        jne .none
+        cmp eax, AHCI_MAX
         jae .none
+        add eax, SATA_FIRST
+        jmp .known
+.ide:
+        cmp eax, IDE_DRIVES
+        jae .none
+.known:
         push rax
         shl rax, 6
         cmp qword [ata_drive + rax + ATAD_PRESENT], 0
@@ -1108,8 +1142,14 @@ bi_bdevices:
         je .next
         call vec_new
         mov rdi, rax
+        mov byte [dev_name + 5], 'h'
         mov byte [dev_name + 7], 'a'
         add [dev_name + 7], bl
+        cmp ebx, SATA_FIRST
+        jb .named
+        mov byte [dev_name + 5], 's'
+        sub byte [dev_name + 7], SATA_FIRST
+.named:
         mov esi, dev_name
         call new_string_z
         call vec_push_str
@@ -1120,14 +1160,20 @@ bi_bdevices:
         call vec_push_int
         mov rax, rbx
         shl rax, 6
-        mov esi, s_hdd
-        cmp dword [ata_drive + rax + ATAD_MODEL], 'QEMU'
-        jne .kind
         mov esi, s_virtual
+        cmp dword [ata_drive + rax + ATAD_MODEL], 'QEMU'
+        je .kind
+        cmp dword [ata_drive + rax + ATAD_MODEL], 'VBOX'
+        je .kind
+        mov esi, s_hdd
 .kind:
         call new_string_z
         call vec_push_str
         mov esi, s_ata
+        cmp ebx, SATA_FIRST
+        jb .bus
+        mov esi, s_sata
+.bus:
         call new_string_z
         call vec_push_str
         mov rax, rbx
@@ -1165,6 +1211,7 @@ s_live_cd:      db "USSR live CD", 0
 s_live_cd_end:
 s_virtual:      db "virtual", 0
 s_ata:          db "ATA", 0
+s_sata:         db "SATA", 0
 e_bread:        db "bread(v): device lba [count [sector]]", 0
 e_bread_numbers: db "bread/bwrite/bcopy: bad lba, count or sector size", 0
 e_bwrite:       db "bwrite(n): device lba bytes [sector]", 0

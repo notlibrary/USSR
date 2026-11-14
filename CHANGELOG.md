@@ -3,6 +3,15 @@
 ## [0.5.0] - 2026-11-16
 
 ### Added
+- SATA disks in Moscow: an AHCI driver (`src/moscow/arch/amd64/ahci.inc`) gives
+  the disks on the first AHCI controller as `/dev/sda` .. `/dev/sdh` (DMA,
+  LBA48) next to the IDE ones, for `bread`, `bwrite`, `bdevices`, the root file
+  system and the installer, which writes VirtualBox's disks (VBOX) as it does
+  QEMU's. The boot loader reads the boot files of a hard disk through the BIOS
+  now, so a disk on SATA (or anything the BIOS boots from) starts Moscow. In
+  VirtualBox: install from the ISO onto a SATA disk, then boot from it.
+  `qemu_test.py` installs onto a disk on QEMU's AHCI controller and boots it
+  (`--no-sata` skips it).
 - `build_glfw.bat`, the Windows GUI build (`ussr.exe` with Petersburg on GLFW):
   it stops early when the parser and lexer are not generated or `ussr.exe` is in
   use, instead of failing later in the compiler or the linker.

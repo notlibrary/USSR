@@ -15,7 +15,7 @@
 #
 # It only ever writes to virtual disks: under ussr to image files, never
 # to a raw disk (\\.\PhysicalDrive1, /dev/sdb); under Moscow to disks
-# whose model says QEMU. Answers come a line at a time from the terminal
+# whose model says QEMU or VBOX (VirtualBox's), IDE or SATA. Answers come a line at a time from the terminal
 # (or standard input), so a script can drive it; at the end of input every
 # question takes its default and the final "yes" is not given.
 $include "../stalin/stalin.su"
@@ -123,7 +123,7 @@ ins_fail(r): m [
 # ---------------------------------------------------------------- disks
 
 # true for a disk the installer may write: an image file under ussr, a
-# QEMU disk under Moscow
+# QEMU or VirtualBox disk under Moscow
 ins_virtual(r): dev [
     set(r): false
     if(_): ins_moscow [
@@ -137,7 +137,7 @@ ins_virtual(r): dev [
             len(ml): model
             set(m4): ""
             if(_): {ml >= 4} [ slice(m4): model 0 4 ]
-            if(_): {path = dev && m4 = "QEMU"} [ set(r): true ]
+            if(_): {path = dev && (m4 = "QEMU" || m4 = "VBOX")} [ set(r): true ]
             set(i): {i + 1}
         ]
         return(r): r
@@ -176,7 +176,7 @@ ins_pick_target(r): src_dev given [
         set(r): path
         return(r): r
     ]
-    # Moscow: the QEMU disks other than the install disk
+    # Moscow: the QEMU and VirtualBox disks other than the install disk
     bdevices(devs):
     vec(choices): ""
     set(first): ""
@@ -208,7 +208,7 @@ ins_pick_target(r): src_dev given [
     ]
     len(nc): choices
     if(_): {nc = 0} [
-        ins_fail(_): "no disk to install onto (start QEMU with a second disk, -drive file=disk.img,format=raw,index=1)"
+        ins_fail(_): "no disk to install onto (give the machine a second disk: QEMU's -drive file=disk.img,format=raw,index=1, or a VirtualBox disk)"
         return(r): r
     ]
     if(_): {given != ""} [ set(first): given ]
