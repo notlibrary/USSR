@@ -79,3 +79,42 @@
 - Headless golden-image tests of every widget
 - Event replay recordings for GUI regression tests
 - Fill in TESTPLAN's ASCII-only gap with Unicode input tests
+
+## Windows and system
+- Several windows with parent and child relations, modal dialogs that
+  block their parent, and tool windows
+- Window icon, title updates, minimum size, position and "always on
+  top"
+- System tray icon with a menu, and desktop notifications
+- Custom mouse cursors per widget (text beam, hand, resize arrows)
+- Standard dialogs: open, save, choose folder, choose font, choose
+  colour, about, confirm with custom buttons (`messagebox` has one
+  form)
+- Remember and restore window geometry by a name
+- Printing through the system's print dialog
+- Screen information: monitors, DPI, work area
+
+## Programming model
+- Data binding: a widget bound to a hash key updates when the value
+  changes
+- An undo stack service for apps (Tula, Siberia and Novosibirsk each
+  need one)
+- A command table: one named action with a label, shortcut, enabled
+  state and toolbar button
+- Async work with a progress dialog and cancel, without freezing the
+  window
+- Animation helpers: timed transitions with easing
+- An image widget that takes pixels from memory, not only a P6 file on
+  disk
+- Canvas item ids: change or delete one retained shape (today
+  `canvasclear` and redraw)
+- Double buffering control and partial redraws for large canvases
+- A widget gallery example showing every control, as living
+  documentation
+
+## Reach
+- Touch and pen input (taps, pinch, pressure)
+- OpenGL ES / WebGL build through Emscripten, so apps run in a browser
+- A terminal (TUI) backend drawing the same widgets with box glyphs
+- A remote display: draw on another machine over a socket
+- Right-to-left layout mirroring

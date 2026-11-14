@@ -63,3 +63,34 @@ and new/open/save/save-as with an unsaved-changes guard.
 - Round-trip tests: LibreOffice-written `.fodt` files load and save
   without losing content
 - Golden rendering tests of wrapping across fonts and sizes
+
+## Writing aids
+- An outline mode: collapse and move sections by their headings
+- Focus mode (only the current paragraph bright) and a full-screen
+  typewriter mode
+- Smart Home/End, and paragraph movement with Ctrl+Up/Down
+- Templates for letters, reports and notes
+- Comments in the margin and tracked changes (ODF change tracking)
+- Compare two documents and show the differences
+- Document statistics: reading time, sentence length, repeated words
+- A thesaurus and grammar hints (through a Lenin model, opt-in)
+- Typing of dead-key accents and a compose sequence
+
+## Document structure
+- Sections with columns
+- Fields: date, page count, file name, cross-references
+- Bookmarks and internal links
+- Bibliography entries and citations
+- Line numbering for code or legal text
+- Drop caps and paragraph borders or shading
+- Tab stops with leaders (for tables of contents)
+
+## Files, further
+- Keep unknown ODF content on round trip: elements Novosibirsk does not
+  understand are written back untouched
+- Document properties (title, author, keywords) in `office:meta`
+- RTF import and export
+- Embedded fonts or a font-missing warning with a substitute
+- Password-protected documents
+- A command-line converter: `novosibirsk.su --convert in.fodt out.txt`
+  without a window (the engine already runs headless)

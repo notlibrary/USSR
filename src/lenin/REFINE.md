@@ -85,3 +85,43 @@ the history. It runs in Moscow with no shell.
   exist) covering every method and stop rule
 - Property tests for ranking: a failing answer never wins, a holdout
   never leaks
+
+## Workflow
+- Resume: continue a stopped run from `--dir` (answers and measurements
+  already on disk), not from zero
+- A dry run that prints the plan: models, calls, the most it can cost,
+  and the prompts, without calling anyone
+- A config file (`lenin.conf`) for the options, so a task is one short
+  command; today everything is flags
+- A watch mode for the human: a live table of answers, scores and the
+  current best in the terminal
+- Human in the loop: pause after a cycle, show the best, take a note
+  that goes into the next handoff
+- Several tasks in one run (`--tasks` as a batch of independent
+  problems) with a combined report
+- Keep every answer's conversation, so a model can be asked a follow-up
+  about its own answer
+
+## Models and prompts
+- Roles: separate models for refining, drafting, criticising and
+  judging, set in `models.conf`
+- Reasoning or effort settings and max-tokens per model in
+  `models.conf`
+- Tool use: let a model run the test itself in a sandbox and iterate
+  before it answers
+- Structured output: ask for a JSON envelope (files, notes,
+  assumptions) in place of "the first fenced block"
+- Prompt-injection guard: text from one model's answer shown to another
+  is fenced and marked as data
+- A context budget: trim the handoff (best answer, defects) to fit a
+  model's window, which `--window` hints at today
+- Model ensembles for the vote: weighted by history, with ties broken
+  by the test, never by the author
+
+## Analysis
+- Significance: say when a "better" answer is within the noise of the
+  measurement
+- Curves per method (rounds, chain, funnel, enrich) on the same task,
+  to choose a method from data
+- Detect answers copied from the baseline or from each other
+- A leak estimate for `--score` suites, as `--stats` gives for tests

@@ -77,3 +77,41 @@ OpenSSL and zlib).
 - Corruption tests: a bad hash, a truncated ZIP, path traversal in an
   archive, a manifest naming files outside the package
 - Upgrade/downgrade/rollback tests
+
+## Repository side
+- Yank a broken version (kept for lock files, hidden from new
+  installs) and deprecate a package with a message
+- Channels: `stable`, `beta`, `nightly` per repository
+- Delta updates: download only what changed between versions
+- Repository statistics: download counts without tracking users
+- Namespaces or owners, so two publishers cannot both claim `kgb`
+- A repository linter run before upload: every index row has its
+  files, hashes match, URLs are under the public path
+- A Novgorod or static web page per package from its README
+
+## Package contents
+- Platform-specific packages (`os=windows`, `arch=x86_64`) for native
+  parts such as fonts or GLFW
+- Binary packages for the `ussr` interpreter itself: `ural self-update`
+- Post-install notes shown to the user (text only; scripts stay
+  forbidden)
+- Data and config directories declared in the manifest, kept on
+  update and removed only on `ural purge`
+- Executable launchers: `ural install kgb` puts a `kgb` command on
+  PATH (and a Kremlin `.kl` launcher)
+- Conflicts and replaces (`replaces=[...]`) for renamed packages
+- Workspaces: one repository checkout with many packages, as this
+  project is (`ural pack` already walks every `box.uno`)
+
+## Health
+- `ural doctor`: database integrity, missing files of installed
+  packages, broken dependencies, stale backups
+- `ural verify PKG`: compare installed files with the recorded hashes
+- `ural clean`: remove old backups and cached archives, with sizes
+  shown
+- `ural outdated`: what would update, with versions
+- Rollback: `ural rollback PKG` to the backup made by `update`
+- Transactions: an install of several packages either completes or
+  leaves nothing behind
+- Version comparison rules written down (how `0.4.0-alpha` sorts
+  against `0.4.0`)

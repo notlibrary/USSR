@@ -67,3 +67,34 @@ bypass the rules. It counts hits, keeps the last 16 drops, and has the
 - A fuzz test for rule parsing
 - An integration test inside Moscow with a QEMU guest pinging and
   connecting
+
+## Application awareness
+- Rules by program: `allow out tcp 443 for lenin`, using the process
+  that opened the socket
+- Ask mode on a desktop: an unknown outgoing connection raises a
+  Kremlin dialog (allow once, always, deny)
+- Profiles: `home`, `public`, `server`, switched with one command
+- Rule groups that can be enabled and disabled as a unit
+- Service names for ports (`ssh`, `https`) from a small table
+- Host names in rules, resolved at load time and refreshed
+- Country or ASN blocks from an offline prefix table
+
+## Deeper inspection
+- Fragment handling policy and a drop of malformed headers, counted
+  apart from rule drops
+- Anti-spoofing: drop packets that claim a local or private source on
+  the wrong side
+- Logging of the first packet of every allowed connection (an audit
+  trail), as an option
+- A pcap writer for dropped packets (`fw(_): "capture on"`)
+- Outgoing rules consulted for UDP sends and DNS, as they are for
+  `socket_connect` and `ping`
+
+## Rule files
+- `include other.rules` and a rules directory read in order
+- Rule expiry (`allow in tcp 9000 until 18:00`) for temporary openings
+- A converter from and to iptables/nftables or pf syntax for the
+  subset both have
+- A longer drop history than the last 16, sized by a setting
+- Hosted mode: apply the same rules to USSR sockets on Windows and
+  Linux (a per-program firewall for Ukraine servers)
