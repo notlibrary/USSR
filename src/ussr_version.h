@@ -4,7 +4,7 @@
 #define _USSR_STRING "USSR"
 
 #define USSR_VERSION_MAJOR 0
-#define USSR_VERSION_MINOR 4
-#define USSR_VERSION_PATCH 9
+#define USSR_VERSION_MINOR 5
+#define USSR_VERSION_PATCH 0
 
 #endif

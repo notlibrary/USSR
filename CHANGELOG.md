@@ -1,6 +1,6 @@
 # USSR programming language CHANGELOG
 
-## [Unreleased]
+## [0.5.0] - 2026-11-16
 
 ### Added
 - Alt+Tab in Moscow's GUI: held Alt and Tab go through the windows of every

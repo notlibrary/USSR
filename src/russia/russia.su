@@ -9267,7 +9267,7 @@ repl_prompt(r): cont [
                 set(rpp_done): 1
             ]
             if(_): {rpp_e = "v"} [
-                concat(r): r "0.4"
+                concat(r): r "0.5"
                 set(rpp_done): 1
             ]
             if(_): {rpp_e = "$" || rpp_e = "\\"} [
@@ -9286,7 +9286,7 @@ repl_prompt(r): cont [
 repl(r): [
     global(_): rp_eof rp_tty rp_pid rp_hist
     print(_): "USSR Unified Shell Script REPL"
-    print(_): "USSR v0.4"
+    print(_): "USSR v0.5"
     print(_): "Enter a command list or press Ctrl-D to exit."
     print(_): ""
     set(rp_buf): ""
