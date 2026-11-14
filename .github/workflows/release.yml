@@ -168,8 +168,8 @@ jobs:
         shell: bash
         run: make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 RYAZAN_REQUIRE_TLS=1 ussr
 
-      # The Moscow install disk, USSR049.img for the tag 0.4.9, and the same
-      # files as USSR049.ISO. moscow.mk goes on without a C library, a
+      # The Moscow install disk, USSR050.img for the tag 0.5.0, and the same
+      # files as USSR050.ISO. moscow.mk goes on without a C library, a
       # program or the ISO when it cannot build them; with STRICT=1, as a
       # release builds, that is an error.
       - name: Build the Moscow install disk

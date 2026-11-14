@@ -52,8 +52,8 @@ installer, though, writes only to virtual disks.
 
 `build/moscow/ussr.iso` holds the same files as the install disk's Belarus root,
 in ISO 9660 with Joliet and Rock Ridge, so Windows, Linux and the rest read them
-under their long names. A release ships it as `USSR049.ISO` for the tag 0.4.9, next to
-`USSR049.img`. `moscow.mk` makes it when `xorriso` is there, and
+under their long names. A release ships it as `USSR050.ISO` for the tag 0.5.0, next to
+`USSR050.img`. `moscow.mk` makes it when `xorriso` is there, and
 `tools/iso_test.py` reads its Joliet tree back with no ISO library and compares
 every file.
 
@@ -66,7 +66,7 @@ next boot. `install(_):` from it puts USSR on a disk, QEMU's virtual ones only, 
 from the install disk.
 
 ```bash
-qemu-system-x86_64 -m 2048 -cdrom USSR049.ISO
+qemu-system-x86_64 -m 2048 -cdrom USSR050.ISO
 ```
 
 UEFI without its legacy BIOS mode and SATA drives in AHCI mode are not supported. So
@@ -127,7 +127,7 @@ same way, and refuses raw disks:
 ## A session
 
     USSR Unified Shell Script REPL
-    USSR v0.4
+    USSR v0.5
     Enter a command list or press Ctrl-D to exit.
 
     russia> foo(r): x [ set(r): {x * x} ]
