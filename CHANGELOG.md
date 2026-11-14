@@ -3,6 +3,9 @@
 ## [0.5.0] - 2026-11-16
 
 ### Added
+- `build_glfw.bat`, the Windows GUI build (`ussr.exe` with Petersburg on GLFW):
+  it stops early when the parser and lexer are not generated or `ussr.exe` is in
+  use, instead of failing later in the compiler or the linker.
 - Alt+Tab in Moscow's GUI: held Alt and Tab go through the windows of every
   program (and Kremlin's desktop) in a list of their titles; letting Alt go
   brings the one chosen to the top with the keys.
@@ -71,6 +74,10 @@
   disk gains Mozilla's root certificates in `/etc/ssl/certs.pem`.
 
 ### Changed
+- `ussr-ubuntu.mk` records the compiler, its version and the flags in
+  `src/.build-flags`, and every object depends on it: changing compilers,
+  `DEBUG=1`, GLFW or OpenSSL rebuilds them all, where a leftover object built
+  the other way (a non-PIE `bestline.o`) used to break the link.
 - The Moscow disks are built by `moscow.mk` at the root (`make -f moscow.mk`),
   which replaces `src/moscow/build.sh`: what was fetched and built from it
   stays, and a second make redoes only what changed (the disk and the ISO are
