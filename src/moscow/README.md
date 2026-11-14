@@ -75,9 +75,25 @@ from the install disk.
 qemu-system-x86_64 -m 2048 -cdrom USSR050.ISO
 ```
 
-UEFI without its legacy BIOS mode is not supported, and the CD drive must be on IDE
-(a CD on SATA boots from the BIOS but stage 2 does not find it). It boots in QEMU and
-VirtualBox.
+It boots from UEFI too: a second El Torito entry, `/boot/efiboot.img`, is an EFI
+system partition (FAT12, made by `tools/mkesp.su`) with `\EFI\BOOT\BOOTX64.EFI`, the
+UEFI loader (`efi/loader.c`). The loader finds the image through the firmware, so the
+CD drive may be on any controller, loads the boot files from it and the whole image
+into memory: the kernel's root is that RAM disk, `/dev/ram`, writes and all, gone at
+the next boot as from the CD. UEFI has no VGA text mode, so the console draws on the
+firmware's framebuffer (GOP), 80x25 cells in an 8x16 font made from Pobeda
+(`arch/amd64/fbfont.inc`, by `tools/fbfont.py`), scaled to the screen; Kremlin runs
+as from a BIOS boot and gives the screen back to the console when it ends.
+
+```bash
+qemu-system-x86_64 -m 2048 -bios edk2-x86_64-code.fd -cdrom USSR050.ISO   # or pflash, as OVMF likes
+```
+
+In VirtualBox, "Enable EFI" in the machine's System settings boots it the same way.
+A disk Moscow is installed on boots from the BIOS (or CSM) only, as yet: the
+installer does not make an EFI system partition. Under the BIOS the CD drive must be
+on IDE (a CD on SATA boots, but stage 2 does not find it). It boots in QEMU and
+VirtualBox, from BIOS and UEFI.
 
 ## Installing
 
@@ -374,6 +390,17 @@ gives the shell instead. The install disk boots to the shell, on VGA
 and COM1, as before.
 
 ## Boot
+
+From UEFI (`efi/loader.c`, built with clang and lld-link into
+`BOOTX64.EFI`): the loader looks through the firmware's block devices for
+the Moscow image - a disk whose sector 16 holds the file table, or a CD
+whose El Torito BIOS entry does - loads the files the table lists from
+1 MiB up as stage 2 does, and from a CD the whole image as a RAM disk
+anywhere below 4 GiB. The boot information gets the GOP framebuffer
+(`BI_FB_*`), ACPI's RSDP and the memory map in e820 form, the loader's
+own allocations reserved in it; boot services end, the identity page
+tables go to 0x1000 as stage 2 builds them, and the runtime starts the
+same way. What it says goes to the firmware's console, then COM1.
 
 - **Stage 1** (the MBR, 512 bytes) reads stage 2 with the BIOS extended
   disk read and jumps to it.

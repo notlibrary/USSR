@@ -22,6 +22,9 @@
 /* the kernel's (arch/amd64/cffi.inc) */
 extern long moscow_ticks(void);
 extern void moscow_gui(long on);
+/* the UEFI framebuffer the console is on: 0 its address (0: VGA text
+ * mode), 1 width, 2 height, 3 pixels a line */
+extern long moscow_fb(long which);
 
 static unsigned char petersburg_glyph(char character, int row);
 
@@ -378,7 +381,21 @@ long gui_video_stop(void)
     vmmouse_stop();
     ps2_mouse(0xf5);
     dispi(4, 0);
-    vga_text_mode();
+    if (moscow_fb(0) != 0)
+    {
+        /* booted from UEFI: no text mode to go back to, but the
+         * framebuffer the console draws on, as the firmware set it */
+        dispi(1, (int)moscow_fb(1));
+        dispi(2, (int)moscow_fb(2));
+        dispi(3, 32);
+        dispi(6, (int)moscow_fb(3));
+        dispi(7, (int)moscow_fb(2));
+        dispi(8, 0);
+        dispi(9, 0);
+        dispi(4, 0x01 | 0x40 | 0x80);   /* on, linear, memory kept */
+    }
+    else
+        vga_text_mode();
     free(glfw.screen);
     glfw.screen = NULL;
     glfw.on = 0;

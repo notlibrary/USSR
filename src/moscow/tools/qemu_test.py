@@ -4,7 +4,7 @@
     python src/moscow/tools/qemu_test.py [--qemu PATH] [--transcript FILE]
                                          [--accel whpx|kvm] [--no-mbl]
                                          [--no-novgorod] [--no-install]
-                                         [--no-sata]
+                                         [--no-sata] [--no-uefi]
 
 QEMU runs headless with the first serial port on a local TCP socket.
 The script waits for each "russia> " prompt (the PS1 Moscow sets), types
@@ -34,6 +34,11 @@ as /dev/hdb runs install(_):, answers its questions, and a third boot
 starts from that disk alone and checks what the installer put there.
 Then the same onto a disk on QEMU's AHCI controller, /dev/sda, booted
 alone from it after (--no-sata skips this).
+
+Then UEFI: the ISO under OVMF, UEFI firmware for QEMU (its edk2 file next
+to QEMU, or /usr/share/OVMF): BOOTX64.EFI loads Moscow, whose root is the
+image in memory and whose console is the framebuffer; Kremlin runs and
+gives the screen back (--no-uefi skips this).
 Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
@@ -307,7 +312,7 @@ class Machine:
     """QEMU with the given disks (path, format), COM1 on a socket."""
 
     def __init__(self, qemu, disks, port, log, monitor=None, forward=(), cdrom=None,
-                 sata=()):
+                 sata=(), extra=()):
         cmd = [qemu, "-display", "none", "-no-reboot", "-m", "2048",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
                "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port]
@@ -329,6 +334,7 @@ class Machine:
                     "-device", "ide-hd,drive=sata%d,bus=ahci.%d" % (i, i)]
         if cdrom:
             cmd += ["-cdrom", cdrom, "-boot", "d"]
+        cmd += list(extra)
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         sock = None
         for _ in range(100):
@@ -402,6 +408,8 @@ def main():
     ap.add_argument("--qemu")
     ap.add_argument("--transcript")
     ap.add_argument("--port", type=int, default=45321)
+    ap.add_argument("--no-uefi", action="store_true",
+                    help="no boot from the ISO under UEFI (OVMF)")
     ap.add_argument("--no-sata", action="store_true",
                     help="no install onto a SATA (AHCI) disk and boot from it")
     ap.add_argument("--no-install", action="store_true",
@@ -507,6 +515,8 @@ def main():
         failures += install(qemu, disk, work, args.port + 1, log, check)
     if not args.no_sata:
         sata(qemu, disk, work, args.port + 95, log, check)
+    if not args.no_uefi:
+        uefi(qemu, work, args.port + 100, log, check)
 
     if args.transcript:
         with open(args.transcript, "wb") as f:
@@ -1699,6 +1709,84 @@ def sata(qemu, disk, work, port, log, check):
         serial.read_until(b"system halted", timeout=20)
     except (TimeoutError, EOFError) as e:
         check("SATA disk conversation", False, str(e))
+    finally:
+        m.close()
+
+
+def find_ovmf(qemu):
+    """OVMF's code and a variable store to copy: (code, vars or None), or None"""
+    share = os.path.join(os.path.dirname(qemu), "share")
+    for code, store in [
+            (os.path.join(share, "edk2-x86_64-code.fd"), os.path.join(share, "edk2-i386-vars.fd")),
+            ("/usr/share/qemu/edk2-x86_64-code.fd", "/usr/share/qemu/edk2-i386-vars.fd"),
+            ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
+            ("/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"),
+            ("/usr/share/ovmf/OVMF.fd", None)]:
+        if os.path.exists(code):
+            return code, store if store and os.path.exists(store) else None
+    return None
+
+
+def uefi(qemu, work, port, log, check):
+    """The ISO under UEFI (OVMF): BOOTX64.EFI from the ISO's EFI system partition
+    loads Moscow; the root is the image in memory (/dev/ram), the console the
+    framebuffer; Kremlin runs and gives the screen back; Ctrl-D powers off."""
+    if not os.path.exists(ISO):
+        print("SKIP no %s: moscow.mk makes it when xorriso is there" % ISO)
+        return
+    fw = find_ovmf(qemu)
+    if fw is None:
+        print("SKIP no OVMF (UEFI for QEMU): install ovmf")
+        return
+    code, store = fw
+    extra = ["-drive", "if=pflash,format=raw,readonly=on,file=" + code.replace(chr(92), "/")]
+    if store:
+        copy = os.path.join(work, "ovmf_vars.fd")
+        shutil.copyfile(store, copy)
+        extra += ["-drive", "if=pflash,format=raw,file=" + copy.replace(chr(92), "/")]
+    m = Machine(qemu, [], port, log, monitor=port + 1, cdrom=ISO, extra=extra)
+    serial = m.serial
+    try:
+        boot = clean(serial.output_to_prompt(timeout=300))
+        check("UEFI: BOOTX64.EFI finds the image on the CD", "Moscow UEFI: the image on the CD" in boot, boot)
+        check("UEFI: the root is the image in memory",
+              "disk:    /dev/ram, 64 MiB, USSR live CD" in boot
+              and re.search(r"root:    /dev/ram from sector \d+, Belarus", boot) is not None, boot)
+        serial.command('cat(_): "/etc/hostname"')
+        got = clean(serial.output_to_prompt())
+        check("UEFI: files come off it", got == "moscow-install", got)
+        shot = m.pixels(work)
+        bright = sum(1 for y in range(0, shot[1], 16) for x in range(0, shot[0], 4)
+                     if max(pixel(shot, x, y)) > 128)
+        check("UEFI: the console is on the framebuffer", bright > 50, "%d bright pixels" % bright)
+        serial.sock.sendall(b'run(_): "kremlin"' + bytes([13]))
+        end = time.time() + 600
+        while True:
+            shot = m.pixels(work)
+            if shot[0] == 1024 and shot[1] == 768 and pixel(shot, 80, 745) == (179, 38, 30):
+                check("UEFI: Kremlin's desktop", True)
+                break
+            if time.time() > end:
+                check("UEFI: Kremlin's desktop", False, "screen %dx%d" % (shot[0], shot[1]))
+                break
+            time.sleep(2)
+        serial.buf = b""
+        m.monitor_command("sendkey ctrl-q")
+        time.sleep(5)
+        m.monitor_command("sendkey ret")
+        serial.output_to_prompt(timeout=300)
+        time.sleep(2)
+        shot = m.pixels(work)
+        check("UEFI: Kremlin gives the screen back to the console",
+              shot[0] != 1024 or pixel(shot, 80, 745) != (179, 38, 30), "screen %dx%d" % (shot[0], shot[1]))
+        serial.sock.sendall(bytes([4]))
+        try:
+            m.proc.wait(timeout=60)
+            check("UEFI: Ctrl-D powers off", True)
+        except subprocess.TimeoutExpired:
+            check("UEFI: Ctrl-D powers off", False)
+    except (TimeoutError, EOFError) as e:
+        check("UEFI conversation", False, str(e))
     finally:
         m.close()
 
