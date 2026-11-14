@@ -316,8 +316,10 @@ what it takes from a hosted system there:
 - `lib/gui/gl.c`: OpenGL 1.1 in software, the part Petersburg draws
   with (quads, lines, alpha textures for TrueType glyphs, glDrawPixels,
   scissor);
-- `lib/gui/glfw.c`: GLFW on the machine: the Bochs/QEMU standard VGA's
-  linear framebuffer at 32 bits (its picture starts 256 KiB into video
+- `lib/gui/glfw.c`: GLFW on the machine: the linear framebuffer at 32
+  bits of a display adapter with the Bochs VBE registers - QEMU's
+  standard VGA, or VirtualBox's VMSVGA, VBoxSVGA and VBoxVGA, all three
+  tried - set up through them (the picture starts 256 KiB into video
   memory, so text mode comes back intact), the PS/2 keyboard as GLFW
   key codes and the mouse: QEMU's vmmouse (VMware's backdoor port
   0x5658) when there is one, which gives the pointer's place, so it

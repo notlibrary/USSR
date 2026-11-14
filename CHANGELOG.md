@@ -86,6 +86,13 @@
   an error instead of their checks after the fact. On Windows it runs in WSL.
 
 ### Fixed
+- Moscow's windows needed QEMU's standard VGA (PCI 1234:1111); in VirtualBox
+  Kremlin found "no screen for windows" and then stopped on "invalid operand
+  types". The GUI now takes any PCI display adapter whose Bochs VBE registers
+  answer, with the framebuffer at its first memory BAR: VirtualBox's VMSVGA,
+  VBoxSVGA and VBoxVGA all run Kremlin. And `createwindow` stops a program
+  that gets no window with "no window for this program", where it used to go
+  on with null.
 - Moscow stopped with "CPU exception 13" in VirtualBox (and on AMD hardware,
   or QEMU with KVM or WHPX on it) at the first Linux program, as when
   `run(_): "kremlin"` compiles Kremlin with `/bin/ussr`: AMD's `SYSRET` takes

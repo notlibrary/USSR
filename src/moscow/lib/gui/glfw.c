@@ -110,7 +110,11 @@ static int dispi_get(int index)
     return port_in16(0x1cf);
 }
 
-/* the standard VGA's framebuffer, or 0 */
+/* The framebuffer of the display adapter whose VBE registers (DISPI)
+ * answer, or 0: the first PCI display device (class 03h), its first
+ * memory BAR - BAR0 on QEMU's standard VGA (1234:1111) and VirtualBox's
+ * VBoxVGA (80ee:beef), BAR1 on VMSVGA (15ad:0405) and VBoxSVGA, whose
+ * BAR0 is I/O ports. Below 4 GiB only: the kernel maps that much. */
 static uintptr_t vga_lfb(void)
 {
     int bus, dev;
@@ -118,8 +122,25 @@ static uintptr_t vga_lfb(void)
         for (dev = 0; dev < 32; ++dev)
         {
             uint32_t id = pci_read(bus, dev, 0, 0);
-            if (id == 0x11111234u)
-                return pci_read(bus, dev, 0, 0x10) & ~(uint32_t)15;
+            int bar;
+            if ((id & 0xffff) == 0xffff || (pci_read(bus, dev, 0, 8) >> 24) != 0x03)
+                continue;
+            for (bar = 0; bar < 6; ++bar)
+            {
+                uint32_t b = pci_read(bus, dev, 0, 0x10 + bar * 4);
+                if (b & 1)
+                    continue;                   /* I/O ports */
+                if ((b & 6) == 4)
+                {
+                    /* 64 bits: the high half must be 0 */
+                    if (bar < 5 && pci_read(bus, dev, 0, 0x14 + bar * 4) != 0)
+                        return 0;
+                }
+                if ((b & ~(uint32_t)15) != 0)
+                    return b & ~(uint32_t)15;
+                if ((b & 6) == 4)
+                    ++bar;
+            }
         }
     return 0;
 }

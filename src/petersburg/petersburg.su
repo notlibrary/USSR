@@ -5,6 +5,10 @@ $once
 
 createwindow(result): title width height [
     petersburg_create_window(result): title width height
+    # no window (no screen, no GUI library: the native has said why): the
+    # program stops here, not at the first use of a window that is not there
+    typeof(_pcw_t): result
+    if(_): {_pcw_t != "integer"} [ fail(_): "no window for this program" ]
     set(petersburg_busy): 0!
 ]
 
