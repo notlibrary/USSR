@@ -7,6 +7,11 @@ USSR=${1:-./ussr}
 pass=0
 fail=0
 here=$(basename "$(pwd)")
+# \v shows MAJOR.MINOR; read it from the header so a release bump
+# never needs this test changed.
+version=$(awk '/#define USSR_VERSION_MAJOR/ { M = $3 }
+               /#define USSR_VERSION_MINOR/ { m = $3 }
+               END { print M "." m }' src/ussr_version.h)
 
 # expect NAME INPUT WANTED_SUBSTRING [ENV=VALUE ...]
 expect() {
@@ -41,7 +46,7 @@ expect "empty PS1 uses the default" 'print(_): 1\n' 'ussr> 1' PS1=
 expect "custom PS1" 'print(_): 1\n' 'my> 1' 'PS1=my> '
 expect "default continuation prompt" 'while(_): {false} [\nprint(_): 9\n]\nprint(_): 2\n' 'ussr> ... ... ussr> 2' -u PS1 -u PS2
 expect "custom PS2" 'while(_): {false} [\nprint(_): 9\n]\n' 'ussr> >> >> ' -u PS1 'PS2=>> '
-expect "version escape" 'print(_): 1\n' '[0.4]1' 'PS1=[\v]'
+expect "version escape" 'print(_): 1\n' "[$version]1" 'PS1=[\v]'
 expect "user and host escapes" 'print(_): 1\n' 'tester@box 1' 'PS1=\u@\h ' USERNAME=tester USER=tester COMPUTERNAME=box HOSTNAME=box
 expect "directory escape" 'print(_): 1\n' "<$here>1" 'PS1=<\W>'
 expect "dollar and backslash escapes" 'print(_): 1\n' '$ \ 1' 'PS1=$ \\ '
