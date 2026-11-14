@@ -1293,6 +1293,25 @@ init(ret): arg_cnt arg_vec [
     k_cpu(cpu):
     concat(line): "cpu:     " cpu
     print(_): line
+    # ACPI's tables, power off, and the tick's source (acpi.inc, apic.inc)
+    k_acpi(ac):
+    at(arev): ac 0
+    at(as5): ac 1
+    at(aapic): ac 2
+    at(aio): ac 3
+    if(_): {arev < 0} [ set(line): "acpi:    no tables" ]
+    else(_): [
+        str_from_int(sr): arev
+        concat(line): "acpi:    tables (RSDP revision " sr ")"
+        if(_): {as5 = 1} [ concat(line): line ", power off by S5" ]
+    ]
+    if(_): {aapic = 1} [
+        str_from_int(sio): aio
+        concat(line): line "; the local APIC's timer, " sio " IOAPIC"
+        if(_): {aio != 1} [ concat(line): line "s" ]
+    ]
+    else(_): [ concat(line): line "; the 8259 PIC and the PIT" ]
+    print(_): line
     k_mem(m):
     at(total): m 0
     at(free): m 1

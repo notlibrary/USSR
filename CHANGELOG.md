@@ -3,6 +3,13 @@
 ## [0.5.0] - 2026-11-16
 
 ### Added
+- ACPI and the APIC in Moscow. `acpi.inc` finds the ACPI tables (RSDP, RSDT or
+  XSDT, FADT, MADT) and powers the machine off by S5, its sleep type read from
+  the DSDT's `\_S5_`: `halt(_)` and Ctrl-D now switch off VirtualBox and real
+  machines, not only QEMU. `apic.inc` gives the 100 Hz tick from the local
+  APIC's timer, counted against the PIT at boot, with the 8259 PICs masked and
+  the MADT's IOAPICs set up masked; without an APIC the PIT stays. The boot
+  prints an `acpi:` line, and `k_acpi(v)` gives what was found.
 - SATA disks in Moscow: an AHCI driver (`src/moscow/arch/amd64/ahci.inc`) gives
   the disks on the first AHCI controller as `/dev/sda` .. `/dev/sdh` (DMA,
   LBA48) next to the IDE ones, for `bread`, `bwrite`, `bdevices`, the root file

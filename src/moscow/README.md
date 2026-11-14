@@ -193,8 +193,9 @@ The file commands are the kernel's (`moscow.su` takes them over with
 | `reboot(_):`, `halt(_):` | reset; stop |
 | `help(_):` | this list |
 
-Ctrl-D on an empty line ends the shell, and Moscow halts the machine
-(QEMU exits when started with `isa-debug-exit`).
+Ctrl-D on an empty line ends the shell, and Moscow powers the machine
+off: ACPI's S5 (QEMU exits with or without `isa-debug-exit`; a VirtualBox
+VM goes to "powered off").
 
 The console is a terminal: the shell reads its lines in raw mode, so
 Up and Down go through the history, which it keeps in
@@ -513,9 +514,26 @@ so keys made soon after boot are weaker than on a host. The kernel's own TLS
 ## The runtime
 
 `ussr_rt.nasm` is the USSR VM in assembly. It loads its own GDT and IDT
-(CPU exceptions print and stop), sets up the console (VGA text mode and
-COM1 at 115200, the PS/2 keyboard), the PIT at 100 Hz and the heap, then
-loads `moscow.ru` and runs it.
+(CPU exceptions print and stop), finds the ACPI tables, sets up the
+console (VGA text mode and COM1 at 115200, the PS/2 keyboard), the tick
+at 100 Hz and the heap, then loads `moscow.ru` and runs it.
+
+ACPI (`arch/amd64/acpi.inc`): the RSDP (from a UEFI loader, else the
+EBDA and 0xe0000 .. 0xfffff), the RSDT or XSDT, and in them the FADT and
+the MADT. Power off is S5: its SLP_TYP values come from the DSDT's
+`\_S5_` package (read by its bytes, no AML interpreter), SCI_EN goes on
+through the SMI port when it is off, and SLP_TYP | SLP_EN goes to PM1a's
+(and PM1b's) control port. `halt(_)` tries it after QEMU's debug exit and
+before QEMU's and VirtualBox's own power-off ports. The boot says what it
+found: `acpi:    tables (RSDP revision 2), power off by S5; the local
+APIC's timer, 1 IOAPIC`; `k_acpi(v)` gives the numbers.
+
+The APIC (`arch/amd64/apic.inc`): with one (CPUID), the local APIC's
+timer gives the tick and the 8259 PICs are masked. It runs at the bus
+clock divided by 16, counted against 10 ms of the PIT's channel 2 at
+boot; that count is its period, so 100 Hz on any machine. The IOAPICs the
+MADT lists are set up with every line masked: the drivers poll. Without
+an APIC the PIT through the PICs gives the tick, as before.
 
 Memory (`arch/amd64/mm.inc`): RAM is the largest usable region of the
 BIOS map above the loaded files. When it goes past the boot loader's
@@ -554,7 +572,7 @@ private half: its heaps are out of the others' reach), its own console
 and its own runtime state (struct types, C libraries, the areas its
 kernel commands run in).
 Task 0 is the one the machine booted with: the kernel and the shell.
-The PIT ticks at 100 Hz; when a task has had its 10 ms, the VM gives
+The tick is 100 Hz (the local APIC's timer, else the PIT); when a task has had its 10 ms, the VM gives
 the CPU away at its next instruction, unless the task is inside a kernel
 command, which runs to its end or to where it waits. Waits are the
 scheduler's, as russia's scheduler and ussr's kqueue-like event queue
@@ -692,7 +710,8 @@ The kernel's own services, used by `moscow.su`:
 | `net_send(n): head [tail [from [count]]]` | one frame: a byte vector, then a string or byte vector (or part of one) |
 | `net_sum(n): data [from [count]]` | the 16-bit one's complement sum of IP checksums, folded |
 | `k_elf_load(lib): bytes` | loads a freestanding x86-64 ELF shared object (`c_load` reads the file); `c_sym`, `c_call`, `c_alloc`, `c_free`, `c_read`, `c_write`, `c_string` as in ussr (`arch/amd64/cffi.inc`) |
-| `k_reboot(_):`, `k_halt(_):` | reset; stop |
+| `k_reboot(_):`, `k_halt(_):` | reset; stop (ACPI S5 power off) |
+| `k_acpi(v):` | `[ACPI revision or -1, S5 found, APIC on, IOAPICs, local APIC timer counts a tick, PM1a control port, SLP_TYPa]` |
 
 The heap is a bump heap with marks: `k_exec` (and `run`) release
 everything the program allocated, and the struct types it declared,

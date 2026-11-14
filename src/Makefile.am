@@ -165,7 +165,9 @@ EXTRA_DIST = \
 	novosibirsk/box.uno \
 	novosibirsk/novosibirsk.su \
 	moscow/README.md \
+	moscow/arch/amd64/acpi.inc \
 	moscow/arch/amd64/ahci.inc \
+	moscow/arch/amd64/apic.inc \
 	moscow/arch/amd64/ata.inc \
 	moscow/arch/amd64/boot.nasm \
 	moscow/arch/amd64/btree.inc \

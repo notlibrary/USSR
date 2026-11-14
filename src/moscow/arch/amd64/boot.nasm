@@ -475,6 +475,7 @@ long_entry:
         mov [BOOTINFO + BI_CD_DRIVE], rax
         mov [BOOTINFO + BI_CD_BASE], rax
         mov [BOOTINFO + BI_CD_BYTES], rax
+        mov [BOOTINFO + BI_RSDP], rax   ; the runtime looks in the BIOS areas
         cmp byte [boot_cd], 0
         je .read_table
         call cd_find

@@ -220,6 +220,7 @@ start:
         call serial_init
         call vga_clear
         call gdt_init
+        call acpi_init
         call idt_init
         call native_init
         call heap_init
@@ -261,15 +262,21 @@ env_init:
         ret
 
 ; Stops the machine. QEMU leaves with exit code 1 when started with
-; -device isa-debug-exit,iobase=0xf4,iosize=4; otherwise ACPI power off
-; (QEMU), otherwise the CPU halts.
+; -device isa-debug-exit,iobase=0xf4,iosize=4; otherwise ACPI's S5 from
+; the tables (acpi.inc), then the ports QEMU and VirtualBox power off at
+; without them; otherwise the CPU halts.
 sys_halt:
         cli
+        mov rsp, RT_STACK_TOP
         mov dx, 0xf4
         xor eax, eax
         out dx, al
-        mov dx, 0x604
+        call acpi_poweroff
+        mov dx, 0x604                   ; QEMU
         mov ax, 0x2000
+        out dx, ax
+        mov dx, 0x4004                  ; VirtualBox
+        mov ax, 0x3400
         out dx, ax
 .stop:
         hlt
@@ -2010,6 +2017,8 @@ idt_init:
         out 0x40, al
         mov al, ah
         out 0x40, al
+        ; the local APIC's timer instead, when there is one (apic.inc)
+        call apic_init
         ret
 
 ; ecx = vector, rax = handler
@@ -2047,8 +2056,15 @@ timer_isr:
         jb .eoi
         mov qword [need_resched], 1
 .eoi:
+        cmp qword [apic_on], 0
+        je .pic_eoi
+        mov rax, [lapic_base]
+        mov dword [rax + LAPIC_EOI], 0
+        jmp .eoi_done
+.pic_eoi:
         mov al, 0x20
         out 0x20, al
+.eoi_done:
         cmp qword [need_resched], 0
         je .out
         test qword [rsp + 16], 3
@@ -7057,6 +7073,8 @@ bi_pwd:
 %include "btree.inc"
 %include "ata.inc"
 %include "ahci.inc"
+%include "acpi.inc"
+%include "apic.inc"
 %include "net.inc"
 %include "cffi.inc"
 %include "bytes.inc"
@@ -7185,6 +7203,7 @@ bi_table:
         dq n_k_console, bi_k_console
         dq n_k_mem, bi_k_mem
         dq n_k_cpu, bi_k_cpu
+        dq n_k_acpi, bi_k_acpi
         dq n_k_modules, bi_k_modules
         dq n_k_exec, bi_k_exec
         dq n_k_reboot, bi_k_reboot
@@ -7359,6 +7378,7 @@ e_too_deep:     db "kernel commands nested too deep", 0
 s_ansi_clear:   db 27, "[2J", 27, "[H", 0
 n_k_mem:        db "k_mem", 0
 n_k_cpu:        db "k_cpu", 0
+n_k_acpi:       db "k_acpi", 0
 n_k_modules:    db "k_modules", 0
 n_k_exec:       db "k_exec", 0
 n_k_reboot:     db "k_reboot", 0
@@ -7778,6 +7798,21 @@ ahci_count:     resq 1                  ; its disks: /dev/sda ..
 ahci_ports:     resb AHCI_MAX           ; the port of each
                 alignb 1024
 ahci_mem:       resb AHCI_MAX * AHCI_PORT_MEM   ; command lists, FIS, tables
+acpi_rsdp:      resq 1                  ; acpi.inc: the tables, 0 for none
+acpi_rev:       resq 1
+acpi_fadt:      resq 1
+acpi_madt:      resq 1
+acpi_smi_cmd:   resq 1
+acpi_enable_value: resq 1
+acpi_pm1a:      resq 1
+acpi_pm1b:      resq 1
+acpi_slp_a:     resq 1
+acpi_slp_b:     resq 1
+acpi_s5:        resq 1
+apic_on:        resq 1                  ; apic.inc: the tick from the local APIC
+lapic_base:     resq 1
+lapic_count:    resq 1
+ioapic_count:   resq 1
 rt_data_end:
 %if rt_data_end > CAPTURE_BUF
 %error "the runtime's variables run into the capture buffer"
