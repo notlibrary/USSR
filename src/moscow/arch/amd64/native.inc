@@ -63,7 +63,12 @@ N_FRAME         equ 15
 FRAME_RSP       equ 14 * 8
 
 ; SYSCALL on: from ring 3 to the kernel's segments (STAR's 0x08), back with
-; SYSRET to 0x18 and 0x20 (STAR's 0x10 + 8 and + 16: gdt_init's order).
+; SYSRET to 0x1b and 0x23 (STAR's 0x13 + 8 and + 16: gdt_init's order).
+; The 3 is ring 3's RPL, in STAR itself: Intel's SYSRET adds it to both
+; selectors, AMD's only to CS, and the program would run with SS 0x18,
+; which the next iretq back to it (after a page fault, the timer) refuses
+; with #GP(0x18) - on a real CPU, VirtualBox or QEMU with KVM/WHPX; QEMU's
+; own CPU does not check.
 native_init:
         mov ecx, MSR_EFER
         rdmsr
@@ -71,7 +76,7 @@ native_init:
         wrmsr
         mov ecx, MSR_STAR
         xor eax, eax
-        mov edx, (0x10 << 16) | 0x08
+        mov edx, ((0x10 | 3) << 16) | 0x08
         wrmsr
         mov ecx, MSR_LSTAR
         mov eax, native_syscall

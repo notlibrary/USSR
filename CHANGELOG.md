@@ -86,6 +86,13 @@
   an error instead of their checks after the fact. On Windows it runs in WSL.
 
 ### Fixed
+- Moscow stopped with "CPU exception 13" in VirtualBox (and on AMD hardware,
+  or QEMU with KVM or WHPX on it) at the first Linux program, as when
+  `run(_): "kremlin"` compiles Kremlin with `/bin/ussr`: AMD's `SYSRET` takes
+  ring 3's SS from STAR as it is, without the RPL of 3 Intel's adds, so the
+  program ran with SS 0x18 and the next `iretq` back to it was refused. STAR
+  holds 0x13 now, as Linux's does. QEMU's own CPU never checked, so the tests
+  did not see it. A CPU exception's report now always reaches the serial port.
 - No ISO could be made with the xorriso of Ubuntu's runners (1.5.6): libisofs
   cannot write the El Torito boot information table for a boot file as big as
   the 64 MiB install disk. `src/moscow/tools/boot_info.sh` writes it after
