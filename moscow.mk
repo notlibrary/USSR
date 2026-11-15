@@ -11,8 +11,8 @@
 #                          hold the boot image and whose one partition is a
 #                          Belarus file system with the programs (/bin), the
 #                          boot files (/boot), /etc, the C libraries (/lib)
-#                          and the whole project (/src/ussr, the files git
-#                          tracks)
+#                          and the whole project (/src/ussr: the files git
+#                          tracks, only those)
 # build/moscow/ussr.iso    the same files as an ISO 9660 image with Joliet,
 #                          so any system reads them under their long names.
 #                          It boots: ussr.img is in it as /boot/ussr.img, the
@@ -326,13 +326,15 @@ $(OUT)/murmansk.rules:
 	    "policy in deny" "policy out allow" "allow in icmp" \
 	    "allow in tcp 8080" "allow in tcp 8443" >$@
 
-# the project: the files git tracks (every file in the tree when this is no
-# git checkout), never build products, whichever way they got there
+# the project: the files git tracks, and only those - nothing a build or an
+# editor left in the tree - never build products even when tracked. Not a
+# git checkout (or git refuses it): an error, not every file there is.
+# safe.directory: a checkout another user owns (WSL on /mnt/c, a container)
 $(LIST): FORCE
 	mkdir -p $(OUT)
-	if git -C $(ROOT) ls-files >$@.all 2>/dev/null && [ -s $@.all ]; then :; else \
-	    cd $(ROOT) && find . \( -path ./build -o -path ./.git -o -path ./.claude \
-	        -o -path ./autom4te.cache \) -prune -o -type f -print | sed 's|^\./||' >$@.all; \
+	if ! git -c safe.directory='*' -C $(ROOT) ls-files >$@.all || [ ! -s $@.all ]; then \
+	    echo "moscow.mk: git ls-files gave no files: build from a git checkout" >&2; \
+	    rm -f $@.all; exit 1; \
 	fi
 	grep -viE $(BUILD_PRODUCTS) $@.all >$@
 	rm -f $@.all
