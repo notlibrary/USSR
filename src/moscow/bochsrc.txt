@@ -1,0 +1,40 @@
+# bochsrc.txt - Moscow in Bochs (https://bochs.sourceforge.io, 2.7 and up),
+# from the repository root, after make -f moscow.mk:
+#
+#     bochs -q -f src/moscow/bochsrc.txt
+#
+# The install disk, build/moscow/ussr.img, is the primary master
+# (/dev/hda); COM1, where the kernel's console goes too, is written to
+# build/moscow/bochs-com1.txt; type into Bochs's window. Bochs's own VGA is
+# the Bochs VBE that Kremlin's windows draw on (a PCI device here, so the
+# GUI finds its framebuffer), its BIOS boots from the disk with extended
+# reads and gives ACPI tables, so Ctrl-D (halt) powers Bochs off.
+#
+# To boot the ISO instead: status=inserted on ata1-master below and
+# boot: cdrom. The mouse is off until Ctrl and the middle button (or F12
+# where the display library says so) capture it.
+
+memory: guest=1024, host=1024
+cpu: model=corei7_sandy_bridge_2600k, count=1, ips=200000000, reset_on_triple_fault=0, ignore_bad_msrs=1
+
+romimage: file=$BXSHARE/BIOS-bochs-latest
+vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest
+vga: extension=vbe, update_freq=15
+pci: enabled=1, chipset=i440fx, slot1=pcivga
+
+ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
+ata0-master: type=disk, mode=flat, path="build/moscow/ussr.img"
+ata1: enabled=1, ioaddr1=0x170, ioaddr2=0x370, irq=15
+ata1-master: type=cdrom, path="build/moscow/ussr.iso", status=ejected
+boot: disk
+
+com1: enabled=1, mode=file, dev="build/moscow/bochs-com1.txt"
+keyboard: type=mf, serial_delay=250
+mouse: type=ps2, enabled=0, toggle=ctrl+mbutton
+clock: sync=realtime, time0=local
+
+log: build/moscow/bochs.log
+panic: action=ask, acpi=fatal
+error: action=report
+info: action=ignore
+debug: action=ignore
