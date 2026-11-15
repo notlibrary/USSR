@@ -23,6 +23,9 @@ the partition, where the boot loader reads it; the Belarus partition
 holds the programs (`install.ru`, `stalin.ru`, `belarus.ru`), copies of
 the boot files, `/etc` and the whole USSR project.
 
+Moscow is 64-bit monolithic OS kernel on it's own (not POSIX not UNIX-like not Microsoft and not *BSD)
+However it inevitably has some traits usually found in the Unix world(zoo)
+
 ## Build and run
 
 Needs GNU make, NASM, QEMU and a built `ussr` (it compiles the `.su` files
