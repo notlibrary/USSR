@@ -57,6 +57,18 @@ In VirtualBox: the ISO on an IDE (PIIX4) CD drive, a disk on the SATA
 the machine boots from the disk. The display may be VMSVGA, VBoxSVGA or
 VBoxVGA.
 
+In Bochs (2.7 and up), with `src/moscow/bochsrc.txt` from the repository
+root:
+
+    bochs -q -f src/moscow/bochsrc.txt
+
+The install disk is the primary master, COM1 goes to
+`build/moscow/bochs-com1.txt`, and Bochs's VGA (the Bochs VBE Kremlin
+draws on, on PCI) and ACPI are there, so the desktop runs and Ctrl-D
+powers Bochs off. For the ISO, `status=inserted` on its line and
+`boot: cdrom`. Bochs is a slower machine than QEMU: the boot takes some
+seconds more.
+
 ## The ISO
 
 `build/moscow/ussr.iso` holds the same files as the install disk's Belarus root,
