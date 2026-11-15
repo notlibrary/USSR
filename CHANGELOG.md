@@ -3,8 +3,9 @@
 ## [0.5.0] - 2026-11-16
 
 ### Added
-- `src/moscow/bochsrc.txt`: Moscow in Bochs (2.7 and up), the install disk or the
-  ISO, COM1 to a file; it boots, runs Kremlin and powers off by ACPI.
+- `src/moscow/bochsrc.bxrc`: Moscow in Bochs 3.1, double-clicked or run from
+  `src/moscow`: the install disk with the ISO in the CD drive, COM1 to a file; it
+  boots, runs Kremlin and powers off by ACPI.
 - UEFI boot for Moscow: `BOOTX64.EFI` (`src/moscow/efi/loader.c`), a UEFI loader
   that finds the Moscow image through the firmware, loads the boot files from
   1 MiB up and, from a CD, the whole image as a RAM disk (`/dev/ram`, the root),

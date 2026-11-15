@@ -184,7 +184,7 @@ EXTRA_DIST = \
 	moscow/install.su \
 	moscow/moscow.su \
 	moscow/run.sh \
-	moscow/bochsrc.txt \
+	moscow/bochsrc.bxrc \
 	belarus/README.md \
 	belarus/belarus.su \
 	moscow/tools/qemu_test.py \
