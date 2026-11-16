@@ -1,0 +1,233 @@
+PASS a flag with a value
+PASS its number
+PASS a flag on its own
+PASS dashes become underscores
+PASS not one of the new flags
+PASS money is a real
+PASS the config file's flags come first
+PASS a key becomes a flag
+PASS a word alone is a flag
+PASS underscores become dashes
+PASS a preset's extension
+PASS a preset's test
+PASS a test given stays
+PASS the language in the system prompt
+PASS weighted criteria
+PASS complexity is a criterion
+PASS an unknown criterion
+PASS a weight that is no number
+PASS weighted speed is timed
+PASS lines are not timed
+PASS options come off a models line
+PASS an option
+PASS options from the models file
+PASS the URL is still the fourth word
+PASS refiners and judges do not draft
+PASS the refine role
+PASS the judges vote
+PASS no critic role: another drafter
+PASS a fake model answers from its file
+PASS wins and answers
+PASS the model that wins goes first
+PASS a call's tokens
+PASS what tokens cost
+PASS no price
+PASS over the money nothing more is asked
+PASS every fenced block
+PASS a name from the line before
+PASS a name from the fence
+PASS a block's code
+PASS a JSON envelope's files
+PASS its notes and assumptions
+PASS not an envelope
+PASS a mutation for size
+PASS mutations go round
+PASS cut to fit
+PASS it says so
+PASS what fits stays
+PASS dependencies
+PASS lines with something on them
+PASS complexity
+PASS the same lines
+PASS no line alike
+PASS median
+PASS median of an even count
+PASS spread
+PASS fewer lines
+PASS weighted: speed counts more
+PASS weighted: size counts more
+PASS a copy loses
+PASS the front: two that pass, neither beaten
+PASS one beaten on everything is off the front
+PASS far apart
+PASS inside the noise
+PASS a failing answer never wins
+PASS the first version
+PASS the next version
+PASS the last version
+PASS an old version
+PASS no such prompt
+PASS --use-prompt takes it from the library
+PASS and it is not refined again
+lenin: up to 8 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: wrong
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 1: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | -
+lenin: cycle 1: crossover by wrong
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 2: wrong
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 2: big
+lenin:   passed | 47 | 0 | -
+lenin: cycle 2: slim
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 1 | slim | passed | 5 | 0 | - |
+| 1 | crossover:wrong | FAILED | 7 | 0 | - |
+| 2 | wrong | FAILED | 7 | 0 | - |
+| 2 | big | passed | 47 | 0 | - |
+| 2 | slim | passed | 5 | 0 | - |
+
+Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 4 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
+
+PASS a run with the new options
+PASS a crossover answer
+PASS the report lists it
+PASS mutants of the best
+PASS calls and tokens
+PASS a mutation in cycle 2
+PASS another model's work is marked as data
+PASS no mutation without a best
+PASS every reply is kept
+PASS an HTML report
+PASS with a chart
+PASS run.json has every answer
+PASS and the best
+lenin: up to 6 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: wrong
+lenin:   resumed from tests/lenin-more-tmp/run1/cycle1_wrong.txt
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 1: big
+lenin:   resumed from tests/lenin-more-tmp/run1/cycle1_big.txt
+lenin:   passed | 47 | 0 | -
+lenin: cycle 1: slim
+lenin:   resumed from tests/lenin-more-tmp/run1/cycle1_slim.txt
+lenin:   passed | 5 | 0 | -
+lenin: cycle 2: wrong
+lenin:   resumed from tests/lenin-more-tmp/run1/cycle2_wrong.txt
+lenin:   FAILED | 7 | 0 | -
+lenin: cycle 2: big
+lenin:   resumed from tests/lenin-more-tmp/run1/cycle2_big.txt
+lenin:   passed | 47 | 0 | -
+lenin: cycle 2: slim
+lenin:   resumed from tests/lenin-more-tmp/run1/cycle2_slim.txt
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | wrong | FAILED | 7 | 0 | - |
+| 1 | big | passed | 47 | 0 | - |
+| 1 | slim | passed | 5 | 0 | - |
+| 2 | wrong | FAILED | 7 | 0 | - |
+| 2 | big | passed | 47 | 0 | - |
+| 2 | slim | passed | 5 | 0 | - |
+
+Best: cycle 1, slim.
+No hidden test: the winner is the best by size of 4 answers that pass a test the models were shown, so it may be fitted to it (--holdout).
+
+PASS resume makes no calls
+lenin: up to 2 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: down
+lenin:   down again, after a failed call
+lenin:   down again, after a failed call
+lenin: cycle 1: slim
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | slim | passed | 5 | 0 | - |
+
+Best: cycle 1, slim.
+
+PASS a failed call is tried again
+PASS tests run in a sandbox
+lenin: up to 1 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: multi
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | multi | passed | 5 | 0 | - |
+
+Best: cycle 1, multi.
+
+PASS a multi-file run
+PASS every file of the answer
+lenin: up to 1 paid model calls
+lenin: --test, --score and --holdout run code no person has read, with your rights: use a sandbox
+lenin: cycle 1: env
+lenin:   passed | 5 | 0 | -
+# Lenin's report
+
+Criterion: size
+Method: rounds
+Chosen: measured: the candidate that passes its test and is best by the criterion
+
+| cycle | model | state | bytes | runs/s | score |
+|---|---|---|---|---|---|
+| 1 | env | passed | 5 | 0 | - |
+
+Best: cycle 1, env.
+
+PASS a JSON envelope run
+PASS its first file is the answer
+PASS its notes
+lenin: a dry run: nobody is called
+models:
+  openai slim at http://x
+  critic: big
+calls: at most 4
+system prompt: You write code. Reply with one complete file in one fenced code block, with nothing else after it. What counts is that it works and then its size:1,lines:1.
+prompt:
+say good
+PASS a dry run calls nobody
+PASS scratch removed
+
+--- stderr ---
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
+USSR: prompt: AI provider error: this model is down
+
+--- exit 0 ---
