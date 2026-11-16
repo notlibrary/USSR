@@ -1,1 +1,1 @@
-'Package{name=`mbl`,version=`0.1.0`,description=`Vi-like console text editor for USSR`,entry=`Mbl.su`,dependencies=[`library`],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`mbl`,version=`0.2.0`,description=`Vi-like console text editor for USSR`,entry=`Mbl.su`,dependencies=[`library`],files=[`Mbl.su`,`more.su`,`CHANGELOG.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

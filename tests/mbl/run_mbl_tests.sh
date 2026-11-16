@@ -156,7 +156,8 @@ fi
 long=$(printf 'ж%.0s' $(seq 1 100))
 printf '%s
 ' "$long" >"$TMP/long.txt"
-printf ':q' | $LIMIT "$USSR" "$MBL" "$TMP/long.txt" >"$TMP/screen" 2>&1
+printf ':q
+' | $LIMIT "$USSR" "$MBL" "$TMP/long.txt" >"$TMP/screen" 2>&1
 run=$(od -An -v -tu1 "$TMP/screen" | tr -s ' 
 ' '
 
@@ -179,6 +180,108 @@ if [ "$run" = "160 27" ]; then
 else
     fail=$((fail + 1)); printf 'FAIL long Cyrillic line cut at 80 characters (%s)
 ' "$run"
+fi
+
+# Refine pass 1: motions, operators, text objects, registers, repeat,
+# macros, search, ex commands, settings, insert-mode keys, files
+NL=$(printf '\nX'); NL=${NL%X}
+CA=$(printf '\001')
+CX=$(printf '\030')
+CW=$(printf '\027')
+CU=$(printf '\025')
+TAB=$(printf '\t')
+case_ motion_b 'one two three\n' "wwbx:wq" 'one wo three\n'
+case_ motion_e 'one two\n' "ex:wq" 'on two\n'
+case_ motion_dollar 'abc\n' "\$x:wq" 'ab\n'
+case_ motion_caret '  abc\n' "\$^x:wq" '  bc\n'
+case_ motion_zero '  abc\n' "\$0x:wq" ' abc\n'
+case_ motion_G 'a\nb\nc\n' "Gx:wq" 'a\nb\n\n'
+case_ motion_gg 'a\nb\nc\n' "Gggx:wq" '\nb\nc\n'
+case_ motion_NG 'a\nb\nc\n' "2Gx:wq" 'a\n\nc\n'
+case_ ex_line_number 'a\nb\nc\n' ":3${NL}x:wq" 'a\nb\n\n'
+case_ motion_f_repeat 'a,b,c,d\n' "f,;x:wq" 'a,bc,d\n'
+case_ motion_t 'a,b,c,d\n' "lt,x:wq" 'a,,c,d\n'
+case_ delete_till 'abc,d\n' "dt,:wq" ',d\n'
+case_ delete_find 'abc,d\n' "df,:wq" 'd\n'
+case_ motion_percent 'f(a(b)c)\n' "%x:wq" 'f(a(b)c\n'
+case_ motion_paragraph 'a\nb\n\nc\n' "}x:wq" 'a\nb\n\nc\n'
+case_ delete_word 'one two\n' "dw:wq" 'two\n'
+case_ delete_to_end 'abc def\n' "wd\$:wq" 'abc \n'
+case_ D_deletes_to_end 'abc def\n' "wD:wq" 'abc \n'
+case_ delete_to_start 'abc def\n' "wd0:wq" 'def\n'
+case_ delete_line_down 'a\nb\nc\n' "dj:wq" 'c\n'
+case_ delete_to_last_line 'a\nb\nc\n' "jdG:wq" 'a\n'
+case_ undo_operator 'one two\n' "dwu:wq" 'one two\n'
+case_ yank_put_line 'a\nb\n' "yyp:wq" 'a\na\nb\n'
+case_ yank_word_put_before 'ab cd\n' "ywP:wq" 'ab ab cd\n'
+case_ swap_chars 'ab\n' "xp:wq" 'ba\n'
+case_ named_register 'one\ntwo\n' "\"ayyj\"ap:wq" 'one\ntwo\none\n'
+case_ change_inner_quotes 'say "hi there" ok\n' "fhci\"X$ESC:wq" 'say "X" ok\n'
+case_ delete_inner_parens 'call(a, b)\n' "f,di(:wq" 'call()\n'
+case_ delete_around_parens 'x(a)y\n' "fada(:wq" 'xy\n'
+case_ delete_inner_word 'one two\n' "wdiw:wq" 'one \n'
+case_ delete_a_word 'one two three\n' "wdaw:wq" 'one three\n'
+case_ replace_char 'abc\n' "rx:wq" 'xbc\n'
+case_ toggle_case 'abc\n' "~~:wq" 'ABc\n'
+case_ join_lines 'a\n  b\n' "J:wq" 'a b\n'
+case_ indent_line 'a\n' ">>:wq" '    a\n'
+case_ dedent_line '      a\n' "<<:wq" '  a\n'
+case_ upper_word 'hello world\n' "gUiw:wq" 'HELLO world\n'
+case_ lower_line 'ABC Def\n' "guu:wq" 'abc def\n'
+case_ substitute_char 'abc\n' "sY$ESC:wq" 'Ybc\n'
+case_ change_to_end 'abc def\n' "wCX$ESC:wq" 'abc X\n'
+case_ open_above 'b\n' "Oa$ESC:wq" 'a\nb\n'
+case_ append_line_end 'ab\n' "A!$ESC:wq" 'ab!\n'
+case_ insert_line_start '  ab\n' "\$I-$ESC:wq" '  -ab\n'
+case_ dot_repeats_x 'abcdef\n' "x..:wq" 'def\n'
+case_ dot_repeats_insert 'one\n' "A!$ESC.:wq" 'one!!\n'
+case_ dot_repeats_dd 'a\nb\nc\nd\n' "dd.:wq" 'c\nd\n'
+case_ macro 'a\nb\nc\n' "qaI-${ESC}jq2@a:wq" '\055a\n\055b\n\055c\n'
+case_ search_forward 'foo bar foo\n' "/foo${NL}x:wq" 'foo bar oo\n'
+case_ search_wraps 'foo bar foo\n' "/foo${NL}nx:wq" 'oo bar foo\n'
+case_ search_backward 'ab cd ab\n' "\$?ab${NL}x:wq" 'ab cd b\n'
+case_ search_word 'ab cd ab\n' "*x:wq" 'ab cd b\n'
+case_ substitute_first 'a a\nb a\n' ":s/a/X/${NL}:wq" 'X a\nb a\n'
+case_ substitute_all 'a a\nb a\n' ":%s/a/X/g${NL}:wq" 'X X\nb X\n'
+case_ substitute_groups 'key=value\n' ":s/(\\w+)=(\\w+)/\\2=\\1/${NL}:wq" 'value=key\n'
+case_ global_delete 'a1\nb\na2\n' ":g/a/d${NL}:wq" 'b\n'
+case_ inverse_global_delete 'a1\nb\na2\n' ":v/a/d${NL}:wq" 'a1\na2\n'
+case_ sort_lines 'c\na\nb\n' ":sort${NL}:wq" 'a\nb\nc\n'
+case_ sort_numeric '10\n9\n100\n' ":sort n${NL}:wq" '9\n10\n100\n'
+case_ sort_unique 'b\na\nb\n' ":sort u${NL}:wq" 'a\nb\n'
+case_ range_delete 'a\nb\nc\n' ":1,2d${NL}:wq" 'c\n'
+case_ range_to_end 'a\nb\nc\n' ":2,\$d${NL}:wq" 'a\n'
+case_ range_shift 'a\nb\n' ":%>${NL}:wq" '    a\n    b\n'
+case_ add_number 'x 41 y\n' "${CA}:wq" 'x 42 y\n'
+case_ subtract_number 'x 41 y\n' "5${CX}:wq" 'x 36 y\n'
+case_ add_negative 'n=-3\n' "${CA}${CA}${CA}${CA}:wq" 'n=1\n'
+case_ insert_ctrl_w - "ione two${CW}$ESC:wq" 'one \n'
+case_ insert_ctrl_u - "iabc${CU}def$ESC:wq" 'def\n'
+case_ insert_tab - "i${TAB}x$ESC:wq" '\tx\n'
+case_ expand_tab - ":set et ts=4${NL}i${TAB}x$ESC:wq" '    x\n'
+case_ auto_indent '  a\n' ":set ai${NL}A${NL}x$ESC:wq" '  a\n  x\n'
+case_ crlf_kept 'a\r\nb\r\n' "x:wq" '\r\nb\r\n'
+case_ crlf_to_unix 'a\r\n' ":set ff=unix${NL}:wq" 'a\n'
+case_ mark_line_delete 'a\nb\nc\nd\n' "majjd'a:wq" 'd\n'
+case_ write_if_changed 'ab\n' "x:x${NL}" 'b\n'
+case_ read_only_refuses 'ab\n' ":set ro${NL}x:wq${NL}:q!" 'ab\n'
+
+# +N opens the file at line N
+printf 'a\nb\nc\n' >"$TMP/plus.txt"
+printf 'x:wq\n' | $LIMIT "$USSR" "$MBL" +3 "$TMP/plus.txt" >"$TMP/screen" 2>&1
+printf 'a\nb\n\n' >"$TMP/want"
+if cmp -s "$TMP/plus.txt" "$TMP/want"; then
+    pass=$((pass + 1)); printf 'PASS +N opens at a line\n'
+else
+    fail=$((fail + 1)); printf 'FAIL +N opens at a line\n'
+fi
+# :set nu shows a gutter, the status line a ruler
+printf 'a\nb\n' >"$TMP/nu.txt"
+printf ':set nu\nj:q\n' | $LIMIT "$USSR" "$MBL" "$TMP/nu.txt" >"$TMP/screen" 2>&1
+if grep -q '  2 b' "$TMP/screen" && grep -q '2:1 100%' "$TMP/screen"; then
+    pass=$((pass + 1)); printf 'PASS line numbers and ruler\n'
+else
+    fail=$((fail + 1)); printf 'FAIL line numbers and ruler\n'
 fi
 
 rm -rf "$TMP"
