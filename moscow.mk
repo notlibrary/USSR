@@ -96,15 +96,23 @@ SQLITE_SHA256 := 926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64
 CACERT := cacert-2026-11-05.pem
 CACERT_SHA256 := 427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285
 
-# $(call fetch,url,sha256): the target, into build/moscow/dl, checked
+# $(call fetch,urls,sha256): the target, into build/moscow/dl, checked.
+# urls are mirrors of one file, tried in turn until one gives the bytes
+# with that SHA-256: a site may answer a CI runner with a block page or
+# a cut-off file and still say 200.
 define fetch
 mkdir -p $(DL)
-curl -fsSL --retry 3 -o $@.part '$(1)'
-sum=$$(sha256sum $@.part | cut -d' ' -f1); \
-if [ "$$sum" != "$(2)" ]; then \
-    echo "moscow.mk: $(notdir $@) has SHA-256 $$sum, not $(2)" >&2; rm -f $@.part; exit 1; \
-fi
-mv $@.part $@
+for url in $(1); do \
+    rm -f $@.part; \
+    if ! curl -fsSL --retry 3 -o $@.part "$$url"; then \
+        echo "moscow.mk: $$url: download failed" >&2; continue; \
+    fi; \
+    sum=$$(sha256sum $@.part | cut -d' ' -f1); \
+    if [ "$$sum" = "$(2)" ]; then mv $@.part $@; exit 0; fi; \
+    echo "moscow.mk: $$url gave $$(wc -c < $@.part) bytes with SHA-256 $$sum, not $(2)" >&2; \
+    head -c 200 $@.part | tr -c '[:print:]' '.' >&2; echo >&2; \
+done; \
+rm -f $@.part; echo "moscow.mk: no mirror gave $(notdir $@)" >&2; exit 1
 endef
 
 $(DL)/$(BEARSSL).tar.gz:
@@ -112,11 +120,11 @@ $(DL)/$(BEARSSL).tar.gz:
 $(DL)/$(MUSL).tar.gz:
 	$(call fetch,https://musl.libc.org/releases/$(MUSL).tar.gz,$(MUSL_SHA256))
 $(DL)/$(ZLIB).tar.gz:
-	$(call fetch,https://zlib.net/fossils/$(ZLIB).tar.gz,$(ZLIB_SHA256))
+	$(call fetch,https://zlib.net/fossils/$(ZLIB).tar.gz https://github.com/madler/zlib/releases/download/v$(ZLIB:zlib-%=%)/$(ZLIB).tar.gz,$(ZLIB_SHA256))
 $(DL)/$(OPENSSL).tar.gz:
-	$(call fetch,https://github.com/openssl/openssl/releases/download/$(OPENSSL)/$(OPENSSL).tar.gz,$(OPENSSL_SHA256))
+	$(call fetch,https://github.com/openssl/openssl/releases/download/$(OPENSSL)/$(OPENSSL).tar.gz https://www.openssl.org/source/$(OPENSSL).tar.gz,$(OPENSSL_SHA256))
 $(DL)/$(CURL).tar.gz:
-	$(call fetch,https://curl.se/download/$(CURL).tar.gz,$(CURL_SHA256))
+	$(call fetch,https://curl.se/download/$(CURL).tar.gz https://github.com/curl/curl/releases/download/curl-$(subst .,_,$(CURL:curl-%=%))/$(CURL).tar.gz,$(CURL_SHA256))
 $(DL)/$(SQLITE).tar.gz:
 	$(call fetch,https://www.sqlite.org/2026/$(SQLITE).tar.gz,$(SQLITE_SHA256))
 $(DL)/$(CACERT):
