@@ -1,0 +1,271 @@
+# Tests src/omsk/image.su: every writer read back by a reader, the
+# operations, hashes, statistics and EXIF orientation, on small images
+# made here (so it runs offline, under ussr and russia.su).
+$include "../src/libs/testing.su"
+$include "../src/omsk/image.su"
+
+# a 6x4 test card: red to blue across, green down
+vec(rgb): ""
+set(y): 0
+while(_): {y < 4} [
+    set(x): 0
+    while(_): {x < 6} [
+        push(_): rgb {x * 50}
+        push(_): rgb {y * 80}
+        push(_): rgb {250 - x * 50}
+        set(x): {x + 1}
+    ]
+    set(y): {y + 1}
+]
+omsk_image(card): 6 4 rgb
+
+# lossless round trips
+omsk_save(png): card "png" null
+omsk_sniff(k): png
+assert_eq(_): "sniff png" k "png"
+omsk_decode(back): png
+btget(brgb): back "rgb"
+assert_eq(_): "png round trip" brgb rgb
+omsk_save(q): card "qoi" null
+omsk_sniff(k): q
+assert_eq(_): "sniff qoi" k "qoi"
+omsk_decode(back): q
+btget(brgb): back "rgb"
+assert_eq(_): "qoi round trip" brgb rgb
+omsk_blank(flat): 5 3 '[9,9,9]'
+omsk_save(q): flat "qoi" null
+len(qn): q
+omsk_decode(back): q
+btget(brgb): back "rgb"
+btget(flatrgb): flat "rgb"
+assert_eq(_): "qoi run" brgb flatrgb
+assert_eq(_): "qoi run is short" qn 25
+omsk_save(b): card "bmp" null
+omsk_sniff(k): b
+assert_eq(_): "sniff bmp" k "bmp"
+omsk_decode(back): b
+btget(brgb): back "rgb"
+assert_eq(_): "bmp round trip" brgb rgb
+omsk_save(p): card "ppm" null
+omsk_decode(back): p
+btget(brgb): back "rgb"
+assert_eq(_): "ppm round trip" brgb rgb
+omsk_save(p): card "pgm" null
+omsk_decode(back): p
+btget(brgb): back "rgb"
+at(g0): brgb 0
+at(g1): brgb 1
+assert_eq(_): "pgm grey" {g0 = g1 && g0 = 28} true
+text_bytes(ascii): "P3\n# comment\n2 1\n15\n15 0 0  0 15 0\n"
+omsk_decode(back): ascii
+btget(brgb): back "rgb"
+assert_eq(_): "ascii ppm with maxval" brgb '[255,0,0,0,255,0]'
+
+# JPEG at two qualities
+btree(o):
+btput(_): o "quality" 95
+omsk_save(j95): card "jpeg" o
+btput(_): o "quality" 20
+omsk_save(j20): card "jpeg" o
+omsk_decode(back): j95
+btget(brgb): back "rgb"
+at(r0): brgb 0
+at(b0): brgb 2
+assert_true(_): "jpeg q95 close" {r0 < 30 && b0 > 220}
+len(n95): j95
+len(n20): j20
+assert_true(_): "jpeg quality changes the tables" {n95 != n20}
+at(dqt): j20 25
+assert_true(_): "jpeg q20 coarser" {dqt > 20}
+omsk_save(j85): card "jpeg" null
+at(dqt85): j85 25
+assert_eq(_): "default quality restored" dqt85 5
+
+# sniffing and refusals
+text_bytes(gif): "GIF89a......"
+omsk_refusal(why): gif
+assert_eq(_): "gif refused" why "GIF is not supported yet"
+text_bytes(heic): "....ftypheic...."
+omsk_refusal(why): heic
+str_contains(b): why "HEVC"
+assert_true(_): "heic refused" b
+omsk_refusal(why): png
+assert_eq(_): "png accepted" why ""
+
+# geometry
+omsk_crop(c): card 1 1 2 2
+btget(crgb): c "rgb"
+assert_eq(_): "crop" crgb '[50,80,200,100,80,150,50,160,200,100,160,150]'
+omsk_rotate(rot): card 90
+btget(rw): rot "w"
+btget(rh): rot "h"
+assert_eq(_): "rotate 90 size" {rw * 10 + rh} 46
+btget(rrgb): rot "rgb"
+at(top_left_g): rrgb 1
+assert_eq(_): "rotate 90 top-left is old bottom-left" top_left_g 240
+omsk_rotate(r4): rot 270
+btget(r4rgb): r4 "rgb"
+assert_eq(_): "rotate 90 then 270" r4rgb rgb
+omsk_rotate(r2): card 180
+omsk_rotate(r2): r2 180
+btget(r2rgb): r2 "rgb"
+assert_eq(_): "rotate 180 twice" r2rgb rgb
+omsk_flip(f): card true
+btget(frgb): f "rgb"
+at(first_r): frgb 0
+assert_eq(_): "flip horizontal" first_r 250
+omsk_flip(f): card false
+btget(frgb): f "rgb"
+at(first_g): frgb 1
+assert_eq(_): "flip vertical" first_g 240
+
+omsk_resize(s): card 3 2 "stretch" "box"
+btget(srgb): s "rgb"
+assert_eq(_): "box resize" srgb '[25,40,225,125,40,125,225,40,25,25,200,225,125,200,125,225,200,25]'
+omsk_resize(s): card 3 3 "fit" "nearest"
+btget(sw): s "w"
+btget(sh): s "h"
+assert_eq(_): "fit size" {sw * 10 + sh} 32
+omsk_resize(s): card 2 2 "fill" "bilinear"
+btget(sw): s "w"
+btget(sh): s "h"
+assert_eq(_): "fill size" {sw * 10 + sh} 22
+omsk_resize(s): card 12 8 "stretch" "bilinear"
+btget(srgb): s "rgb"
+at(mid): srgb {(4 * 12 + 6) * 3}
+assert_true(_): "bilinear upscale interpolates" {mid > 100 && mid < 175}
+
+# a dark image with one bright square on the right
+omsk_blank(dark): 12 4 '[0,0,0]'
+omsk_blank(dot): 3 3 '[255,255,255]'
+omsk_paste(scene): dark dot 8 0 1
+omsk_smart_square(sq): scene 4
+btget(sqrgb): sq "rgb"
+omsk_mean_color(m): sq
+at(mr): m 0
+assert_true(_): "smart square finds the bright part" {mr > 100}
+
+# colour
+omsk_grey(g): card
+btget(grgb): g "rgb"
+at(a): grgb 0
+at(b): grgb 1
+assert_eq(_): "grey channels equal" a b
+omsk_adjust(adj): card 10 1.0
+btget(argb): adj "rgb"
+at(a): argb 0
+assert_eq(_): "brightness" a 10
+omsk_adjust(adj): card 0 0.0
+btget(argb): adj "rgb"
+at(a): argb 5
+assert_eq(_): "contrast 0 is mid grey" a 128
+omsk_blur(bl): card 1
+btget(blrgb): bl "rgb"
+at(a): blrgb 0
+assert_eq(_): "blur corner" a 25
+omsk_sharpen(sh2): flat 1.0
+btget(shrgb): sh2 "rgb"
+assert_eq(_): "sharpen keeps flat areas" shrgb flatrgb
+omsk_quantize(qz): card 2 false
+btget(qrgb): qz "rgb"
+at(a): qrgb 3
+assert_eq(_): "quantize 2 levels" a 0
+omsk_blank(mid_grey): 8 1 '[128,128,128]'
+omsk_quantize(qd): mid_grey 2 true
+btget(qdrgb): qd "rgb"
+set(whites): 0
+set(i): 0
+while(_): {i < 24} [
+    at(v): qdrgb i
+    if(_): {v = 255} [
+        set(whites): {whites + 1}
+    ]
+    set(i): {i + 3}
+]
+assert_true(_): "dithering mixes levels" {whites >= 3 && whites <= 5}
+
+# analysis
+omsk_ahash(h1): card
+omsk_ahash(h2): adj
+omsk_adjust(brighter): card 8 1.0
+omsk_ahash(h3): brighter
+omsk_hamming(d13): h1 h3
+assert_true(_): "ahash stable under brightness" {d13 <= 4}
+omsk_dhash(d1): card
+omsk_flip(mirror): card true
+omsk_dhash(d2): mirror
+omsk_hamming(dd): d1 d2
+assert_true(_): "dhash sees a mirror" {dd > 16}
+omsk_hamming(z): 255 0
+assert_eq(_): "hamming" z 8
+omsk_mean_color(m): flat
+assert_eq(_): "mean color" m '[9,9,9]'
+omsk_paste(mostly): dark dot 0 0 1
+omsk_dominant_color(dc): mostly
+assert_eq(_): "dominant color" dc '[0,0,0]'
+omsk_histogram(hist): flat
+at(h9): hist 9
+assert_eq(_): "histogram" h9 15
+omsk_is_blank(b): flat 2
+assert_true(_): "blank" b
+omsk_is_blank(b): card 2
+assert_eq(_): "not blank" b false
+
+# composition
+omsk_paste(half): flat dot 1 1 0.5
+btget(hrgb): half "rgb"
+at(a): hrgb {(1 * 5 + 1) * 3}
+assert_eq(_): "paste with opacity" a 132
+vec(imgs): ""
+push(_): imgs card
+push(_): imgs flat
+push(_): imgs dot
+omsk_contact_sheet(sheet): imgs 2 8 1 '[255,255,255]'
+btget(sw): sheet "w"
+btget(sh): sheet "h"
+assert_eq(_): "contact sheet size" {sw * 100 + sh} 1919
+
+# EXIF: a JPEG with orientation 6 (rotate 90) and a camera name
+omsk_save(j): card "jpeg" null
+set(app1): '[255,216,255,225,0,62,69,120,105,102,0,0,77,77,0,42,0,0,0,8,0,2,1,18,0,3,0,0,0,1,0,6,0,0,1,16,0,2,0,0,0,10,0,0,0,38,0,0,0,0,85,83,83,82,32,79,109,115,107,0,0,0,0,0,0,0]'
+len(jn): j
+set(i): 2
+while(_): {i < jn} [
+    at(x): j i
+    push(_): app1 x
+    set(i): {i + 1}
+]
+omsk_exif(ex): app1
+btget(o): ex "orientation" 0
+assert_eq(_): "exif orientation" o 6
+btget(model): ex "model" ""
+assert_eq(_): "exif model" model "USSR Omsk"
+omsk_thumb_oriented(t): app1 100
+at(tw): t 2
+at(th): t 3
+assert_eq(_): "oriented thumbnail is rotated" {tw * 1000 + th} 4006
+omsk_exif(none): png
+assert_null(_): "no exif in png" none
+
+# the thumbnail cache
+make_dir(_): "tests/omsk_cache_tmp"
+omsk_thumb_cached(t1): png 3 "tests/omsk_cache_tmp"
+omsk_thumb_cached(t2): png 3 "tests/omsk_cache_tmp"
+at(hit1): t1 5
+at(hit2): t2 5
+at(jp1): t1 4
+at(jp2): t2 4
+assert_eq(_): "cache miss then hit" {hit1 = false && hit2 = true} true
+assert_eq(_): "cache gives the same JPEG" jp2 jp1
+list_dir(left): "tests/omsk_cache_tmp"
+len(nleft): left
+set(i): 0
+while(_): {i < nleft} [
+    at(f): left i
+    concat(fp): "tests/omsk_cache_tmp/" f
+    remove_file(_): fp
+    set(i): {i + 1}
+]
+remove_dir(_): "tests/omsk_cache_tmp"
+
+test_summary(n):

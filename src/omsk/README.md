@@ -26,6 +26,26 @@ init(ret): argc argv [
 
 or from the shell: `ussr src/omsk/examples/thumb.su picture.png thumb.jpg`.
 
+## The image API (image.su)
+
+`$include "src/omsk/image.su"` for whole images: an image is a btree with
+`w`, `h` and `rgb` (a flat vector of R, G, B values). `omsk_decode` reads
+PNG, JPEG, QOI, BMP and PPM/PGM; `omsk_save(bytes): img fmt opts` writes
+JPEG (`quality`), PNG, QOI, BMP, PPM or PGM. Between them: resize (fit,
+fill, stretch with nearest/box/bilinear), crop, rotate, flip, a smart
+square crop, greyscale, brightness/contrast, blur, sharpen, quantisation
+with dithering, perceptual hashes (aHash, dHash), colour statistics,
+pasting and contact sheets, EXIF orientation and fields, and a thumbnail
+cache. The header of `image.su` lists every call. From a shell:
+
+    ussr src/omsk/cli.su info photo.jpg
+    ussr src/omsk/cli.su thumb photo.jpg thumb.jpg 200
+    ussr src/omsk/cli.su convert scan.ppm scan.png
+    ussr src/omsk/cli.su hash photo.jpg
+
+These work at full size in an interpreter, so they suit small images and
+thumbnails; `omsk_decode_fit` decodes PNG and JPEG straight to a box.
+
 ## What it reads
 
 - **PNG**: greyscale, RGB, palette, greyscale with alpha and RGBA, at

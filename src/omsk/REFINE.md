@@ -8,48 +8,52 @@ at quality 85 fitted into a square box. It uses scaled IDCT decoding
 limit. A 2048x1536 JPEG takes about 4 s and a PNG of that size about
 12 s.
 
+**Refine pass 1 (2026-11-16):** `[x]` done, `[~]` partly done; see
+CHANGELOG.md 0.2.0. New: `image.su` (whole-image API, QOI/BMP/PNM/PNG
+I/O, operations, hashes, EXIF) and `cli.su`.
+
 ## Formats in
 - Interlaced PNG (Adam7)
 - Progressive JPEG (browsers and phones produce it often)
 - CMYK and YCCK JPEG (Adobe), with an APP14 marker check
-- EXIF orientation: rotate or flip the thumbnail by the orientation tag
-- GIF (first frame, or all frames for animation), BMP, WebP lossless and
-  lossy, QOI, PPM/PGM (Petersburg's image widget takes P6)
+- [x] EXIF orientation: rotate or flip the thumbnail by the orientation tag
+- [~] GIF (first frame, or all frames for animation), BMP, WebP lossless and
+  lossy, QOI, PPM/PGM (Petersburg's image widget takes P6) — partly: BMP (24/32-bit uncompressed) and QOI are read, and PPM/PGM (see below); GIF and WebP are recognised and refused with a clear reason
 - ICC profiles: at least sRGB conversion for Adobe RGB / Display P3
   images
 - Gamma (`gAMA`) and `sRGB` chunks in PNG
 
 ## Formats out
-- PNG output (lossless thumbnails for screenshots and diagrams), with a
-  deflate encoder
+- [~] PNG output (lossless thumbnails for screenshots and diagrams), with a
+  deflate encoder — partly: lossless PNG output with stored (uncompressed) deflate blocks; no compressing encoder yet
 - WebP or AVIF output (smaller thumbnails)
-- PPM P6 output, so Petersburg can show Omsk images directly
-- Choice of JPEG quality and chroma subsampling (4:2:0 for photos)
+- [x] PPM P6 output, so Petersburg can show Omsk images directly
+- [~] Choice of JPEG quality and chroma subsampling (4:2:0 for photos) — partly: omsk_jpeg_quality and omsk_save's quality option (IJG scaling); chroma stays 4:4:4
 - Progressive JPEG output
 - Optimised Huffman tables (a two-pass encode) for smaller files
 
 ## Operations
-- General resize to any width/height, not only a square box: fit, fill
+- [x] General resize to any width/height, not only a square box: fit, fill
   (crop), stretch
-- Better filters: bilinear, bicubic, Lanczos, alongside the 4x4 box
-  average
-- Crop, rotate 90/180/270, flip
-- Smart crop (centre of interest by edge density) for square thumbnails
-- Sharpen after downscaling
-- Greyscale, brightness/contrast, and a blur preview (blurhash or a
-  low-quality placeholder)
-- Perceptual hash (aHash/dHash/pHash) for Novgorod's duplicate detection
-- Dominant colour extraction (for placeholders)
+- [~] Better filters: bilinear, bicubic, Lanczos, alongside the 4x4 box
+  average — partly: nearest, box and bilinear; no bicubic or Lanczos
+- [x] Crop, rotate 90/180/270, flip
+- [x] Smart crop (centre of interest by edge density) for square thumbnails
+- [x] Sharpen after downscaling
+- [~] Greyscale, brightness/contrast, and a blur preview (blurhash or a
+  low-quality placeholder) — partly: greyscale, brightness/contrast and a box blur; no blurhash
+- [~] Perceptual hash (aHash/dHash/pHash) for Novgorod's duplicate detection — partly: aHash and dHash with omsk_hamming; no pHash
+- [x] Dominant colour extraction (for placeholders)
 - Alpha kept in PNG thumbnails, with a choice of background colour
-- Watermark overlay
-- Metadata reading (EXIF date and camera), plus stripping on re-encode
+- [x] Watermark overlay
+- [~] Metadata reading (EXIF date and camera), plus stripping on re-encode — partly: EXIF date, taken time, make and model are read; re-encoding writes no metadata, so it is stripped
 
 ## Speed
 - Integer-only IDCT (AAN) and fast colour conversion tables
 - 1/8 decode used more aggressively, plus DC-only previews
 - Paeth filter fast path (the README notes Paeth rows cost the most)
 - Inflate with larger lookup tables
-- A cache of thumbnails by input hash
+- [x] A cache of thumbnails by input hash
 - Background worker tasks for Novgorod, so a slow decode never holds a
   request
 
@@ -60,10 +64,10 @@ limit. A 2048x1536 JPEG takes about 4 s and a PNG of that size about
 - A time budget per image with a clean abort
 
 ## API
-- `omsk_decode(img): bytes` to a pixel buffer struct, `omsk_encode(b):
-  img fmt opts`, and `omsk_resize`
+- [~] `omsk_decode(img): bytes` to a pixel buffer struct, `omsk_encode(b):
+  img fmt opts`, and `omsk_resize` — partly: omsk_decode, omsk_save(img fmt opts) and omsk_resize over image btrees (omsk_encode keeps its old rgb signature)
 - Streaming decode by rows for callers that only need statistics
-- A CLI: `omsk.su thumb|info|convert|hash in out [options]`
+- [~] A CLI: `omsk.su thumb|info|convert|hash in out [options]` — partly: src/omsk/cli.su info|thumb|convert|hash
 
 ## Tests
 - Pixel-exact comparisons with a reference decoder for every PNG test
@@ -77,17 +81,17 @@ limit. A 2048x1536 JPEG takes about 4 s and a PNG of that size about
 - SVG rasterising of a safe subset (paths, shapes, text), so vector
   uploads get previews
 - PDF first-page preview and text-file previews rendered with Pobeda
-- TIFF, ICO, TGA and PSD (flattened) input
-- HEIC/AVIF input, at least dimensions and a refusal with a clear
-  reason
+- [~] TIFF, ICO, TGA and PSD (flattened) input — partly: PPM/PGM (P2, P3, P5, P6) and BMP input; TIFF and ICO are recognised and refused
+- [~] HEIC/AVIF input, at least dimensions and a refusal with a clear
+  reason — partly: recognised and refused with a clear reason; no dimensions
 - 16-bit and HDR handling: tone-map to 8 bits with a stated rule
-- Image composition: paste one image onto another (sprites, contact
+- [x] Image composition: paste one image onto another (sprites, contact
   sheets of a thread's images for Novgorod's gallery)
 - Text drawing onto images with a TrueType font (captions, placeholders
   for missing files)
 - Charts and QR codes generated as images
-- Colour quantisation and dithering (palette PNG or GIF output)
-- Histogram, mean colour and "is it mostly blank" checks
+- [~] Colour quantisation and dithering (palette PNG or GIF output) — partly: uniform levels per channel with optional Floyd-Steinberg dithering; no palette output
+- [x] Histogram, mean colour and "is it mostly blank" checks
 
 ## Quality and control
 - Chroma upsampling by interpolation (the README notes Omsk repeats

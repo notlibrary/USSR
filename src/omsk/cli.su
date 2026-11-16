@@ -1,0 +1,153 @@
+# cli.su - Omsk from the command line:
+#
+#   ussr src/omsk/cli.su info FILE              format, size, EXIF fields
+#   ussr src/omsk/cli.su thumb IN OUT.jpg [SIDE] a JPEG thumbnail (200)
+#   ussr src/omsk/cli.su convert IN OUT [QUALITY]
+#                                               to the format of OUT's
+#                                               extension: .jpg .png .qoi
+#                                               .bmp .ppm .pgm
+#   ussr src/omsk/cli.su hash FILE              aHash and dHash in hex
+#
+# Exit status 0 when it worked, 1 with a message on stderr otherwise.
+$include "image.su"
+
+_cli_fail(r): msg [
+    concat(line): "omsk: " msg "\n"
+    write_stderr(_): line
+    set(r): 1
+]
+
+_cli_read(r): path [
+    read_bytes(r): path
+]
+
+_cli_hex64(r): x [
+    set(r): ""
+    set(s): 60
+    while(_): {s >= 0} [
+        at(c): "0123456789abcdef" {(x >> s) & 15}
+        concat(r): r c
+        set(s): {s - 4}
+    ]
+]
+
+init(result): arg_cnt arg_vec [
+    set(result): 1
+    if(_): {arg_cnt < 2} [
+        _cli_fail(result): "usage: cli.su info|thumb|convert|hash FILE [OUT] [N]"
+        return(result): result
+    ]
+    at(cmd): arg_vec 0
+    at(src): arg_vec 1
+    _cli_read(data): src
+    typeof(dt): data
+    if(_): {dt != "vector"} [
+        concat(m): "cannot read " src
+        _cli_fail(result): m
+        return(result): result
+    ]
+    if(_): {cmd = "info"} [
+        omsk_sniff(kind): data
+        omsk_decode(img): data
+        typeof(it): img
+        if(_): {it != "btree"} [
+            omsk_error(e):
+            concat(m): kind ": " e
+            _cli_fail(result): m
+            return(result): result
+        ]
+        btget(w): img "w"
+        btget(h): img "h"
+        str_from_int(ws): w
+        str_from_int(hs): h
+        concat(line): kind " " ws "x" hs
+        print(_): line
+        omsk_exif(ex): data
+        typeof(et): ex
+        if(_): {et = "btree"} [
+            btkeys(keys): ex
+            len(n): keys
+            set(i): 0
+            while(_): {i < n} [
+                at(k): keys i
+                btget(v): ex k
+                vec(one): ""
+                push(_): one v
+                str_join(vs): one ""
+                concat(line): k ": " vs
+                print(_): line
+                set(i): {i + 1}
+            ]
+        ]
+        set(result): 0
+    ]
+    elif(_): {cmd = "thumb" && arg_cnt >= 3} [
+        at(out): arg_vec 2
+        set(side): 200
+        if(_): {arg_cnt >= 4} [
+            at(ss): arg_vec 3
+            str_to_int(side): ss 10
+        ]
+        omsk_thumb_oriented(t): data side
+        typeof(tt): t
+        if(_): {tt != "vector"} [
+            omsk_error(e):
+            _cli_fail(result): e
+            return(result): result
+        ]
+        at(jpeg): t 4
+        write_bytes(_): out jpeg
+        set(result): 0
+    ]
+    elif(_): {cmd = "convert" && arg_cnt >= 3} [
+        at(out): arg_vec 2
+        omsk_decode(img): data
+        typeof(it): img
+        if(_): {it != "btree"} [
+            omsk_error(e):
+            _cli_fail(result): e
+            return(result): result
+        ]
+        str_lower(lo): out
+        re_find(m): "\.([a-z]+)$" lo
+        set(fmt): "jpeg"
+        typeof(mt): m
+        if(_): {mt = "vector"} [
+            at(fmt): m 1
+        ]
+        btree(o):
+        if(_): {arg_cnt >= 4} [
+            at(qs): arg_vec 3
+            str_to_int(q): qs 10
+            btput(_): o "quality" q
+        ]
+        omsk_save(bytes): img fmt o
+        typeof(bt): bytes
+        if(_): {bt != "vector"} [
+            omsk_error(e):
+            _cli_fail(result): e
+            return(result): result
+        ]
+        write_bytes(_): out bytes
+        set(result): 0
+    ]
+    elif(_): {cmd = "hash"} [
+        omsk_decode(img): data
+        typeof(it): img
+        if(_): {it != "btree"} [
+            omsk_error(e):
+            _cli_fail(result): e
+            return(result): result
+        ]
+        omsk_ahash(a): img
+        omsk_dhash(d): img
+        _cli_hex64(as): a
+        _cli_hex64(ds): d
+        concat(line): "ahash " as "\ndhash " ds
+        print(_): line
+        set(result): 0
+    ]
+    else(_): [
+        _cli_fail(result): "usage: cli.su info|thumb|convert|hash FILE [OUT] [N]"
+    ]
+]
