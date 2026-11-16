@@ -27,6 +27,7 @@
 # false, 2 a usage or database error.
 $once
 $include "../libs/strings.su"
+$include "more.su"
 
 global(_): kgb_root kgb_objects kgb_cats kgb_typed kgb_opt_in kgb_opt_file
 
@@ -379,6 +380,7 @@ kgb_lines(r): path [
 ]
 
 kgb_write_lines(r): path lines [
+    kgb_journal(_): path
     set(text): ""
     len(n): lines
     set(i): 0
@@ -564,6 +566,11 @@ kgb_object(r): name [
         at(first): cats 0
         concat(m): first " is a category, not an object"
         kgb_err(_): m
+        return(r): r
+    ]
+    kgb_aka(alias): p
+    if(_): {alias != ""} [
+        set(r): alias
         return(r): r
     ]
     concat(m): "no object '" p "'"
@@ -778,6 +785,32 @@ kgb_facts(r): rel [
         set(section): ""
         len(nl): lines
         set(i): 0
+        # YAML front matter: "key: value" lines between --- lines at the top
+        set(front): false
+        if(_): {nl > 0} [
+            at(l0): lines 0
+            str_trim(l0): l0
+            set(front): {l0 = "---"}
+            if(_): front [
+                set(i): 1
+            ]
+        ]
+        while(_): {front && i < nl} [
+            at(fl): lines i
+            str_trim(ft): fl
+            if(_): {ft = "---" || ft = "..."} [
+                set(front): false
+            ]
+            else(_): [
+                kgb_key(fk): ft
+                kgb_is_string(isk): fk
+                if(_): isk [
+                    new(fact): "KgbFact" rel name i ft "front matter"
+                    push(_): r fact
+                ]
+            ]
+            add(i): i 1
+        ]
         while(_): {i < nl} [
             at(line): lines i
             kgb_heading(h): line
@@ -795,6 +828,18 @@ kgb_facts(r): rel [
                 kgb_fact_text(t): line
                 kgb_is_string(is_f): t
                 if(_): is_f [
+                    # "- [x] done" reads as "done: yes", "- [ ] done" as "done: no"
+                    re_find(cb): "^\\[([ xX])\\] (.+)$" t
+                    typeof(cbt): cb
+                    if(_): {cbt = "vector"} [
+                        at(mark): cb 1
+                        at(label): cb 2
+                        set(yes): "no"
+                        if(_): {mark != " "} [
+                            set(yes): "yes"
+                        ]
+                        concat(t): label ": " yes
+                    ]
                     new(fact): "KgbFact" rel name i t section
                     push(_): r fact
                 ]
@@ -2466,6 +2511,7 @@ kgb_main(r): args [
     kgb_types(_):
     set(kgb_opt_in): ""
     set(kgb_opt_file): ""
+    set(kgb_opt_format): "text"
     set(given): ""
     vec(p): ""
     len(n): args
@@ -2487,6 +2533,10 @@ kgb_main(r): args [
         ]
         elif(_): {option && a = "--file"} [
             at(kgb_opt_file): args {i + 1}
+            add(i): i 1
+        ]
+        elif(_): {option && a = "--format"} [
+            at(kgb_opt_format): args {i + 1}
             add(i): i 1
         ]
         else(_): [
@@ -2526,10 +2576,30 @@ kgb_main(r): args [
     elif(_): {cmd = "edit"} [ kgb_cmd_edit(r): p ]
     elif(_): {cmd = "rm"} [ kgb_cmd_rm(r): p ]
     elif(_): {cmd = "get"} [ kgb_cmd_get(r): p ]
-    elif(_): {cmd = "set"} [ kgb_cmd_set(r): p ]
+    elif(_): {cmd = "set"} [
+        set(where_form): false
+        if(_): {np > 1} [
+            at(p1): p 1
+            set(where_form): {p1 = "--where"}
+        ]
+        if(_): where_form [
+            kgb_cmd_set_where(r): p
+        ]
+        else(_): [
+            kgb_cmd_set(r): p
+        ]
+    ]
     elif(_): {cmd = "unset"} [ kgb_cmd_unset(r): p ]
     elif(_): {cmd = "find"} [ kgb_cmd_find(r): p ]
-    elif(_): {cmd = "where"} [ kgb_cmd_where(r): p ]
+    elif(_): {cmd = "where"} [
+        if(_): {np < 2} [
+            kgb_err(r): "where EXPR [sort by KEY [desc]] [limit N] ..."
+        ]
+        else(_): [
+            list_slice(words): p 1 {0 - 1}
+            kgb_q_run(r): words
+        ]
+    ]
     elif(_): {cmd = "table"} [ kgb_cmd_table(r): p ]
     elif(_): {cmd = "props"} [ kgb_cmd_props(r): p ]
     elif(_): {cmd = "type"} [ kgb_cmd_type(r): p ]
@@ -2542,6 +2612,9 @@ kgb_main(r): args [
     elif(_): {cmd = "stats"} [ kgb_cmd_stats(r): p ]
     elif(_): {cmd = "check"} [ kgb_cmd_check(r): p ]
     elif(_): {cmd = "dump"} [ kgb_cmd_dump(r): p ]
+    if(_): {r = -1} [
+        kgb_more_cmd(r): cmd p
+    ]
     if(_): {r = -1} [
         concat(m): "unknown command '" cmd "' (kgb help lists them)"
         kgb_err(r): m

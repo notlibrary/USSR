@@ -1,0 +1,213 @@
+$ kgb init tests/kgb-more-tmp
+knowledge base in tests/kgb-more-tmp
+$ kgb where (legs>2 or flies=yes) and not extinct=yes
+animals/birds/sparrow
+animals/mammals/cat
+animals/mammals/mouse
+$ kgb where sound~/^meo+w$/i
+animals/mammals/cat
+$ kgb where hunts->color=grey
+animals/mammals/cat
+$ kgb where mass>2kg
+animals/mammals/cat
+animals/mammals/whale
+$ kgb where mass<=30g
+animals/birds/sparrow
+animals/mammals/mouse
+$ kgb where born<1990-01-01
+animals/mammals/whale
+$ kgb where legs sort by mass desc limit 2
+animals/mammals/whale
+animals/mammals/cat
+$ kgb where legs sort by legs offset 1 show legs,mass
+path | legs | mass
+animals/birds/sparrow | 2 | 30 g
+animals/mammals/cat | 4 | 4 kg
+animals/mammals/mouse | 4 | 20 g
+animals/birds/dodo | two | 
+$ kgb where legs count
+5
+$ kgb where legs sum legs
+10
+$ kgb where legs avg legs
+2.5
+$ kgb where legs max mass
+30000000
+$ kgb where legs group by legs
+legs | count
+0 | 1
+2 | 1
+4 | 2
+two | 1
+$ kgb where swims=yes
+animals/mammals/whale
+$ kgb where flies=no
+animals/birds/dodo
+animals/mammals/whale
+$ kgb --format json where legs>3 show legs
+[{"legs":"4","path":"animals/mammals/cat"},{"legs":"4","path":"animals/mammals/mouse"}]
+$ kgb --format csv where legs>3 show legs,sound
+path,legs,sound
+animals/mammals/cat,4,meow
+animals/mammals/mouse,4,
+$ kgb where legs sort
+[exit 2]
+$ kgb where legs limit x
+[exit 2]
+$ kgb query save four legs=4
+$ kgb query save heavy mass>1kg sort by mass
+$ kgb query ls
+four = legs=4
+heavy = mass>1kg sort by mass
+$ kgb q four
+animals/mammals/cat
+animals/mammals/mouse
+$ kgb q heavy
+animals/mammals/cat
+animals/mammals/whale
+$ kgb query rm heavy
+$ kgb q heavy
+[exit 2]
+$ kgb sql select_name,_legs_from_animals_where_legs_>_2_order_by_mass_desc_limit_5
+path | name | legs
+animals/mammals/cat | cat | 4
+animals/mammals/mouse | mouse | 4
+$ kgb sql select_count(*)_from_animals_where_flies_=_yes
+1
+$ kgb sql select_avg(legs)_from_mammals
+2.6667
+$ kgb sql nonsense
+[exit 2]
+$ kgb show Felis_catus
+animals/mammals/cat
+  [cat.md]
+  1. legs: 4
+  2. mass: 4 kg
+  3. born: 2019-05-01
+  4. sound: meow
+  5. hunts: [[mouse]]
+  6. aka: Felis catus
+from animals/:
+  [animals.md]
+  - !legs: int
+$ kgb diff cat mouse
+- aka: Felis catus
+- born: 2019-05-01
++ color: grey
+- hunts: [[mouse]]
+~ mass: 4 kg -> 20 g
++ part of: [[field]]
+- sound: meow
+$ kgb compare cat mouse whale
+key | cat | mouse | whale
+aka | Felis catus |  | 
+born | 2019-05-01 |  | 1980-01-01
+color |  | grey | 
+extinct |  |  | no
+flies |  |  | no
+hunts | [[mouse]] |  | 
+legs | 4 | 4 | 0
+mass | 4 kg | 20 g | 30 t
+part of |  | [[field]] | 
+sound | meow |  | 
+swims |  |  | yes
+$ kgb random places
+places/field
+$ kgb cp cat animals/mammals/lion
+copied animals/mammals/cat to animals/mammals/lion
+$ kgb set lion sound roar
+$ kgb set --where legs=4 diet meat
+$ kgb where diet=meat
+animals/mammals/cat
+animals/mammals/lion
+animals/mammals/mouse
+$ kgb merge lion cat
+note: animals/mammals/lion has no objects left, so it is an object now
+merged animals/mammals/lion into animals/mammals/cat: 1 facts added, 0 links changed
+$ kgb get cat sound
+meow
+roar
+$ kgb orphans
+animals/birds/dodo
+animals/birds/sparrow
+animals/mammals/cat
+animals/mammals/lion
+animals/mammals/whale
+$ kgb hubs 3
+object | links in
+animals/mammals/mouse | 2
+places/country | 1
+places/farm | 1
+$ kgb path cat country
+animals/mammals/cat -> animals/mammals/mouse -> places/field -> places/farm -> places/country
+$ kgb path cat whale
+no path
+[exit 1]
+$ kgb closure mouse part_of
+places/field
+places/farm
+places/country
+$ kgb lint
+animals/birds/sparrow: key 'Mass' looks like 'mass'
+$ kgb validate
+animals/birds/dodo: legs = 'two' is not int
+$ kgb dot
+digraph kgb {
+  rankdir=LR;
+  "animals" [shape=folder];
+  "animals/birds" [shape=folder];
+  "animals" -> "animals/birds" [style=dashed];
+  "animals/mammals" [shape=folder];
+  "animals" -> "animals/mammals" [style=dashed];
+  "places" [shape=folder];
+  "animals/birds" -> "animals/birds/dodo" [style=dashed];
+  "animals/birds" -> "animals/birds/sparrow" [style=dashed];
+  "animals/mammals" -> "animals/mammals/cat" [style=dashed];
+  "animals/mammals/cat" -> "animals/mammals/mouse";
+  "animals/mammals" -> "animals/mammals/lion" [style=dashed];
+  "animals/mammals/lion" -> "animals/mammals/mouse";
+  "animals/mammals" -> "animals/mammals/mouse" [style=dashed];
+  "animals/mammals/mouse" -> "places/field";
+  "animals/mammals" -> "animals/mammals/whale" [style=dashed];
+  "places" -> "places/country" [style=dashed];
+  "places" -> "places/farm" [style=dashed];
+  "places/farm" -> "places/country";
+  "places" -> "places/field" [style=dashed];
+  "places/field" -> "places/farm";
+}
+$ kgb import tests/kgb-more-import.csv animals/reptiles
+imported 2 objects into animals/reptiles
+$ kgb show frog
+animals/reptiles/frog
+  [frog.md]
+  1. legs: 4
+  2. note: says "ribbit", jumps
+from animals/:
+  [animals.md]
+  - !legs: int
+$ kgb import tests/kgb-more-import.json animals/insects
+imported 1 objects into animals/insects
+$ kgb get bee legs
+6
+$ kgb html tests/kgb-more-html
+wrote 12 pages to tests/kgb-more-html
+html links work
+$ kgb set bee legs 5
+$ kgb get bee legs
+5
+$ kgb undo
+restored tests/kgb-more-tmp/animals/insects/bee/bee.md
+$ kgb get bee legs
+6
+$ kgb undo
+nothing to undo
+[exit 1]
+cleaned up
+
+--- stderr ---
+kgb: unexpected 'sort' in the query
+kgb: limit takes a number
+kgb: no saved query 'heavy'
+kgb: sql: select COLS from CAT [where ...] [order by KEY [desc]] [limit N] [offset N]
+
+--- exit 0 ---

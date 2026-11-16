@@ -1,0 +1,172 @@
+# KGB refine pass 1 (src/kgb/more.su): the query language, saved queries,
+# sql, formats, object commands, imports, exports, quality checks, Markdown
+# extras and the journal, on a base in tests/kgb-more-tmp. Prints each
+# command line, its output and its exit status (golden file).
+$include "../src/kgb/kgb.su"
+$include "../src/libs/paths.su"
+
+global(_): kgbt_dir
+
+kgb(r): line [
+    concat(shown): "$ kgb " line
+    print(_): shown
+    str_split(words): line " "
+    vec(args): ""
+    push(_): args "--kb"
+    push(_): args kgbt_dir
+    len(n): words
+    set(i): 0
+    while(_): {i < n} [
+        at(w): words i
+        # "_" stands for a space inside one argument
+        str_replace(w): w "_" " "
+        push(_): args w
+        set(i): {i + 1}
+    ]
+    kgb_main(r): args
+    if(_): {r != 0} [
+        str_from_int(code): r
+        concat(st): "[exit " code "]"
+        print(_): st
+    ]
+]
+
+put(r): rel text [
+    concat(path): kgbt_dir "/" rel
+    path_dir(d): path
+    make_dirs(_): d
+    writefile(r): path text
+]
+
+make_dirs(r): d [
+    path_split(parts): d
+    set(cur): ""
+    str_starts(abs): d "/"
+    if(_): abs [
+        set(cur): "/"
+    ]
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        path_join(cur): cur p
+        make_dir(_): cur
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+base(r): [
+    kgb(_): "init tests/kgb-more-tmp"
+    put(_): "animals/animals.md" "- !legs: int\n"
+    put(_): "animals/mammals/cat/cat.md" "# Cat\n- legs: 4\n- mass: 4 kg\n- born: 2019-05-01\n- sound: meow\n- hunts: [[mouse]]\n- aka: Felis catus\n"
+    put(_): "animals/mammals/mouse/mouse.md" "---\nlegs: 4\nmass: 20 g\n---\n# Mouse\n- color: grey\n- part of: [[field]]\n"
+    put(_): "animals/mammals/whale/whale.md" "- legs: 0\n- mass: 30 t\n- born: 1980-01-01\n- extinct: no\n- [x] swims\n- [ ] flies\n"
+    put(_): "animals/birds/sparrow/sparrow.md" "- legs: 2\n- mass: 30 g\n- flies: yes\n- Mass: 31 g\n"
+    put(_): "animals/birds/dodo/dodo.md" "- legs: two\n- extinct: yes\n- flies: no\n"
+    put(_): "places/field/field.md" "- part of: [[farm]]\n"
+    put(_): "places/farm/farm.md" "- part of: [[country]]\n"
+    put(_): "places/country/country.md" "- kind: land\n"
+    set(r): 0
+]
+
+queries(r): [
+    kgb(_): "where (legs>2 or flies=yes) and not extinct=yes"
+    kgb(_): "where sound~/^meo+w$/i"
+    kgb(_): "where hunts->color=grey"
+    kgb(_): "where mass>2kg"
+    kgb(_): "where mass<=30g"
+    kgb(_): "where born<1990-01-01"
+    kgb(_): "where legs sort by mass desc limit 2"
+    kgb(_): "where legs sort by legs offset 1 show legs,mass"
+    kgb(_): "where legs count"
+    kgb(_): "where legs sum legs"
+    kgb(_): "where legs avg legs"
+    kgb(_): "where legs max mass"
+    kgb(_): "where legs group by legs"
+    kgb(_): "where swims=yes"
+    kgb(_): "where flies=no"
+    kgb(_): "--format json where legs>3 show legs"
+    kgb(_): "--format csv where legs>3 show legs,sound"
+    kgb(_): "where legs sort"
+    kgb(_): "where legs limit x"
+    kgb(_): "query save four legs=4"
+    kgb(_): "query save heavy mass>1kg sort by mass"
+    kgb(_): "query ls"
+    kgb(_): "q four"
+    kgb(_): "q heavy"
+    kgb(_): "query rm heavy"
+    kgb(_): "q heavy"
+    kgb(_): "sql select_name,_legs_from_animals_where_legs_>_2_order_by_mass_desc_limit_5"
+    kgb(_): "sql select_count(*)_from_animals_where_flies_=_yes"
+    kgb(_): "sql select_avg(legs)_from_mammals"
+    kgb(_): "sql nonsense"
+    set(r): 0
+]
+
+objects(r): [
+    kgb(_): "show Felis_catus"
+    kgb(_): "diff cat mouse"
+    kgb(_): "compare cat mouse whale"
+    kgb(_): "random places"
+    kgb(_): "cp cat animals/mammals/lion"
+    kgb(_): "set lion sound roar"
+    kgb(_): "set --where legs=4 diet meat"
+    kgb(_): "where diet=meat"
+    kgb(_): "merge lion cat"
+    kgb(_): "get cat sound"
+    kgb(_): "orphans"
+    kgb(_): "hubs 3"
+    kgb(_): "path cat country"
+    kgb(_): "path cat whale"
+    kgb(_): "closure mouse part_of"
+    kgb(_): "lint"
+    kgb(_): "validate"
+    kgb(_): "dot"
+    set(r): 0
+]
+
+imports(r): [
+    put(_): "../kgb-more-import.csv" "name,legs,note\nfrog,4,\"says \"\"ribbit\"\", jumps\"\nsnake,0,\n"
+    kgb(_): "import tests/kgb-more-import.csv animals/reptiles"
+    kgb(_): "show frog"
+    put(_): "../kgb-more-import.json" "[{\"name\": \"bee\", \"legs\": 6, \"flies\": \"yes\"}, {\"legs\": 1}]"
+    kgb(_): "import tests/kgb-more-import.json animals/insects"
+    kgb(_): "get bee legs"
+    remove_file(_): "tests/kgb-more-import.csv"
+    remove_file(_): "tests/kgb-more-import.json"
+    kgb(_): "html tests/kgb-more-html"
+    readfile(page): "tests/kgb-more-html/animals__mammals__cat.html"
+    str_contains(linked): page "<a href=\"animals__mammals__mouse.html\">mouse</a>"
+    if(_): linked [
+        print(_): "html links work"
+    ]
+    remove_tree(_): "tests/kgb-more-html"
+    set(r): 0
+]
+
+journal(r): [
+    put(_): ".kgb" "journal: on\n"
+    kgb(_): "set bee legs 5"
+    kgb(_): "get bee legs"
+    kgb(_): "undo"
+    kgb(_): "get bee legs"
+    kgb(_): "undo"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(kgbt_dir): "tests/kgb-more-tmp"
+    remove_tree(_): kgbt_dir
+    base(_):
+    queries(_):
+    objects(_):
+    imports(_):
+    journal(_):
+    remove_tree(_): kgbt_dir
+    is_dir(left): kgbt_dir
+    if(_): {left = 0} [
+        print(_): "cleaned up"
+    ]
+    set(ret): 0
+]

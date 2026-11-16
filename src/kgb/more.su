@@ -1,0 +1,2296 @@
+# more.su - KGB refine pass 1. kgb.su includes it; kgb_main sends the
+# commands below here, and "where" runs the query engine.
+#
+# Queries (where, q, sql):
+#   where EXPR [sort by KEY [desc]] [limit N] [offset N] [show K1,K2]
+#         [count | sum KEY | avg KEY | min KEY | max KEY] [group by KEY]
+#     EXPR: conditions joined by and/or/not with parentheses:
+#       where (legs>2 or flies=yes) and not extinct
+#     a condition: KEY, KEY=V, KEY!=V, KEY<V, KEY<=V, KEY>V, KEY>=V,
+#       KEY~TEXT (contains), KEY~/REGEX/i, A->B=V (through [[links]] in A),
+#       with units (mass>2kg against "mass: 2500 g") and dates
+#       (born<1970-01-01)
+#   --format text|json|csv|tsv     for where, q, sql, get and dump-like output
+#   query save NAME EXPR... / query ls / query rm NAME / q NAME
+#   sql "select name, legs from CAT where legs > 2 order by legs desc limit 3"
+# Objects:
+#   diff A B / compare A B C... / random [CAT] / cp OBJ PATH / merge A B
+#   import FILE.csv|FILE.json CAT [NAME_COLUMN]
+#   set --where "EXPR" KEY VALUE   (every match)
+#   orphans / hubs [N] / path A B / closure OBJ KEY
+# Exports: dot [FILE] (Graphviz) / html DIR (a static site)
+# Quality: lint (near-duplicate keys) / validate (category schemas: a fact
+#   "!key: int|real|date|url|text" in a category's file declares a typed,
+#   required key for the objects below it) / aka (aliases: "aka: Name"
+#   facts resolve names)
+# History (when the .kgb file has a line "journal: on", or KGB_JOURNAL=1):
+#   every write keeps the file's old text in .kgb-undo and a line in
+#   .kgb-log; undo restores the last write; log prints the history
+# Markdown: YAML front matter (between --- lines at the top of a file) and
+#   checkbox items ("- [x] done") are read as properties.
+$once
+$include "../libs/strings.su"
+$include "../libs/lists.su"
+$include "../libs/json.su"
+$include "../libs/encoding.su"
+
+global(_): kgb_opt_format kgb_no_journal
+
+# ---------------------------------------------------------------- output
+
+kgb_out_rows(r): header rows [
+    set(r): 0
+    set(fmt): kgb_opt_format
+    typeof(ft): fmt
+    if(_): {ft != "string" || fmt = ""} [
+        set(fmt): "text"
+    ]
+    len(nr): rows
+    len(nh): header
+    if(_): {fmt = "json"} [
+        vec(out): ""
+        set(i): 0
+        while(_): {i < nr} [
+            at(row): rows i
+            btree(o):
+            set(k): 0
+            while(_): {k < nh} [
+                at(h): header k
+                at(v): row k
+                btput(_): o h v
+                set(k): {k + 1}
+            ]
+            push(_): out o
+            set(i): {i + 1}
+        ]
+        json_stringify(text): out
+        print(_): text
+        return(r): r
+    ]
+    set(sep): "\t"
+    if(_): {fmt = "csv"} [
+        set(sep): ","
+    ]
+    if(_): {fmt = "text" && nh = 1} [
+        set(i): 0
+        while(_): {i < nr} [
+            at(row): rows i
+            at(v): row 0
+            print(_): v
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {fmt = "text"} [
+        set(sep): " | "
+    ]
+    kgb_csv_line(hl): header sep fmt
+    print(_): hl
+    set(i): 0
+    while(_): {i < nr} [
+        at(row): rows i
+        kgb_csv_line(l): row sep fmt
+        print(_): l
+        set(i): {i + 1}
+    ]
+]
+
+kgb_csv_line(r): cells sep fmt [
+    set(r): ""
+    len(n): cells
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cells i
+        typeof(ct): c
+        if(_): {ct != "string"} [
+            vec(one): ""
+            push(_): one c
+            str_join(c): one ""
+        ]
+        if(_): {fmt = "csv"} [
+            re_test(q): "[\",\\n]" c
+            if(_): q [
+                str_replace(c): c "\"" "\"\""
+                concat(c): "\"" c "\""
+            ]
+        ]
+        elif(_): {fmt = "tsv"} [
+            str_replace(c): c "\t" " "
+        ]
+        if(_): {i > 0} [
+            concat(r): r sep
+        ]
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- values
+
+# a quantity in base units: [value unit_kind], or null
+kgb_quantity(r): text [
+    set(r): null
+    str_trim(t): text
+    re_find(m): "^(-?[0-9]+(?:\\.[0-9]+)?) *([A-Za-zµ°%]+)?$" t
+    typeof(mt): m
+    if(_): {mt != "vector"} [
+        return(r): r
+    ]
+    at(ns): m 1
+    at(u): m 2
+    str_to_number(v): ns
+    set(kind): ""
+    set(f): 1.0
+    typeof(ut): u
+    if(_): {ut = "string"} [
+        btree(units):
+        btput(_): units "mg" "m:0.001"
+        btput(_): units "g" "m:1"
+        btput(_): units "kg" "m:1000"
+        btput(_): units "t" "m:1000000"
+        btput(_): units "mm" "l:0.001"
+        btput(_): units "cm" "l:0.01"
+        btput(_): units "m" "l:1"
+        btput(_): units "km" "l:1000"
+        btput(_): units "ms" "s:0.001"
+        btput(_): units "s" "s:1"
+        btput(_): units "min" "s:60"
+        btput(_): units "h" "s:3600"
+        btput(_): units "d" "s:86400"
+        btput(_): units "b" "b:1"
+        btput(_): units "kb" "b:1024"
+        btput(_): units "mb" "b:1048576"
+        btput(_): units "gb" "b:1073741824"
+        btput(_): units "%" "p:1"
+        str_lower(lu): u
+        btget(spec): units lu ""
+        if(_): {spec = ""} [
+            set(kind): lu
+        ]
+        else(_): [
+            str_split(sp): spec ":"
+            at(kind): sp 0
+            at(fs): sp 1
+            str_to_number(f): fs
+        ]
+    ]
+    vec(r): ""
+    push(_): r {v * f}
+    push(_): r kind
+]
+
+kgb_is_date(r): v [
+    re_test(r): "^[0-9]{4}-[0-9]{2}-[0-9]{2}" v
+]
+
+# one value against a wanted value; op is = != < <= > >= ~
+kgb_q_value_test(r): v op want [
+    set(r): false
+    if(_): {op = "~"} [
+        len(wl): want
+        str_starts(sl): want "/"
+        set(rx): false
+        set(flags): ""
+        if(_): {sl && wl > 2} [
+            str_rfind(last): want "/"
+            if(_): {last > 0} [
+                slice(pat): want 1 {last - 1}
+                slice(flags): want {last + 1} {wl - last - 1}
+                set(rx): true
+            ]
+        ]
+        if(_): rx [
+            try(bad): "kgb_q_regex" v pat flags
+            global(_): kgb_q_hit
+            set(r): kgb_q_hit
+            if(_): {bad = 1} [
+                set(r): false
+            ]
+        ]
+        else(_): [
+            kgb_has_text(r): v want
+        ]
+        return(r): r
+    ]
+    kgb_is_date(da): v
+    kgb_is_date(db): want
+    if(_): {da && db} [
+        slice(a10): v 0 10
+        slice(b10): want 0 10
+        str_compare(c): a10 b10
+        kgb_q_cmp(r): c op
+        return(r): r
+    ]
+    kgb_quantity(qa): v
+    kgb_quantity(qb): want
+    typeof(ta): qa
+    typeof(tb): qb
+    if(_): {ta = "vector" && tb = "vector"} [
+        at(kind_a): qa 1
+        at(kind_b): qb 1
+        if(_): {kind_a = kind_b || kind_a = "" || kind_b = ""} [
+            at(a): qa 0
+            at(b): qb 0
+            set(c): 0
+            if(_): {a < b} [
+                set(c): {0 - 1}
+            ]
+            elif(_): {a > b} [
+                set(c): 1
+            ]
+            kgb_q_cmp(r): c op
+            return(r): r
+        ]
+    ]
+    kgb_value_test(r): v op want
+]
+
+global(_): kgb_q_hit
+
+kgb_q_regex(r): v pat flags [
+    re_test(kgb_q_hit): pat v flags
+    set(r): 0
+]
+
+kgb_q_cmp(r): c op [
+    set(r): false
+    if(_): {op = "="} [
+        set(r): {c = 0}
+    ]
+    elif(_): {op = "!="} [
+        set(r): {c != 0}
+    ]
+    elif(_): {op = "<"} [
+        set(r): {c < 0}
+    ]
+    elif(_): {op = "<="} [
+        set(r): {c <= 0}
+    ]
+    elif(_): {op = ">"} [
+        set(r): {c > 0}
+    ]
+    elif(_): {op = ">="} [
+        set(r): {c >= 0}
+    ]
+]
+
+# the values of a key path "a->b->c" for an object
+kgb_q_values(r): obj key [
+    str_find(arrow): key "->" 0
+    if(_): {arrow < 0} [
+        kgb_lookup(r): obj key
+        return(r): r
+    ]
+    slice(first): key 0 arrow
+    len(kl): key
+    slice(rest): key {arrow + 2} {kl - arrow - 2}
+    kgb_lookup(vs): obj first
+    vec(r): ""
+    len(n): vs
+    set(i): 0
+    while(_): {i < n} [
+        at(v): vs i
+        kgb_links_of(links): v
+        len(nl): links
+        set(k): 0
+        while(_): {k < nl} [
+            at(l): links k
+            kgb_link_target(target): l
+            if(_): {target != ""} [
+                kgb_q_values(more): target rest
+                len(nm): more
+                set(j): 0
+                while(_): {j < nm} [
+                    at(x): more j
+                    push(_): r x
+                    set(j): {j + 1}
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kgb_q_test(r): obj cond [
+    at(neg): cond 0
+    at(key): cond 1
+    at(op): cond 2
+    at(want): cond 3
+    kgb_q_values(vs): obj key
+    len(n): vs
+    if(_): {op = ""} [
+        set(r): {n > 0}
+    ]
+    elif(_): {op = "!="} [
+        set(r): true
+        set(i): 0
+        while(_): {i < n} [
+            at(v): vs i
+            kgb_q_value_test(eq): v "=" want
+            if(_): eq [
+                set(r): false
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        set(r): false
+        set(i): 0
+        while(_): {i < n} [
+            at(v): vs i
+            kgb_q_value_test(hit): v op want
+            if(_): hit [
+                set(r): true
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): neg [
+        set(r): {r = false}
+    ]
+]
+
+# ---------------------------------------------------------------- parsing
+
+kgb_q_tokens(r): words [
+    vec(r): ""
+    len(n): words
+    set(i): 0
+    while(_): {i < n} [
+        at(w): words i
+        # parentheses are tokens of their own, wherever they are written
+        set(cur): ""
+        len(wl): w
+        set(k): 0
+        while(_): {k < wl} [
+            at(c): w k
+            if(_): {c = "(" || c = ")"} [
+                if(_): {cur != ""} [
+                    push(_): r cur
+                    set(cur): ""
+                ]
+                push(_): r c
+            ]
+            elif(_): {c = " "} [
+                if(_): {cur != ""} [
+                    push(_): r cur
+                    set(cur): ""
+                ]
+            ]
+            else(_): [
+                concat(cur): cur c
+            ]
+            set(k): {k + 1}
+        ]
+        if(_): {cur != ""} [
+            push(_): r cur
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kgb_q_is_clause(r): tok [
+    str_lower(t): tok
+    set(r): {t = "sort" || t = "order" || t = "limit" || t = "offset" || t = "show" || t = "count" || t = "sum" || t = "avg" || t = "min" || t = "max" || t = "group"}
+]
+
+# recursive descent: [node next] with nodes ["or" a b] ["and" a b]
+# ["not" a] ["cond" c] ["true"]
+kgb_q_or(r): toks i [
+    kgb_q_and(left): toks i
+    at(node): left 0
+    at(i): left 1
+    len(n): toks
+    set(go): true
+    while(_): {go && i < n} [
+        at(t): toks i
+        str_lower(lt): t
+        if(_): {lt = "or"} [
+            kgb_q_and(right): toks {i + 1}
+            at(rn): right 0
+            at(i): right 1
+            vec(nn): ""
+            push(_): nn "or"
+            push(_): nn node
+            push(_): nn rn
+            set(node): nn
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    vec(r): ""
+    push(_): r node
+    push(_): r i
+]
+
+kgb_q_and(r): toks i [
+    kgb_q_not(left): toks i
+    at(node): left 0
+    at(i): left 1
+    len(n): toks
+    set(go): true
+    while(_): {go && i < n} [
+        at(t): toks i
+        str_lower(lt): t
+        kgb_q_is_clause(cl): t
+        if(_): {lt = "or" || t = ")" || cl} [
+            set(go): false
+        ]
+        else(_): [
+            if(_): {lt = "and"} [
+                set(i): {i + 1}
+            ]
+            kgb_q_not(right): toks i
+            at(rn): right 0
+            at(i): right 1
+            vec(nn): ""
+            push(_): nn "and"
+            push(_): nn node
+            push(_): nn rn
+            set(node): nn
+        ]
+    ]
+    vec(r): ""
+    push(_): r node
+    push(_): r i
+]
+
+kgb_q_not(r): toks i [
+    len(n): toks
+    vec(r): ""
+    if(_): {i >= n} [
+        vec(node): ""
+        push(_): node "true"
+        push(_): r node
+        push(_): r i
+        return(r): r
+    ]
+    at(t): toks i
+    str_lower(lt): t
+    kgb_q_is_clause(clause): t
+    if(_): clause [
+        vec(node): ""
+        push(_): node "true"
+        push(_): r node
+        push(_): r i
+        return(r): r
+    ]
+    if(_): {lt = "not"} [
+        kgb_q_not(inner): toks {i + 1}
+        at(in): inner 0
+        at(ni): inner 1
+        vec(node): ""
+        push(_): node "not"
+        push(_): node in
+        push(_): r node
+        push(_): r ni
+    ]
+    elif(_): {t = "("} [
+        kgb_q_or(inner): toks {i + 1}
+        at(in): inner 0
+        at(ni): inner 1
+        if(_): {ni < n} [
+            at(close): toks ni
+            if(_): {close = ")"} [
+                set(ni): {ni + 1}
+            ]
+        ]
+        push(_): r in
+        push(_): r ni
+    ]
+    else(_): [
+        # a link path's "->" must not read as the operator ">"
+        str_replace(safe): t "->" "\u0001"
+        kgb_condition(c): safe
+        at(ck): c 1
+        str_replace(ck): ck "\u0001" "->"
+        at(cv): c 3
+        str_replace(cv): cv "\u0001" "->"
+        vec(c2): ""
+        at(c0): c 0
+        at(c2op): c 2
+        push(_): c2 c0
+        push(_): c2 ck
+        push(_): c2 c2op
+        push(_): c2 cv
+        set(c): c2
+        vec(node): ""
+        push(_): node "cond"
+        push(_): node c
+        push(_): r node
+        push(_): r {i + 1}
+    ]
+]
+
+kgb_q_eval(r): obj node [
+    at(kind): node 0
+    if(_): {kind = "true"} [
+        set(r): true
+    ]
+    elif(_): {kind = "cond"} [
+        at(c): node 1
+        kgb_q_test(r): obj c
+    ]
+    elif(_): {kind = "not"} [
+        at(a): node 1
+        kgb_q_eval(x): obj a
+        set(r): {x = false}
+    ]
+    else(_): [
+        at(a): node 1
+        at(b): node 2
+        kgb_q_eval(x): obj a
+        if(_): {kind = "and"} [
+            set(r): false
+            if(_): x [
+                kgb_q_eval(r): obj b
+            ]
+        ]
+        else(_): [
+            set(r): true
+            if(_): {x = false} [
+                kgb_q_eval(r): obj b
+            ]
+        ]
+    ]
+]
+
+# a query from words: a btree with expr, sort, desc, limit, offset, show,
+# agg, agg_key, group
+kgb_q_parse(r): words [
+    kgb_q_tokens(toks): words
+    btree(r):
+    kgb_q_or(top): toks 0
+    at(expr): top 0
+    at(i): top 1
+    btput(_): r "expr" expr
+    btput(_): r "sort" ""
+    btput(_): r "desc" false
+    btput(_): r "limit" {0 - 1}
+    btput(_): r "offset" 0
+    vec(show): ""
+    btput(_): r "show" show
+    btput(_): r "agg" ""
+    btput(_): r "agg_key" ""
+    btput(_): r "group" ""
+    btput(_): r "error" ""
+    len(n): toks
+    while(_): {i < n} [
+        at(t): toks i
+        str_lower(lt): t
+        set(next): ""
+        if(_): {i + 1 < n} [
+            at(next): toks {i + 1}
+        ]
+        if(_): {(lt = "sort" || lt = "order" || lt = "group") && i + 2 < n} [
+            at(key): toks {i + 2}
+            if(_): {lt = "group"} [
+                btput(_): r "group" key
+            ]
+            else(_): [
+                btput(_): r "sort" key
+            ]
+            set(i): {i + 3}
+            if(_): {i < n} [
+                at(d): toks i
+                str_lower(ld): d
+                if(_): {ld = "desc" || ld = "asc"} [
+                    btput(_): r "desc" {ld = "desc"}
+                    set(i): {i + 1}
+                ]
+            ]
+        ]
+        elif(_): {lt = "limit" || lt = "offset"} [
+            str_to_int(v): next 10
+            typeof(vt): v
+            if(_): {vt != "integer"} [
+                concat(e): lt " takes a number"
+                btput(_): r "error" e
+                set(i): n
+            ]
+            else(_): [
+                btput(_): r lt v
+                set(i): {i + 2}
+            ]
+        ]
+        elif(_): {lt = "show"} [
+            str_split(cols): next ","
+            btput(_): r "show" cols
+            set(i): {i + 2}
+        ]
+        elif(_): {lt = "count"} [
+            btput(_): r "agg" "count"
+            set(i): {i + 1}
+        ]
+        elif(_): {lt = "sum" || lt = "avg" || lt = "min" || lt = "max"} [
+            btput(_): r "agg" lt
+            btput(_): r "agg_key" next
+            set(i): {i + 2}
+        ]
+        else(_): [
+            concat(e): "unexpected '" t "' in the query"
+            btput(_): r "error" e
+            set(i): n
+        ]
+    ]
+]
+
+kgb_q_first_value(r): obj key [
+    str_lower(k): key
+    kgb_q_values(vs): obj k
+    set(r): ""
+    len(n): vs
+    if(_): {n > 0} [
+        at(r): vs 0
+    ]
+]
+
+# sorting key values: numbers (with units) before text
+_kgb_q_sortkey(r): v [
+    kgb_quantity(q): v
+    typeof(qt): q
+    vec(r): ""
+    if(_): {qt = "vector"} [
+        at(x): q 0
+        push(_): r 0
+        push(_): r x
+    ]
+    else(_): [
+        str_lower(lv): v
+        push(_): r 1
+        push(_): r lv
+    ]
+]
+
+# objects by a key: numbers (units in base units) before text, objects
+# without the key last; stable
+_kgb_q_sort(r): objs key desc [
+    vec(nums): ""
+    vec(texts): ""
+    vec(missing): ""
+    len(n): objs
+    set(i): 0
+    while(_): {i < n} [
+        at(obj): objs i
+        kgb_q_first_value(v): obj key
+        kgb_quantity(qv): v
+        typeof(qt): qv
+        if(_): {v = ""} [
+            push(_): missing obj
+        ]
+        elif(_): {qt = "vector"} [
+            at(x): qv 0
+            vec(e): ""
+            push(_): e x
+            push(_): e obj
+            push(_): nums e
+        ]
+        else(_): [
+            str_lower(lv): v
+            vec(e): ""
+            push(_): e lv
+            push(_): e obj
+            push(_): texts e
+        ]
+        set(i): {i + 1}
+    ]
+    _kgb_isort(nums): nums desc
+    _kgb_isort(texts): texts desc
+    vec(r): ""
+    len(a): nums
+    set(i): 0
+    while(_): {i < a} [
+        at(e): nums i
+        at(o): e 1
+        push(_): r o
+        set(i): {i + 1}
+    ]
+    len(b): texts
+    set(i): 0
+    while(_): {i < b} [
+        at(e): texts i
+        at(o): e 1
+        push(_): r o
+        set(i): {i + 1}
+    ]
+    len(c): missing
+    set(i): 0
+    while(_): {i < c} [
+        at(o): missing i
+        push(_): r o
+        set(i): {i + 1}
+    ]
+]
+
+# stable insertion sort of [key, item] pairs by key (all numbers or all text)
+_kgb_isort(r): pairs desc [
+    vec(r): ""
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(e): pairs i
+        at(k): e 0
+        vec(next): ""
+        set(placed): false
+        len(m): r
+        set(j): 0
+        while(_): {j < m} [
+            at(f): r j
+            at(fk): f 0
+            typeof(kt): k
+            set(c): 0
+            if(_): {kt = "string"} [
+                str_compare(c): k fk
+            ]
+            elif(_): {k < fk} [
+                set(c): {0 - 1}
+            ]
+            elif(_): {k > fk} [
+                set(c): 1
+            ]
+            if(_): desc [
+                set(c): {0 - c}
+            ]
+            if(_): {placed = false && c < 0} [
+                push(_): next e
+                set(placed): true
+            ]
+            push(_): next f
+            set(j): {j + 1}
+        ]
+        if(_): {placed = false} [
+            push(_): next e
+        ]
+        set(r): next
+        set(i): {i + 1}
+    ]
+]
+
+kgb_q_run(r): words [
+    kgb_scope(cat):
+    kgb_is_string(okc): cat
+    set(r): 2
+    if(_): {okc = false} [
+        return(r): r
+    ]
+    kgb_q_parse(q): words
+    btget(err): q "error"
+    if(_): {err != ""} [
+        kgb_err(r): err
+        return(r): r
+    ]
+    btget(expr): q "expr"
+    kgb_objects_in(objs): cat
+    vec(hits): ""
+    len(no): objs
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): objs i
+        kgb_q_eval(ok): obj expr
+        if(_): ok [
+            push(_): hits obj
+        ]
+        set(i): {i + 1}
+    ]
+    btget(sortkey): q "sort"
+    if(_): {sortkey != ""} [
+        btget(desc): q "desc"
+        _kgb_q_sort(hits): hits sortkey desc
+    ]
+    btget(off): q "offset"
+    btget(lim): q "limit"
+    list_slice(hits): hits off lim
+    len(nh): hits
+    btget(agg): q "agg"
+    btget(group): q "group"
+    if(_): {group != ""} [
+        btree(groups):
+        set(i): 0
+        while(_): {i < nh} [
+            at(obj): hits i
+            kgb_q_first_value(gv): obj group
+            btget(members): groups gv null
+            typeof(mt): members
+            if(_): {mt != "vector"} [
+                vec(members): ""
+                btput(_): groups gv members
+            ]
+            push(_): members obj
+            set(i): {i + 1}
+        ]
+        btkeys(gk): groups
+        vec(rows): ""
+        len(ng): gk
+        set(i): 0
+        while(_): {i < ng} [
+            at(k): gk i
+            btget(members): groups k
+            kgb_q_aggregate(val): q members
+            vec(row): ""
+            push(_): row k
+            push(_): row val
+            push(_): rows row
+            set(i): {i + 1}
+        ]
+        vec(header): ""
+        push(_): header group
+        set(aname): agg
+        if(_): {aname = ""} [
+            set(aname): "count"
+        ]
+        push(_): header aname
+        kgb_out_rows(_): header rows
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {agg != ""} [
+        kgb_q_aggregate(val): q hits
+        vec(header): ""
+        push(_): header agg
+        vec(row): ""
+        push(_): row val
+        vec(rows): ""
+        push(_): rows row
+        kgb_out_rows(_): header rows
+        set(r): 0
+        return(r): r
+    ]
+    btget(show): q "show"
+    vec(header): ""
+    push(_): header "path"
+    len(nc): show
+    set(k): 0
+    while(_): {k < nc} [
+        at(c): show k
+        push(_): header c
+        set(k): {k + 1}
+    ]
+    vec(rows): ""
+    set(i): 0
+    while(_): {i < nh} [
+        at(obj): hits i
+        vec(row): ""
+        push(_): row obj
+        set(k): 0
+        while(_): {k < nc} [
+            at(c): show k
+            kgb_q_first_value(v): obj c
+            push(_): row v
+            set(k): {k + 1}
+        ]
+        push(_): rows row
+        set(i): {i + 1}
+    ]
+    kgb_out_rows(_): header rows
+    set(r): 1
+    if(_): {nh > 0} [
+        set(r): 0
+    ]
+]
+
+kgb_q_aggregate(r): q objs [
+    btget(agg): q "agg"
+    btget(key): q "agg_key"
+    len(n): objs
+    if(_): {agg = "" || agg = "count"} [
+        set(r): n
+        return(r): r
+    ]
+    vec(nums): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(obj): objs i
+        kgb_q_first_value(v): obj key
+        kgb_quantity(qv): v
+        typeof(qt): qv
+        if(_): {qt = "vector"} [
+            at(x): qv 0
+            push(_): nums x
+        ]
+        set(i): {i + 1}
+    ]
+    len(m): nums
+    set(r): ""
+    if(_): {m = 0} [
+        return(r): r
+    ]
+    set(acc): 0
+    at(lo): nums 0
+    at(hi): nums 0
+    set(i): 0
+    while(_): {i < m} [
+        at(x): nums i
+        set(acc): {acc + x}
+        if(_): {x < lo} [
+            set(lo): x
+        ]
+        if(_): {x > hi} [
+            set(hi): x
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {agg = "sum"} [
+        set(x): acc
+    ]
+    elif(_): {agg = "avg"} [
+        set(x): {acc / m}
+    ]
+    elif(_): {agg = "min"} [
+        set(x): lo
+    ]
+    else(_): [
+        set(x): hi
+    ]
+    str_from_number(r): x 4
+]
+
+# ---------------------------------------------------------------- saved queries, sql
+
+_kgb_qfile(r): [
+    kgb_full(r): ".kgb-queries"
+]
+
+kgb_cmd_query(r): p [
+    len(n): p
+    set(r): 2
+    if(_): {n < 2} [
+        kgb_err(r): "query save NAME EXPR... | query ls | query rm NAME"
+        return(r): r
+    ]
+    at(sub): p 1
+    _kgb_qfile(file):
+    kgb_lines(lines): file
+    if(_): {sub = "ls"} [
+        len(nl): lines
+        set(i): 0
+        while(_): {i < nl} [
+            at(l): lines i
+            print(_): l
+            set(i): {i + 1}
+        ]
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {n < 3} [
+        kgb_err(r): "which query?"
+        return(r): r
+    ]
+    at(name): p 2
+    concat(prefix): name " = "
+    vec(kept): ""
+    len(nl): lines
+    set(i): 0
+    while(_): {i < nl} [
+        at(l): lines i
+        kgb_starts(same): l prefix
+        if(_): {same = false} [
+            push(_): kept l
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {sub = "save"} [
+        list_slice(rest): p 3 {0 - 1}
+        str_join(text): rest " "
+        concat(line): prefix text
+        push(_): kept line
+    ]
+    elif(_): {sub != "rm"} [
+        kgb_err(r): "query save NAME EXPR... | query ls | query rm NAME"
+        return(r): r
+    ]
+    kgb_write_lines(_): file kept
+    set(r): 0
+]
+
+kgb_cmd_q(r): p [
+    len(n): p
+    set(r): 2
+    if(_): {n < 2} [
+        kgb_err(r): "q NAME"
+        return(r): r
+    ]
+    at(name): p 1
+    _kgb_qfile(file):
+    kgb_lines(lines): file
+    concat(prefix): name " = "
+    len(nl): lines
+    set(i): 0
+    while(_): {i < nl} [
+        at(l): lines i
+        kgb_starts(same): l prefix
+        if(_): same [
+            len(pl): prefix
+            len(ll): l
+            slice(text): l pl {ll - pl}
+            vec(words): ""
+            push(_): words text
+            kgb_q_run(r): words
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    concat(m): "no saved query '" name "'"
+    kgb_err(r): m
+]
+
+# select COLS from CAT [where COND] [order by KEY [desc]] [limit N] [offset N]
+kgb_cmd_sql(r): p [
+    list_slice(rest): p 1 {0 - 1}
+    str_join(text): rest " "
+    set(r): 2
+    re_find(m): "^\\s*select\\s+(.+?)\\s+from\\s+(\\S+)(?:\\s+where\\s+(.+?))?(?:\\s+order\\s+by\\s+(\\S+)(?:\\s+(asc|desc))?)?(?:\\s+limit\\s+([0-9]+))?(?:\\s+offset\\s+([0-9]+))?\\s*;?\\s*$" text "i"
+    typeof(mt): m
+    if(_): {mt != "vector"} [
+        kgb_err(r): "sql: select COLS from CAT [where ...] [order by KEY [desc]] [limit N] [offset N]"
+        return(r): r
+    ]
+    at(cols): m 1
+    at(cat): m 2
+    at(cond): m 3
+    at(order): m 4
+    at(dir): m 5
+    at(lim): m 6
+    at(off): m 7
+    set(kgb_opt_in): cat
+    if(_): {cat = "*" || cat = "all"} [
+        set(kgb_opt_in): ""
+    ]
+    set(q): ""
+    typeof(ct): cond
+    if(_): {ct = "string"} [
+        # "legs > 2" -> "legs>2": operators join their sides
+        re_replace(c2): "\\s*(!=|>=|<=|=|<|>|~)\\s*" cond "\\1"
+        set(q): c2
+    ]
+    typeof(ot): order
+    if(_): {ot = "string"} [
+        concat(q): q " sort by " order
+        typeof(dt): dir
+        if(_): {dt = "string"} [
+            concat(q): q " " dir
+        ]
+    ]
+    typeof(lt): lim
+    if(_): {lt = "string"} [
+        concat(q): q " limit " lim
+    ]
+    typeof(oft): off
+    if(_): {oft = "string"} [
+        concat(q): q " offset " off
+    ]
+    str_trim(cols): cols
+    str_lower(lc): cols
+    re_find(agg): "^(count)\\(\\*\\)$|^(sum|avg|min|max)\\(([^)]+)\\)$" lc
+    typeof(at_): agg
+    if(_): {at_ = "vector"} [
+        at(c1): agg 1
+        typeof(c1t): c1
+        if(_): {c1t = "string"} [
+            concat(q): q " count"
+        ]
+        else(_): [
+            at(fn): agg 2
+            at(fk): agg 3
+            concat(q): q " " fn " " fk
+        ]
+    ]
+    elif(_): {cols != "*" && lc != "path"} [
+        re_replace(cl): "\\s*,\\s*" cols ","
+        re_replace(cl): "(^|,)path(,|$)" cl "\\1\\2"
+        re_replace(cl): ",,+" cl ","
+        re_replace(cl): "^,|,$" cl ""
+        if(_): {cl != ""} [
+            concat(q): q " show " cl
+        ]
+    ]
+    vec(words): ""
+    push(_): words q
+    kgb_q_run(r): words
+]
+
+# ---------------------------------------------------------------- objects
+
+_kgb_props(r): obj [
+    # key -> values (own and inherited)
+    btree(r):
+    kgb_keys(keys): obj
+    len(n): keys
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        str_starts(schema): k "!"
+        if(_): {schema = false} [
+            kgb_values(vs): obj k
+            str_join(v): vs ", "
+            btput(_): r k v
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kgb_cmd_diff(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "diff A B"
+        return(r): r
+    ]
+    at(an): p 1
+    at(bn): p 2
+    kgb_object(a): an
+    kgb_object(b): bn
+    typeof(at_): a
+    typeof(bt): b
+    if(_): {at_ != "string" || bt != "string"} [
+        return(r): r
+    ]
+    _kgb_props(pa): a
+    _kgb_props(pb): b
+    btkeys(keys_a): pa
+    btkeys(keys_b): pb
+    set_union(all): keys_a keys_b
+    list_sort(all): all
+    set(r): 1
+    len(na): all
+    set(i): 0
+    while(_): {i < na} [
+        at(k): all i
+        btget(va): pa k null
+        btget(vb): pb k null
+        typeof(ta): va
+        typeof(tb): vb
+        if(_): {ta = "null"} [
+            concat(line): "+ " k ": " vb
+            print(_): line
+            set(r): 0
+        ]
+        elif(_): {tb = "null"} [
+            concat(line): "- " k ": " va
+            print(_): line
+            set(r): 0
+        ]
+        elif(_): {va != vb} [
+            concat(line): "~ " k ": " va " -> " vb
+            print(_): line
+            set(r): 0
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kgb_cmd_compare(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "compare A B [C ...]"
+        return(r): r
+    ]
+    vec(objs): ""
+    vec(props): ""
+    vec(header): ""
+    push(_): header "key"
+    set(i): 1
+    while(_): {i < n} [
+        at(nm): p i
+        kgb_object(o): nm
+        typeof(ot): o
+        if(_): {ot != "string"} [
+            return(r): r
+        ]
+        push(_): objs o
+        _kgb_props(pr): o
+        push(_): props pr
+        kgb_base(bn): o
+        push(_): header bn
+        set(i): {i + 1}
+    ]
+    vec(keys): ""
+    len(no): props
+    set(i): 0
+    while(_): {i < no} [
+        at(pr): props i
+        btkeys(k): pr
+        set_union(keys): keys k
+        set(i): {i + 1}
+    ]
+    list_sort(keys): keys
+    vec(rows): ""
+    len(nk): keys
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): keys i
+        vec(row): ""
+        push(_): row k
+        set(j): 0
+        while(_): {j < no} [
+            at(pr): props j
+            btget(v): pr k ""
+            push(_): row v
+            set(j): {j + 1}
+        ]
+        push(_): rows row
+        set(i): {i + 1}
+    ]
+    kgb_out_rows(_): header rows
+    set(r): 0
+]
+
+kgb_cmd_random(r): p [
+    kgb_scope(cat):
+    len(n): p
+    if(_): {n > 1} [
+        at(cn): p 1
+        kgb_category(cat): cn
+    ]
+    set(r): 2
+    kgb_is_string(okc): cat
+    if(_): {okc = false} [
+        return(r): r
+    ]
+    kgb_objects_in(objs): cat
+    len(no): objs
+    set(r): 1
+    if(_): {no > 0} [
+        random64(x):
+        set(x): {x & 0x7FFFFFFFFFFFFFFF}
+        set(k): {x % no}
+        at(o): objs k
+        print(_): o
+        set(r): 0
+    ]
+]
+
+kgb_copy_tree(r): from to [
+    kgb_full(src): from
+    kgb_full(dst): to
+    make_dir(_): dst
+    list_dir(names): src
+    set(r): 0
+    typeof(nt): names
+    if(_): {nt != "vector"} [
+        return(r): r
+    ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        kgb_ends(sub): name "/"
+        if(_): {sub = false} [
+            concat(a): src "/" name
+            concat(b): dst "/" name
+            copy_file(_): a b
+            set(r): {r + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kgb_cmd_cp(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "cp OBJ PATH"
+        return(r): r
+    ]
+    at(on): p 1
+    at(path): p 2
+    kgb_object(o): on
+    typeof(ot): o
+    if(_): {ot != "string"} [
+        return(r): r
+    ]
+    kgb_create(rel): path
+    if(_): {rel = ""} [
+        return(r): r
+    ]
+    kgb_copy_tree(_): o rel
+    concat(m): "copied " o " to " rel
+    print(_): m
+    set(r): 0
+]
+
+# A's facts that B lacks go into B, links to A point to B, A goes away
+kgb_cmd_merge(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "merge A B"
+        return(r): r
+    ]
+    at(an): p 1
+    at(bn): p 2
+    kgb_object(a): an
+    kgb_object(b): bn
+    typeof(at_): a
+    typeof(bt): b
+    if(_): {at_ != "string" || bt != "string" || a = b} [
+        return(r): r
+    ]
+    kgb_facts(fa): a
+    kgb_facts(fb): b
+    vec(have): ""
+    len(nb): fb
+    set(i): 0
+    while(_): {i < nb} [
+        at(f): fb i
+        getf(t): f "text"
+        push(_): have t
+        set(i): {i + 1}
+    ]
+    set(added): 0
+    len(na): fa
+    set(i): 0
+    while(_): {i < na} [
+        at(f): fa i
+        getf(t): f "text"
+        list_contains(dup): have t
+        if(_): {dup = false} [
+            kgb_append_fact(_): b t
+            set(added): {added + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    kgb_base(abase): a
+    kgb_base(bbase): b
+    kgb_relink(changed): abase bbase
+    kgb_prune(_): a
+    str_from_int(as): added
+    str_from_int(cs): changed
+    concat(m): "merged " a " into " b ": " as " facts added, " cs " links changed"
+    print(_): m
+    set(r): 0
+]
+
+# [[old]] -> [[new]] in every file; the number of facts changed
+kgb_relink(r): old new [
+    set(r): 0
+    len(no): kgb_objects
+    concat(from): "[[" old "]]"
+    concat(to): "[[" new "]]"
+    concat(from2): "[[" old "|"
+    concat(to2): "[[" new "|"
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): kgb_objects i
+        kgb_facts(fs): obj
+        len(nf): fs
+        set(k): 0
+        while(_): {k < nf} [
+            at(f): fs k
+            getf(t): f "text"
+            str_contains(h1): t from
+            str_contains(h2): t from2
+            if(_): {h1 || h2} [
+                str_replace(nt): t from to
+                str_replace(nt): nt from2 to2
+                kgb_replace_fact(_): f nt
+                set(r): {r + 1}
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- import
+
+kgb_csv_parse_line(r): line [
+    vec(r): ""
+    set(cur): ""
+    set(q): false
+    len(n): line
+    set(i): 0
+    while(_): {i < n} [
+        at(c): line i
+        if(_): q [
+            if(_): {c = "\""} [
+                set(nx): ""
+                if(_): {i + 1 < n} [
+                    at(nx): line {i + 1}
+                ]
+                if(_): {nx = "\""} [
+                    concat(cur): cur "\""
+                    set(i): {i + 1}
+                ]
+                else(_): [
+                    set(q): false
+                ]
+            ]
+            else(_): [
+                concat(cur): cur c
+            ]
+        ]
+        elif(_): {c = "\""} [
+            set(q): true
+        ]
+        elif(_): {c = ","} [
+            push(_): r cur
+            set(cur): ""
+        ]
+        else(_): [
+            concat(cur): cur c
+        ]
+        set(i): {i + 1}
+    ]
+    push(_): r cur
+]
+
+kgb_cmd_import(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "import FILE.csv|FILE.json CATEGORY [NAME_COLUMN]"
+        return(r): r
+    ]
+    at(file): p 1
+    at(cat): p 2
+    set(namecol): "name"
+    if(_): {n > 3} [
+        at(namecol): p 3
+    ]
+    vec(records): ""
+    str_lower(lf): file
+    kgb_ends(isjson): lf ".json"
+    if(_): isjson [
+        readfile(text): file
+        json_parse(data): text
+        typeof(dt): data
+        if(_): {dt != "vector"} [
+            kgb_err(r): "the JSON file is not an array of objects"
+            return(r): r
+        ]
+        len(nd): data
+        set(i): 0
+        while(_): {i < nd} [
+            at(o): data i
+            typeof(ot): o
+            if(_): {ot = "btree"} [
+                push(_): records o
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        kgb_lines(lines): file
+        len(nl): lines
+        if(_): {nl < 2} [
+            kgb_err(r): "the CSV file needs a header and rows"
+            return(r): r
+        ]
+        at(hl): lines 0
+        kgb_csv_parse_line(header): hl
+        set(i): 1
+        while(_): {i < nl} [
+            at(l): lines i
+            if(_): {l != ""} [
+                kgb_csv_parse_line(cells): l
+                btree(o):
+                len(nh): header
+                len(nc): cells
+                set(k): 0
+                while(_): {k < nh && k < nc} [
+                    at(h): header k
+                    str_trim(h): h
+                    at(c): cells k
+                    btput(_): o h c
+                    set(k): {k + 1}
+                ]
+                push(_): records o
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    set(made): 0
+    len(nr): records
+    set(i): 0
+    while(_): {i < nr} [
+        at(o): records i
+        btget(name): o namecol ""
+        typeof(nt): name
+        if(_): {nt != "string"} [
+            vec(one): ""
+            push(_): one name
+            str_join(name): one ""
+        ]
+        if(_): {name != ""} [
+            re_replace(safe): "[\\\\/:*?\"<>|]" name "_"
+            concat(path): cat "/" safe
+            kgb_create(rel): path
+            if(_): {rel != ""} [
+                btkeys(keys): o
+                len(nk): keys
+                set(k): 0
+                while(_): {k < nk} [
+                    at(key): keys k
+                    if(_): {key != namecol} [
+                        btget(v): o key
+                        typeof(vt): v
+                        if(_): {vt != "string"} [
+                            vec(one): ""
+                            push(_): one v
+                            str_join(v): one ""
+                        ]
+                        if(_): {v != ""} [
+                            concat(fact): key ": " v
+                            kgb_append_fact(_): rel fact
+                        ]
+                    ]
+                    set(k): {k + 1}
+                ]
+                kgb_target(_): rel
+                set(made): {made + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    str_from_int(ms): made
+    concat(m): "imported " ms " objects into " cat
+    print(_): m
+    set(r): 0
+]
+
+# set --where "EXPR" KEY VALUE
+kgb_cmd_set_where(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 5} [
+        kgb_err(r): "set --where EXPR KEY VALUE"
+        return(r): r
+    ]
+    at(expr): p 2
+    at(key): p 3
+    list_slice(vparts): p 4 {0 - 1}
+    str_join(value): vparts " "
+    vec(words): ""
+    push(_): words expr
+    kgb_q_parse(q): words
+    btget(e): q "expr"
+    kgb_scope(cat):
+    kgb_objects_in(objs): cat
+    set(r): 1
+    len(no): objs
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): objs i
+        kgb_q_eval(ok): obj e
+        if(_): ok [
+            vec(sp): ""
+            push(_): sp "set"
+            push(_): sp obj
+            push(_): sp key
+            push(_): sp value
+            kgb_cmd_set(_): sp
+            set(r): 0
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- links
+
+_kgb_link_map(r): [
+    # obj -> vector of linked objects
+    btree(r):
+    len(no): kgb_objects
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): kgb_objects i
+        vec(out): ""
+        kgb_facts(fs): obj
+        len(nf): fs
+        set(k): 0
+        while(_): {k < nf} [
+            at(f): fs k
+            getf(t): f "text"
+            kgb_links_of(ls): t
+            len(nl): ls
+            set(j): 0
+            while(_): {j < nl} [
+                at(l): ls j
+                kgb_link_target(tg): l
+                if(_): {tg != ""} [
+                    list_contains(seen): out tg
+                    if(_): {seen = false} [
+                        push(_): out tg
+                    ]
+                ]
+                set(j): {j + 1}
+            ]
+            set(k): {k + 1}
+        ]
+        btput(_): r obj out
+        set(i): {i + 1}
+    ]
+]
+
+kgb_cmd_orphans(r): p [
+    _kgb_link_map(lm):
+    btree(linked):
+    btkeys(keys): lm
+    len(n): keys
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        btget(out): lm k
+        len(no): out
+        set(j): 0
+        while(_): {j < no} [
+            at(t): out j
+            btput(_): linked t true
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): 1
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        bthas(has): linked k
+        if(_): {has = false} [
+            print(_): k
+            set(r): 0
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kgb_cmd_hubs(r): p [
+    set(top): 10
+    len(n): p
+    if(_): {n > 1} [
+        at(ts): p 1
+        str_to_int(top): ts 10
+    ]
+    _kgb_link_map(lm):
+    btree(count):
+    btkeys(keys): lm
+    len(nk): keys
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): keys i
+        btget(out): lm k
+        len(no): out
+        set(j): 0
+        while(_): {j < no} [
+            at(t): out j
+            btget(c): count t 0
+            btput(_): count t {c + 1}
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    vec(pairs): ""
+    btkeys(ck): count
+    len(nc): ck
+    set(i): 0
+    while(_): {i < nc} [
+        at(k): ck i
+        btget(c): count k
+        vec(pr): ""
+        push(_): pr c
+        push(_): pr k
+        push(_): pairs pr
+        set(i): {i + 1}
+    ]
+    _kgb_isort(sorted): pairs true
+    vec(rows): ""
+    len(ns): sorted
+    set(i): 0
+    while(_): {i < ns && i < top} [
+        at(pr): sorted i
+        at(c): pr 0
+        at(k): pr 1
+        vec(row): ""
+        push(_): row k
+        push(_): row c
+        push(_): rows row
+        set(i): {i + 1}
+    ]
+    vec(header): ""
+    push(_): header "object"
+    push(_): header "links in"
+    kgb_out_rows(_): header rows
+    set(r): 0
+]
+
+# the shortest chain of links from A to B (either direction)
+kgb_cmd_path(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "path A B"
+        return(r): r
+    ]
+    at(an): p 1
+    at(bn): p 2
+    kgb_object(a): an
+    kgb_object(b): bn
+    typeof(at_): a
+    typeof(bt): b
+    if(_): {at_ != "string" || bt != "string"} [
+        return(r): r
+    ]
+    _kgb_link_map(lm):
+    # undirected neighbours
+    btree(nb):
+    btkeys(keys): lm
+    len(nk): keys
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): keys i
+        btget(out): lm k
+        len(no): out
+        set(j): 0
+        while(_): {j < no} [
+            at(t): out j
+            btget(x): nb k null
+            typeof(xt): x
+            if(_): {xt != "vector"} [
+                vec(x): ""
+                btput(_): nb k x
+            ]
+            push(_): x t
+            btget(y): nb t null
+            typeof(yt): y
+            if(_): {yt != "vector"} [
+                vec(y): ""
+                btput(_): nb t y
+            ]
+            push(_): y k
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    btree(prev):
+    btput(_): prev a ""
+    queue_new(q):
+    queue_push(_): q a
+    set(found): {a = b}
+    while(_): {found = false} [
+        queue_pop(cur): q
+        typeof(ct): cur
+        if(_): {ct != "string"} [
+            print(_): "no path"
+            set(r): 1
+            return(r): r
+        ]
+        btget(ns): nb cur null
+        typeof(nst): ns
+        if(_): {nst = "vector"} [
+            len(nn): ns
+            set(j): 0
+            while(_): {j < nn && found = false} [
+                at(t): ns j
+                bthas(seen): prev t
+                if(_): {seen = false} [
+                    btput(_): prev t cur
+                    queue_push(_): q t
+                    if(_): {t = b} [
+                        set(found): true
+                    ]
+                ]
+                set(j): {j + 1}
+            ]
+        ]
+    ]
+    vec(chain): ""
+    set(cur): b
+    while(_): {cur != ""} [
+        push(_): chain cur
+        btget(cur): prev cur
+    ]
+    list_reverse(chain): chain
+    str_join(line): chain " -> "
+    print(_): line
+    set(r): 0
+]
+
+# every object reachable from OBJ through links in KEY facts
+kgb_cmd_closure(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 3} [
+        kgb_err(r): "closure OBJ KEY"
+        return(r): r
+    ]
+    at(on): p 1
+    at(key): p 2
+    kgb_object(o): on
+    typeof(ot): o
+    if(_): {ot != "string"} [
+        return(r): r
+    ]
+    btree(seen):
+    queue_new(q):
+    queue_push(_): q o
+    vec(out): ""
+    set(go): true
+    while(_): go [
+        queue_pop(cur): q
+        typeof(ct): cur
+        if(_): {ct != "string"} [
+            set(go): false
+        ]
+        else(_): [
+            kgb_values(vs): cur key
+            len(nv): vs
+            set(i): 0
+            while(_): {i < nv} [
+                at(v): vs i
+                kgb_links_of(ls): v
+                len(nl): ls
+                set(j): 0
+                while(_): {j < nl} [
+                    at(l): ls j
+                    kgb_link_target(tg): l
+                    bthas(had): seen tg
+                    if(_): {tg != "" && had = false} [
+                        btput(_): seen tg true
+                        push(_): out tg
+                        queue_push(_): q tg
+                    ]
+                    set(j): {j + 1}
+                ]
+                set(i): {i + 1}
+            ]
+        ]
+    ]
+    len(no): out
+    set(i): 0
+    while(_): {i < no} [
+        at(x): out i
+        print(_): x
+        set(i): {i + 1}
+    ]
+    set(r): 1
+    if(_): {no > 0} [
+        set(r): 0
+    ]
+]
+
+# ---------------------------------------------------------------- exports
+
+_kgb_dot_id(r): s [
+    str_replace(e): s "\"" "\\\""
+    concat(r): "\"" e "\""
+]
+
+kgb_cmd_dot(r): p [
+    _kgb_link_map(lm):
+    vec(lines): ""
+    push(_): lines "digraph kgb {"
+    push(_): lines "  rankdir=LR;"
+    len(nc): kgb_cats
+    set(i): 0
+    while(_): {i < nc} [
+        at(c): kgb_cats i
+        if(_): {c != ""} [
+            kgb_parent(par): c
+            _kgb_dot_id(ci): c
+            concat(l): "  " ci " [shape=folder];"
+            push(_): lines l
+            if(_): {par != ""} [
+                _kgb_dot_id(pi): par
+                concat(l): "  " pi " -> " ci " [style=dashed];"
+                push(_): lines l
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    btkeys(objs): lm
+    len(no): objs
+    set(i): 0
+    while(_): {i < no} [
+        at(o): objs i
+        _kgb_dot_id(oi): o
+        kgb_parent(par): o
+        if(_): {par != ""} [
+            _kgb_dot_id(pi): par
+            concat(l): "  " pi " -> " oi " [style=dashed];"
+            push(_): lines l
+        ]
+        btget(out): lm o
+        len(nl): out
+        set(j): 0
+        while(_): {j < nl} [
+            at(t): out j
+            _kgb_dot_id(ti): t
+            concat(l): "  " oi " -> " ti ";"
+            push(_): lines l
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    push(_): lines "}"
+    len(n): p
+    if(_): {n > 1} [
+        at(file): p 1
+        write_lines(_): file lines
+    ]
+    else(_): [
+        len(nl): lines
+        set(i): 0
+        while(_): {i < nl} [
+            at(l): lines i
+            print(_): l
+            set(i): {i + 1}
+        ]
+    ]
+    set(r): 0
+]
+
+_kgb_html_name(r): obj [
+    str_replace(r): obj "/" "__"
+    concat(r): r ".html"
+]
+
+_kgb_html_page(r): title body [
+    html_escape_kgb(t): title
+    concat(r): "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>" t "</title><style>body{font-family:sans-serif;max-width:50em;margin:2em auto}li{margin:.2em 0}</style></head><body>\n<p><a href=\"index.html\">index</a></p>\n<h1>" t "</h1>\n" body "</body></html>\n"
+]
+
+html_escape_kgb(r): s [
+    str_replace(r): s "&" "&amp;"
+    str_replace(r): r "<" "&lt;"
+    str_replace(r): r ">" "&gt;"
+    str_replace(r): r "\"" "&quot;"
+]
+
+kgb_cmd_html(r): p [
+    set(r): 2
+    len(n): p
+    if(_): {n < 2} [
+        kgb_err(r): "html DIR"
+        return(r): r
+    ]
+    at(dir): p 1
+    make_dir(_): dir
+    set(index): "<ul>\n"
+    len(no): kgb_objects
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): kgb_objects i
+        _kgb_html_name(page): obj
+        html_escape_kgb(oe): obj
+        concat(index): index "<li><a href=\"" page "\">" oe "</a></li>\n"
+        kgb_facts(fs): obj
+        set(body): "<ul>\n"
+        len(nf): fs
+        set(k): 0
+        while(_): {k < nf} [
+            at(f): fs k
+            getf(t): f "text"
+            html_escape_kgb(te): t
+            # [[link]] becomes a link to that object's page
+            kgb_links_of(ls): t
+            len(nl): ls
+            set(j): 0
+            while(_): {j < nl} [
+                at(l): ls j
+                kgb_link_target(tg): l
+                if(_): {tg != ""} [
+                    _kgb_html_name(tp): tg
+                    html_escape_kgb(le): l
+                    concat(from): "[[" le "]]"
+                    concat(to): "<a href=\"" tp "\">" le "</a>"
+                    str_replace(te): te from to
+                ]
+                set(j): {j + 1}
+            ]
+            concat(body): body "<li>" te "</li>\n"
+            set(k): {k + 1}
+        ]
+        concat(body): body "</ul>\n"
+        _kgb_html_page(html): obj body
+        concat(file): dir "/" page
+        writefile(_): file html
+        set(i): {i + 1}
+    ]
+    concat(index): index "</ul>\n"
+    _kgb_html_page(html): "Knowledge base" index
+    concat(file): dir "/index.html"
+    writefile(_): file html
+    str_from_int(ns): no
+    concat(m): "wrote " ns " pages to " dir
+    print(_): m
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- quality
+
+_kgb_key_norm(r): k [
+    str_lower(r): k
+    re_replace(r): "[ _-]+" r ""
+]
+
+kgb_cmd_lint(r): p [
+    btree(seen):
+    set(r): 1
+    len(no): kgb_objects
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): kgb_objects i
+        kgb_facts(fs): obj
+        len(nf): fs
+        set(k): 0
+        while(_): {k < nf} [
+            at(f): fs k
+            getf(t): f "text"
+            str_find(c): t ":" 0
+            if(_): {c > 0 && c <= 40} [
+                slice(raw): t 0 c
+                str_trim(raw): raw
+                _kgb_key_norm(nk): raw
+                btget(first): seen nk ""
+                if(_): {first = ""} [
+                    btput(_): seen nk raw
+                ]
+                elif(_): {first != raw} [
+                    concat(m): obj ": key '" raw "' looks like '" first "'"
+                    print(_): m
+                    set(r): 0
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# schema facts "!key: type" in categories; problems are printed
+kgb_cmd_validate(r): p [
+    set(r): 1
+    len(no): kgb_objects
+    set(i): 0
+    while(_): {i < no} [
+        at(obj): kgb_objects i
+        kgb_ancestors(up): obj
+        len(nu): up
+        set(u): 0
+        while(_): {u < nu} [
+            at(cat): up u
+            kgb_facts(cf): cat
+            len(nc): cf
+            set(k): 0
+            while(_): {k < nc} [
+                at(f): cf k
+                getf(t): f "text"
+                re_find(m): "^!\\s*([^:]+):\\s*(\\S+)" t
+                typeof(mt): m
+                if(_): {mt = "vector"} [
+                    at(key): m 1
+                    str_trim(key): key
+                    str_lower(key): key
+                    at(type): m 2
+                    kgb_values(vs): obj key
+                    len(nv): vs
+                    if(_): {nv = 0} [
+                        concat(msg): obj ": missing " key " (" type ")"
+                        print(_): msg
+                        set(r): 0
+                    ]
+                    set(j): 0
+                    while(_): {j < nv} [
+                        at(v): vs j
+                        set(good): true
+                        if(_): {type = "int"} [
+                            re_test(good): "^-?[0-9]+$" v
+                        ]
+                        elif(_): {type = "real" || type = "number"} [
+                            re_test(good): "^-?[0-9]+(\\.[0-9]+)?$" v
+                        ]
+                        elif(_): {type = "date"} [
+                            re_test(good): "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" v
+                        ]
+                        elif(_): {type = "url"} [
+                            re_test(good): "^https?://\\S+$" v
+                        ]
+                        elif(_): {type = "bool"} [
+                            str_lower(lv): v
+                            set(good): {lv = "yes" || lv = "no" || lv = "true" || lv = "false"}
+                        ]
+                        if(_): {good = false} [
+                            concat(msg): obj ": " key " = '" v "' is not " type
+                            print(_): msg
+                            set(r): 0
+                        ]
+                        set(j): {j + 1}
+                    ]
+                ]
+                set(k): {k + 1}
+            ]
+            set(u): {u + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# an object by an "aka: Name" fact, or ""
+kgb_aka(r): name [
+    set(r): ""
+    str_lower(want): name
+    len(no): kgb_objects
+    set(i): 0
+    while(_): {i < no && r = ""} [
+        at(obj): kgb_objects i
+        kgb_facts(fs): obj
+        kgb_values_in(vs): fs "aka"
+        len(nv): vs
+        set(j): 0
+        while(_): {j < nv} [
+            at(v): vs j
+            str_split(names): v ","
+            len(nn): names
+            set(k): 0
+            while(_): {k < nn} [
+                at(a): names k
+                str_trim(a): a
+                str_lower(la): a
+                if(_): {la = want} [
+                    set(r): obj
+                ]
+                set(k): {k + 1}
+            ]
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- history
+
+kgb_journal(r): path [
+    set(r): 0
+    set(off): kgb_no_journal
+    if(_): {off = true} [
+        return(r): r
+    ]
+    # history is kept when the .kgb file says "journal: on" or KGB_JOURNAL=1
+    getenv(env): "KGB_JOURNAL"
+    set(on): {env = "1"}
+    if(_): {on = false} [
+        kgb_full(marker): ".kgb"
+        file_exists(hm): marker
+        if(_): {hm = 1 || hm = true} [
+            readfile(mt): marker
+            typeof(mtt): mt
+            if(_): {mtt = "string"} [
+                re_test(on2): "journal: *on" mt
+                set(on): on2
+            ]
+        ]
+    ]
+    if(_): {on = false} [
+        return(r): r
+    ]
+    file_exists(had): path
+    set(old): null
+    if(_): {had = 1 || had = true} [
+        readfile(old): path
+    ]
+    vec(rec): ""
+    push(_): rec path
+    push(_): rec old
+    json_stringify(text): rec
+    kgb_full(uf): ".kgb-undo"
+    writefile(_): uf text
+    time(now):
+    str_from_int(ts): now
+    concat(line): ts " " path "\n"
+    kgb_full(lf): ".kgb-log"
+    open_file(h): lf "ab"
+    if(_): {h >= 0} [
+        write_file(_): h line
+        close_file(_): h
+    ]
+]
+
+kgb_cmd_undo(r): p [
+    kgb_full(uf): ".kgb-undo"
+    file_exists(have): uf
+    set(r): 1
+    if(_): {have != 1 && have != true} [
+        print(_): "nothing to undo"
+        return(r): r
+    ]
+    readfile(text): uf
+    json_parse(rec): text
+    at(path): rec 0
+    at(old): rec 1
+    typeof(ot): old
+    if(_): {ot = "string"} [
+        writefile(_): path old
+    ]
+    else(_): [
+        remove_file(_): path
+    ]
+    remove_file(_): uf
+    concat(m): "restored " path
+    print(_): m
+    set(r): 0
+]
+
+kgb_cmd_log(r): p [
+    kgb_full(lf): ".kgb-log"
+    kgb_lines(lines): lf
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_split_max(parts): l " " 2
+        at(ts): parts 0
+        str_to_int(t): ts 10
+        len(np): parts
+        set(path): ""
+        if(_): {np > 1} [
+            at(path): parts 1
+        ]
+        localtime(lt): t
+        at(y): lt 0
+        at(mo): lt 1
+        at(d): lt 2
+        at(hh): lt 3
+        at(mi): lt 4
+        str_from_int(ys): y
+        str_from_int(ms): mo
+        str_pad_left(ms): ms 2 "0"
+        str_from_int(ds): d
+        str_pad_left(ds): ds 2 "0"
+        str_from_int(hs): hh
+        str_pad_left(hs): hs 2 "0"
+        str_from_int(mis): mi
+        str_pad_left(mis): mis 2 "0"
+        concat(line): ys "-" ms "-" ds " " hs ":" mis " " path
+        print(_): line
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- dispatch
+
+# the extra commands; -1 when cmd is none of them
+kgb_more_cmd(r): cmd p [
+    set(r): {0 - 1}
+    if(_): {cmd = "query"} [ kgb_cmd_query(r): p ]
+    elif(_): {cmd = "q"} [ kgb_cmd_q(r): p ]
+    elif(_): {cmd = "sql"} [ kgb_cmd_sql(r): p ]
+    elif(_): {cmd = "diff"} [ kgb_cmd_diff(r): p ]
+    elif(_): {cmd = "compare"} [ kgb_cmd_compare(r): p ]
+    elif(_): {cmd = "random"} [ kgb_cmd_random(r): p ]
+    elif(_): {cmd = "cp"} [ kgb_cmd_cp(r): p ]
+    elif(_): {cmd = "merge"} [ kgb_cmd_merge(r): p ]
+    elif(_): {cmd = "import"} [ kgb_cmd_import(r): p ]
+    elif(_): {cmd = "orphans"} [ kgb_cmd_orphans(r): p ]
+    elif(_): {cmd = "hubs"} [ kgb_cmd_hubs(r): p ]
+    elif(_): {cmd = "path"} [ kgb_cmd_path(r): p ]
+    elif(_): {cmd = "closure"} [ kgb_cmd_closure(r): p ]
+    elif(_): {cmd = "dot"} [ kgb_cmd_dot(r): p ]
+    elif(_): {cmd = "html"} [ kgb_cmd_html(r): p ]
+    elif(_): {cmd = "lint"} [ kgb_cmd_lint(r): p ]
+    elif(_): {cmd = "validate"} [ kgb_cmd_validate(r): p ]
+    elif(_): {cmd = "undo"} [ kgb_cmd_undo(r): p ]
+    elif(_): {cmd = "log"} [ kgb_cmd_log(r): p ]
+]
