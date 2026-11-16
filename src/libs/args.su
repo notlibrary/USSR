@@ -1,0 +1,269 @@
+# args.su - a command-line argument parser, in USSR.
+# Declare the options, then parse init's arg_vec:
+#
+#   args_new(p): "tool" "Does a thing."
+#   args_flag(_): p "verbose" "v" "print more"
+#   args_option(_): p "out" "o" "FILE" "where to write" "out.txt"
+#   args_parse(a): p arg_vec 1          # 1: skip the program name
+#   args_get(v): a "out"                # "out.txt" or what was given
+#   args_has(b): a "verbose"            # true when -v / --verbose came
+#   args_rest(v): a                     # the positional arguments
+#   args_error(e): a                    # "" or why parsing failed
+#   args_help(text): p                  # the generated --help text
+#
+# Accepted forms: --name value, --name=value, -o value, -ovalue, -abc
+# (several flags), and -- to end the options. A "-h"/"--help" sets the
+# flag "help". Unknown options and a missing value set args_error.
+# Parsers and results are btrees; options are kept in declaration order.
+$once
+$include "strings.su"
+
+args_new(r): name about [
+    btree(r):
+    btput(_): r "name" name
+    btput(_): r "about" about
+    vec(opts): ""
+    btput(_): r "opts" opts
+]
+
+# an option record: [long short metavar help default takes_value]
+_args_add(r): p long short metavar help default takes [
+    btget(opts): p "opts"
+    vec(o): ""
+    push(_): o long
+    push(_): o short
+    push(_): o metavar
+    push(_): o help
+    push(_): o default
+    push(_): o takes
+    push(_): opts o
+    set(r): 0
+]
+
+args_flag(r): p long short help [
+    _args_add(r): p long short "" help false false
+]
+
+args_option(r): p long short metavar help default [
+    _args_add(r): p long short metavar help default true
+]
+
+_args_find(r): p name is_short [
+    btget(opts): p "opts"
+    len(n): opts
+    set(i): 0
+    set(r): null
+    while(_): {i < n} [
+        at(o): opts i
+        set(k): 0
+        if(_): is_short [
+            set(k): 1
+        ]
+        at(x): o k
+        if(_): {x = name && x != ""} [
+            set(r): o
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+args_parse(r): p argv skip [
+    btree(r):
+    vec(rest): ""
+    btput(_): r "_rest" rest
+    btput(_): r "_error" ""
+    btput(_): r "_parser" p
+    btget(opts): p "opts"
+    len(n): opts
+    set(i): 0
+    while(_): {i < n} [
+        at(o): opts i
+        at(long): o 0
+        at(dflt): o 4
+        at(takes): o 5
+        if(_): takes [
+            btput(_): r long dflt
+        ]
+        set(i): {i + 1}
+    ]
+    len(argc): argv
+    set(i): skip
+    set(only_rest): false
+    while(_): {i < argc} [
+        at(a): argv i
+        set(i): {i + 1}
+        len(al): a
+        set(first): 0
+        if(_): {al > 0} [
+            byte(first): a 0
+        ]
+        if(_): {only_rest || first != 45 || al = 1} [
+            push(_): rest a
+        ]
+        elif(_): {a = "--"} [
+            set(only_rest): true
+        ]
+        elif(_): {a = "-h" || a = "--help"} [
+            btput(_): r "help" true
+        ]
+        else(_): [
+            str_starts(is_long): a "--"
+            if(_): is_long [
+                slice(body): a 2 {al - 2}
+                set(value): null
+                str_find(eq): body "=" 0
+                if(_): {eq >= 0} [
+                    len(bl): body
+                    slice(value): body {eq + 1} {bl - eq - 1}
+                    slice(body): body 0 eq
+                ]
+                _args_find(o): p body false
+                typeof(ot): o
+                if(_): {ot = "null"} [
+                    concat(err): "unknown option --" body
+                    btput(_): r "_error" err
+                ]
+                else(_): [
+                    at(takes): o 5
+                    if(_): takes [
+                        typeof(vt): value
+                        if(_): {vt = "null"} [
+                            if(_): {i < argc} [
+                                at(value): argv i
+                                set(i): {i + 1}
+                            ]
+                            else(_): [
+                                concat(err): "option --" body " needs a value"
+                                btput(_): r "_error" err
+                            ]
+                        ]
+                        btput(_): r body value
+                    ]
+                    else(_): [
+                        btput(_): r body true
+                    ]
+                ]
+            ]
+            else(_): [
+                # -abc: flags until one takes a value, which gets the rest
+                set(k): 1
+                while(_): {k < al} [
+                    slice(c): a k 1
+                    set(k): {k + 1}
+                    _args_find(o): p c true
+                    typeof(ot): o
+                    if(_): {ot = "null"} [
+                        concat(err): "unknown option -" c
+                        btput(_): r "_error" err
+                        set(k): al
+                    ]
+                    else(_): [
+                        at(long): o 0
+                        at(takes): o 5
+                        if(_): takes [
+                            if(_): {k < al} [
+                                slice(value): a k {al - k}
+                                set(k): al
+                            ]
+                            elif(_): {i < argc} [
+                                at(value): argv i
+                                set(i): {i + 1}
+                            ]
+                            else(_): [
+                                concat(err): "option -" c " needs a value"
+                                btput(_): r "_error" err
+                                set(value): null
+                            ]
+                            btput(_): r long value
+                        ]
+                        else(_): [
+                            btput(_): r long true
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]
+]
+
+args_get(r): a name [
+    btget(r): a name null
+]
+
+args_has(r): a name [
+    btget(v): a name false
+    typeof(t): v
+    set(r): false
+    if(_): {t = "boolean"} [
+        set(r): v
+    ]
+    elif(_): {t = "string"} [
+        set(r): true
+    ]
+]
+
+args_rest(r): a [
+    btget(r): a "_rest"
+]
+
+args_error(r): a [
+    btget(r): a "_error"
+]
+
+args_help(r): p [
+    btget(name): p "name"
+    btget(about): p "about"
+    btget(opts): p "opts"
+    concat(r): "Usage: " name " [options] [arguments]\n"
+    if(_): {about != ""} [
+        concat(r): r about "\n"
+    ]
+    concat(r): r "\nOptions:\n"
+    len(n): opts
+    set(i): 0
+    vec(heads): ""
+    set(widest): 10
+    while(_): {i < n} [
+        at(o): opts i
+        at(long): o 0
+        at(short): o 1
+        at(meta): o 2
+        set(head): "    "
+        if(_): {short != ""} [
+            concat(head): "-" short ", "
+        ]
+        concat(head): head "--" long
+        if(_): {meta != ""} [
+            concat(head): head " " meta
+        ]
+        push(_): heads head
+        len(w): head
+        if(_): {w > widest} [
+            set(widest): w
+        ]
+        set(i): {i + 1}
+    ]
+    push(_): heads "-h, --help"
+    set(i): 0
+    while(_): {i <= n} [
+        at(head): heads i
+        set(help): "show this help"
+        set(dflt): null
+        set(takes): false
+        if(_): {i < n} [
+            at(o): opts i
+            at(help): o 3
+            at(dflt): o 4
+            at(takes): o 5
+        ]
+        str_pad_right(head): head widest " "
+        concat(r): r "  " head "  " help
+        typeof(dt): dflt
+        if(_): {takes && dt = "string" && dflt != ""} [
+            concat(r): r " (default: " dflt ")"
+        ]
+        concat(r): r "\n"
+        set(i): {i + 1}
+    ]
+]

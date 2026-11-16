@@ -1,0 +1,555 @@
+# lists.su - vector helpers, written in USSR.
+# Vectors grow with push and shrink with pop; these build new vectors for
+# everything else, so the input is never changed unless the name says so.
+#   list_range(v): from to step  -> from, from+step, ... before `to`
+#   list_copy(v): v              -> a shallow copy
+#   list_reverse(v): v           -> items in reverse order
+#   list_slice(v): v from count  -> count items from index from (clipped)
+#   list_concat(v): a b          -> a's items, then b's
+#   list_index_of(r): v item     -> first index of item, or -1
+#   list_contains(r): v item     -> true when item is in v
+#   list_count(r): v item        -> how many times item occurs
+#   list_unique(v): v            -> first occurrences only, order kept
+#   list_insert(v): v index item -> a copy with item placed at index
+#   list_remove_at(v): v index   -> a copy without the item at index
+#   list_remove(v): v item       -> a copy without any item equal to item
+#   list_set(v): v index item    -> a copy with index replaced by item
+#   list_sort(v): v              -> ascending; numbers by value, strings by
+#                                   bytes (a stable merge sort)
+#   list_sort_desc(v): v         -> descending
+#   list_sort_natural(v): v      -> strings in natural order (file2, file10)
+#   list_min(r): v / list_max(r): v -> smallest / largest item, null if empty
+#   list_zip(v): a b             -> [[a0,b0],[a1,b1],...] up to the shorter
+#   list_flatten(v): v           -> one level of nested vectors spliced in
+#   list_chunk(v): v size        -> vectors of size items (the last shorter)
+#   list_fill(v): item count     -> count copies of item
+#   list_equal(r): a b           -> same length and equal items
+#   list_take(v): v n / list_drop(v): v n
+# Set operations on vectors of numbers or strings (order of a kept):
+#   set_union(v): a b / set_intersect(v): a b / set_difference(v): a b
+# A queue and a stack over vectors:
+#   queue_new(q): / queue_push(_): q item / queue_pop(r): q / queue_len(r): q
+#   queue_pop gives null when the queue is empty. Queues live in a btree
+#   (items under integer keys, "head" and "tail" counters), so both ends
+#   are cheap and no struct declaration is needed (libraries must not
+#   rely on top-level commands, which init programs skip).
+# A priority queue (lowest priority first, FIFO among equals):
+#   heap_new(h): / heap_push(_): h priority value / heap_pop(r): h
+#   heap_pop gives [priority, value] or null; heap_len(r): h
+$once
+$include "strings.su"
+
+list_range(r): from to step [
+    vec(r): ""
+    if(_): {step = 0} [
+        return(r): r
+    ]
+    set(x): from
+    if(_): {step > 0} [
+        while(_): {x < to} [
+            push(_): r x
+            set(x): {x + step}
+        ]
+    ]
+    else(_): [
+        while(_): {x > to} [
+            push(_): r x
+            set(x): {x + step}
+        ]
+    ]
+]
+
+list_copy(r): v [
+    list_slice(r): v 0 {0 - 1}
+]
+
+list_reverse(r): v [
+    vec(r): ""
+    len(i): v
+    while(_): {i > 0} [
+        set(i): {i - 1}
+        at(x): v i
+        push(_): r x
+    ]
+]
+
+# count < 0 means "to the end"
+list_slice(r): v from count [
+    vec(r): ""
+    len(n): v
+    set(i): from
+    if(_): {i < 0} [
+        set(i): 0
+    ]
+    set(stop): n
+    if(_): {count >= 0 && i + count < n} [
+        set(stop): {i + count}
+    ]
+    while(_): {i < stop} [
+        at(x): v i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+]
+
+list_take(r): v n [
+    list_slice(r): v 0 n
+]
+
+list_drop(r): v n [
+    list_slice(r): v n {0 - 1}
+]
+
+list_concat(r): a b [
+    list_copy(r): a
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+]
+
+# equality that never raises: values of different kinds are just unequal
+_list_same(r): a b [
+    typeof(ta): a
+    typeof(tb): b
+    set(na): {ta = "integer" || ta = "real"}
+    set(nb): {tb = "integer" || tb = "real"}
+    set(r): false
+    if(_): {na && nb} [
+        set(r): {a = b}
+    ]
+    elif(_): {ta = tb && (ta = "string" || ta = "boolean")} [
+        set(r): {a = b}
+    ]
+    elif(_): {ta = "null" && tb = "null"} [
+        set(r): true
+    ]
+]
+
+list_index_of(r): v item [
+    len(n): v
+    set(i): 0
+    set(r): {0 - 1}
+    while(_): {r < 0 && i < n} [
+        at(x): v i
+        _list_same(same): x item
+        if(_): same [
+            set(r): i
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_contains(r): v item [
+    list_index_of(i): v item
+    set(r): {i >= 0}
+]
+
+list_count(r): v item [
+    len(n): v
+    set(i): 0
+    set(r): 0
+    while(_): {i < n} [
+        at(x): v i
+        _list_same(same): x item
+        if(_): same [
+            set(r): {r + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_unique(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        list_contains(seen): r x
+        if(_): {seen = false} [
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_insert(r): v index item [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        if(_): {i = index} [
+            push(_): r item
+        ]
+        at(x): v i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+    if(_): {index >= n} [
+        push(_): r item
+    ]
+]
+
+list_remove_at(r): v index [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        if(_): {i != index} [
+            at(x): v i
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_set(r): v index item [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {i = index} [
+            set(x): item
+        ]
+        push(_): r x
+        set(i): {i + 1}
+    ]
+]
+
+list_remove(r): v item [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        _list_same(same): x item
+        if(_): {same = false} [
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# -1, 0, 1; numbers before strings; mode 1 is natural order for strings
+_list_cmp(r): a b mode [
+    typeof(ta): a
+    typeof(tb): b
+    set(na): {ta = "integer" || ta = "real"}
+    set(nb): {tb = "integer" || tb = "real"}
+    set(r): 0
+    if(_): {na && nb} [
+        if(_): {a < b} [
+            set(r): {0 - 1}
+        ]
+        elif(_): {a > b} [
+            set(r): 1
+        ]
+    ]
+    elif(_): na [
+        set(r): {0 - 1}
+    ]
+    elif(_): nb [
+        set(r): 1
+    ]
+    elif(_): {ta = "string" && tb = "string"} [
+        if(_): {mode = 1} [
+            str_natcmp(r): a b
+        ]
+        else(_): [
+            str_compare(r): a b
+        ]
+    ]
+]
+
+# bottom-up merge sort; dir is 1 (ascending) or -1
+_list_msort(r): v dir mode [
+    list_copy(r): v
+    len(n): v
+    set(width): 1
+    while(_): {width < n} [
+        vec(next): ""
+        set(lo): 0
+        while(_): {lo < n} [
+            set(mid): {lo + width}
+            if(_): {mid > n} [
+                set(mid): n
+            ]
+            set(hi): {lo + 2 * width}
+            if(_): {hi > n} [
+                set(hi): n
+            ]
+            set(i): lo
+            set(j): mid
+            while(_): {i < mid || j < hi} [
+                if(_): {i < mid && j < hi} [
+                    at(a): r i
+                    at(b): r j
+                    _list_cmp(c): a b mode
+                    if(_): {c * dir <= 0} [
+                        push(_): next a
+                        set(i): {i + 1}
+                    ]
+                    else(_): [
+                        push(_): next b
+                        set(j): {j + 1}
+                    ]
+                ]
+                elif(_): {i < mid} [
+                    at(a): r i
+                    push(_): next a
+                    set(i): {i + 1}
+                ]
+                else(_): [
+                    at(b): r j
+                    push(_): next b
+                    set(j): {j + 1}
+                ]
+            ]
+            set(lo): hi
+        ]
+        set(r): next
+        set(width): {width * 2}
+    ]
+]
+
+list_sort(r): v [
+    _list_msort(r): v 1 0
+]
+
+list_sort_desc(r): v [
+    _list_msort(r): v {0 - 1} 0
+]
+
+list_sort_natural(r): v [
+    _list_msort(r): v 1 1
+]
+
+list_min(r): v [
+    len(n): v
+    set(r): null
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {i = 0} [
+            set(r): x
+        ]
+        else(_): [
+            _list_cmp(c): x r 0
+            if(_): {c < 0} [
+                set(r): x
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_max(r): v [
+    len(n): v
+    set(r): null
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {i = 0} [
+            set(r): x
+        ]
+        else(_): [
+            _list_cmp(c): x r 0
+            if(_): {c > 0} [
+                set(r): x
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_zip(r): a b [
+    vec(r): ""
+    len(na): a
+    len(nb): b
+    set(n): na
+    if(_): {nb < n} [
+        set(n): nb
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        vec(pair): ""
+        at(x): a i
+        at(y): b i
+        push(_): pair x
+        push(_): pair y
+        push(_): r pair
+        set(i): {i + 1}
+    ]
+]
+
+list_flatten(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        typeof(t): x
+        if(_): {t = "vector"} [
+            len(m): x
+            set(j): 0
+            while(_): {j < m} [
+                at(y): x j
+                push(_): r y
+                set(j): {j + 1}
+            ]
+        ]
+        else(_): [
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_chunk(r): v size [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        list_slice(piece): v i size
+        push(_): r piece
+        set(i): {i + size}
+    ]
+]
+
+list_fill(r): item count [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < count} [
+        push(_): r item
+        set(i): {i + 1}
+    ]
+]
+
+list_equal(r): a b [
+    len(na): a
+    len(nb): b
+    set(r): {na = nb}
+    set(i): 0
+    while(_): {r && i < na} [
+        at(x): a i
+        at(y): b i
+        typeof(tx): x
+        typeof(ty): y
+        if(_): {tx = "vector" && ty = "vector"} [
+            list_equal(r): x y
+        ]
+        else(_): [
+            _list_same(r): x y
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+set_union(r): a b [
+    list_concat(both): a b
+    list_unique(r): both
+]
+
+set_intersect(r): a b [
+    vec(r): ""
+    list_unique(ua): a
+    len(n): ua
+    set(i): 0
+    while(_): {i < n} [
+        at(x): ua i
+        list_contains(inb): b x
+        if(_): inb [
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+set_difference(r): a b [
+    vec(r): ""
+    list_unique(ua): a
+    len(n): ua
+    set(i): 0
+    while(_): {i < n} [
+        at(x): ua i
+        list_contains(inb): b x
+        if(_): {inb = false} [
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+queue_new(r): [
+    btree(r):
+    btput(_): r "head" 0
+    btput(_): r "tail" 0
+]
+
+queue_push(r): q item [
+    btget(tail): q "tail"
+    btput(_): q tail item
+    btput(_): q "tail" {tail + 1}
+    set(r): 0
+]
+
+queue_len(r): q [
+    btget(head): q "head"
+    btget(tail): q "tail"
+    set(r): {tail - head}
+]
+
+queue_pop(r): q [
+    btget(head): q "head"
+    btget(tail): q "tail"
+    set(r): null
+    if(_): {head < tail} [
+        btget(r): q head
+        btdel(_): q head
+        btput(_): q "head" {head + 1}
+    ]
+]
+
+# priority -> a queue of the values with that priority; "n" counts them
+heap_new(r): [
+    btree(r):
+    btput(_): r "n" 0
+]
+
+heap_len(r): h [
+    btget(r): h "n"
+]
+
+heap_push(r): h priority value [
+    btget(q): h priority null
+    if(_): {q = null} [
+        queue_new(q):
+        btput(_): h priority q
+    ]
+    queue_push(_): q value
+    btget(n): h "n"
+    btput(_): h "n" {n + 1}
+    set(r): 0
+]
+
+heap_pop(r): h [
+    set(r): null
+    btget(n): h "n"
+    if(_): {n > 0} [
+        btfirst(k): h
+        btget(q): h k
+        queue_pop(value): q
+        queue_len(left): q
+        if(_): {left = 0} [
+            btdel(_): h k
+        ]
+        btput(_): h "n" {n - 1}
+        vec(r): ""
+        push(_): r k
+        push(_): r value
+    ]
+]

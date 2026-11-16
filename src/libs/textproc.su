@@ -1,0 +1,407 @@
+# textproc.su - templates, escaping, line diffs and logging, in USSR.
+#   html_escape(r): s          -> & < > " ' as entities
+#   sql_quote(r): s            -> a SQL string literal, quotes doubled
+#   shell_quote(r): s          -> one POSIX shell word in single quotes
+#   template_render(r): text values mode
+#                              -> ${name} holes filled from a btree of
+#                                 values; mode "html", "sql", "shell" or
+#                                 "" (none) escapes each value; $$ is a
+#                                 literal $; a missing name stays as is
+#   diff_lines(v): a b         -> an edit script between two vectors of
+#                                 lines (longest common subsequence):
+#                                 items are "  line", "- line", "+ line"
+#   diff_unified(r): a b name_a name_b
+#                              -> unified-diff text with 3 lines of context
+#   patch_apply(v): a script   -> b again, from a and a diff_lines script;
+#                                 null when the script does not fit a
+#   log_level(_): name         -> "debug", "info", "warn" or "error"
+#                                 (default "info"); lower ones are dropped
+#   log_file(_): path          -> also append every message to path
+#                                 ("" stops)
+#   log_debug(_): msg / log_info(_): msg / log_warn(_): msg / log_error(_): msg
+#                              -> "2026-11-16T09:05:00Z WARN msg" on stderr
+$once
+$include "strings.su"
+$include "dates.su"
+
+html_escape(r): s [
+    str_replace(r): s "&" "&amp;"
+    str_replace(r): r "<" "&lt;"
+    str_replace(r): r ">" "&gt;"
+    str_replace(r): r "\"" "&quot;"
+    str_replace(r): r "'" "&#39;"
+]
+
+sql_quote(r): s [
+    str_replace(q): s "'" "''"
+    concat(r): "'" q "'"
+]
+
+shell_quote(r): s [
+    str_replace(q): s "'" "'\\''"
+    concat(r): "'" q "'"
+]
+
+template_render(r): text values mode [
+    len(n): text
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        str_find(at): text "$" i
+        if(_): {at < 0} [
+            slice(rest): text i {n - i}
+            concat(r): r rest
+            set(i): n
+        ]
+        else(_): [
+            slice(run): text i {at - i}
+            concat(r): r run
+            set(next): 0
+            if(_): {at + 1 < n} [
+                byte(next): text {at + 1}
+            ]
+            if(_): {next = 36} [
+                concat(r): r "$"
+                set(i): {at + 2}
+            ]
+            elif(_): {next = 123} [
+                str_find(close): text "}" at
+                if(_): {close < 0} [
+                    concat(r): r "$"
+                    set(i): {at + 1}
+                ]
+                else(_): [
+                    slice(name): text {at + 2} {close - at - 2}
+                    str_trim(name): name
+                    bthas(has): values name
+                    if(_): has [
+                        btget(v): values name
+                        vec(one): ""
+                        push(_): one v
+                        str_join(v): one ""
+                        if(_): {mode = "html"} [
+                            html_escape(v): v
+                        ]
+                        elif(_): {mode = "sql"} [
+                            sql_quote(v): v
+                        ]
+                        elif(_): {mode = "shell"} [
+                            shell_quote(v): v
+                        ]
+                        concat(r): r v
+                    ]
+                    else(_): [
+                        slice(hole): text at {close - at + 1}
+                        concat(r): r hole
+                    ]
+                    set(i): {close + 1}
+                ]
+            ]
+            else(_): [
+                concat(r): r "$"
+                set(i): {at + 1}
+            ]
+        ]
+    ]
+]
+
+# LCS table as a vector of rows (rows of lengths, from the end)
+diff_lines(r): a b [
+    len(na): a
+    len(nb): b
+    vec(rows): ""
+    vec(zero): ""
+    set(j): 0
+    while(_): {j <= nb} [
+        push(_): zero 0
+        set(j): {j + 1}
+    ]
+    # rows are built from i = na down to 0; rows[k] is row na - k
+    push(_): rows zero
+    set(i): {na - 1}
+    while(_): {i >= 0} [
+        len(k): rows
+        at(below): rows {k - 1}
+        vec(row): ""
+        # row values for j = nb .. 0 are gathered reversed, then flipped
+        vec(rev): ""
+        push(_): rev 0
+        at(ai): a i
+        set(j): {nb - 1}
+        set(right): 0
+        while(_): {j >= 0} [
+            at(bj): b j
+            if(_): {ai = bj} [
+                at(d): below {j + 1}
+                set(v): {d + 1}
+            ]
+            else(_): [
+                at(d): below j
+                set(v): d
+                if(_): {right > v} [
+                    set(v): right
+                ]
+            ]
+            push(_): rev v
+            set(right): v
+            set(j): {j - 1}
+        ]
+        len(m): rev
+        set(q): {m - 1}
+        while(_): {q >= 0} [
+            at(x): rev q
+            push(_): row x
+            set(q): {q - 1}
+        ]
+        push(_): rows row
+        set(i): {i - 1}
+    ]
+    vec(r): ""
+    set(i): 0
+    set(j): 0
+    while(_): {i < na || j < nb} [
+        if(_): {i < na && j < nb} [
+            at(ai): a i
+            at(bj): b j
+            if(_): {ai = bj} [
+                concat(line): "  " ai
+                push(_): r line
+                set(i): {i + 1}
+                set(j): {j + 1}
+            ]
+            else(_): [
+                len(k): rows
+                at(down): rows {k - 1 - (i + 1)}
+                at(here): rows {k - 1 - i}
+                at(dv): down j
+                at(rv): here {j + 1}
+                if(_): {dv >= rv} [
+                    concat(line): "- " ai
+                    push(_): r line
+                    set(i): {i + 1}
+                ]
+                else(_): [
+                    concat(line): "+ " bj
+                    push(_): r line
+                    set(j): {j + 1}
+                ]
+            ]
+        ]
+        elif(_): {i < na} [
+            at(ai): a i
+            concat(line): "- " ai
+            push(_): r line
+            set(i): {i + 1}
+        ]
+        else(_): [
+            at(bj): b j
+            concat(line): "+ " bj
+            push(_): r line
+            set(j): {j + 1}
+        ]
+    ]
+]
+
+diff_unified(r): a b name_a name_b [
+    diff_lines(script): a b
+    len(n): script
+    concat(r): "--- " name_a "\n+++ " name_b "\n"
+    # mark the lines to show: changes and 3 lines around them
+    vec(show): ""
+    set(k): 0
+    while(_): {k < n} [
+        push(_): show false
+        set(k): {k + 1}
+    ]
+    set(k): 0
+    while(_): {k < n} [
+        at(e): script k
+        slice(tag): e 0 1
+        if(_): {tag != " "} [
+            set(lo): {k - 3}
+            set(hi): {k + 3}
+            set(q): 0
+            vec(next): ""
+            while(_): {q < n} [
+                at(was): show q
+                push(_): next {was || (q >= lo && q <= hi)}
+                set(q): {q + 1}
+            ]
+            set(show): next
+        ]
+        set(k): {k + 1}
+    ]
+    set(k): 0
+    set(ia): 1
+    set(ib): 1
+    while(_): {k < n} [
+        at(on): show k
+        if(_): on [
+            # one hunk: count its lines first
+            set(q): k
+            set(ca): 0
+            set(cb): 0
+            set(go): true
+            while(_): go [
+                at(e): script q
+                slice(tag): e 0 1
+                if(_): {tag != "+"} [
+                    set(ca): {ca + 1}
+                ]
+                if(_): {tag != "-"} [
+                    set(cb): {cb + 1}
+                ]
+                set(q): {q + 1}
+                set(go): {q < n}
+                if(_): go [
+                    at(go): show q
+                ]
+            ]
+            str_from_int(sa): ia
+            str_from_int(sca): ca
+            str_from_int(sb): ib
+            str_from_int(scb): cb
+            concat(r): r "@@ -" sa "," sca " +" sb "," scb " @@\n"
+            while(_): {k < q} [
+                at(e): script k
+                slice(tag): e 0 1
+                len(el): e
+                slice(body): e 2 {el - 2}
+                if(_): {tag = " "} [
+                    set(tag): " "
+                ]
+                concat(r): r tag body "\n"
+                if(_): {tag != "+"} [
+                    set(ia): {ia + 1}
+                ]
+                if(_): {tag != "-"} [
+                    set(ib): {ib + 1}
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        else(_): [
+            at(e): script k
+            slice(tag): e 0 1
+            if(_): {tag != "+"} [
+                set(ia): {ia + 1}
+            ]
+            if(_): {tag != "-"} [
+                set(ib): {ib + 1}
+            ]
+            set(k): {k + 1}
+        ]
+    ]
+]
+
+patch_apply(r): a script [
+    vec(r): ""
+    len(na): a
+    len(n): script
+    set(i): 0
+    set(k): 0
+    set(good): true
+    while(_): {good && k < n} [
+        at(e): script k
+        slice(tag): e 0 1
+        len(el): e
+        slice(body): e 2 {el - 2}
+        if(_): {tag = "+"} [
+            push(_): r body
+        ]
+        else(_): [
+            set(match): false
+            if(_): {i < na} [
+                at(ai): a i
+                set(match): {ai = body}
+            ]
+            if(_): {match = false} [
+                set(good): false
+            ]
+            else(_): [
+                if(_): {tag = " "} [
+                    push(_): r body
+                ]
+                set(i): {i + 1}
+            ]
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): {good = false || i != na} [
+        set(r): null
+    ]
+]
+
+_log_state(r): [
+    global(_): _log_tree
+    typeof(t): _log_tree
+    if(_): {t != "btree"} [
+        btree(_log_tree):
+        btput(_): _log_tree "level" 1
+        btput(_): _log_tree "file" ""
+    ]
+    set(r): _log_tree
+]
+
+_log_rank(r): name [
+    set(r): 1
+    if(_): {name = "debug"} [
+        set(r): 0
+    ]
+    elif(_): {name = "warn"} [
+        set(r): 2
+    ]
+    elif(_): {name = "error"} [
+        set(r): 3
+    ]
+]
+
+log_level(r): name [
+    _log_state(st):
+    _log_rank(k): name
+    btput(_): st "level" k
+    set(r): 0
+]
+
+log_file(r): path [
+    _log_state(st):
+    btput(_): st "file" path
+    set(r): 0
+]
+
+_log_write(r): rank tag msg [
+    _log_state(st):
+    btget(level): st "level"
+    set(r): 0
+    if(_): {rank >= level} [
+        time(now):
+        iso_utc(stamp): now
+        concat(line): stamp " " tag " " msg "\n"
+        write_stderr(_): line
+        btget(path): st "file"
+        if(_): {path != ""} [
+            open_file(h): path "ab"
+            if(_): {h >= 0} [
+                write_file(_): h line
+                close_file(_): h
+            ]
+        ]
+        set(r): 1
+    ]
+]
+
+log_debug(r): msg [
+    _log_write(r): 0 "DEBUG" msg
+]
+
+log_info(r): msg [
+    _log_write(r): 1 "INFO" msg
+]
+
+log_warn(r): msg [
+    _log_write(r): 2 "WARN" msg
+]
+
+log_error(r): msg [
+    _log_write(r): 3 "ERROR" msg
+]

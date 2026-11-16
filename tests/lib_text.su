@@ -1,0 +1,124 @@
+# Tests the text helpers added to src/libs/strings.su, through testing.su.
+$include "../src/libs/testing.su"
+
+str_upper(s): "Hello, world 7"
+assert_eq(_): "upper" s "HELLO, WORLD 7"
+str_upper_ru(s): "привет, Ёж ё"
+assert_eq(_): "upper ru" s "ПРИВЕТ, ЁЖ Ё"
+str_lower_ru(s): "МОСКВА Ёлка"
+assert_eq(_): "lower ru" s "москва ёлка"
+str_title(s): "red square and ПЕТЕРБУРГ"
+assert_eq(_): "title" s "Red Square And Петербург"
+
+str_split(v): "a,b,,c" ","
+encode(e): v
+assert_eq(_): "split" e "[`a`,`b`,``,`c`]"
+str_split(v): "мир" ""
+len(n): v
+assert_eq(_): "split chars utf8" n 3
+str_split_max(v): "k=v=w" "=" 2
+at(x): v 1
+assert_eq(_): "split max" x "v=w"
+vec(parts): ""
+push(_): parts "x"
+push(_): parts 2
+push(_): parts true
+str_join(s): parts "-"
+assert_eq(_): "join" s "x-2-true"
+
+str_replace(s): "a.b.c" "." "::"
+assert_eq(_): "replace" s "a::b::c"
+str_replace_n(s): "aaaa" "a" "b" 2
+assert_eq(_): "replace n" s "bbaa"
+str_rfind(i): "abcabc" "bc"
+assert_eq(_): "rfind" i 4
+str_count(n): "banana" "an"
+assert_eq(_): "count" n 2
+str_starts(b): "kremlin" "kre"
+assert_true(_): "starts" b
+str_ends(b): "kremlin" "lin"
+assert_true(_): "ends" b
+str_contains(b): "kremlin" "eml"
+assert_true(_): "contains" b
+str_contains(b): "kremlin" "xyz"
+assert_eq(_): "contains not" b false
+
+str_pad_left(s): "7" 3 "0"
+assert_eq(_): "pad left" s "007"
+str_pad_right(s): "ёж" 4 "."
+assert_eq(_): "pad right utf8" s "ёж.."
+str_center(s): "ab" 5 "*"
+assert_eq(_): "center" s "*ab**"
+str_reverse(s): "абв!"
+assert_eq(_): "reverse utf8" s "!вба"
+
+str_compare(c): "abc" "abd"
+assert_eq(_): "compare less" c {0 - 1}
+str_compare(c): "b" "abc"
+assert_eq(_): "compare more" c 1
+str_compare_fold(c): "ABC" "abc"
+assert_eq(_): "compare fold" c 0
+str_natcmp(c): "file2" "file10"
+assert_eq(_): "natcmp" c {0 - 1}
+str_natcmp(c): "File10" "file9"
+assert_eq(_): "natcmp fold" c 1
+
+str_to_int(n): "ff" 16
+assert_eq(_): "to int hex" n 255
+str_to_int(n): "0x1F" 16
+assert_eq(_): "to int 0x" n 31
+str_to_int(n): "-101" 2
+assert_eq(_): "to int bin" n {0 - 5}
+str_to_int(n): "12z" 10
+assert_null(_): "to int bad" n
+str_from_int_base(s): 255 16
+assert_eq(_): "from base 16" s "ff"
+str_from_int_base(s): 5 2
+assert_eq(_): "from base 2" s "101"
+str_from_int_base(s): {0 - 8} 8
+assert_eq(_): "from base neg" s "-10"
+str_group(s): 1234567 ","
+assert_eq(_): "group" s "1,234,567"
+str_group(s): {0 - 1000} " "
+assert_eq(_): "group neg" s "-1 000"
+str_fixed(s): 3.1 2
+assert_eq(_): "fixed" s "3.10"
+str_fixed(s): 5 3
+assert_eq(_): "fixed whole" s "5.000"
+
+str_escape(s): "say \"hi\"\n\tok\\"
+assert_eq(_): "escape" s "say \\\"hi\\\"\\n\\tok\\\\"
+str_unescape(u): s
+assert_eq(_): "unescape round trip" u "say \"hi\"\n\tok\\"
+str_unescape(u): "\\u0416\\u0041"
+assert_eq(_): "unescape u" u "ЖA"
+
+vec(args): ""
+push(_): args 3
+push(_): args "Moscow"
+str_format(s): "{0} days in {1} {{ok}}" args
+assert_eq(_): "format" s "3 days in Moscow {ok}"
+
+str_levenshtein(d): "kitten" "sitting"
+assert_eq(_): "levenshtein" d 3
+str_fuzzy(b): "rnal" "run_all.sh"
+assert_true(_): "fuzzy" b
+
+str_wrap(lines): "the quick brown fox jumps over the lazy dog" 10
+encode(e): lines
+assert_eq(_): "wrap" e "[`the quick`,`brown fox`,`jumps over`,`the lazy`,`dog`]"
+
+str_plural_ru(w): 1 "файл" "файла" "файлов"
+assert_eq(_): "plural ru 1" w "файл"
+str_plural_ru(w): 3 "файл" "файла" "файлов"
+assert_eq(_): "plural ru 3" w "файла"
+str_plural_ru(w): 11 "файл" "файла" "файлов"
+assert_eq(_): "plural ru 11" w "файлов"
+str_plural_ru(w): 22 "файл" "файла" "файлов"
+assert_eq(_): "plural ru 22" w "файла"
+str_plural_en(w): 2 "file" "files"
+assert_eq(_): "plural en" w "files"
+str_translit(t): "Щука и Ёж"
+assert_eq(_): "translit" t "Shchuka i Yozh"
+
+test_summary(n):

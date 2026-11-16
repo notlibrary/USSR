@@ -747,3 +747,392 @@ cbrt(r): x [
 
     return(r): r
 ]
+# --- More maths -------------------------------------------------------------
+#   sinh(r): x / cosh(r): x / tanh(r): x       hyperbolic functions
+#   asinh(r): x / acosh(r): x / atanh(r): x    their inverses
+#   log_base(r): b x       -> logarithm of x in base b
+#   round(r): x digits     -> x rounded half away from zero to digits places
+#                             (digits 0 gives an integer)
+#   trunc(r): x            -> integer part, toward zero
+#   sign(r): x             -> -1, 0 or 1
+#   clamp(r): x lo hi / lerp(r): a b t / min2(r): a b / max2(r): a b
+#   gcd(r): a b / lcm(r): a b / isprime(r): n / isqrt(r): n
+#   modpow(r): base exp m  -> base^exp mod m for non-negative integers
+#   mean(r): v / median(r): v / variance(r): v / stddev(r): v
+#   percentile(r): v p     -> linear interpolation, p in 0..100
+#   sum(r): v / product(r): v
+#   popcount(r): n / rotl32(r): n k / rotr32(r): n k / bswap32(r): n
+#                          -> bit helpers on unsigned 32-bit values
+#   random_range(r): lo hi -> integer in lo..hi (needs standard.su's random64)
+#   random_float(r):       -> real in [0, 1)
+# Statistics take a vector of numbers; an empty vector gives null.
+
+sinh(r): x [
+    exp(a): x
+    set(r): {(a - 1.0 / a) / 2.0}
+]
+
+cosh(r): x [
+    exp(a): x
+    set(r): {(a + 1.0 / a) / 2.0}
+]
+
+tanh(r): x [
+    if(_): {x > 20} [
+        return(r): 1.0
+    ]
+    if(_): {x < 0 - 20} [
+        return(r): -1.0
+    ]
+    exp(a): {2.0 * x}
+    set(r): {(a - 1.0) / (a + 1.0)}
+]
+
+asinh(r): x [
+    sqrt(s): {x * x + 1.0}
+    if(_): {x < 0} [
+        ln(r): {s - x}
+        set(r): {0 - r}
+    ]
+    else(_): [
+        ln(r): {x + s}
+    ]
+]
+
+acosh(r): x [
+    sqrt(s): {x * x - 1.0}
+    ln(r): {x + s}
+]
+
+atanh(r): x [
+    ln(a): {(1.0 + x) / (1.0 - x)}
+    set(r): {a / 2.0}
+]
+
+log_base(r): b x [
+    ln(a): x
+    ln(c): b
+    set(r): {a / c}
+]
+
+trunc(r): x [
+    if(_): {x < 0} [
+        floor(r): {0 - x}
+        set(r): {0 - r}
+    ]
+    else(_): [
+        floor(r): x
+    ]
+    typeof(t): r
+    if(_): {t = "real"} [
+        set(k): 0
+        set(p): 1
+        set(a): r
+        if(_): {a < 0} [
+            set(a): {0 - a}
+        ]
+        while(_): {p * 2 <= a} [
+            set(p): {p * 2}
+        ]
+        while(_): {p >= 1} [
+            if(_): {k + p <= a} [
+                set(k): {k + p}
+            ]
+            set(p): {p >> 1}
+        ]
+        set(r): k
+        if(_): {x < 0} [
+            set(r): {0 - k}
+        ]
+    ]
+]
+
+round(r): x digits [
+    set(scale): 1
+    set(i): 0
+    while(_): {i < digits} [
+        set(scale): {scale * 10}
+        set(i): {i + 1}
+    ]
+    if(_): {x < 0} [
+        trunc(k): {0 - x * scale + 0.5}
+        set(k): {0 - k}
+    ]
+    else(_): [
+        trunc(k): {x * scale + 0.5}
+    ]
+    if(_): {digits <= 0} [
+        set(r): k
+    ]
+    else(_): [
+        set(r): {k / scale}
+    ]
+]
+
+sign(r): x [
+    set(r): 0
+    if(_): {x > 0} [
+        set(r): 1
+    ]
+    elif(_): {x < 0} [
+        set(r): {0 - 1}
+    ]
+]
+
+clamp(r): x lo hi [
+    set(r): x
+    if(_): {x < lo} [
+        set(r): lo
+    ]
+    elif(_): {x > hi} [
+        set(r): hi
+    ]
+]
+
+lerp(r): a b t [
+    set(r): {a + (b - a) * t}
+]
+
+min2(r): a b [
+    set(r): a
+    if(_): {b < a} [
+        set(r): b
+    ]
+]
+
+max2(r): a b [
+    set(r): a
+    if(_): {b > a} [
+        set(r): b
+    ]
+]
+
+gcd(r): a b [
+    set(x): a
+    set(y): b
+    if(_): {x < 0} [
+        set(x): {0 - x}
+    ]
+    if(_): {y < 0} [
+        set(y): {0 - y}
+    ]
+    while(_): {y != 0} [
+        set(t): {x % y}
+        set(x): y
+        set(y): t
+    ]
+    set(r): x
+]
+
+lcm(r): a b [
+    set(r): 0
+    if(_): {a != 0 && b != 0} [
+        gcd(g): a b
+        trunc(q): {a / g}
+        set(r): {q * b}
+        if(_): {r < 0} [
+            set(r): {0 - r}
+        ]
+    ]
+]
+
+isprime(r): n [
+    set(r): {n >= 2}
+    if(_): {n >= 4} [
+        if(_): {n % 2 = 0 || n % 3 = 0} [
+            set(r): false
+        ]
+        set(d): 5
+        while(_): {r && d * d <= n} [
+            if(_): {n % d = 0 || n % (d + 2) = 0} [
+                set(r): false
+            ]
+            set(d): {d + 6}
+        ]
+    ]
+]
+
+isqrt(r): n [
+    set(r): 0
+    if(_): {n > 0} [
+        set(bit): 1
+        while(_): {bit <= n / 4} [
+            set(bit): {bit << 2}
+        ]
+        set(x): n
+        while(_): {bit != 0} [
+            if(_): {x >= r + bit} [
+                set(x): {x - r - bit}
+                set(r): {(r >> 1) + bit}
+            ]
+            else(_): [
+                set(r): {r >> 1}
+            ]
+            set(bit): {bit >> 2}
+        ]
+    ]
+]
+
+# Multiplication stays below 2^63 for moduli up to about 3 * 10^9.
+modpow(r): base e m [
+    set(r): {1 % m}
+    set(b): {base % m}
+    set(k): e
+    while(_): {k > 0} [
+        if(_): {(k & 1) = 1} [
+            set(r): {(r * b) % m}
+        ]
+        set(b): {(b * b) % m}
+        set(k): {k >> 1}
+    ]
+]
+
+sum(r): v [
+    len(n): v
+    set(r): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        set(r): {r + x}
+        set(i): {i + 1}
+    ]
+]
+
+product(r): v [
+    len(n): v
+    set(r): 1
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        set(r): {r * x}
+        set(i): {i + 1}
+    ]
+]
+
+mean(r): v [
+    len(n): v
+    set(r): null
+    if(_): {n > 0} [
+        sum(s): v
+        set(r): {s / n}
+    ]
+]
+
+# insertion sort into a copy (statistics vectors are small)
+_math_sorted(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        vec(next): ""
+        set(placed): false
+        len(m): r
+        set(j): 0
+        while(_): {j < m} [
+            at(y): r j
+            if(_): {placed = false && x < y} [
+                push(_): next x
+                set(placed): true
+            ]
+            push(_): next y
+            set(j): {j + 1}
+        ]
+        if(_): {placed = false} [
+            push(_): next x
+        ]
+        set(r): next
+        set(i): {i + 1}
+    ]
+]
+
+percentile(r): v p [
+    len(n): v
+    set(r): null
+    if(_): {n > 0} [
+        _math_sorted(s): v
+        set(pos): {(n - 1) * p / 100.0}
+        floor(lo): pos
+        trunc(lo): lo
+        set(hi): {lo + 1}
+        if(_): {hi >= n} [
+            set(hi): {n - 1}
+        ]
+        at(a): s lo
+        at(b): s hi
+        set(r): {a + (b - a) * (pos - lo)}
+        trunc(w): r
+        if(_): {w = r} [
+            set(r): w
+        ]
+    ]
+]
+
+median(r): v [
+    percentile(r): v 50
+]
+
+variance(r): v [
+    len(n): v
+    set(r): null
+    if(_): {n > 0} [
+        mean(m): v
+        set(acc): 0.0
+        set(i): 0
+        while(_): {i < n} [
+            at(x): v i
+            set(acc): {acc + (x - m) * (x - m)}
+            set(i): {i + 1}
+        ]
+        set(r): {acc / n}
+    ]
+]
+
+stddev(r): v [
+    variance(x): v
+    set(r): null
+    if(_): {x != null} [
+        sqrt(r): x
+    ]
+]
+
+popcount(r): n [
+    set(x): {n & 0xFFFFFFFF}
+    set(r): 0
+    while(_): {x != 0} [
+        set(r): {r + (x & 1)}
+        set(x): {x >> 1}
+    ]
+]
+
+rotl32(r): n k [
+    set(x): {n & 0xFFFFFFFF}
+    set(s): {k % 32}
+    set(r): {((x << s) | (x >> (32 - s))) & 0xFFFFFFFF}
+    if(_): {s = 0} [
+        set(r): x
+    ]
+]
+
+rotr32(r): n k [
+    set(s): {k % 32}
+    rotl32(r): n {(32 - s) % 32}
+]
+
+bswap32(r): n [
+    set(x): {n & 0xFFFFFFFF}
+    set(r): {((x & 255) << 24) | (((x >> 8) & 255) << 16) | (((x >> 16) & 255) << 8) | ((x >> 24) & 255)}
+]
+
+random_range(r): lo hi [
+    random64(x):
+    set(x): {x & 0x7FFFFFFFFFFFFFFF}
+    set(span): {hi - lo + 1}
+    set(r): {lo + x % span}
+]
+
+random_float(r): [
+    random64(x):
+    set(x): {(x >> 11) & 0x1FFFFFFFFFFFFF}
+    set(r): {x / 9007199254740992.0}
+]

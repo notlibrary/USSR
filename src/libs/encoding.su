@@ -1,0 +1,367 @@
+# encoding.su - text and byte encodings and small checksums, in USSR.
+# Byte data is a vector of 0..255 values (see bytes.su); text is a string.
+# Functions that take "data" accept either a string or a byte vector.
+#   base64_encode(r): data         -> standard alphabet with "=" padding
+#   base64url_encode(r): data      -> URL alphabet (- and _), no padding
+#   base64_decode(v): text         -> byte vector; both alphabets, padding
+#                                     optional, blanks skipped; null when a
+#                                     character is invalid
+#   base64_decode_text(r): text    -> the decoded bytes as a string
+#   hex_encode(r): data            -> lower-case hex digits
+#   hex_decode(v): text            -> byte vector, null on odd length or a
+#                                     bad digit
+#   url_encode(r): text            -> percent-encoding of everything but
+#                                     A-Z a-z 0-9 - _ . ~
+#   url_decode(r): text            -> %XX decoded, "+" becomes a space
+#   form_encode(r): pairs          -> "a=1&b=x%20y" from [[k,v],...]
+#   query_parse(v): text           -> [[k,v],...] from "a=1&b=x+y"
+#   fnv1a32(r): data               -> 32-bit FNV-1a hash
+#   adler32(r): data               -> Adler-32 checksum (zlib)
+#   crc32_hex(r): data             -> the builtin crc32 as 8 hex digits
+#   sha256_hex(r): data            -> the builtin sha256 as 64 hex digits
+#   md5_hex(r): data               -> the builtin md5 as 32 hex digits
+#   uuid4(r):                      -> a random version-4 UUID string
+#   uuid_valid(r): text            -> true for 8-4-4-4-12 hex text
+$once
+$include "strings.su"
+
+_enc_bytes(r): data [
+    typeof(t): data
+    set(r): data
+    if(_): {t = "string"} [
+        text_bytes(r): data
+    ]
+]
+
+_enc_b64(r): data alphabet pad [
+    _enc_bytes(b): data
+    len(n): b
+    set(i): 0
+    set(r): ""
+    while(_): {i + 2 < n} [
+        at(x): b i
+        at(y): b {i + 1}
+        at(z): b {i + 2}
+        set(w): {(x << 16) | (y << 8) | z}
+        at(c1): alphabet {(w >> 18) & 63}
+        at(c2): alphabet {(w >> 12) & 63}
+        at(c3): alphabet {(w >> 6) & 63}
+        at(c4): alphabet {w & 63}
+        concat(r): r c1 c2 c3 c4
+        set(i): {i + 3}
+    ]
+    set(left): {n - i}
+    if(_): {left = 1} [
+        at(x): b i
+        set(w): {x << 16}
+        at(c1): alphabet {(w >> 18) & 63}
+        at(c2): alphabet {(w >> 12) & 63}
+        concat(r): r c1 c2
+        if(_): pad [
+            concat(r): r "=="
+        ]
+    ]
+    elif(_): {left = 2} [
+        at(x): b i
+        at(y): b {i + 1}
+        set(w): {(x << 16) | (y << 8)}
+        at(c1): alphabet {(w >> 18) & 63}
+        at(c2): alphabet {(w >> 12) & 63}
+        at(c3): alphabet {(w >> 6) & 63}
+        concat(r): r c1 c2 c3
+        if(_): pad [
+            concat(r): r "="
+        ]
+    ]
+]
+
+base64_encode(r): data [
+    _enc_b64(r): data "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" true
+]
+
+base64url_encode(r): data [
+    _enc_b64(r): data "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" false
+]
+
+_enc_b64_value(r): c [
+    set(r): {0 - 1}
+    if(_): {c >= 65 && c <= 90} [
+        set(r): {c - 65}
+    ]
+    elif(_): {c >= 97 && c <= 122} [
+        set(r): {c - 71}
+    ]
+    elif(_): {c >= 48 && c <= 57} [
+        set(r): {c + 4}
+    ]
+    elif(_): {c = 43 || c = 45} [
+        set(r): 62
+    ]
+    elif(_): {c = 47 || c = 95} [
+        set(r): 63
+    ]
+]
+
+base64_decode(r): text [
+    vec(r): ""
+    len(n): text
+    set(i): 0
+    set(acc): 0
+    set(bits): 0
+    set(good): true
+    set(done): false
+    while(_): {good && done = false && i < n} [
+        byte(c): text i
+        if(_): {c = 61} [
+            set(done): true
+        ]
+        elif(_): {c = 32 || c = 10 || c = 13 || c = 9} [
+            set(c): c
+        ]
+        else(_): [
+            _enc_b64_value(v): c
+            if(_): {v < 0} [
+                set(good): false
+            ]
+            else(_): [
+                set(acc): {((acc << 6) | v) & 0xFFFFFF}
+                set(bits): {bits + 6}
+                if(_): {bits >= 8} [
+                    set(bits): {bits - 8}
+                    push(_): r {(acc >> bits) & 255}
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {good = false} [
+        set(r): null
+    ]
+]
+
+base64_decode_text(r): text [
+    base64_decode(b): text
+    set(r): null
+    typeof(t): b
+    if(_): {t = "vector"} [
+        utf8_from_bytes(r): b
+    ]
+]
+
+hex_encode(r): data [
+    _enc_bytes(b): data
+    len(n): b
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(x): b i
+        at(h): "0123456789abcdef" {x >> 4}
+        at(l): "0123456789abcdef" {x & 15}
+        concat(r): r h l
+        set(i): {i + 1}
+    ]
+]
+
+hex_decode(r): text [
+    len(n): text
+    set(r): null
+    if(_): {n % 2 = 0} [
+        vec(r): ""
+        set(i): 0
+        set(good): true
+        while(_): {good && i < n} [
+            byte(a): text i
+            byte(b): text {i + 1}
+            str_digit_value(h): a
+            str_digit_value(l): b
+            if(_): {h < 0 || h > 15 || l < 0 || l > 15} [
+                set(good): false
+            ]
+            else(_): [
+                push(_): r {h * 16 + l}
+            ]
+            set(i): {i + 2}
+        ]
+        if(_): {good = false} [
+            set(r): null
+        ]
+    ]
+]
+
+url_encode(r): text [
+    len(n): text
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b = 45 || b = 95 || b = 46 || b = 126} [
+            at(c): text i
+            concat(r): r c
+        ]
+        else(_): [
+            at(h): "0123456789ABCDEF" {b >> 4}
+            at(l): "0123456789ABCDEF" {b & 15}
+            concat(r): r "%" h l
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+url_decode(r): text [
+    len(n): text
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): text i
+        set(step): 1
+        if(_): {b = 43} [
+            concat(r): r " "
+        ]
+        elif(_): {b = 37 && i + 2 < n} [
+            byte(x): text {i + 1}
+            byte(y): text {i + 2}
+            str_digit_value(h): x
+            str_digit_value(l): y
+            if(_): {h >= 0 && h < 16 && l >= 0 && l < 16 && h * 16 + l > 0} [
+                chr(c): {h * 16 + l}
+                concat(r): r c
+                set(step): 3
+            ]
+            else(_): [
+                concat(r): r "%"
+            ]
+        ]
+        else(_): [
+            at(c): text i
+            concat(r): r c
+        ]
+        set(i): {i + step}
+    ]
+]
+
+form_encode(r): pairs [
+    len(n): pairs
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(p): pairs i
+        at(k): p 0
+        at(v): p 1
+        url_encode(ek): k
+        url_encode(ev): v
+        if(_): {i > 0} [
+            concat(r): r "&"
+        ]
+        concat(r): r ek "=" ev
+        set(i): {i + 1}
+    ]
+]
+
+query_parse(r): text [
+    vec(r): ""
+    set(q): text
+    str_starts(lead): q "?"
+    if(_): lead [
+        len(n): q
+        slice(q): q 1 {n - 1}
+    ]
+    if(_): {q = ""} [
+        return(r): r
+    ]
+    str_split(parts): q "&"
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(part): parts i
+        if(_): {part != ""} [
+            str_split_max(kv): part "=" 2
+            at(k): kv 0
+            set(v): ""
+            len(m): kv
+            if(_): {m > 1} [
+                at(v): kv 1
+            ]
+            url_decode(k): k
+            url_decode(v): v
+            vec(pair): ""
+            push(_): pair k
+            push(_): pair v
+            push(_): r pair
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+fnv1a32(r): data [
+    _enc_bytes(b): data
+    len(n): b
+    set(h): 2166136261
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        set(h): {((h ^ x) * 16777619) & 0xFFFFFFFF}
+        set(i): {i + 1}
+    ]
+    set(r): h
+]
+
+adler32(r): data [
+    _enc_bytes(b): data
+    len(n): b
+    set(a): 1
+    set(s): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        set(a): {(a + x) % 65521}
+        set(s): {(s + a) % 65521}
+        set(i): {i + 1}
+    ]
+    set(r): {(s << 16) | a}
+]
+
+crc32_hex(r): data [
+    crc32(c): data
+    set(c): {c & 0xFFFFFFFF}
+    str_from_int_base(r): c 16
+    str_pad_left(r): r 8 "0"
+]
+
+sha256_hex(r): data [
+    sha256(d): data
+    hex_encode(r): d
+]
+
+md5_hex(r): data [
+    md5(d): data
+    hex_encode(r): d
+]
+
+uuid4(r): [
+    vec(b): ""
+    set(i): 0
+    while(_): {i < 2} [
+        random64(x):
+        set(k): 0
+        while(_): {k < 8} [
+            push(_): b {(x >> (k * 8)) & 255}
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    hex_encode(h): b
+    slice(p1): h 0 8
+    slice(p2): h 8 4
+    slice(p3): h 13 3
+    slice(p4a): h 16 1
+    slice(p4b): h 17 3
+    slice(p5): h 20 12
+    byte(c): p4a 0
+    str_digit_value(v): c
+    at(variant): "89ab" {v & 3}
+    concat(r): p1 "-" p2 "-4" p3 "-" variant p4b "-" p5
+]
+
+uuid_valid(r): text [
+    re_test(r): "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" text
+]

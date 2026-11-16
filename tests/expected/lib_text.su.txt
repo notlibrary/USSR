@@ -1,0 +1,54 @@
+PASS upper
+PASS upper ru
+PASS lower ru
+PASS title
+PASS split
+PASS split chars utf8
+PASS split max
+PASS join
+PASS replace
+PASS replace n
+PASS rfind
+PASS count
+PASS starts
+PASS ends
+PASS contains
+PASS contains not
+PASS pad left
+PASS pad right utf8
+PASS center
+PASS reverse utf8
+PASS compare less
+PASS compare more
+PASS compare fold
+PASS natcmp
+PASS natcmp fold
+PASS to int hex
+PASS to int 0x
+PASS to int bin
+PASS to int bad
+PASS from base 16
+PASS from base 2
+PASS from base neg
+PASS group
+PASS group neg
+PASS fixed
+PASS fixed whole
+PASS escape
+PASS unescape round trip
+PASS unescape u
+PASS format
+PASS levenshtein
+PASS fuzzy
+PASS wrap
+PASS plural ru 1
+PASS plural ru 3
+PASS plural ru 11
+PASS plural ru 22
+PASS plural en
+PASS translit
+49 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

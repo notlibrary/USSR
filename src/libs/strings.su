@@ -453,3 +453,930 @@ utf8_from_bytes(r): v [
         set(_u8fb_i): {_u8fb_i + 1}
     ]
 ]
+
+# --- More text helpers ------------------------------------------------------
+# Every function below keeps its temporaries local (USSR has per-call
+# locals), so they never clash with the caller's names.
+#   str_upper(r): s              -> ASCII upper case (str_lower's mirror)
+#   str_lower_ru(r): s / str_upper_ru(r): s
+#                                -> case mapping that also covers Cyrillic
+#                                   (А-Я, а-я, Ё/ё) in UTF-8
+#   str_title(r): s              -> first letter of each word upper case
+#   str_split(v): s sep          -> pieces between each sep (sep "" splits
+#                                   into characters); empty pieces stay
+#   str_split_max(v): s sep max  -> at most max pieces, the last keeps the rest
+#   str_join(r): v sep           -> items joined with sep (numbers converted)
+#   str_replace(r): s from to    -> every from replaced by to
+#   str_replace_n(r): s from to count -> only the first count of them
+#   str_rfind(r): s needle       -> last index of needle, or -1
+#   str_count(r): s needle       -> non-overlapping occurrences
+#   str_starts(r): s prefix / str_ends(r): s suffix / str_contains(r): s part
+#   str_pad_left(r): s width fill / str_pad_right(r): s width fill
+#   str_center(r): s width fill  -> padded to width characters (UTF-8 aware)
+#   str_reverse(r): s            -> characters in reverse order, UTF-8-safe
+#   str_compare(r): a b          -> -1, 0 or 1 by bytes
+#   str_compare_fold(r): a b     -> the same, ignoring ASCII case
+#   str_natcmp(r): a b           -> natural order: "file2" before "file10"
+#   str_to_int(r): s base        -> integer from text in base 2..36 (an
+#                                   optional 0x/0b/0o prefix is accepted);
+#                                   null when a digit is invalid
+#   str_from_int_base(r): n base -> text of n in base 2..36, lower case
+#   str_group(r): n sep          -> integer with a thousands separator
+#   str_fixed(r): x digits       -> exactly `digits` decimals ("3.10")
+#   str_escape(r): s             -> C/JSON/USSR escapes: \" \\ \n \r \t,
+#                                   other control bytes as \u00XX
+#   str_unescape(r): s           -> the reverse (also \uXXXX for ASCII
+#                                   and two- and three-byte UTF-8)
+#   str_format(r): pattern args  -> "{0} of {1}" filled from vector args;
+#                                   "{{" and "}}" are literal braces
+#   str_levenshtein(r): a b      -> edit distance in bytes
+#   str_fuzzy(r): pattern text   -> true when pattern's characters appear
+#                                   in text in order (ASCII case folded)
+#   str_wrap(v): s width         -> lines of at most width characters,
+#                                   broken at blanks (long words are split)
+#   str_plural_ru(r): n one few many -> the Russian form for n
+#   str_plural_en(r): n one many -> "one" for 1, else "many"
+#   str_translit(r): s           -> Cyrillic to Latin (GOST-like scheme)
+
+str_upper(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b >= 97 && b <= 122} [
+            at(c): "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {b - 97}
+        ]
+        else(_): [
+            at(c): s i
+        ]
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+]
+
+# Cyrillic in UTF-8: А-П D0 90-9F, Р-Я D0 A0-AF, а-п D0 B0-BF, р-я D1 80-8F,
+# Ё D0 81, ё D1 91.
+str_upper_ru(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): s i
+        set(b2): 0
+        if(_): {i + 1 < n} [
+            byte(b2): s {i + 1}
+        ]
+        if(_): {b >= 97 && b <= 122} [
+            chr(c): {b - 32}
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+        elif(_): {b = 208 && b2 >= 176 && b2 <= 191} [
+            chr(c2): {b2 - 32}
+            chr(lead): 208
+            concat(r): r lead c2
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 209 && b2 >= 128 && b2 <= 143} [
+            chr(c2): {b2 + 32}
+            chr(lead): 208
+            concat(r): r lead c2
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 209 && b2 = 145} [
+            concat(r): r "Ё"
+            set(i): {i + 2}
+        ]
+        else(_): [
+            chr(c): b
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+str_lower_ru(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): s i
+        set(b2): 0
+        if(_): {i + 1 < n} [
+            byte(b2): s {i + 1}
+        ]
+        if(_): {b >= 65 && b <= 90} [
+            chr(c): {b + 32}
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+        elif(_): {b = 208 && b2 >= 144 && b2 <= 159} [
+            chr(c2): {b2 + 32}
+            chr(lead): 208
+            concat(r): r lead c2
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 208 && b2 >= 160 && b2 <= 175} [
+            chr(c2): {b2 - 32}
+            chr(lead): 209
+            concat(r): r lead c2
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 208 && b2 = 129} [
+            concat(r): r "ё"
+            set(i): {i + 2}
+        ]
+        else(_): [
+            chr(c): b
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+str_title(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    set(start): true
+    while(_): {i < n} [
+        utf8_next(j): s i
+        slice(c): s i {j - i}
+        byte(b): s i
+        set(letter): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b >= 192}
+        if(_): {start && letter} [
+            str_upper_ru(c): c
+        ]
+        elif(_): letter [
+            str_lower_ru(c): c
+        ]
+        concat(r): r c
+        set(start): {letter = false && (b = 32 || b = 9 || b = 10 || b = 45)}
+        if(_): {letter = false && start = false} [
+            set(start): {b = 32 || b = 9 || b = 10 || b = 45 || b = 95}
+        ]
+        set(i): j
+    ]
+]
+
+str_split(r): s sep [
+    str_split_max(r): s sep 0
+]
+
+str_split_max(r): s sep max [
+    vec(r): ""
+    len(n): s
+    len(m): sep
+    if(_): {m = 0} [
+        set(i): 0
+        while(_): {i < n} [
+            utf8_next(j): s i
+            len(k): r
+            if(_): {max > 0 && k = max - 1} [
+                set(j): n
+            ]
+            slice(c): s i {j - i}
+            push(_): r c
+            set(i): j
+        ]
+        return(r): r
+    ]
+    set(from): 0
+    set(go): true
+    while(_): go [
+        len(k): r
+        set(at): {0 - 1}
+        if(_): {max = 0 || k < max - 1} [
+            str_find(at): s sep from
+        ]
+        if(_): {at < 0} [
+            slice(piece): s from {n - from}
+            push(_): r piece
+            set(go): false
+        ]
+        else(_): [
+            slice(piece): s from {at - from}
+            push(_): r piece
+            set(from): {at + m}
+        ]
+    ]
+]
+
+str_join(r): v sep [
+    len(n): v
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(item): v i
+        typeof(t): item
+        if(_): {t = "integer"} [
+            str_from_int(item): item
+        ]
+        elif(_): {t = "real"} [
+            str_from_number(item): item 6
+        ]
+        elif(_): {t = "boolean"} [
+            if(_): item [
+                set(item): "true"
+            ]
+            else(_): [
+                set(item): "false"
+            ]
+        ]
+        elif(_): {t = "null"} [
+            set(item): "null"
+        ]
+        if(_): {i > 0} [
+            concat(r): r sep
+        ]
+        concat(r): r item
+        set(i): {i + 1}
+    ]
+]
+
+str_replace(r): s from to [
+    str_replace_n(r): s from to {0 - 1}
+]
+
+str_replace_n(r): s from to count [
+    len(n): s
+    len(m): from
+    set(r): ""
+    if(_): {m = 0} [
+        set(r): s
+        return(r): r
+    ]
+    set(at): 0
+    set(done): 0
+    set(go): true
+    while(_): go [
+        set(hit): {0 - 1}
+        if(_): {count < 0 || done < count} [
+            str_find(hit): s from at
+        ]
+        if(_): {hit < 0} [
+            slice(rest): s at {n - at}
+            concat(r): r rest
+            set(go): false
+        ]
+        else(_): [
+            slice(piece): s at {hit - at}
+            concat(r): r piece to
+            set(at): {hit + m}
+            set(done): {done + 1}
+        ]
+    ]
+]
+
+str_rfind(r): s needle [
+    len(n): s
+    len(m): needle
+    set(i): {n - m}
+    set(r): {0 - 1}
+    while(_): {r < 0 && i >= 0} [
+        slice(piece): s i m
+        if(_): {piece = needle} [
+            set(r): i
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+str_count(r): s needle [
+    len(m): needle
+    set(r): 0
+    if(_): {m > 0} [
+        str_find(at): s needle 0
+        while(_): {at >= 0} [
+            set(r): {r + 1}
+            str_find(at): s needle {at + m}
+        ]
+    ]
+]
+
+str_starts(r): s prefix [
+    len(n): s
+    len(m): prefix
+    set(r): false
+    if(_): {m <= n} [
+        slice(head): s 0 m
+        set(r): {head = prefix}
+    ]
+]
+
+str_ends(r): s suffix [
+    len(n): s
+    len(m): suffix
+    set(r): false
+    if(_): {m <= n} [
+        slice(tail): s {n - m} m
+        set(r): {tail = suffix}
+    ]
+]
+
+str_contains(r): s part [
+    str_find(at): s part 0
+    set(r): {at >= 0}
+]
+
+str_pad_left(r): s width fill [
+    utf8_count(k): s
+    set(r): s
+    if(_): {fill = ""} [
+        set(fill): " "
+    ]
+    while(_): {k < width} [
+        concat(r): fill r
+        set(k): {k + 1}
+    ]
+]
+
+str_pad_right(r): s width fill [
+    utf8_count(k): s
+    set(r): s
+    if(_): {fill = ""} [
+        set(fill): " "
+    ]
+    while(_): {k < width} [
+        concat(r): r fill
+        set(k): {k + 1}
+    ]
+]
+
+str_center(r): s width fill [
+    utf8_count(k): s
+    set(r): s
+    if(_): {fill = ""} [
+        set(fill): " "
+    ]
+    set(left): true
+    # extra space goes to the right first, like Python's str.center
+    while(_): {k < width} [
+        if(_): left [
+            concat(r): r fill
+        ]
+        else(_): [
+            concat(r): fill r
+        ]
+        set(left): {left = false}
+        set(k): {k + 1}
+    ]
+]
+
+str_reverse(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        utf8_next(j): s i
+        slice(c): s i {j - i}
+        concat(r): c r
+        set(i): j
+    ]
+]
+
+str_compare(r): a b [
+    set(r): 0
+    if(_): {a = b} [
+        return(r): 0
+    ]
+    len(na): a
+    len(nb): b
+    set(i): 0
+    while(_): {r = 0 && i < na && i < nb} [
+        byte(x): a i
+        byte(y): b i
+        if(_): {x < y} [
+            set(r): {0 - 1}
+        ]
+        elif(_): {x > y} [
+            set(r): 1
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {r = 0} [
+        if(_): {na < nb} [
+            set(r): {0 - 1}
+        ]
+        elif(_): {na > nb} [
+            set(r): 1
+        ]
+    ]
+]
+
+str_compare_fold(r): a b [
+    str_lower(la): a
+    str_lower(lb): b
+    str_compare(r): la lb
+]
+
+# Runs of digits compare by value, everything else byte by byte, case folded.
+str_natcmp(r): a b [
+    str_lower(a): a
+    str_lower(b): b
+    len(na): a
+    len(nb): b
+    set(i): 0
+    set(j): 0
+    set(r): 0
+    while(_): {r = 0 && i < na && j < nb} [
+        byte(x): a i
+        byte(y): b j
+        if(_): {x >= 48 && x <= 57 && y >= 48 && y <= 57} [
+            set(vi): 0
+            set(go): true
+            while(_): go [
+                byte(x): a i
+                set(go): {x >= 48 && x <= 57}
+                if(_): go [
+                    set(vi): {vi * 10 + x - 48}
+                    set(i): {i + 1}
+                    set(go): {i < na}
+                ]
+            ]
+            set(vj): 0
+            set(go): true
+            while(_): go [
+                byte(y): b j
+                set(go): {y >= 48 && y <= 57}
+                if(_): go [
+                    set(vj): {vj * 10 + y - 48}
+                    set(j): {j + 1}
+                    set(go): {j < nb}
+                ]
+            ]
+            if(_): {vi < vj} [
+                set(r): {0 - 1}
+            ]
+            elif(_): {vi > vj} [
+                set(r): 1
+            ]
+        ]
+        else(_): [
+            if(_): {x < y} [
+                set(r): {0 - 1}
+            ]
+            elif(_): {x > y} [
+                set(r): 1
+            ]
+            set(i): {i + 1}
+            set(j): {j + 1}
+        ]
+    ]
+    if(_): {r = 0} [
+        set(ra): {na - i}
+        set(rb): {nb - j}
+        if(_): {ra < rb} [
+            set(r): {0 - 1}
+        ]
+        elif(_): {ra > rb} [
+            set(r): 1
+        ]
+    ]
+]
+
+str_digit_value(r): b [
+    set(r): {0 - 1}
+    if(_): {b >= 48 && b <= 57} [
+        set(r): {b - 48}
+    ]
+    elif(_): {b >= 97 && b <= 122} [
+        set(r): {b - 87}
+    ]
+    elif(_): {b >= 65 && b <= 90} [
+        set(r): {b - 55}
+    ]
+]
+
+str_to_int(r): s base [
+    str_trim(t): s
+    str_lower(t): t
+    len(n): t
+    set(i): 0
+    set(neg): false
+    set(r): null
+    if(_): {n = 0} [
+        return(r): r
+    ]
+    byte(b): t 0
+    if(_): {b = 45 || b = 43} [
+        set(neg): {b = 45}
+        set(i): 1
+    ]
+    if(_): {i + 2 <= n} [
+        slice(pre): t i 2
+        if(_): {(pre = "0x" && base = 16) || (pre = "0b" && base = 2) || (pre = "0o" && base = 8)} [
+            set(i): {i + 2}
+        ]
+    ]
+    if(_): {i >= n} [
+        return(r): r
+    ]
+    set(v): 0
+    set(good): true
+    while(_): {good && i < n} [
+        byte(b): t i
+        str_digit_value(d): b
+        if(_): {d < 0 || d >= base} [
+            set(good): false
+        ]
+        else(_): [
+            set(v): {v * base + d}
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): good [
+        set(r): v
+        if(_): neg [
+            set(r): {0 - v}
+        ]
+    ]
+]
+
+str_from_int_base(r): n base [
+    set(r): ""
+    set(neg): {n < 0}
+    set(v): n
+    if(_): neg [
+        set(v): {0 - n}
+    ]
+    if(_): {v = 0} [
+        set(r): "0"
+    ]
+    while(_): {v > 0} [
+        set(d): {v % base}
+        at(c): "0123456789abcdefghijklmnopqrstuvwxyz" d
+        concat(r): c r
+        str_trunc(v): {(v - d) / base}
+    ]
+    if(_): neg [
+        concat(r): "-" r
+    ]
+]
+
+str_group(r): n sep [
+    str_from_int(digits): n
+    set(sign): ""
+    byte(b): digits 0
+    if(_): {b = 45} [
+        set(sign): "-"
+        len(k): digits
+        slice(digits): digits 1 {k - 1}
+    ]
+    len(k): digits
+    set(r): ""
+    set(i): 0
+    while(_): {i < k} [
+        if(_): {i > 0 && (k - i) % 3 = 0} [
+            concat(r): r sep
+        ]
+        at(c): digits i
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+    concat(r): sign r
+]
+
+str_fixed(r): x digits [
+    str_from_number(r): x digits
+    if(_): {digits > 0} [
+        str_find(dot): r "." 0
+        if(_): {dot < 0} [
+            concat(r): r "."
+            len(dot): r
+            set(dot): {dot - 1}
+        ]
+        len(n): r
+        while(_): {n - dot - 1 < digits} [
+            concat(r): r "0"
+            set(n): {n + 1}
+        ]
+    ]
+]
+
+str_escape(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 34} [
+            concat(r): r "\\\""
+        ]
+        elif(_): {b = 92} [
+            concat(r): r "\\\\"
+        ]
+        elif(_): {b = 10} [
+            concat(r): r "\\n"
+        ]
+        elif(_): {b = 13} [
+            concat(r): r "\\r"
+        ]
+        elif(_): {b = 9} [
+            concat(r): r "\\t"
+        ]
+        elif(_): {b < 32} [
+            str_from_int_base(h): b 16
+            str_pad_left(h): h 2 "0"
+            concat(r): r "\\u00" h
+        ]
+        else(_): [
+            at(c): s i
+            concat(r): r c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# One code point as UTF-8 text (no surrogate pairs above U+FFFF here).
+str_utf8_char(r): cp [
+    if(_): {cp < 128} [
+        chr(r): cp
+    ]
+    elif(_): {cp < 2048} [
+        chr(a): {192 + (cp >> 6)}
+        chr(b): {128 + (cp & 63)}
+        concat(r): a b
+    ]
+    elif(_): {cp < 65536} [
+        chr(a): {224 + (cp >> 12)}
+        chr(b): {128 + ((cp >> 6) & 63)}
+        chr(c): {128 + (cp & 63)}
+        concat(r): a b c
+    ]
+    else(_): [
+        chr(a): {240 + (cp >> 18)}
+        chr(b): {128 + ((cp >> 12) & 63)}
+        chr(c): {128 + ((cp >> 6) & 63)}
+        chr(d): {128 + (cp & 63)}
+        concat(r): a b c d
+    ]
+]
+
+str_unescape(r): s [
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 92 && i + 1 < n} [
+            byte(e): s {i + 1}
+            set(i): {i + 2}
+            if(_): {e = 110} [
+                concat(r): r "\n"
+            ]
+            elif(_): {e = 116} [
+                concat(r): r "\t"
+            ]
+            elif(_): {e = 114} [
+                concat(r): r "\r"
+            ]
+            elif(_): {e = 98} [
+                chr(c): 8
+                concat(r): r c
+            ]
+            elif(_): {e = 102} [
+                chr(c): 12
+                concat(r): r c
+            ]
+            elif(_): {e = 117 && i + 4 <= n} [
+                slice(hex): s i 4
+                str_to_int(cp): hex 16
+                if(_): {cp = null || cp = 0} [
+                    concat(r): r "\\u" hex
+                ]
+                else(_): [
+                    str_utf8_char(c): cp
+                    concat(r): r c
+                ]
+                set(i): {i + 4}
+            ]
+            else(_): [
+                chr(c): e
+                concat(r): r c
+            ]
+        ]
+        else(_): [
+            at(c): s i
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+str_format(r): pattern args [
+    len(n): pattern
+    len(nargs): args
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): pattern i
+        set(b2): 0
+        if(_): {i + 1 < n} [
+            byte(b2): pattern {i + 1}
+        ]
+        if(_): {b = 123 && b2 = 123} [
+            concat(r): r "{"
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 125 && b2 = 125} [
+            concat(r): r "}"
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 123} [
+            str_find(close): pattern "}" i
+            set(k): null
+            if(_): {close > i} [
+                slice(inner): pattern {i + 1} {close - i - 1}
+                str_to_int(k): inner 10
+            ]
+            if(_): {k = null} [
+                concat(r): r "{"
+                set(i): {i + 1}
+            ]
+            else(_): [
+                if(_): {k >= 0 && k < nargs} [
+                    vec(one): ""
+                    at(item): args k
+                    push(_): one item
+                    str_join(text): one ""
+                    concat(r): r text
+                ]
+                set(i): {close + 1}
+            ]
+        ]
+        else(_): [
+            at(c): pattern i
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+str_levenshtein(r): a b [
+    len(na): a
+    len(nb): b
+    vec(prev): ""
+    set(j): 0
+    while(_): {j <= nb} [
+        push(_): prev j
+        set(j): {j + 1}
+    ]
+    set(i): 1
+    while(_): {i <= na} [
+        vec(cur): ""
+        push(_): cur i
+        byte(x): a {i - 1}
+        set(j): 1
+        while(_): {j <= nb} [
+            byte(y): b {j - 1}
+            set(cost): 1
+            if(_): {x = y} [
+                set(cost): 0
+            ]
+            at(del): prev j
+            at(ins): cur {j - 1}
+            at(sub): prev {j - 1}
+            set(best): {del + 1}
+            if(_): {ins + 1 < best} [
+                set(best): {ins + 1}
+            ]
+            if(_): {sub + cost < best} [
+                set(best): {sub + cost}
+            ]
+            push(_): cur best
+            set(j): {j + 1}
+        ]
+        set(prev): cur
+        set(i): {i + 1}
+    ]
+    at(r): prev nb
+]
+
+str_fuzzy(r): pattern text [
+    str_lower(p): pattern
+    str_lower(t): text
+    len(np): p
+    len(nt): t
+    set(i): 0
+    set(j): 0
+    while(_): {i < np && j < nt} [
+        byte(x): p i
+        byte(y): t j
+        if(_): {x = y} [
+            set(i): {i + 1}
+        ]
+        set(j): {j + 1}
+    ]
+    set(r): {i = np}
+]
+
+str_wrap(r): s width [
+    vec(r): ""
+    re_split(words): "[ \\t\\n]+" s
+    set(line): ""
+    set(lw): 0
+    len(nw): words
+    set(k): 0
+    while(_): {k < nw} [
+        at(w): words k
+        utf8_count(ww): w
+        if(_): {ww > 0} [
+            # a word longer than the width is cut into pieces
+            while(_): {ww > width} [
+                if(_): {lw > 0} [
+                    push(_): r line
+                    set(line): ""
+                    set(lw): 0
+                ]
+                utf8_index(cut): w width
+                slice(head): w 0 cut
+                push(_): r head
+                len(wn): w
+                slice(w): w cut {wn - cut}
+                utf8_count(ww): w
+            ]
+            if(_): {lw = 0} [
+                set(line): w
+                set(lw): ww
+            ]
+            elif(_): {lw + 1 + ww <= width} [
+                concat(line): line " " w
+                set(lw): {lw + 1 + ww}
+            ]
+            else(_): [
+                push(_): r line
+                set(line): w
+                set(lw): ww
+            ]
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): {lw > 0} [
+        push(_): r line
+    ]
+]
+
+str_plural_ru(r): n one few many [
+    set(a): n
+    if(_): {a < 0} [
+        set(a): {0 - a}
+    ]
+    set(m10): {a % 10}
+    set(m100): {a % 100}
+    set(r): many
+    if(_): {m10 = 1 && m100 != 11} [
+        set(r): one
+    ]
+    elif(_): {m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)} [
+        set(r): few
+    ]
+]
+
+str_plural_en(r): n one many [
+    set(r): many
+    if(_): {n = 1 || n = 0 - 1} [
+        set(r): one
+    ]
+]
+
+str_translit(r): s [
+    set(lower): "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+    vec(latin): ""
+    str_split(latin): "a,b,v,g,d,e,yo,zh,z,i,y,k,l,m,n,o,p,r,s,t,u,f,kh,ts,ch,sh,shch,,y,,e,yu,ya" ","
+    str_split(chars): lower ""
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        utf8_next(j): s i
+        slice(c): s i {j - i}
+        set(out): c
+        if(_): {j - i = 2} [
+            str_lower_ru(lc): c
+            set(upper): {lc != c}
+            set(k): 0
+            set(found): false
+            while(_): {found = false && k < 33} [
+                at(ck): chars k
+                if(_): {ck = lc} [
+                    at(out): latin k
+                    set(found): true
+                    if(_): {upper} [
+                        len(on): out
+                        if(_): {on > 0} [
+                            slice(first): out 0 1
+                            slice(rest): out 1 {on - 1}
+                            str_upper(first): first
+                            concat(out): first rest
+                        ]
+                    ]
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        concat(r): r out
+        set(i): j
+    ]
+]

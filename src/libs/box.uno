@@ -1,1 +1,1 @@
-'Package{name=`library`,version=`0.1.0`,description=`USSR standard library`,entry=`standard.su`,dependencies=[],files=[],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`library`,version=`0.2.0`,description=`USSR standard library`,entry=`standard.su`,dependencies=[],files=[`standard.su`,`io.su`,`bytes.su`,`math.su`,`strings.su`,`vectors.su`,`lists.su`,`encoding.su`,`paths.su`,`dates.su`,`json.su`,`args.su`,`textproc.su`,`testing.su`,`CHANGELOG.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

@@ -1,0 +1,269 @@
+# Tests src/libs/lists.su, the maths additions, encoding.su and dates.su.
+$include "../src/libs/testing.su"
+$include "../src/libs/lists.su"
+$include "../src/libs/math.su"
+$include "../src/libs/encoding.su"
+$include "../src/libs/dates.su"
+
+list_range(v): 0 10 3
+encode(e): v
+assert_eq(_): "range" e "[0,3,6,9]"
+list_range(v): 5 0 {0 - 2}
+encode(e): v
+assert_eq(_): "range down" e "[5,3,1]"
+list_reverse(r): v
+encode(e): r
+assert_eq(_): "reverse" e "[1,3,5]"
+vec(w): ""
+push(_): w 4
+push(_): w "b"
+push(_): w 1
+push(_): w "a"
+push(_): w 4
+list_slice(s): w 1 2
+encode(e): s
+assert_eq(_): "slice" e "[`b`,1]"
+list_index_of(i): w "a"
+assert_eq(_): "index of" i 3
+list_index_of(i): w "zz"
+assert_eq(_): "index of missing" i {0 - 1}
+list_count(n): w 4
+assert_eq(_): "count" n 2
+list_unique(u): w
+encode(e): u
+assert_eq(_): "unique" e "[4,`b`,1,`a`]"
+list_sort(s): w
+encode(e): s
+assert_eq(_): "sort mixed" e "[1,4,4,`a`,`b`]"
+list_sort_desc(s): u
+encode(e): s
+assert_eq(_): "sort desc" e "[`b`,`a`,4,1]"
+str_split(files): "file10 file2 File1" " "
+list_sort_natural(s): files
+encode(e): s
+assert_eq(_): "sort natural" e "[`File1`,`file2`,`file10`]"
+list_insert(x): u 1 "new"
+encode(e): x
+assert_eq(_): "insert" e "[4,`new`,`b`,1,`a`]"
+list_remove_at(x): u 0
+encode(e): x
+assert_eq(_): "remove at" e "[`b`,1,`a`]"
+list_remove(x): w 4
+encode(e): x
+assert_eq(_): "remove" e "[`b`,1,`a`]"
+list_set(x): u 2 9
+encode(e): x
+assert_eq(_): "set" e "[4,`b`,9,`a`]"
+list_min(m): v
+assert_eq(_): "min" m 1
+list_max(m): v
+assert_eq(_): "max" m 5
+list_zip(z): v u
+encode(e): z
+assert_eq(_): "zip" e "[[5,4],[3,`b`],[1,1]]"
+list_flatten(f): z
+len(n): f
+assert_eq(_): "flatten" n 6
+list_chunk(c): w 2
+encode(e): c
+assert_eq(_): "chunk" e "[[4,`b`],[1,`a`],[4]]"
+list_fill(f): 0 3
+encode(e): f
+assert_eq(_): "fill" e "[0,0,0]"
+list_equal(b): z z
+assert_true(_): "equal" b
+set_union(s): v f
+encode(e): s
+assert_eq(_): "union" e "[5,3,1,0]"
+list_range(a): 0 6 1
+list_range(b2): 3 9 1
+set_intersect(s): a b2
+encode(e): s
+assert_eq(_): "intersect" e "[3,4,5]"
+set_difference(s): a b2
+encode(e): s
+assert_eq(_): "difference" e "[0,1,2]"
+
+queue_new(q):
+queue_push(_): q "one"
+queue_push(_): q "two"
+queue_pop(x): q
+assert_eq(_): "queue first" x "one"
+queue_len(n): q
+assert_eq(_): "queue len" n 1
+queue_pop(x): q
+queue_pop(x): q
+assert_null(_): "queue empty" x
+
+heap_new(h):
+heap_push(_): h 5 "e"
+heap_push(_): h 1 "a"
+heap_push(_): h 3 "c"
+heap_push(_): h 1 "a2"
+heap_pop(p): h
+encode(e): p
+assert_eq(_): "heap min" e "[1,`a`]"
+heap_pop(p): h
+encode(e): p
+assert_eq(_): "heap fifo" e "[1,`a2`]"
+heap_len(n): h
+assert_eq(_): "heap len" n 2
+
+# maths
+tanh(t): 0.5
+assert_near(_): "tanh" t 0.462117 0.00001
+sinh(t): 1.0
+assert_near(_): "sinh" t 1.175201 0.00001
+cosh(t): 1.0
+assert_near(_): "cosh" t 1.543081 0.00001
+asinh(t): 1.175201
+assert_near(_): "asinh" t 1.0 0.0001
+atanh(t): 0.5
+assert_near(_): "atanh" t 0.549306 0.00001
+log_base(t): 2 1024
+assert_near(_): "log base" t 10.0 0.00001
+round(t): 2.675 1
+assert_near(_): "round 1" t 2.7 0.000001
+round(t): -2.5 0
+assert_eq(_): "round half away" t {0 - 3}
+trunc(t): -7.9
+assert_eq(_): "trunc" t {0 - 7}
+sign(t): -0.1
+assert_eq(_): "sign" t {0 - 1}
+clamp(t): 15 0 10
+assert_eq(_): "clamp" t 10
+lerp(t): 0 10 0.25
+assert_near(_): "lerp" t 2.5 0.000001
+gcd(t): 84 36
+assert_eq(_): "gcd" t 12
+lcm(t): 4 6
+assert_eq(_): "lcm" t 12
+isprime(t): 97
+assert_true(_): "prime 97" t
+isprime(t): 91
+assert_eq(_): "prime 91" t false
+isqrt(t): 1000000
+assert_eq(_): "isqrt" t 1000
+isqrt(t): 99
+assert_eq(_): "isqrt floor" t 9
+modpow(t): 4 13 497
+assert_eq(_): "modpow" t 445
+vec(data): ""
+push(_): data 2
+push(_): data 4
+push(_): data 4
+push(_): data 4
+push(_): data 5
+push(_): data 5
+push(_): data 7
+push(_): data 9
+mean(t): data
+assert_near(_): "mean" t 5.0 0.000001
+median(t): data
+assert_near(_): "median" t 4.5 0.000001
+variance(t): data
+assert_near(_): "variance" t 4.0 0.000001
+stddev(t): data
+assert_near(_): "stddev" t 2.0 0.00001
+percentile(t): data 100
+assert_eq(_): "percentile 100" t 9
+popcount(t): 255
+assert_eq(_): "popcount" t 8
+rotl32(t): 0x80000001 1
+assert_eq(_): "rotl32" t 3
+rotr32(t): 3 1
+assert_eq(_): "rotr32" t 0x80000001
+bswap32(t): 0x11223344
+assert_eq(_): "bswap32" t 0x44332211
+random_range(t): 3 5
+assert_true(_): "random range" {t >= 3 && t <= 5}
+random_float(t):
+assert_true(_): "random float" {t >= 0 && t < 1}
+
+# encodings
+base64_encode(s): "Many hands make light work."
+assert_eq(_): "base64" s "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
+base64_encode(s): "ab"
+assert_eq(_): "base64 pad" s "YWI="
+base64_decode_text(s): "YWI="
+assert_eq(_): "base64 decode" s "ab"
+base64_decode_text(s): "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
+assert_eq(_): "base64 decode long" s "Many hands make light work."
+vec(raw): ""
+push(_): raw 251
+push(_): raw 255
+base64url_encode(s): raw
+assert_eq(_): "base64url" s "-_8"
+base64_decode(d): "-_8"
+encode(e): d
+assert_eq(_): "base64url decode" e "[251,255]"
+base64_decode(d): "a$b"
+assert_null(_): "base64 bad" d
+hex_encode(s): "Az"
+assert_eq(_): "hex" s "417a"
+hex_decode(d): "417A"
+encode(e): d
+assert_eq(_): "hex decode" e "[65,122]"
+hex_decode(d): "4"
+assert_null(_): "hex odd" d
+url_encode(s): "a b&c=д"
+assert_eq(_): "url encode" s "a%20b%26c%3D%D0%B4"
+url_decode(s): "a%20b+c%D0%B4"
+assert_eq(_): "url decode" s "a b cд"
+query_parse(q): "?x=1&name=Red+Square&flag"
+encode(e): q
+assert_eq(_): "query parse" e "[[`x`,`1`],[`name`,`Red Square`],[`flag`,``]]"
+form_encode(s): q
+assert_eq(_): "form encode" s "x=1&name=Red%20Square&flag="
+fnv1a32(h): "a"
+assert_eq(_): "fnv1a" h 3826002220
+adler32(h): "Wikipedia"
+assert_eq(_): "adler32" h 300286872
+crc32_hex(h): "123456789"
+assert_eq(_): "crc32 hex" h "cbf43926"
+sha256_hex(h): "abc"
+assert_eq(_): "sha256 hex" h "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+md5_hex(h): ""
+assert_eq(_): "md5 hex" h "d41d8cd98f00b204e9800998ecf8427e"
+uuid4(u):
+uuid_valid(b): u
+assert_true(_): "uuid4 valid" b
+slice(ver): u 14 1
+assert_eq(_): "uuid4 version" ver "4"
+
+# dates
+is_leap_year(b): 2000
+assert_true(_): "leap 2000" b
+is_leap_year(b): 1900
+assert_eq(_): "leap 1900" b false
+days_in_month(n): 2024 2
+assert_eq(_): "feb 2024" n 29
+days_in_month(n): 2026 11
+assert_eq(_): "nov" n 30
+days_from_civil(n): 2026 11 16
+assert_eq(_): "days from civil" n 20773
+civil_from_days(v): 20773
+encode(e): v
+assert_eq(_): "civil from days" e "[2026,11,16]"
+civil_from_days(v): {0 - 1}
+encode(e): v
+assert_eq(_): "civil before epoch" e "[1969,12,31]"
+day_of_week(n): 2026 11 16
+assert_eq(_): "weekday" n 1
+day_of_year(n): 2024 12 31
+assert_eq(_): "yearday" n 366
+iso_utc(s): 1763283900
+assert_eq(_): "iso utc" s "2025-11-16T09:05:00Z"
+gmtime(v): 1763283900
+timegm(n): v
+assert_eq(_): "timegm" n 1763283900
+iso_parse(n): "2025-11-16T12:05:00+03:00"
+assert_eq(_): "iso parse zone" n 1763283900
+iso_parse(n): "2025-11-16"
+assert_eq(_): "iso parse date" n 1763251200
+iso_parse(n): "2025-02-30"
+assert_null(_): "iso parse bad" n
+strftime(s): "%a %d %b %Y, %H:%M (%j) %%" v
+assert_eq(_): "strftime" s "Sun 16 Nov 2025, 09:05 (320) %"
+
+test_summary(n):

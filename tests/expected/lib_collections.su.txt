@@ -1,0 +1,102 @@
+PASS range
+PASS range down
+PASS reverse
+PASS slice
+PASS index of
+PASS index of missing
+PASS count
+PASS unique
+PASS sort mixed
+PASS sort desc
+PASS sort natural
+PASS insert
+PASS remove at
+PASS remove
+PASS set
+PASS min
+PASS max
+PASS zip
+PASS flatten
+PASS chunk
+PASS fill
+PASS equal
+PASS union
+PASS intersect
+PASS difference
+PASS queue first
+PASS queue len
+PASS queue empty
+PASS heap min
+PASS heap fifo
+PASS heap len
+PASS tanh
+PASS sinh
+PASS cosh
+PASS asinh
+PASS atanh
+PASS log base
+PASS round 1
+PASS round half away
+PASS trunc
+PASS sign
+PASS clamp
+PASS lerp
+PASS gcd
+PASS lcm
+PASS prime 97
+PASS prime 91
+PASS isqrt
+PASS isqrt floor
+PASS modpow
+PASS mean
+PASS median
+PASS variance
+PASS stddev
+PASS percentile 100
+PASS popcount
+PASS rotl32
+PASS rotr32
+PASS bswap32
+PASS random range
+PASS random float
+PASS base64
+PASS base64 pad
+PASS base64 decode
+PASS base64 decode long
+PASS base64url
+PASS base64url decode
+PASS base64 bad
+PASS hex
+PASS hex decode
+PASS hex odd
+PASS url encode
+PASS url decode
+PASS query parse
+PASS form encode
+PASS fnv1a
+PASS adler32
+PASS crc32 hex
+PASS sha256 hex
+PASS md5 hex
+PASS uuid4 valid
+PASS uuid4 version
+PASS leap 2000
+PASS leap 1900
+PASS feb 2024
+PASS nov
+PASS days from civil
+PASS civil from days
+PASS civil before epoch
+PASS weekday
+PASS yearday
+PASS iso utc
+PASS timegm
+PASS iso parse zone
+PASS iso parse date
+PASS iso parse bad
+PASS strftime
+97 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---
