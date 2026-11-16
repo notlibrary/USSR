@@ -1,0 +1,270 @@
+# smtp.su - sending mail through an SMTP server with STARTTLS (Ryazan).
+# Runs in a scheduler process.
+#
+#   ryazan_smtp_send(r): opts from to subject body
+#       opts: btree with host, port (587), starttls (true), tls (false:
+#             implicit TLS, port 465), user and password (AUTH PLAIN, only
+#             after TLS), helo ("localhost"), ca_file
+#       to:   one address or a vector of addresses
+#       -> 0 when the server accepted the message, else -1 (see
+#          ryazan_smtp_error)
+#   ryazan_smtp_error(e):     -> the last reply or failure
+#   ryazan_smtp_message(t): from to subject body
+#                             -> the RFC 5322 text: headers, blank line, the
+#                                body with CRLF line ends and dot-stuffing
+$once
+$include "http.su"
+$include "../libs/dates.su"
+
+ryazan_smtp_error(r): [
+    global(_): _rzm_error
+    typeof(t): _rzm_error
+    set(r): ""
+    if(_): {t = "string"} [
+        set(r): _rzm_error
+    ]
+]
+
+_rzm_fail(r): msg [
+    global(_): _rzm_error
+    set(_rzm_error): msg
+    _ryazan_say(_): msg
+    set(r): {0 - 1}
+]
+
+# one reply (multi-line replies joined); [code, text] or null
+_rzm_reply(r): c [
+    set(r): null
+    set(text): ""
+    set(go): true
+    while(_): go [
+        btget(buf): c "buf"
+        str_find(eol): buf "\r\n" 0
+        while(_): {eol < 0} [
+            _rzh_recv(more): c 4096 0
+            typeof(mt): more
+            if(_): {mt = "null" || more = ""} [
+                return(r): r
+            ]
+            concat(buf): buf more
+            str_find(eol): buf "\r\n" 0
+        ]
+        slice(line): buf 0 eol
+        len(bl): buf
+        slice(rest): buf {eol + 2} {bl - eol - 2}
+        btput(_): c "buf" rest
+        concat(text): text line "\n"
+        len(ll): line
+        set(more_lines): false
+        if(_): {ll >= 4} [
+            slice(sep): line 3 1
+            set(more_lines): {sep = "-"}
+        ]
+        if(_): {more_lines = false} [
+            slice(cs): line 0 3
+            str_to_int(code): cs 10
+            typeof(ct): code
+            if(_): {ct != "integer"} [
+                set(code): 0
+            ]
+            vec(r): ""
+            push(_): r code
+            push(_): r text
+            set(go): false
+        ]
+    ]
+]
+
+# sends a command and wants a reply code in [lo, hi]
+_rzm_step(r): c line lo hi [
+    set(r): {0 - 1}
+    if(_): {line != ""} [
+        concat(out): line "\r\n"
+        _rzh_send(sent): c out
+        if(_): {sent != 0} [
+            _rzm_fail(r): "the connection broke while sending"
+            return(r): r
+        ]
+    ]
+    _rzm_reply(rep): c
+    typeof(rt): rep
+    if(_): {rt != "vector"} [
+        _rzm_fail(r): "no reply from the server"
+        return(r): r
+    ]
+    at(code): rep 0
+    at(text): rep 1
+    if(_): {code >= lo && code <= hi} [
+        global(_): _rzm_last
+        set(_rzm_last): text
+        set(r): 0
+    ]
+    else(_): [
+        str_trim(t): text
+        _rzm_fail(r): t
+    ]
+]
+
+ryazan_smtp_message(r): from to subject body [
+    typeof(tt): to
+    set(tos): to
+    if(_): {tt = "vector"} [
+        str_join(tos): to ", "
+    ]
+    time(now):
+    iso_utc(stamp): now
+    random64(x):
+    set(x): {x & 0xFFFFFFFF}
+    str_from_int_base(tag): x 16
+    concat(r): "From: " from "\r\nTo: " tos "\r\nSubject: " subject "\r\nX-Date-UTC: " stamp "\r\nMessage-ID: <" tag "." stamp "@ussr.ryazan>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+    str_replace(b): body "\r\n" "\n"
+    str_split(lines): b "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        str_starts(dot): line "."
+        if(_): dot [
+            concat(line): "." line
+        ]
+        concat(r): r line "\r\n"
+        set(i): {i + 1}
+    ]
+]
+
+ryazan_smtp_send(r): opts from to subject body [
+    global(_): _rzm_error _rzm_last
+    set(_rzm_error): ""
+    _rzo(host): opts "host" "localhost"
+    _rzo(implicit): opts "tls" false
+    set(dport): 587
+    if(_): implicit [
+        set(dport): 465
+    ]
+    _rzo(port): opts "port" dport
+    _rzo(starttls): opts "starttls" true
+    _rzo(user): opts "user" ""
+    _rzo(password): opts "password" ""
+    _rzo(helo): opts "helo" "localhost"
+    _rzo(ca): opts "ca_file" ""
+    set(r): {0 - 1}
+    btree(u):
+    set(scheme): "smtp"
+    if(_): implicit [
+        set(scheme): "https"
+    ]
+    btput(_): u "scheme" scheme
+    btput(_): u "host" host
+    btput(_): u "port" port
+    btput(_): u "path" "/"
+    btree(o):
+    btput(_): o "proxy" "none"
+    btput(_): o "ca_file" ca
+    _rzh_open(c): u o false
+    typeof(ct): c
+    if(_): {ct != "btree"} [
+        ryazan_fetch_error(e):
+        _rzm_fail(r): e
+        return(r): r
+    ]
+    _rzm_step(st): c "" 220 220
+    concat(ehlo): "EHLO " helo
+    if(_): {st = 0} [
+        _rzm_step(st): c ehlo 250 250
+    ]
+    btget(secure): c "tls"
+    if(_): {st = 0 && starttls && secure = false} [
+        str_lower(caps): _rzm_last
+        str_contains(offered): caps "starttls"
+        if(_): {offered = false} [
+            _rzm_fail(st): "the server does not offer STARTTLS"
+        ]
+        else(_): [
+            _rzm_step(st): c "STARTTLS" 220 220
+            if(_): {st = 0} [
+                btget(sock): c "sock"
+                if(_): {ca != ""} [
+                    setenv(_): "RYAZAN_CA_FILE" ca
+                ]
+                ryazan_starttls(up): sock host
+                if(_): {ca != ""} [
+                    unsetenv(_): "RYAZAN_CA_FILE"
+                ]
+                if(_): {up != 0} [
+                    tls_error(why):
+                    concat(m): "STARTTLS handshake failed: " why
+                    _rzm_fail(st): m
+                ]
+                else(_): [
+                    btput(_): c "tls" true
+                    btput(_): c "buf" ""
+                    set(secure): true
+                    _rzm_step(st): c ehlo 250 250
+                ]
+            ]
+        ]
+    ]
+    if(_): {st = 0 && user != ""} [
+        if(_): {secure = false} [
+            _rzm_fail(st): "refusing to send a password without TLS"
+        ]
+        else(_): [
+            vec(pb): ""
+            text_bytes(ub): user
+            text_bytes(wb): password
+            push(_): pb 0
+            len(un): ub
+            set(i): 0
+            while(_): {i < un} [
+                at(b): ub i
+                push(_): pb b
+                set(i): {i + 1}
+            ]
+            push(_): pb 0
+            len(wn): wb
+            set(i): 0
+            while(_): {i < wn} [
+                at(b): wb i
+                push(_): pb b
+                set(i): {i + 1}
+            ]
+            base64_encode(token): pb
+            concat(auth): "AUTH PLAIN " token
+            _rzm_step(st): c auth 235 235
+        ]
+    ]
+    if(_): {st = 0} [
+        concat(mf): "MAIL FROM:<" from ">"
+        _rzm_step(st): c mf 250 250
+    ]
+    typeof(tt): to
+    vec(rcpts): ""
+    if(_): {tt = "vector"} [
+        set(rcpts): to
+    ]
+    else(_): [
+        push(_): rcpts to
+    ]
+    len(nr): rcpts
+    set(i): 0
+    while(_): {st = 0 && i < nr} [
+        at(a): rcpts i
+        concat(rc): "RCPT TO:<" a ">"
+        _rzm_step(st): c rc 250 251
+        set(i): {i + 1}
+    ]
+    if(_): {st = 0} [
+        _rzm_step(st): c "DATA" 354 354
+    ]
+    if(_): {st = 0} [
+        ryazan_smtp_message(msg): from to subject body
+        concat(msg): msg ".\r\n"
+        _rzh_send(_): c msg
+        _rzm_step(st): c "" 250 250
+    ]
+    if(_): {st = 0} [
+        set(r): 0
+    ]
+    _rzh_send(_): c "QUIT\r\n"
+    _rzh_close(_): c
+]

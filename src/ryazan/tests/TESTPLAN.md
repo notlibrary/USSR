@@ -15,7 +15,25 @@ PASS/FAIL lines and exits with the number of failures. CI runs it on Linux
 - plain text sent to a TLS server is refused at once instead of hanging.
 
 Like the socket and ukraine tests it is left out of `tests/run_all.sh`,
-because it needs a free port.
+because it needs a free port. So are two more, run the same way:
+
+- `tests/ryazan_http.su` (port 18997): the script client against fake
+  servers in async tasks: Content-Length, chunked and close-delimited
+  bodies, redirects (302/303 after POST, `max_redirects` 0), retries
+  after 503, the cookie jar, keep-alive reuse, chunked uploads, binary
+  mode, downloads with a SHA-256 check, a 1 s timeout, the proxy absolute
+  form, a refused connection, JSON, and HTTPS with HSTS and a per-call
+  CA file.
+- `tests/ryazan_services.su` (port 18999): SHA-1 vectors and the
+  WebSocket accept key, ws:// and wss:// echo through `ryazan_serve`,
+  a client dropped by the handshake timeout, SMTP with STARTTLS and AUTH
+  PLAIN against a fake server, a refused recipient, no password in the
+  clear, and the HTTP-to-HTTPS redirect listener.
+
+`tests/rzh_unit.su` needs no network and runs in `tests/run_all.sh`
+(also through russia.su): URL parsing and resolution, cookies (domain,
+path, Secure, Max-Age), HSTS, multipart and form bodies, error kinds,
+`tls_features`, WebSocket frames and SMTP message text.
 
 ## Manual
 

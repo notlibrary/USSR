@@ -1,0 +1,564 @@
+# ws.su - WebSocket (RFC 6455) clients and servers on Ryazan connections.
+# ws:// runs on a plain socket, wss:// through TLS; both run in a
+# scheduler process. Frames travel as byte vectors; messages are text (a
+# payload's zero bytes are dropped, since USSR strings cannot hold them).
+#
+#   ryazan_ws_connect(c): url headers opts -> a connection btree, or null
+#                                       (opts as for ryazan_fetch: ca_file,
+#                                       connect_timeout)
+#   ryazan_ws_accept(c): socket tls     -> server side: reads the upgrade
+#                                       request on an accepted socket (tls
+#                                       true once ryazan_accept succeeded)
+#                                       and answers 101; a connection or null
+#   ryazan_ws_send(r): c text           -> one text frame; 0 or -1
+#   ryazan_ws_recv(m): c                -> the next text message (fragments
+#                                       joined; pings answered); null once
+#                                       the peer closed
+#   ryazan_ws_ping(r): c data
+#   ryazan_ws_close(r): c code reason   -> a close frame, then the socket
+#   ryazan_ws_path(p): c                -> the request path (server side)
+# Helpers usable on their own:
+#   ryazan_sha1(v): data                -> 20-byte digest (bytes) in USSR
+#   ryazan_ws_accept_key(r): key        -> base64(SHA-1(key + GUID))
+#   ryazan_ws_frame(v): opcode data mask -> one encoded frame as bytes
+$once
+$include "http.su"
+
+# --- SHA-1 -----------------------------------------------------------------
+
+_rzw_rotl(r): x n [
+    set(r): {((x << n) | (x >> (32 - n))) & 0xFFFFFFFF}
+]
+
+ryazan_sha1(r): data [
+    typeof(t): data
+    set(m): data
+    if(_): {t = "string"} [
+        text_bytes(m): data
+    ]
+    vec(msg): ""
+    len(n): m
+    set(i): 0
+    while(_): {i < n} [
+        at(b): m i
+        push(_): msg b
+        set(i): {i + 1}
+    ]
+    push(_): msg 128
+    len(k): msg
+    while(_): {k % 64 != 56} [
+        push(_): msg 0
+        set(k): {k + 1}
+    ]
+    set(bits): {n * 8}
+    set(s): 56
+    while(_): {s >= 0} [
+        push(_): msg {(bits >> s) & 255}
+        set(s): {s - 8}
+    ]
+    set(h0): 0x67452301
+    set(h1): 0xEFCDAB89
+    set(h2): 0x98BADCFE
+    set(h3): 0x10325476
+    set(h4): 0xC3D2E1F0
+    len(total): msg
+    set(off): 0
+    while(_): {off < total} [
+        vec(w): ""
+        set(j): 0
+        while(_): {j < 16} [
+            at(b0): msg {off + j * 4}
+            at(b1): msg {off + j * 4 + 1}
+            at(b2): msg {off + j * 4 + 2}
+            at(b3): msg {off + j * 4 + 3}
+            push(_): w {(b0 << 24) | (b1 << 16) | (b2 << 8) | b3}
+            set(j): {j + 1}
+        ]
+        while(_): {j < 80} [
+            at(x3): w {j - 3}
+            at(x8): w {j - 8}
+            at(x14): w {j - 14}
+            at(x16): w {j - 16}
+            _rzw_rotl(v): {x3 ^ x8 ^ x14 ^ x16} 1
+            push(_): w v
+            set(j): {j + 1}
+        ]
+        set(a): h0
+        set(b): h1
+        set(c): h2
+        set(d): h3
+        set(e): h4
+        set(j): 0
+        while(_): {j < 80} [
+            if(_): {j < 20} [
+                set(f): {(b & c) | ((b ^ 0xFFFFFFFF) & d)}
+                set(kk): 0x5A827999
+            ]
+            elif(_): {j < 40} [
+                set(f): {b ^ c ^ d}
+                set(kk): 0x6ED9EBA1
+            ]
+            elif(_): {j < 60} [
+                set(f): {(b & c) | (b & d) | (c & d)}
+                set(kk): 0x8F1BBCDC
+            ]
+            else(_): [
+                set(f): {b ^ c ^ d}
+                set(kk): 0xCA62C1D6
+            ]
+            _rzw_rotl(ra): a 5
+            at(wj): w j
+            set(temp): {(ra + f + e + kk + wj) & 0xFFFFFFFF}
+            set(e): d
+            set(d): c
+            _rzw_rotl(c): b 30
+            set(b): a
+            set(a): temp
+            set(j): {j + 1}
+        ]
+        set(h0): {(h0 + a) & 0xFFFFFFFF}
+        set(h1): {(h1 + b) & 0xFFFFFFFF}
+        set(h2): {(h2 + c) & 0xFFFFFFFF}
+        set(h3): {(h3 + d) & 0xFFFFFFFF}
+        set(h4): {(h4 + e) & 0xFFFFFFFF}
+        set(off): {off + 64}
+    ]
+    vec(r): ""
+    vec(hs): ""
+    push(_): hs h0
+    push(_): hs h1
+    push(_): hs h2
+    push(_): hs h3
+    push(_): hs h4
+    set(i): 0
+    while(_): {i < 5} [
+        at(h): hs i
+        push(_): r {(h >> 24) & 255}
+        push(_): r {(h >> 16) & 255}
+        push(_): r {(h >> 8) & 255}
+        push(_): r {h & 255}
+        set(i): {i + 1}
+    ]
+]
+
+ryazan_ws_accept_key(r): key [
+    concat(full): key "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    ryazan_sha1(d): full
+    base64_encode(r): d
+]
+
+# --- frames ----------------------------------------------------------------
+# Frames are byte vectors, since their headers hold zero bytes.
+
+ryazan_ws_frame(r): opcode text mask [
+    typeof(tt): text
+    set(pb): text
+    if(_): {tt = "string"} [
+        text_bytes(pb): text
+    ]
+    len(n): pb
+    vec(r): ""
+    push(_): r {128 | opcode}
+    set(mbit): 0
+    if(_): mask [
+        set(mbit): 128
+    ]
+    if(_): {n < 126} [
+        push(_): r {mbit | n}
+    ]
+    elif(_): {n < 65536} [
+        push(_): r {mbit | 126}
+        push(_): r {(n >> 8) & 255}
+        push(_): r {n & 255}
+    ]
+    else(_): [
+        push(_): r {mbit | 127}
+        set(s): 56
+        while(_): {s >= 0} [
+            push(_): r {(n >> s) & 255}
+            set(s): {s - 8}
+        ]
+    ]
+    if(_): mask [
+        random64(x):
+        vec(key): ""
+        set(q): 0
+        while(_): {q < 4} [
+            set(kv): {(x >> (q * 8)) & 255}
+            push(_): key kv
+            push(_): r kv
+            set(q): {q + 1}
+        ]
+        set(p): 0
+        while(_): {p < n} [
+            at(pv): pb p
+            at(kv): key {p % 4}
+            push(_): r {pv ^ kv}
+            set(p): {p + 1}
+        ]
+    ]
+    else(_): [
+        set(p): 0
+        while(_): {p < n} [
+            at(pv): pb p
+            push(_): r pv
+            set(p): {p + 1}
+        ]
+    ]
+]
+
+_rzw_send_bytes(r): c bytes [
+    btget(sock): c "sock"
+    btget(tls): c "tls"
+    len(n): bytes
+    set(r): 0
+    set(off): 0
+    while(_): {r = 0 && off < n} [
+        vec(piece): ""
+        set(i): off
+        while(_): {i < n} [
+            at(b): bytes i
+            push(_): piece b
+            set(i): {i + 1}
+        ]
+        if(_): tls [
+            tls_send_bytes(sent): sock piece
+        ]
+        else(_): [
+            socket_send_bytes(sent): sock piece
+        ]
+        if(_): {sent < 0} [
+            set(r): {0 - 1}
+        ]
+        elif(_): {sent = 0} [
+            wait_writable(_): sock
+        ]
+        else(_): [
+            set(off): {off + sent}
+        ]
+    ]
+    if(_): {r = 0 && tls} [
+        set(fl): 2
+        while(_): {fl = 2} [
+            tls_flush(fl): sock
+            if(_): {fl = 2} [
+                wait_writable(_): sock
+            ]
+        ]
+        if(_): {fl < 0} [
+            set(r): {0 - 1}
+        ]
+    ]
+]
+
+# --- connections -----------------------------------------------------------
+
+_rzw_conn(r): sock tls [
+    btree(r):
+    btput(_): r "sock" sock
+    btput(_): r "tls" tls
+    btput(_): r "buf" ""
+    btput(_): r "binary" false
+    btput(_): r "client" true
+    btput(_): r "path" "/"
+]
+
+ryazan_ws_connect(r): url headers opts [
+    ryazan_url_parse(u): url
+    set(r): null
+    typeof(ut): u
+    if(_): {ut != "btree"} [
+        _rzh_fail(r): "bad URL"
+        return(r): r
+    ]
+    btget(scheme): u "scheme"
+    if(_): {scheme != "ws" && scheme != "wss"} [
+        _rzh_fail(r): "a WebSocket URL starts with ws:// or wss://"
+        return(r): r
+    ]
+    btree(o):
+    btput(_): o "proxy" "none"
+    _rzo(ca): opts "ca_file" ""
+    _rzo(cto): opts "connect_timeout" 30000
+    btput(_): o "ca_file" ca
+    btput(_): o "connect_timeout" cto
+    _rzh_open(c): u o false
+    typeof(ct): c
+    if(_): {ct != "btree"} [
+        return(r): r
+    ]
+    vec(kb): ""
+    set(i): 0
+    while(_): {i < 16} [
+        random64(x):
+        push(_): kb {x & 255}
+        set(i): {i + 1}
+    ]
+    base64_encode(key): kb
+    btget(host): u "host"
+    btget(port): u "port"
+    btget(path): u "path"
+    str_from_int(ps): port
+    concat(req): "GET " path " HTTP/1.1\r\nHost: " host ":" ps "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " key "\r\nSec-WebSocket-Version: 13\r\n"
+    _rzh_header_lines(lines): headers
+    len(nl): lines
+    set(i): 0
+    while(_): {i < nl} [
+        at(line): lines i
+        concat(req): req line "\r\n"
+        set(i): {i + 1}
+    ]
+    concat(req): req "\r\n"
+    _rzh_send(sent): c req
+    _rzh_read_head(head): c 0
+    typeof(ht): head
+    if(_): {sent != 0 || ht != "string"} [
+        _rzh_close(_): c
+        _rzh_fail(r): "no answer to the WebSocket upgrade"
+        return(r): r
+    ]
+    _rzh_parse_head(resp): head
+    btget(code): resp "status"
+    ryazan_resp_header(accept): resp "sec-websocket-accept"
+    ryazan_ws_accept_key(want): key
+    if(_): {code != 101 || accept != want} [
+        _rzh_close(_): c
+        _rzh_fail(r): "the server refused the WebSocket upgrade"
+        return(r): r
+    ]
+    btput(_): c "client" true
+    btput(_): c "path" path
+    set(r): c
+]
+
+ryazan_ws_accept(r): sock tls [
+    _rzw_conn(c): sock tls
+    btput(_): c "client" false
+    set(r): null
+    _rzh_read_head(head): c 0
+    typeof(ht): head
+    if(_): {ht != "string"} [
+        return(r): r
+    ]
+    str_split(first): head "\r\n"
+    at(line): first 0
+    re_find(m): "^GET ([^ ]+) HTTP/1\\.1$" line
+    concat(fake): "HTTP/1.1 200 X\r\n" head
+    _rzh_parse_head(req): fake
+    ryazan_resp_header(key): req "sec-websocket-key"
+    ryazan_resp_header(up): req "upgrade"
+    str_lower(up): up
+    typeof(mt): m
+    if(_): {mt != "vector" || key = "" || up != "websocket"} [
+        _rzh_send(_): c "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        return(r): r
+    ]
+    at(path): m 1
+    btput(_): c "path" path
+    ryazan_ws_accept_key(acc): key
+    concat(resp): "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " acc "\r\n\r\n"
+    _rzh_send(sent): c resp
+    if(_): {sent = 0} [
+        set(r): c
+    ]
+]
+
+ryazan_ws_path(r): c [
+    btget(r): c "path"
+]
+
+ryazan_ws_send(r): c text [
+    btget(client): c "client"
+    ryazan_ws_frame(f): 1 text client
+    _rzw_send_bytes(r): c f
+]
+
+ryazan_ws_ping(r): c data [
+    btget(client): c "client"
+    ryazan_ws_frame(f): 9 data client
+    _rzw_send_bytes(r): c f
+]
+
+ryazan_ws_close(r): c code reason [
+    btget(client): c "client"
+    vec(payload): ""
+    push(_): payload {(code >> 8) & 255}
+    push(_): payload {code & 255}
+    text_bytes(rb): reason
+    len(rn): rb
+    set(i): 0
+    while(_): {i < rn} [
+        at(b): rb i
+        push(_): payload b
+        set(i): {i + 1}
+    ]
+    ryazan_ws_frame(f): 8 payload client
+    _rzw_send_bytes(_): c f
+    _rzh_close(r): c
+]
+
+# n bytes (a vector) from the connection, reading more as needed; null if
+# the peer closed first. The text left over from the HTTP head becomes
+# bytes on the first call.
+_rzw_take(r): c n [
+    btget(bb): c "bbuf" null
+    typeof(bt): bb
+    if(_): {bt != "vector"} [
+        btget(buf): c "buf"
+        text_bytes(bb): buf
+        btput(_): c "buf" ""
+    ]
+    len(bl): bb
+    set(r): null
+    btput(_): c "binary" true
+    while(_): {bl < n} [
+        _rzh_recv(more): c 16384 0
+        typeof(mt): more
+        set(ml): 0
+        if(_): {mt = "vector"} [
+            len(ml): more
+        ]
+        if(_): {ml = 0} [
+            btput(_): c "bbuf" bb
+            btput(_): c "binary" false
+            return(r): r
+        ]
+        set(i): 0
+        while(_): {i < ml} [
+            at(b): more i
+            push(_): bb b
+            set(i): {i + 1}
+        ]
+        len(bl): bb
+    ]
+    btput(_): c "binary" false
+    vec(r): ""
+    vec(rest): ""
+    set(i): 0
+    while(_): {i < bl} [
+        at(b): bb i
+        if(_): {i < n} [
+            push(_): r b
+        ]
+        else(_): [
+            push(_): rest b
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): c "bbuf" rest
+]
+
+_rzw_text(r): bytes [
+    vec(clean): ""
+    len(n): bytes
+    set(i): 0
+    while(_): {i < n} [
+        at(b): bytes i
+        if(_): {b != 0} [
+            push(_): clean b
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): ""
+    len(k): clean
+    if(_): {k > 0} [
+        bytes_text(r): clean
+    ]
+]
+
+_rzw_read_frame(r): c [
+    set(r): null
+    _rzw_take(h): c 2
+    typeof(ht): h
+    if(_): {ht = "null"} [
+        return(r): r
+    ]
+    at(b0): h 0
+    at(b1): h 1
+    set(fin): {(b0 & 128) != 0}
+    set(op): {b0 & 15}
+    set(masked): {(b1 & 128) != 0}
+    set(n): {b1 & 127}
+    if(_): {n = 126} [
+        _rzw_take(x): c 2
+        at(a): x 0
+        at(b): x 1
+        set(n): {(a << 8) | b}
+    ]
+    elif(_): {n = 127} [
+        _rzw_take(x): c 8
+        set(n): 0
+        set(i): 0
+        while(_): {i < 8} [
+            at(a): x i
+            set(n): {(n << 8) | a}
+            set(i): {i + 1}
+        ]
+    ]
+    vec(payload): ""
+    if(_): masked [
+        _rzw_take(key): c 4
+        _rzw_take(raw): c n
+        typeof(rt): raw
+        if(_): {rt = "null"} [
+            return(r): r
+        ]
+        set(i): 0
+        while(_): {i < n} [
+            at(pv): raw i
+            at(kv): key {i % 4}
+            push(_): payload {pv ^ kv}
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {n > 0} [
+        _rzw_take(payload): c n
+        typeof(pt): payload
+        if(_): {pt = "null"} [
+            return(r): r
+        ]
+    ]
+    vec(r): ""
+    push(_): r fin
+    push(_): r op
+    push(_): r payload
+]
+
+ryazan_ws_recv(r): c [
+    set(r): null
+    set(msg): ""
+    set(go): true
+    while(_): go [
+        _rzw_read_frame(f): c
+        typeof(ft): f
+        if(_): {ft = "null"} [
+            return(r): r
+        ]
+        at(fin): f 0
+        at(op): f 1
+        at(payload): f 2
+        if(_): {op = 8} [
+            btget(client): c "client"
+            ryazan_ws_frame(answer): 8 payload client
+            _rzw_send_bytes(_): c answer
+            _rzh_close(_): c
+            return(r): r
+        ]
+        elif(_): {op = 9} [
+            btget(client): c "client"
+            ryazan_ws_frame(pong): 10 payload client
+            _rzw_send_bytes(_): c pong
+        ]
+        elif(_): {op = 10} [
+            set(op): op
+        ]
+        else(_): [
+            _rzw_text(piece): payload
+            concat(msg): msg piece
+            if(_): fin [
+                set(r): msg
+                set(go): false
+            ]
+        ]
+    ]
+]

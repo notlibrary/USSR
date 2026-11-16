@@ -1,0 +1,1442 @@
+# http.su - Ryazan's script HTTP/1.1 client over ryazan.su sessions.
+#
+# tls_request (ryazan_request) is native and blocks the whole interpreter;
+# this client runs in USSR on Ryazan's sockets, so it yields to the
+# scheduler while it waits, and it takes per-request options. Like the
+# rest of Ryazan it must run in a scheduler process (init or async).
+#
+#   ryazan_fetch(resp): method url headers body opts
+#       headers: "Name: value" lines joined by "\n", or a vector of
+#                [name, value] pairs, or ""
+#       body:    a string, a vector of strings (sent chunked), or ""
+#       opts:    a btree (or null) with any of
+#         timeout          seconds for the whole exchange (0: none)
+#         connect_timeout  milliseconds for the TCP connect (30000)
+#         max_redirects    redirects to follow (5; 0 to return the 3xx)
+#         retries          extra attempts on failure, 429 or 503 (0)
+#         backoff          seconds before the first retry, doubling (1)
+#         keepalive        reuse connections from the pool (false)
+#         ca_file          a PEM file to trust for this request only
+#         proxy            "http://host:port"; default HTTPS_PROXY or
+#                          HTTP_PROXY from the environment ("none": off)
+#         cookies          a jar from ryazan_cookies_new
+#         binary           true: the body comes back as bytes too
+#         body_file        a file streamed as the (chunked) body
+#         user_agent       the User-Agent header ("ussr-ryazan")
+#   -> null when no response came (ryazan_fetch_error(e): says why), or a
+#      btree: status, reason, version, headers (vector of [name, value],
+#      names in lower case), body (text; null if it holds a zero byte),
+#      bytes (with binary), url (after redirects), redirects, attempts.
+#
+#   ryazan_resp_header(v): resp name     -> first value of a header, or ""
+#   ryazan_resp_headers(v): resp name    -> every value of a header
+#   ryazan_url_parse(v): url             -> btree scheme host port path, or
+#                                           null; https defaults to 443
+#   ryazan_url_resolve(r): base ref      -> an absolute URL for a Location
+#   ryazan_form(r): pairs                -> application/x-www-form-urlencoded
+#   ryazan_multipart(v): parts           -> [content_type, body]; a part is
+#                                           [name, value] or [name, filename,
+#                                           content_type, data]
+#   ryazan_get_json(v): url opts         -> the parsed JSON body of a 2xx,
+#                                           else null
+#   ryazan_post_json(v): url value opts  -> POSTs value as JSON, parses the
+#                                           answer
+#   ryazan_cookies_new(j):               -> an empty cookie jar
+#   ryazan_cookies_store(_): jar url set_cookie_value
+#   ryazan_cookies_header(r): jar url    -> "a=1; b=2" for that URL
+#   ryazan_hsts_has(b): host / ryazan_hsts_add(_): host seconds
+#                                        -> http:// to a host that sent
+#                                           Strict-Transport-Security is
+#                                           upgraded to https://
+#   ryazan_download(r): url path opts    -> 0 when the body was saved to
+#                                           path (binary-safe); opts sha256
+#                                           (hex) checks it, progress true
+#                                           prints the byte count
+#   ryazan_pool_close(_):                -> closes the pooled connections
+#   ryazan_check(r): url                 -> a report: backend, protocol and
+#                                           suite, status, HSTS and server
+$once
+$include "ryazan.su"
+$include "../libs/strings.su"
+$include "../libs/encoding.su"
+$include "../libs/json.su"
+
+ryazan_fetch_error(r): [
+    global(_): _rzh_error
+    typeof(t): _rzh_error
+    set(r): ""
+    if(_): {t = "string"} [
+        set(r): _rzh_error
+    ]
+]
+
+_rzh_fail(r): msg [
+    global(_): _rzh_error
+    set(_rzh_error): msg
+    _ryazan_say(_): msg
+    set(r): null
+]
+
+_rzo(r): opts key default [
+    set(r): default
+    typeof(t): opts
+    if(_): {t = "btree"} [
+        btget(r): opts key default
+    ]
+]
+
+ryazan_url_parse(r): url [
+    set(r): null
+    re_find(m): "^([A-Za-z][A-Za-z0-9+.-]*)://(?:[^@/?#]*@)?(\\[[^\\]]+\\]|[^:/?#]*)(?::([0-9]+))?([^#]*)" url
+    typeof(t): m
+    if(_): {t != "vector"} [
+        return(r): r
+    ]
+    at(scheme): m 1
+    str_lower(scheme): scheme
+    at(host): m 2
+    at(portt): m 3
+    at(path): m 4
+    if(_): {host = ""} [
+        return(r): r
+    ]
+    str_starts(br): host "["
+    if(_): br [
+        len(hl): host
+        slice(host): host 1 {hl - 2}
+    ]
+    set(port): 80
+    if(_): {scheme = "https" || scheme = "wss"} [
+        set(port): 443
+    ]
+    typeof(pt): portt
+    if(_): {pt = "string"} [
+        str_to_int(port): portt 10
+    ]
+    if(_): {path = ""} [
+        set(path): "/"
+    ]
+    str_starts(qs): path "?"
+    if(_): qs [
+        concat(path): "/" path
+    ]
+    btree(r):
+    btput(_): r "scheme" scheme
+    btput(_): r "host" host
+    btput(_): r "port" port
+    btput(_): r "path" path
+]
+
+_rzh_origin(r): u [
+    btget(s): u "scheme"
+    btget(h): u "host"
+    btget(p): u "port"
+    str_from_int(ps): p
+    concat(r): s "://" h ":" ps
+]
+
+ryazan_url_resolve(r): base ref [
+    re_test(abs): "^[A-Za-z][A-Za-z0-9+.-]*://" ref
+    if(_): abs [
+        set(r): ref
+        return(r): r
+    ]
+    ryazan_url_parse(u): base
+    btget(s): u "scheme"
+    btget(h): u "host"
+    btget(p): u "port"
+    btget(path): u "path"
+    str_from_int(ps): p
+    set(auth): h
+    if(_): {(s = "http" && p != 80) || (s = "https" && p != 443)} [
+        concat(auth): h ":" ps
+    ]
+    str_starts(net): ref "//"
+    str_starts(root): ref "/"
+    if(_): net [
+        concat(r): s ":" ref
+    ]
+    elif(_): root [
+        concat(r): s "://" auth ref
+    ]
+    else(_): [
+        str_find(q): path "?" 0
+        if(_): {q >= 0} [
+            slice(path): path 0 q
+        ]
+        str_rfind(slash): path "/"
+        slice(dir): path 0 {slash + 1}
+        str_starts(query): ref "?"
+        if(_): query [
+            concat(r): s "://" auth path ref
+        ]
+        else(_): [
+            concat(r): s "://" auth dir ref
+        ]
+    ]
+]
+
+# --- connections: btrees with sock, tls, buf, key ---------------------------
+
+_rzh_send(r): conn text [
+    btget(sock): conn "sock"
+    btget(tls): conn "tls"
+    set(r): 0
+    if(_): tls [
+        ryazan_write(r): sock text
+    ]
+    else(_): [
+        len(n): text
+        set(off): 0
+        while(_): {r = 0 && off < n} [
+            slice(piece): text off {n - off}
+            socket_send(sent): sock piece
+            if(_): {sent < 0} [
+                set(r): {0 - 1}
+            ]
+            elif(_): {sent = 0} [
+                wait_writable(_): sock
+            ]
+            else(_): [
+                set(off): {off + sent}
+            ]
+        ]
+    ]
+]
+
+# text up to max bytes; "" when closed; null when the deadline passed
+_rzh_recv(r): conn max deadline [
+    btget(sock): conn "sock"
+    btget(tls): conn "tls"
+    btget(binary): conn "binary"
+    set(r): null
+    set(go): true
+    while(_): go [
+        if(_): tls [
+            if(_): binary [
+                tls_recv_bytes(r): sock max
+            ]
+            else(_): [
+                tls_recv(r): sock max
+            ]
+        ]
+        else(_): [
+            if(_): {deadline = 0} [
+                wait_readable(_): sock
+            ]
+            if(_): binary [
+                socket_recv_bytes(r): sock max
+            ]
+            else(_): [
+                socket_recv(r): sock max
+            ]
+        ]
+        typeof(t): r
+        if(_): {t != "null"} [
+            set(go): false
+        ]
+        elif(_): {deadline = 0} [
+            if(_): tls [
+                wait_readable(_): sock
+            ]
+            else(_): [
+                # a blocking recv that failed: the connection is gone
+                set(r): ""
+                set(go): false
+            ]
+        ]
+        else(_): [
+            time(now):
+            if(_): {now >= deadline} [
+                set(go): false
+            ]
+            else(_): [
+                sleep(_): 10
+            ]
+        ]
+    ]
+]
+
+_rzh_close(r): conn [
+    btget(sock): conn "sock"
+    btget(tls): conn "tls"
+    if(_): tls [
+        ryazan_close(r): sock
+    ]
+    else(_): [
+        socket_close(r): sock
+    ]
+]
+
+_rzh_pool(r): [
+    global(_): _rzh_pool_tree
+    typeof(t): _rzh_pool_tree
+    if(_): {t != "btree"} [
+        btree(_rzh_pool_tree):
+    ]
+    set(r): _rzh_pool_tree
+]
+
+ryazan_pool_close(r): [
+    _rzh_pool(pool):
+    btkeys(keys): pool
+    len(n): keys
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        btget(c): pool k
+        _rzh_close(_): c
+        btdel(_): pool k
+        set(i): {i + 1}
+    ]
+    set(r): n
+]
+
+_rzh_proxy(r): u opts [
+    getenv(envp): "HTTPS_PROXY"
+    btget(scheme): u "scheme"
+    if(_): {scheme = "http"} [
+        getenv(envp): "HTTP_PROXY"
+    ]
+    typeof(et): envp
+    if(_): {et = "null"} [
+        set(envp): ""
+    ]
+    _rzo(r): opts "proxy" envp
+    if(_): {r = "none"} [
+        set(r): ""
+    ]
+]
+
+_rzh_open(r): u opts binary [
+    btget(scheme): u "scheme"
+    btget(host): u "host"
+    btget(port): u "port"
+    _rzo(cto): opts "connect_timeout" 30000
+    _rzo(ca): opts "ca_file" ""
+    _rzh_proxy(proxy): u opts
+    set(tls): {scheme = "https" || scheme = "wss"}
+    set(r): null
+    set(through_proxy): false
+    socket_tcp(sock):
+    if(_): {sock < 1} [
+        _rzh_fail(r): "no socket"
+        return(r): r
+    ]
+    if(_): {proxy != ""} [
+        ryazan_url_parse(pu): proxy
+        typeof(put): pu
+        if(_): {put != "btree"} [
+            socket_close(_): sock
+            _rzh_fail(r): "bad proxy URL"
+            return(r): r
+        ]
+        btget(ph): pu "host"
+        btget(pp): pu "port"
+        socket_connect(c): sock ph pp cto
+        set(through_proxy): true
+    ]
+    else(_): [
+        socket_connect(c): sock host port cto
+    ]
+    if(_): {c != 0} [
+        socket_close(_): sock
+        str_from_int(ps): port
+        concat(m): "connect to " host ":" ps " failed (refused or unreachable)"
+        _rzh_fail(r): m
+        return(r): r
+    ]
+    btree(conn):
+    btput(_): conn "sock" sock
+    btput(_): conn "tls" false
+    btput(_): conn "binary" false
+    btput(_): conn "buf" ""
+    btput(_): conn "absolute" false
+    if(_): {through_proxy && tls} [
+        str_from_int(ps): port
+        concat(target): host ":" ps
+        concat(req): "CONNECT " target " HTTP/1.1\r\nHost: " target "\r\n\r\n"
+        _rzh_send(_): conn req
+        _rzh_read_head(head): conn 0
+        typeof(ht): head
+        set(code): 0
+        if(_): {ht = "string"} [
+            slice(cs): head 9 3
+            str_to_int(code): cs 10
+        ]
+        if(_): {code != 200} [
+            socket_close(_): sock
+            _rzh_fail(r): "the proxy refused CONNECT"
+            return(r): r
+        ]
+        btput(_): conn "buf" ""
+    ]
+    elif(_): through_proxy [
+        btput(_): conn "absolute" true
+    ]
+    if(_): tls [
+        if(_): {ca != ""} [
+            getenv(saved): "RYAZAN_CA_FILE"
+            setenv(_): "RYAZAN_CA_FILE" ca
+        ]
+        ryazan_starttls(shaken): sock host
+        if(_): {ca != ""} [
+            typeof(st): saved
+            if(_): {st = "null"} [
+                unsetenv(_): "RYAZAN_CA_FILE"
+            ]
+            else(_): [
+                setenv(_): "RYAZAN_CA_FILE" saved
+            ]
+        ]
+        if(_): {shaken != 0} [
+            tls_error(why):
+            socket_close(_): sock
+            concat(m): "TLS: " why
+            _rzh_fail(r): m
+            return(r): r
+        ]
+        btput(_): conn "tls" true
+    ]
+    btput(_): conn "binary" binary
+    set(r): conn
+]
+
+# reads until the blank line; the head (without it) or null; extra bytes
+# stay in the connection's buffer
+_rzh_read_head(r): conn deadline [
+    btput(_): conn "binary" false
+    btget(buf): conn "buf"
+    set(r): null
+    str_find(at): buf "\r\n\r\n" 0
+    while(_): {at < 0} [
+        _rzh_recv(more): conn 16384 deadline
+        typeof(t): more
+        if(_): {t = "null" || more = ""} [
+            return(r): r
+        ]
+        concat(buf): buf more
+        len(bl): buf
+        str_find(at): buf "\r\n\r\n" 0
+        if(_): {bl > 65536 && at < 0} [
+            return(r): r
+        ]
+    ]
+    slice(r): buf 0 at
+    len(bl): buf
+    slice(rest): buf {at + 4} {bl - at - 4}
+    btput(_): conn "buf" rest
+]
+
+_rzh_header_lines(r): headers [
+    vec(r): ""
+    typeof(t): headers
+    if(_): {t = "vector"} [
+        len(n): headers
+        set(i): 0
+        while(_): {i < n} [
+            at(p): headers i
+            at(k): p 0
+            at(v): p 1
+            concat(line): k ": " v
+            push(_): r line
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {t = "string"} [
+        str_replace(h): headers "\r" ""
+        str_split(lines): h "\n"
+        len(n): lines
+        set(i): 0
+        while(_): {i < n} [
+            at(line): lines i
+            if(_): {line != ""} [
+                push(_): r line
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+_rzh_has_header(r): lines name [
+    str_lower(want): name
+    concat(want): want ":"
+    len(n): lines
+    set(i): 0
+    set(r): false
+    while(_): {i < n} [
+        at(line): lines i
+        str_lower(l): line
+        str_starts(hit): l want
+        if(_): hit [
+            set(r): true
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+_rzh_drop_header(r): lines name [
+    str_lower(want): name
+    concat(want): want ":"
+    vec(r): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        str_lower(l): line
+        str_starts(hit): l want
+        if(_): {hit = false} [
+            push(_): r line
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+_rzh_parse_head(r): head [
+    str_split(lines): head "\r\n"
+    at(status_line): lines 0
+    re_find(m): "^(HTTP/[0-9.]+) ([0-9]{3}) ?(.*)$" status_line
+    set(r): null
+    typeof(t): m
+    if(_): {t != "vector"} [
+        return(r): r
+    ]
+    btree(r):
+    at(v): m 1
+    at(cs): m 2
+    at(reason): m 3
+    str_to_int(code): cs 10
+    btput(_): r "version" v
+    btput(_): r "status" code
+    btput(_): r "reason" reason
+    vec(hs): ""
+    len(n): lines
+    set(i): 1
+    while(_): {i < n} [
+        at(line): lines i
+        str_find(colon): line ":" 0
+        if(_): {colon > 0} [
+            slice(k): line 0 colon
+            str_lower(k): k
+            len(ll): line
+            slice(val): line {colon + 1} {ll - colon - 1}
+            str_trim(val): val
+            vec(pair): ""
+            push(_): pair k
+            push(_): pair val
+            push(_): hs pair
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): r "headers" hs
+]
+
+ryazan_resp_headers(r): resp name [
+    vec(r): ""
+    str_lower(want): name
+    typeof(t): resp
+    if(_): {t = "btree"} [
+        btget(hs): resp "headers"
+        len(n): hs
+        set(i): 0
+        while(_): {i < n} [
+            at(p): hs i
+            at(k): p 0
+            if(_): {k = want} [
+                at(v): p 1
+                push(_): r v
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+ryazan_resp_header(r): resp name [
+    ryazan_resp_headers(all): resp name
+    set(r): ""
+    len(n): all
+    if(_): {n > 0} [
+        at(r): all 0
+    ]
+]
+
+# body of a parsed response; sets "body"/"bytes"; false if cut short
+_rzh_read_body(r): conn resp method deadline [
+    btget(code): resp "status"
+    ryazan_resp_header(te): resp "transfer-encoding"
+    ryazan_resp_header(cl): resp "content-length"
+    str_lower(te): te
+    btget(binary): conn "binary"
+    btget(buf): conn "buf"
+    set(r): true
+    set(no_body): {method = "HEAD" || code = 204 || code = 304 || (code >= 100 && code < 200)}
+    if(_): no_body [
+        btput(_): resp "body" ""
+        return(r): r
+    ]
+    str_contains(chunked): te "chunked"
+    if(_): binary [
+        if(_): chunked [
+            set(binary): false
+        ]
+        else(_): [
+            btput(_): conn "binary" true
+            text_bytes(data): buf
+            str_to_int(want): cl 10
+            typeof(wt): want
+            set(go): true
+            while(_): go [
+                len(have): data
+                if(_): {wt = "integer"} [
+                    set(go): {have < want}
+                ]
+                if(_): go [
+                    _rzh_recv(more): conn 16384 deadline
+                    typeof(mt): more
+                    if(_): {mt = "null"} [
+                        set(go): false
+                        set(r): false
+                    ]
+                    else(_): [
+                        len(ml): more
+                        if(_): {ml = 0} [
+                            set(go): false
+                            if(_): {wt = "integer"} [
+                                set(r): false
+                            ]
+                        ]
+                        set(k): 0
+                        while(_): {k < ml} [
+                            at(b): more k
+                            push(_): data b
+                            set(k): {k + 1}
+                        ]
+                    ]
+                ]
+            ]
+            btput(_): conn "binary" false
+            btput(_): conn "buf" ""
+            btput(_): resp "bytes" data
+            bytes_text(text): data
+            btput(_): resp "body" text
+            return(r): r
+        ]
+    ]
+    if(_): chunked [
+        set(body): ""
+        set(go): true
+        while(_): go [
+            str_find(eol): buf "\r\n" 0
+            while(_): {eol < 0 && r} [
+                _rzh_recv(more): conn 16384 deadline
+                typeof(mt): more
+                if(_): {mt = "null" || more = ""} [
+                    set(r): false
+                ]
+                else(_): [
+                    concat(buf): buf more
+                    str_find(eol): buf "\r\n" 0
+                ]
+            ]
+            if(_): {r = false} [
+                set(go): false
+            ]
+            else(_): [
+                slice(sizeline): buf 0 eol
+                str_find(semi): sizeline ";" 0
+                if(_): {semi >= 0} [
+                    slice(sizeline): sizeline 0 semi
+                ]
+                str_trim(sizeline): sizeline
+                str_to_int(size): sizeline 16
+                typeof(st): size
+                if(_): {st != "integer"} [
+                    set(r): false
+                    set(go): false
+                ]
+                else(_): [
+                    len(bl): buf
+                    slice(buf): buf {eol + 2} {bl - eol - 2}
+                    # the chunk and its CRLF (the last one: trailers, CRLF)
+                    set(need): {size + 2}
+                    len(bl): buf
+                    while(_): {bl < need && r} [
+                        _rzh_recv(more): conn 16384 deadline
+                        typeof(mt): more
+                        if(_): {mt = "null" || more = ""} [
+                            set(r): false
+                        ]
+                        else(_): [
+                            concat(buf): buf more
+                            len(bl): buf
+                        ]
+                    ]
+                    if(_): r [
+                        slice(piece): buf 0 size
+                        concat(body): body piece
+                        slice(buf): buf need {bl - need}
+                        if(_): {size = 0} [
+                            set(go): false
+                        ]
+                    ]
+                    else(_): [
+                        set(go): false
+                    ]
+                ]
+            ]
+        ]
+        btput(_): resp "body" body
+        btput(_): conn "buf" ""
+        return(r): r
+    ]
+    str_to_int(want): cl 10
+    typeof(wt): want
+    if(_): {wt = "integer"} [
+        len(bl): buf
+        while(_): {bl < want && r} [
+            _rzh_recv(more): conn 16384 deadline
+            typeof(mt): more
+            if(_): {mt = "null" || more = ""} [
+                set(r): false
+            ]
+            else(_): [
+                concat(buf): buf more
+                len(bl): buf
+            ]
+        ]
+        slice(body): buf 0 want
+        btput(_): resp "body" body
+        btput(_): conn "buf" ""
+    ]
+    else(_): [
+        # until the peer closes
+        set(go): true
+        while(_): go [
+            _rzh_recv(more): conn 16384 deadline
+            typeof(mt): more
+            if(_): {mt = "null"} [
+                set(r): false
+                set(go): false
+            ]
+            elif(_): {more = ""} [
+                set(go): false
+            ]
+            else(_): [
+                concat(buf): buf more
+            ]
+        ]
+        btput(_): resp "body" buf
+        btput(_): conn "buf" ""
+        btput(_): conn "closing" true
+    ]
+]
+
+_rzh_once(r): method u lines body opts deadline [
+    _rzo(keepalive): opts "keepalive" false
+    _rzo(binary): opts "binary" false
+    _rzo(agent): opts "user_agent" "ussr-ryazan"
+    _rzo(body_file): opts "body_file" ""
+    _rzh_origin(key): u
+    _rzh_pool(pool):
+    set(conn): null
+    set(reused): false
+    if(_): keepalive [
+        btget(conn): pool key null
+        typeof(ct): conn
+        if(_): {ct = "btree"} [
+            btdel(_): pool key
+            set(reused): true
+        ]
+    ]
+    typeof(ct): conn
+    if(_): {ct != "btree"} [
+        _rzh_open(conn): u opts binary
+        typeof(ct): conn
+        if(_): {ct != "btree"} [
+            set(r): null
+            return(r): r
+        ]
+    ]
+    btput(_): conn "binary" false
+    btget(host): u "host"
+    btget(port): u "port"
+    btget(path): u "path"
+    btget(scheme): u "scheme"
+    btget(absolute): conn "absolute"
+    set(target): path
+    if(_): absolute [
+        _rzh_origin(o): u
+        concat(target): o path
+    ]
+    str_from_int(ps): port
+    set(hosthdr): host
+    if(_): {(scheme = "http" && port != 80) || (scheme = "https" && port != 443)} [
+        concat(hosthdr): host ":" ps
+    ]
+    concat(req): method " " target " HTTP/1.1\r\n"
+    _rzh_has_header(h): lines "host"
+    if(_): {h = false} [
+        concat(req): req "Host: " hosthdr "\r\n"
+    ]
+    _rzh_has_header(h): lines "user-agent"
+    if(_): {h = false} [
+        concat(req): req "User-Agent: " agent "\r\n"
+    ]
+    _rzh_has_header(h): lines "accept"
+    if(_): {h = false} [
+        concat(req): req "Accept: */*\r\n"
+    ]
+    _rzh_has_header(h): lines "connection"
+    if(_): {h = false} [
+        if(_): keepalive [
+            concat(req): req "Connection: keep-alive\r\n"
+        ]
+        else(_): [
+            concat(req): req "Connection: close\r\n"
+        ]
+    ]
+    typeof(bt): body
+    set(chunks): null
+    if(_): {body_file != ""} [
+        set(chunks): "file"
+    ]
+    elif(_): {bt = "vector"} [
+        set(chunks): body
+    ]
+    typeof(cht): chunks
+    if(_): {cht != "null"} [
+        concat(req): req "Transfer-Encoding: chunked\r\n"
+    ]
+    elif(_): {bt = "string" && (body != "" || method = "POST" || method = "PUT" || method = "PATCH")} [
+        _rzh_has_header(h): lines "content-length"
+        if(_): {h = false} [
+            len(bl): body
+            str_from_int(bls): bl
+            concat(req): req "Content-Length: " bls "\r\n"
+        ]
+    ]
+    len(nl): lines
+    set(i): 0
+    while(_): {i < nl} [
+        at(line): lines i
+        concat(req): req line "\r\n"
+        set(i): {i + 1}
+    ]
+    concat(req): req "\r\n"
+    if(_): {bt = "string" && cht = "null"} [
+        concat(req): req body
+    ]
+    _rzh_send(sent): conn req
+    if(_): {sent = 0 && cht != "null"} [
+        _rzh_send_chunks(sent): conn chunks body_file
+    ]
+    if(_): {sent != 0} [
+        _rzh_close(_): conn
+        if(_): reused [
+            # a pooled connection the server had closed: one fresh try
+            _rzh_once(r): method u lines body opts deadline
+            return(r): r
+        ]
+        _rzh_fail(r): "sending the request failed"
+        return(r): r
+    ]
+    _rzh_read_head(head): conn deadline
+    typeof(htt): head
+    if(_): {htt != "string"} [
+        _rzh_close(_): conn
+        set(why): "no response (closed or timed out)"
+        if(_): {deadline > 0} [
+            time(now):
+            if(_): {now >= deadline} [
+                set(why): "timed out waiting for the response"
+            ]
+        ]
+        _rzh_fail(r): why
+        return(r): r
+    ]
+    _rzh_parse_head(r): head
+    typeof(rt): r
+    if(_): {rt != "btree"} [
+        _rzh_close(_): conn
+        _rzh_fail(r): "malformed status line"
+        return(r): r
+    ]
+    btput(_): conn "binary" binary
+    _rzh_read_body(complete): conn r method deadline
+    btput(_): r "complete" complete
+    ryazan_resp_header(ch): r "connection"
+    str_lower(ch): ch
+    btget(closing): conn "closing" false
+    btget(ver): r "version"
+    set(keep): {keepalive && complete && closing = false && ch != "close"}
+    if(_): {ver = "HTTP/1.0" && ch != "keep-alive"} [
+        set(keep): false
+    ]
+    if(_): keep [
+        btput(_): pool key conn
+    ]
+    else(_): [
+        _rzh_close(_): conn
+    ]
+    btget(code): r "status"
+    str_from_int(cs): code
+    btget(reason): r "reason"
+    concat(m): "HTTP " cs " " reason
+    _ryazan_say(_): m
+]
+
+_rzh_send_chunks(r): conn chunks body_file [
+    set(r): 0
+    typeof(ct): chunks
+    if(_): {ct = "vector"} [
+        len(n): chunks
+        set(i): 0
+        while(_): {r = 0 && i < n} [
+            at(piece): chunks i
+            len(pl): piece
+            if(_): {pl > 0} [
+                str_from_int_base(hs): pl 16
+                concat(frame): hs "\r\n" piece "\r\n"
+                _rzh_send(r): conn frame
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        open_file(h): body_file "rb"
+        if(_): {h < 0} [
+            set(r): {0 - 1}
+            return(r): r
+        ]
+        set(go): true
+        while(_): {go && r = 0} [
+            read_file(piece): h 16384
+            typeof(pt): piece
+            set(pl): 0
+            if(_): {pt = "string"} [
+                len(pl): piece
+            ]
+            if(_): {pl = 0} [
+                set(go): false
+            ]
+            else(_): [
+                str_from_int_base(hs): pl 16
+                concat(frame): hs "\r\n" piece "\r\n"
+                _rzh_send(r): conn frame
+            ]
+        ]
+        close_file(_): h
+    ]
+    if(_): {r = 0} [
+        _rzh_send(r): conn "0\r\n\r\n"
+    ]
+]
+
+ryazan_fetch(r): method url headers body opts [
+    global(_): _rzh_error
+    set(_rzh_error): ""
+    _rzo(max_redirects): opts "max_redirects" 5
+    _rzo(retries): opts "retries" 0
+    _rzo(backoff): opts "backoff" 1
+    _rzo(timeout): opts "timeout" 0
+    _rzo(jar): opts "cookies" null
+    _rzh_header_lines(lines): headers
+    set(deadline): 0
+    if(_): {timeout > 0} [
+        time(now):
+        set(deadline): {now + timeout}
+    ]
+    set(cur): url
+    set(redirects): 0
+    set(attempts): 0
+    set(r): null
+    set(go): true
+    while(_): go [
+        ryazan_url_parse(u): cur
+        typeof(ut): u
+        if(_): {ut != "btree"} [
+            concat(m): "bad URL: " cur
+            _rzh_fail(r): m
+            return(r): r
+        ]
+        btget(scheme): u "scheme"
+        btget(host): u "host"
+        if(_): {scheme = "http"} [
+            ryazan_hsts_has(strict): host
+            if(_): strict [
+                btput(_): u "scheme" "https"
+                btget(p): u "port"
+                if(_): {p = 80} [
+                    btput(_): u "port" 443
+                ]
+                set(scheme): "https"
+                str_replace_n(cur): cur "http://" "https://" 1
+            ]
+        ]
+        if(_): {scheme != "http" && scheme != "https"} [
+            concat(m): "unsupported scheme: " scheme
+            _rzh_fail(r): m
+            return(r): r
+        ]
+        set(send): lines
+        typeof(jt): jar
+        if(_): {jt = "btree"} [
+            ryazan_cookies_header(ck): jar cur
+            if(_): {ck != ""} [
+                _rzh_drop_header(send): send "cookie"
+                concat(cl): "Cookie: " ck
+                push(_): send cl
+            ]
+        ]
+        set(attempts): {attempts + 1}
+        _rzh_once(r): method u send body opts deadline
+        typeof(rt): r
+        set(retry): false
+        if(_): {rt != "btree"} [
+            set(retry): {attempts <= retries}
+        ]
+        else(_): [
+            btget(code): r "status"
+            set(retry): {(code = 429 || code = 503) && attempts <= retries}
+        ]
+        if(_): retry [
+            set(wait): {backoff * (1 << (attempts - 1))}
+            if(_): {rt = "btree"} [
+                ryazan_resp_header(ra): r "retry-after"
+                str_to_int(ras): ra 10
+                typeof(rat): ras
+                if(_): {rat = "integer"} [
+                    set(wait): ras
+                ]
+            ]
+            set(ok_to_wait): true
+            if(_): {deadline > 0} [
+                time(now):
+                set(ok_to_wait): {now + wait < deadline}
+            ]
+            if(_): ok_to_wait [
+                str_from_int(ws): wait
+                concat(m): "retrying in " ws " s"
+                _ryazan_say(_): m
+                sleep(_): {wait * 1000}
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        elif(_): {rt != "btree"} [
+            set(go): false
+        ]
+        else(_): [
+            # remember cookies and HSTS
+            if(_): {jt = "btree"} [
+                ryazan_resp_headers(sets): r "set-cookie"
+                len(ns): sets
+                set(k): 0
+                while(_): {k < ns} [
+                    at(sc): sets k
+                    ryazan_cookies_store(_): jar cur sc
+                    set(k): {k + 1}
+                ]
+            ]
+            if(_): {scheme = "https"} [
+                ryazan_resp_header(sts): r "strict-transport-security"
+                re_find(ma): "max-age=([0-9]+)" sts "i"
+                typeof(mat): ma
+                if(_): {mat = "vector"} [
+                    at(mas): ma 1
+                    str_to_int(secs): mas 10
+                    ryazan_hsts_add(_): host secs
+                ]
+            ]
+            btget(code): r "status"
+            ryazan_resp_header(loc): r "location"
+            set(is_redirect): {(code = 301 || code = 302 || code = 303 || code = 307 || code = 308) && loc != ""}
+            if(_): {is_redirect && redirects < max_redirects} [
+                ryazan_url_resolve(next): cur loc
+                ryazan_url_parse(nu): next
+                _rzh_origin(o1): u
+                set(o2): ""
+                typeof(nut): nu
+                if(_): {nut = "btree"} [
+                    _rzh_origin(o2): nu
+                ]
+                if(_): {o1 != o2} [
+                    _rzh_drop_header(lines): lines "authorization"
+                    _rzh_drop_header(lines): lines "cookie"
+                ]
+                if(_): {code = 303 || ((code = 301 || code = 302) && method = "POST")} [
+                    set(method): "GET"
+                    set(body): ""
+                    _rzh_drop_header(lines): lines "content-type"
+                    _rzh_drop_header(lines): lines "content-length"
+                ]
+                concat(m): "redirect to " next
+                _ryazan_say(_): m
+                set(cur): next
+                set(redirects): {redirects + 1}
+                set(attempts): 0
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+    ]
+    typeof(rt): r
+    if(_): {rt = "btree"} [
+        btput(_): r "url" cur
+        btput(_): r "redirects" redirects
+        btput(_): r "attempts" attempts
+    ]
+]
+
+ryazan_form(r): pairs [
+    form_encode(r): pairs
+]
+
+ryazan_multipart(r): parts [
+    random64(x):
+    set(x): {x & 0xFFFFFFFFFFFF}
+    str_from_int_base(tag): x 16
+    concat(boundary): "----ussr-ryazan-" tag
+    set(body): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        len(pl): p
+        at(name): p 0
+        concat(body): body "--" boundary "\r\n"
+        if(_): {pl >= 4} [
+            at(fname): p 1
+            at(ctype): p 2
+            at(data): p 3
+            concat(body): body "Content-Disposition: form-data; name=\"" name "\"; filename=\"" fname "\"\r\nContent-Type: " ctype "\r\n\r\n" data "\r\n"
+        ]
+        else(_): [
+            at(value): p 1
+            concat(body): body "Content-Disposition: form-data; name=\"" name "\"\r\n\r\n" value "\r\n"
+        ]
+        set(i): {i + 1}
+    ]
+    concat(body): body "--" boundary "--\r\n"
+    concat(ctype): "multipart/form-data; boundary=" boundary
+    vec(r): ""
+    push(_): r ctype
+    push(_): r body
+]
+
+ryazan_get_json(r): url opts [
+    ryazan_fetch(resp): "GET" url "Accept: application/json" "" opts
+    set(r): null
+    typeof(t): resp
+    if(_): {t = "btree"} [
+        btget(code): resp "status"
+        btget(body): resp "body"
+        if(_): {code >= 200 && code < 300} [
+            json_parse(r): body
+        ]
+    ]
+]
+
+ryazan_post_json(r): url value opts [
+    json_stringify(text): value
+    ryazan_fetch(resp): "POST" url "Content-Type: application/json\nAccept: application/json" text opts
+    set(r): null
+    typeof(t): resp
+    if(_): {t = "btree"} [
+        btget(code): resp "status"
+        btget(body): resp "body"
+        if(_): {code >= 200 && code < 300} [
+            json_parse(r): body
+        ]
+    ]
+]
+
+# --- cookies ---------------------------------------------------------------
+# A jar maps "domain|path|name" to [name, value, domain, path, secure,
+# host_only].
+
+ryazan_cookies_new(r): [
+    btree(r):
+]
+
+ryazan_cookies_store(r): jar url text [
+    ryazan_url_parse(u): url
+    set(r): 0
+    typeof(ut): u
+    if(_): {ut != "btree"} [
+        return(r): r
+    ]
+    btget(host): u "host"
+    str_lower(host): host
+    btget(path): u "path"
+    str_split(parts): text ";"
+    at(first): parts 0
+    str_find(eq): first "=" 0
+    if(_): {eq <= 0} [
+        return(r): r
+    ]
+    slice(name): first 0 eq
+    str_trim(name): name
+    len(fl): first
+    slice(value): first {eq + 1} {fl - eq - 1}
+    str_trim(value): value
+    set(domain): host
+    set(host_only): true
+    str_rfind(slash): path "/"
+    set(cpath): "/"
+    if(_): {slash > 0} [
+        slice(cpath): path 0 slash
+    ]
+    set(secure): false
+    set(remove): false
+    len(np): parts
+    set(i): 1
+    while(_): {i < np} [
+        at(attr): parts i
+        str_trim(attr): attr
+        str_find(aeq): attr "=" 0
+        set(an): attr
+        set(av): ""
+        if(_): {aeq > 0} [
+            slice(an): attr 0 aeq
+            len(al): attr
+            slice(av): attr {aeq + 1} {al - aeq - 1}
+        ]
+        str_lower(an): an
+        if(_): {an = "domain" && av != ""} [
+            str_lower(d): av
+            str_starts(dot): d "."
+            if(_): dot [
+                len(dl): d
+                slice(d): d 1 {dl - 1}
+            ]
+            # only the host itself or a parent domain of it
+            concat(suffix): "." d
+            str_ends(under): host suffix
+            if(_): {d = host || under} [
+                set(domain): d
+                set(host_only): false
+            ]
+            else(_): [
+                return(r): r
+            ]
+        ]
+        elif(_): {an = "path" && av != ""} [
+            set(cpath): av
+        ]
+        elif(_): {an = "secure"} [
+            set(secure): true
+        ]
+        elif(_): {an = "max-age"} [
+            str_to_int(age): av 10
+            typeof(agt): age
+            if(_): {agt = "integer" && age <= 0} [
+                set(remove): true
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    concat(key): domain "|" cpath "|" name
+    if(_): remove [
+        btdel(_): jar key
+    ]
+    else(_): [
+        vec(c): ""
+        push(_): c name
+        push(_): c value
+        push(_): c domain
+        push(_): c cpath
+        push(_): c secure
+        push(_): c host_only
+        btput(_): jar key c
+    ]
+    set(r): 1
+]
+
+ryazan_cookies_header(r): jar url [
+    ryazan_url_parse(u): url
+    set(r): ""
+    typeof(ut): u
+    if(_): {ut != "btree"} [
+        return(r): r
+    ]
+    btget(host): u "host"
+    str_lower(host): host
+    btget(path): u "path"
+    btget(scheme): u "scheme"
+    btkeys(keys): jar
+    len(n): keys
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        btget(c): jar k
+        at(name): c 0
+        at(value): c 1
+        at(domain): c 2
+        at(cpath): c 3
+        at(secure): c 4
+        at(host_only): c 5
+        set(dom_ok): {host = domain}
+        if(_): {host_only = false} [
+            concat(suffix): "." domain
+            str_ends(under): host suffix
+            set(dom_ok): {dom_ok || under}
+        ]
+        str_starts(path_ok): path cpath
+        set(sec_ok): {secure = false || scheme = "https"}
+        if(_): {dom_ok && path_ok && sec_ok} [
+            if(_): {r != ""} [
+                concat(r): r "; "
+            ]
+            concat(r): r name "=" value
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- HSTS ------------------------------------------------------------------
+
+_rzh_hsts(r): [
+    global(_): _rzh_hsts_tree
+    typeof(t): _rzh_hsts_tree
+    if(_): {t != "btree"} [
+        btree(_rzh_hsts_tree):
+    ]
+    set(r): _rzh_hsts_tree
+]
+
+ryazan_hsts_add(r): host seconds [
+    _rzh_hsts(t):
+    str_lower(h): host
+    if(_): {seconds <= 0} [
+        btdel(_): t h
+    ]
+    else(_): [
+        time(now):
+        btput(_): t h {now + seconds}
+    ]
+    set(r): 0
+]
+
+ryazan_hsts_has(r): host [
+    _rzh_hsts(t):
+    str_lower(h): host
+    btget(until): t h 0
+    time(now):
+    set(r): {until > now}
+]
+
+# --- downloads and checks ---------------------------------------------------
+
+ryazan_download(r): url path opts [
+    btree(o):
+    typeof(ot): opts
+    if(_): {ot = "btree"} [
+        btkeys(keys): opts
+        len(n): keys
+        set(i): 0
+        while(_): {i < n} [
+            at(k): keys i
+            btget(v): opts k
+            btput(_): o k v
+            set(i): {i + 1}
+        ]
+    ]
+    btput(_): o "binary" true
+    _rzo(want): o "sha256" ""
+    _rzo(progress): o "progress" false
+    set(r): {0 - 1}
+    ryazan_fetch(resp): "GET" url "" "" o
+    typeof(t): resp
+    if(_): {t != "btree"} [
+        return(r): r
+    ]
+    btget(code): resp "status"
+    btget(complete): resp "complete"
+    if(_): {code < 200 || code >= 300 || complete = false} [
+        str_from_int(cs): code
+        concat(m): "download failed: HTTP " cs
+        _rzh_fail(_): m
+        return(r): r
+    ]
+    btget(data): resp "bytes" null
+    typeof(dt): data
+    if(_): {dt != "vector"} [
+        btget(text): resp "body"
+        text_bytes(data): text
+    ]
+    if(_): {want != ""} [
+        sha256(d): data
+        hex_encode(got): d
+        str_lower(want): want
+        if(_): {got != want} [
+            _rzh_fail(_): "download failed: SHA-256 mismatch"
+            return(r): r
+        ]
+    ]
+    write_bytes(n): path data
+    len(total): data
+    if(_): progress [
+        str_from_int(ts): total
+        concat(m): ts " bytes saved to " path "\n"
+        write_stderr(_): m
+    ]
+    if(_): {n = total} [
+        set(r): 0
+    ]
+]
+
+ryazan_check(r): url [
+    ryazan_url_parse(u): url
+    tls_backend(b):
+    concat(r): "backend: " b "\n"
+    typeof(ut): u
+    if(_): {ut != "btree"} [
+        concat(r): r "error: bad URL\n"
+        return(r): r
+    ]
+    btget(host): u "host"
+    btget(port): u "port"
+    btget(scheme): u "scheme"
+    if(_): {scheme = "https"} [
+        ryazan_connect_timeout(s): host port 10000
+        if(_): {s > 0} [
+            tls_info(info): s
+            concat(r): r "tls: " info "\n"
+            ryazan_close(_): s
+        ]
+        else(_): [
+            tls_error(why):
+            ryazan_explain(hint): why
+            concat(r): r "tls: failed: " why "\nhint: " hint "\n"
+            return(r): r
+        ]
+    ]
+    btree(o):
+    btput(_): o "max_redirects" 0
+    btput(_): o "timeout" 20
+    ryazan_fetch(resp): "HEAD" url "" "" o
+    typeof(t): resp
+    if(_): {t = "btree"} [
+        btget(code): resp "status"
+        str_from_int(cs): code
+        ryazan_resp_header(sts): resp "strict-transport-security"
+        ryazan_resp_header(server): resp "server"
+        concat(r): r "status: " cs "\n"
+        if(_): {sts != ""} [
+            concat(r): r "hsts: " sts "\n"
+        ]
+        else(_): [
+            concat(r): r "hsts: none\n"
+        ]
+        if(_): {server != ""} [
+            concat(r): r "server: " server "\n"
+        ]
+    ]
+    else(_): [
+        ryazan_fetch_error(e):
+        concat(r): r "http: failed: " e "\n"
+    ]
+]

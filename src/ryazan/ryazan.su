@@ -227,3 +227,210 @@ ryazan_post(r): url content_type data [
     tls_request(_rzp_resp): "POST" url _rzp_headers data
     _ryazan_ok_body(r): _rzp_resp
 ]
+
+# --- Refine pass 1 ----------------------------------------------------------
+#   ryazan_starttls(r): socket host      -> upgrades a connected plain socket
+#                                           to a TLS client session (SMTP
+#                                           STARTTLS, PostgreSQL SSLRequest):
+#                                           0 or -1
+#   ryazan_connect_ca(s): host port ca   -> ryazan_connect trusting only the
+#                                           PEM file ca for this one call
+#                                           ("" keeps the current trust)
+#   ryazan_connect_timeout(s): host port ms
+#                                        -> ryazan_connect with a TCP connect
+#                                           timeout in milliseconds
+#   ryazan_error_kind(k): msg            -> "expired", "wrong-host",
+#                                           "untrusted", "protocol",
+#                                           "refused", "dns", "timeout",
+#                                           "closed" or "other"
+#   ryazan_explain(t): msg               -> a one-line hint for that kind
+#   tls_features(v):                     -> btree of what the backend offers:
+#                                           tls12, tls13, server, pem_server,
+#                                           pkcs12_server, ca_file, alpn,
+#                                           mtls, resumption (true/false)
+#   ryazan_verbose(_): on                -> when true, connects print their
+#                                           steps and the negotiated suite to
+#                                           stderr (also RYAZAN_VERBOSE=1)
+#   ryazan_info(t): socket               -> tls_info, or "plain" for a socket
+#                                           without a session
+
+_ryazan_say(r): text [
+    global(_): _ryazan_verbose_on
+    getenv(env): "RYAZAN_VERBOSE"
+    set(on): false
+    typeof(t): _ryazan_verbose_on
+    if(_): {t = "boolean"} [
+        set(on): _ryazan_verbose_on
+    ]
+    if(_): {env = "1"} [
+        set(on): true
+    ]
+    set(r): 0
+    if(_): on [
+        concat(line): "ryazan: " text "\n"
+        write_stderr(_): line
+        set(r): 1
+    ]
+]
+
+ryazan_verbose(r): on [
+    global(_): _ryazan_verbose_on
+    set(_ryazan_verbose_on): {on = true}
+    set(r): 0
+]
+
+ryazan_starttls(r): socket host [
+    set(r): {0 - 1}
+    concat(m): "starting TLS with " host
+    _ryazan_say(_): m
+    tls_client(started): socket host
+    if(_): {started = 0} [
+        ryazan_handshake(r): socket
+    ]
+    if(_): {r = 0} [
+        tls_info(info): socket
+        concat(m): "handshake done: " info
+        _ryazan_say(_): m
+    ]
+    else(_): [
+        tls_error(why):
+        concat(m): "handshake failed: " why
+        _ryazan_say(_): m
+    ]
+]
+
+ryazan_connect_timeout(r): host port ms [
+    set(r): {0 - 1}
+    str_from_int(ps): port
+    concat(m): "connecting to " host ":" ps
+    _ryazan_say(_): m
+    socket_tcp(sock):
+    if(_): {sock < 1} [
+        return(r): r
+    ]
+    socket_connect(connected): sock host port ms
+    if(_): {connected = 0} [
+        ryazan_starttls(shaken): sock host
+        if(_): {shaken = 0} [
+            set(r): sock
+            return(r): r
+        ]
+    ]
+    else(_): [
+        _ryazan_say(_): "TCP connect failed"
+    ]
+    socket_close(_): sock
+]
+
+ryazan_connect_ca(r): host port ca [
+    if(_): {ca = ""} [
+        ryazan_connect_timeout(r): host port 30000
+        return(r): r
+    ]
+    getenv(saved): "RYAZAN_CA_FILE"
+    setenv(_): "RYAZAN_CA_FILE" ca
+    ryazan_connect_timeout(r): host port 30000
+    typeof(t): saved
+    if(_): {t = "null"} [
+        unsetenv(_): "RYAZAN_CA_FILE"
+    ]
+    else(_): [
+        setenv(_): "RYAZAN_CA_FILE" saved
+    ]
+]
+
+ryazan_info(r): socket [
+    tls_info(r): socket
+    if(_): {r = ""} [
+        set(r): "plain"
+    ]
+]
+
+ryazan_error_kind(r): msg [
+    str_lower(m): msg
+    set(r): "other"
+    if(_): {m = ""} [
+        set(r): "other"
+    ]
+    elif(_): {m != ""} [
+        re_test(expired): "expired|not yet valid|validity" m
+        re_test(host): "name|mismatch|host ?name|cn_invalid|does not match" m
+        re_test(untrusted): "untrusted|unknown ca|self.signed|unable to get local issuer|issuer|root|chain|trust" m
+        re_test(proto): "protocol|version|handshake failure|alert|wrong version|no shared cipher" m
+        re_test(refused): "refused|reset|unreachable" m
+        re_test(dns): "resolve|dns|no such host|getaddrinfo|name or service" m
+        re_test(timeout): "time.?out|timed out" m
+        re_test(closed): "closed|eof|end of file" m
+        if(_): expired [
+            set(r): "expired"
+        ]
+        elif(_): untrusted [
+            set(r): "untrusted"
+        ]
+        elif(_): dns [
+            set(r): "dns"
+        ]
+        elif(_): host [
+            set(r): "wrong-host"
+        ]
+        elif(_): timeout [
+            set(r): "timeout"
+        ]
+        elif(_): refused [
+            set(r): "refused"
+        ]
+        elif(_): proto [
+            set(r): "protocol"
+        ]
+        elif(_): closed [
+            set(r): "closed"
+        ]
+    ]
+]
+
+ryazan_explain(r): msg [
+    ryazan_error_kind(k): msg
+    set(r): "unclassified error; run with RYAZAN_VERBOSE=1 for the steps"
+    if(_): {k = "expired"} [
+        set(r): "the server's certificate has expired or is not valid yet (check the clock too)"
+    ]
+    elif(_): {k = "wrong-host"} [
+        set(r): "the certificate is for another host name than the one connected to"
+    ]
+    elif(_): {k = "untrusted"} [
+        set(r): "the certificate chain does not lead to a trusted root; set RYAZAN_CA_FILE for private CAs"
+    ]
+    elif(_): {k = "protocol"} [
+        set(r): "the peers share no TLS version or cipher, or one side is not speaking TLS"
+    ]
+    elif(_): {k = "refused"} [
+        set(r): "nothing accepted the connection at that address and port"
+    ]
+    elif(_): {k = "dns"} [
+        set(r): "the host name did not resolve"
+    ]
+    elif(_): {k = "timeout"} [
+        set(r): "the peer did not answer in time"
+    ]
+    elif(_): {k = "closed"} [
+        set(r): "the peer closed the connection early"
+    ]
+]
+
+tls_features(r): [
+    tls_backend(b):
+    btree(r):
+    set(any): {b != "none"}
+    btput(_): r "backend" b
+    btput(_): r "tls12" any
+    btput(_): r "tls13" any
+    btput(_): r "server" any
+    btput(_): r "pkcs12_server" any
+    btput(_): r "pem_server" {b = "openssl"}
+    btput(_): r "ca_file" any
+    btput(_): r "sni_client" any
+    btput(_): r "alpn" false
+    btput(_): r "mtls" false
+    btput(_): r "resumption" false
+    btput(_): r "starttls" any
+]

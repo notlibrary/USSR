@@ -35,6 +35,37 @@ ryazan_status(code): resp
 ryazan_header(type): resp "content-type"
 ```
 
+## Script layers (refine pass 1)
+
+Each file includes what it needs; all run in a scheduler process.
+
+| File | Calls |
+|------|-------|
+| `ryazan.su` | `ryazan_starttls(r): socket host`, `ryazan_connect_timeout(s): host port ms`, `ryazan_connect_ca(s): host port ca`, `ryazan_error_kind(k): msg`, `ryazan_explain(t): msg`, `tls_features(v):`, `ryazan_verbose(_): on`, `ryazan_info(t): socket` |
+| `http.su` | `ryazan_fetch(resp): method url headers body opts`, `ryazan_fetch_error(e):`, `ryazan_resp_header(v): resp name`, `ryazan_resp_headers(v): resp name`, `ryazan_url_parse(v): url`, `ryazan_url_resolve(r): base ref`, `ryazan_form(r): pairs`, `ryazan_multipart(v): parts`, `ryazan_get_json(v): url opts`, `ryazan_post_json(v): url value opts`, `ryazan_cookies_new(j):`, `ryazan_cookies_store(_): jar url set_cookie`, `ryazan_cookies_header(r): jar url`, `ryazan_hsts_add(_): host seconds`, `ryazan_hsts_has(b): host`, `ryazan_download(r): url path opts`, `ryazan_pool_close(_):`, `ryazan_check(r): url` |
+| `ws.su` | `ryazan_ws_connect(c): url headers opts`, `ryazan_ws_accept(c): socket tls`, `ryazan_ws_send(r): c text`, `ryazan_ws_recv(m): c`, `ryazan_ws_ping(r): c data`, `ryazan_ws_close(r): c code reason`, `ryazan_ws_path(p): c`, `ryazan_sha1(v): data`, `ryazan_ws_accept_key(r): key`, `ryazan_ws_frame(v): opcode data mask` |
+| `smtp.su` | `ryazan_smtp_send(r): opts from to subject body`, `ryazan_smtp_error(e):`, `ryazan_smtp_message(t): from to subject body` |
+| `server.su` | `ryazan_listen(s): ip port backlog`, `ryazan_serve(r): listener cert secret handler opts`, `ryazan_handshake_timed(r): socket seconds`, `ryazan_redirect_server(r): listener https_port count`, `ryazan_reload(_): cert secret` |
+
+`ryazan_fetch` options (a btree, or `null` for the defaults): `timeout`
+(seconds, whole exchange), `connect_timeout` (ms, 30000), `max_redirects`
+(5), `retries` (0), `backoff` (1 s, doubling), `keepalive` (false),
+`ca_file`, `proxy` (default from `HTTPS_PROXY`/`HTTP_PROXY`; `"none"`
+turns it off), `cookies` (a jar), `binary`, `body_file`, `user_agent`.
+The header comment of each file documents the details.
+
+```USSR
+$include "src/ryazan/http.su"
+init(r): argc argv [
+    btree(o):
+    btput(_): o "timeout" 20
+    btput(_): o "retries" 2
+    ryazan_fetch(resp): "GET" "https://example.org/" "" "" o
+    btget(code): resp "status"
+    ryazan_resp_header(type): resp "content-type"
+]
+```
+
 ## Builtins
 
 Sessions are named by their socket handle.

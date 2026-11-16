@@ -1,0 +1,137 @@
+# Offline unit checks for Ryazan's script layers (src/ryazan/http.su and
+# ws.su): no sockets, so run_all.sh runs it under ussr and russia.su.
+$include "../src/libs/testing.su"
+$include "../src/ryazan/ws.su"
+$include "../src/ryazan/smtp.su"
+
+ryazan_url_parse(u): "https://user@Example.org:8443/a/b?x=1#frag"
+btget(s): u "scheme"
+btget(h): u "host"
+btget(p): u "port"
+btget(path): u "path"
+assert_eq(_): "url scheme" s "https"
+assert_eq(_): "url host" h "Example.org"
+assert_eq(_): "url port" p 8443
+assert_eq(_): "url path" path "/a/b?x=1"
+ryazan_url_parse(u): "http://[::1]/"
+btget(h): u "host"
+btget(p): u "port"
+assert_eq(_): "url ipv6" h "::1"
+assert_eq(_): "url default port" p 80
+ryazan_url_parse(u): "http://h?q"
+btget(path): u "path"
+assert_eq(_): "url query only" path "/?q"
+ryazan_url_parse(u): "not a url"
+assert_null(_): "url bad" u
+
+ryazan_url_resolve(r): "https://a.org/x/y?z" "/root"
+assert_eq(_): "resolve root" r "https://a.org/root"
+ryazan_url_resolve(r): "https://a.org/x/y?z" "w"
+assert_eq(_): "resolve relative" r "https://a.org/x/w"
+ryazan_url_resolve(r): "http://a.org:81/x" "//b.org/q"
+assert_eq(_): "resolve network path" r "http://b.org/q"
+ryazan_url_resolve(r): "http://a.org:81/x" "?k=1"
+assert_eq(_): "resolve query" r "http://a.org:81/x?k=1"
+ryazan_url_resolve(r): "http://a.org/" "https://c.org/"
+assert_eq(_): "resolve absolute" r "https://c.org/"
+
+ryazan_cookies_new(jar):
+ryazan_cookies_store(_): jar "https://www.ussr.org/app/login" "sid=1; Path=/; Secure"
+ryazan_cookies_store(_): jar "https://www.ussr.org/app/login" "pref=ru; Domain=ussr.org; Path=/"
+ryazan_cookies_store(_): jar "https://www.ussr.org/app/login" "local=1"
+ryazan_cookies_store(_): jar "https://www.ussr.org/" "evil=1; Domain=other.org"
+ryazan_cookies_header(c): jar "https://www.ussr.org/app/page"
+assert_eq(_): "cookies all" c "pref=ru; local=1; sid=1"
+ryazan_cookies_header(c): jar "http://api.ussr.org/"
+assert_eq(_): "cookies domain and secure" c "pref=ru"
+ryazan_cookies_header(c): jar "https://www.ussr.org/other"
+assert_eq(_): "cookies path" c "pref=ru; sid=1"
+ryazan_cookies_store(_): jar "https://www.ussr.org/" "sid=gone; Path=/; Max-Age=0"
+ryazan_cookies_header(c): jar "https://www.ussr.org/other"
+assert_eq(_): "cookies max-age 0 deletes" c "pref=ru"
+
+ryazan_hsts_has(b): "strict.example"
+assert_eq(_): "hsts unknown" b false
+ryazan_hsts_add(_): "Strict.Example" 100
+ryazan_hsts_has(b): "strict.example"
+assert_true(_): "hsts added" b
+ryazan_hsts_add(_): "strict.example" 0
+ryazan_hsts_has(b): "strict.example"
+assert_eq(_): "hsts cleared" b false
+
+vec(parts): ""
+vec(p1): ""
+push(_): p1 "title"
+push(_): p1 "Red"
+push(_): parts p1
+vec(p2): ""
+push(_): p2 "file"
+push(_): p2 "a.txt"
+push(_): p2 "text/plain"
+push(_): p2 "body"
+push(_): parts p2
+ryazan_multipart(mp): parts
+at(ctype): mp 0
+at(body): mp 1
+str_starts(b): ctype "multipart/form-data; boundary=----ussr-ryazan-"
+assert_true(_): "multipart type" b
+len(cl): ctype
+slice(boundary): ctype 30 {cl - 30}
+concat(want): "--" boundary "\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nRed\r\n--" boundary "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nbody\r\n--" boundary "--\r\n"
+assert_eq(_): "multipart body" body want
+
+vec(pairs): ""
+push(_): pairs p1
+ryazan_form(f): pairs
+assert_eq(_): "form" f "title=Red"
+
+ryazan_error_kind(k): "certificate has expired"
+assert_eq(_): "kind expired" k "expired"
+ryazan_error_kind(k): "SEC_E_UNTRUSTED_ROOT: the certificate chain was issued by an authority that is not trusted"
+assert_eq(_): "kind untrusted" k "untrusted"
+ryazan_error_kind(k): "certificate name mismatch"
+assert_eq(_): "kind wrong host" k "wrong-host"
+ryazan_error_kind(k): "connect to 127.0.0.1:1 failed (refused or unreachable)"
+assert_eq(_): "kind refused" k "refused"
+ryazan_error_kind(k): "timed out waiting for the response"
+assert_eq(_): "kind timeout" k "timeout"
+ryazan_error_kind(k): "wrong version number"
+assert_eq(_): "kind protocol" k "protocol"
+ryazan_explain(t): "certificate has expired"
+str_contains(b): t "expired"
+assert_true(_): "explain" b
+
+tls_features(ft):
+btget(b): ft "alpn"
+assert_eq(_): "features alpn" b false
+btget(bk): ft "backend"
+tls_backend(want):
+assert_eq(_): "features backend" bk want
+
+ryazan_ws_frame(f): 1 "Hi" false
+encode(e): f
+assert_eq(_): "ws frame" e "[129,2,72,105]"
+str_repeat(t): "a" 200
+ryazan_ws_frame(f): 2 t false
+at(b1): f 1
+at(b2): f 2
+at(b3): f 3
+assert_eq(_): "ws frame 16-bit" {b1 * 65536 + b2 * 256 + b3} {126 * 65536 + 200}
+ryazan_ws_frame(f): 1 "Hey" true
+len(n): f
+at(m): f 1
+assert_eq(_): "ws masked frame" {n * 1000 + m} 9131
+ryazan_sha1(d): ""
+hex_encode(h): d
+assert_eq(_): "sha1 empty" h "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+
+vec(to): ""
+push(_): to "a@x"
+push(_): to "b@x"
+ryazan_smtp_message(msg): "me@x" to "Subj" "hi\n.\nend"
+str_contains(b): msg "To: a@x, b@x\r\n"
+assert_true(_): "smtp to header" b
+str_ends(b): msg "\r\n\r\nhi\r\n..\r\nend\r\n"
+assert_true(_): "smtp body" b
+
+test_summary(n):
