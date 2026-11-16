@@ -27,3 +27,15 @@ Ctrl-D).
 
 On Windows and Linux Mbltishi says so and leaves the terminal to the
 system's own.
+
+## Headless and the emulator model
+
+`vt.su` is a VT100/xterm emulator in USSR (grid, colours, scroll
+regions, alternate screen, modes, OSC titles, links, clipboard and
+prompt marks, scrollback, recording). It runs on any system:
+
+    ussr src/Mbltishi/Mbltishi.su --headless script.txt 24 80
+
+prints the screen that script.txt draws. Other options: `--cwd DIR`,
+`--env NAME=VALUE`, `--hold`, `--scheme NAME`; `~/.mbltishi` holds
+`scheme`, `size`, `font`, `scrollback`, `bell` and `cursor`.
