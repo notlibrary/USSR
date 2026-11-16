@@ -1,0 +1,274 @@
+# Ryazan's WebSocket, SMTP and server helpers over loopback, on ports
+# 18999 and 18994, with the test certificate in tests/ryazan/. Prints
+# PASS/FAIL lines; the exit status is the number of failures. Needs free
+# ports, so run_all.sh leaves it out. From the repository root:
+#     ussr tests/ryazan_services.su
+$include "../src/ryazan/ws.su"
+$include "../src/ryazan/smtp.su"
+$include "../src/ryazan/server.su"
+
+global(_): fails
+
+check(r): label good [
+    if(_): good [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        set(fails): {fails + 1}
+    ]
+    print(_): line
+    set(r): 0
+]
+
+ws_echo(r): sock [
+    ryazan_ws_accept(c): sock false
+    _ws_loop(r): c
+]
+
+wss_echo(r): sock [
+    ryazan_ws_accept(c): sock true
+    _ws_loop(r): c
+]
+
+_ws_loop(r): c [
+    set(r): 0
+    typeof(t): c
+    if(_): {t = "btree"} [
+        ryazan_ws_path(path): c
+        set(go): true
+        while(_): go [
+            ryazan_ws_recv(m): c
+            typeof(mt): m
+            if(_): {mt = "null"} [
+                set(go): false
+            ]
+            else(_): [
+                concat(answer): "echo " path ": " m
+                ryazan_ws_send(_): c answer
+                set(r): {r + 1}
+            ]
+        ]
+    ]
+]
+
+# a fake SMTP server: optional STARTTLS; returns the DATA it got
+smtp_fake(r): listener offer_tls [
+    wait_readable(_): listener
+    socket_accept(s): listener
+    btree(c):
+    btput(_): c "sock" s
+    btput(_): c "tls" false
+    btput(_): c "binary" false
+    btput(_): c "buf" ""
+    _rzh_send(_): c "220 fake ESMTP\r\n"
+    set(r): ""
+    set(in_data): false
+    set(go): true
+    while(_): go [
+        btget(buf): c "buf"
+        str_find(eol): buf "\r\n" 0
+        while(_): {eol < 0 && go} [
+            _rzh_recv(more): c 4096 0
+            typeof(mt): more
+            if(_): {mt = "null" || more = ""} [
+                set(go): false
+            ]
+            else(_): [
+                concat(buf): buf more
+                str_find(eol): buf "\r\n" 0
+            ]
+        ]
+        if(_): go [
+            slice(line): buf 0 eol
+            len(bl): buf
+            slice(rest): buf {eol + 2} {bl - eol - 2}
+            btput(_): c "buf" rest
+            if(_): in_data [
+                if(_): {line = "."} [
+                    set(in_data): false
+                    _rzh_send(_): c "250 queued\r\n"
+                ]
+                else(_): [
+                    concat(r): r line "\n"
+                ]
+            ]
+            else(_): [
+                str_starts(ehlo): line "EHLO"
+                str_starts(auth): line "AUTH PLAIN "
+                if(_): ehlo [
+                    btget(secure): c "tls"
+                    if(_): {offer_tls && secure = false} [
+                        _rzh_send(_): c "250-fake\r\n250-STARTTLS\r\n250 8BITMIME\r\n"
+                    ]
+                    else(_): [
+                        _rzh_send(_): c "250-fake\r\n250 AUTH PLAIN\r\n"
+                    ]
+                ]
+                elif(_): {line = "STARTTLS"} [
+                    _rzh_send(_): c "220 go ahead\r\n"
+                    tls_server(_): s "tests/ryazan/localhost.p12" "ryazan-test"
+                    ryazan_handshake(_): s
+                    btput(_): c "tls" true
+                    btput(_): c "buf" ""
+                ]
+                elif(_): auth [
+                    len(ll): line
+                    slice(tok): line 11 {ll - 11}
+                    concat(r): r "AUTH " tok "\n"
+                    _rzh_send(_): c "235 ok\r\n"
+                ]
+                elif(_): {line = "DATA"} [
+                    set(in_data): true
+                    _rzh_send(_): c "354 go\r\n"
+                ]
+                elif(_): {line = "QUIT"} [
+                    _rzh_send(_): c "221 bye\r\n"
+                    set(go): false
+                ]
+                else(_): [
+                    str_starts(bad): line "RCPT TO:<nobody@"
+                    if(_): bad [
+                        _rzh_send(_): c "550 no such user\r\n"
+                    ]
+                    else(_): [
+                        _rzh_send(_): c "250 ok\r\n"
+                    ]
+                ]
+            ]
+        ]
+    ]
+    _rzh_close(_): c
+]
+
+init(result): arg_cnt arg_vec [
+    set(fails): 0
+
+    ryazan_sha1(d): "abc"
+    hex_encode(h): d
+    check(_): "sha1 abc" {h = "a9993e364706816aba3e25717850c26c9cd0d89d"}
+    str_repeat(long): "a" 1000
+    ryazan_sha1(d): long
+    hex_encode(h): d
+    check(_): "sha1 multi-block" {h = "291e9a6c66994949b57ba5e650361e98fc36b1ba"}
+    ryazan_ws_accept_key(k): "dGhlIHNhbXBsZSBub25jZQ=="
+    check(_): "websocket accept key" {k = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="}
+
+    ryazan_listen(l): "127.0.0.1" 18999 8
+    check(_): "listen" {l > 0}
+
+    # ws:// echo through ryazan_serve (plain)
+    btree(o):
+    btput(_): o "count" 1
+    btput(_): o "plain" true
+    async(srv): "ryazan_serve" l "" "" "ws_echo" o
+    ryazan_ws_connect(c): "ws://127.0.0.1:18999/chat" "" null
+    typeof(ct): c
+    check(_): "ws connect" {ct = "btree"}
+    if(_): {ct = "btree"} [
+        ryazan_ws_send(_): c "hello"
+        ryazan_ws_recv(m): c
+        check(_): "ws echo" {m = "echo /chat: hello"}
+        str_repeat(big): "xyz" 100
+        ryazan_ws_send(_): c big
+        ryazan_ws_recv(m): c
+        len(ml): m
+        check(_): "ws 16-bit length" {ml = 312}
+        ryazan_ws_ping(_): c "p"
+        ryazan_ws_send(_): c ""
+        ryazan_ws_recv(m): c
+        check(_): "ws ping answered, empty message" {m = "echo /chat: "}
+        ryazan_ws_close(_): c 1000 "bye"
+    ]
+    await(served): srv
+    check(_): "serve count" {served = 1}
+
+    tls_backend(backend):
+    if(_): {backend != "none"} [
+        # wss:// with the test certificate
+        btree(o):
+        btput(_): o "count" 1
+        async(srv): "ryazan_serve" l "tests/ryazan/localhost.p12" "ryazan-test" "wss_echo" o
+        btree(co):
+        btput(_): co "ca_file" "tests/ryazan/localhost.cert.pem"
+        ryazan_ws_connect(c): "wss://localhost:18999/secure" "" co
+        typeof(ct): c
+        check(_): "wss connect" {ct = "btree"}
+        if(_): {ct = "btree"} [
+            ryazan_ws_send(_): c "over tls"
+            ryazan_ws_recv(m): c
+            check(_): "wss echo" {m = "echo /secure: over tls"}
+            ryazan_ws_close(_): c 1000 ""
+        ]
+        await(_): srv
+
+        # a client that never finishes the handshake is dropped
+        btree(o):
+        btput(_): o "count" 1
+        btput(_): o "handshake_timeout" 1
+        async(srv): "ryazan_serve" l "tests/ryazan/localhost.p12" "ryazan-test" "wss_echo" o
+        socket_tcp(lazy):
+        socket_connect(_): lazy "127.0.0.1" 18999
+        time(t0):
+        await(served): srv
+        time(t1):
+        check(_): "handshake timeout drops the client" {served = 0 && t1 - t0 <= 3}
+        socket_close(_): lazy
+
+        # SMTP with STARTTLS and AUTH PLAIN
+        async(srv): "smtp_fake" l true
+        btree(so):
+        btput(_): so "host" "localhost"
+        btput(_): so "port" 18999
+        btput(_): so "user" "ann"
+        btput(_): so "password" "pw"
+        btput(_): so "ca_file" "tests/ryazan/localhost.cert.pem"
+        ryazan_smtp_send(sent): so "ann@ussr.example" "bob@ussr.example" "Hi" "line one\n.dot line"
+        await(got): srv
+        ryazan_smtp_error(e):
+        check(_): "smtp starttls send" {sent = 0}
+        if(_): {sent != 0} [
+            print(_): e
+        ]
+        str_contains(auth): got "AUTH AGFubgBwdw=="
+        check(_): "smtp auth plain" auth
+        str_contains(subj): got "Subject: Hi"
+        check(_): "smtp headers" subj
+        str_contains(stuffed): got "\n..dot line\n"
+        check(_): "smtp dot stuffing" stuffed
+    ]
+
+    # SMTP refusal comes back as an error
+    async(srv): "smtp_fake" l false
+    btree(so):
+    btput(_): so "host" "127.0.0.1"
+    btput(_): so "port" 18999
+    btput(_): so "starttls" false
+    ryazan_smtp_send(sent): so "a@x" "nobody@x" "s" "b"
+    await(_): srv
+    ryazan_smtp_error(e):
+    check(_): "smtp rcpt refused" {sent != 0 && e = "550 no such user"}
+
+    # password without TLS is refused before it is sent
+    async(srv): "smtp_fake" l false
+    btput(_): so "user" "u"
+    btput(_): so "password" "p"
+    ryazan_smtp_send(sent): so "a@x" "b@x" "s" "b"
+    await(got): srv
+    str_contains(leaked): got "AUTH"
+    check(_): "smtp no auth in clear" {sent != 0 && leaked = false}
+
+    # HTTP to HTTPS redirect listener
+    async(srv): "ryazan_redirect_server" l 8443 1
+    btree(o):
+    btput(_): o "max_redirects" 0
+    btput(_): o "proxy" "none"
+    ryazan_fetch(resp): "GET" "http://127.0.0.1:18999/a/b?c=1" "" "" o
+    await(_): srv
+    ryazan_resp_header(loc): resp "location"
+    btget(code): resp "status"
+    check(_): "redirect listener" {code = 301 && loc = "https://127.0.0.1:8443/a/b?c=1"}
+
+    socket_close(_): l
+    set(result): fails
+]

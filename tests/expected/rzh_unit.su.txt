@@ -1,0 +1,43 @@
+PASS url scheme
+PASS url host
+PASS url port
+PASS url path
+PASS url ipv6
+PASS url default port
+PASS url query only
+PASS url bad
+PASS resolve root
+PASS resolve relative
+PASS resolve network path
+PASS resolve query
+PASS resolve absolute
+PASS cookies all
+PASS cookies domain and secure
+PASS cookies path
+PASS cookies max-age 0 deletes
+PASS hsts unknown
+PASS hsts added
+PASS hsts cleared
+PASS multipart type
+PASS multipart body
+PASS form
+PASS kind expired
+PASS kind untrusted
+PASS kind wrong host
+PASS kind refused
+PASS kind timeout
+PASS kind protocol
+PASS explain
+PASS features alpn
+PASS features backend
+PASS ws frame
+PASS ws frame 16-bit
+PASS ws masked frame
+PASS sha1 empty
+PASS smtp to header
+PASS smtp body
+38 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

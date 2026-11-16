@@ -1,0 +1,373 @@
+# Ryazan's script HTTP client (src/ryazan/http.su) against fake servers on
+# 127.0.0.1:18997, plus HTTPS with the test certificate in tests/ryazan/.
+# Each server task answers with canned replies and returns the requests it
+# saw, joined by "\n====\n", through await. Prints PASS/FAIL lines; the exit
+# status is the number of failures. Needs the port, so run_all.sh leaves it
+# out (like the other ryazan_* tests). From the repository root:
+#     ussr tests/ryazan_http.su
+$include "../src/ryazan/http.su"
+
+global(_): fails
+
+check(r): label good [
+    if(_): good [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        set(fails): {fails + 1}
+    ]
+    print(_): line
+    set(r): 0
+]
+
+# reads one request (head, then a Content-Length or chunked body)
+read_request(r): s tls [
+    set(r): ""
+    set(go): true
+    while(_): go [
+        str_find(at): r "\r\n\r\n" 0
+        if(_): {at >= 0} [
+            str_lower(low): r
+            re_find(cl): "content-length: *([0-9]+)" low
+            str_contains(chunked): low "transfer-encoding: chunked"
+            len(n): r
+            set(go): false
+            typeof(ct): cl
+            if(_): {ct = "vector"} [
+                at(cls): cl 1
+                str_to_int(want): cls 10
+                set(go): {n < at + 4 + want}
+            ]
+            elif(_): chunked [
+                str_ends(done): r "0\r\n\r\n"
+                set(go): {done = false}
+            ]
+        ]
+        if(_): go [
+            if(_): tls [
+                ryazan_read(more): s 4096
+            ]
+            else(_): [
+                wait_readable(_): s
+                socket_recv(more): s 4096
+            ]
+            typeof(mt): more
+            if(_): {mt = "null" || more = ""} [
+                set(go): false
+            ]
+            else(_): [
+                concat(r): r more
+            ]
+        ]
+    ]
+]
+
+send_all(r): s tls text [
+    if(_): tls [
+        ryazan_write(r): s text
+    ]
+    else(_): [
+        socket_send(r): s text
+    ]
+]
+
+# replies: a vector; "" as a reply means: say nothing, keep the
+# connection open for 3 s (timeouts); "CLOSE" closes and accepts again
+serve(r): listener replies tls [
+    set(r): ""
+    len(n): replies
+    set(i): 0
+    set(client): 0
+    while(_): {i < n} [
+        if(_): {client = 0} [
+            wait_readable(_): listener
+            socket_accept(client): listener
+            if(_): tls [
+                ryazan_accept(_): client "tests/ryazan/localhost.p12" "ryazan-test"
+            ]
+        ]
+        at(reply): replies i
+        set(i): {i + 1}
+        if(_): {reply = "CLOSE"} [
+            socket_close(_): client
+            set(client): 0
+        ]
+        else(_): [
+            read_request(req): client tls
+            if(_): {r != ""} [
+                concat(r): r "\n====\n"
+            ]
+            concat(r): r req
+            if(_): {reply = ""} [
+                sleep(_): 3000
+            ]
+            else(_): [
+                send_all(_): client tls reply
+            ]
+        ]
+    ]
+    if(_): {client != 0} [
+        if(_): tls [
+            ryazan_close(_): client
+        ]
+        else(_): [
+            socket_close(_): client
+        ]
+    ]
+]
+
+replies1(r): a [
+    vec(r): ""
+    push(_): r a
+]
+
+init(result): arg_cnt arg_vec [
+    set(fails): 0
+    setenv(_): "HTTPS_PROXY" ""
+    setenv(_): "HTTP_PROXY" ""
+    socket_tcp(l):
+    socket_bind(b): l "127.0.0.1" 18997
+    socket_listen(k): l 8
+    check(_): "listen" {b = 0 && k = 0}
+    set(base): "http://127.0.0.1:18997"
+
+    # plain GET with Content-Length
+    replies1(rs): "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nX-Tag: a\r\nX-Tag: b\r\n\r\nhello"
+    async(srv): "serve" l rs false
+    concat(u): base "/path?q=1"
+    ryazan_fetch(resp): "GET" u "X-Mine: 7" "" null
+    await(seen): srv
+    btget(code): resp "status"
+    btget(body): resp "body"
+    check(_): "get status" {code = 200}
+    check(_): "get body" {body = "hello"}
+    ryazan_resp_headers(tags): resp "x-tag"
+    encode(te): tags
+    check(_): "repeated headers" {te = "[`a`,`b`]"}
+    str_starts(rl): seen "GET /path?q=1 HTTP/1.1\r\n"
+    check(_): "request line" rl
+    str_contains(hh): seen "Host: 127.0.0.1:18997\r\n"
+    check(_): "host header" hh
+    str_contains(mh): seen "X-Mine: 7\r\n"
+    check(_): "own header" mh
+
+    # chunked response
+    replies1(rs): "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n6;ext=1\r\npedia \r\nD\r\nin\r\n\r\nchunks.\r\n0\r\n\r\n"
+    async(srv): "serve" l rs false
+    ryazan_fetch(resp): "GET" base "" "" null
+    await(_): srv
+    btget(body): resp "body"
+    check(_): "chunked body" {body = "Wikipedia in\r\n\r\nchunks."}
+
+    # body until close (no length)
+    replies1(rs): "HTTP/1.0 200 OK\r\n\r\nuntil close"
+    async(srv): "serve" l rs false
+    ryazan_fetch(resp): "GET" base "" "" null
+    await(_): srv
+    btget(body): resp "body"
+    check(_): "close-delimited body" {body = "until close"}
+
+    # redirects: relative 302, then 303 turning POST into GET
+    vec(rs): ""
+    push(_): rs "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n"
+    push(_): rs "CLOSE"
+    push(_): rs "HTTP/1.1 303 See Other\r\nLocation: http://127.0.0.1:18997/done\r\nContent-Length: 0\r\n\r\n"
+    push(_): rs "CLOSE"
+    push(_): rs "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+    async(srv): "serve" l rs false
+    concat(u): base "/start"
+    ryazan_fetch(resp): "POST" u "Content-Type: text/plain" "data" null
+    await(seen): srv
+    btget(body): resp "body"
+    btget(nred): resp "redirects"
+    btget(final): resp "url"
+    check(_): "redirect body" {body = "ok"}
+    check(_): "redirect count" {nred = 2}
+    concat(want): base "/done"
+    check(_): "final url" {final = want}
+    str_split(reqs): seen "\n====\n"
+    at(second): reqs 1
+    at(third): reqs 2
+    # browsers turn a POST into a GET on 301/302 too, and so does Ryazan
+    str_starts(p2): second "GET /next "
+    check(_): "302 after POST becomes GET" p2
+    str_starts(g3): third "GET /done "
+    check(_): "303 becomes GET" g3
+    str_contains(ct3): third "Content-Type"
+    check(_): "303 drops the body headers" {ct3 = false}
+
+    # redirects off
+    replies1(rs): "HTTP/1.1 301 Moved\r\nLocation: /x\r\nContent-Length: 0\r\n\r\n"
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "max_redirects" 0
+    ryazan_fetch(resp): "GET" base "" "" o
+    await(_): srv
+    btget(code): resp "status"
+    check(_): "max_redirects 0 returns the 3xx" {code = 301}
+
+    # retry after 503
+    vec(rs): ""
+    push(_): rs "HTTP/1.1 503 Busy\r\nRetry-After: 0\r\nContent-Length: 0\r\n\r\n"
+    push(_): rs "CLOSE"
+    push(_): rs "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nyes"
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "retries" 2
+    btput(_): o "backoff" 0
+    ryazan_fetch(resp): "GET" base "" "" o
+    await(_): srv
+    btget(body): resp "body"
+    btget(att): resp "attempts"
+    check(_): "retry body" {body = "yes"}
+    check(_): "retry attempts" {att = 2}
+
+    # cookies: set on one response, sent on the next request
+    vec(rs): ""
+    push(_): rs "HTTP/1.1 200 OK\r\nSet-Cookie: sid=abc; Path=/; HttpOnly\r\nSet-Cookie: theme=dark\r\nContent-Length: 0\r\n\r\n"
+    push(_): rs "CLOSE"
+    push(_): rs "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    async(srv): "serve" l rs false
+    ryazan_cookies_new(jar):
+    btree(o):
+    btput(_): o "cookies" jar
+    concat(u): base "/login"
+    ryazan_fetch(_): "GET" u "" "" o
+    concat(u): base "/page"
+    ryazan_fetch(_): "GET" u "" "" o
+    await(seen): srv
+    str_split(reqs): seen "\n====\n"
+    at(second): reqs 1
+    str_contains(sent): second "Cookie: sid=abc; theme=dark\r\n"
+    check(_): "cookie jar" sent
+
+    # keep-alive: two requests on one connection
+    vec(rs): ""
+    push(_): rs "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none"
+    push(_): rs "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\ntwo"
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "keepalive" true
+    ryazan_fetch(r1): "GET" base "" "" o
+    ryazan_fetch(r2): "GET" base "" "" o
+    await(_): srv
+    btget(b1): r1 "body"
+    btget(b2): r2 "body"
+    check(_): "keep-alive reuse" {b1 = "one" && b2 = "two"}
+    ryazan_pool_close(_):
+
+    # chunked upload from a vector
+    replies1(rs): "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"
+    async(srv): "serve" l rs false
+    vec(pieces): ""
+    push(_): pieces "abc"
+    push(_): pieces "defghijklmnopq"
+    ryazan_fetch(resp): "PUT" base "" pieces null
+    await(seen): srv
+    str_ends(up): seen "\r\n\r\n3\r\nabc\r\ne\r\ndefghijklmnopq\r\n0\r\n\r\n"
+    check(_): "chunked upload" up
+
+    # a binary-mode body that comes up short
+    set(raw): "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nAB"
+    replies1(rs): raw
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "binary" true
+    ryazan_fetch(resp): "GET" base "" "" o
+    await(_): srv
+    btget(bytes): resp "bytes"
+    len(bl): bytes
+    btget(complete): resp "complete"
+    # the server's text cannot hold a NUL, so it sends only 2 of 4 bytes
+    check(_): "binary short body is incomplete" {bl = 2 && complete = false}
+
+    # download with a hash check
+    replies1(rs): "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc"
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "sha256" "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    ryazan_download(dl): base "tests/ryazan_http_tmp.bin" o
+    await(_): srv
+    read_bytes(saved): "tests/ryazan_http_tmp.bin"
+    encode(se): saved
+    check(_): "download" {dl = 0 && se = "[97,98,99]"}
+    remove_file(_): "tests/ryazan_http_tmp.bin"
+    replies1(rs): "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabd"
+    async(srv): "serve" l rs false
+    ryazan_download(dl): base "tests/ryazan_http_tmp.bin" o
+    await(_): srv
+    file_exists(left): "tests/ryazan_http_tmp.bin"
+    check(_): "download hash mismatch refused" {dl != 0 && left != 1}
+
+    # timeout: the server says nothing for 3 s
+    replies1(rs): ""
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "timeout" 1
+    time(t0):
+    ryazan_fetch(resp): "GET" base "" "" o
+    time(t1):
+    ryazan_fetch_error(e):
+    check(_): "timeout gives null" {resp = null}
+    str_contains(said): e "timed out"
+    check(_): "timeout error" said
+    check(_): "timeout is quick" {t1 - t0 <= 2}
+    await(_): srv
+
+    # an HTTP proxy gets the absolute URL
+    replies1(rs): "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\np"
+    async(srv): "serve" l rs false
+    btree(o):
+    btput(_): o "proxy" base
+    ryazan_fetch(resp): "GET" "http://example.invalid/via" "" "" o
+    await(seen): srv
+    str_starts(abs): seen "GET http://example.invalid:80/via HTTP/1.1"
+    check(_): "proxy absolute form" abs
+
+    # connection refused
+    ryazan_fetch(resp): "GET" "http://127.0.0.1:18998/" "" "" null
+    ryazan_fetch_error(e):
+    ryazan_error_kind(kind): e
+    check(_): "refused" {resp = null && kind = "refused"}
+
+    # JSON round trip
+    replies1(rs): "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"sum\": [1, 2]}"
+    async(srv): "serve" l rs false
+    btree(val):
+    btput(_): val "a" 1
+    ryazan_post_json(j): base val null
+    await(seen): srv
+    json_get(x): j "sum.1"
+    check(_): "json answer" {x = 2}
+    str_ends(sentj): seen "{\"a\":1}"
+    check(_): "json request" sentj
+
+    # HTTPS with the test certificate; HSTS is remembered
+    tls_backend(backend):
+    if(_): {backend != "none"} [
+        replies1(rs): "HTTP/1.1 200 OK\r\nStrict-Transport-Security: max-age=600\r\nContent-Length: 6\r\n\r\nsecret"
+        async(srv): "serve" l rs true
+        btree(o):
+        btput(_): o "ca_file" "tests/ryazan/localhost.cert.pem"
+        ryazan_fetch(resp): "GET" "https://localhost:18997/" "" "" o
+        await(_): srv
+        typeof(rt): resp
+        set(body): ""
+        if(_): {rt = "btree"} [
+            btget(body): resp "body"
+        ]
+        else(_): [
+            ryazan_fetch_error(e):
+            print(_): e
+        ]
+        check(_): "https body" {body = "secret"}
+        ryazan_hsts_has(strict): "localhost"
+        check(_): "hsts remembered" strict
+        getenv(ca): "RYAZAN_CA_FILE"
+        check(_): "per-call ca restored" {ca = null}
+    ]
+
+    socket_close(_): l
+    set(result): fails
+]

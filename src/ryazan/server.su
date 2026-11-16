@@ -1,0 +1,185 @@
+# server.su - TLS server helpers for Ryazan (run in a scheduler process).
+#
+#   ryazan_listen(s): ip port backlog  -> a listening socket, or -1
+#   ryazan_serve(r): listener cert secret handler opts
+#       accepts connections and, per connection, runs the TLS handshake and
+#       then `handler(r): socket` as its own async task (handler is a
+#       function name; it reads and writes with ryazan_read/ryazan_write
+#       and need not close the socket: the helper closes it after).
+#       opts (btree or null):
+#         count              connections to serve, then return (0: forever)
+#         handshake_timeout  seconds a client gets to finish the handshake
+#                            (10); slower ones are dropped
+#         max_concurrent     tasks at once (16); the oldest is awaited when
+#                            the limit is reached
+#         plain              true: no TLS (for tests and http:// servers)
+#       -> the number of connections whose handler ran
+#   ryazan_handshake_timed(r): socket seconds
+#                                      -> ryazan_handshake with a deadline:
+#                                         0, or -1 (failed or too slow)
+#   ryazan_redirect_server(r): listener https_port count
+#       answers every plain HTTP request with a 301 to the same host and
+#       path on https:// (port omitted when 443); count 0 serves forever
+#   ryazan_reload(_): cert secret      -> later handshakes of ryazan_serve
+#                                         use this certificate (a renewed
+#                                         one) without a restart
+$once
+$include "http.su"
+
+ryazan_listen(r): ip port backlog [
+    socket_tcp(s):
+    set(r): {0 - 1}
+    if(_): {s > 0} [
+        socket_bind(b): s ip port
+        socket_listen(l): s backlog
+        if(_): {b = 0 && l = 0} [
+            set(r): s
+        ]
+        else(_): [
+            socket_close(_): s
+        ]
+    ]
+]
+
+ryazan_handshake_timed(r): socket seconds [
+    time(start):
+    set(deadline): {start + seconds}
+    set(state): 0
+    while(_): {state != 1 && state >= 0} [
+        tls_handshake(state): socket
+        if(_): {state = 0 || state = 2} [
+            time(now):
+            if(_): {now >= deadline} [
+                set(state): {0 - 1}
+            ]
+            else(_): [
+                sleep(_): 5
+            ]
+        ]
+    ]
+    set(r): {0 - 1}
+    if(_): {state = 1} [
+        set(r): 0
+    ]
+]
+
+ryazan_reload(r): cert secret [
+    global(_): _rzs_cert _rzs_secret
+    set(_rzs_cert): cert
+    set(_rzs_secret): secret
+    set(r): 0
+]
+
+# one connection: handshake (unless plain), the handler, then close
+_rzs_one(r): sock cert secret handler hs_timeout plain [
+    set(r): 0
+    if(_): {plain = false} [
+        tls_server(started): sock cert secret
+        set(shaken): {0 - 1}
+        if(_): {started = 0} [
+            ryazan_handshake_timed(shaken): sock hs_timeout
+        ]
+        if(_): {shaken != 0} [
+            socket_close(_): sock
+            return(r): r
+        ]
+    ]
+    async(task): handler sock
+    await(_): task
+    if(_): plain [
+        socket_close(_): sock
+    ]
+    else(_): [
+        ryazan_close(_): sock
+    ]
+    set(r): 1
+]
+
+ryazan_serve(r): listener cert secret handler opts [
+    global(_): _rzs_cert _rzs_secret
+    set(_rzs_cert): cert
+    set(_rzs_secret): secret
+    _rzo(count): opts "count" 0
+    _rzo(hs_timeout): opts "handshake_timeout" 10
+    _rzo(maxc): opts "max_concurrent" 16
+    _rzo(plain): opts "plain" false
+    vec(tasks): ""
+    set(r): 0
+    set(served): 0
+    while(_): {count = 0 || served < count} [
+        wait_readable(_): listener
+        socket_accept(sock): listener
+        if(_): {sock > 0} [
+            len(nt): tasks
+            if(_): {nt >= maxc} [
+                # wait for the oldest, then keep the rest
+                at(oldest): tasks 0
+                await(done): oldest
+                set(r): {r + done}
+                vec(rest): ""
+                set(i): 1
+                while(_): {i < nt} [
+                    at(t): tasks i
+                    push(_): rest t
+                    set(i): {i + 1}
+                ]
+                set(tasks): rest
+            ]
+            async(task): "_rzs_one" sock _rzs_cert _rzs_secret handler hs_timeout plain
+            push(_): tasks task
+            set(served): {served + 1}
+        ]
+    ]
+    len(nt): tasks
+    set(i): 0
+    while(_): {i < nt} [
+        at(t): tasks i
+        await(done): t
+        set(r): {r + done}
+        set(i): {i + 1}
+    ]
+]
+
+ryazan_redirect_server(r): listener https_port count [
+    set(r): 0
+    while(_): {count = 0 || r < count} [
+        wait_readable(_): listener
+        socket_accept(sock): listener
+        if(_): {sock > 0} [
+            btree(c):
+            btput(_): c "sock" sock
+            btput(_): c "tls" false
+            btput(_): c "binary" false
+            btput(_): c "buf" ""
+            _rzh_read_head(head): c 0
+            typeof(ht): head
+            if(_): {ht = "string"} [
+                str_split(lines): head "\r\n"
+                at(first): lines 0
+                re_find(m): "^[A-Z]+ ([^ ]+) HTTP" first
+                set(path): "/"
+                typeof(mt): m
+                if(_): {mt = "vector"} [
+                    at(path): m 1
+                ]
+                concat(fake): "HTTP/1.1 200 X\r\n" head
+                _rzh_parse_head(req): fake
+                ryazan_resp_header(host): req "host"
+                str_find(colon): host ":" 0
+                if(_): {colon >= 0} [
+                    slice(host): host 0 colon
+                ]
+                set(target): host
+                if(_): {https_port != 443} [
+                    str_from_int(ps): https_port
+                    concat(target): host ":" ps
+                ]
+                concat(loc): "https://" target path
+                concat(resp): "HTTP/1.1 301 Moved Permanently\r\nLocation: " loc "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                _rzh_send(_): c resp
+            ]
+            socket_close(_): sock
+            set(r): {r + 1}
+        ]
+    ]
+]
