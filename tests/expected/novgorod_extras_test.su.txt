@@ -1,0 +1,63 @@
+PASS api boards status
+PASS api boards
+PASS api threads in bump order
+PASS api thread posts
+PASS api 304 with the ETag
+PASS api 404
+PASS board feed
+PASS feed entry
+PASS thread feed
+PASS thread feed only its posts
+PASS search finds
+PASS search filters
+PASS search all words
+PASS gallery page
+PASS rules page
+PASS external link page
+PASS external link refuses scripts
+PASS metrics
+PASS metrics per board
+PASS report link
+PASS sage box
+PASS gallery link
+PASS sage does not bump
+PASS a plain reply bumps
+PASS post with a password
+PASS wrong password refused
+PASS own post deleted
+PASS deleted reply hidden
+PASS deleted reply's file removed
+PASS repeated characters refused
+PASS flood refused
+PASS word filter
+PASS link blocklist
+PASS other links pass
+PASS read-only refuses posts
+PASS read-only banner
+PASS board notice
+PASS report form
+PASS report taken
+PASS report queued
+PASS mod off without a hash
+PASS mod login form
+PASS mod wrong password
+PASS mod login
+PASS report queue shown
+PASS act needs the login
+PASS sticky done
+PASS sticky thread first
+PASS locked thread refuses replies
+PASS locked thread page
+PASS mod deletes a thread
+PASS mod log
+PASS mod log hides passwords
+PASS lock survives a restart
+PASS sticky of a deleted thread kept harmlessly
+PASS report still open after restart
+PASS export count
+PASS export files
+58 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

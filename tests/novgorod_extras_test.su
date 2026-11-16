@@ -1,0 +1,349 @@
+# Novgorod's refine-pass features without a socket, on a scratch data folder
+# in tests/novgorod_x_tmp: the API, feeds, search, gallery, sage, deletion
+# by password, reports, moderation (login, lock, sticky, delete), filters,
+# flood and read-only mode, the export. Prints PASS/FAIL per check.
+$include "../src/libs/testing.su"
+$include "../src/libs/paths.su"
+$include "../src/novgorod/novgorod.su"
+
+form_request(r): path fields origin cookie [
+    set(boundary): "----nvx7MA4YWxk"
+    set(body): ""
+    len(n): fields
+    set(i): 0
+    while(_): {i < n} [
+        at(name): fields i
+        at(value): fields {i + 1}
+        concat(body): body "--" boundary "\r\nContent-Disposition: form-data; name=\"" name "\"\r\n\r\n" value "\r\n"
+        add(i): i 2
+    ]
+    concat(body): body "--" boundary "--\r\n"
+    len(bl): body
+    str_from_int(bls): bl
+    concat(r): "POST " path " HTTP/1.1\r\nHost: localhost:8443\r\nContent-Type: multipart/form-data; boundary=" boundary "\r\nContent-Length: " bls "\r\n"
+    if(_): {origin != ""} [
+        concat(r): r "Origin: " origin "\r\n"
+    ]
+    if(_): {cookie != ""} [
+        concat(r): r "Cookie: " cookie "\r\n"
+    ]
+    concat(r): r "\r\n" body
+]
+
+send(r): path fields cookie [
+    form_request(req): path fields "https://localhost:8443" cookie
+    nv_handle(r): "POST" path req
+]
+
+post(r): board thread text extra [
+    vec(f): ""
+    push(_): f "board"
+    push(_): f board
+    push(_): f "thread"
+    push(_): f thread
+    push(_): f "subject"
+    push(_): f ""
+    push(_): f "text"
+    push(_): f text
+    len(ne): extra
+    set(i): 0
+    while(_): {i < ne} [
+        at(x): extra i
+        push(_): f x
+        set(i): {i + 1}
+    ]
+    send(r): "/post" f ""
+]
+
+fetch(r): target headers [
+    concat(req): "GET " target " HTTP/1.1\r\nHost: localhost\r\n" headers "\r\n"
+    nv_handle(r): "GET" target req
+]
+
+status(r): response [
+    slice(r): response 9 3
+]
+
+body_of(r): response [
+    uk_request_body(r): response
+]
+
+has(r): label text needle [
+    str_contains(b): text needle
+    assert_true(r): label b
+]
+
+lacks(r): label text needle [
+    str_contains(b): text needle
+    assert_eq(r): label b false
+]
+
+clean_dir(r): dir [
+    remove_tree(_): dir
+    set(r): 0
+]
+
+reading_checks(r): [
+    vec(none): ""
+    post(_): "c" "0" "first thread about pointers" none
+    post(_): "c" "1" "a reply with ```\ncode\n```" none
+    # bumps are in seconds: let the clock move between posts whose order counts
+    sleep(_): 1100
+    post(_): "c" "0" "second thread, on loops" none
+    fetch(api): "/api/boards" ""
+    status(code): api
+    assert_eq(_): "api boards status" code "200"
+    body_of(j): api
+    json_parse(boards): j
+    len(nb): boards
+    assert_eq(_): "api boards" nb 6
+    fetch(api): "/api/c/threads" ""
+    body_of(j): api
+    json_parse(threads): j
+    len(nt): threads
+    at(top): threads 0
+    btget(topno): top "no"
+    assert_eq(_): "api threads in bump order" {nt * 10 + topno} 23
+    fetch(api): "/api/thread/1" ""
+    body_of(j): api
+    json_parse(doc): j
+    json_get(text): doc "posts.1.text"
+    str_contains(b): text "a reply"
+    assert_true(_): "api thread posts" b
+    uk_request_header(etag): api "etag"
+    concat(inm): "If-None-Match: " etag "\r\n"
+    fetch(again): "/api/thread/1" inm
+    status(code): again
+    assert_eq(_): "api 304 with the ETag" code "304"
+    fetch(missing): "/api/thread/99" ""
+    status(code): missing
+    assert_eq(_): "api 404" code "404"
+    fetch(feed): "/c/atom.xml" ""
+    has(_): "board feed" feed "<feed xmlns=\"http://www.w3.org/2005/Atom\">"
+    has(_): "feed entry" feed "<id>urn:novgorod:post:3</id>"
+    fetch(feed): "/c/res/1/atom.xml" ""
+    has(_): "thread feed" feed "<id>urn:novgorod:post:2</id>"
+    lacks(_): "thread feed only its posts" feed "urn:novgorod:post:3<"
+    fetch(found): "/search?q=POINTERS" ""
+    has(_): "search finds" found "data-no=\"1\""
+    lacks(_): "search filters" found "data-no=\"3\""
+    fetch(found): "/search?q=loops+second" ""
+    has(_): "search all words" found "data-no=\"3\""
+    fetch(gal): "/c/res/1/gallery" ""
+    has(_): "gallery page" gal "No images in this thread."
+    fetch(rules): "/rules" ""
+    has(_): "rules page" rules "<h1>Rules</h1>"
+    fetch(go): "/go?to=https%3A%2F%2Fexample.org%2Fx" ""
+    has(_): "external link page" go "href=\"https://example.org/x\""
+    fetch(go): "/go?to=javascript:alert(1)" ""
+    status(code): go
+    assert_eq(_): "external link refuses scripts" code "400"
+    fetch(m): "/metrics" ""
+    has(_): "metrics" m "novgorod_posts 3"
+    has(_): "metrics per board" m "novgorod_threads{board=\"c\"} 2"
+    fetch(page): "/c/res/1" ""
+    has(_): "report link" page "/report?no=2"
+    has(_): "sage box" page "name=\"sage\""
+    has(_): "gallery link" page "/c/res/1/gallery"
+    set(r): 0
+]
+
+posting_checks(r): [
+    # sage: a reply that does not bump
+    vec(extra): ""
+    push(_): extra "sage"
+    push(_): extra "1"
+    sleep(_): 1100
+    post(_): "c" "1" "quiet reply" extra
+    fetch(api): "/api/c/threads" ""
+    body_of(j): api
+    json_parse(threads): j
+    at(top): threads 0
+    btget(topno): top "no"
+    assert_eq(_): "sage does not bump" topno 3
+    vec(none): ""
+    sleep(_): 1100
+    post(_): "c" "1" "loud reply" none
+    fetch(api): "/api/c/threads" ""
+    body_of(j): api
+    json_parse(threads): j
+    at(top): threads 0
+    btget(topno): top "no"
+    assert_eq(_): "a plain reply bumps" topno 1
+    # deletion by password
+    vec(extra): ""
+    push(_): extra "password"
+    push(_): extra "hunter2"
+    post(resp): "c" "1" "regrettable" extra
+    nv_find_post(p): 6
+    getf(ptext): p "text"
+    assert_eq(_): "post with a password" ptext "regrettable"
+    vec(f): ""
+    push(_): f "no"
+    push(_): f "6"
+    push(_): f "password"
+    push(_): f "wrong"
+    send(resp): "/delete" f ""
+    status(code): resp
+    assert_eq(_): "wrong password refused" code "403"
+    vec(f): ""
+    push(_): f "no"
+    push(_): f "6"
+    push(_): f "password"
+    push(_): f "hunter2"
+    send(resp): "/delete" f ""
+    status(code): resp
+    assert_eq(_): "own post deleted" code "200"
+    fetch(page): "/c/res/1" ""
+    lacks(_): "deleted reply hidden" page "regrettable"
+    nv_path(pf): "posts/6.post" ""
+    file_exists(left): pf
+    assert_eq(_): "deleted reply's file removed" left false
+    # policy
+    str_repeat(stretch): "=" 100
+    post(resp): "c" "1" stretch none
+    has(_): "repeated characters refused" resp "repeats one character"
+    post(resp): "c" "1" "loud reply" none
+    has(_): "flood refused" resp "That exact text"
+    nv_path(ff): "filters.txt" ""
+    writefile(_): ff "# rules\nword frobnicate\nlink spam.example\n"
+    nv_mod_load(_):
+    post(resp): "c" "1" "please Frobnicate this" none
+    has(_): "word filter" resp "filtered word"
+    post(resp): "c" "1" "see https://www.spam.example/buy" none
+    has(_): "link blocklist" resp "Links to that site"
+    post(resp): "c" "1" "see https://notspam.example.org/ok" none
+    status(code): resp
+    assert_eq(_): "other links pass" code "303"
+    set(nv_read_only): true
+    post(resp): "c" "1" "while read-only" none
+    has(_): "read-only refuses posts" resp "read-only"
+    fetch(page): "/c/" ""
+    has(_): "read-only banner" page "Read-only for maintenance"
+    set(nv_read_only): false
+    # a board notice
+    nv_path(nf): "notice-c.txt" ""
+    writefile(_): nf "**Welcome** to /c/"
+    fetch(page): "/c/" ""
+    has(_): "board notice" page "<b>Welcome</b> to /c/"
+    # reports
+    fetch(form): "/report?no=2" ""
+    has(_): "report form" form "name=\"reason\""
+    vec(f): ""
+    push(_): f "no"
+    push(_): f "2"
+    push(_): f "reason"
+    push(_): f "off topic | spam"
+    send(resp): "/report" f ""
+    status(code): resp
+    assert_eq(_): "report taken" code "200"
+    btget(reports): nv_mod "reports"
+    btget(why): reports 2 ""
+    assert_eq(_): "report queued" why "off topic spam"
+    set(r): 0
+]
+
+mod_checks(r): [
+    fetch(m): "/mod" ""
+    status(code): m
+    assert_eq(_): "mod off without a hash" code "404"
+    sha256(d): "s3cret"
+    hex_encode(set_hash): d
+    set(nv_admin_hash): set_hash
+    fetch(m): "/mod" ""
+    has(_): "mod login form" m "name=\"password\""
+    vec(f): ""
+    push(_): f "password"
+    push(_): f "wrong"
+    send(resp): "/mod/login" f ""
+    status(code): resp
+    assert_eq(_): "mod wrong password" code "403"
+    vec(f): ""
+    push(_): f "password"
+    push(_): f "s3cret"
+    send(resp): "/mod/login" f ""
+    status(code): resp
+    uk_request_header(cookie): resp "set-cookie"
+    str_find(semi): cookie ";" 0
+    slice(cookie): cookie 0 semi
+    assert_eq(_): "mod login" code "303"
+    concat(ch): "Cookie: " cookie "\r\n"
+    fetch(m): "/mod" ch
+    has(_): "report queue shown" m "off topic spam"
+    vec(f): ""
+    push(_): f "no"
+    push(_): f "3"
+    push(_): f "action"
+    push(_): f "sticky"
+    send(resp): "/mod/act" f ""
+    status(code): resp
+    assert_eq(_): "act needs the login" code "403"
+    send(resp): "/mod/act" f cookie
+    status(code): resp
+    assert_eq(_): "sticky done" code "303"
+    fetch(api): "/api/c/threads" ""
+    body_of(j): api
+    json_parse(threads): j
+    at(top): threads 0
+    btget(topno): top "no"
+    assert_eq(_): "sticky thread first" topno 3
+    vec(f): ""
+    push(_): f "no"
+    push(_): f "1"
+    push(_): f "action"
+    push(_): f "lock"
+    send(_): "/mod/act" f cookie
+    vec(none): ""
+    post(resp): "c" "1" "into a locked thread" none
+    has(_): "locked thread refuses replies" resp "This thread is locked."
+    fetch(page): "/c/res/1" ""
+    has(_): "locked thread page" page "This thread is locked."
+    vec(f): ""
+    push(_): f "no"
+    push(_): f "3"
+    push(_): f "action"
+    push(_): f "delete"
+    send(_): "/mod/act" f cookie
+    fetch(gone): "/c/res/3" ""
+    status(code): gone
+    assert_eq(_): "mod deletes a thread" code "404"
+    fetch(log): "/mod/log" ""
+    has(_): "mod log" log "delete 3"
+    lacks(_): "mod log hides passwords" log "pw "
+    # a restart replays mod.log
+    nv_setup(_):
+    nv_open(_): "tests/novgorod_x_tmp"
+    nv_is_locked(still): 1
+    assert_true(_): "lock survives a restart" still
+    nv_is_sticky(st): 3
+    assert_eq(_): "sticky of a deleted thread kept harmlessly" st true
+    btget(reports): nv_mod "reports"
+    btlen(nrep): reports
+    assert_eq(_): "report still open after restart" nrep 1
+    set(r): 0
+]
+
+export_checks(r): [
+    nv_export(n): "tests/novgorod_x_export_tmp"
+    assert_true(_): "export count" {n >= 3}
+    file_exists(pf): "tests/novgorod_x_export_tmp/posts/1.post"
+    file_exists(bf): "tests/novgorod_x_export_tmp/boards.txt"
+    file_exists(mf): "tests/novgorod_x_export_tmp/mod.log"
+    assert_true(_): "export files" {pf && bf && mf}
+    clean_dir(_): "tests/novgorod_x_export_tmp"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    clean_dir(_): "tests/novgorod_x_tmp"
+    nv_types(_):
+    nv_setup(_):
+    nv_open(_): "tests/novgorod_x_tmp"
+    set(nv_rate): 1000
+    reading_checks(_):
+    posting_checks(_):
+    mod_checks(_):
+    export_checks(_):
+    clean_dir(_): "tests/novgorod_x_tmp"
+    test_summary(ret):
+]

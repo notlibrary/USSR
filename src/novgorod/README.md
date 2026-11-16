@@ -156,3 +156,23 @@ ussr src/novgorod/novgorod.su --kvdb forum.kv
 Tests: `ussr tests/novgorod_test.su` (also part of `tests/run_all.sh`);
 `DUBNA_TEST_URL=... ussr tests/novgorod_db_live.su` for `--db`;
 `--kvdb` is in `novgorod_test.su`.
+
+## Moderation and the extra pages (0.5.0)
+
+Start with `--admin-hash` and the SHA-256 of a password in hex (for
+example `printf %s 'the password' | sha256sum`), or set
+`NOVGOROD_ADMIN_HASH`, and `/mod` shows a login, the report queue and the
+actions: delete, lock, unlock, sticky, unsticky, resolve, banimg. Every
+action is a line in `DATA/mod.log`, which a restart replays; `/mod/log`
+shows them to everyone.
+
+Optional files in the data folder: `filters.txt` (`word TEXT` or
+`link HOST` per line), `rules.txt` (the `/rules` page, in Novgorod
+markup), `notice-BOARD.txt` (a notice on that board). Other options:
+`--read-only` for maintenance, `--lock-days N` to close old threads,
+`--trust-proxy` behind Apache, `--export DIR` for a backup.
+
+Machine-readable: `/api/boards`, `/api/BOARD/threads`, `/api/thread/N`
+(JSON with ETag), `/BOARD/atom.xml`, `/BOARD/res/N/atom.xml`, and
+`/metrics` (Prometheus text). Also `/search?q=`, `/BOARD/res/N/gallery`
+and `/go?to=URL`.

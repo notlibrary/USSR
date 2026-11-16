@@ -18,6 +18,13 @@
 #     --prefix /board     serve under a path behind a reverse proxy that
 #                         strips it (links and redirects carry it)
 #     --hsts              send Strict-Transport-Security
+#     --admin-hash HEX    SHA-256 (hex) of the moderators' password; turns
+#                         on /mod (also NOVGOROD_ADMIN_HASH)
+#     --read-only         serve pages but take no posts (maintenance)
+#     --lock-days N       threads idle for N days take no more replies
+#     --trust-proxy       read X-Forwarded-For (behind Apache)
+#     --export DIR        write every post, boards.txt and mod.log to DIR,
+#                         then exit (a backup, whatever the storage)
 #
 # Posts are anonymous and numbered across the whole forum. Bodies use
 # Novgorod markup (markup.su). Images are re-encoded by the browser (which
@@ -34,6 +41,7 @@ $include "../ukraine/ukraine.su"
 $include "markup.su"
 $include "../omsk/omsk.su"
 $include "../dubna/dubna.su"
+$include "extras.su"
 
 global(_): nv_prefix nvm_prefix nv_db nv_db_table nv_kvdb nv_kv uk_max_body nv_data nv_static nv_boards nv_posts nv_seq nv_log nv_css nv_js nv_hsts nv_tls
 global(_): nv_title nv_max_threads nv_bump_limit nv_page_size nv_preview nv_rate nv_max_text nv_max_subject nv_max_image nv_thumb_side
@@ -45,7 +53,7 @@ nv_types(r): [
     struct(NvPost): "no:number" "board:string" "thread:number" "time:number" "subject:string" "text:string" "html:string" "image:string" "iw:number" "ih:number" "tw:number" "th:number" "refs:vector" "alive:boolean" "owner:any"
     struct(NvThread): "op:NvPost" "posts:vector" "bump:number" "alive:boolean"
     struct(NvBoard): "name:string" "title:string" "about:string" "threads:vector"
-    struct(NvForm): "board:string" "thread:string" "subject:string" "text:string" "website:string" "mime:string" "imgw:string" "imgh:string" "thw:string" "thh:string" "thumb:string" "img:string"
+    struct(NvForm): "board:string" "thread:string" "subject:string" "text:string" "website:string" "mime:string" "imgw:string" "imgh:string" "thw:string" "thh:string" "thumb:string" "img:string" "sage:string" "password:string"
     set(r): 0
 ]
 
@@ -76,6 +84,7 @@ nv_setup(r): [
     vec(nv_posts): "NvPost"
     vec(nv_seq): ""
     vec(nv_log): ""
+    nv_extras_setup(_):
     set(r): 0
 ]
 
@@ -497,6 +506,7 @@ nv_open(r): dir [
         nv_default_boards(text):
         nv_load_boards(count): text
     ]
+    nv_mod_load(_):
     if(_): {nv_db != ""} [
         nv_db_load(r):
         return(r): r
@@ -930,7 +940,8 @@ nv_threads(r): board [
         ]
         add(i): i 1
     ]
-    nv_sort(r): live "bump" true
+    nv_sort(sorted): live "bump" true
+    nv_sticky_first(r): sorted
 ]
 
 nv_prune(r): board [
@@ -972,6 +983,9 @@ nv_form_set(r): form name value [
     elif(_): {name = "imgw" || name = "imgh" || name = "thw" || name = "thh" || name = "thumb" || name = "img"} [
         setf(_): form name value
     ]
+    elif(_): {name = "sage" || name = "password"} [
+        setf(_): form name value
+    ]
 ]
 
 # A multipart/form-data request as an NvForm, or null when it is not one.
@@ -1010,7 +1024,7 @@ nv_parse_form(r): request [
     concat(end_mark): next_delim "--"
     len(dl): delim
     len(el): end_mark
-    decode(form): "NvForm{board=``,thread=``,subject=``,text=``,website=``,mime=``,imgw=``,imgh=``,thw=``,thh=``,thumb=``,img=``}"
+    decode(form): "NvForm{board=``,thread=``,subject=``,text=``,website=``,mime=``,imgw=``,imgh=``,thw=``,thh=``,thumb=``,img=``,sage=``,password=``}"
     nvm_find(pos): body delim 0
     if(_): {pos < 0} [
         return(r): r
@@ -1226,6 +1240,18 @@ nv_submit(r): form out [
         set(r): "A post needs text or an image."
         return(r): r
     ]
+    nv_policy_check(r): board_name thread_no text subject img
+    if(_): {r != ""} [
+        btget(refused): nv_stats "refused" 0
+        btput(_): nv_stats "refused" {refused + 1}
+        return(r): r
+    ]
+    set(bump_before): 0
+    if(_): {thread_no != 0} [
+        nv_find_post(bop): thread_no
+        getf(bthread): bop "owner"
+        getf(bump_before): bthread "bump"
+    ]
     time(now):
     nv_rate_ok(ok): now
     if(_): {ok = false} [
@@ -1255,6 +1281,7 @@ nv_submit(r): form out [
         set(r): "That thread is gone."
         return(r): r
     ]
+    nv_after_post(_): p form bump_before
     if(_): {thread_no = 0} [
         nv_prune(_): board
     ]
@@ -1287,7 +1314,8 @@ nv_page(r): title body [
     concat(r): r "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
     concat(r): r "<meta name=\"referrer\" content=\"same-origin\">"
     concat(r): r "<title>" t "</title><link rel=\"stylesheet\" href=\"" nv_prefix "/static/novgorod.css\">"
-    concat(r): r "<script src=\"" nv_prefix "/static/novgorod.js\" defer></script></head>\n<body>\n" nav
+    nv_banner(banner):
+    concat(r): r "<script src=\"" nv_prefix "/static/novgorod.js\" defer></script></head>\n<body>\n" nav banner
     concat(r): r "<main>\n" body "</main>\n"
     concat(r): r "<footer>Novgorod on the <a href=\"https://github.com/notlibrary/USSR\">ROUND stack</a>: Ryazan, Omsk, Ukraine, Novgorod, Dubna. Anonymous; no accounts, no tracking.</footer>\n</body></html>\n"
 ]
@@ -1345,6 +1373,7 @@ nv_post_html(r): p preview backlinks [
     ]
     concat(r): r "<span class=\"name\">Anonymous</span> <span class=\"date\">" date "</span> "
     concat(r): r "<a class=\"no\" href=\"" turl "#p" nos "\">No.</a><a class=\"no quote-me\" href=\"" turl "#q" nos "\" data-quote=\"" nos "\">" nos "</a>"
+    concat(r): r " <a class=\"report\" href=\"" nv_prefix "/report?no=" nos "\" rel=\"nofollow\">report</a>"
     if(_): {thread = 0 && preview} [
         concat(r): r " <a class=\"open\" href=\"" turl "\">[Reply]</a>"
     ]
@@ -1441,6 +1470,11 @@ nv_form_html(r): board thread [
     ]
     concat(r): r "<textarea name=\"text\" rows=\"6\" maxlength=\"" max_text "\" placeholder=\"**bold** *italic* `code` ```lang code block``` >quote >>123\"></textarea>"
     concat(r): r "<input class=\"trap\" name=\"website\" tabindex=\"-1\" autocomplete=\"off\" aria-hidden=\"true\">"
+    concat(r): r "<div class=\"row\"><input type=\"password\" name=\"password\" maxlength=\"64\" placeholder=\"password to delete it later (optional)\" autocomplete=\"new-password\">"
+    if(_): {thread != 0} [
+        concat(r): r " <label><input type=\"checkbox\" name=\"sage\" value=\"1\"> sage (do not bump)</label>"
+    ]
+    concat(r): r "</div>"
     concat(r): r "<div class=\"row\"><input type=\"file\" accept=\"image/png,image/jpeg,image/gif,image/webp\" data-image>"
     concat(r): r "<button type=\"submit\">Post</button> <a href=\"" nv_prefix "/markup\" target=\"_blank\">markup help</a></div>"
     concat(r): r "<p class=\"hint\" data-status>Images are re-encoded in your browser, which removes their metadata.</p>"
@@ -1472,8 +1506,11 @@ nv_thread_preview(r): thread [
     set(i): from
     while(_): {i < n} [
         at(p): posts i
-        nv_post_html(h): p true none
-        concat(r): r h
+        getf(alive): p "alive"
+        if(_): alive [
+            nv_post_html(h): p true none
+            concat(r): r h
+        ]
         add(i): i 1
     ]
     concat(r): r "</section>\n"
@@ -1486,7 +1523,9 @@ nv_board_header(r): board [
     nvm_escape(title): title
     nvm_escape(about): about
     concat(r): "<header class=\"board\"><h1>/" name "/ " title "</h1><p>" about "</p>"
-    concat(r): r "<p class=\"views\"><a href=\"" nv_prefix "/" name "/\">index</a> · <a href=\"" nv_prefix "/" name "/catalog\">catalog</a></p></header>\n"
+    concat(r): r "<p class=\"views\"><a href=\"" nv_prefix "/" name "/\">index</a> · <a href=\"" nv_prefix "/" name "/catalog\">catalog</a> · <a href=\"" nv_prefix "/" name "/atom.xml\">feed</a></p></header>\n"
+    nv_board_notice(notice): name
+    concat(r): r notice
 ]
 
 nv_board_page(r): board page [
@@ -1615,16 +1654,27 @@ nv_thread_page(r): board no [
     while(_): {i < n} [
         at(p): posts i
         at(bl): back i
-        nv_post_html(h): p false bl
-        concat(body): body h
+        getf(alive): p "alive"
+        if(_): alive [
+            nv_post_html(h): p false bl
+            concat(body): body h
+        ]
         add(i): i 1
     ]
     concat(body): body "</section>\n"
     if(_): {n > nv_bump_limit} [
         concat(body): body "<p class=\"omitted\">Bump limit reached: replies no longer lift this thread.</p>\n"
     ]
-    nv_form_html(form): name no
-    concat(body): body "<hr>\n" form
+    nv_is_locked(locked): no
+    if(_): locked [
+        concat(body): body "<hr>\n<p class=\"omitted\">This thread is locked.</p>\n"
+    ]
+    else(_): [
+        nv_form_html(form): name no
+        concat(body): body "<hr>\n" form
+    ]
+    nv_thread_url(gurl): name no
+    concat(body): body "<p class=\"views\"><a href=\"" gurl "/gallery\">gallery</a> · <a href=\"" gurl "/atom.xml\">feed</a></p>\n"
     getf(subject): op "subject"
     set(title): subject
     if(_): {title = ""} [
@@ -1869,6 +1919,14 @@ nv_handle(r): method target request [
         slice(path): target 0 q
         slice(query): target {q + 1} {tl - q - 1}
     ]
+    if(_): {path != "/post"} [
+        nv_segments(xseg): path
+        nv_extra_route(xr): method path query request xseg
+        if(_): {xr != null} [
+            set(r): xr
+            return(r): r
+        ]
+    ]
     if(_): {method = "POST"} [
         if(_): {path = "/post"} [
             nv_handle_post(r): request
@@ -1992,6 +2050,12 @@ init(ret): arg_cnt arg_vec [
     set(static_dir): ""
     set(cert): ""
     set(secret): ""
+    set(export_dir): ""
+    getenv(env_hash): "NOVGOROD_ADMIN_HASH"
+    typeof(eht): env_hash
+    if(_): {eht = "string"} [
+        str_lower(nv_admin_hash): env_hash
+    ]
     set(i): 0
     while(_): {i < arg_cnt} [
         at(a): arg_vec i
@@ -2004,6 +2068,27 @@ init(ret): arg_cnt arg_vec [
         ]
         elif(_): {a = "--hsts"} [
             set(nv_hsts): true
+        ]
+        elif(_): {a = "--read-only"} [
+            set(nv_read_only): true
+        ]
+        elif(_): {a = "--trust-proxy"} [
+            set(nv_trust_proxy): true
+        ]
+        elif(_): {a = "--admin-hash"} [
+            str_lower(nv_admin_hash): v
+            add(i): i 1
+        ]
+        elif(_): {a = "--lock-days"} [
+            nv_int(nv_lock_days): v
+            if(_): {nv_lock_days = null} [
+                set(nv_lock_days): 0
+            ]
+            add(i): i 1
+        ]
+        elif(_): {a = "--export"} [
+            set(export_dir): v
+            add(i): i 1
         ]
         elif(_): {a = "--host"} [
             set(host): v
@@ -2094,6 +2179,17 @@ init(ret): arg_cnt arg_vec [
     nv_s(cs): count
     concat(msg): "novgorod: " cs " posts in " data "\n"
     print(_): msg
+    if(_): {export_dir != ""} [
+        nv_export(written): export_dir
+        nv_s(ws): written
+        concat(msg): "novgorod: exported " ws " posts to " export_dir "\n"
+        print(_): msg
+        set(ret): 0
+        if(_): {written < 0} [
+            set(ret): 1
+        ]
+        return(ret): ret
+    ]
     if(_): {nv_tls = false} [
         uk_server(ret): host port
         return(ret): ret
