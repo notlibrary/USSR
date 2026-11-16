@@ -1,0 +1,137 @@
+# Ukraine's connection handling over loopback (port 18995): keep-alive
+# with pipelined requests, chunked request bodies, Expect: 100-continue,
+# refused smuggling forms, HTTP/1.0, and the header timeout. Needs the
+# port, so run_all.sh leaves it out (ukraine_* tests). From the repository
+# root:  ussr tests/ukraine_keepalive.su
+$include "../src/ukraine/ukraine.su"
+
+global(_): fails uk_keepalive uk_header_timeout uk_idle_timeout
+
+check(r): label good [
+    if(_): good [
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        set(fails): {fails + 1}
+    ]
+    print(_): line
+    set(r): 0
+]
+
+uk_route(result): method target raw [
+    uk_request_body(body): raw
+    concat(text): method " " target " [" body "]"
+    uk_response(result): "200 OK" "text/plain" text
+]
+
+# accepts one connection and runs Ukraine's handler on it
+serve_one(r): listener [
+    wait_readable(_): listener
+    socket_accept(c): listener
+    uk_client(r): c
+]
+
+# sends text, then reads until the peer closes (or 4 s pass)
+talk(r): text [
+    socket_tcp(s):
+    socket_connect(_): s "127.0.0.1" 18995
+    socket_send(_): s text
+    socket_nonblocking(_): s
+    set(r): ""
+    time(t0):
+    set(go): true
+    while(_): go [
+        socket_recv(more): s 4096
+        typeof(mt): more
+        if(_): {mt = "string" && more = ""} [
+            set(go): false
+        ]
+        elif(_): {mt = "string"} [
+            concat(r): r more
+        ]
+        else(_): [
+            time(now):
+            if(_): {now - t0 > 4} [
+                set(go): false
+            ]
+            else(_): [
+                sleep(_): 10
+            ]
+        ]
+    ]
+    socket_close(_): s
+]
+
+init(result): arg_cnt arg_vec [
+    set(fails): 0
+    set(uk_keepalive): true
+    set(uk_idle_timeout): 1
+    set(uk_header_timeout): 2
+    socket_tcp(l):
+    socket_bind(b): l "127.0.0.1" 18995
+    socket_listen(k): l 8
+    check(_): "listen" {b = 0 && k = 0}
+
+    async(srv): "serve_one" l
+    talk(got): "GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\nGET /c HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+    await(served): srv
+    str_count(n200): got "HTTP/1.1 200 OK"
+    check(_): "three pipelined requests" {n200 = 3 && served = 3}
+    str_find(ia): got "GET /a []" 0
+    str_find(ib): got "GET /b []" 0
+    str_find(ic): got "GET /c []" 0
+    check(_): "answered in order" {ia >= 0 && ia < ib && ib < ic}
+    str_count(nka): got "Connection: keep-alive"
+    str_count(ncl): got "Connection: close"
+    check(_): "keep-alive then close" {nka = 2 && ncl = 1}
+    str_contains(dated): got "\r\nDate: "
+    check(_): "date header" dated
+
+    async(srv): "serve_one" l
+    talk(got): "POST /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"
+    await(_): srv
+    str_contains(ch): got "POST /up [abcde]"
+    check(_): "chunked request body" ch
+
+    async(srv): "serve_one" l
+    talk(got): "POST /e HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    await(_): srv
+    str_starts(no100): got "HTTP/1.1 200"
+    check(_): "no 100 for an empty body" no100
+
+    async(srv): "serve_one" l
+    talk(got): "POST /s HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+    await(_): srv
+    str_starts(bad): got "HTTP/1.1 400"
+    check(_): "CL with TE refused" bad
+
+    async(srv): "serve_one" l
+    talk(got): "POST /s HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab"
+    await(_): srv
+    str_starts(bad): got "HTTP/1.1 400"
+    check(_): "duplicate Content-Length refused" bad
+
+    async(srv): "serve_one" l
+    talk(got): "GET / HTTP/1.0\r\n\r\n"
+    await(served): srv
+    str_contains(closed): got "Connection: close"
+    check(_): "HTTP/1.0 closes" {closed && served = 1}
+
+    async(srv): "serve_one" l
+    time(t0):
+    talk(got): "GET /slow HTTP/1.1\r\nHost: x\r\n"
+    time(t1):
+    await(_): srv
+    str_starts(late): got "HTTP/1.1 408"
+    check(_): "header timeout gives 408" {late && t1 - t0 <= 4}
+
+    async(srv): "serve_one" l
+    talk(got): "GET  / HTTP/1.1\r\n\r\n"
+    await(_): srv
+    str_starts(bad): got "HTTP/1.1 400"
+    check(_): "malformed request line refused" bad
+
+    socket_close(_): l
+    set(result): fails
+]
