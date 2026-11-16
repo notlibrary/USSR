@@ -1,0 +1,539 @@
+# json.su - a JSON reader and writer, in USSR.
+# JSON maps onto USSR values: objects become btrees (string keys, so they
+# come back sorted by key), arrays become vectors, and strings, numbers,
+# true, false and null become themselves. Numbers with a fraction or an
+# exponent are reals, others integers.
+#   json_parse(v): text        -> the value, or null with json_error set
+#                                 (json_parse of "null" also gives null:
+#                                 check json_error(e): when it matters)
+#   json_error(r):             -> "" after a good parse, else the reason
+#                                 and the byte offset
+#   json_stringify(r): value   -> compact JSON text
+#   json_pretty(r): value indent -> the same with newlines and `indent`
+#                                 spaces per level
+#   json_get(r): value path    -> walks "a.b.0.c" through objects and
+#                                 arrays; null when a step is missing
+# Strings are UTF-8; \uXXXX escapes (with surrogate pairs) decode to UTF-8,
+# and the writer escapes only what JSON requires. A NUL (\u0000) cannot
+# live in a USSR string and is an error.
+$once
+$include "strings.su"
+
+json_error(r): [
+    global(_): _json_error_text
+    set(r): _json_error_text
+]
+
+_json_fail(r): msg at [
+    global(_): _json_error_text _json_failed
+    if(_): {_json_failed = false} [
+        str_from_int(where): at
+        concat(_json_error_text): msg " at offset " where
+        set(_json_failed): true
+    ]
+    set(r): null
+]
+
+_json_ws(r): s i n [
+    set(r): i
+    set(go): {r < n}
+    while(_): go [
+        byte(b): s r
+        set(go): {b = 32 || b = 9 || b = 10 || b = 13}
+        if(_): go [
+            set(r): {r + 1}
+            set(go): {r < n}
+        ]
+    ]
+]
+
+# each reader returns [value, next_index]
+_json_pair(r): value next [
+    vec(r): ""
+    push(_): r value
+    push(_): r next
+]
+
+_json_value(r): s i n depth [
+    global(_): _json_failed
+    _json_ws(i): s i n
+    if(_): {i >= n} [
+        _json_fail(_): "unexpected end" i
+        _json_pair(r): null i
+        return(r): r
+    ]
+    if(_): {depth > 200} [
+        _json_fail(_): "nesting too deep" i
+        _json_pair(r): null i
+        return(r): r
+    ]
+    byte(b): s i
+    if(_): {b = 123} [
+        _json_object(r): s i n depth
+    ]
+    elif(_): {b = 91} [
+        _json_array(r): s i n depth
+    ]
+    elif(_): {b = 34} [
+        _json_string(r): s i n
+    ]
+    elif(_): {b = 116} [
+        slice(w): s i 4
+        if(_): {w = "true"} [
+            _json_pair(r): true {i + 4}
+        ]
+        else(_): [
+            _json_fail(_): "bad literal" i
+            _json_pair(r): null i
+        ]
+    ]
+    elif(_): {b = 102} [
+        slice(w): s i 5
+        if(_): {w = "false"} [
+            _json_pair(r): false {i + 5}
+        ]
+        else(_): [
+            _json_fail(_): "bad literal" i
+            _json_pair(r): null i
+        ]
+    ]
+    elif(_): {b = 110} [
+        slice(w): s i 4
+        if(_): {w = "null"} [
+            _json_pair(r): null {i + 4}
+        ]
+        else(_): [
+            _json_fail(_): "bad literal" i
+            _json_pair(r): null i
+        ]
+    ]
+    else(_): [
+        _json_number_at(r): s i n
+    ]
+]
+
+_json_number(r): s i n [
+    re_find(m): "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?" s i
+    set(good): false
+    typeof(t): m
+    if(_): {t = "vector"} [
+        at(text): m 0
+        set(good): {text != ""}
+    ]
+    if(_): {good = false} [
+        _json_fail(_): "unexpected character" i
+        _json_pair(r): null i
+        return(r): r
+    ]
+    str_to_number(v): text
+    re_test(real): "[.eE]" text
+    if(_): {real} [
+        set(v): {v * 1.0}
+    ]
+    len(k): text
+    _json_pair(r): v {i + k}
+]
+
+# re_find with a "from" still anchors ^ at the text's start, so the number
+# reader above works on the slice from i instead
+_json_number_at(r): s i n [
+    slice(rest): s i {n - i}
+    _json_number(p): rest 0 {n - i}
+    at(v): p 0
+    at(k): p 1
+    _json_pair(r): v {i + k}
+]
+
+_json_hex4(r): s i [
+    slice(h): s i 4
+    re_test(good): "^[0-9a-fA-F]{4}$" h
+    set(r): {0 - 1}
+    if(_): good [
+        str_to_int(r): h 16
+    ]
+]
+
+_json_string(r): s i n [
+    set(j): {i + 1}
+    set(out): ""
+    set(done): false
+    global(_): _json_failed
+    while(_): {done = false && _json_failed = false} [
+        if(_): {j >= n} [
+            _json_fail(_): "unterminated string" i
+        ]
+        else(_): [
+            # copy a run of plain bytes in one slice
+            set(k): j
+            set(go): true
+            while(_): go [
+                byte(b): s k
+                set(go): {b != 34 && b != 92 && b >= 32}
+                if(_): go [
+                    set(k): {k + 1}
+                    set(go): {k < n}
+                ]
+            ]
+            if(_): {k > j} [
+                slice(run): s j {k - j}
+                concat(out): out run
+                set(j): k
+            ]
+            if(_): {j < n} [
+                byte(b): s j
+                if(_): {b = 34} [
+                    set(done): true
+                    set(j): {j + 1}
+                ]
+                elif(_): {b < 32} [
+                    _json_fail(_): "control character in string" j
+                ]
+                elif(_): {j + 1 >= n} [
+                    _json_fail(_): "unterminated string" i
+                ]
+                else(_): [
+                    byte(e): s {j + 1}
+                    set(j): {j + 2}
+                    if(_): {e = 110} [
+                        concat(out): out "\n"
+                    ]
+                    elif(_): {e = 116} [
+                        concat(out): out "\t"
+                    ]
+                    elif(_): {e = 114} [
+                        concat(out): out "\r"
+                    ]
+                    elif(_): {e = 98} [
+                        chr(c): 8
+                        concat(out): out c
+                    ]
+                    elif(_): {e = 102} [
+                        chr(c): 12
+                        concat(out): out c
+                    ]
+                    elif(_): {e = 34 || e = 92 || e = 47} [
+                        chr(c): e
+                        concat(out): out c
+                    ]
+                    elif(_): {e = 117} [
+                        _json_hex4(cp): s j
+                        set(j): {j + 4}
+                        if(_): {cp >= 55296 && cp < 56320} [
+                            slice(tail): s j 2
+                            _json_hex4(lo): s {j + 2}
+                            if(_): {tail = "\\u" && lo >= 56320 && lo < 57344} [
+                                set(cp): {65536 + ((cp - 55296) << 10) + (lo - 56320)}
+                                set(j): {j + 6}
+                            ]
+                            else(_): [
+                                set(cp): {0 - 1}
+                            ]
+                        ]
+                        if(_): {cp <= 0} [
+                            _json_fail(_): "bad \\u escape" j
+                        ]
+                        else(_): [
+                            str_utf8_char(c): cp
+                            concat(out): out c
+                        ]
+                    ]
+                    else(_): [
+                        _json_fail(_): "bad escape" j
+                    ]
+                ]
+            ]
+        ]
+    ]
+    _json_pair(r): out j
+]
+
+_json_array(r): s i n depth [
+    global(_): _json_failed
+    vec(items): ""
+    _json_ws(j): s {i + 1} n
+    if(_): {j < n} [
+        byte(b): s j
+        if(_): {b = 93} [
+            _json_pair(r): items {j + 1}
+            return(r): r
+        ]
+    ]
+    set(go): true
+    while(_): {go && _json_failed = false} [
+        _json_value(p): s j n {depth + 1}
+        at(v): p 0
+        at(j): p 1
+        push(_): items v
+        _json_ws(j): s j n
+        set(b): 0
+        if(_): {j < n} [
+            byte(b): s j
+        ]
+        if(_): {b = 44} [
+            set(j): {j + 1}
+        ]
+        elif(_): {b = 93} [
+            set(j): {j + 1}
+            set(go): false
+        ]
+        else(_): [
+            _json_fail(_): "expected , or ]" j
+        ]
+    ]
+    _json_pair(r): items j
+]
+
+_json_object(r): s i n depth [
+    global(_): _json_failed
+    btree(obj):
+    _json_ws(j): s {i + 1} n
+    if(_): {j < n} [
+        byte(b): s j
+        if(_): {b = 125} [
+            _json_pair(r): obj {j + 1}
+            return(r): r
+        ]
+    ]
+    set(go): true
+    while(_): {go && _json_failed = false} [
+        _json_ws(j): s j n
+        set(b): 0
+        if(_): {j < n} [
+            byte(b): s j
+        ]
+        if(_): {b != 34} [
+            _json_fail(_): "expected a key" j
+        ]
+        else(_): [
+            _json_string(p): s j n
+            at(key): p 0
+            at(j): p 1
+            _json_ws(j): s j n
+            set(b): 0
+            if(_): {j < n} [
+                byte(b): s j
+            ]
+            if(_): {b != 58} [
+                _json_fail(_): "expected :" j
+            ]
+            else(_): [
+                _json_value(p): s {j + 1} n {depth + 1}
+                at(v): p 0
+                at(j): p 1
+                btput(_): obj key v
+                _json_ws(j): s j n
+                set(b): 0
+                if(_): {j < n} [
+                    byte(b): s j
+                ]
+                if(_): {b = 44} [
+                    set(j): {j + 1}
+                ]
+                elif(_): {b = 125} [
+                    set(j): {j + 1}
+                    set(go): false
+                ]
+                else(_): [
+                    _json_fail(_): "expected , or }" j
+                ]
+            ]
+        ]
+    ]
+    _json_pair(r): obj j
+]
+
+json_parse(r): text [
+    global(_): _json_error_text _json_failed
+    set(_json_error_text): ""
+    set(_json_failed): false
+    len(n): text
+    _json_value(p): text 0 n 0
+    at(r): p 0
+    at(j): p 1
+    if(_): {_json_failed = false} [
+        _json_ws(j): text j n
+        if(_): {j < n} [
+            _json_fail(_): "trailing characters" j
+        ]
+    ]
+    if(_): _json_failed [
+        set(r): null
+    ]
+]
+
+_json_quote(r): s [
+    len(n): s
+    set(i): 0
+    set(r): "\""
+    while(_): {i < n} [
+        set(k): i
+        set(go): true
+        while(_): go [
+            byte(b): s k
+            set(go): {b != 34 && b != 92 && b >= 32}
+            if(_): go [
+                set(k): {k + 1}
+                set(go): {k < n}
+            ]
+        ]
+        if(_): {k > i} [
+            slice(run): s i {k - i}
+            concat(r): r run
+            set(i): k
+        ]
+        if(_): {i < n} [
+            byte(b): s i
+            if(_): {b = 34} [
+                concat(r): r "\\\""
+            ]
+            elif(_): {b = 92} [
+                concat(r): r "\\\\"
+            ]
+            elif(_): {b = 10} [
+                concat(r): r "\\n"
+            ]
+            elif(_): {b = 13} [
+                concat(r): r "\\r"
+            ]
+            elif(_): {b = 9} [
+                concat(r): r "\\t"
+            ]
+            else(_): [
+                str_from_int_base(h): b 16
+                str_pad_left(h): h 4 "0"
+                concat(r): r "\\u" h
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    concat(r): r "\""
+]
+
+_json_write(r): v indent level [
+    typeof(t): v
+    set(nl): ""
+    set(pad): ""
+    set(pad_in): ""
+    set(colon): ":"
+    if(_): {indent > 0} [
+        set(nl): "\n"
+        str_repeat(pad): " " {indent * level}
+        str_repeat(pad_in): " " {indent * (level + 1)}
+        set(colon): ": "
+    ]
+    if(_): {t = "null"} [
+        set(r): "null"
+    ]
+    elif(_): {t = "boolean"} [
+        set(r): "false"
+        if(_): v [
+            set(r): "true"
+        ]
+    ]
+    elif(_): {t = "integer"} [
+        str_from_int(r): v
+    ]
+    elif(_): {t = "real"} [
+        str_from_number(r): v 12
+        re_test(has): "[.eE]" r
+        if(_): {has = false} [
+            concat(r): r ".0"
+        ]
+    ]
+    elif(_): {t = "string"} [
+        _json_quote(r): v
+    ]
+    elif(_): {t = "vector"} [
+        len(n): v
+        if(_): {n = 0} [
+            set(r): "[]"
+        ]
+        else(_): [
+            concat(r): "[" nl
+            set(i): 0
+            while(_): {i < n} [
+                at(x): v i
+                _json_write(xs): x indent {level + 1}
+                if(_): {i > 0} [
+                    concat(r): r "," nl
+                ]
+                concat(r): r pad_in xs
+                set(i): {i + 1}
+            ]
+            concat(r): r nl pad "]"
+        ]
+    ]
+    elif(_): {t = "btree"} [
+        btkeys(keys): v
+        len(n): keys
+        if(_): {n = 0} [
+            set(r): "{}"
+        ]
+        else(_): [
+            concat(r): "{" nl
+            set(i): 0
+            while(_): {i < n} [
+                at(k): keys i
+                typeof(kt): k
+                if(_): {kt != "string"} [
+                    vec(one): ""
+                    push(_): one k
+                    str_join(k): one ""
+                ]
+                btget(x): v k
+                _json_quote(ks): k
+                _json_write(xs): x indent {level + 1}
+                if(_): {i > 0} [
+                    concat(r): r "," nl
+                ]
+                concat(r): r pad_in ks colon xs
+                set(i): {i + 1}
+            ]
+            concat(r): r nl pad "}"
+        ]
+    ]
+    else(_): [
+        # struct instances travel as their UNO text
+        encode(u): v
+        _json_quote(r): u
+    ]
+]
+
+json_stringify(r): value [
+    _json_write(r): value 0 0
+]
+
+json_pretty(r): value indent [
+    _json_write(r): value indent 0
+]
+
+json_get(r): value path [
+    str_split(steps): path "."
+    set(r): value
+    len(n): steps
+    set(i): 0
+    while(_): {i < n} [
+        at(step): steps i
+        typeof(t): r
+        if(_): {t = "btree"} [
+            btget(r): r step null
+        ]
+        elif(_): {t = "vector"} [
+            str_to_int(k): step 10
+            len(m): r
+            if(_): {k = null} [
+                set(r): null
+            ]
+            elif(_): {k >= 0 && k < m} [
+                at(r): r k
+            ]
+            else(_): [
+                set(r): null
+            ]
+        ]
+        else(_): [
+            set(r): null
+        ]
+        set(i): {i + 1}
+    ]
+]

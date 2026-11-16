@@ -1,0 +1,359 @@
+# dates.su - calendar arithmetic and date formatting, in USSR.
+# Dates are proleptic Gregorian. "Unix days" count days since 1970-01-01;
+# a time(s): value divided into days gives one. All in UTC unless a
+# localtime(t): vector is passed in.
+#   is_leap_year(r): y          -> true for Gregorian leap years
+#   days_in_month(r): y m       -> 28..31
+#   days_from_civil(r): y m d   -> Unix days for a date
+#   civil_from_days(v): days    -> [year month day]
+#   day_of_week(r): y m d       -> 0 (Sunday) .. 6
+#   day_of_year(r): y m d       -> 1..366
+#   gmtime(v): seconds          -> [year month day hour minute second
+#                                  weekday yearday], like localtime(t):
+#   timegm(r): v                -> seconds from such a vector (UTC)
+#   iso_date(r): v              -> "2026-11-16" from a time vector
+#   iso_datetime(r): v          -> "2026-11-16T09:05:00" from a time vector
+#   iso_utc(r): seconds         -> "2026-11-16T09:05:00Z"
+#   iso_parse(r): text          -> seconds for "YYYY-MM-DD", with an optional
+#                                  "THH:MM[:SS]" and "Z" or "+HH:MM"; null if
+#                                  the text is not such a date
+#   strftime(r): format v       -> %Y %m %d %H %M %S %y %j %a %A %b %B %e %%
+#   month_name(r): m / day_name(r): wd   English names
+#   elapsed_ms(r): start        -> milliseconds since a clock_ms(s): value
+#   clock_ms(r):                -> a millisecond clock for timing; it has
+#                                  the resolution of time(s): (seconds)
+#                                  unless the host offers better
+$once
+$include "strings.su"
+
+is_leap_year(r): y [
+    set(r): {(y % 4 = 0 && y % 100 != 0) || y % 400 = 0}
+]
+
+days_in_month(r): y m [
+    byte(b): "0303232332323" m
+    set(r): {28 + b - 48}
+    if(_): {m = 2} [
+        is_leap_year(leap): y
+        set(r): 28
+        if(_): leap [
+            set(r): 29
+        ]
+    ]
+]
+
+_date_div(r): a b [
+    # floor division for possibly negative a
+    set(m): {a % b}
+    if(_): {m < 0} [
+        set(m): {m + b}
+    ]
+    str_trunc(r): {(a - m) / b}
+]
+
+# Howard Hinnant's algorithm
+days_from_civil(r): y m d [
+    set(yy): y
+    if(_): {m <= 2} [
+        set(yy): {y - 1}
+    ]
+    _date_div(era): yy 400
+    set(yoe): {yy - era * 400}
+    set(mp): {m + 9}
+    if(_): {m > 2} [
+        set(mp): {m - 3}
+    ]
+    str_trunc(doy): {(153 * mp + 2) / 5}
+    set(doy): {doy + d - 1}
+    str_trunc(q4): {yoe / 4}
+    str_trunc(q100): {yoe / 100}
+    set(doe): {yoe * 365 + q4 - q100 + doy}
+    set(r): {era * 146097 + doe - 719468}
+]
+
+civil_from_days(r): days [
+    set(z): {days + 719468}
+    _date_div(era): z 146097
+    set(doe): {z - era * 146097}
+    str_trunc(a): {doe / 1460}
+    str_trunc(b): {doe / 36524}
+    str_trunc(c): {doe / 146096}
+    str_trunc(yoe): {(doe - a + b - c) / 365}
+    set(y): {yoe + era * 400}
+    str_trunc(q4): {yoe / 4}
+    str_trunc(q100): {yoe / 100}
+    set(doy): {doe - (365 * yoe + q4 - q100)}
+    str_trunc(mp): {(5 * doy + 2) / 153}
+    str_trunc(dd): {(153 * mp + 2) / 5}
+    set(d): {doy - dd + 1}
+    set(m): {mp + 3}
+    if(_): {mp >= 10} [
+        set(m): {mp - 9}
+    ]
+    if(_): {m <= 2} [
+        set(y): {y + 1}
+    ]
+    vec(r): ""
+    push(_): r y
+    push(_): r m
+    push(_): r d
+]
+
+day_of_week(r): y m d [
+    days_from_civil(n): y m d
+    set(r): {(n + 4) % 7}
+    if(_): {r < 0} [
+        set(r): {r + 7}
+    ]
+]
+
+day_of_year(r): y m d [
+    days_from_civil(a): y m d
+    days_from_civil(b): y 1 1
+    set(r): {a - b + 1}
+]
+
+gmtime(r): seconds [
+    _date_div(days): seconds 86400
+    set(rest): {seconds - days * 86400}
+    civil_from_days(ymd): days
+    at(y): ymd 0
+    at(m): ymd 1
+    at(d): ymd 2
+    str_trunc(hh): {rest / 3600}
+    set(rest): {rest - hh * 3600}
+    str_trunc(mm): {rest / 60}
+    set(ss): {rest - mm * 60}
+    day_of_week(wd): y m d
+    day_of_year(yd): y m d
+    vec(r): ""
+    push(_): r y
+    push(_): r m
+    push(_): r d
+    push(_): r hh
+    push(_): r mm
+    push(_): r ss
+    push(_): r wd
+    push(_): r yd
+]
+
+timegm(r): v [
+    at(y): v 0
+    at(m): v 1
+    at(d): v 2
+    at(hh): v 3
+    at(mm): v 4
+    at(ss): v 5
+    days_from_civil(days): y m d
+    set(r): {days * 86400 + hh * 3600 + mm * 60 + ss}
+]
+
+_date_two(r): n [
+    str_from_int(r): n
+    str_pad_left(r): r 2 "0"
+]
+
+iso_date(r): v [
+    at(y): v 0
+    at(m): v 1
+    at(d): v 2
+    str_from_int(ys): y
+    str_pad_left(ys): ys 4 "0"
+    _date_two(ms): m
+    _date_two(ds): d
+    concat(r): ys "-" ms "-" ds
+]
+
+iso_datetime(r): v [
+    iso_date(day): v
+    at(hh): v 3
+    at(mm): v 4
+    at(ss): v 5
+    _date_two(hs): hh
+    _date_two(ms): mm
+    _date_two(sx): ss
+    concat(r): day "T" hs ":" ms ":" sx
+]
+
+iso_utc(r): seconds [
+    gmtime(v): seconds
+    iso_datetime(r): v
+    concat(r): r "Z"
+]
+
+_date_num(r): text from count [
+    slice(part): text from count
+    re_test(good): "^[0-9]+$" part
+    set(r): null
+    if(_): good [
+        str_to_int(r): part 10
+    ]
+]
+
+iso_parse(r): text [
+    str_trim(t): text
+    set(r): null
+    re_find(m): "^(\\d{4})-(\\d{2})-(\\d{2})(?:[T ](\\d{2}):(\\d{2})(?::(\\d{2}))?(?:\\.\\d+)?)?(Z|[+-]\\d{2}:?\\d{2})?$" t
+    typeof(k): m
+    if(_): {k != "vector"} [
+        return(r): r
+    ]
+    at(ys): m 1
+    at(mos): m 2
+    at(ds): m 3
+    str_to_int(y): ys 10
+    str_to_int(mo): mos 10
+    str_to_int(d): ds 10
+    if(_): {mo < 1 || mo > 12} [
+        return(r): r
+    ]
+    days_in_month(dim): y mo
+    if(_): {d < 1 || d > dim} [
+        return(r): r
+    ]
+    set(hh): 0
+    set(mi): 0
+    set(ss): 0
+    at(hs): m 4
+    typeof(ht): hs
+    if(_): {ht = "string"} [
+        str_to_int(hh): hs 10
+        at(mis): m 5
+        str_to_int(mi): mis 10
+        at(sss): m 6
+        typeof(st): sss
+        if(_): {st = "string"} [
+            str_to_int(ss): sss 10
+        ]
+    ]
+    if(_): {hh > 23 || mi > 59 || ss > 60} [
+        return(r): r
+    ]
+    days_from_civil(days): y mo d
+    set(r): {days * 86400 + hh * 3600 + mi * 60 + ss}
+    at(zone): m 7
+    set(zn): 0
+    typeof(zt): zone
+    if(_): {zt = "string"} [
+        len(zn): zone
+    ]
+    if(_): {zn > 1} [
+        byte(sign): zone 0
+        str_replace(z): zone ":" ""
+        slice(zh): z 1 2
+        slice(zm): z 3 2
+        str_to_int(oh): zh 10
+        str_to_int(om): zm 10
+        set(off): {oh * 3600 + om * 60}
+        if(_): {sign = 43} [
+            set(r): {r - off}
+        ]
+        else(_): [
+            set(r): {r + off}
+        ]
+    ]
+]
+
+month_name(r): m [
+    str_split(names): "January,February,March,April,May,June,July,August,September,October,November,December" ","
+    at(r): names {m - 1}
+]
+
+day_name(r): wd [
+    str_split(names): "Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday" ","
+    at(r): names wd
+]
+
+strftime(r): format v [
+    at(y): v 0
+    at(mo): v 1
+    at(d): v 2
+    at(hh): v 3
+    at(mi): v 4
+    at(ss): v 5
+    len(vn): v
+    if(_): {vn > 6} [
+        at(wd): v 6
+        at(yd): v 7
+    ]
+    else(_): [
+        day_of_week(wd): y mo d
+        day_of_year(yd): y mo d
+    ]
+    len(n): format
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): format i
+        if(_): {b = 37 && i + 1 < n} [
+            at(c): format {i + 1}
+            set(out): ""
+            if(_): {c = "Y"} [
+                str_from_int(out): y
+            ]
+            elif(_): {c = "y"} [
+                _date_two(out): {y % 100}
+            ]
+            elif(_): {c = "m"} [
+                _date_two(out): mo
+            ]
+            elif(_): {c = "d"} [
+                _date_two(out): d
+            ]
+            elif(_): {c = "e"} [
+                str_from_int(out): d
+                str_pad_left(out): out 2 " "
+            ]
+            elif(_): {c = "H"} [
+                _date_two(out): hh
+            ]
+            elif(_): {c = "M"} [
+                _date_two(out): mi
+            ]
+            elif(_): {c = "S"} [
+                _date_two(out): ss
+            ]
+            elif(_): {c = "j"} [
+                str_from_int(out): yd
+                str_pad_left(out): out 3 "0"
+            ]
+            elif(_): {c = "A"} [
+                day_name(out): wd
+            ]
+            elif(_): {c = "a"} [
+                day_name(out): wd
+                slice(out): out 0 3
+            ]
+            elif(_): {c = "B"} [
+                month_name(out): mo
+            ]
+            elif(_): {c = "b"} [
+                month_name(out): mo
+                slice(out): out 0 3
+            ]
+            elif(_): {c = "%"} [
+                set(out): "%"
+            ]
+            else(_): [
+                concat(out): "%" c
+            ]
+            concat(r): r out
+            set(i): {i + 2}
+        ]
+        else(_): [
+            at(c): format i
+            concat(r): r c
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+clock_ms(r): [
+    time(s):
+    set(r): {s * 1000}
+]
+
+elapsed_ms(r): start [
+    clock_ms(now):
+    set(r): {now - start}
+]

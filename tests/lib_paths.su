@@ -1,0 +1,118 @@
+# Tests src/libs/paths.su. It works in tests/lib_paths_tmp/ (run from the repository root) and removes it.
+$include "../src/libs/testing.su"
+$include "../src/libs/paths.su"
+
+path_join(p): "a/b" "c.su"
+assert_eq(_): "join" p "a/b/c.su"
+path_join(p): "a/" "/abs"
+assert_eq(_): "join absolute" p "/abs"
+vec(parts): ""
+push(_): parts "src"
+push(_): parts "libs"
+push(_): parts "io.su"
+path_join_all(p): parts
+assert_eq(_): "join all" p "src/libs/io.su"
+path_dir(p): "src/libs/io.su"
+assert_eq(_): "dir" p "src/libs"
+path_dir(p): "io.su"
+assert_eq(_): "dir none" p "."
+path_dir(p): "/etc"
+assert_eq(_): "dir root" p "/"
+path_base(p): "C:\\Users\\x\\file.tar.gz"
+assert_eq(_): "base windows" p "file.tar.gz"
+path_ext(p): "file.tar.gz"
+assert_eq(_): "ext" p ".gz"
+path_ext(p): ".profile"
+assert_eq(_): "ext dotfile" p ""
+path_stem(p): "dir/report.txt"
+assert_eq(_): "stem" p "report"
+path_is_abs(b): "C:/x"
+assert_true(_): "abs drive" b
+path_is_abs(b): "x/y"
+assert_eq(_): "abs relative" b false
+path_normalize(p): "a/./b/../c//d/"
+assert_eq(_): "normalize" p "a/c/d"
+path_normalize(p): "../x/../../y"
+assert_eq(_): "normalize up" p "../../y"
+path_normalize(p): "/a/../../b"
+assert_eq(_): "normalize root" p "/b"
+path_normalize(p): "C:\\a\\..\\b"
+assert_eq(_): "normalize drive" p "C:/b"
+path_split(v): "/a//b/c"
+encode(e): v
+assert_eq(_): "split" e "[`a`,`b`,`c`]"
+
+set(dir): "tests/lib_paths_tmp"
+remove_tree(_): dir
+make_dir(_): dir
+path_join(f): dir "lines.txt"
+vec(lines): ""
+push(_): lines "first"
+push(_): lines "второй"
+push(_): lines ""
+write_lines(ok): f lines
+assert_eq(_): "write lines" ok 0
+append_line(_): f "last"
+read_lines(back): f
+encode(e): back
+assert_eq(_): "read lines" e "[`first`,`второй`,``,`last`]"
+exists(b): f
+assert_true(_): "exists" b
+path_join(missing): dir "nope"
+exists(b): missing
+assert_eq(_): "exists not" b false
+read_lines(none): missing
+assert_null(_): "read lines missing" none
+write_file_atomic(ok): f "replaced"
+assert_eq(_): "atomic write" ok 0
+read_text(t): f
+assert_eq(_): "atomic content" t "replaced"
+path_join(sub): dir "sub"
+make_dir(_): sub
+path_join(g): sub "deep.su"
+write_text(_): g "x"
+path_join(h): sub "other.txt"
+write_text(_): h "y"
+walk_dir(all): dir
+encode(e): all
+assert_eq(_): "walk" e "[`tests/lib_paths_tmp/lines.txt`,`tests/lib_paths_tmp/sub/deep.su`,`tests/lib_paths_tmp/sub/other.txt`]"
+glob(found): "tests/lib_paths_tmp/**/*.su"
+encode(e): found
+assert_eq(_): "glob" e "[`tests/lib_paths_tmp/sub/deep.su`]"
+glob_match(b): "src/*.su" "src/a.su"
+assert_true(_): "glob match" b
+glob_match(b): "src/*.su" "src/x/a.su"
+assert_eq(_): "glob star one part" b false
+glob_match(b): "**/t?st.su" "a/b/test.su"
+assert_true(_): "glob double star" b
+path_join(copy): dir "copy"
+copy_dir(ok): sub copy
+assert_eq(_): "copy dir" ok 0
+path_join(cg): copy "deep.su"
+read_text(t): cg
+assert_eq(_): "copy dir content" t "x"
+remove_tree(ok): "/"
+assert_eq(_): "remove tree refuses root" ok {0 - 1}
+remove_tree(ok): dir
+assert_eq(_): "remove tree" ok 0
+exists(b): dir
+assert_eq(_): "removed" b false
+
+setenv(_): "LIB_PATHS_X" "val"
+env_expand(s): "a/$LIB_PATHS_X/${LIB_PATHS_X}b/$LIB_PATHS_NONE/$"
+assert_eq(_): "env expand" s "a/val/valb//$"
+env_get(s): "LIB_PATHS_NONE" "dflt"
+assert_eq(_): "env get default" s "dflt"
+setenv(_): "HOME" "/home/t"
+env_expand(s): "~/x"
+assert_eq(_): "env tilde" s "/home/t/x"
+temp_dir(t):
+assert_true(_): "temp dir" {t != ""}
+temp_path(t): "ussr_"
+exists(b): t
+assert_eq(_): "temp path fresh" b false
+env_path_list(v):
+len(n): v
+assert_true(_): "path list" {n > 0}
+
+test_summary(n):

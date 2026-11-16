@@ -1,0 +1,45 @@
+PASS join
+PASS join absolute
+PASS join all
+PASS dir
+PASS dir none
+PASS dir root
+PASS base windows
+PASS ext
+PASS ext dotfile
+PASS stem
+PASS abs drive
+PASS abs relative
+PASS normalize
+PASS normalize up
+PASS normalize root
+PASS normalize drive
+PASS split
+PASS write lines
+PASS read lines
+PASS exists
+PASS exists not
+PASS read lines missing
+PASS atomic write
+PASS atomic content
+PASS walk
+PASS glob
+PASS glob match
+PASS glob star one part
+PASS glob double star
+PASS copy dir
+PASS copy dir content
+PASS remove tree refuses root
+PASS remove tree
+PASS removed
+PASS env expand
+PASS env get default
+PASS env tilde
+PASS temp dir
+PASS temp path fresh
+PASS path list
+40 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

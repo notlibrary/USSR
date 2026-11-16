@@ -1,0 +1,122 @@
+# Tests src/libs/json.su, args.su and textproc.su.
+$include "../src/libs/testing.su"
+$include "../src/libs/json.su"
+$include "../src/libs/args.su"
+$include "../src/libs/textproc.su"
+
+json_parse(v): "{\"name\": \"Москва\", \"pop\": 13, \"area\": 2561.5, \"tags\": [\"capital\", true, null], \"nested\": {\"k\": -1e2}}"
+json_error(e):
+assert_eq(_): "json no error" e ""
+json_get(x): v "name"
+assert_eq(_): "json string" x "Москва"
+json_get(x): v "pop"
+assert_eq(_): "json int" x 13
+json_get(x): v "area"
+assert_near(_): "json real" x 2561.5 0.0001
+json_get(x): v "tags.1"
+assert_true(_): "json array bool" x
+json_get(x): v "tags.2"
+assert_null(_): "json null" x
+json_get(x): v "nested.k"
+assert_near(_): "json exponent" x -100.0 0.0001
+json_get(x): v "tags.9"
+assert_null(_): "json missing" x
+json_stringify(s): v
+assert_eq(_): "json stringify" s "{\"area\":2561.5,\"name\":\"Москва\",\"nested\":{\"k\":-100.0},\"pop\":13,\"tags\":[\"capital\",true,null]}"
+json_parse(v): "\"a\\\"b\\\\c\\n\\u0416\\ud83d\\ude00\""
+assert_eq(_): "json escapes" v "a\"b\\c\nЖ😀"
+json_stringify(s): v
+assert_eq(_): "json quote" s "\"a\\\"b\\\\c\\nЖ😀\""
+json_parse(v): "[1, 2,]"
+json_error(e):
+assert_true(_): "json bad error" {e != ""}
+assert_null(_): "json bad value" v
+json_parse(v): "{\"a\" 1}"
+json_error(e):
+str_starts(b): e "expected :"
+assert_true(_): "json expected colon" b
+json_parse(v): "[] x"
+json_error(e):
+str_starts(b): e "trailing"
+assert_true(_): "json trailing" b
+json_parse(v): "[[1,[2]],{}]"
+json_pretty(s): v 2
+assert_eq(_): "json pretty" s "[\n  [\n    1,\n    [\n      2\n    ]\n  ],\n  {}\n]"
+
+args_new(p): "tool" "Does a thing."
+args_flag(_): p "verbose" "v" "print more"
+args_flag(_): p "quiet" "q" "print less"
+args_option(_): p "out" "o" "FILE" "where to write" "out.txt"
+args_option(_): p "level" "l" "N" "how hard" "1"
+str_split(argv): "tool -vq --level=3 input.txt -o result.bin -- -notopt" " "
+args_parse(a): p argv 1
+args_error(e): a
+assert_eq(_): "args no error" e ""
+args_has(b): a "verbose"
+assert_true(_): "args flag" b
+args_has(b): a "quiet"
+assert_true(_): "args combined flags" b
+args_get(x): a "level"
+assert_eq(_): "args equals" x "3"
+args_get(x): a "out"
+assert_eq(_): "args short value" x "result.bin"
+args_rest(r): a
+encode(x): r
+assert_eq(_): "args rest" x "[`input.txt`,`-notopt`]"
+str_split(argv): "-ofile.txt" " "
+args_parse(a): p argv 0
+args_get(x): a "out"
+assert_eq(_): "args attached value" x "file.txt"
+args_get(x): a "level"
+assert_eq(_): "args default" x "1"
+args_has(b): a "verbose"
+assert_eq(_): "args flag absent" b false
+str_split(argv): "--bogus" " "
+args_parse(a): p argv 0
+args_error(e): a
+assert_eq(_): "args unknown" e "unknown option --bogus"
+str_split(argv): "--out" " "
+args_parse(a): p argv 0
+args_error(e): a
+assert_eq(_): "args missing value" e "option --out needs a value"
+args_help(h): p
+str_contains(b): h "-o, --out FILE"
+assert_true(_): "args help option" b
+str_contains(b): h "(default: out.txt)"
+assert_true(_): "args help default" b
+
+html_escape(s): "<a href=\"x\">&'</a>"
+assert_eq(_): "html escape" s "&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;"
+sql_quote(s): "O'Brien"
+assert_eq(_): "sql quote" s "'O''Brien'"
+shell_quote(s): "it's"
+assert_eq(_): "shell quote" s "'it'\\''s'"
+btree(vals):
+btput(_): vals "who" "<b>"
+btput(_): vals "n" 3
+template_render(s): "Hi ${who}, ${n} new, $$5, ${none}" vals "html"
+assert_eq(_): "template html" s "Hi &lt;b&gt;, 3 new, $5, ${none}"
+template_render(s): "x=${ who }" vals ""
+assert_eq(_): "template raw" s "x=<b>"
+
+str_split(a): "a b c d e" " "
+str_split(b): "a c d x e" " "
+diff_lines(d): a b
+encode(x): d
+assert_eq(_): "diff" x "[`  a`,`- b`,`  c`,`  d`,`+ x`,`  e`]"
+patch_apply(back): a d
+list_equal(ok): back b
+assert_true(_): "patch apply" ok
+patch_apply(bad): b d
+assert_null(_): "patch mismatch" bad
+diff_unified(u): a b "old" "new"
+assert_eq(_): "diff unified" u "--- old\n+++ new\n@@ -1,5 +1,5 @@\n a\n-b\n c\n d\n+x\n e\n"
+
+log_level(_): "warn"
+log_info(shown): "hidden"
+assert_eq(_): "log filtered" shown 0
+log_level(_): "error"
+log_warn(shown): "hidden too"
+assert_eq(_): "log level" shown 0
+
+test_summary(n):

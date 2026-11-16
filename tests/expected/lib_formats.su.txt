@@ -1,0 +1,45 @@
+PASS json no error
+PASS json string
+PASS json int
+PASS json real
+PASS json array bool
+PASS json null
+PASS json exponent
+PASS json missing
+PASS json stringify
+PASS json escapes
+PASS json quote
+PASS json bad error
+PASS json bad value
+PASS json expected colon
+PASS json trailing
+PASS json pretty
+PASS args no error
+PASS args flag
+PASS args combined flags
+PASS args equals
+PASS args short value
+PASS args rest
+PASS args attached value
+PASS args default
+PASS args flag absent
+PASS args unknown
+PASS args missing value
+PASS args help option
+PASS args help default
+PASS html escape
+PASS sql quote
+PASS shell quote
+PASS template html
+PASS template raw
+PASS diff
+PASS patch apply
+PASS patch mismatch
+PASS diff unified
+PASS log filtered
+PASS log level
+40 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

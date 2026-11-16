@@ -1,0 +1,131 @@
+# testing.su - a small test helper shared by tests/ and subprojects.
+# Every check prints "PASS label" or "FAIL label (got X, want Y)" and
+# counts; test_summary prints the totals and returns the failure count,
+# so a script can end with `test_summary(n):` and exit with n.
+#   assert_eq(r): label got want        -> true when equal (values of
+#                                          different kinds are unequal;
+#                                          vectors compare item by item)
+#   assert_true(r): label value
+#   assert_near(r): label got want eps  -> |got - want| <= eps
+#   assert_null(r): label value
+#   test_reset(_): / test_counts(v): -> [passed failed]
+#   test_summary(r):                    -> prints "N passed, M failed"
+# Counters live in the !-hash namespace, so they work in init programs and
+# across processes.
+$once
+$include "strings.su"
+$include "lists.su"
+
+_test_text(r): x [
+    typeof(t): x
+    if(_): {t = "string"} [
+        concat(r): "\"" x "\""
+    ]
+    elif(_): {t = "vector"} [
+        encode(r): x
+    ]
+    else(_): [
+        vec(one): ""
+        push(_): one x
+        str_join(r): one ""
+    ]
+]
+
+_test_record(r): label good detail [
+    btree_global_counts(c):
+    if(_): good [
+        btget(p): c "pass"
+        btput(_): c "pass" {p + 1}
+        concat(line): "PASS " label
+    ]
+    else(_): [
+        btget(f): c "fail"
+        btput(_): c "fail" {f + 1}
+        concat(line): "FAIL " label detail
+    ]
+    print(_): line
+    set(r): good
+]
+
+# one counter table per program run, kept in a global
+btree_global_counts(r): [
+    global(_): _test_counts_tree
+    typeof(t): _test_counts_tree
+    if(_): {t = "null"} [
+        btree(_test_counts_tree):
+        btput(_): _test_counts_tree "pass" 0
+        btput(_): _test_counts_tree "fail" 0
+    ]
+    set(r): _test_counts_tree
+]
+
+test_reset(r): [
+    btree_global_counts(c):
+    btput(_): c "pass" 0
+    btput(_): c "fail" 0
+    set(r): 0
+]
+
+test_counts(r): [
+    btree_global_counts(c):
+    btget(p): c "pass"
+    btget(f): c "fail"
+    vec(r): ""
+    push(_): r p
+    push(_): r f
+]
+
+assert_eq(r): label got want [
+    typeof(tg): got
+    typeof(tw): want
+    set(good): false
+    if(_): {tg = "vector" && tw = "vector"} [
+        list_equal(good): got want
+    ]
+    else(_): [
+        _list_same(good): got want
+    ]
+    set(detail): ""
+    if(_): {good = false} [
+        _test_text(g): got
+        _test_text(w): want
+        concat(detail): " (got " g ", want " w ")"
+    ]
+    _test_record(r): label good detail
+]
+
+assert_true(r): label value [
+    set(good): {value = true}
+    _test_record(r): label good " (not true)"
+]
+
+assert_null(r): label value [
+    typeof(t): value
+    set(good): {t = "null"}
+    _test_text(g): value
+    concat(detail): " (got " g ")"
+    _test_record(r): label good detail
+]
+
+assert_near(r): label got want eps [
+    set(d): {got - want}
+    if(_): {d < 0} [
+        set(d): {0 - d}
+    ]
+    set(good): {d <= eps}
+    _test_text(g): got
+    _test_text(w): want
+    concat(detail): " (got " g ", want " w ")"
+    _test_record(r): label good detail
+]
+
+test_summary(r): [
+    test_counts(c):
+    at(p): c 0
+    at(f): c 1
+    str_from_int(ps): p
+    str_from_int(fs): f
+    concat(line): ps " passed, " fs " failed"
+    print(_): line
+    set(r): f
+]

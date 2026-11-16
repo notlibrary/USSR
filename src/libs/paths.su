@@ -1,0 +1,699 @@
+# paths.su - path, file and environment helpers over io.su's primitives.
+# Paths use "/" on every platform; a "\" is read as "/" too, so Windows
+# paths work. A drive prefix ("C:") is kept as part of the root.
+#   path_join(r): a b          -> a and b with one "/" between; an absolute
+#                                 b replaces a
+#   path_join_all(r): v        -> path_join over a vector of parts
+#   path_dir(r): p             -> everything before the last "/" ("." if none)
+#   path_base(r): p            -> the last part
+#   path_ext(r): p             -> ".su" style extension of the last part, or ""
+#   path_stem(r): p            -> the last part without its extension
+#   path_is_abs(r): p          -> starts with "/" or a drive letter
+#   path_normalize(r): p       -> "." and ".." resolved, "//" collapsed
+#   path_abs(r): p             -> joined to getcwd(s): when relative
+#   path_split(v): p           -> its parts, without empty ones
+#   exists(r): p               -> true for a file or a directory
+#   read_lines(v): path        -> lines without their LF/CRLF, null when
+#                                 the file cannot be opened
+#   write_lines(r): path v     -> the lines, each ending in LF; 0 or -1
+#   append_line(r): path text  -> text and a LF at the end of a file
+#   read_text(r): path / write_text(r): path text
+#   write_file_atomic(r): path text -> writes path.tmp, then renames it over
+#                                 path (0 ok, -1 failed)
+#   walk_dir(v): dir           -> every file below dir, as paths, sorted
+#   glob(v): pattern           -> files matching a pattern with * ? and **
+#   glob_match(r): pattern path -> the matcher glob uses
+#   copy_dir(r): from to       -> copies a tree; never replaces files
+#   remove_tree(r): dir        -> deletes a tree; refuses "", "/" and
+#                                 drive roots; 0 ok, -1 failed
+#   temp_dir(r):               -> TMPDIR, TEMP, TMP or /tmp
+#   temp_path(r): prefix       -> a fresh name in temp_dir (not created)
+#   env_get(r): name default   -> getenv, or default when unset
+#   env_expand(r): text        -> $NAME, ${NAME} and ~ at the start
+#                                 expanded; unset names give ""
+#   env_path_list(v):          -> PATH split at ";" on Windows, ":" elsewhere
+#   which(r): program          -> the first PATH entry holding program (on
+#                                 Windows also with .exe, .bat, .cmd), or null
+$once
+$include "strings.su"
+
+_path_slashes(r): p [
+    str_replace(r): p "\\" "/"
+]
+
+path_is_abs(r): p [
+    _path_slashes(q): p
+    len(n): q
+    set(r): false
+    if(_): {n > 0} [
+        byte(b): q 0
+        set(r): {b = 47}
+        if(_): {n >= 2 && r = false} [
+            byte(c): q 1
+            set(r): {c = 58 && ((b >= 65 && b <= 90) || (b >= 97 && b <= 122))}
+        ]
+    ]
+]
+
+path_join(r): a b [
+    _path_slashes(a): a
+    _path_slashes(b): b
+    path_is_abs(abs): b
+    if(_): {abs || a = ""} [
+        set(r): b
+        return(r): r
+    ]
+    if(_): {b = ""} [
+        set(r): a
+        return(r): r
+    ]
+    str_ends(slash): a "/"
+    if(_): slash [
+        concat(r): a b
+    ]
+    else(_): [
+        concat(r): a "/" b
+    ]
+]
+
+path_join_all(r): v [
+    len(n): v
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(p): v i
+        path_join(r): r p
+        set(i): {i + 1}
+    ]
+]
+
+_path_trim_end(r): p [
+    set(r): p
+    len(n): r
+    set(go): {n > 1}
+    while(_): go [
+        byte(b): r {n - 1}
+        set(go): {b = 47 && n > 1}
+        if(_): go [
+            set(n): {n - 1}
+            slice(r): r 0 n
+            set(go): {n > 1}
+        ]
+    ]
+]
+
+path_dir(r): p [
+    _path_slashes(q): p
+    _path_trim_end(q): q
+    str_rfind(at): q "/"
+    if(_): {at < 0} [
+        set(r): "."
+    ]
+    elif(_): {at = 0} [
+        set(r): "/"
+    ]
+    else(_): [
+        slice(r): q 0 at
+    ]
+]
+
+path_base(r): p [
+    _path_slashes(q): p
+    _path_trim_end(q): q
+    str_rfind(at): q "/"
+    len(n): q
+    slice(r): q {at + 1} {n - at - 1}
+]
+
+path_ext(r): p [
+    path_base(b): p
+    str_rfind(at): b "."
+    set(r): ""
+    if(_): {at > 0} [
+        len(n): b
+        slice(r): b at {n - at}
+    ]
+]
+
+path_stem(r): p [
+    path_base(b): p
+    path_ext(e): p
+    len(n): b
+    len(m): e
+    slice(r): b 0 {n - m}
+]
+
+path_split(r): p [
+    _path_slashes(q): p
+    str_split(parts): q "/"
+    vec(r): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(x): parts i
+        if(_): {x != ""} [
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+path_normalize(r): p [
+    _path_slashes(q): p
+    set(root): ""
+    str_starts(slash): q "/"
+    if(_): slash [
+        set(root): "/"
+    ]
+    else(_): [
+        path_is_abs(abs): q
+        if(_): abs [
+            slice(root): q 0 2
+            len(n): q
+            slice(q): q 2 {n - 2}
+            str_starts(slash): q "/"
+            if(_): slash [
+                concat(root): root "/"
+            ]
+        ]
+    ]
+    path_split(parts): q
+    vec(out): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(x): parts i
+        len(k): out
+        if(_): {x = "."} [
+            set(x): x
+        ]
+        elif(_): {x = ".."} [
+            set(up): true
+            if(_): {k > 0} [
+                at(last): out {k - 1}
+                if(_): {last != ".."} [
+                    pop(_): out
+                    set(up): false
+                ]
+            ]
+            if(_): {up && root = ""} [
+                push(_): out ".."
+            ]
+        ]
+        else(_): [
+            push(_): out x
+        ]
+        set(i): {i + 1}
+    ]
+    str_join(body): out "/"
+    concat(r): root body
+    if(_): {r = ""} [
+        set(r): "."
+    ]
+]
+
+path_abs(r): p [
+    path_is_abs(abs): p
+    if(_): abs [
+        path_normalize(r): p
+    ]
+    else(_): [
+        getcwd(cwd):
+        path_join(full): cwd p
+        path_normalize(r): full
+    ]
+]
+
+exists(r): p [
+    file_exists(f): p
+    is_dir(d): p
+    set(r): {f = 1 || f = true || d = 1}
+]
+
+read_lines(r): path [
+    open_file(h): path "r"
+    set(r): null
+    if(_): {h >= 0} [
+        vec(r): ""
+        read_line(line): h
+        while(_): {line != null} [
+            push(_): r line
+            read_line(line): h
+        ]
+        close_file(_): h
+    ]
+]
+
+write_lines(r): path v [
+    open_file(h): path "wb"
+    set(r): {0 - 1}
+    if(_): {h >= 0} [
+        len(n): v
+        set(i): 0
+        while(_): {i < n} [
+            at(line): v i
+            concat(text): line "\n"
+            write_file(_): h text
+            set(i): {i + 1}
+        ]
+        close_file(_): h
+        set(r): 0
+    ]
+]
+
+append_line(r): path text [
+    open_file(h): path "ab"
+    set(r): {0 - 1}
+    if(_): {h >= 0} [
+        concat(line): text "\n"
+        write_file(_): h line
+        close_file(_): h
+        set(r): 0
+    ]
+]
+
+read_text(r): path [
+    open_file(h): path "rb"
+    set(r): null
+    if(_): {h >= 0} [
+        read_file(r): h
+        close_file(_): h
+    ]
+]
+
+write_text(r): path text [
+    open_file(h): path "wb"
+    set(r): {0 - 1}
+    if(_): {h >= 0} [
+        write_file(_): h text
+        close_file(_): h
+        set(r): 0
+    ]
+]
+
+write_file_atomic(r): path text [
+    concat(tmp): path ".tmp"
+    remove_file(_): tmp
+    write_text(r): tmp text
+    if(_): {r = 0} [
+        exists(old): path
+        if(_): old [
+            concat(bak): path ".bak"
+            remove_file(_): bak
+            rename_path(moved): path bak
+            rename_path(done): tmp path
+            if(_): {done = 0} [
+                remove_file(_): bak
+            ]
+            else(_): [
+                rename_path(_): bak path
+                set(r): {0 - 1}
+            ]
+        ]
+        else(_): [
+            rename_path(done): tmp path
+            if(_): {done != 0} [
+                set(r): {0 - 1}
+            ]
+        ]
+    ]
+]
+
+_path_walk(r): dir out [
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t = "vector"} [
+        len(n): names
+        set(i): 0
+        while(_): {i < n} [
+            at(name): names i
+            str_ends(sub): name "/"
+            len(k): name
+            if(_): sub [
+                slice(name): name 0 {k - 1}
+            ]
+            path_join(full): dir name
+            if(_): sub [
+                _path_walk(_): full out
+            ]
+            else(_): [
+                push(_): out full
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    set(r): 0
+]
+
+walk_dir(r): dir [
+    vec(r): ""
+    _path_slashes(d): dir
+    _path_walk(_): d r
+]
+
+# * and ? stay inside one part; ** spans any number of parts
+glob_match(r): pattern path [
+    _path_slashes(p): pattern
+    _path_slashes(s): path
+    set(rx): "^"
+    len(n): p
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): p i
+        set(step): 1
+        if(_): {b = 42} [
+            set(b2): 0
+            if(_): {i + 1 < n} [
+                byte(b2): p {i + 1}
+            ]
+            if(_): {b2 = 42} [
+                set(b3): 0
+                if(_): {i + 2 < n} [
+                    byte(b3): p {i + 2}
+                ]
+                if(_): {b3 = 47} [
+                    concat(rx): rx "(?:.*/)?"
+                    set(step): 3
+                ]
+                else(_): [
+                    concat(rx): rx ".*"
+                    set(step): 2
+                ]
+            ]
+            else(_): [
+                concat(rx): rx "[^/]*"
+            ]
+        ]
+        elif(_): {b = 63} [
+            concat(rx): rx "[^/]"
+        ]
+        elif(_): {(b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 47 || b = 95 || b = 45 || b >= 128} [
+            at(c): p i
+            concat(rx): rx c
+        ]
+        else(_): [
+            at(c): p i
+            concat(rx): rx "\\" c
+        ]
+        set(i): {i + step}
+    ]
+    concat(rx): rx "$"
+    re_test(r): rx s
+]
+
+glob(r): pattern [
+    _path_slashes(p): pattern
+    # the walk starts at the longest directory prefix without wildcards
+    path_split(parts): p
+    set(base): ""
+    str_starts(abs): p "/"
+    if(_): abs [
+        set(base): "/"
+    ]
+    len(n): parts
+    set(i): 0
+    set(go): true
+    while(_): {go && i < n - 1} [
+        at(x): parts i
+        re_test(wild): "[*?]" x
+        if(_): wild [
+            set(go): false
+        ]
+        else(_): [
+            path_join(base): base x
+            set(i): {i + 1}
+        ]
+    ]
+    set(start): base
+    if(_): {start = ""} [
+        set(start): "."
+    ]
+    walk_dir(all): start
+    vec(r): ""
+    len(m): all
+    set(k): 0
+    while(_): {k < m} [
+        at(f): all k
+        set(candidate): f
+        if(_): {base = ""} [
+            str_starts(dot): f "./"
+            if(_): dot [
+                len(fl): f
+                slice(candidate): f 2 {fl - 2}
+            ]
+        ]
+        glob_match(good): p candidate
+        if(_): good [
+            push(_): r candidate
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+copy_dir(r): from to [
+    set(r): 0
+    is_dir(d): to
+    if(_): {d != 1} [
+        make_dir(made): to
+        if(_): {made != 0} [
+            set(r): {0 - 1}
+            return(r): r
+        ]
+    ]
+    list_dir(names): from
+    typeof(t): names
+    if(_): {t != "vector"} [
+        set(r): {0 - 1}
+        return(r): r
+    ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        str_ends(sub): name "/"
+        len(k): name
+        if(_): sub [
+            slice(name): name 0 {k - 1}
+        ]
+        path_join(src): from name
+        path_join(dst): to name
+        if(_): sub [
+            copy_dir(good): src dst
+        ]
+        else(_): [
+            copy_file(good): src dst
+        ]
+        if(_): {good != 0} [
+            set(r): {0 - 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+remove_tree(r): dir [
+    path_normalize(d): dir
+    set(r): {0 - 1}
+    set(bad): {d = "" || d = "." || d = "/" || d = ".."}
+    re_test(drive): "^[A-Za-z]:/?$" d
+    if(_): {bad || drive} [
+        return(r): r
+    ]
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t != "vector"} [
+        return(r): r
+    ]
+    set(r): 0
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        str_ends(sub): name "/"
+        len(k): name
+        if(_): sub [
+            slice(name): name 0 {k - 1}
+            path_join(full): dir name
+            remove_tree(good): full
+        ]
+        else(_): [
+            path_join(full): dir name
+            remove_file(good): full
+            if(_): {good != 0} [
+                set(good): {0 - 1}
+            ]
+        ]
+        if(_): {good != 0} [
+            set(r): {0 - 1}
+        ]
+        set(i): {i + 1}
+    ]
+    remove_dir(good): dir
+    if(_): {good != 0} [
+        set(r): {0 - 1}
+    ]
+]
+
+env_get(r): name default [
+    getenv(r): name
+    if(_): {r = null} [
+        set(r): default
+    ]
+]
+
+temp_dir(r): [
+    getenv(r): "TMPDIR"
+    if(_): {r = null || r = ""} [
+        getenv(r): "TEMP"
+    ]
+    if(_): {r = null || r = ""} [
+        getenv(r): "TMP"
+    ]
+    if(_): {r = null || r = ""} [
+        set(r): "/tmp"
+    ]
+    _path_slashes(r): r
+]
+
+temp_path(r): prefix [
+    temp_dir(d):
+    set(go): true
+    while(_): go [
+        random64(x):
+        set(x): {x & 0xFFFFFFFF}
+        str_from_int_base(tag): x 16
+        concat(name): prefix tag
+        path_join(r): d name
+        exists(taken): r
+        set(go): taken
+    ]
+]
+
+_env_name_byte(r): b [
+    set(r): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b = 95}
+]
+
+env_expand(r): text [
+    set(s): text
+    str_starts(tilde): s "~"
+    if(_): tilde [
+        len(n): s
+        set(home_ok): {n = 1}
+        if(_): {n > 1} [
+            byte(b): s 1
+            set(home_ok): {b = 47 || b = 92}
+        ]
+        if(_): home_ok [
+            getenv(home): "HOME"
+            if(_): {home = null} [
+                getenv(home): "USERPROFILE"
+            ]
+            if(_): {home = null} [
+                set(home): ""
+            ]
+            slice(rest): s 1 {n - 1}
+            concat(s): home rest
+        ]
+    ]
+    len(n): s
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        byte(b): s i
+        if(_): {b = 36 && i + 1 < n} [
+            byte(c): s {i + 1}
+            set(name): ""
+            set(j): i
+            if(_): {c = 123} [
+                str_find(close): s "}" i
+                if(_): {close > 0} [
+                    slice(name): s {i + 2} {close - i - 2}
+                    set(j): {close + 1}
+                ]
+            ]
+            else(_): [
+                set(j): {i + 1}
+                set(go): true
+                while(_): {go && j < n} [
+                    byte(d): s j
+                    _env_name_byte(go): d
+                    if(_): go [
+                        set(j): {j + 1}
+                    ]
+                ]
+                slice(name): s {i + 1} {j - i - 1}
+            ]
+            if(_): {name = ""} [
+                concat(r): r "$"
+                set(i): {i + 1}
+            ]
+            else(_): [
+                getenv(value): name
+                if(_): {value != null} [
+                    concat(r): r value
+                ]
+                set(i): j
+            ]
+        ]
+        else(_): [
+            at(ch): s i
+            concat(r): r ch
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+env_path_list(r): [
+    getenv(p): "PATH"
+    if(_): {p = null} [
+        set(p): ""
+    ]
+    set(sep): ":"
+    getenv(win): "SystemRoot"
+    if(_): {win != null} [
+        set(sep): ";"
+    ]
+    str_split(parts): p sep
+    vec(r): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(x): parts i
+        if(_): {x != ""} [
+            _path_slashes(x): x
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+which(r): program [
+    env_path_list(dirs):
+    vec(exts): ""
+    push(_): exts ""
+    getenv(win): "SystemRoot"
+    if(_): {win != null} [
+        push(_): exts ".exe"
+        push(_): exts ".bat"
+        push(_): exts ".cmd"
+    ]
+    set(r): null
+    len(n): dirs
+    len(m): exts
+    set(i): 0
+    while(_): {r = null && i < n} [
+        at(d): dirs i
+        set(k): 0
+        while(_): {r = null && k < m} [
+            at(e): exts k
+            concat(name): program e
+            path_join(full): d name
+            file_exists(f): full
+            is_dir(isd): full
+            if(_): {(f = 1 || f = true) && isd != 1} [
+                set(r): full
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
