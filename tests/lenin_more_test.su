@@ -1,0 +1,555 @@
+# Lenin refine pass 1 (src/lenin/more.su): flags, the config file, presets,
+# weighted criteria, roles and model options, fakes, the bandit order,
+# prices, multi-file and JSON answers, metrics, copies, ranking properties,
+# the Pareto front, the prompt library, and whole runs with --crossover,
+# --mutants, --resume, --retries, --beam, --mutate and --dry-run against
+# canned replies (file:// URLs, no network). Run from the repository root.
+$include "../src/lenin/lenin.su"
+
+lm_check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(lmc_line): "PASS " label ]
+    else(_): [
+        encode(lmc_g): got
+        encode(lmc_w): want
+        concat(lmc_line): "FAIL " label ": got " lmc_g ", want " lmc_w
+    ]
+    print(_): lmc_line
+]
+
+lm_clean(r): dir [
+    set(r): 0
+    list_dir(lmn_names): dir
+    typeof(lmn_t): lmn_names
+    if(_): {lmn_t != "vector"} [ return(r): r ]
+    len(lmn_n): lmn_names
+    set(lmn_i): 0
+    while(_): {lmn_i < lmn_n} [
+        at(lmn_name): lmn_names lmn_i
+        str_ends(lmn_sub): lmn_name "/"
+        len(lmn_l): lmn_name
+        if(_): lmn_sub [ slice(lmn_name): lmn_name 0 {lmn_l - 1} ]
+        concat(lmn_p): dir "/" lmn_name
+        if(_): lmn_sub [ lm_clean(_): lmn_p ]
+        else(_): [ remove_file(_): lmn_p ]
+        set(lmn_i): {lmn_i + 1}
+    ]
+    remove_dir(_): dir
+]
+
+# a canned chat completion whose answer is content
+lm_reply(r): path content [
+    json_stringify(lmr_s): content
+    concat(lmr_t): "{\"id\": \"t\", \"object\": \"chat.completion\", \"choices\": [{\"index\": 0, \"message\": {\"role\": \"assistant\", \"content\": " lmr_s "}, \"finish_reason\": \"stop\"}]}"
+    writefile(r): path lmr_t
+]
+
+lm_model(r): name [
+    vec(r): ""
+    push(_): r "openai"
+    push(_): r name
+    push(_): r "-"
+    push(_): r ""
+]
+
+lm_word_test(r): [
+    getenv(lmw_os): "OS"
+    set(r): "grep good {file}"
+    if(_): {lmw_os = "Windows_NT"} [ set(r): "findstr good {file}" ]
+]
+
+lm_args(r): models dir [
+    btree(r):
+    btput(_): r "models" models
+    btput(_): r "prompt" "say good"
+    btput(_): r "criteria" "size"
+    btput(_): r "method" "rounds"
+    btput(_): r "dir" dir
+    btput(_): r "cycles" 1
+    lm_word_test(lma_t):
+    btput(_): r "test" lma_t
+    btput(_): r "ext" ".txt"
+    btput(_): r "baseline" ""
+    btput(_): r "window" 0
+    btput(_): r "refine" false
+]
+
+lm_flags(r): [
+    btree(lf_args):
+    lenin_more_arg(lf_v): "--beam" "3" true lf_args
+    lm_check(_): "a flag with a value" lf_v 2
+    btget(lf_v): lf_args "beam" 0
+    lm_check(_): "its number" lf_v 3
+    lenin_more_arg(lf_v): "--dry-run" "" false lf_args
+    lm_check(_): "a flag on its own" lf_v 1
+    btget(lf_v): lf_args "dry_run" false
+    lm_check(_): "dashes become underscores" lf_v true
+    lenin_more_arg(lf_v): "--models" "x" true lf_args
+    lm_check(_): "not one of the new flags" lf_v 0
+    lenin_more_arg(_): "--money" "0.5" true lf_args
+    btget(lf_v): lf_args "money" 0
+    lm_check(_): "money is a real" lf_v 0.5
+
+    set(lf_conf): "tests/lenin-more-tmp/my.conf"
+    writefile(_): lf_conf "# options\ncycles = 3\nmutate\nretry_ms = 5\n"
+    vec(lf_argv): ""
+    push(_): lf_argv "--config"
+    push(_): lf_argv lf_conf
+    push(_): lf_argv "say good"
+    lenin_more_config(lf_out): lf_argv
+    len(lf_v): lf_out
+    lm_check(_): "the config file's flags come first" lf_v 8
+    at(lf_v): lf_out 0
+    lm_check(_): "a key becomes a flag" lf_v "--cycles"
+    at(lf_v): lf_out 2
+    lm_check(_): "a word alone is a flag" lf_v "--mutate"
+    at(lf_v): lf_out 3
+    lm_check(_): "underscores become dashes" lf_v "--retry-ms"
+
+    btree(lf_a2):
+    btput(_): lf_a2 "lang" "python"
+    btput(_): lf_a2 "ext" ".txt"
+    btput(_): lf_a2 "test" ""
+    lenin_more_post(_): lf_a2 "task"
+    btget(lf_v): lf_a2 "ext"
+    lm_check(_): "a preset's extension" lf_v ".py"
+    btget(lf_v): lf_a2 "test"
+    lm_check(_): "a preset's test" lf_v "python {file}"
+    btput(_): lf_a2 "ext" ".pyw"
+    btput(_): lf_a2 "test" "mine {file}"
+    lenin_more_post(_): lf_a2 "task"
+    btget(lf_v): lf_a2 "test"
+    lm_check(_): "a test given stays" lf_v "mine {file}"
+    lenin_make_system(lf_sys): "size"
+    lenin_more_system(lf_sys): lf_sys lf_a2
+    str_ends(lf_v): lf_sys "Write it in python."
+    lm_check(_): "the language in the system prompt" lf_v true
+
+    lenin_more_criteria_ok(lf_v): "size:0.3,speed:0.7"
+    lm_check(_): "weighted criteria" lf_v true
+    lenin_more_criteria_ok(lf_v): "complexity"
+    lm_check(_): "complexity is a criterion" lf_v true
+    lenin_more_criteria_ok(lf_v): "beauty"
+    lm_check(_): "an unknown criterion" lf_v false
+    lenin_more_criteria_ok(lf_v): "size:lots"
+    lm_check(_): "a weight that is no number" lf_v false
+    lenin_more_uses_speed(lf_v): "size:1,speed:2"
+    lm_check(_): "weighted speed is timed" lf_v true
+    lenin_more_uses_speed(lf_v): "lines"
+    lm_check(_): "lines are not timed" lf_v false
+    set(r): 0
+]
+
+lm_models(r): [
+    vec(lm_w): ""
+    push(_): lm_w "openai"
+    push(_): lm_w "judge-1"
+    push(_): lm_w "-"
+    push(_): lm_w "http://x/v1"
+    push(_): lm_w "role=judge"
+    push(_): lm_w "max_tokens=100"
+    lenin_more_model_words(lm_mw): lm_w
+    at(lm_k): lm_mw 0
+    len(lm_v): lm_k
+    lm_check(_): "options come off a models line" lm_v 4
+    at(lm_o): lm_mw 1
+    btget(lm_v): lm_o "max_tokens"
+    lm_check(_): "an option" lm_v "100"
+    set(lm_conf): "tests/lenin-more-tmp/models.conf"
+    writefile(_): lm_conf "openai a - http://x role=refine\nopenai b -\nopenai c - http://y role=judge timeout=9\nopenai d -\n"
+    lenin_load_models(lm_ms): lm_conf
+    at(lm_c): lm_ms 2
+    lenin_more_model_opt(lm_v): lm_c "timeout" "600"
+    lm_check(_): "options from the models file" lm_v "9"
+    at(lm_v): lm_c 3
+    lm_check(_): "the URL is still the fourth word" lm_v "http://y"
+    btree(lm_args):
+    lenin_more_models(lm_d): lm_ms lm_args
+    len(lm_v): lm_d
+    lm_check(_): "refiners and judges do not draft" lm_v 2
+    lenin_more_role(lm_rm): "refine" null
+    at(lm_v): lm_rm 1
+    lm_check(_): "the refine role" lm_v "a"
+    lenin_more_judges(lm_j): lm_d
+    at(lm_v): lm_j 0
+    at(lm_v): lm_v 1
+    lm_check(_): "the judges vote" lm_v "c"
+    lenin_critic(lm_cr): lm_d "b"
+    at(lm_v): lm_cr 1
+    lm_check(_): "no critic role: another drafter" lm_v "d"
+
+    lenin_fake_models(lm_f): lm_d "tests/fake"
+    at(lm_v): lm_f 0
+    at(lm_v): lm_v 3
+    str_ends(lm_v): lm_v "/tests/fake/b.json"
+    lm_check(_): "a fake model answers from its file" lm_v true
+
+    set(lm_h): "tests/lenin-more-tmp/history.tsv"
+    chr(lm_tab): 9
+    concat(lm_t): "answer" lm_tab "1" lm_tab "1" lm_tab "b" lm_tab "passed" lm_tab "5" lm_tab "0" lm_tab "0\n"
+    concat(lm_t): lm_t "answer" lm_tab "1" lm_tab "1" lm_tab "d" lm_tab "passed" lm_tab "5" lm_tab "0" lm_tab "1\n"
+    concat(lm_t): lm_t "answer" lm_tab "2" lm_tab "1" lm_tab "d" lm_tab "passed" lm_tab "5" lm_tab "0" lm_tab "1\n"
+    writefile(_): lm_h lm_t
+    lenin_win_rates(lm_wr): lm_h
+    btget(lm_v): lm_wr "d"
+    encode(lm_v): lm_v
+    lm_check(_): "wins and answers" lm_v "[2,2]"
+    lenin_more_adapt(lm_ad): lm_d lm_h
+    at(lm_v): lm_ad 0
+    at(lm_v): lm_v 1
+    lm_check(_): "the model that wins goes first" lm_v "d"
+
+    set(lm_pf): "tests/lenin-more-tmp/prices.txt"
+    writefile(_): lm_pf "# model input output, per million tokens\nb 3 15\n"
+    lenin_load_prices(lenin_prices): lm_pf
+    btree(lm_lg):
+    set(lenin_ledger): lm_lg
+    lenin_model(lm_b): "b"
+    lenin_more_account(_): lm_b "1234" "5678" "abcdefgh"
+    btget(lm_v): lenin_ledger "b"
+    encode(lm_v): lm_v
+    lm_check(_): "a call's tokens" lm_v "[1,2,2]"
+    lenin_cost(lm_v): "b" 1000000 1000000
+    lm_check(_): "what tokens cost" lm_v 18.0
+    lenin_cost(lm_v): "d" 1 1
+    lm_check(_): "no price" lm_v -1
+    btree(lm_o2):
+    btput(_): lm_o2 "money" 0.00001
+    set(lenin_opts): lm_o2
+    lenin_spent(lm_v):
+    lm_check(_): "over the money nothing more is asked" lm_v true
+    set(lenin_opts): null
+    set(lenin_prices): null
+    set(r): 0
+]
+
+lenin_model(r): name [
+    lm_model(r): name
+]
+
+lm_text(r): [
+    set(lt_reply): "Here:\n**main.py**\n```python\nimport util\nprint(util.x)\n```\nand\n```python util.py\nx = 1\n```\n"
+    lenin_files(lt_f): lt_reply
+    len(lt_v): lt_f
+    lm_check(_): "every fenced block" lt_v 2
+    at(lt_v): lt_f 0
+    at(lt_v): lt_v 0
+    lm_check(_): "a name from the line before" lt_v "main.py"
+    at(lt_v): lt_f 1
+    at(lt_v): lt_v 0
+    lm_check(_): "a name from the fence" lt_v "util.py"
+    at(lt_v): lt_f 1
+    at(lt_v): lt_v 1
+    lm_check(_): "a block's code" lt_v "x = 1\n"
+    set(lt_env): "{\"files\": {\"a.py\": \"print(1)\\n\"}, \"notes\": \"short\", \"assumptions\": [\"ASCII\"]}"
+    lenin_envelope(lt_e): lt_env
+    at(lt_v): lt_e 0
+    len(lt_v): lt_v
+    lm_check(_): "a JSON envelope's files" lt_v 1
+    at(lt_v): lt_e 1
+    lm_check(_): "its notes and assumptions" lt_v "short\n- assumption: ASCII"
+    lenin_envelope(lt_v): "no json here"
+    lm_check(_): "not an envelope" lt_v null
+    lenin_mutation(lt_v): "size" 0
+    lm_check(_): "a mutation for size" lt_v "Make it shorter."
+    lenin_mutation(lt_v): "speed" 4
+    lm_check(_): "mutations go round" lt_v "Use a better algorithm or data structure."
+    lenin_more_fit(lt_v): "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz" 60
+    len(lt_n): lt_v
+    lm_check(_): "cut to fit" {lt_n <= 60} true
+    str_contains(lt_v): lt_v "left out"
+    lm_check(_): "it says so" lt_v true
+    lenin_more_fit(lt_v): "short" 60
+    lm_check(_): "what fits stays" lt_v "short"
+
+    btree(lt_c):
+    btput(_): lt_c "code" "import os\nfrom x import y\n\nif a && b:\n    while c: pass\n"
+    lenin_more_metrics(_): lt_c
+    btget(lt_v): lt_c "deps"
+    lm_check(_): "dependencies" lt_v 2
+    btget(lt_v): lt_c "lines"
+    lm_check(_): "lines with something on them" lt_v 4
+    btget(lt_v): lt_c "complexity"
+    lm_check(_): "complexity" lt_v 4
+    lenin_similar(lt_v): "a\nb\n" "b\na\n"
+    lm_check(_): "the same lines" lt_v 1.0
+    lenin_similar(lt_v): "a\nb\n" "c\nd\n"
+    lm_check(_): "no line alike" lt_v 0.0
+    str_split(lt_ns): "3 1 2" " "
+    lm_nums(lt_ns): lt_ns
+    lenin_median(lt_v): lt_ns
+    lm_check(_): "median" lt_v 2
+    str_split(lt_ns): "1 2 3 4" " "
+    lm_nums(lt_ns): lt_ns
+    lenin_median(lt_v): lt_ns
+    lm_check(_): "median of an even count" lt_v 2.5
+    str_split(lt_ns): "1 2 3" " "
+    lm_nums(lt_ns): lt_ns
+    lenin_spread(lt_v): lt_ns
+    lm_check(_): "spread" lt_v 1.0
+    set(r): 0
+]
+
+lm_nums(r): v [
+    vec(r): ""
+    len(ln_n): v
+    set(ln_i): 0
+    while(_): {ln_i < ln_n} [
+        at(ln_x): v ln_i
+        str_to_number(ln_x): ln_x
+        push(_): r ln_x
+        set(ln_i): {ln_i + 1}
+    ]
+]
+
+lm_cand(r): name size passed rate [
+    lenin_measure(r): name name "x" "" "" "" "l" 0
+    btput(_): r "size" size
+    btput(_): r "passed" passed
+    btput(_): r "tested" true
+    btput(_): r "rate" rate
+]
+
+lm_rank(r): [
+    lm_cand(lr_a): "a" 10 true 5
+    lm_cand(lr_b): "b" 20 true 9
+    lm_cand(lr_c): "c" 5 false 99
+    btput(_): lr_a "lines" 3
+    btput(_): lr_b "lines" 2
+    lenin_better(lr_v): lr_b lr_a "lines"
+    lm_check(_): "fewer lines" lr_v true
+    lenin_better(lr_v): lr_b lr_a "size:0.3,speed:0.7"
+    lm_check(_): "weighted: speed counts more" lr_v true
+    lenin_better(lr_v): lr_a lr_b "size:0.9,speed:0.1"
+    lm_check(_): "weighted: size counts more" lr_v true
+    btput(_): lr_a "dup" true
+    lenin_better(lr_v): lr_b lr_a "size"
+    lm_check(_): "a copy loses" lr_v true
+    btput(_): lr_a "dup" false
+    vec(lr_l): ""
+    push(_): lr_l lr_a
+    push(_): lr_l lr_b
+    push(_): lr_l lr_c
+    lenin_pareto(lr_f): lr_l
+    len(lr_v): lr_f
+    lm_check(_): "the front: two that pass, neither beaten" lr_v 2
+    lm_cand(lr_d): "d" 30 true 1
+    vec(lr_l): ""
+    push(_): lr_l lr_a
+    push(_): lr_l lr_b
+    push(_): lr_l lr_d
+    lenin_pareto(lr_f): lr_l
+    len(lr_v): lr_f
+    lm_check(_): "one beaten on everything is off the front" lr_v 2
+    lenin_noise(lr_v): lr_a lr_b
+    str_contains(lr_v): lr_v "beyond the noise"
+    lm_check(_): "far apart" lr_v true
+    lm_cand(lr_e): "e" 10 true 5.2
+    lenin_noise(lr_v): lr_a lr_e
+    str_contains(lr_v): lr_v "a tie"
+    lm_check(_): "inside the noise" lr_v true
+
+    # properties: over many made-up candidates a failing one never wins,
+    # and a weighted ranking does too
+    set(lr_seed): 12345
+    set(lr_bad): 0
+    set(lr_k): 0
+    while(_): {lr_k < 60} [
+        vec(lr_all): ""
+        set(lr_any): false
+        set(lr_j): 0
+        while(_): {lr_j < 5} [
+            set(lr_seed): {(lr_seed * 1103515245 + 12345) % 2147483648}
+            set(lr_sz): {lr_seed % 50 + 1}
+            set(lr_pass): {lr_seed % 3 != 0}
+            if(_): lr_pass [ set(lr_any): true ]
+            str_from_int(lr_js): lr_j
+            lm_cand(lr_x): lr_js lr_sz lr_pass {lr_seed % 7}
+            push(_): lr_all lr_x
+            set(lr_j): {lr_j + 1}
+        ]
+        lenin_best(lr_w): lr_all "size:0.5,speed:0.5"
+        btget(lr_wp): lr_w "passed"
+        if(_): {lr_any && lr_wp = false} [ set(lr_bad): {lr_bad + 1} ]
+        lenin_best(lr_w): lr_all "lines"
+        btget(lr_wp): lr_w "passed"
+        if(_): {lr_any && lr_wp = false} [ set(lr_bad): {lr_bad + 1} ]
+        set(lr_k): {lr_k + 1}
+    ]
+    lm_check(_): "a failing answer never wins" lr_bad 0
+    set(r): 0
+]
+
+lm_library(r): [
+    setenv(_): "LENIN_PROMPTS" "tests/lenin-more-tmp/prompts"
+    lenin_prompt_save(ll_v): "editor" "make an editor"
+    lm_check(_): "the first version" ll_v 1
+    lenin_prompt_save(ll_v): "editor" "make an editor with bold"
+    lm_check(_): "the next version" ll_v 2
+    lenin_prompt_load(ll_v): "editor" 0
+    lm_check(_): "the last version" ll_v "make an editor with bold"
+    lenin_prompt_load(ll_v): "editor" 1
+    lm_check(_): "an old version" ll_v "make an editor"
+    lenin_prompt_load(ll_v): "nothing" 0
+    lm_check(_): "no such prompt" ll_v null
+    btree(ll_a):
+    btput(_): ll_a "use_prompt" "editor@1"
+    lenin_more_post(ll_v): ll_a "typed"
+    lm_check(_): "--use-prompt takes it from the library" ll_v "make an editor"
+    btget(ll_v): ll_a "refine" true
+    lm_check(_): "and it is not refined again" ll_v false
+    set(r): 0
+]
+
+lm_runs(r): [
+    set(lr_fake): "tests/lenin-more-tmp/fake"
+    make_dir(_): lr_fake
+    readfile(lr_t): "tests/ai/lenin_slim.json"
+    writefile(_): "tests/lenin-more-tmp/fake/slim.json" lr_t
+    readfile(lr_t): "tests/ai/lenin_big.json"
+    writefile(_): "tests/lenin-more-tmp/fake/big.json" lr_t
+    readfile(lr_t): "tests/ai/lenin_wrong.json"
+    writefile(_): "tests/lenin-more-tmp/fake/wrong.json" lr_t
+    readfile(lr_t): "tests/ai/lenin_down.json"
+    writefile(_): "tests/lenin-more-tmp/fake/down.json" lr_t
+    lm_reply(_): "tests/lenin-more-tmp/fake/multi.json" "Two files:\n```text main.txt\ngood\n```\n```text extra.txt\nmore\n```\n"
+    lm_reply(_): "tests/lenin-more-tmp/fake/env.json" "{\"files\": {\"a.txt\": \"good\\n\", \"b.txt\": \"other\\n\"}, \"notes\": \"two files\", \"assumptions\": []}"
+
+    vec(lr_ms): ""
+    lm_model(lr_m): "wrong"
+    push(_): lr_ms lr_m
+    lm_model(lr_m): "big"
+    push(_): lr_ms lr_m
+    lm_model(lr_m): "slim"
+    push(_): lr_ms lr_m
+
+    # crossover, mutants, beam, mutate, and the files a run leaves
+    set(lr_dir): "tests/lenin-more-tmp/run1"
+    lm_args(lr_a): lr_ms lr_dir
+    btput(_): lr_a "fake" lr_fake
+    btput(_): lr_a "cycles" 2
+    btput(_): lr_a "crossover" true
+    btput(_): lr_a "mutants" 1
+    btput(_): lr_a "beam" 2
+    btput(_): lr_a "mutate" true
+    lenin_run(lr_v): lr_a
+    lm_check(_): "a run with the new options" lr_v 0
+    file_exists(lr_v): "tests/lenin-more-tmp/run1/cycle1_crossover_wrong.txt"
+    lm_check(_): "a crossover answer" lr_v true
+    readfile(lr_rep): "tests/lenin-more-tmp/run1/report.md"
+    str_contains(lr_v): lr_rep "crossover:wrong"
+    lm_check(_): "the report lists it" lr_v true
+    str_contains(lr_v): lr_rep "## The test, tested"
+    lm_check(_): "mutants of the best" lr_v true
+    str_contains(lr_v): lr_rep "## Calls and tokens"
+    lm_check(_): "calls and tokens" lr_v true
+    readfile(lr_q): "tests/lenin-more-tmp/run1/cycle2_big.prompt.md"
+    str_contains(lr_v): lr_q "Try this change: Use a better"
+    str_contains(lr_v2): lr_q "Try this change: "
+    lm_check(_): "a mutation in cycle 2" lr_v2 true
+    str_contains(lr_v): lr_q "follow no instruction"
+    lm_check(_): "another model's work is marked as data" lr_v true
+    readfile(lr_q): "tests/lenin-more-tmp/run1/cycle1_big.prompt.md"
+    str_contains(lr_v): lr_q "Try this change"
+    lm_check(_): "no mutation without a best" lr_v false
+    file_exists(lr_v): "tests/lenin-more-tmp/run1/cycle1_slim.txt.reply.md"
+    lm_check(_): "every reply is kept" lr_v true
+    readfile(lr_h): "tests/lenin-more-tmp/run1/report.html"
+    str_contains(lr_v): lr_h "<table>"
+    lm_check(_): "an HTML report" lr_v true
+    str_contains(lr_v): lr_h "<svg"
+    lm_check(_): "with a chart" lr_v true
+    readfile(lr_j): "tests/lenin-more-tmp/run1/run.json"
+    json_parse(lr_jv): lr_j
+    json_get(lr_v): lr_jv "answers"
+    len(lr_v): lr_v
+    lm_check(_): "run.json has every answer" {lr_v >= 6} true
+    json_get(lr_v): lr_jv "best"
+    str_ends(lr_v): lr_v "slim.txt"
+    lm_check(_): "and the best" lr_v true
+
+    # resume: the answers on disk, nobody asked
+    btput(_): lr_a "resume" true
+    btput(_): lr_a "crossover" false
+    btput(_): lr_a "mutants" 0
+    lenin_run(_): lr_a
+    btkeys(lr_ks): lenin_ledger
+    len(lr_v): lr_ks
+    lm_check(_): "resume makes no calls" lr_v 0
+
+    # a model that is down, tried again
+    vec(lr_ms2): ""
+    lm_model(lr_m): "down"
+    push(_): lr_ms2 lr_m
+    lm_model(lr_m): "slim"
+    push(_): lr_ms2 lr_m
+    lm_args(lr_a2): lr_ms2 "tests/lenin-more-tmp/run2"
+    btput(_): lr_a2 "fake" lr_fake
+    btput(_): lr_a2 "retries" 2
+    btput(_): lr_a2 "retry_ms" 1
+    btput(_): lr_a2 "sandbox" true
+    lenin_run(_): lr_a2
+    btget(lr_v): lenin_ledger "down"
+    at(lr_v): lr_v 0
+    lm_check(_): "a failed call is tried again" lr_v 3
+    is_dir(lr_v): "tests/lenin-more-tmp/run2/sandbox"
+    lm_check(_): "tests run in a sandbox" lr_v 1
+
+    # several files in one answer, and a JSON envelope
+    vec(lr_ms3): ""
+    lm_model(lr_m): "multi"
+    push(_): lr_ms3 lr_m
+    lm_args(lr_a3): lr_ms3 "tests/lenin-more-tmp/run3"
+    btput(_): lr_a3 "fake" lr_fake
+    btput(_): lr_a3 "multi" true
+    lenin_run(lr_v): lr_a3
+    lm_check(_): "a multi-file run" lr_v 0
+    readfile(lr_v): "tests/lenin-more-tmp/run3/cycle1_multi.txt.files/extra.txt"
+    lm_check(_): "every file of the answer" lr_v "more\n"
+    vec(lr_ms4): ""
+    lm_model(lr_m): "env"
+    push(_): lr_ms4 lr_m
+    lm_args(lr_a4): lr_ms4 "tests/lenin-more-tmp/run4"
+    btput(_): lr_a4 "fake" lr_fake
+    btput(_): lr_a4 "json" true
+    lenin_run(lr_v): lr_a4
+    lm_check(_): "a JSON envelope run" lr_v 0
+    readfile(lr_v): "tests/lenin-more-tmp/run4/best.txt"
+    lm_check(_): "its first file is the answer" lr_v "good\n"
+    readfile(lr_v): "tests/lenin-more-tmp/run4/cycle1_env.txt.notes.md"
+    lm_check(_): "its notes" lr_v "two files"
+
+    # a dry run through the command line
+    set(lr_conf): "tests/lenin-more-tmp/dry.conf"
+    writefile(_): lr_conf "openai slim - http://x\nopenai big - http://y role=critic\n"
+    vec(lr_argv): ""
+    push(_): lr_argv "--no-config"
+    push(_): lr_argv "--models"
+    push(_): lr_argv lr_conf
+    push(_): lr_argv "--dry-run"
+    push(_): lr_argv "--cycles"
+    push(_): lr_argv "2"
+    push(_): lr_argv "--criteria"
+    push(_): lr_argv "size:1,lines:1"
+    push(_): lr_argv "--no-history"
+    push(_): lr_argv "say"
+    push(_): lr_argv "good"
+    lenin_main(lr_v): lr_argv
+    lm_check(_): "a dry run calls nobody" lr_v 0
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    lm_clean(_): "tests/lenin-more-tmp"
+    make_dir(_): "tests/lenin-more-tmp"
+    lm_flags(_):
+    lm_models(_):
+    lm_text(_):
+    lm_rank(_):
+    lm_library(_):
+    lm_runs(_):
+    lm_clean(_): "tests/lenin-more-tmp"
+    file_exists(lr_gone): "tests/lenin-more-tmp"
+    lm_check(_): "scratch removed" lr_gone false
+]

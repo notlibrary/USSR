@@ -474,13 +474,18 @@ The tests' leak: 2 of 4 answers that passed a test the models saw failed the hid
 Under 20 measured runs: too few to conclude anything.
 
 PASS stats gives the tests' leak
-usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size]
+usage: lenin --models FILE [--dir DIR] [--cycles N] [--criteria speed|size|lines|complexity|deps|size:W,speed:W]
              [--method rounds|chain|enrich|funnel]
              [--test COMMAND] [--score COMMAND] [--ext .EXT] [--baseline FILE]
              [--window SECONDS] [--refine N] [--no-refine] [--holdout COMMAND]
              [--patience N] [--target SCORE] [--budget CALLS] [--direct]
              [--task TEXT] [--tasks FILE] [--prompt-file FILE] [prompt ...]
              [--history FILE] [--no-history]
+             [--lang L] [--beam K] [--mutate] [--crossover] [--diverse] [--adaptive]
+             [--repeat N] [--mutants N] [--explain] [--sandbox] [--prices FILE]
+             [--money X] [--retries N] [--retry-ms MS] [--fake DIR] [--resume]
+             [--multi] [--json] [--context N] [--save-prompt NAME]
+             [--use-prompt NAME[@V]] [--dry-run] [--config FILE] [--no-config]
        lenin --stats [--history FILE]
 --models: a file of lines: provider model KEY_ENV [url]; KEY_ENV - for no key
 --test: a command that exits 0 when a candidate works; {file} is the candidate

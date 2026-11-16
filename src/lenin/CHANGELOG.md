@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.0
+Refine pass 1 from REFINE.md; the new code is `more.su`.
+- Search: `--beam K` shows the next model the top K answers that pass;
+  `--mutate` gives each model a change to try, chosen by the criterion;
+  `--crossover` has a model merge the two best after every cycle;
+  `--diverse` makes an answer too like an earlier one lose ties;
+  `--adaptive` orders the models by their wins in the history.
+- Measuring: `--criteria` takes `lines`, `complexity`, `deps` and weights
+  (`size:0.3,speed:0.7`); `--repeat N` times the speed N times (median and
+  spread); `--mutants N` runs copies of the best, each without one line,
+  through `--test`; `--sandbox` runs tests with HOME in DIR/sandbox.
+- Answers: `--multi` keeps every fenced block as a file
+  (`cycleN_model.ext.files/`, `{dir}` in a test); `--json` takes a JSON
+  envelope of files, notes and assumptions; every reply is kept.
+- `--lang python|ussr|js|sh|ruby|c` presets; a versioned prompt library
+  (`--save-prompt NAME`, `--use-prompt NAME[@V]`); `--context N`.
+- Cost: tokens per model (guessed at four bytes each), `--prices FILE`
+  and `--money X`; `--retries N` with doubling waits.
+- models.conf lines take `role=refine|draft|critic|judge`, `max_tokens=`
+  and `timeout=`.
+- Workflow: `--resume` reuses the answers in `--dir`, `--dry-run` prints
+  the models, calls, cost and prompts, `--config FILE` (or `./lenin.conf`)
+  holds the options, `--fake DIR` answers from canned replies.
+- The report adds a Pareto front, copies (answers 90% like another or
+  the baseline), whether a speed win is inside the noise, the mutants,
+  `--explain` (why the winner won) and calls and tokens; it is also
+  written as `report.html`, and `run.json` records the run. Another
+  model's answer in a prompt is marked as data.
+- `tests/lenin_more_test.su`: 94 checks; `tests/lenin_test.su` is
+  unchanged but for the usage text.
+
 ## Unreleased
 - From research/neuroslop_enrichment_and_refining.md: `--method funnel`, wide
   for the first cycle and a chain after it; the critic that lists what a draft
