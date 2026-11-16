@@ -40,7 +40,7 @@ contains(r): s needle [
 ]
 
 # Removes dir and everything in it (files, then folders deepest first).
-remove_tree(r): dir [
+kt_remove_tree(r): dir [
     vec(_rt_dirs): ""
     push(_): _rt_dirs dir
     set(_rt_i): 0
@@ -356,7 +356,7 @@ test_layout_and_navigation(r): [
 # --- a scratch desktop
 test_a_scratch_desktop(r): [
     set(_root): "tests/kremlin_tmp"
-    remove_tree(_): _root
+    kt_remove_tree(_): _root
     getcwd(_cwd):
     km_slashes(_cwd): _cwd
     km_join(_root): _cwd _root
@@ -545,7 +545,7 @@ test_a_scratch_desktop(r): [
     set(_v): km_wall?
     eq(_): "settings survive a restart" _v 1
 
-    remove_tree(_): _root
+    kt_remove_tree(_): _root
     file_exists(_v): _root
     eq(_): "scratch desktop removed" _v false
     set(r): 0

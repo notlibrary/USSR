@@ -1,0 +1,1189 @@
+# more.su - Kremlin refine pass 1: the desktop engine's file operations,
+# launchers, menus, calendar and settings beyond 0.1. kremlin.su includes
+# it; everything here works without a window (tests/kremlin_more_test.su).
+#
+# Files (names are in the current folder, km_dir):
+#   kremlintrash(e): name          -> moves it to ROOT/.trash (folders with
+#                                     everything in them); "" or why not
+#   kremlintrashlist(v): / kremlinrestore(e): name / kremlinemptytrash(n):
+#   kremlincopyto(e): name dir / kremlinmoveto(e): name dir
+#                                  -> recursive copy, move (a different name
+#                                     " copy" when the target exists)
+#   kremlincut(_): names / kremlincopy(_): names / kremlinpaste(e):
+#   kremlinundo(e):                -> takes back the last trash, move,
+#                                     rename, paste, new folder or new file
+#   kremlinselectmany(_): names / kremlinselection(v): / kremlintrashselection(e):
+#   kremlinnewfromtemplate(e): template name   from ROOT/Templates
+#   kremlininfo(v): name           -> btree: kind size lines items sha256
+#   kremlinfind(v): query          -> paths under ROOT whose name or text
+#                                     holds query (case folded)
+# Launchers: name, command, console, and now icon, dir (working directory),
+#   env (NAME=VALUE; ...), hotkey, category, comment (km_launcher_info)
+# Settings (.kremlin): assoc.EXT = launcher or command (file
+#   associations), showhidden = yes, clock = 24h|12h|24s, lang = en|ru,
+#   kiosk = yes; kremlinexport(r): path / kremlinimport(r): path
+# Menus: km_start_items lists Apps' sub-folders as categories;
+#   kremlinsearch(v): query -> [label path] launchers and recent files;
+#   kremlinrecent(v): / kremlinopenwith(v): name -> launchers;
+#   kremlinopenwithrun(e): name launcher / kremlinrunhistory(v):
+# Calendar: kremlinnote(_): date text / kremlinnotes(v): date / km_weeknum(n):
+#   y m d (ISO 8601) / kremlinholidays(v): y m (ROOT/.holidays lines
+#   "MM-DD name") / kremlinimportics(n): path (VEVENTs become notes)
+# Messages: kremlinnotify(_): title text / kremlinnotifications(v):
+# Labels: km_tr(s): text (Russian when lang = ru)
+$once
+$include "../libs/strings.su"
+$include "../libs/paths.su"
+$include "../libs/encoding.su"
+$include "../libs/dates.su"
+
+km_more_defaults(r): [
+    btree(assoc):
+    set(km_assoc): assoc!
+    set(km_showhidden): false!
+    set(km_clockfmt): "24h"!
+    set(km_lang): "en"!
+    set(km_kiosk): false!
+    vec(clip): ""
+    set(km_clip): clip!
+    set(km_clip_cut): false!
+    vec(undo): ""
+    set(km_undo): undo!
+    vec(sel): ""
+    set(km_selection): sel!
+    vec(msgs): ""
+    set(km_notices): msgs!
+    set(km_last_kl): ""!
+    set(km_last_launch_env): ""!
+    set(r): 0
+]
+
+# extra settings keys; true when key was one of them
+km_more_config(r): key val [
+    set(r): true
+    str_starts(isassoc): key "assoc."
+    if(_): isassoc [
+        len(kl): key
+        slice(ext): key 6 {kl - 6}
+        str_lower(ext): ext
+        str_starts(dot): ext "."
+        if(_): dot [
+            len(el): ext
+            slice(ext): ext 1 {el - 1}
+        ]
+        set(a): km_assoc?
+        btput(_): a ext val
+    ]
+    elif(_): {key = "showhidden"} [
+        str_lower(v): val
+        set(km_showhidden): {v = "yes" || v = "true" || v = "1"}!
+    ]
+    elif(_): {key = "clock"} [
+        if(_): {val = "24h" || val = "12h" || val = "24s"} [
+            set(km_clockfmt): val!
+        ]
+    ]
+    elif(_): {key = "lang"} [
+        if(_): {val = "en" || val = "ru"} [
+            set(km_lang): val!
+        ]
+    ]
+    elif(_): {key = "kiosk"} [
+        str_lower(v): val
+        set(km_kiosk): {v = "yes" || v = "true" || v = "1"}!
+    ]
+    else(_): [
+        set(r): false
+    ]
+]
+
+km_more_config_text(r): [
+    set(r): ""
+    set(a): km_assoc?
+    btkeys(keys): a
+    len(n): keys
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        btget(v): a k
+        concat(r): r "assoc." k "=" v "\n"
+        set(i): {i + 1}
+    ]
+    set(sh): km_showhidden?
+    if(_): sh [
+        concat(r): r "showhidden=yes\n"
+    ]
+    set(c): km_clockfmt?
+    set(l): km_lang?
+    concat(r): r "clock=" c "\nlang=" l "\n"
+    set(k): km_kiosk?
+    if(_): k [
+        concat(r): r "kiosk=yes\n"
+    ]
+]
+
+# ---------------------------------------------------------------- helpers
+
+# km_hidden for the listing, which shows dot files when showhidden is on
+km_listed_hidden(r): name [
+    km_hidden(r): name
+    set(show): km_showhidden?
+    str_lower(l): name
+    if(_): {r && show && l != ".trash" && l != ".trash/"} [
+        set(r): false
+    ]
+]
+
+_km_here(r): name [
+    set(d): km_dir?
+    km_strip_slash(n): name
+    km_join(r): d n
+]
+
+_km_undo_push(r): op a b [
+    set(u): km_undo?
+    vec(e): ""
+    push(_): e op
+    push(_): e a
+    push(_): e b
+    push(_): u e
+    set(r): 0
+]
+
+# a free path for base in dir: "name", "name copy", "name copy 2", ...
+_km_free(r): dir base [
+    km_join(r): dir base
+    exists(taken): r
+    if(_): {taken = false} [
+        return(r): r
+    ]
+    km_ext(ext): base
+    set(stem): base
+    if(_): {ext != ""} [
+        len(bl): base
+        len(el): ext
+        slice(stem): base 0 {bl - el - 1}
+        concat(ext): "." ext
+    ]
+    set(k): 1
+    set(go): true
+    while(_): go [
+        concat(name): stem " copy" ext
+        if(_): {k > 1} [
+            str_from_int(ks): k
+            concat(name): stem " copy " ks ext
+        ]
+        km_join(r): dir name
+        exists(taken): r
+        set(go): taken
+        set(k): {k + 1}
+    ]
+]
+
+_km_move(r): from to [
+    # rename, else copy and remove (another drive)
+    rename_path(bad): from to
+    set(r): 0
+    if(_): {bad != 0} [
+        is_dir(d): from
+        if(_): {d = 1} [
+            copy_dir(r): from to
+            if(_): {r = 0} [
+                remove_tree(_): from
+            ]
+        ]
+        else(_): [
+            copy_file(r): from to
+            if(_): {r = 0} [
+                remove_file(_): from
+            ]
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- trash
+
+_km_trash_dir(r): [
+    set(root): km_root?
+    km_join(r): root ".trash"
+    make_dir(_): r
+]
+
+kremlintrash(r): name [
+    set(r): ""
+    _km_here(from): name
+    exists(have): from
+    if(_): {have = false} [
+        set(r): "It is gone already"
+        return(r): r
+    ]
+    _km_trash_dir(td):
+    km_strip_slash(n): name
+    _km_free(to): td n
+    _km_move(bad): from to
+    if(_): {bad != 0} [
+        set(r): "Could not move it to the trash"
+        return(r): r
+    ]
+    # where it came from, for restore
+    km_join(idx): td ".index"
+    km_base(stored): to
+    concat(line): stored "\t" from "\n"
+    open_file(h): idx "ab"
+    if(_): {h >= 0} [
+        write_file(_): h line
+        close_file(_): h
+    ]
+    km_pin_index(pin): name
+    if(_): {pin >= 0} [
+        km_unpin_at(_): pin
+    ]
+    _km_undo_push(_): "trash" stored from
+    kremlinrefresh(_):
+]
+
+# [name original] pairs
+kremlintrashlist(r): [
+    vec(r): ""
+    _km_trash_dir(td):
+    km_join(idx): td ".index"
+    read_lines(lines): idx
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        return(r): r
+    ]
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_split_max(p): l "\t" 2
+        len(np): p
+        if(_): {np = 2} [
+            at(nm): p 0
+            km_join(full): td nm
+            exists(still): full
+            if(_): still [
+                push(_): r p
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kremlinrestore(r): name [
+    set(r): "Not in the trash"
+    kremlintrashlist(all):
+    _km_trash_dir(td):
+    len(n): all
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(p): all i
+        at(nm): p 0
+        if(_): {nm = name} [
+            at(orig): p 1
+            km_join(from): td nm
+            exists(clash): orig
+            set(to): orig
+            if(_): clash [
+                km_parent(od): orig
+                km_base(ob): orig
+                _km_free(to): od ob
+            ]
+            _km_move(bad): from to
+            set(r): ""
+            if(_): {bad != 0} [
+                set(r): "Could not restore it"
+            ]
+            set(i): 0
+        ]
+        set(i): {i - 1}
+    ]
+    kremlinrefresh(_):
+]
+
+kremlinemptytrash(r): [
+    _km_trash_dir(td):
+    list_dir(names): td
+    set(r): 0
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        km_strip_slash(b): nm
+        km_join(p): td b
+        km_is_dir_name(isd): nm
+        if(_): isd [
+            remove_tree(_): p
+        ]
+        else(_): [
+            remove_file(_): p
+        ]
+        if(_): {b != ".index"} [
+            set(r): {r + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- copy, move, clipboard
+
+kremlincopyto(r): name dir [
+    set(r): ""
+    _km_here(from): name
+    km_strip_slash(n): name
+    _km_free(to): dir n
+    is_dir(isd): from
+    if(_): {isd = 1} [
+        copy_dir(bad): from to
+    ]
+    else(_): [
+        copy_file(bad): from to
+    ]
+    if(_): {bad != 0} [
+        set(r): "Could not copy it"
+    ]
+    else(_): [
+        _km_undo_push(_): "copy" to ""
+    ]
+    kremlinrefresh(_):
+]
+
+kremlinmoveto(r): name dir [
+    set(r): ""
+    _km_here(from): name
+    km_strip_slash(n): name
+    _km_free(to): dir n
+    _km_move(bad): from to
+    if(_): {bad != 0} [
+        set(r): "Could not move it"
+    ]
+    else(_): [
+        _km_undo_push(_): "move" to from
+    ]
+    kremlinrefresh(_):
+]
+
+kremlincut(r): names [
+    _km_clip_set(r): names true
+]
+
+kremlincopy(r): names [
+    _km_clip_set(r): names false
+]
+
+_km_clip_set(r): names cut [
+    vec(paths): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        _km_here(p): nm
+        push(_): paths p
+        set(i): {i + 1}
+    ]
+    set(km_clip): paths!
+    set(km_clip_cut): cut!
+    set(r): n
+]
+
+kremlinpaste(r): [
+    set(r): ""
+    set(paths): km_clip?
+    set(cut): km_clip_cut?
+    set(dir): km_dir?
+    len(n): paths
+    vec(made): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(from): paths i
+        km_base(b): from
+        _km_free(to): dir b
+        if(_): cut [
+            _km_move(bad): from to
+        ]
+        else(_): [
+            is_dir(isd): from
+            if(_): {isd = 1} [
+                copy_dir(bad): from to
+            ]
+            else(_): [
+                copy_file(bad): from to
+            ]
+        ]
+        if(_): {bad != 0} [
+            concat(r): "Could not paste " b
+        ]
+        else(_): [
+            vec(pair): ""
+            push(_): pair to
+            push(_): pair from
+            push(_): made pair
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): cut [
+        vec(none): ""
+        set(km_clip): none!
+    ]
+    set(op): "pastecopy"
+    if(_): cut [
+        set(op): "pastecut"
+    ]
+    _km_undo_push(_): op made ""
+    kremlinrefresh(_):
+]
+
+kremlinundo(r): [
+    set(u): km_undo?
+    len(n): u
+    set(r): "Nothing to undo"
+    if(_): {n = 0} [
+        return(r): r
+    ]
+    pop(e): u
+    at(op): e 0
+    at(a): e 1
+    at(b): e 2
+    set(r): ""
+    if(_): {op = "trash"} [
+        kremlinrestore(r): a
+    ]
+    elif(_): {op = "move" || op = "rename"} [
+        _km_move(bad): a b
+        if(_): {bad != 0} [
+            set(r): "Could not undo it"
+        ]
+    ]
+    elif(_): {op = "copy" || op = "new"} [
+        is_dir(isd): a
+        if(_): {isd = 1} [
+            remove_tree(_): a
+        ]
+        else(_): [
+            remove_file(_): a
+        ]
+    ]
+    elif(_): {op = "pastecopy" || op = "pastecut"} [
+        len(np): a
+        set(i): 0
+        while(_): {i < np} [
+            at(pair): a i
+            at(to): pair 0
+            at(from): pair 1
+            if(_): {op = "pastecut"} [
+                _km_move(_): to from
+            ]
+            else(_): [
+                is_dir(isd): to
+                if(_): {isd = 1} [
+                    remove_tree(_): to
+                ]
+                else(_): [
+                    remove_file(_): to
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    kremlinrefresh(_):
+]
+
+# the names a rename, new folder and new file made, for undo
+km_more_renamed(r): from to [
+    _km_undo_push(r): "rename" to from
+]
+
+km_more_created(r): path [
+    _km_undo_push(r): "new" path ""
+]
+
+kremlinselectmany(r): names [
+    vec(sel): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        km_index_of(k): nm
+        if(_): {k >= 0} [
+            push(_): sel nm
+        ]
+        set(i): {i + 1}
+    ]
+    set(km_selection): sel!
+    len(r): sel
+]
+
+kremlinselection(r): [
+    set(r): km_selection?
+]
+
+kremlintrashselection(r): [
+    set(sel): km_selection?
+    set(r): ""
+    len(n): sel
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): sel i
+        kremlintrash(e): nm
+        if(_): {e != ""} [
+            set(r): e
+        ]
+        set(i): {i + 1}
+    ]
+    vec(none): ""
+    set(km_selection): none!
+]
+
+# ---------------------------------------------------------------- templates, info, search
+
+kremlinnewfromtemplate(r): template name [
+    set(root): km_root?
+    km_join(tdir): root "Templates"
+    km_join(from): tdir template
+    exists(have): from
+    set(r): ""
+    if(_): {have = false} [
+        concat(r): "No template " template
+        return(r): r
+    ]
+    set(dir): km_dir?
+    km_join(to): dir name
+    exists(taken): to
+    if(_): taken [
+        set(r): "A file with that name is here already"
+        return(r): r
+    ]
+    is_dir(isd): from
+    if(_): {isd = 1} [
+        copy_dir(bad): from to
+    ]
+    else(_): [
+        copy_file(bad): from to
+    ]
+    if(_): {bad != 0} [
+        set(r): "Could not make it"
+    ]
+    else(_): [
+        _km_undo_push(_): "new" to ""
+    ]
+    kremlinrefresh(_):
+]
+
+kremlininfo(r): name [
+    btree(r):
+    _km_here(p): name
+    km_kind(k): name
+    btput(_): r "kind" k
+    is_dir(isd): p
+    if(_): {isd = 1} [
+        walk_dir(files): p
+        len(nf): files
+        btput(_): r "items" nf
+        set(total): 0
+        set(i): 0
+        while(_): {i < nf} [
+            at(f): files i
+            read_bytes(b): f
+            len(bn): b
+            set(total): {total + bn}
+            set(i): {i + 1}
+        ]
+        btput(_): r "size" total
+    ]
+    else(_): [
+        read_bytes(b): p
+        typeof(bt): b
+        if(_): {bt = "vector"} [
+            len(bn): b
+            btput(_): r "size" bn
+            set(nl): 0
+            set(i): 0
+            while(_): {i < bn} [
+                at(x): b i
+                if(_): {x = 10} [
+                    set(nl): {nl + 1}
+                ]
+                set(i): {i + 1}
+            ]
+            btput(_): r "lines" nl
+            sha256(d): b
+            hex_encode(h): d
+            btput(_): r "sha256" h
+        ]
+    ]
+]
+
+kremlinfind(r): query [
+    vec(r): ""
+    set(root): km_root?
+    str_lower(q): query
+    walk_dir(files): root
+    len(n): files
+    set(i): 0
+    while(_): {i < n} [
+        at(f): files i
+        str_contains(hidden): f "/."
+        if(_): {hidden = false} [
+            km_base(b): f
+            str_lower(lb): b
+            str_contains(hit): lb q
+            if(_): {hit = false} [
+                km_kind(kind): b
+                if(_): {kind = "text" || kind = "code"} [
+                    readfile(t): f
+                    typeof(tt): t
+                    if(_): {tt = "string"} [
+                        str_lower(lt): t
+                        str_contains(hit): lt q
+                    ]
+                ]
+            ]
+            if(_): hit [
+                push(_): r f
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- launchers
+
+# a launcher's keys as a btree (name command console icon dir env hotkey
+# category comment)
+km_launcher_info(r): text [
+    btree(r):
+    km_launcher_parse(base): text
+    at(nm): base 0
+    at(cmd): base 1
+    at(con): base 2
+    btput(_): r "name" nm
+    btput(_): r "command" cmd
+    btput(_): r "console" con
+    km_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_trim(l): l
+        str_find(colon): l ":" 0
+        if(_): {colon > 0} [
+            slice(k): l 0 colon
+            str_trim(k): k
+            str_lower(k): k
+            len(ll): l
+            slice(v): l {colon + 1} {ll - colon - 1}
+            str_trim(v): v
+            if(_): {k = "icon" || k = "dir" || k = "env" || k = "hotkey" || k = "category" || k = "comment"} [
+                btput(_): r k v
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# applies a launcher's dir and env before it starts; the old directory
+km_launch_env(r): info [
+    getcwd(r):
+    btget(env): info "env" ""
+    if(_): {env != ""} [
+        str_split(pairs): env ";"
+        len(n): pairs
+        set(i): 0
+        while(_): {i < n} [
+            at(p): pairs i
+            str_find(eq): p "=" 0
+            if(_): {eq > 0} [
+                slice(k): p 0 eq
+                str_trim(k): k
+                len(pl): p
+                slice(v): p {eq + 1} {pl - eq - 1}
+                str_trim(v): v
+                setenv(_): k v
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    btget(dir): info "dir" ""
+    if(_): {dir != ""} [
+        env_expand(d): dir
+        is_dir(isd): d
+        if(_): {isd = 1} [
+            cd(_): d
+        ]
+    ]
+]
+
+# an associated program for path, as a plan, or null
+km_assoc_plan(r): path [
+    set(r): null
+    km_ext(e): path
+    str_lower(e): e
+    set(a): km_assoc?
+    btget(target): a e ""
+    if(_): {target = ""} [
+        return(r): r
+    ]
+    km_quote(q): path
+    str_ends(kl): target ".kl"
+    if(_): kl [
+        set(root): km_root?
+        km_join(lp): root target
+        exists(have): lp
+        if(_): have [
+            readfile(t): lp
+            km_launcher_parse(l): t
+            at(cmd): l 1
+            km_split_command(parts): cmd
+            at(prog): parts 0
+            at(params): parts 1
+            concat(all): params " " q
+            str_trim(all): all
+            km_plan(r): "launch" prog all false
+        ]
+    ]
+    else(_): [
+        km_split_command(parts): target
+        at(prog): parts 0
+        at(params): parts 1
+        concat(all): params " " q
+        str_trim(all): all
+        km_plan(r): "launch" prog all false
+    ]
+]
+
+# ---------------------------------------------------------------- menus
+
+_km_launchers(r): [
+    # [label path] of every launcher under Apps, sub-folders included
+    vec(r): ""
+    set(root): km_root?
+    km_join(apps): root "Apps"
+    walk_dir(files): apps
+    len(n): files
+    set(i): 0
+    while(_): {i < n} [
+        at(f): files i
+        str_ends(kl): f ".kl"
+        if(_): kl [
+            km_base(b): f
+            km_label(l): b
+            vec(e): ""
+            push(_): e l
+            push(_): e f
+            push(_): r e
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kremlinsearch(r): query [
+    vec(r): ""
+    _km_launchers(all):
+    kremlinrecent(rec):
+    len(nr): rec
+    set(i): 0
+    while(_): {i < nr} [
+        at(p): rec i
+        km_base(b): p
+        vec(e): ""
+        push(_): e b
+        push(_): e p
+        push(_): all e
+        set(i): {i + 1}
+    ]
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(e): all i
+        at(l): e 0
+        str_fuzzy(hit): query l
+        if(_): hit [
+            push(_): r e
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+_km_list_file(r): name [
+    set(root): km_root?
+    km_join(r): root name
+]
+
+km_recent_add(r): path [
+    _km_list_file(f): ".recent"
+    read_lines(lines): f
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        vec(lines): ""
+    ]
+    vec(out): ""
+    push(_): out path
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        len(no): out
+        if(_): {l != path && l != "" && no < 20} [
+            push(_): out l
+        ]
+        set(i): {i + 1}
+    ]
+    write_lines(r): f out
+]
+
+kremlinrecent(r): [
+    _km_list_file(f): ".recent"
+    read_lines(r): f
+    typeof(t): r
+    if(_): {t != "vector"} [
+        vec(r): ""
+    ]
+]
+
+kremlinopenwith(r): name [
+    _km_launchers(r):
+]
+
+kremlinopenwithrun(r): name launcher [
+    _km_here(p): name
+    readfile(t): launcher
+    typeof(tt): t
+    set(r): "Cannot read that launcher"
+    if(_): {tt != "string"} [
+        return(r): r
+    ]
+    km_launcher_parse(l): t
+    at(cmd): l 1
+    km_split_command(parts): cmd
+    at(prog): parts 0
+    at(params): parts 1
+    km_quote(q): p
+    concat(all): params " " q
+    str_trim(all): all
+    km_plan(plan): "launch" prog all false
+    km_label(label): name
+    km_recent_add(_): p
+    km_execute(r): plan label
+]
+
+km_run_history_add(r): line [
+    _km_list_file(f): ".runhistory"
+    read_lines(lines): f
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        vec(lines): ""
+    ]
+    vec(out): ""
+    push(_): out line
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        len(no): out
+        if(_): {l != line && l != "" && no < 50} [
+            push(_): out l
+        ]
+        set(i): {i + 1}
+    ]
+    write_lines(r): f out
+]
+
+kremlinrunhistory(r): [
+    _km_list_file(f): ".runhistory"
+    read_lines(r): f
+    typeof(t): r
+    if(_): {t != "vector"} [
+        vec(r): ""
+    ]
+]
+
+# Apps' sub-folders as start-menu categories
+km_category_items(r): [
+    vec(r): ""
+    set(root): km_root?
+    km_join(apps): root "Apps"
+    list_dir(names): apps
+    typeof(nt): names
+    if(_): {nt != "vector"} [
+        return(r): r
+    ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        km_is_dir_name(isd): nm
+        km_hidden(hid): nm
+        if(_): {isd && hid = false} [
+            km_strip_slash(b): nm
+            km_join(p): apps b
+            concat(label): b " >"
+            concat(act): "path:" p
+            km_item(item): label "" act
+            push(_): r item
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- calendar
+
+_km_date_key(r): date [
+    re_test(good): "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" date
+    set(r): ""
+    if(_): good [
+        set(r): date
+    ]
+]
+
+kremlinnote(r): date text [
+    _km_date_key(d): date
+    set(r): {0 - 1}
+    if(_): {d = ""} [
+        return(r): r
+    ]
+    re_replace(t): "[\\r\\n\\t]+" text " "
+    _km_list_file(f): ".calendar"
+    concat(line): d "\t" t
+    append_line(r): f line
+]
+
+kremlinnotes(r): date [
+    vec(r): ""
+    _km_list_file(f): ".calendar"
+    read_lines(lines): f
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        return(r): r
+    ]
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_split_max(p): l "\t" 2
+        len(np): p
+        if(_): {np = 2} [
+            at(d): p 0
+            if(_): {d = date} [
+                at(t): p 1
+                push(_): r t
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# the ISO 8601 week number of a date
+km_weeknum(r): y m d [
+    day_of_week(wd): y m d
+    # Monday = 1 .. Sunday = 7
+    set(iso): wd
+    if(_): {wd = 0} [
+        set(iso): 7
+    ]
+    days_from_civil(today): y m d
+    # the Thursday of this week decides the year
+    set(thu): {today - iso + 4}
+    civil_from_days(tc): thu
+    at(ty): tc 0
+    days_from_civil(jan1): ty 1 1
+    str_trunc(r): {(thu - jan1) / 7}
+    set(r): {r + 1}
+]
+
+kremlinholidays(r): y m [
+    vec(r): ""
+    _km_list_file(f): ".holidays"
+    read_lines(lines): f
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        return(r): r
+    ]
+    str_from_int(ms): m
+    str_pad_left(ms): ms 2 "0"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        re_find(mt): "^([0-9]{2})-([0-9]{2})\\s+(.+)$" l
+        typeof(tt): mt
+        if(_): {tt = "vector"} [
+            at(mm): mt 1
+            if(_): {mm = ms} [
+                at(dd): mt 2
+                at(name): mt 3
+                str_to_int(dn): dd 10
+                vec(e): ""
+                push(_): e dn
+                push(_): e name
+                push(_): r e
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kremlinimportics(r): path [
+    readfile(text): path
+    set(r): 0
+    typeof(tt): text
+    if(_): {tt != "string"} [
+        set(r): {0 - 1}
+        return(r): r
+    ]
+    # lines continued with a leading blank join the line before
+    str_replace(t): text "\r\n" "\n"
+    re_replace(t): "\\n[ \\t]" t ""
+    str_split(lines): t "\n"
+    set(start): ""
+    set(summary): ""
+    set(inside): false
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        if(_): {l = "BEGIN:VEVENT"} [
+            set(inside): true
+            set(start): ""
+            set(summary): ""
+        ]
+        elif(_): {l = "END:VEVENT" && inside} [
+            set(inside): false
+            if(_): {start != ""} [
+                kremlinnote(_): start summary
+                set(r): {r + 1}
+            ]
+        ]
+        elif(_): inside [
+            re_find(ds): "^DTSTART[^:]*:([0-9]{4})([0-9]{2})([0-9]{2})" l
+            typeof(dt): ds
+            if(_): {dt = "vector"} [
+                at(yy): ds 1
+                at(mo): ds 2
+                at(dd): ds 3
+                concat(start): yy "-" mo "-" dd
+            ]
+            str_starts(sm): l "SUMMARY:"
+            if(_): sm [
+                len(ll): l
+                slice(summary): l 8 {ll - 8}
+                str_replace(summary): summary "\\," ","
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- messages
+
+kremlinnotify(r): title text [
+    set(q): km_notices?
+    time(now):
+    vec(e): ""
+    push(_): e now
+    push(_): e title
+    push(_): e text
+    push(_): q e
+    concat(m): title ": " text
+    km_say(_): m
+    set(r): 0
+]
+
+kremlinnotifications(r): [
+    set(r): km_notices?
+]
+
+# ---------------------------------------------------------------- settings, labels, clock
+
+kremlinexport(r): path [
+    km_save_config(_):
+    km_config_path(src):
+    readfile(t): src
+    writefile(_): path t
+    set(r): 0
+]
+
+kremlinimport(r): path [
+    readfile(t): path
+    typeof(tt): t
+    set(r): {0 - 1}
+    if(_): {tt = "string"} [
+        km_config_apply(_): t
+        km_save_config(_):
+        set(r): 0
+    ]
+]
+
+km_tr(r): text [
+    set(lang): km_lang?
+    set(r): text
+    if(_): {lang = "ru"} [
+        btree(t):
+        btput(_): t "Desktop" "Рабочий стол"
+        btput(_): t "Run..." "Выполнить..."
+        btput(_): t "Help" "Справка"
+        btput(_): t "Exit Kremlin" "Выход из Кремля"
+        btput(_): t "Open" "Открыть"
+        btput(_): t "Rename" "Переименовать"
+        btput(_): t "Delete" "Удалить"
+        btput(_): t "Properties" "Свойства"
+        btput(_): t "New folder" "Новая папка"
+        btput(_): t "New file" "Новый файл"
+        btput(_): t "Trash" "Корзина"
+        btput(_): t "Paste" "Вставить"
+        btget(r): t text text
+    ]
+]
+
+# the panel clock from a localtime vector, in the clock setting's format
+km_more_clock(r): t [
+    at(hh): t 3
+    at(mi): t 4
+    at(ss): t 5
+    set(fmt): km_clockfmt?
+    km_two(ms): mi
+    if(_): {fmt = "12h"} [
+        set(suffix): "AM"
+        if(_): {hh >= 12} [
+            set(suffix): "PM"
+        ]
+        set(h12): {hh % 12}
+        if(_): {h12 = 0} [
+            set(h12): 12
+        ]
+        str_from_int(hs): h12
+        concat(r): hs ":" ms " " suffix
+    ]
+    else(_): [
+        km_two(hs): hh
+        concat(r): hs ":" ms
+        if(_): {fmt = "24s"} [
+            km_two(sx): ss
+            concat(r): r ":" sx
+        ]
+    ]
+]
+
+# before a launch: the launcher's dir and env; the directory to go back to
+km_more_prelaunch(r): [
+    set(r): ""
+    set(kl): km_last_kl?
+    set(km_last_kl): ""!
+    set(km_last_launch_env): ""!
+    if(_): {kl = ""} [
+        return(r): r
+    ]
+    readfile(t): kl
+    typeof(tt): t
+    if(_): {tt != "string"} [
+        return(r): r
+    ]
+    km_launcher_info(info): t
+    btget(dir): info "dir" ""
+    btget(env): info "env" ""
+    concat(note): "dir=" dir " env=" env
+    set(km_last_launch_env): note!
+    set(dry): km_dryrun?
+    if(_): {dry = false && (dir != "" || env != "")} [
+        km_launch_env(r): info
+    ]
+]

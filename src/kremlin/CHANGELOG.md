@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.0
+Refine pass 1 from REFINE.md; the new code is `more.su`.
+- Trash: `kremlintrash` moves files and whole folders to `.trash` and
+  remembers where they came from; `kremlintrashlist`, `kremlinrestore`,
+  `kremlinemptytrash`.
+- `kremlincopyto` and `kremlinmoveto` copy and move folders with
+  everything in them, picking "name copy" beside a name already there.
+- Clipboard: `kremlincut`, `kremlincopy`, `kremlinpaste`, and Ctrl+X/C/V
+  in the window.
+- `kremlinundo` (Ctrl+Z) takes back the last trash, move, rename, paste,
+  copy, new folder or new file.
+- Several at once: `kremlinselectmany`, `kremlinselection`,
+  `kremlintrashselection`.
+- `kremlinnewfromtemplate` from the `Templates` folder; `kremlininfo`
+  (kind, size, lines, items, SHA-256); `kremlinfind` searches names and
+  text under the desktop.
+- Launchers take `icon`, `dir`, `env`, `hotkey`, `category` and `comment`
+  (`km_launcher_info`); `dir` and `env` apply when the launcher starts.
+- Settings: `assoc.EXT = program` or a `.kl` launcher (file
+  associations), `showhidden`, `clock = 24h|12h|24s`, `lang = en|ru`
+  (menu labels), `kiosk` (no Exit), and `kremlinexport`/`kremlinimport`.
+- Menus: sub-folders of `Apps` are categories in the KREMLIN menu;
+  `kremlinsearch` (fuzzy, launchers and recent files), `kremlinrecent`,
+  `kremlinopenwith` and `kremlinopenwithrun`, and the Run dialog keeps
+  `.runhistory` (`kremlinrunhistory`).
+- Calendar: notes in `.calendar` (`kremlinnote`, `kremlinnotes`), ISO
+  week numbers (`km_weeknum`), holidays from `.holidays`, and `.ics`
+  import (`kremlinimportics`).
+- `kremlinnotify` queues messages; `kremlinnotifications` lists them.
+- `tests/kremlin_more_test.su`: 82 checks. `tests/kremlin_test.su` names
+  its own tree remover `kt_remove_tree` (the library's is now included);
+  the GUI test also removes `.runhistory`.
+
 ## 0.1.0
 - First version: a full-screen desktop on one canvas showing the folder
   `~/kremlin` (`C:\Users\<name>\kremlin`) as icons, with a panel holding the
