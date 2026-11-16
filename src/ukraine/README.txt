@@ -54,9 +54,33 @@ See `tests/ukraine_http.su` for a runnable example and
 socket API.
 
 The socket API returns small integer handles, not native descriptors. The
-current HTTP layer is intentionally small: IPv4 TCP, one request per
-connection, a 16 KiB request-header limit, and application-defined routing.
-It does not decode chunked request bodies or provide IPv6; TLS comes from
-ryazan.
+core stays small: IPv4 TCP, a 16 KiB request-header limit, and
+application-defined routing; TLS comes from ryazan. Chunked request bodies
+are decoded, and requests with smuggling forms (two Content-Lengths, or
+Content-Length with Transfer-Encoding) get 400.
+
+## Settings
+
+Set these globals before uk_server (all optional):
+
+  uk_keepalive        true: several requests per connection, pipelining
+                      answered in order (default false: one per connection)
+  uk_max_requests     requests per kept-alive connection (100)
+  uk_header_timeout   seconds for a request head, 0 for none (0)
+  uk_body_timeout     seconds for a body after its head (0)
+  uk_idle_timeout     seconds an idle kept-alive connection may wait (5)
+  uk_max_connections  connections at once, 503 beyond; 0 for no limit (0)
+  uk_server_name      the Server header ("ukraine"; "" sends none)
+
+On an untrusted network set the timeouts and a connection limit.
+
+## The framework (app.su)
+
+`$include "src/ukraine/app.su"` for routes with parameters, middleware,
+cookies, signed sessions, CSRF tokens, forms and uploads, JSON, static
+files with ETag and Range, CORS, rate limits, an access log, Basic, Bearer
+and JWT authentication, and `uk_app_call` to test routes without a socket.
+The header comment of app.su is its reference; tests/ukraine_app_test.su
+shows every part in use.
 Keep the server on trusted networks until those features and production-grade
 timeouts/limits are added.

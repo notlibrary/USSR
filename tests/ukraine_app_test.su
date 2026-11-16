@@ -1,0 +1,437 @@
+# Tests src/ukraine/app.su without sockets, through uk_app_call, plus the
+# core's chunked decoding, head checks and date format. Runs in run_all.
+$include "../src/libs/testing.su"
+$include "../src/ukraine/app.su"
+
+global(_): app uk_cors_origins uk_rate_limit uk_access_log
+
+uk_route(result): method target raw [
+    uk_app_handle(result): app raw
+]
+
+h_hello(r): req [
+    uk_param(name): req "name"
+    uk_query(greet): req "greet"
+    if(_): {greet = ""} [
+        set(greet): "hello"
+    ]
+    concat(text): greet " " name
+    uk_text(r): 200 text
+]
+
+h_files(r): req [
+    uk_param(rest): req "*"
+    uk_text(r): 200 rest
+]
+
+h_echo_json(r): req [
+    uk_json_body(v): req
+    btree(out):
+    btput(_): out "got" v
+    uk_json(r): 201 out
+]
+
+h_form(r): req [
+    uk_form(a): req "a"
+    uk_upload(f): req "file"
+    set(fname): "-"
+    typeof(ft): f
+    if(_): {ft = "vector"} [
+        at(fname): f 0
+        at(data): f 2
+        concat(fname): fname ":" data
+    ]
+    concat(text): a " " fname
+    uk_text(r): 200 text
+]
+
+h_login(r): req [
+    uk_text(r): 200 "in"
+    btree(s):
+    btput(_): s "user" "ann"
+    uk_session_set(_): r "s3cret" s
+    btree(o):
+    btput(_): o "max_age" 60
+    btput(_): o "secure" true
+    uk_set_cookie(_): r "theme" "dark" o
+]
+
+h_me(r): req [
+    uk_session_get(s): req "s3cret"
+    btget(u): s "user" "nobody"
+    uk_text(r): 200 u
+]
+
+h_old(r): req [
+    uk_response(r): "202 Accepted" "text/plain" "raw"
+]
+
+h_static(r): req [
+    uk_static(r): req "tests/ukraine_static_tmp"
+]
+
+h_inner(r): req [
+    btget(p): req "path"
+    concat(t): "inner " p
+    uk_text(r): 200 t
+]
+
+h_teapot(r): req [
+    uk_text(r): 404 "custom not found"
+]
+
+mw_block(r): req [
+    set(r): null
+    uk_header(k): req "x-block"
+    if(_): {k = "1"} [
+        uk_text(r): 403 "blocked"
+    ]
+]
+
+after_tag(r): pair [
+    at(r): pair 1
+    uk_set_header(_): r "X-Tagged" "yes"
+]
+
+show(r): res [
+    btget(code): res "status"
+    btget(body): res "body"
+    str_from_int(cs): code
+    concat(r): cs " " body
+]
+
+sec_1(r): app [
+    uk_app_call(res): app "GET" "/hello/Lena?greet=privet" "" ""
+    show(s): res
+    assert_eq(_): "route params and query" s "200 privet Lena"
+    uk_res_header(tag): res "x-tagged"
+    assert_eq(_): "after hook" tag "yes"
+    uk_app_call(res): app "GET" "/hello/%D0%AF" "" ""
+    show(s): res
+    assert_eq(_): "decoded path" s "200 hello Я"
+    uk_app_call(res): app "GET" "/files/a/b/c.txt" "" ""
+    show(s): res
+    assert_eq(_): "wildcard" s "200 a/b/c.txt"
+    uk_app_call(res): app "GET" "/nope" "" ""
+    btget(code): res "status"
+    assert_eq(_): "404" code 404
+    uk_app_call(res): app "DELETE" "/hello/x" "" ""
+    btget(code): res "status"
+    uk_res_header(allow): res "allow"
+    assert_eq(_): "405 with Allow" {code = 405 && allow = "GET, HEAD, OPTIONS"} true
+    uk_app_call(res): app "OPTIONS" "/hello/x" "" ""
+    btget(code): res "status"
+    assert_eq(_): "OPTIONS answered" code 204
+    uk_app_call(res): app "HEAD" "/hello/x" "" ""
+    btget(body): res "body"
+    btget(hl): res "head_length"
+    assert_eq(_): "HEAD drops the body" {body = "" && hl = "7"} true
+    uk_app_call(res): app "TRACE" "/hello/x" "" ""
+    btget(code): res "status"
+    assert_eq(_): "TRACE refused" code 405
+    uk_app_call(res): app "GET" "/hello/x" "X-Block: 1" ""
+    show(s): res
+    assert_eq(_): "middleware stops" s "403 blocked"
+    uk_app_call(res): app "GET" "/api/x/7" "" ""
+    show(s): res
+    assert_eq(_): "mount" s "200 inner /x/7"
+    uk_app_call(res): app "GET" "/hello/z" "Host: other.example:8080" ""
+    show(s): res
+    assert_eq(_): "virtual host" s "200 inner /hello/z"
+
+    set(r): 0
+]
+
+sec_2(r): app [
+    uk_app_call(res): app "POST" "/json" "Content-Type: application/json" "{\"n\": [1, 2]}"
+    show(s): res
+    assert_eq(_): "json in and out" s "201 {\"got\":{\"n\":[1,2]}}"
+    str_repeat(big): "x" 100
+    uk_app_call(res): app "POST" "/json" "" big
+    btget(code): res "status"
+    assert_eq(_): "per-path body limit" code 413
+
+    uk_app_call(res): app "POST" "/form" "Content-Type: application/x-www-form-urlencoded" "a=red+square&b=2"
+    show(s): res
+    assert_eq(_): "urlencoded form" s "200 red square -"
+    set(mp): "--XyZ\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nfield\r\n--XyZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"n.txt\"\r\nContent-Type: text/plain\r\n\r\nfile body\r\n--XyZ--\r\n"
+    uk_app_call(res): app "POST" "/form" "Content-Type: multipart/form-data; boundary=XyZ" mp
+    show(s): res
+    assert_eq(_): "multipart form and upload" s "200 field n.txt:file body"
+
+    set(r): 0
+]
+
+sec_3(r): app [
+    uk_app_call(res): app "POST" "/login" "" ""
+    btget(hs): res "headers"
+    vec(cookies): ""
+    len(nh): hs
+    set(i): 0
+    while(_): {i < nh} [
+        at(p): hs i
+        at(k): p 0
+        if(_): {k = "Set-Cookie"} [
+            at(v): p 1
+            push(_): cookies v
+        ]
+        set(i): {i + 1}
+    ]
+    len(nc): cookies
+    assert_eq(_): "two cookies" nc 2
+    at(theme): cookies 1
+    assert_eq(_): "cookie flags" theme "theme=dark; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax"
+    at(sess): cookies 0
+    str_find(semi): sess ";" 0
+    slice(pairtext): sess 0 semi
+    concat(ch): "Cookie: " pairtext
+    uk_app_call(res): app "GET" "/me" ch ""
+    show(s): res
+    assert_eq(_): "signed session" s "200 ann"
+    str_replace(forged): ch "e" "f"
+    uk_app_call(res): app "GET" "/me" forged ""
+    show(s): res
+    assert_eq(_): "forged session refused" s "200 nobody"
+
+    uk_app_call(res): app "GET" "/old" "" ""
+    show(s): res
+    assert_eq(_): "old-style raw handler" s "202 raw"
+
+    set(r): 0
+]
+
+sec_4(r): app [
+    # CORS
+    vec(uk_cors_origins): ""
+    push(_): uk_cors_origins "https://ok.example"
+    uk_app_call(res): app "OPTIONS" "/hello/x" "Origin: https://ok.example\nAccess-Control-Request-Method: GET" ""
+    btget(code): res "status"
+    uk_res_header(ao): res "access-control-allow-origin"
+    assert_eq(_): "cors preflight" {code = 204 && ao = "https://ok.example"} true
+    uk_app_call(res): app "GET" "/hello/x" "Origin: https://ok.example" ""
+    uk_res_header(ao): res "access-control-allow-origin"
+    assert_eq(_): "cors simple request" ao "https://ok.example"
+    uk_app_call(res): app "OPTIONS" "/hello/x" "Origin: https://evil.example\nAccess-Control-Request-Method: GET" ""
+    btget(code): res "status"
+    assert_eq(_): "cors refused origin" code 403
+
+    set(r): 0
+]
+
+sec_5(r): app [
+    # error pages and negotiation
+    uk_app_error_page(_): app 404 "h_teapot"
+    uk_app_call(res): app "GET" "/missing" "" ""
+    show(s): res
+    assert_eq(_): "custom error page" s "404 custom not found"
+    uk_app_new(plain):
+    uk_app_call(res): plain "GET" "/x" "Accept: application/json" ""
+    btget(body): res "body"
+    json_parse(ej): body
+    btget(code): ej "status"
+    assert_eq(_): "json error body" code 404
+
+    set(r): 0
+]
+
+sec_6(r): app [
+    # static files
+    make_dir(_): "tests/ukraine_static_tmp"
+    make_dir(_): "tests/ukraine_static_tmp/d"
+    writefile(_): "tests/ukraine_static_tmp/a.css" "body{color:red}"
+    writefile(_): "tests/ukraine_static_tmp/d/index.html" "<p>index</p>"
+    uk_app_call(res): app "GET" "/static/a.css" "" ""
+    show(s): res
+    uk_res_header(ctype): res "content-type"
+    uk_res_header(etag): res "etag"
+    assert_eq(_): "static file" s "200 body{color:red}"
+    assert_eq(_): "static mime" ctype "text/css; charset=utf-8"
+    concat(inm): "If-None-Match: " etag
+    uk_app_call(res): app "GET" "/static/a.css" inm ""
+    btget(code): res "status"
+    assert_eq(_): "static 304" code 304
+    uk_app_call(res): app "GET" "/static/a.css" "Range: bytes=5-9" ""
+    show(s): res
+    uk_res_header(cr): res "content-range"
+    assert_eq(_): "static range" {s = "206 color" && cr = "bytes 5-9/15"} true
+    uk_app_call(res): app "GET" "/static/a.css" "Range: bytes=-3" ""
+    show(s): res
+    assert_eq(_): "static suffix range" s "206 ed}"
+    uk_app_call(res): app "GET" "/static/a.css" "Range: bytes=99-" ""
+    btget(code): res "status"
+    assert_eq(_): "static 416" code 416
+    uk_app_call(res): app "GET" "/static/d" "" ""
+    btget(code): res "status"
+    uk_res_header(loc): res "location"
+    assert_eq(_): "directory redirect" {code = 301 && loc = "/static/d/"} true
+    uk_app_call(res): app "GET" "/static/d/" "" ""
+    show(s): res
+    assert_eq(_): "directory index" s "200 <p>index</p>"
+    uk_app_call(res): app "GET" "/static/../ukraine_app_test.su" "" ""
+    btget(code): res "status"
+    assert_eq(_): "traversal refused" code 403
+    uk_app_call(res): app "GET" "/static/%2e%2e/ukraine_app_test.su" "" ""
+    btget(code): res "status"
+    assert_eq(_): "encoded traversal refused" code 403
+    remove_file(_): "tests/ukraine_static_tmp/d/index.html"
+    remove_dir(_): "tests/ukraine_static_tmp/d"
+    remove_file(_): "tests/ukraine_static_tmp/a.css"
+    remove_dir(_): "tests/ukraine_static_tmp"
+
+    set(r): 0
+]
+
+sec_7(r): app [
+    # rate limit
+    set(uk_rate_limit): 2
+    uk_app_new(limited):
+    uk_app_use(_): limited "uk_mw_rate_limit"
+    uk_app_get(_): limited "/hello/:name" "h_hello"
+    uk_app_call(r1): limited "GET" "/hello/a" "X-Forwarded-For: 10.0.0.9" ""
+    uk_app_call(r2): limited "GET" "/hello/a" "X-Forwarded-For: 10.0.0.9" ""
+    uk_app_call(r3): limited "GET" "/hello/a" "X-Forwarded-For: 10.0.0.9" ""
+    uk_app_call(r4): limited "GET" "/hello/a" "X-Forwarded-For: 10.0.0.10" ""
+    btget(c2): r2 "status"
+    btget(c3): r3 "status"
+    btget(c4): r4 "status"
+    assert_eq(_): "rate limit" {c2 = 200 && c3 = 429 && c4 = 200} true
+
+    set(r): 0
+]
+
+sec_8(r): app [
+    # access log
+    set(uk_access_log): "tests/ukraine_access_tmp.log"
+    remove_file(_): uk_access_log
+    uk_app_new(logged):
+    uk_app_after(_): logged "uk_after_log"
+    uk_app_get(_): logged "/hello/:name" "h_hello"
+    uk_app_call(_): logged "GET" "/hello/log?x=1" "User-Agent: probe\nReferer: http://r/" ""
+    readfile(log): "tests/ukraine_access_tmp.log"
+    re_test(clf): "^- - - \\[[0-9]{2}/[A-Z][a-z]{2}/[0-9]{4}:[0-9:]{8} \\+0000\\] \"GET /hello/log\\?x=1 HTTP/1.1\" 200 9 \"http://r/\" \"probe\"\n$" log
+    assert_true(_): "combined log format" clf
+    remove_file(_): "tests/ukraine_access_tmp.log"
+
+    set(r): 0
+]
+
+sec_9(r): app [
+    # helpers
+    uk_parse_request(req): "GET / HTTP/1.1\r\nAuthorization: Basic YW5uOnB3\r\nAccept: text/html;q=0.5, application/json\r\nCookie: a=1; b=2\r\nForwarded: for=192.0.2.60;proto=http\r\n\r\n"
+    uk_basic_auth(ba): req
+    encode(bae): ba
+    assert_eq(_): "basic auth" bae "[`ann`,`pw`]"
+    uk_cookie(cb): req "b"
+    assert_eq(_): "cookie parse" cb "2"
+    vec(types): ""
+    push(_): types "text/html"
+    push(_): types "application/json"
+    uk_best_type(bt): req types
+    assert_eq(_): "content negotiation" bt "application/json"
+    uk_accepts(ok_img): req "image/png"
+    assert_eq(_): "accepts refuses" ok_img false
+    uk_client_ip(ip): req true
+    assert_eq(_): "forwarded for" ip "192.0.2.60"
+    uk_client_ip(ip): req false
+    assert_eq(_): "untrusted proxy headers ignored" ip ""
+    uk_sign(sg): "k" "value"
+    uk_unsign(us): "k" sg
+    assert_eq(_): "sign round trip" us "value"
+    uk_unsign(us): "other" sg
+    assert_null(_): "wrong key" us
+    uk_csrf_token(tok): "k" "sess1"
+    uk_csrf_check(good): "k" "sess1" tok
+    uk_csrf_check(bad): "k" "sess2" tok
+    assert_eq(_): "csrf" {good && bad = false} true
+    set(r): 0
+]
+
+sec_10(r): app [
+    # a JWT made with the same HMAC: header {"alg":"HS256","typ":"JWT"}
+    base64url_encode(jh): "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
+    base64url_encode(jp): "{\"sub\":\"ann\",\"exp\":4102444800}"
+    concat(signing): jh "." jp
+    hmac_sha256(mac): "jwtkey" signing
+    base64url_encode(js): mac
+    concat(jwt): signing "." js
+    uk_jwt_verify(claims): jwt "jwtkey"
+    btget(sub): claims "sub" ""
+    assert_eq(_): "jwt verify" sub "ann"
+    uk_jwt_verify(claims): jwt "wrong"
+    assert_null(_): "jwt bad signature" claims
+    uk_sse(ev): "update" "a\nb" "7"
+    assert_eq(_): "sse" ev "id: 7\nevent: update\ndata: a\ndata: b\n\n"
+    btree(vals):
+    btput(_): vals "who" "<script>"
+    uk_render(html): "<b>${who}</b>" vals
+    assert_eq(_): "template escapes" html "<b>&lt;script&gt;</b>"
+
+    set(r): 0
+]
+
+sec_11(r): app [
+    # the core: chunked bodies, head checks, dates
+    uk_dechunk(dc): "4\r\nWiki\r\n5;x=y\r\npedia\r\n0\r\n\r\nNEXT" 1000
+    at(plain): dc 0
+    at(used): dc 1
+    assert_eq(_): "dechunk" {plain = "Wikipedia" && used = 28} true
+    uk_dechunk(dc): "4\r\nWi" 1000
+    assert_null(_): "dechunk incomplete" dc
+    uk_dechunk(dc): "zz\r\n" 1000
+    assert_eq(_): "dechunk malformed" dc 400
+    uk_check_head(why): "GET / HTTP/1.1\r\nHost: x"
+    assert_eq(_): "good head" why ""
+    uk_check_head(why): "GET / HTTP/2.0\r\nHost: x"
+    assert_eq(_): "bad version" why "bad request line"
+    uk_check_head(why): "GET / HTTP/1.1\r\nBad Header: x"
+    assert_eq(_): "bad header name" why "bad header line"
+    uk_header_count(n2): "POST / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 2\r\n\r\n" "Content-Length"
+    assert_eq(_): "duplicate length counted" n2 2
+    uk_http_date(d): 784111777
+    assert_eq(_): "http date" d "Sun, 06 Nov 1994 08:49:37 GMT"
+    uk_response(raw): "200 OK" "text/plain" "hi"
+    uk_finish_response(fin): raw true "abc"
+    str_contains(ka): fin "Connection: keep-alive\r\n"
+    str_contains(rid): fin "X-Request-Id: abc\r\n"
+    str_contains(srv): fin "Server: ukraine\r\n"
+    assert_eq(_): "finish response headers" {ka && rid && srv} true
+
+    set(r): 0
+]
+
+init(result): arg_cnt arg_vec [
+    global(_): app uk_cors_origins uk_rate_limit uk_access_log
+    uk_app_new(app):
+    uk_app_get(_): app "/hello/:name" "h_hello"
+    uk_app_get(_): app "/files/*" "h_files"
+    uk_app_post(_): app "/json" "h_echo_json"
+    uk_app_post(_): app "/form" "h_form"
+    uk_app_post(_): app "/login" "h_login"
+    uk_app_get(_): app "/me" "h_me"
+    uk_app_get(_): app "/old" "h_old"
+    uk_app_get(_): app "/static/*" "h_static"
+    uk_app_new(inner):
+    uk_app_get(_): inner "/x/:id" "h_inner"
+    uk_app_mount(_): app "/api" inner
+    uk_app_new(vhost):
+    uk_app_get(_): vhost "/hello/:name" "h_inner"
+    uk_app_host(_): app "other.example" vhost
+    uk_app_use(_): app "mw_block"
+    uk_app_use(_): app "uk_mw_cors"
+    uk_app_after(_): app "after_tag"
+    uk_app_after(_): app "uk_after_cors"
+    uk_app_limit(_): app "/json" 64
+
+    sec_1(_): app
+    sec_2(_): app
+    sec_3(_): app
+    sec_4(_): app
+    sec_5(_): app
+    sec_6(_): app
+    sec_7(_): app
+    sec_8(_): app
+    sec_9(_): app
+    sec_10(_): app
+    sec_11(_): app
+    test_summary(result):
+]

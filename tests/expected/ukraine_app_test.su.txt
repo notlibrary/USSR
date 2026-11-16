@@ -1,0 +1,65 @@
+PASS route params and query
+PASS after hook
+PASS decoded path
+PASS wildcard
+PASS 404
+PASS 405 with Allow
+PASS OPTIONS answered
+PASS HEAD drops the body
+PASS TRACE refused
+PASS middleware stops
+PASS mount
+PASS virtual host
+PASS json in and out
+PASS per-path body limit
+PASS urlencoded form
+PASS multipart form and upload
+PASS two cookies
+PASS cookie flags
+PASS signed session
+PASS forged session refused
+PASS old-style raw handler
+PASS cors preflight
+PASS cors simple request
+PASS cors refused origin
+PASS custom error page
+PASS json error body
+PASS static file
+PASS static mime
+PASS static 304
+PASS static range
+PASS static suffix range
+PASS static 416
+PASS directory redirect
+PASS directory index
+PASS traversal refused
+PASS encoded traversal refused
+PASS rate limit
+PASS combined log format
+PASS basic auth
+PASS cookie parse
+PASS content negotiation
+PASS accepts refuses
+PASS forwarded for
+PASS untrusted proxy headers ignored
+PASS sign round trip
+PASS wrong key
+PASS csrf
+PASS jwt verify
+PASS jwt bad signature
+PASS sse
+PASS template escapes
+PASS dechunk
+PASS dechunk incomplete
+PASS dechunk malformed
+PASS good head
+PASS bad version
+PASS bad header name
+PASS duplicate length counted
+PASS http date
+PASS finish response headers
+60 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

@@ -1,0 +1,1656 @@
+# app.su - Ukraine's framework layer: routes, middleware, requests and
+# responses as btrees, cookies, sessions, CSRF, JSON, forms, static files,
+# CORS, authentication, content negotiation and an access log.
+#
+# An application builds a table and hands every request to it:
+#
+#   $include "src/ukraine/app.su"
+#   global(_): app
+#   hello(res): req [
+#       uk_param(name): req "name"
+#       concat(text): "hello " name
+#       uk_text(res): 200 text
+#   ]
+#   uk_route(result): method target raw [
+#       uk_app_handle(result): app raw
+#   ]
+#   init(r): argc argv [
+#       global(_): app
+#       uk_app_new(app):
+#       uk_app_get(_): app "/hello/:name" "hello"
+#       uk_server(r): "127.0.0.1" 8080
+#   ]
+#
+# Handlers and middleware are function names; they are called through
+# async/await, so they run inside the server's scheduler task like any
+# other code. A handler takes the request btree and returns a response
+# btree (uk_res, uk_text, uk_html, uk_json, uk_redirect, ...) or raw
+# response text.
+#
+# Requests (btrees): method, target, path, query (vector of [k, v]),
+#   params (btree of :names and "*"), headers (vector of [name, value],
+#   names in lower case), body, raw, cookies (btree), id.
+# Responses (btrees): status (integer), headers (vector of [name, value]),
+#   body (text).
+#
+# Routing
+#   uk_app_new(app):                    -> an empty application
+#   uk_app_add(_): app method pattern handler
+#   uk_app_get / uk_app_post / uk_app_put / uk_app_delete (_): app pattern h
+#       patterns: "/thread/:id", "/static/*", "/"; the first match wins;
+#       a path that matches with another method gets 405 with Allow;
+#       HEAD is answered by GET routes (body dropped) and OPTIONS by the
+#       framework (204 with Allow); TRACE and CONNECT get 405
+#   uk_app_mount(_): app prefix other_app -> requests under prefix go to the
+#       other application (with the prefix removed from path)
+#   uk_app_host(_): app host other_app  -> virtual hosts by the Host header
+#   uk_app_use(_): app middleware       -> middleware(res): req runs before
+#       the handler; returning null goes on, a response stops there
+#   uk_app_after(_): app hook           -> hook(res): pair gets [req, res]
+#       and returns the response to send (headers added, logs written)
+#   uk_app_error_page(_): app status handler -> a handler for 404/405/500...
+#   uk_app_limit(_): app prefix bytes   -> a body limit for paths under prefix
+#   uk_app_call(res): app method target headers body
+#       -> calls the application without a socket (for tests); the
+#          response btree
+#   uk_app_handle(r): app raw           -> what uk_route returns
+# Requests
+#   uk_param(v): req name / uk_query(v): req name / uk_header(v): req name
+#   uk_form(v): req name                -> urlencoded or multipart field
+#   uk_form_fields(v): req              -> btree of all form fields
+#   uk_upload(v): req name              -> [filename content_type data] of a
+#                                          multipart file field, or null
+#   uk_cookie(v): req name / uk_json_body(v): req
+#   uk_accepts(r): req type             -> true when Accept allows type
+#   uk_best_type(r): req types          -> the first of a vector of types the
+#                                          client accepts most
+#   uk_basic_auth(v): req               -> [user password] or null
+#   uk_bearer(v): req                   -> the token or ""
+#   uk_client_ip(r): req trusted        -> the first X-Forwarded-For /
+#                                          Forwarded address when trusted is
+#                                          true, else ""
+# Responses
+#   uk_res(r): status body type / uk_text(r): status text / uk_html(r):
+#   status html / uk_json(r): status value / uk_redirect(r): status url
+#   uk_set_header(_): res name value    -> replaces a header
+#   uk_add_header(_): res name value    -> adds one (Set-Cookie may repeat)
+#   uk_set_cookie(_): res name value opts -> opts btree: path, domain,
+#       max_age, secure, http_only, same_site
+#   uk_security_headers(_): res csp     -> CSP, nosniff, Referrer-Policy,
+#       X-Frame-Options, Permissions-Policy
+#   uk_cache(_): res seconds public     -> Cache-Control (0: no-store)
+#   uk_render(r): template values       -> an HTML template, ${name} holes
+#                                          escaped for HTML
+#   uk_sse(r): event data id            -> one Server-Sent Events message
+#   uk_error(r): req status message     -> JSON {"error":..,"status":..,"id":..}
+#                                          when the client wants JSON, else text
+#   uk_res_text(r): res                 -> the raw HTTP response
+# Sessions and CSRF (HMAC-SHA-256 signed cookies)
+#   uk_sign(r): secret value / uk_unsign(r): secret signed (null if forged)
+#   uk_session_get(v): req secret       -> btree of the session, empty if none
+#   uk_session_set(_): res secret session -> Set-Cookie "session" (signed,
+#                                          HttpOnly, SameSite=Lax)
+#   uk_csrf_token(r): secret session_id / uk_csrf_check(b): secret
+#                                          session_id token
+#   uk_jwt_verify(v): token secret      -> the claims btree of an HS256 JWT
+#                                          whose signature and exp are good,
+#                                          else null
+# Middleware ready to use (pass the name to uk_app_use / uk_app_after)
+#   "uk_mw_cors"        CORS: preflight 204 and Access-Control-Allow-Origin
+#                       for origins in the global uk_cors_origins (a vector;
+#                       "*" allows any)
+#   "uk_mw_rate_limit"  at most uk_rate_limit requests per minute per client
+#                       (X-Forwarded-For or "local"); 429 beyond; the
+#                       counters sit in the application's btree, which
+#                       every connection task shares
+#   "uk_after_log"      access log in Combined Log Format to stderr or the
+#                       file in the global uk_access_log
+#   "uk_after_security" uk_security_headers with the global uk_csp
+# Static files
+#   uk_static(r): req root              -> serves root + path: MIME types,
+#       index.html for directories, ETag and Last-Modified-free validation
+#       (304), Range (206/416), HEAD, and no escaping root (403)
+#   uk_mime(t): path                    -> the type for an extension
+$once
+$include "ukraine.su"
+$include "../libs/strings.su"
+$include "../libs/encoding.su"
+$include "../libs/json.su"
+$include "../libs/textproc.su"
+$include "../libs/dates.su"
+
+# ------------------------------------------------------------ requests
+
+uk_parse_request(r): raw [
+    btree(r):
+    uk_request_method(method): raw
+    uk_request_target(target): raw
+    btput(_): r "method" method
+    btput(_): r "target" target
+    btput(_): r "raw" raw
+    str_find(q): target "?" 0
+    set(path): target
+    set(qs): ""
+    if(_): {q >= 0} [
+        slice(path): target 0 q
+        len(tl): target
+        slice(qs): target {q + 1} {tl - q - 1}
+    ]
+    url_decode_path(path): path
+    btput(_): r "path" path
+    query_parse(query): qs
+    btput(_): r "query" query
+    btree(params):
+    btput(_): r "params" params
+    vec(headers): ""
+    uk_find(end): raw "\r\n\r\n" 0
+    if(_): {end > 0} [
+        slice(head): raw 0 end
+        str_split(lines): head "\r\n"
+        len(n): lines
+        set(i): 1
+        while(_): {i < n} [
+            at(line): lines i
+            str_find(colon): line ":" 0
+            if(_): {colon > 0} [
+                slice(k): line 0 colon
+                str_lower(k): k
+                len(ll): line
+                slice(v): line {colon + 1} {ll - colon - 1}
+                str_trim(v): v
+                vec(pair): ""
+                push(_): pair k
+                push(_): pair v
+                push(_): headers pair
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    btput(_): r "headers" headers
+    uk_request_body(body): raw
+    btput(_): r "body" body
+    btree(cookies):
+    uk_header(ch): r "cookie"
+    if(_): {ch != ""} [
+        str_split(parts): ch ";"
+        len(n): parts
+        set(i): 0
+        while(_): {i < n} [
+            at(p): parts i
+            str_find(eq): p "=" 0
+            if(_): {eq > 0} [
+                slice(k): p 0 eq
+                str_trim(k): k
+                len(pl): p
+                slice(v): p {eq + 1} {pl - eq - 1}
+                str_trim(v): v
+                bthas(seen): cookies k
+                if(_): {seen = false} [
+                    btput(_): cookies k v
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    btput(_): r "cookies" cookies
+    uk_header(rid): r "x-request-id"
+    if(_): {rid = ""} [
+        uk_request_id(rid):
+    ]
+    btput(_): r "id" rid
+]
+
+# percent-decoding for paths: "+" stays a plus
+url_decode_path(r): s [
+    str_replace(t): s "+" "%2B"
+    url_decode(r): t
+]
+
+uk_header(r): req name [
+    str_lower(want): name
+    btget(hs): req "headers"
+    len(n): hs
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(p): hs i
+        at(k): p 0
+        if(_): {k = want} [
+            at(r): p 1
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_param(r): req name [
+    btget(ps): req "params"
+    btget(r): ps name ""
+]
+
+_uk_pairs_get(r): pairs name [
+    len(n): pairs
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(p): pairs i
+        at(k): p 0
+        if(_): {k = name} [
+            at(r): p 1
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_query(r): req name [
+    btget(q): req "query"
+    _uk_pairs_get(r): q name
+]
+
+uk_cookie(r): req name [
+    btget(c): req "cookies"
+    btget(r): c name ""
+]
+
+uk_json_body(r): req [
+    btget(body): req "body"
+    json_parse(r): body
+]
+
+# multipart parts as [name filename content_type data]
+_uk_multipart(r): req [
+    vec(r): ""
+    uk_header(ct): req "content-type"
+    re_find(m): "boundary=\"?([^\";]+)\"?" ct
+    typeof(mt): m
+    if(_): {mt != "vector"} [
+        return(r): r
+    ]
+    at(boundary): m 1
+    btget(body): req "body"
+    concat(delim): "--" boundary
+    str_split(parts): body delim
+    len(n): parts
+    set(i): 1
+    while(_): {i < n} [
+        at(part): parts i
+        str_starts(final): part "--"
+        if(_): final [
+            set(i): n
+        ]
+        else(_): [
+            str_find(he): part "\r\n\r\n" 0
+            if(_): {he > 0} [
+                slice(head): part 0 he
+                len(pl): part
+                set(dl): {pl - he - 4}
+                slice(data): part {he + 4} dl
+                str_ends(crlf): data "\r\n"
+                if(_): crlf [
+                    len(dl): data
+                    slice(data): data 0 {dl - 2}
+                ]
+                re_find(nm): "name=\"([^\"]*)\"" head "i"
+                re_find(fn): "filename=\"([^\"]*)\"" head "i"
+                re_find(ty): "content-type: *([^\\r\\n]+)" head "i"
+                set(name): ""
+                set(fname): null
+                set(ctype): "text/plain"
+                typeof(t1): nm
+                typeof(t2): fn
+                typeof(t3): ty
+                if(_): {t1 = "vector"} [
+                    at(name): nm 1
+                ]
+                if(_): {t2 = "vector"} [
+                    at(fname): fn 1
+                ]
+                if(_): {t3 = "vector"} [
+                    at(ctype): ty 1
+                ]
+                vec(entry): ""
+                push(_): entry name
+                push(_): entry fname
+                push(_): entry ctype
+                push(_): entry data
+                push(_): r entry
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_form_fields(r): req [
+    btree(r):
+    uk_header(ct): req "content-type"
+    str_lower(ct): ct
+    str_starts(urlenc): ct "application/x-www-form-urlencoded"
+    str_starts(multi): ct "multipart/form-data"
+    if(_): urlenc [
+        btget(body): req "body"
+        query_parse(pairs): body
+        len(n): pairs
+        set(i): 0
+        while(_): {i < n} [
+            at(p): pairs i
+            at(k): p 0
+            at(v): p 1
+            btput(_): r k v
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): multi [
+        _uk_multipart(parts): req
+        len(n): parts
+        set(i): 0
+        while(_): {i < n} [
+            at(p): parts i
+            at(k): p 0
+            at(fname): p 1
+            at(v): p 3
+            typeof(ft): fname
+            if(_): {ft = "null"} [
+                btput(_): r k v
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+uk_form(r): req name [
+    uk_form_fields(f): req
+    btget(r): f name ""
+]
+
+uk_upload(r): req name [
+    _uk_multipart(parts): req
+    set(r): null
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        at(k): p 0
+        at(fname): p 1
+        typeof(ft): fname
+        if(_): {k = name && ft = "string"} [
+            vec(r): ""
+            push(_): r fname
+            at(ct): p 2
+            push(_): r ct
+            at(data): p 3
+            push(_): r data
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# [type, q] pairs from an Accept-style header
+_uk_accept_list(r): header [
+    vec(r): ""
+    if(_): {header = ""} [
+        return(r): r
+    ]
+    str_split(items): header ","
+    len(n): items
+    set(i): 0
+    while(_): {i < n} [
+        at(it): items i
+        str_split(bits): it ";"
+        at(t): bits 0
+        str_trim(t): t
+        str_lower(t): t
+        set(q): 1.0
+        len(nb): bits
+        set(k): 1
+        while(_): {k < nb} [
+            at(b): bits k
+            str_trim(b): b
+            str_starts(isq): b "q="
+            if(_): isq [
+                len(bl): b
+                slice(qs): b 2 {bl - 2}
+                str_to_number(qv): qs
+                typeof(qt): qv
+                if(_): {qt = "integer" || qt = "real"} [
+                    set(q): {qv * 1.0}
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+        vec(pair): ""
+        push(_): pair t
+        push(_): pair q
+        push(_): r pair
+        set(i): {i + 1}
+    ]
+]
+
+# the q value the client gives type (0 when refused)
+_uk_quality(r): req type [
+    uk_header(acc): req "accept"
+    set(r): 0.0
+    if(_): {acc = ""} [
+        set(r): 1.0
+        return(r): r
+    ]
+    _uk_accept_list(list): acc
+    str_lower(want): type
+    str_find(slash): want "/" 0
+    slice(major): want 0 slash
+    concat(major_any): major "/*"
+    set(best_spec): 0
+    len(n): list
+    set(i): 0
+    while(_): {i < n} [
+        at(p): list i
+        at(t): p 0
+        at(q): p 1
+        set(spec): 0
+        if(_): {t = want} [
+            set(spec): 3
+        ]
+        elif(_): {t = major_any} [
+            set(spec): 2
+        ]
+        elif(_): {t = "*/*"} [
+            set(spec): 1
+        ]
+        if(_): {spec > best_spec} [
+            set(best_spec): spec
+            set(r): q
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_accepts(r): req type [
+    _uk_quality(q): req type
+    set(r): {q > 0}
+]
+
+uk_best_type(r): req types [
+    len(n): types
+    set(r): ""
+    set(best): 0.0
+    set(i): 0
+    while(_): {i < n} [
+        at(t): types i
+        _uk_quality(q): req t
+        if(_): {q > best} [
+            set(best): q
+            set(r): t
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_basic_auth(r): req [
+    uk_header(h): req "authorization"
+    set(r): null
+    re_find(m): "^[Bb]asic +([A-Za-z0-9+/=]+)$" h
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(tok): m 1
+        base64_decode_text(plain): tok
+        typeof(pt): plain
+        if(_): {pt = "string"} [
+            str_find(colon): plain ":" 0
+            if(_): {colon >= 0} [
+                vec(r): ""
+                slice(u): plain 0 colon
+                len(pl): plain
+                slice(pw): plain {colon + 1} {pl - colon - 1}
+                push(_): r u
+                push(_): r pw
+            ]
+        ]
+    ]
+]
+
+uk_bearer(r): req [
+    uk_header(h): req "authorization"
+    set(r): ""
+    re_find(m): "^[Bb]earer +([^ ]+)$" h
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(r): m 1
+    ]
+]
+
+uk_client_ip(r): req trusted [
+    set(r): ""
+    if(_): {trusted = false} [
+        return(r): r
+    ]
+    uk_header(xff): req "x-forwarded-for"
+    if(_): {xff != ""} [
+        str_split(ips): xff ","
+        at(r): ips 0
+        str_trim(r): r
+        return(r): r
+    ]
+    uk_header(fwd): req "forwarded"
+    re_find(m): "for=\"?\\[?([^\\]\";,]+)" fwd "i"
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(r): m 1
+    ]
+]
+
+# ------------------------------------------------------------ responses
+
+uk_status_text(r): code [
+    btree(t):
+    btput(_): t 100 "Continue"
+    btput(_): t 101 "Switching Protocols"
+    btput(_): t 200 "OK"
+    btput(_): t 201 "Created"
+    btput(_): t 202 "Accepted"
+    btput(_): t 204 "No Content"
+    btput(_): t 206 "Partial Content"
+    btput(_): t 301 "Moved Permanently"
+    btput(_): t 302 "Found"
+    btput(_): t 303 "See Other"
+    btput(_): t 304 "Not Modified"
+    btput(_): t 307 "Temporary Redirect"
+    btput(_): t 308 "Permanent Redirect"
+    btput(_): t 400 "Bad Request"
+    btput(_): t 401 "Unauthorized"
+    btput(_): t 403 "Forbidden"
+    btput(_): t 404 "Not Found"
+    btput(_): t 405 "Method Not Allowed"
+    btput(_): t 406 "Not Acceptable"
+    btput(_): t 408 "Request Timeout"
+    btput(_): t 409 "Conflict"
+    btput(_): t 410 "Gone"
+    btput(_): t 413 "Content Too Large"
+    btput(_): t 415 "Unsupported Media Type"
+    btput(_): t 416 "Range Not Satisfiable"
+    btput(_): t 422 "Unprocessable Content"
+    btput(_): t 429 "Too Many Requests"
+    btput(_): t 500 "Internal Server Error"
+    btput(_): t 501 "Not Implemented"
+    btput(_): t 502 "Bad Gateway"
+    btput(_): t 503 "Service Unavailable"
+    btget(r): t code "Status"
+]
+
+uk_res(r): status body type [
+    btree(r):
+    btput(_): r "status" status
+    vec(h): ""
+    btput(_): r "headers" h
+    btput(_): r "body" body
+    if(_): {type != ""} [
+        uk_set_header(_): r "Content-Type" type
+    ]
+]
+
+uk_text(r): status text [
+    uk_res(r): status text "text/plain; charset=utf-8"
+]
+
+uk_html(r): status html [
+    uk_res(r): status html "text/html; charset=utf-8"
+]
+
+uk_json(r): status value [
+    json_stringify(text): value
+    uk_res(r): status text "application/json"
+]
+
+uk_redirect(r): status url [
+    uk_res(r): status "" ""
+    uk_set_header(_): r "Location" url
+]
+
+uk_set_header(r): res name value [
+    btget(h): res "headers"
+    str_lower(want): name
+    vec(nh): ""
+    len(n): h
+    set(i): 0
+    while(_): {i < n} [
+        at(p): h i
+        at(k): p 0
+        str_lower(lk): k
+        if(_): {lk != want} [
+            push(_): nh p
+        ]
+        set(i): {i + 1}
+    ]
+    vec(pair): ""
+    push(_): pair name
+    push(_): pair value
+    push(_): nh pair
+    btput(_): res "headers" nh
+    set(r): 0
+]
+
+uk_add_header(r): res name value [
+    btget(h): res "headers"
+    vec(pair): ""
+    push(_): pair name
+    push(_): pair value
+    push(_): h pair
+    set(r): 0
+]
+
+uk_res_header(r): res name [
+    btget(h): res "headers"
+    _uk_pairs_get_ci(r): h name
+]
+
+_uk_pairs_get_ci(r): pairs name [
+    str_lower(want): name
+    len(n): pairs
+    set(i): 0
+    set(r): ""
+    while(_): {i < n} [
+        at(p): pairs i
+        at(k): p 0
+        str_lower(lk): k
+        if(_): {lk = want} [
+            at(r): p 1
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_set_cookie(r): res name value opts [
+    concat(c): name "=" value
+    typeof(ot): opts
+    set(path): "/"
+    set(same): "Lax"
+    set(http_only): true
+    set(secure): false
+    set(max_age): null
+    set(domain): ""
+    if(_): {ot = "btree"} [
+        btget(path): opts "path" "/"
+        btget(same): opts "same_site" "Lax"
+        btget(http_only): opts "http_only" true
+        btget(secure): opts "secure" false
+        btget(max_age): opts "max_age" null
+        btget(domain): opts "domain" ""
+    ]
+    concat(c): c "; Path=" path
+    if(_): {domain != ""} [
+        concat(c): c "; Domain=" domain
+    ]
+    typeof(mt): max_age
+    if(_): {mt = "integer"} [
+        str_from_int(ms): max_age
+        concat(c): c "; Max-Age=" ms
+    ]
+    if(_): secure [
+        concat(c): c "; Secure"
+    ]
+    if(_): http_only [
+        concat(c): c "; HttpOnly"
+    ]
+    if(_): {same != ""} [
+        concat(c): c "; SameSite=" same
+    ]
+    uk_add_header(r): res "Set-Cookie" c
+]
+
+uk_security_headers(r): res csp [
+    if(_): {csp = ""} [
+        set(csp): "default-src 'self'; frame-ancestors 'none'"
+    ]
+    uk_set_header(_): res "Content-Security-Policy" csp
+    uk_set_header(_): res "X-Content-Type-Options" "nosniff"
+    uk_set_header(_): res "Referrer-Policy" "strict-origin-when-cross-origin"
+    uk_set_header(_): res "X-Frame-Options" "DENY"
+    uk_set_header(_): res "Permissions-Policy" "camera=(), microphone=(), geolocation=()"
+    set(r): 0
+]
+
+uk_cache(r): res seconds public [
+    if(_): {seconds <= 0} [
+        uk_set_header(r): res "Cache-Control" "no-store"
+    ]
+    else(_): [
+        str_from_int(s): seconds
+        set(scope): "private"
+        if(_): public [
+            set(scope): "public"
+        ]
+        concat(v): scope ", max-age=" s
+        uk_set_header(r): res "Cache-Control" v
+    ]
+]
+
+uk_render(r): template values [
+    template_render(r): template values "html"
+]
+
+uk_sse(r): event data id [
+    set(r): ""
+    if(_): {id != ""} [
+        concat(r): "id: " id "\n"
+    ]
+    if(_): {event != ""} [
+        concat(r): r "event: " event "\n"
+    ]
+    str_split(lines): data "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        concat(r): r "data: " line "\n"
+        set(i): {i + 1}
+    ]
+    concat(r): r "\n"
+]
+
+uk_error(r): req status message [
+    btget(rid): req "id" ""
+    set(wants_json): false
+    uk_header(acc): req "accept"
+    if(_): {acc != ""} [
+        _uk_quality(qj): req "application/json"
+        _uk_quality(qh): req "text/html"
+        _uk_quality(qt): req "text/plain"
+        set(wants_json): {qj > qh && qj > qt}
+    ]
+    if(_): wants_json [
+        btree(v):
+        btput(_): v "error" message
+        btput(_): v "status" status
+        btput(_): v "id" rid
+        uk_json(r): status v
+    ]
+    else(_): [
+        uk_status_text(st): status
+        concat(text): st ": " message "\n"
+        uk_text(r): status text
+    ]
+]
+
+uk_res_text(r): res [
+    typeof(t): res
+    if(_): {t = "string"} [
+        set(r): res
+        return(r): r
+    ]
+    btget(status): res "status"
+    btget(body): res "body"
+    btget(h): res "headers"
+    uk_status_text(st): status
+    str_from_int(cs): status
+    len(bl): body
+    str_from_int(bls): bl
+    concat(r): "HTTP/1.1 " cs " " st "\r\n"
+    len(n): h
+    set(i): 0
+    set(has_type): false
+    while(_): {i < n} [
+        at(p): h i
+        at(k): p 0
+        at(v): p 1
+        str_lower(lk): k
+        if(_): {lk = "content-type"} [
+            set(has_type): true
+        ]
+        if(_): {lk != "content-length"} [
+            concat(r): r k ": " v "\r\n"
+        ]
+        set(i): {i + 1}
+    ]
+    set(no_body): {status = 204 || status = 304 || status < 200}
+    if(_): {no_body = false} [
+        concat(r): r "Content-Length: " bls "\r\n"
+    ]
+    uk_res_header(nos): res "x-content-type-options"
+    if(_): {nos = ""} [
+        concat(r): r "X-Content-Type-Options: nosniff\r\n"
+    ]
+    concat(r): r "Connection: close\r\n\r\n"
+    if(_): {no_body = false} [
+        concat(r): r body
+    ]
+]
+
+# ------------------------------------------------------------ signing
+
+_uk_hex(r): bytes [
+    hex_encode(r): bytes
+]
+
+uk_sign(r): secret value [
+    hmac_sha256(mac): secret value
+    base64url_encode(sig): mac
+    concat(r): value "." sig
+]
+
+uk_unsign(r): secret signed [
+    set(r): null
+    str_rfind(dot): signed "."
+    if(_): {dot < 0} [
+        return(r): r
+    ]
+    slice(value): signed 0 dot
+    uk_sign(again): secret value
+    # compare every byte so the time does not leak where they differ
+    len(na): again
+    len(nb): signed
+    set(diff): {na != nb}
+    if(_): {na = nb} [
+        set(i): 0
+        while(_): {i < na} [
+            byte(x): again i
+            byte(y): signed i
+            if(_): {x != y} [
+                set(diff): true
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {diff = false} [
+        set(r): value
+    ]
+]
+
+uk_session_get(r): req secret [
+    uk_cookie(c): req "session"
+    btree(r):
+    if(_): {c = ""} [
+        return(r): r
+    ]
+    url_decode(c): c
+    uk_unsign(v): secret c
+    typeof(vt): v
+    if(_): {vt = "string"} [
+        base64_decode_text(text): v
+        typeof(tt): text
+        if(_): {tt = "string"} [
+            json_parse(obj): text
+            typeof(ob): obj
+            if(_): {ob = "btree"} [
+                set(r): obj
+            ]
+        ]
+    ]
+]
+
+uk_session_set(r): res secret session [
+    json_stringify(text): session
+    base64url_encode(b): text
+    uk_sign(signed): secret b
+    url_encode(cv): signed
+    btree(o):
+    btput(_): o "http_only" true
+    btput(_): o "same_site" "Lax"
+    uk_set_cookie(r): res "session" cv o
+]
+
+uk_csrf_token(r): secret session_id [
+    concat(msg): "csrf:" session_id
+    hmac_sha256(mac): secret msg
+    base64url_encode(r): mac
+]
+
+uk_csrf_check(r): secret session_id token [
+    uk_csrf_token(want): secret session_id
+    set(r): {want = token && token != ""}
+]
+
+uk_jwt_verify(r): token secret [
+    set(r): null
+    str_split(parts): token "."
+    len(n): parts
+    if(_): {n != 3} [
+        return(r): r
+    ]
+    at(h64): parts 0
+    at(p64): parts 1
+    at(s64): parts 2
+    base64_decode_text(htext): h64
+    typeof(ht): htext
+    if(_): {ht != "string"} [
+        return(r): r
+    ]
+    json_parse(header): htext
+    typeof(hb): header
+    if(_): {hb != "btree"} [
+        return(r): r
+    ]
+    btget(alg): header "alg" ""
+    if(_): {alg != "HS256"} [
+        return(r): r
+    ]
+    concat(signing): h64 "." p64
+    hmac_sha256(mac): secret signing
+    base64url_encode(want): mac
+    if(_): {want != s64} [
+        return(r): r
+    ]
+    base64_decode_text(ptext): p64
+    json_parse(claims): ptext
+    typeof(cb): claims
+    if(_): {cb != "btree"} [
+        return(r): r
+    ]
+    btget(exp): claims "exp" null
+    typeof(et): exp
+    if(_): {et = "integer"} [
+        time(now):
+        if(_): {now >= exp} [
+            return(r): r
+        ]
+    ]
+    set(r): claims
+]
+
+# ------------------------------------------------------------ routing
+
+uk_app_new(r): [
+    btree(r):
+    vec(routes): ""
+    vec(before): ""
+    vec(after): ""
+    vec(mounts): ""
+    btree(hosts):
+    btree(pages):
+    vec(limits): ""
+    btput(_): r "routes" routes
+    btput(_): r "before" before
+    btput(_): r "after" after
+    btput(_): r "mounts" mounts
+    btput(_): r "hosts" hosts
+    btput(_): r "pages" pages
+    btput(_): r "limits" limits
+    btree(rate):
+    btput(_): r "rate" rate
+]
+
+uk_app_add(r): app method pattern handler [
+    btget(routes): app "routes"
+    vec(rt): ""
+    push(_): rt method
+    push(_): rt pattern
+    push(_): rt handler
+    push(_): routes rt
+    set(r): 0
+]
+
+uk_app_get(r): app pattern handler [
+    uk_app_add(r): app "GET" pattern handler
+]
+
+uk_app_post(r): app pattern handler [
+    uk_app_add(r): app "POST" pattern handler
+]
+
+uk_app_put(r): app pattern handler [
+    uk_app_add(r): app "PUT" pattern handler
+]
+
+uk_app_delete(r): app pattern handler [
+    uk_app_add(r): app "DELETE" pattern handler
+]
+
+uk_app_use(r): app middleware [
+    btget(v): app "before"
+    push(_): v middleware
+    set(r): 0
+]
+
+uk_app_after(r): app hook [
+    btget(v): app "after"
+    push(_): v hook
+    set(r): 0
+]
+
+uk_app_mount(r): app prefix other [
+    btget(v): app "mounts"
+    vec(m): ""
+    push(_): m prefix
+    push(_): m other
+    push(_): v m
+    set(r): 0
+]
+
+uk_app_host(r): app host other [
+    btget(h): app "hosts"
+    str_lower(k): host
+    btput(_): h k other
+    set(r): 0
+]
+
+uk_app_error_page(r): app status handler [
+    btget(p): app "pages"
+    btput(_): p status handler
+    set(r): 0
+]
+
+uk_app_limit(r): app prefix bytes [
+    btget(v): app "limits"
+    vec(l): ""
+    push(_): l prefix
+    push(_): l bytes
+    push(_): v l
+    set(r): 0
+]
+
+# matches path against a pattern: a btree of params, or null
+uk_match(r): pattern path [
+    set(r): null
+    str_split(pp): pattern "/"
+    str_split(sp): path "/"
+    len(np): pp
+    len(ns): sp
+    btree(params):
+    set(i): 0
+    set(good): true
+    while(_): {good && i < np} [
+        at(seg): pp i
+        if(_): {seg = "*"} [
+            # the rest of the path, slashes included
+            set(rest): ""
+            set(k): i
+            while(_): {k < ns} [
+                at(x): sp k
+                if(_): {k > i} [
+                    concat(rest): rest "/"
+                ]
+                concat(rest): rest x
+                set(k): {k + 1}
+            ]
+            btput(_): params "*" rest
+            set(i): np
+            set(ns): np
+        ]
+        elif(_): {i >= ns} [
+            set(good): false
+        ]
+        else(_): [
+            at(x): sp i
+            str_starts(is_param): seg ":"
+            if(_): is_param [
+                len(sl): seg
+                slice(name): seg 1 {sl - 1}
+                if(_): {x = ""} [
+                    set(good): false
+                ]
+                else(_): [
+                    btput(_): params name x
+                ]
+            ]
+            elif(_): {seg != x} [
+                set(good): false
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {good && np = ns} [
+        set(r): params
+    ]
+]
+
+_uk_call(r): fname arg [
+    async(p): fname arg
+    await(r): p
+]
+
+_uk_finish(r): app req res [
+    typeof(t): res
+    set(r): res
+    if(_): {t = "string"} [
+        # raw text from an old-style handler: wrap it
+        btree(r):
+        btput(_): r "raw_text" res
+        return(r): r
+    ]
+    btget(after): app "after"
+    len(n): after
+    set(i): 0
+    while(_): {i < n} [
+        at(h): after i
+        vec(pair): ""
+        push(_): pair req
+        push(_): pair r
+        _uk_call(r): h pair
+        set(i): {i + 1}
+    ]
+]
+
+_uk_page(r): app req status message [
+    btget(pages): app "pages"
+    btget(h): pages status ""
+    if(_): {h != ""} [
+        _uk_call(r): h req
+    ]
+    else(_): [
+        uk_error(r): req status message
+    ]
+]
+
+# the response btree for a parsed request
+uk_app_dispatch(r): app req [
+    btput(_): req "_app" app
+    btget(method): req "method"
+    btget(path): req "path"
+    # virtual hosts
+    btget(hosts): app "hosts"
+    uk_header(host): req "host"
+    str_lower(host): host
+    str_find(colon): host ":" 0
+    if(_): {colon >= 0} [
+        slice(host): host 0 colon
+    ]
+    btget(vh): hosts host null
+    typeof(vt): vh
+    if(_): {vt = "btree"} [
+        uk_app_dispatch(r): vh req
+        return(r): r
+    ]
+    # mounts
+    btget(mounts): app "mounts"
+    len(nm): mounts
+    set(i): 0
+    while(_): {i < nm} [
+        at(m): mounts i
+        at(prefix): m 0
+        at(other): m 1
+        concat(prefix_slash): prefix "/"
+        str_starts(under): path prefix_slash
+        if(_): {under || path = prefix} [
+            len(pl): prefix
+            len(pathl): path
+            slice(rest): path pl {pathl - pl}
+            if(_): {rest = ""} [
+                set(rest): "/"
+            ]
+            btput(_): req "path" rest
+            uk_app_dispatch(r): other req
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    # per-route body limits
+    btget(limits): app "limits"
+    btget(body): req "body"
+    len(blen): body
+    len(nl): limits
+    set(i): 0
+    while(_): {i < nl} [
+        at(l): limits i
+        at(prefix): l 0
+        at(cap): l 1
+        str_starts(under): path prefix
+        if(_): {under && blen > cap} [
+            _uk_page(r): app req 413 "the body is too large for this path"
+            _uk_finish(r): app req r
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    # middleware
+    btget(before): app "before"
+    len(nb): before
+    set(i): 0
+    while(_): {i < nb} [
+        at(mw): before i
+        _uk_call(stop): mw req
+        typeof(st): stop
+        if(_): {st != "null"} [
+            _uk_finish(r): app req stop
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {method = "TRACE" || method = "CONNECT"} [
+        _uk_page(r): app req 405 "method not allowed"
+        uk_set_header(_): r "Allow" "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+        _uk_finish(r): app req r
+        return(r): r
+    ]
+    set(want): method
+    if(_): {method = "HEAD"} [
+        set(want): "GET"
+    ]
+    btget(routes): app "routes"
+    len(nr): routes
+    vec(allowed): ""
+    set(handler): ""
+    set(i): 0
+    while(_): {i < nr && handler = ""} [
+        at(rt): routes i
+        at(rm): rt 0
+        at(rp): rt 1
+        at(rh): rt 2
+        uk_match(params): rp path
+        typeof(pt): params
+        if(_): {pt = "btree"} [
+            if(_): {rm = want} [
+                set(handler): rh
+                btput(_): req "params" params
+            ]
+            else(_): [
+                list_contains_text(seen): allowed rm
+                if(_): {seen = false} [
+                    push(_): allowed rm
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {handler != ""} [
+        _uk_call(r): handler req
+        typeof(rt2): r
+        if(_): {rt2 != "btree" && rt2 != "string"} [
+            _uk_page(r): app req 500 "the handler gave no response"
+        ]
+    ]
+    else(_): [
+        len(na): allowed
+        if(_): {na = 0} [
+            _uk_page(r): app req 404 "not found"
+        ]
+        else(_): [
+            list_contains_text(has_get): allowed "GET"
+            if(_): has_get [
+                push(_): allowed "HEAD"
+            ]
+            push(_): allowed "OPTIONS"
+            str_join(allow): allowed ", "
+            if(_): {method = "OPTIONS"} [
+                uk_res(r): 204 "" ""
+            ]
+            else(_): [
+                _uk_page(r): app req 405 "method not allowed"
+            ]
+            uk_set_header(_): r "Allow" allow
+        ]
+    ]
+    _uk_finish(r): app req r
+    if(_): {method = "HEAD"} [
+        typeof(ft): r
+        if(_): {ft = "btree"} [
+            btget(b): r "body" ""
+            len(bl): b
+            str_from_int(bls): bl
+            btput(_): r "head_length" bls
+            btput(_): r "body" ""
+        ]
+    ]
+]
+
+list_contains_text(r): v item [
+    len(n): v
+    set(i): 0
+    set(r): false
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {x = item} [
+            set(r): true
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+uk_app_handle(r): app raw [
+    uk_parse_request(req): raw
+    uk_app_dispatch(res): app req
+    btget(raw_text): res "raw_text" ""
+    if(_): {raw_text != ""} [
+        set(r): raw_text
+        return(r): r
+    ]
+    uk_res_text(r): res
+    # HEAD keeps the length of the body it does not send
+    btget(hl): res "head_length" ""
+    if(_): {hl != ""} [
+        str_replace_n(r): r "Content-Length: 0\r\n" "" 1
+        str_find(end): r "\r\n\r\n" 0
+        slice(head): r 0 end
+        concat(r): head "\r\nContent-Length: " hl "\r\n\r\n"
+    ]
+]
+
+uk_app_call(r): app method target headers body [
+    concat(raw): method " " target " HTTP/1.1\r\n"
+    str_replace(h): headers "\r" ""
+    str_split(lines): h "\n"
+    len(n): lines
+    set(i): 0
+    set(has_host): false
+    while(_): {i < n} [
+        at(line): lines i
+        if(_): {line != ""} [
+            concat(raw): raw line "\r\n"
+            str_lower(ll): line
+            str_starts(hh): ll "host:"
+            if(_): hh [
+                set(has_host): true
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {has_host = false} [
+        concat(raw): raw "Host: localhost\r\n"
+    ]
+    len(bl): body
+    if(_): {bl > 0} [
+        str_from_int(bls): bl
+        concat(raw): raw "Content-Length: " bls "\r\n"
+    ]
+    concat(raw): raw "\r\n" body
+    uk_parse_request(req): raw
+    uk_app_dispatch(r): app req
+    typeof(t): r
+    if(_): {t = "btree"} [
+        btget(rawt): r "raw_text" ""
+        if(_): {rawt != ""} [
+            # an old-style handler's text, parsed back for inspection
+            uk_request_header(ctype): rawt "content-type"
+            slice(cs): rawt 9 3
+            str_to_int(code): cs 10
+            uk_request_body(b): rawt
+            uk_res(r): code b ctype
+        ]
+    ]
+]
+
+# ------------------------------------------------------------ middleware
+
+uk_mw_cors(r): req [
+    global(_): uk_cors_origins
+    set(r): null
+    uk_header(origin): req "origin"
+    if(_): {origin = ""} [
+        return(r): r
+    ]
+    set(list): uk_cors_origins
+    typeof(lt): list
+    set(allowed): false
+    if(_): {lt = "vector"} [
+        list_contains_text(any): list "*"
+        list_contains_text(named): list origin
+        set(allowed): {any || named}
+    ]
+    btget(method): req "method"
+    uk_header(preflight): req "access-control-request-method"
+    if(_): {method = "OPTIONS" && preflight != ""} [
+        if(_): allowed [
+            uk_res(r): 204 "" ""
+            uk_set_header(_): r "Access-Control-Allow-Origin" origin
+            uk_set_header(_): r "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE, OPTIONS"
+            uk_header(reqh): req "access-control-request-headers"
+            if(_): {reqh != ""} [
+                uk_set_header(_): r "Access-Control-Allow-Headers" reqh
+            ]
+            uk_set_header(_): r "Access-Control-Max-Age" "600"
+            uk_set_header(_): r "Vary" "Origin"
+        ]
+        else(_): [
+            uk_error(r): req 403 "origin not allowed"
+        ]
+        return(r): r
+    ]
+    if(_): allowed [
+        # remember to add the header after the handler
+        btput(_): req "cors_origin" origin
+    ]
+]
+
+uk_after_cors(r): pair [
+    at(req): pair 0
+    at(r): pair 1
+    btget(origin): req "cors_origin" ""
+    typeof(t): r
+    if(_): {origin != "" && t = "btree"} [
+        uk_set_header(_): r "Access-Control-Allow-Origin" origin
+        uk_set_header(_): r "Vary" "Origin"
+    ]
+]
+
+# a per-process counter table: minute -> client -> count
+uk_mw_rate_limit(r): req [
+    global(_): uk_rate_limit
+    set(r): null
+    set(cap): uk_rate_limit
+    typeof(ct): cap
+    if(_): {ct != "integer"} [
+        return(r): r
+    ]
+    # the counters live in the shared hash: every request runs in a task
+    # of its own with a copy of the globals
+    btget(app): req "_app"
+    btget(tree): app "rate"
+    time(now):
+    str_trunc(minute): {now / 60}
+    btget(stamp): tree "_minute" 0
+    if(_): {stamp != minute} [
+        btkeys(old): tree
+        len(no): old
+        set(i): 0
+        while(_): {i < no} [
+            at(k): old i
+            btdel(_): tree k
+            set(i): {i + 1}
+        ]
+        btput(_): tree "_minute" minute
+    ]
+    uk_client_ip(who): req true
+    if(_): {who = ""} [
+        set(who): "local"
+    ]
+    concat(key): "c:" who
+    btget(count): tree key 0
+    set(count): {count + 1}
+    btput(_): tree key count
+    if(_): {count > cap} [
+        uk_error(r): req 429 "too many requests"
+        uk_set_header(_): r "Retry-After" "60"
+    ]
+]
+
+uk_after_log(r): pair [
+    global(_): uk_access_log
+    at(req): pair 0
+    at(r): pair 1
+    btget(method): req "method"
+    btget(target): req "target"
+    uk_header(ref): req "referer"
+    uk_header(ua): req "user-agent"
+    uk_client_ip(ip): req true
+    if(_): {ip = ""} [
+        set(ip): "-"
+    ]
+    set(status): 200
+    set(size): 0
+    typeof(t): r
+    if(_): {t = "btree"} [
+        btget(status): r "status" 200
+        btget(b): r "body" ""
+        len(size): b
+    ]
+    if(_): {ref = ""} [
+        set(ref): "-"
+    ]
+    if(_): {ua = ""} [
+        set(ua): "-"
+    ]
+    time(now):
+    gmtime(v): now
+    strftime(stamp): "%d/%b/%Y:%H:%M:%S +0000" v
+    str_from_int(ss): status
+    str_from_int(zs): size
+    concat(line): ip " - - [" stamp "] \"" method " " target " HTTP/1.1\" " ss " " zs " \"" ref "\" \"" ua "\"\n"
+    set(path): uk_access_log
+    typeof(pt): path
+    if(_): {pt = "string" && path != ""} [
+        open_file(h): path "ab"
+        if(_): {h >= 0} [
+            write_file(_): h line
+            close_file(_): h
+        ]
+    ]
+    else(_): [
+        write_stderr(_): line
+    ]
+]
+
+uk_after_security(r): pair [
+    global(_): uk_csp
+    at(r): pair 1
+    set(csp): uk_csp
+    typeof(ct): csp
+    if(_): {ct != "string"} [
+        set(csp): ""
+    ]
+    typeof(t): r
+    if(_): {t = "btree"} [
+        uk_security_headers(_): r csp
+    ]
+]
+
+# ------------------------------------------------------------ static files
+
+uk_mime(r): path [
+    str_lower(p): path
+    re_find(m): "\\.([a-z0-9]+)$" p
+    set(ext): ""
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(ext): m 1
+    ]
+    btree(t):
+    btput(_): t "html" "text/html; charset=utf-8"
+    btput(_): t "htm" "text/html; charset=utf-8"
+    btput(_): t "css" "text/css; charset=utf-8"
+    btput(_): t "js" "text/javascript; charset=utf-8"
+    btput(_): t "json" "application/json"
+    btput(_): t "txt" "text/plain; charset=utf-8"
+    btput(_): t "su" "text/plain; charset=utf-8"
+    btput(_): t "md" "text/markdown; charset=utf-8"
+    btput(_): t "svg" "image/svg+xml"
+    btput(_): t "png" "image/png"
+    btput(_): t "jpg" "image/jpeg"
+    btput(_): t "jpeg" "image/jpeg"
+    btput(_): t "gif" "image/gif"
+    btput(_): t "webp" "image/webp"
+    btput(_): t "ico" "image/x-icon"
+    btput(_): t "pdf" "application/pdf"
+    btput(_): t "wasm" "application/wasm"
+    btput(_): t "xml" "application/xml"
+    btput(_): t "woff2" "font/woff2"
+    btput(_): t "mp4" "video/mp4"
+    btput(_): t "mp3" "audio/mpeg"
+    btget(r): t ext "application/octet-stream"
+]
+
+uk_static(r): req root [
+    btget(method): req "method"
+    btget(path): req "path"
+    # under a wildcard route ("/static/*") the file is the wildcard part
+    btget(ps): req "params"
+    bthas(wild): ps "*"
+    if(_): wild [
+        btget(rest): ps "*"
+        concat(path): "/" rest
+    ]
+    if(_): {method != "GET" && method != "HEAD"} [
+        uk_error(r): req 405 "method not allowed"
+        uk_set_header(_): r "Allow" "GET, HEAD"
+        return(r): r
+    ]
+    # refuse any dot-dot segment or backslash before touching the disk
+    str_split(segs): path "/"
+    list_contains_text(up): segs ".."
+    str_contains(bs): path "\\"
+    str_contains(nul): path ":"
+    if(_): {up || bs || nul} [
+        uk_error(r): req 403 "forbidden"
+        return(r): r
+    ]
+    concat(full): root path
+    is_dir(d): full
+    if(_): {d = 1} [
+        str_ends(slash): full "/"
+        if(_): {slash = false} [
+            btget(full_path): req "path"
+            concat(loc): full_path "/"
+            uk_redirect(r): 301 loc
+            return(r): r
+        ]
+        concat(full): full "index.html"
+    ]
+    file_exists(have): full
+    if(_): {have != 1 && have != true} [
+        uk_error(r): req 404 "not found"
+        return(r): r
+    ]
+    readfile(data): full
+    typeof(dt): data
+    if(_): {dt != "string"} [
+        uk_error(r): req 500 "unreadable"
+        return(r): r
+    ]
+    len(size): data
+    crc32(c): data
+    str_from_int_base(etag): {c & 0xFFFFFFFF} 16
+    str_from_int_base(sz): size 16
+    concat(etag): "\"" sz "-" etag "\""
+    uk_header(inm): req "if-none-match"
+    uk_mime(type): full
+    if(_): {inm = etag || inm = "*"} [
+        uk_res(r): 304 "" ""
+        uk_set_header(_): r "ETag" etag
+        return(r): r
+    ]
+    uk_header(range): req "range"
+    re_find(m): "^bytes=([0-9]*)-([0-9]*)$" range
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(a): m 1
+        at(b): m 2
+        set(from): 0
+        set(to): {size - 1}
+        if(_): {a = "" && b != ""} [
+            str_to_int(suffix): b 10
+            set(from): {size - suffix}
+            if(_): {from < 0} [
+                set(from): 0
+            ]
+        ]
+        else(_): [
+            if(_): {a != ""} [
+                str_to_int(from): a 10
+            ]
+            if(_): {b != ""} [
+                str_to_int(to): b 10
+            ]
+        ]
+        if(_): {to >= size} [
+            set(to): {size - 1}
+        ]
+        if(_): {from > to || from >= size} [
+            uk_res(r): 416 "" ""
+            str_from_int(ss): size
+            concat(cr): "bytes */" ss
+            uk_set_header(_): r "Content-Range" cr
+            return(r): r
+        ]
+        slice(part): data from {to - from + 1}
+        uk_res(r): 206 part type
+        str_from_int(fs): from
+        str_from_int(ts): to
+        str_from_int(ss): size
+        concat(cr): "bytes " fs "-" ts "/" ss
+        uk_set_header(_): r "Content-Range" cr
+    ]
+    else(_): [
+        uk_res(r): 200 data type
+    ]
+    uk_set_header(_): r "ETag" etag
+    uk_set_header(_): r "Accept-Ranges" "bytes"
+    uk_cache(_): r 300 true
+]

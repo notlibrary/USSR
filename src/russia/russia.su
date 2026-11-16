@@ -8010,12 +8010,22 @@ vm_native_e(r): name dst nb [
 # (async(p): "worker" n, load(p): pathvar entry).
 cv_scname(r): nd tgt [
     getf(cv_snt): nd "tag"
+    set(cv_snv): 0
     if(_): {cv_snt = 4} [
+        # a bare word names a function (async(p): worker); a word that is
+        # no function's name is a variable holding the name, as in ussr
+        # (whose async takes a variable's non-empty string value first)
         getf(cv_snn): nd "s1"
-        cv_const(cv_sci): cv_snn
-        cv_emit(_): 1 tgt 0 0 cv_sci
+        cv_findf2(cv_snf): cv_snn
+        if(_): {cv_snf + 1 > 0} [
+            cv_const(cv_sci): cv_snn
+            cv_emit(_): 1 tgt 0 0 cv_sci
+        ]
+        else(_): [
+            set(cv_snv): 1
+        ]
     ]
-    if(_): {cv_snt != 4} [
+    if(_): {cv_snt != 4 || cv_snv = 1} [
         cv_e(r): nd tgt
     ]
 ]
