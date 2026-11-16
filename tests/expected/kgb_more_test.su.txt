@@ -111,8 +111,8 @@ mass | 4 kg | 20 g | 30 t
 part of |  | [[field]] | 
 sound | meow |  | 
 swims |  |  | yes
-$ kgb random places
-places/field
+$ kgb random solo
+solo/only
 $ kgb cp cat animals/mammals/lion
 copied animals/mammals/cat to animals/mammals/lion
 $ kgb set lion sound roar
@@ -133,6 +133,7 @@ animals/birds/sparrow
 animals/mammals/cat
 animals/mammals/lion
 animals/mammals/whale
+solo/only
 $ kgb hubs 3
 object | links in
 animals/mammals/mouse | 2
@@ -160,6 +161,7 @@ digraph kgb {
   "animals/mammals" [shape=folder];
   "animals" -> "animals/mammals" [style=dashed];
   "places" [shape=folder];
+  "solo" [shape=folder];
   "animals/birds" -> "animals/birds/dodo" [style=dashed];
   "animals/birds" -> "animals/birds/sparrow" [style=dashed];
   "animals/mammals" -> "animals/mammals/cat" [style=dashed];
@@ -174,6 +176,7 @@ digraph kgb {
   "places/farm" -> "places/country";
   "places" -> "places/field" [style=dashed];
   "places/field" -> "places/farm";
+  "solo" -> "solo/only" [style=dashed];
 }
 $ kgb import tests/kgb-more-import.csv animals/reptiles
 imported 2 objects into animals/reptiles
@@ -190,7 +193,7 @@ imported 1 objects into animals/insects
 $ kgb get bee legs
 6
 $ kgb html tests/kgb-more-html
-wrote 12 pages to tests/kgb-more-html
+wrote 13 pages to tests/kgb-more-html
 html links work
 $ kgb set bee legs 5
 $ kgb get bee legs

@@ -67,6 +67,7 @@ base(r): [
     put(_): "places/field/field.md" "- part of: [[farm]]\n"
     put(_): "places/farm/farm.md" "- part of: [[country]]\n"
     put(_): "places/country/country.md" "- kind: land\n"
+    put(_): "solo/only/only.md" "- kind: single\n"
     set(r): 0
 ]
 
@@ -108,7 +109,8 @@ objects(r): [
     kgb(_): "show Felis_catus"
     kgb(_): "diff cat mouse"
     kgb(_): "compare cat mouse whale"
-    kgb(_): "random places"
+    # one object in the category, so the pick is always the same
+    kgb(_): "random solo"
     kgb(_): "cp cat animals/mammals/lion"
     kgb(_): "set lion sound roar"
     kgb(_): "set --where legs=4 diet meat"
