@@ -1,0 +1,81 @@
+PASS casual: 5 MS AC 2 + MR =
+PASS casual: 5 M+ 3 M+ MR
+PASS casual: 9 M+ 4 M- MC MR
+PASS casual: 6 * 7 = AC ANS + 1 =
+PASS tape line
+PASS sci: 1 SINH
+PASS sci: 0 COSH
+PASS sci: 2 7 CBRT
+PASS sci: 5 GAMMA
+PASS sci: 0 . 5 N!
+PASS sci: 5 NCR 2 =
+PASS sci: 5 NPR 2 =
+PASS sci: 1 2 GCD 1 8 =
+PASS sci: 4 LCM 6 =
+PASS sci: 1 7 MOD 5 =
+PASS sci: 2 7 YROOT 3 =
+PASS sci: 8 LOGY 2 =
+PASS sci: 2 + 3 NCR 2 =
+PASS sci: GRAD 1 0 0 SIN
+PASS sci: 1 2 . 5 DMS
+PASS sci: 1 2 . 3 DD
+PASS sci: 1 2 3 4 5 6 7 = ENG
+PASS sci: 1 2 3 4 5 = SCI
+PASS sci: 2 / 3 = FIX
+PASS prog: BYTE 2 5 5 + 1 =
+PASS prog: BYTE 1 2 7 + 1 =
+PASS prog: BYTE UNSIGNED 2 0 0 + 1 0 0 =
+PASS prog: 1 2 NAND 1 0 =
+PASS prog: 5 NOR 3 =
+PASS prog: 5 XNOR 3 =
+PASS prog: 2 5 5 POPCNT
+PASS prog: DWORD 1 CLZ
+PASS prog: 8 CTZ
+PASS prog: 1 6 +/- SAR 2 =
+PASS prog: 1 6 +/- SHR 6 0 =
+PASS casual: NAND 5
+PASS calc 2PI
+PASS calc 3(4+5)
+PASS calc 200 + 10%
+PASS calc 2^3^2
+PASS calc -2^2
+PASS calc 5!
+PASS calc sqrt(16) + abs(-3)
+PASS calc cos(60)
+PASS calc pi r^2
+PASS calc f(3) + f(0)
+PASS calc ans + 1
+PASS calc c / 1000
+PASS calc error
+PASS unknown function
+PASS divide by zero
+PASS solve
+PASS derivative
+PASS integral
+PASS rpn
+PASS rpn functions
+PASS rpn underflow
+PASS celsius to fahrenheit
+PASS miles
+PASS GiB to MB
+PASS convert mismatch
+PASS days between
+PASS add days
+PASS weekday
+PASS stats
+PASS regression
+PASS IEEE 754
+PASS IEEE 754 negative
+PASS memory order
+PASS low byte as text
+PASS code point
+PASS crc32
+PASS fnv1a
+PASS digit grouping
+PASS settings
+PASS tape saved
+76 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

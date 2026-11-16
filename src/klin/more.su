@@ -1,0 +1,1679 @@
+# more.su - Klin refine pass 1. klin.su includes it and calls in from
+# klinreset, klinpress, klin_unary, klin_binary, klin_prec, klin_equals and
+# klin_text_of.
+#
+# Keys (klinpress):
+#   MC MR M+ M- MS     memory;  ANS  the last result;  RAND  a number in [0, 1)
+#   GRAD RAD           angle units (DEG still toggles DEG and RAD)
+#   SINH COSH TANH ASINH ACOSH ATANH CBRT GAMMA   (N! takes non-integers too)
+#   DMS DD             degrees to and from degrees.minutes-seconds (d.mmss)
+#   NPR NCR GCD LCM MOD YROOT LOGY   binary, in casual and sci
+#   prog: BYTE WORD DWORD QWORD (8/16/32/64 bits), SIGNED UNSIGNED,
+#         NAND NOR XNOR SAR (arithmetic shift; SHR is logical), POPCNT CLZ CTZ
+#   FIX SCI ENG AUTO   display formats (FIX: 2 decimals, SCI and ENG with
+#                      exponents, ENG in multiples of 3)
+# Library calls:
+#   klin_calc(v): text            "2PI", "3(4+5)", "200+10%", "x=5", "x^2+1",
+#                                 "f(x)=x^2+1" then "f(3)", sin/cos/... and
+#                                 the constants pi e c g h na k; degrees as
+#                                 the angle unit says; a number or an error
+#   klin_solve(v): text var lo hi    a root of text = 0 between lo and hi
+#   klin_derivative(v): text var x / klin_integral(v): text var a b
+#   klin_rpn(v): text             "3 4 + 2 *" -> 14
+#   klin_convert(v): x from to    length, mass, temperature, data, time
+#   klin_days_between(n): a b / klin_add_days(s): date n / klin_weekday(s): date
+#   klin_stats(v): values         btree: n mean median stddev min max
+#   klin_regression(v): xs ys     [slope intercept r]
+#   klin_ieee(v): x               [sign exponent mantissa_hex bits_hex]
+#   klin_bytes(s): v size         memory order (little-endian) of v
+#   klin_char(s): v / klin_code(n): text   low byte as text, first code point
+#   klin_checksum(s): text kind   "crc32", "adler32" or "fnv1a" in hex
+#   klin_group(s): text           digit grouping with spaces
+#   klin_tape(v): / klin_tape_save(n): path   the "expr = result" lines
+#   klin_settings_save(r): path / klin_settings_load(r): path   ~/.klin
+$once
+$include "../libs/strings.su"
+$include "../libs/encoding.su"
+$include "../libs/dates.su"
+
+klin_more_reset(r): [
+    set(klin_mem): 0.0!
+    vec(tape): ""
+    set(klin_tape): tape!
+    set(klin_ans): 0.0!
+    set(klin_word): 64!
+    set(klin_signed): true!
+    btree(vars):
+    set(klin_vars): vars!
+    set(klin_display_fmt): "AUTO"!
+    set(r): 0
+]
+
+# AC keeps memory, the tape, variables and the prog settings
+klin_more_saved(r): [
+    vec(r): ""
+    set(m): klin_mem?
+    set(t): klin_tape?
+    set(a): klin_ans?
+    set(w): klin_word?
+    set(s): klin_signed?
+    set(v): klin_vars?
+    set(f): klin_display_fmt?
+    push(_): r m
+    push(_): r t
+    push(_): r a
+    push(_): r w
+    push(_): r s
+    push(_): r v
+    push(_): r f
+]
+
+klin_more_restore(r): saved [
+    at(m): saved 0
+    at(t): saved 1
+    at(a): saved 2
+    at(w): saved 3
+    at(s): saved 4
+    at(v): saved 5
+    at(f): saved 6
+    set(klin_mem): m!
+    set(klin_tape): t!
+    set(klin_ans): a!
+    set(klin_word): w!
+    set(klin_signed): s!
+    set(klin_vars): v!
+    set(klin_display_fmt): f!
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- words
+
+# v cut to the word size, sign-extended when signed
+klin_mask(r): v [
+    set(r): v
+    set(w): klin_word?
+    if(_): {w >= 64} [
+        return(r): r
+    ]
+    set(m): {(1 << w) - 1}
+    set(r): {v & m}
+    set(signed): klin_signed?
+    if(_): signed [
+        set(top): {1 << (w - 1)}
+        if(_): {(r & top) != 0} [
+            set(r): {r - (1 << w)}
+        ]
+    ]
+]
+
+_klin_ubits(r): v [
+    # the bits of v within the word size, as a non-negative number when < 64
+    set(w): klin_word?
+    set(r): v
+    if(_): {w < 64} [
+        set(r): {v & ((1 << w) - 1)}
+    ]
+]
+
+# ---------------------------------------------------------------- unary
+
+klin_gamma(r): x [
+    # Lanczos approximation (g = 7, n = 9)
+    set(r): null
+    if(_): {x < 0.5} [
+        # reflection: gamma(x) gamma(1-x) = pi / sin(pi x)
+        klin_sincos(s): {3.141592653589793 * x} false
+        klin_gamma(g1): {1 - x}
+        typeof(gt): g1
+        if(_): {gt != "real" || s = 0} [
+            return(r): r
+        ]
+        set(r): {3.141592653589793 / (s * g1)}
+        return(r): r
+    ]
+    set(x1): {x - 1.0}
+    vec(c): ""
+    push(_): c 0.99999999999980993
+    push(_): c 676.5203681218851
+    push(_): c -1259.1392167224028
+    push(_): c 771.32342877765313
+    push(_): c -176.61502916214059
+    push(_): c 12.507343278686905
+    push(_): c -0.13857109526572012
+    push(_): c 0.0000099843695780195716
+    push(_): c 0.00000015056327351493116
+    at(a): c 0
+    set(i): 1
+    while(_): {i < 9} [
+        at(ci): c i
+        set(a): {a + ci / (x1 + i)}
+        set(i): {i + 1}
+    ]
+    set(t): {x1 + 7.5}
+    pow(p): t {x1 + 0.5}
+    exp(e): {0 - t}
+    set(r): {2.5066282746310002 * p * e * a}
+]
+
+klin_popcount(r): v [
+    _klin_ubits(x): v
+    set(r): 0
+    set(k): 0
+    while(_): {k < 64} [
+        set(r): {r + ((x >> k) & 1)}
+        set(k): {k + 1}
+    ]
+]
+
+klin_clz(r): v [
+    set(w): klin_word?
+    _klin_ubits(x): v
+    set(r): 0
+    set(k): {w - 1}
+    set(go): true
+    while(_): {go && k >= 0} [
+        if(_): {((x >> k) & 1) = 1} [
+            set(go): false
+        ]
+        else(_): [
+            set(r): {r + 1}
+            set(k): {k - 1}
+        ]
+    ]
+]
+
+klin_ctz(r): v [
+    set(w): klin_word?
+    _klin_ubits(x): v
+    set(r): 0
+    set(go): true
+    while(_): {go && r < w} [
+        if(_): {((x >> r) & 1) = 1} [
+            set(go): false
+        ]
+        else(_): [
+            set(r): {r + 1}
+        ]
+    ]
+]
+
+klin_to_dms(r): x [
+    # 12.5 degrees -> 12.3000 (12 degrees 30 minutes 0 seconds)
+    set(neg): {x < 0}
+    set(a): x
+    if(_): neg [
+        set(a): {0 - x}
+    ]
+    str_trunc(d): a
+    set(mf): {(a - d) * 60}
+    str_trunc(m): mf
+    set(s): {(mf - m) * 60}
+    set(r): {d + m / 100.0 + s / 10000.0}
+    if(_): neg [
+        set(r): {0 - r}
+    ]
+]
+
+klin_from_dms(r): x [
+    set(neg): {x < 0}
+    set(a): x
+    if(_): neg [
+        set(a): {0 - x}
+    ]
+    str_trunc(d): a
+    set(rest): {(a - d) * 100 + 0.0000000001}
+    str_trunc(m): rest
+    set(s): {(rest - m) * 100}
+    set(r): {d + m / 60.0 + s / 3600.0}
+    if(_): neg [
+        set(r): {0 - r}
+    ]
+]
+
+# [handled value]
+klin_more_unary(r): op x prog [
+    vec(r): ""
+    set(v): x
+    set(handled): true
+    if(_): prog [
+        if(_): {op = "POPCNT"} [
+            klin_popcount(v): x
+        ]
+        elif(_): {op = "CLZ"} [
+            klin_clz(v): x
+        ]
+        elif(_): {op = "CTZ"} [
+            klin_ctz(v): x
+        ]
+        else(_): [
+            set(handled): false
+        ]
+    ]
+    elif(_): {op = "SINH" || op = "COSH" || op = "TANH"} [
+        if(_): {x > 709 || x < 0 - 709} [
+            set(v): "Overflow"
+        ]
+        elif(_): {op = "SINH"} [
+            sinh(v): x
+        ]
+        elif(_): {op = "COSH"} [
+            cosh(v): x
+        ]
+        else(_): [
+            tanh(v): x
+        ]
+    ]
+    elif(_): {op = "ASINH"} [
+        asinh(v): x
+    ]
+    elif(_): {op = "ACOSH"} [
+        if(_): {x < 1} [
+            set(v): "Invalid input"
+        ]
+        else(_): [
+            acosh(v): x
+        ]
+    ]
+    elif(_): {op = "ATANH"} [
+        if(_): {x <= 0 - 1 || x >= 1} [
+            set(v): "Invalid input"
+        ]
+        else(_): [
+            atanh(v): x
+        ]
+    ]
+    elif(_): {op = "CBRT"} [
+        cbrt(v): x
+    ]
+    elif(_): {op = "GAMMA"} [
+        klin_gamma(v): x
+        typeof(vt): v
+        if(_): {vt != "real"} [
+            set(v): "Invalid input"
+        ]
+    ]
+    elif(_): {op = "N!"} [
+        klin_is_integral(whole): x
+        if(_): {whole = false && x > 0 - 1} [
+            klin_gamma(v): {x + 1}
+        ]
+        else(_): [
+            set(handled): false
+        ]
+    ]
+    elif(_): {op = "DMS"} [
+        klin_to_dms(v): x
+    ]
+    elif(_): {op = "DD"} [
+        klin_from_dms(v): x
+    ]
+    else(_): [
+        set(handled): false
+    ]
+    push(_): r handled
+    push(_): r v
+]
+
+klin_more_is_function(r): key [
+    set(r): {key = "SINH" || key = "COSH" || key = "TANH" || key = "ASINH" || key = "ACOSH" || key = "ATANH" || key = "CBRT" || key = "GAMMA" || key = "DMS" || key = "DD" || key = "POPCNT" || key = "CLZ" || key = "CTZ"}
+]
+
+# ---------------------------------------------------------------- binary
+
+klin_more_prec(r): op [
+    set(r): 0
+    if(_): {op = "NOR"} [ set(r): 1 ]
+    elif(_): {op = "XNOR"} [ set(r): 2 ]
+    elif(_): {op = "NAND"} [ set(r): 3 ]
+    elif(_): {op = "SAR"} [ set(r): 4 ]
+    elif(_): {op = "NPR" || op = "NCR" || op = "GCD" || op = "LCM"} [ set(r): 6 ]
+    elif(_): {op = "YROOT" || op = "LOGY"} [ set(r): 7 ]
+]
+
+klin_more_prog_only(r): key [
+    set(r): {key = "NAND" || key = "NOR" || key = "XNOR" || key = "SAR" || key = "POPCNT" || key = "CLZ" || key = "CTZ" || key = "BYTE" || key = "WORD" || key = "DWORD" || key = "QWORD" || key = "SIGNED" || key = "UNSIGNED"}
+]
+
+_klin_int(r): x [
+    set(r): null
+    klin_is_integral(w): x
+    if(_): w [
+        str_trunc(r): x
+    ]
+]
+
+# [handled value]
+klin_more_binary(r): op a b prog [
+    vec(r): ""
+    set(handled): true
+    set(v): "Invalid input"
+    if(_): {op = "NAND"} [
+        set(v): {(a & b) ^ (0 - 1)}
+    ]
+    elif(_): {op = "NOR"} [
+        set(v): {(a | b) ^ (0 - 1)}
+    ]
+    elif(_): {op = "XNOR"} [
+        set(v): {(a ^ b) ^ (0 - 1)}
+    ]
+    elif(_): {op = "SAR"} [
+        if(_): {b < 0 || b > 63} [
+            set(v): "Shift out of range"
+        ]
+        else(_): [
+            klin_mask(sa): a
+            set(v): {sa >> b}
+        ]
+    ]
+    elif(_): {op = "SHR" && prog} [
+        # a logical shift: zeros come in at the top
+        if(_): {b < 0 || b > 63} [
+            set(v): "Shift out of range"
+        ]
+        elif(_): {b = 0} [
+            set(v): a
+        ]
+        else(_): [
+            _klin_ubits(ua): a
+            set(v): {(ua >> b) & ((1 << (64 - b)) - 1)}
+        ]
+    ]
+    elif(_): {op = "MOD" && prog = false} [
+        if(_): {b = 0} [
+            set(v): "Cannot divide by zero"
+        ]
+        else(_): [
+            floor(q): {a / b}
+            set(v): {a - q * b}
+        ]
+    ]
+    elif(_): {op = "NPR" || op = "NCR"} [
+        _klin_int(n): a
+        _klin_int(k): b
+        typeof(nt): n
+        typeof(kt): k
+        if(_): {nt = "integer" && kt = "integer"} [
+            if(_): {k >= 0 && n >= k} [
+                set(v): 1
+                set(i): 0
+                while(_): {i < k} [
+                    set(v): {v * (n - i)}
+                    set(i): {i + 1}
+                ]
+                if(_): {op = "NCR"} [
+                    set(f): 1
+                    set(i): 2
+                    while(_): {i <= k} [
+                        set(f): {f * i}
+                        set(i): {i + 1}
+                    ]
+                    str_trunc(v): {v / f + 0.5}
+                ]
+                set(v): {v * 1.0}
+                if(_): prog [
+                    str_trunc(v): v
+                ]
+            ]
+        ]
+    ]
+    elif(_): {op = "GCD" || op = "LCM"} [
+        _klin_int(x): a
+        _klin_int(y): b
+        typeof(xt): x
+        typeof(yt): y
+        if(_): {xt = "integer" && yt = "integer"} [
+            gcd(g): x y
+            if(_): {op = "GCD"} [
+                set(v): g
+            ]
+            else(_): [
+                lcm(v): x y
+            ]
+            if(_): {prog = false} [
+                set(v): {v * 1.0}
+            ]
+        ]
+    ]
+    elif(_): {op = "YROOT"} [
+        if(_): {b = 0} [
+            set(v): "Invalid input"
+        ]
+        elif(_): {a < 0} [
+            # odd roots of negatives are real
+            _klin_int(bi): b
+            typeof(bt): bi
+            set(odd): false
+            if(_): {bt = "integer"} [
+                set(odd): {bi % 2 != 0}
+            ]
+            if(_): odd [
+                klin_pow(p): {0 - a} {1.0 / b}
+                set(v): {0 - p}
+            ]
+        ]
+        else(_): [
+            klin_pow(v): a {1.0 / b}
+        ]
+    ]
+    elif(_): {op = "LOGY"} [
+        if(_): {a <= 0 || b <= 0 || b = 1} [
+            set(v): "Invalid input"
+        ]
+        else(_): [
+            ln(la): a
+            ln(lb): b
+            set(v): {la / lb}
+        ]
+    ]
+    else(_): [
+        set(handled): false
+    ]
+    if(_): {handled && prog} [
+        klin_is_number(num): v
+        if(_): num [
+            klin_mask(v): v
+        ]
+    ]
+    push(_): r handled
+    push(_): r v
+]
+
+# ---------------------------------------------------------------- keys
+
+klin_more_press(r): key [
+    set(r): true
+    klin_prog(prog):
+    if(_): {key = "MC"} [
+        set(klin_mem): 0.0!
+    ]
+    elif(_): {key = "MR"} [
+        set(m): klin_mem?
+        if(_): prog [
+            str_trunc(m): m
+        ]
+        klin_set_current(_): m
+    ]
+    elif(_): {key = "M+" || key = "M-" || key = "MS"} [
+        klinvalue(v):
+        set(m): klin_mem?
+        if(_): {key = "M+"} [
+            set(m): {m + v}
+        ]
+        elif(_): {key = "M-"} [
+            set(m): {m - v}
+        ]
+        else(_): [
+            set(m): v
+        ]
+        set(klin_mem): m!
+        # the value stays; what is typed next starts a new number
+        klin_set_current(_): v
+    ]
+    elif(_): {key = "ANS"} [
+        set(a): klin_ans?
+        if(_): prog [
+            str_trunc(a): a
+        ]
+        klin_set_current(_): a
+    ]
+    elif(_): {key = "RAND" && prog = false} [
+        random_float(x):
+        klin_set_current(_): x
+    ]
+    elif(_): {key = "GRAD" || key = "RAD"} [
+        set(klin_angle): key!
+    ]
+    elif(_): {(key = "BYTE" || key = "WORD" || key = "DWORD" || key = "QWORD") && prog} [
+        set(w): 64
+        if(_): {key = "BYTE"} [
+            set(w): 8
+        ]
+        elif(_): {key = "WORD"} [
+            set(w): 16
+        ]
+        elif(_): {key = "DWORD"} [
+            set(w): 32
+        ]
+        set(klin_word): w!
+        klinvalue(v):
+        klin_mask(v): v
+        klin_set_current(_): v
+    ]
+    elif(_): {(key = "SIGNED" || key = "UNSIGNED") && prog} [
+        set(klin_signed): {key = "SIGNED"}!
+        klinvalue(v):
+        klin_mask(v): v
+        klin_set_current(_): v
+    ]
+    elif(_): {key = "FIX" || key = "SCI" || key = "ENG" || key = "AUTO"} [
+        set(klin_display_fmt): key!
+    ]
+    else(_): [
+        set(r): false
+    ]
+]
+
+# after "=": the last result and a tape line
+klin_more_result(r): text v [
+    set(klin_ans): v!
+    set(tape): klin_tape?
+    klin_fmt(vs): v
+    concat(line): text " " vs
+    push(_): tape line
+    set(r): 0
+]
+
+klin_tape(r): [
+    set(r): klin_tape?
+]
+
+klin_tape_save(r): path [
+    set(tape): klin_tape?
+    write_lines(w): path tape
+    len(r): tape
+    if(_): {w != 0} [
+        set(r): {0 - 1}
+    ]
+]
+
+# ---------------------------------------------------------------- display
+
+# exponent and mantissa of x: [m e] with 1 <= |m| < 10
+_klin_sci(r): x [
+    set(m): x
+    set(e): 0
+    set(a): x
+    if(_): {a < 0} [
+        set(a): {0 - a}
+    ]
+    if(_): {a > 0} [
+        while(_): {a >= 10} [
+            set(a): {a / 10}
+            set(e): {e + 1}
+        ]
+        while(_): {a < 1} [
+            set(a): {a * 10}
+            set(e): {e - 1}
+        ]
+    ]
+    set(m): a
+    if(_): {x < 0} [
+        set(m): {0 - a}
+    ]
+    vec(r): ""
+    push(_): r m
+    push(_): r e
+]
+
+klin_more_text(r): v [
+    set(fmt): klin_display_fmt?
+    set(r): null
+    if(_): {fmt = "AUTO"} [
+        return(r): r
+    ]
+    if(_): {fmt = "FIX"} [
+        str_fixed(r): v 2
+        return(r): r
+    ]
+    _klin_sci(se): v
+    at(m): se 0
+    at(e): se 1
+    if(_): {fmt = "ENG"} [
+        set(shift): {e % 3}
+        if(_): {shift < 0} [
+            set(shift): {shift + 3}
+        ]
+        set(k): 0
+        while(_): {k < shift} [
+            set(m): {m * 10}
+            set(k): {k + 1}
+        ]
+        set(e): {e - shift}
+    ]
+    str_from_number(ms): m 6
+    str_from_int(es): e
+    concat(r): ms "E" es
+]
+
+klin_group(r): text [
+    str_find(dot): text "." 0
+    set(int_part): text
+    set(frac): ""
+    len(n): text
+    if(_): {dot >= 0} [
+        slice(int_part): text 0 dot
+        slice(frac): text dot {n - dot}
+    ]
+    set(sign): ""
+    str_starts(neg): int_part "-"
+    if(_): neg [
+        set(sign): "-"
+        len(il): int_part
+        slice(int_part): int_part 1 {il - 1}
+    ]
+    len(k): int_part
+    set(out): ""
+    set(i): 0
+    while(_): {i < k} [
+        if(_): {i > 0 && (k - i) % 3 = 0} [
+            concat(out): out " "
+        ]
+        at(c): int_part i
+        concat(out): out c
+        set(i): {i + 1}
+    ]
+    concat(r): sign out frac
+]
+
+# ---------------------------------------------------------------- text expressions
+
+_klin_vars(r): [
+    set(r): klin_vars?
+]
+
+# tokens of an expression: numbers, names, operators, parentheses, commas
+klin_tokens(r): text [
+    vec(r): ""
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        at(c): text i
+        if(_): {b = 32 || b = 9} [
+            set(i): {i + 1}
+        ]
+        elif(_): {(b >= 48 && b <= 57) || b = 46} [
+            re_find(m): "^[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?|^[0-9]+\\.?" text i
+            slice(rest): text i {n - i}
+            re_find(m): "^([0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+\\.)" rest
+            at(num): m 0
+            str_to_number(v): num
+            push(_): r v
+            len(nl): num
+            set(i): {i + nl}
+        ]
+        elif(_): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 95} [
+            slice(rest): text i {n - i}
+            re_find(m): "^[A-Za-z_][A-Za-z_0-9]*" rest
+            at(name): m 0
+            str_lower(ln): name
+            vec(tok): ""
+            push(_): tok "name"
+            push(_): tok ln
+            push(_): r tok
+            len(nl): name
+            set(i): {i + nl}
+        ]
+        else(_): [
+            push(_): r c
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+_klin_is_name(r): t [
+    typeof(tt): t
+    set(r): false
+    if(_): {tt = "vector"} [
+        set(r): true
+    ]
+]
+
+_klin_starts_operand(r): t [
+    klin_is_number(num): t
+    _klin_is_name(nm): t
+    set(r): {num || nm || t = "("}
+]
+
+# [value pos error]
+_klin_ev(r): toks pos vars [
+    _klin_ev_add(r): toks pos vars
+]
+
+_klin_ev_add(r): toks pos vars [
+    _klin_ev_mul(left): toks pos vars
+    at(v): left 0
+    at(pos): left 1
+    at(err): left 2
+    len(n): toks
+    set(go): {err = ""}
+    while(_): {go && pos < n} [
+        at(t): toks pos
+        if(_): {t = "+" || t = "-"} [
+            _klin_ev_mul(right): toks {pos + 1} vars
+            at(b): right 0
+            at(pos): right 1
+            at(err): right 2
+            # "200 + 10%" adds 10% of 200
+            at(pct): right 3
+            if(_): pct [
+                set(b): {v * b}
+            ]
+            if(_): {err = ""} [
+                if(_): {t = "+"} [
+                    set(v): {v + b}
+                ]
+                else(_): [
+                    set(v): {v - b}
+                ]
+            ]
+            set(go): {err = ""}
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    vec(r): ""
+    push(_): r v
+    push(_): r pos
+    push(_): r err
+]
+
+# [value pos error was_percent]
+_klin_ev_mul(r): toks pos vars [
+    _klin_ev_pow(left): toks pos vars
+    at(v): left 0
+    at(pos): left 1
+    at(err): left 2
+    at(pct): left 3
+    len(n): toks
+    set(go): {err = ""}
+    while(_): {go && pos < n} [
+        at(t): toks pos
+        _klin_starts_operand(implicit): t
+        if(_): {t = "*" || t = "/" || implicit} [
+            set(next): {pos + 1}
+            if(_): implicit [
+                set(next): pos
+            ]
+            _klin_ev_pow(right): toks next vars
+            at(b): right 0
+            at(pos): right 1
+            at(err): right 2
+            set(pct): false
+            if(_): {err = ""} [
+                if(_): {t = "/"} [
+                    if(_): {b = 0} [
+                        set(err): "Cannot divide by zero"
+                    ]
+                    else(_): [
+                        set(v): {v / b}
+                    ]
+                ]
+                else(_): [
+                    set(v): {v * b}
+                ]
+            ]
+            set(go): {err = ""}
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    vec(r): ""
+    push(_): r v
+    push(_): r pos
+    push(_): r err
+    push(_): r pct
+]
+
+_klin_ev_pow(r): toks pos vars [
+    _klin_ev_unary(left): toks pos vars
+    at(v): left 0
+    at(pos): left 1
+    at(err): left 2
+    at(pct): left 3
+    len(n): toks
+    if(_): {err = "" && pos < n} [
+        at(t): toks pos
+        if(_): {t = "^"} [
+            # right-associative
+            _klin_ev_pow(right): toks {pos + 1} vars
+            at(b): right 0
+            at(pos): right 1
+            at(err): right 2
+            if(_): {err = ""} [
+                klin_pow(v): v b
+                klin_is_number(ok): v
+                if(_): {ok = false} [
+                    set(err): v
+                    set(v): 0
+                ]
+            ]
+            set(pct): false
+        ]
+    ]
+    vec(r): ""
+    push(_): r v
+    push(_): r pos
+    push(_): r err
+    push(_): r pct
+]
+
+_klin_ev_unary(r): toks pos vars [
+    len(n): toks
+    vec(r): ""
+    if(_): {pos < n} [
+        at(t): toks pos
+        if(_): {t = "-" || t = "+"} [
+            _klin_ev_unary(inner): toks {pos + 1} vars
+            at(v): inner 0
+            if(_): {t = "-"} [
+                set(v): {0 - v}
+            ]
+            push(_): r v
+            at(p2): inner 1
+            push(_): r p2
+            at(e2): inner 2
+            push(_): r e2
+            push(_): r false
+            return(r): r
+        ]
+    ]
+    _klin_ev_atom(r): toks pos vars
+]
+
+_klin_constant(r): name [
+    btree(c):
+    btput(_): c "pi" 3.141592653589793
+    btput(_): c "e" 2.718281828459045
+    btput(_): c "c" 299792458.0
+    btput(_): c "g" 9.80665
+    btput(_): c "h" 0.000000000000000000000000000000000662607015
+    btput(_): c "na" 602214076000000000000000.0
+    btput(_): c "k" 0.00000000000000000000001380649
+    btget(r): c name null
+]
+
+_klin_function(r): name x [
+    # the calculator's own functions, by their key names
+    set(key): ""
+    btree(map):
+    btput(_): map "sin" "SIN"
+    btput(_): map "cos" "COS"
+    btput(_): map "tan" "TAN"
+    btput(_): map "asin" "ASIN"
+    btput(_): map "acos" "ACOS"
+    btput(_): map "atan" "ATAN"
+    btput(_): map "sinh" "SINH"
+    btput(_): map "cosh" "COSH"
+    btput(_): map "tanh" "TANH"
+    btput(_): map "asinh" "ASINH"
+    btput(_): map "acosh" "ACOSH"
+    btput(_): map "atanh" "ATANH"
+    btput(_): map "ln" "LN"
+    btput(_): map "log" "LOG"
+    btput(_): map "sqrt" "SQRT"
+    btput(_): map "cbrt" "CBRT"
+    btput(_): map "abs" "|X|"
+    btput(_): map "exp" "E^X"
+    btput(_): map "fact" "N!"
+    btput(_): map "gamma" "GAMMA"
+    btget(key): map name ""
+    set(r): null
+    if(_): {key != ""} [
+        klin_unary(r): key x false
+    ]
+]
+
+_klin_ev_atom(r): toks pos vars [
+    vec(r): ""
+    len(n): toks
+    if(_): {pos >= n} [
+        push(_): r 0
+        push(_): r pos
+        push(_): r "Invalid input"
+        push(_): r false
+        return(r): r
+    ]
+    at(t): toks pos
+    set(v): 0
+    set(err): ""
+    set(next): {pos + 1}
+    klin_is_number(num): t
+    _klin_is_name(nm): t
+    if(_): num [
+        set(v): {t * 1.0}
+    ]
+    elif(_): {t = "("} [
+        _klin_ev_add(inner): toks {pos + 1} vars
+        at(v): inner 0
+        at(next): inner 1
+        at(err): inner 2
+        if(_): {next < n} [
+            at(close): toks next
+            if(_): {close = ")"} [
+                set(next): {next + 1}
+            ]
+        ]
+    ]
+    elif(_): nm [
+        at(name): t 1
+        # a call: name(...)
+        set(call): false
+        if(_): {next < n} [
+            at(t2): toks next
+            set(call): {t2 = "("}
+        ]
+        if(_): call [
+            _klin_ev_add(arg): toks {next + 1} vars
+            at(x): arg 0
+            at(next): arg 1
+            at(err): arg 2
+            if(_): {next < n} [
+                at(close): toks next
+                if(_): {close = ")"} [
+                    set(next): {next + 1}
+                ]
+            ]
+            if(_): {err = ""} [
+                concat(fkey): "fn:" name
+                btget(def): vars fkey null
+                typeof(dt): def
+                if(_): {dt = "vector"} [
+                    # a user function: [parameter, body]
+                    at(param): def 0
+                    at(body): def 1
+                    btget(saved): vars param null
+                    btput(_): vars param {x * 1.0}
+                    _klin_calc_in(v): body vars
+                    typeof(st): saved
+                    if(_): {st = "null"} [
+                        btdel(_): vars param
+                    ]
+                    else(_): [
+                        btput(_): vars param saved
+                    ]
+                ]
+                else(_): [
+                    _klin_function(v): name x
+                    typeof(vt): v
+                    if(_): {vt = "null"} [
+                        concat(err): "unknown function " name
+                        set(v): 0
+                    ]
+                ]
+                klin_is_number(okv): v
+                if(_): {okv = false && err = ""} [
+                    set(err): v
+                    set(v): 0
+                ]
+            ]
+        ]
+        else(_): [
+            btget(val): vars name null
+            typeof(vt): val
+            if(_): {vt = "null"} [
+                _klin_constant(val): name
+                typeof(vt): val
+            ]
+            if(_): {vt = "null"} [
+                concat(err): "unknown name " name
+            ]
+            else(_): [
+                set(v): val
+            ]
+        ]
+    ]
+    else(_): [
+        concat(err): "unexpected " t
+    ]
+    # postfix: ! and %
+    set(pct): false
+    set(go): {err = ""}
+    while(_): {go && next < n} [
+        at(pt): toks next
+        if(_): {pt = "!"} [
+            klin_unary(v): "N!" v false
+            klin_is_number(okv): v
+            if(_): {okv = false} [
+                set(err): v
+                set(v): 0
+            ]
+            set(next): {next + 1}
+        ]
+        elif(_): {pt = "%"} [
+            set(v): {v / 100}
+            set(pct): true
+            set(next): {next + 1}
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    push(_): r v
+    push(_): r next
+    push(_): r err
+    push(_): r pct
+]
+
+_klin_calc_in(r): text vars [
+    klin_tokens(toks): text
+    _klin_ev_add(res): toks 0 vars
+    at(v): res 0
+    at(pos): res 1
+    at(err): res 2
+    len(n): toks
+    if(_): {err = "" && pos < n} [
+        set(err): "Invalid input"
+    ]
+    set(r): v
+    if(_): {err != ""} [
+        set(r): err
+    ]
+]
+
+klin_calc(r): text [
+    _klin_vars(vars):
+    typeof(vt): vars
+    if(_): {vt != "btree"} [
+        klin_more_reset(_):
+        _klin_vars(vars):
+    ]
+    str_trim(t): text
+    # f(x) = body defines a function, x = expr a variable
+    re_find(fm): "^([A-Za-z_][A-Za-z_0-9]*)\\(([A-Za-z_][A-Za-z_0-9]*)\\)\\s*=\\s*(.+)$" t
+    typeof(ft): fm
+    if(_): {ft = "vector"} [
+        at(fname): fm 1
+        at(param): fm 2
+        at(body): fm 3
+        str_lower(fname): fname
+        str_lower(param): param
+        vec(def): ""
+        push(_): def param
+        push(_): def body
+        concat(fkey): "fn:" fname
+        btput(_): vars fkey def
+        set(r): 0
+        return(r): r
+    ]
+    re_find(vm): "^([A-Za-z_][A-Za-z_0-9]*)\\s*=\\s*(.+)$" t
+    typeof(vmt): vm
+    if(_): {vmt = "vector"} [
+        at(name): vm 1
+        at(expr): vm 2
+        str_lower(name): name
+        _klin_calc_in(r): expr vars
+        klin_is_number(ok): r
+        if(_): ok [
+            btput(_): vars name r
+        ]
+        return(r): r
+    ]
+    _klin_calc_in(r): t vars
+    klin_is_number(ok): r
+    if(_): ok [
+        set(klin_ans): r!
+        btput(_): vars "ans" r
+    ]
+]
+
+# the value of text with var set to x
+_klin_at(r): text var x [
+    _klin_vars(vars):
+    typeof(vt): vars
+    if(_): {vt != "btree"} [
+        klin_more_reset(_):
+        _klin_vars(vars):
+    ]
+    str_lower(v): var
+    btget(saved): vars v null
+    btput(_): vars v {x * 1.0}
+    _klin_calc_in(r): text vars
+    typeof(st): saved
+    if(_): {st = "null"} [
+        btdel(_): vars v
+    ]
+    else(_): [
+        btput(_): vars v saved
+    ]
+]
+
+klin_solve(r): text var lo hi [
+    _klin_at(fa): text var lo
+    _klin_at(fb): text var hi
+    set(r): "No sign change"
+    klin_is_number(oka): fa
+    klin_is_number(okb): fb
+    if(_): {oka = false || okb = false} [
+        set(r): "Invalid input"
+        return(r): r
+    ]
+    if(_): {fa = 0} [
+        set(r): {lo * 1.0}
+        return(r): r
+    ]
+    if(_): {fb = 0} [
+        set(r): {hi * 1.0}
+        return(r): r
+    ]
+    if(_): {(fa < 0) = (fb < 0)} [
+        return(r): r
+    ]
+    set(a): {lo * 1.0}
+    set(b): {hi * 1.0}
+    set(k): 0
+    while(_): {k < 200} [
+        set(m): {(a + b) / 2}
+        _klin_at(fm): text var m
+        if(_): {fm = 0} [
+            set(a): m
+            set(b): m
+            set(k): 200
+        ]
+        elif(_): {(fm < 0) = (fa < 0)} [
+            set(a): m
+            set(fa): fm
+        ]
+        else(_): [
+            set(b): m
+        ]
+        set(k): {k + 1}
+    ]
+    set(r): {(a + b) / 2}
+]
+
+klin_derivative(r): text var x [
+    set(h): 0.00001
+    _klin_at(f1): text var {x + h}
+    _klin_at(f2): text var {x - h}
+    set(r): {(f1 - f2) / (2 * h)}
+]
+
+klin_integral(r): text var a b [
+    # Simpson's rule on 200 intervals
+    set(n): 200
+    set(h): {(b - a) / n}
+    _klin_at(fa): text var a
+    _klin_at(fb): text var b
+    set(acc): {fa + fb}
+    set(i): 1
+    while(_): {i < n} [
+        _klin_at(fx): text var {a + i * h}
+        if(_): {i % 2 = 1} [
+            set(acc): {acc + 4 * fx}
+        ]
+        else(_): [
+            set(acc): {acc + 2 * fx}
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): {acc * h / 3}
+]
+
+klin_rpn(r): text [
+    str_split(words): text " "
+    vec(stack): ""
+    len(n): words
+    set(i): 0
+    set(r): "Invalid input"
+    while(_): {i < n} [
+        at(w): words i
+        if(_): {w != ""} [
+            str_to_number(num): w
+            typeof(nt): num
+            if(_): {nt = "integer" || nt = "real"} [
+                push(_): stack {num * 1.0}
+            ]
+            else(_): [
+                len(sn): stack
+                if(_): {w = "neg" || w = "sqrt" || w = "sin" || w = "cos" || w = "ln"} [
+                    if(_): {sn < 1} [
+                        return(r): r
+                    ]
+                    pop(x): stack
+                    if(_): {w = "neg"} [
+                        push(_): stack {0 - x}
+                    ]
+                    else(_): [
+                        _klin_function(y): w x
+                        push(_): stack y
+                    ]
+                ]
+                elif(_): {w = "swap"} [
+                    pop(b): stack
+                    pop(a): stack
+                    push(_): stack b
+                    push(_): stack a
+                ]
+                elif(_): {w = "dup"} [
+                    pop(a): stack
+                    push(_): stack a
+                    push(_): stack a
+                ]
+                else(_): [
+                    if(_): {sn < 2} [
+                        return(r): r
+                    ]
+                    pop(b): stack
+                    pop(a): stack
+                    if(_): {w = "+"} [
+                        push(_): stack {a + b}
+                    ]
+                    elif(_): {w = "-"} [
+                        push(_): stack {a - b}
+                    ]
+                    elif(_): {w = "*"} [
+                        push(_): stack {a * b}
+                    ]
+                    elif(_): {w = "/"} [
+                        if(_): {b = 0} [
+                            set(r): "Cannot divide by zero"
+                            return(r): r
+                        ]
+                        push(_): stack {a / b}
+                    ]
+                    elif(_): {w = "^"} [
+                        klin_pow(p): a b
+                        push(_): stack p
+                    ]
+                    else(_): [
+                        return(r): r
+                    ]
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    len(sn): stack
+    if(_): {sn = 1} [
+        at(r): stack 0
+    ]
+]
+
+# ---------------------------------------------------------------- conversions
+
+klin_convert(r): x from to [
+    str_lower(f): from
+    str_lower(t): to
+    set(r): "Invalid input"
+    # temperatures
+    set(temps): "c,f,k"
+    str_split(tl): temps ","
+    list_contains_klin(ftemp): tl f
+    list_contains_klin(ttemp): tl t
+    if(_): {ftemp && ttemp} [
+        set(cel): x
+        if(_): {f = "f"} [
+            set(cel): {(x - 32) * 5 / 9.0}
+        ]
+        elif(_): {f = "k"} [
+            set(cel): {x - 273.15}
+        ]
+        set(r): cel
+        if(_): {t = "f"} [
+            set(r): {cel * 9 / 5.0 + 32}
+        ]
+        elif(_): {t = "k"} [
+            set(r): {cel + 273.15}
+        ]
+        return(r): r
+    ]
+    btree(u):
+    btput(_): u "mm" "l:0.001"
+    btput(_): u "cm" "l:0.01"
+    btput(_): u "m" "l:1"
+    btput(_): u "km" "l:1000"
+    btput(_): u "in" "l:0.0254"
+    btput(_): u "ft" "l:0.3048"
+    btput(_): u "yd" "l:0.9144"
+    btput(_): u "mi" "l:1609.344"
+    btput(_): u "mg" "m:0.001"
+    btput(_): u "g" "m:1"
+    btput(_): u "kg" "m:1000"
+    btput(_): u "t" "m:1000000"
+    btput(_): u "oz" "m:28.349523125"
+    btput(_): u "lb" "m:453.59237"
+    btput(_): u "b" "d:1"
+    btput(_): u "kb" "d:1000"
+    btput(_): u "mb" "d:1000000"
+    btput(_): u "gb" "d:1000000000"
+    btput(_): u "kib" "d:1024"
+    btput(_): u "mib" "d:1048576"
+    btput(_): u "gib" "d:1073741824"
+    btput(_): u "ms" "s:0.001"
+    btput(_): u "s" "s:1"
+    btput(_): u "min" "s:60"
+    btput(_): u "h" "s:3600"
+    btput(_): u "day" "s:86400"
+    btput(_): u "week" "s:604800"
+    btget(fs): u f ""
+    btget(ts): u t ""
+    if(_): {fs = "" || ts = ""} [
+        return(r): r
+    ]
+    str_split(fp): fs ":"
+    str_split(tp): ts ":"
+    at(fk): fp 0
+    at(tk): tp 0
+    if(_): {fk != tk} [
+        return(r): r
+    ]
+    at(ff): fp 1
+    at(tf): tp 1
+    str_to_number(fv): ff
+    str_to_number(tv): tf
+    set(r): {x * fv / tv}
+]
+
+list_contains_klin(r): v x [
+    len(n): v
+    set(i): 0
+    set(r): false
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [
+            set(r): true
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+_klin_days(r): date [
+    re_find(m): "^([0-9]{4})-([0-9]{2})-([0-9]{2})$" date
+    set(r): null
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(ys): m 1
+        at(ms): m 2
+        at(ds): m 3
+        str_to_int(y): ys 10
+        str_to_int(mo): ms 10
+        str_to_int(d): ds 10
+        days_from_civil(r): y mo d
+    ]
+]
+
+klin_days_between(r): a b [
+    _klin_days(da): a
+    _klin_days(db): b
+    set(r): null
+    typeof(at): da
+    typeof(bt): db
+    if(_): {at = "integer" && bt = "integer"} [
+        set(r): {db - da}
+    ]
+]
+
+klin_add_days(r): date n [
+    _klin_days(d): date
+    set(r): null
+    typeof(dt): d
+    if(_): {dt = "integer"} [
+        civil_from_days(v): {d + n}
+        iso_date(r): v
+    ]
+]
+
+klin_weekday(r): date [
+    _klin_days(d): date
+    set(r): null
+    typeof(dt): d
+    if(_): {dt = "integer"} [
+        set(w): {(d + 4) % 7}
+        if(_): {w < 0} [
+            set(w): {w + 7}
+        ]
+        day_name(r): w
+    ]
+]
+
+# ---------------------------------------------------------------- statistics
+
+klin_stats(r): values [
+    btree(r):
+    len(n): values
+    btput(_): r "n" n
+    if(_): {n = 0} [
+        return(r): r
+    ]
+    mean(m): values
+    median(md): values
+    stddev(sd): values
+    list_min_klin(lo): values
+    list_max_klin(hi): values
+    btput(_): r "mean" m
+    btput(_): r "median" md
+    btput(_): r "stddev" sd
+    btput(_): r "min" lo
+    btput(_): r "max" hi
+]
+
+list_min_klin(r): v [
+    at(r): v 0
+    len(n): v
+    set(i): 1
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {x < r} [
+            set(r): x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+list_max_klin(r): v [
+    at(r): v 0
+    len(n): v
+    set(i): 1
+    while(_): {i < n} [
+        at(x): v i
+        if(_): {x > r} [
+            set(r): x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+klin_regression(r): xs ys [
+    len(n): xs
+    mean(mx): xs
+    mean(my): ys
+    set(sxy): 0.0
+    set(sxx): 0.0
+    set(syy): 0.0
+    set(i): 0
+    while(_): {i < n} [
+        at(x): xs i
+        at(y): ys i
+        set(sxy): {sxy + (x - mx) * (y - my)}
+        set(sxx): {sxx + (x - mx) * (x - mx)}
+        set(syy): {syy + (y - my) * (y - my)}
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    if(_): {sxx = 0} [
+        return(r): r
+    ]
+    set(slope): {sxy / sxx}
+    push(_): r slope
+    push(_): r {my - slope * mx}
+    sqrt(d): {sxx * syy}
+    set(corr): 0.0
+    if(_): {d > 0} [
+        set(corr): {sxy / d}
+    ]
+    push(_): r corr
+]
+
+# ---------------------------------------------------------------- bits and bytes
+
+_klin_hex(r): v width [
+    set(r): ""
+    set(k): {width - 1}
+    while(_): {k >= 0} [
+        at(c): "0123456789ABCDEF" {(v >> (k * 4)) & 15}
+        concat(r): r c
+        set(k): {k - 1}
+    ]
+]
+
+# the IEEE 754 double of x: [sign exponent mantissa_hex bits_hex]
+klin_ieee(r): x [
+    set(sign): 0
+    set(a): {x * 1.0}
+    if(_): {a < 0} [
+        set(sign): 1
+        set(a): {0 - a}
+    ]
+    set(e): 0
+    set(mant): 0
+    if(_): {a = 0} [
+        set(bexp): 0
+    ]
+    else(_): [
+        while(_): {a >= 2} [
+            set(a): {a / 2}
+            set(e): {e + 1}
+        ]
+        while(_): {a < 1} [
+            set(a): {a * 2}
+            set(e): {e - 1}
+        ]
+        set(bexp): {e + 1023}
+        set(frac): {a - 1}
+        set(k): 0
+        while(_): {k < 52} [
+            set(frac): {frac * 2}
+            set(mant): {mant << 1}
+            if(_): {frac >= 1} [
+                set(mant): {mant | 1}
+                set(frac): {frac - 1}
+            ]
+            set(k): {k + 1}
+        ]
+    ]
+    set(bits): {(sign << 63) | (bexp << 52) | mant}
+    vec(r): ""
+    push(_): r sign
+    push(_): r e
+    _klin_hex(mh): mant 13
+    push(_): r mh
+    _klin_hex(bh): bits 16
+    push(_): r bh
+]
+
+klin_bytes(r): v size [
+    set(r): ""
+    set(k): 0
+    while(_): {k < size} [
+        set(b): {(v >> (k * 8)) & 255}
+        _klin_hex(h): b 2
+        if(_): {k > 0} [
+            concat(r): r " "
+        ]
+        concat(r): r h
+        set(k): {k + 1}
+    ]
+]
+
+klin_char(r): v [
+    set(b): {v & 255}
+    set(r): ""
+    if(_): {b >= 32 && b < 127} [
+        chr(r): b
+    ]
+]
+
+klin_code(r): text [
+    text_bytes(bs): text
+    len(n): bs
+    set(r): 0
+    if(_): {n > 0} [
+        at(b0): bs 0
+        utf8_len(k): b0
+        set(r): b0
+        if(_): {k = 2 && n >= 2} [
+            at(b1): bs 1
+            set(r): {((b0 & 31) << 6) | (b1 & 63)}
+        ]
+        elif(_): {k = 3 && n >= 3} [
+            at(b1): bs 1
+            at(b2): bs 2
+            set(r): {((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63)}
+        ]
+        elif(_): {k = 4 && n >= 4} [
+            at(b1): bs 1
+            at(b2): bs 2
+            at(b3): bs 3
+            set(r): {((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63)}
+        ]
+    ]
+]
+
+klin_checksum(r): text kind [
+    set(r): ""
+    if(_): {kind = "crc32"} [
+        crc32_hex(r): text
+    ]
+    elif(_): {kind = "adler32"} [
+        adler32(v): text
+        _klin_hex(r): v 8
+    ]
+    elif(_): {kind = "fnv1a"} [
+        fnv1a32(v): text
+        _klin_hex(r): v 8
+    ]
+    str_lower(r): r
+]
+
+# ---------------------------------------------------------------- settings
+
+klin_settings_save(r): path [
+    set(m): klin_mode?
+    set(a): klin_angle?
+    set(b): klin_base?
+    set(w): klin_word?
+    set(f): klin_display_fmt?
+    str_from_int(bs): b
+    str_from_int(ws): w
+    concat(text): "mode=" m "\nangle=" a "\nbase=" bs "\nword=" ws "\nformat=" f "\n"
+    writefile(_): path text
+    set(r): 0
+]
+
+klin_settings_load(r): path [
+    set(r): {0 - 1}
+    file_exists(have): path
+    if(_): {have != 1 && have != true} [
+        return(r): r
+    ]
+    readfile(text): path
+    str_split(lines): text "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_split_max(kv): l "=" 2
+        len(nk): kv
+        if(_): {nk = 2} [
+            at(k): kv 0
+            at(v): kv 1
+            str_trim(v): v
+            if(_): {k = "mode" && (v = "casual" || v = "sci" || v = "prog")} [
+                klinmode(_): v
+            ]
+            elif(_): {k = "angle" && (v = "DEG" || v = "RAD" || v = "GRAD")} [
+                set(klin_angle): v!
+            ]
+            elif(_): {k = "base"} [
+                str_to_int(b): v 10
+                if(_): {b = 2 || b = 8 || b = 10 || b = 16} [
+                    set(klin_base): b!
+                ]
+            ]
+            elif(_): {k = "word"} [
+                str_to_int(w): v 10
+                if(_): {w = 8 || w = 16 || w = 32 || w = 64} [
+                    set(klin_word): w!
+                ]
+            ]
+            elif(_): {k = "format" && (v = "AUTO" || v = "FIX" || v = "SCI" || v = "ENG")} [
+                set(klin_display_fmt): v!
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
