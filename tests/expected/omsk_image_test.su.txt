@@ -1,0 +1,58 @@
+PASS sniff png
+PASS png round trip
+PASS sniff qoi
+PASS qoi round trip
+PASS qoi run
+PASS qoi run is short
+PASS sniff bmp
+PASS bmp round trip
+PASS ppm round trip
+PASS pgm grey
+PASS ascii ppm with maxval
+PASS jpeg q95 close
+PASS jpeg quality changes the tables
+PASS jpeg q20 coarser
+PASS default quality restored
+PASS gif refused
+PASS heic refused
+PASS png accepted
+PASS crop
+PASS rotate 90 size
+PASS rotate 90 top-left is old bottom-left
+PASS rotate 90 then 270
+PASS rotate 180 twice
+PASS flip horizontal
+PASS flip vertical
+PASS box resize
+PASS fit size
+PASS fill size
+PASS bilinear upscale interpolates
+PASS smart square finds the bright part
+PASS grey channels equal
+PASS brightness
+PASS contrast 0 is mid grey
+PASS blur corner
+PASS sharpen keeps flat areas
+PASS quantize 2 levels
+PASS dithering mixes levels
+PASS ahash stable under brightness
+PASS dhash sees a mirror
+PASS hamming
+PASS mean color
+PASS dominant color
+PASS histogram
+PASS blank
+PASS not blank
+PASS paste with opacity
+PASS contact sheet size
+PASS exif orientation
+PASS exif model
+PASS oriented thumbnail is rotated
+PASS no exif in png
+PASS cache miss then hit
+PASS cache gives the same JPEG
+53 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

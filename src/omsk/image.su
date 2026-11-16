@@ -1,0 +1,2007 @@
+# image.su - Omsk's image API: whole images in memory, more formats,
+# operations, hashes and statistics. Pure USSR, like omsk.su.
+#
+# An image is a btree: "w", "h" and "rgb", a flat vector of w * h * 3
+# values 0..255 (row by row, R G B per pixel).
+#
+# Making and converting
+#   omsk_image(img): w h rgb          -> an image from its parts
+#   omsk_blank(img): w h color        -> filled with color [r g b]
+#   omsk_decode(img): bytes           -> PNG, JPEG, QOI, BMP or PPM/PGM at full
+#                                        size; null with omsk_error(e): set
+#   omsk_decode_fit(img): bytes side  -> PNG/JPEG decoded straight to fit a
+#                                        side x side box (fast scaled decode)
+#   omsk_sniff(s): bytes              -> "png" "jpeg" "qoi" "bmp" "ppm" "gif"
+#                                        "webp" "tiff" "heic" "avif" "ico" or
+#                                        "unknown"
+#   omsk_refusal(s): bytes            -> "" when Omsk can decode it, else a
+#                                        clear reason ("GIF is not supported
+#                                        yet", ...)
+#   omsk_save(v): img fmt opts        -> bytes: fmt "jpeg" (opts: quality
+#                                        1..100), "png" (stored deflate,
+#                                        lossless), "qoi", "bmp", "ppm", "pgm"
+#   omsk_jpeg_quality(_): q           -> quality for omsk_encode and
+#                                        omsk_thumb (85 by default)
+# Geometry
+#   omsk_resize(img): img w h mode filter
+#                                     -> mode "stretch", "fit" (inside w x h,
+#                                        proportions kept) or "fill" (cover
+#                                        w x h, centre-cropped); filter
+#                                        "nearest", "box" or "bilinear"
+#   omsk_crop(img): img x y w h / omsk_rotate(img): img degrees (90 180 270)
+#   omsk_flip(img): img horizontal    -> true: mirror left-right; false: up-down
+#   omsk_smart_square(img): img side  -> a square thumbnail cropped around
+#                                        the area with the most edges
+# Colour and filters
+#   omsk_grey(img): img / omsk_adjust(img): img brightness contrast
+#                                     -> brightness -255..255, contrast as
+#                                        a factor (1.0 keeps it)
+#   omsk_blur(img): img radius / omsk_sharpen(img): img amount
+#   omsk_quantize(img): img levels dither
+#                                     -> levels per channel (2..8); dither
+#                                        true uses Floyd-Steinberg
+# Analysis
+#   omsk_ahash(r): img / omsk_dhash(r): img -> 64-bit perceptual hashes
+#   omsk_hamming(r): a b              -> differing bits of two hashes
+#   omsk_mean_color(v): img           -> [r g b]
+#   omsk_dominant_color(v): img       -> [r g b] of the busiest colour bucket
+#   omsk_histogram(v): img            -> 256 counts of luminance
+#   omsk_is_blank(b): img tolerance   -> true when nearly every pixel is
+#                                        within tolerance of the mean
+# Composition
+#   omsk_paste(img): base top x y opacity -> top drawn onto base (0..1)
+#   omsk_contact_sheet(img): images cols cell gap color
+#                                     -> a grid of fitted thumbnails
+# Metadata
+#   omsk_exif(v): bytes               -> btree of EXIF fields of a JPEG:
+#                                        orientation, datetime, make, model
+#                                        (missing ones absent); null if none
+#   omsk_orient(img): img orientation -> applies an EXIF orientation 1..8
+#   omsk_thumb_oriented(t): bytes side -> like omsk_thumb, honouring EXIF
+$once
+$include "omsk.su"
+
+omsk_image(r): w h rgb [
+    btree(r):
+    btput(_): r "w" w
+    btput(_): r "h" h
+    btput(_): r "rgb" rgb
+]
+
+omsk_blank(r): w h color [
+    at(cr): color 0
+    at(cg): color 1
+    at(cb): color 2
+    vec(rgb): ""
+    set(n): {w * h}
+    set(i): 0
+    while(_): {i < n} [
+        push(_): rgb cr
+        push(_): rgb cg
+        push(_): rgb cb
+        set(i): {i + 1}
+    ]
+    omsk_image(r): w h rgb
+]
+
+_omi_clamp(r): x [
+    set(r): x
+    if(_): {r < 0} [
+        set(r): 0
+    ]
+    elif(_): {r > 255} [
+        set(r): 255
+    ]
+]
+
+_omi_int(r): x [
+    # round to nearest for reals, without math.su
+    set(r): x
+    typeof(t): x
+    if(_): {t = "real"} [
+        if(_): {x >= 0} [
+            str_trunc(r): {x + 0.5}
+        ]
+        else(_): [
+            str_trunc(r): {x - 0.5}
+        ]
+    ]
+]
+
+# --------------------------------------------------------------- sniffing
+
+_omi_starts(r): v sig [
+    len(n): v
+    len(m): sig
+    set(r): {n >= m}
+    set(i): 0
+    while(_): {r && i < m} [
+        at(a): v i
+        at(b): sig i
+        set(r): {a = b}
+        set(i): {i + 1}
+    ]
+]
+
+_omi_text_at(r): v p n [
+    set(r): ""
+    set(i): 0
+    len(len_v): v
+    while(_): {i < n && p + i < len_v} [
+        at(b): v {p + i}
+        if(_): {b > 0} [
+            chr(c): b
+            concat(r): r c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+omsk_sniff(r): v [
+    set(r): "unknown"
+    len(n): v
+    if(_): {n < 4} [
+        return(r): r
+    ]
+    _omi_starts(png): v '[137,80,78,71]'
+    _omi_starts(jpg): v '[255,216,255]'
+    _omi_text_at(head4): v 0 4
+    _omi_text_at(head2): v 0 2
+    if(_): png [
+        set(r): "png"
+    ]
+    elif(_): jpg [
+        set(r): "jpeg"
+    ]
+    elif(_): {head4 = "qoif"} [
+        set(r): "qoi"
+    ]
+    elif(_): {head2 = "BM"} [
+        set(r): "bmp"
+    ]
+    elif(_): {head2 = "P2" || head2 = "P3" || head2 = "P5" || head2 = "P6"} [
+        set(r): "ppm"
+    ]
+    elif(_): {head4 = "GIF8"} [
+        set(r): "gif"
+    ]
+    elif(_): {head4 = "RIFF"} [
+        _omi_text_at(t): v 8 4
+        if(_): {t = "WEBP"} [
+            set(r): "webp"
+        ]
+    ]
+    elif(_): {head2 = "II" || head2 = "MM"} [
+        set(r): "tiff"
+    ]
+    else(_): [
+        _omi_text_at(box): v 4 8
+        if(_): {box = "ftypheic" || box = "ftypheix" || box = "ftypmif1"} [
+            set(r): "heic"
+        ]
+        elif(_): {box = "ftypavif"} [
+            set(r): "avif"
+        ]
+        else(_): [
+            _omi_starts(ico): v '[0,0,1,0]'
+            if(_): ico [
+                set(r): "ico"
+            ]
+        ]
+    ]
+]
+
+omsk_refusal(r): v [
+    omsk_sniff(k): v
+    set(r): ""
+    if(_): {k = "unknown"} [
+        set(r): "not an image Omsk knows"
+    ]
+    elif(_): {k = "gif" || k = "webp" || k = "tiff" || k = "ico"} [
+        str_upper(K): k
+        concat(r): K " is not supported yet"
+    ]
+    elif(_): {k = "heic" || k = "avif"} [
+        str_upper(K): k
+        concat(r): K " needs a codec Omsk does not have (HEVC/AV1)"
+    ]
+]
+
+# --------------------------------------------------------------- decoding
+
+omsk_decode_fit(r): v side [
+    omsk_setup(_):
+    set(r): null
+    omsk_info(info): v
+    typeof(it): info
+    if(_): {it != "vector"} [
+        omsk_fail(r): "not a PNG or JPEG image"
+        return(r): r
+    ]
+    at(kind): info 0
+    at(w): info 1
+    at(h): info 2
+    if(_): {w < 1 || h < 1 || w * h > omsk_max_pixels} [
+        omsk_fail(r): "the picture is empty or too large"
+        return(r): r
+    ]
+    set(tw): w
+    set(th): h
+    if(_): {side > 0} [
+        omsk_fit(d): w h side
+        at(tw): d 0
+        at(th): d 1
+    ]
+    if(_): {kind = "png"} [
+        omsk_png(rgb): v tw th
+    ]
+    else(_): [
+        omsk_jpeg(rgb): v tw th
+    ]
+    typeof(rt): rgb
+    if(_): {rt = "vector"} [
+        omsk_image(r): tw th rgb
+    ]
+]
+
+omsk_decode(r): v [
+    omsk_setup(_):
+    set(omsk_err): ""
+    omsk_sniff(k): v
+    set(r): null
+    if(_): {k = "png" || k = "jpeg"} [
+        omsk_decode_fit(r): v 0
+    ]
+    elif(_): {k = "qoi"} [
+        _omi_qoi_decode(r): v
+    ]
+    elif(_): {k = "bmp"} [
+        _omi_bmp_decode(r): v
+    ]
+    elif(_): {k = "ppm"} [
+        _omi_ppm_decode(r): v
+    ]
+    else(_): [
+        omsk_refusal(why): v
+        omsk_fail(r): why
+    ]
+]
+
+_omi_le16(r): v p [
+    at(a): v p
+    at(b): v {p + 1}
+    set(r): {a | (b << 8)}
+]
+
+_omi_le32(r): v p [
+    at(a): v p
+    at(b): v {p + 1}
+    at(c): v {p + 2}
+    at(d): v {p + 3}
+    set(r): {a | (b << 8) | (c << 16) | (d << 24)}
+    if(_): {d >= 128} [
+        set(r): {r - 4294967296}
+    ]
+]
+
+_omi_too_big(r): w h [
+    set(r): {w < 1 || h < 1 || w > 65535 || h > 65535 || w * h > omsk_max_pixels}
+]
+
+_omi_qoi_decode(r): v [
+    set(r): null
+    len(n): v
+    if(_): {n < 22} [
+        omsk_fail(r): "QOI file too short"
+        return(r): r
+    ]
+    omsk_u32(w): v 4
+    omsk_u32(h): v 8
+    _omi_too_big(big): w h
+    if(_): big [
+        omsk_fail(r): "the picture is empty or too large"
+        return(r): r
+    ]
+    # 64-entry index of seen pixels, kept as three vectors rebuilt only on
+    # change would be slow; a btree keyed by slot works instead
+    btree(index):
+    vec(rgb): ""
+    set(pr): 0
+    set(pg): 0
+    set(pb): 0
+    set(pa): 255
+    set(total): {w * h}
+    set(done): 0
+    set(p): 14
+    set(run): 0
+    while(_): {done < total} [
+        if(_): {run > 0} [
+            set(run): {run - 1}
+        ]
+        elif(_): {p < n} [
+            at(b): v p
+            set(p): {p + 1}
+            if(_): {b = 254} [
+                at(pr): v p
+                at(pg): v {p + 1}
+                at(pb): v {p + 2}
+                set(p): {p + 3}
+            ]
+            elif(_): {b = 255} [
+                at(pr): v p
+                at(pg): v {p + 1}
+                at(pb): v {p + 2}
+                at(pa): v {p + 3}
+                set(p): {p + 4}
+            ]
+            else(_): [
+                set(tag): {b >> 6}
+                if(_): {tag = 0} [
+                    btget(px): index {b & 63} null
+                    typeof(pt): px
+                    if(_): {pt = "vector"} [
+                        at(pr): px 0
+                        at(pg): px 1
+                        at(pb): px 2
+                        at(pa): px 3
+                    ]
+                    else(_): [
+                        set(pr): 0
+                        set(pg): 0
+                        set(pb): 0
+                        set(pa): 0
+                    ]
+                ]
+                elif(_): {tag = 1} [
+                    set(pr): {(pr + ((b >> 4) & 3) - 2) & 255}
+                    set(pg): {(pg + ((b >> 2) & 3) - 2) & 255}
+                    set(pb): {(pb + (b & 3) - 2) & 255}
+                ]
+                elif(_): {tag = 2} [
+                    at(b2): v p
+                    set(p): {p + 1}
+                    set(dg): {(b & 63) - 32}
+                    set(pr): {(pr + dg - 8 + ((b2 >> 4) & 15)) & 255}
+                    set(pg): {(pg + dg) & 255}
+                    set(pb): {(pb + dg - 8 + (b2 & 15)) & 255}
+                ]
+                else(_): [
+                    set(run): {b & 63}
+                ]
+            ]
+        ]
+        else(_): [
+            omsk_fail(r): "QOI data ends early"
+            return(r): r
+        ]
+        set(slot): {(pr * 3 + pg * 5 + pb * 7 + pa * 11) % 64}
+        vec(px): ""
+        push(_): px pr
+        push(_): px pg
+        push(_): px pb
+        push(_): px pa
+        btput(_): index slot px
+        # alpha goes on white, as for PNG
+        if(_): {pa = 255} [
+            push(_): rgb pr
+            push(_): rgb pg
+            push(_): rgb pb
+        ]
+        else(_): [
+            str_trunc(blend): {(pr * pa + 255 * (255 - pa) + 127) / 255}
+            push(_): rgb blend
+            str_trunc(blend): {(pg * pa + 255 * (255 - pa) + 127) / 255}
+            push(_): rgb blend
+            str_trunc(blend): {(pb * pa + 255 * (255 - pa) + 127) / 255}
+            push(_): rgb blend
+        ]
+        set(done): {done + 1}
+    ]
+    omsk_image(r): w h rgb
+]
+
+_omi_bmp_decode(r): v [
+    set(r): null
+    len(n): v
+    if(_): {n < 54} [
+        omsk_fail(r): "BMP file too short"
+        return(r): r
+    ]
+    _omi_le32(off): v 10
+    _omi_le32(w): v 18
+    _omi_le32(h): v 22
+    _omi_le16(bpp): v 28
+    _omi_le32(comp): v 30
+    set(bottom_up): {h > 0}
+    if(_): {h < 0} [
+        set(h): {0 - h}
+    ]
+    _omi_too_big(big): w h
+    if(_): big [
+        omsk_fail(r): "the picture is empty or too large"
+        return(r): r
+    ]
+    if(_): {(bpp != 24 && bpp != 32) || (comp != 0 && comp != 3)} [
+        omsk_fail(r): "only 24- and 32-bit uncompressed BMP files are read"
+        return(r): r
+    ]
+    set(bytes_pp): {bpp >> 3}
+    set(stride): {((w * bytes_pp + 3) >> 2) << 2}
+    if(_): {off + stride * h > n} [
+        omsk_fail(r): "BMP data ends early"
+        return(r): r
+    ]
+    vec(rgb): ""
+    set(y): 0
+    while(_): {y < h} [
+        set(row): y
+        if(_): bottom_up [
+            set(row): {h - 1 - y}
+        ]
+        set(p): {off + row * stride}
+        set(x): 0
+        while(_): {x < w} [
+            at(cb): v p
+            at(cg): v {p + 1}
+            at(cr): v {p + 2}
+            push(_): rgb cr
+            push(_): rgb cg
+            push(_): rgb cb
+            set(p): {p + bytes_pp}
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): w h rgb
+]
+
+# the next PNM header token (comments skipped): [text next]
+_omi_pnm_token(r): v p [
+    len(n): v
+    set(tok): ""
+    set(go): true
+    while(_): {go && p < n} [
+        at(b): v p
+        if(_): {b = 35} [
+            while(_): {p < n && b != 10} [
+                at(b): v p
+                set(p): {p + 1}
+            ]
+        ]
+        elif(_): {b = 32 || b = 9 || b = 10 || b = 13} [
+            set(p): {p + 1}
+            if(_): {tok != ""} [
+                set(go): false
+            ]
+        ]
+        else(_): [
+            chr(c): b
+            concat(tok): tok c
+            set(p): {p + 1}
+        ]
+    ]
+    vec(r): ""
+    push(_): r tok
+    push(_): r p
+]
+
+_omi_ppm_decode(r): v [
+    set(r): null
+    _omi_pnm_token(t): v 0
+    at(magic): t 0
+    at(p): t 1
+    _omi_pnm_token(t): v p
+    at(ws): t 0
+    at(p): t 1
+    _omi_pnm_token(t): v p
+    at(hs): t 0
+    at(p): t 1
+    _omi_pnm_token(t): v p
+    at(ms): t 0
+    at(p): t 1
+    str_to_int(w): ws 10
+    str_to_int(h): hs 10
+    str_to_int(maxv): ms 10
+    typeof(wt): w
+    typeof(ht): h
+    typeof(mt): maxv
+    if(_): {wt != "integer" || ht != "integer" || mt != "integer"} [
+        omsk_fail(r): "bad PNM header"
+        return(r): r
+    ]
+    _omi_too_big(big): w h
+    if(_): {big || maxv < 1 || maxv > 65535} [
+        omsk_fail(r): "the picture is empty or too large"
+        return(r): r
+    ]
+    set(grey): {magic = "P2" || magic = "P5"}
+    set(binary): {magic = "P5" || magic = "P6"}
+    set(ch): 3
+    if(_): grey [
+        set(ch): 1
+    ]
+    set(wide): {maxv > 255}
+    set(count): {w * h * ch}
+    vec(vals): ""
+    len(n): v
+    set(k): 0
+    while(_): {k < count} [
+        if(_): binary [
+            if(_): {p >= n} [
+                omsk_fail(r): "PNM data ends early"
+                return(r): r
+            ]
+            at(x): v p
+            set(p): {p + 1}
+            if(_): wide [
+                at(lo): v p
+                set(x): {(x << 8) | lo}
+                set(p): {p + 1}
+            ]
+        ]
+        else(_): [
+            _omi_pnm_token(t): v p
+            at(xs): t 0
+            at(p): t 1
+            str_to_int(x): xs 10
+            typeof(xt): x
+            if(_): {xt != "integer"} [
+                omsk_fail(r): "PNM data ends early"
+                return(r): r
+            ]
+        ]
+        if(_): {maxv != 255} [
+            set(x): {(x * 255 + maxv / 2) / maxv}
+            str_trunc(x): x
+        ]
+        push(_): vals x
+        set(k): {k + 1}
+    ]
+    if(_): grey [
+        vec(rgb): ""
+        set(k): 0
+        while(_): {k < count} [
+            at(x): vals k
+            push(_): rgb x
+            push(_): rgb x
+            push(_): rgb x
+            set(k): {k + 1}
+        ]
+        set(vals): rgb
+    ]
+    omsk_image(r): w h vals
+]
+
+# --------------------------------------------------------------- encoding
+
+omsk_jpeg_quality(r): q [
+    omsk_setup(_):
+    global(_): omsk_quality
+    if(_): {q < 1} [
+        set(q): 1
+    ]
+    if(_): {q > 100} [
+        set(q): 100
+    ]
+    set(omsk_quality): q
+    set(scale): {200 - 2 * q}
+    if(_): {q < 50} [
+        str_trunc(scale): {5000 / q}
+    ]
+    set(lum): '[16,11,10,16,24,40,51,61,12,12,14,19,26,58,60,55,14,13,16,24,40,57,69,56,14,17,22,29,51,87,80,62,18,22,37,56,68,109,103,77,24,35,55,64,81,104,113,92,49,64,78,87,103,121,120,101,72,92,95,98,112,100,103,99]'
+    set(chrom): '[17,18,24,47,99,99,99,99,18,21,26,66,99,99,99,99,24,26,56,99,99,99,99,99,47,66,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99]'
+    vec(ql): ""
+    vec(qc): ""
+    vec(rl): ""
+    vec(rc): ""
+    set(k): 0
+    while(_): {k < 64} [
+        at(nat): omsk_zz k
+        at(a): lum nat
+        at(b): chrom nat
+        str_trunc(a): {(a * scale + 50) / 100}
+        str_trunc(b): {(b * scale + 50) / 100}
+        _omi_q(a): a
+        _omi_q(b): b
+        push(_): ql a
+        push(_): qc b
+        str_trunc(ra): {65536 / a + 0.5}
+        str_trunc(rb): {65536 / b + 0.5}
+        push(_): rl ra
+        push(_): rc rb
+        set(k): {k + 1}
+    ]
+    set(omsk_qlum): ql
+    set(omsk_qchr): qc
+    set(omsk_rlum): rl
+    set(omsk_rchr): rc
+    # the DQT segments at the start of omsk_jhead carry the tables
+    vec(head): ""
+    len(hn): omsk_jhead
+    set(k): 0
+    while(_): {k < hn} [
+        at(x): omsk_jhead k
+        if(_): {k >= 5 && k < 69} [
+            at(x): ql {k - 5}
+        ]
+        elif(_): {k >= 74 && k < 138} [
+            at(x): qc {k - 74}
+        ]
+        push(_): head x
+        set(k): {k + 1}
+    ]
+    set(omsk_jhead): head
+    set(r): q
+]
+
+_omi_q(r): x [
+    set(r): x
+    if(_): {r < 1} [
+        set(r): 1
+    ]
+    if(_): {r > 255} [
+        set(r): 255
+    ]
+]
+
+_omi_push_be32(r): out x [
+    push(_): out {(x >> 24) & 255}
+    push(_): out {(x >> 16) & 255}
+    push(_): out {(x >> 8) & 255}
+    push(_): out {x & 255}
+    set(r): 0
+]
+
+_omi_push_le16(r): out x [
+    push(_): out {x & 255}
+    push(_): out {(x >> 8) & 255}
+    set(r): 0
+]
+
+_omi_push_le32(r): out x [
+    _omi_push_le16(_): out {x & 65535}
+    _omi_push_le16(_): out {(x >> 16) & 65535}
+    set(r): 0
+]
+
+_omi_push_text(r): out text [
+    text_bytes(b): text
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+_omi_chunk(r): out type data [
+    len(n): data
+    _omi_push_be32(_): out n
+    text_bytes(tb): type
+    vec(crcin): ""
+    set(i): 0
+    while(_): {i < 4} [
+        at(x): tb i
+        push(_): out x
+        push(_): crcin x
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(x): data i
+        push(_): out x
+        push(_): crcin x
+        set(i): {i + 1}
+    ]
+    crc32(c): crcin
+    _omi_push_be32(_): out {c & 0xFFFFFFFF}
+    set(r): 0
+]
+
+_omi_png(r): img [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(r): ""
+    set(sig): '[137,80,78,71,13,10,26,10]'
+    len(sn): sig
+    set(i): 0
+    while(_): {i < sn} [
+        at(x): sig i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+    vec(ihdr): ""
+    _omi_push_be32(_): ihdr w
+    _omi_push_be32(_): ihdr h
+    push(_): ihdr 8
+    push(_): ihdr 2
+    push(_): ihdr 0
+    push(_): ihdr 0
+    push(_): ihdr 0
+    _omi_chunk(_): r "IHDR" ihdr
+    # raw scanlines (filter 0) in stored deflate blocks of up to 65535
+    vec(raw): ""
+    set(stride): {w * 3}
+    set(y): 0
+    while(_): {y < h} [
+        push(_): raw 0
+        set(p): {y * stride}
+        set(x): 0
+        while(_): {x < stride} [
+            at(v): rgb {p + x}
+            push(_): raw v
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    vec(z): ""
+    push(_): z 120
+    push(_): z 1
+    len(rn): raw
+    set(p): 0
+    set(a1): 1
+    set(a2): 0
+    set(go): true
+    while(_): go [
+        set(blk): {rn - p}
+        if(_): {blk > 65535} [
+            set(blk): 65535
+        ]
+        set(last): {p + blk >= rn}
+        if(_): last [
+            push(_): z 1
+            set(go): false
+        ]
+        else(_): [
+            push(_): z 0
+        ]
+        _omi_push_le16(_): z blk
+        _omi_push_le16(_): z {blk ^ 65535}
+        set(k): 0
+        while(_): {k < blk} [
+            at(v): raw {p + k}
+            push(_): z v
+            set(a1): {(a1 + v) % 65521}
+            set(a2): {(a2 + a1) % 65521}
+            set(k): {k + 1}
+        ]
+        set(p): {p + blk}
+    ]
+    _omi_push_be32(_): z {(a2 << 16) | a1}
+    _omi_chunk(_): r "IDAT" z
+    vec(empty): ""
+    _omi_chunk(_): r "IEND" empty
+]
+
+_omi_qoi(r): img [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(r): ""
+    _omi_push_text(_): r "qoif"
+    _omi_push_be32(_): r w
+    _omi_push_be32(_): r h
+    push(_): r 3
+    push(_): r 0
+    btree(index):
+    set(pr): 0
+    set(pg): 0
+    set(pb): 0
+    set(run): 0
+    set(n): {w * h}
+    set(i): 0
+    while(_): {i < n} [
+        at(cr): rgb {i * 3}
+        at(cg): rgb {i * 3 + 1}
+        at(cb): rgb {i * 3 + 2}
+        set(same): {cr = pr && cg = pg && cb = pb}
+        if(_): same [
+            set(run): {run + 1}
+            if(_): {run = 62 || i = n - 1} [
+                push(_): r {192 | (run - 1)}
+                set(run): 0
+            ]
+        ]
+        else(_): [
+            if(_): {run > 0} [
+                push(_): r {192 | (run - 1)}
+                set(run): 0
+            ]
+            set(slot): {(cr * 3 + cg * 5 + cb * 7 + 255 * 11) % 64}
+            btget(seen): index slot null
+            set(hit): false
+            typeof(st): seen
+            if(_): {st = "vector"} [
+                at(sr): seen 0
+                at(sg): seen 1
+                at(sb): seen 2
+                set(hit): {sr = cr && sg = cg && sb = cb}
+            ]
+            if(_): hit [
+                push(_): r slot
+            ]
+            else(_): [
+                vec(px): ""
+                push(_): px cr
+                push(_): px cg
+                push(_): px cb
+                btput(_): index slot px
+                set(dr): {((cr - pr + 128) & 255) - 128}
+                set(dg): {((cg - pg + 128) & 255) - 128}
+                set(db): {((cb - pb + 128) & 255) - 128}
+                set(drg): {dr - dg}
+                set(dbg): {db - dg}
+                if(_): {dr >= 0 - 2 && dr <= 1 && dg >= 0 - 2 && dg <= 1 && db >= 0 - 2 && db <= 1} [
+                    push(_): r {64 | ((dr + 2) << 4) | ((dg + 2) << 2) | (db + 2)}
+                ]
+                elif(_): {dg >= 0 - 32 && dg <= 31 && drg >= 0 - 8 && drg <= 7 && dbg >= 0 - 8 && dbg <= 7} [
+                    push(_): r {128 | (dg + 32)}
+                    push(_): r {((drg + 8) << 4) | (dbg + 8)}
+                ]
+                else(_): [
+                    push(_): r 254
+                    push(_): r cr
+                    push(_): r cg
+                    push(_): r cb
+                ]
+            ]
+        ]
+        set(pr): cr
+        set(pg): cg
+        set(pb): cb
+        set(i): {i + 1}
+    ]
+    set(k): 0
+    while(_): {k < 7} [
+        push(_): r 0
+        set(k): {k + 1}
+    ]
+    push(_): r 1
+]
+
+_omi_bmp(r): img [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    set(stride): {((w * 3 + 3) >> 2) << 2}
+    set(size): {54 + stride * h}
+    vec(r): ""
+    _omi_push_text(_): r "BM"
+    _omi_push_le32(_): r size
+    _omi_push_le32(_): r 0
+    _omi_push_le32(_): r 54
+    _omi_push_le32(_): r 40
+    _omi_push_le32(_): r w
+    _omi_push_le32(_): r h
+    _omi_push_le16(_): r 1
+    _omi_push_le16(_): r 24
+    _omi_push_le32(_): r 0
+    _omi_push_le32(_): r {stride * h}
+    _omi_push_le32(_): r 2835
+    _omi_push_le32(_): r 2835
+    _omi_push_le32(_): r 0
+    _omi_push_le32(_): r 0
+    set(pad): {stride - w * 3}
+    set(y): {h - 1}
+    while(_): {y >= 0} [
+        set(x): 0
+        while(_): {x < w} [
+            set(p): {(y * w + x) * 3}
+            at(cr): rgb p
+            at(cg): rgb {p + 1}
+            at(cb): rgb {p + 2}
+            push(_): r cb
+            push(_): r cg
+            push(_): r cr
+            set(x): {x + 1}
+        ]
+        set(k): 0
+        while(_): {k < pad} [
+            push(_): r 0
+            set(k): {k + 1}
+        ]
+        set(y): {y - 1}
+    ]
+]
+
+_omi_pnm(r): img grey [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    str_from_int(ws): w
+    str_from_int(hs): h
+    vec(r): ""
+    if(_): grey [
+        concat(head): "P5\n" ws " " hs "\n255\n"
+    ]
+    else(_): [
+        concat(head): "P6\n" ws " " hs "\n255\n"
+    ]
+    _omi_push_text(_): r head
+    set(n): {w * h}
+    set(i): 0
+    while(_): {i < n} [
+        at(cr): rgb {i * 3}
+        at(cg): rgb {i * 3 + 1}
+        at(cb): rgb {i * 3 + 2}
+        if(_): grey [
+            push(_): r {(77 * cr + 150 * cg + 29 * cb + 128) >> 8}
+        ]
+        else(_): [
+            push(_): r cr
+            push(_): r cg
+            push(_): r cb
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+omsk_save(r): img fmt opts [
+    omsk_setup(_):
+    set(r): null
+    if(_): {fmt = "jpeg" || fmt = "jpg"} [
+        global(_): omsk_quality
+        typeof(qt): omsk_quality
+        set(old): 85
+        if(_): {qt = "integer"} [
+            set(old): omsk_quality
+        ]
+        set(q): old
+        typeof(ot): opts
+        if(_): {ot = "btree"} [
+            btget(q): opts "quality" old
+        ]
+        if(_): {q != old} [
+            omsk_jpeg_quality(_): q
+        ]
+        btget(w): img "w"
+        btget(h): img "h"
+        btget(rgb): img "rgb"
+        omsk_encode(r): rgb w h
+        if(_): {q != old} [
+            omsk_jpeg_quality(_): old
+        ]
+    ]
+    elif(_): {fmt = "png"} [
+        _omi_png(r): img
+    ]
+    elif(_): {fmt = "qoi"} [
+        _omi_qoi(r): img
+    ]
+    elif(_): {fmt = "bmp"} [
+        _omi_bmp(r): img
+    ]
+    elif(_): {fmt = "ppm"} [
+        _omi_pnm(r): img false
+    ]
+    elif(_): {fmt = "pgm"} [
+        _omi_pnm(r): img true
+    ]
+    else(_): [
+        concat(m): "unknown output format " fmt
+        omsk_fail(r): m
+    ]
+]
+
+# --------------------------------------------------------------- geometry
+
+_omi_px(r): rgb w x y [
+    set(p): {(y * w + x) * 3}
+    vec(r): ""
+    at(a): rgb p
+    at(b): rgb {p + 1}
+    at(c): rgb {p + 2}
+    push(_): r a
+    push(_): r b
+    push(_): r c
+]
+
+omsk_crop(r): img x0 y0 cw ch [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    if(_): {x0 < 0} [
+        set(x0): 0
+    ]
+    if(_): {y0 < 0} [
+        set(y0): 0
+    ]
+    if(_): {x0 + cw > w} [
+        set(cw): {w - x0}
+    ]
+    if(_): {y0 + ch > h} [
+        set(ch): {h - y0}
+    ]
+    vec(out): ""
+    set(y): 0
+    while(_): {y < ch} [
+        set(p): {((y0 + y) * w + x0) * 3}
+        set(k): 0
+        set(m): {cw * 3}
+        while(_): {k < m} [
+            at(v): rgb {p + k}
+            push(_): out v
+            set(k): {k + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): cw ch out
+]
+
+omsk_rotate(r): img degrees [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    set(d): {((degrees % 360) + 360) % 360}
+    vec(out): ""
+    if(_): {d = 180} [
+        set(i): {w * h - 1}
+        while(_): {i >= 0} [
+            at(a): rgb {i * 3}
+            at(b): rgb {i * 3 + 1}
+            at(c): rgb {i * 3 + 2}
+            push(_): out a
+            push(_): out b
+            push(_): out c
+            set(i): {i - 1}
+        ]
+        omsk_image(r): w h out
+    ]
+    elif(_): {d = 90 || d = 270} [
+        # the new image is h wide and w high
+        set(ny): 0
+        while(_): {ny < w} [
+            set(nx): 0
+            while(_): {nx < h} [
+                if(_): {d = 90} [
+                    set(sx): ny
+                    set(sy): {h - 1 - nx}
+                ]
+                else(_): [
+                    set(sx): {w - 1 - ny}
+                    set(sy): nx
+                ]
+                set(p): {(sy * w + sx) * 3}
+                at(a): rgb p
+                at(b): rgb {p + 1}
+                at(c): rgb {p + 2}
+                push(_): out a
+                push(_): out b
+                push(_): out c
+                set(nx): {nx + 1}
+            ]
+            set(ny): {ny + 1}
+        ]
+        omsk_image(r): h w out
+    ]
+    else(_): [
+        omsk_image(r): w h rgb
+    ]
+]
+
+omsk_flip(r): img horizontal [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(out): ""
+    set(y): 0
+    while(_): {y < h} [
+        set(sy): y
+        if(_): {horizontal = false} [
+            set(sy): {h - 1 - y}
+        ]
+        set(x): 0
+        while(_): {x < w} [
+            set(sx): x
+            if(_): horizontal [
+                set(sx): {w - 1 - x}
+            ]
+            set(p): {(sy * w + sx) * 3}
+            at(a): rgb p
+            at(b): rgb {p + 1}
+            at(c): rgb {p + 2}
+            push(_): out a
+            push(_): out b
+            push(_): out c
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+_omi_scale(r): img tw th filter [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(out): ""
+    set(y): 0
+    while(_): {y < th} [
+        set(x): 0
+        while(_): {x < tw} [
+            if(_): {filter = "nearest"} [
+                str_trunc(sx): {(x + 0.5) * w / tw}
+                str_trunc(sy): {(y + 0.5) * h / th}
+                if(_): {sx >= w} [
+                    set(sx): {w - 1}
+                ]
+                if(_): {sy >= h} [
+                    set(sy): {h - 1}
+                ]
+                set(p): {(sy * w + sx) * 3}
+                at(a): rgb p
+                at(b): rgb {p + 1}
+                at(c): rgb {p + 2}
+            ]
+            elif(_): {filter = "bilinear"} [
+                set(fx): {(x + 0.5) * w / tw - 0.5}
+                set(fy): {(y + 0.5) * h / th - 0.5}
+                if(_): {fx < 0} [
+                    set(fx): 0.0
+                ]
+                if(_): {fy < 0} [
+                    set(fy): 0.0
+                ]
+                str_trunc(x0): fx
+                str_trunc(y0): fy
+                set(x1): {x0 + 1}
+                set(y1): {y0 + 1}
+                if(_): {x1 >= w} [
+                    set(x1): {w - 1}
+                ]
+                if(_): {y1 >= h} [
+                    set(y1): {h - 1}
+                ]
+                set(ax): {fx - x0}
+                set(ay): {fy - y0}
+                vec(acc): ""
+                set(c): 0
+                while(_): {c < 3} [
+                    at(p00): rgb {(y0 * w + x0) * 3 + c}
+                    at(p10): rgb {(y0 * w + x1) * 3 + c}
+                    at(p01): rgb {(y1 * w + x0) * 3 + c}
+                    at(p11): rgb {(y1 * w + x1) * 3 + c}
+                    set(top): {p00 + (p10 - p00) * ax}
+                    set(bot): {p01 + (p11 - p01) * ax}
+                    _omi_int(v): {top + (bot - top) * ay}
+                    push(_): acc v
+                    set(c): {c + 1}
+                ]
+                at(a): acc 0
+                at(b): acc 1
+                at(c): acc 2
+            ]
+            else(_): [
+                # box: the average of every source pixel in the cell
+                str_trunc(xa): {x * w / tw}
+                str_trunc(xb): {(x + 1) * w / tw}
+                str_trunc(ya): {y * h / th}
+                str_trunc(yb): {(y + 1) * h / th}
+                if(_): {xb <= xa} [
+                    set(xb): {xa + 1}
+                ]
+                if(_): {yb <= ya} [
+                    set(yb): {ya + 1}
+                ]
+                set(sa): 0
+                set(sb): 0
+                set(sc): 0
+                set(cnt): 0
+                set(yy): ya
+                while(_): {yy < yb && yy < h} [
+                    set(xx): xa
+                    while(_): {xx < xb && xx < w} [
+                        set(p): {(yy * w + xx) * 3}
+                        at(pa): rgb p
+                        at(pb): rgb {p + 1}
+                        at(pc): rgb {p + 2}
+                        set(sa): {sa + pa}
+                        set(sb): {sb + pb}
+                        set(sc): {sc + pc}
+                        set(cnt): {cnt + 1}
+                        set(xx): {xx + 1}
+                    ]
+                    set(yy): {yy + 1}
+                ]
+                str_trunc(a): {sa / cnt + 0.5}
+                str_trunc(b): {sb / cnt + 0.5}
+                str_trunc(c): {sc / cnt + 0.5}
+            ]
+            push(_): out a
+            push(_): out b
+            push(_): out c
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): tw th out
+]
+
+omsk_resize(r): img tw th mode filter [
+    btget(w): img "w"
+    btget(h): img "h"
+    if(_): {filter = ""} [
+        set(filter): "box"
+    ]
+    if(_): {mode = "fit"} [
+        # the largest size inside tw x th with the same proportions
+        set(nw): tw
+        str_trunc(nh): {h * tw / w + 0.5}
+        if(_): {nh > th} [
+            set(nh): th
+            str_trunc(nw): {w * th / h + 0.5}
+        ]
+        if(_): {nw < 1} [
+            set(nw): 1
+        ]
+        if(_): {nh < 1} [
+            set(nh): 1
+        ]
+        _omi_scale(r): img nw nh filter
+    ]
+    elif(_): {mode = "fill"} [
+        # crop the source to tw:th around its centre, then scale
+        set(cw): w
+        str_trunc(ch): {w * th / tw + 0.5}
+        if(_): {ch > h} [
+            set(ch): h
+            str_trunc(cw): {h * tw / th + 0.5}
+        ]
+        str_trunc(cx): {(w - cw) / 2}
+        str_trunc(cy): {(h - ch) / 2}
+        omsk_crop(c): img cx cy cw ch
+        _omi_scale(r): c tw th filter
+    ]
+    else(_): [
+        _omi_scale(r): img tw th filter
+    ]
+]
+
+_omi_luma(r): img [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(r): ""
+    set(n): {w * h}
+    set(i): 0
+    while(_): {i < n} [
+        at(a): rgb {i * 3}
+        at(b): rgb {i * 3 + 1}
+        at(c): rgb {i * 3 + 2}
+        push(_): r {(77 * a + 150 * b + 29 * c + 128) >> 8}
+        set(i): {i + 1}
+    ]
+]
+
+omsk_smart_square(r): img side [
+    btget(w): img "w"
+    btget(h): img "h"
+    set(s): w
+    if(_): {h < s} [
+        set(s): h
+    ]
+    _omi_luma(l): img
+    # edge energy per column (wide images) or row (tall ones), then the
+    # window of length s with the most of it
+    vec(energy): ""
+    set(wide): {w >= h}
+    set(long): h
+    if(_): wide [
+        set(long): w
+    ]
+    set(k): 0
+    while(_): {k < long} [
+        set(e): 0
+        set(j): 0
+        set(across): w
+        if(_): wide [
+            set(across): h
+        ]
+        while(_): {j < across} [
+            if(_): wide [
+                set(x): k
+                set(y): j
+            ]
+            else(_): [
+                set(x): j
+                set(y): k
+            ]
+            at(c0): l {y * w + x}
+            set(c1): c0
+            set(c2): c0
+            if(_): {x + 1 < w} [
+                at(c1): l {y * w + x + 1}
+            ]
+            if(_): {y + 1 < h} [
+                at(c2): l {(y + 1) * w + x}
+            ]
+            set(dx): {c1 - c0}
+            set(dy): {c2 - c0}
+            if(_): {dx < 0} [
+                set(dx): {0 - dx}
+            ]
+            if(_): {dy < 0} [
+                set(dy): {0 - dy}
+            ]
+            set(e): {e + dx + dy}
+            set(j): {j + 1}
+        ]
+        push(_): energy e
+        set(k): {k + 1}
+    ]
+    set(best): 0
+    set(best_at): 0
+    set(sum): 0
+    set(k): 0
+    while(_): {k < long} [
+        at(e): energy k
+        set(sum): {sum + e}
+        if(_): {k >= s} [
+            at(old): energy {k - s}
+            set(sum): {sum - old}
+        ]
+        if(_): {k >= s - 1 && sum > best} [
+            set(best): sum
+            set(best_at): {k - s + 1}
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): {best = 0} [
+        str_trunc(best_at): {(long - s) / 2}
+    ]
+    if(_): wide [
+        omsk_crop(c): img best_at 0 s s
+    ]
+    else(_): [
+        omsk_crop(c): img 0 best_at s s
+    ]
+    _omi_scale(r): c side side "box"
+]
+
+# --------------------------------------------------------------- colour
+
+omsk_grey(r): img [
+    btget(w): img "w"
+    btget(h): img "h"
+    _omi_luma(l): img
+    vec(out): ""
+    len(n): l
+    set(i): 0
+    while(_): {i < n} [
+        at(v): l i
+        push(_): out v
+        push(_): out v
+        push(_): out v
+        set(i): {i + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+omsk_adjust(r): img brightness contrast [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(out): ""
+    len(n): rgb
+    set(i): 0
+    while(_): {i < n} [
+        at(v): rgb i
+        _omi_int(v): {(v - 128) * contrast + 128 + brightness}
+        _omi_clamp(v): v
+        push(_): out v
+        set(i): {i + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+omsk_blur(r): img radius [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    vec(out): ""
+    set(y): 0
+    while(_): {y < h} [
+        set(x): 0
+        while(_): {x < w} [
+            set(sa): 0
+            set(sb): 0
+            set(sc): 0
+            set(cnt): 0
+            set(yy): {y - radius}
+            while(_): {yy <= y + radius} [
+                set(xx): {x - radius}
+                while(_): {xx <= x + radius} [
+                    if(_): {xx >= 0 && xx < w && yy >= 0 && yy < h} [
+                        set(p): {(yy * w + xx) * 3}
+                        at(pa): rgb p
+                        at(pb): rgb {p + 1}
+                        at(pc): rgb {p + 2}
+                        set(sa): {sa + pa}
+                        set(sb): {sb + pb}
+                        set(sc): {sc + pc}
+                        set(cnt): {cnt + 1}
+                    ]
+                    set(xx): {xx + 1}
+                ]
+                set(yy): {yy + 1}
+            ]
+            str_trunc(a): {sa / cnt + 0.5}
+            str_trunc(b): {sb / cnt + 0.5}
+            str_trunc(c): {sc / cnt + 0.5}
+            push(_): out a
+            push(_): out b
+            push(_): out c
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+# unsharp mask: out = in + amount * (in - blur(in, 1))
+omsk_sharpen(r): img amount [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    omsk_blur(b): img 1
+    btget(soft): b "rgb"
+    vec(out): ""
+    len(n): rgb
+    set(i): 0
+    while(_): {i < n} [
+        at(v): rgb i
+        at(s): soft i
+        _omi_int(v): {v + amount * (v - s)}
+        _omi_clamp(v): v
+        push(_): out v
+        set(i): {i + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+omsk_quantize(r): img levels dither [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    if(_): {levels < 2} [
+        set(levels): 2
+    ]
+    set(step): {255.0 / (levels - 1)}
+    vec(out): ""
+    # Floyd-Steinberg keeps the error of this row and the next in two
+    # vectors that are rebuilt per row (vectors have no element store)
+    vec(cur_err): ""
+    vec(next_err): ""
+    set(k): 0
+    while(_): {k < (w + 2) * 3} [
+        push(_): cur_err 0.0
+        push(_): next_err 0.0
+        set(k): {k + 1}
+    ]
+    set(y): 0
+    while(_): {y < h} [
+        vec(fresh): ""
+        set(k): 0
+        while(_): {k < (w + 2) * 3} [
+            push(_): fresh 0.0
+            set(k): {k + 1}
+        ]
+        # errors pushed to the next row are collected as additions
+        btree(add_next):
+        btree(add_cur):
+        set(x): 0
+        while(_): {x < w} [
+            set(c): 0
+            while(_): {c < 3} [
+                set(slot): {(x + 1) * 3 + c}
+                at(v): rgb {(y * w + x) * 3 + c}
+                set(e0): 0.0
+                if(_): dither [
+                    at(e0): cur_err slot
+                    btget(extra): add_cur slot 0.0
+                    set(e0): {e0 + extra}
+                ]
+                set(want): {v + e0}
+                _omi_int(q): {want / step}
+                _omi_int(q): {q * step}
+                _omi_clamp(q): q
+                push(_): out q
+                if(_): dither [
+                    set(err): {want - q}
+                    set(right): {slot + 3}
+                    btget(ar): add_cur right 0.0
+                    btput(_): add_cur right {ar + err * 7 / 16}
+                    btget(bl): add_next {slot - 3} 0.0
+                    btput(_): add_next {slot - 3} {bl + err * 3 / 16}
+                    btget(bm): add_next slot 0.0
+                    btput(_): add_next slot {bm + err * 5 / 16}
+                    btget(br): add_next right 0.0
+                    btput(_): add_next right {br + err / 16}
+                ]
+                set(c): {c + 1}
+            ]
+            set(x): {x + 1}
+        ]
+        # the next row starts from the collected additions
+        vec(cur_err): ""
+        set(k): 0
+        while(_): {k < (w + 2) * 3} [
+            btget(e): add_next k 0.0
+            push(_): cur_err e
+            set(k): {k + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+# --------------------------------------------------------------- analysis
+
+_omi_small_grey(r): img w h [
+    _omi_scale(s): img w h "box"
+    _omi_luma(r): s
+]
+
+omsk_ahash(r): img [
+    _omi_small_grey(l): img 8 8
+    set(total): 0
+    set(i): 0
+    while(_): {i < 64} [
+        at(v): l i
+        set(total): {total + v}
+        set(i): {i + 1}
+    ]
+    set(r): 0
+    set(i): 0
+    while(_): {i < 64} [
+        at(v): l i
+        set(r): {r << 1}
+        if(_): {v * 64 > total} [
+            set(r): {r | 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+omsk_dhash(r): img [
+    _omi_small_grey(l): img 9 8
+    set(r): 0
+    set(y): 0
+    while(_): {y < 8} [
+        set(x): 0
+        while(_): {x < 8} [
+            at(a): l {y * 9 + x}
+            at(b): l {y * 9 + x + 1}
+            set(r): {r << 1}
+            if(_): {a > b} [
+                set(r): {r | 1}
+            ]
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+]
+
+omsk_hamming(r): a b [
+    set(x): {a ^ b}
+    set(r): 0
+    set(i): 0
+    while(_): {i < 64} [
+        set(r): {r + (x & 1)}
+        set(x): {x >> 1}
+        set(i): {i + 1}
+    ]
+]
+
+omsk_mean_color(r): img [
+    btget(rgb): img "rgb"
+    len(n): rgb
+    set(sa): 0
+    set(sb): 0
+    set(sc): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(a): rgb i
+        at(b): rgb {i + 1}
+        at(c): rgb {i + 2}
+        set(sa): {sa + a}
+        set(sb): {sb + b}
+        set(sc): {sc + c}
+        set(i): {i + 3}
+    ]
+    set(px): {n / 3}
+    vec(r): ""
+    str_trunc(a): {sa / px + 0.5}
+    str_trunc(b): {sb / px + 0.5}
+    str_trunc(c): {sc / px + 0.5}
+    push(_): r a
+    push(_): r b
+    push(_): r c
+]
+
+omsk_dominant_color(r): img [
+    btget(rgb): img "rgb"
+    len(n): rgb
+    # 4 bits per channel buckets, with sums to give the bucket's mean
+    btree(counts):
+    set(i): 0
+    while(_): {i < n} [
+        at(a): rgb i
+        at(b): rgb {i + 1}
+        at(c): rgb {i + 2}
+        set(key): {((a >> 4) << 8) | ((b >> 4) << 4) | (c >> 4)}
+        btget(e): counts key null
+        typeof(et): e
+        vec(ne): ""
+        if(_): {et = "vector"} [
+            at(k0): e 0
+            at(k1): e 1
+            at(k2): e 2
+            at(k3): e 3
+            push(_): ne {k0 + 1}
+            push(_): ne {k1 + a}
+            push(_): ne {k2 + b}
+            push(_): ne {k3 + c}
+        ]
+        else(_): [
+            push(_): ne 1
+            push(_): ne a
+            push(_): ne b
+            push(_): ne c
+        ]
+        btput(_): counts key ne
+        set(i): {i + 3}
+    ]
+    btkeys(keys): counts
+    len(nk): keys
+    set(best): null
+    set(bestn): 0
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): keys i
+        btget(e): counts k
+        at(cnt): e 0
+        if(_): {cnt > bestn} [
+            set(bestn): cnt
+            set(best): e
+        ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    at(k1): best 1
+    at(k2): best 2
+    at(k3): best 3
+    str_trunc(a): {k1 / bestn + 0.5}
+    str_trunc(b): {k2 / bestn + 0.5}
+    str_trunc(c): {k3 / bestn + 0.5}
+    push(_): r a
+    push(_): r b
+    push(_): r c
+]
+
+omsk_histogram(r): img [
+    _omi_luma(l): img
+    btree(counts):
+    len(n): l
+    set(i): 0
+    while(_): {i < n} [
+        at(v): l i
+        btget(c): counts v 0
+        btput(_): counts v {c + 1}
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    set(i): 0
+    while(_): {i < 256} [
+        btget(c): counts i 0
+        push(_): r c
+        set(i): {i + 1}
+    ]
+]
+
+omsk_is_blank(r): img tolerance [
+    omsk_mean_color(m): img
+    at(ma): m 0
+    at(mb): m 1
+    at(mc): m 2
+    btget(rgb): img "rgb"
+    len(n): rgb
+    set(off): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(a): rgb i
+        at(b): rgb {i + 1}
+        at(c): rgb {i + 2}
+        set(da): {a - ma}
+        set(db): {b - mb}
+        set(dc): {c - mc}
+        if(_): {da > tolerance || da < 0 - tolerance || db > tolerance || db < 0 - tolerance || dc > tolerance || dc < 0 - tolerance} [
+            set(off): {off + 1}
+        ]
+        set(i): {i + 3}
+    ]
+    # "nearly every": at most 1% of the pixels stray
+    set(r): {off * 100 <= n / 3}
+]
+
+# --------------------------------------------------------------- composition
+
+omsk_paste(r): base top px py opacity [
+    btget(w): base "w"
+    btget(h): base "h"
+    btget(rgb): base "rgb"
+    btget(tw): top "w"
+    btget(th): top "h"
+    btget(trgb): top "rgb"
+    vec(out): ""
+    set(y): 0
+    while(_): {y < h} [
+        set(x): 0
+        while(_): {x < w} [
+            set(p): {(y * w + x) * 3}
+            at(a): rgb p
+            at(b): rgb {p + 1}
+            at(c): rgb {p + 2}
+            set(tx): {x - px}
+            set(ty): {y - py}
+            if(_): {tx >= 0 && tx < tw && ty >= 0 && ty < th} [
+                set(q): {(ty * tw + tx) * 3}
+                at(ta): trgb q
+                at(tb): trgb {q + 1}
+                at(tc): trgb {q + 2}
+                _omi_int(a): {a + (ta - a) * opacity}
+                _omi_int(b): {b + (tb - b) * opacity}
+                _omi_int(c): {c + (tc - c) * opacity}
+            ]
+            push(_): out a
+            push(_): out b
+            push(_): out c
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    omsk_image(r): w h out
+]
+
+omsk_contact_sheet(r): images cols cell gap color [
+    len(n): images
+    set(rows): {(n + cols - 1) / cols}
+    str_trunc(rows): rows
+    if(_): {rows * cols < n} [
+        set(rows): {rows + 1}
+    ]
+    set(sw): {cols * cell + (cols + 1) * gap}
+    set(sh): {rows * cell + (rows + 1) * gap}
+    omsk_blank(r): sw sh color
+    set(i): 0
+    while(_): {i < n} [
+        at(img): images i
+        omsk_resize(t): img cell cell "fit" "box"
+        btget(tw): t "w"
+        btget(th): t "h"
+        set(col): {i % cols}
+        str_trunc(row): {(i - col) / cols}
+        str_trunc(ox): {gap + col * (cell + gap) + (cell - tw) / 2}
+        str_trunc(oy): {gap + row * (cell + gap) + (cell - th) / 2}
+        omsk_paste(r): r t ox oy 1
+        set(i): {i + 1}
+    ]
+]
+
+# --------------------------------------------------------------- EXIF
+
+omsk_exif(r): v [
+    set(r): null
+    _omi_starts(jpg): v '[255,216]'
+    if(_): {jpg = false} [
+        return(r): r
+    ]
+    len(n): v
+    set(p): 2
+    while(_): {p + 4 < n} [
+        at(m0): v p
+        at(m1): v {p + 1}
+        if(_): {m0 != 255 || m1 = 218 || m1 = 217} [
+            return(r): r
+        ]
+        omsk_u16(seg): v {p + 2}
+        if(_): {m1 = 225} [
+            _omi_text_at(tag): v {p + 4} 4
+            if(_): {tag = "Exif"} [
+                _omi_tiff(r): v {p + 10}
+                return(r): r
+            ]
+        ]
+        set(p): {p + 2 + seg}
+    ]
+]
+
+_omi_tiff_u16(r): v p le [
+    if(_): le [
+        _omi_le16(r): v p
+    ]
+    else(_): [
+        omsk_u16(r): v p
+    ]
+]
+
+_omi_tiff_u32(r): v p le [
+    if(_): le [
+        _omi_le32(r): v p
+    ]
+    else(_): [
+        omsk_u32(r): v p
+    ]
+]
+
+_omi_tiff(r): v base [
+    btree(r):
+    _omi_text_at(order): v base 2
+    set(le): {order = "II"}
+    _omi_tiff_u32(ifd): v {base + 4} le
+    vec(dirs): ""
+    push(_): dirs ifd
+    set(k): 0
+    len(n): v
+    while(_): {k < 2} [
+        len(nd): dirs
+        if(_): {k >= nd} [
+            set(k): 2
+        ]
+        else(_): [
+            at(d): dirs k
+            set(at_): {base + d}
+            if(_): {at_ + 2 <= n} [
+                _omi_tiff_u16(count): v at_ le
+                set(e): 0
+                while(_): {e < count && at_ + 2 + e * 12 + 12 <= n} [
+                    set(q): {at_ + 2 + e * 12}
+                    _omi_tiff_u16(tag): v q le
+                    _omi_tiff_u16(type): v {q + 2} le
+                    _omi_tiff_u32(cnt): v {q + 4} le
+                    _omi_tiff_u32(val): v {q + 8} le
+                    if(_): {tag = 274} [
+                        _omi_tiff_u16(o): v {q + 8} le
+                        btput(_): r "orientation" o
+                    ]
+                    elif(_): {tag = 34665} [
+                        push(_): dirs val
+                    ]
+                    elif(_): {type = 2 && (tag = 271 || tag = 272 || tag = 306 || tag = 36867)} [
+                        set(src): {q + 8}
+                        if(_): {cnt > 4} [
+                            set(src): {base + val}
+                        ]
+                        _omi_text_at(text): v src {cnt - 1}
+                        str_trim(text): text
+                        if(_): {tag = 271} [
+                            btput(_): r "make" text
+                        ]
+                        elif(_): {tag = 272} [
+                            btput(_): r "model" text
+                        ]
+                        elif(_): {tag = 306} [
+                            btput(_): r "datetime" text
+                        ]
+                        else(_): [
+                            btput(_): r "taken" text
+                        ]
+                    ]
+                    set(e): {e + 1}
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+    ]
+]
+
+omsk_orient(r): img o [
+    set(r): img
+    if(_): {o = 2} [
+        omsk_flip(r): img true
+    ]
+    elif(_): {o = 3} [
+        omsk_rotate(r): img 180
+    ]
+    elif(_): {o = 4} [
+        omsk_flip(r): img false
+    ]
+    elif(_): {o = 5} [
+        omsk_rotate(t): img 90
+        omsk_flip(r): t true
+    ]
+    elif(_): {o = 6} [
+        omsk_rotate(r): img 90
+    ]
+    elif(_): {o = 7} [
+        omsk_rotate(t): img 270
+        omsk_flip(r): t true
+    ]
+    elif(_): {o = 8} [
+        omsk_rotate(r): img 270
+    ]
+]
+
+omsk_thumb_oriented(r): v side [
+    omsk_decode_fit(img): v side
+    set(r): null
+    typeof(it): img
+    if(_): {it != "btree"} [
+        return(r): r
+    ]
+    omsk_exif(ex): v
+    set(o): 1
+    typeof(et): ex
+    if(_): {et = "btree"} [
+        btget(o): ex "orientation" 1
+    ]
+    omsk_orient(img): img o
+    omsk_info(info): v
+    at(w): info 1
+    at(h): info 2
+    btget(tw): img "w"
+    btget(th): img "h"
+    btget(rgb): img "rgb"
+    omsk_encode(jpeg): rgb tw th
+    vec(r): ""
+    push(_): r w
+    push(_): r h
+    push(_): r tw
+    push(_): r th
+    push(_): r jpeg
+]
+
+# --------------------------------------------------------------- cache
+#   omsk_thumb_cached(t): bytes side dir
+#                       -> like omsk_thumb, but the JPEG is kept in dir under
+#                          the SHA-256 of the input and the side, and read
+#                          back from there next time; [w h tw th jpeg hit]
+omsk_thumb_cached(r): v side dir [
+    sha256(d): v
+    set(name): ""
+    set(i): 0
+    while(_): {i < 32} [
+        at(x): d i
+        at(hi): "0123456789abcdef" {x >> 4}
+        at(lo): "0123456789abcdef" {x & 15}
+        concat(name): name hi lo
+        set(i): {i + 1}
+    ]
+    str_from_int(ss): side
+    concat(path): dir "/" name "-" ss ".jpg"
+    file_exists(have): path
+    omsk_info(info): v
+    set(r): null
+    typeof(it): info
+    if(_): {it != "vector"} [
+        omsk_fail(r): "not a PNG or JPEG image"
+        return(r): r
+    ]
+    if(_): {have = 1 || have = true} [
+        read_bytes(jpeg): path
+        at(w): info 1
+        at(h): info 2
+        omsk_fit(fit): w h side
+        at(tw): fit 0
+        at(th): fit 1
+        vec(r): ""
+        push(_): r w
+        push(_): r h
+        push(_): r tw
+        push(_): r th
+        push(_): r jpeg
+        push(_): r true
+        return(r): r
+    ]
+    omsk_thumb(t): v side
+    typeof(tt): t
+    if(_): {tt = "vector"} [
+        at(jpeg): t 4
+        write_bytes(_): path jpeg
+        set(r): t
+        push(_): r false
+    ]
+]
