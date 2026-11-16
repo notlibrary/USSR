@@ -147,3 +147,18 @@ gets LF line endings and loses a UTF-8 BOM, which it reads past.
 Library use, tests: `kgb_main(code): args` runs one command line from a
 vector of strings; see [docs/API.md](docs/API.md). `ussr tests/kgb_test.su`
 builds a base in `tests/kgb-tmp`, runs every command and removes it.
+
+## Queries and more (0.2.0)
+
+    kgb where "(legs>2 or flies=yes) and not extinct=yes" sort by mass desc limit 5
+    kgb where "hunts->color=grey"
+    kgb where legs group by legs
+    kgb --format json where legs>3 show legs,mass
+    kgb sql "select name, legs from animals where legs > 2 order by legs"
+    kgb query save heavy "mass>1kg"   then   kgb q heavy
+
+Also `diff`, `compare`, `random`, `cp`, `merge`, `import FILE.csv|.json CAT`,
+`set --where EXPR KEY VALUE`, `orphans`, `hubs`, `path A B`, `closure OBJ
+KEY`, `dot`, `html DIR`, `lint`, `validate`, and with `journal: on` in the
+`.kgb` file `undo` and `log`. The header of `src/kgb/more.su` describes
+them all.
