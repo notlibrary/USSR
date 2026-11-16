@@ -1,0 +1,86 @@
+PASS new file
+PASS info size
+PASS info lines
+PASS info sha256
+PASS info folder items
+PASS info folder size
+PASS trash a folder
+PASS trashed folder leaves the desktop
+PASS trash lists it
+PASS restore
+PASS restored with what was in it
+PASS restore twice
+PASS trash a missing name
+PASS empty the trash
+PASS trash is empty
+PASS undo after the trash is emptied
+PASS copy to a folder
+PASS copy beside a name gets a new name
+PASS undo a copy
+PASS move to a folder
+PASS moved beside a name
+PASS undo a move
+PASS copy to the clipboard
+PASS paste
+PASS paste beside a name
+PASS undo a paste
+PASS cut and paste moves
+PASS a cut is pasted once
+PASS undo a cut
+PASS rename
+PASS undo a rename
+PASS undo a new folder
+PASS select many skips missing names
+PASS the selection
+PASS trash the selection
+PASS new from a template
+PASS the template's text
+PASS a missing template
+PASS find by text
+PASS find by name
+PASS launcher command
+PASS launcher dir
+PASS launcher env
+PASS launcher hotkey
+PASS launcher category
+PASS launcher comment
+PASS an icon line before the command
+PASS launch uses dir and env
+PASS association program
+PASS association gets the file
+PASS association through a launcher
+PASS associations are saved
+PASS opened files are recent
+PASS Apps folders are menu categories
+PASS fuzzy menu search
+PASS search finds recent files
+PASS open with lists launchers
+PASS open with a launcher
+PASS open with passes the file
+PASS run history, newest first
+PASS week of 2026-01-01
+PASS week of 2027-01-01
+PASS week of 2024-12-30
+PASS week of 2026-11-16
+PASS a note needs YYYY-MM-DD
+PASS notes of a day
+PASS holidays of a month
+PASS import an ics file
+PASS ics summary
+PASS clock 24h
+PASS clock 12h
+PASS clock with seconds
+PASS Russian labels
+PASS kiosk has no exit
+PASS show hidden files
+PASS the trash stays hidden
+PASS back to English
+PASS import settings
+PASS imported language
+PASS settings survive a restart
+PASS notifications are kept
+PASS scratch desktop removed
+
+--- stderr ---
+
+--- exit 0 ---

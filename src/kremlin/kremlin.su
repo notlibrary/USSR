@@ -55,6 +55,7 @@
 $once
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
+$include "more.su"
 
 $define KM_KEY_SPACE 32
 $define KM_KEY_ESCAPE 256
@@ -576,7 +577,7 @@ km_listing(r): dir sort [
         set(_kli_i): 0
         while(_): {_kli_i < _kli_n} [
             at(_kli_name): _kli_all _kli_i
-            km_hidden(_kli_h): _kli_name
+            km_listed_hidden(_kli_h): _kli_name
             if(_): {_kli_h = false} [
                 km_kind(_kli_k): _kli_name
                 push(_): _kli_names _kli_name
@@ -713,6 +714,7 @@ km_config_defaults(r): [
     set(km_pins): _kcd_p!
     set(km_ussr): "ussr"!
     set(km_source): ""!
+    km_more_defaults(_):
     set(r): 0
 ]
 
@@ -761,6 +763,7 @@ km_config_apply(r): text [
             ]
             elif(_): {_kcf_key = "ussr" && _kcf_val != ""} [ set(km_ussr): _kcf_val! ]
             elif(_): {_kcf_key = "source"} [ set(km_source): _kcf_val! ]
+            else(_): [ km_more_config(_): _kcf_key _kcf_val ]
         ]
         set(_kcf_i): {_kcf_i + 1}
     ]
@@ -792,6 +795,8 @@ km_config_text(r): [
     concat(r): r "# the interpreter and USSR's src folder, for launchers and autostart\nussr=" _kct_v "\n"
     set(_kct_v): km_source?
     concat(r): r "source=" _kct_v "\n"
+    km_more_config_text(_kct_more):
+    concat(r): r _kct_more
 ]
 
 km_config_path(r): [
@@ -892,6 +897,7 @@ km_launcher_parse(r): text [
                 str_lower(_klp_v): _klp_val
                 set(_klp_console): {_klp_v != "no" && _klp_v != "false" && _klp_v != "0"}
             ]
+            elif(_): {_klp_key = "icon" || _klp_key = "dir" || _klp_key = "env" || _klp_key = "hotkey" || _klp_key = "category" || _klp_key = "comment"} [ set(_klp_key): "" ]
             elif(_): {_klp_cmd = ""} [ set(_klp_cmd): _klp_line ]
         ]
         set(_klp_i): {_klp_i + 1}
@@ -954,6 +960,13 @@ km_path_plan(r): path [
     is_dir(_kpp_isdir): path
     file_exists(_kpp_exists): path
     km_ext(_kpp_e): path
+    set(km_last_kl): ""!
+    if(_): {_kpp_isdir != 1 && _kpp_exists && _kpp_e != "kl"} [
+        km_assoc_plan(_kpp_as): path
+        typeof(_kpp_ast): _kpp_as
+        if(_): {_kpp_ast = "vector"} [ return(r): _kpp_as ]
+    ]
+    if(_): {_kpp_e = "kl"} [ set(km_last_kl): path! ]
     set(_kpp_ussr): km_ussr?
     set(_kpp_src): km_source?
     if(_): {_kpp_isdir = 1} [
@@ -1128,6 +1141,7 @@ kremlinnewfolder(r): name [
         make_dir(_knf_ok): _knf_p
         if(_): {_knf_ok != 0} [ set(r): "Could not create the folder" ]
         else(_): [
+            km_more_created(_): _knf_p
             kremlinrefresh(_):
             concat(_knf_n): name "/"
             kremlinselect(_): _knf_n
@@ -1143,6 +1157,7 @@ kremlinnewfile(r): name [
         file_exists(_knt_ok): _knt_p
         if(_): {_knt_ok = false} [ set(r): "Could not create the file" ]
         else(_): [
+            km_more_created(_): _knt_p
             kremlinrefresh(_):
             kremlinselect(_): name
         ]
@@ -1282,6 +1297,7 @@ kremlinrename(r): old new [
             rename_path(_krn_ok): _krn_from _krn_to
             if(_): {_krn_ok != 0} [ set(r): "Could not rename it (is it open in a program?)" ]
             else(_): [
+                km_more_renamed(_): _krn_from _krn_to
                 # a pinned item stays pinned under its new name
                 if(_): {_krn_pin >= 0} [
                     km_unpin_at(_): _krn_pin
@@ -1398,13 +1414,16 @@ km_execute(r): plan label [
     elif(_): {_kex_action = "launch"} [
         set(_kex_dry): km_dryrun?
         if(_): {_kex_dry = true} [
+            km_more_prelaunch(_):
             set(_kex_log): km_launched?
             push(_): _kex_log plan
             set(km_launched): _kex_log!
             set(_kex_ok): 0
         ]
         else(_): [
+            km_more_prelaunch(_kex_back):
             launch(_kex_ok): _kex_target _kex_params _kex_hidden
+            if(_): {_kex_back != ""} [ cd(_): _kex_back ]
         ]
         if(_): {_kex_ok = 0} [
             concat(_kex_msg): "Starting " label
@@ -1426,6 +1445,13 @@ kremlinopenname(r): name [
     if(_): {_kon_action = "folder"} [ kremlinopen(_): _kon_target ]
     else(_): [
         km_label(_kon_label): name
+        km_kind(_kon_kind): name
+        if(_): {_kon_action = "launch" && _kon_kind != "launcher"} [
+            set(_kon_dir): km_dir?
+            km_strip_slash(_kon_n): name
+            km_join(_kon_p): _kon_dir _kon_n
+            km_recent_add(_): _kon_p
+        ]
         km_execute(r): _kon_plan _kon_label
     ]
 ]
@@ -1462,6 +1488,7 @@ km_run(r): line [
             at(_krr_params): _krr_parts 1
             km_plan(_krr_plan): "launch" _krr_prog _krr_params false
         ]
+        km_run_history_add(_): _krr_l
         km_execute(r): _krr_plan _krr_l
     ]
 ]
@@ -1968,14 +1995,24 @@ km_start_items(r): [
             ]
             set(_ksi_i): {_ksi_i + 1}
         ]
+        km_category_items(_ksi_cats):
+        len(_ksi_cn): _ksi_cats
+        set(_ksi_i): 0
+        while(_): {_ksi_i < _ksi_cn} [
+            at(_ksi_item): _ksi_cats _ksi_i
+            push(_): r _ksi_item
+            set(_ksi_i): {_ksi_i + 1}
+        ]
         if(_): {_ksi_n > 0} [
             km_item(_ksi_item): "-" "" ""
             push(_): r _ksi_item
         ]
     ]
-    km_item(_ksi_item): "Desktop" "" "desktop"
+    km_tr(_ksi_tl): "Desktop"
+    km_item(_ksi_item): _ksi_tl "" "desktop"
     push(_): r _ksi_item
-    km_item(_ksi_item): "Run..." "Ctrl+R" "run"
+    km_tr(_ksi_tl): "Run..."
+    km_item(_ksi_item): _ksi_tl "Ctrl+R" "run"
     push(_): r _ksi_item
     km_item(_ksi_item): "-" "" ""
     push(_): r _ksi_item
@@ -2000,10 +2037,15 @@ km_start_items(r): [
     push(_): r _ksi_item
     km_item(_ksi_item): "-" "" ""
     push(_): r _ksi_item
-    km_item(_ksi_item): "Help" "F1" "help"
+    km_tr(_ksi_tl): "Help"
+    km_item(_ksi_item): _ksi_tl "F1" "help"
     push(_): r _ksi_item
-    km_item(_ksi_item): "Exit Kremlin" "Ctrl+Q" "exit"
-    push(_): r _ksi_item
+    set(_ksi_kiosk): km_kiosk?
+    if(_): {_ksi_kiosk = false} [
+        km_tr(_ksi_tl): "Exit Kremlin"
+        km_item(_ksi_item): _ksi_tl "Ctrl+Q" "exit"
+        push(_): r _ksi_item
+    ]
 ]
 
 # What can be done with a listed name.
@@ -2122,7 +2164,7 @@ km_help_text(r): [
     concat(r): r "Arrows, Home, End, PgUp, PgDn  move\nEnter  open      Shift+Enter  open with system\nBackspace  back to the folder above\n"
     concat(r): r "F2  rename      Del  delete      Ctrl+D  duplicate\nCtrl+P  pin or unpin on the panel\n"
     concat(r): r "Ctrl+N  new folder      Ctrl+Shift+N  new text file\nCtrl+L  new launcher    Ctrl+R  run a command\n"
-    concat(r): r "F5  refresh      F10 or Win  KREMLIN menu\nMenu key or Shift+F10  actions for the selection\nletters  jump to a name      Ctrl+Q  exit"
+    concat(r): r "F5  refresh      F10 or Win  KREMLIN menu\nMenu key or Shift+F10  actions for the selection\nletters  jump to a name      Ctrl+Q  exit\nCtrl+X/C/V  cut, copy, paste      Ctrl+Z  undo"
 ]
 
 km_properties(r): name [
@@ -2711,7 +2753,7 @@ km_draw_panel(r): canvas m hits [
     km_hit_add(_): hits {3 * _kdp_s} _kdp_by _kdp_bw _kdp_bh "start"
     # the clock, right-aligned
     localtime(_kdp_t):
-    km_clock_text(_kdp_clock): _kdp_t
+    km_more_clock(_kdp_clock): _kdp_t
     km_date_text(_kdp_date): _kdp_t
     set(km_clock_shown): _kdp_clock!
     concat(_kdp_ct): _kdp_date "  " _kdp_clock
@@ -3443,7 +3485,21 @@ km_desktop_key(r): key [
         elif(_): {key = 78} [ kremlinaction(_): "newfolder" "" ]
         elif(_): {key = 76} [ kremlinaction(_): "newlauncher" "" ]
         elif(_): {key = 82} [ kremlinaction(_): "run" "" ]
-        elif(_): {key = 81} [ kremlinaction(_): "exit" "" ]
+        elif(_): {key = 81} [
+            set(_kdk3_kiosk): km_kiosk?
+            if(_): {_kdk3_kiosk = false} [ kremlinaction(_): "exit" "" ]
+        ]
+        elif(_): {(key = 88 || key = 67) && _kdk3_name != ""} [
+            vec(_kdk3_clip): ""
+            push(_): _kdk3_clip _kdk3_name
+            if(_): {key = 88} [ kremlincut(_): _kdk3_clip ]
+            else(_): [ kremlincopy(_): _kdk3_clip ]
+            set(_kdk3_cm): "Copied"
+            if(_): {key = 88} [ set(_kdk3_cm): "Cut" ]
+            km_say(_): _kdk3_cm
+        ]
+        elif(_): {key = 86} [ kremlinpaste(_kdk3_err): ]
+        elif(_): {key = 90} [ kremlinundo(_kdk3_err): ]
         elif(_): {key = 68 && _kdk3_name != ""} [ kremlinaction(_kdk3_err): "duplicate" _kdk3_name ]
         elif(_): {key = 80 && _kdk3_name != ""} [ kremlinaction(_kdk3_err): "pin" _kdk3_name ]
     ]
@@ -3502,7 +3558,7 @@ kremlinfocus(r): focused [
 km_tick_once(r): [
     set(_kto_redraw): false
     localtime(_kto_t):
-    km_clock_text(_kto_clock): _kto_t
+    km_more_clock(_kto_clock): _kto_t
     set(_kto_shown): km_clock_shown?
     if(_): {_kto_clock != _kto_shown} [ set(_kto_redraw): true ]
     set(_kto_msg): km_status?

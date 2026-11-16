@@ -370,6 +370,8 @@ init(result): arg_count arg_values [
     remove_dir(_): "tests/kremlin_gui_tmp/Documents"
     remove_file(_): "tests/kremlin_gui_tmp/Welcome.txt"
     remove_file(_): "tests/kremlin_gui_tmp/.kremlin"
+    remove_file(_): "tests/kremlin_gui_tmp/.runhistory"
+    remove_file(_): "tests/kremlin_gui_tmp/.recent"
     remove_dir(_): "tests/kremlin_gui_tmp/Music 1"
     remove_dir(_): "tests/kremlin_gui_tmp"
     file_exists(gone): "tests/kremlin_gui_tmp"

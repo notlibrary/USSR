@@ -1,0 +1,402 @@
+# Kremlin refine pass 1 (src/kremlin/more.su): trash, copy and move,
+# clipboard, undo, selection, templates, properties, search, launcher
+# keys, file associations, menus, the calendar and settings, on a scratch
+# desktop in tests/kremlin_more_tmp. Nothing is started (km_dryrun).
+$include "../src/kremlin/kremlin.su"
+
+kmt_eq(r): label got want [
+    if(_): {got = want} [
+        concat(_kq_line): "PASS " label
+    ]
+    else(_): [
+        typeof(_kq_gt): got
+        typeof(_kq_wt): want
+        if(_): {_kq_gt != "string"} [ encode(got): got ]
+        if(_): {_kq_wt != "string"} [ encode(want): want ]
+        concat(_kq_line): "FAIL " label ": got " got ", want " want
+    ]
+    print(_): _kq_line
+    set(r): 0
+]
+
+kmt_joined(r): v [
+    set(r): ""
+    len(_kj_n): v
+    set(_kj_i): 0
+    while(_): {_kj_i < _kj_n} [
+        at(_kj_x): v _kj_i
+        typeof(_kj_t): _kj_x
+        if(_): {_kj_t != "string"} [ encode(_kj_x): _kj_x ]
+        if(_): {_kj_i > 0} [ concat(r): r "|" ]
+        concat(r): r _kj_x
+        set(_kj_i): {_kj_i + 1}
+    ]
+]
+
+kmt_root(r): [
+    getcwd(_kr_cwd):
+    km_slashes(_kr_cwd): _kr_cwd
+    km_join(r): _kr_cwd "tests/kremlin_more_tmp"
+]
+
+kmt_has(r): name [
+    set(_kh_items): km_items?
+    set(r): false
+    len(_kh_n): _kh_items
+    set(_kh_i): 0
+    while(_): {_kh_i < _kh_n} [
+        at(_kh_x): _kh_items _kh_i
+        if(_): {_kh_x = name} [ set(r): true ]
+        set(_kh_i): {_kh_i + 1}
+    ]
+]
+
+kmt_files(r): [
+    kmt_root(_kf_root):
+    remove_tree(_): _kf_root
+    kremlinreset(_): _kf_root
+    set(km_dryrun): true!
+    km_join(_kf_docs): _kf_root "Documents"
+
+    kremlinnewfile(_kf_e): "a.txt"
+    kmt_eq(_): "new file" _kf_e ""
+    km_join(_kf_a): _kf_root "a.txt"
+    writefile(_): _kf_a "hello\nworld\n"
+    kremlininfo(_kf_info): "a.txt"
+    btget(_kf_v): _kf_info "size" 0
+    kmt_eq(_): "info size" _kf_v 12
+    btget(_kf_v): _kf_info "lines" 0
+    kmt_eq(_): "info lines" _kf_v 2
+    btget(_kf_v): _kf_info "sha256" ""
+    len(_kf_v): _kf_v
+    kmt_eq(_): "info sha256" _kf_v 64
+
+    kremlinnewfolder(_): "box"
+    km_join(_kf_box): _kf_root "box"
+    km_join(_kf_inner): _kf_box "inner.txt"
+    writefile(_): _kf_inner "in"
+    kremlininfo(_kf_info): "box/"
+    btget(_kf_v): _kf_info "items" 0
+    kmt_eq(_): "info folder items" _kf_v 1
+    btget(_kf_v): _kf_info "size" 0
+    kmt_eq(_): "info folder size" _kf_v 2
+
+    kremlintrash(_kf_e): "box/"
+    kmt_eq(_): "trash a folder" _kf_e ""
+    kmt_has(_kf_v): "box/"
+    kmt_eq(_): "trashed folder leaves the desktop" _kf_v false
+    kremlintrashlist(_kf_t):
+    len(_kf_v): _kf_t
+    kmt_eq(_): "trash lists it" _kf_v 1
+    kremlinrestore(_kf_e): "box"
+    kmt_eq(_): "restore" _kf_e ""
+    file_exists(_kf_v): _kf_inner
+    kmt_eq(_): "restored with what was in it" _kf_v true
+    kremlinrestore(_kf_e): "box"
+    kmt_eq(_): "restore twice" _kf_e "Not in the trash"
+
+    kremlintrash(_): "a.txt"
+    kremlintrash(_kf_e): "a.txt"
+    kmt_eq(_): "trash a missing name" _kf_e "It is gone already"
+    kremlinemptytrash(_kf_v):
+    kmt_eq(_): "empty the trash" _kf_v 1
+    kremlintrashlist(_kf_t):
+    len(_kf_v): _kf_t
+    kmt_eq(_): "trash is empty" _kf_v 0
+    kremlinundo(_kf_e):
+    kmt_eq(_): "undo after the trash is emptied" _kf_e "Not in the trash"
+
+    # copy and move to a folder
+    kremlinnewfile(_): "b.txt"
+    kremlincopyto(_kf_e): "b.txt" _kf_docs
+    km_join(_kf_db): _kf_docs "b.txt"
+    file_exists(_kf_v): _kf_db
+    kmt_eq(_): "copy to a folder" _kf_v true
+    kremlincopyto(_): "b.txt" _kf_docs
+    km_join(_kf_dbc): _kf_docs "b copy.txt"
+    file_exists(_kf_v): _kf_dbc
+    kmt_eq(_): "copy beside a name gets a new name" _kf_v true
+    kremlinundo(_kf_e):
+    file_exists(_kf_v): _kf_dbc
+    kmt_eq(_): "undo a copy" _kf_v false
+    kremlinmoveto(_): "b.txt" _kf_docs
+    kmt_has(_kf_v): "b.txt"
+    kmt_eq(_): "move to a folder" _kf_v false
+    file_exists(_kf_v): _kf_dbc
+    kmt_eq(_): "moved beside a name" _kf_v true
+    kremlinundo(_):
+    kmt_has(_kf_v): "b.txt"
+    kmt_eq(_): "undo a move" _kf_v true
+
+    # the clipboard
+    vec(_kf_names): ""
+    push(_): _kf_names "b.txt"
+    kremlincopy(_kf_v): _kf_names
+    kmt_eq(_): "copy to the clipboard" _kf_v 1
+    kremlinopen(_): _kf_docs
+    kremlinpaste(_kf_e):
+    kmt_eq(_): "paste" _kf_e ""
+    kmt_has(_kf_v): "b copy.txt"
+    kmt_eq(_): "paste beside a name" _kf_v true
+    kremlinundo(_):
+    kmt_has(_kf_v): "b copy.txt"
+    kmt_eq(_): "undo a paste" _kf_v false
+    kremlinopen(_): _kf_root
+    kremlincut(_): _kf_names
+    kremlinopen(_): _kf_docs
+    kremlinpaste(_):
+    kremlinopen(_): _kf_root
+    kmt_has(_kf_v): "b.txt"
+    kmt_eq(_): "cut and paste moves" _kf_v false
+    set(_kf_clip): km_clip?
+    len(_kf_v): _kf_clip
+    kmt_eq(_): "a cut is pasted once" _kf_v 0
+    kremlinundo(_):
+    kmt_has(_kf_v): "b.txt"
+    kmt_eq(_): "undo a cut" _kf_v true
+
+    # rename and new folder undo
+    kremlinrename(_): "b.txt" "c.txt"
+    kmt_has(_kf_v): "c.txt"
+    kmt_eq(_): "rename" _kf_v true
+    kremlinundo(_):
+    kmt_has(_kf_v): "b.txt"
+    kmt_eq(_): "undo a rename" _kf_v true
+    kremlinnewfolder(_): "tmpdir"
+    kremlinundo(_):
+    kmt_has(_kf_v): "tmpdir/"
+    kmt_eq(_): "undo a new folder" _kf_v false
+
+    # many at once
+    kremlinnewfile(_): "x1.txt"
+    kremlinnewfile(_): "x2.txt"
+    vec(_kf_sel): ""
+    push(_): _kf_sel "x1.txt"
+    push(_): _kf_sel "x2.txt"
+    push(_): _kf_sel "nope.txt"
+    kremlinselectmany(_kf_v): _kf_sel
+    kmt_eq(_): "select many skips missing names" _kf_v 2
+    kremlinselection(_kf_v):
+    kmt_joined(_kf_v): _kf_v
+    kmt_eq(_): "the selection" _kf_v "x1.txt|x2.txt"
+    kremlintrashselection(_):
+    kmt_has(_kf_v): "x2.txt"
+    kmt_eq(_): "trash the selection" _kf_v false
+
+    # templates
+    km_join(_kf_tpl): _kf_root "Templates"
+    make_dir(_): _kf_tpl
+    km_join(_kf_tf): _kf_tpl "note.md"
+    writefile(_): _kf_tf "# Note\n"
+    kremlinnewfromtemplate(_kf_e): "note.md" "mine.md"
+    kmt_eq(_): "new from a template" _kf_e ""
+    km_join(_kf_mine): _kf_root "mine.md"
+    readfile(_kf_v): _kf_mine
+    kmt_eq(_): "the template's text" _kf_v "# Note\n"
+    kremlinnewfromtemplate(_kf_e): "none.md" "x.md"
+    kmt_eq(_): "a missing template" _kf_e "No template none.md"
+
+    # search
+    km_join(_kf_nt): _kf_docs "notes.txt"
+    writefile(_): _kf_nt "Tickets to the Bolshoi\n"
+    kremlinfind(_kf_hits): "bolshoi"
+    kmt_joined(_kf_v): _kf_hits
+    str_ends(_kf_v): _kf_v "Documents/notes.txt"
+    kmt_eq(_): "find by text" _kf_v true
+    kremlinfind(_kf_hits): "WELCOME"
+    len(_kf_v): _kf_hits
+    kmt_eq(_): "find by name" _kf_v 1
+    set(r): 0
+]
+
+kmt_launchers(r): [
+    kmt_root(_kl_root):
+    set(_kl_text): "name: Editor\ncommand: notepad\nicon: edit.png\ndir: C:/work\nenv: A=1; B=2\nhotkey: Ctrl+E\ncategory: Office\ncomment: Writes text\n"
+    km_launcher_info(_kl_i): _kl_text
+    btget(_kl_v): _kl_i "command" ""
+    kmt_eq(_): "launcher command" _kl_v "notepad"
+    btget(_kl_v): _kl_i "dir" ""
+    kmt_eq(_): "launcher dir" _kl_v "C:/work"
+    btget(_kl_v): _kl_i "env" ""
+    kmt_eq(_): "launcher env" _kl_v "A=1; B=2"
+    btget(_kl_v): _kl_i "hotkey" ""
+    kmt_eq(_): "launcher hotkey" _kl_v "Ctrl+E"
+    btget(_kl_v): _kl_i "category" ""
+    kmt_eq(_): "launcher category" _kl_v "Office"
+    btget(_kl_v): _kl_i "comment" ""
+    kmt_eq(_): "launcher comment" _kl_v "Writes text"
+    set(_kl_t2): "name: Tool\nicon: t.png\ncommand: tool.exe\n"
+    km_launcher_parse(_kl_p): _kl_t2
+    at(_kl_v): _kl_p 1
+    kmt_eq(_): "an icon line before the command" _kl_v "tool.exe"
+
+    # the launcher's dir and env reach the launch
+    km_join(_kl_apps): _kl_root "Apps"
+    km_join(_kl_tool): _kl_apps "Tool.kl"
+    writefile(_): _kl_tool "name: Tool\ncommand: tool.exe\ndir: C:/work\nenv: K=V\n"
+    km_path_plan(_kl_plan): _kl_tool
+    km_execute(_): _kl_plan "Tool"
+    set(_kl_v): km_last_launch_env?
+    kmt_eq(_): "launch uses dir and env" _kl_v "dir=C:/work env=K=V"
+
+    # file associations
+    km_config_apply(_): "assoc.MD = notepad\nassoc..log = Apps/Calculator.kl\n"
+    km_join(_kl_mine): _kl_root "mine.md"
+    km_path_plan(_kl_plan): _kl_mine
+    at(_kl_v): _kl_plan 1
+    kmt_eq(_): "association program" _kl_v "notepad"
+    at(_kl_v): _kl_plan 2
+    km_quote(_kl_q): _kl_mine
+    kmt_eq(_): "association gets the file" _kl_v _kl_q
+    km_join(_kl_log): _kl_root "x.log"
+    writefile(_): _kl_log "x"
+    km_path_plan(_kl_plan): _kl_log
+    at(_kl_v): _kl_plan 0
+    kmt_eq(_): "association through a launcher" _kl_v "launch"
+    km_config_text(_kl_ct):
+    str_contains(_kl_v): _kl_ct "assoc.md=notepad"
+    kmt_eq(_): "associations are saved" _kl_v true
+
+    # recent documents
+    kremlinopen(_): _kl_root
+    kremlinopenname(_): "mine.md"
+    kremlinrecent(_kl_rec):
+    at(_kl_v): _kl_rec 0
+    kmt_eq(_): "opened files are recent" _kl_v _kl_mine
+
+    # menus
+    km_join(_kl_games): _kl_apps "Games"
+    make_dir(_): _kl_games
+    km_start_items(_kl_menu):
+    set(_kl_found): false
+    len(_kl_n): _kl_menu
+    set(_kl_j): 0
+    while(_): {_kl_j < _kl_n} [
+        at(_kl_it): _kl_menu _kl_j
+        at(_kl_lab): _kl_it 0
+        if(_): {_kl_lab = "Games >"} [ set(_kl_found): true ]
+        set(_kl_j): {_kl_j + 1}
+    ]
+    kmt_eq(_): "Apps folders are menu categories" _kl_found true
+    kremlinsearch(_kl_hits): "clc"
+    at(_kl_v): _kl_hits 0
+    at(_kl_v): _kl_v 0
+    kmt_eq(_): "fuzzy menu search" _kl_v "Calculator"
+    kremlinsearch(_kl_hits): "mine"
+    len(_kl_v): _kl_hits
+    kmt_eq(_): "search finds recent files" _kl_v 1
+    kremlinopenwith(_kl_all): "mine.md"
+    len(_kl_v): _kl_all
+    kmt_eq(_): "open with lists launchers" {_kl_v >= 4} true
+    km_join(_kl_calc): _kl_apps "Calculator.kl"
+    kremlinopenwithrun(_kl_e): "mine.md" _kl_calc
+    kmt_eq(_): "open with a launcher" _kl_e ""
+    set(_kl_log2): km_launched?
+    pop(_kl_last): _kl_log2
+    at(_kl_v): _kl_last 2
+    str_ends(_kl_v): _kl_v "mine.md\""
+    kmt_eq(_): "open with passes the file" _kl_v true
+    km_run(_): "notepad todo.txt"
+    km_run(_): "calc"
+    km_run(_): "notepad todo.txt"
+    kremlinrunhistory(_kl_h):
+    kmt_joined(_kl_v): _kl_h
+    kmt_eq(_): "run history, newest first" _kl_v "notepad todo.txt|calc"
+    set(r): 0
+]
+
+kmt_calendar(r): [
+    kmt_root(_kc_root):
+    km_weeknum(_kc_v): 2026 1 1
+    kmt_eq(_): "week of 2026-01-01" _kc_v 1
+    km_weeknum(_kc_v): 2027 1 1
+    kmt_eq(_): "week of 2027-01-01" _kc_v 53
+    km_weeknum(_kc_v): 2024 12 30
+    kmt_eq(_): "week of 2024-12-30" _kc_v 1
+    km_weeknum(_kc_v): 2026 11 16
+    kmt_eq(_): "week of 2026-11-16" _kc_v 47
+    kremlinnote(_): "2026-11-16" "Meet\tthe team"
+    kremlinnote(_kc_v): "16.11.2026" "bad"
+    kmt_eq(_): "a note needs YYYY-MM-DD" _kc_v {0 - 1}
+    kremlinnotes(_kc_n): "2026-11-16"
+    kmt_joined(_kc_v): _kc_n
+    kmt_eq(_): "notes of a day" _kc_v "Meet the team"
+    km_join(_kc_hol): _kc_root ".holidays"
+    writefile(_): _kc_hol "01-01 New Year\n11-07 October\n05-09 Victory Day\n"
+    kremlinholidays(_kc_h): 2026 11
+    kmt_joined(_kc_v): _kc_h
+    kmt_eq(_): "holidays of a month" _kc_v "[7,`October`]"
+    km_join(_kc_ics): _kc_root "cal.ics"
+    writefile(_): _kc_ics "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261231\r\nSUMMARY:Party\\, a b\r\n ig one\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    kremlinimportics(_kc_v): _kc_ics
+    kmt_eq(_): "import an ics file" _kc_v 1
+    kremlinnotes(_kc_n): "2026-12-31"
+    kmt_joined(_kc_v): _kc_n
+    kmt_eq(_): "ics summary" _kc_v "Party, a big one"
+    set(r): 0
+]
+
+kmt_settings(r): [
+    kmt_root(_ks_root):
+    vec(_ks_t): ""
+    push(_): _ks_t 2026
+    push(_): _ks_t 11
+    push(_): _ks_t 16
+    push(_): _ks_t 13
+    push(_): _ks_t 5
+    push(_): _ks_t 9
+    km_more_clock(_ks_v): _ks_t
+    kmt_eq(_): "clock 24h" _ks_v "13:05"
+    km_config_apply(_): "clock=12h\nlang=ru\nkiosk=yes\nshowhidden=yes\n"
+    km_more_clock(_ks_v): _ks_t
+    kmt_eq(_): "clock 12h" _ks_v "1:05 PM"
+    km_config_apply(_): "clock=24s\n"
+    km_more_clock(_ks_v): _ks_t
+    kmt_eq(_): "clock with seconds" _ks_v "13:05:09"
+    km_tr(_ks_v): "Trash"
+    kmt_eq(_): "Russian labels" _ks_v "Корзина"
+    km_start_items(_ks_menu):
+    set(_ks_exit): false
+    len(_ks_n): _ks_menu
+    set(_ks_j): 0
+    while(_): {_ks_j < _ks_n} [
+        at(_ks_it): _ks_menu _ks_j
+        at(_ks_a): _ks_it 2
+        if(_): {_ks_a = "exit"} [ set(_ks_exit): true ]
+        set(_ks_j): {_ks_j + 1}
+    ]
+    kmt_eq(_): "kiosk has no exit" _ks_exit false
+    kremlinopen(_): _ks_root
+    kmt_has(_ks_v): ".kremlin"
+    kmt_eq(_): "show hidden files" _ks_v true
+    kmt_has(_ks_v): ".trash/"
+    kmt_eq(_): "the trash stays hidden" _ks_v false
+    km_join(_ks_out): _ks_root "exported.txt"
+    kremlinexport(_): _ks_out
+    km_config_apply(_): "lang=en\nkiosk=no\nshowhidden=no\n"
+    set(_ks_v): km_lang?
+    kmt_eq(_): "back to English" _ks_v "en"
+    kremlinimport(_ks_v): _ks_out
+    kmt_eq(_): "import settings" _ks_v 0
+    set(_ks_v): km_lang?
+    kmt_eq(_): "imported language" _ks_v "ru"
+    kremlinreset(_): _ks_root
+    set(_ks_v): km_clockfmt?
+    kmt_eq(_): "settings survive a restart" _ks_v "24s"
+    kremlinnotify(_): "Mail" "one new letter"
+    kremlinnotifications(_ks_q):
+    len(_ks_v): _ks_q
+    kmt_eq(_): "notifications are kept" _ks_v 1
+    remove_tree(_): _ks_root
+    file_exists(_ks_v): _ks_root
+    kmt_eq(_): "scratch desktop removed" _ks_v false
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    kmt_files(_):
+    kmt_launchers(_):
+    kmt_calendar(_):
+    kmt_settings(_):
+    set(ret): 0
+]
