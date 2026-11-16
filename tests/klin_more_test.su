@@ -1,0 +1,190 @@
+# Klin refine pass 1 (src/klin/more.su): new keys through klinpress, and the
+# library calls (text expressions, solver, RPN, conversions, dates,
+# statistics, bits and bytes, settings). No window is needed.
+$include "../src/libs/testing.su"
+$include "../src/klin/klin.su"
+
+keys(r): sequence [
+    klin_words(w): sequence
+    len(n): w
+    set(i): 0
+    while(_): {i < n} [
+        at(k): w i
+        klinpress(_): k
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+calc(r): mode sequence want [
+    klinreset(_): mode
+    keys(_): sequence
+    klindisplay(got):
+    concat(label): mode ": " sequence
+    assert_eq(r): label got want
+]
+
+near(r): text want [
+    klin_calc(v): text
+    concat(label): "calc " text
+    assert_near(r): label v want 0.000001
+]
+
+init(ret): arg_cnt arg_vec [
+    # memory and ANS
+    calc(_): "casual" "5 MS AC 2 + MR =" "7"
+    calc(_): "casual" "5 M+ 3 M+ MR" "8"
+    calc(_): "casual" "9 M+ 4 M- MC MR" "0"
+    calc(_): "casual" "6 * 7 = AC ANS + 1 =" "43"
+    klin_tape(tape):
+    len(nt): tape
+    at(last): tape {nt - 1}
+    assert_eq(_): "tape line" last "42 + 1 = 43"
+    # sci functions and operators
+    calc(_): "sci" "1 SINH" "1.17520119364"
+    calc(_): "sci" "0 COSH" "1"
+    calc(_): "sci" "2 7 CBRT" "3"
+    calc(_): "sci" "5 GAMMA" "24"
+    calc(_): "sci" "0 . 5 N!" "0.886226925453"
+    calc(_): "sci" "5 NCR 2 =" "10"
+    calc(_): "sci" "5 NPR 2 =" "20"
+    calc(_): "sci" "1 2 GCD 1 8 =" "6"
+    calc(_): "sci" "4 LCM 6 =" "12"
+    calc(_): "sci" "1 7 MOD 5 =" "2"
+    calc(_): "sci" "2 7 YROOT 3 =" "3"
+    calc(_): "sci" "8 LOGY 2 =" "3"
+    calc(_): "sci" "2 + 3 NCR 2 =" "5"
+    calc(_): "sci" "GRAD 1 0 0 SIN" "1"
+    calc(_): "sci" "1 2 . 5 DMS" "12.3"
+    calc(_): "sci" "1 2 . 3 DD" "12.5"
+    calc(_): "sci" "1 2 3 4 5 6 7 = ENG" "1.234567E6"
+    calc(_): "sci" "1 2 3 4 5 = SCI" "1.2345E4"
+    calc(_): "sci" "2 / 3 = FIX" "0.67"
+    # programmer mode
+    calc(_): "prog" "BYTE 2 5 5 + 1 =" "0"
+    calc(_): "prog" "BYTE 1 2 7 + 1 =" "-128"
+    calc(_): "prog" "BYTE UNSIGNED 2 0 0 + 1 0 0 =" "44"
+    calc(_): "prog" "1 2 NAND 1 0 =" "-9"
+    calc(_): "prog" "5 NOR 3 =" "-8"
+    calc(_): "prog" "5 XNOR 3 =" "-7"
+    calc(_): "prog" "2 5 5 POPCNT" "8"
+    calc(_): "prog" "DWORD 1 CLZ" "31"
+    calc(_): "prog" "8 CTZ" "3"
+    calc(_): "prog" "1 6 +/- SAR 2 =" "-4"
+    calc(_): "prog" "1 6 +/- SHR 6 0 =" "15"
+    calc(_): "casual" "NAND 5" "5"
+
+    # text expressions
+    near(_): "2PI" 6.283185307179586
+    near(_): "3(4+5)" 27
+    near(_): "200 + 10%" 220
+    near(_): "2^3^2" 512
+    near(_): "-2^2" 4
+    near(_): "5!" 120
+    near(_): "sqrt(16) + abs(-3)" 7
+    near(_): "cos(60)" 0.5
+    klin_calc(_): "r = 2"
+    near(_): "pi r^2" 12.566370614359172
+    klin_calc(_): "f(x) = x^2 + 1"
+    near(_): "f(3) + f(0)" 11
+    near(_): "ans + 1" 12
+    near(_): "c / 1000" 299792.458
+    klin_calc(bad): "2 +"
+    assert_eq(_): "calc error" bad "Invalid input"
+    klin_calc(bad): "nope(2)"
+    assert_eq(_): "unknown function" bad "unknown function nope"
+    klin_calc(bad): "1/0"
+    assert_eq(_): "divide by zero" bad "Cannot divide by zero"
+    klin_solve(root): "x^2 - 2" "x" 0 2
+    assert_near(_): "solve" root 1.4142135623730951 0.0000001
+    klin_derivative(d): "x^3" "x" 2
+    assert_near(_): "derivative" d 12 0.0001
+    klin_integral(a): "x^2" "x" 0 3
+    assert_near(_): "integral" a 9 0.000001
+    klin_rpn(v): "3 4 + 2 *"
+    assert_near(_): "rpn" v 14 0.0000001
+    klin_rpn(v): "2 sqrt dup *"
+    assert_near(_): "rpn functions" v 2 0.0000001
+    klin_rpn(v): "1 +"
+    assert_eq(_): "rpn underflow" v "Invalid input"
+
+    # conversions, dates, statistics
+    klin_convert(v): 100 "c" "f"
+    assert_near(_): "celsius to fahrenheit" v 212 0.0000001
+    klin_convert(v): 1 "mi" "km"
+    assert_near(_): "miles" v 1.609344 0.0000001
+    klin_convert(v): 1 "gib" "mb"
+    assert_near(_): "GiB to MB" v 1073.741824 0.0000001
+    klin_convert(v): 2 "kg" "s"
+    assert_eq(_): "convert mismatch" v "Invalid input"
+    klin_days_between(n): "2026-01-01" "2026-11-16"
+    assert_eq(_): "days between" n 319
+    klin_add_days(d): "2026-11-16" 50
+    assert_eq(_): "add days" d "2027-01-05"
+    klin_weekday(w): "1961-04-12"
+    assert_eq(_): "weekday" w "Wednesday"
+    vec(data): ""
+    push(_): data 2
+    push(_): data 4
+    push(_): data 4
+    push(_): data 4
+    push(_): data 5
+    push(_): data 5
+    push(_): data 7
+    push(_): data 9
+    klin_stats(st): data
+    btget(m): st "mean"
+    btget(sd): st "stddev"
+    btget(md): st "median"
+    assert_near(_): "stats" {m + sd + md} 11.5 0.00001
+    vec(xs): ""
+    vec(ys): ""
+    push(_): xs 1
+    push(_): xs 2
+    push(_): xs 3
+    push(_): ys 3
+    push(_): ys 5
+    push(_): ys 7
+    klin_regression(reg): xs ys
+    at(slope): reg 0
+    at(icpt): reg 1
+    at(corr): reg 2
+    assert_near(_): "regression" {slope * 100 + icpt * 10 + corr} 211 0.000001
+
+    # bits and bytes
+    klin_ieee(ie): 1.5
+    at(bits): ie 3
+    assert_eq(_): "IEEE 754" bits "3FF8000000000000"
+    klin_ieee(ie): -2.0
+    at(bits): ie 3
+    assert_eq(_): "IEEE 754 negative" bits "C000000000000000"
+    klin_bytes(b): 0x12345678 4
+    assert_eq(_): "memory order" b "78 56 34 12"
+    klin_char(c): 0x4141
+    assert_eq(_): "low byte as text" c "A"
+    klin_code(k): "Ж"
+    assert_eq(_): "code point" k 1046
+    klin_checksum(s): "123456789" "crc32"
+    assert_eq(_): "crc32" s "cbf43926"
+    klin_checksum(s): "a" "fnv1a"
+    assert_eq(_): "fnv1a" s "e40c292c"
+    klin_group(g): "-1234567.25"
+    assert_eq(_): "digit grouping" g "-1 234 567.25"
+
+    # settings
+    klinreset(_): "prog"
+    klinpress(_): "HEX"
+    klinpress(_): "WORD"
+    klin_settings_save(_): "tests/klin_settings_tmp"
+    klinreset(_): "casual"
+    klin_settings_load(_): "tests/klin_settings_tmp"
+    set(mode): klin_mode?
+    set(base): klin_base?
+    set(word): klin_word?
+    assert_eq(_): "settings" {mode = "prog" && base = 16 && word = 16} true
+    remove_file(_): "tests/klin_settings_tmp"
+    klin_tape_save(n): "tests/klin_tape_tmp"
+    assert_true(_): "tape saved" {n >= 0}
+    remove_file(_): "tests/klin_tape_tmp"
+    test_summary(ret):
+]

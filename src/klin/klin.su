@@ -34,6 +34,9 @@ $once
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
+$include "../libs/lists.su"
+$include "../libs/paths.su"
+$include "more.su"
 
 $define KLIN_WIDTH 360
 $define KLIN_HEIGHT 500
@@ -419,17 +422,25 @@ klin_to_radians(r): x [
     set(r): x
     set(_ktr_a): klin_angle?
     if(_): {_ktr_a = "DEG"} [ set(r): {x * 3.141592653589793 / 180} ]
+    if(_): {_ktr_a = "GRAD"} [ set(r): {x * 3.141592653589793 / 200} ]
 ]
 
 klin_from_radians(r): x [
     set(r): x
     set(_kfr_a): klin_angle?
     if(_): {_kfr_a = "DEG"} [ set(r): {x * 180 / 3.141592653589793} ]
+    if(_): {_kfr_a = "GRAD"} [ set(r): {x * 200 / 3.141592653589793} ]
 ]
 
 # A function key applied to x: the result, or an error message (a string).
 klin_unary(r): op x prog [
     set(r): x
+    klin_more_unary(_ku_more): op x prog
+    at(_ku_done): _ku_more 0
+    if(_): _ku_done [
+        at(r): _ku_more 1
+        return(r): r
+    ]
     if(_): prog [
         if(_): {op = "NOT"} [ set(r): {x ^ (0 - 1)} ]
         elif(_): {op = "+/-"} [ set(r): {0 - x} ]
@@ -515,11 +526,18 @@ klin_prec(r): op [
     elif(_): {op = "+" || op = "-"} [ set(r): 5 ]
     elif(_): {op = "*" || op = "/" || op = "MOD"} [ set(r): 6 ]
     elif(_): {op = "^"} [ set(r): 7 ]
+    if(_): {r = 0} [ klin_more_prec(r): op ]
 ]
 
 # a op b, or an error message (a string).
 klin_binary(r): op a b prog [
     set(r): "Invalid input"
+    klin_more_binary(_kb_more): op a b prog
+    at(_kb_done): _kb_more 0
+    if(_): _kb_done [
+        at(r): _kb_more 1
+        return(r): r
+    ]
     if(_): prog [
         if(_): {op = "+"} [ set(r): {a + b} ]
         elif(_): {op = "-"} [ set(r): {a - b} ]
@@ -645,6 +663,7 @@ klin_evaluate(r): toks prog [
 # --- state and keys ---------------------------------------------------------
 
 klinreset(r): mode [
+    klin_more_reset(_):
     set(klin_mode): mode!
     set(klin_base): 10!
     set(klin_angle): "DEG"!
@@ -687,7 +706,9 @@ klin_text_of(r): v [
         klinbasetext(r): v _kto_base
     ]
     else(_): [
-        klin_fmt(r): v
+        klin_more_text(r): v
+        typeof(_kto_t): r
+        if(_): {_kto_t != "string"} [ klin_fmt(r): v ]
     ]
 ]
 
@@ -775,6 +796,11 @@ klin_fail(r): message [
 # Sets the current value (a function result or a constant).
 klin_set_current(r): v [
     klin_is_number(_ksc_ok): v
+    klin_prog(_ksc_prog):
+    if(_): {_ksc_ok && _ksc_prog} [
+        typeof(_ksc_t): v
+        if(_): {_ksc_t = "integer"} [ klin_mask(v): v ]
+    ]
     if(_): _ksc_ok [
         set(klin_cur): v!
         set(klin_hascur): true!
@@ -920,6 +946,7 @@ klin_equals(r): [
         if(_): _keq_ok [
             concat(_keq_hist): _keq_text " ="
             set(klin_hist): _keq_hist!
+            klin_more_result(_): _keq_hist _keq_v
         ]
         klin_set_current(_): _keq_v
     ]
@@ -1010,6 +1037,7 @@ klin_is_function(r): key [
     if(_): {key = "LN" || key = "LOG" || key = "E^X" || key = "10^X" || key = "X^2" || key = "SQRT"} [ set(r): true ]
     if(_): {key = "1/X" || key = "N!" || key = "|X|" || key = "%"} [ set(r): true ]
     if(_): {key = "NOT" || key = "SW16" || key = "SW32" || key = "SW64" || key = "ROL" || key = "ROR"} [ set(r): true ]
+    if(_): {r = false} [ klin_more_is_function(r): key ]
 ]
 
 klinpress(r): key [
@@ -1022,11 +1050,17 @@ klinpress(r): key [
         set(klin_hist): ""!
     ]
     klin_digit_ok(_kp_digit): key
+    klin_more_prog_only(_kp_po): key
+    if(_): {_kp_po && _kp_prog = false} [ return(r): r ]
+    klin_more_press(_kp_more): key
+    if(_): _kp_more [ return(r): r ]
     if(_): {key = "AC"} [
         set(_kp_mode): klin_mode?
         set(_kp_base): klin_base?
         set(_kp_angle): klin_angle?
+        klin_more_saved(_kp_kept):
         klinreset(_): _kp_mode
+        klin_more_restore(_): _kp_kept
         set(klin_base): _kp_base!
         set(klin_angle): _kp_angle!
     ]
@@ -1053,7 +1087,8 @@ klinpress(r): key [
         klin_is_binary(_kp_bin): key
         klin_is_function(_kp_fun): key
         if(_): {_kp_bin && (key = "^" || key = "X^Y") && _kp_prog} [ set(_kp_bin): false ]
-        if(_): {_kp_bin && (key = "AND" || key = "OR" || key = "XOR" || key = "SHL" || key = "SHR" || key = "MOD") && _kp_prog = false} [ set(_kp_bin): false ]
+        if(_): {_kp_bin && (key = "AND" || key = "OR" || key = "XOR" || key = "SHL" || key = "SHR") && _kp_prog = false} [ set(_kp_bin): false ]
+        if(_): {_kp_bin && (key = "YROOT" || key = "LOGY") && _kp_prog} [ set(_kp_bin): false ]
         if(_): _kp_bin [ klin_binary_key(_): key ]
         elif(_): _kp_fun [
             klinvalue(_kp_v):
@@ -1628,6 +1663,29 @@ klin_app_keyup(result): window key [
 
 init(result): arg_count arg_values [
     set(result): 0
+    if(_): {arg_count >= 2} [
+        at(_kla_a0): arg_values 0
+        if(_): {_kla_a0 = "-e"} [
+            klinreset(_): "sci"
+            set(_kla_i): 1
+            while(_): {_kla_i < arg_count} [
+                at(_kla_ex): arg_values _kla_i
+                klin_calc(_kla_v): _kla_ex
+                klin_is_number(_kla_ok): _kla_v
+                if(_): _kla_ok [
+                    klin_fmt(_kla_t): _kla_v
+                    print(_): _kla_t
+                ]
+                else(_): [
+                    concat(_kla_m): "klin: " _kla_v "\n"
+                    write_stderr(_): _kla_m
+                    set(result): 1
+                ]
+                set(_kla_i): {_kla_i + 1}
+            ]
+            return(_): result
+        ]
+    ]
     set(_kla_mode): "casual"
     if(_): {arg_count = 1} [ at(_kla_mode): arg_values 0 ]
     if(_): {arg_count > 1 || (_kla_mode != "casual" && _kla_mode != "sci" && _kla_mode != "prog")} [
