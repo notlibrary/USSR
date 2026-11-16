@@ -1,0 +1,2877 @@
+# more.su - Mbl refine pass 1: motions, operators, text objects,
+# registers, search, ex commands, macros, repeat, marks and settings.
+# Mbl.su includes this file and calls into it from Mbl_next, Mbl_normal,
+# Mbl_insert, Mbl_runcmd, Mbl_load, Mbl_save and Mbl_render.
+#
+# Normal mode (with counts):
+#   b e W B E 0 ^ $ gg G NG f F t T ; , % { } H M L    motions
+#   Ctrl+D Ctrl+U Ctrl+F Ctrl+B  half and full pages;  zz zt zb  recentre
+#   d c y g~ gu gU > <  + motion or text object (iw aw iW aW i" a" i' a'
+#                 i( a( ib i[ a[ i{ a{ iB i< a<); dd cc yy >> << g~~ guu
+#                 gUU work on lines
+#   D C Y s S X r ~ J gJ p P  .  q{a-z} @{a-z} @@  m{a-z} '{a-z} `{a-z}
+#   / ? n N * #   search (regex); Ctrl+A Ctrl+X  add to the number
+#   "{a-z}        names the register of the next d/c/y/p/P
+# Insert mode: Tab inserts a tab (or spaces with :set et), Ctrl+W deletes
+#   a word, Ctrl+U to the line start, Enter keeps the indent with :set ai.
+# Ex commands: :N  :x  :sav F  :r F  :noh  :reg  :marks
+#   [range]d|y|>|<|j|s/pat/rep/[g][i]|g/pat/d|v/pat/d|sort [n] [u] [r]
+#   ranges: N  N,M  .  $  %  'a  .+N  $-N
+#   :set nu|nonu|ai|noai|et|noet|ic|noic|ws|nows|ts=N|sw=N|ff=dos|ff=unix|ro|noro
+# Files: CRLF line ends are kept (ff), writes go through a temporary file,
+#   "+N file" opens at line N, -R opens read-only.
+
+global(_): Mbl_kq Mbl_kq_pos Mbl_keylog Mbl_dot Mbl_rec_reg Mbl_rec Mbl_macros Mbl_last_macro
+global(_): Mbl_regs Mbl_reg_name Mbl_marks Mbl_search Mbl_search_back Mbl_find
+global(_): Mbl_opt_nu Mbl_opt_ai Mbl_opt_et Mbl_opt_ic Mbl_opt_ws Mbl_opt_ts Mbl_opt_sw
+global(_): Mbl_crlf Mbl_ro Mbl_cmd_start Mbl_cmd_ver Mbl_replaying
+
+Mbl_more_init(r): [
+    vec(Mbl_kq): ""
+    set(Mbl_kq_pos): 0
+    vec(Mbl_keylog): ""
+    vec(Mbl_dot): ""
+    set(Mbl_rec_reg): ""
+    vec(Mbl_rec): ""
+    btree(Mbl_macros):
+    set(Mbl_last_macro): ""
+    btree(Mbl_regs):
+    set(Mbl_reg_name): ""
+    btree(Mbl_marks):
+    set(Mbl_search): ""
+    set(Mbl_search_back): false
+    set(Mbl_find): ""
+    set(Mbl_opt_nu): false
+    set(Mbl_opt_ai): false
+    set(Mbl_opt_et): false
+    set(Mbl_opt_ic): false
+    set(Mbl_opt_ws): true
+    set(Mbl_opt_ts): 8
+    set(Mbl_opt_sw): 4
+    set(Mbl_crlf): false
+    set(Mbl_ro): false
+    set(Mbl_cmd_start): 0
+    set(Mbl_cmd_ver): 0
+    set(Mbl_replaying): false
+    set(r): 0
+]
+
+# ---------- the key queue (macros, ., mappings) ----------
+
+Mbl_queue_keys(r): keys [
+    len(n): keys
+    set(i): 0
+    vec(fresh): ""
+    # the new keys come first, then whatever was still queued
+    while(_): {i < n} [
+        at(b): keys i
+        push(_): fresh b
+        set(i): {i + 1}
+    ]
+    len(m): Mbl_kq
+    set(i): Mbl_kq_pos
+    while(_): {i < m} [
+        at(b): Mbl_kq i
+        push(_): fresh b
+        set(i): {i + 1}
+    ]
+    set(Mbl_kq): fresh
+    set(Mbl_kq_pos): 0
+    set(r): 0
+]
+
+# a queued key, or -2 when the queue is empty
+Mbl_queue_next(r): [
+    set(r): {0 - 2}
+    len(n): Mbl_kq
+    if(_): {Mbl_kq_pos < n} [
+        at(r): Mbl_kq Mbl_kq_pos
+        set(Mbl_kq_pos): {Mbl_kq_pos + 1}
+        if(_): {Mbl_kq_pos >= n} [
+            vec(Mbl_kq): ""
+            set(Mbl_kq_pos): 0
+        ]
+    ]
+]
+
+Mbl_log_key(r): b [
+    push(_): Mbl_keylog b
+    if(_): {Mbl_rec_reg != ""} [
+        push(_): Mbl_rec b
+    ]
+    set(r): 0
+]
+
+# called by the main loop around each dispatched key: keeps the keys of
+# the last change for "."
+Mbl_cmd_begin(r): [
+    if(_): {Mbl_mode = 0 && Mbl_count = 0 && Mbl_pend = 0} [
+        len(n): Mbl_keylog
+        set(Mbl_cmd_start): {n - 1}
+        set(Mbl_cmd_ver): Mbl_ver
+    ]
+    set(r): 0
+]
+
+Mbl_cmd_end(r): [
+    set(r): 0
+    if(_): {Mbl_mode = 0 && Mbl_count = 0 && Mbl_pend = 0} [
+        len(n): Mbl_keylog
+        # a key read ahead and pushed back (after ESC) starts the next command
+        set(ahead): {Mbl_pb > 0 - 1 && n > 0}
+        if(_): ahead [
+            set(n): {n - 1}
+        ]
+        if(_): {Mbl_ver != Mbl_cmd_ver && Mbl_cmd_start >= 0 && Mbl_cmd_start < n} [
+            at(first): Mbl_keylog Mbl_cmd_start
+            # u, Ctrl+R, :, . and @ are not repeated by .
+            if(_): {first != 117 && first != 18 && first != 58 && first != 46 && first != 64} [
+                vec(Mbl_dot): ""
+                set(i): Mbl_cmd_start
+                while(_): {i < n} [
+                    at(b): Mbl_keylog i
+                    push(_): Mbl_dot b
+                    set(i): {i + 1}
+                ]
+            ]
+        ]
+        if(_): ahead [
+            at(last): Mbl_keylog n
+            vec(Mbl_keylog): ""
+            push(_): Mbl_keylog last
+        ]
+        else(_): [
+            vec(Mbl_keylog): ""
+        ]
+        set(Mbl_cmd_start): 0
+    ]
+]
+
+# ---------- small helpers ----------
+
+Mbl_line(r): y [
+    at(r): Mbl_buf y
+]
+
+Mbl_nlines(r): [
+    len(r): Mbl_buf
+]
+
+Mbl_indent_of(r): line [
+    re_find(m): "^[ \\t]*" line
+    set(r): ""
+    typeof(t): m
+    if(_): {t = "vector"} [
+        at(r): m 0
+    ]
+]
+
+Mbl_first_nonblank(r): line [
+    Mbl_indent_of(ind): line
+    len(r): ind
+    len(n): line
+    if(_): {r >= n && n > 0} [
+        utf8_prev(r): line n
+    ]
+]
+
+Mbl_last_char(r): line [
+    len(n): line
+    set(r): 0
+    if(_): {n > 0} [
+        utf8_prev(r): line n
+    ]
+]
+
+Mbl_reg_set(r): text linewise [
+    vec(v): ""
+    push(_): v text
+    push(_): v linewise
+    set(name): Mbl_reg_name
+    if(_): {name = ""} [
+        set(name): "\""
+    ]
+    btput(_): Mbl_regs name v
+    btput(_): Mbl_regs "\"" v
+    set(Mbl_reg_name): ""
+    set(r): 0
+]
+
+Mbl_reg_get(r): [
+    set(name): Mbl_reg_name
+    if(_): {name = ""} [
+        set(name): "\""
+    ]
+    set(Mbl_reg_name): ""
+    btget(r): Mbl_regs name null
+]
+
+# ---------- motions ----------
+
+# A motion from the cursor: [found y x linewise inclusive]; it may read
+# more keys (f x, g g, ...). count >= 1.
+Mbl_motion(r): b count [
+    set(y): Mbl_cy
+    set(x): Mbl_cx
+    set(found): true
+    set(linewise): false
+    set(inclusive): false
+    Mbl_line(line): y
+    len(n): line
+    Mbl_nlines(nl):
+    if(_): {b = 104 || b = 8 || b = 127} [
+        set(k): 0
+        while(_): {k < count && x > 0} [
+            utf8_prev(x): line x
+            set(k): {k + 1}
+        ]
+    ]
+    elif(_): {b = 108 || b = 32} [
+        set(k): 0
+        while(_): {k < count && x < n} [
+            utf8_next(x): line x
+            set(k): {k + 1}
+        ]
+    ]
+    elif(_): {b = 106 || b = 107} [
+        set(linewise): true
+        if(_): {b = 106} [
+            set(y): {y + count}
+        ]
+        else(_): [
+            set(y): {y - count}
+        ]
+        if(_): {y < 0} [
+            set(y): 0
+        ]
+        if(_): {y >= nl} [
+            set(y): {nl - 1}
+        ]
+    ]
+    elif(_): {b = 48} [
+        set(x): 0
+    ]
+    elif(_): {b = 94} [
+        Mbl_first_nonblank(x): line
+    ]
+    elif(_): {b = 36} [
+        set(y): {y + count - 1}
+        if(_): {y >= nl} [
+            set(y): {nl - 1}
+        ]
+        Mbl_line(l2): y
+        Mbl_last_char(x): l2
+        set(inclusive): true
+    ]
+    elif(_): {b = 119 || b = 87} [
+        set(k): 0
+        while(_): {k < count} [
+            Mbl_word_next_pos(p): y x {b = 87}
+            at(y): p 0
+            at(x): p 1
+            set(k): {k + 1}
+        ]
+    ]
+    elif(_): {b = 98 || b = 66} [
+        set(k): 0
+        while(_): {k < count} [
+            Mbl_word_back_pos(p): y x {b = 66}
+            at(y): p 0
+            at(x): p 1
+            set(k): {k + 1}
+        ]
+    ]
+    elif(_): {b = 101 || b = 69} [
+        set(k): 0
+        while(_): {k < count} [
+            Mbl_word_end_pos(p): y x {b = 69}
+            at(y): p 0
+            at(x): p 1
+            set(k): {k + 1}
+        ]
+        set(inclusive): true
+    ]
+    elif(_): {b = 71} [
+        set(linewise): true
+        set(y): {nl - 1}
+        if(_): {Mbl_count_given} [
+            set(y): {count - 1}
+        ]
+        if(_): {y >= nl} [
+            set(y): {nl - 1}
+        ]
+        Mbl_line(l2): y
+        Mbl_first_nonblank(x): l2
+    ]
+    elif(_): {b = 103} [
+        Mbl_next(b2):
+        if(_): {b2 = 103} [
+            set(linewise): true
+            set(y): {count - 1}
+            if(_): {y >= nl} [
+                set(y): {nl - 1}
+            ]
+            Mbl_line(l2): y
+            Mbl_first_nonblank(x): l2
+        ]
+        elif(_): {b2 = 101 || b2 = 69} [
+            set(k): 0
+            while(_): {k < count} [
+                Mbl_word_end_back_pos(p): y x {b2 = 69}
+                at(y): p 0
+                at(x): p 1
+                set(k): {k + 1}
+            ]
+            set(inclusive): true
+        ]
+        else(_): [
+            set(found): false
+        ]
+    ]
+    elif(_): {b = 102 || b = 70 || b = 116 || b = 84} [
+        Mbl_next(cb):
+        Mbl_readchar(ch): cb
+        set(found): {ch != ""}
+        if(_): found [
+            chr(kind): b
+            concat(Mbl_find): kind ch
+            Mbl_find_pos(p): Mbl_find count false
+            at(found): p 0
+            at(x): p 1
+            set(inclusive): {b = 102 || b = 116}
+        ]
+    ]
+    elif(_): {b = 59 || b = 44} [
+        set(found): {Mbl_find != ""}
+        if(_): found [
+            Mbl_find_pos(p): Mbl_find count {b = 44}
+            at(found): p 0
+            at(x): p 1
+            slice(kind): Mbl_find 0 1
+            set(inclusive): {kind = "f" || kind = "t"}
+            if(_): {b = 44} [
+                set(inclusive): {kind = "F" || kind = "T"}
+                set(inclusive): false
+            ]
+        ]
+    ]
+    elif(_): {b = 37} [
+        Mbl_match_pos(p): y x
+        at(found): p 0
+        at(y): p 1
+        at(x): p 2
+        set(inclusive): true
+    ]
+    elif(_): {b = 125 || b = 123} [
+        set(k): 0
+        while(_): {k < count} [
+            if(_): {b = 125} [
+                set(y): {y + 1}
+                set(go): {y < nl - 1}
+                while(_): go [
+                    Mbl_line(l2): y
+                    str_trim(t2): l2
+                    set(go): {t2 != "" && y < nl - 1}
+                    if(_): go [
+                        set(y): {y + 1}
+                    ]
+                ]
+                if(_): {y >= nl} [
+                    set(y): {nl - 1}
+                ]
+            ]
+            else(_): [
+                set(y): {y - 1}
+                set(go): {y > 0}
+                while(_): go [
+                    Mbl_line(l2): y
+                    str_trim(t2): l2
+                    set(go): {t2 != "" && y > 0}
+                    if(_): go [
+                        set(y): {y - 1}
+                    ]
+                ]
+                if(_): {y < 0} [
+                    set(y): 0
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+        set(x): 0
+    ]
+    elif(_): {b = 72 || b = 77 || b = 76} [
+        set(linewise): true
+        set(rows): {Mbl_rows - 1}
+        set(last): {Mbl_top + rows - 1}
+        if(_): {last >= nl} [
+            set(last): {nl - 1}
+        ]
+        if(_): {b = 72} [
+            set(y): {Mbl_top + count - 1}
+        ]
+        elif(_): {b = 76} [
+            set(y): {last - count + 1}
+        ]
+        else(_): [
+            str_trunc(y): {(Mbl_top + last) / 2}
+        ]
+        if(_): {y > last} [
+            set(y): last
+        ]
+        if(_): {y < Mbl_top} [
+            set(y): Mbl_top
+        ]
+        Mbl_line(l2): y
+        Mbl_first_nonblank(x): l2
+    ]
+    elif(_): {b = 39 || b = 96} [
+        Mbl_next(mb):
+        chr(mk): mb
+        btget(m): Mbl_marks mk null
+        typeof(mt): m
+        set(found): {mt = "vector"}
+        if(_): found [
+            at(y): m 0
+            at(x): m 1
+            if(_): {y >= nl} [
+                set(y): {nl - 1}
+            ]
+            if(_): {b = 39} [
+                set(linewise): true
+                Mbl_line(l2): y
+                Mbl_first_nonblank(x): l2
+            ]
+        ]
+    ]
+    else(_): [
+        set(found): false
+    ]
+    vec(r): ""
+    push(_): r found
+    push(_): r y
+    push(_): r x
+    push(_): r linewise
+    push(_): r inclusive
+]
+
+# class of the character at (y, x), with big words seeing only blanks
+Mbl_cls(r): line x big [
+    len(n): line
+    set(r): 0
+    if(_): {x < n} [
+        Mbl_class(r): line x
+        if(_): {big && r != 0} [
+            set(r): 1
+        ]
+    ]
+]
+
+Mbl_word_next_pos(r): y x big [
+    Mbl_nlines(nl):
+    Mbl_line(line): y
+    len(n): line
+    Mbl_cls(c): line x big
+    if(_): {c != 0} [
+        set(go): true
+        while(_): go [
+            utf8_next(x): line x
+            Mbl_cls(c2): line x big
+            set(go): {x < n && c2 = c}
+        ]
+    ]
+    set(go): true
+    while(_): go [
+        if(_): {x >= n} [
+            if(_): {y + 1 < nl} [
+                set(y): {y + 1}
+                Mbl_line(line): y
+                len(n): line
+                set(x): 0
+                if(_): {n = 0} [
+                    set(go): false
+                ]
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        else(_): [
+            Mbl_cls(c2): line x big
+            if(_): {c2 = 0} [
+                utf8_next(x): line x
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+    ]
+    vec(r): ""
+    push(_): r y
+    push(_): r x
+]
+
+Mbl_word_back_pos(r): y x big [
+    Mbl_line(line): y
+    # step back once, over blanks and line starts
+    set(go): true
+    while(_): go [
+        if(_): {x = 0} [
+            if(_): {y > 0} [
+                set(y): {y - 1}
+                Mbl_line(line): y
+                len(x): line
+                if(_): {x = 0} [
+                    set(go): false
+                ]
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        else(_): [
+            utf8_prev(x): line x
+            Mbl_cls(c): line x big
+            if(_): {c != 0} [
+                set(go): false
+            ]
+        ]
+    ]
+    len(n): line
+    if(_): {n > 0 && x < n} [
+        Mbl_cls(c): line x big
+        set(go): {x > 0}
+        while(_): go [
+            utf8_prev(px): line x
+            Mbl_cls(pc): line px big
+            if(_): {pc = c && c != 0} [
+                set(x): px
+                set(go): {x > 0}
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+    ]
+    vec(r): ""
+    push(_): r y
+    push(_): r x
+]
+
+Mbl_word_end_pos(r): y x big [
+    Mbl_nlines(nl):
+    Mbl_line(line): y
+    len(n): line
+    # move at least one character, then over blanks and lines
+    utf8_next(x): line x
+    set(go): true
+    while(_): go [
+        if(_): {x >= n} [
+            if(_): {y + 1 < nl} [
+                set(y): {y + 1}
+                Mbl_line(line): y
+                len(n): line
+                set(x): 0
+            ]
+            else(_): [
+                Mbl_last_char(x): line
+                set(go): false
+            ]
+        ]
+        else(_): [
+            Mbl_cls(c): line x big
+            if(_): {c = 0} [
+                utf8_next(x): line x
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+    ]
+    if(_): {x < n} [
+        Mbl_cls(c): line x big
+        set(go): true
+        while(_): go [
+            utf8_next(nx): line x
+            Mbl_cls(nc): line nx big
+            if(_): {nx < n && nc = c} [
+                set(x): nx
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+    ]
+    vec(r): ""
+    push(_): r y
+    push(_): r x
+]
+
+Mbl_word_end_back_pos(r): y x big [
+    Mbl_line(line): y
+    len(n): line
+    set(c0): 0
+    if(_): {x < n} [
+        Mbl_cls(c0): line x big
+    ]
+    # leave the current word, then skip blanks backwards
+    set(go): true
+    while(_): go [
+        if(_): {x = 0} [
+            if(_): {y > 0} [
+                set(y): {y - 1}
+                Mbl_line(line): y
+                len(n): line
+                set(x): n
+                if(_): {n = 0} [
+                    set(go): false
+                ]
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        else(_): [
+            utf8_prev(x): line x
+            Mbl_cls(c): line x big
+            if(_): {c != 0 && c != c0} [
+                set(go): false
+            ]
+            if(_): {c = 0} [
+                set(c0): 0
+            ]
+        ]
+    ]
+    vec(r): ""
+    push(_): r y
+    push(_): r x
+]
+
+# f F t T on the cursor line: [found x]
+Mbl_find_pos(r): spec count reverse [
+    slice(kind): spec 0 1
+    len(sl): spec
+    slice(ch): spec 1 {sl - 1}
+    Mbl_line(line): Mbl_cy
+    len(n): line
+    set(forward): {kind = "f" || kind = "t"}
+    if(_): reverse [
+        set(forward): {forward = false}
+    ]
+    set(till): {kind = "t" || kind = "T"}
+    set(x): Mbl_cx
+    set(k): 0
+    set(found): true
+    while(_): {found && k < count} [
+        set(hit): false
+        set(p): x
+        set(go): true
+        while(_): {go && hit = false} [
+            if(_): forward [
+                utf8_next(np): line p
+                set(go): {np > p && np < n}
+                set(p): np
+            ]
+            else(_): [
+                set(go): {p > 0}
+                if(_): go [
+                    utf8_prev(p): line p
+                ]
+            ]
+            if(_): go [
+                utf8_next(e): line p
+                slice(c): line p {e - p}
+                if(_): {c = ch} [
+                    set(hit): true
+                ]
+            ]
+        ]
+        if(_): hit [
+            set(x): p
+        ]
+        else(_): [
+            set(found): false
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): {found && till} [
+        if(_): forward [
+            utf8_prev(x): line x
+        ]
+        else(_): [
+            utf8_next(x): line x
+        ]
+    ]
+    vec(r): ""
+    push(_): r found
+    push(_): r x
+]
+
+# % : the bracket matching the first one at or after the cursor
+Mbl_match_pos(r): y x [
+    set(open): "([{"
+    set(close): ")]}"
+    Mbl_line(line): y
+    len(n): line
+    set(at_): {0 - 1}
+    set(p): x
+    while(_): {at_ < 0 && p < n} [
+        at(c): line p
+        str_find(io): open c 0
+        str_find(ic): close c 0
+        if(_): {io >= 0 || ic >= 0} [
+            set(at_): p
+        ]
+        else(_): [
+            set(p): {p + 1}
+        ]
+    ]
+    vec(r): ""
+    if(_): {at_ < 0} [
+        push(_): r false
+        push(_): r y
+        push(_): r x
+        return(r): r
+    ]
+    at(c): line at_
+    str_find(io): open c 0
+    set(forward): {io >= 0}
+    if(_): forward [
+        at(mate): close io
+    ]
+    else(_): [
+        str_find(ic): close c 0
+        at(mate): open ic
+    ]
+    set(depth): 0
+    set(cy): y
+    set(cx): at_
+    Mbl_nlines(nl):
+    set(found): false
+    set(go): true
+    while(_): go [
+        Mbl_line(l2): cy
+        len(n2): l2
+        if(_): {cx >= 0 && cx < n2} [
+            at(ch): l2 cx
+            if(_): {ch = c} [
+                set(depth): {depth + 1}
+            ]
+            elif(_): {ch = mate} [
+                set(depth): {depth - 1}
+                if(_): {depth = 0} [
+                    set(found): true
+                    set(go): false
+                ]
+            ]
+        ]
+        if(_): go [
+            if(_): forward [
+                set(cx): {cx + 1}
+                if(_): {cx >= n2} [
+                    set(cy): {cy + 1}
+                    set(cx): 0
+                    if(_): {cy >= nl} [
+                        set(go): false
+                    ]
+                    else(_): [
+                        set(cx): {0 - 1}
+                        set(cx): 0
+                        Mbl_line(l3): cy
+                        len(n3): l3
+                        if(_): {n3 = 0} [
+                            set(cx): {0 - 1}
+                        ]
+                    ]
+                ]
+            ]
+            else(_): [
+                set(cx): {cx - 1}
+                while(_): {cx < 0 && go} [
+                    set(cy): {cy - 1}
+                    if(_): {cy < 0} [
+                        set(go): false
+                    ]
+                    else(_): [
+                        Mbl_line(l3): cy
+                        len(n3): l3
+                        set(cx): {n3 - 1}
+                    ]
+                ]
+            ]
+        ]
+        if(_): {cx < 0 && go && forward} [
+            set(cy): {cy + 1}
+            set(cx): 0
+            if(_): {cy >= nl} [
+                set(go): false
+            ]
+        ]
+    ]
+    push(_): r found
+    push(_): r cy
+    push(_): r cx
+]
+
+# ---------- text objects ----------
+
+# i/a + object at the cursor: [found y1 x1 y2 x2 linewise] with (y2, x2)
+# exclusive
+Mbl_text_object(r): around kind [
+    vec(r): ""
+    Mbl_line(line): Mbl_cy
+    len(n): line
+    set(found): false
+    set(x1): Mbl_cx
+    set(x2): Mbl_cx
+    if(_): {kind = 119 || kind = 87} [
+        set(big): {kind = 87}
+        if(_): {n > 0} [
+            set(found): true
+            Mbl_cls(c): line Mbl_cx big
+            set(go): {x1 > 0}
+            while(_): go [
+                utf8_prev(px): line x1
+                Mbl_cls(pc): line px big
+                if(_): {pc = c} [
+                    set(x1): px
+                    set(go): {x1 > 0}
+                ]
+                else(_): [
+                    set(go): false
+                ]
+            ]
+            set(go): true
+            while(_): go [
+                Mbl_cls(nc): line x2 big
+                if(_): {x2 < n && nc = c} [
+                    utf8_next(x2): line x2
+                ]
+                else(_): [
+                    set(go): false
+                ]
+            ]
+            if(_): around [
+                # trailing blanks, or leading ones at the end of the line
+                set(before): x2
+                set(go): true
+                while(_): go [
+                    Mbl_cls(nc): line x2 big
+                    if(_): {x2 < n && nc = 0} [
+                        utf8_next(x2): line x2
+                    ]
+                    else(_): [
+                        set(go): false
+                    ]
+                ]
+                if(_): {x2 = before} [
+                    set(go): {x1 > 0}
+                    while(_): go [
+                        utf8_prev(px): line x1
+                        Mbl_cls(pc): line px big
+                        if(_): {pc = 0} [
+                            set(x1): px
+                            set(go): {x1 > 0}
+                        ]
+                        else(_): [
+                            set(go): false
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]
+    elif(_): {kind = 34 || kind = 39 || kind = 96} [
+        chr(q): kind
+        # the quotes around the cursor on this line
+        set(left): {0 - 1}
+        set(p): 0
+        set(right): {0 - 1}
+        set(qs): 0
+        while(_): {p < n && right < 0} [
+            at(c): line p
+            if(_): {c = q} [
+                if(_): {left >= 0 && p >= Mbl_cx} [
+                    set(right): p
+                ]
+                elif(_): {p <= Mbl_cx || left < 0} [
+                    if(_): {left >= 0 && p <= Mbl_cx} [
+                        set(left): {0 - 1}
+                        set(qs): {qs + 1}
+                        if(_): {qs % 2 = 1} [
+                            set(left): p
+                        ]
+                    ]
+                    else(_): [
+                        set(left): p
+                        set(qs): {qs + 1}
+                    ]
+                ]
+            ]
+            set(p): {p + 1}
+        ]
+        if(_): {left >= 0 && right > left} [
+            set(found): true
+            set(x1): {left + 1}
+            set(x2): right
+            if(_): around [
+                set(x1): left
+                set(x2): {right + 1}
+            ]
+        ]
+    ]
+    else(_): [
+        chr(kc): kind
+        set(o): ""
+        set(c): ""
+        if(_): {kc = "(" || kc = ")" || kc = "b"} [
+            set(o): "("
+            set(c): ")"
+        ]
+        elif(_): {kc = "[" || kc = "]"} [
+            set(o): "["
+            set(c): "]"
+        ]
+        elif(_): {kc = "{" || kc = "}" || kc = "B"} [
+            set(o): "{"
+            set(c): "}"
+        ]
+        elif(_): {kc = "<" || kc = ">"} [
+            set(o): "<"
+            set(c): ">"
+        ]
+        if(_): {o != ""} [
+            # search back for an unmatched opener, then its match
+            set(depth): 0
+            set(cy): Mbl_cy
+            set(cx): Mbl_cx
+            set(oy): {0 - 1}
+            set(ox): 0
+            Mbl_line(l2): cy
+            len(n2): l2
+            if(_): {cx < n2} [
+                at(ch0): l2 cx
+                if(_): {ch0 = o} [
+                    set(oy): cy
+                    set(ox): cx
+                ]
+            ]
+            while(_): {oy < 0 && cy >= 0} [
+                set(cx): {cx - 1}
+                if(_): {cx < 0} [
+                    set(cy): {cy - 1}
+                    if(_): {cy >= 0} [
+                        Mbl_line(l2): cy
+                        len(n2): l2
+                        set(cx): n2
+                    ]
+                ]
+                else(_): [
+                    Mbl_line(l2): cy
+                    at(ch): l2 cx
+                    if(_): {ch = c} [
+                        set(depth): {depth + 1}
+                    ]
+                    elif(_): {ch = o} [
+                        if(_): {depth = 0} [
+                            set(oy): cy
+                            set(ox): cx
+                        ]
+                        else(_): [
+                            set(depth): {depth - 1}
+                        ]
+                    ]
+                ]
+            ]
+            if(_): {oy >= 0} [
+                set(saved_y): Mbl_cy
+                set(saved_x): Mbl_cx
+                Mbl_match_pos(m): oy ox
+                at(mf): m 0
+                at(my): m 1
+                at(mx): m 2
+                if(_): mf [
+                    set(found): true
+                    vec(r): ""
+                    push(_): r true
+                    if(_): around [
+                        push(_): r oy
+                        push(_): r ox
+                        push(_): r my
+                        push(_): r {mx + 1}
+                    ]
+                    else(_): [
+                        push(_): r oy
+                        push(_): r {ox + 1}
+                        push(_): r my
+                        push(_): r mx
+                    ]
+                    push(_): r false
+                    return(r): r
+                ]
+            ]
+        ]
+    ]
+    push(_): r found
+    push(_): r Mbl_cy
+    push(_): r x1
+    push(_): r Mbl_cy
+    push(_): r x2
+    push(_): r false
+]
+
+# ---------- ranges of text ----------
+
+# the text from (y1, x1) to (y2, x2), exclusive, with "\n" between lines
+Mbl_get_range(r): y1 x1 y2 x2 [
+    Mbl_line(a): y1
+    if(_): {y1 = y2} [
+        slice(r): a x1 {x2 - x1}
+        return(r): r
+    ]
+    len(an): a
+    slice(r): a x1 {an - x1}
+    set(y): {y1 + 1}
+    while(_): {y < y2} [
+        Mbl_line(m): y
+        concat(r): r "\n" m
+        set(y): {y + 1}
+    ]
+    Mbl_line(b): y2
+    slice(bp): b 0 x2
+    concat(r): r "\n" bp
+]
+
+# removes (y1, x1)..(y2, x2) exclusive, joining the ends
+Mbl_del_range(r): y1 x1 y2 x2 [
+    Mbl_line(a): y1
+    Mbl_line(b): y2
+    slice(head): a 0 x1
+    len(bn): b
+    slice(tail): b x2 {bn - x2}
+    concat(joined): head tail
+    vec(nb): ""
+    Mbl_nlines(nl):
+    set(y): 0
+    while(_): {y < nl} [
+        if(_): {y < y1 || y > y2} [
+            at(l): Mbl_buf y
+            push(_): nb l
+        ]
+        elif(_): {y = y1} [
+            push(_): nb joined
+        ]
+        set(y): {y + 1}
+    ]
+    set(Mbl_buf): nb
+    set(Mbl_cy): y1
+    set(Mbl_cx): x1
+    Mbl_touch(_):
+    set(r): 0
+]
+
+Mbl_del_lines(r): y1 y2 [
+    vec(nb): ""
+    Mbl_nlines(nl):
+    set(y): 0
+    while(_): {y < nl} [
+        if(_): {y < y1 || y > y2} [
+            at(l): Mbl_buf y
+            push(_): nb l
+        ]
+        set(y): {y + 1}
+    ]
+    len(left): nb
+    if(_): {left = 0} [
+        push(_): nb ""
+    ]
+    set(Mbl_buf): nb
+    len(left): nb
+    set(Mbl_cy): y1
+    if(_): {Mbl_cy >= left} [
+        set(Mbl_cy): {left - 1}
+    ]
+    Mbl_line(l): Mbl_cy
+    Mbl_first_nonblank(Mbl_cx): l
+    Mbl_touch(_):
+    set(r): 0
+]
+
+Mbl_lines_text(r): y1 y2 [
+    set(r): ""
+    set(y): y1
+    while(_): {y <= y2} [
+        Mbl_line(l): y
+        if(_): {y > y1} [
+            concat(r): r "\n"
+        ]
+        concat(r): r l
+        set(y): {y + 1}
+    ]
+]
+
+# replaces lines y1..y2 with the lines of a vector
+Mbl_replace_lines(r): y1 y2 lines [
+    vec(nb): ""
+    Mbl_nlines(nl):
+    set(y): 0
+    while(_): {y < nl} [
+        if(_): {y = y1} [
+            len(k): lines
+            set(i): 0
+            while(_): {i < k} [
+                at(l): lines i
+                push(_): nb l
+                set(i): {i + 1}
+            ]
+        ]
+        if(_): {y < y1 || y > y2} [
+            at(l): Mbl_buf y
+            push(_): nb l
+        ]
+        set(y): {y + 1}
+    ]
+    len(left): nb
+    if(_): {left = 0} [
+        push(_): nb ""
+    ]
+    set(Mbl_buf): nb
+    Mbl_touch(_):
+    set(r): 0
+]
+
+Mbl_case_text(r): text how [
+    if(_): {how = "u"} [
+        str_lower_ru(r): text
+    ]
+    elif(_): {how = "U"} [
+        str_upper_ru(r): text
+    ]
+    else(_): [
+        set(r): ""
+        len(n): text
+        set(i): 0
+        while(_): {i < n} [
+            utf8_next(j): text i
+            slice(c): text i {j - i}
+            str_upper_ru(up): c
+            if(_): {up = c} [
+                str_lower_ru(c): c
+            ]
+            else(_): [
+                set(c): up
+            ]
+            concat(r): r c
+            set(i): j
+        ]
+    ]
+]
+
+Mbl_shift_lines(r): y1 y2 dir [
+    vec(out): ""
+    str_repeat(unit): " " Mbl_opt_sw
+    set(y): y1
+    while(_): {y <= y2} [
+        Mbl_line(l): y
+        if(_): {dir > 0} [
+            if(_): {l != ""} [
+                concat(l): unit l
+            ]
+        ]
+        else(_): [
+            set(k): 0
+            set(go): true
+            while(_): {go && k < Mbl_opt_sw} [
+                str_starts(sp): l " "
+                str_starts(tb): l "\t"
+                len(ln): l
+                if(_): sp [
+                    slice(l): l 1 {ln - 1}
+                    set(k): {k + 1}
+                ]
+                elif(_): tb [
+                    slice(l): l 1 {ln - 1}
+                    set(go): false
+                ]
+                else(_): [
+                    set(go): false
+                ]
+            ]
+        ]
+        push(_): out l
+        set(y): {y + 1}
+    ]
+    Mbl_replace_lines(_): y1 y2 out
+    set(Mbl_cy): y1
+    Mbl_line(l): y1
+    Mbl_first_nonblank(Mbl_cx): l
+    set(r): 0
+]
+
+# ---------- operators ----------
+
+# op: 100 d, 99 c, 121 y, 117 gu, 85 gU, 126 g~, 62 >, 60 <
+Mbl_operator(r): op count [
+    set(r): 0
+    Mbl_next(b):
+    # a count after the operator multiplies
+    set(n2): 0
+    while(_): {(b >= 49 && b <= 57) || (b = 48 && n2 > 0)} [
+        set(n2): {n2 * 10 + b - 48}
+        Mbl_next(b):
+    ]
+    if(_): {n2 > 0} [
+        set(count): {count * n2}
+        set(Mbl_count_given): true
+    ]
+    set(found): false
+    set(linewise): false
+    set(y1): Mbl_cy
+    set(x1): Mbl_cx
+    set(y2): Mbl_cy
+    set(x2): Mbl_cx
+    # the operator doubled (dd cc yy >> << guu gUU g~~) or its last letter
+    set(same): {b = op}
+    if(_): {(op = 117 && b = 117) || (op = 85 && b = 85) || (op = 126 && b = 126)} [
+        set(same): true
+    ]
+    if(_): {op = 117 || op = 85 || op = 126} [
+        if(_): {b = 103} [
+            Mbl_next(b3):
+            set(same): {b3 = op}
+            if(_): {same = false} [
+                set(Mbl_pb): b3
+            ]
+        ]
+    ]
+    if(_): same [
+        Mbl_nlines(nl):
+        set(found): true
+        set(linewise): true
+        set(y2): {Mbl_cy + count - 1}
+        if(_): {y2 >= nl} [
+            set(y2): {nl - 1}
+        ]
+    ]
+    elif(_): {b = 105 || b = 97} [
+        Mbl_next(kind):
+        Mbl_text_object(t): {b = 97} kind
+        at(found): t 0
+        at(y1): t 1
+        at(x1): t 2
+        at(y2): t 3
+        at(x2): t 4
+    ]
+    elif(_): {op = 99 && (b = 119 || b = 87)} [
+        # cw changes to the end of the word, like ce (vi's rule)
+        Mbl_line(line): Mbl_cy
+        len(n): line
+        Mbl_cls(c): line Mbl_cx {b = 87}
+        if(_): {c = 0 || n = 0 || b = 119} [
+            # cw keeps Mbl's own rules (blanks, counts, punctuation)
+            Mbl_begin_change(_):
+            Mbl_change_word(_): count
+            set(r): 1
+            return(r): r
+        ]
+        set(x): Mbl_cx
+        set(y): Mbl_cy
+        set(k): 0
+        while(_): {k < count} [
+            if(_): {k > 0} [
+                Mbl_word_end_pos(p): y x {b = 87}
+            ]
+            else(_): [
+                # the end of the word under the cursor
+                set(xe): x
+                set(go): true
+                while(_): go [
+                    utf8_next(nx): line xe
+                    Mbl_cls(nc): line nx {b = 87}
+                    if(_): {nx < n && nc = c} [
+                        set(xe): nx
+                    ]
+                    else(_): [
+                        set(go): false
+                    ]
+                ]
+                vec(p): ""
+                push(_): p y
+                push(_): p xe
+            ]
+            at(y): p 0
+            at(x): p 1
+            set(k): {k + 1}
+        ]
+        set(found): true
+        set(y2): y
+        Mbl_line(l2): y
+        utf8_next(x2): l2 x
+    ]
+    else(_): [
+        Mbl_motion(m): b count
+        at(found): m 0
+        at(my): m 1
+        at(mx): m 2
+        at(linewise): m 3
+        at(incl): m 4
+        if(_): found [
+            set(back): {my < Mbl_cy || (my = Mbl_cy && mx < Mbl_cx)}
+            if(_): back [
+                set(y1): my
+                set(x1): mx
+                set(y2): Mbl_cy
+                set(x2): Mbl_cx
+            ]
+            else(_): [
+                set(y2): my
+                set(x2): mx
+            ]
+            if(_): incl [
+                Mbl_line(l2): y2
+                utf8_next(x2): l2 x2
+            ]
+            # dw on the last word of a line stops at the line end
+            if(_): {(b = 119 || b = 87) && y2 > y1 && linewise = false} [
+                Mbl_line(l1): y1
+                set(y2): y1
+                len(x2): l1
+            ]
+        ]
+    ]
+    if(_): {found = false} [
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {linewise} [
+        if(_): {y1 > y2} [
+            set(t): y1
+            set(y1): y2
+            set(y2): t
+        ]
+        Mbl_lines_text(text): y1 y2
+        if(_): {op = 121} [
+            Mbl_reg_set(_): text true
+            set(Mbl_cy): y1
+            Mbl_fixcx(_):
+        ]
+        elif(_): {op = 100} [
+            Mbl_begin_change(_):
+            Mbl_reg_set(_): text true
+            Mbl_del_lines(_): y1 y2
+        ]
+        elif(_): {op = 99} [
+            Mbl_begin_change(_):
+            Mbl_reg_set(_): text true
+            Mbl_line(first): y1
+            set(ind): ""
+            if(_): Mbl_opt_ai [
+                Mbl_indent_of(ind): first
+            ]
+            vec(one): ""
+            push(_): one ind
+            Mbl_replace_lines(_): y1 y2 one
+            set(Mbl_cy): y1
+            len(Mbl_cx): ind
+            set(Mbl_mode): 1
+        ]
+        elif(_): {op = 62 || op = 60} [
+            Mbl_begin_change(_):
+            set(dir): 1
+            if(_): {op = 60} [
+                set(dir): {0 - 1}
+            ]
+            Mbl_shift_lines(_): y1 y2 dir
+        ]
+        else(_): [
+            Mbl_begin_change(_):
+            vec(out): ""
+            set(y): y1
+            while(_): {y <= y2} [
+                Mbl_line(l): y
+                chr(how): op
+                Mbl_case_text(l): l how
+                push(_): out l
+                set(y): {y + 1}
+            ]
+            Mbl_replace_lines(_): y1 y2 out
+            set(Mbl_cy): y1
+            Mbl_fixcx(_):
+        ]
+    ]
+    else(_): [
+        Mbl_get_range(text): y1 x1 y2 x2
+        if(_): {op = 121} [
+            Mbl_reg_set(_): text false
+            set(Mbl_cy): y1
+            set(Mbl_cx): x1
+        ]
+        elif(_): {op = 100 || op = 99} [
+            Mbl_begin_change(_):
+            Mbl_reg_set(_): text false
+            Mbl_del_range(_): y1 x1 y2 x2
+            if(_): {op = 99} [
+                set(Mbl_mode): 1
+            ]
+            else(_): [
+                Mbl_fixcx(_):
+            ]
+        ]
+        elif(_): {op = 62 || op = 60} [
+            Mbl_begin_change(_):
+            set(dir): 1
+            if(_): {op = 60} [
+                set(dir): {0 - 1}
+            ]
+            Mbl_shift_lines(_): y1 y2 dir
+        ]
+        else(_): [
+            Mbl_begin_change(_):
+            chr(how): op
+            Mbl_case_text(changed): text how
+            Mbl_del_range(_): y1 x1 y2 x2
+            Mbl_insert_text(_): changed
+            set(Mbl_cy): y1
+            set(Mbl_cx): x1
+            Mbl_fixcx(_):
+        ]
+    ]
+    Mbl_scroll(_):
+    set(r): 1
+]
+
+# inserts text (may hold "\n") at the cursor; the cursor ends after it
+Mbl_insert_text(r): text [
+    Mbl_line(line): Mbl_cy
+    len(n): line
+    slice(head): line 0 Mbl_cx
+    slice(tail): line Mbl_cx {n - Mbl_cx}
+    str_split(parts): text "\n"
+    len(k): parts
+    vec(newlines): ""
+    set(i): 0
+    while(_): {i < k} [
+        at(p): parts i
+        if(_): {i = 0} [
+            concat(p): head p
+        ]
+        if(_): {i = k - 1} [
+            len(pl): p
+            set(endx): pl
+            concat(p): p tail
+        ]
+        push(_): newlines p
+        set(i): {i + 1}
+    ]
+    Mbl_replace_lines(_): Mbl_cy Mbl_cy newlines
+    set(Mbl_cy): {Mbl_cy + k - 1}
+    set(Mbl_cx): endx
+    set(r): 0
+]
+
+Mbl_put(r): after count [
+    Mbl_reg_get(reg):
+    set(r): 0
+    typeof(t): reg
+    if(_): {t != "vector"} [
+        return(r): r
+    ]
+    at(text): reg 0
+    at(linewise): reg 1
+    Mbl_begin_change(_):
+    set(all): text
+    set(k): 1
+    while(_): {k < count} [
+        if(_): linewise [
+            concat(all): all "\n" text
+        ]
+        else(_): [
+            concat(all): all text
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): linewise [
+        str_split(lines): all "\n"
+        set(at_): Mbl_cy
+        if(_): after [
+            set(at_): {Mbl_cy + 1}
+        ]
+        vec(nb): ""
+        Mbl_nlines(nl):
+        set(y): 0
+        while(_): {y <= nl} [
+            if(_): {y = at_} [
+                len(ln): lines
+                set(i): 0
+                while(_): {i < ln} [
+                    at(l): lines i
+                    push(_): nb l
+                    set(i): {i + 1}
+                ]
+            ]
+            if(_): {y < nl} [
+                at(l): Mbl_buf y
+                push(_): nb l
+            ]
+            set(y): {y + 1}
+        ]
+        set(Mbl_buf): nb
+        Mbl_touch(_):
+        set(Mbl_cy): at_
+        Mbl_line(l): at_
+        Mbl_first_nonblank(Mbl_cx): l
+    ]
+    else(_): [
+        Mbl_line(line): Mbl_cy
+        len(n): line
+        if(_): {after && n > 0} [
+            utf8_next(Mbl_cx): line Mbl_cx
+        ]
+        Mbl_insert_text(_): all
+        Mbl_line(l2): Mbl_cy
+        if(_): {Mbl_cx > 0} [
+            utf8_prev(Mbl_cx): l2 Mbl_cx
+        ]
+    ]
+    Mbl_fixcx(_):
+    Mbl_scroll(_):
+]
+
+# ---------- search ----------
+
+Mbl_flags(r): [
+    set(r): ""
+    if(_): Mbl_opt_ic [
+        set(r): "i"
+    ]
+]
+
+# the next match of pattern from the cursor: [found y x]
+Mbl_search_pos(r): pattern backward [
+    Mbl_flags(fl):
+    Mbl_nlines(nl):
+    vec(r): ""
+    set(y): Mbl_cy
+    set(tries): 0
+    set(found): false
+    set(rx): 0
+    while(_): {found = false && tries <= nl} [
+        Mbl_line(line): y
+        if(_): {backward = false} [
+            set(from): 0
+            if(_): {tries = 0} [
+                utf8_next(from): line Mbl_cx
+            ]
+            len(ln): line
+            if(_): {from <= ln} [
+                re_pos(p): pattern line from fl
+                typeof(pt): p
+                if(_): {pt = "vector"} [
+                    set(found): true
+                    at(rx): p 0
+                ]
+            ]
+        ]
+        else(_): [
+            # the last match before the cursor (or anywhere on later tries)
+            set(limit): 1000000000
+            if(_): {tries = 0} [
+                set(limit): Mbl_cx
+            ]
+            set(from): 0
+            set(go): true
+            while(_): go [
+                re_pos(p): pattern line from fl
+                typeof(pt): p
+                set(go): false
+                if(_): {pt = "vector"} [
+                    at(s): p 0
+                    at(e): p 1
+                    if(_): {s < limit} [
+                        set(found): true
+                        set(rx): s
+                        set(from): {s + 1}
+                        if(_): {e > s} [
+                            set(from): e
+                        ]
+                        len(ln): line
+                        set(go): {from <= ln}
+                    ]
+                ]
+            ]
+        ]
+        if(_): {found = false} [
+            set(tries): {tries + 1}
+            if(_): backward [
+                set(y): {y - 1}
+                if(_): {y < 0} [
+                    set(y): {nl - 1}
+                    if(_): {Mbl_opt_ws = false} [
+                        set(tries): {nl + 1}
+                    ]
+                ]
+            ]
+            else(_): [
+                set(y): {y + 1}
+                if(_): {y >= nl} [
+                    set(y): 0
+                    if(_): {Mbl_opt_ws = false} [
+                        set(tries): {nl + 1}
+                    ]
+                ]
+            ]
+        ]
+    ]
+    push(_): r found
+    push(_): r y
+    push(_): r rx
+]
+
+Mbl_do_search(r): backward count [
+    set(r): 0
+    if(_): {Mbl_search = ""} [
+        set(Mbl_msg): "no previous pattern"
+        return(r): r
+    ]
+    set(k): 0
+    while(_): {k < count} [
+        try(bad): "Mbl_search_try" backward
+        if(_): {bad = 1} [
+            set(Mbl_msg): "bad pattern"
+            return(r): r
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+Mbl_search_try(r): backward [
+    Mbl_search_pos(p): Mbl_search backward
+    at(found): p 0
+    if(_): found [
+        at(Mbl_cy): p 1
+        at(Mbl_cx): p 2
+        Mbl_fixcx(_):
+        Mbl_scroll(_):
+        set(Mbl_msg): ""
+    ]
+    else(_): [
+        concat(Mbl_msg): "pattern not found: " Mbl_search
+    ]
+    set(r): 0
+]
+
+# reads a line after a prompt (/ ? :), "" with ESC
+Mbl_prompt_line(r): prompt [
+    set(Mbl_mode): 2
+    set(Mbl_msg): prompt
+    set(r): ""
+    set(done): false
+    set(ok): false
+    while(_): {done = false} [
+        Mbl_render(_):
+        Mbl_next(b):
+        if(_): {b < 0 || b = 27 || b = 3} [
+            set(done): true
+        ]
+        elif(_): {b = 13 || b = 10} [
+            set(done): true
+            set(ok): true
+        ]
+        elif(_): {b = 127 || b = 8} [
+            len(cl): r
+            if(_): {cl > 0} [
+                utf8_prev(cut): r cl
+                slice(r): r 0 cut
+            ]
+            concat(Mbl_msg): prompt r
+        ]
+        elif(_): {b > 31} [
+            Mbl_readchar(ch): b
+            concat(r): r ch
+            concat(Mbl_msg): prompt r
+        ]
+    ]
+    set(Mbl_mode): 0
+    set(Mbl_msg): ""
+    if(_): {ok = false} [
+        set(r): null
+    ]
+]
+
+Mbl_word_under(r): [
+    Mbl_text_object(t): false 119
+    at(f): t 0
+    set(r): ""
+    if(_): f [
+        at(y1): t 1
+        at(x1): t 2
+        at(x2): t 4
+        Mbl_line(l): y1
+        slice(r): l x1 {x2 - x1}
+    ]
+]
+
+Mbl_regex_quote(r): text [
+    set(r): ""
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        at(c): text i
+        str_find(special): "\\.^$*+?()[]{}|" c 0
+        if(_): {special >= 0} [
+            concat(r): r "\\" c
+        ]
+        else(_): [
+            concat(r): r c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------- numbers ----------
+
+Mbl_add_number(r): delta [
+    Mbl_line(line): Mbl_cy
+    len(n): line
+    slice(rest): line Mbl_cx {n - Mbl_cx}
+    re_pos(p): "-?[0-9]+" rest
+    set(r): 0
+    typeof(pt): p
+    if(_): {pt != "vector"} [
+        return(r): r
+    ]
+    at(s): p 0
+    at(e): p 1
+    # a minus right before the cursor's digits counts
+    set(s): {s + Mbl_cx}
+    set(e): {e + Mbl_cx}
+    if(_): {s > 0} [
+        slice(before): line {s - 1} 1
+        slice(firstc): line s 1
+        if(_): {before = "-" && firstc != "-"} [
+            set(s): {s - 1}
+        ]
+    ]
+    slice(num): line s {e - s}
+    str_to_int(v): num 10
+    str_from_int(nv): {v + delta}
+    slice(head): line 0 s
+    slice(tail): line e {n - e}
+    concat(nl): head nv tail
+    Mbl_begin_change(_):
+    Mbl_setline(_): Mbl_cy nl
+    Mbl_touch(_):
+    len(vl): nv
+    set(Mbl_cx): {s + vl - 1}
+    set(r): 1
+]
+
+# ---------- normal mode additions ----------
+
+global(_): Mbl_count_given
+
+# true when b was handled here (Mbl_normal then does nothing more)
+Mbl_more_normal(r): b count given [
+    set(Mbl_count_given): given
+    set(r): true
+    # a register name for the next command
+    if(_): {b = 34} [
+        Mbl_next(rb):
+        chr(Mbl_reg_name): rb
+        return(r): r
+    ]
+    if(_): {b = 100 || b = 99 || b = 121} [
+        Mbl_operator(_): b count
+        return(r): r
+    ]
+    if(_): {b = 62 || b = 60} [
+        Mbl_operator(_): b count
+        return(r): r
+    ]
+    if(_): {b = 103} [
+        Mbl_next(b2):
+        if(_): {b2 = 117 || b2 = 85 || b2 = 126} [
+            Mbl_operator(_): b2 count
+        ]
+        elif(_): {b2 = 74} [
+            Mbl_join(_): count false
+        ]
+        elif(_): {b2 = 118} [
+            set(r): true
+        ]
+        else(_): [
+            set(Mbl_pb): b2
+            Mbl_move(_): 103 count
+        ]
+        return(r): r
+    ]
+    if(_): {b = 68 || b = 67 || b = 89} [
+        # D C Y
+        if(_): {b = 89} [
+            set(Mbl_pb): 121
+            Mbl_operator(_): 121 count
+        ]
+        else(_): [
+            set(Mbl_pb): 36
+            set(op): 100
+            if(_): {b = 67} [
+                set(op): 99
+            ]
+            Mbl_operator(_): op count
+        ]
+        return(r): r
+    ]
+    if(_): {b = 115 || b = 83} [
+        if(_): {b = 115} [
+            set(Mbl_pb): 108
+            Mbl_operator(_): 99 count
+        ]
+        else(_): [
+            set(Mbl_pb): 99
+            Mbl_operator(_): 99 count
+        ]
+        return(r): r
+    ]
+    if(_): {b = 120} [
+        set(Mbl_pb): 108
+        Mbl_operator(_): 100 count
+        return(r): r
+    ]
+    if(_): {b = 88} [
+        Mbl_begin_change(_):
+        set(k): 0
+        while(_): {k < count && Mbl_cx > 0} [
+            Mbl_line(line): Mbl_cy
+            utf8_prev(px): line Mbl_cx
+            set(Mbl_cx): px
+            Mbl_delch(_):
+            set(k): {k + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {b = 114} [
+        Mbl_next(cb):
+        Mbl_readchar(ch): cb
+        if(_): {ch != "" || cb = 13} [
+            Mbl_line(line): Mbl_cy
+            len(n): line
+            if(_): {n > 0} [
+                Mbl_begin_change(_):
+                set(x): Mbl_cx
+                set(k): 0
+                set(e): x
+                while(_): {k < count && e < n} [
+                    utf8_next(e): line e
+                    set(k): {k + 1}
+                ]
+                if(_): {k = count} [
+                    slice(head): line 0 x
+                    slice(tail): line e {n - e}
+                    str_repeat(mid): ch count
+                    concat(nl): head mid tail
+                    Mbl_setline(_): Mbl_cy nl
+                    Mbl_touch(_):
+                    len(ml): mid
+                    set(Mbl_cx): {x + ml}
+                    Mbl_fixcx(_):
+                    utf8_prev(Mbl_cx): nl Mbl_cx
+                    if(_): {count = 1} [
+                        set(Mbl_cx): x
+                    ]
+                ]
+            ]
+        ]
+        return(r): r
+    ]
+    if(_): {b = 126} [
+        Mbl_line(line): Mbl_cy
+        len(n): line
+        if(_): {n > 0} [
+            Mbl_begin_change(_):
+            set(e): Mbl_cx
+            set(k): 0
+            while(_): {k < count && e < n} [
+                utf8_next(e): line e
+                set(k): {k + 1}
+            ]
+            slice(head): line 0 Mbl_cx
+            slice(mid): line Mbl_cx {e - Mbl_cx}
+            slice(tail): line e {n - e}
+            Mbl_case_text(mid): mid "~"
+            concat(nl): head mid tail
+            Mbl_setline(_): Mbl_cy nl
+            Mbl_touch(_):
+            set(Mbl_cx): e
+            Mbl_fixcx(_):
+        ]
+        return(r): r
+    ]
+    if(_): {b = 74} [
+        Mbl_join(_): count true
+        return(r): r
+    ]
+    if(_): {b = 112 || b = 80} [
+        Mbl_put(_): {b = 112} count
+        return(r): r
+    ]
+    if(_): {b = 46} [
+        len(nd): Mbl_dot
+        if(_): {nd > 0} [
+            set(k): 0
+            while(_): {k < count} [
+                Mbl_queue_keys(_): Mbl_dot
+                set(k): {k + 1}
+            ]
+        ]
+        return(r): r
+    ]
+    if(_): {b = 113} [
+        if(_): {Mbl_rec_reg != ""} [
+            # stop: drop the q that ended the recording
+            vec(keys): ""
+            len(nr): Mbl_rec
+            set(i): 0
+            while(_): {i < nr - 1} [
+                at(k): Mbl_rec i
+                push(_): keys k
+                set(i): {i + 1}
+            ]
+            btput(_): Mbl_macros Mbl_rec_reg keys
+            set(Mbl_rec_reg): ""
+            set(Mbl_msg): ""
+        ]
+        else(_): [
+            Mbl_next(rb):
+            chr(name): rb
+            set(Mbl_rec_reg): name
+            vec(Mbl_rec): ""
+            concat(Mbl_msg): "recording @" name
+        ]
+        return(r): r
+    ]
+    if(_): {b = 64} [
+        Mbl_next(rb):
+        chr(name): rb
+        if(_): {name = "@"} [
+            set(name): Mbl_last_macro
+        ]
+        btget(keys): Mbl_macros name null
+        typeof(kt): keys
+        if(_): {kt = "vector"} [
+            set(Mbl_last_macro): name
+            set(k): 0
+            while(_): {k < count} [
+                Mbl_queue_keys(_): keys
+                set(k): {k + 1}
+            ]
+        ]
+        return(r): r
+    ]
+    if(_): {b = 109} [
+        Mbl_next(mb):
+        chr(name): mb
+        vec(pos): ""
+        push(_): pos Mbl_cy
+        push(_): pos Mbl_cx
+        btput(_): Mbl_marks name pos
+        return(r): r
+    ]
+    if(_): {b = 47 || b = 63} [
+        set(prompt): "/"
+        if(_): {b = 63} [
+            set(prompt): "?"
+        ]
+        Mbl_prompt_line(pat): prompt
+        typeof(pt): pat
+        if(_): {pt = "string"} [
+            if(_): {pat != ""} [
+                set(Mbl_search): pat
+            ]
+            set(Mbl_search_back): {b = 63}
+            Mbl_do_search(_): Mbl_search_back count
+        ]
+        return(r): r
+    ]
+    if(_): {b = 110 || b = 78} [
+        set(back): Mbl_search_back
+        if(_): {b = 78} [
+            set(back): {back = false}
+        ]
+        Mbl_do_search(_): back count
+        return(r): r
+    ]
+    if(_): {b = 42 || b = 35} [
+        Mbl_word_under(w):
+        if(_): {w != ""} [
+            Mbl_regex_quote(q): w
+            concat(Mbl_search): "\\b" q "\\b"
+            set(Mbl_search_back): {b = 35}
+            Mbl_do_search(_): Mbl_search_back count
+        ]
+        return(r): r
+    ]
+    if(_): {b = 1 || b = 24} [
+        set(d): count
+        if(_): {b = 24} [
+            set(d): {0 - count}
+        ]
+        Mbl_add_number(_): d
+        return(r): r
+    ]
+    if(_): {b = 4 || b = 21 || b = 6 || b = 2} [
+        set(page): {Mbl_rows - 2}
+        str_trunc(half): {page / 2}
+        set(step): half
+        if(_): {b = 6 || b = 2} [
+            set(step): page
+        ]
+        if(_): {b = 21 || b = 2} [
+            set(step): {0 - step}
+        ]
+        Mbl_nlines(nl):
+        set(Mbl_cy): {Mbl_cy + step}
+        set(Mbl_top): {Mbl_top + step}
+        if(_): {Mbl_cy >= nl} [
+            set(Mbl_cy): {nl - 1}
+        ]
+        if(_): {Mbl_cy < 0} [
+            set(Mbl_cy): 0
+        ]
+        if(_): {Mbl_top > nl - 1} [
+            set(Mbl_top): {nl - 1}
+        ]
+        if(_): {Mbl_top < 0} [
+            set(Mbl_top): 0
+        ]
+        Mbl_fixcx(_):
+        Mbl_scroll(_):
+        return(r): r
+    ]
+    if(_): {b = 122} [
+        Mbl_next(zb):
+        if(_): {zb = 122 || zb = 46} [
+            str_trunc(half): {(Mbl_rows - 1) / 2}
+            set(Mbl_top): {Mbl_cy - half}
+        ]
+        elif(_): {zb = 116 || zb = 13} [
+            set(Mbl_top): Mbl_cy
+        ]
+        elif(_): {zb = 98 || zb = 45} [
+            set(Mbl_top): {Mbl_cy - Mbl_rows + 2}
+        ]
+        if(_): {Mbl_top < 0} [
+            set(Mbl_top): 0
+        ]
+        return(r): r
+    ]
+    if(_): {b = 79} [
+        # O: open a line above
+        Mbl_begin_change(_):
+        set(ind): ""
+        if(_): Mbl_opt_ai [
+            Mbl_line(l): Mbl_cy
+            Mbl_indent_of(ind): l
+        ]
+        Mbl_lineins(_): Mbl_cy ind
+        len(Mbl_cx): ind
+        set(Mbl_mode): 1
+        Mbl_touch(_):
+        Mbl_scroll(_):
+        return(r): r
+    ]
+    if(_): {b = 73 || b = 65} [
+        # I A
+        Mbl_begin_change(_):
+        Mbl_line(l): Mbl_cy
+        if(_): {b = 73} [
+            Mbl_indent_of(ind): l
+            len(Mbl_cx): ind
+        ]
+        else(_): [
+            len(Mbl_cx): l
+        ]
+        set(Mbl_mode): 1
+        return(r): r
+    ]
+    Mbl_move(r): b count
+]
+
+# a plain motion moves the cursor: true when b was one
+Mbl_move(r): b count [
+    set(known): "beWBE0^$Gg%{}HML;,fFtT'`"
+    chr(c): b
+    str_find(k): known c 0
+    set(r): false
+    if(_): {k < 0 || b = 0} [
+        return(r): r
+    ]
+    # a jump remembers where it came from in the mark '
+    if(_): {b = 71 || b = 103 || b = 37 || b = 39 || b = 96} [
+        vec(pos): ""
+        push(_): pos Mbl_cy
+        push(_): pos Mbl_cx
+        btput(_): Mbl_marks "''" pos
+    ]
+    Mbl_motion(m): b count
+    at(found): m 0
+    if(_): found [
+        at(Mbl_cy): m 1
+        at(Mbl_cx): m 2
+        Mbl_fixcx(_):
+        Mbl_scroll(_):
+    ]
+    set(r): true
+]
+
+Mbl_join(r): count spaces [
+    Mbl_nlines(nl):
+    set(times): {count - 1}
+    if(_): {times < 1} [
+        set(times): 1
+    ]
+    set(r): 0
+    if(_): {Mbl_cy + 1 >= nl} [
+        return(r): r
+    ]
+    Mbl_begin_change(_):
+    set(k): 0
+    while(_): {k < times && Mbl_cy + 1 < nl} [
+        Mbl_line(a): Mbl_cy
+        Mbl_line(b): {Mbl_cy + 1}
+        if(_): spaces [
+            str_trim(bt): b
+            re_replace(a): "[ \\t]+$" a ""
+            len(al): a
+            set(sep): " "
+            str_starts(close): bt ")"
+            if(_): {bt = "" || al = 0 || close} [
+                set(sep): ""
+            ]
+            concat(j): a sep bt
+        ]
+        else(_): [
+            len(al): a
+            concat(j): a b
+        ]
+        vec(one): ""
+        push(_): one j
+        Mbl_replace_lines(_): Mbl_cy {Mbl_cy + 1} one
+        set(Mbl_cx): al
+        Mbl_nlines(nl):
+        set(k): {k + 1}
+    ]
+    Mbl_fixcx(_):
+]
+
+# ---------- insert mode additions ----------
+
+# true when the key was handled
+Mbl_more_insert(r): b [
+    set(r): false
+    if(_): {b = 9} [
+        if(_): Mbl_opt_et [
+            Mbl_line(l): Mbl_cy
+            slice(head): l 0 Mbl_cx
+            utf8_count(col): head
+            set(k): {Mbl_opt_ts - col % Mbl_opt_ts}
+            str_repeat(sp): " " k
+            Mbl_insch(_): sp
+        ]
+        else(_): [
+            Mbl_insch(_): "\t"
+        ]
+        set(r): true
+    ]
+    elif(_): {b = 23} [
+        # Ctrl+W: the word (and blanks) before the cursor
+        Mbl_line(l): Mbl_cy
+        set(x): Mbl_cx
+        set(go): {x > 0}
+        while(_): go [
+            utf8_prev(px): l x
+            Mbl_class(c): l px
+            if(_): {c = 0} [
+                set(x): px
+                set(go): {x > 0}
+            ]
+            else(_): [
+                set(go): false
+            ]
+        ]
+        if(_): {x > 0} [
+            utf8_prev(px): l x
+            Mbl_class(c0): l px
+            set(go): true
+            while(_): go [
+                utf8_prev(px): l x
+                Mbl_class(c): l px
+                if(_): {x > 0 && c = c0} [
+                    set(x): px
+                    set(go): {x > 0}
+                ]
+                else(_): [
+                    set(go): false
+                ]
+            ]
+        ]
+        len(n): l
+        slice(head): l 0 x
+        slice(tail): l Mbl_cx {n - Mbl_cx}
+        concat(nl): head tail
+        Mbl_setline(_): Mbl_cy nl
+        set(Mbl_cx): x
+        Mbl_touch(_):
+        set(r): true
+    ]
+    elif(_): {b = 21} [
+        Mbl_line(l): Mbl_cy
+        len(n): l
+        slice(tail): l Mbl_cx {n - Mbl_cx}
+        Mbl_setline(_): Mbl_cy tail
+        set(Mbl_cx): 0
+        Mbl_touch(_):
+        set(r): true
+    ]
+    elif(_): {(b = 13 || b = 10) && Mbl_opt_ai} [
+        Mbl_line(l): Mbl_cy
+        Mbl_indent_of(ind): l
+        Mbl_enter(_):
+        Mbl_insch(_): ind
+        set(r): true
+    ]
+]
+
+# ---------- ex commands ----------
+
+# a line address at the start of text: [found line rest]
+Mbl_address(r): text [
+    vec(r): ""
+    set(rest): text
+    set(found): true
+    set(line): Mbl_cy
+    re_find(m): "^([0-9]+|\\.|\\$|'[a-z])(?:([+-])([0-9]*))?" text
+    typeof(mt): m
+    if(_): {mt != "vector"} [
+        re_find(m2): "^([+-])([0-9]*)" text
+        typeof(m2t): m2
+        if(_): {m2t = "vector"} [
+            vec(m): ""
+            push(_): m ""
+            push(_): m "."
+            at(sg): m2 1
+            at(nm): m2 2
+            push(_): m sg
+            push(_): m nm
+            at(whole): m2 0
+            set(m0): whole
+            set(mt): "vector"
+        ]
+    ]
+    else(_): [
+        at(m0): m 0
+    ]
+    if(_): {mt != "vector"} [
+        push(_): r false
+        push(_): r Mbl_cy
+        push(_): r text
+        return(r): r
+    ]
+    at(base): m 1
+    Mbl_nlines(nl):
+    if(_): {base = "."} [
+        set(line): Mbl_cy
+    ]
+    elif(_): {base = "$"} [
+        set(line): {nl - 1}
+    ]
+    else(_): [
+        str_starts(isq): base "'"
+        if(_): isq [
+            slice(mk): base 1 1
+            btget(pos): Mbl_marks mk null
+            typeof(pt): pos
+            if(_): {pt = "vector"} [
+                at(line): pos 0
+            ]
+            else(_): [
+                set(found): false
+            ]
+        ]
+        else(_): [
+            str_to_int(ln): base 10
+            set(line): {ln - 1}
+        ]
+    ]
+    at(sign): m 2
+    typeof(st): sign
+    if(_): {st = "string"} [
+        if(_): {sign != ""} [
+            at(num): m 3
+            set(d): 1
+            if(_): {num != ""} [
+                str_to_int(d): num 10
+            ]
+            if(_): {sign = "-"} [
+                set(d): {0 - d}
+            ]
+            set(line): {line + d}
+        ]
+    ]
+    if(_): {line < 0} [
+        set(line): 0
+    ]
+    if(_): {line >= nl} [
+        set(line): {nl - 1}
+    ]
+    len(ml): m0
+    len(tl): text
+    slice(rest): text ml {tl - ml}
+    push(_): r found
+    push(_): r line
+    push(_): r rest
+]
+
+# [has_range y1 y2 rest]
+Mbl_range(r): cmd [
+    vec(r): ""
+    Mbl_nlines(nl):
+    str_starts(all): cmd "%"
+    if(_): all [
+        len(cl): cmd
+        slice(rest): cmd 1 {cl - 1}
+        push(_): r true
+        push(_): r 0
+        push(_): r {nl - 1}
+        push(_): r rest
+        return(r): r
+    ]
+    Mbl_address(a): cmd
+    at(fa): a 0
+    if(_): {fa = false} [
+        push(_): r false
+        push(_): r Mbl_cy
+        push(_): r Mbl_cy
+        push(_): r cmd
+        return(r): r
+    ]
+    at(y1): a 1
+    at(rest): a 2
+    set(y2): y1
+    str_starts(comma): rest ","
+    if(_): comma [
+        len(rl): rest
+        slice(rest2): rest 1 {rl - 1}
+        Mbl_address(b): rest2
+        at(fb): b 0
+        if(_): fb [
+            at(y2): b 1
+            at(rest): b 2
+        ]
+    ]
+    if(_): {y2 < y1} [
+        set(t): y1
+        set(y1): y2
+        set(y2): t
+    ]
+    push(_): r true
+    push(_): r y1
+    push(_): r y2
+    push(_): r rest
+]
+
+# :s/pat/rep/flags on lines y1..y2: the number of lines changed
+Mbl_substitute(r): y1 y2 spec [
+    set(r): 0
+    len(n): spec
+    if(_): {n < 2} [
+        return(r): r
+    ]
+    slice(delim): spec 0 1
+    slice(body): spec 1 {n - 1}
+    # split at unescaped delimiters
+    vec(parts): ""
+    set(cur): ""
+    len(bn): body
+    set(i): 0
+    while(_): {i < bn} [
+        at(c): body i
+        if(_): {c = "\\" && i + 1 < bn} [
+            at(nx): body {i + 1}
+            if(_): {nx = delim} [
+                concat(cur): cur nx
+            ]
+            else(_): [
+                concat(cur): cur c nx
+            ]
+            set(i): {i + 2}
+        ]
+        elif(_): {c = delim} [
+            push(_): parts cur
+            set(cur): ""
+            set(i): {i + 1}
+        ]
+        else(_): [
+            concat(cur): cur c
+            set(i): {i + 1}
+        ]
+    ]
+    push(_): parts cur
+    len(np): parts
+    at(pat): parts 0
+    set(rep): ""
+    set(flags): ""
+    if(_): {np > 1} [
+        at(rep): parts 1
+    ]
+    if(_): {np > 2} [
+        at(flags): parts 2
+    ]
+    if(_): {pat = ""} [
+        set(pat): Mbl_search
+    ]
+    set(Mbl_search): pat
+    # vi's & is the whole match
+    str_replace(rep): rep "&" "\\0"
+    str_contains(global_): flags "g"
+    str_contains(icase): flags "i"
+    set(fl): ""
+    if(_): {icase || Mbl_opt_ic} [
+        set(fl): "i"
+    ]
+    vec(out): ""
+    set(y): y1
+    set(changed): 0
+    set(last): y1
+    while(_): {y <= y2} [
+        Mbl_line(l): y
+        re_test(hit): pat l fl
+        if(_): hit [
+            if(_): global_ [
+                re_replace(nl2): pat l rep fl
+            ]
+            else(_): [
+                re_pos(p): pat l 0 fl
+                at(s): p 0
+                at(e): p 1
+                len(ln): l
+                slice(head): l 0 s
+                slice(mid): l s {e - s}
+                slice(tail): l e {ln - e}
+                re_replace(mid2): pat mid rep fl
+                concat(nl2): head mid2 tail
+            ]
+            push(_): out nl2
+            set(changed): {changed + 1}
+            set(last): y
+        ]
+        else(_): [
+            push(_): out l
+        ]
+        set(y): {y + 1}
+    ]
+    if(_): {changed > 0} [
+        Mbl_replace_lines(_): y1 y2 out
+        set(Mbl_cy): last
+        set(Mbl_cx): 0
+    ]
+    set(r): changed
+]
+
+Mbl_sort_lines(r): y1 y2 opts [
+    vec(lines): ""
+    set(y): y1
+    while(_): {y <= y2} [
+        Mbl_line(l): y
+        push(_): lines l
+        set(y): {y + 1}
+    ]
+    str_contains(numeric): opts "n"
+    str_contains(unique): opts "u"
+    str_contains(rev): opts "r"
+    if(_): numeric [
+        # sort by the first number in each line (lines without one first)
+        vec(keyed): ""
+        len(n): lines
+        set(i): 0
+        while(_): {i < n} [
+            at(l): lines i
+            re_find(m): "-?[0-9]+" l
+            set(key): {0 - 9000000000000000000}
+            typeof(mt): m
+            if(_): {mt = "vector"} [
+                at(ks): m 0
+                str_to_int(key): ks 10
+            ]
+            vec(pair): ""
+            push(_): pair key
+            push(_): pair i
+            push(_): keyed pair
+            set(i): {i + 1}
+        ]
+        # stable insertion by key
+        vec(order): ""
+        set(i): 0
+        while(_): {i < n} [
+            at(pr): keyed i
+            at(k): pr 0
+            vec(next): ""
+            set(placed): false
+            len(m): order
+            set(j): 0
+            while(_): {j < m} [
+                at(q): order j
+                at(qk): q 0
+                if(_): {placed = false && k < qk} [
+                    push(_): next pr
+                    set(placed): true
+                ]
+                push(_): next q
+                set(j): {j + 1}
+            ]
+            if(_): {placed = false} [
+                push(_): next pr
+            ]
+            set(order): next
+            set(i): {i + 1}
+        ]
+        vec(sorted): ""
+        set(i): 0
+        while(_): {i < n} [
+            at(pr): order i
+            at(idx): pr 1
+            at(l): lines idx
+            push(_): sorted l
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        list_sort(sorted): lines
+    ]
+    if(_): rev [
+        list_reverse(sorted): sorted
+    ]
+    if(_): unique [
+        vec(u): ""
+        len(n): sorted
+        set(i): 0
+        set(prev): null
+        while(_): {i < n} [
+            at(l): sorted i
+            typeof(pt): prev
+            set(dup): false
+            if(_): {pt = "string"} [
+                set(dup): {prev = l}
+            ]
+            if(_): {dup = false} [
+                push(_): u l
+            ]
+            set(prev): l
+            set(i): {i + 1}
+        ]
+        set(sorted): u
+    ]
+    Mbl_replace_lines(_): y1 y2 sorted
+    set(Mbl_cy): y1
+    set(Mbl_cx): 0
+    set(r): 0
+]
+
+Mbl_set(r): opt [
+    set(r): true
+    re_find(m): "^([a-z]+)=([0-9a-z]+)$" opt
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(name): m 1
+        at(val): m 2
+        str_to_int(nv): val 10
+        typeof(nt): nv
+        if(_): {(name = "ts" || name = "tabstop") && nt = "integer"} [
+            if(_): {nv > 0} [
+                set(Mbl_opt_ts): nv
+            ]
+        ]
+        elif(_): {(name = "sw" || name = "shiftwidth") && nt = "integer"} [
+            if(_): {nv > 0} [
+                set(Mbl_opt_sw): nv
+            ]
+        ]
+        elif(_): {name = "ff" || name = "fileformat"} [
+            set(Mbl_crlf): {val = "dos"}
+            set(Mbl_dirty): 1
+        ]
+        else(_): [
+            set(r): false
+        ]
+        return(r): r
+    ]
+    if(_): {opt = "nu" || opt = "number"} [
+        set(Mbl_opt_nu): true
+    ]
+    elif(_): {opt = "nonu" || opt = "nonumber"} [
+        set(Mbl_opt_nu): false
+    ]
+    elif(_): {opt = "ai" || opt = "autoindent"} [
+        set(Mbl_opt_ai): true
+    ]
+    elif(_): {opt = "noai" || opt = "noautoindent"} [
+        set(Mbl_opt_ai): false
+    ]
+    elif(_): {opt = "et" || opt = "expandtab"} [
+        set(Mbl_opt_et): true
+    ]
+    elif(_): {opt = "noet" || opt = "noexpandtab"} [
+        set(Mbl_opt_et): false
+    ]
+    elif(_): {opt = "ic" || opt = "ignorecase"} [
+        set(Mbl_opt_ic): true
+    ]
+    elif(_): {opt = "noic" || opt = "noignorecase"} [
+        set(Mbl_opt_ic): false
+    ]
+    elif(_): {opt = "ws" || opt = "wrapscan"} [
+        set(Mbl_opt_ws): true
+    ]
+    elif(_): {opt = "nows" || opt = "nowrapscan"} [
+        set(Mbl_opt_ws): false
+    ]
+    elif(_): {opt = "ro" || opt = "readonly"} [
+        set(Mbl_ro): true
+    ]
+    elif(_): {opt = "noro" || opt = "noreadonly"} [
+        set(Mbl_ro): false
+    ]
+    else(_): [
+        set(r): false
+    ]
+]
+
+# true when cmd was one of these
+Mbl_more_cmd(r): cmd [
+    set(r): true
+    str_trim(cmd): cmd
+    if(_): {cmd = "x"} [
+        if(_): {Mbl_dirty = 1} [
+            Mbl_save(_):
+        ]
+        set(Mbl_running): 0
+        return(r): r
+    ]
+    if(_): {cmd = "noh"} [
+        return(r): r
+    ]
+    str_starts(isset): cmd "set "
+    if(_): isset [
+        len(cl): cmd
+        slice(opts): cmd 4 {cl - 4}
+        str_split(list): opts " "
+        len(n): list
+        set(i): 0
+        while(_): {i < n} [
+            at(o): list i
+            if(_): {o != ""} [
+                Mbl_set(ok): o
+                if(_): {ok = false} [
+                    concat(Mbl_msg): "unknown option: " o
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    str_starts(issav): cmd "sav "
+    if(_): issav [
+        len(cl): cmd
+        slice(Mbl_file): cmd 4 {cl - 4}
+        set(Mbl_showname): Mbl_file
+        Mbl_save(_):
+        return(r): r
+    ]
+    str_starts(isread): cmd "r "
+    if(_): isread [
+        len(cl): cmd
+        slice(path): cmd 2 {cl - 2}
+        read_lines(lines): path
+        typeof(lt): lines
+        if(_): {lt = "vector"} [
+            Mbl_begin_change(_):
+            vec(both): ""
+            Mbl_line(cur): Mbl_cy
+            push(_): both cur
+            len(n): lines
+            set(i): 0
+            while(_): {i < n} [
+                at(l): lines i
+                push(_): both l
+                set(i): {i + 1}
+            ]
+            Mbl_replace_lines(_): Mbl_cy Mbl_cy both
+            set(Mbl_cy): {Mbl_cy + 1}
+            set(Mbl_cx): 0
+        ]
+        else(_): [
+            concat(Mbl_msg): "cannot read " path
+        ]
+        return(r): r
+    ]
+    Mbl_range(rg): cmd
+    at(has): rg 0
+    at(y1): rg 1
+    at(y2): rg 2
+    at(rest): rg 3
+    str_trim(rest): rest
+    if(_): {has && rest = ""} [
+        # :N goes to a line
+        set(Mbl_cy): y2
+        Mbl_line(l): y2
+        Mbl_first_nonblank(Mbl_cx): l
+        Mbl_scroll(_):
+        return(r): r
+    ]
+    if(_): {rest = "d"} [
+        Mbl_begin_change(_):
+        Mbl_lines_text(t): y1 y2
+        Mbl_reg_set(_): t true
+        Mbl_del_lines(_): y1 y2
+        return(r): r
+    ]
+    if(_): {rest = "y"} [
+        Mbl_lines_text(t): y1 y2
+        Mbl_reg_set(_): t true
+        return(r): r
+    ]
+    if(_): {rest = ">" || rest = "<"} [
+        Mbl_begin_change(_):
+        set(dir): 1
+        if(_): {rest = "<"} [
+            set(dir): {0 - 1}
+        ]
+        Mbl_shift_lines(_): y1 y2 dir
+        return(r): r
+    ]
+    if(_): {rest = "j"} [
+        set(Mbl_cy): y1
+        set(k): {y2 - y1 + 1}
+        if(_): {k < 2} [
+            set(k): 2
+        ]
+        Mbl_join(_): k true
+        return(r): r
+    ]
+    len(rl): rest
+    str_starts(issort): rest "sort"
+    if(_): issort [
+        if(_): {has = false} [
+            set(y1): 0
+            Mbl_nlines(nl):
+            set(y2): {nl - 1}
+        ]
+        slice(opts): rest 4 {rl - 4}
+        Mbl_begin_change(_):
+        Mbl_sort_lines(_): y1 y2 opts
+        return(r): r
+    ]
+    str_starts(iss): rest "s"
+    if(_): {iss && rl > 1} [
+        slice(spec): rest 1 {rl - 1}
+        Mbl_begin_change(_):
+        try(bad): "Mbl_sub_try" y1 y2 spec
+        if(_): {bad = 1} [
+            set(Mbl_msg): "bad pattern"
+        ]
+        return(r): r
+    ]
+    str_starts(isg): rest "g/"
+    str_starts(isv): rest "v/"
+    if(_): {isg || isv} [
+        slice(spec): rest 2 {rl - 2}
+        str_ends(isd): spec "/d"
+        if(_): isd [
+            len(sl): spec
+            slice(pat): spec 0 {sl - 2}
+            if(_): {has = false} [
+                set(y1): 0
+                Mbl_nlines(nl):
+                set(y2): {nl - 1}
+            ]
+            Mbl_flags(fl):
+            Mbl_begin_change(_):
+            vec(keep): ""
+            set(y): y1
+            set(removed): 0
+            while(_): {y <= y2} [
+                Mbl_line(l): y
+                re_test(hit): pat l fl
+                if(_): {hit = isg} [
+                    set(removed): {removed + 1}
+                ]
+                else(_): [
+                    push(_): keep l
+                ]
+                set(y): {y + 1}
+            ]
+            Mbl_replace_lines(_): y1 y2 keep
+            Mbl_nlines(nl):
+            set(Mbl_cy): y1
+            if(_): {Mbl_cy >= nl} [
+                set(Mbl_cy): {nl - 1}
+            ]
+            set(Mbl_cx): 0
+            str_from_int(rs): removed
+            concat(Mbl_msg): rs " lines deleted"
+            return(r): r
+        ]
+    ]
+    if(_): {cmd = "reg" || cmd = "registers"} [
+        btkeys(keys): Mbl_regs
+        str_join(Mbl_msg): keys " "
+        return(r): r
+    ]
+    if(_): {cmd = "marks"} [
+        btkeys(keys): Mbl_marks
+        str_join(Mbl_msg): keys " "
+        return(r): r
+    ]
+    set(r): false
+]
+
+Mbl_sub_try(r): y1 y2 spec [
+    Mbl_substitute(n): y1 y2 spec
+    if(_): {n = 0} [
+        set(Mbl_msg): "pattern not found"
+    ]
+    set(r): 0
+]
+
+# ---------- status line ruler ----------
+
+Mbl_ruler(r): [
+    Mbl_nlines(nl):
+    Mbl_line(l): Mbl_cy
+    utf8_column(col): l Mbl_cx
+    str_from_int(ys): {Mbl_cy + 1}
+    str_from_int(xs): {col + 1}
+    str_trunc(pct): {(Mbl_cy + 1) * 100 / nl}
+    str_from_int(ps): pct
+    concat(r): ys ":" xs " " ps "%"
+    if(_): Mbl_crlf [
+        concat(r): r " dos"
+    ]
+    if(_): Mbl_ro [
+        concat(r): r " [RO]"
+    ]
+    if(_): {Mbl_rec_reg != ""} [
+        concat(r): r " @" Mbl_rec_reg
+    ]
+]
+
+Mbl_gutter(r): [
+    set(r): 0
+    if(_): Mbl_opt_nu [
+        Mbl_nlines(nl):
+        str_from_int(s): nl
+        len(w): s
+        set(r): {w + 1}
+        if(_): {r < 4} [
+            set(r): 4
+        ]
+    ]
+]

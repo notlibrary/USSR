@@ -14,6 +14,8 @@
 #               u         undo the last change    Ctrl+R  redo
 # Commands:     :w [name] write file   :q quit   :wq write+quit   :q! quit
 #               :e [name] reload / edit another file
+# Much more (motions, operators and text objects, registers, search, :s,
+# ranges, :set, macros, ., marks): see the header of more.su.
 # Insert mode:  type to insert, Enter splits the line, Backspace deletes
 #               (and joins lines at column 0), ESC or Ctrl+C -> normal.
 #
@@ -35,6 +37,9 @@
 # rebuilt as one string per frame and written with a single template call.
 
 $include "../libs/strings.su"
+$include "../libs/lists.su"
+$include "../libs/paths.su"
+$include "more.su"
 
 # Editor state shared by the functions below. Every other variable a
 # function sets is local to that function.
@@ -511,6 +516,12 @@ Mbl_load(r): path [
             ]
             close_file(_): Mbll_h
         ]
+        readfile(Mbll_all): path
+        typeof(Mbll_at): Mbll_all
+        set(Mbl_crlf): false
+        if(_): {Mbll_at = "string"} [
+            str_contains(Mbl_crlf): Mbll_all "\r\n"
+        ]
     ]
     len(Mbll_bn): Mbl_buf
     if(_): {Mbll_bn = 0} [
@@ -528,7 +539,15 @@ Mbl_save(r): [
     if(_): {Mblw_fn = 0} [
         set(Mbl_msg): "no file name"
     ]
+    if(_): {Mblw_fn > 0 && Mbl_ro} [
+        set(Mbl_msg): "read-only file (:set noro to write)"
+        set(Mblw_fn): 0
+    ]
     if(_): {Mblw_fn > 0} [
+        set(Mblw_eol): "\n"
+        if(_): Mbl_crlf [
+            set(Mblw_eol): "\r\n"
+        ]
         set(Mbl_payload): ""
         if(_): {Mbl_bom = 1} [
             set(Mbl_payload): Mbl_bom_text
@@ -538,10 +557,13 @@ Mbl_save(r): [
         while(_): {Mblw_i < Mblw_n} [
             at(Mblw_l): Mbl_buf Mblw_i
             concat(Mbl_payload): Mbl_payload Mblw_l
-            concat(Mbl_payload): Mbl_payload "\n"
+            concat(Mbl_payload): Mbl_payload Mblw_eol
             set(Mblw_i): {Mblw_i + 1}
         ]
-        writefile(Mblw_ok): Mbl_file Mbl_payload
+        write_file_atomic(Mblw_ok): Mbl_file Mbl_payload
+        if(_): {Mblw_ok != 0} [
+            writefile(Mblw_ok): Mbl_file Mbl_payload
+        ]
         set(Mbl_saved_ver): Mbl_ver
         set(Mbl_dirty): 0
         set(Mbl_msg): "written"
@@ -567,6 +589,12 @@ Mbl_render(r): [
             len(Mblrn_ll): Mblrn_l
             if(_): {Mblrn_cut < Mblrn_ll} [
                 slice(Mblrn_l): Mblrn_l 0 Mblrn_cut
+            ]
+            Mbl_gutter(Mblrn_g):
+            if(_): {Mblrn_g > 0} [
+                str_from_int(Mblrn_num): {Mblrn_li + 1}
+                str_pad_left(Mblrn_num): Mblrn_num {Mblrn_g - 1} " "
+                concat(Mblrn_s): Mblrn_s Mblrn_num " "
             ]
             concat(Mblrn_s): Mblrn_s Mblrn_l
         ]
@@ -601,6 +629,8 @@ Mbl_render(r): [
         ]
         concat(Mblrn_s): Mblrn_s "  "
         concat(Mblrn_s): Mblrn_s Mbl_msg
+        Mbl_ruler(Mblrn_ru):
+        concat(Mblrn_s): Mblrn_s "  " Mblrn_ru
     ]
     concat(Mblrn_s): Mblrn_s Mbl_esc
     concat(Mblrn_s): Mblrn_s "[0m"
@@ -613,7 +643,8 @@ Mbl_render(r): [
     concat(Mblrn_s): Mblrn_s ";"
     at(Mblrn_cl): Mbl_buf Mbl_cy
     utf8_column(Mblrn_col): Mblrn_cl Mbl_cx
-    encode(Mblrn_x): {Mblrn_col + 1}
+    Mbl_gutter(Mblrn_g2):
+    encode(Mblrn_x): {Mblrn_col + 1 + Mblrn_g2}
     concat(Mblrn_s): Mblrn_s Mblrn_x
     concat(Mblrn_s): Mblrn_s "H"
     template(_): "STR" Mblrn_s
@@ -630,8 +661,18 @@ Mbl_next(r): [
         set(Mbl_pb): {0 - 1}
     ]
     if(_): {Mblnx_have = 0} [
-        terminal_getch(Mblnx_b):
-        set(r): Mblnx_b
+        # macros and . feed keys through the queue first
+        Mbl_queue_next(Mblnx_q):
+        if(_): {Mblnx_q > 0 - 2} [
+            set(r): Mblnx_q
+        ]
+        else(_): [
+            terminal_getch(Mblnx_b):
+            set(r): Mblnx_b
+        ]
+        if(_): {r > 0 - 1} [
+            Mbl_log_key(_): r
+        ]
     ]
 ]
 
@@ -834,6 +875,10 @@ Mbl_arrow(r): c [
 
 Mbl_insert(r): b [
     set(r): 0
+    Mbl_more_insert(Mblin_done): b
+    if(_): Mblin_done [
+        return(_): r
+    ]
     if(_): {b = 13} [
         Mbl_enter(_): 
     ]
@@ -870,9 +915,16 @@ Mbl_normal(r): b [
         return(_): r
     ]
     set(Mblnm_n): Mbl_count
+    set(Mblnm_given): {Mbl_count > 0}
     set(Mbl_count): 0
     if(_): {Mblnm_n < 1} [
         set(Mblnm_n): 1
+    ]
+    if(_): {Mbl_pend = 0} [
+        Mbl_more_normal(Mblnm_done): b Mblnm_n Mblnm_given
+        if(_): Mblnm_done [
+            return(_): r
+        ]
     ]
     if(_): {Mbl_pend > 0} [
         set(Mblnm_op): Mbl_pend
@@ -1008,6 +1060,12 @@ Mbl_runcmd(r): cmd [
         ]
     ]
     if(_): {Mblrc_ok = 0} [
+        Mbl_more_cmd(Mblrc_more): cmd
+        if(_): Mblrc_more [
+            set(Mblrc_ok): 1
+        ]
+    ]
+    if(_): {Mblrc_ok = 0} [
         set(Mbl_msg): "not an editor command"
     ]
 ]
@@ -1103,9 +1161,29 @@ init(ret): arg_cnt arg_vec [
     push(_): Mblit_bom 187
     push(_): Mblit_bom 191
     utf8_from_bytes(Mbl_bom_text): Mblit_bom
-    if(_): {arg_cnt > 0} [
-        at(Mbl_file): arg_vec 0
-        set(Mbl_showname): Mbl_file
+    Mbl_more_init(_):
+    set(Mblit_line): 0
+    set(Mblit_i): 0
+    while(_): {Mblit_i < arg_cnt} [
+        at(Mblit_a): arg_vec Mblit_i
+        str_starts(Mblit_plus): Mblit_a "+"
+        if(_): {Mblit_a = "-R"} [
+            set(Mbl_ro): true
+        ]
+        elif(_): Mblit_plus [
+            len(Mblit_al): Mblit_a
+            slice(Mblit_ns): Mblit_a 1 {Mblit_al - 1}
+            str_to_int(Mblit_line): Mblit_ns 10
+            typeof(Mblit_lt): Mblit_line
+            if(_): {Mblit_lt != "integer"} [
+                set(Mblit_line): 0
+            ]
+        ]
+        else(_): [
+            set(Mbl_file): Mblit_a
+            set(Mbl_showname): Mbl_file
+        ]
+        set(Mblit_i): {Mblit_i + 1}
     ]
     Mbl_detect(_): 
     Mbl_load(_): Mbl_file
@@ -1124,6 +1202,14 @@ init(ret): arg_cnt arg_vec [
     set(Mbl_count): 0
     set(Mbl_msg): ""
     set(Mbl_running): 1
+    if(_): {Mblit_line > 0} [
+        len(Mblit_nl): Mbl_buf
+        set(Mbl_cy): {Mblit_line - 1}
+        if(_): {Mbl_cy >= Mblit_nl} [
+            set(Mbl_cy): {Mblit_nl - 1}
+        ]
+        Mbl_scroll(_):
+    ]
     set(Mblit_s): Mbl_esc
     concat(Mblit_s): Mblit_s "[2J"
     concat(Mblit_s): Mblit_s Mbl_esc
@@ -1136,7 +1222,9 @@ init(ret): arg_cnt arg_vec [
             set(Mbl_running): 0
         ]
         if(_): {Mbl_b > 0 - 1} [
+            Mbl_cmd_begin(_):
             Mbl_dispatch(_): Mbl_b
+            Mbl_cmd_end(_):
         ]
     ]
     terminal_sane(Mblit_r2): 

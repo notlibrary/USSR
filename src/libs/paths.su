@@ -300,7 +300,7 @@ write_file_atomic(r): path text [
         if(_): old [
             concat(bak): path ".bak"
             remove_file(_): bak
-            rename_path(moved): path bak
+            rename_path(_): path bak
             rename_path(done): tmp path
             if(_): {done = 0} [
                 remove_file(_): bak
