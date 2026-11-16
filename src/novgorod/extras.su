@@ -1,0 +1,1353 @@
+# extras.su - Novgorod's moderation, posting policy, API, feeds, search and
+# smaller pages (refine pass 1). novgorod.su includes this file; it hooks in
+# through nv_extra_route (requests), nv_policy_check (posting), nv_mod_load
+# (startup) and a few lines in the pages.
+#
+# Options (see novgorod.su's header): --admin-hash HEX, --read-only,
+# --lock-days N, --trust-proxy, --export DIR.
+#
+# Moderation state is an append-only file, DATA/mod.log, one action per
+# line ("TIME ACTION ARGS"), replayed at start; it works the same with
+# files, --db and --kvdb storage, because posts themselves are untouched
+# by it except for deletions:
+#   lock N | unlock N | sticky N | unsticky N   threads by their first post
+#   delete N                                     a post (a thread if N opens one)
+#   report N TEXT | resolve N                    the report queue
+#   pw N HASH                                    a poster's deletion password
+#   banimg HASH                                  an image refused from now on
+# DATA/filters.txt (optional): one rule per line, "word TEXT" refuses posts
+# containing TEXT (case folded), "link HOST" refuses links to HOST or its
+# subdomains; "#" starts a comment.
+# DATA/rules.txt (optional): the /rules page, in Novgorod markup.
+# DATA/notice-BOARD.txt (optional): a notice at the top of that board.
+#
+# Pages and endpoints added:
+#   GET  /api/boards  /api/BOARD/threads  /api/thread/N   JSON, with ETag
+#   GET  /BOARD/atom.xml  /BOARD/res/N/atom.xml           Atom feeds
+#   GET  /search?q=WORDS[&board=B]                         newest 50 matches
+#   GET  /BOARD/res/N/gallery                              a thread's images
+#   GET  /rules  /go?to=URL (external link warning)  /metrics (text)
+#   GET  /report?no=N  POST /report                        report a post
+#   POST /delete (no, password)                            the poster deletes
+#   GET  /mod  POST /mod/login  POST /mod/act  GET /mod/log
+$once
+$include "../libs/strings.su"
+$include "../libs/encoding.su"
+$include "../libs/json.su"
+
+global(_): nv_mod nv_read_only nv_admin_hash nv_lock_days nv_trust_proxy nv_server_key nv_filters nv_stats
+
+# ---------------------------------------------------------------- state
+
+nv_extras_setup(r): [
+    btree(nv_mod):
+    btree(locks):
+    btree(sticky):
+    btree(reports):
+    btree(pw):
+    btree(banimg):
+    vec(log): ""
+    btput(_): nv_mod "locks" locks
+    btput(_): nv_mod "sticky" sticky
+    btput(_): nv_mod "reports" reports
+    btput(_): nv_mod "pw" pw
+    btput(_): nv_mod "banimg" banimg
+    btput(_): nv_mod "log" log
+    set(nv_read_only): false
+    set(nv_admin_hash): ""
+    set(nv_lock_days): 0
+    set(nv_trust_proxy): false
+    random64(k1):
+    random64(k2):
+    str_from_int(a): k1
+    str_from_int(b): k2
+    concat(nv_server_key): "novgorod:" a ":" b
+    vec(nv_filters): ""
+    btree(nv_stats):
+    btput(_): nv_stats "refused" 0
+    btput(_): nv_stats "requests" 0
+    set(r): 0
+]
+
+# applies one mod.log line to the state; replaying is true at startup
+nv_mod_apply(r): line replaying [
+    set(r): 0
+    str_split_max(parts): line " " 3
+    len(n): parts
+    if(_): {n < 2} [
+        return(r): r
+    ]
+    at(t): parts 0
+    at(action): parts 1
+    set(arg): ""
+    if(_): {n > 2} [
+        at(arg): parts 2
+    ]
+    str_split_max(ab): arg " " 2
+    at(first): ab 0
+    set(rest): ""
+    len(an): ab
+    if(_): {an > 1} [
+        at(rest): ab 1
+    ]
+    str_to_int(no): first 10
+    btget(locks): nv_mod "locks"
+    btget(sticky): nv_mod "sticky"
+    btget(reports): nv_mod "reports"
+    btget(pw): nv_mod "pw"
+    btget(banimg): nv_mod "banimg"
+    btget(log): nv_mod "log"
+    if(_): {action = "lock"} [
+        btput(_): locks no true
+    ]
+    elif(_): {action = "unlock"} [
+        btdel(_): locks no
+    ]
+    elif(_): {action = "sticky"} [
+        btput(_): sticky no true
+    ]
+    elif(_): {action = "unsticky"} [
+        btdel(_): sticky no
+    ]
+    elif(_): {action = "report"} [
+        btget(old): reports no ""
+        if(_): {old != ""} [
+            concat(rest): old " | " rest
+        ]
+        btput(_): reports no rest
+    ]
+    elif(_): {action = "resolve"} [
+        btdel(_): reports no
+    ]
+    elif(_): {action = "pw"} [
+        btput(_): pw no rest
+    ]
+    elif(_): {action = "banimg"} [
+        btput(_): banimg first true
+    ]
+    elif(_): {action = "delete"} [
+        btdel(_): reports no
+        if(_): {replaying = false} [
+            nv_delete_post(_): no
+        ]
+    ]
+    # the public log: moderation actions, not reports or passwords
+    if(_): {action != "report" && action != "pw"} [
+        vec(entry): ""
+        str_to_int(tn): t 10
+        push(_): entry tn
+        push(_): entry action
+        push(_): entry first
+        push(_): log entry
+    ]
+]
+
+nv_mod_record(r): action arg [
+    time(now):
+    str_from_int(ts): now
+    concat(line): ts " " action " " arg
+    nv_path(f): "mod.log" ""
+    open_file(h): f "ab"
+    set(r): {0 - 1}
+    if(_): {h >= 0} [
+        concat(text): line "\n"
+        write_file(_): h text
+        close_file(_): h
+        set(r): 0
+    ]
+    nv_mod_apply(_): line false
+]
+
+nv_mod_load(r): [
+    set(r): 0
+    nv_path(f): "mod.log" ""
+    file_exists(have): f
+    if(_): have [
+        readfile(text): f
+        str_split(lines): text "\n"
+        len(n): lines
+        set(i): 0
+        while(_): {i < n} [
+            at(line): lines i
+            str_trim(line): line
+            if(_): {line != ""} [
+                nv_mod_apply(_): line true
+                set(r): {r + 1}
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    vec(nv_filters): ""
+    nv_path(ff): "filters.txt" ""
+    file_exists(have_f): ff
+    if(_): have_f [
+        readfile(ftext): ff
+        str_split(flines): ftext "\n"
+        len(fn): flines
+        set(i): 0
+        while(_): {i < fn} [
+            at(fl): flines i
+            str_trim(fl): fl
+            str_starts(comment): fl "#"
+            str_split_max(rule): fl " " 2
+            len(rn): rule
+            if(_): {comment = false && rn = 2} [
+                at(kind): rule 0
+                at(value): rule 1
+                str_lower(value): value
+                str_trim(value): value
+                if(_): {(kind = "word" || kind = "link") && value != ""} [
+                    vec(entry): ""
+                    push(_): entry kind
+                    push(_): entry value
+                    push(_): nv_filters entry
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+nv_is_locked(r): op_no [
+    btget(locks): nv_mod "locks"
+    btget(r): locks op_no false
+]
+
+nv_is_sticky(r): op_no [
+    btget(sticky): nv_mod "sticky"
+    btget(r): sticky op_no false
+]
+
+# sticky threads first, the rest in bump order
+nv_sticky_first(r): threads [
+    vec(top): ""
+    vec(rest): ""
+    len(n): threads
+    set(i): 0
+    while(_): {i < n} [
+        at(t): threads i
+        getf(op): t "op"
+        getf(no): op "no"
+        nv_is_sticky(s): no
+        if(_): s [
+            push(_): top t
+        ]
+        else(_): [
+            push(_): rest t
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): top
+    len(m): rest
+    set(i): 0
+    while(_): {i < m} [
+        at(t): rest i
+        push(_): r t
+        set(i): {i + 1}
+    ]
+]
+
+nv_delete_post(r): no [
+    set(r): false
+    nv_find_post(p): no
+    if(_): {p = null} [
+        return(r): r
+    ]
+    getf(thread): p "owner"
+    getf(op_no): p "thread"
+    if(_): {op_no = 0} [
+        nv_remove_thread(_): thread
+        set(r): true
+        return(r): r
+    ]
+    setf(_): p "alive" false
+    if(_): {nv_db != ""} [
+        nv_db_connect(c):
+        if(_): {c != null} [
+            vec(params): ""
+            push(_): params no
+            concat(sql): "delete from " nv_db_table " where no = $1"
+            dubna_exec(_): c sql params
+            dubna_close(_): c
+        ]
+    ]
+    if(_): {nv_kvdb != ""} [
+        nv_kv_key(key): no
+        dubna_kv_del(_): nv_kv key
+        dubna_kv_commit(_): nv_kv
+    ]
+    nv_s(nos): no
+    concat(name): nos ".post"
+    nv_path(f): "posts/" name
+    remove_file(_): f
+    concat(name): nos ".svg"
+    nv_path(f): "img/" name
+    remove_file(_): f
+    nv_path(f): "thumbs/" name
+    remove_file(_): f
+    set(r): true
+]
+
+# ---------------------------------------------------------------- policy
+
+_nv_hash_text(r): text [
+    sha256(d): text
+    hex_encode(r): d
+]
+
+# the longest run of one byte repeated (USSR regexes have no
+# backreferences, so this counts by hand)
+_nv_longest_run(r): text [
+    len(n): text
+    set(r): 0
+    set(cur): 0
+    set(last): {0 - 1}
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): {b = last} [
+            set(cur): {cur + 1}
+        ]
+        else(_): [
+            set(cur): 1
+            set(last): b
+        ]
+        if(_): {cur > r} [
+            set(r): cur
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# "" when the post may go in, else the reason. thread_no 0 is a new thread.
+nv_policy_check(r): board_name thread_no text subject img [
+    set(r): ""
+    if(_): nv_read_only [
+        set(r): "The forum is read-only for maintenance; try again later."
+        return(r): r
+    ]
+    if(_): {thread_no != 0} [
+        nv_is_locked(locked): thread_no
+        if(_): locked [
+            set(r): "This thread is locked."
+            return(r): r
+        ]
+        if(_): {nv_lock_days > 0} [
+            nv_find_post(op): thread_no
+            if(_): {op != null} [
+                getf(thread): op "owner"
+                getf(bump): thread "bump"
+                time(now):
+                if(_): {now - bump > nv_lock_days * 86400} [
+                    set(r): "This thread is old and closed to replies."
+                    return(r): r
+                ]
+            ]
+        ]
+    ]
+    # page-stretching posts: many lines, or one character over and over
+    str_count(lines): text "\n"
+    if(_): {lines > 300} [
+        set(r): "The post has too many lines."
+        return(r): r
+    ]
+    _nv_longest_run(run): text
+    if(_): {run >= 80} [
+        set(r): "The post repeats one character too many times."
+        return(r): r
+    ]
+    str_lower(low): text
+    str_lower(lsub): subject
+    concat(all): lsub " " low
+    len(nf): nv_filters
+    set(i): 0
+    while(_): {i < nf} [
+        at(rule): nv_filters i
+        at(kind): rule 0
+        at(value): rule 1
+        if(_): {kind = "word"} [
+            str_contains(hit): all value
+            if(_): hit [
+                set(r): "The post contains a filtered word."
+                return(r): r
+            ]
+        ]
+        else(_): [
+            str_replace(dots): value "." "\\."
+            concat(rx): "https?://([a-z0-9-]+\\.)*" dots "([:/?#]|$)"
+            re_test(hit): rx all "m"
+            if(_): hit [
+                set(r): "Links to that site are not allowed here."
+                return(r): r
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    # flood: the same text again among the last 20 posts
+    str_trim(norm): low
+    re_replace(norm): "\\s+" norm " "
+    len(normlen): norm
+    if(_): {normlen > 0} [
+        len(np): nv_posts
+        set(k): {np - 1}
+        set(seen): 0
+        while(_): {k >= 0 && seen < 20} [
+            at(p): nv_posts k
+            getf(alive): p "alive"
+            if(_): alive [
+                getf(pt): p "text"
+                str_lower(pl): pt
+                str_trim(pl): pl
+                re_replace(pl): "\\s+" pl " "
+                if(_): {pl = norm} [
+                    set(r): "That exact text was posted a moment ago."
+                    return(r): r
+                ]
+                set(seen): {seen + 1}
+            ]
+            set(k): {k - 1}
+        ]
+    ]
+    if(_): {img != ""} [
+        _nv_hash_text(ih): img
+        btget(banimg): nv_mod "banimg"
+        btget(banned): banimg ih false
+        if(_): banned [
+            set(r): "That image is not allowed here."
+            return(r): r
+        ]
+    ]
+]
+
+# after a post is stored: its deletion password and sage
+nv_after_post(r): p form bump_before [
+    set(r): 0
+    getf(password): form "password"
+    getf(no): p "no"
+    if(_): {password != ""} [
+        concat(salted): nv_title ":" password
+        _nv_hash_text(h): salted
+        str_from_int(ns): no
+        concat(arg): ns " " h
+        nv_mod_record(_): "pw" arg
+    ]
+    getf(sage): form "sage"
+    getf(thread_no): p "thread"
+    if(_): {sage != "" && thread_no != 0} [
+        getf(thread): p "owner"
+        setf(_): thread "bump" bump_before
+    ]
+]
+
+# ---------------------------------------------------------------- helpers
+
+nv_text_response(r): status type body extra [
+    concat(headers): "Cache-Control: no-cache\n" extra
+    uk_response_ex(r): status type headers body
+]
+
+# ETag on a body; a 304 when the request already has it
+nv_etagged(r): request status type body [
+    crc32(c): body
+    str_from_int_base(tag): {c & 0xFFFFFFFF} 16
+    len(bl): body
+    str_from_int_base(ls): bl 16
+    concat(etag): "\"" ls "-" tag "\""
+    uk_request_header(inm): request "if-none-match"
+    concat(extra): "ETag: " etag "\n"
+    if(_): {inm = etag} [
+        nv_text_response(r): "304 Not Modified" type "" extra
+        # a 304 has no body: drop the Content-Length of 0
+    ]
+    else(_): [
+        nv_text_response(r): status type body extra
+    ]
+]
+
+nv_post_json(r): p [
+    btree(r):
+    getf(no): p "no"
+    getf(board): p "board"
+    getf(thread): p "thread"
+    getf(t): p "time"
+    getf(subject): p "subject"
+    getf(text): p "text"
+    getf(image): p "image"
+    btput(_): r "no" no
+    btput(_): r "board" board
+    btput(_): r "thread" thread
+    btput(_): r "time" t
+    btput(_): r "subject" subject
+    btput(_): r "text" text
+    if(_): {image != ""} [
+        nv_s(nos): no
+        btree(img):
+        getf(iw): p "iw"
+        getf(ih): p "ih"
+        btput(_): img "type" image
+        btput(_): img "width" iw
+        btput(_): img "height" ih
+        concat(u): nv_prefix "/i/" nos ".svg"
+        concat(tu): nv_prefix "/t/" nos ".svg"
+        btput(_): img "url" u
+        btput(_): img "thumb" tu
+        btput(_): r "image" img
+    ]
+]
+
+_nv_live_posts(r): thread [
+    vec(r): ""
+    getf(posts): thread "posts"
+    len(n): posts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): posts i
+        getf(alive): p "alive"
+        if(_): alive [
+            push(_): r p
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+nv_api(r): request seg [
+    len(n): seg
+    set(r): null
+    if(_): {n = 2} [
+        at(what): seg 1
+        if(_): {what = "boards"} [
+            vec(out): ""
+            len(nb): nv_boards
+            set(i): 0
+            while(_): {i < nb} [
+                at(b): nv_boards i
+                btree(o):
+                getf(name): b "name"
+                getf(title): b "title"
+                getf(about): b "about"
+                btput(_): o "name" name
+                btput(_): o "title" title
+                btput(_): o "about" about
+                nv_threads(live): b
+                len(nt): live
+                btput(_): o "threads" nt
+                push(_): out o
+                set(i): {i + 1}
+            ]
+            json_stringify(body): out
+            nv_etagged(r): request "200 OK" "application/json" body
+        ]
+    ]
+    elif(_): {n = 3} [
+        at(second): seg 1
+        at(third): seg 2
+        if(_): {second = "thread"} [
+            nv_int(no): third
+            set(op): null
+            if(_): {no != null} [
+                nv_find_post(op): no
+            ]
+            set(ok): false
+            if(_): {op != null} [
+                getf(ot): op "thread"
+                set(ok): {ot = 0}
+            ]
+            if(_): ok [
+                getf(thread): op "owner"
+                _nv_live_posts(live): thread
+                vec(out): ""
+                len(np): live
+                set(i): 0
+                while(_): {i < np} [
+                    at(p): live i
+                    nv_post_json(j): p
+                    push(_): out j
+                    set(i): {i + 1}
+                ]
+                btree(doc):
+                btput(_): doc "posts" out
+                nv_is_locked(lk): no
+                nv_is_sticky(st): no
+                btput(_): doc "locked" lk
+                btput(_): doc "sticky" st
+                json_stringify(body): doc
+                nv_etagged(r): request "200 OK" "application/json" body
+            ]
+            else(_): [
+                nv_text_response(r): "404 Not Found" "application/json" "{\"error\":\"no such thread\"}" ""
+            ]
+        ]
+        elif(_): {third = "threads"} [
+            nv_board(board): second
+            if(_): {board != null} [
+                nv_threads(live): board
+                vec(out): ""
+                len(nt): live
+                set(i): 0
+                while(_): {i < nt} [
+                    at(t): live i
+                    getf(op): t "op"
+                    nv_post_json(j): op
+                    getf(bump): t "bump"
+                    _nv_live_posts(lp): t
+                    len(cnt): lp
+                    btput(_): j "replies" {cnt - 1}
+                    btput(_): j "bump" bump
+                    getf(opno): op "no"
+                    nv_is_sticky(st): opno
+                    btput(_): j "sticky" st
+                    push(_): out j
+                    set(i): {i + 1}
+                ]
+                json_stringify(body): out
+                nv_etagged(r): request "200 OK" "application/json" body
+            ]
+        ]
+    ]
+]
+
+_nv_xml(r): s [
+    nvm_escape(r): s
+]
+
+_nv_atom_date(r): t [
+    gmtime_nv(r): t
+]
+
+# 2026-11-16T09:05:00Z without dates.su (Novgorod's own nv_date is local)
+gmtime_nv(r): t [
+    str_trunc(days): {t / 86400}
+    set(rest): {t - days * 86400}
+    set(z): {days + 719468}
+    str_trunc(era): {z / 146097}
+    set(doe): {z - era * 146097}
+    str_trunc(a): {doe / 1460}
+    str_trunc(b): {doe / 36524}
+    str_trunc(c): {doe / 146096}
+    str_trunc(yoe): {(doe - a + b - c) / 365}
+    str_trunc(q4): {yoe / 4}
+    str_trunc(q100): {yoe / 100}
+    set(doy): {doe - (365 * yoe + q4 - q100)}
+    str_trunc(mp): {(5 * doy + 2) / 153}
+    str_trunc(dd): {(153 * mp + 2) / 5}
+    set(d): {doy - dd + 1}
+    set(m): {mp + 3}
+    if(_): {mp >= 10} [
+        set(m): {mp - 9}
+    ]
+    set(y): {yoe + era * 400}
+    if(_): {m <= 2} [
+        set(y): {y + 1}
+    ]
+    str_trunc(hh): {rest / 3600}
+    set(rest): {rest - hh * 3600}
+    str_trunc(mi): {rest / 60}
+    set(ss): {rest - mi * 60}
+    str_from_int(ys): y
+    nv_pad2(ms): m
+    nv_pad2(ds): d
+    nv_pad2(hs): hh
+    nv_pad2(mis): mi
+    nv_pad2(sss): ss
+    concat(r): ys "-" ms "-" ds "T" hs ":" mis ":" sss "Z"
+]
+
+nv_atom(r): request title self posts [
+    set(updated): 0
+    len(n): posts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): posts i
+        getf(t): p "time"
+        if(_): {t > updated} [
+            set(updated): t
+        ]
+        set(i): {i + 1}
+    ]
+    gmtime_nv(us): updated
+    _nv_xml(tx): title
+    concat(body): "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\">\n<title>" tx "</title>\n<id>urn:novgorod:" self "</id>\n<updated>" us "</updated>\n<link rel=\"self\" href=\"" nv_prefix self "\"/>\n"
+    set(i): {n - 1}
+    set(shown): 0
+    while(_): {i >= 0 && shown < 50} [
+        at(p): posts i
+        getf(no): p "no"
+        getf(board): p "board"
+        getf(thread): p "thread"
+        getf(t): p "time"
+        getf(subject): p "subject"
+        getf(html): p "html"
+        nv_s(nos): no
+        set(op_no): thread
+        if(_): {thread = 0} [
+            set(op_no): no
+        ]
+        nv_thread_url(turl): board op_no
+        set(et): subject
+        if(_): {et = ""} [
+            concat(et): "No. " nos
+        ]
+        _nv_xml(et): et
+        _nv_xml(content): html
+        gmtime_nv(ts): t
+        concat(body): body "<entry><title>" et "</title><id>urn:novgorod:post:" nos "</id><updated>" ts "</updated><link href=\"" turl "#p" nos "\"/><content type=\"html\">" content "</content></entry>\n"
+        set(shown): {shown + 1}
+        set(i): {i - 1}
+    ]
+    concat(body): body "</feed>\n"
+    nv_etagged(r): request "200 OK" "application/atom+xml; charset=utf-8" body
+]
+
+nv_board_feed(r): request board [
+    getf(name): board "name"
+    vec(all): ""
+    len(np): nv_posts
+    set(i): 0
+    while(_): {i < np} [
+        at(p): nv_posts i
+        getf(pb): p "board"
+        getf(alive): p "alive"
+        if(_): {pb = name && alive} [
+            push(_): all p
+        ]
+        set(i): {i + 1}
+    ]
+    getf(title): board "title"
+    concat(ft): "/" name "/ " title " - " nv_title
+    concat(self): "/" name "/atom.xml"
+    nv_atom(r): request ft self all
+]
+
+nv_search(r): query [
+    nv_query_text(q): query "q"
+    nv_query_text(only): query "board"
+    str_trim(q): q
+    str_lower(lq): q
+    nvm_escape(qe): q
+    concat(body): "<section class=\"notice\"><h1>Search</h1><form action=\"" nv_prefix "/search\" method=\"get\"><input name=\"q\" value=\"" qe "\" placeholder=\"words\"> <button type=\"submit\">Search</button></form></section>\n"
+    len(ql): lq
+    if(_): {ql > 0} [
+        str_split(words): lq " "
+        set(found): 0
+        len(np): nv_posts
+        set(i): {np - 1}
+        while(_): {i >= 0 && found < 50} [
+            at(p): nv_posts i
+            getf(alive): p "alive"
+            getf(pb): p "board"
+            set(want): {alive && (only = "" || only = pb)}
+            if(_): want [
+                getf(text): p "text"
+                getf(subject): p "subject"
+                concat(hay): subject " " text
+                str_lower(hay): hay
+                set(all_in): true
+                len(nw): words
+                set(k): 0
+                while(_): {k < nw} [
+                    at(w): words k
+                    if(_): {w != ""} [
+                        str_contains(has): hay w
+                        if(_): {has = false} [
+                            set(all_in): false
+                        ]
+                    ]
+                    set(k): {k + 1}
+                ]
+                if(_): all_in [
+                    vec(none): ""
+                    nv_post_html(h): p true none
+                    concat(body): body h
+                    set(found): {found + 1}
+                ]
+            ]
+            set(i): {i - 1}
+        ]
+        nv_s(fs): found
+        concat(body): body "<p class=\"omitted\">" fs " found (newest first, at most 50).</p>\n"
+    ]
+    concat(t): "Search - " nv_title
+    nv_html(r): "200 OK" t body
+]
+
+# a query parameter as text ("" when absent), percent-decoded
+nv_query_text(r): query key [
+    query_parse(pairs): query
+    set(r): ""
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(p): pairs i
+        at(k): p 0
+        if(_): {k = key} [
+            at(r): p 1
+            set(i): n
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+nv_gallery(r): board no [
+    getf(name): board "name"
+    nv_find_post(op): no
+    set(ok): false
+    if(_): {op != null} [
+        getf(ot): op "thread"
+        getf(ob): op "board"
+        set(ok): {ot = 0 && ob = name}
+    ]
+    if(_): {ok = false} [
+        nv_error(r): "404 Not Found" "This thread does not exist."
+        return(r): r
+    ]
+    getf(thread): op "owner"
+    _nv_live_posts(live): thread
+    nv_thread_url(turl): name no
+    nv_board_header(body): board
+    concat(body): body "<p class=\"views\"><a href=\"" turl "\">back to the thread</a></p><section class=\"gallery\">"
+    len(n): live
+    set(count): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(p): live i
+        getf(image): p "image"
+        if(_): {image != ""} [
+            getf(pno): p "no"
+            getf(tw): p "tw"
+            getf(th): p "th"
+            nv_s(ps): pno
+            nv_s(tws): tw
+            nv_s(ths): th
+            concat(body): body "<a href=\"" turl "#p" ps "\"><img src=\"" nv_prefix "/t/" ps ".svg\" width=\"" tws "\" height=\"" ths "\" alt=\"image of post " ps "\" loading=\"lazy\"></a> "
+            set(count): {count + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {count = 0} [
+        concat(body): body "<p class=\"empty\">No images in this thread.</p>"
+    ]
+    concat(body): body "</section>\n"
+    nv_s(ns): no
+    concat(t): "/" name "/ gallery of " ns " - " nv_title
+    nv_html(r): "200 OK" t body
+]
+
+nv_rules_page(r): [
+    nv_path(f): "rules.txt" ""
+    file_exists(have): f
+    set(text): "Be kind. Post code, not anime. No spam, no illegal content, no personal data of others. Moderators may delete anything that breaks these rules."
+    if(_): have [
+        readfile(text): f
+    ]
+    nvm_render(html): text
+    concat(body): "<section class=\"notice\"><h1>Rules</h1><div class=\"text\">" html "</div></section>\n"
+    concat(t): "Rules - " nv_title
+    nv_html(r): "200 OK" t body
+]
+
+nv_board_notice(r): name [
+    concat(fname): "notice-" name ".txt"
+    nv_path(f): fname ""
+    file_exists(have): f
+    set(r): ""
+    if(_): have [
+        readfile(text): f
+        str_trim(text): text
+        if(_): {text != ""} [
+            nvm_render(html): text
+            concat(r): "<aside class=\"notice board-notice\">" html "</aside>"
+        ]
+    ]
+]
+
+nv_banner(r): [
+    set(r): ""
+    if(_): nv_read_only [
+        set(r): "<aside class=\"notice\">Read-only for maintenance: reading works, posting is paused.</aside>\n"
+    ]
+]
+
+nv_go_page(r): query [
+    nv_query_text(to): query "to"
+    re_test(web): "^https?://[^\\s\"<>]+$" to
+    if(_): {web = false} [
+        nv_error(r): "400 Bad Request" "That is not a web address."
+        return(r): r
+    ]
+    nvm_escape(te): to
+    concat(body): "<section class=\"notice\"><h1>Leaving Novgorod</h1><p>This link goes to another site, which Novgorod does not check:</p><p><a href=\"" te "\" rel=\"nofollow noopener noreferrer ugc\">" te "</a></p><p><a href=\"" nv_prefix "/\" data-back>Back</a></p></section>\n"
+    concat(t): "External link - " nv_title
+    nv_html(r): "200 OK" t body
+]
+
+nv_metrics(r): request [
+    len(np): nv_posts
+    set(live_posts): 0
+    set(i): 0
+    while(_): {i < np} [
+        at(p): nv_posts i
+        getf(alive): p "alive"
+        if(_): alive [
+            set(live_posts): {live_posts + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    nv_s(lps): live_posts
+    concat(body): "# TYPE novgorod_posts gauge\nnovgorod_posts " lps "\n# TYPE novgorod_threads gauge\n"
+    len(nb): nv_boards
+    set(i): 0
+    while(_): {i < nb} [
+        at(b): nv_boards i
+        getf(name): b "name"
+        nv_threads(live): b
+        len(nt): live
+        nv_s(nts): nt
+        concat(body): body "novgorod_threads{board=\"" name "\"} " nts "\n"
+        set(i): {i + 1}
+    ]
+    btget(refused): nv_stats "refused" 0
+    btget(reports): nv_mod "reports"
+    btlen(nr): reports
+    nv_s(rs): refused
+    nv_s(nrs): nr
+    len(seq_n): nv_seq
+    at(next): nv_seq {seq_n - 1}
+    nv_s(ns): next
+    concat(body): body "# TYPE novgorod_refused_posts counter\nnovgorod_refused_posts " rs "\n# TYPE novgorod_open_reports gauge\nnovgorod_open_reports " nrs "\n# TYPE novgorod_next_number gauge\nnovgorod_next_number " ns "\n"
+    nv_text_response(r): "200 OK" "text/plain; version=0.0.4; charset=utf-8" body ""
+]
+
+# ---------------------------------------------------------------- forms
+
+# a urlencoded or multipart POST as a btree of fields
+nv_post_fields(r): request [
+    btree(r):
+    uk_request_header(ctype): request "content-type"
+    str_lower(lower): ctype
+    str_starts(urlenc): lower "application/x-www-form-urlencoded"
+    if(_): urlenc [
+        uk_request_body(body): request
+        query_parse(pairs): body
+        len(n): pairs
+        set(i): 0
+        while(_): {i < n} [
+            at(p): pairs i
+            at(k): p 0
+            at(v): p 1
+            btput(_): r k v
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    str_starts(multi): lower "multipart/form-data"
+    re_find(m): "boundary=\"?([^\";]+)\"?" ctype
+    typeof(mt): m
+    if(_): {multi = false || mt != "vector"} [
+        return(r): r
+    ]
+    at(boundary): m 1
+    uk_request_body(body): request
+    concat(delim): "--" boundary
+    str_split(parts): body delim
+    len(n): parts
+    set(i): 1
+    while(_): {i < n} [
+        at(part): parts i
+        str_find(he): part "\r\n\r\n" 0
+        if(_): {he > 0} [
+            slice(head): part 0 he
+            len(pl): part
+            slice(value): part {he + 4} {pl - he - 4}
+            str_ends(crlf): value "\r\n"
+            if(_): crlf [
+                len(vl): value
+                slice(value): value 0 {vl - 2}
+            ]
+            re_find(nm): "name=\"([^\"]*)\"" head "i"
+            typeof(nt): nm
+            if(_): {nt = "vector"} [
+                at(k): nm 1
+                btput(_): r k value
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+nv_report_page(r): query [
+    nv_query_text(nos): query "no"
+    nv_int(no): nos
+    set(p): null
+    if(_): {no != null} [
+        nv_find_post(p): no
+    ]
+    if(_): {p = null} [
+        nv_error(r): "404 Not Found" "No such post."
+        return(r): r
+    ]
+    nv_s(ns): no
+    concat(body): "<section class=\"notice\"><h1>Report No. " ns "</h1><form action=\"" nv_prefix "/report\" method=\"post\" accept-charset=\"utf-8\"><input type=\"hidden\" name=\"no\" value=\"" ns "\"><input name=\"reason\" maxlength=\"200\" placeholder=\"What is wrong with it?\" required> <button type=\"submit\">Report</button></form>"
+    concat(body): body "<h2>Delete your own post</h2><form action=\"" nv_prefix "/delete\" method=\"post\"><input type=\"hidden\" name=\"no\" value=\"" ns "\"><input type=\"password\" name=\"password\" placeholder=\"the password you posted with\" required> <button type=\"submit\">Delete</button></form></section>\n"
+    concat(t): "Report - " nv_title
+    nv_html(r): "200 OK" t body
+]
+
+nv_report_post(r): request [
+    nv_post_fields(f): request
+    btget(nos): f "no" ""
+    btget(reason): f "reason" ""
+    nv_int(no): nos
+    set(p): null
+    if(_): {no != null} [
+        nv_find_post(p): no
+    ]
+    if(_): {p = null} [
+        nv_error(r): "404 Not Found" "No such post."
+        return(r): r
+    ]
+    nvm_clean(reason): reason
+    re_replace(reason): "[\\r\\n|]+" reason " "
+    re_replace(reason): "\\s+" reason " "
+    str_trim(reason): reason
+    utf8_count(rc): reason
+    if(_): {reason = "" || rc > 200} [
+        nv_error(r): "400 Bad Request" "A report needs a short reason."
+        return(r): r
+    ]
+    nv_s(ns): no
+    concat(arg): ns " " reason
+    nv_mod_record(_): "report" arg
+    concat(body): "<section class=\"notice\"><h1>Thank you</h1><p>The moderators will look at No. " ns ".</p><p><a href=\"" nv_prefix "/p/" ns "\">Back to the post</a></p></section>\n"
+    nv_html(r): "200 OK" "Reported" body
+]
+
+nv_delete_own(r): request [
+    nv_post_fields(f): request
+    btget(nos): f "no" ""
+    btget(password): f "password" ""
+    nv_int(no): nos
+    btget(pw): nv_mod "pw"
+    set(stored): ""
+    if(_): {no != null} [
+        btget(stored): pw no ""
+    ]
+    concat(salted): nv_title ":" password
+    _nv_hash_text(h): salted
+    if(_): {stored = "" || password = "" || h != stored} [
+        nv_error(r): "403 Forbidden" "That password does not delete this post."
+        return(r): r
+    ]
+    nv_s(ns): no
+    nv_mod_record(_): "delete" ns
+    nv_error(r): "200 OK" "The post is deleted."
+]
+
+# ---------------------------------------------------------------- admin
+
+_nv_admin_cookie_value(r): [
+    concat(msg): "admin:" nv_admin_hash
+    hmac_sha256(mac): nv_server_key msg
+    base64url_encode(r): mac
+]
+
+nv_is_admin(r): request [
+    set(r): false
+    if(_): {nv_admin_hash = ""} [
+        return(r): r
+    ]
+    uk_request_header(cookies): request "cookie"
+    re_find(m): "(?:^|;) *nvmod=([A-Za-z0-9_-]+)" cookies
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(v): m 1
+        _nv_admin_cookie_value(want):
+        set(r): {v = want}
+    ]
+]
+
+nv_mod_page(r): request [
+    if(_): {nv_admin_hash = ""} [
+        nv_error(r): "404 Not Found" "Moderation is off (start with --admin-hash)."
+        return(r): r
+    ]
+    nv_is_admin(admin): request
+    if(_): {admin = false} [
+        concat(body): "<section class=\"notice\"><h1>Moderators</h1><form action=\"" nv_prefix "/mod/login\" method=\"post\"><input type=\"password\" name=\"password\" placeholder=\"password\" required> <button type=\"submit\">Log in</button></form></section>\n"
+        nv_html(r): "200 OK" "Moderators" body
+        return(r): r
+    ]
+    set(body): "<section class=\"notice\"><h1>Report queue</h1>"
+    btget(reports): nv_mod "reports"
+    btkeys(keys): reports
+    len(n): keys
+    if(_): {n = 0} [
+        concat(body): body "<p>No open reports.</p>"
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(no): keys i
+        btget(reason): reports no
+        nv_s(ns): no
+        nvm_escape(re): reason
+        concat(body): body "<p><a href=\"" nv_prefix "/p/" ns "\">No. " ns "</a>: " re "</p>"
+        set(i): {i + 1}
+    ]
+    concat(body): body "</section><section class=\"notice\"><h1>Act</h1><form action=\"" nv_prefix "/mod/act\" method=\"post\"><input name=\"no\" placeholder=\"post number\" required> <select name=\"action\"><option>delete</option><option>lock</option><option>unlock</option><option>sticky</option><option>unsticky</option><option>resolve</option><option>banimg</option></select> <button type=\"submit\">Do it</button></form><p><a href=\"" nv_prefix "/mod/log\">moderation log</a></p></section>\n"
+    nv_html(r): "200 OK" "Moderation" body
+]
+
+nv_mod_login(r): request [
+    nv_post_fields(f): request
+    btget(password): f "password" ""
+    _nv_hash_text(h): password
+    str_lower(want): nv_admin_hash
+    if(_): {nv_admin_hash = "" || h != want} [
+        nv_error(r): "403 Forbidden" "Wrong password."
+        return(r): r
+    ]
+    _nv_admin_cookie_value(v):
+    concat(headers): "Set-Cookie: nvmod=" v "; Path=" nv_prefix "/mod; HttpOnly; SameSite=Strict"
+    if(_): nv_tls [
+        concat(headers): headers "; Secure"
+    ]
+    concat(location): nv_prefix "/mod"
+    concat(headers): headers "\nLocation: " location "\nCache-Control: no-store\n"
+    uk_response_ex(r): "303 See Other" "text/plain; charset=utf-8" headers "See Other\n"
+]
+
+nv_mod_act(r): request [
+    nv_is_admin(admin): request
+    if(_): {admin = false} [
+        nv_error(r): "403 Forbidden" "Log in first."
+        return(r): r
+    ]
+    nv_post_fields(f): request
+    btget(nos): f "no" ""
+    btget(action): f "action" ""
+    nv_int(no): nos
+    set(known): {action = "delete" || action = "lock" || action = "unlock" || action = "sticky" || action = "unsticky" || action = "resolve" || action = "banimg"}
+    if(_): {no = null || known = false} [
+        nv_error(r): "400 Bad Request" "A post number and an action, please."
+        return(r): r
+    ]
+    nv_s(ns): no
+    if(_): {action = "banimg"} [
+        nv_s(nos2): no
+        concat(iname): nos2 ".svg"
+        nv_path(f2): "img/" iname
+        file_exists(have): f2
+        if(_): {have = false} [
+            nv_error(r): "404 Not Found" "That post has no image."
+            return(r): r
+        ]
+        readfile(svg): f2
+        re_find(m): "base64,([A-Za-z0-9+/=]+)" svg
+        typeof(mt): m
+        if(_): {mt = "vector"} [
+            at(b64): m 1
+            _nv_hash_text(ih): b64
+            nv_mod_record(_): "banimg" ih
+        ]
+        nv_mod_record(_): "delete" ns
+    ]
+    else(_): [
+        nv_mod_record(_): action ns
+    ]
+    concat(location): nv_prefix "/mod"
+    nv_redirect(r): location
+]
+
+nv_mod_log_page(r): [
+    btget(log): nv_mod "log"
+    len(n): log
+    set(body): "<section class=\"notice\"><h1>Moderation log</h1>"
+    if(_): {n = 0} [
+        concat(body): body "<p>Nothing yet.</p>"
+    ]
+    set(i): {n - 1}
+    set(shown): 0
+    while(_): {i >= 0 && shown < 200} [
+        at(e): log i
+        at(t): e 0
+        at(action): e 1
+        at(what): e 2
+        nv_date(ds): t
+        nvm_escape(we): what
+        concat(body): body "<p>" ds " " action " " we "</p>"
+        set(i): {i - 1}
+        set(shown): {shown + 1}
+    ]
+    concat(body): body "</section>\n"
+    concat(t): "Moderation log - " nv_title
+    nv_html(r): "200 OK" t body
+]
+
+# ---------------------------------------------------------------- routing
+
+# Requests the extras answer: a response, or null to let Novgorod go on.
+nv_extra_route(r): method path query request seg [
+    set(r): null
+    len(n): seg
+    btget(cnt): nv_stats "requests" 0
+    btput(_): nv_stats "requests" {cnt + 1}
+    set(first): ""
+    if(_): {n > 0} [
+        at(first): seg 0
+    ]
+    if(_): {method = "POST"} [
+        if(_): {path = "/report"} [
+            nv_same_origin(same): request
+            if(_): same [
+                nv_report_post(r): request
+            ]
+            else(_): [
+                nv_error(r): "403 Forbidden" "Reports must come from this forum's own pages."
+            ]
+        ]
+        elif(_): {path = "/delete"} [
+            nv_same_origin(same): request
+            if(_): same [
+                nv_delete_own(r): request
+            ]
+            else(_): [
+                nv_error(r): "403 Forbidden" "Requests must come from this forum's own pages."
+            ]
+        ]
+        elif(_): {path = "/mod/login" || path = "/mod/act"} [
+            nv_same_origin(same): request
+            if(_): {same = false} [
+                nv_error(r): "403 Forbidden" "Requests must come from this forum's own pages."
+            ]
+            elif(_): {path = "/mod/login"} [
+                nv_mod_login(r): request
+            ]
+            else(_): [
+                nv_mod_act(r): request
+            ]
+        ]
+        return(r): r
+    ]
+    if(_): {first = "api"} [
+        nv_api(r): request seg
+        if(_): {r = null} [
+            nv_text_response(r): "404 Not Found" "application/json" "{\"error\":\"not found\"}" ""
+        ]
+        return(r): r
+    ]
+    if(_): {n = 1} [
+        if(_): {first = "search"} [
+            nv_search(r): query
+        ]
+        elif(_): {first = "rules"} [
+            nv_rules_page(r):
+        ]
+        elif(_): {first = "go"} [
+            nv_go_page(r): query
+        ]
+        elif(_): {first = "metrics"} [
+            nv_metrics(r): request
+        ]
+        elif(_): {first = "report"} [
+            nv_report_page(r): query
+        ]
+        elif(_): {first = "mod"} [
+            nv_mod_page(r): request
+        ]
+        return(r): r
+    ]
+    if(_): {n = 2 && first = "mod"} [
+        at(second): seg 1
+        if(_): {second = "log"} [
+            nv_mod_log_page(r):
+        ]
+        return(r): r
+    ]
+    nv_board(board): first
+    if(_): {board = null} [
+        return(r): r
+    ]
+    if(_): {n = 2} [
+        at(second): seg 1
+        if(_): {second = "atom.xml"} [
+            nv_board_feed(r): request board
+        ]
+    ]
+    elif(_): {n = 4} [
+        at(second): seg 1
+        at(third): seg 2
+        at(fourth): seg 3
+        nv_int(no): third
+        if(_): {second = "res" && no != null} [
+            if(_): {fourth = "gallery"} [
+                nv_gallery(r): board no
+            ]
+            elif(_): {fourth = "atom.xml"} [
+                nv_find_post(op): no
+                set(ok): false
+                if(_): {op != null} [
+                    getf(ot): op "thread"
+                    getf(ob): op "board"
+                    getf(name): board "name"
+                    set(ok): {ot = 0 && ob = name}
+                ]
+                if(_): ok [
+                    getf(thread): op "owner"
+                    _nv_live_posts(live): thread
+                    getf(subject): op "subject"
+                    nv_s(ns): no
+                    getf(name): board "name"
+                    concat(ft): "/" name "/ " ns " " subject " - " nv_title
+                    concat(self): "/" name "/res/" ns "/atom.xml"
+                    nv_atom(r): request ft self live
+                ]
+            ]
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- export
+
+# Writes every live post as N.post, plus boards.txt and mod.log, into dir;
+# the number of posts written, or -1.
+nv_export(r): dir [
+    make_dir(_): dir
+    is_dir(d): dir
+    set(r): {0 - 1}
+    if(_): {d != 1} [
+        return(r): r
+    ]
+    concat(pdir): dir "/posts"
+    make_dir(_): pdir
+    set(r): 0
+    len(np): nv_posts
+    set(i): 0
+    while(_): {i < np} [
+        at(p): nv_posts i
+        getf(alive): p "alive"
+        if(_): alive [
+            getf(no): p "no"
+            nv_post_file(file): p
+            nv_s(ns): no
+            concat(f): pdir "/" ns ".post"
+            writefile(_): f file
+            set(r): {r + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    nv_path(bf): "boards.txt" ""
+    readfile(boards): bf
+    concat(f): dir "/boards.txt"
+    writefile(_): f boards
+    nv_path(mf): "mod.log" ""
+    file_exists(have): mf
+    if(_): have [
+        readfile(mods): mf
+        concat(f): dir "/mod.log"
+        writefile(_): f mods
+    ]
+    len(seq_n): nv_seq
+    at(next): nv_seq {seq_n - 1}
+    nv_s(ns): next
+    concat(f): dir "/seq"
+    writefile(_): f ns
+]

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.0
+Refine pass 1 from REFINE.md; the new code is `extras.su`. Nothing
+changes for a forum started as before: every addition is a new page or
+an option.
+- Moderation: `--admin-hash HEX` (the SHA-256 of a password, or
+  `NOVGOROD_ADMIN_HASH`) turns on `/mod`: a login that sets a signed,
+  HttpOnly cookie for `/mod` only, the report queue, and actions to
+  delete a post or thread, lock and sticky threads, resolve reports and
+  ban a post's image. Actions go to an append-only `DATA/mod.log`,
+  replayed at start, so files, `--db` and `--kvdb` all keep them; `/mod/log`
+  is the public log (no reports, no passwords).
+- Posters: a "report" link on every post (`/report?no=N`), a password
+  field to delete one's own post later (`/delete`, stored hashed in
+  mod.log), and sage for replies that should not bump.
+- Policy: `DATA/filters.txt` with `word` and `link` rules, refused posts
+  with too many lines or one character repeated 80 times, the same text
+  again among the last 20 posts, `--read-only` with a banner,
+  `--lock-days N` for old threads, banned images.
+- Reading: a JSON API (`/api/boards`, `/api/BOARD/threads`,
+  `/api/thread/N`) with ETag and 304, Atom feeds per board and thread,
+  `/search?q=` across boards, a thread gallery, `/rules` (from
+  `DATA/rules.txt`), a per-board notice (`DATA/notice-BOARD.txt`), an
+  external-link warning page (`/go?to=`) and `/metrics`.
+- Sticky threads come first on boards and in the API; deleted replies
+  disappear from pages.
+- `--export DIR` writes every post, boards.txt, seq and mod.log, then
+  exits: a backup whatever the storage.
+- `tests/novgorod_extras_test.su`: 58 checks; the existing
+  `tests/novgorod_test.su` output is unchanged.
+
 ## 0.4.0
 - Thumbnails are made by the server with Omsk (`src/omsk`): every posted
   picture is decoded, its real size replaces the one the form gives, and
