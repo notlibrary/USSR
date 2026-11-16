@@ -1,0 +1,1466 @@
+# more.su - Dubna refine pass 1: prepared statements, typed rows, COPY,
+# LISTEN/NOTIFY, cursors, pipelines, cancelling, transactions, quoting,
+# a pool, reconnects, migrations, EXPLAIN, .pgpass, Dubna KV prefix/TTL/
+# export, and a RESP (Redis) client. Include it instead of dubna.su.
+#
+# PostgreSQL
+#   dubna_prepare(r): c name sql          Parse once under name: 0 or -1
+#   dubna_exec_prepared(res): c name params  Bind/Execute a prepared one
+#   dubna_deallocate(r): c name
+#   dubna_query_all(v): c sql             every result of a multi-statement
+#                                         simple query, in order
+#   dubna_pipeline(v): c sql param_sets   one statement with many parameter
+#                                         vectors, all before one Sync
+#   dubna_rows(v): res                    rows as vectors of typed values
+#   dubna_records(v): res                 rows as btrees keyed by column
+#   dubna_columns(v): res                 [[name, type oid], ...]
+#   dubna_typed(v): text oid              int2/4/8 and oid integers, float4/8
+#                                         reals, bool booleans, json/jsonb
+#                                         parsed, int/text/bool/float arrays
+#                                         vectors; numeric stays exact text
+#   dubna_array(v): text                  "{1,2,NULL,"a b"}" to a vector
+#   dubna_copy_in(n): c sql lines         COPY ... FROM STDIN (text format):
+#                                         rows copied, or -1
+#   dubna_copy_out(v): c sql              COPY ... TO STDOUT: lines, or null
+#   dubna_listen(r): c channel / dubna_unlisten(r): c channel
+#   dubna_notify(r): c channel payload
+#   dubna_wait_notify(v): c ms            [channel, payload, pid], or null
+#                                         after ms milliseconds (0: just look)
+#   dubna_cursor(r): c name sql params    BEGIN and DECLARE: 0 or -1
+#   dubna_fetch(res): c name count        the next rows of a cursor
+#   dubna_cursor_close(r): c name         CLOSE and COMMIT
+#   dubna_cancel(r): c                    CancelRequest over a second socket
+#   dubna_begin / dubna_commit / dubna_rollback (r): c
+#   dubna_savepoint / dubna_rollback_to / dubna_release (r): c name
+#   dubna_tx(r): c fn                     BEGIN, fn(r): c as a task, COMMIT
+#                                         when it gives 0, else ROLLBACK
+#   dubna_quote_ident(r): name / dubna_quote_literal(r): text
+#   dubna_set(r): c name value            set_config (statement_timeout,
+#                                         search_path, application_name ...)
+#   dubna_server_version(n): c            e.g. 180001
+#   dubna_notices(v): c                   the notices so far, then forgets them
+#   dubna_connect_retry(c): conninfo tries delay_ms   backoff, doubling
+#   dubna_pgpass(r): host port db user    the .pgpass password (PGPASSFILE,
+#                                         %APPDATA%/postgresql/pgpass.conf or
+#                                         ~/.pgpass), or ""
+#   dubna_connect_pgpass(c): conninfo     dubna_connect with that password
+#   dubna_pool_new(p): conninfo size / dubna_pool_get(c): p /
+#   dubna_pool_put(_): p c / dubna_pool_close(_): p
+#   dubna_migrate(n): c dir               DIR/NNN_*.sql not yet in
+#                                         schema_migrations, each in a
+#                                         transaction: the count, or -1
+#   dubna_explain(t): c sql               EXPLAIN's plan as text
+# Dubna KV
+#   dubna_kv_prefix(v): db prefix max / dubna_kv_range_desc(v): db lo hi max
+#   dubna_kv_put_ttl(r): db key value seconds / dubna_kv_get_ttl(v): db key
+#   dubna_kv_export(n): db path / dubna_kv_import(n): db path   JSON lines
+# Redis
+#   dubna_resp_encode(r): args / dubna_resp_decode(v): text
+#   dubna_redis_connect(c): host port / dubna_redis(v): c args /
+#   dubna_redis_close(_): c
+$once
+$include "dubna.su"
+$include "../libs/strings.su"
+$include "../libs/json.su"
+$include "../libs/paths.su"
+
+# ---------------------------------------------------------------- prepared
+
+_dn_send_collect(r): c msgs [
+    dubna_send(sent): c msgs
+    if(_): {sent != 0} [
+        dubna_new_result(r):
+        setf(_): r "error" "dubna: could not send the query"
+        dubna_fail(_): "dubna: could not send the query"
+        return(r): r
+    ]
+    dubna_collect(r): c
+]
+
+_dn_sync(r): out [
+    vec(sync): ""
+    dubna_message(sm): "S" sync
+    dubna_put_bytes(_): out sm
+    set(r): 0
+]
+
+dubna_prepare(r): c name sql [
+    vec(m): ""
+    vec(parse): ""
+    dubna_put_cstr(_): parse name
+    dubna_put_cstr(_): parse sql
+    dubna_put_int16(_): parse 0
+    dubna_message(pm): "P" parse
+    dubna_put_bytes(_): m pm
+    _dn_sync(_): m
+    _dn_send_collect(res): c m
+    dubna_ok(good): res
+    set(r): {0 - 1}
+    if(_): good [
+        set(r): 0
+    ]
+]
+
+_dn_bind_execute(r): out stmt params [
+    vec(bind): ""
+    dubna_put_cstr(_): bind ""
+    dubna_put_cstr(_): bind stmt
+    dubna_put_int16(_): bind 0
+    len(n): params
+    dubna_put_int16(_): bind n
+    set(i): 0
+    while(_): {i < n} [
+        at(p): params i
+        dubna_param_text(text): p
+        typeof(tt): text
+        if(_): {tt = "null"} [
+            dubna_put_int32(_): bind {0 - 1}
+        ]
+        else(_): [
+            text_bytes(bytes): text
+            len(bl): bytes
+            dubna_put_int32(_): bind bl
+            dubna_put_bytes(_): bind bytes
+        ]
+        set(i): {i + 1}
+    ]
+    dubna_put_int16(_): bind 0
+    dubna_message(m): "B" bind
+    dubna_put_bytes(_): out m
+    vec(describe): ""
+    push(_): describe 80
+    push(_): describe 0
+    dubna_message(m): "D" describe
+    dubna_put_bytes(_): out m
+    vec(execute): ""
+    dubna_put_cstr(_): execute ""
+    dubna_put_int32(_): execute 0
+    dubna_message(m): "E" execute
+    dubna_put_bytes(_): out m
+    set(r): 0
+]
+
+dubna_exec_prepared(r): c name params [
+    vec(m): ""
+    _dn_bind_execute(_): m name params
+    _dn_sync(_): m
+    _dn_send_collect(r): c m
+]
+
+dubna_deallocate(r): c name [
+    dubna_quote_ident(q): name
+    concat(sql): "deallocate " q
+    _dn_simple_ok(r): c sql
+]
+
+# replies up to ReadyForQuery, one result per CommandComplete or error
+_dn_collect_all(r): c [
+    vec(r): ""
+    dubna_new_result(cur):
+    while(_): {true} [
+        dubna_read(msg): c
+        typeof(mt): msg
+        if(_): {mt != "vector"} [
+            setf(_): cur "error" "dubna: the server closed the connection"
+            push(_): r cur
+            return(r): r
+        ]
+        at(type): msg 0
+        at(body): msg 1
+        if(_): {type = "T"} [
+            dubna_row_description(_): cur body
+        ]
+        elif(_): {type = "D"} [
+            dubna_data_row(row): body
+            getf(rows): cur "rows"
+            push(_): rows row
+        ]
+        elif(_): {type = "C" || type = "I"} [
+            if(_): {type = "C"} [
+                dubna_cstr(tag): body 0
+                setf(_): cur "tag" tag
+            ]
+            push(_): r cur
+            dubna_new_result(cur):
+        ]
+        elif(_): {type = "E"} [
+            vec(code_out): ""
+            dubna_error_text(text): body code_out
+            at(code): code_out 0
+            concat(text): "dubna: " text
+            setf(_): cur "error" text
+            setf(_): cur "code" code
+            dubna_fail(_): text
+            push(_): r cur
+            dubna_new_result(cur):
+        ]
+        elif(_): {type = "N"} [
+            dubna_error_text(text): body null
+            getf(notices): c "notices"
+            push(_): notices text
+        ]
+        elif(_): {type = "A"} [
+            _dn_queue_notify(_): c body
+        ]
+        elif(_): {type = "Z"} [
+            at(st): body 0
+            chr(status): st
+            setf(_): c "status" status
+            return(r): r
+        ]
+    ]
+]
+
+dubna_query_all(r): c sql [
+    dubna_query_message(m): sql
+    dubna_send(sent): c m
+    vec(r): ""
+    if(_): {sent = 0} [
+        _dn_collect_all(r): c
+    ]
+]
+
+dubna_pipeline(r): c sql param_sets [
+    vec(m): ""
+    vec(parse): ""
+    dubna_put_cstr(_): parse ""
+    dubna_put_cstr(_): parse sql
+    dubna_put_int16(_): parse 0
+    dubna_message(pm): "P" parse
+    dubna_put_bytes(_): m pm
+    len(n): param_sets
+    set(i): 0
+    while(_): {i < n} [
+        at(ps): param_sets i
+        _dn_bind_execute(_): m "" ps
+        set(i): {i + 1}
+    ]
+    _dn_sync(_): m
+    dubna_send(sent): c m
+    vec(r): ""
+    if(_): {sent = 0} [
+        _dn_collect_all(r): c
+    ]
+]
+
+_dn_simple_ok(r): c sql [
+    dubna_query_all(all): c sql
+    set(r): 0
+    len(n): all
+    if(_): {n = 0} [
+        set(r): {0 - 1}
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(res): all i
+        dubna_ok(good): res
+        if(_): {good = false} [
+            set(r): {0 - 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- types
+
+dubna_array(r): text [
+    vec(r): ""
+    len(n): text
+    if(_): {n < 2} [
+        return(r): r
+    ]
+    set(i): 1
+    set(item): ""
+    set(quoted): false
+    set(was_quoted): false
+    set(has): false
+    while(_): {i < n - 1} [
+        byte(b): text i
+        if(_): quoted [
+            if(_): {b = 92} [
+                at(ch): text {i + 1}
+                concat(item): item ch
+                set(i): {i + 1}
+            ]
+            elif(_): {b = 34} [
+                set(quoted): false
+            ]
+            else(_): [
+                at(ch): text i
+                concat(item): item ch
+            ]
+        ]
+        elif(_): {b = 34} [
+            set(quoted): true
+            set(was_quoted): true
+            set(has): true
+        ]
+        elif(_): {b = 44} [
+            if(_): {item = "NULL" && was_quoted = false} [
+                push(_): r null
+            ]
+            else(_): [
+                push(_): r item
+            ]
+            set(item): ""
+            set(was_quoted): false
+            set(has): false
+        ]
+        else(_): [
+            at(ch): text i
+            concat(item): item ch
+            set(has): true
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {has || was_quoted} [
+        if(_): {item = "NULL" && was_quoted = false} [
+            push(_): r null
+        ]
+        else(_): [
+            push(_): r item
+        ]
+    ]
+]
+
+dubna_typed(r): text oid [
+    set(r): text
+    typeof(t): text
+    if(_): {t = "null"} [
+        return(r): r
+    ]
+    if(_): {oid = 20 || oid = 21 || oid = 23 || oid = 26} [
+        str_to_int(r): text 10
+    ]
+    elif(_): {oid = 700 || oid = 701} [
+        if(_): {text != "NaN" && text != "Infinity" && text != "-Infinity"} [
+            str_to_number(x): text
+            set(r): {x * 1.0}
+        ]
+    ]
+    elif(_): {oid = 16} [
+        set(r): {text = "t"}
+    ]
+    elif(_): {oid = 114 || oid = 3802} [
+        json_parse(r): text
+    ]
+    elif(_): {oid = 1005 || oid = 1007 || oid = 1016 || oid = 1000 || oid = 1022 || oid = 1021} [
+        dubna_array(items): text
+        vec(r): ""
+        len(n): items
+        set(i): 0
+        while(_): {i < n} [
+            at(x): items i
+            typeof(xt): x
+            if(_): {xt = "string"} [
+                if(_): {oid = 1000} [
+                    set(x): {x = "t"}
+                ]
+                elif(_): {oid = 1022 || oid = 1021} [
+                    str_to_number(v): x
+                    set(x): {v * 1.0}
+                ]
+                else(_): [
+                    str_to_int(x): x 10
+                ]
+            ]
+            push(_): r x
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {oid = 1009 || oid = 1015} [
+        dubna_array(r): text
+    ]
+]
+
+dubna_columns(r): res [
+    vec(r): ""
+    getf(cols): res "columns"
+    getf(types): res "types"
+    len(n): cols
+    set(i): 0
+    while(_): {i < n} [
+        at(name): cols i
+        at(oid): types i
+        vec(p): ""
+        push(_): p name
+        push(_): p oid
+        push(_): r p
+        set(i): {i + 1}
+    ]
+]
+
+dubna_rows(r): res [
+    vec(r): ""
+    getf(rows): res "rows"
+    getf(types): res "types"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        vec(out): ""
+        len(m): row
+        set(k): 0
+        while(_): {k < m} [
+            at(v): row k
+            at(oid): types k
+            dubna_typed(tv): v oid
+            push(_): out tv
+            set(k): {k + 1}
+        ]
+        push(_): r out
+        set(i): {i + 1}
+    ]
+]
+
+dubna_records(r): res [
+    vec(r): ""
+    getf(cols): res "columns"
+    dubna_rows(rows): res
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        btree(rec):
+        len(m): row
+        set(k): 0
+        while(_): {k < m} [
+            at(name): cols k
+            at(v): row k
+            btput(_): rec name v
+            set(k): {k + 1}
+        ]
+        push(_): r rec
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- COPY
+
+dubna_copy_in(r): c sql lines [
+    set(r): {0 - 1}
+    dubna_query_message(m): sql
+    dubna_send(sent): c m
+    if(_): {sent != 0} [
+        return(r): r
+    ]
+    set(ready): false
+    set(go): true
+    while(_): go [
+        dubna_read(msg): c
+        typeof(mt): msg
+        if(_): {mt != "vector"} [
+            return(r): r
+        ]
+        at(type): msg 0
+        if(_): {type = "G"} [
+            set(ready): true
+            set(go): false
+        ]
+        elif(_): {type = "E"} [
+            at(body): msg 1
+            vec(code_out): ""
+            dubna_error_text(text): body code_out
+            concat(text): "dubna: " text
+            dubna_fail(_): text
+        ]
+        elif(_): {type = "Z"} [
+            set(go): false
+        ]
+    ]
+    if(_): {ready = false} [
+        return(r): r
+    ]
+    vec(data): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        concat(text): line "\n"
+        text_bytes(b): text
+        dubna_put_bytes(_): data b
+        len(dl): data
+        if(_): {dl > 32768 || i = n - 1} [
+            dubna_message(cd): "d" data
+            dubna_send(_): c cd
+            vec(data): ""
+        ]
+        set(i): {i + 1}
+    ]
+    vec(empty): ""
+    dubna_message(done): "c" empty
+    dubna_send(_): c done
+    dubna_collect(res): c
+    dubna_ok(good): res
+    if(_): good [
+        dubna_count(r): res
+    ]
+]
+
+dubna_copy_out(r): c sql [
+    set(r): null
+    dubna_query_message(m): sql
+    dubna_send(sent): c m
+    if(_): {sent != 0} [
+        return(r): r
+    ]
+    vec(chunks): ""
+    set(failed): false
+    set(go): true
+    while(_): go [
+        dubna_read(msg): c
+        typeof(mt): msg
+        if(_): {mt != "vector"} [
+            return(r): r
+        ]
+        at(type): msg 0
+        at(body): msg 1
+        if(_): {type = "d"} [
+            dubna_put_bytes(_): chunks body
+        ]
+        elif(_): {type = "E"} [
+            vec(code_out): ""
+            dubna_error_text(text): body code_out
+            concat(text): "dubna: " text
+            dubna_fail(_): text
+            set(failed): true
+        ]
+        elif(_): {type = "Z"} [
+            set(go): false
+        ]
+    ]
+    if(_): failed [
+        return(r): r
+    ]
+    vec(r): ""
+    len(n): chunks
+    if(_): {n > 0} [
+        bytes_text(all): chunks
+        typeof(alt): all
+        if(_): {alt = "string"} [
+            str_split(lines): all "\n"
+            len(ln): lines
+            set(i): 0
+            while(_): {i < ln} [
+                at(line): lines i
+                if(_): {i < ln - 1 || line != ""} [
+                    push(_): r line
+                ]
+                set(i): {i + 1}
+            ]
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- notify
+
+_dn_queue(r): c [
+    global(_): dubna_notify_queues
+    typeof(t): dubna_notify_queues
+    if(_): {t != "btree"} [
+        btree(dubna_notify_queues):
+    ]
+    getf(s): c "socket"
+    btget(r): dubna_notify_queues s null
+    typeof(qt): r
+    if(_): {qt != "vector"} [
+        vec(r): ""
+        btput(_): dubna_notify_queues s r
+    ]
+]
+
+_dn_queue_notify(r): c body [
+    dubna_int32(pid): body 0
+    dubna_zero(z): body 4
+    bytes_text(channel): body 4 {z - 4}
+    dubna_zero(z2): body {z + 1}
+    set(payload): ""
+    if(_): {z2 > z + 1} [
+        bytes_text(payload): body {z + 1} {z2 - z - 1}
+    ]
+    vec(n): ""
+    push(_): n channel
+    push(_): n payload
+    push(_): n pid
+    _dn_queue(q): c
+    push(_): q n
+    set(r): 0
+]
+
+dubna_listen(r): c channel [
+    dubna_quote_ident(q): channel
+    concat(sql): "listen " q
+    _dn_simple_ok(r): c sql
+]
+
+dubna_unlisten(r): c channel [
+    dubna_quote_ident(q): channel
+    concat(sql): "unlisten " q
+    _dn_simple_ok(r): c sql
+]
+
+dubna_notify(r): c channel payload [
+    vec(p): ""
+    push(_): p channel
+    push(_): p payload
+    dubna_exec(res): c "select pg_notify($1, $2)" p
+    dubna_ok(good): res
+    set(r): {0 - 1}
+    if(_): good [
+        set(r): 0
+    ]
+]
+
+# the next whole message when one is in the buffer, else null
+_dn_buffered(r): c [
+    set(r): null
+    getf(inbuf): c "inbuf"
+    getf(pos): c "inpos"
+    len(have): inbuf
+    if(_): {have - pos >= 5} [
+        dubna_int32(size): inbuf {pos + 1}
+        if(_): {have - pos >= size + 1} [
+            dubna_read(r): c
+        ]
+    ]
+]
+
+dubna_wait_notify(r): c ms [
+    global(_): dubna_notify_queues
+    set(r): null
+    _dn_queue(q): c
+    time(start):
+    set(deadline): {start * 1000 + ms}
+    getf(s): c "socket"
+    getf(tls): c "tls"
+    socket_nonblocking(_): s
+    while(_): {true} [
+        len(qn): q
+        if(_): {qn > 0} [
+            at(r): q 0
+            vec(rest): ""
+            set(i): 1
+            while(_): {i < qn} [
+                at(x): q i
+                push(_): rest x
+                set(i): {i + 1}
+            ]
+            btput(_): dubna_notify_queues s rest
+            return(r): r
+        ]
+        _dn_buffered(msg): c
+        typeof(mt): msg
+        if(_): {mt = "vector"} [
+            at(type): msg 0
+            at(body): msg 1
+            if(_): {type = "A"} [
+                _dn_queue_notify(_): c body
+                _dn_queue(q): c
+            ]
+            elif(_): {type = "N"} [
+                dubna_error_text(text): body null
+                getf(notices): c "notices"
+                push(_): notices text
+            ]
+        ]
+        else(_): [
+            if(_): tls [
+                tls_recv_bytes(chunk): s 65536
+            ]
+            else(_): [
+                socket_recv_bytes(chunk): s 65536
+            ]
+            typeof(ct): chunk
+            set(cl): 0
+            if(_): {ct = "vector"} [
+                len(cl): chunk
+            ]
+            if(_): {ct = "vector" && cl = 0} [
+                setf(_): c "open" false
+                return(r): r
+            ]
+            if(_): {cl > 0} [
+                getf(inbuf): c "inbuf"
+                getf(pos): c "inpos"
+                len(have): inbuf
+                if(_): {pos >= have} [
+                    setf(_): c "inbuf" chunk
+                    setf(_): c "inpos" 0
+                ]
+                else(_): [
+                    dubna_put_bytes(_): inbuf chunk
+                ]
+            ]
+            else(_): [
+                time(now):
+                if(_): {now * 1000 >= deadline || ms = 0} [
+                    return(r): r
+                ]
+                sleep(_): 20
+            ]
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- cursors
+
+dubna_cursor(r): c name sql params [
+    dubna_query(_): c "begin"
+    dubna_quote_ident(q): name
+    concat(decl): "declare " q " no scroll cursor for " sql
+    dubna_exec(res): c decl params
+    dubna_ok(good): res
+    set(r): {0 - 1}
+    if(_): good [
+        set(r): 0
+    ]
+    else(_): [
+        dubna_query(_): c "rollback"
+    ]
+]
+
+dubna_fetch(r): c name count [
+    dubna_quote_ident(q): name
+    str_from_int(cs): count
+    concat(sql): "fetch " cs " from " q
+    dubna_query(r): c sql
+]
+
+dubna_cursor_close(r): c name [
+    dubna_quote_ident(q): name
+    concat(sql): "close " q
+    dubna_query(_): c sql
+    _dn_simple_ok(r): c "commit"
+]
+
+# ---------------------------------------------------------------- cancel
+
+dubna_cancel(r): c [
+    global(_): dubna_targets
+    getf(pid): c "pid"
+    getf(key): c "key"
+    getf(s0): c "socket"
+    set(r): {0 - 1}
+    typeof(tt): dubna_targets
+    if(_): {tt != "btree"} [
+        return(r): r
+    ]
+    btget(where): dubna_targets s0 null
+    typeof(wt): where
+    if(_): {wt != "vector"} [
+        return(r): r
+    ]
+    at(h): where 0
+    at(p): where 1
+    socket_tcp(s):
+    socket_connect(ok): s h p 5000
+    if(_): {ok = 0} [
+        vec(body): ""
+        dubna_put_int32(_): body 16
+        dubna_put_int32(_): body 80877102
+        dubna_put_int32(_): body pid
+        dubna_put_int32(_): body key
+        socket_send_bytes(n): s body
+        if(_): {n = 16} [
+            set(r): 0
+        ]
+    ]
+    socket_close(_): s
+]
+
+# ---------------------------------------------------------------- transactions
+
+dubna_begin(r): c [
+    _dn_simple_ok(r): c "begin"
+]
+
+dubna_commit(r): c [
+    _dn_simple_ok(r): c "commit"
+]
+
+dubna_rollback(r): c [
+    _dn_simple_ok(r): c "rollback"
+]
+
+dubna_savepoint(r): c name [
+    dubna_quote_ident(q): name
+    concat(sql): "savepoint " q
+    _dn_simple_ok(r): c sql
+]
+
+dubna_rollback_to(r): c name [
+    dubna_quote_ident(q): name
+    concat(sql): "rollback to savepoint " q
+    _dn_simple_ok(r): c sql
+]
+
+dubna_release(r): c name [
+    dubna_quote_ident(q): name
+    concat(sql): "release savepoint " q
+    _dn_simple_ok(r): c sql
+]
+
+dubna_tx(r): c fn [
+    dubna_begin(b): c
+    set(r): {0 - 1}
+    if(_): {b != 0} [
+        return(r): r
+    ]
+    async(p): fn c
+    await(got): p
+    getf(status): c "status"
+    if(_): {got = 0 && status = "T"} [
+        dubna_commit(r): c
+    ]
+    else(_): [
+        dubna_rollback(_): c
+    ]
+]
+
+dubna_quote_ident(r): name [
+    str_replace(q): name "\"" "\"\""
+    concat(r): "\"" q "\""
+]
+
+dubna_quote_literal(r): text [
+    str_contains(bs): text "\\"
+    str_replace(q): text "'" "''"
+    if(_): bs [
+        str_replace(q): q "\\" "\\\\"
+        concat(r): "E'" q "'"
+    ]
+    else(_): [
+        concat(r): "'" q "'"
+    ]
+]
+
+dubna_set(r): c name value [
+    vec(p): ""
+    push(_): p name
+    dubna_param_text(v): value
+    push(_): p v
+    dubna_exec(res): c "select set_config($1, $2, false)" p
+    dubna_ok(good): res
+    set(r): {0 - 1}
+    if(_): good [
+        set(r): 0
+    ]
+]
+
+dubna_server_version(r): c [
+    dubna_query(res): c "show server_version_num"
+    dubna_value(v): res 0 0
+    set(r): 0
+    typeof(t): v
+    if(_): {t = "string"} [
+        str_to_int(r): v 10
+    ]
+]
+
+dubna_notices(r): c [
+    getf(r): c "notices"
+    vec(fresh): ""
+    setf(_): c "notices" fresh
+]
+
+dubna_connect_retry(r): conninfo tries delay_ms [
+    set(r): null
+    set(k): 0
+    set(wait): delay_ms
+    while(_): {k < tries} [
+        dubna_connect(r): conninfo
+        if(_): {r != null} [
+            return(r): r
+        ]
+        set(k): {k + 1}
+        if(_): {k < tries} [
+            sleep(_): wait
+            set(wait): {wait * 2}
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- pgpass
+
+# fields split at unescaped ":", with "\:" and "\\" escapes
+_dn_pgpass_fields(r): line [
+    vec(r): ""
+    set(cur): ""
+    len(n): line
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): line i
+        if(_): {b = 92 && i + 1 < n} [
+            at(nx): line {i + 1}
+            concat(cur): cur nx
+            set(i): {i + 2}
+        ]
+        elif(_): {b = 58} [
+            push(_): r cur
+            set(cur): ""
+            set(i): {i + 1}
+        ]
+        else(_): [
+            at(ch): line i
+            concat(cur): cur ch
+            set(i): {i + 1}
+        ]
+    ]
+    push(_): r cur
+]
+
+dubna_pgpass(r): host port db user [
+    set(r): ""
+    getenv(file): "PGPASSFILE"
+    typeof(ft): file
+    if(_): {ft != "string"} [
+        set(file): ""
+    ]
+    if(_): {file = ""} [
+        getenv(appdata): "APPDATA"
+        typeof(at): appdata
+        if(_): {at = "string"} [
+            concat(win): appdata "/postgresql/pgpass.conf"
+            file_exists(have): win
+            if(_): have [
+                set(file): win
+            ]
+        ]
+    ]
+    if(_): {file = ""} [
+        getenv(home): "HOME"
+        typeof(ht): home
+        if(_): {ht = "string"} [
+            concat(file): home "/.pgpass"
+        ]
+    ]
+    read_lines(lines): file
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        return(r): r
+    ]
+    str_from_int(ps): port
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        str_starts(comment): line "#"
+        if(_): {comment = false && line != ""} [
+            _dn_pgpass_fields(f): line
+            len(nf): f
+            if(_): {nf = 5} [
+                at(h): f 0
+                at(p): f 1
+                at(d): f 2
+                at(u): f 3
+                at(pw): f 4
+                set(hit): {(h = "*" || h = host) && (p = "*" || p = ps) && (d = "*" || d = db) && (u = "*" || u = user)}
+                if(_): hit [
+                    set(r): pw
+                    return(r): r
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+dubna_connect_pgpass(r): conninfo [
+    set(host): "localhost"
+    set(port): 5432
+    set(db): ""
+    set(user): ""
+    set(has_pw): false
+    re_find(m): "(?:^|\\s)host=(\\S+)" conninfo
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(host): m 1
+    ]
+    re_find(m): "(?:^|\\s)port=([0-9]+)" conninfo
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(pt): m 1
+        str_to_int(port): pt 10
+    ]
+    re_find(m): "(?:^|\\s)dbname=(\\S+)" conninfo
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(db): m 1
+    ]
+    re_find(m): "(?:^|\\s)user=(\\S+)" conninfo
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(user): m 1
+    ]
+    re_test(has_pw): "(?:^|\\s)password=" conninfo
+    if(_): {db = ""} [
+        set(db): user
+    ]
+    set(info): conninfo
+    if(_): {has_pw = false} [
+        dubna_pgpass(pw): host port db user
+        if(_): {pw != ""} [
+            str_replace(qpw): pw "\\" "\\\\"
+            str_replace(qpw): qpw "'" "\\'"
+            concat(info): conninfo " password='" qpw "'"
+        ]
+    ]
+    dubna_connect(r): info
+]
+
+# ---------------------------------------------------------------- pool
+
+dubna_pool_new(r): conninfo size [
+    btree(r):
+    btput(_): r "conninfo" conninfo
+    btput(_): r "size" size
+    vec(idle): ""
+    btput(_): r "idle" idle
+    btput(_): r "open" 0
+]
+
+dubna_pool_get(r): p [
+    btget(idle): p "idle"
+    set(r): null
+    len(n): idle
+    while(_): {n > 0 && r = null} [
+        pop(c): idle
+        dubna_query(res): c "select 1"
+        dubna_ok(good): res
+        if(_): good [
+            set(r): c
+        ]
+        else(_): [
+            dubna_close(_): c
+            btget(open): p "open"
+            btput(_): p "open" {open - 1}
+        ]
+        len(n): idle
+    ]
+    if(_): {r = null} [
+        btget(open): p "open"
+        btget(size): p "size"
+        if(_): {open < size} [
+            btget(info): p "conninfo"
+            dubna_connect(r): info
+            if(_): {r != null} [
+                btput(_): p "open" {open + 1}
+            ]
+        ]
+        else(_): [
+            dubna_fail(_): "dubna: the pool is exhausted"
+        ]
+    ]
+]
+
+dubna_pool_put(r): p c [
+    set(r): 0
+    getf(status): c "status"
+    getf(alive): c "open"
+    btget(idle): p "idle"
+    if(_): {alive && status = "I"} [
+        push(_): idle c
+    ]
+    else(_): [
+        if(_): {alive && status != "I"} [
+            dubna_query(_): c "rollback"
+            push(_): idle c
+        ]
+        else(_): [
+            dubna_close(_): c
+            btget(open): p "open"
+            btput(_): p "open" {open - 1}
+        ]
+    ]
+]
+
+dubna_pool_close(r): p [
+    btget(idle): p "idle"
+    len(n): idle
+    while(_): {n > 0} [
+        pop(c): idle
+        dubna_close(_): c
+        len(n): idle
+    ]
+    btput(_): p "open" 0
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- migrations
+
+dubna_migrate(r): c dir [
+    set(r): {0 - 1}
+    dubna_query(res): c "create table if not exists schema_migrations (version text primary key, applied_at timestamptz not null default now())"
+    dubna_ok(good): res
+    if(_): {good = false} [
+        return(r): r
+    ]
+    dubna_query(done): c "select version from schema_migrations"
+    btree(applied):
+    getf(rows): done "rows"
+    len(nd): rows
+    set(i): 0
+    while(_): {i < nd} [
+        at(row): rows i
+        at(v): row 0
+        btput(_): applied v true
+        set(i): {i + 1}
+    ]
+    list_dir(names): dir
+    typeof(nt): names
+    if(_): {nt != "vector"} [
+        dubna_fail(_): "dubna: no migrations folder"
+        return(r): r
+    ]
+    set(r): 0
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(name): names i
+        re_find(m): "^([0-9]+)_.*\\.sql$" name
+        typeof(mt): m
+        if(_): {mt = "vector"} [
+            at(version): m 1
+            btget(seen): applied version false
+            if(_): {seen = false} [
+                concat(path): dir "/" name
+                readfile(sql): path
+                dubna_query(_): c "begin"
+                dubna_query_all(results): c sql
+                set(failed): false
+                len(nr): results
+                set(k): 0
+                while(_): {k < nr} [
+                    at(one): results k
+                    dubna_ok(fine): one
+                    if(_): {fine = false} [
+                        set(failed): true
+                    ]
+                    set(k): {k + 1}
+                ]
+                if(_): failed [
+                    dubna_query(_): c "rollback"
+                    set(r): {0 - 1}
+                    return(r): r
+                ]
+                vec(p): ""
+                push(_): p version
+                dubna_exec(_): c "insert into schema_migrations (version) values ($1)" p
+                dubna_query(_): c "commit"
+                set(r): {r + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+dubna_explain(r): c sql [
+    concat(q): "explain " sql
+    dubna_query(res): c q
+    set(r): ""
+    dubna_ok(good): res
+    if(_): {good = false} [
+        dubna_error(r):
+        return(r): r
+    ]
+    getf(rows): res "rows"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        at(line): row 0
+        concat(r): r line "\n"
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- Dubna KV
+
+dubna_kv_prefix(r): db prefix max [
+    dubna_kv_range(all): db prefix null {0 - 1}
+    vec(r): ""
+    len(n): all
+    set(i): 0
+    set(go): true
+    while(_): {go && i < n} [
+        at(pair): all i
+        at(k): pair 0
+        typeof(kt): k
+        set(match): false
+        if(_): {kt = "string"} [
+            str_starts(match): k prefix
+        ]
+        len(got): r
+        if(_): {match && (max < 0 || got < max)} [
+            push(_): r pair
+        ]
+        elif(_): {kt = "string" && match = false} [
+            set(go): false
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+dubna_kv_range_desc(r): db lo hi max [
+    dubna_kv_range(all): db lo hi {0 - 1}
+    vec(r): ""
+    len(n): all
+    set(i): {n - 1}
+    while(_): {i >= 0 && (max < 0 || n - 1 - i < max)} [
+        at(pair): all i
+        push(_): r pair
+        set(i): {i - 1}
+    ]
+]
+
+dubna_kv_put_ttl(r): db key value seconds [
+    time(now):
+    vec(v): ""
+    push(_): v "__ttl"
+    push(_): v {now + seconds}
+    push(_): v value
+    dubna_kv_put(r): db key v
+]
+
+dubna_kv_get_ttl(r): db key [
+    dubna_kv_get(v): db key
+    set(r): v
+    typeof(t): v
+    if(_): {t = "vector"} [
+        len(n): v
+        if(_): {n = 3} [
+            at(tag): v 0
+            typeof(tt): tag
+            set(is_ttl): false
+            if(_): {tt = "string"} [
+                set(is_ttl): {tag = "__ttl"}
+            ]
+            if(_): is_ttl [
+                at(until): v 1
+                time(now):
+                set(r): null
+                if(_): {now < until} [
+                    at(r): v 2
+                ]
+                else(_): [
+                    dubna_kv_del(_): db key
+                ]
+            ]
+        ]
+    ]
+]
+
+dubna_kv_export(r): db path [
+    dubna_kv_range(all): db null null {0 - 1}
+    vec(lines): ""
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pair): all i
+        at(k): pair 0
+        at(v): pair 1
+        typeof(vt): v
+        vec(rec): ""
+        push(_): rec k
+        if(_): {vt = "vector" || vt = "string" || vt = "integer" || vt = "real" || vt = "boolean" || vt = "null"} [
+            push(_): rec v
+        ]
+        else(_): [
+            encode(u): v
+            btree(wrap):
+            btput(_): wrap "uno" u
+            push(_): rec wrap
+        ]
+        json_stringify(line): rec
+        push(_): lines line
+        set(i): {i + 1}
+    ]
+    write_lines(w): path lines
+    set(r): n
+    if(_): {w != 0} [
+        set(r): {0 - 1}
+    ]
+]
+
+dubna_kv_import(r): db path [
+    read_lines(lines): path
+    set(r): {0 - 1}
+    typeof(lt): lines
+    if(_): {lt != "vector"} [
+        return(r): r
+    ]
+    set(r): 0
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(line): lines i
+        if(_): {line != ""} [
+            json_parse(rec): line
+            typeof(rt): rec
+            if(_): {rt = "vector"} [
+                at(k): rec 0
+                at(v): rec 1
+                typeof(vt): v
+                if(_): {vt = "btree"} [
+                    btget(u): v "uno" ""
+                    decode(v): u
+                ]
+                dubna_kv_put(_): db k v
+                set(r): {r + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    dubna_kv_commit(cm): db
+    if(_): {cm != 0} [
+        set(r): {0 - 1}
+    ]
+]
+
+# ---------------------------------------------------------------- RESP
+
+dubna_resp_encode(r): args [
+    len(n): args
+    str_from_int(ns): n
+    concat(r): "*" ns "\r\n"
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        vec(one): ""
+        push(_): one a
+        str_join(s): one ""
+        len(sl): s
+        str_from_int(sls): sl
+        concat(r): r "$" sls "\r\n" s "\r\n"
+        set(i): {i + 1}
+    ]
+]
+
+# [value, next] from text at p, or null when incomplete
+_dn_resp_at(r): text p [
+    set(r): null
+    len(n): text
+    if(_): {p >= n} [
+        return(r): r
+    ]
+    str_find(eol): text "\r\n" p
+    if(_): {eol < 0} [
+        return(r): r
+    ]
+    at(kind): text p
+    slice(line): text {p + 1} {eol - p - 1}
+    set(next): {eol + 2}
+    vec(r): ""
+    if(_): {kind = "+"} [
+        push(_): r line
+        push(_): r next
+    ]
+    elif(_): {kind = "-"} [
+        vec(e): ""
+        push(_): e "error"
+        push(_): e line
+        push(_): r e
+        push(_): r next
+    ]
+    elif(_): {kind = ":"} [
+        str_to_int(v): line 10
+        push(_): r v
+        push(_): r next
+    ]
+    elif(_): {kind = "$"} [
+        str_to_int(size): line 10
+        if(_): {size < 0} [
+            push(_): r null
+            push(_): r next
+        ]
+        elif(_): {next + size + 2 > n} [
+            set(r): null
+        ]
+        else(_): [
+            slice(v): text next size
+            push(_): r v
+            push(_): r {next + size + 2}
+        ]
+    ]
+    elif(_): {kind = "*"} [
+        str_to_int(count): line 10
+        if(_): {count < 0} [
+            push(_): r null
+            push(_): r next
+        ]
+        else(_): [
+            vec(items): ""
+            set(k): 0
+            set(q): next
+            while(_): {k < count} [
+                _dn_resp_at(item): text q
+                typeof(it): item
+                if(_): {it = "null"} [
+                    set(r): null
+                    return(r): r
+                ]
+                at(v): item 0
+                at(q): item 1
+                push(_): items v
+                set(k): {k + 1}
+            ]
+            push(_): r items
+            push(_): r q
+        ]
+    ]
+    else(_): [
+        set(r): null
+    ]
+]
+
+dubna_resp_decode(r): text [
+    _dn_resp_at(r): text 0
+]
+
+dubna_redis_connect(r): host port [
+    socket_tcp(s):
+    set(r): null
+    socket_connect(ok): s host port 5000
+    if(_): {ok = 0} [
+        btree(r):
+        btput(_): r "socket" s
+        btput(_): r "buf" ""
+    ]
+    else(_): [
+        socket_close(_): s
+        dubna_fail(_): "dubna: could not reach the Redis server"
+    ]
+]
+
+dubna_redis(r): c args [
+    btget(s): c "socket"
+    dubna_resp_encode(cmd): args
+    socket_send(_): s cmd
+    set(r): null
+    btget(buf): c "buf"
+    while(_): {true} [
+        _dn_resp_at(got): buf 0
+        typeof(gt): got
+        if(_): {gt = "vector"} [
+            at(r): got 0
+            at(used): got 1
+            len(bl): buf
+            slice(rest): buf used {bl - used}
+            btput(_): c "buf" rest
+            return(r): r
+        ]
+        wait_readable(_): s
+        socket_recv(more): s 65536
+        typeof(mt): more
+        if(_): {mt != "string" || more = ""} [
+            dubna_fail(_): "dubna: the Redis server closed the connection"
+            return(r): r
+        ]
+        concat(buf): buf more
+    ]
+]
+
+dubna_redis_close(r): c [
+    btget(s): c "socket"
+    socket_close(r): s
+]

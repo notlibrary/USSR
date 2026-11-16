@@ -855,6 +855,20 @@ dubna_connect(r): conninfo [
     ]
 ]
 
+# Where each connection's server is, by socket, for dubna_cancel (more.su).
+dubna_remember(r): s host port [
+    global(_): dubna_targets
+    typeof(t): dubna_targets
+    if(_): {t != "btree"} [
+        btree(dubna_targets):
+    ]
+    vec(where): ""
+    push(_): where host
+    push(_): where port
+    btput(_): dubna_targets s where
+    set(r): 0
+]
+
 dubna_open(r): host port user password database sslmode [
     set(r): null
     str_from_int(port_text): port
@@ -874,6 +888,7 @@ dubna_open(r): host port user password database sslmode [
     vec(params): ""
     vec(notices): ""
     new(c): "DubnaConn" s false inbuf 0 params "I" 0 0 true notices
+    dubna_remember(_): s host port
     tls_backend(backend):
     if(_): {sslmode != "disable" && sslmode != "allow" && backend != "none"} [
         dubna_ssl_request(m):

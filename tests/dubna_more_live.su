@@ -1,0 +1,283 @@
+# Dubna's refine-pass features (src/dubna/more.su) against a real
+# PostgreSQL server. Not run by tests/run_all.sh (it needs a server);
+# point DUBNA_TEST_URL at a database you may create tables in:
+#   DUBNA_TEST_URL="host=127.0.0.1 port=55432 dbname=postgres user=postgres" ussr tests/dubna_more_live.su
+# Prints PASS or FAIL per check and a summary; exit status = failures.
+$include "../src/libs/testing.su"
+$include "../src/dubna/more.su"
+
+global(_): dn_test_url
+
+tx_work(r): c [
+    dubna_query(_): c "insert into dubna_more_t (n, name) values (100, 'in tx')"
+    set(r): 0
+]
+
+tx_fail(r): c [
+    dubna_query(_): c "insert into dubna_more_t (n, name) values (101, 'doomed')"
+    set(r): 1
+]
+
+slow(r): c [
+    dubna_query(r): c "select pg_sleep(10)"
+]
+
+sec_basics(r): c [
+    dubna_query(_): c "drop table if exists dubna_more_t"
+    dubna_query(res): c "create table dubna_more_t (n int primary key, name text, score float8, ok bool, tags text[], data jsonb, big numeric)"
+    dubna_ok(good): res
+    assert_true(_): "create table" good
+    dubna_prepare(p): c "ins" "insert into dubna_more_t (n, name, score, ok) values ($1, $2, $3, $4)"
+    assert_eq(_): "prepare" p 0
+    vec(a): ""
+    push(_): a 1
+    push(_): a "one"
+    push(_): a 1.5
+    push(_): a true
+    dubna_exec_prepared(res): c "ins" a
+    dubna_count(n1): res
+    vec(b): ""
+    push(_): b 2
+    push(_): b "two"
+    push(_): b null
+    push(_): b false
+    dubna_exec_prepared(res): c "ins" b
+    dubna_count(n2): res
+    assert_eq(_): "exec prepared twice" {n1 + n2} 2
+    dubna_deallocate(d): c "ins"
+    assert_eq(_): "deallocate" d 0
+    vec(sets): ""
+    set(k): 3
+    while(_): {k < 8} [
+        vec(ps): ""
+        push(_): ps k
+        str_from_int(ks): k
+        concat(nm): "p" ks
+        push(_): ps nm
+        push(_): sets ps
+        set(k): {k + 1}
+    ]
+    dubna_pipeline(results): c "insert into dubna_more_t (n, name) values ($1, $2)" sets
+    len(nr): results
+    assert_eq(_): "pipeline results" nr 5
+    dubna_query(res): c "select count(*) from dubna_more_t"
+    dubna_rows(rows): res
+    at(row0): rows 0
+    at(cnt): row0 0
+    assert_eq(_): "pipeline rows in, typed count" cnt 7
+    dubna_query(res): c "update dubna_more_t set tags = '{a,\"b c\",NULL}', data = '{\"k\": [1, 2]}', big = 12345678901234567890.25 where n = 1"
+    dubna_query(res): c "select n, name, score, ok, tags, data, big, array[1,2,3] as ints from dubna_more_t where n = 1"
+    dubna_records(recs): res
+    at(rec): recs 0
+    btget(n): rec "n"
+    btget(score): rec "score"
+    btget(okv): rec "ok"
+    btget(tags): rec "tags"
+    btget(data): rec "data"
+    btget(big): rec "big"
+    btget(ints): rec "ints"
+    assert_eq(_): "typed int" n 1
+    assert_near(_): "typed float" score 1.5 0.0000001
+    assert_eq(_): "typed bool" okv true
+    encode(te): tags
+    assert_eq(_): "typed text array" te "[`a`,`b c`,null]"
+    json_get(k1): data "k.1"
+    assert_eq(_): "typed jsonb" k1 2
+    assert_eq(_): "numeric stays exact" big "12345678901234567890.25"
+    encode(ie): ints
+    assert_eq(_): "typed int array" ie "[1,2,3]"
+    dubna_columns(cols): res
+    at(c0): cols 0
+    encode(c0e): c0
+    assert_eq(_): "columns" c0e "[`n`,23]"
+    dubna_query_all(all): c "select 1; select 2, 3; select 'x' where false"
+    len(na): all
+    at(second): all 1
+    dubna_value(v): second 0 1
+    assert_eq(_): "query all keeps every result" {na * 10} 30
+    assert_eq(_): "second result" v "3"
+    set(r): 0
+]
+
+sec_copy(r): c [
+    vec(lines): ""
+    push(_): lines "50\tcopied a"
+    push(_): lines "51\tcopied\\tb"
+    push(_): lines "52\t\\N"
+    dubna_copy_in(n): c "copy dubna_more_t (n, name) from stdin" lines
+    assert_eq(_): "copy in" n 3
+    dubna_copy_out(out): c "copy (select n, name from dubna_more_t where n >= 50 order by n) to stdout"
+    encode(oe): out
+    assert_eq(_): "copy out" oe "[`50\tcopied a`,`51\tcopied\\tb`,`52\t\\N`]"
+    dubna_copy_in(bad): c "copy no_such_table from stdin" lines
+    assert_eq(_): "copy in error" bad {0 - 1}
+    dubna_query(res): c "select 1"
+    dubna_ok(alive): res
+    assert_true(_): "connection fine after a copy error" alive
+    set(r): 0
+]
+
+sec_cursor_tx(r): c [
+    vec(none): ""
+    dubna_cursor(cr): c "cur" "select n from dubna_more_t order by n" none
+    assert_eq(_): "cursor" cr 0
+    dubna_fetch(f1): c "cur" 2
+    dubna_fetch(f2): c "cur" 2
+    dubna_rows(r1): f1
+    dubna_rows(r2): f2
+    encode(e1): r1
+    encode(e2): r2
+    assert_eq(_): "fetch pages" e1 "[[1],[2]]"
+    assert_eq(_): "fetch next page" e2 "[[3],[4]]"
+    dubna_cursor_close(cc): c "cur"
+    assert_eq(_): "cursor close" cc 0
+    dubna_tx(t1): c "tx_work"
+    dubna_tx(t2): c "tx_fail"
+    dubna_query(res): c "select count(*) from dubna_more_t where n >= 100"
+    dubna_value(cnt): res 0 0
+    assert_eq(_): "tx commits and rolls back" {t1 = 0 && t2 != 0 && cnt = "1"} true
+    dubna_begin(_): c
+    dubna_query(_): c "insert into dubna_more_t (n) values (200)"
+    dubna_savepoint(_): c "sp"
+    dubna_query(_): c "insert into dubna_more_t (n) values (201)"
+    dubna_rollback_to(_): c "sp"
+    dubna_release(_): c "sp"
+    dubna_commit(_): c
+    dubna_query(res): c "select string_agg(n::text, ',' order by n) from dubna_more_t where n >= 200"
+    dubna_value(v): res 0 0
+    assert_eq(_): "savepoints" v "200"
+    dubna_quote_ident(qi): "we\"ird"
+    assert_eq(_): "quote ident" qi "\"we\"\"ird\""
+    dubna_quote_literal(ql): "it's"
+    assert_eq(_): "quote literal" ql "'it''s'"
+    concat(sql): "select " ql
+    dubna_query(res): c sql
+    dubna_value(v): res 0 0
+    assert_eq(_): "quoted literal round trip" v "it's"
+    dubna_set(st): c "application_name" "dubna-more"
+    dubna_query(res): c "show application_name"
+    dubna_value(v): res 0 0
+    assert_eq(_): "set" {st = 0 && v = "dubna-more"} true
+    dubna_server_version(ver): c
+    assert_true(_): "server version" {ver >= 100000}
+    dubna_notices(_): c
+    dubna_query(_): c "do $$ begin raise notice 'hello notice'; end $$"
+    dubna_notices(ns): c
+    len(nn): ns
+    dubna_notices(ns2): c
+    len(nn2): ns2
+    assert_eq(_): "notices then forgotten" {nn * 10 + nn2} 10
+    dubna_explain(plan): c "select * from dubna_more_t where n = 1"
+    str_contains(scan): plan "Scan"
+    assert_true(_): "explain" scan
+    set(r): 0
+]
+
+sec_notify(r): c [
+    dubna_connect(other): dn_test_url
+    dubna_listen(l): c "dubna_chan"
+    assert_eq(_): "listen" l 0
+    dubna_notify(_): other "dubna_chan" "payload 1"
+    dubna_wait_notify(got): c 3000
+    typeof(gt): got
+    set(ch): ""
+    set(pl): ""
+    if(_): {gt = "vector"} [
+        at(ch): got 0
+        at(pl): got 1
+    ]
+    assert_eq(_): "notify arrives" {ch = "dubna_chan" && pl = "payload 1"} true
+    time(t0):
+    dubna_wait_notify(none): c 1000
+    time(t1):
+    assert_null(_): "wait times out" none
+    assert_true(_): "timeout is short" {t1 - t0 <= 2}
+    dubna_unlisten(_): c "dubna_chan"
+    # cancel a slow query from another task
+    async(p): "slow" other
+    sleep(_): 500
+    dubna_cancel(cn): other
+    await(sres): p
+    getf(code): sres "code"
+    assert_eq(_): "cancel" {cn = 0 && code = "57014"} true
+    dubna_close(_): other
+    set(r): 0
+]
+
+sec_pool(r): c [
+    dubna_pool_new(pool): dn_test_url 2
+    dubna_pool_get(a): pool
+    dubna_pool_get(b): pool
+    dubna_pool_get(none): pool
+    assert_eq(_): "pool size" {a != null && b != null && none = null} true
+    dubna_pool_put(_): pool a
+    dubna_pool_get(again): pool
+    getf(sa): a "socket"
+    getf(sg): again "socket"
+    assert_eq(_): "pool reuses" sa sg
+    dubna_pool_put(_): pool again
+    dubna_pool_put(_): pool b
+    dubna_pool_close(_): pool
+    dubna_connect_retry(rc): "host=127.0.0.1 port=1 dbname=x user=x" 2 50
+    assert_null(_): "retry gives up" rc
+    set(r): 0
+]
+
+sec_migrate(r): c [
+    set(dir): "tests/dubna_migrations_tmp"
+    remove_tree(_): dir
+    make_dir(_): dir
+    writefile(_): "tests/dubna_migrations_tmp/001_create.sql" "create table dubna_mig_a (x int);"
+    writefile(_): "tests/dubna_migrations_tmp/002_more.sql" "insert into dubna_mig_a values (1); insert into dubna_mig_a values (2);"
+    writefile(_): "tests/dubna_migrations_tmp/notes.txt" "not a migration"
+    dubna_query(_): c "drop table if exists dubna_mig_a"
+    dubna_query(_): c "drop table if exists schema_migrations"
+    dubna_migrate(m1): c dir
+    dubna_migrate(m2): c dir
+    assert_eq(_): "migrations once" {m1 * 10 + m2} 20
+    writefile(_): "tests/dubna_migrations_tmp/003_bad.sql" "insert into no_such_table values (1);"
+    dubna_migrate(m3): c dir
+    dubna_query(res): c "select count(*) from schema_migrations"
+    dubna_value(v): res 0 0
+    assert_eq(_): "a failed migration rolls back" {m3 = 0 - 1 && v = "2"} true
+    dubna_query(_): c "drop table dubna_mig_a"
+    dubna_query(_): c "drop table schema_migrations"
+    remove_tree(_): dir
+    # .pgpass
+    writefile(_): "tests/dubna_pgpass_tmp" "# comment\nother:*:*:*:nope\n127.0.0.1:55432:*:postgres:pa\\:ss\n"
+    setenv(_): "PGPASSFILE" "tests/dubna_pgpass_tmp"
+    dubna_pgpass(pw): "127.0.0.1" 55432 "postgres" "postgres"
+    assert_eq(_): "pgpass match and escape" pw "pa:ss"
+    dubna_pgpass(pw): "elsewhere" 5432 "db" "u"
+    assert_eq(_): "pgpass no match" pw ""
+    remove_file(_): "tests/dubna_pgpass_tmp"
+    unsetenv(_): "PGPASSFILE"
+    dubna_query(_): c "drop table dubna_more_t"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    global(_): dn_test_url
+    getenv(dn_test_url): "DUBNA_TEST_URL"
+    typeof(ut): dn_test_url
+    if(_): {ut != "string" || dn_test_url = ""} [
+        print(_): "SKIP set DUBNA_TEST_URL to a PostgreSQL conninfo or URL"
+        set(ret): 0
+        return(ret): ret
+    ]
+    dubna_connect(c): dn_test_url
+    if(_): {c = null} [
+        dubna_error(e):
+        print(_): e
+        set(ret): 1
+        return(ret): ret
+    ]
+    sec_basics(_): c
+    sec_copy(_): c
+    sec_cursor_tx(_): c
+    sec_notify(_): c
+    sec_pool(_): c
+    sec_migrate(_): c
+    dubna_close(_): c
+    test_summary(ret):
+]

@@ -1095,3 +1095,9 @@ There are 3 runtimes in Moscow:
 Make 2 used by default even the command run from russia
 Make 1 used if ussr ran using 1 not russia
 Make 3 used in rest cases
+
+Start refining USSR project
+pick REFINE.md from subproject root folder(which also have box.uno in the subproject root)
+and use it as a prompt with things to do with it
+This is a long run task ~25-50 features for each of 27 subprojects
+Do not info on refining with global README until it ends use REFINE.md and subproject CHANGELOG.md
