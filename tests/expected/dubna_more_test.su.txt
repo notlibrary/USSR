@@ -1,0 +1,33 @@
+PASS array
+PASS empty array
+PASS int4
+PASS int8
+PASS float8
+PASS float NaN stays text
+PASS bool
+PASS numeric exact
+PASS jsonb
+PASS bool array
+PASS float array
+PASS null stays null
+PASS quote ident
+PASS quote literal with backslash
+PASS resp encode
+PASS resp simple
+PASS resp array
+PASS resp error
+PASS resp incomplete
+PASS pgpass fields
+PASS kv prefix
+PASS kv prefix max
+PASS kv range desc
+PASS kv ttl live
+PASS kv ttl expired
+PASS kv ttl plain value
+PASS kv export count
+PASS kv import
+28 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

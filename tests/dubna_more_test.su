@@ -1,0 +1,105 @@
+# Offline checks of src/dubna/more.su: array and typed decoding, quoting,
+# RESP, Dubna KV prefix scans, TTL keys and JSON-lines export/import.
+$include "../src/libs/testing.su"
+$include "../src/dubna/more.su"
+
+dubna_array(v): "{1,2,NULL,\"a,b\",\"q\\\"x\",\"NULL\"}"
+encode(e): v
+assert_eq(_): "array" e "[`1`,`2`,null,`a,b`,`q\"x`,`NULL`]"
+dubna_array(v): "{}"
+len(n): v
+assert_eq(_): "empty array" n 0
+dubna_typed(x): "42" 23
+assert_eq(_): "int4" x 42
+dubna_typed(x): "-9000000000" 20
+assert_eq(_): "int8" x {0 - 9000000000}
+dubna_typed(x): "2.5" 701
+assert_near(_): "float8" x 2.5 0.0000001
+dubna_typed(x): "NaN" 701
+assert_eq(_): "float NaN stays text" x "NaN"
+dubna_typed(x): "t" 16
+assert_eq(_): "bool" x true
+dubna_typed(x): "1.10" 1700
+assert_eq(_): "numeric exact" x "1.10"
+dubna_typed(x): "{\"a\": [true]}" 3802
+json_get(a0): x "a.0"
+assert_eq(_): "jsonb" a0 true
+dubna_typed(x): "{t,f,NULL}" 1000
+encode(e): x
+assert_eq(_): "bool array" e "[true,false,null]"
+dubna_typed(x): "{1.5,2}" 1022
+at(f0): x 0
+assert_near(_): "float array" f0 1.5 0.0000001
+dubna_typed(x): null 23
+assert_null(_): "null stays null" x
+
+dubna_quote_ident(q): "Table"
+assert_eq(_): "quote ident" q "\"Table\""
+dubna_quote_literal(q): "a\\b'c"
+assert_eq(_): "quote literal with backslash" q "E'a\\\\b''c'"
+
+vec(args): ""
+push(_): args "SET"
+push(_): args "k"
+push(_): args 12
+dubna_resp_encode(cmd): args
+assert_eq(_): "resp encode" cmd "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$2\r\n12\r\n"
+dubna_resp_decode(d): "+OK\r\n"
+at(v): d 0
+assert_eq(_): "resp simple" v "OK"
+dubna_resp_decode(d): "*3\r\n:5\r\n$-1\r\n$3\r\nabc\r\n"
+at(v): d 0
+encode(e): v
+assert_eq(_): "resp array" e "[5,null,`abc`]"
+dubna_resp_decode(d): "-ERR nope\r\n"
+at(v): d 0
+at(kind): v 0
+assert_eq(_): "resp error" kind "error"
+dubna_resp_decode(d): "$5\r\nab"
+assert_null(_): "resp incomplete" d
+
+_dn_pgpass_fields(f): "h\\:1:5432:db:u:p\\\\w"
+encode(e): f
+assert_eq(_): "pgpass fields" e "[`h:1`,`5432`,`db`,`u`,`p\\w`]"
+
+set(path): "tests/dubna_more_kv_tmp.db"
+remove_file(_): path
+dubna_kv_open(db): path
+dubna_kv_put(_): db "user/1" "ann"
+dubna_kv_put(_): db "user/2" "bob"
+dubna_kv_put(_): db "usr" "x"
+dubna_kv_put(_): db "zeta" "z"
+dubna_kv_put(_): db 7 "seven"
+dubna_kv_prefix(p): db "user/" {0 - 1}
+encode(e): p
+assert_eq(_): "kv prefix" e "[[`user/1`,`ann`],[`user/2`,`bob`]]"
+dubna_kv_prefix(p): db "user/" 1
+len(n): p
+assert_eq(_): "kv prefix max" n 1
+dubna_kv_range_desc(dr): db "user/" null 2
+encode(e): dr
+assert_eq(_): "kv range desc" e "[[`zeta`,`z`],[`usr`,`x`]]"
+dubna_kv_put_ttl(_): db "session" "live" 60
+dubna_kv_put_ttl(_): db "old" "gone" {0 - 1}
+dubna_kv_get_ttl(s): db "session"
+dubna_kv_get_ttl(o): db "old"
+assert_eq(_): "kv ttl live" s "live"
+assert_null(_): "kv ttl expired" o
+dubna_kv_get_ttl(plain): db "zeta"
+assert_eq(_): "kv ttl plain value" plain "z"
+dubna_kv_commit(_): db
+dubna_kv_export(ne): db "tests/dubna_more_kv_tmp.jsonl"
+dubna_kv_count(cnt): db
+assert_eq(_): "kv export count" ne cnt
+dubna_kv_close(_): db
+remove_file(_): path
+dubna_kv_open(db2): path
+dubna_kv_import(ni): db2 "tests/dubna_more_kv_tmp.jsonl"
+dubna_kv_get(back): db2 7
+dubna_kv_get_ttl(sb): db2 "session"
+assert_eq(_): "kv import" {ni = ne && back = "seven" && sb = "live"} true
+dubna_kv_close(_): db2
+remove_file(_): path
+remove_file(_): "tests/dubna_more_kv_tmp.jsonl"
+
+test_summary(n):
