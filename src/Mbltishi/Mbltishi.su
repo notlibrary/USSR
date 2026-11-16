@@ -12,14 +12,127 @@
 # carries out the ANSI sequences of the console. When the program ends
 # the window closes; closing the window ends the program (it reads the
 # end of its input, as Ctrl-D).
+#
+# Options before the program:
+#   --headless FILE [ROWS COLS]  feed FILE through the emulator model
+#                                (vt.su) and print the screen: works on
+#                                every system, for golden-file tests
+#   --cwd DIR                    start the program in DIR
+#   --env NAME=VALUE             set a variable for it (repeatable)
+#   --hold                       keep the window after the program ends,
+#                                until it is closed
+#   --scheme NAME                a colour scheme (Graphite, Steppe,
+#                                Kremlin, Mono); ~/.mbltishi sets the
+#                                default (scheme, size, font, ...)
 $include "../petersburg/petersburg.su"
+$include "vt.su"
 
 $define MB_WIDTH 840
 $define MB_HEIGHT 500
 $define MB_FONT_PX 16
 
+_mb_headless(r): path rows cols [
+    readfile(text): path
+    typeof(tt): text
+    set(r): 1
+    if(_): {tt != "string"} [
+        concat(m): "Mbltishi: cannot read " path
+        print(_): m
+        return(r): r
+    ]
+    vt_new(t): rows cols
+    vt_feed(_): t text
+    vt_text(lines): t
+    len(n): lines
+    # the screen without its empty bottom rows
+    set(last): {n - 1}
+    set(go): {last >= 0}
+    while(_): go [
+        at(l): lines last
+        if(_): {l = ""} [
+            set(last): {last - 1}
+            set(go): {last >= 0}
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    set(i): 0
+    while(_): {i <= last} [
+        at(l): lines i
+        print(_): l
+        set(i): {i + 1}
+    ]
+    btget(title): t "title"
+    if(_): {title != ""} [
+        concat(m): "title: " title
+        print(_): m
+    ]
+    set(r): 0
+]
+
 init(result): arg_count arg_values [
     set(result): 0
+    # options come before the program
+    set(_mb_first): 0
+    set(_mb_hold): false
+    set(_mb_cwd): ""
+    getenv(_mb_home): "HOME"
+    set(_mb_rc): ".mbltishi"
+    typeof(_mb_ht): _mb_home
+    if(_): {_mb_ht = "string"} [
+        concat(_mb_rc): _mb_home "/.mbltishi"
+    ]
+    vt_config(_mb_cfg): _mb_rc
+    btget(_mb_scheme): _mb_cfg "scheme"
+    set(_mb_go): true
+    while(_): {_mb_go && _mb_first < arg_count} [
+        at(_mb_o): arg_values _mb_first
+        set(_mb_nv): ""
+        if(_): {_mb_first + 1 < arg_count} [
+            at(_mb_nv): arg_values {_mb_first + 1}
+        ]
+        if(_): {_mb_o = "--headless"} [
+            set(_mb_rows): 24
+            set(_mb_cols): 80
+            if(_): {_mb_first + 3 < arg_count} [
+                at(_mb_rs): arg_values {_mb_first + 2}
+                at(_mb_cs): arg_values {_mb_first + 3}
+                str_to_int(_mb_rows): _mb_rs 10
+                str_to_int(_mb_cols): _mb_cs 10
+            ]
+            _mb_headless(result): _mb_nv _mb_rows _mb_cols
+            return(_): result
+        ]
+        elif(_): {_mb_o = "--cwd"} [
+            set(_mb_cwd): _mb_nv
+            set(_mb_first): {_mb_first + 2}
+        ]
+        elif(_): {_mb_o = "--env"} [
+            str_find(_mb_eq): _mb_nv "=" 0
+            if(_): {_mb_eq > 0} [
+                slice(_mb_k): _mb_nv 0 _mb_eq
+                len(_mb_el): _mb_nv
+                slice(_mb_v): _mb_nv {_mb_eq + 1} {_mb_el - _mb_eq - 1}
+                setenv(_): _mb_k _mb_v
+            ]
+            set(_mb_first): {_mb_first + 2}
+        ]
+        elif(_): {_mb_o = "--scheme"} [
+            set(_mb_scheme): _mb_nv
+            set(_mb_first): {_mb_first + 2}
+        ]
+        elif(_): {_mb_o = "--hold"} [
+            set(_mb_hold): true
+            set(_mb_first): {_mb_first + 1}
+        ]
+        else(_): [
+            set(_mb_go): false
+        ]
+    ]
+    if(_): {_mb_cwd != ""} [
+        cd(_): _mb_cwd
+    ]
     getenv(_mb_os): "OS"
     if(_): {_mb_os != "Moscow"} [
         print(_): "Mbltishi runs in Moscow, the USSR kernel (src/moscow); here use this system's terminal"
@@ -28,10 +141,10 @@ init(result): arg_count arg_values [
     ]
     set(_mb_prog): "russia"
     vec(_mb_args): ""
-    set(_mb_i): 0
+    set(_mb_i): _mb_first
     while(_): {_mb_i < arg_count} [
         at(_mb_a): arg_values _mb_i
-        if(_): {_mb_i = 0} [ set(_mb_prog): _mb_a ]
+        if(_): {_mb_i = _mb_first} [ set(_mb_prog): _mb_a ]
         else(_): [ push(_): _mb_args _mb_a ]
         set(_mb_i): {_mb_i + 1}
     ]
@@ -65,6 +178,14 @@ init(result): arg_count arg_values [
         at(_mb_a1): _mb_args 1
         at(_mb_a2): _mb_args 2
         terminal_run(result): _mb_t _mb_prog _mb_a0 _mb_a1 _mb_a2
+    ]
+    if(_): _mb_hold [
+        # the window stays until it is closed
+        alive(_mb_open): _mb_w
+        while(_): _mb_open [
+            sleep(_): 100
+            alive(_mb_open): _mb_w
+        ]
     ]
     terminal_close(_): _mb_t
     alive(_mb_open): _mb_w

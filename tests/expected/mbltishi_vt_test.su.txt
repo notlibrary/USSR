@@ -1,0 +1,67 @@
+PASS print and newline
+PASS cursor position
+PASS erase line
+PASS erase screen
+PASS autowrap
+PASS no autowrap keeps the last column
+PASS scrolling
+PASS scrollback
+PASS tab stop
+PASS relative moves
+PASS bell
+PASS insert characters
+PASS delete characters
+PASS erase characters
+PASS insert line
+PASS delete lines
+PASS deleted lines skip the scrollback
+PASS scroll region
+PASS reverse index at the top of the region
+PASS save and restore cursor
+PASS CSI s and u
+PASS alternate screen
+PASS back to the main screen
+PASS cursor hidden and shaped
+PASS bracketed paste
+PASS SGR mouse report
+PASS X10 mouse release
+PASS mouse off
+PASS cursor key
+PASS application cursor key
+PASS function key
+PASS bold red
+PASS reset
+PASS 256 colours
+PASS truecolor and 256 background
+PASS underline and reverse
+PASS attributes off
+PASS bright colour
+PASS wide character takes two cells
+PASS combining mark joins its letter
+PASS a wide character wraps whole
+PASS Cyrillic
+PASS sequence split across writes
+PASS window title
+PASS current directory
+PASS hyperlink cells
+PASS clipboard set
+PASS clipboard query
+PASS prompt marks
+PASS progress
+PASS DSR, CPR and DA
+PASS replies are taken once
+PASS url detection
+PASS file:line references
+PASS search scrollback and screen
+PASS save scrollback
+PASS resize keeps the top left
+PASS asciicast header
+PASS replay
+PASS config file
+PASS colour scheme
+PASS reset
+62 passed, 0 failed
+
+--- stderr ---
+
+--- exit 0 ---

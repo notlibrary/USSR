@@ -1,0 +1,312 @@
+# Headless checks of Mbltishi's emulator model (src/Mbltishi/vt.su):
+# escape sequences in, the grid and the terminal's state out. "\\e" and
+# "\\a" in the scripts below stand for ESC and BEL (_vt_esc).
+$include "../src/libs/testing.su"
+$include "../src/Mbltishi/vt.su"
+
+feed(r): t text [
+    _vt_esc(s): text
+    vt_feed(r): t s
+]
+
+screen(r): t [
+    vt_text(lines): t
+    str_join(r): lines "|"
+]
+
+sec_basic(r): [
+    vt_new(t): 4 10
+    feed(_): t "hello\r\nworld"
+    screen(s): t
+    assert_eq(_): "print and newline" s "hello|world||"
+    feed(_): t "\\e[1;3HX"
+    vt_line(l): t 0
+    assert_eq(_): "cursor position" l "heXlo"
+    feed(_): t "\\e[2;1H\\e[K"
+    vt_line(l): t 1
+    assert_eq(_): "erase line" l ""
+    feed(_): t "\\e[2J"
+    screen(s): t
+    assert_eq(_): "erase screen" s "|||"
+    vt_new(t): 3 5
+    feed(_): t "abcdefgh"
+    screen(s): t
+    assert_eq(_): "autowrap" s "abcde|fgh|"
+    feed(_): t "\\e[?7l\\e[3;1H123456789"
+    vt_line(l): t 2
+    assert_eq(_): "no autowrap keeps the last column" l "12349"
+    vt_new(t): 3 5
+    feed(_): t "1\r\n2\r\n3\r\n4"
+    screen(s): t
+    vt_scrollback(sb): t
+    encode(se): sb
+    assert_eq(_): "scrolling" s "2|3|4"
+    assert_eq(_): "scrollback" se "[`1`]"
+    vt_new(t): 2 10
+    feed(_): t "a\tb"
+    vt_line(l): t 0
+    assert_eq(_): "tab stop" l "a       b"
+    feed(_): t "\r\\e[3Cz\\e[2Dy"
+    vt_line(l): t 0
+    assert_eq(_): "relative moves" l "a yz    b"
+    feed(_): t "\\a\\a"
+    btget(bell): t "bell"
+    assert_eq(_): "bell" bell 2
+    set(r): 0
+]
+
+sec_edit(r): [
+    vt_new(t): 4 6
+    feed(_): t "abcdef\\e[1;3H\\e[2@"
+    vt_line(l): t 0
+    assert_eq(_): "insert characters" l "ab  cd"
+    feed(_): t "\\e[2P"
+    vt_line(l): t 0
+    assert_eq(_): "delete characters" l "abcd"
+    feed(_): t "\\e[1;2H\\e[2X"
+    vt_line(l): t 0
+    assert_eq(_): "erase characters" l "a  d"
+    vt_new(t): 4 3
+    feed(_): t "1\r\n2\r\n3\r\n4\\e[2;1H\\e[L"
+    screen(s): t
+    assert_eq(_): "insert line" s "1||2|3"
+    feed(_): t "\\e[M\\e[M"
+    screen(s): t
+    assert_eq(_): "delete lines" s "1|3||"
+    vt_scrollback(sb): t
+    len(nsb): sb
+    assert_eq(_): "deleted lines skip the scrollback" nsb 0
+    vt_new(t): 5 3
+    feed(_): t "a\r\nb\r\nc\r\nd\r\ne\\e[2;4r\\e[4;1H\r\nX"
+    screen(s): t
+    assert_eq(_): "scroll region" s "a|c|d|X|e"
+    feed(_): t "\\e[2;1H\\eM"
+    screen(s): t
+    assert_eq(_): "reverse index at the top of the region" s "a||c|d|e"
+    vt_new(t): 2 6
+    feed(_): t "ab\\e7\\e[2;5Hcd\\e8ef"
+    screen(s): t
+    assert_eq(_): "save and restore cursor" s "abef|    cd"
+    feed(_): t "\\e[s\\e[2;1HZ\\e[u!"
+    vt_line(l): t 0
+    assert_eq(_): "CSI s and u" l "abef!"
+    set(r): 0
+]
+
+sec_modes(r): [
+    vt_new(t): 3 8
+    feed(_): t "main\\e[?1049hALT"
+    btget(alt): t "alt"
+    vt_line(l): t 0
+    assert_eq(_): "alternate screen" {alt && l = "ALT"} true
+    feed(_): t "\\e[?1049l"
+    vt_line(l): t 0
+    vt_cursor(c): t
+    at(cx): c 1
+    assert_eq(_): "back to the main screen" {l = "main" && cx = 4} true
+    feed(_): t "\\e[?25l\\e[5 q"
+    vt_cursor(c): t
+    at(vis): c 2
+    at(shape): c 3
+    assert_eq(_): "cursor hidden and shaped" {vis = false && shape = 5} true
+    feed(_): t "\\e[?2004h"
+    chr(e): 27
+    vt_paste(p2): t "plain"
+    concat(want2): e "[200~plain" e "[201~"
+    assert_eq(_): "bracketed paste" p2 want2
+    feed(_): t "\\e[?1000h\\e[?1006h"
+    vt_mouse(m): t 0 2 4 true
+    concat(want): e "[<0;5;3M"
+    assert_eq(_): "SGR mouse report" m want
+    feed(_): t "\\e[?1006l"
+    vt_mouse(m): t 0 0 0 false
+    chr(c35): 35
+    chr(c33): 33
+    concat(want): e "[M" c35 c33 c33
+    assert_eq(_): "X10 mouse release" m want
+    feed(_): t "\\e[?1000l"
+    vt_mouse(m): t 0 0 0 true
+    assert_eq(_): "mouse off" m ""
+    vt_key(k): t "up"
+    concat(want): e "[A"
+    assert_eq(_): "cursor key" k want
+    feed(_): t "\\e[?1h"
+    vt_key(k): t "up"
+    concat(want): e "OA"
+    assert_eq(_): "application cursor key" k want
+    vt_key(k): t "f5"
+    concat(want): e "[15~"
+    assert_eq(_): "function key" k want
+    set(r): 0
+]
+
+sec_sgr(r): [
+    vt_new(t): 2 10
+    feed(_): t "\\e[1;31mR\\e[0mN\\e[38;5;208mO\\e[38;2;10;20;30;48;5;4mT\\e[4;7mU\\e[24;27;39;49mV"
+    vt_cell(c): t 0 0
+    at(fg): c 1
+    at(fl): c 3
+    assert_eq(_): "bold red" {fg = 1 && fl = 1} true
+    vt_cell(c): t 0 1
+    at(fg): c 1
+    at(fl): c 3
+    assert_eq(_): "reset" {fg = 0 - 1 && fl = 0} true
+    vt_cell(c): t 0 2
+    at(fg): c 1
+    assert_eq(_): "256 colours" fg 208
+    vt_cell(c): t 0 3
+    at(fg): c 1
+    at(bg): c 2
+    assert_eq(_): "truecolor and 256 background" {fg = 16777216 + 660510 && bg = 4} true
+    vt_cell(c): t 0 4
+    at(fl): c 3
+    assert_eq(_): "underline and reverse" fl 72
+    vt_cell(c): t 0 5
+    at(fl): c 3
+    at(fg): c 1
+    assert_eq(_): "attributes off" {fl = 0 && fg = 0 - 1} true
+    feed(_): t "\\e[92mB"
+    vt_cell(c): t 0 6
+    at(fg): c 1
+    assert_eq(_): "bright colour" fg 10
+    set(r): 0
+]
+
+sec_text(r): [
+    vt_new(t): 2 6
+    feed(_): t "a中b"
+    vt_line(l): t 0
+    vt_cell(c): t 0 1
+    at(w): c 5
+    vt_cursor(cur): t
+    at(cx): cur 1
+    assert_eq(_): "wide character takes two cells" {l = "a中b" && w = 2 && cx = 4} true
+    feed(_): t "e\xCC\x81"
+    vt_new(t): 2 6
+    chr(acute1): 204
+    chr(acute2): 129
+    concat(comb): "e" acute1 acute2 "x"
+    vt_feed(_): t comb
+    vt_cell(c): t 0 0
+    at(ch): c 0
+    vt_cursor(cur): t
+    at(cx): cur 1
+    concat(want): "e" acute1 acute2
+    assert_eq(_): "combining mark joins its letter" {ch = want && cx = 2} true
+    vt_new(t): 2 3
+    feed(_): t "ab中"
+    screen(s): t
+    assert_eq(_): "a wide character wraps whole" s "ab|中"
+    vt_new(t): 2 20
+    feed(_): t "привет мир"
+    vt_line(l): t 0
+    assert_eq(_): "Cyrillic" l "привет мир"
+    vt_new(t): 2 10
+    feed(_): t "ab\\e["
+    feed(_): t "2Cc"
+    vt_line(l): t 0
+    assert_eq(_): "sequence split across writes" l "ab  c"
+    set(r): 0
+]
+
+sec_osc(r): [
+    vt_new(t): 3 20
+    feed(_): t "\\e]0;my title\\a\\e]7;file://host/home/ann%20b\\e\\"
+    btget(title): t "title"
+    btget(cwd): t "cwd"
+    assert_eq(_): "window title" title "my title"
+    assert_eq(_): "current directory" cwd "/home/ann b"
+    feed(_): t "\\e]8;;https://ussr.example\\aLINK\\e]8;;\\aX"
+    vt_cell(c): t 0 0
+    at(link): c 4
+    vt_cell(c2): t 0 4
+    at(link2): c2 4
+    assert_eq(_): "hyperlink cells" {link = "https://ussr.example" && link2 = ""} true
+    feed(_): t "\\e]52;c;aGVsbG8=\\a"
+    btget(clip): t "clipboard"
+    assert_eq(_): "clipboard set" clip "hello"
+    feed(_): t "\\e]52;c;?\\a"
+    vt_replies(rep): t
+    chr(e): 27
+    chr(bel): 7
+    concat(want): e "]52;c;aGVsbG8=" bel
+    assert_eq(_): "clipboard query" rep want
+    feed(_): t "\r\n\\e]133;A\\a$ ls\r\n\\e]133;A\\a$ "
+    btget(prompts): t "prompts"
+    encode(pe): prompts
+    assert_eq(_): "prompt marks" pe "[1,2]"
+    feed(_): t "\\e]9;4;1;42\\a"
+    btget(pg): t "progress"
+    encode(pge): pg
+    assert_eq(_): "progress" pge "[1,42]"
+    set(r): 0
+]
+
+sec_replies(r): [
+    vt_new(t): 5 10
+    feed(_): t "\\e[3;4H\\e[6n\\e[5n\\e[c"
+    vt_replies(rep): t
+    chr(e): 27
+    concat(want): e "[3;4R" e "[0n" e "[?62;22c"
+    assert_eq(_): "DSR, CPR and DA" rep want
+    vt_replies(again): t
+    assert_eq(_): "replies are taken once" again ""
+    set(r): 0
+]
+
+sec_tools(r): [
+    vt_new(t): 3 60
+    feed(_): t "see https://ussr.example/a?b=1, and src/x.su:42\r\nfail at tests/run.sh:7."
+    vt_urls(u): t
+    encode(ue): u
+    assert_eq(_): "url detection" ue "[`https://ussr.example/a?b=1`]"
+    vt_file_refs(f): t
+    encode(fe): f
+    assert_eq(_): "file:line references" fe "[[`src/x.su`,42],[`tests/run.sh`,7]]"
+    vt_new(t): 2 5
+    feed(_): t "one\r\ntwo\r\nthree\r\nfour"
+    vt_search(hits): t "^t"
+    encode(he): hits
+    assert_eq(_): "search scrollback and screen" he "[1,2]"
+    vt_save(_): t "tests/mbltishi_vt_tmp.txt"
+    readfile(saved): "tests/mbltishi_vt_tmp.txt"
+    assert_eq(_): "save scrollback" saved "one\ntwo\nthree\nfour\n"
+    remove_file(_): "tests/mbltishi_vt_tmp.txt"
+    vt_resize(_): t 3 3
+    screen(s): t
+    assert_eq(_): "resize keeps the top left" s "thr|fou|"
+    vt_new(t): 2 10
+    vt_record(_): t 0.5 "ab"
+    vt_record(_): t 1.25 "\r\ncd"
+    vt_cast(cast): t
+    str_starts(hdr): cast "{\"version\": 2, \"width\": 10, \"height\": 2}\n"
+    assert_true(_): "asciicast header" hdr
+    vt_replay(t2): cast 2 10
+    screen(s2): t2
+    assert_eq(_): "replay" s2 "ab|cd"
+    writefile(_): "tests/mbltishi_rc_tmp" "# mine\nscheme = Steppe\nsize = 20\nbell=none\n"
+    vt_config(cfg): "tests/mbltishi_rc_tmp"
+    btget(scheme): cfg "scheme"
+    btget(size): cfg "size"
+    btget(font): cfg "font"
+    assert_eq(_): "config file" {scheme = "Steppe" && size = 20 && font = "fonts/pobeda.ttf"} true
+    remove_file(_): "tests/mbltishi_rc_tmp"
+    vt_scheme(sc): "Steppe"
+    len(nsc): sc
+    at(bgc): sc 1
+    assert_eq(_): "colour scheme" {nsc = 19 && bgc = 15918792} true
+    feed(_): t "x\\ec"
+    screen(s): t
+    assert_eq(_): "reset" s "|"
+    set(r): 0
+]
+
+sec_basic(_):
+sec_edit(_):
+sec_modes(_):
+sec_sgr(_):
+sec_text(_):
+sec_osc(_):
+sec_replies(_):
+sec_tools(_):
+test_summary(n):

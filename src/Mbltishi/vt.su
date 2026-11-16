@@ -1,0 +1,1501 @@
+# vt.su - Mbltishi's terminal emulator model in USSR: a VT100/xterm grid
+# that any program can drive and read, headless. Moscow's window terminal
+# (lib/gui/term.c) draws on a canvas; this model carries out the same
+# sequences and more, so Mbltishi's behaviour can be tested anywhere and
+# hosted systems get an emulator too.
+#
+#   vt_new(t): rows cols                 a terminal (a btree)
+#   vt_feed(_): t text                   carries out output from a program
+#   vt_text(v): t                        the screen as lines (right blanks cut)
+#   vt_line(s): t y                      one screen line
+#   vt_cell(v): t y x                    [char fg bg flags link width]
+#   vt_cursor(v): t                      [y x visible shape]
+#   vt_replies(s): t                     what the terminal answers (DSR, DA),
+#                                        then forgets it
+#   vt_resize(_): t rows cols            keeps the top-left text
+#   vt_reset(_): t                       ESC c
+# Scrollback: vt_scrollback(v): t / vt_search(v): t pattern -> line numbers
+#   (scrollback first, then the screen) / vt_save(r): t path
+# Input: vt_key(s): t name ("up" "down" "right" "left" "home" "end"
+#   "pgup" "pgdn" "f1".."f12" "enter" "tab" "backspace" "esc")
+#   vt_paste(s): t text                  bracketed when ?2004 is on
+#   vt_mouse(s): t button y x press      X10 or SGR report, "" when off
+# Detection: vt_urls(v): t / vt_file_refs(v): t ("path:line" pairs)
+# Recording: vt_record(_): t seconds text   feeds and remembers the output
+#   vt_cast(s): t                        asciicast v2 text of the recording
+#   vt_replay(t): cast rows cols         a terminal fed from asciicast text
+# Fields in the btree a program may read: "title", "cwd", "clipboard",
+#   "progress" ([state percent]), "prompts" (screen rows of OSC 133 A
+#   marks), "bell" (count), "mouse" (0, 1000, 1002, 1003), "sgr_mouse",
+#   "paste" (bracketed paste on), "app_cursor", "alt" (alternate screen).
+#
+# Sequences: C0 BEL BS HT LF VT FF CR; ESC 7 8 D E M c; CSI A B C D E F G
+# H f d e a ` J K X @ P L M S T r s u m n c h l (?1 ?7 ?25 ?47 ?1047
+# ?1048 ?1049 ?1000 ?1002 ?1003 ?1006 ?2004), SP q (cursor shape); OSC 0
+# 2 7 8 52 133 9;4. SGR: 0-9, 21-29, 30-37 38;5;N 38;2;R;G;B 39, 40-47 48
+# 49, 90-97, 100-107. Wide CJK and emoji take two cells, combining marks
+# join the cell before them.
+$once
+$include "../libs/strings.su"
+$include "../libs/encoding.su"
+$include "../libs/json.su"
+
+# ---------------------------------------------------------------- cells
+
+_vt_blank(r): t [
+    btget(fg): t "fg"
+    btget(bg): t "bg"
+    vec(r): ""
+    push(_): r " "
+    push(_): r {0 - 1}
+    push(_): r bg
+    push(_): r 0
+    push(_): r ""
+    push(_): r 1
+    set(fg): fg
+]
+
+_vt_new_row(r): t [
+    btree(r):
+    btget(cols): t "cols"
+    _vt_blank(b): t
+    set(x): 0
+    while(_): {x < cols} [
+        btput(_): r x b
+        set(x): {x + 1}
+    ]
+]
+
+_vt_new_grid(r): t [
+    btree(r):
+    btget(rows): t "rows"
+    set(y): 0
+    while(_): {y < rows} [
+        _vt_new_row(row): t
+        btput(_): r y row
+        set(y): {y + 1}
+    ]
+]
+
+vt_new(r): rows cols [
+    btree(r):
+    btput(_): r "rows" rows
+    btput(_): r "cols" cols
+    btput(_): r "fg" {0 - 1}
+    btput(_): r "bg" {0 - 1}
+    btput(_): r "flags" 0
+    btput(_): r "link" ""
+    _vt_new_grid(g): r
+    btput(_): r "grid" g
+    btput(_): r "y" 0
+    btput(_): r "x" 0
+    btput(_): r "wrap_next" false
+    btput(_): r "top" 0
+    btput(_): r "bottom" {rows - 1}
+    btput(_): r "autowrap" true
+    btput(_): r "visible" true
+    btput(_): r "shape" 1
+    btput(_): r "alt" false
+    btput(_): r "saved" null
+    btput(_): r "title" ""
+    btput(_): r "cwd" ""
+    btput(_): r "clipboard" ""
+    vec(pg): ""
+    push(_): pg 0
+    push(_): pg 0
+    btput(_): r "progress" pg
+    vec(prompts): ""
+    btput(_): r "prompts" prompts
+    btput(_): r "bell" 0
+    btput(_): r "mouse" 0
+    btput(_): r "sgr_mouse" false
+    btput(_): r "paste" false
+    btput(_): r "app_cursor" false
+    btput(_): r "replies" ""
+    vec(sb): ""
+    btput(_): r "scrollback" sb
+    btput(_): r "scrollback_max" 1000
+    btput(_): r "pending" ""
+    vec(rec): ""
+    btput(_): r "record" rec
+]
+
+vt_reset(r): t [
+    btget(rows): t "rows"
+    btget(cols): t "cols"
+    vt_new(fresh): rows cols
+    btkeys(keys): fresh
+    len(n): keys
+    set(i): 0
+    while(_): {i < n} [
+        at(k): keys i
+        btget(v): fresh k
+        btput(_): t k v
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+_vt_cell_of(r): t ch width [
+    vec(r): ""
+    btget(fg): t "fg"
+    btget(bg): t "bg"
+    btget(flags): t "flags"
+    btget(link): t "link"
+    push(_): r ch
+    push(_): r fg
+    push(_): r bg
+    push(_): r flags
+    push(_): r link
+    push(_): r width
+]
+
+_vt_row(r): t y [
+    btget(g): t "grid"
+    btget(r): g y
+]
+
+vt_cell(r): t y x [
+    _vt_row(row): t y
+    btget(r): row x
+]
+
+vt_cursor(r): t [
+    vec(r): ""
+    btget(y): t "y"
+    btget(x): t "x"
+    btget(v): t "visible"
+    btget(s): t "shape"
+    push(_): r y
+    push(_): r x
+    push(_): r v
+    push(_): r s
+]
+
+vt_line(r): t y [
+    btget(cols): t "cols"
+    _vt_row(row): t y
+    set(r): ""
+    set(x): 0
+    while(_): {x < cols} [
+        btget(c): row x
+        at(ch): c 0
+        concat(r): r ch
+        set(x): {x + 1}
+    ]
+    re_replace(r): " +$" r ""
+]
+
+vt_text(r): t [
+    vec(r): ""
+    btget(rows): t "rows"
+    set(y): 0
+    while(_): {y < rows} [
+        vt_line(l): t y
+        push(_): r l
+        set(y): {y + 1}
+    ]
+]
+
+vt_replies(r): t [
+    btget(r): t "replies"
+    btput(_): t "replies" ""
+]
+
+# the two-character texts \e and \a in sequence texts are ESC and BEL
+_vt_esc(r): s [
+    chr(e): 27
+    chr(b): 7
+    str_replace(r): s "\\e" e
+    str_replace(r): r "\\a" b
+]
+
+_vt_reply(r): t text [
+    _vt_esc(text): text
+    btget(old): t "replies"
+    concat(new): old text
+    btput(_): t "replies" new
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- scrolling
+
+# rows top..bottom move up by n (lines leaving the top of the main screen
+# with the whole screen as the region go to the scrollback)
+_vt_scroll_up(r): t n [
+    btget(top): t "top"
+    btget(bottom): t "bottom"
+    btget(rows): t "rows"
+    btget(g): t "grid"
+    btget(alt): t "alt"
+    set(k): 0
+    while(_): {k < n} [
+        if(_): {top = 0 && bottom = rows - 1 && alt = false} [
+            vt_line(gone): t 0
+            btget(sb): t "scrollback"
+            push(_): sb gone
+            btget(mx): t "scrollback_max"
+            len(sn): sb
+            if(_): {sn > mx} [
+                vec(trim): ""
+                set(i): {sn - mx}
+                while(_): {i < sn} [
+                    at(l): sb i
+                    push(_): trim l
+                    set(i): {i + 1}
+                ]
+                btput(_): t "scrollback" trim
+            ]
+        ]
+        set(y): top
+        while(_): {y < bottom} [
+            btget(next): g {y + 1}
+            btput(_): g y next
+            set(y): {y + 1}
+        ]
+        _vt_new_row(fresh): t
+        btput(_): g bottom fresh
+        set(k): {k + 1}
+    ]
+    set(r): 0
+]
+
+_vt_scroll_down(r): t n [
+    btget(top): t "top"
+    btget(bottom): t "bottom"
+    btget(g): t "grid"
+    set(k): 0
+    while(_): {k < n} [
+        set(y): bottom
+        while(_): {y > top} [
+            btget(prev): g {y - 1}
+            btput(_): g y prev
+            set(y): {y - 1}
+        ]
+        _vt_new_row(fresh): t
+        btput(_): g top fresh
+        set(k): {k + 1}
+    ]
+    set(r): 0
+]
+
+_vt_linefeed(r): t [
+    btget(y): t "y"
+    btget(bottom): t "bottom"
+    btget(rows): t "rows"
+    if(_): {y = bottom} [
+        _vt_scroll_up(_): t 1
+    ]
+    elif(_): {y < rows - 1} [
+        btput(_): t "y" {y + 1}
+    ]
+    btput(_): t "wrap_next" false
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- printing
+
+# 2 for East Asian wide characters and most emoji, 0 for combining marks
+vt_width(r): ch [
+    text_bytes(b): ch
+    len(n): b
+    set(r): 1
+    set(cp): 0
+    at(b0): b 0
+    if(_): {n = 2} [
+        at(b1): b 1
+        set(cp): {((b0 & 31) << 6) | (b1 & 63)}
+    ]
+    elif(_): {n = 3} [
+        at(b1): b 1
+        at(b2): b 2
+        set(cp): {((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63)}
+    ]
+    elif(_): {n = 4} [
+        at(b1): b 1
+        at(b2): b 2
+        at(b3): b 3
+        set(cp): {((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63)}
+    ]
+    if(_): {(cp >= 768 && cp <= 879) || (cp >= 6832 && cp <= 6911) || (cp >= 7616 && cp <= 7679) || (cp >= 8400 && cp <= 8447) || (cp >= 65056 && cp <= 65071) || cp = 8205 || (cp >= 65024 && cp <= 65039)} [
+        set(r): 0
+    ]
+    elif(_): {(cp >= 4352 && cp <= 4447) || (cp >= 11904 && cp <= 42191) || (cp >= 44032 && cp <= 55203) || (cp >= 63744 && cp <= 64255) || (cp >= 65040 && cp <= 65049) || (cp >= 65072 && cp <= 65135) || (cp >= 65280 && cp <= 65376) || (cp >= 65504 && cp <= 65510) || (cp >= 127744 && cp <= 129791) || (cp >= 131072 && cp <= 196605)} [
+        set(r): 2
+    ]
+]
+
+_vt_put_char(r): t ch [
+    set(r): 0
+    vt_width(w): ch
+    btget(y): t "y"
+    btget(x): t "x"
+    btget(cols): t "cols"
+    if(_): {w = 0} [
+        # a combining mark joins the cell before the cursor
+        set(px): {x - 1}
+        btget(wn): t "wrap_next"
+        if(_): wn [
+            set(px): x
+        ]
+        if(_): {px >= 0} [
+            _vt_row(row): t y
+            btget(c): row px
+            at(base): c 0
+            if(_): {base = ""} [
+                set(px): {px - 1}
+                btget(c): row px
+                at(base): c 0
+            ]
+            concat(joined): base ch
+            vec(nc): ""
+            push(_): nc joined
+            set(k): 1
+            while(_): {k < 6} [
+                at(v): c k
+                push(_): nc v
+                set(k): {k + 1}
+            ]
+            btput(_): row px nc
+        ]
+        return(r): r
+    ]
+    btget(wn): t "wrap_next"
+    btget(aw): t "autowrap"
+    if(_): {wn && aw} [
+        btput(_): t "x" 0
+        _vt_linefeed(_): t
+        btget(y): t "y"
+        set(x): 0
+    ]
+    if(_): {w = 2 && x = cols - 1 && aw} [
+        # no room for both halves: wrap first
+        _vt_row(row): t y
+        _vt_blank(b): t
+        btput(_): row x b
+        btput(_): t "x" 0
+        _vt_linefeed(_): t
+        btget(y): t "y"
+        set(x): 0
+    ]
+    _vt_row(row): t y
+    _vt_cell_of(c): t ch w
+    btput(_): row x c
+    if(_): {w = 2 && x + 1 < cols} [
+        _vt_cell_of(c2): t "" 0
+        btput(_): row {x + 1} c2
+    ]
+    set(nx): {x + w}
+    if(_): {nx >= cols} [
+        btput(_): t "x" {cols - 1}
+        btput(_): t "wrap_next" true
+    ]
+    else(_): [
+        btput(_): t "x" nx
+        btput(_): t "wrap_next" false
+    ]
+]
+
+# ---------------------------------------------------------------- erasing
+
+_vt_erase(r): t y x1 x2 [
+    _vt_row(row): t y
+    _vt_blank(b): t
+    set(x): x1
+    while(_): {x < x2} [
+        btput(_): row x b
+        set(x): {x + 1}
+    ]
+    set(r): 0
+]
+
+_vt_clamp(r): v lo hi [
+    set(r): v
+    if(_): {r < lo} [
+        set(r): lo
+    ]
+    if(_): {r > hi} [
+        set(r): hi
+    ]
+]
+
+_vt_goto(r): t y x [
+    btget(rows): t "rows"
+    btget(cols): t "cols"
+    _vt_clamp(cy): y 0 {rows - 1}
+    _vt_clamp(cx): x 0 {cols - 1}
+    btput(_): t "y" cy
+    btput(_): t "x" cx
+    btput(_): t "wrap_next" false
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- SGR
+
+_vt_sgr(r): t params [
+    len(n): params
+    if(_): {n = 0} [
+        vec(params): ""
+        push(_): params 0
+        set(n): 1
+    ]
+    btget(fg): t "fg"
+    btget(bg): t "bg"
+    btget(fl): t "flags"
+    set(i): 0
+    while(_): {i < n} [
+        at(p): params i
+        if(_): {p = 0} [
+            set(fg): {0 - 1}
+            set(bg): {0 - 1}
+            set(fl): 0
+        ]
+        elif(_): {p >= 1 && p <= 9} [
+            set(bit): {1 << (p - 1)}
+            set(fl): {fl | bit}
+        ]
+        elif(_): {p = 21 || p = 22} [
+            set(fl): {fl & (0xFFFF ^ 3)}
+        ]
+        elif(_): {p >= 23 && p <= 29} [
+            set(bit): {1 << (p - 21)}
+            set(fl): {fl & (0xFFFF ^ bit)}
+        ]
+        elif(_): {p >= 30 && p <= 37} [
+            set(fg): {p - 30}
+        ]
+        elif(_): {p >= 40 && p <= 47} [
+            set(bg): {p - 40}
+        ]
+        elif(_): {p >= 90 && p <= 97} [
+            set(fg): {p - 82}
+        ]
+        elif(_): {p >= 100 && p <= 107} [
+            set(bg): {p - 92}
+        ]
+        elif(_): {p = 39} [
+            set(fg): {0 - 1}
+        ]
+        elif(_): {p = 49} [
+            set(bg): {0 - 1}
+        ]
+        elif(_): {p = 38 || p = 48} [
+            set(color): {0 - 1}
+            if(_): {i + 2 < n} [
+                at(mode): params {i + 1}
+                if(_): {mode = 5} [
+                    at(color): params {i + 2}
+                    set(i): {i + 2}
+                ]
+                elif(_): {mode = 2 && i + 4 < n} [
+                    at(cr): params {i + 2}
+                    at(cg): params {i + 3}
+                    at(cb): params {i + 4}
+                    set(color): {16777216 | (cr << 16) | (cg << 8) | cb}
+                    set(i): {i + 4}
+                ]
+            ]
+            if(_): {p = 38} [
+                set(fg): color
+            ]
+            else(_): [
+                set(bg): color
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): t "fg" fg
+    btput(_): t "bg" bg
+    btput(_): t "flags" fl
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- CSI
+
+_vt_params(r): text [
+    vec(r): ""
+    if(_): {text = ""} [
+        return(r): r
+    ]
+    str_replace(t2): text ":" ";"
+    str_split(parts): t2 ";"
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        str_to_int(v): p 10
+        typeof(vt): v
+        if(_): {vt != "integer"} [
+            set(v): 0
+        ]
+        push(_): r v
+        set(i): {i + 1}
+    ]
+]
+
+_vt_p(r): params i default [
+    len(n): params
+    set(r): default
+    if(_): {i < n} [
+        at(r): params i
+        if(_): {r = 0} [
+            set(r): default
+        ]
+    ]
+]
+
+_vt_mode(r): t mode on [
+    set(r): 0
+    if(_): {mode = 1} [
+        btput(_): t "app_cursor" on
+    ]
+    elif(_): {mode = 7} [
+        btput(_): t "autowrap" on
+    ]
+    elif(_): {mode = 25} [
+        btput(_): t "visible" on
+    ]
+    elif(_): {mode = 1000 || mode = 1002 || mode = 1003} [
+        if(_): on [
+            btput(_): t "mouse" mode
+        ]
+        else(_): [
+            btput(_): t "mouse" 0
+        ]
+    ]
+    elif(_): {mode = 1006} [
+        btput(_): t "sgr_mouse" on
+    ]
+    elif(_): {mode = 2004} [
+        btput(_): t "paste" on
+    ]
+    elif(_): {mode = 47 || mode = 1047 || mode = 1049} [
+        btget(alt): t "alt"
+        if(_): {on && alt = false} [
+            if(_): {mode = 1049} [
+                _vt_save_cursor(_): t
+            ]
+            btget(g): t "grid"
+            btput(_): t "main_grid" g
+            _vt_new_grid(ng): t
+            btput(_): t "grid" ng
+            btput(_): t "alt" true
+            if(_): {mode = 1049} [
+                _vt_goto(_): t 0 0
+            ]
+        ]
+        elif(_): {on = false && alt} [
+            btget(mg): t "main_grid"
+            btput(_): t "grid" mg
+            btput(_): t "alt" false
+            if(_): {mode = 1049} [
+                _vt_restore_cursor(_): t
+            ]
+        ]
+    ]
+    elif(_): {mode = 1048} [
+        if(_): on [
+            _vt_save_cursor(_): t
+        ]
+        else(_): [
+            _vt_restore_cursor(_): t
+        ]
+    ]
+]
+
+_vt_save_cursor(r): t [
+    vec(s): ""
+    btget(y): t "y"
+    btget(x): t "x"
+    btget(fg): t "fg"
+    btget(bg): t "bg"
+    btget(fl): t "flags"
+    push(_): s y
+    push(_): s x
+    push(_): s fg
+    push(_): s bg
+    push(_): s fl
+    btput(_): t "saved" s
+    set(r): 0
+]
+
+_vt_restore_cursor(r): t [
+    btget(s): t "saved"
+    typeof(st): s
+    set(r): 0
+    if(_): {st = "vector"} [
+        at(y): s 0
+        at(x): s 1
+        at(fg): s 2
+        at(bg): s 3
+        at(fl): s 4
+        _vt_goto(_): t y x
+        btput(_): t "fg" fg
+        btput(_): t "bg" bg
+        btput(_): t "flags" fl
+    ]
+    else(_): [
+        _vt_goto(_): t 0 0
+    ]
+]
+
+# shifts cells of row y from x on by n (n > 0 inserts blanks, n < 0 deletes)
+_vt_shift_cells(r): t y x n [
+    btget(cols): t "cols"
+    _vt_row(row): t y
+    _vt_blank(b): t
+    vec(cells): ""
+    set(i): 0
+    while(_): {i < cols} [
+        btget(c): row i
+        push(_): cells c
+        set(i): {i + 1}
+    ]
+    set(i): x
+    while(_): {i < cols} [
+        set(src): {i - n}
+        if(_): {n < 0} [
+            set(src): {i - n}
+        ]
+        if(_): {n > 0} [
+            set(src): {i - n}
+        ]
+        if(_): {src >= x && src < cols} [
+            at(c): cells src
+            btput(_): row i c
+        ]
+        else(_): [
+            btput(_): row i b
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+_vt_csi(r): t private params_text inter final [
+    set(r): 0
+    _vt_params(ps): params_text
+    btget(y): t "y"
+    btget(x): t "x"
+    btget(rows): t "rows"
+    btget(cols): t "cols"
+    _vt_p(n1): ps 0 1
+    if(_): {inter = " " && final = "q"} [
+        _vt_p(shape): ps 0 1
+        btput(_): t "shape" shape
+        return(r): r
+    ]
+    if(_): {private = "?"} [
+        if(_): {final = "h" || final = "l"} [
+            len(np): ps
+            set(i): 0
+            while(_): {i < np} [
+                at(m): ps i
+                _vt_mode(_): t m {final = "h"}
+                set(i): {i + 1}
+            ]
+        ]
+        return(r): r
+    ]
+    if(_): {private = ">" && final = "c"} [
+        _vt_reply(_): t "\\e[>0;10;1c"
+        return(r): r
+    ]
+    if(_): {final = "A"} [
+        _vt_goto(_): t {y - n1} x
+    ]
+    elif(_): {final = "B" || final = "e"} [
+        _vt_goto(_): t {y + n1} x
+    ]
+    elif(_): {final = "C" || final = "a"} [
+        _vt_goto(_): t y {x + n1}
+    ]
+    elif(_): {final = "D"} [
+        _vt_goto(_): t y {x - n1}
+    ]
+    elif(_): {final = "E"} [
+        _vt_goto(_): t {y + n1} 0
+    ]
+    elif(_): {final = "F"} [
+        _vt_goto(_): t {y - n1} 0
+    ]
+    elif(_): {final = "G" || final = "`"} [
+        _vt_goto(_): t y {n1 - 1}
+    ]
+    elif(_): {final = "d"} [
+        _vt_goto(_): t {n1 - 1} x
+    ]
+    elif(_): {final = "H" || final = "f"} [
+        _vt_p(row): ps 0 1
+        _vt_p(col): ps 1 1
+        _vt_goto(_): t {row - 1} {col - 1}
+    ]
+    elif(_): {final = "J"} [
+        len(np): ps
+        set(mode): 0
+        if(_): {np > 0} [
+            at(mode): ps 0
+        ]
+        if(_): {mode = 0} [
+            _vt_erase(_): t y x cols
+            set(k): {y + 1}
+            while(_): {k < rows} [
+                _vt_erase(_): t k 0 cols
+                set(k): {k + 1}
+            ]
+        ]
+        elif(_): {mode = 1} [
+            set(k): 0
+            while(_): {k < y} [
+                _vt_erase(_): t k 0 cols
+                set(k): {k + 1}
+            ]
+            _vt_erase(_): t y 0 {x + 1}
+        ]
+        else(_): [
+            set(k): 0
+            while(_): {k < rows} [
+                _vt_erase(_): t k 0 cols
+                set(k): {k + 1}
+            ]
+            if(_): {mode = 3} [
+                vec(sb): ""
+                btput(_): t "scrollback" sb
+            ]
+        ]
+    ]
+    elif(_): {final = "K"} [
+        len(np): ps
+        set(mode): 0
+        if(_): {np > 0} [
+            at(mode): ps 0
+        ]
+        if(_): {mode = 0} [
+            _vt_erase(_): t y x cols
+        ]
+        elif(_): {mode = 1} [
+            _vt_erase(_): t y 0 {x + 1}
+        ]
+        else(_): [
+            _vt_erase(_): t y 0 cols
+        ]
+    ]
+    elif(_): {final = "X"} [
+        set(e): {x + n1}
+        if(_): {e > cols} [
+            set(e): cols
+        ]
+        _vt_erase(_): t y x e
+    ]
+    elif(_): {final = "@"} [
+        _vt_shift_cells(_): t y x n1
+    ]
+    elif(_): {final = "P"} [
+        _vt_shift_cells(_): t y x {0 - n1}
+    ]
+    elif(_): {final = "L" || final = "M"} [
+        btget(top): t "top"
+        btget(bottom): t "bottom"
+        if(_): {y >= top && y <= bottom} [
+            btput(_): t "top" y
+            if(_): {final = "L"} [
+                _vt_scroll_down(_): t n1
+            ]
+            else(_): [
+                # deleted lines never reach the scrollback
+                btput(_): t "alt_guard" true
+                btget(alt0): t "alt"
+                btput(_): t "alt" true
+                _vt_scroll_up(_): t n1
+                btput(_): t "alt" alt0
+            ]
+            btput(_): t "top" top
+            btput(_): t "x" 0
+        ]
+    ]
+    elif(_): {final = "S"} [
+        _vt_scroll_up(_): t n1
+    ]
+    elif(_): {final = "T"} [
+        _vt_scroll_down(_): t n1
+    ]
+    elif(_): {final = "r"} [
+        _vt_p(top): ps 0 1
+        _vt_p(bot): ps 1 rows
+        if(_): {top < bot && bot <= rows} [
+            btput(_): t "top" {top - 1}
+            btput(_): t "bottom" {bot - 1}
+            _vt_goto(_): t 0 0
+        ]
+    ]
+    elif(_): {final = "s"} [
+        _vt_save_cursor(_): t
+    ]
+    elif(_): {final = "u"} [
+        _vt_restore_cursor(_): t
+    ]
+    elif(_): {final = "m"} [
+        _vt_sgr(_): t ps
+    ]
+    elif(_): {final = "n"} [
+        if(_): {n1 = 5} [
+            _vt_reply(_): t "\\e[0n"
+        ]
+        elif(_): {n1 = 6} [
+            str_from_int(ys): {y + 1}
+            str_from_int(xs): {x + 1}
+            concat(rep): "\\e[" ys ";" xs "R"
+            _vt_reply(_): t rep
+        ]
+    ]
+    elif(_): {final = "c"} [
+        _vt_reply(_): t "\\e[?62;22c"
+    ]
+]
+
+# ---------------------------------------------------------------- OSC
+
+_vt_osc(r): t body [
+    set(r): 0
+    str_find(semi): body ";" 0
+    set(num): body
+    set(arg): ""
+    if(_): {semi >= 0} [
+        slice(num): body 0 semi
+        len(bl): body
+        slice(arg): body {semi + 1} {bl - semi - 1}
+    ]
+    if(_): {num = "0" || num = "2"} [
+        btput(_): t "title" arg
+    ]
+    elif(_): {num = "7"} [
+        re_replace(path): "^file://[^/]*" arg ""
+        url_decode(path): path
+        btput(_): t "cwd" path
+    ]
+    elif(_): {num = "8"} [
+        # 8;params;URI
+        str_find(s2): arg ";" 0
+        set(uri): ""
+        if(_): {s2 >= 0} [
+            len(al): arg
+            slice(uri): arg {s2 + 1} {al - s2 - 1}
+        ]
+        btput(_): t "link" uri
+    ]
+    elif(_): {num = "52"} [
+        str_find(s2): arg ";" 0
+        if(_): {s2 >= 0} [
+            len(al): arg
+            slice(data): arg {s2 + 1} {al - s2 - 1}
+            if(_): {data != "?"} [
+                base64_decode_text(text): data
+                typeof(tt): text
+                if(_): {tt = "string"} [
+                    btput(_): t "clipboard" text
+                ]
+            ]
+            else(_): [
+                btget(clip): t "clipboard"
+                base64_encode(enc): clip
+                concat(rep): "\\e]52;c;" enc "\\a"
+                _vt_reply(_): t rep
+            ]
+        ]
+    ]
+    elif(_): {num = "133"} [
+        str_starts(prompt): arg "A"
+        if(_): prompt [
+            btget(prompts): t "prompts"
+            btget(y): t "y"
+            push(_): prompts y
+        ]
+    ]
+    elif(_): {num = "9"} [
+        re_find(m): "^4;([0-4]);?([0-9]*)" arg
+        typeof(mt): m
+        if(_): {mt = "vector"} [
+            at(st): m 1
+            at(pc): m 2
+            str_to_int(sv): st 10
+            set(pv): 0
+            if(_): {pc != ""} [
+                str_to_int(pv): pc 10
+            ]
+            vec(pg): ""
+            push(_): pg sv
+            push(_): pg pv
+            btput(_): t "progress" pg
+        ]
+    ]
+]
+
+# ---------------------------------------------------------------- feed
+
+vt_feed(r): t text [
+    # an escape sequence cut by the end of a write waits for the next one
+    btget(pend): t "pending"
+    concat(data): pend text
+    btput(_): t "pending" ""
+    len(n): data
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): data i
+        if(_): {b = 27} [
+            set(used): 0
+            if(_): {i + 1 < n} [
+                at(c1): data {i + 1}
+                if(_): {c1 = "["} [
+                    # CSI: private marker, parameters, intermediates, final
+                    set(j): {i + 2}
+                    set(private): ""
+                    if(_): {j < n} [
+                        at(pc): data j
+                        if(_): {pc = "?" || pc = ">" || pc = "=" || pc = "<"} [
+                            set(private): pc
+                            set(j): {j + 1}
+                        ]
+                    ]
+                    set(ps): ""
+                    set(go): true
+                    while(_): {go && j < n} [
+                        byte(pb): data j
+                        if(_): {(pb >= 48 && pb <= 57) || pb = 59 || pb = 58} [
+                            at(pch): data j
+                            concat(ps): ps pch
+                            set(j): {j + 1}
+                        ]
+                        else(_): [
+                            set(go): false
+                        ]
+                    ]
+                    set(inter): ""
+                    set(go): true
+                    while(_): {go && j < n} [
+                        byte(ib): data j
+                        if(_): {ib >= 32 && ib <= 47} [
+                            at(ich): data j
+                            concat(inter): inter ich
+                            set(j): {j + 1}
+                        ]
+                        else(_): [
+                            set(go): false
+                        ]
+                    ]
+                    if(_): {j < n} [
+                        at(final): data j
+                        _vt_csi(_): t private ps inter final
+                        set(used): {j - i + 1}
+                    ]
+                ]
+                elif(_): {c1 = "]"} [
+                    # OSC up to BEL or ESC \
+                    set(j): {i + 2}
+                    set(end): {0 - 1}
+                    set(term_len): 1
+                    while(_): {end < 0 && j < n} [
+                        byte(ob): data j
+                        if(_): {ob = 7} [
+                            set(end): j
+                        ]
+                        elif(_): {ob = 27 && j + 1 < n} [
+                            at(nb): data {j + 1}
+                            if(_): {nb = "\\"} [
+                                set(end): j
+                                set(term_len): 2
+                            ]
+                        ]
+                        set(j): {j + 1}
+                    ]
+                    if(_): {end >= 0} [
+                        slice(body): data {i + 2} {end - i - 2}
+                        _vt_osc(_): t body
+                        set(used): {end - i + term_len}
+                    ]
+                ]
+                elif(_): {c1 = "(" || c1 = ")"} [
+                    # character set designations: accepted, ignored
+                    if(_): {i + 2 < n} [
+                        set(used): 3
+                    ]
+                ]
+                else(_): [
+                    set(used): 2
+                    btget(y): t "y"
+                    btget(x): t "x"
+                    if(_): {c1 = "7"} [
+                        _vt_save_cursor(_): t
+                    ]
+                    elif(_): {c1 = "8"} [
+                        _vt_restore_cursor(_): t
+                    ]
+                    elif(_): {c1 = "D"} [
+                        _vt_linefeed(_): t
+                    ]
+                    elif(_): {c1 = "E"} [
+                        _vt_linefeed(_): t
+                        btput(_): t "x" 0
+                    ]
+                    elif(_): {c1 = "M"} [
+                        btget(top): t "top"
+                        if(_): {y = top} [
+                            _vt_scroll_down(_): t 1
+                        ]
+                        elif(_): {y > 0} [
+                            btput(_): t "y" {y - 1}
+                        ]
+                    ]
+                    elif(_): {c1 = "c"} [
+                        vt_reset(_): t
+                    ]
+                ]
+            ]
+            if(_): {used = 0} [
+                slice(rest): data i {n - i}
+                btput(_): t "pending" rest
+                set(i): n
+            ]
+            else(_): [
+                set(i): {i + used}
+            ]
+        ]
+        elif(_): {b < 32 || b = 127} [
+            btget(y): t "y"
+            btget(x): t "x"
+            if(_): {b = 10 || b = 11 || b = 12} [
+                _vt_linefeed(_): t
+            ]
+            elif(_): {b = 13} [
+                btput(_): t "x" 0
+                btput(_): t "wrap_next" false
+            ]
+            elif(_): {b = 8} [
+                if(_): {x > 0} [
+                    btput(_): t "x" {x - 1}
+                ]
+                btput(_): t "wrap_next" false
+            ]
+            elif(_): {b = 9} [
+                btget(cols): t "cols"
+                set(nx): {(x + 8) - (x + 8) % 8}
+                if(_): {nx > cols - 1} [
+                    set(nx): {cols - 1}
+                ]
+                btput(_): t "x" nx
+            ]
+            elif(_): {b = 7} [
+                btget(bell): t "bell"
+                btput(_): t "bell" {bell + 1}
+            ]
+            set(i): {i + 1}
+        ]
+        else(_): [
+            utf8_next(j): data i
+            slice(ch): data i {j - i}
+            _vt_put_char(_): t ch
+            set(i): j
+        ]
+    ]
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- resize
+
+vt_resize(r): t rows cols [
+    btget(orows): t "rows"
+    btget(ocols): t "cols"
+    btget(og): t "grid"
+    btput(_): t "rows" rows
+    btput(_): t "cols" cols
+    _vt_new_grid(ng): t
+    set(y): 0
+    while(_): {y < rows && y < orows} [
+        btget(orow): og y
+        btget(nrow): ng y
+        set(x): 0
+        while(_): {x < cols && x < ocols} [
+            btget(c): orow x
+            btput(_): nrow x c
+            set(x): {x + 1}
+        ]
+        set(y): {y + 1}
+    ]
+    btput(_): t "grid" ng
+    btput(_): t "top" 0
+    btput(_): t "bottom" {rows - 1}
+    btget(cy): t "y"
+    btget(cx): t "x"
+    _vt_goto(_): t cy cx
+    set(r): 0
+]
+
+# ---------------------------------------------------------------- scrollback
+
+vt_scrollback(r): t [
+    btget(r): t "scrollback"
+]
+
+vt_search(r): t pattern [
+    vec(r): ""
+    btget(sb): t "scrollback"
+    len(ns): sb
+    set(i): 0
+    while(_): {i < ns} [
+        at(l): sb i
+        re_test(hit): pattern l
+        if(_): hit [
+            push(_): r i
+        ]
+        set(i): {i + 1}
+    ]
+    vt_text(lines): t
+    len(nl): lines
+    set(k): 0
+    while(_): {k < nl} [
+        at(l): lines k
+        re_test(hit): pattern l
+        if(_): hit [
+            push(_): r {ns + k}
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+vt_save(r): t path [
+    btget(sb): t "scrollback"
+    vec(all): ""
+    len(ns): sb
+    set(i): 0
+    while(_): {i < ns} [
+        at(l): sb i
+        push(_): all l
+        set(i): {i + 1}
+    ]
+    vt_text(lines): t
+    # the screen without its empty bottom rows
+    len(nl): lines
+    set(last): {nl - 1}
+    set(go): {last >= 0}
+    while(_): go [
+        at(l): lines last
+        if(_): {l = ""} [
+            set(last): {last - 1}
+            set(go): {last >= 0}
+        ]
+        else(_): [
+            set(go): false
+        ]
+    ]
+    set(k): 0
+    while(_): {k <= last} [
+        at(l): lines k
+        push(_): all l
+        set(k): {k + 1}
+    ]
+    set(text): ""
+    len(na): all
+    set(i): 0
+    while(_): {i < na} [
+        at(l): all i
+        concat(text): text l "\n"
+        set(i): {i + 1}
+    ]
+    writefile(_): path text
+    set(r): na
+]
+
+# ---------------------------------------------------------------- input
+
+vt_key(r): t name [
+    btget(app): t "app_cursor"
+    set(lead): "\\e["
+    if(_): app [
+        set(lead): "\\eO"
+    ]
+    set(r): ""
+    if(_): {name = "up"} [
+        concat(r): lead "A"
+    ]
+    elif(_): {name = "down"} [
+        concat(r): lead "B"
+    ]
+    elif(_): {name = "right"} [
+        concat(r): lead "C"
+    ]
+    elif(_): {name = "left"} [
+        concat(r): lead "D"
+    ]
+    elif(_): {name = "home"} [
+        concat(r): lead "H"
+    ]
+    elif(_): {name = "end"} [
+        concat(r): lead "F"
+    ]
+    elif(_): {name = "pgup"} [
+        set(r): "\\e[5~"
+    ]
+    elif(_): {name = "pgdn"} [
+        set(r): "\\e[6~"
+    ]
+    elif(_): {name = "insert"} [
+        set(r): "\\e[2~"
+    ]
+    elif(_): {name = "delete"} [
+        set(r): "\\e[3~"
+    ]
+    elif(_): {name = "enter"} [
+        set(r): "\r"
+    ]
+    elif(_): {name = "tab"} [
+        set(r): "\t"
+    ]
+    elif(_): {name = "backspace"} [
+        chr(r): 127
+    ]
+    elif(_): {name = "esc"} [
+        set(r): "\\e"
+    ]
+    else(_): [
+        str_split(fkeys): "P,Q,R,S,15~,17~,18~,19~,20~,21~,23~,24~" ","
+        re_find(m): "^f([0-9]+)$" name
+        typeof(mt): m
+        if(_): {mt = "vector"} [
+            at(ns): m 1
+            str_to_int(k): ns 10
+            if(_): {k >= 1 && k <= 12} [
+                at(code): fkeys {k - 1}
+                if(_): {k <= 4} [
+                    concat(r): "\\eO" code
+                ]
+                else(_): [
+                    concat(r): "\\e[" code
+                ]
+            ]
+        ]
+    ]
+    _vt_esc(r): r
+]
+
+vt_paste(r): t text [
+    btget(on): t "paste"
+    set(r): text
+    if(_): on [
+        # a pasted end marker must not end the paste early
+        chr(e): 27
+        concat(endmark): e "[201~"
+        str_replace(clean): text endmark ""
+        concat(r): e "[200~" clean endmark
+    ]
+]
+
+# button 0 1 2 (left middle right), 64 65 (wheel); y x from 0
+vt_mouse(r): t button y x press [
+    btget(mode): t "mouse"
+    set(r): ""
+    if(_): {mode = 0} [
+        return(r): r
+    ]
+    btget(sgr): t "sgr_mouse"
+    if(_): sgr [
+        str_from_int(bs): button
+        str_from_int(xs): {x + 1}
+        str_from_int(ys): {y + 1}
+        set(fin): "M"
+        if(_): {press = false} [
+            set(fin): "m"
+        ]
+        concat(r): "\\e[<" bs ";" xs ";" ys fin
+    ]
+    else(_): [
+        set(code): button
+        if(_): {press = false} [
+            set(code): 3
+        ]
+        chr(cb): {32 + code}
+        chr(cx): {33 + x}
+        chr(cy): {33 + y}
+        concat(r): "\\e[M" cb cx cy
+    ]
+    _vt_esc(r): r
+]
+
+# ---------------------------------------------------------------- detection
+
+vt_urls(r): t [
+    vec(r): ""
+    vt_text(lines): t
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        re_all(found): "https?://[^\\s<>\"']+" l
+        len(k): found
+        set(j): 0
+        while(_): {j < k} [
+            at(u): found j
+            re_replace(u): "[.,;:!?)]+$" u ""
+            push(_): r u
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+vt_file_refs(r): t [
+    vec(r): ""
+    vt_text(lines): t
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        re_all(found): "[A-Za-z0-9_./-]+\\.[A-Za-z0-9]+:[0-9]+" l
+        len(k): found
+        set(j): 0
+        while(_): {j < k} [
+            at(ref): found j
+            str_rfind(colon): ref ":"
+            slice(path): ref 0 colon
+            len(rl): ref
+            slice(ls): ref {colon + 1} {rl - colon - 1}
+            str_to_int(ln): ls 10
+            vec(p): ""
+            push(_): p path
+            push(_): p ln
+            push(_): r p
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- recording
+
+vt_record(r): t seconds text [
+    btget(rec): t "record"
+    vec(ev): ""
+    push(_): ev seconds
+    push(_): ev text
+    push(_): rec ev
+    vt_feed(r): t text
+]
+
+vt_cast(r): t [
+    btget(rows): t "rows"
+    btget(cols): t "cols"
+    str_from_int(ws): cols
+    str_from_int(hs): rows
+    concat(r): "{\"version\": 2, \"width\": " ws ", \"height\": " hs "}\n"
+    btget(rec): t "record"
+    len(n): rec
+    set(i): 0
+    while(_): {i < n} [
+        at(ev): rec i
+        at(sec): ev 0
+        at(text): ev 1
+        vec(line): ""
+        push(_): line {sec * 1.0}
+        push(_): line "o"
+        push(_): line text
+        json_stringify(j): line
+        concat(r): r j "\n"
+        set(i): {i + 1}
+    ]
+]
+
+vt_replay(r): cast rows cols [
+    vt_new(r): rows cols
+    str_split(lines): cast "\n"
+    len(n): lines
+    set(i): 1
+    while(_): {i < n} [
+        at(l): lines i
+        if(_): {l != ""} [
+            json_parse(ev): l
+            typeof(et): ev
+            if(_): {et = "vector"} [
+                at(kind): ev 1
+                at(sec): ev 0
+                at(text): ev 2
+                if(_): {kind = "o"} [
+                    vt_record(_): r sec text
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# ---------------------------------------------------------------- configuration
+
+# ~/.mbltishi: "key = value" lines (font, size, scheme, scrollback, bell,
+# cursor); unknown keys are kept, "#" starts a comment
+vt_config(r): path [
+    btree(r):
+    btput(_): r "font" "fonts/pobeda.ttf"
+    btput(_): r "size" 16
+    btput(_): r "scheme" "Graphite"
+    btput(_): r "scrollback" 1000
+    btput(_): r "bell" "visual"
+    btput(_): r "cursor" "block"
+    file_exists(have): path
+    if(_): {have != 1 && have != true} [
+        return(r): r
+    ]
+    readfile(text): path
+    typeof(tt): text
+    if(_): {tt != "string"} [
+        return(r): r
+    ]
+    str_split(lines): text "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_trim(l): l
+        str_starts(comment): l "#"
+        str_find(eq): l "=" 0
+        if(_): {comment = false && eq > 0} [
+            slice(k): l 0 eq
+            str_trim(k): k
+            len(ll): l
+            slice(v): l {eq + 1} {ll - eq - 1}
+            str_trim(v): v
+            str_to_int(nv): v 10
+            typeof(nt): nv
+            if(_): {nt = "integer"} [
+                btput(_): r k nv
+            ]
+            else(_): [
+                btput(_): r k v
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# a colour scheme: [foreground background cursor palette(16)] as 0xRRGGBB
+vt_scheme(r): name [
+    btree(all):
+    btput(_): all "Graphite" "d8d8d0,262624,f0c674,262624,cc6666,b5bd68,f0c674,81a2be,b294bb,8abeb7,d8d8d0,666660,ff7777,d0e07a,ffdd88,99bbdd,ccaaee,99dddd,ffffff"
+    btput(_): all "Steppe" "3b2f1e,f2e6c8,b5651d,3b2f1e,a33b20,6b7d2a,b5651d,2f5d7c,7a4a6b,3f7a6f,e8dcc0,6f5f45,c4502e,8a9a3a,d08a3a,4a7a9a,9a6a8a,5a9a8a,fff8e0"
+    btput(_): all "Kremlin" "f0e6d8,5a1414,ffd24a,1a0a0a,c0392b,27ae60,f1c40f,2980b9,8e44ad,16a085,ecf0f1,7f8c8d,e74c3c,2ecc71,f4d03f,3498db,9b59b6,1abc9c,ffffff"
+    btput(_): all "Mono" "e0e0e0,000000,ffffff,000000,e0e0e0,e0e0e0,e0e0e0,e0e0e0,e0e0e0,e0e0e0,e0e0e0,808080,ffffff,ffffff,ffffff,ffffff,ffffff,ffffff,ffffff"
+    btget(spec): all name ""
+    if(_): {spec = ""} [
+        btget(spec): all "Graphite"
+    ]
+    str_split(parts): spec ","
+    vec(r): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(h): parts i
+        str_to_int(v): h 16
+        push(_): r v
+        set(i): {i + 1}
+    ]
+]
+
+vt_scheme_names(r): [
+    str_split(r): "Graphite,Steppe,Kremlin,Mono" ","
+]
