@@ -1119,9 +1119,11 @@ stalin:
 novosibirsk:
 - add holding arrow key scroll document
 - make help key works
+- render different fonts based on user selection of different parts of the text
 tver:
 - add F letter to the bottom bar F1 F2 F3 ... not 1 2 3
 kremlin:
 - add trash folder to bottom right corner with special icon
 - add holding arrow keys move folder selection cursor
-
+- add start menu buttons highlight on mouse move
+- add add shortcut menu item link to the folder or to executable program

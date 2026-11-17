@@ -330,4 +330,6 @@ Bill Gates or Richard Hipp
 
 Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
+If you think you are the better just do it talk is cheap
+
 P.S. СССР Средство Создания Совершенных Разработок
