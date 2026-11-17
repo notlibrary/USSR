@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.0-alpha
+Refine pass 1 from REFINE.md: the engine in `more.su` (no window needed),
+the keys in `keys.su`.
+- Keys: F2 and Shift+F6 rename in place; Shift+F4 makes an empty file; F3
+  views a file (UTF-8, UTF-16, Latin-1, a hex dump, an image's size); F4
+  edits it ($EDITOR, else Mbl); Enter opens files as Kremlin does (`.su`,
+  `.dxf`, `.kl`, the system's program) and browses a `.zip` as folders;
+  F5 inside a `.zip` extracts; Alt+F5 packs into a `.zip`; Shift+F8 moves
+  to the trash (Kremlin's when there is one) after a confirmation with
+  counts and sizes; F9 runs the user menu; Space sizes a folder; Ctrl+R
+  refreshes; Ctrl+U swaps the panels; Ctrl+E brings the other panel
+  here; Ctrl+L goes to a path; Ctrl+D and Ctrl+B are bookmarks; Alt+F1
+  and Alt+F2 step through the drive roots; Alt+Left and Alt+Right are
+  back and forward; Ctrl+H shows or hides dot files; Ctrl+F filters a
+  folder; Ctrl+A, Num +, Num - and Num * mark; Alt+F7 finds files;
+  Ctrl+O runs a command. A function key bar replaces the old key line.
+- Engine: copy policies (overwrite, skip, rename, different), jobs with
+  progress, cancel, a failure report and a queue; comparing and
+  synchronising folders; ZIP reading (stored and deflated, with its own
+  inflate), extracting and packing; recursive delete and the trash;
+  shredding; find by name, size and text; multi-rename with counters,
+  replace and case; SHA-256 and MD5 checksums with verification; split
+  and join; a side-by-side diff; duplicates; disk usage; detail and
+  brief views; sorting; settings in `~/.tver` (bookmarks, filters,
+  hidden files, the user menu); a terminal view of both panels.
+- `tests/tver_more_test.su` (112 checks), `tests/gui/tver_keys_test.su`
+  (18 checks) and a ZIP fixture in `tests/fixtures/tver/`; the other Tver
+  GUI tests are unchanged and pass.
+
 ## 0.5.0-alpha
 - F5 copies the item under the cursor or the marked items to the other
   panel; directories are copied with their contents. Existing destinations

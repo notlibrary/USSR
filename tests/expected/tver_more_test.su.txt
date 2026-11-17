@@ -1,0 +1,116 @@
+PASS rename
+PASS rename onto another
+PASS a slash in a name
+PASS a change of case
+PASS a new file
+PASS not twice
+PASS files counted
+PASS folders counted
+PASS bytes counted
+PASS a confirmation's words
+PASS sizes for people
+PASS copy
+PASS skip what is there
+PASS different: the same file is skipped
+PASS different: a changed one is overwritten
+PASS rename beside it
+PASS no policy: refused
+PASS not into itself
+PASS the queue runs a step
+PASS progress
+PASS an empty queue
+PASS what failed and why
+PASS a cancelled job
+PASS to the trash
+PASS the trash remembers where it was
+PASS compare
+PASS compare by content
+PASS sync one way
+PASS what differs is left alone
+PASS folders too
+PASS sync both ways
+PASS shredded
+PASS a folder with all in it deleted
+PASS nothing failed
+PASS a ZIP's entries
+PASS a small deflated entry
+PASS a big deflated entry
+PASS its last line
+PASS a stored entry
+PASS the top of a ZIP as a folder
+PASS a folder inside it
+PASS extract
+PASS an extracted file
+PASS pack
+PASS a packed entry reads back
+PASS not a ZIP
+PASS UTF-8
+PASS its text
+PASS UTF-16 with a BOM
+PASS Latin-1
+PASS binary: hex
+PASS a hex line
+PASS a short last line
+PASS not an image
+PASS an image's size
+PASS no EDITOR: Mbl through ussr
+PASS EDITOR
+PASS a drawing opens in Tula
+PASS a launcher runs its command
+PASS back
+PASS forward
+PASS a new place drops what was ahead
+PASS quick search
+PASS the next match
+PASS by size, folders first
+PASS reversed
+PASS by extension
+PASS a detail line
+PASS a brief view by columns
+PASS dot files shown by default
+PASS hidden and filtered
+PASS drive roots
+PASS a kind
+PASS mark by pattern
+PASS unmark by pattern
+PASS invert, never ..
+PASS all
+PASS .. is never marked
+PASS find by name
+PASS find by text
+PASS find by size
+PASS a rename plan
+PASS search, replace and case
+PASS a swap
+PASS the names swapped
+PASS a clash stops it
+PASS checksums verify
+PASS a changed file fails
+PASS md5 too
+PASS split in parts
+PASS joined
+PASS the same bytes
+PASS a side-by-side diff
+PASS duplicates found
+PASS a pair
+PASS the biggest folder first
+PASS the info panel
+PASS hidden off
+PASS bookmarks
+PASS a bookmark once
+PASS a bookmark removed
+PASS settings written and read back
+PASS a user menu command
+PASS file and folder
+PASS settings saved
+PASS 10 000 names sorted
+PASS and searched
+PASS odd names that can be made
+PASS a Cyrillic rename
+PASS list separators escaped
+PASS a terminal view
+PASS scratch removed
+
+--- stderr ---
+
+--- exit 0 ---

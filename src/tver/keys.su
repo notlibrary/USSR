@@ -1,0 +1,705 @@
+# keys.su - Tver refine pass 1: the keys of the window, on top of more.su.
+# tver.su includes it; tver_dispatch_key asks tvk_key first.
+#
+#   F2, Shift+F6   rename            Shift+F4   a new empty file
+#   F3             view (text, hex, image size) in a message box
+#   F4             edit ($EDITOR, else Mbl)    Enter on a file: open it as
+#                  Kremlin would; on a .zip: browse it as a folder
+#   F5 in a .zip   extract to the other panel  Alt+F5  pack into a .zip
+#   Shift+F8       to the trash, folders with all in them (twice: confirm)
+#   F9             the user menu of ~/.tver (a number, then ENTER)
+#   Space          a folder's size          Ctrl+R  refresh
+#   Ctrl+U         swap the panels           Ctrl+E  the other panel here
+#   Ctrl+L         go to a path              Ctrl+D  bookmark this folder
+#   Ctrl+B         the next bookmark         Alt+F1/Alt+F2  drive roots
+#   Alt+Left/Right back and forward          Ctrl+H  show or hide dot files
+#   Ctrl+F         filter this folder        Ctrl+A  mark all
+#   Num +, Num -   mark, unmark by pattern   Num *   invert the marks
+#   Alt+F7         find files                Ctrl+O  run a command here
+# Hash keys: tver_mods tver_prompt_kind tver_hist tver_hist_at tver_bm_at
+$once
+$include "more.su"
+
+$define TVK_SHIFT 1
+$define TVK_CTRL 2
+$define TVK_ALT 4
+
+tvk_init(r): [
+    set(r): 0
+    set(tver_mods): 0!
+    set(tver_prompt_kind): "mkdir"!
+    vec(h): ""
+    vec(h0): ""
+    vec(h1): ""
+    push(_): h h0
+    push(_): h h1
+    set(tver_hist): h!
+    vec(at): ""
+    push(_): at -1
+    push(_): at -1
+    set(tver_hist_at): at!
+    set(tver_bm_at): -1!
+    set(tver_hist_moving): false!
+]
+
+# the modifier keys, down and up: true when key was one
+tvk_mod(r): key down [
+    set(bit): 0
+    if(_): {key = 340 || key = 344} [ set(bit): TVK_SHIFT ]
+    if(_): {key = 341 || key = 345} [ set(bit): TVK_CTRL ]
+    if(_): {key = 342 || key = 346} [ set(bit): TVK_ALT ]
+    set(r): {bit != 0}
+    if(_): r [
+        set(m): tver_mods?
+        if(_): down [ set(m): {m | bit} ]
+        else(_): [ set(m): {m & (7 - bit)} ]
+        set(tver_mods): m!
+    ]
+]
+
+tvk_keyup(r): key [
+    tvk_mod(r): key false
+]
+
+tvk_dir(r): panel [
+    set(dirs): tver_dirs?
+    at(r): dirs panel
+]
+
+# --- virtual folders: a .zip and a folder inside it ("a.zip/docs")
+
+# [zip inner] when path is inside a ZIP, else null
+tvk_zip_split(r): path [
+    set(r): null
+    str_replace(p): path "\\" "/"
+    str_lower(l): p
+    str_find(i): l ".zip/" 0
+    len(n): p
+    if(_): {i < 0} [
+        str_ends(e): l ".zip"
+        if(_): {e = false} [ return(r): r ]
+        set(i): {n - 4}
+    ]
+    tvm_isdir(real): path
+    if(_): real [ return(r): r ]
+    slice(zip): p 0 {i + 4}
+    set(inner): ""
+    if(_): {i + 5 < n} [ slice(inner): p {i + 5} {n - i - 5} ]
+    vec(r): ""
+    push(_): r zip
+    push(_): r inner
+]
+
+# what tver_refresh lists: a ZIP's folder, or the folder by the settings
+tvk_list(r): path [
+    tvk_zip_split(z): path
+    if(_): {z != null} [
+        at(zip): z 0
+        at(inner): z 1
+        tvm_zip_folder(r): zip inner
+        return(r): r
+    ]
+    list_dir(r): path
+    typeof(t): r
+    if(_): {t = "vector"} [
+        tvm_settings_load(s):
+        tvm_listing_filter(r): path r s
+    ]
+]
+
+tvk_names(r): panel [
+    set(all): tver_names?
+    at(r): all panel
+]
+
+tvk_marks(r): panel [
+    set(all): tver_marks?
+    at(r): all panel
+]
+
+tvk_set_marks(r): panel marks [
+    set(all): tver_marks?
+    set(all): panel marks
+    set(tver_marks): all!
+    set(lists): tver_lists?
+    at(list): lists panel
+    getindex(k): list
+    tver_refresh(r): panel k
+]
+
+tvk_selected(r): panel [
+    set(lists): tver_lists?
+    at(list): lists panel
+    getindex(r): list
+]
+
+tvk_name(r): panel [
+    tvk_selected(k): panel
+    tvk_names(names): panel
+    len(n): names
+    set(r): ""
+    if(_): {k >= 0 && k < n} [ at(r): names k ]
+]
+
+tvk_go(r): panel path [
+    tver_enter(r): panel path
+    if(_): r [ tvk_hist_note(_): panel path ]
+]
+
+tvk_hist_note(r): panel path [
+    set(r): 0
+    set(moving): tver_hist_moving?
+    if(_): moving [ return(r): r ]
+    set(hist): tver_hist?
+    set(at): tver_hist_at?
+    at(h): hist panel
+    at(k): at panel
+    vec(keep): ""
+    set(i): 0
+    while(_): {i <= k} [
+        at(x): h i
+        push(_): keep x
+        set(i): {i + 1}
+    ]
+    len(n): keep
+    set(same): false
+    if(_): {n > 0} [
+        at(last): keep {n - 1}
+        set(same): {last = path}
+    ]
+    if(_): {same = false} [ push(_): keep path ]
+    set(hist): panel keep
+    len(n): keep
+    set(at): panel {n - 1}
+    set(tver_hist): hist!
+    set(tver_hist_at): at!
+]
+
+tvk_hist_move(r): panel step [
+    set(r): false
+    set(hist): tver_hist?
+    set(at): tver_hist_at?
+    at(h): hist panel
+    at(k): at panel
+    len(n): h
+    set(k2): {k + step}
+    if(_): {k2 < 0 || k2 >= n} [ return(r): r ]
+    at(path): h k2
+    set(tver_hist_moving): true!
+    tver_enter(r): panel path
+    set(tver_hist_moving): false!
+    if(_): r [
+        set(at): panel k2
+        set(tver_hist_at): at!
+    ]
+]
+
+# --- the prompt, shared with F7
+
+tvk_prompt(r): panel kind text initial [
+    set(r): 0
+    set(window): tver_window?
+    set(tver_pending): ""!
+    textbox(box): window initial
+    grid(_): box 3 0 false
+    setfocus(_): box
+    set(tver_prompt): box!
+    set(tver_prompt_kind): kind!
+    tver_set_status(_): text
+]
+
+# ENTER or ESC in a prompt
+tvk_prompt_finish(r): panel ok [
+    set(r): 0
+    set(kind): tver_prompt_kind?
+    if(_): {kind = "mkdir"} [
+        tver_mkdir_finish(_): panel ok
+        return(r): r
+    ]
+    set(box): tver_prompt?
+    gettext(text): box
+    destroy(_): box
+    set(tver_prompt): 0!
+    set(tver_prompt_kind): "mkdir"!
+    set(lists): tver_lists?
+    at(list): lists panel
+    setfocus(_): list
+    if(_): {ok = false} [
+        tver_panel_status(_):
+        return(r): r
+    ]
+    tvk_dir(dir): panel
+    if(_): {kind = "rename"} [
+        tvk_name(old): panel
+        tvm_rename(why): dir old text
+        if(_): {why = ""} [
+            tvk_selected(k): panel
+            tver_refresh(_): panel k
+            concat(m): "Renamed to " text
+            tver_set_status(_): m
+        ]
+        else(_): [
+            concat(m): "Cannot rename: " why
+            tver_set_status(_): m
+        ]
+    ]
+    elif(_): {kind = "newfile"} [
+        tvm_new_file(why): dir text
+        if(_): {why = ""} [
+            tver_refresh(_): panel 0
+            concat(m): "Created " text
+            tver_set_status(_): m
+        ]
+        else(_): [
+            concat(m): "Cannot create it: " why
+            tver_set_status(_): m
+        ]
+    ]
+    elif(_): {kind = "goto"} [
+        str_replace(p): text "\\" "/"
+        tvm_isdir(d): p
+        if(_): d [ tvk_go(_): panel p ]
+        else(_): [
+            concat(m): "No folder " text
+            tver_set_status(_): m
+        ]
+    ]
+    elif(_): {kind = "mark" || kind = "unmark"} [
+        tvk_names(names): panel
+        tvk_marks(marks): panel
+        tvm_select(nm): names marks text {kind = "mark"}
+        tvk_set_marks(_): panel nm
+        tvm_totals(t): dir names nm
+        tvk_totals_status(_): t
+    ]
+    elif(_): {kind = "filter"} [
+        tvm_settings_load(s):
+        btget(f): s "filters"
+        if(_): {text = "" || text = "*"} [ btdel(_): f dir ]
+        else(_): [ btput(_): f dir text ]
+        tvm_settings_save(_): s
+        tver_refresh(_): panel 0
+        concat(m): "Filter: " text
+        tver_set_status(_): m
+    ]
+    elif(_): {kind = "find"} [
+        tvm_find(hits): dir text -1 -1 ""
+        len(n): hits
+        str_from_int(ns): n
+        concat(body): ns " found under " dir
+        set(i): 0
+        while(_): {i < n && i < 40} [
+            at(h): hits i
+            concat(body): body "\n" h
+            set(i): {i + 1}
+        ]
+        messagebox(_): "Find files" body
+        concat(m): ns " files match " text
+        tver_set_status(_): m
+    ]
+    elif(_): {kind = "command"} [
+        cd(_): dir
+        str_find(sp): text " " 0
+        set(prog): text
+        set(args): ""
+        if(_): {sp > 0} [
+            slice(prog): text 0 sp
+            len(tl): text
+            slice(args): text {sp + 1} {tl - sp - 1}
+        ]
+        launch(st): prog args false
+        str_from_int(ss): st
+        concat(m): "Started " text " (" ss ")"
+        tver_set_status(_): m
+    ]
+    elif(_): {kind = "menu"} [
+        tvm_settings_load(s):
+        btget(menu): s "menu"
+        str_to_int(k): text 10
+        len(n): menu
+        if(_): {k >= 1 && k <= n} [
+            at(e): menu {k - 1}
+            at(cmd): e 1
+            tvk_name(nm): panel
+            tvm_menu_expand(line): cmd dir nm
+            cd(_): dir
+            str_find(sp): line " " 0
+            set(prog): line
+            set(args): ""
+            if(_): {sp > 0} [
+                slice(prog): line 0 sp
+                len(ll): line
+                slice(args): line {sp + 1} {ll - sp - 1}
+            ]
+            launch(_): prog args false
+            concat(m): "Ran " line
+            tver_set_status(_): m
+        ]
+        else(_): [ tver_set_status(_): "No such menu entry" ]
+    ]
+]
+
+tvk_totals_status(r): t [
+    at(c): t 0
+    at(b): t 1
+    str_from_int(cs): c
+    tvm_human(bs): b
+    concat(m): cs " marked, " bs
+    tver_set_status(r): m
+]
+
+# --- the keys: true when one was taken
+
+tvk_key(r): window key panel [
+    set(r): true
+    tvk_mod(ismod): key true
+    if(_): ismod [ return(r): r ]
+    set(m): tver_mods?
+    set(shift): {(m & TVK_SHIFT) != 0}
+    set(ctrl): {(m & TVK_CTRL) != 0}
+    set(alt): {(m & TVK_ALT) != 0}
+    tvk_dir(dir): panel
+    tvk_name(name): panel
+    tvm_plain(plain): name
+    tver_join(path): dir plain
+    tvk_zip_split(inzip): dir
+    if(_): {(key = 291 && shift = false) || (key = 295 && shift)} [
+        if(_): {name = "" || name = "../"} [ tver_set_status(_): "Select an item to rename" ]
+        else(_): [ tvk_prompt(_): panel "rename" "New name: ENTER renames, ESC cancels" plain ]
+    ]
+    elif(_): {key = 293 && shift} [ tvk_prompt(_): panel "newfile" "New file name: ENTER creates, ESC cancels" "" ]
+    elif(_): {key = 292} [ tvk_view(_): path ]
+    elif(_): {key = 293} [
+        tvm_editor(plan): path
+        at(prog): plan 0
+        at(args): plan 1
+        launch(_): prog args false
+        concat(ms): "Editing " plain
+        tver_set_status(_): ms
+    ]
+    elif(_): {key = 294 && alt} [ tvk_pack(_): panel ]
+    elif(_): {key = 294 && inzip != null} [ tvk_extract(_): panel ]
+    elif(_): {key = 297 && shift} [ tvk_trash(_): panel ]
+    elif(_): {key = 298} [ tvk_menu(_): panel ]
+    elif(_): {key = 296 && alt} [ tvk_prompt(_): panel "find" "Find files by name (*.su): ENTER searches below this folder" "*" ]
+    elif(_): {key = 32 && inzip = null} [
+        if(_): {name = "" || name = "../"} [ return(r): r ]
+        tvm_stats(st): path
+        tvm_describe(d): st
+        concat(ms): plain ": " d
+        tver_set_status(_): ms
+    ]
+    elif(_): {ctrl && key = 82} [
+        tvk_selected(k): 0
+        tver_refresh(_): 0 k
+        tvk_selected(k): 1
+        tver_refresh(_): 1 k
+        tver_set_status(_): "Refreshed"
+    ]
+    elif(_): {ctrl && key = 85} [
+        tvk_dir(a): 0
+        tvk_dir(b): 1
+        tvk_go(_): 0 b
+        tvk_go(_): 1 a
+        tver_set_status(_): "Panels swapped"
+    ]
+    elif(_): {ctrl && key = 69} [ tvk_go(_): {1 - panel} dir ]
+    elif(_): {ctrl && key = 76} [ tvk_prompt(_): panel "goto" "Go to a folder: ENTER goes, ESC cancels" dir ]
+    elif(_): {ctrl && key = 68} [
+        tvm_settings_load(s):
+        tvm_bookmark_add(n): s dir
+        tvm_settings_save(_): s
+        concat(ms): "Bookmarked " dir
+        tver_set_status(_): ms
+    ]
+    elif(_): {ctrl && key = 66} [
+        tvm_settings_load(s):
+        btget(b): s "bookmarks"
+        len(n): b
+        if(_): {n = 0} [ tver_set_status(_): "No bookmarks yet: Ctrl+D adds this folder" ]
+        else(_): [
+            set(k): tver_bm_at?
+            set(k): {(k + 1) % n}
+            set(tver_bm_at): k!
+            at(p): b k
+            tvk_go(_): panel p
+        ]
+    ]
+    elif(_): {alt && (key = 290 || key = 291)} [
+        tvm_roots(roots):
+        set(side): 0
+        if(_): {key = 291} [ set(side): 1 ]
+        tvk_dir(cur): side
+        len(n): roots
+        set(k): 0
+        set(i): 0
+        while(_): {i < n} [
+            at(x): roots i
+            str_starts(under): cur x
+            if(_): under [ set(k): {(i + 1) % n} ]
+            set(i): {i + 1}
+        ]
+        at(p): roots k
+        tvk_go(_): side p
+    ]
+    elif(_): {alt && key = 263} [ tvk_hist_move(_): panel -1 ]
+    elif(_): {alt && key = 262} [ tvk_hist_move(_): panel 1 ]
+    elif(_): {ctrl && key = 72} [
+        tvm_settings_load(s):
+        btget(h): s "hidden"
+        btput(_): s "hidden" {h = false}
+        tvm_settings_save(_): s
+        tver_refresh(_): 0 0
+        tver_refresh(_): 1 0
+        if(_): h [ tver_set_status(_): "Dot files hidden" ]
+        else(_): [ tver_set_status(_): "Dot files shown" ]
+    ]
+    elif(_): {ctrl && key = 70} [ tvk_prompt(_): panel "filter" "Show only (*.su; * for all): ENTER sets it for this folder" "*" ]
+    elif(_): {ctrl && key = 65} [
+        tvk_names(names): panel
+        tvm_select_all(nm): names
+        tvk_set_marks(_): panel nm
+        tvm_totals(t): dir names nm
+        tvk_totals_status(_): t
+    ]
+    elif(_): {key = 334} [ tvk_prompt(_): panel "mark" "Mark by pattern: ENTER marks" "*" ]
+    elif(_): {key = 333} [ tvk_prompt(_): panel "unmark" "Unmark by pattern: ENTER unmarks" "*" ]
+    elif(_): {key = 332} [
+        tvk_names(names): panel
+        tvk_marks(marks): panel
+        tvm_invert(nm): names marks
+        tvk_set_marks(_): panel nm
+        tvm_totals(t): dir names nm
+        tvk_totals_status(_): t
+    ]
+    elif(_): {ctrl && key = 79} [ tvk_prompt(_): panel "command" "A command to run in this folder: ENTER runs it" "" ]
+    elif(_): {key = 257 || key = 335} [
+        # into and out of a ZIP, and files that open
+        str_ends(isd): name "/"
+        str_lower(lname): name
+        str_ends(iszip): lname ".zip"
+        if(_): {inzip != null && name = "../"} [
+            at(zip): inzip 0
+            at(inner): inzip 1
+            if(_): {inner = ""} [
+                path_dir(up): zip
+                tvk_go(_): panel up
+            ]
+            else(_): [
+                path_dir(up): inner
+                if(_): {up = "." || up = inner} [ set(up): "" ]
+                concat(p): zip "/" up
+                tvk_go(_): panel p
+            ]
+        ]
+        elif(_): {inzip != null && isd} [
+            at(zip): inzip 0
+            at(inner): inzip 1
+            concat(p): zip "/" inner
+            if(_): {inner != ""} [ concat(p): p "/" ]
+            concat(p): p plain
+            tvk_go(_): panel p
+        ]
+        elif(_): {inzip = null && iszip && isd = false} [ tvk_go(_): panel path ]
+        elif(_): {inzip = null && isd = false && name != ""} [
+            tvm_open_plan(plan): path
+            at(prog): plan 0
+            at(args): plan 1
+            launch(_): prog args false
+            concat(ms): "Opened " plain
+            tver_set_status(_): ms
+        ]
+        else(_): [ set(r): false ]
+    ]
+    else(_): [ set(r): false ]
+]
+
+tvk_view(r): path [
+    set(r): 0
+    tvm_isdir(d): path
+    if(_): d [ return(r): r ]
+    tvm_image_info(img): path
+    tvm_view(v): path 4096
+    at(kind): v 0
+    at(text): v 1
+    if(_): {img != ""} [ concat(text): img "\n\n" text ]
+    str_split(lines): text "\n"
+    len(n): lines
+    if(_): {n > 40} [
+        set(t2): ""
+        set(i): 0
+        while(_): {i < 40} [
+            at(l): lines i
+            concat(t2): t2 l "\n"
+            set(i): {i + 1}
+        ]
+        concat(text): t2 "..."
+    ]
+    tvm_base(b): path
+    concat(title): b " (" kind ")"
+    messagebox(_): title text
+]
+
+# the marked names (or the cursor's) of a panel
+tvk_targets(r): panel [
+    tvk_names(names): panel
+    tvk_marks(marks): panel
+    tvk_selected(k): panel
+    tver_targets(idx): names marks k
+    vec(r): ""
+    len(n): idx
+    set(i): 0
+    while(_): {i < n} [
+        at(j): idx i
+        at(nm): names j
+        if(_): {nm != "../"} [ push(_): r nm ]
+        set(i): {i + 1}
+    ]
+]
+
+tvk_extract(r): panel [
+    set(r): 0
+    tvk_dir(dir): panel
+    tvk_zip_split(z): dir
+    at(zip): z 0
+    at(inner): z 1
+    tvk_dir(to): {1 - panel}
+    tvk_targets(names): panel
+    set(done): 0
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        str_ends(isd): nm "/"
+        set(entry): nm
+        if(_): {inner != ""} [ concat(entry): inner "/" nm ]
+        if(_): {isd = false} [
+            tvm_zip_read(data): zip entry
+            if(_): {data != null} [
+                tver_join(p): to nm
+                write_bytes(_): p data
+                set(done): {done + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    tvk_selected(k): {1 - panel}
+    tver_refresh(_): {1 - panel} k
+    str_from_int(ds): done
+    concat(m): ds " file(s) extracted"
+    tver_set_status(_): m
+]
+
+tvk_pack(r): panel [
+    tvk_dir(dir): panel
+    tvk_dir(to): {1 - panel}
+    tvk_targets(names): panel
+    vec(paths): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        tvm_plain(pn): nm
+        tver_join(p): dir pn
+        push(_): paths p
+        set(i): {i + 1}
+    ]
+    tvm_free_name(zn): to "archive.zip"
+    tver_join(out): to zn
+    tvm_zip_pack(r): paths dir out
+    tvk_selected(k): {1 - panel}
+    tver_refresh(_): {1 - panel} k
+    str_from_int(rs): r
+    concat(m): rs " file(s) packed into " zn
+    tver_set_status(_): m
+]
+
+tvk_trash(r): panel [
+    set(r): 0
+    tvk_dir(dir): panel
+    tvk_targets(names): panel
+    len(n): names
+    if(_): {n = 0} [
+        tver_set_status(_): "Select an item to move to the trash"
+        return(r): r
+    ]
+    btree(sum):
+    btput(_): sum "files" 0
+    btput(_): sum "dirs" 0
+    btput(_): sum "bytes" 0
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        tvm_plain(pn): nm
+        tver_join(p): dir pn
+        tvm_stats(st): p
+        vec(keys): ""
+        str_split(keys): "files dirs bytes" " "
+        set(k): 0
+        while(_): {k < 3} [
+            at(kn): keys k
+            btget(a): sum kn
+            btget(b): st kn
+            btput(_): sum kn {a + b}
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    tvm_describe(d): sum
+    concat(key): "trash|" dir "|" d
+    set(pending): tver_pending?
+    if(_): {pending != key} [
+        set(tver_pending): key!
+        concat(m): "Shift+F8 again moves " d " to the trash"
+        tver_set_status(_): m
+        return(r): r
+    ]
+    set(tver_pending): ""!
+    set(fail): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        tvm_plain(pn): nm
+        tver_join(p): dir pn
+        tvm_trash(why): p
+        if(_): {why != "" && fail = ""} [ concat(fail): pn ": " why ]
+        set(i): {i + 1}
+    ]
+    tvk_names(all): panel
+    vec(none): ""
+    len(na): all
+    set(i): 0
+    while(_): {i < na} [
+        push(_): none false
+        set(i): {i + 1}
+    ]
+    tvk_set_marks(_): panel none
+    tvk_selected(k): panel
+    tver_refresh(_): panel k
+    if(_): {fail = ""} [
+        concat(m): "Moved " d " to the trash"
+        tver_set_status(_): m
+    ]
+    else(_): [ tver_set_status(_): fail ]
+]
+
+tvk_menu(r): panel [
+    tvm_settings_load(s):
+    btget(menu): s "menu"
+    len(n): menu
+    set(r): 0
+    if(_): {n = 0} [
+        tver_set_status(_): "No user menu: add lines \"menu LABEL: COMMAND\" to ~/.tver"
+        return(r): r
+    ]
+    set(text): "Menu:"
+    set(i): 0
+    while(_): {i < n} [
+        at(e): menu i
+        at(lab): e 0
+        str_from_int(is): {i + 1}
+        concat(text): text "  " is " " lab
+        set(i): {i + 1}
+    ]
+    tvk_prompt(_): panel "menu" text ""
+]

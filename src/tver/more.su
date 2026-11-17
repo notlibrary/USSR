@@ -1,0 +1,2695 @@
+# more.su - Tver refine pass 1: the file manager's engine beyond 0.5, in
+# functions that need no window (tests/tver_more_test.su), and the keys
+# tver.su hands to it (tvm_key).
+#
+# Files:     tvm_rename tvm_new_file tvm_stats tvm_delete_tree tvm_trash
+#            tvm_copy_item (policy overwrite|skip|rename|different) tvm_job
+#            tvm_job_step tvm_queue_* tvm_compare tvm_sync tvm_shred
+# Archives:  tvm_zip_list tvm_zip_read tvm_zip_extract tvm_zip_pack
+#            tvm_zip_folder (a ZIP's folder as names, like list_dir)
+# Viewing:   tvm_view (UTF-8, UTF-16, Latin-1 or a hex dump) tvm_hex
+#            tvm_image_info tvm_editor tvm_open_plan (.su, .dxf, .kl, others)
+# Moving:    tvm_roots tvm_history_* tvm_bookmarks_* tvm_jump tvm_sort
+#            tvm_detail tvm_brief tvm_listing_filter (hidden files, filters)
+# Marking:   tvm_select tvm_invert tvm_select_all tvm_totals
+# Tools:     tvm_find tvm_rename_plan tvm_rename_apply tvm_sums tvm_verify
+#            tvm_split tvm_join tvm_diff tvm_dupes tvm_usage tvm_info
+# Settings:  ~/.tver: "bookmark PATH", "filter DIR PATTERN",
+#            "menu LABEL: COMMAND" (%f file, %d folder, %n name), "hidden
+#            off" (dot files left out), "key NAME ACTION", "left
+#            PATH", "right PATH"; tvm_settings_load / _save
+# Display:   tvm_kind tvm_keybar tvm_tui
+$once
+$include "../libs/strings.su"
+$include "../libs/lists.su"
+$include "../libs/paths.su"
+$include "../libs/encoding.su"
+
+# --- small things
+
+tvm_join(r): dir name [
+    path_join(r): dir name
+]
+
+tvm_base(r): path [
+    lenin_tvm_strip(p): path
+    path_base(r): p
+]
+
+lenin_tvm_strip(r): path [
+    set(r): path
+    str_ends(sl): r "/"
+    len(n): r
+    if(_): {sl && n > 1} [ slice(r): r 0 {n - 1} ]
+]
+
+tvm_size(r): path [
+    read_bytes(b): path
+    set(r): 0
+    typeof(t): b
+    if(_): {t = "vector"} [ len(r): b ]
+]
+
+tvm_isdir(r): path [
+    is_dir(d): path
+    set(r): {d = 1}
+]
+
+tvm_plain(r): name [
+    lenin_tvm_strip(r): name
+]
+
+tvm_human(r): bytes [
+    str_from_int(r): bytes
+    concat(r): r " B"
+    if(_): {bytes >= 1024} [
+        str_from_number(k): {bytes / 1024.0} 1
+        concat(r): k " KiB"
+    ]
+    if(_): {bytes >= 1048576} [
+        str_from_number(m): {bytes / 1048576.0} 1
+        concat(r): m " MiB"
+    ]
+    if(_): {bytes >= 1073741824} [
+        str_from_number(g): {bytes / 1073741824.0} 2
+        concat(r): g " GiB"
+    ]
+]
+
+# a free name in dir: "a.txt", "a (2).txt", ...
+tvm_free_name(r): dir name [
+    set(r): name
+    tvm_join(p): dir name
+    file_exists(e): p
+    if(_): {e = false} [ return(r): r ]
+    path_ext(ext): name
+    path_stem(stem): name
+    set(k): 2
+    while(_): e [
+        str_from_int(ks): k
+        concat(r): stem " (" ks ")" ext
+        tvm_join(p): dir r
+        file_exists(e): p
+        set(k): {k + 1}
+    ]
+]
+
+# --- file operations
+
+tvm_bad_name(r): name [
+    set(r): ""
+    str_contains(sl): name "/"
+    str_contains(bs): name "\\"
+    if(_): {name = "" || name = "." || name = ".."} [ set(r): "a name is needed" ]
+    elif(_): {sl || bs} [ set(r): "a name cannot contain / or \\" ]
+]
+
+# "" or why not
+tvm_rename(r): dir old new [
+    tvm_plain(o): old
+    tvm_bad_name(r): new
+    if(_): {r != ""} [ return(r): r ]
+    if(_): {o = new} [ return(r): r ]
+    tvm_join(from): dir o
+    tvm_join(to): dir new
+    file_exists(e): to
+    str_lower(ol): o
+    str_lower(nl): new
+    if(_): {e && ol != nl} [
+        concat(r): new " is there already"
+        return(r): r
+    ]
+    if(_): {ol = nl} [
+        # only the case changes: through another name (Windows sees one file)
+        concat(mid): from ".tver-case"
+        rename_path(bad): from mid
+        if(_): {bad = 0} [ rename_path(bad): mid to ]
+    ]
+    else(_): [ rename_path(bad): from to ]
+    if(_): {bad != 0} [ set(r): "could not rename it (is it open?)" ]
+]
+
+tvm_new_file(r): dir name [
+    tvm_bad_name(r): name
+    if(_): {r != ""} [ return(r): r ]
+    tvm_join(p): dir name
+    file_exists(e): p
+    if(_): e [
+        concat(r): name " is there already"
+        return(r): r
+    ]
+    open_file(h): p "wb"
+    if(_): {h < 0} [
+        set(r): "this system does not take that name"
+        return(r): r
+    ]
+    close_file(_): h
+]
+
+# files, dirs and bytes under a path (the path itself when a file)
+tvm_stats(r): path [
+    btree(r):
+    btput(_): r "files" 0
+    btput(_): r "dirs" 0
+    btput(_): r "bytes" 0
+    tvm_isdir(d): path
+    if(_): {d = false} [
+        btput(_): r "files" 1
+        tvm_size(s): path
+        btput(_): r "bytes" s
+        return(r): r
+    ]
+    tvm_stats_into(_): path r
+]
+
+tvm_stats_into(r): dir acc [
+    set(r): 0
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        str_ends(isd): nm "/"
+        tvm_plain(pn): nm
+        tvm_join(p): dir pn
+        if(_): isd [
+            btget(dc): acc "dirs"
+            btput(_): acc "dirs" {dc + 1}
+            tvm_stats_into(_): p acc
+        ]
+        else(_): [
+            btget(fc): acc "files"
+            btput(_): acc "files" {fc + 1}
+            tvm_size(s): p
+            btget(bc): acc "bytes"
+            btput(_): acc "bytes" {bc + s}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# a confirmation text: "3 files and 1 folder, 12.0 KiB"
+tvm_describe(r): stats [
+    btget(f): stats "files"
+    btget(d): stats "dirs"
+    btget(b): stats "bytes"
+    str_from_int(fs): f
+    str_from_int(ds): d
+    tvm_human(hs): b
+    set(fw): " files"
+    if(_): {f = 1} [ set(fw): " file" ]
+    set(dw): " folders"
+    if(_): {d = 1} [ set(dw): " folder" ]
+    concat(r): fs fw " and " ds dw ", " hs
+]
+
+# everything under path: [deleted failures], failures [[path why]...]
+tvm_delete_tree(r): path [
+    vec(fails): ""
+    set(done): 0
+    tvm_isdir(d): path
+    if(_): d [ tvm_delete_into(done): path fails ]
+    else(_): [
+        remove_file(bad): path
+        if(_): {bad = 0} [ set(done): 1 ]
+        else(_): [
+            vec(f): ""
+            push(_): f path
+            push(_): f "could not delete it"
+            push(_): fails f
+        ]
+    ]
+    vec(r): ""
+    push(_): r done
+    push(_): r fails
+]
+
+tvm_delete_into(r): dir fails [
+    set(r): 0
+    list_dir(names): dir
+    typeof(t): names
+    if(_): {t = "vector"} [
+        len(n): names
+        set(i): 0
+        while(_): {i < n} [
+            at(nm): names i
+            str_ends(isd): nm "/"
+            tvm_plain(pn): nm
+            tvm_join(p): dir pn
+            if(_): isd [
+                tvm_delete_into(k): p fails
+                set(r): {r + k}
+            ]
+            else(_): [
+                remove_file(bad): p
+                if(_): {bad = 0} [ set(r): {r + 1} ]
+                else(_): [
+                    vec(f): ""
+                    push(_): f p
+                    push(_): f "could not delete it"
+                    push(_): fails f
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    remove_dir(bad): dir
+    if(_): {bad = 0} [ set(r): {r + 1} ]
+    else(_): [
+        vec(f): ""
+        push(_): f dir
+        push(_): f "the folder is not empty or is locked"
+        push(_): fails f
+    ]
+]
+
+# the trash: Kremlin's (~/kremlin/.trash) when there is one, else
+# ~/.tver-trash; an .index line per item says where it came from
+tvm_trash_dir(r): [
+    getenv(home): "HOME"
+    if(_): {home = null || home = ""} [ getenv(home): "USERPROFILE" ]
+    if(_): {home = null} [ set(home): "." ]
+    lenin_tvm_slashes(home): home
+    path_join(km): home "kremlin"
+    tvm_isdir(hask): km
+    if(_): hask [ path_join(r): km ".trash" ]
+    else(_): [ path_join(r): home ".tver-trash" ]
+    tvm_isdir(there): r
+    if(_): {there = false} [ make_dir(_): r ]
+]
+
+lenin_tvm_slashes(r): s [
+    str_replace(r): s "\\" "/"
+]
+
+tvm_trash(r): path [
+    set(r): ""
+    file_exists(e): path
+    if(_): {e = false} [
+        set(r): "it is gone already"
+        return(r): r
+    ]
+    tvm_trash_dir(td):
+    tvm_base(b): path
+    tvm_free_name(nm): td b
+    tvm_join(to): td nm
+    rename_path(bad): path to
+    if(_): {bad != 0} [
+        tvm_isdir(d): path
+        if(_): d [ copy_dir(bad): path to ]
+        else(_): [ copy_file(bad): path to ]
+        if(_): {bad = 0} [ tvm_delete_tree(_): path ]
+    ]
+    if(_): {bad != 0} [
+        set(r): "could not move it to the trash"
+        return(r): r
+    ]
+    tvm_join(idx): td ".index"
+    concat(line): nm "\t" path "\n"
+    open_file(h): idx "ab"
+    if(_): {h >= 0} [
+        write_file(_): h line
+        close_file(_): h
+    ]
+]
+
+# copies src to dst (a file or a folder) by a policy for what is there:
+# overwrite, skip, rename, different (overwrite when size or content
+# differ); "copied", "skipped", "overwrote", "renamed NAME", or "failed: why"
+tvm_copy_item(r): src dst policy [
+    file_exists(there): dst
+    tvm_isdir(sd): src
+    set(target): dst
+    set(r): "copied"
+    if(_): there [
+        if(_): {policy = "skip"} [
+            set(r): "skipped"
+            return(r): r
+        ]
+        if(_): {policy = "rename"} [
+            path_dir(dd): dst
+            tvm_base(db): dst
+            tvm_free_name(nm): dd db
+            tvm_join(target): dd nm
+            concat(r): "renamed " nm
+        ]
+        elif(_): {policy = "different" && sd = false} [
+            tvm_same_file(same): src dst
+            if(_): same [
+                set(r): "skipped"
+                return(r): r
+            ]
+            set(r): "overwrote"
+        ]
+        elif(_): {policy = "overwrite" || policy = "different"} [ set(r): "overwrote" ]
+        else(_): [
+            set(r): "failed: it is there already"
+            return(r): r
+        ]
+    ]
+    if(_): sd [
+        tvm_inside(loop): target src
+        if(_): loop [
+            set(r): "failed: a folder cannot go inside itself"
+            return(r): r
+        ]
+        copy_dir(bad): src target
+    ]
+    else(_): [
+        file_exists(old): target
+        if(_): old [ remove_file(_): target ]
+        copy_file(bad): src target
+    ]
+    if(_): {bad != 0} [ set(r): "failed: could not copy it" ]
+]
+
+tvm_inside(r): path dir [
+    path_normalize(p): path
+    path_normalize(d): dir
+    concat(dslash): d "/"
+    str_starts(r): p dslash
+    if(_): {p = d} [ set(r): true ]
+]
+
+tvm_same_file(r): a b [
+    tvm_size(sa): a
+    tvm_size(sb): b
+    set(r): false
+    if(_): {sa != sb} [ return(r): r ]
+    read_bytes(ba): a
+    read_bytes(bb): b
+    sha256(ha): ba
+    sha256(hb): bb
+    hex_encode(xa): ha
+    hex_encode(xb): hb
+    set(r): {xa = xb}
+]
+
+# --- jobs: a copy or move in steps, with progress, cancel and a report
+
+tvm_job(r): kind pairs policy [
+    btree(r):
+    btput(_): r "kind" kind
+    btput(_): r "pairs" pairs
+    btput(_): r "policy" policy
+    btput(_): r "next" 0
+    vec(fails): ""
+    btput(_): r "fails" fails
+    btput(_): r "cancel" false
+    btput(_): r "state" "waiting"
+    set(total): 0
+    len(n): pairs
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): pairs i
+        at(src): pr 0
+        tvm_stats(st): src
+        btget(b): st "bytes"
+        set(total): {total + b}
+        set(i): {i + 1}
+    ]
+    btput(_): r "bytes" total
+    btput(_): r "done_bytes" 0
+]
+
+# one item; false when the job is over (finished or cancelled)
+tvm_job_step(r): job [
+    set(r): false
+    btget(c): job "cancel"
+    if(_): c [
+        btput(_): job "state" "cancelled"
+        return(r): r
+    ]
+    btget(pairs): job "pairs"
+    btget(k): job "next"
+    len(n): pairs
+    if(_): {k >= n} [
+        btput(_): job "state" "finished"
+        return(r): r
+    ]
+    btput(_): job "state" "running"
+    at(pr): pairs k
+    at(src): pr 0
+    at(dst): pr 1
+    tvm_stats(st): src
+    btget(b): st "bytes"
+    btget(policy): job "policy"
+    btget(kind): job "kind"
+    tvm_copy_item(res): src dst policy
+    str_starts(failed): res "failed"
+    if(_): {failed = false && kind = "move" && res != "skipped"} [
+        tvm_delete_tree(dr): src
+        at(dfails): dr 1
+        len(ndf): dfails
+        if(_): {ndf > 0} [ set(res): "failed: copied, but the original could not be removed" ]
+    ]
+    str_starts(failed): res "failed"
+    if(_): failed [
+        btget(fails): job "fails"
+        vec(f): ""
+        push(_): f src
+        len(rl): res
+        slice(why): res 8 {rl - 8}
+        push(_): f why
+        push(_): fails f
+    ]
+    btget(db): job "done_bytes"
+    btput(_): job "done_bytes" {db + b}
+    btput(_): job "next" {k + 1}
+    set(r): {k + 1 < n}
+    if(_): {r = false} [ btput(_): job "state" "finished" ]
+]
+
+tvm_job_cancel(r): job [
+    btput(_): job "cancel" true
+    set(r): 0
+]
+
+tvm_job_percent(r): job [
+    btget(t): job "bytes"
+    btget(d): job "done_bytes"
+    set(r): 100
+    if(_): {t > 0} [
+        set(r): {d * 100 / t}
+        str_trunc(r): r
+    ]
+]
+
+tvm_job_report(r): job [
+    btget(fails): job "fails"
+    btget(k): job "next"
+    len(nf): fails
+    str_from_int(ks): {k - nf}
+    concat(r): ks " done"
+    if(_): {nf > 0} [
+        str_from_int(fs): nf
+        concat(r): r ", " fs " failed:"
+        set(i): 0
+        while(_): {i < nf} [
+            at(f): fails i
+            at(p): f 0
+            at(w): f 1
+            concat(r): r "\n  " p ": " w
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+tvm_queue(r): [
+    vec(r): ""
+]
+
+tvm_queue_add(r): q job [
+    push(_): q job
+    len(r): q
+]
+
+# a step of the first job not over; false when the queue is empty
+tvm_queue_step(r): q [
+    set(r): false
+    len(n): q
+    set(i): 0
+    while(_): {i < n} [
+        at(j): q i
+        btget(st): j "state"
+        if(_): {st = "waiting" || st = "running"} [
+            tvm_job_step(_): j
+            set(r): true
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- comparing and synchronising folders
+
+# [[name state]...]: same, left (only there), right, size, content
+tvm_compare(r): a b deep [
+    vec(r): ""
+    list_dir(la): a
+    list_dir(lb): b
+    btree(all):
+    tvm_compare_add(_): all la 1
+    tvm_compare_add(_): all lb 2
+    btkeys(ks): all
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): ks i
+        btget(where): all nm
+        set(state): "same"
+        if(_): {where = 1} [ set(state): "left" ]
+        elif(_): {where = 2} [ set(state): "right" ]
+        else(_): [
+            str_ends(isd): nm "/"
+            tvm_plain(pn): nm
+            tvm_join(pa): a pn
+            tvm_join(pb): b pn
+            if(_): isd [
+                if(_): deep [
+                    tvm_compare(sub): pa pb deep
+                    len(ns): sub
+                    set(j): 0
+                    while(_): {j < ns} [
+                        at(e): sub j
+                        at(sn): e 0
+                        at(ss): e 1
+                        if(_): {ss != "same"} [ set(state): "content" ]
+                        set(j): {j + 1}
+                    ]
+                ]
+            ]
+            else(_): [
+                tvm_size(sa): pa
+                tvm_size(sb): pb
+                if(_): {sa != sb} [ set(state): "size" ]
+                elif(_): deep [
+                    tvm_same_file(same): pa pb
+                    if(_): {same = false} [ set(state): "content" ]
+                ]
+            ]
+        ]
+        vec(e): ""
+        push(_): e nm
+        push(_): e state
+        push(_): r e
+        set(i): {i + 1}
+    ]
+]
+
+tvm_compare_add(r): all names side [
+    set(r): 0
+    typeof(t): names
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        btget(v): all nm 0
+        btput(_): all nm {v | side}
+        set(i): {i + 1}
+    ]
+]
+
+# what is missing on a side is copied there; both: both ways. Files that
+# differ are left alone (Tver cannot tell which is newer) and reported.
+tvm_sync(r): a b both [
+    btree(r):
+    btput(_): r "copied" 0
+    vec(left): ""
+    btput(_): r "differ" left
+    tvm_compare(cmp): a b true
+    len(n): cmp
+    set(i): 0
+    while(_): {i < n} [
+        at(e): cmp i
+        at(nm): e 0
+        at(st): e 1
+        tvm_plain(pn): nm
+        tvm_join(pa): a pn
+        tvm_join(pb): b pn
+        if(_): {st = "left"} [
+            tvm_copy_item(res): pa pb "skip"
+            if(_): {res = "copied"} [
+                btget(c): r "copied"
+                btput(_): r "copied" {c + 1}
+            ]
+        ]
+        elif(_): {st = "right" && both} [
+            tvm_copy_item(res): pb pa "skip"
+            if(_): {res = "copied"} [
+                btget(c): r "copied"
+                btput(_): r "copied" {c + 1}
+            ]
+        ]
+        elif(_): {st = "size" || st = "content"} [ push(_): left nm ]
+        elif(_): {st = "same"} [
+            str_ends(isd): nm "/"
+            if(_): isd [
+                tvm_sync(sub): pa pb both
+                btget(sc): sub "copied"
+                btget(c): r "copied"
+                btput(_): r "copied" {c + sc}
+                btget(sd): sub "differ"
+                len(nsd): sd
+                set(j): 0
+                while(_): {j < nsd} [
+                    at(x): sd j
+                    concat(xn): nm x
+                    push(_): left xn
+                    set(j): {j + 1}
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# overwritten with zeros, then with other bytes, then removed
+tvm_shred(r): path [
+    tvm_size(n): path
+    vec(z): ""
+    vec(o): ""
+    set(i): 0
+    while(_): {i < n} [
+        push(_): z 0
+        push(_): o {(i * 37 + 91) % 256}
+        set(i): {i + 1}
+    ]
+    write_bytes(_): path z
+    write_bytes(_): path o
+    remove_file(r): path
+]
+
+# --- ZIP archives (stored and deflated entries; packing stores)
+
+tvm_u16(r): b p [
+    at(x0): b p
+    at(x1): b {p + 1}
+    set(r): {x0 | (x1 << 8)}
+]
+
+tvm_u32(r): b p [
+    at(x0): b p
+    at(x1): b {p + 1}
+    at(x2): b {p + 2}
+    at(x3): b {p + 3}
+    set(r): {x0 | (x1 << 8) | (x2 << 16) | (x3 << 24)}
+]
+
+tvm_bytes_text(r): b p n [
+    set(r): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b {p + i}
+        chr(c): x
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+]
+
+# entries: btrees name size csize method offset (of the local header)
+tvm_zip_list(r): path [
+    set(r): null
+    read_bytes(b): path
+    typeof(t): b
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): b
+    # the end of central directory record, searched from the end
+    set(e): {n - 22}
+    set(found): -1
+    while(_): {e >= 0 && e >= n - 65557 && found < 0} [
+        tvm_u32(sig): b e
+        if(_): {sig = 101010256} [ set(found): e ]
+        set(e): {e - 1}
+    ]
+    if(_): {found < 0} [ return(r): r ]
+    tvm_u16(count): b {found + 10}
+    tvm_u32(cd): b {found + 16}
+    vec(r): ""
+    set(p): cd
+    set(k): 0
+    while(_): {k < count} [
+        tvm_u32(sig): b p
+        if(_): {sig != 33639248} [ return(r): r ]
+        tvm_u16(method): b {p + 10}
+        tvm_u32(csize): b {p + 20}
+        tvm_u32(size): b {p + 24}
+        tvm_u16(nl): b {p + 28}
+        tvm_u16(xl): b {p + 30}
+        tvm_u16(cl): b {p + 32}
+        tvm_u32(off): b {p + 42}
+        tvm_bytes_text(name): b {p + 46} nl
+        btree(en):
+        btput(_): en "name" name
+        btput(_): en "size" size
+        btput(_): en "csize" csize
+        btput(_): en "method" method
+        btput(_): en "offset" off
+        push(_): r en
+        set(p): {p + 46 + nl + xl + cl}
+        set(k): {k + 1}
+    ]
+]
+
+# an entry's bytes, or null
+tvm_zip_read(r): path name [
+    set(r): null
+    tvm_zip_list(es): path
+    if(_): {es = null} [ return(r): r ]
+    read_bytes(b): path
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(en): es i
+        btget(nm): en "name"
+        if(_): {nm = name} [
+            btget(off): en "offset"
+            btget(method): en "method"
+            btget(csize): en "csize"
+            tvm_u16(nl): b {off + 26}
+            tvm_u16(xl): b {off + 28}
+            set(start): {off + 30 + nl + xl}
+            vec(data): ""
+            set(j): 0
+            while(_): {j < csize} [
+                at(x): b {start + j}
+                push(_): data x
+                set(j): {j + 1}
+            ]
+            if(_): {method = 0} [ set(r): data ]
+            elif(_): {method = 8} [ tvm_inflate(r): data ]
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tvm_zip_extract(r): path dir [
+    set(r): 0
+    tvm_zip_list(es): path
+    if(_): {es = null} [
+        set(r): -1
+        return(r): r
+    ]
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(en): es i
+        btget(nm): en "name"
+        str_ends(isd): nm "/"
+        str_contains(up): nm ".."
+        if(_): {up = false} [
+            tvm_join(p): dir nm
+            if(_): isd [ tvm_mkdirs(_): p ]
+            else(_): [
+                path_dir(pd): p
+                tvm_mkdirs(_): pd
+                tvm_zip_read(data): path nm
+                if(_): {data != null} [
+                    write_bytes(_): p data
+                    set(r): {r + 1}
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tvm_push16(r): v x [
+    set(r): 0
+    push(_): v {x & 255}
+    push(_): v {(x >> 8) & 255}
+]
+
+tvm_push32(r): v x [
+    set(r): 0
+    push(_): v {x & 255}
+    push(_): v {(x >> 8) & 255}
+    push(_): v {(x >> 16) & 255}
+    push(_): v {(x >> 24) & 255}
+]
+
+tvm_push_text(r): v s [
+    set(r): 0
+    len(n): s
+    set(i): 0
+    while(_): {i < n} [
+        byte(x): s i
+        push(_): v x
+        set(i): {i + 1}
+    ]
+]
+
+# files (paths) into a ZIP, named relative to base; folders with all in
+# them; the number of files
+tvm_zip_pack(r): paths base out [
+    vec(z): ""
+    vec(central): ""
+    set(r): 0
+    vec(all): ""
+    len(n): paths
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paths i
+        tvm_isdir(d): p
+        if(_): d [
+            walk_dir(fs): p
+            len(nf): fs
+            set(j): 0
+            while(_): {j < nf} [
+                at(f): fs j
+                push(_): all f
+                set(j): {j + 1}
+            ]
+        ]
+        else(_): [ push(_): all p ]
+        set(i): {i + 1}
+    ]
+    path_normalize(b0): base
+    concat(bslash): b0 "/"
+    len(bl): bslash
+    len(na): all
+    set(i): 0
+    while(_): {i < na} [
+        at(f): all i
+        path_normalize(fn): f
+        set(name): fn
+        str_starts(under): fn bslash
+        if(_): under [
+            len(fl): fn
+            slice(name): fn bl {fl - bl}
+        ]
+        read_bytes(data): f
+        len(size): data
+        crc32(crc): data
+        len(off): z
+        tvm_push32(_): z 67324752
+        tvm_push16(_): z 20
+        tvm_push16(_): z 0
+        tvm_push16(_): z 0
+        tvm_push16(_): z 0
+        tvm_push16(_): z 33
+        tvm_push32(_): z crc
+        tvm_push32(_): z size
+        tvm_push32(_): z size
+        len(nl): name
+        tvm_push16(_): z nl
+        tvm_push16(_): z 0
+        tvm_push_text(_): z name
+        set(j): 0
+        while(_): {j < size} [
+            at(x): data j
+            push(_): z x
+            set(j): {j + 1}
+        ]
+        tvm_push32(_): central 33639248
+        tvm_push16(_): central 20
+        tvm_push16(_): central 20
+        tvm_push16(_): central 0
+        tvm_push16(_): central 0
+        tvm_push16(_): central 0
+        tvm_push16(_): central 33
+        tvm_push32(_): central crc
+        tvm_push32(_): central size
+        tvm_push32(_): central size
+        tvm_push16(_): central nl
+        tvm_push16(_): central 0
+        tvm_push16(_): central 0
+        tvm_push16(_): central 0
+        tvm_push16(_): central 0
+        tvm_push32(_): central 0
+        tvm_push32(_): central off
+        tvm_push_text(_): central name
+        set(r): {r + 1}
+        set(i): {i + 1}
+    ]
+    len(cdo): z
+    len(cds): central
+    set(i): 0
+    while(_): {i < cds} [
+        at(x): central i
+        push(_): z x
+        set(i): {i + 1}
+    ]
+    tvm_push32(_): z 101010256
+    tvm_push16(_): z 0
+    tvm_push16(_): z 0
+    tvm_push16(_): z r
+    tvm_push16(_): z r
+    tvm_push32(_): z cds
+    tvm_push32(_): z cdo
+    tvm_push16(_): z 0
+    write_bytes(_): out z
+]
+
+# the names in a folder of the archive ("" is the top), as list_dir gives
+tvm_zip_folder(r): path inner [
+    vec(r): ""
+    tvm_zip_list(es): path
+    if(_): {es = null} [ return(r): r ]
+    set(pre): inner
+    if(_): {pre != ""} [
+        str_ends(sl): pre "/"
+        if(_): {sl = false} [ concat(pre): pre "/" ]
+    ]
+    len(pl): pre
+    btree(seen):
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(en): es i
+        btget(nm): en "name"
+        str_starts(under): nm pre
+        len(nl): nm
+        if(_): {under && nl > pl} [
+            slice(rest): nm pl {nl - pl}
+            str_find(sl): rest "/" 0
+            set(item): rest
+            if(_): {sl >= 0} [ slice(item): rest 0 {sl + 1} ]
+            btput(_): seen item true
+        ]
+        set(i): {i + 1}
+    ]
+    btkeys(ks): seen
+    # folders first, as list_dir
+    set(pass): 0
+    while(_): {pass < 2} [
+        len(nk): ks
+        set(i): 0
+        while(_): {i < nk} [
+            at(k): ks i
+            str_ends(isd): k "/"
+            if(_): {(pass = 0 && isd) || (pass = 1 && isd = false)} [ push(_): r k ]
+            set(i): {i + 1}
+        ]
+        set(pass): {pass + 1}
+    ]
+]
+
+# --- viewing
+
+# a file as text for the viewer: [kind text], kind utf-8, utf-16, latin-1
+# or hex (a binary file), at most max bytes read
+tvm_view(r): path max [
+    read_bytes(b): path
+    vec(r): ""
+    typeof(t): b
+    if(_): {t != "vector"} [
+        push(_): r "error"
+        push(_): r "cannot read it"
+        return(r): r
+    ]
+    len(n): b
+    if(_): {n > max} [
+        vec(c): ""
+        set(i): 0
+        while(_): {i < max} [
+            at(x): b i
+            push(_): c x
+            set(i): {i + 1}
+        ]
+        set(b): c
+        set(n): max
+    ]
+    set(kind): "utf-8"
+    set(start): 0
+    if(_): {n >= 3} [
+        at(a): b 0
+        at(c): b 1
+        at(d): b 2
+        if(_): {a = 239 && c = 187 && d = 191} [ set(start): 3 ]
+    ]
+    if(_): {n >= 2} [
+        at(a): b 0
+        at(c): b 1
+        if(_): {(a = 255 && c = 254) || (a = 254 && c = 255)} [
+            push(_): r "utf-16"
+            tvm_utf16(text): b {a = 255}
+            push(_): r text
+            return(r): r
+        ]
+    ]
+    # binary: a NUL in the first 8000 bytes
+    set(i): 0
+    while(_): {i < n && i < 8000} [
+        at(x): b i
+        if(_): {x = 0} [
+            push(_): r "hex"
+            tvm_hex(h): b 0 n
+            push(_): r h
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    tvm_valid_utf8(ok): b start
+    vec(body): ""
+    set(i): start
+    while(_): {i < n} [
+        at(x): b i
+        push(_): body x
+        set(i): {i + 1}
+    ]
+    if(_): ok [
+        bytes_text(text): body
+    ]
+    else(_): [
+        set(kind): "latin-1"
+        tvm_latin1(text): body
+    ]
+    push(_): r kind
+    push(_): r text
+]
+
+tvm_valid_utf8(r): b start [
+    set(r): true
+    len(n): b
+    set(i): start
+    while(_): {i < n} [
+        at(x): b i
+        set(need): 0
+        if(_): {x >= 128} [
+            if(_): {x >= 194 && x <= 223} [ set(need): 1 ]
+            elif(_): {x >= 224 && x <= 239} [ set(need): 2 ]
+            elif(_): {x >= 240 && x <= 244} [ set(need): 3 ]
+            else(_): [
+                set(r): false
+                return(r): r
+            ]
+        ]
+        set(k): 1
+        while(_): {k <= need} [
+            if(_): {i + k >= n} [
+                set(r): false
+                return(r): r
+            ]
+            at(y): b {i + k}
+            if(_): {y < 128 || y > 191} [
+                set(r): false
+                return(r): r
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1 + need}
+    ]
+]
+
+# a code point as UTF-8 bytes onto v
+tvm_put_utf8(r): v cp [
+    set(r): 0
+    if(_): {cp < 128} [ push(_): v cp ]
+    elif(_): {cp < 2048} [
+        push(_): v {192 | (cp >> 6)}
+        push(_): v {128 | (cp & 63)}
+    ]
+    elif(_): {cp < 65536} [
+        push(_): v {224 | (cp >> 12)}
+        push(_): v {128 | ((cp >> 6) & 63)}
+        push(_): v {128 | (cp & 63)}
+    ]
+    else(_): [
+        push(_): v {240 | (cp >> 18)}
+        push(_): v {128 | ((cp >> 12) & 63)}
+        push(_): v {128 | ((cp >> 6) & 63)}
+        push(_): v {128 | (cp & 63)}
+    ]
+]
+
+tvm_latin1(r): b [
+    vec(o): ""
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        tvm_put_utf8(_): o x
+        set(i): {i + 1}
+    ]
+    bytes_text(r): o
+]
+
+tvm_utf16(r): b little [
+    vec(o): ""
+    len(n): b
+    set(i): 2
+    while(_): {i + 1 < n} [
+        at(x0): b i
+        at(x1): b {i + 1}
+        set(u): {(x1 << 8) | x0}
+        if(_): {little = false} [ set(u): {(x0 << 8) | x1} ]
+        set(i): {i + 2}
+        if(_): {u >= 55296 && u <= 56319 && i + 1 < n} [
+            at(y0): b i
+            at(y1): b {i + 1}
+            set(lo): {(y1 << 8) | y0}
+            if(_): {little = false} [ set(lo): {(y0 << 8) | y1} ]
+            set(u): {65536 + ((u - 55296) << 10) + (lo - 56320)}
+            set(i): {i + 2}
+        ]
+        tvm_put_utf8(_): o u
+    ]
+    bytes_text(r): o
+]
+
+# a hex dump: offset, 16 bytes, their printable characters
+tvm_hex(r): b offset count [
+    set(r): ""
+    len(n): b
+    set(end): {offset + count}
+    if(_): {end > n} [ set(end): n ]
+    set(p): offset
+    while(_): {p < end} [
+        tvm_hexn(oh): p 8
+        concat(line): oh "  "
+        set(chars): ""
+        set(k): 0
+        while(_): {k < 16} [
+            if(_): {p + k < end} [
+                at(x): b {p + k}
+                tvm_hexn(hx): x 2
+                concat(line): line hx " "
+                set(ch): "."
+                if(_): {x >= 32 && x < 127} [ chr(ch): x ]
+                concat(chars): chars ch
+            ]
+            else(_): [ concat(line): line "   " ]
+            if(_): {k = 7} [ concat(line): line " " ]
+            set(k): {k + 1}
+        ]
+        concat(r): r line " |" chars "|\n"
+        set(p): {p + 16}
+    ]
+]
+
+# "PNG 640x480" and the like, or ""
+tvm_image_info(r): path [
+    set(r): ""
+    read_bytes(b): path
+    typeof(t): b
+    if(_): {t != "vector"} [ return(r): r ]
+    len(n): b
+    if(_): {n < 26} [ return(r): r ]
+    at(a0): b 0
+    at(a1): b 1
+    at(a2): b 2
+    at(a3): b 3
+    if(_): {a0 = 137 && a1 = 80 && a2 = 78 && a3 = 71} [
+        set(w): 0
+        set(h): 0
+        set(k): 16
+        while(_): {k < 20} [
+            at(x): b k
+            set(w): {(w << 8) | x}
+            at(y): b {k + 4}
+            set(h): {(h << 8) | y}
+            set(k): {k + 1}
+        ]
+        str_from_int(ws): w
+        str_from_int(hs): h
+        concat(r): "PNG " ws "x" hs
+    ]
+    elif(_): {a0 = 71 && a1 = 73 && a2 = 70} [
+        tvm_u16(w): b 6
+        tvm_u16(h): b 8
+        str_from_int(ws): w
+        str_from_int(hs): h
+        concat(r): "GIF " ws "x" hs
+    ]
+    elif(_): {a0 = 66 && a1 = 77} [
+        tvm_u32(w): b 18
+        tvm_u32(h): b 22
+        str_from_int(ws): w
+        str_from_int(hs): h
+        concat(r): "BMP " ws "x" hs
+    ]
+    elif(_): {a0 = 255 && a1 = 216} [ set(r): "JPEG" ]
+    elif(_): {a0 = 80 && (a1 = 54 || a1 = 53)} [ set(r): "PNM" ]
+]
+
+# what F4 runs: $EDITOR, else Mbl through ussr; [program arguments]
+tvm_editor(r): path [
+    vec(r): ""
+    getenv(ed): "EDITOR"
+    if(_): {ed != null && ed != ""} [
+        push(_): r ed
+        chr(q): 34
+        concat(a): q path q
+        push(_): r a
+        return(r): r
+    ]
+    tvm_ussr_src(src):
+    push(_): r "ussr"
+    path_join(mbl): src "Mbl/Mbl.su"
+    chr(q): 34
+    concat(a): q mbl q " " q path q
+    push(_): r a
+]
+
+tvm_ussr_src(r): [
+    getenv(h): "USSR_HOME"
+    if(_): {h != null && h != ""} [
+        lenin_tvm_slashes(h): h
+        path_join(r): h "src"
+        return(r): r
+    ]
+    set(r): "src"
+]
+
+# how a file opens: [program arguments], as Kremlin does
+tvm_open_plan(r): path [
+    vec(r): ""
+    path_ext(e): path
+    str_lower(e): e
+    chr(q): 34
+    tvm_ussr_src(src):
+    if(_): {e = ".su"} [
+        push(_): r "ussr"
+        concat(a): q path q
+        push(_): r a
+    ]
+    elif(_): {e = ".dxf"} [
+        push(_): r "ussr"
+        path_join(tula): src "tula/tula.su"
+        concat(a): q tula q " " q path q
+        push(_): r a
+    ]
+    elif(_): {e = ".kl"} [
+        readfile(t): path
+        str_split(lines): t "\n"
+        set(cmd): ""
+        len(n): lines
+        set(i): 0
+        while(_): {i < n} [
+            at(l): lines i
+            str_trim(l): l
+            str_starts(c): l "command:"
+            if(_): c [
+                len(ll): l
+                slice(cmd): l 8 {ll - 8}
+                str_trim(cmd): cmd
+            ]
+            set(i): {i + 1}
+        ]
+        str_find(sp): cmd " " 0
+        set(prog): cmd
+        set(args): ""
+        if(_): {sp > 0} [
+            slice(prog): cmd 0 sp
+            len(cl): cmd
+            slice(args): cmd {sp + 1} {cl - sp - 1}
+        ]
+        push(_): r prog
+        push(_): r args
+    ]
+    else(_): [
+        getenv(os): "OS"
+        if(_): {os = "Windows_NT"} [
+            push(_): r "cmd"
+            concat(a): "/c start " q q " " q path q
+            push(_): r a
+        ]
+        else(_): [
+            push(_): r "xdg-open"
+            concat(a): q path q
+            push(_): r a
+        ]
+    ]
+]
+
+# --- moving about
+
+tvm_roots(r): [
+    vec(r): ""
+    getenv(os): "OS"
+    if(_): {os = "Windows_NT"} [
+        set(c): 65
+        while(_): {c <= 90} [
+            chr(l): c
+            concat(root): l ":/"
+            tvm_isdir(d): root
+            if(_): d [ push(_): r root ]
+            set(c): {c + 1}
+        ]
+    ]
+    else(_): [ push(_): r "/" ]
+]
+
+tvm_history(r): [
+    btree(r):
+    vec(v): ""
+    btput(_): r "items" v
+    btput(_): r "at" -1
+]
+
+tvm_history_go(r): h path [
+    btget(items): h "items"
+    btget(k): h "at"
+    vec(keep): ""
+    set(i): 0
+    while(_): {i <= k} [
+        at(x): items i
+        push(_): keep x
+        set(i): {i + 1}
+    ]
+    len(n): keep
+    set(same): false
+    if(_): {n > 0} [
+        at(last): keep {n - 1}
+        set(same): {last = path}
+    ]
+    if(_): {same = false} [ push(_): keep path ]
+    btput(_): h "items" keep
+    len(n): keep
+    btput(_): h "at" {n - 1}
+    set(r): n
+]
+
+tvm_history_back(r): h [
+    set(r): null
+    btget(k): h "at"
+    if(_): {k > 0} [
+        btput(_): h "at" {k - 1}
+        btget(items): h "items"
+        at(r): items {k - 1}
+    ]
+]
+
+tvm_history_forward(r): h [
+    set(r): null
+    btget(k): h "at"
+    btget(items): h "items"
+    len(n): items
+    if(_): {k + 1 < n} [
+        btput(_): h "at" {k + 1}
+        at(r): items {k + 1}
+    ]
+]
+
+# the first name that starts with prefix (case folded), from the cursor on
+tvm_jump(r): names prefix from [
+    set(r): -1
+    str_lower(p): prefix
+    len(n): names
+    set(k): 0
+    while(_): {k < n} [
+        set(i): {(from + k) % n}
+        at(nm): names i
+        str_lower(l): nm
+        str_starts(hit): l p
+        if(_): hit [
+            set(r): i
+            return(r): r
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+# entries [name size] sorted: mode name|ext|size, reverse, folders first;
+# "../" stays on top
+tvm_sort(r): entries mode reverse dirsfirst [
+    vec(r): ""
+    btree(ord):
+    len(n): entries
+    set(i): 0
+    while(_): {i < n} [
+        at(e): entries i
+        at(nm): e 0
+        at(sz): e 1
+        str_ends(isd): nm "/"
+        str_lower(l): nm
+        set(key): l
+        if(_): {mode = "ext"} [
+            path_ext(x): l
+            concat(key): x " " l
+        ]
+        if(_): {mode = "size"} [
+            str_from_int(ss): sz
+            str_pad_left(ss): ss 15 "0"
+            concat(key): ss " " l
+        ]
+        set(group): "1"
+        if(_): {dirsfirst && isd} [ set(group): "0" ]
+        str_from_int(is): i
+        str_pad_left(is): is 8 "0"
+        concat(k): group key " " is
+        btput(_): ord k e
+        set(i): {i + 1}
+    ]
+    btkeys(ks): ord
+    vec(sorted): ""
+    len(nk): ks
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): ks i
+        btget(e): ord k
+        push(_): sorted e
+        set(i): {i + 1}
+    ]
+    if(_): reverse [
+        # the groups stay in order: folders first still
+        vec(dirs): ""
+        vec(files): ""
+        set(i): {nk - 1}
+        while(_): {i >= 0} [
+            at(e): sorted i
+            at(nm): e 0
+            str_ends(isd): nm "/"
+            if(_): {dirsfirst && isd} [ push(_): dirs e ]
+            else(_): [ push(_): files e ]
+            set(i): {i - 1}
+        ]
+        vec(sorted): ""
+        list_concat(sorted): dirs files
+    ]
+    # the parent on top
+    set(i): 0
+    while(_): {i < nk} [
+        at(e): sorted i
+        at(nm): e 0
+        if(_): {nm = "../"} [ push(_): r e ]
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < nk} [
+        at(e): sorted i
+        at(nm): e 0
+        if(_): {nm != "../"} [ push(_): r e ]
+        set(i): {i + 1}
+    ]
+]
+
+# names with their sizes: [[name size]...]; folders size -1
+tvm_entries(r): dir names [
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        str_ends(isd): nm "/"
+        set(sz): -1
+        if(_): {isd = false} [
+            tvm_join(p): dir nm
+            tvm_size(sz): p
+        ]
+        vec(e): ""
+        push(_): e nm
+        push(_): e sz
+        push(_): r e
+        set(i): {i + 1}
+    ]
+]
+
+# the detail view: name, size, kind in columns
+tvm_detail(r): entries width [
+    vec(r): ""
+    len(n): entries
+    set(nw): {width - 26}
+    if(_): {nw < 8} [ set(nw): 8 ]
+    set(i): 0
+    while(_): {i < n} [
+        at(e): entries i
+        at(nm): e 0
+        at(sz): e 1
+        set(name): nm
+        len(ln): name
+        if(_): {ln > nw} [
+            slice(name): name 0 {nw - 1}
+            concat(name): name "~"
+        ]
+        str_pad_right(name): name nw " "
+        set(ss): "<DIR>"
+        if(_): {sz >= 0} [ tvm_human(ss): sz ]
+        str_pad_left(ss): ss 12 " "
+        tvm_kind(k): nm
+        concat(line): name " " ss " " k
+        push(_): r line
+        set(i): {i + 1}
+    ]
+]
+
+# the brief view: names in cols columns of width each, by column
+tvm_brief(r): names cols width [
+    vec(r): ""
+    len(n): names
+    set(rows): {(n + cols - 1) / cols}
+    str_trunc(rows): rows
+    set(y): 0
+    while(_): {y < rows} [
+        set(line): ""
+        set(c): 0
+        while(_): {c < cols} [
+            set(k): {c * rows + y}
+            if(_): {k < n} [
+                at(nm): names k
+                len(ln): nm
+                set(cell): nm
+                if(_): {ln >= width} [ slice(cell): nm 0 {width - 1} ]
+                str_pad_right(cell): cell width " "
+                concat(line): line cell
+            ]
+            set(c): {c + 1}
+        ]
+        str_trim(line): line
+        push(_): r line
+        set(y): {y + 1}
+    ]
+]
+
+# names after the hidden-files setting and the folder's filter
+tvm_listing_filter(r): dir names settings [
+    vec(r): ""
+    btget(show): settings "hidden" true
+    btget(filters): settings "filters" null
+    set(pat): ""
+    if(_): {filters != null} [ btget(pat): filters dir "" ]
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        str_starts(hid): nm "."
+        str_ends(isd): nm "/"
+        set(ok): {show || hid = false || nm = "../"}
+        if(_): {ok && pat != "" && isd = false} [ glob_match(ok): pat nm ]
+        if(_): ok [ push(_): r nm ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- marks
+
+# marks with every name that matches pattern set to on ("../" never)
+tvm_select(r): names marks pattern on [
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        at(m): marks i
+        tvm_plain(pn): nm
+        glob_match(hit): pattern pn
+        if(_): {hit && nm != "../"} [ set(m): on ]
+        push(_): r m
+        set(i): {i + 1}
+    ]
+]
+
+tvm_invert(r): names marks [
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        at(m): marks i
+        if(_): {nm != "../"} [ set(m): {m = false} ]
+        push(_): r m
+        set(i): {i + 1}
+    ]
+]
+
+tvm_select_all(r): names [
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        push(_): r {nm != "../"}
+        set(i): {i + 1}
+    ]
+]
+
+# [count bytes] of the marked entries (folders with what is in them)
+tvm_totals(r): dir names marks [
+    set(count): 0
+    set(bytes): 0
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(m): marks i
+        if(_): m [
+            at(nm): names i
+            tvm_plain(pn): nm
+            tvm_join(p): dir pn
+            tvm_stats(st): p
+            btget(b): st "bytes"
+            set(bytes): {bytes + b}
+            set(count): {count + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    push(_): r count
+    push(_): r bytes
+]
+
+# --- tools
+
+# files under root: a name pattern, a size range (-1: none), text inside
+tvm_find(r): root pattern minsize maxsize text [
+    vec(r): ""
+    walk_dir(fs): root
+    typeof(t): fs
+    if(_): {t != "vector"} [ return(r): r ]
+    str_lower(tl): text
+    len(n): fs
+    set(i): 0
+    while(_): {i < n} [
+        at(f): fs i
+        path_base(b): f
+        set(ok): true
+        if(_): {pattern != ""} [ glob_match(ok): pattern b ]
+        if(_): {ok && (minsize >= 0 || maxsize >= 0)} [
+            tvm_size(sz): f
+            if(_): {minsize >= 0 && sz < minsize} [ set(ok): false ]
+            if(_): {maxsize >= 0 && sz > maxsize} [ set(ok): false ]
+        ]
+        if(_): {ok && text != ""} [
+            readfile(c): f
+            typeof(ct): c
+            set(ok): false
+            if(_): {ct = "string"} [
+                str_lower(cl): c
+                str_contains(ok): cl tl
+            ]
+        ]
+        if(_): ok [ push(_): r f ]
+        set(i): {i + 1}
+    ]
+]
+
+# new names for names by a mask: [N] the name, [E] the extension, [C]
+# a counter (start, step 1; [C:3] three digits), then search -> replace
+# and a case: upper, lower, title or keep; -> [[old new]...]
+tvm_rename_plan(r): names mask search replace case start [
+    vec(r): ""
+    set(c): start
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(old): names i
+        tvm_plain(pn): old
+        path_ext(ext): pn
+        path_stem(stem): pn
+        set(e): ext
+        len(el): e
+        if(_): {el > 0} [ slice(e): ext 1 {el - 1} ]
+        set(nw): mask
+        lenin_tvm_replace(nw): nw "[N]" stem
+        lenin_tvm_replace(nw): nw "[E]" e
+        str_from_int(cs): c
+        re_find(cm): "\\[C:([0-9])\\]" nw
+        typeof(cmt): cm
+        if(_): {cmt = "vector"} [
+            at(whole): cm 0
+            at(digits): cm 1
+            str_to_int(dn): digits 10
+            str_pad_left(cp): cs dn "0"
+            lenin_tvm_replace(nw): nw whole cp
+        ]
+        lenin_tvm_replace(nw): nw "[C]" cs
+        if(_): {search != ""} [ lenin_tvm_replace(nw): nw search replace ]
+        if(_): {case = "upper"} [ str_upper(nw): nw ]
+        if(_): {case = "lower"} [ str_lower(nw): nw ]
+        if(_): {case = "title"} [ str_title(nw): nw ]
+        vec(p): ""
+        push(_): p pn
+        push(_): p nw
+        push(_): r p
+        set(c): {c + 1}
+        set(i): {i + 1}
+    ]
+]
+
+lenin_tvm_replace(r): s a b [
+    str_replace(r): s a b
+]
+
+# "" or why not; a name taken twice or by another file stops it all
+tvm_rename_apply(r): dir plan [
+    set(r): ""
+    btree(news):
+    btree(olds):
+    len(n): plan
+    set(i): 0
+    while(_): {i < n} [
+        at(p): plan i
+        at(o): p 0
+        btput(_): olds o true
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(p): plan i
+        at(nw): p 1
+        tvm_bad_name(why): nw
+        if(_): {why != ""} [
+            concat(r): nw ": " why
+            return(r): r
+        ]
+        bthas(twice): news nw
+        if(_): twice [
+            concat(r): nw " would be two files"
+            return(r): r
+        ]
+        btput(_): news nw true
+        tvm_join(np): dir nw
+        file_exists(e): np
+        bthas(isold): olds nw
+        if(_): {e && isold = false} [
+            concat(r): nw " is there already"
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    # through temporary names, so a swap works
+    vec(tmp): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(p): plan i
+        at(o): p 0
+        str_from_int(is): i
+        concat(t): ".tver-rename-" is
+        tvm_join(a): dir o
+        tvm_join(b): dir t
+        rename_path(_): a b
+        push(_): tmp t
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(p): plan i
+        at(nw): p 1
+        at(t): tmp i
+        tvm_join(a): dir t
+        tvm_join(b): dir nw
+        rename_path(bad): a b
+        if(_): {bad != 0} [ concat(r): "could not name " nw ]
+        set(i): {i + 1}
+    ]
+]
+
+tvm_hash_file(r): path algo [
+    read_bytes(b): path
+    if(_): {algo = "md5"} [ md5(d): b ]
+    else(_): [ sha256(d): b ]
+    hex_encode(r): d
+]
+
+# "HASH  name" lines, as sha256sum and md5sum write them
+tvm_sums(r): dir names algo [
+    set(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        str_ends(isd): nm "/"
+        if(_): {isd = false} [
+            tvm_join(p): dir nm
+            tvm_hash_file(h): p algo
+            concat(r): r h "  " nm "\n"
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# [[name ok]...] from such lines
+tvm_verify(r): dir text algo [
+    vec(r): ""
+    str_split(lines): text "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_find(sp): l "  " 0
+        if(_): {sp > 0} [
+            slice(h): l 0 sp
+            len(ll): l
+            slice(nm): l {sp + 2} {ll - sp - 2}
+            tvm_join(p): dir nm
+            file_exists(e): p
+            set(ok): false
+            if(_): e [
+                tvm_hash_file(h2): p algo
+                str_lower(hl): h
+                set(ok): {h2 = hl}
+            ]
+            vec(x): ""
+            push(_): x nm
+            push(_): x ok
+            push(_): r x
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# path.001, path.002, ... of part bytes each; the number of parts
+tvm_split(r): path part [
+    read_bytes(b): path
+    len(n): b
+    set(r): 0
+    set(p): 0
+    while(_): {p < n || (n = 0 && r = 0)} [
+        vec(c): ""
+        set(k): 0
+        while(_): {k < part && p + k < n} [
+            at(x): b {p + k}
+            push(_): c x
+            set(k): {k + 1}
+        ]
+        set(r): {r + 1}
+        str_from_int(rs): r
+        str_pad_left(rs): rs 3 "0"
+        concat(pp): path "." rs
+        write_bytes(_): pp c
+        set(p): {p + part}
+    ]
+]
+
+# the parts of first (x.001) joined into out; the number of parts
+tvm_join_parts(r): first out [
+    str_ends(ok): first ".001"
+    set(r): 0
+    if(_): {ok = false} [ return(r): r ]
+    len(fl): first
+    slice(base): first 0 {fl - 4}
+    vec(all): ""
+    set(go): true
+    while(_): go [
+        str_from_int(rs): {r + 1}
+        str_pad_left(rs): rs 3 "0"
+        concat(pp): base "." rs
+        file_exists(e): pp
+        if(_): e [
+            read_bytes(b): pp
+            list_concat(all): all b
+            set(r): {r + 1}
+        ]
+        else(_): [ set(go): false ]
+    ]
+    write_bytes(_): out all
+]
+
+# a line diff: [[op left right]...] with op " " (same), "-" (only left),
+# "+" (only right), "~" (changed: one line for another)
+tvm_diff(r): a b [
+    str_replace(ta): a "\r\n" "\n"
+    str_replace(tb): b "\r\n" "\n"
+    str_split(la): ta "\n"
+    str_split(lb): tb "\n"
+    len(n): la
+    len(m): lb
+    # longest common subsequence lengths, from the end
+    vec(t): ""
+    set(sz): {(n + 1) * (m + 1)}
+    set(i): 0
+    while(_): {i < sz} [
+        push(_): t 0
+        set(i): {i + 1}
+    ]
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        set(j): {m - 1}
+        while(_): {j >= 0} [
+            at(x): la i
+            at(y): lb j
+            if(_): {x = y} [
+                at(d): t {(i + 1) * (m + 1) + j + 1}
+                set(t): {i * (m + 1) + j} {d + 1}
+            ]
+            else(_): [
+                at(d1): t {(i + 1) * (m + 1) + j}
+                at(d2): t {i * (m + 1) + j + 1}
+                set(mx): d1
+                if(_): {d2 > d1} [ set(mx): d2 ]
+                set(t): {i * (m + 1) + j} mx
+            ]
+            set(j): {j - 1}
+        ]
+        set(i): {i - 1}
+    ]
+    vec(raw): ""
+    set(i): 0
+    set(j): 0
+    while(_): {i < n || j < m} [
+        vec(e): ""
+        set(same): false
+        if(_): {i < n && j < m} [
+            at(x): la i
+            at(y): lb j
+            set(same): {x = y}
+        ]
+        if(_): same [
+            push(_): e " "
+            at(x): la i
+            push(_): e x
+            push(_): e x
+            set(i): {i + 1}
+            set(j): {j + 1}
+        ]
+        else(_): [
+            set(down): 0
+            set(right): 0
+            if(_): {i < n} [ at(down): t {(i + 1) * (m + 1) + j} ]
+            if(_): {j < m} [ at(right): t {i * (m + 1) + j + 1} ]
+            if(_): {j >= m || (i < n && down >= right)} [
+                push(_): e "-"
+                at(x): la i
+                push(_): e x
+                push(_): e ""
+                set(i): {i + 1}
+            ]
+            else(_): [
+                push(_): e "+"
+                push(_): e ""
+                at(y): lb j
+                push(_): e y
+                set(j): {j + 1}
+            ]
+        ]
+        push(_): raw e
+    ]
+    # a removal followed by an addition is a change
+    vec(r): ""
+    len(nr): raw
+    set(k): 0
+    while(_): {k < nr} [
+        at(e): raw k
+        at(op): e 0
+        set(paired): false
+        if(_): {op = "-" && k + 1 < nr} [
+            at(e2): raw {k + 1}
+            at(op2): e2 0
+            if(_): {op2 = "+"} [
+                vec(c): ""
+                push(_): c "~"
+                at(l1): e 1
+                at(l2): e2 2
+                push(_): c l1
+                push(_): c l2
+                push(_): r c
+                set(k): {k + 2}
+                set(paired): true
+            ]
+        ]
+        if(_): {paired = false} [
+            push(_): r e
+            set(k): {k + 1}
+        ]
+    ]
+]
+
+# the diff side by side: "left | right" lines width wide each side
+tvm_diff_text(r): ops width [
+    set(r): ""
+    len(n): ops
+    set(i): 0
+    while(_): {i < n} [
+        at(e): ops i
+        at(op): e 0
+        at(l): e 1
+        at(rr): e 2
+        len(ll): l
+        if(_): {ll > width} [ slice(l): l 0 width ]
+        str_pad_right(l): l width " "
+        set(mid): " | "
+        if(_): {op = "-"} [ set(mid): " < " ]
+        if(_): {op = "+"} [ set(mid): " > " ]
+        if(_): {op = "~"} [ set(mid): " ~ " ]
+        concat(line): l mid rr
+        str_trim_right_tvm(line): line
+        concat(r): r line "\n"
+        set(i): {i + 1}
+    ]
+]
+
+str_trim_right_tvm(r): s [
+    set(r): s
+    len(n): r
+    while(_): {n > 0} [
+        byte(c): r {n - 1}
+        if(_): {c != 32} [ return(r): r ]
+        slice(r): r 0 {n - 1}
+        set(n): {n - 1}
+    ]
+]
+
+# groups of files with the same content under root, biggest first
+tvm_dupes(r): root [
+    vec(r): ""
+    walk_dir(fs): root
+    btree(bysize):
+    len(n): fs
+    set(i): 0
+    while(_): {i < n} [
+        at(f): fs i
+        tvm_size(sz): f
+        if(_): {sz > 0} [
+            btget(g): bysize sz null
+            if(_): {g = null} [
+                vec(g): ""
+                btput(_): bysize sz g
+            ]
+            push(_): g f
+        ]
+        set(i): {i + 1}
+    ]
+    btkeys(sizes): bysize
+    len(ns): sizes
+    set(i): {ns - 1}
+    while(_): {i >= 0} [
+        at(sz): sizes i
+        btget(g): bysize sz
+        len(ng): g
+        if(_): {ng > 1} [
+            btree(byhash):
+            set(k): 0
+            while(_): {k < ng} [
+                at(f): g k
+                tvm_hash_file(h): f "sha256"
+                btget(hg): byhash h null
+                if(_): {hg = null} [
+                    vec(hg): ""
+                    btput(_): byhash h hg
+                ]
+                push(_): hg f
+                set(k): {k + 1}
+            ]
+            btkeys(hs): byhash
+            len(nh): hs
+            set(k): 0
+            while(_): {k < nh} [
+                at(h): hs k
+                btget(hg): byhash h
+                len(nhg): hg
+                if(_): {nhg > 1} [ push(_): r hg ]
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+# the folders right under root by size: [[name bytes]...], biggest first
+tvm_usage(r): root [
+    vec(r): ""
+    list_dir(names): root
+    typeof(t): names
+    if(_): {t != "vector"} [ return(r): r ]
+    btree(ord):
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        tvm_plain(pn): nm
+        tvm_join(p): root pn
+        tvm_stats(st): p
+        btget(b): st "bytes"
+        str_ends(isd): nm "/"
+        if(_): {isd = false} [ set(b): -1 ]
+        str_from_int(bs): {1000000000000 - b}
+        str_pad_left(bs): bs 15 "0"
+        concat(k): bs " " nm
+        vec(e): ""
+        push(_): e nm
+        push(_): e b
+        if(_): isd [ btput(_): ord k e ]
+        set(i): {i + 1}
+    ]
+    btkeys(ks): ord
+    len(nk): ks
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): ks i
+        btget(e): ord k
+        push(_): r e
+        set(i): {i + 1}
+    ]
+]
+
+# the info panel's lines for a folder
+tvm_info(r): dir [
+    tvm_stats(st): dir
+    tvm_describe(d): st
+    list_dir(names): dir
+    set(n): 0
+    typeof(t): names
+    if(_): {t = "vector"} [ len(n): names ]
+    str_from_int(ns): n
+    concat(r): dir "\n" ns " entries here\n" d " in all"
+]
+
+# --- settings: ~/.tver
+
+tvm_settings_path(r): [
+    getenv(r): "TVER_SETTINGS"
+    if(_): {r != null && r != ""} [ return(r): r ]
+    getenv(home): "HOME"
+    if(_): {home = null || home = ""} [ getenv(home): "USERPROFILE" ]
+    if(_): {home = null} [ set(home): "." ]
+    lenin_tvm_slashes(home): home
+    path_join(r): home ".tver"
+]
+
+tvm_settings_new(r): [
+    btree(r):
+    btput(_): r "hidden" true
+    btree(f):
+    btput(_): r "filters" f
+    vec(b): ""
+    btput(_): r "bookmarks" b
+    vec(m): ""
+    btput(_): r "menu" m
+    btput(_): r "left" ""
+    btput(_): r "right" ""
+    btree(k):
+    btput(_): r "keys" k
+    btree(cur):
+    btput(_): r "cursors" cur
+]
+
+tvm_settings_parse(r): text [
+    tvm_settings_new(r):
+    str_replace(t): text "\r" ""
+    str_split(lines): t "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_trim(l): l
+        str_find(sp): l " " 0
+        str_starts(cm): l "#"
+        if(_): {sp > 0 && cm = false} [
+            slice(k): l 0 sp
+            len(ll): l
+            slice(v): l {sp + 1} {ll - sp - 1}
+            str_trim(v): v
+            if(_): {k = "bookmark"} [
+                btget(b): r "bookmarks"
+                push(_): b v
+            ]
+            elif(_): {k = "hidden"} [ btput(_): r "hidden" {v != "off"} ]
+            elif(_): {k = "filter"} [
+                str_find(sp2): v " " 0
+                if(_): {sp2 > 0} [
+                    slice(d): v 0 sp2
+                    len(vl): v
+                    slice(p): v {sp2 + 1} {vl - sp2 - 1}
+                    btget(f): r "filters"
+                    btput(_): f d p
+                ]
+            ]
+            elif(_): {k = "menu"} [
+                str_find(co): v ":" 0
+                if(_): {co > 0} [
+                    slice(lab): v 0 co
+                    len(vl): v
+                    slice(cmd): v {co + 1} {vl - co - 1}
+                    str_trim(cmd): cmd
+                    vec(e): ""
+                    push(_): e lab
+                    push(_): e cmd
+                    btget(m): r "menu"
+                    push(_): m e
+                ]
+            ]
+            elif(_): {k = "left" || k = "right"} [ btput(_): r k v ]
+            elif(_): {k = "key"} [
+                str_find(sp2): v " " 0
+                if(_): {sp2 > 0} [
+                    slice(kn): v 0 sp2
+                    len(vl): v
+                    slice(act): v {sp2 + 1} {vl - sp2 - 1}
+                    str_lower(kn): kn
+                    btget(keys): r "keys"
+                    btput(_): keys kn act
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tvm_settings_text(r): s [
+    set(r): "# Tver's settings (Tver rewrites this file)\n"
+    btget(h): s "hidden"
+    if(_): {h = false} [ concat(r): r "hidden off\n" ]
+    btget(l): s "left"
+    if(_): {l != ""} [ concat(r): r "left " l "\n" ]
+    btget(rt): s "right"
+    if(_): {rt != ""} [ concat(r): r "right " rt "\n" ]
+    btget(b): s "bookmarks"
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        concat(r): r "bookmark " x "\n"
+        set(i): {i + 1}
+    ]
+    btget(f): s "filters"
+    btkeys(fk): f
+    len(n): fk
+    set(i): 0
+    while(_): {i < n} [
+        at(k): fk i
+        btget(p): f k
+        concat(r): r "filter " k " " p "\n"
+        set(i): {i + 1}
+    ]
+    btget(m): s "menu"
+    len(n): m
+    set(i): 0
+    while(_): {i < n} [
+        at(e): m i
+        at(lab): e 0
+        at(cmd): e 1
+        concat(r): r "menu " lab ": " cmd "\n"
+        set(i): {i + 1}
+    ]
+    btget(keys): s "keys"
+    btkeys(kk): keys
+    len(n): kk
+    set(i): 0
+    while(_): {i < n} [
+        at(k): kk i
+        btget(a): keys k
+        concat(r): r "key " k " " a "\n"
+        set(i): {i + 1}
+    ]
+]
+
+tvm_settings_load(r): [
+    tvm_settings_path(p):
+    file_exists(e): p
+    if(_): e [
+        readfile(t): p
+        tvm_settings_parse(r): t
+    ]
+    else(_): [ tvm_settings_new(r): ]
+]
+
+tvm_settings_save(r): s [
+    tvm_settings_path(p):
+    tvm_settings_text(t): s
+    writefile(r): p t
+]
+
+tvm_bookmark_add(r): s path [
+    btget(b): s "bookmarks"
+    lenin_has_tvm(there): b path
+    if(_): {there = false} [ push(_): b path ]
+    len(r): b
+]
+
+lenin_has_tvm(r): v x [
+    set(r): false
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [ set(r): true ]
+        set(i): {i + 1}
+    ]
+]
+
+tvm_bookmark_remove(r): s path [
+    btget(b): s "bookmarks"
+    vec(keep): ""
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(y): b i
+        if(_): {y != path} [ push(_): keep y ]
+        set(i): {i + 1}
+    ]
+    btput(_): s "bookmarks" keep
+    len(r): keep
+]
+
+# a user menu command with %f (the file), %d (the folder), %n (the name)
+tvm_menu_expand(r): cmd dir name [
+    tvm_plain(pn): name
+    tvm_join(f): dir pn
+    chr(q): 34
+    concat(qf): q f q
+    concat(qd): q dir q
+    concat(qn): q pn q
+    lenin_tvm_replace(r): cmd "%f" qf
+    lenin_tvm_replace(r): r "%d" qd
+    lenin_tvm_replace(r): r "%n" qn
+]
+
+# --- display
+
+tvm_kind(r): name [
+    str_ends(isd): name "/"
+    set(r): "file"
+    if(_): isd [
+        set(r): "dir"
+        return(r): r
+    ]
+    path_ext(e): name
+    str_lower(e): e
+    vec(code): ""
+    str_split(code): ".su .c .h .py .js .rs .go .java .sh .ps1 .cpp .hpp .lua .rb" " "
+    vec(text): ""
+    str_split(text): ".txt .md .csv .json .xml .uno .ini .log .html .css .kl" " "
+    vec(img): ""
+    str_split(img): ".png .jpg .jpeg .gif .bmp .qoi .ppm .pgm .svg .webp .ico" " "
+    vec(arc): ""
+    str_split(arc): ".zip .ural .tar .gz .7z .xz .bz2 .rar" " "
+    vec(snd): ""
+    str_split(snd): ".wav .mp3 .ogg .flac" " "
+    vec(prog): ""
+    str_split(prog): ".exe .bat .cmd .com .msi .ru" " "
+    lenin_has_tvm(k1): code e
+    lenin_has_tvm(k2): text e
+    lenin_has_tvm(k3): img e
+    lenin_has_tvm(k4): arc e
+    lenin_has_tvm(k5): snd e
+    lenin_has_tvm(k6): prog e
+    if(_): k1 [ set(r): "code" ]
+    elif(_): k2 [ set(r): "text" ]
+    elif(_): k3 [ set(r): "image" ]
+    elif(_): k4 [ set(r): "archive" ]
+    elif(_): k5 [ set(r): "audio" ]
+    elif(_): k6 [ set(r): "program" ]
+    elif(_): {e = ".dxf"} [ set(r): "drawing" ]
+]
+
+tvm_keybar(r): [
+    set(r): "1Help 2Rename 3View 4Edit 5Copy 6Move 7Mkdir 8Delete 9Menu  Ctrl+R refresh  Ctrl+U swap  Ctrl+L go"
+]
+
+# two panels as text with box glyphs (a terminal view)
+tvm_tui(r): ldir lnames lsel rdir rnames rsel active width height [
+    set(half): {width / 2}
+    str_trunc(half): half
+    set(inner): {half - 2}
+    set(r): ""
+    tvm_tui_top(lt): ldir inner {active = 0}
+    tvm_tui_top(rtop): rdir inner {active = 1}
+    concat(r): lt rtop "\n"
+    set(rows): {height - 2}
+    set(y): 0
+    while(_): {y < rows} [
+        tvm_tui_cell(a): lnames lsel y inner {active = 0}
+        tvm_tui_cell(b): rnames rsel y inner {active = 1}
+        concat(r): r "│" a "││" b "│\n"
+        set(y): {y + 1}
+    ]
+    str_repeat(bar): "─" inner
+    concat(r): r "└" bar "┘└" bar "┘\n"
+]
+
+tvm_tui_top(r): dir inner on [
+    set(t): dir
+    len(tl): t
+    if(_): {tl > inner - 2} [
+        slice(t): dir {tl - inner + 3} {inner - 3}
+        concat(t): "~" t
+    ]
+    len(tl): t
+    set(left): {inner - tl - 2}
+    if(_): {left < 0} [ set(left): 0 ]
+    str_repeat(bar): "─" left
+    set(mark): " "
+    if(_): on [ set(mark): "*" ]
+    concat(r): "┌" mark t " " bar "┐"
+]
+
+tvm_tui_cell(r): names sel y inner on [
+    len(n): names
+    set(t): ""
+    if(_): {y < n} [ at(t): names y ]
+    if(_): {t = "../"} [ set(t): ".." ]
+    len(tl): t
+    if(_): {tl > inner - 2} [ slice(t): t 0 {inner - 2} ]
+    set(pre): " "
+    if(_): {y = sel && on} [ set(pre): ">" ]
+    concat(t): pre t
+    str_pad_right(r): t inner " "
+]
+
+tvm_hexn(r): x digits [
+    set(r): ""
+    set(d): "0123456789abcdef"
+    set(k): 0
+    while(_): {k < digits} [
+        slice(c): d {x & 15} 1
+        concat(r): c r
+        set(x): {x >> 4}
+        set(k): {k + 1}
+    ]
+]
+
+tvm_mkdirs(r): path [
+    set(r): 0
+    tvm_isdir(d): path
+    if(_): {d || path = "" || path = "."} [ return(r): r ]
+    path_dir(parent): path
+    if(_): {parent != path} [ tvm_mkdirs(_): parent ]
+    make_dir(r): path
+]
+
+# --- inflate (RFC 1951), for ZIP entries
+
+tvm_bits(r): st n [
+    btget(data): st "data"
+    btget(pos): st "pos"
+    btget(buf): st "buf"
+    btget(cnt): st "cnt"
+    len(dl): data
+    while(_): {cnt < n} [
+        set(x): 0
+        if(_): {pos < dl} [ at(x): data pos ]
+        set(buf): {buf | (x << cnt)}
+        set(pos): {pos + 1}
+        set(cnt): {cnt + 8}
+    ]
+    set(r): {buf & ((1 << n) - 1)}
+    btput(_): st "buf" {buf >> n}
+    btput(_): st "cnt" {cnt - n}
+    btput(_): st "pos" pos
+]
+
+# a Huffman table from code lengths: [counts symbols]
+tvm_huff(r): lengths [
+    vec(count): ""
+    set(i): 0
+    while(_): {i < 16} [
+        push(_): count 0
+        set(i): {i + 1}
+    ]
+    len(n): lengths
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lengths i
+        at(c): count l
+        set(count): l {c + 1}
+        set(i): {i + 1}
+    ]
+    set(count): 0 0
+    vec(offs): ""
+    push(_): offs 0
+    push(_): offs 0
+    set(i): 1
+    while(_): {i < 15} [
+        at(o): offs i
+        at(c): count i
+        push(_): offs {o + c}
+        set(i): {i + 1}
+    ]
+    vec(sym): ""
+    set(i): 0
+    while(_): {i < n} [
+        push(_): sym 0
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lengths i
+        if(_): {l != 0} [
+            at(o): offs l
+            set(sym): o i
+            set(offs): l {o + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    push(_): r count
+    push(_): r sym
+]
+
+tvm_decode(r): st h [
+    at(count): h 0
+    at(sym): h 1
+    set(code): 0
+    set(first): 0
+    set(index): 0
+    set(l): 1
+    while(_): {l < 16} [
+        tvm_bits(b): st 1
+        set(code): {code | b}
+        at(c): count l
+        if(_): {code - c < first} [
+            at(r): sym {index + code - first}
+            return(r): r
+        ]
+        set(index): {index + c}
+        set(first): {(first + c) << 1}
+        set(code): {code << 1}
+        set(l): {l + 1}
+    ]
+    set(r): -1
+]
+
+tvm_nums(r): text [
+    str_split(p): text " "
+    vec(r): ""
+    len(n): p
+    set(i): 0
+    while(_): {i < n} [
+        at(x): p i
+        str_to_int(v): x 10
+        push(_): r v
+        set(i): {i + 1}
+    ]
+]
+
+# raw deflate -> bytes, or null when it is not deflate
+tvm_inflate(r): data [
+    set(r): null
+    btree(st):
+    btput(_): st "data" data
+    btput(_): st "pos" 0
+    btput(_): st "buf" 0
+    btput(_): st "cnt" 0
+    tvm_nums(lbase): "3 4 5 6 7 8 9 10 11 13 15 17 19 23 27 31 35 43 51 59 67 83 99 115 131 163 195 227 258"
+    tvm_nums(lext): "0 0 0 0 0 0 0 0 1 1 1 1 2 2 2 2 3 3 3 3 4 4 4 4 5 5 5 5 0"
+    tvm_nums(dbase): "1 2 3 4 5 7 9 13 17 25 33 49 65 97 129 193 257 385 513 769 1025 1537 2049 3073 4097 6145 8193 12289 16385 24577"
+    tvm_nums(dext): "0 0 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13"
+    vec(out): ""
+    len(dl): data
+    set(last): 0
+    while(_): {last = 0} [
+        tvm_bits(last): st 1
+        tvm_bits(type): st 2
+        if(_): {type = 0} [
+            btput(_): st "buf" 0
+            btput(_): st "cnt" 0
+            btget(pos): st "pos"
+            if(_): {pos + 4 > dl} [ return(r): r ]
+            tvm_u16(ln): data pos
+            set(pos): {pos + 4}
+            set(k): 0
+            while(_): {k < ln && pos < dl} [
+                at(x): data pos
+                push(_): out x
+                set(pos): {pos + 1}
+                set(k): {k + 1}
+            ]
+            btput(_): st "pos" pos
+        ]
+        elif(_): {type = 1 || type = 2} [
+            vec(ll): ""
+            vec(dlens): ""
+            if(_): {type = 1} [
+                set(i): 0
+                while(_): {i < 288} [
+                    set(l): 8
+                    if(_): {i >= 144 && i < 256} [ set(l): 9 ]
+                    if(_): {i >= 256 && i < 280} [ set(l): 7 ]
+                    push(_): ll l
+                    set(i): {i + 1}
+                ]
+                set(i): 0
+                while(_): {i < 30} [
+                    push(_): dlens 5
+                    set(i): {i + 1}
+                ]
+            ]
+            else(_): [
+                tvm_bits(hlit): st 5
+                tvm_bits(hdist): st 5
+                tvm_bits(hclen): st 4
+                set(hlit): {hlit + 257}
+                set(hdist): {hdist + 1}
+                set(hclen): {hclen + 4}
+                tvm_nums(order): "16 17 18 0 8 7 9 6 10 5 11 4 12 3 13 2 14 1 15"
+                vec(cl): ""
+                set(i): 0
+                while(_): {i < 19} [
+                    push(_): cl 0
+                    set(i): {i + 1}
+                ]
+                set(i): 0
+                while(_): {i < hclen} [
+                    tvm_bits(v): st 3
+                    at(o): order i
+                    set(cl): o v
+                    set(i): {i + 1}
+                ]
+                tvm_huff(ch): cl
+                vec(lens): ""
+                set(total): {hlit + hdist}
+                set(have): 0
+                while(_): {have < total} [
+                    tvm_decode(sym): st ch
+                    if(_): {sym < 0} [ return(r): r ]
+                    if(_): {sym < 16} [
+                        push(_): lens sym
+                        set(have): {have + 1}
+                    ]
+                    else(_): [
+                        set(rep): 0
+                        set(val): 0
+                        if(_): {sym = 16} [
+                            if(_): {have = 0} [ return(r): r ]
+                            at(val): lens {have - 1}
+                            tvm_bits(x): st 2
+                            set(rep): {3 + x}
+                        ]
+                        elif(_): {sym = 17} [
+                            tvm_bits(x): st 3
+                            set(rep): {3 + x}
+                        ]
+                        else(_): [
+                            tvm_bits(x): st 7
+                            set(rep): {11 + x}
+                        ]
+                        set(k): 0
+                        while(_): {k < rep} [
+                            push(_): lens val
+                            set(k): {k + 1}
+                        ]
+                        set(have): {have + rep}
+                    ]
+                ]
+                set(i): 0
+                while(_): {i < hlit} [
+                    at(x): lens i
+                    push(_): ll x
+                    set(i): {i + 1}
+                ]
+                while(_): {i < total} [
+                    at(x): lens i
+                    push(_): dlens x
+                    set(i): {i + 1}
+                ]
+            ]
+            tvm_huff(lh): ll
+            tvm_huff(dh): dlens
+            set(go): true
+            while(_): go [
+                tvm_decode(sym): st lh
+                if(_): {sym < 0} [ return(r): r ]
+                if(_): {sym < 256} [ push(_): out sym ]
+                elif(_): {sym = 256} [ set(go): false ]
+                else(_): [
+                    set(si): {sym - 257}
+                    if(_): {si >= 29} [ return(r): r ]
+                    at(lb): lbase si
+                    at(le): lext si
+                    tvm_bits(x): st le
+                    set(length): {lb + x}
+                    tvm_decode(ds): st dh
+                    if(_): {ds < 0 || ds >= 30} [ return(r): r ]
+                    at(db): dbase ds
+                    at(de): dext ds
+                    tvm_bits(y): st de
+                    set(dist): {db + y}
+                    len(ol): out
+                    if(_): {dist > ol} [ return(r): r ]
+                    set(k): 0
+                    while(_): {k < length} [
+                        at(x): out {ol - dist + k}
+                        push(_): out x
+                        set(k): {k + 1}
+                    ]
+                ]
+            ]
+        ]
+        else(_): [ return(r): r ]
+    ]
+    set(r): out
+]
