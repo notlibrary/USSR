@@ -1,0 +1,78 @@
+== odds
+  0 out of 20: 0-0 100.0%
+  1 out of 20: 1-0 100.0%
+  2 out of 20: 2-0 47.4%, 1-1 52.6%
+  3 out of 20: 3-0 21.0%, 2-1 79.0%
+  4 out of 20: 4-0 8.6%, 3-1 49.6%, 2-2 41.8%
+  5 out of 20: 5-0 3.2%, 4-1 27.0%, 3-2 69.6%
+  6 out of 20: 6-0 1.0%, 5-1 13.0%, 4-2 48.8%, 3-3 37.2%
+  3 out of 10: 3-0 16.6%, 2-1 83.4%
+  4 out, by cards in the first hand (thousandths): [43,248,418,248,43]
+== worth
+  As Ks Qs 7s 8s 9s Ah 8d 7c Kd (trump 0): about 6.5 tricks (s 5, c 0, d 0.5, h 1)
+  Ah Kh Qh Jh 10h 9h 8h 7h As Ad (trump 3): about 10 tricks (s 1, c 0, d 1, h 8)
+  Kc 7c Qd 8d 7d Jh 9h 8s 7s 9c (trump -1): about 1 tricks (s 0, c 0.5, d 0.5, h 0)
+  7s 8s 9s 7c 8c 9c 7d 8d 7h 8h (trump -1): about 0 tricks (s 0, c 0, d 0, h 0)
+== the hand editor
+  set: ''
+  Anna: s A K Q J 10   c -   d -   h A K Q J 10
+  Boris: s 9 8 7   c -   d A K Q J 10 9 8   h -
+  Vera: s -   c A K Q J 10 9 8 7   d -   h 9 8
+  talon: 7h 7d
+seat1 needs 10 cards
+As is dealt twice
+a card I cannot read in ' Xs'
+who is 'north'? (seat1, seat2, seat3, talon)
+no ':' in 'seat1 As'
+== save and resume
+  saved: ''
+  loaded: '', phase bid
+  settlement [176,-160,-16] then [176,-160,-16]
+  Anna: s A K Q J 10   c -   d -   h A K Q J 10
+  Boris: s 9 8 7   c -   d A K Q J 10 9 8   h -
+  Vera: s -   c A K Q J 10 9 8 7   d -   h 9 8
+  talon: 7h 7d
+no file tests/sochi-more-nothing.uno
+tests/sochi-more-bad.uno is not a saved Sochi game
+tests/sochi-more-bad.uno is not a saved Sochi game
+== log and CSV
+Hand 1, dealer Anna
+Anna bids 6s
+Boris passes
+
+player,pool,mountain,whists_written,result
+"Anna",4,0,12,176
+"Boris",0,6,0,-160
+"Vera",0,0,0,-16
+
+hand 1, pool to 10, phase bid
+player,pool,mountain,whists_written,result
+"Anna",4,0,12,176
+"Boris",0,6,0,-160
+"Vera",0,0,0,-16
+
+hand 1, pool to 10, phase bid
+player,pool,mountain,whists_written,result
+"Anna",4,0,12,176
+"Boris",0,6,0,-160
+"Vera",0,0,0,-16
+player,pool,mountain,whists_written,result
+"Anna",4,0,12,176
+"Boris",0,6,0,-160
+"Vera",0,0,0,-16
+
+== in a game
+  /odds h -> 'the other hands hold 3: 3-0 21.0%, 2-1 79.0% (two hands of 10, before the talon)'
+  /odds x -> '/odds SUIT: s, c, d or h'
+  /worth -> 'about 10 tricks (s 5, c 0, d 0, h 5)'
+  /save -> '/save FILE'
+  /save tests/sochi-more-game2.uno -> 'written: tests/sochi-more-game2.uno'
+  /csv tests/sochi-more.csv -> 'written: tests/sochi-more.csv'
+  /nothing -> ''
+== the packet parser, fuzzed
+  300 random packets, 100 with the SOCHI1 header parsed, none stopped the program
+
+--- stderr ---
+USSR: expected '{' after 'not' in UNO text
+
+--- exit 0 ---

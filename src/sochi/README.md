@@ -137,3 +137,17 @@ the protocol and the functions for scripts.
 `ussr tests/sochi_test.su` checks the rules without the network, against
 `tests/expected/sochi_test.su.txt`, natively and through russia.su. See
 [tests/TESTPLAN.md](tests/TESTPLAN.md).
+
+## Odds, hand worth, saved games
+
+```bash
+ussr src/sochi/sochi.su odds 4 10 10          # 4-0 8.6%, 3-1 49.6%, 2-2 41.8%
+ussr src/sochi/sochi.su worth "As Ks Qs 7s 8s 9s Ah 8d 7c Kd" s
+ussr src/sochi/sochi.su show game.uno         # a game saved with /save
+ussr src/sochi/sochi.su csv game.uno out.csv  # its settlement for Siberia
+```
+
+At the table, `/odds SUIT` shows how the suit's cards you do not hold
+split between the other two hands. `/worth` estimates your hand's
+tricks. `/save FILE`, `/log FILE` and `/csv FILE` write the game, its
+log and its settlement.

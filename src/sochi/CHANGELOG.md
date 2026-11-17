@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0
+- Refine pass 1, in `more.su`:
+  - An odds helper: `sochi odds N A B` and `/odds SUIT` give how the
+    cards of a suit split between two hands (hypergeometric, in tenths
+    of a percent).
+  - What a hand is worth: `sochi worth CARDS [TRUMP]` and `/worth`
+    estimate tricks per suit from top sequences, guarded kings and
+    queens, and long trumps.
+  - Save and resume: `/save FILE` writes every value of the game as UNO.
+    `sx_load` reads it back; `sochi show FILE` prints its scores and
+    settlement.
+  - The log as text (`/log FILE`) and the settlement as CSV for Siberia
+    (`/csv FILE`, `sochi csv FILE OUT`).
+  - A hand editor: `sx_set_deal("seat1: ...; seat2: ...; seat3: ...;
+    talon: ...")` checks 10 cards per seat, 2 in the talon and no card
+    dealt twice.
+- Tests: `tests/sochi_more_test.su`, including 300 random packets through
+  the packet parser.
+
 ## 0.1.0
 - First version: Preferans for three by the Sochi rules (bidding with
   misère, talon and discard, responsible whist with half-whist and open

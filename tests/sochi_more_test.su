@@ -1,0 +1,186 @@
+# Sochi refine pass 1 (src/sochi/more.su): suit-split odds, what a hand is
+# worth, the hand editor, saving and resuming a game, the log and CSV
+# export, the in-game commands, and a fuzz of the packet parser. Files
+# go to tests/sochi-more-*; nothing touches the network.
+$include "../src/sochi/sochi.su"
+
+sx_t_hands(_): [
+    set(p): 0
+    while(_): {p < 3} [
+        so_name(pn): p
+        at(h): sg_hands p
+        so_hand_show(hs): h
+        concat(line): "  " pn ": " hs
+        print(_): line
+        add(p): p 1
+    ]
+    so_cards_show(ts): sg_talon
+    concat(line): "  talon: " ts
+    print(_): line
+]
+
+sx_t_rm(_): path [
+    file_exists(e): path
+    if(_): e [ remove_file(_): path ]
+]
+
+init(ret): arg_count arg_values [
+    so_types(_):
+    print(_): "== odds"
+    set(n): 0
+    while(_): {n <= 6} [
+        sx_odds_text(t): n 10 10
+        so_int(ns): n
+        concat(line): "  " ns " out of 20: " t
+        print(_): line
+        add(n): n 1
+    ]
+    sx_odds_text(t): 3 5 5
+    concat(line): "  3 out of 10: " t
+    print(_): line
+    sx_split_odds(v): 4 10 10
+    encode(vs): v
+    concat(line): "  4 out, by cards in the first hand (thousandths): " vs
+    print(_): line
+
+    print(_): "== worth"
+    vec(cases): ""
+    push(_): cases "As Ks Qs 7s 8s 9s Ah 8d 7c Kd|0"
+    push(_): cases "Ah Kh Qh Jh 10h 9h 8h 7h As Ad|3"
+    push(_): cases "Kc 7c Qd 8d 7d Jh 9h 8s 7s 9c|-1"
+    push(_): cases "7s 8s 9s 7c 8c 9c 7d 8d 7h 8h|-1"
+    len(nc): cases
+    set(i): 0
+    while(_): {i < nc} [
+        at(c): cases i
+        str_split(pp): c "|"
+        at(cs): pp 0
+        at(ts): pp 1
+        str_to_number(tr): ts
+        sx_parse_cards(cards): cs
+        sx_worth_text(w): cards tr
+        concat(line): "  " cs " (trump " ts "): " w
+        print(_): line
+        add(i): i 1
+    ]
+
+    print(_): "== the hand editor"
+    so_table(_): 10 1945
+    set(sg_names): 0 "Anna"
+    set(sg_names): 1 "Boris"
+    set(sg_names): 2 "Vera"
+    so_new_game(_):
+    sx_set_deal(e): "seat1: As Ks Qs Js 10s Ah Kh Qh Jh 10h; seat2: 9s 8s 7s Ad Kd Qd Jd 10d 9d 8d; seat3: Ac Kc Qc Jc 10c 9c 8c 7c 9h 8h; talon: 7h 7d"
+    concat(line): "  set: '" e "'"
+    print(_): line
+    sx_t_hands(_):
+    sx_set_deal(e): "seat1: As Ks; seat2: 9s; seat3: Ac; talon: 7h 7d"
+    print(_): e
+    sx_set_deal(e): "seat1: As As Qs Js 10s Ah Kh Qh Jh 10h; seat2: 9s; seat3: Ac; talon: 7h 7d"
+    print(_): e
+    sx_set_deal(e): "seat1: Xs; seat2: 9s; seat3: Ac; talon: 7h"
+    print(_): e
+    sx_set_deal(e): "north: As"
+    print(_): e
+    sx_set_deal(e): "seat1 As"
+    print(_): e
+
+    print(_): "== save and resume"
+    set(sg_pool): 0 4
+    set(sg_mount): 1 6
+    set(sg_whist): 2 12
+    so_settle(before):
+    sx_save(e): "tests/sochi-more-game.uno"
+    concat(line): "  saved: '" e "'"
+    print(_): line
+    set(sg_pool): 0 0
+    vec(sg_hands): ""
+    set(sg_phase): "nothing"
+    sx_load(e): "tests/sochi-more-game.uno"
+    concat(line): "  loaded: '" e "', phase " sg_phase
+    print(_): line
+    so_settle(after):
+    encode(bs): before
+    encode(as): after
+    concat(line): "  settlement " bs " then " as
+    print(_): line
+    sx_t_hands(_):
+    sx_load(e): "tests/sochi-more-nothing.uno"
+    print(_): e
+    writefile(_): "tests/sochi-more-bad.uno" "[1, 2, 3]"
+    sx_load(e): "tests/sochi-more-bad.uno"
+    print(_): e
+    writefile(_): "tests/sochi-more-bad.uno" "not uno at all ["
+    sx_load(e): "tests/sochi-more-bad.uno"
+    print(_): e
+
+    print(_): "== log and CSV"
+    so_log(_): "Anna bids 6s"
+    so_log(_): "Boris passes"
+    sx_log_save(e): "tests/sochi-more.log"
+    readfile(lt): "tests/sochi-more.log"
+    print(_): lt
+    sx_csv_text(ct):
+    print(_): ct
+    sx_show_text(st):
+    print(_): st
+    vec(args): ""
+    push(_): args "tests/sochi-more-game.uno"
+    sx_cmd(rc): "show" args
+    push(_): args "tests/sochi-more.csv"
+    sx_cmd(rc): "csv" args
+    readfile(csv): "tests/sochi-more.csv"
+    print(_): csv
+
+    print(_): "== in a game"
+    so_view(view): 0
+    vec(lines): ""
+    push(_): lines "/odds h"
+    push(_): lines "/odds x"
+    push(_): lines "/worth"
+    push(_): lines "/save"
+    push(_): lines "/save tests/sochi-more-game2.uno"
+    push(_): lines "/csv tests/sochi-more.csv"
+    push(_): lines "/nothing"
+    len(nl): lines
+    set(i): 0
+    while(_): {i < nl} [
+        at(l): lines i
+        str_lower(lt): l
+        sx_line_cmd(said): view lt l
+        concat(line): "  " l " -> '" said "'"
+        print(_): line
+        add(i): i 1
+    ]
+
+    print(_): "== the packet parser, fuzzed"
+    # sochi's own generator: the same bytes on every machine
+    set(sg_rng): 2024
+    set(round): 0
+    set(parsed): 0
+    while(_): {round < 300} [
+        so_rand(len_): 40
+        set(t): ""
+        if(_): {round % 3 = 0} [ set(t): "SOCHI1 " ]
+        set(k): 0
+        while(_): {k < len_} [
+            so_rand(c): 95
+            chr(ch): {c + 32}
+            concat(t): t ch
+            add(k): k 1
+        ]
+        sn_parse(p): t
+        if(_): {p != null} [ add(parsed): parsed 1 ]
+        add(round): round 1
+    ]
+    so_int(ps): parsed
+    concat(line): "  300 random packets, " ps " with the SOCHI1 header parsed, none stopped the program"
+    print(_): line
+
+    sx_t_rm(_): "tests/sochi-more-game.uno"
+    sx_t_rm(_): "tests/sochi-more-game2.uno"
+    sx_t_rm(_): "tests/sochi-more-bad.uno"
+    sx_t_rm(_): "tests/sochi-more.log"
+    sx_t_rm(_): "tests/sochi-more.csv"
+    set(ret): 0
+]
