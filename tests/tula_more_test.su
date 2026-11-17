@@ -1,0 +1,664 @@
+# Tula refine pass 1 (src/tula/more.su), with no window: typed coordinates
+# and expressions, shapes, snaps, transforms, intersections, offset, trim,
+# extend, fillet, chamfer, break, join, grips, measuring, layers, colours,
+# linetypes, blocks, the quadtree, selection, regions, constraints,
+# isometric points, sheets, symbols, a bill of materials, purge and audit,
+# DXF R12 and 2000 out and back in, binary DXF, SVG out and in, PDF,
+# G-code, STL, recent files, the command line and the scripting API.
+# Run from the repository root.
+$include "../src/tula/tula.su"
+
+ut_check(r): label got want [
+    set(r): 0
+    set(utc_ok): {got = want}
+    typeof(utc_gt): got
+    if(_): {utc_gt = "real"} [
+        typeof(utc_wt): want
+        if(_): {utc_wt = "real" || utc_wt = "integer"} [
+            abs(utc_d): {got - want}
+            set(utc_ok): {utc_d < 0.001}
+        ]
+    ]
+    if(_): utc_ok [ concat(utc_line): "PASS " label ]
+    else(_): [
+        set(utc_g): got
+        set(utc_w): want
+        typeof(utc_wt2): want
+        if(_): {utc_gt != "string"} [ encode(utc_g): got ]
+        if(_): {utc_wt2 != "string"} [ encode(utc_w): want ]
+        concat(utc_line): "FAIL " label ": got " utc_g ", want " utc_w
+    ]
+    print(_): utc_line
+]
+
+ut_xy(r): p [
+    at(ut_x): p 0
+    at(ut_y): p 1
+    tl_fmt(ut_xs): ut_x
+    tl_fmt(ut_ys): ut_y
+    concat(r): ut_xs "," ut_ys
+]
+
+ut_entity(r): e [
+    tl_fields(ut_f): e
+    set(r): ""
+    len(ut_n): ut_f
+    set(ut_i): 0
+    while(_): {ut_i < ut_n} [
+        at(ut_v): ut_f ut_i
+        typeof(ut_t): ut_v
+        set(ut_s): ut_v
+        if(_): {ut_t = "integer" || ut_t = "real"} [ tl_fmt(ut_s): ut_v ]
+        if(_): {ut_t = "boolean"} [ encode(ut_s): ut_v ]
+        if(_): {ut_t = "vector"} [
+            set(ut_s): ""
+            len(ut_m): ut_v
+            set(ut_k): 0
+            while(_): {ut_k < ut_m} [
+                at(ut_x): ut_v ut_k
+                tl_fmt(ut_xs): ut_x
+                if(_): {ut_k > 0} [ concat(ut_s): ut_s "," ]
+                concat(ut_s): ut_s ut_xs
+                set(ut_k): {ut_k + 1}
+            ]
+        ]
+        if(_): {ut_i > 0} [ concat(r): r " " ]
+        concat(r): r ut_s
+        set(ut_i): {ut_i + 1}
+    ]
+]
+
+ut_input(r): [
+    tl_doc_new(d):
+    btget(vars): d "vars"
+    btput(_): vars "a" 10
+    tl_pt(last): 5 5
+    tl_coord(p): d "@10,0" last
+    ut_xy(v): p
+    ut_check(_): "relative" v "15,5"
+    tl_coord(p): d "@10<90" last
+    ut_xy(v): p
+    ut_check(_): "polar relative" v "5,15"
+    tl_coord(p): d "100,50" last
+    ut_xy(v): p
+    ut_check(_): "absolute" v "100,50"
+    tl_coord(p): d "a*2,a+1" last
+    ut_xy(v): p
+    ut_check(_): "variables in coordinates" v "20,11"
+    tl_coord(v): d "nonsense" last
+    ut_check(_): "not a point" v null
+    tl_eval(v): d "2 * (3 + 4) ^ 2 / 7"
+    ut_check(_): "precedence" v 14.0
+    tl_eval(v): d "sqrt(16) + sin(90) + -a"
+    ut_check(_): "functions and minus" v -5.0
+    tl_eval(v): d "b + 1"
+    ut_check(_): "an unknown name" v null
+    tl_set_var(v): d "width = 2 * a + 10"
+    ut_check(_): "a variable from an expression" v 30
+    tl_eval(v): d "width"
+    ut_check(_): "and its use" v 30
+    set(r): 0
+]
+
+ut_shapes(r): [
+    tl_rect(e): 0 0 10 5
+    ut_entity(v): e
+    ut_check(_): "a rectangle" v "POLYLINE true 0,0,10,0,10,5,0,5"
+    tl_polygon(e): 0 0 10 4 false 0
+    tl_area(a): e
+    at(v): a 0
+    ut_check(_): "a square in a circle: area" v 200.0
+    tl_polygon(e): 0 0 10 4 true 0
+    tl_area(a): e
+    at(v): a 0
+    ut_check(_): "a square about a circle: area" v 400.0
+    tl_circle3(c): 0 10 10 0 0 -10
+    at(v): c 2
+    ut_check(_): "a circle through three points" v 10.0
+    tl_arc3(e): 10 0 0 10 -10 0
+    ut_entity(v): e
+    ut_check(_): "an arc through three points" v "ARC 0 0 10 0 180"
+    tl_arc3(e): -10 0 0 10 10 0
+    ut_entity(v): e
+    ut_check(_): "the other way round" v "ARC 0 0 10 0 180"
+    tl_circle3(v): 0 0 1 1 2 2
+    ut_check(_): "three points in a line" v null
+    tl_ellipse(e): 0 0 10 5 0
+    tl_explode_for_draw(parts): null e
+    at(p): parts 0
+    tl_bbox(b): null p
+
+    tl_doc_new(d):
+    tl_bbox(b): d e
+    at(v): b 3
+    ut_check(_): "its height" v 5.0
+    tl_nums(cp): "0 0 10 10 20 0 30 10"
+    tl_bspline_points(sp): 3 cp 10
+    at(v): sp 0
+    ut_check(_): "a spline starts at its first point" v 0
+    len(n): sp
+    at(v): sp {n - 2}
+    ut_check(_): "and ends at its last" v 30.0
+    set(r): 0
+]
+
+ut_geometry(r): [
+    tl_doc_new(d):
+    tl_line_e(l1): 0 0 10 0
+    tl_line_e(l2): 5 -5 5 5
+    tl_intersect(ps): l1 l2
+    at(p): ps 0
+    ut_xy(v): p
+    ut_check(_): "two lines cross" v "5,0"
+    tl_circle_e(c): 0 0 5
+    tl_line_e(l3): -10 0 10 0
+    tl_intersect(ps): c l3
+    len(v): ps
+    ut_check(_): "a line through a circle" v 2
+    tl_circle_e(c2): 8 0 5
+    tl_intersect(ps): c c2
+    at(p): ps 0
+    ut_xy(v): p
+    ut_check(_): "two circles" v "4,-3"
+    tl_arc_e(arc): 0 0 5 0 90
+    tl_intersect(ps): arc l3
+    len(v): ps
+    ut_check(_): "an arc keeps its part" v 1
+
+    tl_add(_): d l1
+    tl_add(_): d l2
+    tl_add(_): d c
+    vec(modes): ""
+    str_split(modes): "end mid center int" " "
+    tl_osnap(s): d 5.2 0.3 1 modes null
+    at(v): s 2
+    ut_check(_): "a snap to the crossing or middle" {v = "int" || v = "mid"} true
+    tl_osnap(s): d 0.4 0.3 1 modes null
+    ut_xy(v): s
+    ut_check(_): "a snap to the centre" v "0,0"
+    vec(m2): ""
+    push(_): m2 "perp"
+    tl_pt(from): 3 7
+    tl_osnap(s): d 3 0.5 2 m2 from
+    ut_xy(v): s
+    ut_check(_): "perpendicular" v "3,0"
+    vec(m3): ""
+    push(_): m3 "tan"
+    tl_pt(from): 10 0
+    tl_osnap(s): d 2.5 4.3 1 m3 from
+    at(v): s 2
+    ut_check(_): "tangent" v "tan"
+    tl_ortho(p): 0 0 10 3
+    ut_xy(v): p
+    ut_check(_): "ortho" v "10,0"
+    tl_polar_track(p): 0 0 10 11 45
+    at(px): p 0
+    at(py): p 1
+    abs(dd): {px - py}
+    ut_check(_): "polar tracking to 45 degrees" {dd < 0.001} true
+    tl_readout(v): 0 0 3 4
+    ut_check(_): "the readout" v "3, 4  length 5  angle 53.1"
+
+    # transforms
+    tl_mat_rotate(m): 0 0 90
+    tl_transform(t): l1 m
+    ut_entity(v): t
+    ut_check(_): "rotate a line" v "LINE 0 0 0 10"
+    tl_transform(t): arc m
+    ut_entity(v): t
+    ut_check(_): "rotate an arc" v "ARC 0 0 5 90 180"
+    tl_mat_mirror(m): 0 0 0 10
+    tl_transform(t): arc m
+    ut_entity(v): t
+    ut_check(_): "mirror an arc" v "ARC 0 0 5 90 180"
+    tl_mat_scale(m): 0 0 2
+    tl_transform(t): c m
+    ut_entity(v): t
+    ut_check(_): "scale a circle" v "CIRCLE 0 0 10"
+
+    # offset, trim, extend, fillet, chamfer, break, join
+    tl_offset(o): l1 2
+    ut_entity(v): o
+    ut_check(_): "offset a line" v "LINE 0 2 10 2"
+    tl_rect(sq): 0 0 10 10
+    tl_offset(o): sq 1
+    ut_entity(v): o
+    ut_check(_): "offset a square outward" v "POLYLINE true -1,-1,11,-1,11,11,-1,11"
+    tl_offset(v): c -6
+    ut_check(_): "a circle cannot shrink past nothing" v null
+    tl_trim(t): l1 l2 8 0
+    ut_entity(v): t
+    ut_check(_): "trim the right end" v "LINE 0 0 5 0"
+    tl_line_e(short): 0 0 3 0
+    tl_extend(t): short l2 3 0
+    ut_entity(v): t
+    ut_check(_): "extend to a line" v "LINE 0 0 5 0"
+    tl_extend(t): short c 3 0
+    ut_entity(v): t
+    ut_check(_): "extend to a circle" v "LINE 0 0 5 0"
+    tl_line_e(h): 0 0 10 0
+    tl_line_e(vl): 10 0 10 10
+    tl_fillet(f): h vl 2
+    at(fa): f 2
+    ut_entity(v): fa
+    ut_check(_): "a fillet's arc" v "ARC 8 2 2 270 0"
+    at(fl): f 0
+    ut_entity(v): fl
+    ut_check(_): "and the first line cut back" v "LINE 0 0 8 0"
+    tl_chamfer(f): h vl 2 3
+    at(fc): f 2
+    ut_entity(v): fc
+    ut_check(_): "a chamfer" v "LINE 8 0 10 3"
+    tl_break(two): l1 4 1
+    at(b0): two 0
+    ut_entity(v): b0
+    ut_check(_): "break" v "LINE 0 0 4 0"
+    vec(parts): ""
+    tl_line_e(j1): 0 0 10 0
+    push(_): parts j1
+    tl_line_e(j2): 10 10 10 0
+    push(_): parts j2
+    tl_line_e(j3): 10 10 0 10
+    push(_): parts j3
+    tl_line_e(j4): 0 10 0 0
+    push(_): parts j4
+    tl_join(js): parts 0.001
+    len(v): js
+    ut_check(_): "four lines join into one" v 1
+    at(jp): js 0
+    at(v): jp 1
+    ut_check(_): "a closed one" v true
+    tl_area(a): jp
+    at(v): a 0
+    ut_check(_): "its area" v 100.0
+    tl_grips(g): l1
+    len(v): g
+    ut_check(_): "a line's grips" v 3
+    tl_grip_move(t): l1 2 5 5
+    ut_entity(v): t
+    ut_check(_): "the middle grip moves it" v "LINE 0 5 10 5"
+    set(r): 0
+]
+
+ut_doc(r): [
+    tl_doc_new(d):
+    tl_commands(_): d "layer new walls 1\nrect 0,0 @100,50\nlayer set 0\ncircle 50,25 10\nline 0,0 @10<0 @10<90\nselect all\n"
+    btget(es): d "entities"
+    len(v): es
+    ut_check(_): "a script of commands" v 4
+    at(e0): es 0
+    tl_prop(v): e0 "layer" "0"
+    ut_check(_): "the current layer is used" v "walls"
+    tl_rgb(v): d e0
+    ut_check(_): "colour by layer" v 16711680
+    tl_aci(v): 3
+    ut_check(_): "ACI 3 is green" v 65280
+    tl_aci(v): 252
+    ut_check(_): "ACI greys" v 6908265
+    tl_aci(v): 10
+    ut_check(_): "ACI 10, the red end of the wheel" v 16711680
+    tl_command(v): d "layer off walls"
+    tl_visible(v): d e0
+    ut_check(_): "a layer switched off" v false
+    tl_command(_): d "layer on walls"
+    tl_command(_): d "layer lock walls"
+    tl_editable(v): d e0
+    ut_check(_): "a locked layer" v false
+    tl_command(_): d "layer unlock walls"
+    tl_ltype(pat): "DASHED" 1
+    tl_dash_line(pieces): 0 0 20 0 pat
+    len(v): pieces
+    ut_check(_): "a dashed line in pieces" v 3
+    tl_command(v): d "area"
+    ut_check(_): "area of the selection" v "area 5314.1593, perimeter 382.8319"
+    tl_command(v): d "dist 0,0 3,4"
+    ut_check(_): "a distance" v "3, 4  length 5  angle 53.1"
+    tl_command(v): d "select 50,35"
+    ut_check(_): "pick" v "1 selected"
+    tl_command(v): d "centroid"
+    ut_check(_): "a centroid" v "50,25"
+    tl_command(v): d "select window -1,-1 101,51"
+    ut_check(_): "a window" v "4 selected"
+    tl_command(v): d "select crossing 45,20 46,21"
+    ut_check(_): "crossing: inside a circle is not crossing it" v "0 selected"
+    tl_command(v): d "select crossing 55,20 65,21"
+    ut_check(_): "crossing the circle" v "1 selected"
+    tl_command(_): d "select last"
+    tl_command(v): d "copy 0,0 @0,100"
+    ut_check(_): "copy" v "1 copied"
+    tl_command(_): d "undo"
+    btget(es): d "entities"
+    len(v): es
+    ut_check(_): "undo" v 4
+    tl_command(_): d "redo"
+    btget(es): d "entities"
+    len(v): es
+    ut_check(_): "redo" v 5
+    tl_command(_): d "undo"
+    tl_command(_): d "select 50,15"
+    tl_command(v): d "array rect 2 3 30 20"
+    ut_check(_): "a rectangular array" v "5 made"
+    tl_command(_): d "undo"
+    tl_command(v): d "array polar 50,25 4 360"
+    ut_check(_): "a polar array" v "3 made"
+    tl_command(_): d "undo"
+    tl_command(v): d "nosuch"
+    ut_check(_): "an unknown command" v "no command nosuch (help lists them)"
+    tl_command(v): d "dim aligned 0,0 30,40 0,10"
+    ut_check(_): "an aligned dimension" v "50"
+    tl_command(v): d "dim radius 50,25 60,25 70,30"
+    ut_check(_): "a radius" v "R10"
+    tl_command(v): d "dim angle 0,0 10,0 0,10"
+    ut_check(_): "an angle" v "90%%d"
+
+    # blocks
+    tl_symbols(_): d
+    tl_command(v): d "insert BOLT_M10 200,0 2 30"
+    ut_check(_): "insert a symbol" v "ok"
+    tl_command(_): d "insert BOLT_M10 220,0"
+    tl_command(_): d "insert RESISTOR 0,200"
+    btget(es): d "entities"
+    len(n): es
+    at(ins): es {n - 3}
+    tl_insert_parts(parts): d ins
+    len(v): parts
+    ut_check(_): "an insert draws its block" v 2
+    at(p0): parts 1
+    ut_entity(v): p0
+    ut_check(_): "placed and scaled" v "CIRCLE 200 0 10"
+    tl_bom(rows): d
+    encode(v): rows
+    ut_check(_): "a bill of materials" v "[[`BOLT_M10`,2],[`RESISTOR`,1]]"
+    tl_command(v): d "bom 300,300"
+    ut_check(_): "a BOM table" v "2 rows"
+    tl_command(_): d "select 200,8"
+    tl_command(v): d "explode"
+    ut_check(_): "explode" v "2 parts"
+    tl_purge(p): d
+    at(v): p 1
+    ut_check(_): "purge unused blocks" {v > 5} true
+
+    # quadtree and regions
+    tl_qt_build(qt): d
+    tl_qt_query(hits): qt 40 15 60 35
+    len(v): hits
+    ut_check(_): "a quadtree query" {v >= 2} true
+    tl_doc_new(d2):
+    tl_commands(_): d2 "line 0,0 10,0\nline 10,0 10,10\nline 10,10 0,10\nline 0,10 0,0\nline 20,0 30,0\n"
+    tl_regions(rg): d2 0.001
+    len(v): rg
+    ut_check(_): "a region from four lines" v 1
+
+    # constraints
+    tl_doc_new(d3):
+    btget(es3): d3 "entities"
+    tl_line_e(c1): 0 0 10 1
+    push(_): es3 c1
+    tl_line_e(c2): 10 1 11 8
+    push(_): es3 c2
+    vec(cons): ""
+    str_split(k1): "horizontal 0" " "
+    vec(k1): ""
+    push(_): k1 "horizontal"
+    push(_): k1 0
+    push(_): cons k1
+    vec(k2): ""
+    push(_): k2 "coincident"
+    push(_): k2 1
+    push(_): k2 0
+    push(_): k2 0
+    push(_): k2 1
+    push(_): cons k2
+    vec(k3): ""
+    push(_): k3 "perpendicular"
+    push(_): k3 1
+    push(_): k3 0
+    push(_): cons k3
+    tl_solve(v): d3 cons 200 0.0001
+    ut_check(_): "the constraints are met" {v >= 0} true
+    at(e): es3 0
+    at(y2): e 4
+    ut_check(_): "horizontal" y2 0
+    at(f): es3 1
+    at(fx1): f 1
+    at(fx2): f 3
+    abs(dv): {fx2 - fx1}
+    ut_check(_): "perpendicular" {dv < 0.001} true
+    tl_drive(v): d3 cons 0 25
+    at(e): es3 0
+    at(x2): e 3
+    ut_check(_): "a driving dimension" x2 25.0
+    at(f): es3 1
+    at(fx1): f 1
+    ut_check(_): "and what hangs on it follows" fx1 25.0
+
+    tl_iso(p): 10 0 "top"
+    ut_xy(v): p
+    ut_check(_): "an isometric point" v "8.6603,5"
+    tl_sheet(sh): "A3" "Shaft" "Tula"
+    at(b): sh 0
+    tl_area(a): b
+    at(v): a 0
+    ut_check(_): "an A3 sheet" v 124740.0
+    tl_sheet(v): "B9" "x" "y"
+    len(v): v
+    ut_check(_): "no such sheet" v 0
+
+    tl_doc_new(d4):
+    btget(es4): d4 "entities"
+    tl_line_e(z): 1 1 1 1
+    push(_): es4 z
+    tl_circle_e(z2): 0 0 0
+    push(_): es4 z2
+    tl_line_e(ok): 0 0 1 1
+    push(_): es4 ok
+    tl_audit(au): d4
+    at(v): au 0
+    ut_check(_): "audit removes bad entities" v 2
+    set(r): 0
+]
+
+ut_files(r): [
+    tl_doc_new(d):
+    tl_commands(_): d "layer new axis 5\nlayer ltype axis center\nline 0,0 100,0\nlayer set 0\ncircle 50,0 20\narc 0,0 10,10 20,0\npline 0,0 10,0 10,10 c\ntext 0,30 5 Hello world\nellipse 0,-30 20 10\nspline 0,0 10,10 20,0 30,10\nxline 0,0 45\ndim linear 0,0 100,0 50,-10\n"
+    tl_symbols(_): d
+    tl_command(_): d "insert BEARING 150,0"
+    tl_dxf(t2000): d "2000"
+    str_contains(v): t2000 "AC1015"
+    ut_check(_): "DXF 2000" v true
+    str_contains(v): t2000 "\nSPLINE\n"
+    ut_check(_): "with splines" v true
+    str_contains(v): t2000 "\nBEARING\n"
+    ut_check(_): "and blocks" v true
+    str_contains(v): t2000 "\nCENTER\n"
+    ut_check(_): "and linetypes" v true
+    tl_dxf(t12): d "R12"
+    str_contains(v): t12 "AC1009"
+    ut_check(_): "DXF R12" v true
+    str_contains(v): t12 "LWPOLYLINE"
+    ut_check(_): "R12 has no LWPOLYLINE" v false
+    str_contains(v): t12 "\nVERTEX\n"
+    ut_check(_): "but POLYLINE and VERTEX" v true
+    str_contains(v): t12 "\nELLIPSE\n"
+    ut_check(_): "and no ELLIPSE" v false
+    writefile(_): "tests/tula-more-tmp.dxf" t2000
+    tl_load(back): "tests/tula-more-tmp.dxf"
+    btget(es): back "entities"
+    len(v): es
+    ut_check(_): "DXF 2000 read back" {v >= 9} true
+    btget(bl): back "blocks"
+    bthas(v): bl "BEARING"
+    ut_check(_): "its blocks" v true
+    btget(lay): back "layers"
+    btget(ax): lay "axis" null
+    btget(v): ax "ltype"
+    ut_check(_): "its layers" v "CENTER"
+    btget(raw): back "raw"
+    len(v): raw
+    ut_check(_): "what Tula does not draw is kept" {v >= 2} true
+    tl_dxf(again): back "2000"
+    str_contains(v): again "\nXLINE\n"
+    ut_check(_): "and written back" v true
+    remove_file(_): "tests/tula-more-tmp.dxf"
+
+    # binary DXF: the sentinel, then code (2 bytes) and value groups
+    vec(bin): ""
+    tula_bin_sig(sig):
+    len(sl): sig
+    set(i): 0
+    while(_): {i < sl} [
+        byte(x): sig i
+        push(_): bin x
+        set(i): {i + 1}
+    ]
+    tl_nums(tail): "13 10 26 0"
+    list_concat(bin): bin tail
+    ut_bin_str(_): bin 0 "SECTION"
+    ut_bin_str(_): bin 2 "ENTITIES"
+    ut_bin_str(_): bin 0 "LINE"
+    ut_bin_str(_): bin 8 "0"
+    ut_bin_f64(_): bin 10 1.5
+    ut_bin_f64(_): bin 20 -2.25
+    ut_bin_f64(_): bin 11 100
+    ut_bin_f64(_): bin 21 0
+    ut_bin_str(_): bin 0 "ENDSEC"
+    ut_bin_str(_): bin 0 "EOF"
+    tl_dxf_binary(txt): bin
+    str_contains(v): txt "10\n1.5"
+    ut_check(_): "binary DXF to text" v true
+    str_contains(v): txt "20\n-2.25"
+    ut_check(_): "negative doubles" v true
+
+    tl_svg(svg): d
+    str_starts(v): svg "<svg"
+    ut_check(_): "SVG out" v true
+    str_contains(v): svg "<circle cx=\"50\" cy=\"0\" r=\"20\""
+    ut_check(_): "with its circle" v true
+    tl_svg_import(imp): "<svg><line x1=\"0\" y1=\"0\" x2=\"10\" y2=\"-5\"/><rect x=\"0\" y=\"0\" width=\"4\" height=\"2\"/><path d=\"M 0 0 L 10 0 l 0 10 Z M 20 20 C 20 30 30 30 30 20\"/></svg>"
+    len(v): imp
+    ut_check(_): "SVG in" v 4
+    at(e): imp 0
+    ut_entity(v): e
+    ut_check(_): "y flipped back" v "LINE 0 0 10 5"
+    at(e): imp 2
+    ut_entity(v): e
+    ut_check(_): "a closed path" v "POLYLINE true 0,0,10,0,10,-10"
+    at(e): imp 3
+    at(pts): e 2
+    len(v): pts
+    ut_check(_): "a curve flattened" v 34
+    tl_pdf(pdf): d
+    str_starts(v): pdf "%PDF-1.4"
+    ut_check(_): "a PDF" v true
+    str_ends(v): pdf "%%EOF\n"
+    ut_check(_): "a whole one" v true
+    tl_doc_new(dg):
+    tl_commands(_): dg "line 0,0 10,0\ncircle 0,0 5\n"
+    tl_gcode(g): dg 300 -1
+    str_contains(v): g "G1 X10 Y0 F300"
+    ut_check(_): "G-code lines" v true
+    str_contains(v): g "G3 X5 Y0 I-5 J0"
+    ut_check(_): "G-code circles" v true
+    tl_rect(sq): 0 0 10 10
+    tl_stl_extrude(stl): sq 5
+    re_all(fs): "facet normal" stl
+    len(v): fs
+    ut_check(_): "an extruded square: 16 facets" v 16
+
+    tl_nums(pp): "5 0 5 10"
+    tl_poly_e(prof): false pp
+    tl_stl_revolve(stl): prof 12
+    re_all(fs): "facet normal" stl
+    len(v): fs
+    ut_check(_): "a revolved cylinder wall" v 24
+
+    setenv(_): "HOME" "tests"
+    tl_recent_add(_): "a.dxf"
+    tl_recent_add(_): "b.dxf"
+    tl_recent_add(_): "a.dxf"
+    tl_recent(rc):
+    encode(v): rc
+    ut_check(_): "recent files" v "[`a.dxf`,`b.dxf`]"
+    remove_file(_): "tests/.tula-recent"
+    tl_autosave(ap): dg "tests/tula-more-x.dxf"
+    ut_check(_): "autosave beside the file" ap "tests/tula-more-x.autosave.dxf"
+    remove_file(_): ap
+
+    # the scripting API
+    tula_new(_):
+    tula_layer(_): "parts" 4
+    tula_rect(_): 0 0 40 20
+    tula_circle(_): 20 10 5
+    tula_do(v): "dim linear 0,0 40,0 20,-8"
+    ut_check(_): "a script's dimension" v "40"
+    tula_save(_): "tests/tula-more-api.dxf"
+    tl_load(back): "tests/tula-more-api.dxf"
+    btget(es): back "entities"
+    len(v): es
+    ut_check(_): "a scripted drawing saved" {v >= 3} true
+    remove_file(_): "tests/tula-more-api.dxf"
+    set(r): 0
+]
+
+ut_bin_str(r): v code s [
+    set(r): 0
+    push(_): v {code & 255}
+    push(_): v {code >> 8}
+    len(n): s
+    set(i): 0
+    while(_): {i < n} [
+        byte(x): s i
+        push(_): v x
+        set(i): {i + 1}
+    ]
+    push(_): v 0
+]
+
+# a double's eight bytes, little-endian (enough for these test values)
+ut_bin_f64(r): v code x [
+    set(r): 0
+    push(_): v {code & 255}
+    push(_): v {code >> 8}
+    set(sign): 0
+    if(_): {x < 0} [
+        set(sign): 1
+        set(x): {0 - x}
+    ]
+    if(_): {x = 0} [
+        set(i): 0
+        while(_): {i < 8} [
+            push(_): v 0
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    set(e): 0
+    while(_): {x >= 2} [
+        set(x): {x / 2.0}
+        set(e): {e + 1}
+    ]
+    while(_): {x < 1} [
+        set(x): {x * 2.0}
+        set(e): {e - 1}
+    ]
+    set(f): {(x - 1) * 4503599627370496}
+    str_trunc(fi): f
+    set(ex): {e + 1023}
+    set(i): 0
+    while(_): {i < 6} [
+        push(_): v {fi & 255}
+        set(fi): {fi >> 8}
+        set(i): {i + 1}
+    ]
+    push(_): v {((ex & 15) << 4) | (fi & 15)}
+    push(_): v {(sign << 7) | (ex >> 4)}
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    ut_input(_):
+    ut_shapes(_):
+    ut_geometry(_):
+    ut_doc(_):
+    ut_files(_):
+]

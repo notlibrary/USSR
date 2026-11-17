@@ -1,0 +1,6417 @@
+# more.su - Tula refine pass 1: the CAD engine beyond 0.4, headless. A
+# drawing (tl_doc) holds entities in tula.su's vector form, layers, blocks,
+# views, variables and the DXF entities Tula does not draw; commands work
+# on it from the window's command line, from scripts and from tests.
+#
+# Entities (tula.su's, plus):
+#   ["ELLIPSE", cx, cy, mx, my, ratio, start, end]   (radians, like DXF)
+#   ["SPLINE", degree, points]   ["XLINE", x, y, dx, dy]   ["RAY", ...]
+#   ["HATCH", "SOLID"|"ANSI31", points, scale]
+#   ["DIM", type, x1, y1, x2, y2, x3, y3, text]   (linear aligned radius
+#       diameter angle; points: the two measured points and where it sits)
+#   ["INSERT", name, x, y, sx, sy, rotation]
+# Any entity may end with a btree of properties: layer, color (ACI;
+# 256 by layer), ltype, lweight.
+#
+# Scripting: tula_new(_): / tula_line(_): x1 y1 x2 y2 / tula_circle /
+# tula_arc / tula_rect / tula_polygon / tula_text / tula_save(_): path ...
+# work on the current drawing (tl_current). tl_command(s): doc line runs
+# one command; tl_commands(s): doc text runs a script of them.
+$once
+$include "../libs/strings.su"
+$include "../libs/math.su"
+$include "../libs/lists.su"
+
+global(_): tl_current
+
+$define TL_EPS 0.000001
+
+# --- the document
+
+tl_doc_new(r): [
+    btree(r):
+    vec(e): ""
+    btput(_): r "entities" e
+    btree(layers):
+    btput(_): r "layers" layers
+    tl_layer_add(_): r "0" 7
+    btree(blocks):
+    btput(_): r "blocks" blocks
+    btree(views):
+    btput(_): r "views" views
+    btree(vars):
+    btput(_): r "vars" vars
+    vec(raw): ""
+    btput(_): r "raw" raw
+    vec(u): ""
+    btput(_): r "undo" u
+    vec(rd): ""
+    btput(_): r "redo" rd
+    btput(_): r "layer" "0"
+    btput(_): r "color" 256
+    btput(_): r "units" "mm"
+    vec(sel): ""
+    btput(_): r "selection" sel
+    vec(last): ""
+    push(_): last 0
+    push(_): last 0
+    btput(_): r "last" last
+    btput(_): r "theme" "light"
+]
+
+tl_entities(r): doc [
+    btget(r): doc "entities"
+]
+
+tl_props(r): e [
+    set(r): null
+    len(n): e
+    if(_): {n = 0} [ return(r): r ]
+    at(x): e {n - 1}
+    typeof(t): x
+    if(_): {t = "btree"} [ set(r): x ]
+]
+
+tl_prop(r): e key default [
+    tl_props(p): e
+    set(r): default
+    if(_): {p != null} [ btget(r): p key default ]
+]
+
+tl_set_prop(r): e key value [
+    tl_props(p): e
+    if(_): {p = null} [
+        btree(p):
+        push(_): e p
+    ]
+    btput(_): p key value
+    set(r): 0
+]
+
+# an entity without its properties (a copy of the fields)
+tl_fields(r): e [
+    vec(r): ""
+    len(n): e
+    tl_props(p): e
+    if(_): {p != null} [ set(n): {n - 1} ]
+    set(i): 0
+    while(_): {i < n} [
+        at(x): e i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+]
+
+# a deep copy of an entity (point vectors and properties too)
+tl_copy(r): e [
+    vec(r): ""
+    len(n): e
+    set(i): 0
+    while(_): {i < n} [
+        at(x): e i
+        typeof(t): x
+        if(_): {t = "vector"} [
+            vec(c): ""
+            list_concat(c): c x
+            push(_): r c
+        ]
+        elif(_): {t = "btree"} [
+            btree(c):
+            btkeys(ks): x
+            len(nk): ks
+            set(k): 0
+            while(_): {k < nk} [
+                at(kk): ks k
+                btget(v): x kk
+                btput(_): c kk v
+                set(k): {k + 1}
+            ]
+            push(_): r c
+        ]
+        else(_): [ push(_): r x ]
+        set(i): {i + 1}
+    ]
+]
+
+# adds an entity with the current layer and colour; its index
+tl_add(r): doc e [
+    btget(layer): doc "layer"
+    btget(color): doc "color"
+    if(_): {layer != "0"} [ tl_set_prop(_): e "layer" layer ]
+    if(_): {color != 256} [ tl_set_prop(_): e "color" color ]
+    btget(es): doc "entities"
+    push(_): es e
+    len(n): es
+    set(r): {n - 1}
+]
+
+tl_new(r): kind a [
+    vec(r): ""
+    push(_): r kind
+    len(n): a
+    set(i): 0
+    while(_): {i < n} [
+        at(x): a i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+]
+
+tl_nums(r): text [
+    str_split(p): text " "
+    vec(r): ""
+    len(n): p
+    set(i): 0
+    while(_): {i < n} [
+        at(x): p i
+        if(_): {x != ""} [
+            str_to_number(v): x
+            push(_): r v
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_line_e(r): x1 y1 x2 y2 [
+    vec(r): ""
+    push(_): r "LINE"
+    push(_): r x1
+    push(_): r y1
+    push(_): r x2
+    push(_): r y2
+]
+
+tl_circle_e(r): cx cy rad [
+    vec(r): ""
+    push(_): r "CIRCLE"
+    push(_): r cx
+    push(_): r cy
+    push(_): r rad
+]
+
+tl_arc_e(r): cx cy rad a0 a1 [
+    vec(r): ""
+    push(_): r "ARC"
+    push(_): r cx
+    push(_): r cy
+    push(_): r rad
+    push(_): r a0
+    push(_): r a1
+]
+
+tl_poly_e(r): closed pts [
+    vec(r): ""
+    push(_): r "POLYLINE"
+    push(_): r closed
+    push(_): r pts
+]
+
+tl_text_e(r): x y h text [
+    vec(r): ""
+    push(_): r "TEXT"
+    push(_): r x
+    push(_): r y
+    push(_): r h
+    push(_): r text
+]
+
+# --- undo: snapshots of the entities
+
+tl_checkpoint(r): doc [
+    btget(es): doc "entities"
+    vec(snap): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_copy(c): e
+        push(_): snap c
+        set(i): {i + 1}
+    ]
+    btget(u): doc "undo"
+    push(_): u snap
+    len(nu): u
+    if(_): {nu > 100} [
+        vec(keep): ""
+        set(i): 1
+        while(_): {i < nu} [
+            at(x): u i
+            push(_): keep x
+            set(i): {i + 1}
+        ]
+        btput(_): doc "undo" keep
+    ]
+    vec(none): ""
+    btput(_): doc "redo" none
+    set(r): 0
+]
+
+tl_undo(r): doc [
+    btget(u): doc "undo"
+    len(n): u
+    set(r): false
+    if(_): {n = 0} [ return(r): r ]
+    pop(snap): u
+    btget(es): doc "entities"
+    btget(rd): doc "redo"
+    push(_): rd es
+    btput(_): doc "entities" snap
+    set(r): true
+]
+
+tl_redo(r): doc [
+    btget(rd): doc "redo"
+    len(n): rd
+    set(r): false
+    if(_): {n = 0} [ return(r): r ]
+    pop(snap): rd
+    btget(es): doc "entities"
+    btget(u): doc "undo"
+    push(_): u es
+    btput(_): doc "entities" snap
+    set(r): true
+]
+
+# --- angles and points
+
+tl_deg(r): rad [
+    set(r): {rad * 180 / M_PI}
+]
+
+tl_rad(r): deg [
+    set(r): {deg * M_PI / 180}
+]
+
+tl_norm_deg(r): a [
+    set(r): a
+    while(_): {r < 0} [ set(r): {r + 360} ]
+    while(_): {r >= 360} [ set(r): {r - 360} ]
+]
+
+tl_angle(r): x1 y1 x2 y2 [
+    atan2(a): {y2 - y1} {x2 - x1}
+    tl_deg(r): a
+    tl_norm_deg(r): r
+]
+
+tl_dist(r): x1 y1 x2 y2 [
+    sqrt(r): {(x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)}
+]
+
+tl_pt(r): x y [
+    vec(r): ""
+    push(_): r x
+    push(_): r y
+]
+
+tl_round(r): x digits [
+    round(r): x digits
+    abs(a): r
+    if(_): {a < TL_EPS} [ set(r): 0 ]
+]
+
+# "@10,0" relative, "@25<45" polar relative, "100,50", "25<45" polar from
+# the origin; variables and expressions work in each number -> [x y] or null
+tl_coord(r): doc text last [
+    set(r): null
+    str_trim(t): text
+    str_starts(rel): t "@"
+    if(_): rel [
+        len(tl): t
+        slice(t): t 1 {tl - 1}
+    ]
+    set(bx): 0
+    set(by): 0
+    if(_): rel [
+        at(bx): last 0
+        at(by): last 1
+    ]
+    str_find(lt): t "<" 0
+    if(_): {lt > 0} [
+        slice(ds): t 0 lt
+        len(tl): t
+        slice(as): t {lt + 1} {tl - lt - 1}
+        tl_eval(d): doc ds
+        tl_eval(a): doc as
+        if(_): {d = null || a = null} [ return(r): r ]
+        tl_rad(ar): a
+        cos(c): ar
+        sin(s): ar
+        tl_pt(r): {bx + d * c} {by + d * s}
+        return(r): r
+    ]
+    str_find(cm): t "," 0
+    if(_): {cm <= 0} [ return(r): r ]
+    slice(xs): t 0 cm
+    len(tl): t
+    slice(ys): t {cm + 1} {tl - cm - 1}
+    tl_eval(x): doc xs
+    tl_eval(y): doc ys
+    if(_): {x = null || y = null} [ return(r): r ]
+    tl_pt(r): {bx + x} {by + y}
+]
+
+# --- expressions: numbers, variables, + - * / ^ ( ), sqrt sin cos tan
+# (degrees), abs, pi
+
+global(_): tl_ex_text tl_ex_pos tl_ex_vars tl_ex_bad
+
+tl_eval(r): doc text [
+    set(tl_ex_text): text
+    set(tl_ex_pos): 0
+    set(tl_ex_bad): false
+    set(tl_ex_vars): null
+    if(_): {doc != null} [ btget(tl_ex_vars): doc "vars" ]
+    tl_ex_sum(r):
+    tl_ex_space(_):
+    len(n): tl_ex_text
+    if(_): {tl_ex_bad || tl_ex_pos < n} [ set(r): null ]
+]
+
+tl_ex_space(r): [
+    set(r): 0
+    len(n): tl_ex_text
+    while(_): {tl_ex_pos < n} [
+        byte(b): tl_ex_text tl_ex_pos
+        if(_): {b != 32 && b != 9} [ return(r): r ]
+        set(tl_ex_pos): {tl_ex_pos + 1}
+    ]
+]
+
+tl_ex_peek(r): [
+    tl_ex_space(_):
+    set(r): 0
+    len(n): tl_ex_text
+    if(_): {tl_ex_pos < n} [ byte(r): tl_ex_text tl_ex_pos ]
+]
+
+tl_ex_sum(r): [
+    tl_ex_product(r):
+    set(go): true
+    while(_): go [
+        tl_ex_peek(c):
+        if(_): {c = 43} [
+            set(tl_ex_pos): {tl_ex_pos + 1}
+            tl_ex_product(v):
+            set(r): {r + v}
+        ]
+        elif(_): {c = 45} [
+            set(tl_ex_pos): {tl_ex_pos + 1}
+            tl_ex_product(v):
+            set(r): {r - v}
+        ]
+        else(_): [ set(go): false ]
+    ]
+]
+
+tl_ex_product(r): [
+    tl_ex_power(r):
+    set(go): true
+    while(_): go [
+        tl_ex_peek(c):
+        if(_): {c = 42} [
+            set(tl_ex_pos): {tl_ex_pos + 1}
+            tl_ex_power(v):
+            set(r): {r * v}
+        ]
+        elif(_): {c = 47} [
+            set(tl_ex_pos): {tl_ex_pos + 1}
+            tl_ex_power(v):
+            if(_): {v = 0} [
+                set(tl_ex_bad): true
+                set(v): 1
+            ]
+            set(r): {r / (v * 1.0)}
+        ]
+        else(_): [ set(go): false ]
+    ]
+]
+
+tl_ex_power(r): [
+    tl_ex_unary(r):
+    tl_ex_peek(c):
+    if(_): {c = 94} [
+        set(tl_ex_pos): {tl_ex_pos + 1}
+        tl_ex_power(v):
+        pow(r): r v
+    ]
+]
+
+tl_ex_unary(r): [
+    tl_ex_peek(c):
+    if(_): {c = 45} [
+        set(tl_ex_pos): {tl_ex_pos + 1}
+        tl_ex_unary(v):
+        set(r): {0 - v}
+        return(r): r
+    ]
+    if(_): {c = 43} [ set(tl_ex_pos): {tl_ex_pos + 1} ]
+    tl_ex_atom(r):
+]
+
+tl_ex_atom(r): [
+    set(r): 0
+    tl_ex_peek(c):
+    len(n): tl_ex_text
+    if(_): {c = 40} [
+        set(tl_ex_pos): {tl_ex_pos + 1}
+        tl_ex_sum(r):
+        tl_ex_peek(c2):
+        if(_): {c2 = 41} [ set(tl_ex_pos): {tl_ex_pos + 1} ]
+        else(_): [ set(tl_ex_bad): true ]
+        return(r): r
+    ]
+    set(start): tl_ex_pos
+    if(_): {(c >= 48 && c <= 57) || c = 46} [
+        while(_): {tl_ex_pos < n} [
+            byte(b): tl_ex_text tl_ex_pos
+            if(_): {(b >= 48 && b <= 57) || b = 46 || b = 101} [ set(tl_ex_pos): {tl_ex_pos + 1} ]
+            else(_): [ set(n): tl_ex_pos ]
+        ]
+        len(n): tl_ex_text
+        slice(s): tl_ex_text start {tl_ex_pos - start}
+        str_to_number(r): s
+        typeof(rt): r
+        if(_): {rt != "integer" && rt != "real"} [
+            set(tl_ex_bad): true
+            set(r): 0
+        ]
+        return(r): r
+    ]
+    while(_): {tl_ex_pos < n} [
+        byte(b): tl_ex_text tl_ex_pos
+        if(_): {(b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b = 95 || (b >= 48 && b <= 57 && tl_ex_pos > start)} [ set(tl_ex_pos): {tl_ex_pos + 1} ]
+        else(_): [ set(n): tl_ex_pos ]
+    ]
+    len(n): tl_ex_text
+    if(_): {tl_ex_pos = start} [
+        set(tl_ex_bad): true
+        return(r): r
+    ]
+    slice(name): tl_ex_text start {tl_ex_pos - start}
+    tl_ex_peek(c3):
+    if(_): {c3 = 40} [
+        set(tl_ex_pos): {tl_ex_pos + 1}
+        tl_ex_sum(a):
+        tl_ex_peek(c4):
+        if(_): {c4 = 41} [ set(tl_ex_pos): {tl_ex_pos + 1} ]
+        else(_): [ set(tl_ex_bad): true ]
+        if(_): {name = "sqrt"} [ sqrt(r): a ]
+        elif(_): {name = "sin"} [
+            tl_rad(ar): a
+            sin(r): ar
+        ]
+        elif(_): {name = "cos"} [
+            tl_rad(ar): a
+            cos(r): ar
+        ]
+        elif(_): {name = "tan"} [
+            tl_rad(ar): a
+            sin(s): ar
+            cos(co): ar
+            set(r): {s / co}
+        ]
+        elif(_): {name = "abs"} [ abs(r): a ]
+        else(_): [ set(tl_ex_bad): true ]
+        return(r): r
+    ]
+    if(_): {name = "pi"} [
+        set(r): M_PI
+        return(r): r
+    ]
+    set(v): null
+    if(_): {tl_ex_vars != null} [ btget(v): tl_ex_vars name null ]
+    if(_): {v = null} [ set(tl_ex_bad): true ]
+    else(_): [ set(r): v ]
+]
+
+# "a = 2 * b + 10": the variable is set; its value or null
+tl_set_var(r): doc text [
+    set(r): null
+    str_find(eq): text "=" 0
+    if(_): {eq <= 0} [ return(r): r ]
+    slice(name): text 0 eq
+    str_trim(name): name
+    len(tl): text
+    slice(ex): text {eq + 1} {tl - eq - 1}
+    tl_eval(r): doc ex
+    if(_): {r != null} [
+        btget(vars): doc "vars"
+        btput(_): vars name r
+    ]
+]
+
+# --- shapes
+
+tl_rect(r): x1 y1 x2 y2 [
+    vec(pts): ""
+    push(_): pts x1
+    push(_): pts y1
+    push(_): pts x2
+    push(_): pts y1
+    push(_): pts x2
+    push(_): pts y2
+    push(_): pts x1
+    push(_): pts y2
+    tl_poly_e(r): true pts
+]
+
+# a regular polygon of n sides around (cx, cy); outside true: the radius
+# reaches the middle of each side (circumscribed about the circle)
+tl_polygon(r): cx cy rad n outside angle [
+    set(rr): rad
+    if(_): outside [
+        tl_rad(h): {180.0 / n}
+        cos(c): h
+        set(rr): {rad / c}
+    ]
+    vec(pts): ""
+    set(i): 0
+    while(_): {i < n} [
+        tl_rad(a): {angle + 360.0 * i / n}
+        cos(c): a
+        sin(s): a
+        push(_): pts {cx + rr * c}
+        push(_): pts {cy + rr * s}
+        set(i): {i + 1}
+    ]
+    tl_poly_e(r): true pts
+]
+
+# the circle through three points: [cx cy r] or null
+tl_circle3(r): x1 y1 x2 y2 x3 y3 [
+    set(r): null
+    set(d): {2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))}
+    abs(ad): d
+    if(_): {ad < TL_EPS} [ return(r): r ]
+    set(s1): {x1 * x1 + y1 * y1}
+    set(s2): {x2 * x2 + y2 * y2}
+    set(s3): {x3 * x3 + y3 * y3}
+    set(ux): {(s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / d}
+    set(uy): {(s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / d}
+    tl_dist(rad): ux uy x1 y1
+    vec(r): ""
+    push(_): r ux
+    push(_): r uy
+    push(_): r rad
+]
+
+# an arc through three points, start to end through the middle
+tl_arc3(r): x1 y1 x2 y2 x3 y3 [
+    set(r): null
+    tl_circle3(c): x1 y1 x2 y2 x3 y3
+    if(_): {c = null} [ return(r): r ]
+    at(cx): c 0
+    at(cy): c 1
+    at(rad): c 2
+    tl_angle(a1): cx cy x1 y1
+    tl_angle(a2): cx cy x2 y2
+    tl_angle(a3): cx cy x3 y3
+    # counter-clockwise from a1 to a3 passes a2?
+    tl_norm_deg(s2): {a2 - a1}
+    tl_norm_deg(s3): {a3 - a1}
+    if(_): {s2 < s3} [ tl_arc_e(r): cx cy rad a1 a3 ]
+    else(_): [ tl_arc_e(r): cx cy rad a3 a1 ]
+]
+
+tl_ellipse(r): cx cy rx ry rot [
+    tl_rad(a): rot
+    cos(c): a
+    sin(s): a
+    set(mx): {rx * c}
+    set(my): {rx * s}
+    set(ratio): 1.0
+    if(_): {rx > 0} [ set(ratio): {ry / (rx * 1.0)} ]
+    vec(r): ""
+    push(_): r "ELLIPSE"
+    push(_): r cx
+    push(_): r cy
+    push(_): r mx
+    push(_): r my
+    push(_): r ratio
+    push(_): r 0
+    push(_): r {2 * M_PI}
+]
+
+tl_spline(r): degree pts [
+    vec(r): ""
+    push(_): r "SPLINE"
+    push(_): r degree
+    push(_): r pts
+]
+
+# a clamped uniform B-spline of control points, as points (flat)
+tl_bspline_points(r): degree ctrl steps [
+    vec(r): ""
+    len(nn): ctrl
+    set(n): {nn / 2}
+    str_trunc(n): n
+    set(p): degree
+    if(_): {n <= p} [ set(p): {n - 1} ]
+    if(_): {p < 1} [
+        list_concat(r): r ctrl
+        return(r): r
+    ]
+    # knots: p+1 zeros, inner, p+1 ones
+    vec(k): ""
+    set(m): {n + p + 1}
+    set(i): 0
+    while(_): {i < m} [
+        set(v): 0
+        if(_): {i > p && i < n} [ set(v): {(i - p) / (n - p * 1.0)} ]
+        if(_): {i >= n} [ set(v): 1.0 ]
+        push(_): k v
+        set(i): {i + 1}
+    ]
+    set(s): 0
+    while(_): {s <= steps} [
+        set(u): {s / (steps * 1.0)}
+        if(_): {u >= 1} [ set(u): 0.9999999 ]
+        set(x): 0
+        set(y): 0
+        set(j): 0
+        while(_): {j < n} [
+            tl_basis(b): j p u k
+            at(cx): ctrl {2 * j}
+            at(cy): ctrl {2 * j + 1}
+            set(x): {x + b * cx}
+            set(y): {y + b * cy}
+            set(j): {j + 1}
+        ]
+        push(_): r x
+        push(_): r y
+        set(s): {s + 1}
+    ]
+]
+
+tl_basis(r): i p u k [
+    if(_): {p = 0} [
+        at(a): k i
+        at(b): k {i + 1}
+        set(r): 0
+        if(_): {u >= a && u < b} [ set(r): 1 ]
+        return(r): r
+    ]
+    at(ki): k i
+    at(kip): k {i + p}
+    at(ki1): k {i + 1}
+    at(kip1): k {i + p + 1}
+    set(left): 0
+    set(right): 0
+    if(_): {kip - ki > 0} [
+        tl_basis(b1): i {p - 1} u k
+        set(left): {(u - ki) / (kip - ki) * b1}
+    ]
+    if(_): {kip1 - ki1 > 0} [
+        tl_basis(b2): {i + 1} {p - 1} u k
+        set(right): {(kip1 - u) / (kip1 - ki1) * b2}
+    ]
+    set(r): {left + right}
+]
+
+# --- what entities become when drawn: lines, arcs, circles, polylines,
+# points and text (blocks inserted, splines and ellipses flattened)
+
+tl_explode_for_draw(r): doc e [
+    vec(r): ""
+    at(kind): e 0
+    if(_): {kind = "ELLIPSE"} [
+        tl_ellipse_points(pts): e 64
+        at(s0): e 6
+        at(s1): e 7
+        set(full): {s1 - s0 >= 2 * M_PI - 0.0001}
+        tl_poly_e(p): full pts
+        push(_): r p
+    ]
+    elif(_): {kind = "SPLINE"} [
+        at(deg): e 1
+        at(pts): e 2
+        tl_bspline_points(fp): deg pts 64
+        tl_poly_e(p): false fp
+        push(_): r p
+    ]
+    elif(_): {kind = "XLINE" || kind = "RAY"} [
+        at(x): e 1
+        at(y): e 2
+        at(dx): e 3
+        at(dy): e 4
+        set(far): 100000
+        set(x0): x
+        set(y0): y
+        if(_): {kind = "XLINE"} [
+            set(x0): {x - dx * far}
+            set(y0): {y - dy * far}
+        ]
+        tl_line_e(l): x0 y0 {x + dx * far} {y + dy * far}
+        push(_): r l
+    ]
+    elif(_): {kind = "HATCH"} [
+        at(pat): e 1
+        at(pts): e 2
+        tl_poly_e(b): true pts
+        push(_): r b
+        if(_): {pat != "SOLID"} [
+            at(sc): e 3
+            tl_hatch_lines(hl): pts 45 {sc * 3}
+            list_concat(r): r hl
+        ]
+        else(_): [
+            tl_hatch_lines(hl): pts 45 0.5
+            list_concat(r): r hl
+        ]
+    ]
+    elif(_): {kind = "DIM"} [ tl_dim_parts(r): e ]
+    elif(_): {kind = "INSERT"} [ tl_insert_parts(r): doc e ]
+    else(_): [ push(_): r e ]
+]
+
+tl_ellipse_points(r): e steps [
+    at(cx): e 1
+    at(cy): e 2
+    at(mx): e 3
+    at(my): e 4
+    at(ratio): e 5
+    at(s0): e 6
+    at(s1): e 7
+    sqrt(major): {mx * mx + my * my}
+    set(minor): {major * ratio}
+    atan2(rot): my mx
+    cos(cr): rot
+    sin(sr): rot
+    vec(r): ""
+    set(k): 0
+    while(_): {k <= steps} [
+        set(t): {s0 + (s1 - s0) * k / steps}
+        cos(ct): t
+        sin(st): t
+        set(ex): {major * ct}
+        set(ey): {minor * st}
+        push(_): r {cx + ex * cr - ey * sr}
+        push(_): r {cy + ex * sr + ey * cr}
+        set(k): {k + 1}
+    ]
+]
+
+# parallel lines at angle (degrees), spacing apart, clipped to a polygon
+tl_hatch_lines(r): pts angle spacing [
+    vec(r): ""
+    len(nn): pts
+    set(n): {nn / 2}
+    str_trunc(n): n
+    if(_): {n < 3 || spacing <= 0} [ return(r): r ]
+    tl_rad(a): angle
+    cos(c): a
+    sin(s): a
+    # rotate into a frame where the lines are horizontal
+    set(lo): 1000000000
+    set(hi): -1000000000
+    set(i): 0
+    while(_): {i < n} [
+        at(x): pts {2 * i}
+        at(y): pts {2 * i + 1}
+        set(v): {0 - x * s + y * c}
+        if(_): {v < lo} [ set(lo): v ]
+        if(_): {v > hi} [ set(hi): v ]
+        set(i): {i + 1}
+    ]
+    set(v): {lo + spacing / 2}
+    set(count): 0
+    while(_): {v < hi && count < 2000} [
+        btree(xs):
+        set(i): 0
+        while(_): {i < n} [
+            at(ax): pts {2 * i}
+            at(ay): pts {2 * i + 1}
+            set(j): {(i + 1) % n}
+            at(bx): pts {2 * j}
+            at(by): pts {2 * j + 1}
+            set(av): {0 - ax * s + ay * c}
+            set(bv): {0 - bx * s + by * c}
+            if(_): {(av <= v && bv > v) || (av > v && bv <= v)} [
+                set(t): {(v - av) / (bv - av)}
+                set(px): {ax + (bx - ax) * t}
+                set(py): {ay + (by - ay) * t}
+                set(u): {px * c + py * s}
+                btput(_): xs {u + i * 0.0000001} u
+            ]
+            set(i): {i + 1}
+        ]
+        btkeys(ks): xs
+        len(nk): ks
+        set(k): 0
+        while(_): {k + 1 < nk} [
+            at(ka): ks k
+            at(kb): ks {k + 1}
+            btget(ua): xs ka
+            btget(ub): xs kb
+            tl_line_e(l): {ua * c - v * s} {ua * s + v * c} {ub * c - v * s} {ub * s + v * c}
+            push(_): r l
+            set(k): {k + 2}
+        ]
+        set(v): {v + spacing}
+        set(count): {count + 1}
+    ]
+]
+
+# --- dimensions
+
+tl_dim(r): type x1 y1 x2 y2 x3 y3 text [
+    vec(r): ""
+    push(_): r "DIM"
+    push(_): r type
+    push(_): r x1
+    push(_): r y1
+    push(_): r x2
+    push(_): r y2
+    push(_): r x3
+    push(_): r y3
+    push(_): r text
+]
+
+# the measured value of a dimension
+tl_dim_value(r): e [
+    at(type): e 1
+    at(x1): e 2
+    at(y1): e 3
+    at(x2): e 4
+    at(y2): e 5
+    at(x3): e 6
+    at(y3): e 7
+    if(_): {type = "linear"} [
+        # horizontal or vertical: by where the line sits
+        abs(dx): {x2 - x1}
+        abs(dy): {y2 - y1}
+        set(r): dx
+        set(miny): y1
+        if(_): {y2 < miny} [ set(miny): y2 ]
+        set(maxy): y1
+        if(_): {y2 > maxy} [ set(maxy): y2 ]
+        if(_): {x3 < x1 && x3 < x2 || x3 > x1 && x3 > x2} [
+            if(_): {y3 >= miny && y3 <= maxy} [ set(r): dy ]
+        ]
+    ]
+    elif(_): {type = "aligned"} [ tl_dist(r): x1 y1 x2 y2 ]
+    elif(_): {type = "radius"} [ tl_dist(r): x1 y1 x2 y2 ]
+    elif(_): {type = "diameter"} [
+        tl_dist(d): x1 y1 x2 y2
+        set(r): {2 * d}
+    ]
+    elif(_): {type = "angle"} [
+        # at (x1, y1) between the rays to (x2, y2) and (x3, y3)
+        tl_angle(a): x1 y1 x2 y2
+        tl_angle(b): x1 y1 x3 y3
+        tl_norm_deg(r): {b - a}
+    ]
+    else(_): [ set(r): 0 ]
+]
+
+tl_dim_text(r): e [
+    at(t): e 8
+    tl_dim_value(v): e
+    at(type): e 1
+    str_from_number(vs): v 2
+    str_ends(z): vs ".00"
+    if(_): z [
+        len(vl): vs
+        slice(vs): vs 0 {vl - 3}
+    ]
+    if(_): {type = "radius"} [ concat(vs): "R" vs ]
+    if(_): {type = "diameter"} [ concat(vs): "%%c" vs ]
+    if(_): {type = "angle"} [ concat(vs): vs "%%d" ]
+    set(r): vs
+    if(_): {t != ""} [ str_replace(r): t "<>" vs ]
+]
+
+# a dimension as lines, an arc and text
+tl_dim_parts(r): e [
+    vec(r): ""
+    at(type): e 1
+    at(x1): e 2
+    at(y1): e 3
+    at(x2): e 4
+    at(y2): e 5
+    at(x3): e 6
+    at(y3): e 7
+    tl_dim_text(t): e
+    set(h): 2.5
+    if(_): {type = "radius" || type = "diameter"} [
+        tl_line_e(l): x1 y1 x2 y2
+        push(_): r l
+        tl_text_e(tx): x3 y3 h t
+        push(_): r tx
+        return(r): r
+    ]
+    if(_): {type = "angle"} [
+        tl_dist(rad): x1 y1 x2 y2
+        tl_angle(a): x1 y1 x2 y2
+        tl_angle(b): x1 y1 x3 y3
+        tl_arc_e(arc): x1 y1 {rad * 0.6} a b
+        push(_): r arc
+        tl_rad(m): {(a + b) / 2}
+        cos(c): m
+        sin(s): m
+        tl_text_e(tx): {x1 + rad * 0.7 * c} {y1 + rad * 0.7 * s} h t
+        push(_): r tx
+        return(r): r
+    ]
+    # where the dimension line runs
+    set(ax): x1
+    set(ay): y3
+    set(bx): x2
+    set(by): y3
+    tl_dim_value(v): e
+    abs(dx): {x2 - x1}
+    if(_): {type = "linear" && v != dx} [
+        set(ax): x3
+        set(ay): y1
+        set(bx): x3
+        set(by): y2
+    ]
+    if(_): {type = "aligned"} [
+        # offset along the normal through (x3, y3)
+        set(ux): {x2 - x1}
+        set(uy): {y2 - y1}
+        tl_dist(len_): x1 y1 x2 y2
+        if(_): {len_ > 0} [
+            set(nx): {0 - uy / len_}
+            set(ny): {ux / len_}
+            set(off): {(x3 - x1) * nx + (y3 - y1) * ny}
+            set(ax): {x1 + nx * off}
+            set(ay): {y1 + ny * off}
+            set(bx): {x2 + nx * off}
+            set(by): {y2 + ny * off}
+        ]
+    ]
+    tl_line_e(e1): x1 y1 ax ay
+    push(_): r e1
+    tl_line_e(e2): x2 y2 bx by
+    push(_): r e2
+    tl_line_e(dl): ax ay bx by
+    push(_): r dl
+    tl_text_e(tx): {(ax + bx) / 2} {(ay + by) / 2 + 1} h t
+    push(_): r tx
+]
+
+# --- blocks
+
+tl_block_define(r): doc name bx by entities [
+    btget(blocks): doc "blocks"
+    vec(b): ""
+    push(_): b bx
+    push(_): b by
+    push(_): b entities
+    btput(_): blocks name b
+    set(r): 0
+]
+
+tl_insert(r): name x y sx sy rot [
+    vec(r): ""
+    push(_): r "INSERT"
+    push(_): r name
+    push(_): r x
+    push(_): r y
+    push(_): r sx
+    push(_): r sy
+    push(_): r rot
+]
+
+# an INSERT as the block's entities, placed
+tl_insert_parts(r): doc e [
+    vec(r): ""
+    at(name): e 1
+    at(x): e 2
+    at(y): e 3
+    at(sx): e 4
+    at(sy): e 5
+    at(rot): e 6
+    btget(blocks): doc "blocks"
+    btget(b): blocks name null
+    if(_): {b = null} [ return(r): r ]
+    at(bx): b 0
+    at(by): b 1
+    at(es): b 2
+    tl_matrix_insert(m): bx by x y sx sy rot
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(be): es i
+        tl_copy(c): be
+        tl_transform(c2): c m
+        # nested blocks
+        at(k): c2 0
+        if(_): {k = "INSERT" || k = "DIM" || k = "SPLINE" || k = "ELLIPSE" || k = "HATCH"} [
+            tl_explode_for_draw(parts): doc c2
+            list_concat(r): r parts
+        ]
+        else(_): [ push(_): r c2 ]
+        set(i): {i + 1}
+    ]
+]
+
+# entities of the selection exploded: INSERTs into their parts
+tl_explode(r): doc idx [
+    btget(es): doc "entities"
+    at(e): es idx
+    at(k): e 0
+    set(r): 0
+    if(_): {k != "INSERT"} [ return(r): r ]
+    tl_insert_parts(parts): doc e
+    vec(out): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        if(_): {i = idx} [
+            list_concat(out): out parts
+            len(r): parts
+        ]
+        else(_): [
+            at(x): es i
+            push(_): out x
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): doc "entities" out
+]
+
+# --- transforms: [a b c d e f] maps (x, y) to (a x + c y + e, b x + d y + f)
+
+tl_matrix(r): a b c d e f [
+    vec(r): ""
+    push(_): r a
+    push(_): r b
+    push(_): r c
+    push(_): r d
+    push(_): r e
+    push(_): r f
+]
+
+tl_mat_move(r): dx dy [
+    tl_matrix(r): 1 0 0 1 dx dy
+]
+
+tl_mat_rotate(r): cx cy deg [
+    tl_rad(a): deg
+    cos(c): a
+    sin(s): a
+    tl_matrix(r): c s {0 - s} c {cx - c * cx + s * cy} {cy - s * cx - c * cy}
+]
+
+tl_mat_scale(r): cx cy k [
+    tl_matrix(r): k 0 0 k {cx - k * cx} {cy - k * cy}
+]
+
+# mirror in the line through (x1, y1) and (x2, y2)
+tl_mat_mirror(r): x1 y1 x2 y2 [
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(l2): {dx * dx + dy * dy}
+    set(a): {(dx * dx - dy * dy) / l2}
+    set(b): {2 * dx * dy / l2}
+    tl_matrix(r): a b b {0 - a} {x1 - a * x1 - b * y1} {y1 - b * x1 + a * y1}
+]
+
+tl_matrix_insert(r): bx by x y sx sy rot [
+    tl_rad(a): rot
+    cos(c): a
+    sin(s): a
+    # p' = R S (p - base) + (x, y)
+    tl_matrix(r): {c * sx} {s * sx} {0 - s * sy} {c * sy} {x - (c * sx * bx - s * sy * by)} {y - (s * sx * bx + c * sy * by)}
+]
+
+tl_xy(r): m x y [
+    at(a): m 0
+    at(b): m 1
+    at(c): m 2
+    at(d): m 3
+    at(e): m 4
+    at(f): m 5
+    tl_pt(r): {a * x + c * y + e} {b * x + d * y + f}
+]
+
+tl_mat_scale_factor(r): m [
+    at(a): m 0
+    at(b): m 1
+    sqrt(r): {a * a + b * b}
+]
+
+tl_mat_mirrored(r): m [
+    at(a): m 0
+    at(b): m 1
+    at(c): m 2
+    at(d): m 3
+    set(r): {a * d - b * c < 0}
+]
+
+tl_mat_angle(r): m [
+    at(a): m 0
+    at(b): m 1
+    tl_angle(r): 0 0 a b
+]
+
+# an entity under a transform (similarity: circles stay circles)
+tl_transform(r): e m [
+    tl_copy(r): e
+    at(kind): r 0
+    tl_mat_scale_factor(k): m
+    tl_mat_mirrored(mir): m
+    tl_mat_angle(rot): m
+    if(_): {kind = "LINE"} [
+        at(x1): r 1
+        at(y1): r 2
+        at(x2): r 3
+        at(y2): r 4
+        tl_xy(p): m x1 y1
+        tl_xy(q): m x2 y2
+        at(v): p 0
+        set(r): 1 v
+        at(v): p 1
+        set(r): 2 v
+        at(v): q 0
+        set(r): 3 v
+        at(v): q 1
+        set(r): 4 v
+    ]
+    elif(_): {kind = "CIRCLE" || kind = "ARC" || kind = "POINT" || kind = "TEXT" || kind = "XLINE" || kind = "RAY" || kind = "INSERT"} [
+        set(ix): 1
+        if(_): {kind = "INSERT"} [ set(ix): 2 ]
+        at(x): r ix
+        at(y): r {ix + 1}
+        tl_xy(p): m x y
+        at(v): p 0
+        set(r): ix v
+        at(v): p 1
+        set(r): {ix + 1} v
+        if(_): {kind = "CIRCLE" || kind = "ARC"} [
+            at(rad): r 3
+            set(r): 3 {rad * k}
+        ]
+        if(_): {kind = "ARC"} [
+            at(a0): r 4
+            at(a1): r 5
+            if(_): mir [
+                tl_norm_deg(n0): {rot - a1}
+                tl_norm_deg(n1): {rot - a0}
+            ]
+            else(_): [
+                tl_norm_deg(n0): {a0 + rot}
+                tl_norm_deg(n1): {a1 + rot}
+            ]
+            set(r): 4 n0
+            set(r): 5 n1
+        ]
+        if(_): {kind = "TEXT"} [
+            at(h): r 3
+            set(r): 3 {h * k}
+        ]
+        if(_): {kind = "XLINE" || kind = "RAY"} [
+            at(dx): r 3
+            at(dy): r 4
+            at(a): m 0
+            at(b): m 1
+            at(c): m 2
+            at(d): m 3
+            set(r): 3 {(a * dx + c * dy) / k}
+            set(r): 4 {(b * dx + d * dy) / k}
+        ]
+        if(_): {kind = "INSERT"} [
+            at(sx): r 4
+            at(sy): r 5
+            at(ro): r 6
+            set(r): 4 {sx * k}
+            set(r): 5 {sy * k}
+            if(_): mir [ set(r): 5 {0 - sy * k} ]
+            tl_norm_deg(nr): {ro + rot}
+            set(r): 6 nr
+        ]
+    ]
+    elif(_): {kind = "POLYLINE" || kind = "SPLINE" || kind = "HATCH"} [
+        at(pts): r 2
+        vec(np): ""
+        len(n): pts
+        set(i): 0
+        while(_): {i + 1 < n} [
+            at(x): pts i
+            at(y): pts {i + 1}
+            tl_xy(p): m x y
+            at(v): p 0
+            push(_): np v
+            at(v): p 1
+            push(_): np v
+            set(i): {i + 2}
+        ]
+        set(r): 2 np
+    ]
+    elif(_): {kind = "ELLIPSE"} [
+        at(x): r 1
+        at(y): r 2
+        tl_xy(p): m x y
+        at(v): p 0
+        set(r): 1 v
+        at(v): p 1
+        set(r): 2 v
+        at(mx): r 3
+        at(my): r 4
+        at(a): m 0
+        at(b): m 1
+        at(c): m 2
+        at(d): m 3
+        set(r): 3 {a * mx + c * my}
+        set(r): 4 {b * mx + d * my}
+        if(_): mir [
+            at(s0): r 6
+            at(s1): r 7
+            set(r): 6 {0 - s1}
+            set(r): 7 {0 - s0}
+        ]
+    ]
+    elif(_): {kind = "DIM"} [
+        set(i): 2
+        while(_): {i < 8} [
+            at(x): r i
+            at(y): r {i + 1}
+            tl_xy(p): m x y
+            at(v): p 0
+            set(r): i v
+            at(v): p 1
+            set(r): {i + 1} v
+            set(i): {i + 2}
+        ]
+    ]
+]
+
+# move, copy, rotate, scale, mirror the entities at idx (copy keeps them)
+tl_apply(r): doc idx m keep [
+    btget(es): doc "entities"
+    set(r): 0
+    len(n): idx
+    set(i): 0
+    while(_): {i < n} [
+        at(k): idx i
+        at(e): es k
+        tl_transform(t): e m
+        if(_): keep [ push(_): es t ]
+        else(_): [ set(es): k t ]
+        set(r): {r + 1}
+        set(i): {i + 1}
+    ]
+]
+
+# rectangular array: rows x cols copies, dx dy apart
+tl_array_rect(r): doc idx rows cols dx dy [
+    set(r): 0
+    set(i): 0
+    while(_): {i < rows} [
+        set(j): 0
+        while(_): {j < cols} [
+            if(_): {i > 0 || j > 0} [
+                tl_mat_move(m): {j * dx} {i * dy}
+                tl_apply(c): doc idx m true
+                set(r): {r + c}
+            ]
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_array_polar(r): doc idx cx cy count total [
+    set(r): 0
+    set(i): 1
+    while(_): {i < count} [
+        tl_mat_rotate(m): cx cy {total * i / count}
+        tl_apply(c): doc idx m true
+        set(r): {r + c}
+        set(i): {i + 1}
+    ]
+]
+
+# --- intersections
+
+# line segments p1-p2 and p3-p4 (as infinite lines when lines is true):
+# [x y t u] or null
+tl_ll(r): x1 y1 x2 y2 x3 y3 x4 y4 lines [
+    set(r): null
+    set(d): {(x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)}
+    abs(ad): d
+    if(_): {ad < TL_EPS} [ return(r): r ]
+    set(t): {((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / d}
+    set(u): {0 - ((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / d}
+    if(_): {lines = false && (t < 0 - TL_EPS || t > 1 + TL_EPS || u < 0 - TL_EPS || u > 1 + TL_EPS)} [ return(r): r ]
+    vec(r): ""
+    push(_): r {x1 + t * (x2 - x1)}
+    push(_): r {y1 + t * (y2 - y1)}
+    push(_): r t
+    push(_): r u
+]
+
+# a line (infinite) and a circle: [[x y t]...] t along the line
+tl_lc(r): x1 y1 x2 y2 cx cy rad [
+    vec(r): ""
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(fx): {x1 - cx}
+    set(fy): {y1 - cy}
+    set(a): {dx * dx + dy * dy}
+    set(b): {2 * (fx * dx + fy * dy)}
+    set(c): {fx * fx + fy * fy - rad * rad}
+    set(disc): {b * b - 4 * a * c}
+    if(_): {disc < 0 - TL_EPS || a = 0} [ return(r): r ]
+    if(_): {disc < 0} [ set(disc): 0 ]
+    sqrt(sq): disc
+    set(t1): {(0 - b - sq) / (2 * a)}
+    set(t2): {(0 - b + sq) / (2 * a)}
+    vec(p): ""
+    push(_): p {x1 + t1 * dx}
+    push(_): p {y1 + t1 * dy}
+    push(_): p t1
+    push(_): r p
+    if(_): {sq > TL_EPS} [
+        vec(q): ""
+        push(_): q {x1 + t2 * dx}
+        push(_): q {y1 + t2 * dy}
+        push(_): q t2
+        push(_): r q
+    ]
+]
+
+# two circles: [[x y]...]
+tl_cc(r): x1 y1 r1 x2 y2 r2 [
+    vec(r): ""
+    tl_dist(d): x1 y1 x2 y2
+    abs(dr): {r1 - r2}
+    if(_): {d > r1 + r2 + TL_EPS || d < dr - TL_EPS || d < TL_EPS} [ return(r): r ]
+    set(a): {(r1 * r1 - r2 * r2 + d * d) / (2 * d)}
+    set(h2): {r1 * r1 - a * a}
+    if(_): {h2 < 0} [ set(h2): 0 ]
+    sqrt(h): h2
+    set(mx): {x1 + a * (x2 - x1) / d}
+    set(my): {y1 + a * (y2 - y1) / d}
+    tl_pt(p): {mx + h * (y2 - y1) / d} {my - h * (x2 - x1) / d}
+    push(_): r p
+    if(_): {h > TL_EPS} [
+        tl_pt(q): {mx - h * (y2 - y1) / d} {my + h * (x2 - x1) / d}
+        push(_): r q
+    ]
+]
+
+# the segments of an entity: [[x1 y1 x2 y2]...] (lines and polylines)
+tl_segments(r): e [
+    vec(r): ""
+    at(kind): e 0
+    if(_): {kind = "LINE"} [
+        tl_fields(f): e
+        vec(s): ""
+        at(a): f 1
+        push(_): s a
+        at(a): f 2
+        push(_): s a
+        at(a): f 3
+        push(_): s a
+        at(a): f 4
+        push(_): s a
+        push(_): r s
+    ]
+    elif(_): {kind = "POLYLINE" || kind = "HATCH"} [
+        at(closed): e 1
+        at(pts): e 2
+        if(_): {kind = "HATCH"} [ set(closed): true ]
+        len(nn): pts
+        set(n): {nn / 2}
+        str_trunc(n): n
+        set(last): {n - 1}
+        if(_): closed [ set(last): n ]
+        set(i): 0
+        while(_): {i < last} [
+            set(j): {(i + 1) % n}
+            vec(s): ""
+            at(a): pts {2 * i}
+            push(_): s a
+            at(a): pts {2 * i + 1}
+            push(_): s a
+            at(a): pts {2 * j}
+            push(_): s a
+            at(a): pts {2 * j + 1}
+            push(_): s a
+            push(_): r s
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+tl_on_arc(r): e x y [
+    at(kind): e 0
+    set(r): true
+    if(_): {kind != "ARC"} [ return(r): r ]
+    at(cx): e 1
+    at(cy): e 2
+    at(a0): e 4
+    at(a1): e 5
+    tl_angle(a): cx cy x y
+    tl_norm_deg(sweep): {a1 - a0}
+    tl_norm_deg(at_): {a - a0}
+    set(r): {at_ <= sweep + 0.0001}
+]
+
+# every crossing of two entities: [[x y]...]
+tl_intersect(r): e f [
+    vec(r): ""
+    at(ka): e 0
+    at(kb): f 0
+    set(roundA): {ka = "CIRCLE" || ka = "ARC"}
+    set(roundB): {kb = "CIRCLE" || kb = "ARC"}
+    if(_): {roundA && roundB} [
+        at(x1): e 1
+        at(y1): e 2
+        at(r1): e 3
+        at(x2): f 1
+        at(y2): f 2
+        at(r2): f 3
+        tl_cc(ps): x1 y1 r1 x2 y2 r2
+        len(n): ps
+        set(i): 0
+        while(_): {i < n} [
+            at(p): ps i
+            at(px): p 0
+            at(py): p 1
+            tl_on_arc(o1): e px py
+            tl_on_arc(o2): f px py
+            if(_): {o1 && o2} [ push(_): r p ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {roundA || roundB} [
+        set(c): e
+        set(l): f
+        if(_): roundB [
+            set(c): f
+            set(l): e
+        ]
+        at(cx): c 1
+        at(cy): c 2
+        at(rad): c 3
+        tl_segments(segs): l
+        len(ns): segs
+        set(j): 0
+        while(_): {j < ns} [
+            at(s): segs j
+            at(x1): s 0
+            at(y1): s 1
+            at(x2): s 2
+            at(y2): s 3
+            tl_lc(ps): x1 y1 x2 y2 cx cy rad
+            len(n): ps
+            set(i): 0
+            while(_): {i < n} [
+                at(p): ps i
+                at(t): p 2
+                at(px): p 0
+                at(py): p 1
+                tl_on_arc(o): c px py
+                if(_): {t >= 0 - TL_EPS && t <= 1 + TL_EPS && o} [
+                    tl_pt(q): px py
+                    push(_): r q
+                ]
+                set(i): {i + 1}
+            ]
+            set(j): {j + 1}
+        ]
+        return(r): r
+    ]
+    tl_segments(sa): e
+    tl_segments(sb): f
+    len(na): sa
+    len(nb): sb
+    set(i): 0
+    while(_): {i < na} [
+        at(s): sa i
+        set(j): 0
+        while(_): {j < nb} [
+            at(t): sb j
+            at(x1): s 0
+            at(y1): s 1
+            at(x2): s 2
+            at(y2): s 3
+            at(x3): t 0
+            at(y3): t 1
+            at(x4): t 2
+            at(y4): t 3
+            tl_ll(p): x1 y1 x2 y2 x3 y3 x4 y4 false
+            if(_): {p != null} [
+                at(px): p 0
+                at(py): p 1
+                tl_pt(q): px py
+                push(_): r q
+            ]
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- snapping
+
+# object snaps near (x, y) within tol: [x y kind] or null; modes: a list
+# of end mid center int perp tan near; from: [x y] the point drawn from
+tl_osnap(r): doc x y tol modes from [
+    set(r): null
+    btget(es): doc "entities"
+    set(best): tol
+    vec(cands): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_snap_points(ps): e modes from x y
+        list_concat(cands): cands ps
+        set(i): {i + 1}
+    ]
+    lenin_has_tl(wint): modes "int"
+    if(_): wint [
+        set(i): 0
+        while(_): {i < n} [
+            at(e): es i
+            set(j): {i + 1}
+            while(_): {j < n} [
+                at(f): es j
+                tl_intersect(ps): e f
+                len(np): ps
+                set(k): 0
+                while(_): {k < np} [
+                    at(p): ps k
+                    at(px): p 0
+                    at(py): p 1
+                    vec(c): ""
+                    push(_): c px
+                    push(_): c py
+                    push(_): c "int"
+                    push(_): cands c
+                    set(k): {k + 1}
+                ]
+                set(j): {j + 1}
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    len(nc): cands
+    set(i): 0
+    while(_): {i < nc} [
+        at(c): cands i
+        at(cx): c 0
+        at(cy): c 1
+        tl_dist(d): x y cx cy
+        if(_): {d <= best} [
+            set(best): d
+            set(r): c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+lenin_has_tl(r): v x [
+    set(r): false
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [ set(r): true ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_snap_points(r): e modes from x y [
+    vec(r): ""
+    at(kind): e 0
+    lenin_has_tl(wend): modes "end"
+    lenin_has_tl(wmid): modes "mid"
+    lenin_has_tl(wcen): modes "center"
+    lenin_has_tl(wperp): modes "perp"
+    lenin_has_tl(wtan): modes "tan"
+    lenin_has_tl(wnear): modes "near"
+    if(_): {kind = "CIRCLE" || kind = "ARC"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        if(_): wcen [ tl_snap_push(_): r cx cy "center" ]
+        if(_): {kind = "ARC" && (wend || wmid)} [
+            at(a0): e 4
+            at(a1): e 5
+            tl_norm_deg(sw): {a1 - a0}
+            if(_): wend [
+                tl_polar_pt(p): cx cy rad a0
+                tl_snap_push_pt(_): r p "end"
+                tl_polar_pt(p): cx cy rad a1
+                tl_snap_push_pt(_): r p "end"
+            ]
+            if(_): wmid [
+                tl_polar_pt(p): cx cy rad {a0 + sw / 2}
+                tl_snap_push_pt(_): r p "mid"
+            ]
+        ]
+        if(_): {wtan && from != null} [
+            at(fx): from 0
+            at(fy): from 1
+            tl_dist(d): fx fy cx cy
+            if(_): {d > rad} [
+                tl_angle(base): cx cy fx fy
+                set(cosv): {rad / d}
+                set(sv): {1 - cosv * cosv}
+                sqrt(s2): sv
+                atan2(ha): s2 cosv
+                tl_deg(hd): ha
+                tl_polar_pt(p): cx cy rad {base + hd}
+                tl_snap_push_pt(_): r p "tan"
+                tl_polar_pt(p): cx cy rad {base - hd}
+                tl_snap_push_pt(_): r p "tan"
+            ]
+        ]
+        if(_): wnear [
+            tl_angle(a): cx cy x y
+            tl_polar_pt(p): cx cy rad a
+            tl_snap_push_pt(_): r p "near"
+        ]
+        return(r): r
+    ]
+    if(_): {kind = "POINT" && (wend || wcen)} [
+        at(px): e 1
+        at(py): e 2
+        tl_snap_push(_): r px py "end"
+        return(r): r
+    ]
+    tl_segments(segs): e
+    len(ns): segs
+    set(i): 0
+    while(_): {i < ns} [
+        at(s): segs i
+        at(x1): s 0
+        at(y1): s 1
+        at(x2): s 2
+        at(y2): s 3
+        if(_): wend [
+            tl_snap_push(_): r x1 y1 "end"
+            tl_snap_push(_): r x2 y2 "end"
+        ]
+        if(_): wmid [ tl_snap_push(_): r {(x1 + x2) / 2} {(y1 + y2) / 2} "mid" ]
+        if(_): {wperp && from != null} [
+            at(fx): from 0
+            at(fy): from 1
+            tl_foot(p): x1 y1 x2 y2 fx fy
+            tl_snap_push_pt(_): r p "perp"
+        ]
+        if(_): wnear [
+            tl_foot(p): x1 y1 x2 y2 x y
+            tl_snap_push_pt(_): r p "near"
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_snap_push(r): v x y kind [
+    set(r): 0
+    vec(e): ""
+    push(_): e x
+    push(_): e y
+    push(_): e kind
+    push(_): v e
+]
+
+tl_snap_push_pt(r): v p kind [
+    at(x): p 0
+    at(y): p 1
+    tl_snap_push(r): v x y kind
+]
+
+tl_polar_pt(r): cx cy rad deg [
+    tl_rad(a): deg
+    cos(c): a
+    sin(s): a
+    tl_pt(r): {cx + rad * c} {cy + rad * s}
+]
+
+# the foot of the perpendicular from (px, py) on the segment's line
+tl_foot(r): x1 y1 x2 y2 px py [
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(l2): {dx * dx + dy * dy}
+    set(t): 0
+    if(_): {l2 > 0} [ set(t): {((px - x1) * dx + (py - y1) * dy) / l2} ]
+    tl_pt(r): {x1 + t * dx} {y1 + t * dy}
+]
+
+# ortho: the point straightened to horizontal or vertical from (ax, ay)
+tl_ortho(r): ax ay x y [
+    abs(dx): {x - ax}
+    abs(dy): {y - ay}
+    if(_): {dx >= dy} [ tl_pt(r): x ay ]
+    else(_): [ tl_pt(r): ax y ]
+]
+
+# polar tracking: the angle rounded to steps of step degrees
+tl_polar_track(r): ax ay x y step [
+    tl_dist(d): ax ay x y
+    tl_angle(a): ax ay x y
+    set(k): {a / step}
+    round(k): k 0
+    tl_polar_pt(r): ax ay d {k * step}
+]
+
+# "length 10.000  angle 45.0" for the segment being drawn
+tl_readout(r): ax ay x y [
+    tl_dist(d): ax ay x y
+    tl_angle(a): ax ay x y
+    str_from_number(ds): d 3
+    str_from_number(as): a 1
+    str_from_number(xs): x 3
+    str_from_number(ys): y 3
+    concat(r): xs ", " ys "  length " ds "  angle " as
+]
+
+# --- selection
+
+tl_bbox(r): doc e [
+    tl_explode_for_draw(parts): doc e
+    set(x0): 1000000000
+    set(y0): 1000000000
+    set(x1): -1000000000
+    set(y1): -1000000000
+    len(np): parts
+    set(i): 0
+    while(_): {i < np} [
+        at(p): parts i
+        tl_points_of(ps): p
+        len(n): ps
+        set(k): 0
+        while(_): {k + 1 < n} [
+            at(x): ps k
+            at(y): ps {k + 1}
+            if(_): {x < x0} [ set(x0): x ]
+            if(_): {y < y0} [ set(y0): y ]
+            if(_): {x > x1} [ set(x1): x ]
+            if(_): {y > y1} [ set(y1): y ]
+            set(k): {k + 2}
+        ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    push(_): r x0
+    push(_): r y0
+    push(_): r x1
+    push(_): r y1
+]
+
+# the points that bound a basic entity (flat x y ...)
+tl_points_of(r): e [
+    vec(r): ""
+    at(kind): e 0
+    if(_): {kind = "LINE"} [
+        at(a): e 1
+        push(_): r a
+        at(a): e 2
+        push(_): r a
+        at(a): e 3
+        push(_): r a
+        at(a): e 4
+        push(_): r a
+    ]
+    elif(_): {kind = "CIRCLE"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        push(_): r {cx - rad}
+        push(_): r {cy - rad}
+        push(_): r {cx + rad}
+        push(_): r {cy + rad}
+    ]
+    elif(_): {kind = "ARC"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        at(a0): e 4
+        at(a1): e 5
+        tl_norm_deg(sw): {a1 - a0}
+        set(k): 0
+        while(_): {k <= 32} [
+            tl_polar_pt(p): cx cy rad {a0 + sw * k / 32}
+            list_concat(r): r p
+            set(k): {k + 1}
+        ]
+    ]
+    elif(_): {kind = "POLYLINE"} [
+        at(pts): e 2
+        list_concat(r): r pts
+    ]
+    elif(_): {kind = "POINT" || kind = "TEXT"} [
+        at(a): e 1
+        push(_): r a
+        at(b): e 2
+        push(_): r b
+        if(_): {kind = "TEXT"} [
+            at(h): e 3
+            at(t): e 4
+            len(tl): t
+            push(_): r {a + tl * h * 0.8}
+            push(_): r {b + h}
+        ]
+    ]
+]
+
+# the index of the entity nearest (x, y) within tol, or -1
+tl_pick(r): doc x y tol [
+    set(r): -1
+    btget(es): doc "entities"
+    set(best): tol
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_distance_to(d): doc e x y
+        if(_): {d <= best} [
+            set(best): d
+            set(r): i
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_distance_to(r): doc e x y [
+    set(r): 1000000000
+    tl_explode_for_draw(parts): doc e
+    len(np): parts
+    set(i): 0
+    while(_): {i < np} [
+        at(p): parts i
+        at(kind): p 0
+        set(d): 1000000000
+        if(_): {kind = "CIRCLE" || kind = "ARC"} [
+            at(cx): p 1
+            at(cy): p 2
+            at(rad): p 3
+            tl_dist(dc): x y cx cy
+            abs(d): {dc - rad}
+            tl_angle(a): cx cy x y
+            tl_polar_pt(q): cx cy rad a
+            at(qx): q 0
+            at(qy): q 1
+            tl_on_arc(on): p qx qy
+            if(_): {on = false} [ set(d): 1000000000 ]
+        ]
+        elif(_): {kind = "POINT" || kind = "TEXT"} [
+            at(px): p 1
+            at(py): p 2
+            tl_dist(d): x y px py
+        ]
+        else(_): [
+            tl_segments(segs): p
+            len(ns): segs
+            set(k): 0
+            while(_): {k < ns} [
+                at(s): segs k
+                at(x1): s 0
+                at(y1): s 1
+                at(x2): s 2
+                at(y2): s 3
+                tl_seg_dist(ds): x y x1 y1 x2 y2
+                if(_): {ds < d} [ set(d): ds ]
+                set(k): {k + 1}
+            ]
+        ]
+        if(_): {d < r} [ set(r): d ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_seg_dist(r): x y x1 y1 x2 y2 [
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(l2): {dx * dx + dy * dy}
+    set(t): 0
+    if(_): {l2 > 0} [ set(t): {((x - x1) * dx + (y - y1) * dy) / l2} ]
+    if(_): {t < 0} [ set(t): 0 ]
+    if(_): {t > 1} [ set(t): 1 ]
+    tl_dist(r): x y {x1 + t * dx} {y1 + t * dy}
+]
+
+# a window (inside only) or crossing (touching) box: the indices
+tl_window(r): doc x0 y0 x1 y1 crossing [
+    vec(r): ""
+    set(ax): x0
+    set(bx): x1
+    if(_): {x1 < x0} [
+        set(ax): x1
+        set(bx): x0
+    ]
+    set(ay): y0
+    set(by): y1
+    if(_): {y1 < y0} [
+        set(ay): y1
+        set(by): y0
+    ]
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_bbox(b): doc e
+        at(ex0): b 0
+        at(ey0): b 1
+        at(ex1): b 2
+        at(ey1): b 3
+        set(inside): {ex0 >= ax && ex1 <= bx && ey0 >= ay && ey1 <= by}
+        set(touch): {ex1 >= ax && ex0 <= bx && ey1 >= ay && ey0 <= by}
+        if(_): {crossing && touch && inside = false} [ tl_crosses_box(touch): doc e ax ay bx by ]
+        if(_): {inside || (crossing && touch)} [ push(_): r i ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- a quadtree of entity boxes, for picking among many
+
+tl_qt_build(r): doc [
+    btree(r):
+    btget(es): doc "entities"
+    vec(boxes): ""
+    len(n): es
+    set(x0): 1000000000
+    set(y0): 1000000000
+    set(x1): -1000000000
+    set(y1): -1000000000
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_bbox(b): doc e
+        push(_): boxes b
+        at(a): b 0
+        at(c): b 1
+        at(d): b 2
+        at(f): b 3
+        if(_): {a < x0} [ set(x0): a ]
+        if(_): {c < y0} [ set(y0): c ]
+        if(_): {d > x1} [ set(x1): d ]
+        if(_): {f > y1} [ set(y1): f ]
+        set(i): {i + 1}
+    ]
+    btput(_): r "boxes" boxes
+    vec(all): ""
+    set(i): 0
+    while(_): {i < n} [
+        push(_): all i
+        set(i): {i + 1}
+    ]
+    tl_qt_node(root): boxes all x0 y0 x1 y1 0
+    btput(_): r "root" root
+]
+
+tl_qt_node(r): boxes idx x0 y0 x1 y1 depth [
+    btree(r):
+    vec(rc): ""
+    push(_): rc x0
+    push(_): rc y0
+    push(_): rc x1
+    push(_): rc y1
+    btput(_): r "rect" rc
+    len(n): idx
+    if(_): {n <= 8 || depth >= 8} [
+        btput(_): r "items" idx
+        return(r): r
+    ]
+    set(mx): {(x0 + x1) / 2}
+    set(my): {(y0 + y1) / 2}
+    vec(here): ""
+    vec(q0): ""
+    vec(q1): ""
+    vec(q2): ""
+    vec(q3): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(k): idx i
+        at(b): boxes k
+        at(a): b 0
+        at(c): b 1
+        at(d): b 2
+        at(f): b 3
+        if(_): {d < mx && f < my} [ push(_): q0 k ]
+        elif(_): {a >= mx && f < my} [ push(_): q1 k ]
+        elif(_): {d < mx && c >= my} [ push(_): q2 k ]
+        elif(_): {a >= mx && c >= my} [ push(_): q3 k ]
+        else(_): [ push(_): here k ]
+        set(i): {i + 1}
+    ]
+    btput(_): r "items" here
+    vec(kids): ""
+    tl_qt_node(k0): boxes q0 x0 y0 mx my {depth + 1}
+    push(_): kids k0
+    tl_qt_node(k1): boxes q1 mx y0 x1 my {depth + 1}
+    push(_): kids k1
+    tl_qt_node(k2): boxes q2 x0 my mx y1 {depth + 1}
+    push(_): kids k2
+    tl_qt_node(k3): boxes q3 mx my x1 y1 {depth + 1}
+    push(_): kids k3
+    btput(_): r "kids" kids
+]
+
+# the indices whose boxes meet [x0 y0 x1 y1]
+tl_qt_query(r): qt x0 y0 x1 y1 [
+    vec(r): ""
+    btget(boxes): qt "boxes"
+    btget(root): qt "root"
+    tl_qt_collect(_): root boxes x0 y0 x1 y1 r
+]
+
+tl_qt_collect(r): node boxes x0 y0 x1 y1 out [
+    set(r): 0
+    btget(rc): node "rect"
+    at(a): rc 0
+    at(c): rc 1
+    at(d): rc 2
+    at(f): rc 3
+    if(_): {x1 < a || x0 > d || y1 < c || y0 > f} [
+        btget(kids0): node "kids" null
+        if(_): {kids0 != null} [ return(r): r ]
+    ]
+    btget(items): node "items"
+    len(n): items
+    set(i): 0
+    while(_): {i < n} [
+        at(k): items i
+        at(b): boxes k
+        at(ba): b 0
+        at(bc): b 1
+        at(bd): b 2
+        at(bf): b 3
+        if(_): {bd >= x0 && ba <= x1 && bf >= y0 && bc <= y1} [ push(_): out k ]
+        set(i): {i + 1}
+    ]
+    btget(kids): node "kids" null
+    if(_): {kids != null} [
+        set(i): 0
+        while(_): {i < 4} [
+            at(kn): kids i
+            tl_qt_collect(_): kn boxes x0 y0 x1 y1 out
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+# --- editing: offset, trim, extend, fillet, chamfer, break, join
+
+# an entity offset by d (left of a line's direction, outward for circles)
+tl_offset(r): e d [
+    set(r): null
+    at(kind): e 0
+    if(_): {kind = "LINE"} [
+        tl_fields(f): e
+        at(x1): f 1
+        at(y1): f 2
+        at(x2): f 3
+        at(y2): f 4
+        tl_dist(l): x1 y1 x2 y2
+        if(_): {l = 0} [ return(r): r ]
+        set(nx): {0 - (y2 - y1) / l * d}
+        set(ny): {(x2 - x1) / l * d}
+        tl_line_e(r): {x1 + nx} {y1 + ny} {x2 + nx} {y2 + ny}
+    ]
+    elif(_): {kind = "CIRCLE" || kind = "ARC"} [
+        tl_copy(r): e
+        at(rad): r 3
+        if(_): {rad + d <= 0} [
+            set(r): null
+            return(r): r
+        ]
+        set(r): 3 {rad + d}
+    ]
+    elif(_): {kind = "POLYLINE"} [
+        at(closed): e 1
+        at(pts): e 2
+        len(nn): pts
+        set(n): {nn / 2}
+        str_trunc(n): n
+        # a closed outline: positive is outward, whichever way it runs
+        if(_): closed [
+            set(sa): 0
+            set(i): 0
+            while(_): {i < n} [
+                set(j): {(i + 1) % n}
+                at(x1): pts {2 * i}
+                at(y1): pts {2 * i + 1}
+                at(x2): pts {2 * j}
+                at(y2): pts {2 * j + 1}
+                set(sa): {sa + x1 * y2 - x2 * y1}
+                set(i): {i + 1}
+            ]
+            if(_): {sa > 0} [ set(d): {0 - d} ]
+        ]
+        vec(np): ""
+        set(i): 0
+        while(_): {i < n} [
+            # the corner: where the two offset edges meet
+            set(ip): {i - 1}
+            set(in_): {i + 1}
+            if(_): {ip < 0} [
+                set(ip): {n - 1}
+                if(_): {closed = false} [ set(ip): -1 ]
+            ]
+            if(_): {in_ >= n} [
+                set(in_): 0
+                if(_): {closed = false} [ set(in_): -1 ]
+            ]
+            at(x): pts {2 * i}
+            at(y): pts {2 * i + 1}
+            set(done): false
+            if(_): {ip >= 0 && in_ >= 0} [
+                at(ax): pts {2 * ip}
+                at(ay): pts {2 * ip + 1}
+                at(bx): pts {2 * in_}
+                at(by): pts {2 * in_ + 1}
+                tl_line_e(l1): ax ay x y
+                tl_line_e(l2): x y bx by
+                tl_offset(o1): l1 d
+                tl_offset(o2): l2 d
+                at(p1): o1 1
+                at(q1): o1 2
+                at(p2): o1 3
+                at(q2): o1 4
+                at(p3): o2 1
+                at(q3): o2 2
+                at(p4): o2 3
+                at(q4): o2 4
+                tl_ll(m): p1 q1 p2 q2 p3 q3 p4 q4 true
+                if(_): {m != null} [
+                    at(mx): m 0
+                    at(my): m 1
+                    push(_): np mx
+                    push(_): np my
+                    set(done): true
+                ]
+            ]
+            if(_): {done = false} [
+                set(ox): x
+                set(oy): y
+                if(_): {in_ >= 0} [
+                    at(bx): pts {2 * in_}
+                    at(by): pts {2 * in_ + 1}
+                    tl_line_e(l): x y bx by
+                    tl_offset(o): l d
+                    at(ox): o 1
+                    at(oy): o 2
+                ]
+                elif(_): {ip >= 0} [
+                    at(ax): pts {2 * ip}
+                    at(ay): pts {2 * ip + 1}
+                    tl_line_e(l): ax ay x y
+                    tl_offset(o): l d
+                    at(ox): o 3
+                    at(oy): o 4
+                ]
+                push(_): np ox
+                push(_): np oy
+            ]
+            set(i): {i + 1}
+        ]
+        tl_poly_e(r): closed np
+    ]
+]
+
+# a line trimmed at its crossings with a boundary: the part on the side
+# of (px, py) goes; the line that stays, or null
+tl_trim(r): e boundary px py [
+    set(r): null
+    at(kind): e 0
+    if(_): {kind != "LINE"} [ return(r): r ]
+    tl_fields(f): e
+    at(x1): f 1
+    at(y1): f 2
+    at(x2): f 3
+    at(y2): f 4
+    tl_intersect(ps): e boundary
+    len(n): ps
+    if(_): {n = 0} [ return(r): r ]
+    # the pick's parameter along the line
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(l2): {dx * dx + dy * dy}
+    set(tp): {((px - x1) * dx + (py - y1) * dy) / l2}
+    set(lo): 0
+    set(hi): 1
+    set(i): 0
+    while(_): {i < n} [
+        at(p): ps i
+        at(qx): p 0
+        at(qy): p 1
+        set(t): {((qx - x1) * dx + (qy - y1) * dy) / l2}
+        if(_): {t < tp && t > lo} [ set(lo): t ]
+        if(_): {t > tp && t < hi} [ set(hi): t ]
+        set(i): {i + 1}
+    ]
+    # the picked piece is [lo, hi]: keep the longer remaining side
+    if(_): {lo > 0 && hi < 1} [
+        # inside: keep both ends; the caller gets the first, the second
+        # is r's "rest" property
+        tl_line_e(r): x1 y1 {x1 + lo * dx} {y1 + lo * dy}
+        tl_line_e(rest): {x1 + hi * dx} {y1 + hi * dy} x2 y2
+        tl_set_prop(_): r "rest" rest
+        return(r): r
+    ]
+    if(_): {lo > 0} [ tl_line_e(r): x1 y1 {x1 + lo * dx} {y1 + lo * dy} ]
+    else(_): [ tl_line_e(r): {x1 + hi * dx} {y1 + hi * dy} x2 y2 ]
+]
+
+# a line extended at its end nearest (px, py) to a boundary, or null
+tl_extend(r): e boundary px py [
+    set(r): null
+    at(kind): e 0
+    if(_): {kind != "LINE"} [ return(r): r ]
+    tl_fields(f): e
+    at(x1): f 1
+    at(y1): f 2
+    at(x2): f 3
+    at(y2): f 4
+    tl_dist(d1): px py x1 y1
+    tl_dist(d2): px py x2 y2
+    set(atend): {d2 <= d1}
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(best): null
+    at(bk): boundary 0
+    if(_): {bk = "CIRCLE" || bk = "ARC"} [
+        at(cx): boundary 1
+        at(cy): boundary 2
+        at(rad): boundary 3
+        tl_lc(ps): x1 y1 x2 y2 cx cy rad
+        len(n): ps
+        set(i): 0
+        while(_): {i < n} [
+            at(p): ps i
+            at(t): p 2
+            at(qx): p 0
+            at(qy): p 1
+            tl_on_arc(on): boundary qx qy
+            if(_): {on && atend && t > 1 && (best = null || t < best)} [ set(best): t ]
+            if(_): {on && atend = false && t < 0 && (best = null || t > best)} [ set(best): t ]
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        tl_segments(segs): boundary
+        len(n): segs
+        set(i): 0
+        while(_): {i < n} [
+            at(s): segs i
+            at(a1): s 0
+            at(b1): s 1
+            at(a2): s 2
+            at(b2): s 3
+            tl_ll(p): x1 y1 x2 y2 a1 b1 a2 b2 true
+            if(_): {p != null} [
+                at(t): p 2
+                at(u): p 3
+                set(onseg): {u >= 0 - TL_EPS && u <= 1 + TL_EPS}
+                if(_): {onseg && atend && t > 1 && (best = null || t < best)} [ set(best): t ]
+                if(_): {onseg && atend = false && t < 0 && (best = null || t > best)} [ set(best): t ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {best = null} [ return(r): r ]
+    if(_): atend [ tl_line_e(r): x1 y1 {x1 + best * dx} {y1 + best * dy} ]
+    else(_): [ tl_line_e(r): {x1 + best * dx} {y1 + best * dy} x2 y2 ]
+]
+
+# two lines that meet (or would): [line1 line2 arc] with an arc of radius
+# rad between them (rad 0: a sharp corner, arc null), or null
+tl_fillet(r): e f rad [
+    set(r): null
+    tl_fields(a): e
+    tl_fields(b): f
+    at(x1): a 1
+    at(y1): a 2
+    at(x2): a 3
+    at(y2): a 4
+    at(x3): b 1
+    at(y3): b 2
+    at(x4): b 3
+    at(y4): b 4
+    tl_ll(p): x1 y1 x2 y2 x3 y3 x4 y4 true
+    if(_): {p = null} [ return(r): r ]
+    at(cx): p 0
+    at(cy): p 1
+    # the far ends stay
+    tl_dist(da1): cx cy x1 y1
+    tl_dist(da2): cx cy x2 y2
+    set(fx): x1
+    set(fy): y1
+    if(_): {da2 > da1} [
+        set(fx): x2
+        set(fy): y2
+    ]
+    tl_dist(db1): cx cy x3 y3
+    tl_dist(db2): cx cy x4 y4
+    set(gx): x3
+    set(gy): y3
+    if(_): {db2 > db1} [
+        set(gx): x4
+        set(gy): y4
+    ]
+    vec(r): ""
+    if(_): {rad <= 0} [
+        tl_line_e(l1): fx fy cx cy
+        tl_line_e(l2): gx gy cx cy
+        push(_): r l1
+        push(_): r l2
+        push(_): r null
+        return(r): r
+    ]
+    # unit directions from the corner to the far ends
+    tl_dist(la): cx cy fx fy
+    tl_dist(lb): cx cy gx gy
+    set(ux): {(fx - cx) / la}
+    set(uy): {(fy - cy) / la}
+    set(vx): {(gx - cx) / lb}
+    set(vy): {(gy - cy) / lb}
+    set(cosv): {ux * vx + uy * vy}
+    acos(theta): cosv
+    tan_half(th): {theta / 2}
+    set(t): {rad / th}
+    sin(sh): {theta / 2}
+    set(dcen): {rad / sh}
+    set(bx): {ux + vx}
+    set(by): {uy + vy}
+    sqrt(bl): {bx * bx + by * by}
+    set(ox): {cx + bx / bl * dcen}
+    set(oy): {cy + by / bl * dcen}
+    set(t1x): {cx + ux * t}
+    set(t1y): {cy + uy * t}
+    set(t2x): {cx + vx * t}
+    set(t2y): {cy + vy * t}
+    tl_line_e(l1): fx fy t1x t1y
+    tl_line_e(l2): gx gy t2x t2y
+    tl_angle(a1): ox oy t1x t1y
+    tl_angle(a2): ox oy t2x t2y
+    tl_norm_deg(sw): {a2 - a1}
+    if(_): {sw <= 180} [ tl_arc_e(arc): ox oy rad a1 a2 ]
+    else(_): [ tl_arc_e(arc): ox oy rad a2 a1 ]
+    push(_): r l1
+    push(_): r l2
+    push(_): r arc
+]
+
+tan_half(r): x [
+    sin(s): x
+    cos(c): x
+    set(r): {s / c}
+]
+
+# two lines cut back d1 and d2 from where they meet, with a line between
+tl_chamfer(r): e f d1 d2 [
+    tl_fillet(sharp): e f 0
+    set(r): null
+    if(_): {sharp = null} [ return(r): r ]
+    at(l1): sharp 0
+    at(l2): sharp 1
+    at(fx): l1 1
+    at(fy): l1 2
+    at(cx): l1 3
+    at(cy): l1 4
+    at(gx): l2 1
+    at(gy): l2 2
+    tl_dist(la): cx cy fx fy
+    tl_dist(lb): cx cy gx gy
+    set(p1x): {cx + (fx - cx) / la * d1}
+    set(p1y): {cy + (fy - cy) / la * d1}
+    set(p2x): {cx + (gx - cx) / lb * d2}
+    set(p2y): {cy + (gy - cy) / lb * d2}
+    vec(r): ""
+    tl_line_e(a): fx fy p1x p1y
+    push(_): r a
+    tl_line_e(b): gx gy p2x p2y
+    push(_): r b
+    tl_line_e(c): p1x p1y p2x p2y
+    push(_): r c
+]
+
+# a line broken at a point: two lines
+tl_break(r): e x y [
+    tl_fields(f): e
+    at(x1): f 1
+    at(y1): f 2
+    at(x2): f 3
+    at(y2): f 4
+    tl_foot(p): x1 y1 x2 y2 x y
+    at(px): p 0
+    at(py): p 1
+    vec(r): ""
+    tl_line_e(a): x1 y1 px py
+    push(_): r a
+    tl_line_e(b): px py x2 y2
+    push(_): r b
+]
+
+# lines and open polylines that meet end to end, joined into polylines
+tl_join(r): parts tol [
+    vec(r): ""
+    vec(chains): ""
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(e): parts i
+        at(k): e 0
+        vec(pts): ""
+        if(_): {k = "LINE"} [
+            tl_fields(f): e
+            at(a): f 1
+            push(_): pts a
+            at(a): f 2
+            push(_): pts a
+            at(a): f 3
+            push(_): pts a
+            at(a): f 4
+            push(_): pts a
+        ]
+        elif(_): {k = "POLYLINE"} [
+            at(pp): e 2
+            list_concat(pts): pts pp
+        ]
+        push(_): chains pts
+        set(i): {i + 1}
+    ]
+    # join repeatedly while two chains share an end
+    set(go): true
+    while(_): go [
+        set(go): false
+        len(nc): chains
+        set(i): 0
+        while(_): {i < nc && go = false} [
+            set(j): {i + 1}
+            while(_): {j < nc && go = false} [
+                at(a): chains i
+                at(b): chains j
+                tl_chain_join(m): a b tol
+                if(_): {m != null} [
+                    vec(rest): ""
+                    set(k): 0
+                    while(_): {k < nc} [
+                        if(_): {k = i} [ push(_): rest m ]
+                        elif(_): {k != j} [
+                            at(x): chains k
+                            push(_): rest x
+                        ]
+                        set(k): {k + 1}
+                    ]
+                    set(chains): rest
+                    set(go): true
+                ]
+                set(j): {j + 1}
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    len(nc): chains
+    set(i): 0
+    while(_): {i < nc} [
+        at(c): chains i
+        len(cl): c
+        at(sx): c 0
+        at(sy): c 1
+        at(ex): c {cl - 2}
+        at(ey): c {cl - 1}
+        tl_dist(d): sx sy ex ey
+        set(closed): {d <= tol && cl > 4}
+        if(_): closed [
+            vec(c2): ""
+            set(k): 0
+            while(_): {k < cl - 2} [
+                at(x): c k
+                push(_): c2 x
+                set(k): {k + 1}
+            ]
+            set(c): c2
+        ]
+        tl_poly_e(p): closed c
+        push(_): r p
+        set(i): {i + 1}
+    ]
+]
+
+tl_chain_join(r): a b tol [
+    set(r): null
+    len(na): a
+    len(nb): b
+    at(asx): a 0
+    at(asy): a 1
+    at(aex): a {na - 2}
+    at(aey): a {na - 1}
+    at(bsx): b 0
+    at(bsy): b 1
+    at(bex): b {nb - 2}
+    at(bey): b {nb - 1}
+    tl_dist(d1): aex aey bsx bsy
+    tl_dist(d2): aex aey bex bey
+    tl_dist(d3): asx asy bex bey
+    tl_dist(d4): asx asy bsx bsy
+    if(_): {d1 <= tol} [
+        vec(r): ""
+        list_concat(r): r a
+        tl_drop2(bt): b
+        list_concat(r): r bt
+    ]
+    elif(_): {d2 <= tol} [
+        tl_rev_pts(br): b
+        vec(r): ""
+        list_concat(r): r a
+        tl_drop2(bt): br
+        list_concat(r): r bt
+    ]
+    elif(_): {d3 <= tol} [
+        vec(r): ""
+        list_concat(r): r b
+        tl_drop2(at_): a
+        list_concat(r): r at_
+    ]
+    elif(_): {d4 <= tol} [
+        tl_rev_pts(ar): a
+        vec(r): ""
+        list_concat(r): r ar
+        tl_drop2(bt): b
+        list_concat(r): r bt
+    ]
+]
+
+tl_drop2(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): 2
+    while(_): {i < n} [
+        at(x): v i
+        push(_): r x
+        set(i): {i + 1}
+    ]
+]
+
+tl_rev_pts(r): v [
+    vec(r): ""
+    len(n): v
+    set(i): {n - 2}
+    while(_): {i >= 0} [
+        at(x): v i
+        at(y): v {i + 1}
+        push(_): r x
+        push(_): r y
+        set(i): {i - 2}
+    ]
+]
+
+# grips: the points that edit an entity; tl_grip_move moves one
+tl_grips(r): e [
+    vec(r): ""
+    at(kind): e 0
+    if(_): {kind = "LINE"} [
+        tl_fields(f): e
+        at(a): f 1
+        at(b): f 2
+        tl_pt(p): a b
+        push(_): r p
+        at(a): f 3
+        at(b): f 4
+        tl_pt(p): a b
+        push(_): r p
+        at(a): f 1
+        at(b): f 2
+        at(c): f 3
+        at(d): f 4
+        tl_pt(p): {(a + c) / 2} {(b + d) / 2}
+        push(_): r p
+    ]
+    elif(_): {kind = "CIRCLE" || kind = "ARC"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        tl_pt(p): cx cy
+        push(_): r p
+        tl_pt(p): {cx + rad} cy
+        push(_): r p
+    ]
+    elif(_): {kind = "POLYLINE"} [
+        at(pts): e 2
+        len(n): pts
+        set(i): 0
+        while(_): {i + 1 < n} [
+            at(a): pts i
+            at(b): pts {i + 1}
+            tl_pt(p): a b
+            push(_): r p
+            set(i): {i + 2}
+        ]
+    ]
+    elif(_): {kind = "POINT" || kind = "TEXT" || kind = "INSERT"} [
+        set(ix): 1
+        if(_): {kind = "INSERT"} [ set(ix): 2 ]
+        at(a): e ix
+        at(b): e {ix + 1}
+        tl_pt(p): a b
+        push(_): r p
+    ]
+]
+
+tl_grip_move(r): e k x y [
+    tl_copy(r): e
+    at(kind): r 0
+    if(_): {kind = "LINE"} [
+        if(_): {k = 0} [
+            set(r): 1 x
+            set(r): 2 y
+        ]
+        elif(_): {k = 1} [
+            set(r): 3 x
+            set(r): 4 y
+        ]
+        else(_): [
+            at(a): r 1
+            at(b): r 2
+            at(c): r 3
+            at(d): r 4
+            set(dx): {x - (a + c) / 2}
+            set(dy): {y - (b + d) / 2}
+            set(r): 1 {a + dx}
+            set(r): 2 {b + dy}
+            set(r): 3 {c + dx}
+            set(r): 4 {d + dy}
+        ]
+    ]
+    elif(_): {kind = "CIRCLE" || kind = "ARC"} [
+        if(_): {k = 0} [
+            set(r): 1 x
+            set(r): 2 y
+        ]
+        else(_): [
+            at(cx): r 1
+            at(cy): r 2
+            tl_dist(d): cx cy x y
+            set(r): 3 d
+        ]
+    ]
+    elif(_): {kind = "POLYLINE"} [
+        at(pts): r 2
+        set(pts): {2 * k} x
+        set(pts): {2 * k + 1} y
+    ]
+    elif(_): {kind = "POINT" || kind = "TEXT" || kind = "INSERT"} [
+        set(ix): 1
+        if(_): {kind = "INSERT"} [ set(ix): 2 ]
+        set(r): ix x
+        set(r): {ix + 1} y
+    ]
+]
+
+# --- measuring
+
+tl_length(r): e [
+    set(r): 0
+    at(kind): e 0
+    if(_): {kind = "CIRCLE"} [
+        at(rad): e 3
+        set(r): {2 * M_PI * rad}
+    ]
+    elif(_): {kind = "ARC"} [
+        at(rad): e 3
+        at(a0): e 4
+        at(a1): e 5
+        tl_norm_deg(sw): {a1 - a0}
+        set(r): {rad * sw * M_PI / 180}
+    ]
+    else(_): [
+        tl_segments(segs): e
+        len(n): segs
+        set(i): 0
+        while(_): {i < n} [
+            at(s): segs i
+            at(x1): s 0
+            at(y1): s 1
+            at(x2): s 2
+            at(y2): s 3
+            tl_dist(d): x1 y1 x2 y2
+            set(r): {r + d}
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+# area and centroid of a closed polyline or a circle: [area cx cy]
+tl_area(r): e [
+    set(r): null
+    at(kind): e 0
+    if(_): {kind = "CIRCLE"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        vec(r): ""
+        push(_): r {M_PI * rad * rad}
+        push(_): r cx
+        push(_): r cy
+        return(r): r
+    ]
+    if(_): {kind != "POLYLINE" && kind != "HATCH"} [ return(r): r ]
+    at(pts): e 2
+    len(nn): pts
+    set(n): {nn / 2}
+    str_trunc(n): n
+    set(a): 0
+    set(sx): 0
+    set(sy): 0
+    set(i): 0
+    while(_): {i < n} [
+        set(j): {(i + 1) % n}
+        at(x1): pts {2 * i}
+        at(y1): pts {2 * i + 1}
+        at(x2): pts {2 * j}
+        at(y2): pts {2 * j + 1}
+        set(c): {x1 * y2 - x2 * y1}
+        set(a): {a + c}
+        set(sx): {sx + (x1 + x2) * c}
+        set(sy): {sy + (y1 + y2) * c}
+        set(i): {i + 1}
+    ]
+    set(a): {a / 2}
+    vec(r): ""
+    abs(aa): a
+    push(_): r aa
+    if(_): {a = 0} [
+        push(_): r 0
+        push(_): r 0
+    ]
+    else(_): [
+        push(_): r {sx / (6 * a)}
+        push(_): r {sy / (6 * a)}
+    ]
+]
+
+# a line of words about each entity of the selection
+tl_list(r): doc idx [
+    set(r): ""
+    btget(es): doc "entities"
+    len(n): idx
+    set(i): 0
+    while(_): {i < n} [
+        at(k): idx i
+        at(e): es k
+        tl_info(t): doc e
+        str_from_int(ks): k
+        concat(r): r ks ": " t "\n"
+        set(i): {i + 1}
+    ]
+]
+
+tl_info(r): doc e [
+    at(kind): e 0
+    tl_prop(layer): e "layer" "0"
+    set(r): kind
+    concat(r): r " on " layer
+    if(_): {kind = "LINE" || kind = "CIRCLE" || kind = "ARC" || kind = "POLYLINE"} [
+        tl_length(l): e
+        str_from_number(ls): l 3
+        concat(r): r ", length " ls
+    ]
+    tl_area(a): e
+    if(_): {a != null} [
+        at(av): a 0
+        str_from_number(as): av 3
+        concat(r): r ", area " as
+    ]
+]
+
+# --- layers
+
+tl_layer_add(r): doc name color [
+    btget(layers): doc "layers"
+    btree(l):
+    btput(_): l "color" color
+    btput(_): l "on" true
+    btput(_): l "frozen" false
+    btput(_): l "locked" false
+    btput(_): l "ltype" "CONTINUOUS"
+    btput(_): layers name l
+    set(r): 0
+]
+
+tl_layer_set(r): doc name key value [
+    btget(layers): doc "layers"
+    btget(l): layers name null
+    set(r): false
+    if(_): {l = null} [ return(r): r ]
+    btput(_): l key value
+    set(r): true
+]
+
+tl_layer_rename(r): doc old new [
+    btget(layers): doc "layers"
+    btget(l): layers old null
+    set(r): false
+    if(_): {l = null || old = "0"} [ return(r): r ]
+    btdel(_): layers old
+    btput(_): layers new l
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_prop(la): e "layer" "0"
+        if(_): {la = old} [ tl_set_prop(_): e "layer" new ]
+        set(i): {i + 1}
+    ]
+    set(r): true
+]
+
+# is an entity shown (its layer on and not frozen)? can it be edited?
+tl_visible(r): doc e [
+    tl_prop(ln): e "layer" "0"
+    btget(layers): doc "layers"
+    btget(l): layers ln null
+    set(r): true
+    if(_): {l != null} [
+        btget(on): l "on"
+        btget(fr): l "frozen"
+        set(r): {on && fr = false}
+    ]
+]
+
+tl_editable(r): doc e [
+    tl_visible(r): doc e
+    tl_prop(ln): e "layer" "0"
+    btget(layers): doc "layers"
+    btget(l): layers ln null
+    if(_): {r && l != null} [
+        btget(lk): l "locked"
+        set(r): {lk = false}
+    ]
+]
+
+# an entity's colour as 0xRRGGBB: its own, else its layer's
+tl_rgb(r): doc e [
+    tl_prop(c): e "color" 256
+    if(_): {c = 256} [
+        tl_prop(ln): e "layer" "0"
+        btget(layers): doc "layers"
+        btget(l): layers ln null
+        set(c): 7
+        if(_): {l != null} [ btget(c): l "color" ]
+    ]
+    tl_aci(r): c
+]
+
+# the AutoCAD colour index: 1..9, greys 250..255, the hue wheel 10..249
+tl_aci(r): n [
+    vec(base): ""
+    str_split(base): "0 16711680 16776960 65280 65535 255 16711935 0 8421504 12632256" " "
+    if(_): {n >= 1 && n <= 9} [
+        at(s): base n
+        str_to_int(r): s 10
+        return(r): r
+    ]
+    if(_): {n >= 250 && n <= 255} [
+        tl_nums(greys): "51 80 105 130 190 255"
+        at(g): greys {n - 250}
+        set(r): {(g << 16) | (g << 8) | g}
+        return(r): r
+    ]
+    if(_): {n < 10 || n > 249} [
+        set(r): 0
+        return(r): r
+    ]
+    set(k): {n - 10}
+    set(hue): {(k / 10) * 15}
+    str_trunc(hue): hue
+    set(row): {k % 10}
+    # even rows full, odd rows pastel; brightness falls every two rows
+    str_trunc(rh): {row / 2}
+    set(v): {1.0 - rh * 0.17}
+    set(s): 1.0
+    if(_): {row % 2 = 1} [ set(s): 0.5 ]
+    tl_hsv(r): hue s v
+]
+
+tl_hsv(r): h s v [
+    set(c): {v * s}
+    set(hh): {h / 60.0}
+    str_trunc(hi): hh
+    set(f): {hh - hi}
+    set(p): {v - c}
+    set(q): {v - c * f}
+    set(t): {v - c * (1 - f)}
+    set(rr): v
+    set(gg): t
+    set(bb): p
+    set(k): {hi % 6}
+    if(_): {k = 1} [
+        set(rr): q
+        set(gg): v
+        set(bb): p
+    ]
+    elif(_): {k = 2} [
+        set(rr): p
+        set(gg): v
+        set(bb): t
+    ]
+    elif(_): {k = 3} [
+        set(rr): p
+        set(gg): q
+        set(bb): v
+    ]
+    elif(_): {k = 4} [
+        set(rr): t
+        set(gg): p
+        set(bb): v
+    ]
+    elif(_): {k = 5} [
+        set(rr): v
+        set(gg): p
+        set(bb): q
+    ]
+    round(r8): {rr * 255} 0
+    round(g8): {gg * 255} 0
+    round(b8): {bb * 255} 0
+    str_trunc(r8): r8
+    str_trunc(g8): g8
+    str_trunc(b8): b8
+    set(r): {(r8 << 16) | (g8 << 8) | b8}
+]
+
+# dash pattern of a linetype in drawing units: [on off ...] or empty
+tl_ltype(r): name scale [
+    vec(r): ""
+    str_upper(n): name
+    if(_): {n = "DASHED"} [
+        push(_): r {6 * scale}
+        push(_): r {3 * scale}
+    ]
+    elif(_): {n = "CENTER"} [
+        push(_): r {12 * scale}
+        push(_): r {3 * scale}
+        push(_): r {3 * scale}
+        push(_): r {3 * scale}
+    ]
+    elif(_): {n = "HIDDEN"} [
+        push(_): r {3 * scale}
+        push(_): r {1.5 * scale}
+    ]
+    elif(_): {n = "DOT"} [
+        push(_): r {0.2 * scale}
+        push(_): r {2 * scale}
+    ]
+]
+
+# a line cut by a dash pattern: the drawn pieces as lines
+tl_dash_line(r): x1 y1 x2 y2 pattern [
+    vec(r): ""
+    len(np): pattern
+    if(_): {np = 0} [
+        tl_line_e(l): x1 y1 x2 y2
+        push(_): r l
+        return(r): r
+    ]
+    tl_dist(len_): x1 y1 x2 y2
+    if(_): {len_ = 0} [ return(r): r ]
+    set(pos): 0
+    set(k): 0
+    set(count): 0
+    while(_): {pos < len_ && count < 5000} [
+        at(seg): pattern k
+        set(end): {pos + seg}
+        if(_): {end > len_} [ set(end): len_ ]
+        if(_): {k % 2 = 0} [
+            tl_line_e(l): {x1 + (x2 - x1) * pos / len_} {y1 + (y2 - y1) * pos / len_} {x1 + (x2 - x1) * end / len_} {y1 + (y2 - y1) * end / len_}
+            push(_): r l
+        ]
+        set(pos): end
+        set(k): {(k + 1) % np}
+        set(count): {count + 1}
+    ]
+]
+
+# --- named views
+
+tl_view_save(r): doc name view [
+    btget(v): doc "views"
+    btput(_): v name view
+    set(r): 0
+]
+
+tl_view_get(r): doc name [
+    btget(v): doc "views"
+    btget(r): v name null
+]
+
+# --- regions: lines that close a loop
+
+# closed loops among the lines and open polylines: closed polylines
+tl_regions(r): doc tol [
+    vec(r): ""
+    btget(es): doc "entities"
+    vec(parts): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        at(k): e 0
+        if(_): {k = "LINE"} [ push(_): parts e ]
+        if(_): {k = "POLYLINE"} [
+            at(c): e 1
+            if(_): c [ push(_): r e ]
+            else(_): [ push(_): parts e ]
+        ]
+        set(i): {i + 1}
+    ]
+    tl_join(js): parts tol
+    len(nj): js
+    set(i): 0
+    while(_): {i < nj} [
+        at(p): js i
+        at(c): p 1
+        if(_): c [ push(_): r p ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- constraints: on line entities (by index)
+#   ["horizontal", i] ["vertical", i] ["length", i, L] ["parallel", i, j]
+#   ["perpendicular", i, j] ["coincident", i, ei, j, ej] ["equal", i, j]
+#   ["fix", i, e] (an end that stays)
+# The solver moves second endpoints (and whole lines for coincident) a
+# little each round until nothing is off by more than tol.
+
+tl_solve(r): doc cons rounds tol [
+    btget(es): doc "entities"
+    set(r): -1
+    len(nc): cons
+    set(k): 0
+    while(_): {k < rounds} [
+        set(worst): 0
+        set(i): 0
+        while(_): {i < nc} [
+            at(c): cons i
+            tl_con_step(err): es c
+            if(_): {err > worst} [ set(worst): err ]
+            set(i): {i + 1}
+        ]
+        if(_): {worst <= tol} [
+            set(r): k
+            return(r): r
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+tl_con_step(r): es c [
+    set(r): 0
+    at(kind): c 0
+    at(i): c 1
+    at(e): es i
+    at(x1): e 1
+    at(y1): e 2
+    at(x2): e 3
+    at(y2): e 4
+    tl_dist(len_): x1 y1 x2 y2
+    if(_): {kind = "horizontal"} [
+        abs(r): {y2 - y1}
+        set(e): 4 y1
+    ]
+    elif(_): {kind = "vertical"} [
+        abs(r): {x2 - x1}
+        set(e): 3 x1
+    ]
+    elif(_): {kind = "length"} [
+        at(want): c 2
+        abs(r): {len_ - want}
+        if(_): {len_ > 0} [
+            set(e): 3 {x1 + (x2 - x1) / len_ * want}
+            set(e): 4 {y1 + (y2 - y1) / len_ * want}
+        ]
+    ]
+    elif(_): {kind = "parallel" || kind = "perpendicular" || kind = "equal"} [
+        at(j): c 2
+        at(f): es j
+        at(u1): f 1
+        at(v1): f 2
+        at(u2): f 3
+        at(v2): f 4
+        tl_angle(a): u1 v1 u2 v2
+        tl_dist(lf): u1 v1 u2 v2
+        tl_angle(b): x1 y1 x2 y2
+        set(want): a
+        if(_): {kind = "perpendicular"} [ set(want): {a + 90} ]
+        set(nl): len_
+        if(_): {kind = "equal"} [
+            set(want): b
+            set(nl): lf
+        ]
+        # the nearer of the two directions
+        tl_norm_deg(d): {want - b}
+        if(_): {d > 90 && d < 270 && kind != "equal"} [ tl_norm_deg(want): {want + 180} ]
+        tl_norm_deg(d): {want - b}
+        if(_): {d > 180} [ set(d): {360 - d} ]
+        abs(dl): {nl - len_}
+        set(r): {d + dl}
+        tl_polar_pt(p): x1 y1 nl want
+        at(px): p 0
+        at(py): p 1
+        set(e): 3 px
+        set(e): 4 py
+    ]
+    elif(_): {kind = "coincident"} [
+        at(ei): c 2
+        at(j): c 3
+        at(ej): c 4
+        at(f): es j
+        set(fx): 1
+        if(_): {ej = 1} [ set(fx): 3 ]
+        at(tx): f fx
+        at(ty): f {fx + 1}
+        set(ex): 1
+        if(_): {ei = 1} [ set(ex): 3 ]
+        at(sx): e ex
+        at(sy): e {ex + 1}
+        tl_dist(r): sx sy tx ty
+        set(e): ex tx
+        set(e): {ex + 1} ty
+    ]
+]
+
+# a driving dimension: the length constraint of line i set to value, and
+# the constraints solved again
+tl_drive(r): doc cons i value [
+    len(n): cons
+    set(found): false
+    set(k): 0
+    while(_): {k < n} [
+        at(c): cons k
+        at(kind): c 0
+        at(ci): c 1
+        if(_): {kind = "length" && ci = i} [
+            set(c): 2 value
+            set(found): true
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): {found = false} [
+        vec(c): ""
+        push(_): c "length"
+        push(_): c i
+        push(_): c value
+        push(_): cons c
+    ]
+    tl_solve(r): doc cons 200 0.0001
+]
+
+# --- isometric drafting
+
+# a point in an isoplane (left, top, right) from 2D plane coordinates
+tl_iso(r): u v plane [
+    set(c): 0.8660254037844386
+    if(_): {plane = "top"} [ tl_pt(r): {(u - v) * c} {(u + v) * 0.5} ]
+    elif(_): {plane = "left"} [ tl_pt(r): {0 - u * c} {v + u * 0.5} ]
+    else(_): [ tl_pt(r): {u * c} {v + u * 0.5} ]
+]
+
+# an iso circle: the ellipse a circle of radius rad becomes in a plane
+tl_iso_circle(r): cx cy rad plane [
+    vec(pts): ""
+    set(k): 0
+    while(_): {k < 48} [
+        tl_rad(a): {k * 7.5}
+        cos(c): a
+        sin(s): a
+        tl_iso(p): {rad * c} {rad * s} plane
+        at(px): p 0
+        at(py): p 1
+        push(_): pts {cx + px}
+        push(_): pts {cy + py}
+        set(k): {k + 1}
+    ]
+    tl_poly_e(r): true pts
+]
+
+# --- sheets: a frame and a title block (ГОСТ 2.301 sizes, mm)
+
+tl_sheet_size(r): name [
+    btree(t):
+    btput(_): t "A4" "210 297"
+    btput(_): t "A3" "420 297"
+    btput(_): t "A2" "594 420"
+    btput(_): t "A1" "841 594"
+    btput(_): t "A0" "1189 841"
+    btget(s): t name ""
+    set(r): null
+    if(_): {s != ""} [ tl_nums(r): s ]
+]
+
+# the sheet's entities: border, frame (20 mm binding margin, 5 elsewhere),
+# a 185 x 55 title block in the lower right with title and author
+tl_sheet(r): name title author [
+    vec(r): ""
+    tl_sheet_size(sz): name
+    if(_): {sz = null} [ return(r): r ]
+    at(w): sz 0
+    at(h): sz 1
+    tl_rect(b): 0 0 w h
+    push(_): r b
+    tl_rect(f): 20 5 {w - 5} {h - 5}
+    push(_): r f
+    set(tx): {w - 5 - 185}
+    tl_rect(tb): tx 5 {w - 5} 60
+    push(_): r tb
+    tl_line_e(l1): tx 20 {w - 5} 20
+    push(_): r l1
+    tl_line_e(l2): tx 40 {w - 5} 40
+    push(_): r l2
+    tl_line_e(l3): {tx + 120} 5 {tx + 120} 60
+    push(_): r l3
+    tl_text_e(t1): {tx + 5} 45 7 title
+    push(_): r t1
+    tl_text_e(t2): {tx + 5} 25 3.5 author
+    push(_): r t2
+    tl_text_e(t3): {tx + 125} 45 3.5 name
+    push(_): r t3
+]
+
+# --- a symbol library, as blocks
+
+tl_symbols(r): doc [
+    set(r): 0
+    # a hex bolt head (M10, across flats 16)
+    tl_polygon(hx): 0 0 8 6 true 0
+    tl_circle_e(hc): 0 0 5
+    vec(b): ""
+    push(_): b hx
+    push(_): b hc
+    tl_block_define(_): doc "BOLT_M10" 0 0 b
+    # a ball bearing in section
+    vec(b): ""
+    tl_circle_e(c1): 0 0 10
+    push(_): b c1
+    tl_circle_e(c2): 0 0 6
+    push(_): b c2
+    tl_circle_e(c3): 0 8 2
+    push(_): b c3
+    tl_block_define(_): doc "BEARING" 0 0 b
+    # a resistor (IEC box) and a capacitor
+    vec(b): ""
+    tl_line_e(l): -10 0 -5 0
+    push(_): b l
+    tl_rect(bx): -5 -2 5 2
+    push(_): b bx
+    tl_line_e(l): 5 0 10 0
+    push(_): b l
+    tl_block_define(_): doc "RESISTOR" 0 0 b
+    vec(b): ""
+    tl_line_e(l): -10 0 -1 0
+    push(_): b l
+    tl_line_e(l): -1 -4 -1 4
+    push(_): b l
+    tl_line_e(l): 1 -4 1 4
+    push(_): b l
+    tl_line_e(l): 1 0 10 0
+    push(_): b l
+    tl_block_define(_): doc "CAPACITOR" 0 0 b
+    vec(b): ""
+    tl_line_e(l): 0 0 0 -4
+    push(_): b l
+    tl_line_e(l): -4 -4 4 -4
+    push(_): b l
+    tl_line_e(l): -2.5 -5.5 2.5 -5.5
+    push(_): b l
+    tl_line_e(l): -1 -7 1 -7
+    push(_): b l
+    tl_block_define(_): doc "GROUND" 0 0 b
+    # a door with its swing, a window in a wall
+    vec(b): ""
+    tl_line_e(l): 0 0 0 900
+    push(_): b l
+    tl_arc_e(a): 0 0 900 0 90
+    push(_): b a
+    tl_block_define(_): doc "DOOR_900" 0 0 b
+    vec(b): ""
+    tl_rect(w): 0 0 1200 250
+    push(_): b w
+    tl_line_e(l): 0 125 1200 125
+    push(_): b l
+    tl_block_define(_): doc "WINDOW_1200" 0 0 b
+    # surface roughness (ГОСТ 2.309) and a weld (fillet) symbol
+    vec(b): ""
+    tl_line_e(l): -3 3 0 0
+    push(_): b l
+    tl_line_e(l): 0 0 6 6
+    push(_): b l
+    tl_line_e(l): 6 6 14 6
+    push(_): b l
+    tl_block_define(_): doc "ROUGHNESS" 0 0 b
+    vec(b): ""
+    tl_nums(tpn): "0 0 4 0 0 4"
+    tl_poly_e(tri): true tpn
+    push(_): b tri
+    tl_line_e(l): 0 0 15 0
+    push(_): b l
+    tl_block_define(_): doc "WELD_FILLET" 0 0 b
+]
+
+# a bill of materials from the inserts: [[block count]...]
+tl_bom(r): doc [
+    vec(r): ""
+    btree(counts):
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        at(k): e 0
+        if(_): {k = "INSERT"} [
+            at(nm): e 1
+            btget(c): counts nm 0
+            btput(_): counts nm {c + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    btkeys(ks): counts
+    len(nk): ks
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): ks i
+        btget(c): counts k
+        vec(row): ""
+        push(_): row k
+        push(_): row c
+        push(_): r row
+        set(i): {i + 1}
+    ]
+]
+
+# a table as entities: rows of text cells, column widths, a row height
+tl_table(r): x y rows widths h [
+    vec(r): ""
+    len(nr): rows
+    len(nc): widths
+    set(total): 0
+    set(i): 0
+    while(_): {i < nc} [
+        at(w): widths i
+        set(total): {total + w}
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i <= nr} [
+        tl_line_e(l): x {y - i * h} {x + total} {y - i * h}
+        push(_): r l
+        set(i): {i + 1}
+    ]
+    set(cx): x
+    set(i): 0
+    while(_): {i <= nc} [
+        tl_line_e(l): cx y cx {y - nr * h}
+        push(_): r l
+        if(_): {i < nc} [
+            at(w): widths i
+            set(cx): {cx + w}
+        ]
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < nr} [
+        at(row): rows i
+        set(cx): x
+        set(j): 0
+        while(_): {j < nc} [
+            at(w): widths j
+            at(v): row j
+            typeof(vt): v
+            set(s): v
+            if(_): {vt = "integer"} [ str_from_int(s): v ]
+            tl_text_e(t): {cx + 1} {y - (i + 1) * h + h * 0.3} {h * 0.5} s
+            push(_): r t
+            set(cx): {cx + w}
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- purge and audit
+
+# unused layers (not "0") and blocks removed: [layers blocks]
+tl_purge(r): doc [
+    btree(used_l):
+    btree(used_b):
+    btput(_): used_l "0" true
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_prop(ln): e "layer" "0"
+        btput(_): used_l ln true
+        at(k): e 0
+        if(_): {k = "INSERT"} [
+            at(bn): e 1
+            btput(_): used_b bn true
+        ]
+        set(i): {i + 1}
+    ]
+    btget(cur): doc "layer"
+    btput(_): used_l cur true
+    btget(layers): doc "layers"
+    btkeys(lk): layers
+    set(nl): 0
+    len(n): lk
+    set(i): 0
+    while(_): {i < n} [
+        at(k): lk i
+        bthas(u): used_l k
+        if(_): {u = false} [
+            btdel(_): layers k
+            set(nl): {nl + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    btget(blocks): doc "blocks"
+    btkeys(bk): blocks
+    set(nb): 0
+    len(n): bk
+    set(i): 0
+    while(_): {i < n} [
+        at(k): bk i
+        bthas(u): used_b k
+        if(_): {u = false} [
+            btdel(_): blocks k
+            set(nb): {nb + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    push(_): r nl
+    push(_): r nb
+]
+
+# bad entities (zero length, zero radius, empty text, unknown layers or
+# blocks) removed: the number removed and why
+tl_audit(r): doc [
+    vec(keep): ""
+    vec(why): ""
+    btget(es): doc "entities"
+    btget(layers): doc "layers"
+    btget(blocks): doc "blocks"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        at(k): e 0
+        set(bad): ""
+        if(_): {k = "LINE"} [
+            tl_length(l): e
+            if(_): {l < TL_EPS} [ set(bad): "a line of no length" ]
+        ]
+        elif(_): {k = "CIRCLE" || k = "ARC"} [
+            at(rad): e 3
+            if(_): {rad <= 0} [ set(bad): "a circle of no radius" ]
+        ]
+        elif(_): {k = "TEXT"} [
+            at(t): e 4
+            if(_): {t = ""} [ set(bad): "empty text" ]
+        ]
+        elif(_): {k = "POLYLINE"} [
+            at(pts): e 2
+            len(np): pts
+            if(_): {np < 4} [ set(bad): "a polyline of one point" ]
+        ]
+        elif(_): {k = "INSERT"} [
+            at(bn): e 1
+            bthas(h): blocks bn
+            if(_): {h = false} [ concat(bad): "an insert of no block " bn ]
+        ]
+        tl_prop(ln): e "layer" "0"
+        bthas(hl): layers ln
+        if(_): {hl = false && bad = ""} [ tl_layer_add(_): doc ln 7 ]
+        if(_): {bad = ""} [ push(_): keep e ]
+        else(_): [
+            str_from_int(is): i
+            concat(w): is ": " bad
+            push(_): why w
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): doc "entities" keep
+    vec(r): ""
+    len(nw): why
+    push(_): r nw
+    push(_): r why
+]
+
+# --- DXF out: R12 (AC1009) or 2000 (AC1015), with layers, blocks, and the
+# entities Tula keeps but does not draw
+
+tl_g(r): t code value [
+    concat(r): t code "\n" value "\n"
+]
+
+tl_gn(r): t code value [
+    str_from_number(v): value 10
+    concat(r): t code "\n" v "\n"
+]
+
+tl_gi(r): t code value [
+    str_from_int(v): value
+    concat(r): t code "\n" v "\n"
+]
+
+tl_dxf(r): doc version [
+    set(r12): {version = "R12"}
+    set(acad): "AC1015"
+    if(_): r12 [ set(acad): "AC1009" ]
+    set(t): ""
+    tl_g(t): t "0" "SECTION"
+    tl_g(t): t "2" "HEADER"
+    tl_g(t): t "9" "$ACADVER"
+    tl_g(t): t "1" acad
+    btget(units): doc "units"
+    set(iu): 4
+    if(_): {units = "inch"} [ set(iu): 1 ]
+    if(_): {r12 = false} [
+        tl_g(t): t "9" "$INSUNITS"
+        tl_gi(t): t "70" iu
+    ]
+    tl_g(t): t "0" "ENDSEC"
+    # tables: linetypes and layers
+    tl_g(t): t "0" "SECTION"
+    tl_g(t): t "2" "TABLES"
+    tl_g(t): t "0" "TABLE"
+    tl_g(t): t "2" "LTYPE"
+    vec(lts): ""
+    str_split(lts): "CONTINUOUS DASHED CENTER HIDDEN DOT" " "
+    tl_gi(t): t "70" 5
+    set(i): 0
+    while(_): {i < 5} [
+        at(lt): lts i
+        tl_g(t): t "0" "LTYPE"
+        tl_g(t): t "2" lt
+        tl_gi(t): t "70" 0
+        tl_g(t): t "3" lt
+        tl_gi(t): t "72" 65
+        tl_ltype(pat): lt 1
+        len(np): pat
+        tl_gi(t): t "73" np
+        set(total): 0
+        set(k): 0
+        while(_): {k < np} [
+            at(x): pat k
+            set(total): {total + x}
+            set(k): {k + 1}
+        ]
+        tl_gn(t): t "40" total
+        set(k): 0
+        while(_): {k < np} [
+            at(x): pat k
+            set(sx): x
+            if(_): {k % 2 = 1} [ set(sx): {0 - x} ]
+            tl_gn(t): t "49" sx
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    tl_g(t): t "0" "ENDTAB"
+    tl_g(t): t "0" "TABLE"
+    tl_g(t): t "2" "LAYER"
+    btget(layers): doc "layers"
+    btkeys(lk): layers
+    len(nl): lk
+    tl_gi(t): t "70" nl
+    set(i): 0
+    while(_): {i < nl} [
+        at(name): lk i
+        btget(l): layers name
+        tl_g(t): t "0" "LAYER"
+        tl_g(t): t "2" name
+        btget(fr): l "frozen"
+        btget(lk2): l "locked"
+        set(flags): 0
+        if(_): fr [ set(flags): {flags | 1} ]
+        if(_): lk2 [ set(flags): {flags | 4} ]
+        tl_gi(t): t "70" flags
+        btget(c): l "color"
+        btget(on): l "on"
+        if(_): {on = false} [ set(c): {0 - c} ]
+        tl_gi(t): t "62" c
+        btget(lt): l "ltype"
+        tl_g(t): t "6" lt
+        set(i): {i + 1}
+    ]
+    tl_g(t): t "0" "ENDTAB"
+    tl_g(t): t "0" "ENDSEC"
+    # blocks
+    tl_g(t): t "0" "SECTION"
+    tl_g(t): t "2" "BLOCKS"
+    btget(blocks): doc "blocks"
+    btkeys(bk): blocks
+    len(nb): bk
+    set(i): 0
+    while(_): {i < nb} [
+        at(name): bk i
+        btget(b): blocks name
+        at(bx): b 0
+        at(by): b 1
+        at(bes): b 2
+        tl_g(t): t "0" "BLOCK"
+        tl_g(t): t "8" "0"
+        tl_g(t): t "2" name
+        tl_gi(t): t "70" 0
+        tl_gn(t): t "10" bx
+        tl_gn(t): t "20" by
+        tl_gn(t): t "30" 0
+        tl_g(t): t "3" name
+        len(nbe): bes
+        set(k): 0
+        while(_): {k < nbe} [
+            at(e): bes k
+            tl_dxf_entity_text(et): doc e r12
+            concat(t): t et
+            set(k): {k + 1}
+        ]
+        tl_g(t): t "0" "ENDBLK"
+        tl_g(t): t "8" "0"
+        set(i): {i + 1}
+    ]
+    tl_g(t): t "0" "ENDSEC"
+    tl_g(t): t "0" "SECTION"
+    tl_g(t): t "2" "ENTITIES"
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_dxf_entity_text(et): doc e r12
+        concat(t): t et
+        set(i): {i + 1}
+    ]
+    btget(raw): doc "raw"
+    len(nr): raw
+    set(i): 0
+    while(_): {i < nr} [
+        at(x): raw i
+        concat(t): t x
+        set(i): {i + 1}
+    ]
+    tl_g(t): t "0" "ENDSEC"
+    tl_g(r): t "0" "EOF"
+]
+
+tl_dxf_common(r): t kind e [
+    tl_g(r): t "0" kind
+    tl_prop(ln): e "layer" "0"
+    tl_g(r): r "8" ln
+    tl_prop(c): e "color" 256
+    if(_): {c != 256} [ tl_gi(r): r "62" c ]
+    tl_prop(lt): e "ltype" ""
+    if(_): {lt != ""} [ tl_g(r): r "6" lt ]
+]
+
+tl_dxf_entity_text(r): doc e r12 [
+    set(r): ""
+    at(kind): e 0
+    if(_): {kind = "LINE"} [
+        tl_dxf_common(r): r "LINE" e
+        at(a): e 1
+        tl_gn(r): r "10" a
+        at(a): e 2
+        tl_gn(r): r "20" a
+        at(a): e 3
+        tl_gn(r): r "11" a
+        at(a): e 4
+        tl_gn(r): r "21" a
+    ]
+    elif(_): {kind = "CIRCLE" || kind = "ARC"} [
+        tl_dxf_common(r): r kind e
+        at(a): e 1
+        tl_gn(r): r "10" a
+        at(a): e 2
+        tl_gn(r): r "20" a
+        at(a): e 3
+        tl_gn(r): r "40" a
+        if(_): {kind = "ARC"} [
+            at(a): e 4
+            tl_gn(r): r "50" a
+            at(a): e 5
+            tl_gn(r): r "51" a
+        ]
+    ]
+    elif(_): {kind = "POINT"} [
+        tl_dxf_common(r): r "POINT" e
+        at(a): e 1
+        tl_gn(r): r "10" a
+        at(a): e 2
+        tl_gn(r): r "20" a
+    ]
+    elif(_): {kind = "TEXT"} [
+        tl_dxf_common(r): r "TEXT" e
+        at(a): e 1
+        tl_gn(r): r "10" a
+        at(a): e 2
+        tl_gn(r): r "20" a
+        at(a): e 3
+        tl_gn(r): r "40" a
+        at(a): e 4
+        tl_g(r): r "1" a
+        tl_prop(rot): e "rotation" 0
+        if(_): {rot != 0} [ tl_gn(r): r "50" rot ]
+    ]
+    elif(_): {kind = "POLYLINE" && r12} [
+        at(closed): e 1
+        at(pts): e 2
+        tl_dxf_common(r): r "POLYLINE" e
+        tl_gi(r): r "66" 1
+        set(f): 0
+        if(_): closed [ set(f): 1 ]
+        tl_gi(r): r "70" f
+        len(np): pts
+        set(k): 0
+        while(_): {k + 1 < np} [
+            tl_dxf_common(r): r "VERTEX" e
+            at(a): pts k
+            tl_gn(r): r "10" a
+            at(a): pts {k + 1}
+            tl_gn(r): r "20" a
+            set(k): {k + 2}
+        ]
+        tl_dxf_common(r): r "SEQEND" e
+    ]
+    elif(_): {kind = "POLYLINE"} [
+        at(closed): e 1
+        at(pts): e 2
+        tl_dxf_common(r): r "LWPOLYLINE" e
+        len(np): pts
+        str_trunc(nv): {np / 2}
+        tl_gi(r): r "90" nv
+        set(f): 0
+        if(_): closed [ set(f): 1 ]
+        tl_gi(r): r "70" f
+        set(k): 0
+        while(_): {k + 1 < np} [
+            at(a): pts k
+            tl_gn(r): r "10" a
+            at(a): pts {k + 1}
+            tl_gn(r): r "20" a
+            set(k): {k + 2}
+        ]
+    ]
+    elif(_): {kind = "ELLIPSE" && r12 = false} [
+        tl_dxf_common(r): r "ELLIPSE" e
+        at(a): e 1
+        tl_gn(r): r "10" a
+        at(a): e 2
+        tl_gn(r): r "20" a
+        at(a): e 3
+        tl_gn(r): r "11" a
+        at(a): e 4
+        tl_gn(r): r "21" a
+        at(a): e 5
+        tl_gn(r): r "40" a
+        at(a): e 6
+        tl_gn(r): r "41" a
+        at(a): e 7
+        tl_gn(r): r "42" a
+    ]
+    elif(_): {kind = "SPLINE" && r12 = false} [
+        at(deg): e 1
+        at(pts): e 2
+        len(np): pts
+        str_trunc(nc): {np / 2}
+        tl_dxf_common(r): r "SPLINE" e
+        tl_gi(r): r "70" 8
+        tl_gi(r): r "71" deg
+        set(p): deg
+        if(_): {nc <= p} [ set(p): {nc - 1} ]
+        set(nk): {nc + p + 1}
+        tl_gi(r): r "72" nk
+        tl_gi(r): r "73" nc
+        set(k): 0
+        while(_): {k < nk} [
+            set(v): 0
+            if(_): {k > p && k < nc} [ set(v): {(k - p) / (nc - p * 1.0)} ]
+            if(_): {k >= nc} [ set(v): 1 ]
+            tl_gn(r): r "40" v
+            set(k): {k + 1}
+        ]
+        set(k): 0
+        while(_): {k + 1 < np} [
+            at(a): pts k
+            tl_gn(r): r "10" a
+            at(a): pts {k + 1}
+            tl_gn(r): r "20" a
+            tl_gn(r): r "30" 0
+            set(k): {k + 2}
+        ]
+    ]
+    elif(_): {(kind = "XLINE" || kind = "RAY") && r12 = false} [
+        tl_dxf_common(r): r kind e
+        at(a): e 1
+        tl_gn(r): r "10" a
+        at(a): e 2
+        tl_gn(r): r "20" a
+        at(a): e 3
+        tl_gn(r): r "11" a
+        at(a): e 4
+        tl_gn(r): r "21" a
+    ]
+    elif(_): {kind = "HATCH" && r12 = false} [
+        at(pat): e 1
+        at(pts): e 2
+        tl_dxf_common(r): r "HATCH" e
+        tl_gn(r): r "10" 0
+        tl_gn(r): r "20" 0
+        tl_gn(r): r "30" 0
+        tl_g(r): r "2" pat
+        set(solid): 0
+        if(_): {pat = "SOLID"} [ set(solid): 1 ]
+        tl_gi(r): r "70" solid
+        tl_gi(r): r "71" 0
+        tl_gi(r): r "91" 1
+        tl_gi(r): r "92" 3
+        tl_gi(r): r "72" 0
+        tl_gi(r): r "73" 1
+        len(np): pts
+        str_trunc(nv): {np / 2}
+        tl_gi(r): r "93" nv
+        set(k): 0
+        while(_): {k + 1 < np} [
+            at(a): pts k
+            tl_gn(r): r "10" a
+            at(a): pts {k + 1}
+            tl_gn(r): r "20" a
+            set(k): {k + 2}
+        ]
+        tl_gi(r): r "97" 0
+        tl_gi(r): r "75" 0
+        tl_gi(r): r "76" 1
+        if(_): {solid = 0} [
+            at(sc): e 3
+            tl_gn(r): r "52" 0
+            tl_gn(r): r "41" sc
+            tl_gi(r): r "77" 0
+            tl_gi(r): r "78" 1
+            tl_gn(r): r "53" 45
+            tl_gn(r): r "43" 0
+            tl_gn(r): r "44" 0
+            tl_gn(r): r "45" {0 - 2.245 * sc}
+            tl_gn(r): r "46" {2.245 * sc}
+            tl_gi(r): r "79" 0
+        ]
+        tl_gi(r): r "98" 0
+    ]
+    elif(_): {kind = "INSERT"} [
+        tl_dxf_common(r): r "INSERT" e
+        at(a): e 1
+        tl_g(r): r "2" a
+        at(a): e 2
+        tl_gn(r): r "10" a
+        at(a): e 3
+        tl_gn(r): r "20" a
+        at(a): e 4
+        tl_gn(r): r "41" a
+        at(a): e 5
+        tl_gn(r): r "42" a
+        at(a): e 6
+        tl_gn(r): r "50" a
+    ]
+    else(_): [
+        # dimensions, and what R12 has no word for: their drawn parts
+        tl_explode_for_draw(parts): doc e
+        tl_props(p): e
+        len(np): parts
+        set(k): 0
+        while(_): {k < np} [
+            at(x): parts k
+            at(xk): x 0
+            if(_): {xk != kind} [
+                if(_): {p != null} [ push(_): x p ]
+                tl_dxf_entity_text(xt): doc x r12
+                concat(r): r xt
+            ]
+            set(k): {k + 1}
+        ]
+    ]
+]
+
+# --- DXF in: blocks and inserts, and the entities Tula keeps raw
+
+# [codes values] pairs of a DXF text
+tl_dxf_pairs(r): text [
+    str_replace(t): text "\r" ""
+    str_split(lines): t "\n"
+    vec(r): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i + 1 < n} [
+        at(c): lines i
+        at(v): lines {i + 1}
+        str_trim(c): c
+        str_to_int(ci): c 10
+        vec(p): ""
+        push(_): p ci
+        push(_): p v
+        push(_): r p
+        set(i): {i + 2}
+    ]
+]
+
+# what tula.su's reader leaves out: [blocks inserts raw layers]
+#   blocks: btree name -> [bx by entities]; inserts: INSERT entities;
+#   raw: DXF text of other entities; layers: btree name -> [color ltype]
+tl_dxf_extras(r): text [
+    tl_dxf_pairs(ps): text
+    btree(blocks):
+    vec(inserts): ""
+    vec(raw): ""
+    btree(layers):
+    set(section): ""
+    set(blockname): ""
+    set(bx): 0
+    set(by): 0
+    vec(bents): ""
+    len(n): ps
+    set(i): 0
+    while(_): {i < n} [
+        at(p): ps i
+        at(c): p 0
+        at(v): p 1
+        if(_): {c = 0} [
+            # one record: up to the next code 0
+            vec(codes): ""
+            vec(vals): ""
+            set(j): {i + 1}
+            set(go): true
+            while(_): {j < n && go} [
+                at(q): ps j
+                at(qc): q 0
+                if(_): {qc = 0} [ set(go): false ]
+                else(_): [
+                    at(qv): q 1
+                    push(_): codes qc
+                    push(_): vals qv
+                    set(j): {j + 1}
+                ]
+            ]
+            if(_): {v = "SECTION"} [ tula_dxf_str(section): codes vals 2 "" ]
+            elif(_): {v = "ENDSEC"} [ set(section): "" ]
+            elif(_): {section = "TABLES" && v = "LAYER"} [
+                tula_dxf_str(ln): codes vals 2 ""
+                if(_): {ln != ""} [
+                    tula_dxf_num(lc): codes vals 62 7
+                    tula_dxf_str(lt): codes vals 6 "CONTINUOUS"
+                    vec(le): ""
+                    push(_): le lc
+                    push(_): le lt
+                    btput(_): layers ln le
+                ]
+            ]
+            elif(_): {section = "BLOCKS" && v = "BLOCK"} [
+                tula_dxf_str(blockname): codes vals 2 ""
+                tula_dxf_num(bx): codes vals 10 0
+                tula_dxf_num(by): codes vals 20 0
+                vec(bents): ""
+            ]
+            elif(_): {section = "BLOCKS" && v = "ENDBLK"} [
+                if(_): {blockname != ""} [
+                    vec(b): ""
+                    push(_): b bx
+                    push(_): b by
+                    push(_): b bents
+                    btput(_): blocks blockname b
+                ]
+                set(blockname): ""
+            ]
+            elif(_): {v = "INSERT" && (section = "ENTITIES" || section = "BLOCKS")} [
+                tula_dxf_str(nm): codes vals 2 ""
+                tula_dxf_num(x): codes vals 10 0
+                tula_dxf_num(y): codes vals 20 0
+                tula_dxf_num(sx): codes vals 41 1
+                tula_dxf_num(sy): codes vals 42 1
+                tula_dxf_num(ro): codes vals 50 0
+                tl_insert(ins): nm x y sx sy ro
+                tula_dxf_str(ln): codes vals 8 "0"
+                if(_): {ln != "0"} [ tl_set_prop(_): ins "layer" ln ]
+                if(_): {section = "ENTITIES"} [ push(_): inserts ins ]
+                else(_): [ push(_): bents ins ]
+            ]
+            elif(_): {section = "BLOCKS" && blockname != ""} [
+                tula_dxf_entity(be): v codes vals
+                if(_): {be != null} [ push(_): bents be ]
+            ]
+            elif(_): {section = "ENTITIES"} [
+                tula_dxf_entity(known): v codes vals
+                set(ours): {known != null || v = "POLYLINE" || v = "VERTEX" || v = "SEQEND"}
+                if(_): {ours = false} [
+                    # kept as it came, to be written back
+                    concat(rt): "0\n" v "\n"
+                    len(nc): codes
+                    set(k): 0
+                    while(_): {k < nc} [
+                        at(cc): codes k
+                        at(cv): vals k
+                        str_from_int(cs): cc
+                        concat(rt): rt cs "\n" cv "\n"
+                        set(k): {k + 1}
+                    ]
+                    push(_): raw rt
+                ]
+            ]
+            set(i): j
+        ]
+        else(_): [ set(i): {i + 1} ]
+    ]
+    vec(r): ""
+    push(_): r blocks
+    push(_): r inserts
+    push(_): r raw
+    push(_): r layers
+]
+
+# a DXF file into a new document: tula.su's entities, then the extras
+tl_load(r): path [
+    tl_doc_new(r):
+    tula_dxf_read(res): path
+    typeof(rt): res
+    if(_): {rt = "string"} [
+        btput(_): r "error" res
+        return(r): r
+    ]
+    at(es): res 0
+    btput(_): r "entities" es
+    read_bytes(b): path
+    bytes_text(text): b
+    tl_dxf_extras(x): text
+    at(blocks): x 0
+    at(ins): x 1
+    at(raw): x 2
+    at(layers): x 3
+    btput(_): r "blocks" blocks
+    list_concat(es): es ins
+    btput(_): r "entities" es
+    btput(_): r "raw" raw
+    btkeys(lk): layers
+    len(n): lk
+    set(i): 0
+    while(_): {i < n} [
+        at(k): lk i
+        btget(le): layers k
+        at(c): le 0
+        at(lt): le 1
+        abs(ac): c
+        tl_layer_add(_): r k ac
+        if(_): {c < 0} [ tl_layer_set(_): r k "on" false ]
+        tl_layer_set(_): r k "ltype" lt
+        set(i): {i + 1}
+    ]
+]
+
+# --- binary DXF: the same groups as ASCII DXF, as ASCII DXF text
+
+tl_dxf_binary(r): bytes [
+    set(r): null
+    tula_bin_sig(sig):
+    len(sl): sig
+    len(n): bytes
+    if(_): {n < sl} [ return(r): r ]
+    set(i): 0
+    while(_): {i < sl} [
+        at(x): bytes i
+        byte(y): sig i
+        if(_): {i < 18 && x != y} [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    set(p): 22
+    set(t): ""
+    while(_): {p + 1 < n} [
+        at(c0): bytes p
+        at(c1): bytes {p + 1}
+        set(code): {c0 | (c1 << 8)}
+        set(p): {p + 2}
+        set(v): ""
+        if(_): {(code >= 10 && code <= 59) || (code >= 110 && code <= 149) || (code >= 210 && code <= 239) || (code >= 1010 && code <= 1059)} [
+            tl_f64(fv): bytes p
+            str_from_number(v): fv 10
+            set(p): {p + 8}
+        ]
+        elif(_): {(code >= 60 && code <= 79) || (code >= 170 && code <= 179) || (code >= 270 && code <= 289) || (code >= 370 && code <= 389) || (code >= 400 && code <= 409) || (code >= 1060 && code <= 1070)} [
+            at(a): bytes p
+            at(b): bytes {p + 1}
+            set(iv): {a | (b << 8)}
+            if(_): {iv >= 32768} [ set(iv): {iv - 65536} ]
+            str_from_int(v): iv
+            set(p): {p + 2}
+        ]
+        elif(_): {(code >= 90 && code <= 99) || (code >= 420 && code <= 429) || (code >= 440 && code <= 449) || code = 1071} [
+            at(a): bytes p
+            at(b): bytes {p + 1}
+            at(c): bytes {p + 2}
+            at(d): bytes {p + 3}
+            set(iv): {a | (b << 8) | (c << 16) | (d << 24)}
+            if(_): {iv >= 2147483648} [ set(iv): {iv - 4294967296} ]
+            str_from_int(v): iv
+            set(p): {p + 4}
+        ]
+        elif(_): {code = 290 || (code >= 280 && code <= 289)} [
+            at(a): bytes p
+            str_from_int(v): a
+            set(p): {p + 1}
+        ]
+        else(_): [
+            vec(sb): ""
+            set(go): true
+            while(_): {p < n && go} [
+                at(x): bytes p
+                set(p): {p + 1}
+                if(_): {x = 0} [ set(go): false ]
+                else(_): [ push(_): sb x ]
+            ]
+            bytes_text(v): sb
+        ]
+        str_from_int(cs): code
+        concat(t): t cs "\n" v "\n"
+    ]
+    set(r): t
+]
+
+tula_bin_sig(r): [
+    set(r): "AutoCAD Binary DXF"
+]
+
+# an IEEE 754 double, little-endian, at p
+tl_f64(r): b p [
+    at(b7): b {p + 7}
+    at(b6): b {p + 6}
+    set(sign): {b7 >> 7}
+    set(ex): {((b7 & 127) << 4) | (b6 >> 4)}
+    set(frac): {b6 & 15}
+    set(k): 5
+    while(_): {k >= 0} [
+        at(x): b {p + k}
+        set(frac): {frac * 256 + x}
+        set(k): {k - 1}
+    ]
+    if(_): {ex = 0 && frac = 0} [
+        set(r): 0.0
+        return(r): r
+    ]
+    set(mant): {1 + frac / 4503599627370496.0}
+    if(_): {ex = 0} [
+        set(mant): {frac / 4503599627370496.0}
+        set(ex): 1
+    ]
+    pow(scale): 2.0 {ex - 1023}
+    set(r): {mant * scale}
+    if(_): {sign = 1} [ set(r): {0 - r} ]
+]
+
+# --- SVG and PDF out, SVG in
+
+tl_svg(r): doc [
+    btget(es): doc "entities"
+    vec(all): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_visible(v): doc e
+        if(_): v [
+            tl_explode_for_draw(parts): doc e
+            tl_rgb(c): doc e
+            len(np): parts
+            set(k): 0
+            while(_): {k < np} [
+                at(p): parts k
+                vec(pr): ""
+                push(_): pr p
+                push(_): pr c
+                push(_): all pr
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    # the box of it all
+    set(x0): 1000000000
+    set(y0): 1000000000
+    set(x1): -1000000000
+    set(y1): -1000000000
+    len(na): all
+    set(i): 0
+    while(_): {i < na} [
+        at(pr): all i
+        at(p): pr 0
+        tl_points_of(ps): p
+        len(nps): ps
+        set(k): 0
+        while(_): {k + 1 < nps} [
+            at(x): ps k
+            at(y): ps {k + 1}
+            if(_): {x < x0} [ set(x0): x ]
+            if(_): {y < y0} [ set(y0): y ]
+            if(_): {x > x1} [ set(x1): x ]
+            if(_): {y > y1} [ set(y1): y ]
+            set(k): {k + 2}
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {na = 0} [
+        set(x0): 0
+        set(y0): 0
+        set(x1): 1
+        set(y1): 1
+    ]
+    set(w): {x1 - x0}
+    set(h): {y1 - y0}
+    tl_fmt(xs): x0
+    tl_fmt(ys): {0 - y1}
+    tl_fmt(ws): w
+    tl_fmt(hs): h
+    concat(r): "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"" xs " " ys " " ws " " hs "\" width=\"" ws "mm\" height=\"" hs "mm\">\n<g fill=\"none\" stroke-width=\"0.25\">\n"
+    set(i): 0
+    while(_): {i < na} [
+        at(pr): all i
+        at(p): pr 0
+        at(c): pr 1
+        tl_hex6(cs): c
+        tl_svg_one(s): p cs
+        concat(r): r s
+        set(i): {i + 1}
+    ]
+    concat(r): r "</g>\n</svg>\n"
+]
+
+tl_fmt(r): x [
+    str_from_number(r): x 4
+    str_ends(z): r ".0000"
+    if(_): z [
+        len(n): r
+        slice(r): r 0 {n - 5}
+    ]
+]
+
+tl_hex6(r): c [
+    set(d): "0123456789abcdef"
+    set(r): ""
+    set(k): 0
+    while(_): {k < 6} [
+        slice(h): d {c & 15} 1
+        concat(r): h r
+        set(c): {c >> 4}
+        set(k): {k + 1}
+    ]
+    concat(r): "#" r
+]
+
+# y is flipped: SVG's y grows downward
+tl_svg_one(r): e cs [
+    at(kind): e 0
+    set(r): ""
+    if(_): {kind = "LINE"} [
+        at(a): e 1
+        at(b): e 2
+        at(c): e 3
+        at(d): e 4
+        tl_fmt(as): a
+        tl_fmt(bs): {0 - b}
+        tl_fmt(cs2): c
+        tl_fmt(ds): {0 - d}
+        concat(r): "<line x1=\"" as "\" y1=\"" bs "\" x2=\"" cs2 "\" y2=\"" ds "\" stroke=\"" cs "\"/>\n"
+    ]
+    elif(_): {kind = "CIRCLE"} [
+        at(a): e 1
+        at(b): e 2
+        at(c): e 3
+        tl_fmt(as): a
+        tl_fmt(bs): {0 - b}
+        tl_fmt(rs): c
+        concat(r): "<circle cx=\"" as "\" cy=\"" bs "\" r=\"" rs "\" stroke=\"" cs "\"/>\n"
+    ]
+    elif(_): {kind = "ARC"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        at(a0): e 4
+        at(a1): e 5
+        tl_polar_pt(p): cx cy rad a0
+        tl_polar_pt(q): cx cy rad a1
+        tl_norm_deg(sw): {a1 - a0}
+        set(large): 0
+        if(_): {sw > 180} [ set(large): 1 ]
+        at(px): p 0
+        at(py): p 1
+        at(qx): q 0
+        at(qy): q 1
+        tl_fmt(pxs): px
+        tl_fmt(pys): {0 - py}
+        tl_fmt(qxs): qx
+        tl_fmt(qys): {0 - qy}
+        tl_fmt(rs): rad
+        str_from_int(ls): large
+        concat(r): "<path d=\"M " pxs " " pys " A " rs " " rs " 0 " ls " 0 " qxs " " qys "\" stroke=\"" cs "\"/>\n"
+    ]
+    elif(_): {kind = "POLYLINE"} [
+        at(closed): e 1
+        at(pts): e 2
+        set(tag): "polyline"
+        if(_): closed [ set(tag): "polygon" ]
+        set(ps): ""
+        len(n): pts
+        set(k): 0
+        while(_): {k + 1 < n} [
+            at(x): pts k
+            at(y): pts {k + 1}
+            tl_fmt(xs): x
+            tl_fmt(ys): {0 - y}
+            if(_): {k > 0} [ concat(ps): ps " " ]
+            concat(ps): ps xs "," ys
+            set(k): {k + 2}
+        ]
+        concat(r): "<" tag " points=\"" ps "\" stroke=\"" cs "\"/>\n"
+    ]
+    elif(_): {kind = "TEXT"} [
+        at(x): e 1
+        at(y): e 2
+        at(h): e 3
+        at(t): e 4
+        tl_fmt(xs): x
+        tl_fmt(ys): {0 - y}
+        tl_fmt(hs): h
+        str_replace(t): t "&" "&amp;"
+        str_replace(t): t "<" "&lt;"
+        concat(r): "<text x=\"" xs "\" y=\"" ys "\" font-size=\"" hs "\" fill=\"" cs "\" stroke=\"none\">" t "</text>\n"
+    ]
+    elif(_): {kind = "POINT"} [
+        at(x): e 1
+        at(y): e 2
+        tl_fmt(xs): x
+        tl_fmt(ys): {0 - y}
+        concat(r): "<circle cx=\"" xs "\" cy=\"" ys "\" r=\"0.3\" fill=\"" cs "\"/>\n"
+    ]
+]
+
+# a one-page PDF of the drawing, scaled to fit an A4 landscape page
+tl_pdf(r): doc [
+    btget(es): doc "entities"
+    vec(all): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_visible(v): doc e
+        if(_): v [
+            tl_explode_for_draw(parts): doc e
+            list_concat(all): all parts
+        ]
+        set(i): {i + 1}
+    ]
+    set(x0): 1000000000
+    set(y0): 1000000000
+    set(x1): -1000000000
+    set(y1): -1000000000
+    len(na): all
+    set(i): 0
+    while(_): {i < na} [
+        at(p): all i
+        tl_points_of(ps): p
+        len(nps): ps
+        set(k): 0
+        while(_): {k + 1 < nps} [
+            at(x): ps k
+            at(y): ps {k + 1}
+            if(_): {x < x0} [ set(x0): x ]
+            if(_): {y < y0} [ set(y0): y ]
+            if(_): {x > x1} [ set(x1): x ]
+            if(_): {y > y1} [ set(y1): y ]
+            set(k): {k + 2}
+        ]
+        set(i): {i + 1}
+    ]
+    # A4 landscape, 842 x 595 points, 36 point margins
+    set(pw): 842
+    set(ph): 595
+    set(sc): 1
+    if(_): {x1 > x0 && y1 > y0} [
+        set(sx): {(pw - 72) / (x1 - x0)}
+        set(sy): {(ph - 72) / (y1 - y0)}
+        set(sc): sx
+        if(_): {sy < sc} [ set(sc): sy ]
+    ]
+    set(ops): "0.5 w\n"
+    set(i): 0
+    while(_): {i < na} [
+        at(p): all i
+        tl_pdf_one(s): p x0 y0 sc
+        concat(ops): ops s
+        set(i): {i + 1}
+    ]
+    len(ol): ops
+    str_from_int(ols): ol
+    vec(objs): ""
+    push(_): objs "<< /Type /Catalog /Pages 2 0 R >>"
+    push(_): objs "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"
+    push(_): objs "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+    concat(st): "<< /Length " ols " >>\nstream\n" ops "endstream"
+    push(_): objs st
+    push(_): objs "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    set(r): "%PDF-1.4\n"
+    vec(offs): ""
+    len(no): objs
+    set(i): 0
+    while(_): {i < no} [
+        len(off): r
+        push(_): offs off
+        at(o): objs i
+        str_from_int(is): {i + 1}
+        concat(r): r is " 0 obj\n" o "\nendobj\n"
+        set(i): {i + 1}
+    ]
+    len(xref): r
+    str_from_int(ns): {no + 1}
+    concat(r): r "xref\n0 " ns "\n0000000000 65535 f \n"
+    set(i): 0
+    while(_): {i < no} [
+        at(off): offs i
+        str_from_int(os): off
+        str_pad_left(os): os 10 "0"
+        concat(r): r os " 00000 n \n"
+        set(i): {i + 1}
+    ]
+    str_from_int(xs): xref
+    concat(r): r "trailer\n<< /Size " ns " /Root 1 0 R >>\nstartxref\n" xs "\n%%EOF\n"
+]
+
+tl_pdf_one(r): e x0 y0 sc [
+    set(r): ""
+    at(kind): e 0
+    if(_): {kind = "TEXT"} [
+        at(x): e 1
+        at(y): e 2
+        at(h): e 3
+        at(t): e 4
+        tl_fmt(xs): {36 + (x - x0) * sc}
+        tl_fmt(ys): {36 + (y - y0) * sc}
+        tl_fmt(hs): {h * sc}
+        str_replace(t): t "(" "["
+        str_replace(t): t ")" "]"
+        concat(r): "BT /F1 " hs " Tf " xs " " ys " Td (" t ") Tj ET\n"
+        return(r): r
+    ]
+    tl_points_of(raw): e
+    if(_): {kind = "CIRCLE"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        tl_arc_e(full): cx cy rad 0 360
+        tl_points_of(raw): full
+    ]
+    len(n): raw
+    if(_): {n < 4} [ return(r): r ]
+    set(k): 0
+    while(_): {k + 1 < n} [
+        at(x): raw k
+        at(y): raw {k + 1}
+        tl_fmt(xs): {36 + (x - x0) * sc}
+        tl_fmt(ys): {36 + (y - y0) * sc}
+        set(op): " l\n"
+        if(_): {k = 0} [ set(op): " m\n" ]
+        concat(r): r xs " " ys op
+        set(k): {k + 2}
+    ]
+    if(_): {kind = "POLYLINE"} [
+        at(cl): e 1
+        if(_): cl [ concat(r): r "h\n" ]
+    ]
+    concat(r): r "S\n"
+]
+
+# lines, circles, rects, polylines, polygons and paths (M L H V Z C Q) of an
+# SVG file, y flipped back: the entities
+tl_svg_import(r): text [
+    vec(r): ""
+    re_all(tags): "<(line|circle|rect|polyline|polygon|path|ellipse)\\b[^>]*>" text
+    typeof(tt): tags
+    if(_): {tt != "vector"} [ return(r): r ]
+    len(n): tags
+    set(i): 0
+    while(_): {i < n} [
+        at(tag): tags i
+        tl_svg_tag(es): tag
+        list_concat(r): r es
+        set(i): {i + 1}
+    ]
+]
+
+tl_svg_attr(r): tag name [
+    concat(pat): "[ \\t\\n]" name "=\"([^\"]*)\""
+    re_find(m): pat tag
+    set(r): null
+    typeof(mt): m
+    if(_): {mt = "vector"} [ at(r): m 1 ]
+]
+
+tl_svg_num(r): tag name [
+    tl_svg_attr(s): tag name
+    set(r): 0
+    if(_): {s != null} [
+        str_to_number(r): s
+        typeof(t): r
+        if(_): {t != "integer" && t != "real"} [ set(r): 0 ]
+    ]
+]
+
+tl_svg_tag(r): tag [
+    vec(r): ""
+    re_find(m): "^<([a-z]+)" tag
+    at(kind): m 1
+    if(_): {kind = "line"} [
+        tl_svg_num(a): tag "x1"
+        tl_svg_num(b): tag "y1"
+        tl_svg_num(c): tag "x2"
+        tl_svg_num(d): tag "y2"
+        tl_line_e(l): a {0 - b} c {0 - d}
+        push(_): r l
+    ]
+    elif(_): {kind = "circle"} [
+        tl_svg_num(a): tag "cx"
+        tl_svg_num(b): tag "cy"
+        tl_svg_num(c): tag "r"
+        tl_circle_e(l): a {0 - b} c
+        push(_): r l
+    ]
+    elif(_): {kind = "ellipse"} [
+        tl_svg_num(a): tag "cx"
+        tl_svg_num(b): tag "cy"
+        tl_svg_num(c): tag "rx"
+        tl_svg_num(d): tag "ry"
+        tl_ellipse(l): a {0 - b} c d 0
+        push(_): r l
+    ]
+    elif(_): {kind = "rect"} [
+        tl_svg_num(a): tag "x"
+        tl_svg_num(b): tag "y"
+        tl_svg_num(c): tag "width"
+        tl_svg_num(d): tag "height"
+        tl_rect(l): a {0 - b} {a + c} {0 - b - d}
+        push(_): r l
+    ]
+    elif(_): {kind = "polyline" || kind = "polygon"} [
+        tl_svg_attr(s): tag "points"
+        if(_): {s != null} [
+            re_all(nums): "-?[0-9.]+(e-?[0-9]+)?" s
+            vec(pts): ""
+            len(nn): nums
+            set(k): 0
+            while(_): {k + 1 < nn} [
+                at(xs): nums k
+                at(ys): nums {k + 1}
+                str_to_number(x): xs
+                str_to_number(y): ys
+                push(_): pts x
+                push(_): pts {0 - y}
+                set(k): {k + 2}
+            ]
+            tl_poly_e(l): {kind = "polygon"} pts
+            push(_): r l
+        ]
+    ]
+    elif(_): {kind = "path"} [
+        tl_svg_attr(d): tag "d"
+        if(_): {d != null} [ tl_svg_path(r): d ]
+    ]
+]
+
+# an SVG path's moves, lines and curves as polylines
+tl_svg_path(r): d [
+    vec(r): ""
+    re_all(toks): "[MmLlHhVvZzCcQq]|-?[0-9]*\\.?[0-9]+(e-?[0-9]+)?" d
+    typeof(tt): toks
+    if(_): {tt != "vector"} [ return(r): r ]
+    vec(cur): ""
+    set(x): 0
+    set(y): 0
+    set(sx): 0
+    set(sy): 0
+    set(cmd): "M"
+    len(n): toks
+    set(i): 0
+    while(_): {i < n} [
+        at(t): toks i
+        re_test(isc): "^[A-Za-z]$" t
+        if(_): isc [
+            set(cmd): t
+            set(i): {i + 1}
+            if(_): {t = "Z" || t = "z"} [
+                len(nc): cur
+                if(_): {nc >= 4} [
+                    tl_poly_e(p): true cur
+                    push(_): r p
+                ]
+                vec(cur): ""
+                set(x): sx
+                set(y): sy
+            ]
+        ]
+        else(_): [
+            str_upper(uc): cmd
+            set(relv): {cmd != uc}
+            set(need): 2
+            if(_): {uc = "H" || uc = "V"} [ set(need): 1 ]
+            if(_): {uc = "C"} [ set(need): 6 ]
+            if(_): {uc = "Q"} [ set(need): 4 ]
+            vec(a): ""
+            set(k): 0
+            while(_): {k < need && i < n} [
+                at(tv): toks i
+                str_to_number(v): tv
+                push(_): a v
+                set(i): {i + 1}
+                set(k): {k + 1}
+            ]
+            set(bx): 0
+            set(by): 0
+            if(_): relv [
+                set(bx): x
+                set(by): y
+            ]
+            if(_): {uc = "M"} [
+                len(nc): cur
+                if(_): {nc >= 4} [
+                    tl_poly_e(p): false cur
+                    push(_): r p
+                ]
+                vec(cur): ""
+                at(ax): a 0
+                at(ay): a 1
+                set(x): {bx + ax}
+                set(y): {by + ay}
+                set(sx): x
+                set(sy): y
+                push(_): cur x
+                push(_): cur {0 - y}
+                set(cmd): "L"
+                if(_): relv [ set(cmd): "l" ]
+            ]
+            elif(_): {uc = "L" || uc = "H" || uc = "V"} [
+                if(_): {uc = "L"} [
+                    at(ax): a 0
+                    at(ay): a 1
+                    set(x): {bx + ax}
+                    set(y): {by + ay}
+                ]
+                if(_): {uc = "H"} [
+                    at(ax): a 0
+                    set(x): {bx + ax}
+                    if(_): {relv = false} [ set(x): ax ]
+                ]
+                if(_): {uc = "V"} [
+                    at(ay): a 0
+                    set(y): {by + ay}
+                    if(_): {relv = false} [ set(y): ay ]
+                ]
+                push(_): cur x
+                push(_): cur {0 - y}
+            ]
+            else(_): [
+                # a Bézier, flattened in 16 steps
+                at(c1x): a 0
+                at(c1y): a 1
+                set(c1x): {bx + c1x}
+                set(c1y): {by + c1y}
+                set(c2x): c1x
+                set(c2y): c1y
+                if(_): {uc = "C"} [
+                    at(c2x): a 2
+                    at(c2y): a 3
+                    set(c2x): {bx + c2x}
+                    set(c2y): {by + c2y}
+                    at(ex): a 4
+                    at(ey): a 5
+                ]
+                else(_): [
+                    at(ex): a 2
+                    at(ey): a 3
+                ]
+                set(ex): {bx + ex}
+                set(ey): {by + ey}
+                set(k): 1
+                while(_): {k <= 16} [
+                    set(u): {k / 16.0}
+                    set(v): {1 - u}
+                    if(_): {uc = "C"} [
+                        set(px): {v * v * v * x + 3 * v * v * u * c1x + 3 * v * u * u * c2x + u * u * u * ex}
+                        set(py): {v * v * v * y + 3 * v * v * u * c1y + 3 * v * u * u * c2y + u * u * u * ey}
+                    ]
+                    else(_): [
+                        set(px): {v * v * x + 2 * v * u * c1x + u * u * ex}
+                        set(py): {v * v * y + 2 * v * u * c1y + u * u * ey}
+                    ]
+                    push(_): cur px
+                    push(_): cur {0 - py}
+                    set(k): {k + 1}
+                ]
+                set(x): ex
+                set(y): ey
+            ]
+        ]
+    ]
+    len(nc): cur
+    if(_): {nc >= 4} [
+        tl_poly_e(p): false cur
+        push(_): r p
+    ]
+]
+
+# --- machines: G-code and STL
+
+tl_gnum(r): x [
+    str_from_number(r): x 3
+]
+
+# lines, arcs, circles and polylines as G-code: G0 to each start, G1 lines,
+# G2/G3 arcs, at feed f with the tool down to depth z (0: a laser)
+tl_gcode(r): doc feed depth [
+    set(r): "G21 ; millimetres\nG90 ; absolute\n"
+    tl_gnum(fs): feed
+    tl_gnum(zs): depth
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_visible(vis): doc e
+        if(_): vis [
+            tl_explode_for_draw(parts): doc e
+            len(np): parts
+            set(k): 0
+            while(_): {k < np} [
+                at(p): parts k
+                tl_gcode_one(s): p fs zs depth
+                concat(r): r s
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    concat(r): r "G0 Z5\nM2\n"
+]
+
+tl_gcode_one(r): e fs zs depth [
+    set(r): ""
+    at(kind): e 0
+    set(down): "M3 ; on\n"
+    set(up): "M5 ; off\n"
+    if(_): {depth != 0} [
+        concat(down): "G1 Z" zs " F" fs "\n"
+        set(up): "G0 Z5\n"
+    ]
+    if(_): {kind = "CIRCLE" || kind = "ARC"} [
+        at(cx): e 1
+        at(cy): e 2
+        at(rad): e 3
+        set(a0): 0
+        set(a1): 360
+        if(_): {kind = "ARC"} [
+            at(a0): e 4
+            at(a1): e 5
+        ]
+        tl_polar_pt(p): cx cy rad a0
+        at(px): p 0
+        at(py): p 1
+        tl_gnum(xs): px
+        tl_gnum(ys): py
+        concat(r): "G0 X" xs " Y" ys "\n" down
+        tl_gnum(is): {cx - px}
+        tl_gnum(js): {cy - py}
+        if(_): {kind = "CIRCLE"} [
+            concat(r): r "G3 X" xs " Y" ys " I" is " J" js " F" fs "\n"
+        ]
+        else(_): [
+            tl_polar_pt(q): cx cy rad a1
+            at(qx): q 0
+            at(qy): q 1
+            tl_gnum(qxs): qx
+            tl_gnum(qys): qy
+            concat(r): r "G3 X" qxs " Y" qys " I" is " J" js " F" fs "\n"
+        ]
+        concat(r): r up
+        return(r): r
+    ]
+    tl_points_of(ps): e
+    if(_): {kind = "TEXT" || kind = "POINT"} [ return(r): r ]
+    len(n): ps
+    if(_): {n < 4} [ return(r): r ]
+    at(x): ps 0
+    at(y): ps 1
+    tl_gnum(xs): x
+    tl_gnum(ys): y
+    concat(r): "G0 X" xs " Y" ys "\n" down
+    set(k): 2
+    while(_): {k + 1 < n} [
+        at(x): ps k
+        at(y): ps {k + 1}
+        tl_gnum(xs): x
+        tl_gnum(ys): y
+        concat(r): r "G1 X" xs " Y" ys " F" fs "\n"
+        set(k): {k + 2}
+    ]
+    if(_): {kind = "POLYLINE"} [
+        at(cl): e 1
+        if(_): cl [
+            at(x): ps 0
+            at(y): ps 1
+            tl_gnum(xs): x
+            tl_gnum(ys): y
+            concat(r): r "G1 X" xs " Y" ys " F" fs "\n"
+        ]
+    ]
+    concat(r): r up
+]
+
+tl_stl_facet(r): ax ay az bx by bz cx cy cz [
+    set(ux): {bx - ax}
+    set(uy): {by - ay}
+    set(uz): {bz - az}
+    set(vx): {cx - ax}
+    set(vy): {cy - ay}
+    set(vz): {cz - az}
+    set(nx): {uy * vz - uz * vy}
+    set(ny): {uz * vx - ux * vz}
+    set(nz): {ux * vy - uy * vx}
+    sqrt(l): {nx * nx + ny * ny + nz * nz}
+    if(_): {l > 0} [
+        set(nx): {nx / l}
+        set(ny): {ny / l}
+        set(nz): {nz / l}
+    ]
+    tl_fmt(n1): nx
+    tl_fmt(n2): ny
+    tl_fmt(n3): nz
+    tl_fmt(a1): ax
+    tl_fmt(a2): ay
+    tl_fmt(a3): az
+    tl_fmt(b1): bx
+    tl_fmt(b2): by
+    tl_fmt(b3): bz
+    tl_fmt(c1): cx
+    tl_fmt(c2): cy
+    tl_fmt(c3): cz
+    concat(r): "facet normal " n1 " " n2 " " n3 "\n outer loop\n  vertex " a1 " " a2 " " a3 "\n  vertex " b1 " " b2 " " b3 "\n  vertex " c1 " " c2 " " c3 "\n endloop\nendfacet\n"
+]
+
+# a closed profile (counter-clockwise) extruded height h, as ASCII STL; the
+# caps are fans from the centroid (right for convex and star-shaped ones)
+tl_stl_extrude(r): e h [
+    set(r): ""
+    tl_area(a): e
+    if(_): {a = null} [ return(r): r ]
+    at(cx): a 1
+    at(cy): a 2
+    at(kind): e 0
+    if(_): {kind = "CIRCLE"} [
+        at(rad): e 3
+        tl_polygon(pg): cx cy rad 48 false 0
+        at(pts): pg 2
+    ]
+    else(_): [ at(pts): e 2 ]
+    len(nn): pts
+    str_trunc(n): {nn / 2}
+    set(r): "solid tula\n"
+    set(i): 0
+    while(_): {i < n} [
+        set(j): {(i + 1) % n}
+        at(x1): pts {2 * i}
+        at(y1): pts {2 * i + 1}
+        at(x2): pts {2 * j}
+        at(y2): pts {2 * j + 1}
+        tl_stl_facet(f): x1 y1 0 x2 y2 0 x2 y2 h
+        concat(r): r f
+        tl_stl_facet(f): x1 y1 0 x2 y2 h x1 y1 h
+        concat(r): r f
+        tl_stl_facet(f): cx cy 0 x2 y2 0 x1 y1 0
+        concat(r): r f
+        tl_stl_facet(f): cx cy h x1 y1 h x2 y2 h
+        concat(r): r f
+        set(i): {i + 1}
+    ]
+    concat(r): r "endsolid tula\n"
+]
+
+# an open profile (x >= 0) revolved around the y axis in segs steps
+tl_stl_revolve(r): e segs [
+    at(pts): e 2
+    len(nn): pts
+    str_trunc(n): {nn / 2}
+    set(r): "solid tula\n"
+    set(s): 0
+    while(_): {s < segs} [
+        tl_rad(a0): {360.0 * s / segs}
+        tl_rad(a1): {360.0 * (s + 1) / segs}
+        cos(c0): a0
+        sin(s0): a0
+        cos(c1): a1
+        sin(s1): a1
+        set(i): 0
+        while(_): {i + 1 < n} [
+            at(r1): pts {2 * i}
+            at(y1): pts {2 * i + 1}
+            at(r2): pts {2 * i + 2}
+            at(y2): pts {2 * i + 3}
+            tl_stl_facet(f): {r1 * c0} y1 {r1 * s0} {r2 * c0} y2 {r2 * s0} {r2 * c1} y2 {r2 * s1}
+            concat(r): r f
+            tl_stl_facet(f): {r1 * c0} y1 {r1 * s0} {r2 * c1} y2 {r2 * s1} {r1 * c1} y1 {r1 * s1}
+            concat(r): r f
+            set(i): {i + 1}
+        ]
+        set(s): {s + 1}
+    ]
+    concat(r): r "endsolid tula\n"
+]
+
+# --- autosave and recent files
+
+tl_recent_path(r): [
+    getenv(h): "HOME"
+    if(_): {h = null || h = ""} [ getenv(h): "USERPROFILE" ]
+    if(_): {h = null} [ set(h): "." ]
+    str_replace(h): h "\\" "/"
+    concat(r): h "/.tula-recent"
+]
+
+tl_recent_add(r): path [
+    tl_recent_path(f):
+    file_exists(e): f
+    vec(old): ""
+    if(_): e [
+        readfile(t): f
+        str_split(old): t "\n"
+    ]
+    vec(out): ""
+    push(_): out path
+    len(n): old
+    set(i): 0
+    while(_): {i < n} [
+        at(x): old i
+        len(no): out
+        if(_): {x != path && x != "" && no < 10} [ push(_): out x ]
+        set(i): {i + 1}
+    ]
+    str_join(t): out "\n"
+    writefile(_): f t
+    len(r): out
+]
+
+tl_recent(r): [
+    tl_recent_path(f):
+    vec(r): ""
+    file_exists(e): f
+    if(_): e [
+        readfile(t): f
+        str_split(all): t "\n"
+        len(n): all
+        set(i): 0
+        while(_): {i < n} [
+            at(x): all i
+            if(_): {x != ""} [ push(_): r x ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+# a drawing saved beside its file as NAME.autosave.dxf
+tl_autosave(r): doc path [
+    str_ends(dxf): path ".dxf"
+    set(base): path
+    if(_): dxf [
+        len(pl): path
+        slice(base): path 0 {pl - 4}
+    ]
+    concat(p): base ".autosave.dxf"
+    tl_dxf(t): doc "2000"
+    writefile(_): p t
+    set(r): p
+]
+
+# --- the command line: one command, its answer
+
+tl_words(r): line [
+    str_trim(t): line
+    re_split(r): "[ \\t]+" t
+    typeof(rt): r
+    if(_): {rt != "vector"} [ vec(r): "" ]
+]
+
+tl_command(r): doc line [
+    set(r): ""
+    tl_words(w): line
+    len(n): w
+    if(_): {n = 0} [ return(r): r ]
+    at(cmd): w 0
+    str_lower(cmd): cmd
+    btget(last): doc "last"
+    btget(sel): doc "selection"
+    btget(es): doc "entities"
+    str_find(eqp): line "=" 0
+    if(_): {eqp > 0 && cmd != "layer" && cmd != "text"} [
+        tl_set_var(v): doc line
+        if(_): {v = null} [ set(r): "not a value" ]
+        else(_): [
+            tl_fmt(vs): v
+            concat(r): "= " vs
+        ]
+        return(r): r
+    ]
+    if(_): {cmd = "line" || cmd = "pline" || cmd = "polygon_pts"} [
+        vec(pts): ""
+        set(prev): last
+        set(i): 1
+        set(closed): false
+        while(_): {i < n} [
+            at(a): w i
+            str_lower(al): a
+            if(_): {al = "c" || al = "close"} [ set(closed): true ]
+            else(_): [
+                tl_coord(p): doc a prev
+                if(_): {p = null} [
+                    concat(r): "not a point: " a
+                    return(r): r
+                ]
+                at(px): p 0
+                at(py): p 1
+                push(_): pts px
+                push(_): pts py
+                set(prev): p
+            ]
+            set(i): {i + 1}
+        ]
+        len(np): pts
+        if(_): {np < 4} [
+            set(r): "two points at least"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        if(_): {cmd = "line" && np = 4 && closed = false} [
+            at(a): pts 0
+            at(b): pts 1
+            at(c): pts 2
+            at(d): pts 3
+            tl_line_e(e): a b c d
+            tl_add(_): doc e
+        ]
+        elif(_): {cmd = "line"} [
+            set(k): 0
+            while(_): {k + 3 < np} [
+                at(a): pts k
+                at(b): pts {k + 1}
+                at(c): pts {k + 2}
+                at(d): pts {k + 3}
+                tl_line_e(e): a b c d
+                tl_add(_): doc e
+                set(k): {k + 2}
+            ]
+            if(_): closed [
+                at(a): pts {np - 2}
+                at(b): pts {np - 1}
+                at(c): pts 0
+                at(d): pts 1
+                tl_line_e(e): a b c d
+                tl_add(_): doc e
+            ]
+        ]
+        else(_): [
+            tl_poly_e(e): closed pts
+            tl_add(_): doc e
+        ]
+        btput(_): doc "last" prev
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "circle" && n >= 3} [
+        at(a): w 1
+        at(b): w 2
+        tl_coord(c): doc a last
+        tl_eval(rad): doc b
+        if(_): {c = null || rad = null} [
+            set(r): "circle CENTRE RADIUS"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(cx): c 0
+        at(cy): c 1
+        tl_circle_e(e): cx cy rad
+        tl_add(_): doc e
+        btput(_): doc "last" c
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "arc" && n >= 4} [
+        at(a): w 1
+        at(b): w 2
+        at(c): w 3
+        tl_coord(p1): doc a last
+        tl_coord(p2): doc b p1
+        tl_coord(p3): doc c p2
+        set(e): null
+        if(_): {p1 != null && p2 != null && p3 != null} [
+            at(x1): p1 0
+            at(y1): p1 1
+            at(x2): p2 0
+            at(y2): p2 1
+            at(x3): p3 0
+            at(y3): p3 1
+            tl_arc3(e): x1 y1 x2 y2 x3 y3
+        ]
+        if(_): {e = null} [
+            set(r): "arc P1 P2 P3: three points not in a line"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        tl_add(_): doc e
+        btput(_): doc "last" p3
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "rect" && n >= 3} [
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p1): doc a last
+        tl_coord(p2): doc b p1
+        if(_): {p1 = null || p2 = null} [
+            set(r): "rect CORNER CORNER"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(x1): p1 0
+        at(y1): p1 1
+        at(x2): p2 0
+        at(y2): p2 1
+        tl_rect(e): x1 y1 x2 y2
+        tl_add(_): doc e
+        btput(_): doc "last" p2
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "polygon" && n >= 4} [
+        at(a): w 1
+        at(b): w 2
+        at(c): w 3
+        tl_coord(p): doc a last
+        tl_eval(rad): doc b
+        tl_eval(sides): doc c
+        set(outside): false
+        if(_): {n >= 5} [
+            at(o): w 4
+            set(outside): {o = "outside"}
+        ]
+        if(_): {p = null || rad = null || sides = null || sides < 3} [
+            set(r): "polygon CENTRE RADIUS SIDES [outside]"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(cx): p 0
+        at(cy): p 1
+        str_trunc(ns): sides
+        tl_polygon(e): cx cy rad ns outside 90
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "ellipse" && n >= 4} [
+        at(a): w 1
+        at(b): w 2
+        at(c): w 3
+        tl_coord(p): doc a last
+        tl_eval(rx): doc b
+        tl_eval(ry): doc c
+        set(rot): 0
+        if(_): {n >= 5} [
+            at(d): w 4
+            tl_eval(rot): doc d
+        ]
+        if(_): {p = null || rx = null || ry = null} [
+            set(r): "ellipse CENTRE RX RY [ANGLE]"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(cx): p 0
+        at(cy): p 1
+        tl_ellipse(e): cx cy rx ry rot
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "spline" && n >= 3} [
+        vec(pts): ""
+        set(prev): last
+        set(i): 1
+        while(_): {i < n} [
+            at(a): w i
+            tl_coord(p): doc a prev
+            if(_): {p = null} [
+                concat(r): "not a point: " a
+                return(r): r
+            ]
+            list_concat(pts): pts p
+            set(prev): p
+            set(i): {i + 1}
+        ]
+        tl_checkpoint(_): doc
+        tl_spline(e): 3 pts
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "point" && n >= 2} [
+        at(a): w 1
+        tl_coord(p): doc a last
+        if(_): {p = null} [
+            set(r): "point X,Y"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(px): p 0
+        at(py): p 1
+        vec(e): ""
+        push(_): e "POINT"
+        push(_): e px
+        push(_): e py
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "text" && n >= 4} [
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p): doc a last
+        tl_eval(h): doc b
+        set(rot): 0
+        set(from): 3
+        at(maybe): w 3
+        str_starts(isrot): maybe "rot="
+        if(_): isrot [
+            len(ml): maybe
+            slice(rs): maybe 4 {ml - 4}
+            tl_eval(rot): doc rs
+            set(from): 4
+        ]
+        if(_): {p = null || h = null || from >= n} [
+            set(r): "text X,Y HEIGHT [rot=A] WORDS..."
+            return(r): r
+        ]
+        vec(rest): ""
+        set(i): from
+        while(_): {i < n} [
+            at(x): w i
+            push(_): rest x
+            set(i): {i + 1}
+        ]
+        str_join(txt): rest " "
+        tl_checkpoint(_): doc
+        at(px): p 0
+        at(py): p 1
+        tl_text_e(e): px py h txt
+        if(_): {rot != 0} [ tl_set_prop(_): e "rotation" rot ]
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "xline" || cmd = "ray"} [
+        if(_): {n < 3} [
+            concat(r): cmd " POINT ANGLE"
+            return(r): r
+        ]
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p): doc a last
+        tl_eval(ang): doc b
+        if(_): {p = null || ang = null} [
+            concat(r): cmd " POINT ANGLE"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        tl_rad(ar): ang
+        cos(c): ar
+        sin(s): ar
+        at(px): p 0
+        at(py): p 1
+        str_upper(k): cmd
+        vec(e): ""
+        push(_): e k
+        push(_): e px
+        push(_): e py
+        push(_): e c
+        push(_): e s
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "dim" && n >= 5} [
+        at(type): w 1
+        at(a): w 2
+        at(b): w 3
+        at(c): w 4
+        tl_coord(p1): doc a last
+        tl_coord(p2): doc b p1
+        tl_coord(p3): doc c p2
+        if(_): {p1 = null || p2 = null || p3 = null} [
+            set(r): "dim linear|aligned|radius|diameter|angle P1 P2 P3"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(x1): p1 0
+        at(y1): p1 1
+        at(x2): p2 0
+        at(y2): p2 1
+        at(x3): p3 0
+        at(y3): p3 1
+        tl_dim(e): type x1 y1 x2 y2 x3 y3 ""
+        tl_add(_): doc e
+        tl_dim_text(r): e
+    ]
+    elif(_): {cmd = "hatch"} [
+        # the selection's closed polylines get a hatch
+        set(pat): "ANSI31"
+        if(_): {n >= 2} [
+            at(p): w 1
+            str_upper(pat): p
+        ]
+        set(made): 0
+        tl_checkpoint(_): doc
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            at(e): es k
+            tl_area(a): e
+            at(ek): e 0
+            if(_): {a != null && ek = "POLYLINE"} [
+                at(pts): e 2
+                vec(cp): ""
+                list_concat(cp): cp pts
+                vec(h): ""
+                push(_): h "HATCH"
+                push(_): h pat
+                push(_): h cp
+                push(_): h 1
+                tl_add(_): doc h
+                set(made): {made + 1}
+            ]
+            set(i): {i + 1}
+        ]
+        str_from_int(ms): made
+        concat(r): ms " hatched"
+    ]
+    elif(_): {cmd = "select"} [
+        vec(nsel): ""
+        if(_): {n >= 2} [
+            at(a): w 1
+            if(_): {a = "all"} [
+                len(ne): es
+                set(i): 0
+                while(_): {i < ne} [
+                    at(e): es i
+                    tl_editable(ok): doc e
+                    if(_): ok [ push(_): nsel i ]
+                    set(i): {i + 1}
+                ]
+            ]
+            elif(_): {a = "last"} [
+                len(ne): es
+                if(_): {ne > 0} [ push(_): nsel {ne - 1} ]
+            ]
+            elif(_): {(a = "window" || a = "crossing") && n >= 4} [
+                at(b): w 2
+                at(c): w 3
+                tl_coord(p1): doc b last
+                tl_coord(p2): doc c last
+                if(_): {p1 != null && p2 != null} [
+                    at(x1): p1 0
+                    at(y1): p1 1
+                    at(x2): p2 0
+                    at(y2): p2 1
+                    tl_window(nsel): doc x1 y1 x2 y2 {a = "crossing"}
+                ]
+            ]
+            else(_): [
+                tl_coord(p): doc a last
+                if(_): {p != null} [
+                    at(px): p 0
+                    at(py): p 1
+                    tl_pick(k): doc px py 2
+                    if(_): {k >= 0} [ push(_): nsel k ]
+                ]
+            ]
+        ]
+        btput(_): doc "selection" nsel
+        len(ns): nsel
+        str_from_int(ss): ns
+        concat(r): ss " selected"
+    ]
+    elif(_): {cmd = "move" || cmd = "copy"} [
+        if(_): {n < 3} [
+            concat(r): cmd " FROM TO"
+            return(r): r
+        ]
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p1): doc a last
+        tl_coord(p2): doc b p1
+        if(_): {p1 = null || p2 = null} [
+            concat(r): cmd " FROM TO"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(x1): p1 0
+        at(y1): p1 1
+        at(x2): p2 0
+        at(y2): p2 1
+        tl_mat_move(m): {x2 - x1} {y2 - y1}
+        tl_apply(k): doc sel m {cmd = "copy"}
+        str_from_int(ks): k
+        concat(r): ks " " cmd "d"
+        if(_): {cmd = "copy"} [ concat(r): ks " copied" ]
+    ]
+    elif(_): {cmd = "rotate" || cmd = "scale"} [
+        if(_): {n < 3} [
+            concat(r): cmd " BASE VALUE"
+            return(r): r
+        ]
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p): doc a last
+        tl_eval(v): doc b
+        if(_): {p = null || v = null} [
+            concat(r): cmd " BASE VALUE"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(px): p 0
+        at(py): p 1
+        if(_): {cmd = "rotate"} [ tl_mat_rotate(m): px py v ]
+        else(_): [ tl_mat_scale(m): px py v ]
+        tl_apply(k): doc sel m false
+        str_from_int(ks): k
+        concat(r): ks " done"
+    ]
+    elif(_): {cmd = "mirror"} [
+        if(_): {n < 3} [
+            set(r): "mirror P1 P2 [keep]"
+            return(r): r
+        ]
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p1): doc a last
+        tl_coord(p2): doc b p1
+        set(keep): false
+        if(_): {n >= 4} [
+            at(kw): w 3
+            set(keep): {kw = "keep"}
+        ]
+        tl_checkpoint(_): doc
+        at(x1): p1 0
+        at(y1): p1 1
+        at(x2): p2 0
+        at(y2): p2 1
+        tl_mat_mirror(m): x1 y1 x2 y2
+        tl_apply(k): doc sel m keep
+        str_from_int(ks): k
+        concat(r): ks " mirrored"
+    ]
+    elif(_): {cmd = "array" && n >= 5} [
+        at(kind): w 1
+        tl_checkpoint(_): doc
+        if(_): {kind = "rect" && n >= 6} [
+            at(a): w 2
+            at(b): w 3
+            at(c): w 4
+            at(d): w 5
+            tl_eval(rows): doc a
+            tl_eval(cols): doc b
+            tl_eval(dx): doc c
+            tl_eval(dy): doc d
+            tl_array_rect(k): doc sel rows cols dx dy
+        ]
+        else(_): [
+            at(a): w 2
+            at(b): w 3
+            at(c): w 4
+            tl_coord(p): doc a last
+            tl_eval(cnt): doc b
+            tl_eval(tot): doc c
+            at(px): p 0
+            at(py): p 1
+            tl_array_polar(k): doc sel px py cnt tot
+        ]
+        str_from_int(ks): k
+        concat(r): ks " made"
+    ]
+    elif(_): {cmd = "offset" && n >= 2} [
+        at(a): w 1
+        tl_eval(d): doc a
+        tl_checkpoint(_): doc
+        set(made): 0
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            at(e): es k
+            tl_offset(o): e d
+            if(_): {o != null} [
+                tl_add(_): doc o
+                set(made): {made + 1}
+            ]
+            set(i): {i + 1}
+        ]
+        str_from_int(ms): made
+        concat(r): ms " offset"
+    ]
+    elif(_): {(cmd = "fillet" || cmd = "chamfer") && n >= 2} [
+        len(ns): sel
+        if(_): {ns != 2} [
+            concat(r): cmd " needs two lines selected"
+            return(r): r
+        ]
+        at(i1): sel 0
+        at(i2): sel 1
+        at(e): es i1
+        at(f): es i2
+        at(a): w 1
+        tl_eval(d): doc a
+        if(_): {cmd = "fillet"} [ tl_fillet(res): e f d ]
+        else(_): [
+            set(d2): d
+            if(_): {n >= 3} [
+                at(b): w 2
+                tl_eval(d2): doc b
+            ]
+            tl_chamfer(res): e f d d2
+        ]
+        if(_): {res = null} [
+            set(r): "the lines do not meet"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(l1): res 0
+        at(l2): res 1
+        at(x): res 2
+        set(es): i1 l1
+        set(es): i2 l2
+        if(_): {x != null} [ tl_add(_): doc x ]
+        set(r): "ok"
+    ]
+    elif(_): {(cmd = "trim" || cmd = "extend") && n >= 2} [
+        # the first selected entity is the boundary; the point picks the
+        # line to trim or extend
+        len(ns): sel
+        at(a): w 1
+        tl_coord(p): doc a last
+        if(_): {ns < 1 || p = null} [
+            concat(r): cmd " POINT (the boundary selected first)"
+            return(r): r
+        ]
+        at(bi): sel 0
+        at(bnd): es bi
+        at(px): p 0
+        at(py): p 1
+        tl_pick(k): doc px py 2
+        if(_): {k < 0 || k = bi} [
+            set(r): "no line at that point"
+            return(r): r
+        ]
+        at(e): es k
+        if(_): {cmd = "trim"} [ tl_trim(res): e bnd px py ]
+        else(_): [ tl_extend(res): e bnd px py ]
+        if(_): {res = null} [
+            set(r): "nothing to do there"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        tl_prop(rest): res "rest" null
+        tl_fields(clean): res
+        set(es): k clean
+        if(_): {rest != null} [ tl_add(_): doc rest ]
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "break" && n >= 2} [
+        at(a): w 1
+        tl_coord(p): doc a last
+        at(px): p 0
+        at(py): p 1
+        tl_pick(k): doc px py 2
+        if(_): {k < 0} [
+            set(r): "no line there"
+            return(r): r
+        ]
+        at(e): es k
+        at(ek): e 0
+        if(_): {ek != "LINE"} [
+            set(r): "break works on lines"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        tl_break(two): e px py
+        at(a1): two 0
+        at(a2): two 1
+        set(es): k a1
+        tl_add(_): doc a2
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "join"} [
+        tl_checkpoint(_): doc
+        vec(parts): ""
+        vec(keep): ""
+        btree(chosen):
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            btput(_): chosen k true
+            at(e): es k
+            push(_): parts e
+            set(i): {i + 1}
+        ]
+        len(ne): es
+        set(i): 0
+        while(_): {i < ne} [
+            bthas(c): chosen i
+            if(_): {c = false} [
+                at(e): es i
+                push(_): keep e
+            ]
+            set(i): {i + 1}
+        ]
+        tl_join(js): parts 0.001
+        list_concat(keep): keep js
+        btput(_): doc "entities" keep
+        vec(none): ""
+        btput(_): doc "selection" none
+        len(nj): js
+        str_from_int(js_): nj
+        concat(r): "joined into " js_
+    ]
+    elif(_): {cmd = "erase" || cmd = "delete"} [
+        tl_checkpoint(_): doc
+        btree(chosen):
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            btput(_): chosen k true
+            set(i): {i + 1}
+        ]
+        vec(keep): ""
+        len(ne): es
+        set(i): 0
+        while(_): {i < ne} [
+            bthas(c): chosen i
+            if(_): {c = false} [
+                at(e): es i
+                push(_): keep e
+            ]
+            set(i): {i + 1}
+        ]
+        btput(_): doc "entities" keep
+        vec(none): ""
+        btput(_): doc "selection" none
+        str_from_int(ss): ns
+        concat(r): ss " erased"
+    ]
+    elif(_): {cmd = "explode"} [
+        tl_checkpoint(_): doc
+        set(made): 0
+        len(ns): sel
+        set(i): {ns - 1}
+        while(_): {i >= 0} [
+            at(k): sel i
+            tl_explode(c): doc k
+            set(made): {made + c}
+            set(i): {i - 1}
+        ]
+        vec(none): ""
+        btput(_): doc "selection" none
+        str_from_int(ms): made
+        concat(r): ms " parts"
+    ]
+    elif(_): {cmd = "undo"} [
+        tl_undo(ok): doc
+        set(r): "nothing to undo"
+        if(_): ok [ set(r): "undone" ]
+    ]
+    elif(_): {cmd = "redo"} [
+        tl_redo(ok): doc
+        set(r): "nothing to redo"
+        if(_): ok [ set(r): "redone" ]
+    ]
+    elif(_): {cmd = "layer" && n >= 2} [
+        at(sub): w 1
+        set(name): ""
+        if(_): {n >= 3} [ at(name): w 2 ]
+        btget(layers): doc "layers"
+        if(_): {sub = "new" && name != ""} [
+            set(c): 7
+            if(_): {n >= 4} [
+                at(cs): w 3
+                str_to_int(c): cs 10
+            ]
+            tl_layer_add(_): doc name c
+            btput(_): doc "layer" name
+            concat(r): "layer " name
+        ]
+        elif(_): {sub = "set" && name != ""} [
+            bthas(h): layers name
+            if(_): {h = false} [ tl_layer_add(_): doc name 7 ]
+            btput(_): doc "layer" name
+            concat(r): "layer " name
+        ]
+        elif(_): {(sub = "off" || sub = "on" || sub = "freeze" || sub = "thaw" || sub = "lock" || sub = "unlock") && name != ""} [
+            set(key): "on"
+            set(val): {sub = "on"}
+            if(_): {sub = "freeze" || sub = "thaw"} [
+                set(key): "frozen"
+                set(val): {sub = "freeze"}
+            ]
+            if(_): {sub = "lock" || sub = "unlock"} [
+                set(key): "locked"
+                set(val): {sub = "lock"}
+            ]
+            tl_layer_set(ok): doc name key val
+            set(r): "no such layer"
+            if(_): ok [ concat(r): name " " sub ]
+        ]
+        elif(_): {sub = "color" && n >= 4} [
+            at(cs): w 3
+            str_to_int(c): cs 10
+            tl_layer_set(ok): doc name "color" c
+            set(r): "no such layer"
+            if(_): ok [ set(r): "ok" ]
+        ]
+        elif(_): {sub = "ltype" && n >= 4} [
+            at(lt): w 3
+            str_upper(lt): lt
+            tl_layer_set(ok): doc name "ltype" lt
+            set(r): "no such layer"
+            if(_): ok [ set(r): "ok" ]
+        ]
+        elif(_): {sub = "rename" && n >= 4} [
+            at(nn): w 3
+            tl_layer_rename(ok): doc name nn
+            set(r): "cannot rename it"
+            if(_): ok [ set(r): "ok" ]
+        ]
+        elif(_): {sub = "list"} [
+            btkeys(ks): layers
+            str_join(r): ks " "
+        ]
+        else(_): [ set(r): "layer new|set|on|off|freeze|thaw|lock|unlock|color|ltype|rename|list" ]
+    ]
+    elif(_): {cmd = "color" && n >= 2} [
+        at(cs): w 1
+        set(c): 256
+        if(_): {cs != "bylayer"} [ str_to_int(c): cs 10 ]
+        len(ns): sel
+        if(_): {ns = 0} [
+            btput(_): doc "color" c
+            set(r): "the colour of what comes next"
+        ]
+        else(_): [
+            tl_checkpoint(_): doc
+            set(i): 0
+            while(_): {i < ns} [
+                at(k): sel i
+                at(e): es k
+                tl_set_prop(_): e "color" c
+                set(i): {i + 1}
+            ]
+            set(r): "ok"
+        ]
+    ]
+    elif(_): {(cmd = "ltype" || cmd = "lweight" || cmd = "onlayer") && n >= 2} [
+        at(v): w 1
+        set(key): cmd
+        if(_): {cmd = "onlayer"} [ set(key): "layer" ]
+        if(_): {cmd = "ltype"} [ str_upper(v): v ]
+        tl_checkpoint(_): doc
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            at(e): es k
+            tl_set_prop(_): e key v
+            set(i): {i + 1}
+        ]
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "block" && n >= 3} [
+        at(name): w 1
+        at(a): w 2
+        tl_coord(p): doc a last
+        vec(parts): ""
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            at(e): es k
+            tl_copy(c): e
+            push(_): parts c
+            set(i): {i + 1}
+        ]
+        at(bx): p 0
+        at(by): p 1
+        tl_block_define(_): doc name bx by parts
+        concat(r): "block " name
+    ]
+    elif(_): {cmd = "insert" && n >= 3} [
+        at(name): w 1
+        at(a): w 2
+        tl_coord(p): doc a last
+        set(s): 1
+        set(rot): 0
+        if(_): {n >= 4} [
+            at(b): w 3
+            tl_eval(s): doc b
+        ]
+        if(_): {n >= 5} [
+            at(c): w 4
+            tl_eval(rot): doc c
+        ]
+        btget(blocks): doc "blocks"
+        bthas(h): blocks name
+        if(_): {h = false} [
+            concat(r): "no block " name
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        at(px): p 0
+        at(py): p 1
+        tl_insert(e): name px py s s rot
+        tl_add(_): doc e
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "symbols"} [
+        tl_symbols(_): doc
+        btget(blocks): doc "blocks"
+        btkeys(ks): blocks
+        str_join(r): ks " "
+    ]
+    elif(_): {cmd = "sheet" && n >= 2} [
+        at(name): w 1
+        str_upper(name): name
+        set(title): "Drawing"
+        if(_): {n >= 3} [
+            vec(rest): ""
+            set(i): 2
+            while(_): {i < n} [
+                at(x): w i
+                push(_): rest x
+                set(i): {i + 1}
+            ]
+            str_join(title): rest " "
+        ]
+        tl_sheet(parts): name title "Tula"
+        len(np): parts
+        if(_): {np = 0} [
+            set(r): "sheet A4|A3|A2|A1|A0 [TITLE]"
+            return(r): r
+        ]
+        tl_checkpoint(_): doc
+        set(i): 0
+        while(_): {i < np} [
+            at(e): parts i
+            tl_add(_): doc e
+            set(i): {i + 1}
+        ]
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "dist" && n >= 3} [
+        at(a): w 1
+        at(b): w 2
+        tl_coord(p1): doc a last
+        tl_coord(p2): doc b p1
+        at(x1): p1 0
+        at(y1): p1 1
+        at(x2): p2 0
+        at(y2): p2 1
+        tl_readout(r): x1 y1 x2 y2
+    ]
+    elif(_): {cmd = "area" || cmd = "list" || cmd = "length"} [
+        if(_): {cmd = "list"} [
+            tl_list(r): doc sel
+            return(r): r
+        ]
+        set(total): 0
+        set(perim): 0
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            at(e): es k
+            tl_area(a): e
+            if(_): {a != null} [
+                at(av): a 0
+                set(total): {total + av}
+            ]
+            tl_length(l): e
+            set(perim): {perim + l}
+            set(i): {i + 1}
+        ]
+        tl_fmt(ts): total
+        tl_fmt(ps): perim
+        concat(r): "area " ts ", perimeter " ps
+    ]
+    elif(_): {cmd = "bbox" || cmd = "centroid"} [
+        set(x0): 1000000000
+        set(y0): 1000000000
+        set(x1): -1000000000
+        set(y1): -1000000000
+        len(ns): sel
+        set(i): 0
+        while(_): {i < ns} [
+            at(k): sel i
+            at(e): es k
+            tl_bbox(b): doc e
+            at(a): b 0
+            at(c): b 1
+            at(d): b 2
+            at(f): b 3
+            if(_): {a < x0} [ set(x0): a ]
+            if(_): {c < y0} [ set(y0): c ]
+            if(_): {d > x1} [ set(x1): d ]
+            if(_): {f > y1} [ set(y1): f ]
+            set(i): {i + 1}
+        ]
+        if(_): {cmd = "bbox"} [
+            tl_fmt(a): x0
+            tl_fmt(b): y0
+            tl_fmt(c): x1
+            tl_fmt(d): y1
+            concat(r): a "," b " to " c "," d
+        ]
+        else(_): [
+            set(ta): 0
+            set(sx): 0
+            set(sy): 0
+            set(i): 0
+            while(_): {i < ns} [
+                at(k): sel i
+                at(e): es k
+                tl_area(a): e
+                if(_): {a != null} [
+                    at(av): a 0
+                    at(ax): a 1
+                    at(ay): a 2
+                    set(ta): {ta + av}
+                    set(sx): {sx + ax * av}
+                    set(sy): {sy + ay * av}
+                ]
+                set(i): {i + 1}
+            ]
+            if(_): {ta = 0} [ set(r): "no closed shape selected" ]
+            else(_): [
+                tl_fmt(a): {sx / ta}
+                tl_fmt(b): {sy / ta}
+                concat(r): a "," b
+            ]
+        ]
+    ]
+    elif(_): {cmd = "view" && n >= 3} [
+        at(sub): w 1
+        at(name): w 2
+        if(_): {sub = "save"} [
+            btget(cur): doc "view_now" null
+            tl_view_save(_): doc name cur
+            set(r): "ok"
+        ]
+        else(_): [
+            tl_view_get(v): doc name
+            set(r): "no such view"
+            if(_): {v != null} [
+                btput(_): doc "view_now" v
+                set(r): "ok"
+            ]
+        ]
+    ]
+    elif(_): {cmd = "units" && n >= 2} [
+        at(u): w 1
+        btput(_): doc "units" u
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "purge"} [
+        tl_purge(p): doc
+        at(a): p 0
+        at(b): p 1
+        str_from_int(as): a
+        str_from_int(bs): b
+        concat(r): as " layers and " bs " blocks purged"
+    ]
+    elif(_): {cmd = "audit"} [
+        tl_audit(a): doc
+        at(k): a 0
+        str_from_int(ks): k
+        concat(r): ks " bad entities removed"
+    ]
+    elif(_): {cmd = "bom"} [
+        tl_bom(rows): doc
+        len(nr): rows
+        if(_): {nr = 0} [
+            set(r): "no inserts"
+            return(r): r
+        ]
+        vec(t): ""
+        str_split(head): "Block|Count" "|"
+        push(_): t head
+        list_concat(t): t rows
+        at(a): w 1
+        tl_coord(p): doc "0,0" last
+        if(_): {n >= 2} [ tl_coord(p): doc a last ]
+        at(px): p 0
+        at(py): p 1
+        tl_nums(widths): "40 15"
+        tl_table(parts): px py t widths 7
+        tl_checkpoint(_): doc
+        len(np): parts
+        set(i): 0
+        while(_): {i < np} [
+            at(e): parts i
+            tl_add(_): doc e
+            set(i): {i + 1}
+        ]
+        str_from_int(ns): nr
+        concat(r): ns " rows"
+    ]
+    elif(_): {cmd = "osnap"} [
+        vec(modes): ""
+        set(i): 1
+        while(_): {i < n} [
+            at(m): w i
+            if(_): {m != "off"} [ push(_): modes m ]
+            set(i): {i + 1}
+        ]
+        btput(_): doc "osnap" modes
+        str_join(ms): modes " "
+        set(r): "object snaps off"
+        if(_): {ms != ""} [ concat(r): "object snaps: " ms ]
+    ]
+    elif(_): {cmd = "ortho" && n >= 2} [
+        at(v): w 1
+        btput(_): doc "ortho" {v = "on"}
+        concat(r): "ortho " v
+    ]
+    elif(_): {cmd = "theme" && n >= 2} [
+        at(t): w 1
+        btput(_): doc "theme" t
+        set(r): "ok"
+    ]
+    elif(_): {cmd = "help"} [
+        set(r): "line pline circle arc rect polygon ellipse spline point text xline ray dim hatch | select move copy rotate scale mirror array offset fillet chamfer trim extend break join erase explode undo redo | layer color ltype lweight onlayer block insert symbols sheet | dist area length list bbox centroid view units purge audit bom theme osnap ortho | NAME = EXPRESSION"
+    ]
+    else(_): [ concat(r): "no command " cmd " (help lists them)" ]
+]
+
+# a script of commands, one a line; the answers, one a line
+tl_commands(r): doc text [
+    set(r): ""
+    str_replace(t): text "\r" ""
+    str_split(lines): t "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_trim(l): l
+        str_starts(c): l "#"
+        if(_): {l != "" && c = false} [
+            tl_command(a): doc l
+            concat(r): r a "\n"
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- the scripting API on the current drawing
+
+tula_new(r): [
+    tl_doc_new(tl_current):
+    set(r): 0
+]
+
+tula_doc(r): [
+    if(_): {tl_current = null} [ tl_doc_new(tl_current): ]
+    set(r): tl_current
+]
+
+tula_line(r): x1 y1 x2 y2 [
+    tula_doc(d):
+    tl_line_e(e): x1 y1 x2 y2
+    tl_add(r): d e
+]
+
+tula_circle(r): cx cy rad [
+    tula_doc(d):
+    tl_circle_e(e): cx cy rad
+    tl_add(r): d e
+]
+
+tula_arc(r): cx cy rad a0 a1 [
+    tula_doc(d):
+    tl_arc_e(e): cx cy rad a0 a1
+    tl_add(r): d e
+]
+
+tula_rect(r): x1 y1 x2 y2 [
+    tula_doc(d):
+    tl_rect(e): x1 y1 x2 y2
+    tl_add(r): d e
+]
+
+tula_polygon(r): cx cy rad sides [
+    tula_doc(d):
+    tl_polygon(e): cx cy rad sides false 90
+    tl_add(r): d e
+]
+
+tula_text(r): x y h text [
+    tula_doc(d):
+    tl_text_e(e): x y h text
+    tl_add(r): d e
+]
+
+tula_layer(r): name color [
+    tula_doc(d):
+    tl_layer_add(_): d name color
+    btput(_): d "layer" name
+    set(r): 0
+]
+
+tula_do(r): line [
+    tula_doc(d):
+    tl_command(r): d line
+]
+
+tula_save(r): path [
+    tula_doc(d):
+    tl_dxf(t): d "2000"
+    writefile(r): path t
+]
+
+# --- the window: tula.su draws, loads, saves and clicks through these.
+# Hash keys: tula_doc (the drawing but its entities, which stay in
+# tula_entities) and tula_cmdbox (the command line, 0 when none).
+
+tl_gui_doc(r): [
+    set(r): tula_doc?
+    set(es): tula_entities?
+    btput(_): r "entities" es
+]
+
+tl_gui_store(r): doc [
+    btget(es): doc "entities"
+    set(tula_entities): es!
+    set(tula_doc): doc!
+    set(r): 0
+]
+
+# one entity on the canvas: its layer, colour, linetype; new kinds drawn
+# as their parts
+tl_draw(r): canvas e [
+    set(r): 0
+    set(doc): tula_doc?
+    tl_visible(v): doc e
+    if(_): {v = false} [ return(r): r ]
+    btget(theme): doc "theme" "light"
+    tl_prop(c): e "color" 256
+    tl_prop(ln): e "layer" "0"
+    set(aci): c
+    if(_): {c = 256} [
+        btget(layers): doc "layers"
+        btget(l): layers ln null
+        set(aci): 7
+        if(_): {l != null} [ btget(aci): l "color" ]
+    ]
+    set(ink): TULA_INK
+    set(tink): TULA_TEXT_INK
+    if(_): {theme = "dark"} [
+        set(ink): 14211288
+        set(tink): 12632256
+    ]
+    if(_): {aci != 7} [
+        tl_aci(ink): aci
+        set(tink): ink
+    ]
+    tl_prop(lt): e "ltype" ""
+    if(_): {lt = ""} [
+        btget(layers): doc "layers"
+        btget(l): layers ln null
+        if(_): {l != null} [ btget(lt): l "ltype" ]
+    ]
+    tl_ltype(pat): lt 1
+    tl_explode_for_draw(parts): doc e
+    len(n): parts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): parts i
+        at(k): p 0
+        len(npat): pat
+        if(_): {k = "LINE" && npat > 0} [
+            tl_fields(f): p
+            at(x1): f 1
+            at(y1): f 2
+            at(x2): f 3
+            at(y2): f 4
+            tl_dash_line(pieces): x1 y1 x2 y2 pat
+            len(nq): pieces
+            set(j): 0
+            while(_): {j < nq} [
+                at(q): pieces j
+                tula_draw_entity(_): canvas q ink tink
+                set(j): {j + 1}
+            ]
+        ]
+        else(_): [ tula_draw_entity(_): canvas p ink tink ]
+        set(i): {i + 1}
+    ]
+]
+
+tl_background(r): [
+    set(doc): tula_doc?
+    btget(theme): doc "theme" "light"
+    set(r): TULA_BACKGROUND
+    if(_): {theme = "dark"} [ set(r): 2105376 ]
+]
+
+# can the old writer save it (one layer, nothing but its entity kinds)?
+tl_plain(r): doc [
+    set(r): false
+    btget(layers): doc "layers"
+    btlen(nl): layers
+    btget(blocks): doc "blocks"
+    btlen(nb): blocks
+    btget(raw): doc "raw"
+    len(nr): raw
+    if(_): {nl > 1 || nb > 0 || nr > 0} [ return(r): r ]
+    btget(es): doc "entities"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_props(p): e
+        at(k): e 0
+        set(basic): {k = "LINE" || k = "CIRCLE" || k = "ARC" || k = "POLYLINE" || k = "POINT" || k = "TEXT"}
+        if(_): {p != null || basic = false} [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    set(r): true
+]
+
+# after tula.su's reader: blocks, inserts, layers and kept entities
+tl_gui_after_load(r): path entities [
+    tl_doc_new(doc):
+    read_bytes(b): path
+    bytes_text(text): b
+    tl_dxf_extras(x): text
+    at(blocks): x 0
+    at(ins): x 1
+    at(raw): x 2
+    at(layers): x 3
+    btput(_): doc "blocks" blocks
+    btput(_): doc "raw" raw
+    btkeys(lk): layers
+    len(n): lk
+    set(i): 0
+    while(_): {i < n} [
+        at(k): lk i
+        btget(le): layers k
+        at(c): le 0
+        at(lt): le 1
+        abs(ac): c
+        tl_layer_add(_): doc k ac
+        if(_): {c < 0} [ tl_layer_set(_): doc k "on" false ]
+        tl_layer_set(_): doc k "ltype" lt
+        set(i): {i + 1}
+    ]
+    list_concat(entities): entities ins
+    btput(_): doc "entities" entities
+    set(tula_doc): doc!
+    set(r): entities
+    tl_recent_add(_): path
+]
+
+# the command line's Enter
+tl_gui_command(r): [
+    set(r): 0
+    set(box): tula_cmdbox?
+    if(_): {box = 0} [ return(r): r ]
+    gettext(line): box
+    if(_): {line = ""} [ return(r): r ]
+    tl_gui_doc(doc):
+    tl_command(answer): doc line
+    tl_gui_store(_): doc
+    settext(_): box ""
+    tula_redraw(_):
+    concat(m): line ": " answer
+    tula_set_status(_): m
+]
+
+# a click's point after object snaps and ortho: [x y]
+tl_gui_point(r): rawx rawy snapx snapy scale [
+    set(doc): tula_doc?
+    tl_pt(r): snapx snapy
+    btget(modes): doc "osnap" null
+    if(_): {modes != null} [
+        len(nm): modes
+        if(_): {nm > 0} [
+            set(anchor): tula_anchor?
+            set(from): null
+            len(na): anchor
+            if(_): {na = 2} [ set(from): anchor ]
+            set(es): tula_entities?
+            btput(_): doc "entities" es
+            tl_osnap(s): doc rawx rawy {10.0 / scale} modes from
+            if(_): {s != null} [
+                at(sx): s 0
+                at(sy): s 1
+                tl_pt(r): sx sy
+            ]
+        ]
+    ]
+    btget(ortho): doc "ortho" false
+    if(_): ortho [
+        set(anchor): tula_anchor?
+        len(na): anchor
+        if(_): {na = 2} [
+            at(ax): anchor 0
+            at(ay): anchor 1
+            at(px): r 0
+            at(py): r 1
+            tl_ortho(r): ax ay px py
+        ]
+    ]
+]
+
+# does an entity's outline cross the box, or lie partly inside it?
+tl_crosses_box(r): doc e ax ay bx by [
+    set(r): false
+    tl_rect(box): ax ay bx by
+    tl_explode_for_draw(parts): doc e
+    len(np): parts
+    set(i): 0
+    while(_): {i < np} [
+        at(p): parts i
+        at(k): p 0
+        if(_): {k = "POINT" || k = "TEXT"} [
+            at(x): p 1
+            at(y): p 2
+            if(_): {x >= ax && x <= bx && y >= ay && y <= by} [
+                set(r): true
+                return(r): r
+            ]
+        ]
+        else(_): [
+            tl_intersect(hits): p box
+            len(nh): hits
+            if(_): {nh > 0} [
+                set(r): true
+                return(r): r
+            ]
+            # wholly inside the box (a part of it)
+            tl_points_of(ps): p
+            len(npt): ps
+            if(_): {npt >= 2} [
+                at(x): ps 0
+                at(y): ps 1
+                if(_): {x >= ax && x <= bx && y >= ay && y <= by} [
+                    set(r): true
+                    return(r): r
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]

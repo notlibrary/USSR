@@ -14,7 +14,8 @@
 #   tulafit(r):                  -> fit the whole drawing in the canvas
 #   tulatoolbar(toolbar): window -> toolbar wired to every command above
 #   tulakey(r): window key       -> window "key" callback body: arrows pan,
-#                                   + / - zoom, F fits
+#                                   + / - zoom, F fits, Enter runs the
+#                                   command line (more.su: help lists them)
 #
 # World coordinates are drawing units with y up. The view maps a world point
 # to canvas pixels as  sx = ox + x * scale,  sy = oy - y * scale.
@@ -47,6 +48,7 @@ $define TULA_MAX_SCALE 1000.0
 $define TULA_MAX_ENTITIES 10000
 # Toolbar and keyboard pan step in canvas pixels.
 $define TULA_PAN_STEP 100
+$include "more.su"
 
 tula_floor(r): x [
     str_trunc(_tf_t): x
@@ -163,7 +165,7 @@ tula_draw_grid(r): canvas [
     set(r): 0
 ]
 
-tula_draw_entity(r): canvas entity [
+tula_draw_entity(r): canvas entity ink tink [
     at(_te_kind): entity 0
     set(_tev): tula_view?
     at(_te_s): _tev 2
@@ -176,7 +178,7 @@ tula_draw_entity(r): canvas entity [
         tula_to_screen_y(_te_y1): _te_b
         tula_to_screen_x(_te_x2): _te_c
         tula_to_screen_y(_te_y2): _te_d
-        canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 TULA_INK
+        canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 ink
     ]
     elif(_): {_te_kind = "CIRCLE" || _te_kind = "ARC"} [
         at(_te_a): entity 1
@@ -185,14 +187,14 @@ tula_draw_entity(r): canvas entity [
         tula_to_screen_x(_te_x1): _te_a
         tula_to_screen_y(_te_y1): _te_b
         if(_): {_te_kind = "CIRCLE"} [
-            canvascircle(_): canvas _te_x1 _te_y1 {_te_c * _te_s} TULA_INK
+            canvascircle(_): canvas _te_x1 _te_y1 {_te_c * _te_s} ink
         ]
         else(_): [
             # Screen y grows downward, but sy = oy - y * scale flips it back,
             # so DXF's counter-clockwise angles carry over unchanged.
             at(_te_start): entity 4
             at(_te_end): entity 5
-            canvasarc(_): canvas _te_x1 _te_y1 {_te_c * _te_s} _te_start _te_end TULA_INK
+            canvasarc(_): canvas _te_x1 _te_y1 {_te_c * _te_s} _te_start _te_end ink
         ]
     ]
     elif(_): {_te_kind = "POLYLINE"} [
@@ -213,13 +215,13 @@ tula_draw_entity(r): canvas entity [
             at(_te_b): _te_pts {_te_i + 1}
             tula_to_screen_x(_te_x2): _te_a
             tula_to_screen_y(_te_y2): _te_b
-            canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 TULA_INK
+            canvasline(_): canvas _te_x1 _te_y1 _te_x2 _te_y2 ink
             set(_te_x1): _te_x2
             set(_te_y1): _te_y2
             set(_te_i): {_te_i + 2}
         ]
         if(_): {_te_closed && _te_n >= 6} [
-            canvasline(_): canvas _te_x1 _te_y1 _te_fx _te_fy TULA_INK
+            canvasline(_): canvas _te_x1 _te_y1 _te_fx _te_fy ink
         ]
     ]
     elif(_): {_te_kind = "POINT"} [
@@ -227,8 +229,8 @@ tula_draw_entity(r): canvas entity [
         at(_te_b): entity 2
         tula_to_screen_x(_te_x1): _te_a
         tula_to_screen_y(_te_y1): _te_b
-        canvasline(_): canvas {_te_x1 - 3} {_te_y1 - 3} {_te_x1 + 3} {_te_y1 + 3} TULA_INK
-        canvasline(_): canvas {_te_x1 - 3} {_te_y1 + 3} {_te_x1 + 3} {_te_y1 - 3} TULA_INK
+        canvasline(_): canvas {_te_x1 - 3} {_te_y1 - 3} {_te_x1 + 3} {_te_y1 + 3} ink
+        canvasline(_): canvas {_te_x1 - 3} {_te_y1 + 3} {_te_x1 + 3} {_te_y1 - 3} ink
     ]
     elif(_): {_te_kind = "TEXT"} [
         # Petersburg's bitmap font has one size: the text sits on its DXF
@@ -238,7 +240,7 @@ tula_draw_entity(r): canvas entity [
         at(_te_text): entity 4
         tula_to_screen_x(_te_x1): _te_a
         tula_to_screen_y(_te_y1): _te_b
-        canvastext(_): canvas _te_x1 {_te_y1 - 7} _te_text TULA_TEXT_INK
+        canvastext(_): canvas _te_x1 {_te_y1 - 7} _te_text tink
     ]
     set(r): 0
 ]
@@ -246,14 +248,15 @@ tula_draw_entity(r): canvas entity [
 # Rebuilds the whole canvas display list from the drawing state.
 tula_redraw(r): [
     set(_trd_canvas): tula_canvas?
-    canvasclear(_): _trd_canvas TULA_BACKGROUND
+    tl_background(_trd_bg):
+    canvasclear(_): _trd_canvas _trd_bg
     tula_draw_grid(_): _trd_canvas
     set(_trd_entities): tula_entities?
     len(_trd_n): _trd_entities
     set(_trd_i): 0
     while(_): {_trd_i < _trd_n} [
         at(_trd_e): _trd_entities _trd_i
-        tula_draw_entity(_): _trd_canvas _trd_e
+        tl_draw(_): _trd_canvas _trd_e
         set(_trd_i): {_trd_i + 1}
     ]
     set(_trd_anchor): tula_anchor?
@@ -277,6 +280,9 @@ tulainitialize(canvas): window status filename [
     set(tula_canvas): canvas!
     vec(_ti_entities): ""
     set(tula_entities): _ti_entities!
+    tl_doc_new(_ti_doc):
+    set(tula_doc): _ti_doc!
+    set(tula_cmdbox): 0!
     vec(_ti_anchor): ""
     set(tula_anchor): _ti_anchor!
     set(tula_tool): ""!
@@ -378,6 +384,9 @@ tula_click_body(r): canvas x y [
     at(_tc_s): _tc_v 2
     tula_snap(_tc_x): {(x - _tc_ox) / _tc_s}
     tula_snap(_tc_y): {(_tc_oy - y) / _tc_s}
+    tl_gui_point(_tc_pt): {(x - _tc_ox) / _tc_s} {(_tc_oy - y) / _tc_s} _tc_x _tc_y _tc_s
+    at(_tc_x): _tc_pt 0
+    at(_tc_y): _tc_pt 1
     str_from_number(_tc_xs): _tc_x 3
     str_from_number(_tc_ys): _tc_y 3
     set(_tc_anchor): tula_anchor?
@@ -581,10 +590,23 @@ tula_bounds(r): entities [
                 set(_tb_k): {_tb_k + 2}
             ]
         ]
-        else(_): [
+        elif(_): {_tb_kind = "POINT" || _tb_kind = "TEXT"} [
             at(_tb_a): _tb_e 1
             at(_tb_b): _tb_e 2
             tula_bounds_add(_): r _tb_a _tb_b
+        ]
+        else(_): [
+            # more.su's kinds: by what they draw
+            set(_tb_doc): tula_doc?
+            tl_bbox(_tb_box): _tb_doc _tb_e
+            at(_tb_a): _tb_box 0
+            at(_tb_b): _tb_box 1
+            at(_tb_c): _tb_box 2
+            at(_tb_d): _tb_box 3
+            if(_): {_tb_a <= _tb_c} [
+                tula_bounds_add(_): r _tb_a _tb_b
+                tula_bounds_add(_): r _tb_c _tb_d
+            ]
         ]
         set(_tb_i): {_tb_i + 1}
     ]
@@ -715,6 +737,12 @@ tulatoolbar(toolbar): window [
 # "-" 45, keypad + 334, keypad - 333, "F" 70.
 tulakey(result): window key [
     set(result): 0
+    if(_): {key = 257 || key = 335} [
+        uilock(_):
+        tl_gui_command(_):
+        uiunlock(_):
+        return(_): result
+    ]
     if(_): {key = 263} [
         tulapan(_): TULA_PAN_STEP 0
     ]
@@ -832,7 +860,10 @@ tula_save_body(r): [
         return(_): r
     ]
     set(_tsv_entities): tula_entities?
-    tula_dxf_text(_tsv_text): _tsv_entities
+    tl_gui_doc(_tsv_doc):
+    tl_plain(_tsv_plain): _tsv_doc
+    if(_): _tsv_plain [ tula_dxf_text(_tsv_text): _tsv_entities ]
+    else(_): [ tl_dxf(_tsv_text): _tsv_doc "2000" ]
     open_file(_tsv_h): _tsv_path "wb"
     if(_): {_tsv_h < 0} [
         concat(_tsv_msg): "Cannot save DXF: " _tsv_path
@@ -1212,6 +1243,17 @@ tula_load_body(r): [
     ]
     at(_tlb_entities): _tlb_result 0
     at(_tlb_skipped): _tlb_result 1
+    tl_gui_after_load(_tlb_entities): _tlb_path _tlb_entities
+    # INSERTs are read now (more.su); the rest are kept for saving
+    vec(_tlb_left): ""
+    len(_tlb_sk): _tlb_skipped
+    set(_tlb_j): 0
+    while(_): {_tlb_j < _tlb_sk} [
+        at(_tlb_x): _tlb_skipped _tlb_j
+        if(_): {_tlb_x != "INSERT"} [ push(_): _tlb_left _tlb_x ]
+        set(_tlb_j): {_tlb_j + 1}
+    ]
+    set(_tlb_skipped): _tlb_left
     len(_tlb_n): _tlb_entities
     if(_): {_tlb_n > TULA_MAX_ENTITIES} [
         tula_set_status(_): "DXF has more objects than Tula can hold"
@@ -1227,7 +1269,7 @@ tula_load_body(r): [
     len(_tlb_ns2): _tlb_skipped
     if(_): {_tlb_ns2 > 0} [
         tula_skip_text(_tlb_skip): _tlb_skipped
-        concat(_tlb_msg): _tlb_msg "; " _tlb_skip
+        concat(_tlb_msg): _tlb_msg "; " _tlb_skip ", kept for saving"
     ]
     tula_set_status(_): _tlb_msg
 ]
@@ -1271,6 +1313,8 @@ init(result): arg_count arg_values [
     textbox(filename): window _tla_file
     label(status): window ""
     tulainitialize(canvas): window status filename
+    textbox(_tla_cmd): window ""
+    set(tula_cmdbox): _tla_cmd!
     tulatoolbar(_): window
     on(_): canvas "pointer" "tula_app_pointer"
     on(_): canvas "wheel" "tula_app_wheel"

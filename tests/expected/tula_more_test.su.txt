@@ -1,0 +1,128 @@
+PASS relative
+PASS polar relative
+PASS absolute
+PASS variables in coordinates
+PASS not a point
+PASS precedence
+PASS functions and minus
+PASS an unknown name
+PASS a variable from an expression
+PASS and its use
+PASS a rectangle
+PASS a square in a circle: area
+PASS a square about a circle: area
+PASS a circle through three points
+PASS an arc through three points
+PASS the other way round
+PASS three points in a line
+PASS its height
+PASS a spline starts at its first point
+PASS and ends at its last
+PASS two lines cross
+PASS a line through a circle
+PASS two circles
+PASS an arc keeps its part
+PASS a snap to the crossing or middle
+PASS a snap to the centre
+PASS perpendicular
+PASS tangent
+PASS ortho
+PASS polar tracking to 45 degrees
+PASS the readout
+PASS rotate a line
+PASS rotate an arc
+PASS mirror an arc
+PASS scale a circle
+PASS offset a line
+PASS offset a square outward
+PASS a circle cannot shrink past nothing
+PASS trim the right end
+PASS extend to a line
+PASS extend to a circle
+PASS a fillet's arc
+PASS and the first line cut back
+PASS a chamfer
+PASS break
+PASS four lines join into one
+PASS a closed one
+PASS its area
+PASS a line's grips
+PASS the middle grip moves it
+PASS a script of commands
+PASS the current layer is used
+PASS colour by layer
+PASS ACI 3 is green
+PASS ACI greys
+PASS ACI 10, the red end of the wheel
+PASS a layer switched off
+PASS a locked layer
+PASS a dashed line in pieces
+PASS area of the selection
+PASS a distance
+PASS pick
+PASS a centroid
+PASS a window
+PASS crossing: inside a circle is not crossing it
+PASS crossing the circle
+PASS copy
+PASS undo
+PASS redo
+PASS a rectangular array
+PASS a polar array
+PASS an unknown command
+PASS an aligned dimension
+PASS a radius
+PASS an angle
+PASS insert a symbol
+PASS an insert draws its block
+PASS placed and scaled
+PASS a bill of materials
+PASS a BOM table
+PASS explode
+PASS purge unused blocks
+PASS a quadtree query
+PASS a region from four lines
+PASS the constraints are met
+PASS horizontal
+PASS perpendicular
+PASS a driving dimension
+PASS and what hangs on it follows
+PASS an isometric point
+PASS an A3 sheet
+PASS no such sheet
+PASS audit removes bad entities
+PASS DXF 2000
+PASS with splines
+PASS and blocks
+PASS and linetypes
+PASS DXF R12
+PASS R12 has no LWPOLYLINE
+PASS but POLYLINE and VERTEX
+PASS and no ELLIPSE
+PASS DXF 2000 read back
+PASS its blocks
+PASS its layers
+PASS what Tula does not draw is kept
+PASS and written back
+PASS binary DXF to text
+PASS negative doubles
+PASS SVG out
+PASS with its circle
+PASS SVG in
+PASS y flipped back
+PASS a closed path
+PASS a curve flattened
+PASS a PDF
+PASS a whole one
+PASS G-code lines
+PASS G-code circles
+PASS an extruded square: 16 facets
+PASS a revolved cylinder wall
+PASS recent files
+PASS autosave beside the file
+PASS a script's dimension
+PASS a scripted drawing saved
+
+--- stderr ---
+
+--- exit 0 ---

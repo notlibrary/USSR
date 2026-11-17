@@ -63,10 +63,10 @@ init(result): arg_count arg_values [
     tulainitialize(canvas): window status filename
 
     load(t): "tests/gui/fixtures/sample.dxf"
-    check(_): "load status" t "Loaded 8 object(s) from tests/gui/fixtures/sample.dxf; 2 unsupported entities skipped (SPLINE, INSERT)"
+    check(_): "load status" t "Loaded 9 object(s) from tests/gui/fixtures/sample.dxf; 1 unsupported entities skipped (SPLINE), kept for saving"
     set(e): tula_entities?
     len(n): e
-    check(_): "entity count" n 8
+    check(_): "entity count" n 9
     set(kinds): ""
     set(i): 0
     while(_): {i < n} [
@@ -75,7 +75,7 @@ init(result): arg_count arg_values [
         concat(kinds): kinds k " "
         set(i): {i + 1}
     ]
-    check(_): "entity kinds in file order" kinds "LINE CIRCLE ARC POLYLINE POLYLINE POINT TEXT POLYLINE "
+    check(_): "entity kinds in file order" kinds "LINE CIRCLE ARC POLYLINE POLYLINE POINT TEXT POLYLINE INSERT "
     at(x): e 0
     at(v): x 3
     check(_): "line end from ENTITIES, not BLOCKS" v 100
@@ -111,7 +111,7 @@ init(result): arg_count arg_values [
     # line 1 + circle 1 + arc 1 + closed square 4 + polyline 2 + point 2
     # + text 1 + ellipse 64
     entity_shapes(s):
-    check(_): "shapes drawn for entities" s 76
+    check(_): "shapes drawn for entities" s 77
 
     # Fit: extents x -10..130, y -30..95 centered in the 1000x700 default.
     screen_x(sx): 60
@@ -192,7 +192,7 @@ init(result): arg_count arg_values [
     settext(_): filename "tula_dxf_roundtrip.dxf"
     tulasave(_):
     load(t): "tula_dxf_roundtrip.dxf"
-    check(_): "round trip status" t "Loaded 8 object(s) from tula_dxf_roundtrip.dxf"
+    check(_): "round trip status" t "Loaded 9 object(s) from tula_dxf_roundtrip.dxf; 1 unsupported entities skipped (SPLINE), kept for saving"
     set(e2): tula_entities?
     set(same): true
     set(i): 0
@@ -219,7 +219,7 @@ init(result): arg_count arg_values [
     remove_file(_): "tula_dxf_roundtrip.dxf"
 
     load(t): "tests/gui/fixtures/sample_crlf.dxf"
-    check(_): "CRLF file" t "Loaded 8 object(s) from tests/gui/fixtures/sample_crlf.dxf; 2 unsupported entities skipped (SPLINE, INSERT)"
+    check(_): "CRLF file" t "Loaded 9 object(s) from tests/gui/fixtures/sample_crlf.dxf; 1 unsupported entities skipped (SPLINE), kept for saving"
     load(t): "tests/gui/fixtures/missing.dxf"
     check(_): "missing file" t "Cannot open DXF: tests/gui/fixtures/missing.dxf"
     load(t): "tests/gui/fixtures/truncated.dxf"
@@ -230,7 +230,7 @@ init(result): arg_count arg_values [
     check(_): "binary DXF refused" t "Not an ASCII DXF file (binary DXF is not supported)"
     set(e3): tula_entities?
     len(n): e3
-    check(_): "failed loads keep the drawing" n 8
+    check(_): "failed loads keep the drawing" n 9
 
     close(_): window
     set(result): 0

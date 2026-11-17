@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.0-alpha
+Refine pass 1 from REFINE.md: the CAD engine in `more.su` (no window
+needed), used by a new command line below the canvas and by scripts.
+- Commands (Enter in the command line; `help` lists them): line, pline,
+  circle, arc (3 points), rect, polygon, ellipse, spline, point, text
+  (height, rotation), xline, ray, dimensions (linear, aligned, radius,
+  diameter, angle), hatch; select (pick, all, last, window, crossing),
+  move, copy, rotate, scale, mirror, rectangular and polar arrays,
+  offset, trim, extend, fillet, chamfer, break, join, erase, explode,
+  undo, redo; layers (new, set, on/off, freeze, lock, colour, linetype,
+  rename), colour, linetype and lineweight per entity; blocks, insert,
+  a symbol library (bolt, bearing, resistor, capacitor, ground, door,
+  window, roughness, weld); A4-A0 sheets with a title block; distance,
+  area, perimeter, list, bounding box, centroid; named views, units,
+  purge, audit, a bill of materials table, themes, object snaps and
+  ortho for clicks. Coordinates take `@10,0`, `@25<45` and expressions;
+  `NAME = EXPRESSION` sets a variable.
+- Drawing follows layers (on, frozen), colours (the ACI table), and
+  linetypes; the canvas has a dark theme.
+- DXF: INSERT entities and BLOCKS are read and drawn, layers and their
+  linetypes are kept, other entities are kept and written back; DXF
+  2000 (with layers, linetypes, blocks, splines, ellipses, hatches) and
+  R12 output; binary DXF converts to text.
+- Also: SVG and PDF output, SVG import, G-code, STL extrude and revolve,
+  geometric constraints with driving dimensions, closed regions from
+  lines, isometric helpers, a quadtree, autosave and recent files, and a
+  scripting API (`tula_new`, `tula_line`, `tula_circle`, `tula_rect`,
+  `tula_do`, `tula_save`, ...).
+- `tests/tula_more_test.su` (124 checks). The DXF fixtures' INSERT now
+  draws inside the drawing, and the GUI tests count it.
+
 ## 0.4.0-alpha
 - Added a toolbar (`tulatoolbar`) with Line, Circle, Load DXF, Save DXF,
   Zoom +, Zoom -, Fit and pan buttons, the active tool shown pressed, and
