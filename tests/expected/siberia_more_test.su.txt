@@ -1,0 +1,151 @@
+PASS lookup =VLOOKUP("cherry",A1:B4,2,FALSE)
+PASS lookup =VLOOKUP("kiwi",A1:B4,2,0)
+PASS lookup =VLOOKUP(25,B1:C4,2)
+PASS lookup =HLOOKUP("south",C2:D2,2,0)
+PASS lookup =INDEX(A1:B4,3,2)
+PASS lookup =MATCH("date",A1:A4,0)
+PASS lookup =MATCH(25,B1:B4)
+PASS lookup =XLOOKUP("banana",A1:A4,B1:B4)
+PASS lookup =XLOOKUP("kiwi",A1:A4,B1:B4,"none")
+PASS conditional =SUMIF(C1:C4,"north",B1:B4)
+PASS conditional =SUMIF(B1:B4,">15")
+PASS conditional =COUNTIF(A1:A4,"*an*")
+PASS conditional =COUNTIF(A1:A4,"?????")
+PASS conditional =AVERAGEIF(C1:C4,"south",B1:B4)
+PASS conditional =SUMIFS(B1:B4,C1:C4,"north",B1:B4,">10")
+PASS conditional =COUNTIFS(C1:C4,"south",D1:D4,"<>2")
+PASS text =LEFT("Siberia",3)
+PASS text =RIGHT("Сибирь",3)
+PASS text =MID("Novosibirsk",5,4)
+PASS text =FIND("b","abcabc",3)
+PASS text =SEARCH("B","abc")
+PASS text =FIND("z","abc")
+PASS text =SUBSTITUTE("a-b-c","-","+")
+PASS text =SUBSTITUTE("a-b-c","-","+",2)
+PASS text =TRIM("  a   b  ")
+PASS text =CONCAT(A1," ",A2)
+PASS text =TEXTJOIN(", ",1,A1:A3)
+PASS text =TEXT(1234.5,"#,##0.00")
+PASS text =TEXT(0.256,"0.0%")
+PASS text =TEXT(12345,"0.00E+00")
+PASS text =TEXT(DATE(2026,11,17),"yyyy-mm-dd")
+PASS text =TEXT(0.75,"hh:mm")
+PASS text =VALUE("42.5")+1
+PASS text =REPT("ab",3)
+PASS text =PROPER("hello big world")
+PASS text =EXACT("a","A")
+PASS dates =DATE(2026,11,17)
+PASS dates =YEAR(46343)&"-"&MONTH(46343)&"-"&DAY(46343)
+PASS dates =WEEKDAY(DATE(2026,11,17))
+PASS dates =WEEKDAY(DATE(2026,11,17),2)
+PASS dates =DATE(2026,13,1)=DATE(2027,1,1)
+PASS dates =EDATE(DATE(2026,1,31),1)=DATE(2026,2,28)
+PASS dates =EOMONTH(DATE(2024,2,10),0)=DATE(2024,2,29)
+PASS dates =DATEDIF(DATE(2020,5,15),DATE(2026,11,17),"Y")
+PASS dates =DATEDIF(DATE(2020,5,15),DATE(2026,11,17),"M")
+PASS dates =HOUR(0.5)+MINUTE(TIME(0,45,0))
+PASS maths =SUMPRODUCT(B1:B4,D1:D4)
+PASS maths =PRODUCT(D1:D4)
+PASS maths =ROUNDUP(2.341,2)
+PASS maths =ROUNDDOWN(-2.349,2)
+PASS maths =CEILING(7,5)+FLOOR(7,5)
+PASS maths =LOG(1000)
+PASS maths =LOG(8,2)
+PASS maths =ROUND(LN(EXP(2)),6)
+PASS maths =ROUND(SIN(RADIANS(30)),6)
+PASS maths =DEGREES(ATAN2(1,1))
+PASS maths =FACT(5)
+PASS maths =GCD(12,18)+LCM(4,6)
+PASS maths =SIGN(-3)
+PASS maths =AND(RAND()>=0,RAND()<1)
+PASS maths =AND(RANDBETWEEN(3,5)>=3,RANDBETWEEN(3,5)<=5)
+PASS statistics =MEDIAN(B1:B4)
+PASS statistics =MODE(1,2,2,3)
+PASS statistics =ROUND(STDEV(B1:B4),4)
+PASS statistics =VARP(D1:D4)
+PASS statistics =LARGE(B1:B4,2)+SMALL(B1:B4,1)
+PASS statistics =RANK(30,B1:B4)
+PASS statistics =PERCENTILE(D1:D4,0.5)
+PASS statistics =COUNTA(A1:C4)+COUNTBLANK(F1:F3)
+PASS logic =IFERROR(1/0,"none")
+PASS logic =IFNA(VLOOKUP("x",A1:B4,2,0),0)
+PASS logic =IFS(B1>50,"big",B1>5,"some")
+PASS logic =SWITCH(D2,1,"one",2,"two","many")
+PASS logic =XOR(TRUE,TRUE,TRUE)
+PASS logic =ISBLANK(F9)&ISNUMBER(B1)&ISTEXT(A1)&ISERROR(1/0)
+PASS finance =ROUND(PMT(0.05/12,360,200000),2)
+PASS finance =ROUND(FV(0.05,10,-100),2)
+PASS finance =ROUND(PV(0.05,10,-100),2)
+PASS finance =ROUND(NPV(0.1,100,100,100),2)
+PASS finance =ROUND(IRR(G1:G3),4)
+PASS regression =SLOPE(E1:E4,D1:D4)
+PASS regression =INTERCEPT(E1:E4,D1:D4)
+PASS regression =CORREL(D1:D4,E1:E4)
+PASS regression =FORECAST(10,E1:E4,D1:D4)
+PASS regression =TREND(E1:E4,D1:D4,5)
+PASS bits =BITAND(12,10)&BITOR(12,10)&BITXOR(12,10)
+PASS bits =DEC2HEX(255)&" "&DEC2BIN(5,8)&" "&DEC2OCT(8)
+PASS bits =HEX2DEC("FF")+BIN2DEC("101")+OCT2DEC("10")
+PASS bits =DEC2HEX(-1)
+PASS subtotal =SUBTOTAL(9,B1:B4)
+PASS subtotal =SUBTOTAL(101,B1:B4)
+PASS user function, a range =USSR("sm_sum_first",B1:B2)
+PASS user function =USSR("sm_double_all",5)
+PASS unknown =NOSUCH(1)
+PASS names =SUM(Amounts)
+PASS names =FIRST*2
+PASS names =SUM(unknownname)
+PASS sort by region, then amount down
+PASS undo the sort
+PASS redo it
+PASS find
+PASS replace
+PASS replaced
+PASS undo the replace
+PASS a number series
+PASS weekdays
+PASS text with a number
+PASS a formula filled down
+PASS and its value
+PASS absolute references stay
+PASS rows inserted: the range grows
+PASS the rows moved down
+PASS the sum is the same
+PASS and deleted again
+PASS a range shrinks
+PASS without banana
+PASS a column inserted
+PASS duplicates removed
+PASS what is left
+PASS transposed
+PASS text to columns
+PASS goal seek
+PASS the error checker
+PASS says why
+PASS precedents
+PASS dependents
+PASS a scenario
+PASS selection stats
+PASS CSV with ; and a header
+PASS a quoted field
+PASS a decimal comma
+PASS CSV out with a decimal comma
+PASS a BOM
+PASS Windows-1251 in
+PASS and out
+PASS HTML
+PASS Markdown
+siberia: wrote tests/siberia-more-tmp.fods
+PASS --convert
+42
+PASS --eval
+PASS other options: not the command line's
+PASS a number format
+PASS a negative percent
+PASS a date and time
+PASS currency
+PASS random formulas never stop the sheet
+
+--- stderr ---
+
+--- exit 0 ---

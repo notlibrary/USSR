@@ -56,6 +56,8 @@ $define SB_KEY_F1 290
 $define SB_KEY_F2 291
 $define SB_KEY_KP_ENTER 335
 
+$include "more.su"
+
 # --- small helpers ----------------------------------------------------------
 
 # Declares the types and gives every piece of state its starting value;
@@ -105,6 +107,7 @@ sbstate(r): [
     set(sb_buf): ""!
     # the pad's view follows its cursor; the shared key handlers set it
     set(sb_pfollow): true!
+    sbm_state(_):
 $ifdef SB_PAD
     vec(v): ""
     set(sb_families): v!
@@ -1032,7 +1035,7 @@ sb_primary(r): p [
         ]
         elif(_): {text = "TRUE"} [ set(r): true ]
         elif(_): {text = "FALSE"} [ set(r): false ]
-        else(_): [ sb_err(r): "#NAME?" ]
+        else(_): [ sbm_name(r): text ]
     ]
     elif(_): {kind = "op" && text = "("} [
         sb_expr(r): p
@@ -1217,6 +1220,12 @@ sb_round(r): x digits [
 ]
 
 sb_call(r): name args [
+    sbm_call(_sbc_more): name args
+    at(_sbc_done): _sbc_more 0
+    if(_): _sbc_done [
+        at(r): _sbc_more 1
+        return(r): r
+    ]
     len(n): args
     sb_err(r): "#NAME?"
     set(agg): {name = "SUM" || name = "AVERAGE" || name = "MIN" || name = "MAX" || name = "COUNT"}
@@ -2333,6 +2342,23 @@ sb_common_key(r): key [
         return(_): r
     ]
     set(r): true
+    set(mode): sb_mode?
+    if(_): {mode = "sheet" && (key = 90 || key = 89 || key = 68)} [
+        if(_): {key = 90} [ sbm_undo(_): ]
+        elif(_): {key = 89} [ sbm_redo(_): ]
+        else(_): [
+            set(row): sb_row?
+            set(col): sb_col?
+            if(_): {row > 0} [
+                sbm_text_at(above): {row - 1} col
+                sbm_shift_formula(t): above 1 0
+                sbm_mark(_):
+                sbm_put(_): row col t
+            ]
+        ]
+        set(sb_dirty): true!
+        return(_): r
+    ]
     if(_): {key = 78} [ sb_action(_): "new" ]
     elif(_): {key = 79} [ sb_action(_): "open" ]
     elif(_): {key = 83 && shift = true} [ sb_action(_): "saveas" ]
@@ -2534,7 +2560,8 @@ sb_sheet_commit(r): [
         set(buf): sb_buf?
         set(row): sb_row?
         set(col): sb_col?
-        sb_set_index(_): {row * SB_COLS + col} buf
+        sbm_mark(_):
+        sbm_put(_): row col buf
         set(sb_edit): false!
         set(sb_dirty): true!
     ]
@@ -2963,6 +2990,15 @@ $endif
 
 $ifdef __MAIN__
 init(result): arg_count arg_values [
-    sb_app_main(result): "sheet" "Siberia" "usage: ussr siberia.su [file.fods|file.csv]" arg_count arg_values
+    vec(_sba_args): ""
+    set(_sba_i): 0
+    while(_): {_sba_i < arg_count} [
+        at(_sba_a): arg_values _sba_i
+        push(_): _sba_args _sba_a
+        set(_sba_i): {_sba_i + 1}
+    ]
+    sbm_cli(result): _sba_args
+    if(_): {result >= 0} [ return(_): result ]
+    sb_app_main(result): "sheet" "Siberia" "usage: ussr siberia.su [file.fods|file.csv] | --eval FILE CELL... | --convert IN OUT" arg_count arg_values
 ]
 $endif
