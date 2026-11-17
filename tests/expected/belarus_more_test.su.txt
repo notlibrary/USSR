@@ -1,7 +1,7 @@
 $ belarus mkfs IMG --label refine
 tests/belarus-more-tmp.img: Belarus file system 'refine', 2048 blocks (8 MiB)
 $ belarus info IMG --json
-{"label": "refine", "uuid": "6644ca0b940f97fa", "block_size": 4096, "blocks": 2048, "free": 2030, "start_sector": 0, "root_inode": 17}
+{"label": "refine", "uuid": "f054c65c60c436ef", "block_size": 4096, "blocks": 2048, "free": 2030, "start_sector": 0, "root_inode": 17}
 # files
 $ belarus write IMG /etc/hostname moscow
 $ belarus append IMG /etc/hostname .local
@@ -150,7 +150,7 @@ $ belarus crc32 IMG /doc/latest
 225e940d  /doc/lines.txt
 $ belarus block IMG 0
 block 0: BELARUS1
-[[`block`,4096],[`blocks`,2048],[`created`,1700000000],[`label`,`refine`],[`magic`,`belarus`],[`root`,17],[`uuid`,`6644ca0b940f97fa`],[`version`,2]]
+[[`block`,4096],[`blocks`,2048],[`created`,1700000000],[`label`,`refine`],[`magic`,`belarus`],[`root`,17],[`uuid`,`f054c65c60c436ef`],[`version`,2]]
 $ belarus block IMG 1
 block 1: BLFREE01
 [[40,2008]]
@@ -187,9 +187,9 @@ label renamed
 $ belarus relabel IMG bad`label
 [exit 1]
 $ belarus uuid IMG
-uuid d02c9bcc2358ffcd
+uuid e0b0c052e1da1213
 $ belarus info IMG
-label renamed, uuid d02c9bcc2358ffcd
+label renamed, uuid e0b0c052e1da1213
 size 8 MiB, free 7.8 MiB; starts at sector 0, root directory in inode 17
 $ belarus mkfs IMG2 --label two
 tests/belarus-more-two.img: Belarus file system 'two', 1024 blocks (4 MiB)
