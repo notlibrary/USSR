@@ -1,0 +1,165 @@
+# Sochi at the Petersburg table (src/sochi/gui.su). Needs a GUI-enabled
+# ussr (GLFW) and a display; the window is never shown. Run from the
+# repository root:
+#     ussr tests/gui/sochi_gui_test.su
+# Plays a short game (a pool of 2) through injected canvas clicks on the
+# buttons and cards the table draws: bids, a discard, contracts, whists,
+# card play and "Next hand", the bots moving between. Prints PASS or FAIL.
+$include "../../src/sochi/gui.su"
+
+sgt_check(r): label ok [
+    set(r): 0
+    if(_): ok [ concat(m): "PASS " label ]
+    else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+]
+
+# the centre of the first drawn hit whose action starts with prefix ("" if none)
+sgt_find(r): prefix [
+    vec(r): ""
+    len(n): sgu_hits
+    set(i): 0
+    while(_): {i < n} [
+        at(e): sgu_hits i
+        at(a): e 4
+        str_starts(s): a prefix
+        if(_): s [
+            at(x): e 0
+            at(y): e 1
+            at(w): e 2
+            at(h): e 3
+            push(_): r {x + w / 2}
+            push(_): r {y + h / 2}
+            push(_): r a
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sgt_click(r): hit [
+    set(r): 0
+    at(x): hit 0
+    at(y): hit 1
+    str_trunc(xi): x
+    str_trunc(yi): y
+    inject(_): sgu_cv "pointer" xi yi 0
+    sleep(_): 20
+]
+
+init(ret): arg_count arg_values [
+    sgu_open(_): "Tester" 2 1917
+    set(sgu_pause): 0
+    sgu_tick(_):
+    canvascount(shapes): sgu_cv
+    sgt_check(_): "the table draws (cards, icons, buttons)" {shapes > 500}
+    sgt_find(bid): "b:"
+    len(nb): bid
+    sgt_check(_): "your bids are buttons" {nb = 3 || sg_turn != 0}
+    set(hands): 0
+    set(clicks): 0
+    set(cards): 0
+    set(discards): 0
+    set(bidonce): false
+    set(lastno): sg_handno
+    set(t): 0
+    while(_): {t < 3000 && sg_phase != "over"} [
+        sgu_tick(_):
+        so_ctl(ctl):
+        set(done): {sg_phase = "done"}
+        if(_): {ctl = 0 || done} [
+            set(hit): null
+            sgt_find(p): "p:"
+            sgt_find(s): "sel:"
+            sgt_find(d): "discard"
+            sgt_find(nx): "n:"
+            len(np): p
+            len(ns): s
+            len(nd): d
+            len(nn): nx
+            if(_): {np > 0} [
+                set(hit): p
+                set(cards): {cards + 1}
+            ]
+            elif(_): {nd > 0} [
+                set(hit): d
+                set(discards): {discards + 1}
+            ]
+            elif(_): {ns > 0} [
+                # the first card not chosen yet
+                len(nh): sgu_hits
+                set(i): 0
+                while(_): {i < nh && hit = null} [
+                    at(e): sgu_hits i
+                    at(a): e 4
+                    str_starts(isel): a "sel:"
+                    if(_): isel [
+                        len(al): a
+                        slice(cn): a 4 {al - 4}
+                        so_parse_card(c): cn
+                        so_has(had): sgu_sel c
+                        if(_): {had = false} [
+                            at(x): e 0
+                            at(y): e 1
+                            vec(hit): ""
+                            push(_): hit {x + 10}
+                            push(_): hit {y + 60}
+                        ]
+                    ]
+                    set(i): {i + 1}
+                ]
+            ]
+            elif(_): {nn > 0} [ set(hit): nx ]
+            else(_): [
+                # a bid: once a real one, else pass; other choices: the first
+                sgt_find(pass): "b:pass"
+                sgt_find(bid6): "b:6"
+                sgt_find(c): "c:"
+                sgt_find(w): "w:"
+                len(nps): pass
+                len(nb6): bid6
+                len(nc): c
+                len(nw): w
+                if(_): {nb6 > 0 && bidonce = false} [
+                    set(hit): bid6
+                    set(bidonce): true
+                ]
+                elif(_): {nps > 0} [ set(hit): pass ]
+                elif(_): {nc > 0} [ set(hit): c ]
+                elif(_): {nw > 0} [ set(hit): w ]
+            ]
+            if(_): {hit != null} [
+                sgt_click(_): hit
+                set(clicks): {clicks + 1}
+            ]
+        ]
+        if(_): {sg_handno != lastno} [
+            set(hands): {hands + 1}
+            set(lastno): sg_handno
+        ]
+        set(t): {t + 1}
+    ]
+    sgt_check(_): "the game reaches its end through clicks" {sg_phase = "over"}
+    sgt_check(_): "several hands were played" {hands >= 2}
+    sgt_check(_): "cards were played by clicking them" {cards >= 10}
+    sgt_check(_): "clicks went through the canvas callback" {clicks > 10}
+    sgu_draw(_):
+    sgt_find(ng): "new"
+    len(nng): ng
+    sgt_check(_): "the end offers a new game" {nng = 3}
+    if(_): {nng = 3} [ sgt_click(_): ng ]
+    sgu_tick(_):
+    sgt_check(_): "a new game starts" {sg_phase = "bid"}
+    # the suit icons are filled: rows for every suit
+    set(sv): 0
+    set(ok): true
+    while(_): {sv < 4} [
+        sgu_rows(iv): sv 0.1
+        len(ni): iv
+        if(_): {ni < 2} [ set(ok): false ]
+        set(sv): {sv + 1}
+    ]
+    sgt_check(_): "every suit icon has a filled middle row" ok
+    destroy(_): sgu_win
+    set(ret): 0
+]

@@ -42,6 +42,19 @@ Play for Ivan: Qd 7d   ('text to chat)
 > 
 ```
 
+## Playing at a window
+
+```bash
+ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]
+```
+
+A Petersburg table where you play against two bots. Cards show big
+letters for the ranks and drawn icons for spades, clubs, diamonds and
+hearts. Click a bid or a whist choice, two cards then **Discard**, or a
+card to play it; the playable cards have a gold edge. Enter starts the
+next hand and Escape closes the window. It needs a GUI-enabled ussr
+(GLFW).
+
 ## Playing
 
 Type moves at the `>` prompt. The bottom line always says what is
