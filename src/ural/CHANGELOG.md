@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+- Refine pass 1. New pure functions in `native/ural_more.c` (unit-tested
+  in `tests/test_more.c`) and new commands in `native/ural_cmds.inc`.
+- Dependencies may carry version constraints: `ryazan>=0.1.0`, `kgb^0.4.0`,
+  `~0.2.1`, `=`, `<`, `<=`, `*`, and ranges joined by `,`. `install` checks
+  the installed version against the constraint and names the conflict.
+- One version rule: numbers compare as numbers, and `0.4.0-alpha` sorts
+  before `0.4.0`. `ural compare` and `ural satisfies` show it.
+- Package workflow:
+  - `ural new NAME [DIR]` scaffolds the usual layout.
+  - `ural check [DIR]` validates a manifest: version, SPDX license,
+    dependencies, listed files present and inside the package, the entry
+    listed, stray files.
+  - `ural version patch|minor|major [DIR]` bumps `box.uno` and adds a
+    CHANGELOG heading.
+- Installed packages:
+  - `ural verify [PKG...]` compares files with their recorded hashes.
+  - `ural doctor` checks the database, every package's files, and
+    dependencies and their constraints.
+  - `ural info PKG [--json]`, `files`, `tree` and `why`.
+  - `ural backups` and `ural clean` list and remove update backups.
+  - `ural run PKG [ARGS]` runs the entry with `ussr`, and `list --json`
+    prints the package list as JSON.
+- `ural hash FILE` prints FNV-1a and SHA-256, and `ural completion
+  bash|powershell` prints a completion script.
+- `ural.su` wraps the new commands.
+
+## 0.1.x (before 0.2.0)
 - `upload` reads the index and one archive back over the public HTTPS URL
   and fails with a hint on a 403 (umask), a 404 (wrong directory) or an old
   cached copy.

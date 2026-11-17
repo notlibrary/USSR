@@ -12,10 +12,12 @@ OpenSSL and zlib).
   with FNV-1a (not cryptographic).
 - `ural.su` is a thin wrapper that calls the program.
 
+**Refine pass 1 (0.2.0):** [x] done, [~] partly done; see CHANGELOG.md.
+
 ## Security
 - Signed repositories: an Ed25519 signature of `ussr.boxes` and a
   publisher key per package, checked on install
-- SHA-256 hashes in place of (or next to) FNV-1a
+- [~] SHA-256 hashes in place of (or next to) FNV-1a — partly: ural hash prints SHA-256 next to FNV-1a; the index still records FNV-1a
 - A trust-on-first-use key pin per server
 - Key rotation and revocation lists
 - Reproducible packs (sorted ZIP entries, fixed times) so hashes match
@@ -23,12 +25,12 @@ OpenSSL and zlib).
 - `ural audit`: list installed packages with known advisories
 
 ## Dependencies
-- Version constraints in `dependencies` (`ryazan>=0.1.0`, `^0.4`,
-  `~0.2.1`) and a real resolver with conflict messages
+- [~] Version constraints in `dependencies` (`ryazan>=0.1.0`, `^0.4`,
+  `~0.2.1`) and a real resolver with conflict messages — partly: constraints parse, check and are enforced after install; the newest version is still the one fetched, so there is no backtracking resolver
 - `minimum_ussr` enforced against the running ussr version
 - A lock file (`box.lock`) for a project: exact versions and hashes
 - Optional and dev dependencies
-- `ural tree` showing the dependency graph, and `ural why PKG`
+- [x] `ural tree` showing the dependency graph, and `ural why PKG`
 - Install from a local `.ural` file or a directory (`ural install
   ./src/kgb`)
 - Install a specific version (`ural install kgb@0.1.0`), with pin and
@@ -36,16 +38,16 @@ OpenSSL and zlib).
 - Uninstall of packages nothing else needs (`ural autoremove`)
 
 ## Project workflow
-- `ural new NAME` scaffolds a package (box.uno, README, CHANGELOG,
+- [x] `ural new NAME` scaffolds a package (box.uno, README, CHANGELOG,
   docs/API.md, examples/hello.su, tests/TESTPLAN.md, matching the
   layout most subprojects use)
-- `ural check` validates a manifest: the `files` list exists, `entry`
+- [x] `ural check` validates a manifest: the `files` list exists, `entry`
   is in it, there are no stray files, and the version was bumped
-- `ural run PKG [args]` runs a package's entry with its include paths set
+- [x] `ural run PKG [args]` runs a package's entry with its include paths set
 - Include-path integration: `$include <kgb>` resolving to installed
   packages
 - `ural publish` = pack + upload + verify in one step
-- Version bump helper (`ural version patch|minor|major`) updating
+- [x] Version bump helper (`ural version patch|minor|major`) updating
   box.uno and CHANGELOG
 
 ## Transport
@@ -56,17 +58,17 @@ OpenSSL and zlib).
 - Proxy settings
 
 ## Metadata
-- Fill in `license` (every manifest says UNSPECIFIED) and validate
-  SPDX ids
+- [~] Fill in `license` (every manifest says UNSPECIFIED) and validate
+  SPDX ids — partly: ural check validates SPDX ids and warns on UNSPECIFIED; the manifests are not filled in
 - `authors`, `homepage`, `repository` and `keywords` fields, for search
-- `ural info PKG`: README excerpt, versions, files, size
+- [x] `ural info PKG`: README excerpt, versions, files, size
 - A changelog shown on `update`
 - A static HTML index of a repository for browsing
 
 ## Interface
-- `--json` output for every command
+- [~] `--json` output for every command — partly: list and info; the other commands print text
 - Progress bars, plus quiet and verbose levels
-- Shell completion for package names
+- [x] Shell completion for package names
 - A Petersburg GUI (or a Kremlin app) for browsing and installing
 - Do more of the work in `ural.su` (or port Ural to USSR) so Moscow can
   use it without the native program
@@ -104,14 +106,14 @@ OpenSSL and zlib).
   project is (`ural pack` already walks every `box.uno`)
 
 ## Health
-- `ural doctor`: database integrity, missing files of installed
+- [x] `ural doctor`: database integrity, missing files of installed
   packages, broken dependencies, stale backups
-- `ural verify PKG`: compare installed files with the recorded hashes
-- `ural clean`: remove old backups and cached archives, with sizes
-  shown
+- [x] `ural verify PKG`: compare installed files with the recorded hashes
+- [~] `ural clean`: remove old backups and cached archives, with sizes
+  shown — partly: update backups listed and removed; no archive cache or sizes yet
 - `ural outdated`: what would update, with versions
 - Rollback: `ural rollback PKG` to the backup made by `update`
 - Transactions: an install of several packages either completes or
   leaves nothing behind
-- Version comparison rules written down (how `0.4.0-alpha` sorts
+- [x] Version comparison rules written down (how `0.4.0-alpha` sorts
   against `0.4.0`)

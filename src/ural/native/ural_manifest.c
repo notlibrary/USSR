@@ -1,4 +1,5 @@
 #include "ural_manifest.h"
+#include "ural_more.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -111,10 +112,20 @@ int ural_manifest_validate_component(const char *text)
     return 1;
 }
 
+/* NAME, or NAME followed by a version constraint (ryazan>=0.1.0, kgb^0.4) */
+static int dependency_ok(const char *value)
+{
+    char name[128];
+    const char *constraint;
+    if (ural_dependency_split(value, name, sizeof name, &constraint) != 0)
+        return 0;
+    return constraint[0] == '\0' || ural_constraint_valid(constraint);
+}
+
 static int append_dependency(ural_manifest_t *m, char *value)
 {
     char **items;
-    if (!ural_manifest_validate_component(value))
+    if (!dependency_ok(value))
         return -1;
     items = (char **)realloc(m->dependencies,
                               (m->dependency_count + 1) * sizeof(*items));

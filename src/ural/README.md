@@ -114,6 +114,35 @@ URL given to `pack`. With vsftpd on Ubuntu and the web root `/var/www/html`:
    site sits behind an HTTP-only proxy such as Cloudflare, upload to the
    server's IP address; the public URL stays the domain.
 
+### Refine pass 1 commands
+
+| Command | Does |
+|---------|------|
+| `ural new NAME [DIR]` | a package skeleton: `box.uno`, `NAME.su`, README, CHANGELOG, `docs/API.md`, `examples/hello.su`, `tests/TESTPLAN.md` |
+| `ural check [DIR]` | the manifest against its directory: version, SPDX license, dependencies, files present and inside, entry listed, stray files; exit 1 on a problem |
+| `ural version patch\|minor\|major [DIR]` | bumps `box.uno` (a pre-release's patch is its release) and adds a CHANGELOG heading |
+| `ural hash FILE` | FNV-1a (what the index records) and SHA-256 |
+| `ural compare V1 V2` / `ural satisfies VERSION CONSTRAINT` | the version order and constraint rules, below |
+| `ural verify [PKG...]` | installed files against the hashes recorded at install |
+| `ural doctor` | database integrity, every package's files, dependencies and their constraints, leftover backups |
+| `ural info PKG [--json]` / `files PKG` | version, description, license, entry, dependencies, size, the README's first paragraph; the file list |
+| `ural tree PKG` / `ural why PKG` | the installed dependency tree; what needs PKG |
+| `ural backups` / `ural clean` | the copies `update` keeps in `backups/`; removing them |
+| `ural run PKG [ARGS]` | `ussr` (from PATH) runs the package's entry |
+| `ural list --json` | the installed packages as JSON |
+| `ural completion [bash\|powershell]` | a completion script: `eval "$(ural completion)"` |
+
+**Versions** compare number by number (`0.10.0` > `0.9.0`), and a
+pre-release sorts before its release (`0.4.0-alpha` < `0.4.0-beta` <
+`0.4.0`).
+
+**Dependencies** are `NAME` or `NAME` plus a constraint: `=V`, `>V`,
+`>=V`, `<V`, `<=V`, `^V` (the same major version, or the same minor for
+`0.x`), `~V` (the same minor), `*`, or clauses joined by `,`
+(`ryazan>=0.1.0,<1.0.0`). `install` installs the newest version and then
+fails, naming both sides, when that version does not satisfy the
+constraint.
+
 ## USSR source wrapper
 
 Include `ural.su` after installing `ural` and placing it on `PATH`:
