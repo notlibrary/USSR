@@ -1,0 +1,575 @@
+# Murmansk refine pass 1: lists, sets, both ends, reject, log, limits,
+# times, ICMP types, flags, names, comments, programs, groups; insert,
+# move, test, replace, timed apply, lint; the connection table, scans,
+# blocks, the blocklist, antispoof; statistics, profiles, iptables both
+# ways, pcap; a property test (text reloaded decides the same), a parser
+# fuzz test and 1 000 rules. Run from the repository root.
+$include "../src/murmansk/murmansk.su"
+
+mt_check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(mtc_line): "PASS " label ]
+    else(_): [
+        encode(mtc_g): got
+        encode(mtc_w): want
+        concat(mtc_line): "FAIL " label ": got " mtc_g ", want " mtc_w
+    ]
+    print(_): mtc_line
+]
+
+mt_has(r): text part [
+    str_contains(r): text part
+]
+
+mt_language(r): [
+    murmansk_reset(_):
+    murmansk_clock(_): 0
+    mu_ip(ml_host): "10.0.2.2"
+    mu_ip(ml_far): "192.168.1.7"
+    mu_ip(ml_lan): "192.168.5.9"
+    murmansk_add(ml_v): "allow in tcp 80,443,8000-8099"
+    mt_check(_): "a port list" ml_v 0
+    murmansk_allows(ml_v): "in" "tcp" ml_host 443
+    mt_check(_): "one of the list" ml_v true
+    murmansk_allows(ml_v): "in" "tcp" ml_host 8050
+    mt_check(_): "a range in the list" ml_v true
+    murmansk_allows(ml_v): "in" "tcp" ml_host 444
+    mt_check(_): "not in the list" ml_v false
+    murmansk_add(ml_v): "set mail = smtp,submission,imaps"
+    mt_check(_): "a set" ml_v 0
+    murmansk_add(_): "set lan = 192.168.0.0/16, 10.9.0.0/16"
+    murmansk_add(_): "allow in tcp $mail from $lan"
+    murmansk_allows(ml_v): "in" "tcp" ml_lan 587
+    mt_check(_): "sets and service names" ml_v true
+    murmansk_allows(ml_v): "in" "tcp" ml_host 587
+    mt_check(_): "a set of networks" ml_v false
+    murmansk_add(ml_v): "allow in tcp ssh"
+    murmansk_allows(ml_v): "in" "tcp" ml_host 22
+    mt_check(_): "a service name" ml_v true
+
+    # both ends, source ports
+    murmansk_add(ml_v): "allow in udp 53 from 10.0.2.0/24 port 1024-65535 to 10.0.2.15"
+    mt_check(_): "both ends and a source port" ml_v 0
+    mu_ip(ml_me): "10.0.2.15"
+    mu_pkt(ml_p): "in" "udp" ml_host 53
+    btput(_): ml_p "lip" ml_me
+    btput(_): ml_p "sport" 5353
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "it matches" ml_v "allow"
+    btput(_): ml_p "sport" 53
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "a low source port does not" ml_v "deny"
+    murmansk_add(ml_v): "allow in tcp 80 to 10.0.0.0/8"
+    mt_check(_): "to alone in a rule for in" ml_v -1
+
+    # reject, log, comments, names
+    murmansk_add(ml_v): "telnet: reject in tcp 23   # no telnet here"
+    mt_check(_): "reject, a name and a comment" ml_v 0
+    mu_pkt(ml_p): "in" "tcp" ml_far 23
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "rejected" ml_v "reject"
+    murmansk_text(ml_t):
+    mt_has(ml_v): ml_t "telnet: reject in tcp 23  # no telnet here"
+    mt_check(_): "name and comment written back" ml_v true
+    murmansk_delete(ml_v): "telnet"
+    mt_check(_): "delete by name" ml_v 0
+    murmansk_add(_): "allow log in tcp 2222"
+    murmansk_check(_): "in" "tcp" ml_far 2222
+    murmansk_report(ml_rep):
+    mt_has(ml_v): ml_rep "allowed by allow log in tcp 2222"
+    mt_check(_): "log rules log what they allow" ml_v true
+
+    # ICMP types and TCP flags
+    murmansk_reset(_):
+    murmansk_clock(_): 0
+    murmansk_add(ml_v): "allow in icmp echo-request"
+    mt_check(_): "an ICMP type" ml_v 0
+    murmansk_allows(ml_v): "in" "icmp" ml_far 0
+    mt_check(_): "ping is an echo request" ml_v true
+    mu_pkt(ml_p): "in" "icmp" ml_far 0
+    btput(_): ml_p "itype" 13
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "a timestamp request is not" ml_v "deny"
+    murmansk_add(ml_v): "allow in tcp 25 flags syn,!ack"
+    mt_check(_): "flags" ml_v 0
+    mu_pkt(ml_p): "in" "tcp" ml_far 25
+    btput(_): ml_p "flags" "syn,ack"
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "syn with ack is not syn alone" ml_v "deny"
+    btput(_): ml_p "flags" "syn"
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "syn alone" ml_v "allow"
+
+    # limits
+    murmansk_add(ml_v): "allow in tcp 8443 limit 2/s burst 3"
+    mt_check(_): "a limit" ml_v 0
+    set(ml_n): 0
+    set(ml_i): 0
+    while(_): {ml_i < 5} [
+        murmansk_check(ml_ok): "in" "tcp" ml_far 8443
+        if(_): ml_ok [ set(ml_n): {ml_n + 1} ]
+        set(ml_i): {ml_i + 1}
+    ]
+    mt_check(_): "the burst, then no more" ml_n 3
+    murmansk_clock(_): 1000
+    murmansk_check(ml_ok): "in" "tcp" ml_far 8443
+    murmansk_check(ml_ok2): "in" "tcp" ml_far 8443
+    murmansk_check(ml_ok3): "in" "tcp" ml_far 8443
+    mt_check(_): "a second later: two more" {ml_ok && ml_ok2 && ml_ok3 = false} true
+
+    # time
+    murmansk_reset(_):
+    murmansk_clock(_): {9 * 3600000}
+    murmansk_add(ml_v): "allow in tcp 3389 during 08:00-18:00"
+    mt_check(_): "during" ml_v 0
+    murmansk_allows(ml_v): "in" "tcp" ml_far 3389
+    mt_check(_): "at nine" ml_v true
+    murmansk_clock(_): {20 * 3600000}
+    murmansk_allows(ml_v): "in" "tcp" ml_far 3389
+    mt_check(_): "at eight in the evening" ml_v false
+    murmansk_add(_): "allow in tcp 9000 until 21:00"
+    murmansk_allows(ml_v): "in" "tcp" ml_far 9000
+    mt_check(_): "until, before it" ml_v true
+    murmansk_clock(_): {21 * 3600000 + 1}
+    murmansk_allows(ml_v): "in" "tcp" ml_far 9000
+    mt_check(_): "until, after it" ml_v false
+    murmansk_report(ml_rep):
+    mt_has(ml_v): ml_rep "expired"
+    mt_check(_): "the report says it expired" ml_v true
+
+    # programs and groups
+    murmansk_add(_): "policy out deny"
+    murmansk_add(_): "allow out tcp 443 for lenin group ai"
+    mu_pkt(ml_p): "out" "tcp" ml_far 443
+    btput(_): ml_p "prog" "lenin"
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "a program's rule" ml_v "allow"
+    btput(_): ml_p "prog" "other"
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "another program" ml_v "deny"
+    btput(_): ml_p "prog" "lenin"
+    murmansk_group(_): "ai" false
+    murmansk_decide(ml_d): ml_p false
+    at(ml_v): ml_d 0
+    mt_check(_): "a group switched off" ml_v "deny"
+    murmansk_group(_): "ai" true
+
+    # mistakes
+    murmansk_add(ml_v): "allow in tcp 80 limit fast"
+    mt_check(_): "a bad limit" ml_v -1
+    murmansk_add(ml_v): "allow in tcp 80 during 25:00-26:00"
+    mt_check(_): "a bad time" ml_v -1
+    murmansk_add(ml_v): "allow in udp 80 flags syn"
+    mt_check(_): "flags need tcp" ml_v -1
+    murmansk_add(ml_v): "allow in tcp nosuchservice"
+    mt_check(_): "an unknown service" ml_v -1
+    set(r): 0
+]
+
+mt_manage(r): [
+    murmansk_reset(_):
+    murmansk_clock(_): 0
+    mu_ip(mm_far): "192.168.1.7"
+    murmansk_add(_): "allow in tcp 80"
+    murmansk_add(_): "allow in tcp 81"
+    murmansk_insert(mm_v): 1 "deny in tcp 80"
+    mt_check(_): "insert" mm_v 0
+    murmansk_allows(mm_v): "in" "tcp" mm_far 80
+    mt_check(_): "the inserted rule comes first" mm_v false
+    murmansk_move(mm_v): 1 3
+    murmansk_allows(mm_v): "in" "tcp" mm_far 80
+    mt_check(_): "moved last" mm_v true
+    murmansk_test(mm_v): "in tcp 192.168.1.7 81"
+    mt_check(_): "test names the rule" mm_v "allow by rule 2: allow in tcp 81"
+    murmansk_test(mm_v): "in udp 192.168.1.7 9"
+    mt_check(_): "test: the policy" mm_v "deny by policy"
+    murmansk_check(_): "in" "tcp" mm_far 81
+    murmansk_check(_): "in" "tcp" mm_far 99
+    murmansk_zero(_):
+    murmansk_report(mm_rep):
+    mt_has(mm_v): mm_rep "(1 hits)"
+    mt_check(_): "zero: no hits left" mm_v false
+    mt_has(mm_v): mm_rep "0 packets dropped"
+    mt_check(_): "zero: no drops" mm_v true
+
+    murmansk_replace(mm_v): "allow in tcp 7\nnonsense\n"
+    mt_check(_): "a replace with an error" mm_v 1
+    murmansk_allows(mm_v): "in" "tcp" mm_far 81
+    mt_check(_): "keeps the old rules" mm_v true
+    murmansk_replace(mm_v): "allow in tcp 7\n"
+    mt_check(_): "a good replace" mm_v 0
+    murmansk_allows(mm_v): "in" "tcp" mm_far 81
+    mt_check(_): "the old rules are gone" mm_v false
+
+    murmansk_apply_timed(mm_v): "allow in tcp 8\n" 60
+    mt_check(_): "a timed apply" mm_v 0
+    murmansk_allows(mm_v): "in" "tcp" mm_far 8
+    mt_check(_): "the new rules act" mm_v true
+    murmansk_clock(_): 61000
+    murmansk_check(_): "in" "tcp" mm_far 1
+    murmansk_allows(mm_v): "in" "tcp" mm_far 7
+    mt_check(_): "unconfirmed: the old rules come back" mm_v true
+    murmansk_apply_timed(_): "allow in tcp 8\n" 60
+    murmansk_confirm(mm_v):
+    mt_check(_): "confirm" mm_v true
+    murmansk_clock(_): 200000
+    murmansk_check(_): "in" "tcp" mm_far 1
+    murmansk_allows(mm_v): "in" "tcp" mm_far 8
+    mt_check(_): "confirmed rules stay" mm_v true
+
+    murmansk_lint(mm_l): "allow in tcp 80\nallow in tcp 80 from 10.0.0.0/8\nallow sideways\nset x = 1\n"
+    len(mm_v): mm_l
+    mt_check(_): "lint finds two" mm_v 2
+    at(mm_v): mm_l 0
+    mt_check(_): "a rule that never decides" mm_v "line 2: never decides: line 1 before it matches all it does"
+    at(mm_v): mm_l 1
+    mt_check(_): "a wrong line" mm_v "line 3: in or out, not sideways"
+    murmansk_text(mm_t):
+    mt_has(mm_v): mm_t "set x"
+    mt_check(_): "lint changes nothing" mm_v false
+
+    murmansk_command(mm_c): "insert 1 deny in tcp 8"
+    at(mm_v): mm_c 0
+    mt_check(_): "the fw verb insert" mm_v 0
+    murmansk_command(mm_c): "test in tcp 192.168.1.7 8"
+    at(mm_v): mm_c 1
+    mt_check(_): "the fw verb test" mm_v "deny by rule 1: deny in tcp 8"
+    murmansk_command(mm_c): "allow in tcp 9"
+    mt_check(_): "a rule is not a verb" mm_c null
+    set(r): 0
+]
+
+mt_state(r): [
+    murmansk_reset(_):
+    murmansk_clock(_): 0
+    mu_ip(ms_far): "192.168.1.7"
+    mu_ip(ms_other): "192.168.1.8"
+    murmansk_add(_): "allow in tcp 80 perip 2"
+    murmansk_check(ms_a): "in" "tcp" ms_far 80
+    murmansk_check(ms_b): "in" "tcp" ms_far 80
+    mt_check(_): "two from one source" {ms_a && ms_b} true
+    murmansk_track(_): "in" "tcp" ms_far 81
+    murmansk_check(ms_v): "in" "tcp" ms_far 80
+    mt_check(_): "a third is over perip" ms_v false
+    murmansk_check(ms_v): "in" "tcp" ms_other 80
+    mt_check(_): "another source may" ms_v true
+    murmansk_conns(ms_t):
+    mt_has(ms_v): ms_t "3 connections"
+    mt_check(_): "the connection table" ms_v true
+    murmansk_add(_): "timeout tcp 5"
+    murmansk_clock(_): 6000
+    murmansk_expire(ms_v):
+    mt_check(_): "idle connections expire" ms_v 3
+
+    murmansk_reset(_):
+    murmansk_clock(_): 0
+    murmansk_add(ms_v): "scan 3 10 60"
+    mt_check(_): "scan detection" ms_v 0
+    murmansk_add(_): "allow in tcp 80"
+    murmansk_check(_): "in" "tcp" ms_far 21
+    murmansk_check(_): "in" "tcp" ms_far 22
+    murmansk_check(_): "in" "tcp" ms_far 23
+    murmansk_check(ms_v): "in" "tcp" ms_far 80
+    mt_check(_): "a scanner is blocked" ms_v false
+    murmansk_check(ms_v): "in" "tcp" ms_other 80
+    mt_check(_): "others are not" ms_v true
+    murmansk_clock(_): 61000
+    murmansk_check(ms_v): "in" "tcp" ms_far 80
+    mt_check(_): "the block runs out" ms_v true
+    murmansk_block(_): ms_other 30 "too many 404s"
+    murmansk_test(ms_v): "in tcp 192.168.1.8 80"
+    mt_check(_): "a block from another program" ms_v "deny by a block (too many 404s)"
+    murmansk_unblock(_): ms_other
+    murmansk_allows(ms_v): "in" "tcp" ms_other 80
+    mt_check(_): "unblocked" ms_v true
+
+    murmansk_blocklist(ms_v): "# bad nets\n192.168.1.0/24\n203.0.113.5\nnot an address\n"
+    mt_check(_): "a blocklist" ms_v 2
+    murmansk_allows(ms_v): "in" "tcp" ms_far 80
+    mt_check(_): "a listed network" ms_v false
+    murmansk_test(ms_v): "in tcp 192.168.1.7 80"
+    mt_check(_): "the blocklist says so" ms_v "deny by the blocklist (192.168.1.0/24)"
+    mu_ip(ms_ok): "198.51.100.1"
+    murmansk_allows(ms_v): "in" "tcp" ms_ok 80
+    mt_check(_): "an address not listed" ms_v true
+    murmansk_blocklist(_): ""
+
+    murmansk_add(_): "antispoof on"
+    mu_ip(ms_lo): "127.0.0.1"
+    murmansk_check(ms_v): "in" "tcp" ms_lo 80
+    mt_check(_): "a loopback source from outside" ms_v false
+    murmansk_malformed(_): "short header"
+    murmansk_report(ms_rep):
+    mt_has(ms_v): ms_rep "1 spoofed packets dropped"
+    mt_check(_): "spoofed counted apart" ms_v true
+    mt_has(ms_v): ms_rep "1 malformed (short header)"
+    mt_check(_): "malformed counted apart" ms_v true
+
+    murmansk_add(_): "audit on"
+    murmansk_check(_): "in" "tcp" ms_ok 80
+    murmansk_audit(ms_au):
+    len(ms_v): ms_au
+    mt_check(_): "the audit trail" ms_v 1
+
+    murmansk_add(_): "forward tcp 80 to 10.0.2.20:8080"
+    murmansk_forward(ms_f): "tcp" 80
+    at(ms_v): ms_f 1
+    mt_check(_): "a port forward" ms_v 8080
+    murmansk_forward(ms_v): "tcp" 81
+    mt_check(_): "no forward" ms_v null
+
+    murmansk_reset(_):
+    murmansk_add(_): "history 3"
+    set(ms_i): 0
+    while(_): {ms_i < 6} [
+        murmansk_check(_): "in" "tcp" ms_far {1000 + ms_i}
+        set(ms_i): {ms_i + 1}
+    ]
+    btlen(ms_v): mu_log
+    mt_check(_): "history keeps 3" ms_v 3
+    murmansk_check(_): "in" "tcp" ms_other 1000
+    murmansk_top(ms_v): 1
+    mt_check(_): "top sources and ports" ms_v "top sources: 192.168.1.7 (6)\ntop ports: tcp 1000 (2)"
+
+    set(ms_log): "tests/murmansk-tmp.log"
+    remove_file(_): ms_log
+    concat(ms_line): "logfile " ms_log
+    murmansk_add(_): ms_line
+    murmansk_check(_): "in" "tcp" ms_far 7
+    readfile(ms_v): ms_log
+    mt_has(ms_v): ms_v "in tcp 192.168.1.7 port 7: denied by policy"
+    mt_check(_): "the drop log file" ms_v true
+    btput(_): mu_st "logfile" ""
+    remove_file(_): ms_log
+
+    set(ms_cap): "tests/murmansk-tmp.pcap"
+    murmansk_capture(_): ms_cap
+    mu_pkt(ms_p): "in" "udp" ms_far 9
+    vec(ms_data): ""
+    push(_): ms_data 69
+    push(_): ms_data 0
+    btput(_): ms_p "data" ms_data
+    murmansk_check_pkt(_): ms_p
+    read_bytes(ms_b): ms_cap
+    len(ms_v): ms_b
+    mt_check(_): "a pcap of the drop" ms_v 42
+    at(ms_v): ms_b 0
+    mt_check(_): "its magic" ms_v 212
+    murmansk_capture(_): ""
+    remove_file(_): ms_cap
+    set(r): 0
+]
+
+mt_files(r): [
+    murmansk_reset(_):
+    murmansk_profile(mf_v): "server"
+    mt_check(_): "a profile" mf_v 0
+    mu_ip(mf_far): "192.168.1.7"
+    murmansk_allows(mf_v): "in" "tcp" mf_far 443
+    mt_check(_): "server opens https" mf_v true
+    murmansk_report(mf_rep):
+    mt_has(mf_v): mf_rep "profile server"
+    mt_check(_): "the report names it" mf_v true
+    murmansk_profile_define(_): "closed" "policy in deny\npolicy out deny\n"
+    murmansk_profile(_): "closed"
+    murmansk_allows(mf_v): "out" "tcp" mf_far 443
+    mt_check(_): "a profile of one's own" mf_v false
+    murmansk_profile(mf_v): "nowhere"
+    mt_check(_): "no such profile" mf_v -1
+
+    murmansk_reset(_):
+    murmansk_add(_): "allow in tcp 22,80 from 10.0.0.0/8"
+    murmansk_add(_): "web: deny out udp 53 limit 5/s burst 10"
+    murmansk_iptables(mf_t):
+    mt_has(mf_v): mf_t "-A INPUT -p tcp -s 10.0.0.0/8 -m multiport --dports 22,80 -j ACCEPT"
+    mt_check(_): "to iptables" mf_v true
+    mt_has(mf_v): mf_t "-m limit --limit 5/second --limit-burst 10 -m comment --comment \"web\" -j DROP"
+    mt_check(_): "limits and comments" mf_v true
+    murmansk_from_iptables(mf_r): "iptables -P INPUT DROP\n-A INPUT -p tcp --dport 8000:8099 -s 10.0.2.0/24 -j ACCEPT\n-A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j REJECT\n-A INPUT -i eth0 -j LOG\n"
+    mt_check(_): "from iptables" mf_r "policy in deny\nallow in tcp 8000-8099 from 10.0.2.0/24\nreject out udp 53 to 1.1.1.1\n# left out: -A INPUT -i eth0 -j LOG\n"
+    murmansk_load_text(mf_v): mf_r
+    mt_check(_): "and it loads" mf_v 0
+
+    # include: a file and a folder
+    make_dir(_): "tests/murmansk-tmp"
+    writefile(_): "tests/murmansk-tmp/a.rules" "allow in tcp 5001\n"
+    writefile(_): "tests/murmansk-tmp/b.rules" "allow in tcp 5002\n"
+    writefile(_): "tests/murmansk-tmp/one.txt" "allow in tcp 5003\n"
+    murmansk_reset(_):
+    murmansk_add(mf_v): "include tests/murmansk-tmp"
+    mt_check(_): "include a folder" mf_v 0
+    murmansk_allows(mf_v): "in" "tcp" mf_far 5002
+    mt_check(_): "its rules" mf_v true
+    murmansk_allows(mf_v): "in" "tcp" mf_far 5003
+    mt_check(_): "only *.rules" mf_v false
+    murmansk_add(mf_v): "include tests/murmansk-tmp/none.rules"
+    mt_check(_): "a missing include" mf_v -1
+    remove_file(_): "tests/murmansk-tmp/a.rules"
+    remove_file(_): "tests/murmansk-tmp/b.rules"
+    remove_file(_): "tests/murmansk-tmp/one.txt"
+    remove_dir(_): "tests/murmansk-tmp"
+    set(r): 0
+]
+
+# a made-up rule from a seed
+mt_rule(r): seed [
+    vec(acts): ""
+    str_split(acts): "allow deny reject" " "
+    vec(protos): ""
+    str_split(protos): "tcp udp icmp any" " "
+    set(a): {seed % 3}
+    at(act): acts a
+    set(dir): "in"
+    set(s3): {seed / 3}
+    str_trunc(s3): s3
+    if(_): {s3 % 2 = 1} [ set(dir): "out" ]
+    set(s7): {seed / 7}
+    str_trunc(s7): s7
+    set(p): {s7 % 4}
+    at(proto): protos p
+    concat(r): act " " dir " " proto
+    if(_): {proto = "tcp" || proto = "udp"} [
+        set(lo): {seed % 100}
+        set(hi): {lo + seed % 50}
+        str_from_int(ls): lo
+        str_from_int(hs): hi
+        concat(r): r " " ls "-" hs
+        if(_): {seed % 5 = 0} [ concat(r): r ",ssh" ]
+    ]
+    set(far): "from"
+    if(_): {dir = "out"} [ set(far): "to" ]
+    if(_): {seed % 4 = 0} [
+        str_from_int(bs): {8 + seed % 25}
+        concat(r): r " " far " 10." "0.0.0/" bs
+    ]
+]
+
+mt_props(r): [
+    # a rule set and its text reloaded decide the same
+    set(mp_seed): 7
+    set(mp_bad): 0
+    set(mp_round): 0
+    while(_): {mp_round < 6} [
+        murmansk_reset(_):
+        murmansk_clock(_): 0
+        set(mp_i): 0
+        while(_): {mp_i < 12} [
+            set(mp_seed): {(mp_seed * 1103515245 + 12345) % 2147483648}
+            mt_rule(mp_rt): mp_seed
+            murmansk_add(_): mp_rt
+            set(mp_i): {mp_i + 1}
+        ]
+        vec(mp_before): ""
+        vec(mp_pkts): ""
+        set(mp_j): 0
+        while(_): {mp_j < 40} [
+            set(mp_seed): {(mp_seed * 1103515245 + 12345) % 2147483648}
+            set(mp_dir): "in"
+            if(_): {mp_seed % 2 = 1} [ set(mp_dir): "out" ]
+            vec(mp_ps): ""
+            str_split(mp_ps): "tcp udp icmp" " "
+            at(mp_proto): mp_ps {mp_seed % 3}
+            set(mp_ip): {167772160 + mp_seed % 65536}
+            if(_): {mp_seed % 3 = 0} [ set(mp_ip): {3232235520 + mp_seed % 256} ]
+            set(mp_port): {mp_seed % 160}
+            murmansk_allows(mp_a): mp_dir mp_proto mp_ip mp_port
+            push(_): mp_before mp_a
+            vec(mp_pk): ""
+            push(_): mp_pk mp_dir
+            push(_): mp_pk mp_proto
+            push(_): mp_pk mp_ip
+            push(_): mp_pk mp_port
+            push(_): mp_pkts mp_pk
+            set(mp_j): {mp_j + 1}
+        ]
+        murmansk_text(mp_t):
+        murmansk_reset(_):
+        murmansk_load_text(mp_errs): mp_t
+        if(_): {mp_errs != 0} [ set(mp_bad): {mp_bad + 1} ]
+        murmansk_text(mp_t2):
+        if(_): {mp_t2 != mp_t} [ set(mp_bad): {mp_bad + 1} ]
+        set(mp_j): 0
+        while(_): {mp_j < 40} [
+            at(mp_pk): mp_pkts mp_j
+            at(mp_dir): mp_pk 0
+            at(mp_proto): mp_pk 1
+            at(mp_ip): mp_pk 2
+            at(mp_port): mp_pk 3
+            murmansk_allows(mp_a): mp_dir mp_proto mp_ip mp_port
+            at(mp_b): mp_before mp_j
+            if(_): {mp_a != mp_b} [ set(mp_bad): {mp_bad + 1} ]
+            set(mp_j): {mp_j + 1}
+        ]
+        set(mp_round): {mp_round + 1}
+    ]
+    mt_check(_): "rules reloaded from their text decide the same" mp_bad 0
+
+    # fuzz: random words never break the parser, and a bad line adds nothing
+    murmansk_reset(_):
+    vec(mp_words): ""
+    str_split(mp_words): "allow deny reject in out tcp udp icmp any 80 1-2 from to port 10.0.0.0/8 $x limit 5/s burst flags syn during 08:00-09:00 until for group name log # , - 99999 -1 x:" " "
+    len(mp_nw): mp_words
+    set(mp_crash): 0
+    set(mp_k): 0
+    while(_): {mp_k < 300} [
+        set(mp_line): ""
+        set(mp_len): {mp_seed % 9 + 1}
+        set(mp_q): 0
+        while(_): {mp_q < mp_len} [
+            set(mp_seed): {(mp_seed * 1103515245 + 12345) % 2147483648}
+            at(mp_x): mp_words {mp_seed % mp_nw}
+            concat(mp_line): mp_line " " mp_x
+            set(mp_q): {mp_q + 1}
+        ]
+        btlen(mp_n0): mu_rules
+        murmansk_add(mp_st): mp_line
+        btlen(mp_n1): mu_rules
+        if(_): {mp_st != 0 && mp_n1 != mp_n0} [ set(mp_crash): {mp_crash + 1} ]
+        if(_): {mp_st = 0 && mp_n1 = mp_n0 + 1} [
+            # what it took, written back, is a rule again
+            btget(mp_rule): mu_rules mp_n1
+            mu_rule_text(mp_rt): mp_rule
+            mu_parse(mp_again): mp_rt
+            if(_): {mp_again = null} [ set(mp_crash): {mp_crash + 1} ]
+        ]
+        set(mp_k): {mp_k + 1}
+    ]
+    mt_check(_): "the parser takes any words" mp_crash 0
+
+    # 1 000 rules: the first that matches still decides
+    murmansk_reset(_):
+    set(mp_i): 0
+    while(_): {mp_i < 1000} [
+        str_from_int(mp_ps): {10000 + mp_i}
+        concat(mp_rt): "allow in tcp " mp_ps
+        if(_): {mp_i % 2 = 1} [ concat(mp_rt): "deny in udp " mp_ps ]
+        murmansk_add(_): mp_rt
+        set(mp_i): {mp_i + 1}
+    ]
+    murmansk_add(_): "allow in udp"
+    mu_ip(mp_far): "192.168.1.7"
+    murmansk_allows(mp_v): "in" "tcp" mp_far 10998
+    mt_check(_): "a rule near the end of 1 000" mp_v true
+    murmansk_allows(mp_v): "in" "udp" mp_far 10999
+    mt_check(_): "the last udp deny" mp_v false
+    murmansk_allows(mp_v): "in" "udp" mp_far 20000
+    mt_check(_): "past them all" mp_v true
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    mt_language(_):
+    mt_manage(_):
+    mt_state(_):
+    mt_files(_):
+    mt_props(_):
+]

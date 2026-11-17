@@ -1,0 +1,110 @@
+PASS a port list
+PASS one of the list
+PASS a range in the list
+PASS not in the list
+PASS a set
+PASS sets and service names
+PASS a set of networks
+PASS a service name
+PASS both ends and a source port
+PASS it matches
+PASS a low source port does not
+PASS to alone in a rule for in
+PASS reject, a name and a comment
+PASS rejected
+PASS name and comment written back
+PASS delete by name
+PASS log rules log what they allow
+PASS an ICMP type
+PASS ping is an echo request
+PASS a timestamp request is not
+PASS flags
+PASS syn with ack is not syn alone
+PASS syn alone
+PASS a limit
+PASS the burst, then no more
+PASS a second later: two more
+PASS during
+PASS at nine
+PASS at eight in the evening
+PASS until, before it
+PASS until, after it
+PASS the report says it expired
+PASS a program's rule
+PASS another program
+PASS a group switched off
+PASS a bad limit
+PASS a bad time
+PASS flags need tcp
+PASS an unknown service
+PASS insert
+PASS the inserted rule comes first
+PASS moved last
+PASS test names the rule
+PASS test: the policy
+PASS zero: no hits left
+PASS zero: no drops
+PASS a replace with an error
+PASS keeps the old rules
+PASS a good replace
+PASS the old rules are gone
+PASS a timed apply
+PASS the new rules act
+PASS unconfirmed: the old rules come back
+PASS confirm
+PASS confirmed rules stay
+PASS lint finds two
+PASS a rule that never decides
+PASS a wrong line
+PASS lint changes nothing
+PASS the fw verb insert
+PASS the fw verb test
+PASS a rule is not a verb
+PASS two from one source
+PASS a third is over perip
+PASS another source may
+PASS the connection table
+PASS idle connections expire
+PASS scan detection
+PASS a scanner is blocked
+PASS others are not
+PASS the block runs out
+PASS a block from another program
+PASS unblocked
+PASS a blocklist
+PASS a listed network
+PASS the blocklist says so
+PASS an address not listed
+PASS a loopback source from outside
+PASS spoofed counted apart
+PASS malformed counted apart
+PASS the audit trail
+PASS a port forward
+PASS no forward
+PASS history keeps 3
+PASS top sources and ports
+PASS the drop log file
+PASS a pcap of the drop
+PASS its magic
+PASS a profile
+PASS server opens https
+PASS the report names it
+PASS a profile of one's own
+PASS no such profile
+PASS to iptables
+PASS limits and comments
+PASS from iptables
+PASS and it loads
+PASS include a folder
+PASS its rules
+PASS only *.rules
+PASS a missing include
+PASS rules reloaded from their text decide the same
+PASS the parser takes any words
+PASS a rule near the end of 1 000
+PASS the last udp deny
+PASS past them all
+
+--- stderr ---
+
+--- exit 0 ---

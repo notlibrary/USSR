@@ -1,0 +1,1534 @@
+# more.su - Murmansk refine pass 1: managing rules, state and protection,
+# observability, profiles and converters. murmansk.su includes it.
+#
+# Settings lines (in a rules file, or murmansk_add):
+#   scan N S T          N or more ports denied to one source in S seconds
+#                       block it for T seconds; scan off
+#   antispoof on|off    drop what comes in claiming a loopback, zero or
+#                       broadcast source, or this machine's own address
+#   audit on|off        keep the first packet of every allowed connection
+#   history N           how many drops (and log rules' matches) are kept
+#   timeout tcp|udp|icmp S   how long a connection stays in the table
+#   forward tcp 80 to 10.0.2.20:8080
+#   group NAME off      its rules do not match until switched on
+#   include PATH        more rules, from a file or every *.rules in a folder
+#   logfile PATH [BYTES]   drops also go to a file, rotated to PATH.1
+#
+#   murmansk_insert(r): n text   murmansk_move(r): from to
+#   murmansk_test(s): "in tcp 10.0.2.15 8080"   which rule decides
+#   murmansk_replace(r): text    all or nothing: errors, the old rules kept
+#   murmansk_apply_timed(r): text seconds / murmansk_confirm(r):
+#   murmansk_zero(_):            counters back to 0
+#   murmansk_lint(v): text       "line N: ..." for errors and dead rules
+#   murmansk_track(_): dir proto ip port / murmansk_close(_): ...
+#   murmansk_conns(s):           the connection table
+#   murmansk_block(_): ip seconds why / murmansk_unblock(_): ip
+#   murmansk_blocklist(r): text  a/b lines, looked up by prefix length
+#   murmansk_forward(v): proto port -> [ip port] or null
+#   murmansk_top(s): n           top dropped sources and ports
+#   murmansk_group(_): name on   murmansk_profile(r): name
+#   murmansk_profile_define(_): name text
+#   murmansk_iptables(s):        the rules as iptables commands
+#   murmansk_from_iptables(s): text   iptables -A/-P lines -> rules
+#   murmansk_capture(_): path|""  drops with a "data" byte vector -> pcap
+#   murmansk_malformed(_): why    counted apart from rule drops
+#   murmansk_command(v): line    the fw shell's verbs: [status text] or null
+$once
+$include "../libs/lists.su"
+
+mu_more_reset(r): [
+    set(r): 0
+    btree(t):
+    btput(_): t "tcp" 3600
+    btput(_): t "udp" 30
+    btput(_): t "icmp" 10
+    btput(_): mu_st "timeouts" t
+    btree(c):
+    btput(_): mu_st "conns" c
+    btree(b):
+    btput(_): mu_st "blocks" b
+    btree(bl):
+    btput(_): mu_st "blist" bl
+    btree(fw):
+    btput(_): mu_st "forwards" fw
+    btree(ss):
+    btput(_): mu_st "stats_src" ss
+    btree(sp):
+    btput(_): mu_st "stats_port" sp
+    btree(sc):
+    btput(_): mu_st "scan" sc
+    btput(_): mu_st "scan_n" 0
+    btput(_): mu_st "antispoof" false
+    btput(_): mu_st "audit" false
+    vec(al): ""
+    btput(_): mu_st "audit_log" al
+    btput(_): mu_st "spoofed" 0
+    btree(mf):
+    btput(_): mu_st "malformed" mf
+    btput(_): mu_st "logfile" ""
+    btput(_): mu_st "logmax" 1000000
+    btput(_): mu_st "capture" ""
+    vec(inc): ""
+    btput(_): mu_st "includes" inc
+    btput(_): mu_st "loading" ""
+    btput(_): mu_st "pending" null
+    btput(_): mu_st "profile" ""
+    btput(_): mu_st "dry" false
+]
+
+# the settings keys a rules file sets; the rest is state a reload keeps
+mu_config_keys(r): [
+    str_split(r): "sets groups_off index history timeouts forwards scan_n scan_s scan_t antispoof audit includes logfile logmax loading dry" " "
+]
+
+mu_on(r): v [
+    set(r): {v = "on" || v = "yes" || v = "true"}
+]
+
+# a settings line: 0, -1, or 1 when it is none
+mu_more_line(r): text [
+    set(r): 1
+    mu_words(w): text
+    len(n): w
+    if(_): {n = 0} [ return(r): r ]
+    at(k): w 0
+    vec(known): ""
+    str_split(known): "scan antispoof audit history timeout forward group include logfile" " "
+    mu_has_word(isk): known k
+    if(_): {isk = false} [ return(r): r ]
+    # "group G off" is a setting; anything else starting with a word
+    # is not a rule either
+    set(r): -1
+    btget(dry): mu_st "dry" false
+    set(v1): ""
+    if(_): {n > 1} [ at(v1): w 1 ]
+    if(_): {k = "scan"} [
+        if(_): {v1 = "off" && n = 2} [
+            if(_): {dry = false} [ btput(_): mu_st "scan_n" 0 ]
+            set(r): 0
+            return(r): r
+        ]
+        if(_): {n != 4} [
+            mu_fail(_): "scan is: scan PORTS SECONDS BLOCK-SECONDS, or scan off"
+            return(r): r
+        ]
+        at(a): w 1
+        at(b): w 2
+        at(c): w 3
+        mu_number(na): a
+        mu_number(nb): b
+        mu_number(nc): c
+        if(_): {na < 2 || nb < 1 || nc < 1} [
+            mu_fail(_): "scan is: scan PORTS SECONDS BLOCK-SECONDS, or scan off"
+            return(r): r
+        ]
+        if(_): {dry = false} [
+            btput(_): mu_st "scan_n" na
+            btput(_): mu_st "scan_s" nb
+            btput(_): mu_st "scan_t" nc
+        ]
+    ]
+    elif(_): {k = "antispoof" || k = "audit"} [
+        if(_): {n != 2 || (v1 != "on" && v1 != "off")} [
+            concat(m): k " is on or off"
+            mu_fail(_): m
+            return(r): r
+        ]
+        mu_on(on): v1
+        if(_): {dry = false} [ btput(_): mu_st k on ]
+    ]
+    elif(_): {k = "history"} [
+        mu_number(h): v1
+        if(_): {n != 2 || h < 1} [
+            mu_fail(_): "history is a number of lines"
+            return(r): r
+        ]
+        if(_): {dry = false} [ btput(_): mu_st "history" h ]
+    ]
+    elif(_): {k = "timeout"} [
+        set(s): -1
+        if(_): {n = 3} [
+            at(sv): w 2
+            mu_number(s): sv
+        ]
+        if(_): {s < 1 || (v1 != "tcp" && v1 != "udp" && v1 != "icmp")} [
+            mu_fail(_): "timeout is: timeout tcp|udp|icmp SECONDS"
+            return(r): r
+        ]
+        if(_): {dry = false} [
+            btget(t): mu_st "timeouts"
+            btput(_): t v1 s
+        ]
+    ]
+    elif(_): {k = "forward"} [
+        # forward tcp 80 to 10.0.2.20:8080
+        set(good): false
+        if(_): {n = 5} [
+            at(p): w 2
+            at(to): w 3
+            at(dest): w 4
+            mu_number(port): p
+            str_split(hp): dest ":"
+            len(nhp): hp
+            set(good): {(v1 = "tcp" || v1 = "udp") && port >= 0 && port <= 65535 && to = "to" && nhp = 2}
+            if(_): good [
+                at(hs): hp 0
+                at(ps): hp 1
+                mu_ip(hip): hs
+                mu_number(hport): ps
+                set(good): {hip >= 0 && hport >= 0 && hport <= 65535}
+            ]
+        ]
+        if(_): {good = false} [
+            mu_fail(_): "forward is: forward tcp|udp PORT to a.b.c.d:PORT"
+            return(r): r
+        ]
+        if(_): {dry = false} [
+            btget(f): mu_st "forwards"
+            str_from_int(pks): port
+            concat(key): v1 " " pks
+            btput(_): f key dest
+        ]
+    ]
+    elif(_): {k = "group"} [
+        if(_): {n != 3} [ return(r): r ]
+        at(st): w 2
+        if(_): {st != "off" && st != "on"} [
+            mu_fail(_): "group is: group NAME off|on"
+            return(r): r
+        ]
+        if(_): {dry = false} [
+            mu_on(on): st
+            murmansk_group(_): v1 on
+        ]
+    ]
+    elif(_): {k = "include"} [
+        if(_): {n != 2} [
+            mu_fail(_): "include is: include PATH"
+            return(r): r
+        ]
+        if(_): {dry = false} [
+            btget(inc): mu_st "includes"
+            push(_): inc v1
+            mu_include(bad): v1
+            if(_): {bad != 0} [ return(r): r ]
+        ]
+    ]
+    elif(_): {k = "logfile"} [
+        if(_): {n < 2 || n > 3} [
+            mu_fail(_): "logfile is: logfile PATH [BYTES]"
+            return(r): r
+        ]
+        if(_): {dry = false} [
+            btput(_): mu_st "logfile" v1
+            if(_): {n = 3} [
+                at(mx): w 2
+                mu_number(mxn): mx
+                if(_): {mxn > 0} [ btput(_): mu_st "logmax" mxn ]
+            ]
+        ]
+    ]
+    set(r): 0
+]
+
+mu_has_word(r): v x [
+    set(r): false
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(y): v i
+        if(_): {y = x} [ set(r): true ]
+        set(i): {i + 1}
+    ]
+]
+
+# the rules of a file, or of every *.rules in a folder (in name order);
+# 0, or -1 with mu_error set
+mu_include(r): path [
+    set(r): 0
+    is_dir(d): path
+    vec(files): ""
+    if(_): {d = 1} [
+        list_dir(names): path
+        list_sort(names): names
+        len(nn): names
+        set(i): 0
+        while(_): {i < nn} [
+            at(nm): names i
+            str_ends(isr): nm ".rules"
+            if(_): isr [
+                concat(p): path "/" nm
+                push(_): files p
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        file_exists(e): path
+        if(_): {e = false} [
+            concat(m): "no file " path " to include"
+            mu_fail(r): m
+            return(r): r
+        ]
+        push(_): files path
+    ]
+    btget(was): mu_st "loading" ""
+    len(nf): files
+    set(i): 0
+    while(_): {i < nf} [
+        at(f): files i
+        readfile(t): f
+        btput(_): mu_st "loading" f
+        murmansk_load_text(bad): t
+        btput(_): mu_st "loading" was
+        if(_): {bad > 0} [
+            murmansk_error(e):
+            concat(m): f ": " e
+            mu_fail(r): m
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+mu_more_text(r): [
+    set(r): ""
+    btget(sn): mu_st "scan_n" 0
+    if(_): {sn > 0} [
+        btget(ss): mu_st "scan_s"
+        btget(st): mu_st "scan_t"
+        str_from_int(a): sn
+        str_from_int(b): ss
+        str_from_int(c): st
+        concat(r): r "scan " a " " b " " c "\n"
+    ]
+    btget(aspf): mu_st "antispoof" false
+    if(_): aspf [ concat(r): r "antispoof on\n" ]
+    btget(au): mu_st "audit" false
+    if(_): au [ concat(r): r "audit on\n" ]
+    btget(h): mu_st "history" 16
+    if(_): {h != 16} [
+        str_from_int(hs): h
+        concat(r): r "history " hs "\n"
+    ]
+    btget(t): mu_st "timeouts"
+    vec(defs): ""
+    str_split(defs): "tcp:3600 udp:30 icmp:10" " "
+    set(i): 0
+    while(_): {i < 3} [
+        at(d): defs i
+        str_split(kv): d ":"
+        at(k): kv 0
+        at(dv): kv 1
+        btget(v): t k
+        str_from_int(vs): v
+        if(_): {vs != dv} [ concat(r): r "timeout " k " " vs "\n" ]
+        set(i): {i + 1}
+    ]
+    btget(f): mu_st "forwards"
+    btkeys(fk): f
+    len(nf): fk
+    set(i): 0
+    while(_): {i < nf} [
+        at(k): fk i
+        btget(v): f k
+        concat(r): r "forward " k " to " v "\n"
+        set(i): {i + 1}
+    ]
+    btget(off): mu_st "groups_off"
+    btkeys(gk): off
+    len(ng): gk
+    set(i): 0
+    while(_): {i < ng} [
+        at(k): gk i
+        concat(r): r "group " k " off\n"
+        set(i): {i + 1}
+    ]
+    btget(lf): mu_st "logfile" ""
+    if(_): {lf != ""} [
+        btget(lm): mu_st "logmax"
+        str_from_int(lms): lm
+        concat(r): r "logfile " lf " " lms "\n"
+    ]
+    btget(inc): mu_st "includes"
+    len(ni): inc
+    set(i): 0
+    while(_): {i < ni} [
+        at(p): inc i
+        concat(r): r "include " p "\n"
+        set(i): {i + 1}
+    ]
+]
+
+# --- before the rules: blocks, the blocklist, spoofing
+
+mu_more_first(r): pkt live [
+    set(r): null
+    if(_): {mu_st = null} [ return(r): r ]
+    btget(dir): pkt "dir"
+    btget(ip): pkt "ip"
+    if(_): {dir = "in"} [
+        btget(blocks): mu_st "blocks"
+        btget(b): blocks ip null
+        if(_): {b != null} [
+            at(until): b 0
+            at(why): b 1
+            mu_now(now):
+            if(_): {now < until} [
+                vec(r): ""
+                push(_): r "deny"
+                push(_): r null
+                concat(w): "a block (" why ")"
+                push(_): r w
+                return(r): r
+            ]
+            if(_): live [ btdel(_): blocks ip ]
+        ]
+        btget(aspf): mu_st "antispoof" false
+        if(_): aspf [
+            btget(lip): pkt "lip" null
+            set(top): {(ip >> 24) & 255}
+            set(spoof): {top = 127 || top = 0 || ip = 4294967295 || (lip != null && ip = lip)}
+            if(_): spoof [
+                if(_): live [
+                    btget(sp): mu_st "spoofed"
+                    btput(_): mu_st "spoofed" {sp + 1}
+                ]
+                vec(r): ""
+                push(_): r "deny"
+                push(_): r null
+                push(_): r "antispoof"
+                return(r): r
+            ]
+        ]
+    ]
+    mu_listed(hit): ip
+    if(_): {hit != ""} [
+        vec(r): ""
+        push(_): r "deny"
+        push(_): r null
+        concat(w): "the blocklist (" hit ")"
+        push(_): r w
+    ]
+]
+
+# the blocklist prefix ip falls in, "" when none: one lookup per prefix
+# length the list has
+mu_listed(r): ip [
+    set(r): ""
+    btget(bl): mu_st "blist"
+    btget(lens): mu_st "blens" null
+    if(_): {lens = null} [ return(r): r ]
+    len(n): lens
+    set(i): 0
+    while(_): {i < n} [
+        at(bits): lens i
+        mu_mask(mask): bits
+        set(net): {ip & mask}
+        str_from_int(ns): net
+        str_from_int(bs): bits
+        concat(k): ns "/" bs
+        bthas(h): bl k
+        if(_): h [
+            mu_ip_text(t): net
+            concat(r): t "/" bs
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+murmansk_blocklist(r): text [
+    set(r): 0
+    btree(bl):
+    btree(lenset):
+    mu_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        mu_words(w): l
+        len(nw): w
+        if(_): {nw > 0} [
+            at(a): w 0
+            mu_addrs(v): a
+            set(good): false
+            if(_): {v != null} [
+                len(nv): v
+                set(good): {nv = 1}
+            ]
+            if(_): good [
+                at(pr): v 0
+                at(net): pr 0
+                at(bits): pr 1
+                str_from_int(ns): net
+                str_from_int(bs): bits
+                concat(k): ns "/" bs
+                btput(_): bl k true
+                btput(_): lenset bits true
+                set(r): {r + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): mu_st "blist" bl
+    # longest prefixes first
+    btkeys(ls): lenset
+    vec(lens): ""
+    len(nl): ls
+    set(i): {nl - 1}
+    while(_): {i >= 0} [
+        at(x): ls i
+        push(_): lens x
+        set(i): {i - 1}
+    ]
+    btput(_): mu_st "blens" lens
+]
+
+mu_lines(r): text [
+    str_replace(t): text "\r" ""
+    str_split(r): t "\n"
+]
+
+murmansk_block(r): ip seconds why [
+    set(r): 0
+    mu_now(now):
+    vec(e): ""
+    push(_): e {now + seconds * 1000}
+    push(_): e why
+    btget(b): mu_st "blocks"
+    btput(_): b ip e
+]
+
+murmansk_unblock(r): ip [
+    btget(b): mu_st "blocks"
+    btdel(r): b ip
+]
+
+murmansk_blocked(r): [
+    vec(r): ""
+    btget(b): mu_st "blocks"
+    mu_now(now):
+    btkeys(ks): b
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(ip): ks i
+        btget(e): b ip
+        at(until): e 0
+        if(_): {until > now} [
+            mu_ip_text(t): ip
+            push(_): r t
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- after a verdict
+
+mu_more_dropped(r): pkt line [
+    set(r): 0
+    btget(ip): pkt "ip"
+    btget(port): pkt "port" 0
+    if(_): {port = null} [ set(port): 0 ]
+    btget(proto): pkt "proto"
+    btget(dir): pkt "dir"
+    btget(ss): mu_st "stats_src"
+    btget(c): ss ip 0
+    btput(_): ss ip {c + 1}
+    if(_): {proto != "icmp"} [
+        btget(sp): mu_st "stats_port"
+        str_from_int(pss): port
+        concat(pk): proto " " pss
+        btget(c2): sp pk 0
+        btput(_): sp pk {c2 + 1}
+    ]
+    # a port scan: many ports from one source
+    btget(sn): mu_st "scan_n" 0
+    if(_): {sn > 0 && dir = "in" && proto != "icmp"} [
+        btget(scan): mu_st "scan"
+        btget(seen): scan ip null
+        if(_): {seen = null} [
+            btree(seen):
+            btput(_): scan ip seen
+        ]
+        mu_now(now):
+        btput(_): seen port now
+        btget(win): mu_st "scan_s"
+        btkeys(ps): seen
+        set(recent): 0
+        len(np): ps
+        set(i): 0
+        while(_): {i < np} [
+            at(p): ps i
+            btget(t): seen p
+            if(_): {now - t <= win * 1000} [ set(recent): {recent + 1} ]
+            else(_): [ btdel(_): seen p ]
+            set(i): {i + 1}
+        ]
+        if(_): {recent >= sn} [
+            btget(bt): mu_st "scan_t"
+            murmansk_block(_): ip bt "a port scan"
+            btdel(_): scan ip
+        ]
+    ]
+    btget(lf): mu_st "logfile" ""
+    if(_): {lf != ""} [ mu_log_line(_): lf line ]
+    btget(cap): mu_st "capture" ""
+    btget(data): pkt "data" null
+    if(_): {cap != "" && data != null} [ mu_pcap_add(_): data ]
+]
+
+mu_more_allowed(r): pkt line [
+    set(r): 0
+    btget(dir): pkt "dir"
+    btget(proto): pkt "proto"
+    btget(ip): pkt "ip"
+    btget(port): pkt "port" 0
+    murmansk_track(_): dir proto ip port
+    btget(au): mu_st "audit" false
+    if(_): au [
+        btget(al): mu_st "audit_log"
+        mu_now(now):
+        str_from_int(ts): {now / 1000}
+        concat(e): ts " " line
+        push(_): al e
+        len(n): al
+        if(_): {n > 256} [
+            vec(rest): ""
+            set(i): {n - 256}
+            while(_): {i < n} [
+                at(x): al i
+                push(_): rest x
+                set(i): {i + 1}
+            ]
+            btput(_): mu_st "audit_log" rest
+        ]
+    ]
+]
+
+murmansk_audit(r): [
+    btget(r): mu_st "audit_log"
+]
+
+mu_log_line(r): path line [
+    set(r): 0
+    btget(mx): mu_st "logmax"
+    read_bytes(b): path
+    typeof(bt): b
+    if(_): {bt = "vector"} [
+        len(sz): b
+        if(_): {sz >= mx} [
+            concat(old): path ".1"
+            file_exists(e): old
+            if(_): e [ remove_file(_): old ]
+            rename_path(_): path old
+        ]
+    ]
+    mu_now(now):
+    str_from_int(ts): {now / 1000}
+    open_file(h): path "ab"
+    if(_): {h >= 0} [
+        concat(l): ts " " line "\n"
+        write_file(_): h l
+        close_file(_): h
+    ]
+]
+
+# --- the connection table
+
+mu_conn_key(r): proto ip port [
+    str_from_int(ips): ip
+    str_from_int(ps): port
+    concat(r): proto " " ips " " ps
+]
+
+murmansk_track(r): dir proto ip port [
+    set(r): 0
+    if(_): {port = null} [ set(port): 0 ]
+    mu_conn_key(k): proto ip port
+    btget(c): mu_st "conns"
+    mu_now(now):
+    btget(e): c k null
+    set(first): now
+    if(_): {e != null} [ at(first): e 0 ]
+    vec(e2): ""
+    push(_): e2 first
+    push(_): e2 now
+    push(_): e2 dir
+    push(_): e2 proto
+    push(_): e2 ip
+    push(_): e2 port
+    btput(_): c k e2
+]
+
+murmansk_close(r): dir proto ip port [
+    mu_conn_key(k): proto ip port
+    btget(c): mu_st "conns"
+    btdel(r): c k
+]
+
+# connections idle longer than their protocol's timeout go
+murmansk_expire(r): [
+    set(r): 0
+    btget(c): mu_st "conns"
+    btget(t): mu_st "timeouts"
+    mu_now(now):
+    btkeys(ks): c
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(e): c k
+        at(last): e 1
+        at(proto): e 3
+        btget(to): t proto 60
+        if(_): {now - last > to * 1000} [
+            btdel(_): c k
+            set(r): {r + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+mu_conns_from(r): ip [
+    set(r): 0
+    if(_): {mu_st = null} [ return(r): r ]
+    btget(c): mu_st "conns"
+    btkeys(ks): c
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(e): c k
+        at(eip): e 4
+        if(_): {eip = ip} [ set(r): {r + 1} ]
+        set(i): {i + 1}
+    ]
+]
+
+murmansk_conns(r): [
+    murmansk_expire(_):
+    btget(c): mu_st "conns"
+    btkeys(ks): c
+    len(n): ks
+    str_from_int(ns): n
+    concat(r): ns " connections"
+    mu_now(now):
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(e): c k
+        at(first): e 0
+        at(last): e 1
+        at(dir): e 2
+        at(proto): e 3
+        at(ip): e 4
+        at(port): e 5
+        mu_ip_text(a): ip
+        str_from_int(ps): port
+        str_from_int(age): {(now - first) / 1000}
+        str_from_int(idle): {(now - last) / 1000}
+        concat(r): r "\n  " dir " " proto " " a
+        if(_): {proto != "icmp"} [ concat(r): r " port " ps ]
+        concat(r): r "  " age " s old, idle " idle " s"
+        set(i): {i + 1}
+    ]
+]
+
+# --- ticks: a timed apply runs out, connections expire
+
+mu_more_tick(r): [
+    set(r): 0
+    btget(p): mu_st "pending" null
+    if(_): {p != null} [
+        at(deadline): p 0
+        at(old): p 1
+        mu_now(now):
+        if(_): {now >= deadline} [
+            mu_reload(_): old
+            btput(_): mu_st "pending" null
+            set(mu_error): "the timed rules were not confirmed: the old rules are back"
+        ]
+    ]
+]
+
+# --- managing rules
+
+murmansk_insert(r): n text [
+    btlen(count): mu_rules
+    set(r): -1
+    if(_): {n < 1 || n > count + 1} [
+        mu_fail(r): "no place of that number"
+        return(r): r
+    ]
+    mu_parse(rule): text
+    if(_): {rule = null} [ return(r): r ]
+    set(i): count
+    while(_): {i >= n} [
+        btget(x): mu_rules i
+        btput(_): mu_rules {i + 1} x
+        set(i): {i - 1}
+    ]
+    btput(_): mu_rules n rule
+    mu_dirty(_):
+    set(r): 0
+]
+
+murmansk_move(r): from to [
+    btlen(count): mu_rules
+    set(r): -1
+    typeof(ft): from
+    if(_): {ft = "string"} [ mu_find_name(from): from ]
+    if(_): {from < 1 || from > count || to < 1 || to > count} [
+        mu_fail(r): "no rule of that number"
+        return(r): r
+    ]
+    btget(rule): mu_rules from
+    if(_): {from < to} [
+        set(i): from
+        while(_): {i < to} [
+            btget(x): mu_rules {i + 1}
+            btput(_): mu_rules i x
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        set(i): from
+        while(_): {i > to} [
+            btget(x): mu_rules {i - 1}
+            btput(_): mu_rules i x
+            set(i): {i - 1}
+        ]
+    ]
+    btput(_): mu_rules to rule
+    mu_dirty(_):
+    set(r): 0
+]
+
+# "in tcp 10.0.2.15 8080 [flags syn] [for prog]" -> what decides it
+murmansk_test(r): text [
+    mu_words(w): text
+    len(n): w
+    set(r): "test is: in|out tcp|udp|icmp a.b.c.d [port]"
+    if(_): {n < 3} [ return(r): r ]
+    at(dir): w 0
+    at(proto): w 1
+    at(a): w 2
+    mu_ip(ip): a
+    if(_): {ip < 0 || (dir != "in" && dir != "out")} [ return(r): r ]
+    set(port): 0
+    if(_): {n > 3} [
+        at(ps): w 3
+        mu_number(port): ps
+        mu_service(sv): ps
+        if(_): {sv >= 0} [ set(port): sv ]
+    ]
+    mu_pkt(pkt): dir proto ip port
+    if(_): {n > 5} [
+        at(k): w 4
+        at(v): w 5
+        if(_): {k = "flags"} [ btput(_): pkt "flags" v ]
+        if(_): {k = "for"} [ btput(_): pkt "prog" v ]
+    ]
+    murmansk_decide(d): pkt false
+    at(v): d 0
+    at(rule): d 1
+    at(why): d 2
+    if(_): {rule = null} [
+        concat(r): v " by " why
+        return(r): r
+    ]
+    # its number
+    set(num): 0
+    btlen(cnt): mu_rules
+    set(i): 1
+    while(_): {i <= cnt && num = 0} [
+        btget(x): mu_rules i
+        mu_rule_fits(f): x pkt
+        mu_rule_text(xt): x
+        if(_): {f && xt = why} [ set(num): i ]
+        set(i): {i + 1}
+    ]
+    str_from_int(ns): num
+    concat(r): v " by rule " ns ": " why
+]
+
+# rules from text, keeping counters and state; errors
+mu_reload(r): text [
+    set(drops): mu_drops
+    set(keep): mu_st
+    murmansk_reset(_):
+    mu_config_keys(cfg):
+    btkeys(ks): keep
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        mu_has_word(isc): cfg k
+        if(_): {isc = false} [
+            btget(v): keep k
+            btput(_): mu_st k v
+        ]
+        set(i): {i + 1}
+    ]
+    murmansk_load_text(r): text
+    set(mu_drops): drops
+]
+
+murmansk_replace(r): text [
+    murmansk_text(old):
+    mu_reload(r): text
+    if(_): {r > 0} [
+        murmansk_error(e):
+        mu_reload(_): old
+        set(mu_error): e
+    ]
+]
+
+murmansk_apply_timed(r): text seconds [
+    murmansk_text(old):
+    murmansk_replace(r): text
+    if(_): {r = 0} [
+        mu_now(now):
+        vec(p): ""
+        push(_): p {now + seconds * 1000}
+        push(_): p old
+        btput(_): mu_st "pending" p
+    ]
+]
+
+murmansk_confirm(r): [
+    btget(p): mu_st "pending" null
+    set(r): {p != null}
+    btput(_): mu_st "pending" null
+]
+
+murmansk_zero(r): [
+    set(r): 0
+    btlen(n): mu_rules
+    set(i): 1
+    while(_): {i <= n} [
+        btget(rule): mu_rules i
+        btput(_): rule "hits" 0
+        btput(_): rule "bytes" 0
+        set(i): {i + 1}
+    ]
+    set(mu_drops): 0
+    btree(lg):
+    set(mu_log): lg
+    btree(ss):
+    btput(_): mu_st "stats_src" ss
+    btree(sp):
+    btput(_): mu_st "stats_port" sp
+    btput(_): mu_st "spoofed" 0
+    btree(mf):
+    btput(_): mu_st "malformed" mf
+]
+
+# does a match everything b matches? (then b, after a, never decides)
+mu_covers(r): a b [
+    set(r): false
+    btget(ad): a "dir"
+    btget(bd): b "dir"
+    btget(ap): a "proto"
+    btget(bp): b "proto"
+    if(_): {ad != bd || (ap != "any" && ap != bp)} [ return(r): r ]
+    vec(extra): ""
+    str_split(extra): "fspec prog group" " "
+    set(i): 0
+    while(_): {i < 3} [
+        at(k): extra i
+        btget(v): a k ""
+        if(_): {v != ""} [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    btget(rate): a "rate" 0
+    btget(perip): a "perip" 0
+    btget(df): a "dfrom" -1
+    btget(un): a "until" -1
+    btget(it): a "itype" -1
+    btget(bit): b "itype" -1
+    if(_): {rate > 0 || perip > 0 || df >= 0 || un >= 0} [ return(r): r ]
+    if(_): {it >= 0 && it != bit} [ return(r): r ]
+    vec(specs): ""
+    str_split(specs): "pspec sspec srcspec dstspec" " "
+    set(i): 0
+    while(_): {i < 4} [
+        at(k): specs i
+        btget(va): a k ""
+        btget(vb): b k ""
+        if(_): {va != "" && va != "any" && va != vb} [ return(r): r ]
+        set(i): {i + 1}
+    ]
+    set(r): true
+]
+
+# errors and rules that can never decide, without touching the rules
+murmansk_lint(r): text [
+    vec(r): ""
+    btget(sets): mu_st "sets"
+    btree(saved):
+    btkeys(sk): sets
+    len(nsk): sk
+    set(i): 0
+    while(_): {i < nsk} [
+        at(k): sk i
+        btget(v): sets k
+        btput(_): saved k v
+        set(i): {i + 1}
+    ]
+    set(pin): mu_in
+    set(pout): mu_out
+    set(err0): mu_error
+    btput(_): mu_st "dry" true
+    vec(rules): ""
+    vec(nums): ""
+    mu_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        mu_words(w): l
+        len(nw): w
+        str_from_int(ln): {i + 1}
+        if(_): {nw > 0} [
+            mu_policy(st): l
+            if(_): {st = 1} [ mu_set_line(st): l ]
+            if(_): {st = 1} [ mu_more_line(st): l ]
+            if(_): {st = 1} [
+                mu_parse(rule): l
+                set(st): -1
+                if(_): {rule != null} [
+                    set(st): 0
+                    len(nr): rules
+                    set(j): 0
+                    while(_): {j < nr} [
+                        at(prev): rules j
+                        mu_covers(c): prev rule
+                        if(_): c [
+                            at(pn): nums j
+                            concat(m): "line " ln ": never decides: line " pn " before it matches all it does"
+                            push(_): r m
+                            set(j): nr
+                        ]
+                        set(j): {j + 1}
+                    ]
+                    push(_): rules rule
+                    push(_): nums ln
+                ]
+            ]
+            if(_): {st = -1} [
+                concat(m): "line " ln ": " mu_error
+                push(_): r m
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): mu_st "dry" false
+    btput(_): mu_st "sets" saved
+    set(mu_in): pin
+    set(mu_out): pout
+    set(mu_error): err0
+]
+
+# --- forwarding, statistics, groups, profiles
+
+murmansk_forward(r): proto port [
+    set(r): null
+    btget(f): mu_st "forwards"
+    str_from_int(ps): port
+    concat(k): proto " " ps
+    btget(d): f k null
+    if(_): {d = null} [ return(r): r ]
+    str_split(hp): d ":"
+    at(hs): hp 0
+    at(pp): hp 1
+    mu_ip(ip): hs
+    mu_number(p): pp
+    vec(r): ""
+    push(_): r ip
+    push(_): r p
+]
+
+# the n biggest of a btree of counts, as "key (count)" pieces
+mu_top_of(r): t n keyfn [
+    vec(r): ""
+    btkeys(ks): t
+    vec(left): ""
+    len(nk): ks
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): ks i
+        push(_): left k
+        set(i): {i + 1}
+    ]
+    while(_): {n > 0} [
+        len(nl): left
+        if(_): {nl = 0} [ return(r): r ]
+        set(bi): 0
+        set(bc): -1
+        set(i): 0
+        while(_): {i < nl} [
+            at(k): left i
+            btget(c): t k
+            if(_): {c > bc} [
+                set(bc): c
+                set(bi): i
+            ]
+            set(i): {i + 1}
+        ]
+        at(k): left bi
+        set(label): k
+        if(_): {keyfn = "ip"} [ mu_ip_text(label): k ]
+        str_from_int(cs): bc
+        concat(e): label " (" cs ")"
+        push(_): r e
+        vec(rest): ""
+        set(i): 0
+        while(_): {i < nl} [
+            if(_): {i != bi} [
+                at(x): left i
+                push(_): rest x
+            ]
+            set(i): {i + 1}
+        ]
+        set(left): rest
+        set(n): {n - 1}
+    ]
+]
+
+murmansk_top(r): n [
+    btget(ss): mu_st "stats_src"
+    btget(sp): mu_st "stats_port"
+    mu_top_of(a): ss n "ip"
+    mu_top_of(b): sp n ""
+    str_join(sa): a ", "
+    str_join(sb): b ", "
+    concat(r): "top sources: " sa "\ntop ports: " sb
+]
+
+murmansk_group(r): name on [
+    set(r): 0
+    btget(off): mu_st "groups_off"
+    if(_): on [ btdel(_): off name ]
+    else(_): [ btput(_): off name true ]
+]
+
+mu_profiles(r): [
+    btget(r): mu_st "profiles" null
+    if(_): {r != null} [ return(r): r ]
+    btree(r):
+    btput(_): r "home" "policy in deny\npolicy out allow\nallow in icmp echo-request\nallow in any from 192.168.0.0/16,10.0.0.0/8\n"
+    btput(_): r "public" "policy in deny\npolicy out allow\nscan 8 10 600\nantispoof on\n"
+    btput(_): r "server" "policy in deny\npolicy out allow\nallow in tcp ssh,http,https\nallow in icmp echo-request limit 5/s burst 10\nscan 20 10 600\nantispoof on\n"
+    btput(_): mu_st "profiles" r
+]
+
+murmansk_profile_define(r): name text [
+    mu_profiles(p):
+    btput(_): p name text
+    set(r): 0
+]
+
+murmansk_profile(r): name [
+    mu_profiles(p):
+    btget(t): p name null
+    if(_): {t = null} [
+        concat(m): "no profile " name
+        mu_fail(r): m
+        return(r): r
+    ]
+    murmansk_replace(r): t
+    if(_): {r = 0} [ btput(_): mu_st "profile" name ]
+]
+
+# --- counted apart
+
+murmansk_malformed(r): why [
+    btget(m): mu_st "malformed"
+    btget(c): m why 0
+    btput(_): m why {c + 1}
+    set(r): {c + 1}
+]
+
+mu_more_report(r): [
+    set(r): ""
+    btget(pf): mu_st "profile" ""
+    if(_): {pf != ""} [ concat(r): r "profile " pf "\n" ]
+    btget(sp): mu_st "spoofed" 0
+    if(_): {sp > 0} [
+        str_from_int(s): sp
+        concat(r): r s " spoofed packets dropped\n"
+    ]
+    btget(m): mu_st "malformed"
+    btkeys(mk): m
+    len(nm): mk
+    set(i): 0
+    while(_): {i < nm} [
+        at(k): mk i
+        btget(c): m k
+        str_from_int(cs): c
+        concat(r): r cs " malformed (" k ")\n"
+        set(i): {i + 1}
+    ]
+    murmansk_blocked(bl):
+    len(nb): bl
+    if(_): {nb > 0} [
+        str_join(bs): bl ", "
+        concat(r): r "blocked: " bs "\n"
+    ]
+    btget(p): mu_st "pending" null
+    if(_): {p != null} [ concat(r): r "new rules waiting to be confirmed\n" ]
+]
+
+# --- other firewalls' syntax
+
+mu_ipt_ports(r): spec [
+    # "80,443,8000-8099" -> " --dport 80" or " -m multiport --dports ..."
+    mu_ports(ps): spec
+    set(r): ""
+    len(n): ps
+    set(parts): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): ps i
+        at(lo): pr 0
+        at(hi): pr 1
+        str_from_int(ls): lo
+        set(t): ls
+        if(_): {hi != lo} [
+            str_from_int(hs): hi
+            concat(t): ls ":" hs
+        ]
+        if(_): {parts != ""} [ concat(parts): parts "," ]
+        concat(parts): parts t
+        set(i): {i + 1}
+    ]
+    set(r): parts
+]
+
+murmansk_iptables(r): [
+    set(r): ""
+    set(pi): "DROP"
+    if(_): {mu_in = "allow"} [ set(pi): "ACCEPT" ]
+    set(po): "DROP"
+    if(_): {mu_out = "allow"} [ set(po): "ACCEPT" ]
+    concat(r): "-P INPUT " pi "\n-P OUTPUT " po "\n"
+    btlen(n): mu_rules
+    set(i): 1
+    while(_): {i <= n} [
+        btget(rule): mu_rules i
+        btget(dir): rule "dir"
+        btget(proto): rule "proto"
+        btget(action): rule "action"
+        set(chain): "INPUT"
+        if(_): {dir = "out"} [ set(chain): "OUTPUT" ]
+        concat(l): "-A " chain
+        if(_): {proto != "any"} [ concat(l): l " -p " proto ]
+        btget(it): rule "itype" -1
+        if(_): {it >= 0} [
+            str_from_int(its): it
+            concat(l): l " --icmp-type " its
+        ]
+        btget(srcspec): rule "srcspec" ""
+        if(_): {srcspec != "" && srcspec != "any"} [
+            mu_expand(e): srcspec
+            concat(l): l " -s " e
+        ]
+        btget(dstspec): rule "dstspec" ""
+        if(_): {dstspec != "" && dstspec != "any"} [
+            mu_expand(e): dstspec
+            concat(l): l " -d " e
+        ]
+        btget(sspec): rule "sspec" ""
+        if(_): {sspec != ""} [
+            mu_ipt_ports(sp): sspec
+            str_contains(many): sp ","
+            if(_): many [ concat(l): l " -m multiport --sports " sp ]
+            else(_): [ concat(l): l " --sport " sp ]
+        ]
+        btget(pspec): rule "pspec" ""
+        if(_): {pspec != ""} [
+            mu_ipt_ports(dp): pspec
+            str_contains(many): dp ","
+            if(_): many [ concat(l): l " -m multiport --dports " dp ]
+            else(_): [ concat(l): l " --dport " dp ]
+        ]
+        btget(rate): rule "rate" 0
+        if(_): {rate > 0} [
+            btget(per): rule "per"
+            btget(burst): rule "burst"
+            str_from_int(rs): rate
+            str_from_int(bs): burst
+            set(unit): "second"
+            if(_): {per = "m"} [ set(unit): "minute" ]
+            concat(l): l " -m limit --limit " rs "/" unit " --limit-burst " bs
+        ]
+        btget(comment): rule "comment" ""
+        btget(name): rule "name" ""
+        if(_): {comment = ""} [ set(comment): name ]
+        if(_): {comment != ""} [
+            chr(q): 34
+            concat(l): l " -m comment --comment " q comment q
+        ]
+        set(j): "ACCEPT"
+        if(_): {action = "deny"} [ set(j): "DROP" ]
+        if(_): {action = "reject"} [ set(j): "REJECT" ]
+        concat(r): r l " -j " j "\n"
+        set(i): {i + 1}
+    ]
+]
+
+# iptables -P and -A lines (INPUT and OUTPUT) -> Murmansk rules text;
+# what has no rule here is left out with a comment
+murmansk_from_iptables(r): text [
+    set(r): ""
+    mu_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_trim(l): l
+        str_starts(pre): l "iptables "
+        if(_): pre [
+            len(ll): l
+            slice(l): l 9 {ll - 9}
+        ]
+        mu_words(w): l
+        len(nw): w
+        if(_): {nw >= 3} [
+            at(op): w 0
+            at(chain): w 1
+            set(dir): ""
+            if(_): {chain = "INPUT"} [ set(dir): "in" ]
+            if(_): {chain = "OUTPUT"} [ set(dir): "out" ]
+            if(_): {op = "-P" && dir != ""} [
+                at(t): w 2
+                set(a): "deny"
+                if(_): {t = "ACCEPT"} [ set(a): "allow" ]
+                concat(r): r "policy " dir " " a "\n"
+            ]
+            elif(_): {op = "-A" && dir != ""} [
+                set(proto): "any"
+                set(src): ""
+                set(dst): ""
+                set(dport): ""
+                set(sport): ""
+                set(j): ""
+                set(limit): ""
+                set(burst): ""
+                set(k): 2
+                while(_): {k < nw} [
+                    at(x): w k
+                    set(v): ""
+                    if(_): {k + 1 < nw} [ at(v): w {k + 1} ]
+                    set(step): 2
+                    if(_): {x = "-p"} [ set(proto): v ]
+                    elif(_): {x = "-s"} [ set(src): v ]
+                    elif(_): {x = "-d"} [ set(dst): v ]
+                    elif(_): {x = "--dport" || x = "--dports"} [ mu_colon_dash(dport): v ]
+                    elif(_): {x = "--sport" || x = "--sports"} [ mu_colon_dash(sport): v ]
+                    elif(_): {x = "-j"} [ set(j): v ]
+                    elif(_): {x = "--limit"} [ set(limit): v ]
+                    elif(_): {x = "--limit-burst"} [ set(burst): v ]
+                    elif(_): {x = "-m"} [ set(step): 2 ]
+                    else(_): [ set(step): 1 ]
+                    set(k): {k + step}
+                ]
+                set(a): ""
+                if(_): {j = "ACCEPT"} [ set(a): "allow" ]
+                if(_): {j = "DROP"} [ set(a): "deny" ]
+                if(_): {j = "REJECT"} [ set(a): "reject" ]
+                if(_): {a = ""} [ concat(r): r "# left out: " l "\n" ]
+                else(_): [
+                    concat(rule): a " " dir " " proto
+                    if(_): {dport != ""} [ concat(rule): rule " " dport ]
+                    set(far): src
+                    set(near): dst
+                    set(fw): "from"
+                    set(nw_): "to"
+                    if(_): {dir = "out"} [
+                        set(far): dst
+                        set(near): src
+                        set(fw): "to"
+                        set(nw_): "from"
+                    ]
+                    if(_): {far != "" || near != "" || sport != ""} [
+                        set(fa): far
+                        if(_): {fa = ""} [ set(fa): "any" ]
+                        concat(rule): rule " " fw " " fa
+                        if(_): {sport != "" && dir = "in"} [ concat(rule): rule " port " sport ]
+                        if(_): {near != ""} [ concat(rule): rule " " nw_ " " near ]
+                        if(_): {sport != "" && dir = "out"} [ concat(rule): rule " port " sport ]
+                    ]
+                    if(_): {limit != ""} [
+                        str_split(lp): limit "/"
+                        at(ln): lp 0
+                        at(lu): lp 1
+                        mu_first_char(lu): lu
+                        concat(rule): rule " limit " ln "/" lu
+                        if(_): {burst != ""} [ concat(rule): rule " burst " burst ]
+                    ]
+                    concat(r): r rule "\n"
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+mu_colon_dash(r): s [
+    str_replace(r): s ":" "-"
+]
+
+mu_first_char(r): s [
+    slice(r): s 0 1
+]
+
+# --- capture: dropped packets as pcap (raw IP)
+
+murmansk_capture(r): path [
+    set(r): 0
+    btput(_): mu_st "capture" path
+    vec(recs): ""
+    btput(_): mu_st "pcap" recs
+    if(_): {path != ""} [ mu_pcap_write(_): ]
+]
+
+mu_le32(r): v x [
+    set(r): 0
+    push(_): v {x & 255}
+    push(_): v {(x >> 8) & 255}
+    push(_): v {(x >> 16) & 255}
+    push(_): v {(x >> 24) & 255}
+]
+
+mu_pcap_add(r): data [
+    btget(recs): mu_st "pcap"
+    push(_): recs data
+    mu_pcap_write(r):
+]
+
+mu_pcap_write(r): [
+    vec(b): ""
+    mu_le32(_): b 2712847316
+    push(_): b 2
+    push(_): b 0
+    push(_): b 4
+    push(_): b 0
+    mu_le32(_): b 0
+    mu_le32(_): b 0
+    mu_le32(_): b 65535
+    mu_le32(_): b 101
+    btget(recs): mu_st "pcap"
+    mu_now(now):
+    len(n): recs
+    set(i): 0
+    while(_): {i < n} [
+        at(d): recs i
+        len(dl): d
+        set(sec): {now / 1000}
+        str_trunc(sec): sec
+        mu_le32(_): b sec
+        mu_le32(_): b 0
+        mu_le32(_): b dl
+        mu_le32(_): b dl
+        set(j): 0
+        while(_): {j < dl} [
+            at(x): d j
+            push(_): b x
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    btget(path): mu_st "capture"
+    write_bytes(r): path b
+]
+
+# --- the fw shell's new verbs
+
+murmansk_command(r): line [
+    set(r): null
+    mu_words(w): line
+    len(n): w
+    if(_): {n = 0} [ return(r): r ]
+    at(v): w 0
+    set(st): 0
+    set(out): ""
+    set(rest): ""
+    str_find(sp): line " " 0
+    len(ll): line
+    if(_): {sp > 0} [
+        slice(rest): line {sp + 1} {ll - sp - 1}
+        str_trim(rest): rest
+    ]
+    if(_): {v = "insert" && n >= 3} [
+        at(ns): w 1
+        mu_number(k): ns
+        str_find(sp2): rest " " 0
+        len(rl): rest
+        slice(rule): rest {sp2 + 1} {rl - sp2 - 1}
+        murmansk_insert(st): k rule
+    ]
+    elif(_): {v = "move" && n = 3} [
+        at(a): w 1
+        at(b): w 2
+        mu_number(an): a
+        mu_number(bn): b
+        set(from): an
+        if(_): {an < 0} [ set(from): a ]
+        murmansk_move(st): from bn
+    ]
+    elif(_): {v = "delete" && n = 2} [
+        at(x): w 1
+        mu_number(k): x
+        if(_): {k < 0} [ murmansk_delete(st): x ]
+        else(_): [ murmansk_delete(st): k ]
+    ]
+    elif(_): {v = "test"} [ murmansk_test(out): rest ]
+    elif(_): {v = "conns"} [ murmansk_conns(out): ]
+    elif(_): {v = "zero"} [
+        murmansk_zero(_):
+        set(out): "counters are 0"
+    ]
+    elif(_): {v = "top"} [ murmansk_top(out): 5 ]
+    elif(_): {v = "lint"} [
+        murmansk_text(t):
+        murmansk_lint(msgs): t
+        str_join(out): msgs "\n"
+        if(_): {out = ""} [ set(out): "no problems" ]
+    ]
+    elif(_): {v = "confirm"} [
+        murmansk_confirm(c):
+        set(out): "nothing waits to be confirmed"
+        if(_): c [ set(out): "the new rules stay" ]
+    ]
+    elif(_): {v = "profile" && n = 2} [
+        at(p): w 1
+        murmansk_profile(st): p
+    ]
+    elif(_): {v = "group" && n = 3} [
+        at(g): w 1
+        at(o): w 2
+        mu_on(on): o
+        murmansk_group(_): g on
+    ]
+    elif(_): {v = "block" && n >= 3} [
+        at(a): w 1
+        at(s): w 2
+        mu_ip(ip): a
+        mu_number(secs): s
+        if(_): {ip < 0 || secs < 1} [ mu_fail(st): "block is: block a.b.c.d SECONDS" ]
+        else(_): [ murmansk_block(_): ip secs "by hand" ]
+    ]
+    elif(_): {v = "unblock" && n = 2} [
+        at(a): w 1
+        mu_ip(ip): a
+        murmansk_unblock(_): ip
+    ]
+    elif(_): {v = "iptables"} [ murmansk_iptables(out): ]
+    else(_): [ return(r): r ]
+    vec(r): ""
+    push(_): r st
+    push(_): r out
+]
