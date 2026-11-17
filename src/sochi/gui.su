@@ -3,6 +3,15 @@
 # spades, clubs, diamonds and hearts, bids and moves as buttons.
 #
 #   ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]
+#   ussr src/sochi/gui.su --host [--bots N] [--name NICK]   a LAN table
+#   ussr src/sochi/gui.su --join [ADDRESS] [--name NICK]    join one
+#
+# Without --host or --join you play two local bots. --host opens a table on
+# UDP port 33333 (--port P) that terminal players (sochi join), terminal
+# bots (sochi join --bot) and other windows (--join) find on the LAN; empty
+# seats can be filled with bots from the window at any time. --join takes
+# the first table found on the LAN, or the one at ADDRESS (host or
+# host:port).
 #
 # Click a bid, a contract or a whist choice; click two cards then
 # "Discard"; click a card to play it. Enter goes on to the next hand,
@@ -20,6 +29,8 @@ $include "../libs/math.su"
 
 global(_): sgu_win sgu_cv sgu_q sgu_hits sgu_sel sgu_w sgu_h sgu_dirty
 global(_): sgu_wait sgu_msg sgu_pause
+global(_): sgu_mode sgu_hhost sgu_hport sgu_sent sgu_resend sgu_botseq sgu_botat
+global(_): sgu_lastview sgu_seen_seq
 
 $define SGU_FELT 3042874
 $define SGU_FELT_DARK 2305579
@@ -246,6 +257,29 @@ sgu_chip(r): x y w h label action [
 
 # --- the table
 
+# what this window shows: the host's (or the local) game from seat 0, or
+# the last view a joined table sent (null before the first)
+sgu_view(r): [
+    if(_): {sgu_mode = "client"} [
+        set(r): su_view
+        typeof(tv): r
+        if(_): {tv = "vector"} [
+            # the score sheet reads these
+            at(sg_pool): r V_POOL
+            at(sg_mount): r V_MOUNT
+            at(sg_whist): r V_WHIST
+            at(sg_psize): r V_PSIZE
+        ]
+        return(r): r
+    ]
+    so_view(r): 0
+]
+
+# a seat's place at the table, seen from me: 0 me, 1 left, 2 right
+sgu_rel(r): seat me [
+    set(r): {(seat - me + 3) % 3}
+]
+
 sgu_name_of(r): view seat [
     at(names): view V_NAMES
     at(r): names seat
@@ -254,6 +288,10 @@ sgu_name_of(r): view seat [
 sgu_player_box(r): x y view seat [
     set(r): 0
     sgu_name_of(nm): view seat
+    if(_): {nm = ""} [ set(nm): "(empty seat)" ]
+    at(online): view V_ONLINE
+    at(on): online seat
+    if(_): {on = 0} [ concat(nm): nm " (offline)" ]
     at(ctl): view V_CTL
     set(col): SGU_TEXT
     if(_): {ctl = seat} [ set(col): SGU_GOLD ]
@@ -346,7 +384,9 @@ sgu_center(r): view cx cy [
     set(i): 0
     while(_): {i < nt} [
         at(c): trick i
-        at(s): tseats i
+        at(s0): tseats i
+        at(me): view V_SEAT
+        sgu_rel(s): s0 me
         set(x): {cx - SGU_CW / 2}
         set(y): {cy - 10}
         if(_): {s = 1} [
@@ -484,13 +524,24 @@ sgu_draw(r): [
     set(sgu_w): w
     set(sgu_h): h
     canvasclear(_): sgu_cv SGU_FELT
-    so_view(view): 0
+    sgu_view(view):
+    typeof(tv): view
+    if(_): {tv != "vector"} [
+        set(t): "Joining the table..."
+        if(_): {sgu_msg != ""} [ set(t): sgu_msg ]
+        sgu_text(_): 60 {h / 2} t SGU_GOLD 3
+        set(sgu_dirty): false
+        return(r): r
+    ]
     at(phase): view V_PHASE
-    # the bots, top left and top right
-    sgu_player_box(_): 30 20 view 1
-    sgu_side_hand(_): 30 70 view 1
-    sgu_player_box(_): {w - 620} 20 view 2
-    sgu_side_hand(_): {w - 620} 70 view 2
+    at(me): view V_SEAT
+    set(left): {(me + 1) % 3}
+    set(right): {(me + 2) % 3}
+    # the other two, top left and top right
+    sgu_player_box(_): 30 20 view left
+    sgu_side_hand(_): 30 70 view left
+    sgu_player_box(_): {w - 620} 20 view right
+    sgu_side_hand(_): {w - 620} 70 view right
     # the trick in the middle
     set(cx): {(w - 300) / 2}
     sgu_center(_): view cx {h / 2 - 40}
@@ -505,7 +556,7 @@ sgu_draw(r): [
     if(_): {x0 < 20} [ set(x0): 20 ]
     set(y0): {h - SGU_CH - 30}
     at(ctl): view V_CTL
-    set(mine): {ctl = 0}
+    set(mine): {ctl = me}
     set(i): 0
     while(_): {i < n} [
         at(c): hand i
@@ -528,9 +579,17 @@ sgu_draw(r): [
         if(_): {can && mine} [ sgu_hit(_): x {y0 - 18} SGU_CW {SGU_CH + 18} act ]
         set(i): {i + 1}
     ]
-    sgu_player_box(_): x0 {y0 - 60} view 0
+    sgu_player_box(_): x0 {y0 - 60} view me
     # the status line and the buttons
     so_render_hint(hint): view
+    if(_): {phase = "lobby"} [
+        set(hint): "Waiting for players to join"
+        if(_): {sgu_mode = "host"} [
+            so_int(ps): sn_port
+            concat(hint): "Your table is open on UDP port " ps ": waiting for players"
+            sgu_chip(_): {cx - 100} {h / 2 + 120} 200 36 "Fill with bots" "fill"
+        ]
+    ]
     if(_): {sgu_msg != ""} [ set(hint): sgu_msg ]
     sgu_text(_): {x0 + 300} {y0 - 60} hint SGU_GOLD 2
     if(_): {phase = "done"} [
@@ -540,7 +599,7 @@ sgu_draw(r): [
     ]
     elif(_): {phase = "over"} [
         sgu_text(_): {cx - 160} {h / 2 + 90} "Game over: the pool is closed" SGU_GOLD 3
-        sgu_chip(_): {cx - 70} {h / 2 + 130} 140 36 "New game" "new"
+        if(_): {sgu_mode = "local"} [ sgu_chip(_): {cx - 70} {h / 2 + 130} 140 36 "New game" "new" ]
     ]
     elif(_): mine [ sgu_actions(_): view {x0} {y0 - 75} 600 ]
     set(sgu_dirty): false
@@ -567,6 +626,17 @@ sgu_find(r): x y [
     ]
 ]
 
+# a move of mine: into the game here, or queued for the host
+sgu_send(r): action [
+    set(r): 0
+    if(_): {sgu_mode = "client"} [
+        su_queue(_): action
+        return(r): r
+    ]
+    so_act(e): 0 action
+    set(sgu_msg): e
+]
+
 sgu_do(r): action [
     set(r): 0
     set(sgu_msg): ""
@@ -588,9 +658,8 @@ sgu_do(r): action [
         so_card_show(an): a
         so_card_show(bn): b
         concat(act): "d:" an " " bn
-        so_act(e): 0 act
-        set(sgu_msg): e
-        vec(sgu_sel): ""
+        sgu_send(_): act
+        while(_): sgu_sel [ pop(_): sgu_sel ]
     ]
     elif(_): {action = "new"} [
         at(nm): sg_names 0
@@ -600,14 +669,29 @@ sgu_do(r): action [
         so_new_game(_):
     ]
     elif(_): {action = "n:"} [
-        so_act(_): 0 "n:"
-        so_act(_): 1 "n:"
-        so_act(_): 2 "n:"
+        sgu_send(_): "n:"
+        if(_): {sgu_mode = "local"} [
+            so_act(_): 1 "n:"
+            so_act(_): 2 "n:"
+        ]
     ]
-    else(_): [
-        so_act(e): 0 action
-        set(sgu_msg): e
+    elif(_): {action = "fill"} [
+        # bots take the empty seats and the game starts
+        set(i): 1
+        set(bn): "Bot Masha"
+        while(_): {i < 3} [
+            at(nm): sg_names i
+            if(_): {nm = ""} [
+                set(sg_names): i bn
+                set(sg_kind): i "bot"
+                set(bn): "Bot Grisha"
+            ]
+            set(i): {i + 1}
+        ]
+        if(_): {sg_phase = "lobby"} [ so_new_game(_): ]
+        add(sg_seq): sg_seq 1
     ]
+    else(_): [ sgu_send(_): action ]
     set(sgu_wait): 0
     set(sgu_dirty): true
 ]
@@ -634,6 +718,179 @@ sgu_bots(r): [
         set(sgu_wait): 0
         set(sgu_dirty): true
     ]
+]
+
+# --- the network
+
+# the host's turn of the loop: packets in, the bots, views out
+sgu_host_step(r): [
+    set(r): 0
+    socket_recvfrom(m): sn_sock 20
+    typeof(tm): m
+    while(_): {tm = "vector"} [
+        sn_host_packet(_): m
+        socket_recvfrom(m): sn_sock 0
+        typeof(tm): m
+    ]
+    add(sn_tick): sn_tick 1
+    if(_): {sg_seq != sgu_botseq} [
+        set(sgu_botseq): sg_seq
+        set(sgu_botat): {sn_tick + sgu_pause}
+    ]
+    if(_): {sn_tick >= sgu_botat} [
+        set(i): 0
+        set(moved): false
+        while(_): {i < 3 && moved = false} [
+            at(k): sg_kind i
+            if(_): {k = "bot"} [
+                set(before): sg_seq
+                su_bot_step(_): i
+                set(moved): {sg_seq != before}
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {sg_seq != sgu_sent} [
+        set(sgu_sent): sg_seq
+        set(sgu_resend): {sn_tick + 15}
+        set(i): 1
+        while(_): {i < 3} [
+            sn_send_view(_): i
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {sn_tick >= sgu_resend} [
+        set(sgu_resend): {sn_tick + 15}
+        set(i): 1
+        while(_): {i < 3} [
+            at(ak): sn_acked i
+            if(_): {ak < sg_seq} [ sn_send_view(_): i ]
+            set(i): {i + 1}
+        ]
+    ]
+    # a remote player silent for about 15 s is offline
+    if(_): {(sn_tick % 50) = 0} [
+        set(i): 1
+        while(_): {i < 3} [
+            at(addr): sn_addr i
+            at(seen): sn_seen i
+            at(on): sg_online i
+            if(_): {addr != "" && sn_tick - seen > 750 && on = 1} [
+                set(sg_online): i 0
+                add(sg_seq): sg_seq 1
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {sg_seq != sgu_seen_seq} [
+        set(sgu_seen_seq): sg_seq
+        set(sgu_dirty): true
+    ]
+]
+
+# a joined window's turn: views in (and acknowledged), my moves out
+sgu_client_step(r): [
+    set(r): 0
+    socket_recvfrom(m): sn_sock 20
+    typeof(tm): m
+    while(_): {tm = "vector"} [
+        at(text): m 0
+        sn_parse(p): text
+        typeof(tp): p
+        if(_): {tp = "vector"} [
+            at(verb): p 0
+            at(rest): p 1
+            if(_): {verb = "VIEW"} [
+                sn_split2(qu): rest
+                at(qs): qu 0
+                at(u): qu 1
+                str_to_number(q): qs
+                concat(ack): "ACK " qs
+                sn_send(_): sgu_hhost sgu_hport ack
+                set(sgu_lastview): sn_tick
+                set(have): 0
+                typeof(tv): su_view
+                if(_): {tv = "vector"} [ at(have): su_view V_SEQ ]
+                if(_): {q > have} [
+                    decode(su_view): u
+                    # moves the host has applied leave the queue
+                    at(ids): su_view V_ACTID
+                    at(done): ids sn_seat
+                    len(np): su_pending
+                    while(_): {np > 0} [
+                        at(hd): su_pending 0
+                        at(hid): hd 0
+                        if(_): {hid <= done} [
+                            so_slice_from(su_pending): su_pending 1
+                            len(np): su_pending
+                        ]
+                        else(_): [ set(np): 0 ]
+                    ]
+                    set(sgu_resend): sn_tick
+                    set(sgu_dirty): true
+                ]
+            ]
+            elif(_): {verb = "BYE"} [
+                set(sgu_msg): "The host closed the table."
+                set(sgu_dirty): true
+            ]
+        ]
+        socket_recvfrom(m): sn_sock 0
+        typeof(tm): m
+    ]
+    add(sn_tick): sn_tick 1
+    len(np): su_pending
+    if(_): {np > 0 && sn_tick >= sgu_resend} [
+        at(hd): su_pending 0
+        at(hid): hd 0
+        at(ha): hd 1
+        so_int(hs): hid
+        concat(am): "ACT " hs " " ha
+        sn_send(_): sgu_hhost sgu_hport am
+        set(sgu_resend): {sn_tick + 15}
+    ]
+    if(_): {(sn_tick % 100) = 0} [ sn_send(_): sgu_hhost sgu_hport "PING" ]
+]
+
+# joins host:port as name: my seat, or -1 after saying why in sgu_msg
+sgu_join(r): host port name [
+    set(r): -1
+    vec(su_pending): ""
+    set(su_actid): 0
+    set(su_view): null
+    set(tries): 0
+    concat(jm): "JOIN " name
+    while(_): {r < 0 && tries < 20} [
+        sn_send(_): host port jm
+        set(w): 0
+        while(_): {w < 10 && r < 0} [
+            socket_recvfrom(m): sn_sock 50
+            set(w): {w + 1}
+            typeof(tm): m
+            if(_): {tm = "vector"} [
+                at(text): m 0
+                sn_parse(p): text
+                typeof(tp): p
+                if(_): {tp = "vector"} [
+                    at(verb): p 0
+                    at(rest): p 1
+                    if(_): {verb = "WELCOME"} [
+                        sn_split2(sl): rest
+                        at(ss): sl 0
+                        at(ls): sl 1
+                        str_to_number(r): ss
+                        str_to_number(su_actid): ls
+                    ]
+                    elif(_): {verb = "FULL"} [
+                        set(sgu_msg): "That table is full or already playing."
+                        return(r): r
+                    ]
+                ]
+            ]
+        ]
+        set(tries): {tries + 1}
+    ]
+    if(_): {r < 0} [ set(sgu_msg): "No answer from that table." ]
 ]
 
 # --- the callbacks: they only queue what happened
@@ -687,7 +944,12 @@ sgu_events(r): [
         elif(_): {kind = "key"} [
             # Enter: the next hand; Escape: close
             if(_): {a1 = 257 || a1 = 335} [
-                if(_): {sg_phase = "done"} [ sgu_do(_): "n:" ]
+                sgu_view(kv):
+                typeof(tkv): kv
+                if(_): {tkv = "vector"} [
+                    at(kph): kv V_PHASE
+                    if(_): {kph = "done"} [ sgu_do(_): "n:" ]
+                ]
             ]
             if(_): {a1 = 256} [ close(_): sgu_win ]
         ]
@@ -699,36 +961,123 @@ sgu_main(r): args [
     set(name): "You"
     set(pool): 10
     set(seed): -1
+    set(bots): 0
+    set(addr): ""
+    set(sgu_mode): "local"
+    set(sn_port): 33333
     len(n): args
     set(i): 0
     while(_): {i < n} [
         at(a): args i
         set(v): ""
         if(_): {i + 1 < n} [ at(v): args {i + 1} ]
+        set(step): 2
         if(_): {a = "--name"} [ set(name): v ]
         elif(_): {a = "--pool"} [ str_to_number(pool): v ]
         elif(_): {a = "--seed"} [ str_to_number(seed): v ]
+        elif(_): {a = "--bots"} [ str_to_number(bots): v ]
+        elif(_): {a = "--port"} [ str_to_number(sn_port): v ]
+        elif(_): {a = "--host"} [
+            set(sgu_mode): "host"
+            set(step): 1
+        ]
+        elif(_): {a = "--join"} [
+            set(sgu_mode): "client"
+            set(step): 1
+            str_starts(opt): v "--"
+            if(_): {v != "" && opt = false} [
+                set(addr): v
+                set(step): 2
+            ]
+        ]
         else(_): [
-            print(_): "usage: ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]"
+            print(_): "usage: ussr src/sochi/gui.su [--host [--bots N] | --join [ADDRESS]] [--name NICK] [--pool N] [--seed N] [--port P]"
             set(r): 2
             return(r): r
         ]
-        set(i): {i + 2}
+        set(i): {i + step}
     ]
     if(_): {seed < 0} [
         time(t):
         set(seed): {t & 2147483647}
     ]
     sgu_open(_): name pool seed
+    if(_): {sgu_mode = "host"} [
+        sgu_host_open(e): name bots
+        if(_): {e != 0} [
+            print(_): sgu_msg
+            set(r): 1
+            return(r): r
+        ]
+        # bots on the network wait half a second, so people can follow
+        set(sgu_pause): 25
+    ]
+    if(_): {sgu_mode = "client"} [
+        socket_udp(sn_sock):
+        if(_): {sn_sock < 0} [
+            print(_): "Cannot open a UDP socket"
+            set(r): 2
+            return(r): r
+        ]
+        if(_): {addr = ""} [
+            print(_): "Looking for tables on the LAN..."
+            sn_discover(tables): 1500
+            len(nt): tables
+            if(_): {nt = 0} [
+                print(_): "No table on the LAN: start one with --host, or give an address"
+                set(r): 1
+                return(r): r
+            ]
+            at(e0): tables 0
+            at(sgu_hhost): e0 0
+            at(sgu_hport): e0 1
+            at(info): e0 2
+            concat(m): "Joining " info " at " sgu_hhost
+            print(_): m
+        ]
+        else(_): [
+            str_find(colon): addr ":" 0
+            set(sgu_hhost): addr
+            set(sgu_hport): sn_port
+            if(_): {colon >= 0} [
+                sn_hostport(hp): addr
+                at(sgu_hhost): hp 0
+                at(sgu_hport): hp 1
+            ]
+        ]
+        sgu_join(seat): sgu_hhost sgu_hport name
+        if(_): {seat < 0} [
+            print(_): sgu_msg
+            set(r): 1
+            return(r): r
+        ]
+        set(sn_seat): seat
+    ]
     show(_): sgu_win
     run(_):
     sleep(_): 150
     alive(sgu_up): sgu_win
     while(_): sgu_up [
         sgu_tick(_):
-        sleep(_): 50
+        # the network steps wait for packets themselves
+        if(_): {sgu_mode = "local"} [ sleep(_): 50 ]
         alive(sgu_up): sgu_win
     ]
+    if(_): {sgu_mode = "host"} [
+        set(i): 1
+        while(_): {i < 3} [
+            at(a): sn_addr i
+            if(_): {a != ""} [
+                sn_hostport(hp): a
+                at(h): hp 0
+                at(pt): hp 1
+                sn_send(_): h pt "BYE"
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {sgu_mode = "client"} [ sn_send(_): sgu_hhost sgu_hport "BYE" ]
+    if(_): {sgu_mode != "local"} [ socket_close(_): sn_sock ]
 ]
 
 # the game and the window (not shown yet)
@@ -736,9 +1085,10 @@ sgu_open(r): name pool seed [
     set(r): 0
     so_types(_):
     set(sg_uni): false
+    set(su_bot): false
+    set(su_fast): false
+    set(su_quit): false
     so_table(_): pool seed
-    sgu_names(_): name
-    so_new_game(_):
     vec(sgu_q): ""
     vec(sgu_hits): ""
     vec(sgu_sel): ""
@@ -748,6 +1098,17 @@ sgu_open(r): name pool seed [
     set(sgu_dirty): true
     set(sgu_w): 0
     set(sgu_h): 0
+    set(sgu_sent): -1
+    set(sgu_resend): 0
+    set(sgu_botseq): -1
+    set(sgu_botat): 0
+    set(sgu_lastview): 0
+    set(sgu_seen_seq): -1
+    set(sn_tick): 0
+    if(_): {sgu_mode = "local"} [
+        sgu_names(_): name
+        so_new_game(_):
+    ]
     createwindow(sgu_win): "Sochi" 1200 800
     canvas(sgu_cv): sgu_win
     pack(_): sgu_cv true
@@ -755,17 +1116,53 @@ sgu_open(r): name pool seed [
     on(_): sgu_win "key" "sgu_key"
 ]
 
+# a table on the LAN, here: seat 0 is this window; bots seats more. 0, or
+# 3 when the port is taken
+sgu_host_open(r): name bots [
+    set(r): 0
+    socket_udp(sn_sock): sn_port
+    if(_): {sn_sock < 0} [
+        so_int(ps): sn_port
+        concat(sgu_msg): "UDP port " ps " is taken: a table is already open on this computer"
+        set(r): 3
+        return(r): r
+    ]
+    set(sn_host): true
+    set(sg_names): 0 name
+    set(sg_kind): 0 "local"
+    vec(sn_addr): ""
+    push(_): sn_addr ""
+    push(_): sn_addr ""
+    push(_): sn_addr ""
+    so_vec3(sn_acked): 0
+    so_vec3(sn_seen): 0
+    set(i): 1
+    while(_): {i <= bots && i < 3} [
+        set(bn): "Bot Masha"
+        if(_): {i = 2} [ set(bn): "Bot Grisha" ]
+        set(sg_names): i bn
+        set(sg_kind): i "bot"
+        set(i): {i + 1}
+    ]
+    so_log(_): "The table is open"
+    if(_): {bots >= 2} [ so_new_game(_): ]
+]
+
 # one turn of the main loop: what was clicked, a bot's move, a redraw
 sgu_tick(r): [
     set(r): 0
     sgu_events(_):
-    sgu_bots(_):
-    # at the end of a hand the bots are ready at once
-    if(_): {sg_phase = "done"} [
-        at(r1): sg_ready 1
-        at(r2): sg_ready 2
-        if(_): {r1 = 0} [ so_act(_): 1 "n:" ]
-        if(_): {r2 = 0} [ so_act(_): 2 "n:" ]
+    if(_): {sgu_mode = "host"} [ sgu_host_step(_): ]
+    elif(_): {sgu_mode = "client"} [ sgu_client_step(_): ]
+    else(_): [
+        sgu_bots(_):
+        # at the end of a hand the bots are ready at once
+        if(_): {sg_phase = "done"} [
+            at(r1): sg_ready 1
+            at(r2): sg_ready 2
+            if(_): {r1 = 0} [ so_act(_): 1 "n:" ]
+            if(_): {r2 = 0} [ so_act(_): 2 "n:" ]
+        ]
     ]
     getwidth(w): sgu_cv
     getheight(h): sgu_cv

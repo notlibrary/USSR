@@ -1,0 +1,49 @@
+# A window hosts a LAN table on UDP port 33391 and plays seat 0 by clicks
+# while two terminal bots join (see run.sh). Prints PASS or FAIL.
+$include "player.su"
+
+init(ret): arg_count arg_values [
+    set(sgu_mode): "host"
+    set(sn_port): 33391
+    set(sgl_bid): false
+    set(sgl_clicks): 0
+    set(sgl_cards): 0
+    sgu_open(_): "Window" 2 1991
+    sgu_host_open(e): "Window" 0
+    set(sgu_pause): 0
+    set(t): 0
+    set(joined): false
+    while(_): {t < 6000 && sg_phase != "over"} [
+        sgu_tick(_):
+        if(_): {sg_phase != "lobby"} [ set(joined): true ]
+        so_ctl(ctl):
+        if(_): {ctl = 0 || sg_phase = "done"} [ sgl_move(_): ]
+        set(t): {t + 1}
+    ]
+    at(n1): sg_names 1
+    at(n2): sg_names 2
+    at(k1): sg_kind 1
+    if(_): joined [ print(_): "PASS two terminal players joined the window's table" ]
+    else(_): [ print(_): "FAIL nobody joined" ]
+    concat(m): "  seats: " n1 " (" k1 "), " n2
+    print(_): m
+    if(_): {sg_phase = "over"} [ print(_): "PASS the game was played to its end over the LAN" ]
+    else(_): [ concat(m): "FAIL the game stopped in phase " sg_phase
+        print(_): m ]
+    if(_): {sgl_cards >= 5} [ print(_): "PASS the window played its cards by clicks" ]
+    else(_): [ print(_): "FAIL the window played no cards" ]
+    set(i): 1
+    while(_): {i < 3} [
+        at(a): sn_addr i
+        if(_): {a != ""} [
+            sn_hostport(hp): a
+            at(h): hp 0
+            at(pt): hp 1
+            sn_send(_): h pt "BYE"
+        ]
+        set(i): {i + 1}
+    ]
+    socket_close(_): sn_sock
+    destroy(_): sgu_win
+    set(ret): 0
+]

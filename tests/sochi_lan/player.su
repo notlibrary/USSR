@@ -1,0 +1,96 @@
+# The automatic player of the LAN tests: plays this window's seat by
+# clicking (injected canvas events) what the table draws.
+$include "../../src/sochi/gui.su"
+
+global(_): sgl_bid sgl_clicks sgl_cards
+
+sgl_find(r): prefix [
+    vec(r): ""
+    len(n): sgu_hits
+    set(i): 0
+    while(_): {i < n} [
+        at(e): sgu_hits i
+        at(a): e 4
+        str_starts(s): a prefix
+        if(_): s [
+            at(x): e 0
+            at(y): e 1
+            at(w): e 2
+            at(h): e 3
+            push(_): r {x + 10}
+            push(_): r {y + h / 2}
+            push(_): r a
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sgl_click(r): hit [
+    set(r): 0
+    at(x): hit 0
+    at(y): hit 1
+    str_trunc(xi): x
+    str_trunc(yi): y
+    inject(_): sgu_cv "pointer" xi yi 0
+    sleep(_): 20
+    set(sgl_clicks): {sgl_clicks + 1}
+]
+
+# one move when the table offers one
+sgl_move(r): [
+    set(r): 0
+    set(hit): null
+    vec(order): ""
+    push(_): order "p:"
+    push(_): order "discard"
+    push(_): order "n:"
+    push(_): order "b:6"
+    push(_): order "b:pass"
+    push(_): order "c:"
+    push(_): order "w:"
+    len(no): order
+    set(k): 0
+    while(_): {k < no && hit = null} [
+        at(pre): order k
+        set(skip): {pre = "b:6" && sgl_bid}
+        if(_): {skip = false} [
+            sgl_find(h): pre
+            len(nh): h
+            if(_): {nh > 0} [
+                set(hit): h
+                if(_): {pre = "b:6"} [ set(sgl_bid): true ]
+                if(_): {pre = "p:"} [ set(sgl_cards): {sgl_cards + 1} ]
+            ]
+        ]
+        set(k): {k + 1}
+    ]
+    if(_): {hit = null} [
+        # discarding: the first card not chosen yet
+        len(nh): sgu_hits
+        set(i): 0
+        while(_): {i < nh && hit = null} [
+            at(e): sgu_hits i
+            at(a): e 4
+            str_starts(isel): a "sel:"
+            if(_): isel [
+                len(al): a
+                slice(cn): a 4 {al - 4}
+                so_parse_card(c): cn
+                so_has(had): sgu_sel c
+                if(_): {had = false} [
+                    at(x): e 0
+                    at(y): e 1
+                    vec(hit): ""
+                    push(_): hit {x + 10}
+                    push(_): hit {y + 60}
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {hit != null} [
+        sgl_click(_): hit
+        set(r): 1
+    ]
+]

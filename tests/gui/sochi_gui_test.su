@@ -48,6 +48,7 @@ sgt_click(r): hit [
 ]
 
 init(ret): arg_count arg_values [
+    set(sgu_mode): "local"
     sgu_open(_): "Tester" 2 1917
     set(sgu_pause): 0
     sgu_tick(_):
