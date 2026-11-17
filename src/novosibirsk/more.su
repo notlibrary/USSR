@@ -1,0 +1,2217 @@
+# more.su - Novosibirsk refine pass 1: a richer document beside the pad's
+# plain paragraphs, with no window (tests/novosibirsk_more_test.su).
+#
+# A document (nsm_doc) is a btree: "paras", a vector of paragraph btrees
+# (text, level 0 or a heading 1..6, list "", "bullet" or "number" with
+# depth, align left|center|right|justify, indent, first, before, after,
+# spacing (%), pagebreak, style, and spans [[start end props]...] over byte
+# offsets with props bold italic underline strike sub sup color background
+# size font href note), and "meta" (title author keywords).
+#
+#   nsm_new(d): / nsm_para(p): text / nsm_from_pad(d): / nsm_to_pad(_): d
+#   nsm_format(_): d pi start end key value     character formatting
+#   nsm_fodt(s): d / nsm_from_fodt(d): text      flat ODF with styles
+#   nsm_html(s): d / nsm_markdown(s): d / nsm_text(s): d numbers
+#   nsm_rtf(s): d / nsm_from_markdown(d): text / nsm_from_html(d): text
+#   nsm_from_rtf(d): text
+#   nsm_find(v): d pattern regex case / nsm_replace(n): d find repl regex case
+#   nsm_stats(b): d   words chars sentences reading time, repeated words
+#   nsm_autocorrect(s): text style ("ru": «» quotes, "en": “” quotes)
+#   nsm_specials(v):   nsm_toc(v): d   nsm_toc_text(s): d width
+#   nsm_outline(v): d   nsm_move_section(_): d heading dir
+#   nsm_compare(v): a b   nsm_template(d): name   nsm_fields(s): d text path
+#   nsm_word_left(n) / nsm_word_right(n): text col    nsm_smart_home(n): text col
+#   nsm_convert(r): in out        (.fodt .txt .html .md .rtf)
+$once
+$include "../libs/lists.su"
+
+# --- the document
+
+nsm_new(r): [
+    btree(r):
+    vec(paras): ""
+    btput(_): r "paras" paras
+    btree(meta):
+    btput(_): meta "title" ""
+    btput(_): meta "author" ""
+    btput(_): meta "keywords" ""
+    btput(_): r "meta" meta
+]
+
+nsm_para(r): text [
+    btree(r):
+    btput(_): r "text" text
+    btput(_): r "level" 0
+    btput(_): r "list" ""
+    btput(_): r "depth" 1
+    btput(_): r "align" "left"
+    btput(_): r "indent" 0
+    btput(_): r "first" 0
+    btput(_): r "before" 0
+    btput(_): r "after" 0
+    btput(_): r "spacing" 100
+    btput(_): r "pagebreak" false
+    btput(_): r "style" ""
+    vec(spans): ""
+    btput(_): r "spans" spans
+]
+
+nsm_add(r): d p [
+    btget(paras): d "paras"
+    push(_): paras p
+    len(r): paras
+    set(r): {r - 1}
+]
+
+nsm_paras(r): d [
+    btget(r): d "paras"
+]
+
+nsm_get(r): d i [
+    btget(paras): d "paras"
+    at(r): paras i
+]
+
+nsm_from_pad(r): [
+    nsm_new(r):
+    set(paras): sb_paras?
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        getf(t): p "text"
+        nsm_para(np): t
+        nsm_add(_): r np
+        set(i): {i + 1}
+    ]
+]
+
+nsm_to_pad(r): d [
+    btget(ps): d "paras"
+    vec(paras): "SbPara"
+    len(n): ps
+    set(i): 0
+    while(_): {i < n} [
+        at(p): ps i
+        btget(t): p "text"
+        new(sp): "SbPara" t
+        push(_): paras sp
+        set(i): {i + 1}
+    ]
+    if(_): {n = 0} [
+        new(sp): "SbPara" ""
+        push(_): paras sp
+    ]
+    set(sb_paras): paras!
+    set(sb_prow): 0!
+    set(sb_pcol): 0!
+    set(r): n
+]
+
+# a property over bytes start..end of paragraph pi: spans split and merged
+nsm_format(r): d pi start end key value [
+    nsm_get(p): d pi
+    btget(spans): p "spans"
+    btget(t): p "text"
+    len(tl): t
+    if(_): {end > tl} [ set(end): tl ]
+    vec(out): ""
+    len(n): spans
+    set(i): 0
+    while(_): {i < n} [
+        at(s): spans i
+        at(a): s 0
+        at(b): s 1
+        at(props): s 2
+        # the parts outside [start, end) keep their props
+        if(_): {b <= start || a >= end} [ push(_): out s ]
+        else(_): [
+            if(_): {a < start} [
+                nsm_span(left): a start props
+                push(_): out left
+            ]
+            nsm_span_copy(mid): {a < start} start a {b > end} end b props
+            push(_): out mid
+            if(_): {b > end} [
+                nsm_span(right): end b props
+                push(_): out right
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    # bytes in [start, end) with no span yet get one
+    btree(covered):
+    len(no): out
+    set(i): 0
+    while(_): {i < no} [
+        at(s): out i
+        at(a): s 0
+        at(b): s 1
+        if(_): {b > start && a < end} [ btput(_): covered a b ]
+        set(i): {i + 1}
+    ]
+    set(pos): start
+    btkeys(ks): covered
+    len(nk): ks
+    set(k): 0
+    while(_): {k <= nk} [
+        set(next): end
+        set(after): end
+        if(_): {k < nk} [
+            at(next): ks k
+            btget(after): covered next
+        ]
+        if(_): {next > pos} [
+            btree(pr):
+            nsm_span(gap): pos next pr
+            push(_): out gap
+        ]
+        if(_): {after > pos} [ set(pos): after ]
+        set(k): {k + 1}
+    ]
+    # the property everywhere in [start, end)
+    len(no): out
+    set(i): 0
+    while(_): {i < no} [
+        at(s): out i
+        at(a): s 0
+        at(b): s 1
+        at(props): s 2
+        if(_): {a >= start && b <= end} [
+            if(_): {value = false || value = null} [ btdel(_): props key ]
+            else(_): [ btput(_): props key value ]
+        ]
+        set(i): {i + 1}
+    ]
+    nsm_spans_tidy(clean): out
+    btput(_): p "spans" clean
+    len(r): clean
+]
+
+nsm_span(r): a b props [
+    vec(r): ""
+    push(_): r a
+    push(_): r b
+    push(_): r props
+]
+
+# the part of a span inside [start, end), with a copy of its props
+nsm_span_copy(r): cutl start a cutr end b props [
+    set(x): a
+    if(_): cutl [ set(x): start ]
+    set(y): b
+    if(_): cutr [ set(y): end ]
+    btree(c):
+    btkeys(ks): props
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(v): props k
+        btput(_): c k v
+        set(i): {i + 1}
+    ]
+    nsm_span(r): x y c
+]
+
+# sorted, empty ones and plain ones gone, neighbours with the same props
+# joined
+nsm_spans_tidy(r): spans [
+    btree(ord):
+    len(n): spans
+    set(i): 0
+    while(_): {i < n} [
+        at(s): spans i
+        at(a): s 0
+        at(b): s 1
+        at(pr): s 2
+        btlen(np): pr
+        if(_): {b > a && np > 0} [ btput(_): ord {a * 1000000 + i} s ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    btkeys(ks): ord
+    len(nk): ks
+    set(i): 0
+    while(_): {i < nk} [
+        at(k): ks i
+        btget(s): ord k
+        len(nr): r
+        set(joined): false
+        if(_): {nr > 0} [
+            at(last): r {nr - 1}
+            at(lb): last 1
+            at(lp): last 2
+            at(sa): s 0
+            at(sp): s 2
+            encode(e1): lp
+            encode(e2): sp
+            if(_): {lb = sa && e1 = e2} [
+                at(sb): s 1
+                set(last): 1 sb
+                set(joined): true
+            ]
+        ]
+        if(_): {joined = false} [ push(_): r s ]
+        set(i): {i + 1}
+    ]
+]
+
+# the pieces of a paragraph's text with their props: [[text props]...]
+nsm_pieces(r): p [
+    vec(r): ""
+    btget(t): p "text"
+    btget(spans): p "spans"
+    len(tl): t
+    set(pos): 0
+    len(n): spans
+    set(i): 0
+    while(_): {i < n} [
+        at(s): spans i
+        at(a): s 0
+        at(b): s 1
+        at(pr): s 2
+        if(_): {a > pos} [
+            slice(x): t pos {a - pos}
+            btree(none):
+            vec(e): ""
+            push(_): e x
+            push(_): e none
+            push(_): r e
+        ]
+        if(_): {b > tl} [ set(b): tl ]
+        slice(x): t a {b - a}
+        vec(e): ""
+        push(_): e x
+        push(_): e pr
+        push(_): r e
+        set(pos): b
+        set(i): {i + 1}
+    ]
+    if(_): {pos < tl} [
+        slice(x): t pos {tl - pos}
+        btree(none):
+        vec(e): ""
+        push(_): e x
+        push(_): e none
+        push(_): r e
+    ]
+]
+
+# --- flat ODF text with automatic styles
+
+nsm_prop(r): pr key default [
+    btget(r): pr key default
+]
+
+# the fo: attributes of character props
+nsm_text_props(r): pr [
+    set(r): ""
+    nsm_prop(b): pr "bold" false
+    nsm_prop(it): pr "italic" false
+    nsm_prop(u): pr "underline" false
+    nsm_prop(s): pr "strike" false
+    nsm_prop(sub): pr "sub" false
+    nsm_prop(sup): pr "sup" false
+    nsm_prop(color): pr "color" ""
+    nsm_prop(bg): pr "background" ""
+    nsm_prop(size): pr "size" 0
+    nsm_prop(font): pr "font" ""
+    if(_): b [ concat(r): r " fo:font-weight=\"bold\"" ]
+    if(_): it [ concat(r): r " fo:font-style=\"italic\"" ]
+    if(_): u [ concat(r): r " style:text-underline-style=\"solid\" style:text-underline-width=\"auto\" style:text-underline-color=\"font-color\"" ]
+    if(_): s [ concat(r): r " style:text-line-through-style=\"solid\"" ]
+    if(_): sub [ concat(r): r " style:text-position=\"sub 58%\"" ]
+    if(_): sup [ concat(r): r " style:text-position=\"super 58%\"" ]
+    if(_): {color != ""} [ concat(r): r " fo:color=\"" color "\"" ]
+    if(_): {bg != ""} [ concat(r): r " fo:background-color=\"" bg "\"" ]
+    if(_): {size > 0} [
+        str_from_number(ss): size 1
+        str_ends(z): ss ".0"
+        if(_): z [
+            len(sl): ss
+            slice(ss): ss 0 {sl - 2}
+        ]
+        concat(r): r " fo:font-size=\"" ss "pt\""
+    ]
+    if(_): {font != ""} [
+        sb_xml_escape(fe): font
+        concat(r): r " style:font-name=\"" fe "\""
+    ]
+]
+
+nsm_para_props(r): p [
+    set(r): ""
+    btget(align): p "align"
+    if(_): {align != "left"} [
+        set(a): align
+        if(_): {align = "right"} [ set(a): "end" ]
+        concat(r): r " fo:text-align=\"" a "\""
+    ]
+    vec(keys): ""
+    str_split(keys): "indent:fo:margin-left first:fo:text-indent before:fo:margin-top after:fo:margin-bottom" " "
+    set(i): 0
+    while(_): {i < 4} [
+        at(kv): keys i
+        str_find(c): kv ":" 0
+        slice(k): kv 0 c
+        len(kl): kv
+        slice(attr): kv {c + 1} {kl - c - 1}
+        btget(v): p k
+        if(_): {v != 0} [
+            str_from_number(vs): v 2
+            concat(r): r " " attr "=\"" vs "mm\""
+        ]
+        set(i): {i + 1}
+    ]
+    btget(sp): p "spacing"
+    if(_): {sp != 100} [
+        str_from_int(ss): sp
+        concat(r): r " fo:line-height=\"" ss "%\""
+    ]
+    btget(pb): p "pagebreak"
+    if(_): pb [ concat(r): r " fo:break-before=\"page\"" ]
+]
+
+nsm_fodt(r): d [
+    # automatic styles, one per distinct set of props
+    btree(tstyles):
+    btree(pstyles):
+    btget(paras): d "paras"
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        nsm_para_props(pp): p
+        if(_): {pp != ""} [
+            btget(have): pstyles pp null
+            if(_): {have = null} [
+                btlen(k): pstyles
+                str_from_int(ks): {k + 1}
+                concat(nm): "P" ks
+                btput(_): pstyles pp nm
+            ]
+        ]
+        btget(spans): p "spans"
+        len(ns): spans
+        set(j): 0
+        while(_): {j < ns} [
+            at(s): spans j
+            at(pr): s 2
+            nsm_text_props(tp): pr
+            if(_): {tp != ""} [
+                btget(have): tstyles tp null
+                if(_): {have = null} [
+                    btlen(k): tstyles
+                    str_from_int(ks): {k + 1}
+                    concat(nm): "T" ks
+                    btput(_): tstyles tp nm
+                ]
+            ]
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    btget(meta): d "meta"
+    concat(r): SB_ODF_HEAD "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" office:mimetype=\"application/vnd.oasis.opendocument.text\">\n"
+    btget(title): meta "title" ""
+    btget(author): meta "author" ""
+    btget(kw): meta "keywords" ""
+    if(_): {title != "" || author != "" || kw != ""} [
+        concat(r): r "<office:meta>\n"
+        sb_xml_escape(x): title
+        if(_): {title != ""} [ concat(r): r "<dc:title>" x "</dc:title>\n" ]
+        sb_xml_escape(x): author
+        if(_): {author != ""} [ concat(r): r "<dc:creator>" x "</dc:creator>\n" ]
+        sb_xml_escape(x): kw
+        if(_): {kw != ""} [ concat(r): r "<meta:keyword>" x "</meta:keyword>\n" ]
+        concat(r): r "</office:meta>\n"
+    ]
+    concat(r): r "<office:automatic-styles>\n"
+    btkeys(pk): pstyles
+    len(npk): pk
+    set(i): 0
+    while(_): {i < npk} [
+        at(props): pk i
+        btget(nm): pstyles props
+        concat(r): r "<style:style style:name=\"" nm "\" style:family=\"paragraph\"><style:paragraph-properties" props "/></style:style>\n"
+        set(i): {i + 1}
+    ]
+    btkeys(tk): tstyles
+    len(ntk): tk
+    set(i): 0
+    while(_): {i < ntk} [
+        at(props): tk i
+        btget(nm): tstyles props
+        concat(r): r "<style:style style:name=\"" nm "\" style:family=\"text\"><style:text-properties" props "/></style:style>\n"
+        set(i): {i + 1}
+    ]
+    concat(r): r "</office:automatic-styles>\n<office:body>\n<office:text>\n"
+    set(inlist): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(lst): p "list"
+        if(_): {lst != inlist && inlist != ""} [ concat(r): r "</text:list>\n" ]
+        if(_): {lst != inlist && lst != ""} [
+            set(ls): "Bullet"
+            if(_): {lst = "number"} [ set(ls): "Numbering_20_123" ]
+            concat(r): r "<text:list text:style-name=\"" ls "\">\n"
+        ]
+        set(inlist): lst
+        nsm_para_props(pp): p
+        set(sn): ""
+        if(_): {pp != ""} [
+            btget(nm): pstyles pp
+            concat(sn): " text:style-name=\"" nm "\""
+        ]
+        btget(level): p "level"
+        set(tag): "text:p"
+        set(extra): ""
+        if(_): {level > 0} [
+            set(tag): "text:h"
+            str_from_int(ls): level
+            concat(extra): " text:outline-level=\"" ls "\""
+            if(_): {sn = ""} [ concat(sn): " text:style-name=\"Heading_20_" ls "\"" ]
+        ]
+        set(body): ""
+        nsm_pieces(pieces): p
+        len(np): pieces
+        set(j): 0
+        while(_): {j < np} [
+            at(pc): pieces j
+            at(x): pc 0
+            at(pr): pc 1
+            sb_odf_text(xt): x
+            nsm_text_props(tp): pr
+            btget(href): pr "href" ""
+            btget(note): pr "note" ""
+            set(piece): xt
+            if(_): {tp != ""} [
+                btget(nm): tstyles tp
+                concat(piece): "<text:span text:style-name=\"" nm "\">" xt "</text:span>"
+            ]
+            if(_): {href != ""} [
+                sb_xml_escape(he): href
+                concat(piece): "<text:a xlink:type=\"simple\" xlink:href=\"" he "\">" piece "</text:a>"
+            ]
+            concat(body): body piece
+            if(_): {note != ""} [
+                sb_xml_escape(ne): note
+                concat(body): body "<text:note text:note-class=\"footnote\"><text:note-body><text:p>" ne "</text:p></text:note-body></text:note>"
+            ]
+            set(j): {j + 1}
+        ]
+        set(open): ""
+        set(close): ""
+        if(_): {lst != ""} [
+            set(open): "<text:list-item>"
+            set(close): "</text:list-item>"
+        ]
+        if(_): {body = ""} [ concat(r): r open "<" tag sn extra "/>" close "\n" ]
+        else(_): [ concat(r): r open "<" tag sn extra ">" body "</" tag ">" close "\n" ]
+        set(i): {i + 1}
+    ]
+    if(_): {inlist != ""} [ concat(r): r "</text:list>\n" ]
+    concat(r): r "</office:text>\n</office:body>\n</office:document>\n"
+]
+
+# the props named by a style's text-properties attributes
+nsm_props_of(r): attrs [
+    btree(r):
+    sb_xml_attr(w): attrs "fo:font-weight"
+    if(_): {w = "bold"} [ btput(_): r "bold" true ]
+    sb_xml_attr(s): attrs "fo:font-style"
+    if(_): {s = "italic"} [ btput(_): r "italic" true ]
+    sb_xml_attr(u): attrs "style:text-underline-style"
+    if(_): {u != null && u != "none"} [ btput(_): r "underline" true ]
+    sb_xml_attr(l): attrs "style:text-line-through-style"
+    if(_): {l != null && l != "none"} [ btput(_): r "strike" true ]
+    sb_xml_attr(pos): attrs "style:text-position"
+    if(_): {pos != null} [
+        str_starts(sub): pos "sub"
+        str_starts(sup): pos "super"
+        if(_): sub [ btput(_): r "sub" true ]
+        if(_): sup [ btput(_): r "sup" true ]
+    ]
+    sb_xml_attr(c): attrs "fo:color"
+    if(_): {c != null} [ btput(_): r "color" c ]
+    sb_xml_attr(bg): attrs "fo:background-color"
+    if(_): {bg != null && bg != "transparent"} [ btput(_): r "background" bg ]
+    sb_xml_attr(fs): attrs "fo:font-size"
+    if(_): {fs != null} [
+        str_ends(pt): fs "pt"
+        if(_): pt [
+            len(fl): fs
+            slice(fs): fs 0 {fl - 2}
+            str_to_number(fsn): fs
+            btput(_): r "size" fsn
+        ]
+    ]
+    sb_xml_attr(fn): attrs "style:font-name"
+    if(_): {fn != null} [ btput(_): r "font" fn ]
+]
+
+nsm_mm(r): v [
+    set(r): 0
+    if(_): {v = null} [ return(r): r ]
+    str_ends(mm): v "mm"
+    str_ends(cm): v "cm"
+    str_ends(inch): v "in"
+    len(n): v
+    set(num): v
+    if(_): {mm || cm || inch} [ slice(num): v 0 {n - 2} ]
+    str_to_number(r): num
+    typeof(t): r
+    if(_): {t != "integer" && t != "real"} [ set(r): 0 ]
+    if(_): cm [ set(r): {r * 10} ]
+    if(_): inch [ set(r): {r * 25.4} ]
+]
+
+nsm_from_fodt(r): s [
+    nsm_new(r):
+    btget(meta): r "meta"
+    re_find(m): "<dc:title>([^<]*)</dc:title>" s
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(x): m 1
+        sb_xml_unescape(x): x
+        btput(_): meta "title" x
+    ]
+    re_find(m): "<dc:creator>([^<]*)</dc:creator>" s
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(x): m 1
+        sb_xml_unescape(x): x
+        btput(_): meta "author" x
+    ]
+    re_find(m): "<meta:keyword>([^<]*)</meta:keyword>" s
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(x): m 1
+        sb_xml_unescape(x): x
+        btput(_): meta "keywords" x
+    ]
+    # styles: name -> [family props paraattrs]
+    btree(styles):
+    len(n): s
+    set(i): 0
+    set(cur): ""
+    set(curfam): ""
+    str_find(body): s "<office:body" 0
+    if(_): {body < 0} [ set(body): n ]
+    while(_): {i < body} [
+        sb_next_lt(j): s i n
+        if(_): {j >= body} [ set(i): body ]
+        else(_): [
+            sb_xml_tag(tag): s j
+            at(kind): tag 0
+            at(name): tag 1
+            at(attrs): tag 2
+            at(i): tag 3
+            if(_): {name = "style:style" && kind != "close"} [
+                sb_xml_attr(cur): attrs "style:name"
+                sb_xml_attr(curfam): attrs "style:family"
+                vec(e): ""
+                btree(pr):
+                push(_): e pr
+                push(_): e ""
+                btput(_): styles cur e
+            ]
+            elif(_): {name = "style:text-properties" && cur != ""} [
+                btget(e): styles cur null
+                if(_): {e != null} [
+                    nsm_props_of(pr): attrs
+                    set(e): 0 pr
+                ]
+            ]
+            elif(_): {name = "style:paragraph-properties" && cur != ""} [
+                btget(e): styles cur null
+                if(_): {e != null} [ set(e): 1 attrs ]
+            ]
+        ]
+    ]
+    str_find(start): s "<office:text" 0
+    if(_): {start < 0} [ return(r): r ]
+    set(i): start
+    set(depth): 0
+    set(hidden): 0
+    set(listkind): ""
+    set(p): null
+    vec(stack): ""
+    set(href): ""
+    set(notetext): ""
+    set(innote): false
+    set(done): false
+    while(_): {i < n && done = false} [
+        byte(b): s i
+        if(_): {b != 60} [
+            sb_next_lt(j): s i n
+            sb_xml_text(t): s i j
+            if(_): innote [ concat(notetext): notetext t ]
+            elif(_): {depth > 0 && hidden = 0 && p != null} [ nsm_append(_): p t stack href ]
+            set(i): j
+        ]
+        else(_): [
+            sb_xml_tag(tag): s i
+            at(kind): tag 0
+            at(name): tag 1
+            at(attrs): tag 2
+            at(i): tag 3
+            set(isp): {name = "text:p" || name = "text:h"}
+            if(_): {name = "text:note" && kind = "open"} [
+                set(innote): true
+                set(notetext): ""
+            ]
+            elif(_): {name = "text:note" && kind = "close"} [
+                set(innote): false
+                if(_): {p != null} [ nsm_note_last(_): p notetext ]
+            ]
+            elif(_): innote [ set(innote): innote ]
+            elif(_): {name = "office:annotation"} [
+                if(_): {kind = "open"} [ set(hidden): {hidden + 1} ]
+                if(_): {kind = "close"} [ set(hidden): {hidden - 1} ]
+            ]
+            elif(_): {name = "text:list" && kind = "open"} [
+                sb_xml_attr(ls): attrs "text:style-name"
+                set(listkind): "bullet"
+                if(_): {ls != null} [
+                    str_lower(ll): ls
+                    str_contains(num): ll "num"
+                    if(_): num [ set(listkind): "number" ]
+                ]
+            ]
+            elif(_): {name = "text:list" && kind = "close"} [ set(listkind): "" ]
+            elif(_): {isp && (kind = "open" || kind = "empty") && depth = 0} [
+                nsm_para(p): ""
+                btput(_): p "list" listkind
+                if(_): {name = "text:h"} [
+                    sb_attr_int(lv): attrs "text:outline-level" 1
+                    btput(_): p "level" lv
+                ]
+                sb_xml_attr(sn): attrs "text:style-name"
+                if(_): {sn != null} [
+                    btget(e): styles sn null
+                    if(_): {e != null} [
+                        at(pa): e 1
+                        nsm_apply_para_attrs(_): p pa
+                    ]
+                    else(_): [ btput(_): p "style" sn ]
+                ]
+                vec(stack): ""
+                nsm_add(_): r p
+                if(_): {kind = "open"} [ set(depth): 1 ]
+            ]
+            elif(_): {isp && kind = "open"} [ set(depth): {depth + 1} ]
+            elif(_): {isp && kind = "close"} [
+                set(depth): {depth - 1}
+                if(_): {depth < 0} [ set(depth): 0 ]
+            ]
+            elif(_): {depth > 0 && hidden = 0 && p != null} [
+                if(_): {name = "text:span" && kind = "open"} [
+                    sb_xml_attr(sn): attrs "text:style-name"
+                    btree(pr):
+                    if(_): {sn != null} [
+                        btget(e): styles sn null
+                        if(_): {e != null} [ at(pr): e 0 ]
+                    ]
+                    push(_): stack pr
+                ]
+                elif(_): {name = "text:span" && kind = "close"} [
+                    len(ns): stack
+                    if(_): {ns > 0} [ pop(_): stack ]
+                ]
+                elif(_): {name = "text:a" && kind = "open"} [
+                    sb_xml_attr(h): attrs "xlink:href"
+                    set(href): ""
+                    if(_): {h != null} [ sb_xml_unescape(href): h ]
+                ]
+                elif(_): {name = "text:a" && kind = "close"} [ set(href): "" ]
+                elif(_): {name = "text:s"} [
+                    sb_attr_int(count): attrs "text:c" 1
+                    str_repeat(sp): " " count
+                    nsm_append(_): p sp stack href
+                ]
+                elif(_): {name = "text:tab"} [ nsm_append(_): p "\t" stack href ]
+                elif(_): {name = "text:line-break"} [ nsm_append(_): p " " stack href ]
+            ]
+            elif(_): {name = "office:text" && kind = "close"} [ set(done): true ]
+        ]
+    ]
+]
+
+nsm_note_last(r): p text [
+    btget(t): p "text"
+    len(tl): t
+    set(r): 0
+    if(_): {tl = 0} [ return(r): r ]
+    str_trim(nt): text
+    # the note goes on the piece read just before it
+    btget(last): p "lastrange" null
+    set(a): {tl - 1}
+    set(b): tl
+    if(_): {last != null} [
+        at(a): last 0
+        at(b): last 1
+    ]
+    nsm_new(tmp):
+    nsm_add(_): tmp p
+    nsm_format(r): tmp 0 a b "note" nt
+]
+
+nsm_apply_para_attrs(r): p attrs [
+    set(r): 0
+    sb_xml_attr(a): attrs "fo:text-align"
+    if(_): {a != null} [
+        set(al): a
+        if(_): {a = "end"} [ set(al): "right" ]
+        if(_): {a = "start"} [ set(al): "left" ]
+        btput(_): p "align" al
+    ]
+    sb_xml_attr(v): attrs "fo:margin-left"
+    nsm_mm(x): v
+    btput(_): p "indent" x
+    sb_xml_attr(v): attrs "fo:text-indent"
+    nsm_mm(x): v
+    btput(_): p "first" x
+    sb_xml_attr(v): attrs "fo:margin-top"
+    nsm_mm(x): v
+    btput(_): p "before" x
+    sb_xml_attr(v): attrs "fo:margin-bottom"
+    nsm_mm(x): v
+    btput(_): p "after" x
+    sb_xml_attr(v): attrs "fo:line-height"
+    if(_): {v != null} [
+        str_ends(pc): v "%"
+        if(_): pc [
+            len(vl): v
+            slice(v): v 0 {vl - 1}
+            str_to_number(x): v
+            btput(_): p "spacing" x
+        ]
+    ]
+    sb_xml_attr(v): attrs "fo:break-before"
+    if(_): {v = "page"} [ btput(_): p "pagebreak" true ]
+]
+
+# text added to a paragraph under the open spans' props
+nsm_append(r): p text stack href [
+    set(r): 0
+    btget(t): p "text"
+    len(a): t
+    concat(t): t text
+    btput(_): p "text" t
+    len(b): t
+    vec(lr): ""
+    push(_): lr a
+    push(_): lr b
+    btput(_): p "lastrange" lr
+    btree(pr):
+    len(ns): stack
+    set(i): 0
+    while(_): {i < ns} [
+        at(sp): stack i
+        btkeys(ks): sp
+        len(nk): ks
+        set(k): 0
+        while(_): {k < nk} [
+            at(kk): ks k
+            btget(v): sp kk
+            btput(_): pr kk v
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {href != ""} [ btput(_): pr "href" href ]
+    btlen(np): pr
+    if(_): {np > 0 && b > a} [
+        btget(spans): p "spans"
+        nsm_span(s): a b pr
+        push(_): spans s
+        nsm_spans_tidy(clean): spans
+        btput(_): p "spans" clean
+    ]
+]
+
+# --- HTML, Markdown, plain text, RTF out
+
+nsm_html_escape(r): s [
+    str_replace(r): s "&" "&amp;"
+    str_replace(r): r "<" "&lt;"
+    str_replace(r): r ">" "&gt;"
+]
+
+nsm_html(r): d [
+    btget(meta): d "meta"
+    btget(title): meta "title" ""
+    nsm_html_escape(te): title
+    concat(r): "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>" te "</title>\n</head>\n<body>\n"
+    btget(paras): d "paras"
+    vec(notes): ""
+    set(inlist): ""
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(lst): p "list"
+        if(_): {lst != inlist && inlist != ""} [
+            if(_): {inlist = "number"} [ concat(r): r "</ol>\n" ] else(_): [ concat(r): r "</ul>\n" ]
+        ]
+        if(_): {lst != inlist && lst != ""} [
+            if(_): {lst = "number"} [ concat(r): r "<ol>\n" ] else(_): [ concat(r): r "<ul>\n" ]
+        ]
+        set(inlist): lst
+        nsm_pieces(pieces): p
+        set(body): ""
+        len(np): pieces
+        set(j): 0
+        while(_): {j < np} [
+            at(pc): pieces j
+            at(x): pc 0
+            at(pr): pc 1
+            nsm_html_escape(h): x
+            nsm_prop(b): pr "bold" false
+            nsm_prop(it): pr "italic" false
+            nsm_prop(u): pr "underline" false
+            nsm_prop(s): pr "strike" false
+            nsm_prop(sub): pr "sub" false
+            nsm_prop(sup): pr "sup" false
+            nsm_prop(color): pr "color" ""
+            nsm_prop(bg): pr "background" ""
+            nsm_prop(href): pr "href" ""
+            nsm_prop(note): pr "note" ""
+            if(_): b [ concat(h): "<b>" h "</b>" ]
+            if(_): it [ concat(h): "<i>" h "</i>" ]
+            if(_): u [ concat(h): "<u>" h "</u>" ]
+            if(_): s [ concat(h): "<s>" h "</s>" ]
+            if(_): sub [ concat(h): "<sub>" h "</sub>" ]
+            if(_): sup [ concat(h): "<sup>" h "</sup>" ]
+            set(css): ""
+            if(_): {color != ""} [ concat(css): "color:" color ";" ]
+            if(_): {bg != ""} [ concat(css): css "background:" bg ";" ]
+            if(_): {css != ""} [ concat(h): "<span style=\"" css "\">" h "</span>" ]
+            if(_): {href != ""} [
+                nsm_html_escape(he): href
+                concat(h): "<a href=\"" he "\">" h "</a>"
+            ]
+            if(_): {note != ""} [
+                push(_): notes note
+                len(nn): notes
+                str_from_int(ns): nn
+                concat(h): h "<sup><a href=\"#note" ns "\">" ns "</a></sup>"
+            ]
+            concat(body): body h
+            set(j): {j + 1}
+        ]
+        btget(level): p "level"
+        btget(align): p "align"
+        set(style): ""
+        if(_): {align != "left"} [ concat(style): " style=\"text-align:" align "\"" ]
+        if(_): {lst != ""} [ concat(r): r "<li>" body "</li>\n" ]
+        elif(_): {level > 0} [
+            str_from_int(ls): level
+            concat(r): r "<h" ls style ">" body "</h" ls ">\n"
+        ]
+        else(_): [ concat(r): r "<p" style ">" body "</p>\n" ]
+        set(i): {i + 1}
+    ]
+    if(_): {inlist = "number"} [ concat(r): r "</ol>\n" ]
+    if(_): {inlist = "bullet"} [ concat(r): r "</ul>\n" ]
+    len(nn): notes
+    if(_): {nn > 0} [
+        concat(r): r "<hr>\n<ol>\n"
+        set(i): 0
+        while(_): {i < nn} [
+            at(x): notes i
+            nsm_html_escape(h): x
+            str_from_int(ns): {i + 1}
+            concat(r): r "<li id=\"note" ns "\">" h "</li>\n"
+            set(i): {i + 1}
+        ]
+        concat(r): r "</ol>\n"
+    ]
+    concat(r): r "</body>\n</html>\n"
+]
+
+nsm_markdown(r): d [
+    set(r): ""
+    btget(paras): d "paras"
+    vec(notes): ""
+    set(prevlist): ""
+    set(num): 0
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        nsm_pieces(pieces): p
+        set(body): ""
+        len(np): pieces
+        set(j): 0
+        while(_): {j < np} [
+            at(pc): pieces j
+            at(x): pc 0
+            at(pr): pc 1
+            set(h): x
+            nsm_prop(b): pr "bold" false
+            nsm_prop(it): pr "italic" false
+            nsm_prop(s): pr "strike" false
+            nsm_prop(href): pr "href" ""
+            nsm_prop(note): pr "note" ""
+            if(_): b [ concat(h): "**" h "**" ]
+            if(_): it [ concat(h): "*" h "*" ]
+            if(_): s [ concat(h): "~~" h "~~" ]
+            if(_): {href != ""} [ concat(h): "[" h "](" href ")" ]
+            if(_): {note != ""} [
+                push(_): notes note
+                len(nn): notes
+                str_from_int(ns): nn
+                concat(h): h "[^" ns "]"
+            ]
+            concat(body): body h
+            set(j): {j + 1}
+        ]
+        btget(level): p "level"
+        btget(lst): p "list"
+        btget(depth): p "depth"
+        if(_): {lst != "number"} [ set(num): 0 ]
+        if(_): {prevlist != "" && lst = ""} [ concat(r): r "\n" ]
+        if(_): {lst = "bullet"} [
+            str_repeat(ind): "  " {depth - 1}
+            concat(r): r ind "- " body "\n"
+        ]
+        elif(_): {lst = "number"} [
+            set(num): {num + 1}
+            str_from_int(ns): num
+            str_repeat(ind): "   " {depth - 1}
+            concat(r): r ind ns ". " body "\n"
+        ]
+        elif(_): {level > 0} [
+            str_repeat(hs): "#" level
+            concat(r): r hs " " body "\n\n"
+        ]
+        else(_): [ concat(r): r body "\n\n" ]
+        set(prevlist): lst
+        set(i): {i + 1}
+    ]
+    len(nn): notes
+    set(i): 0
+    while(_): {i < nn} [
+        at(x): notes i
+        str_from_int(ns): {i + 1}
+        concat(r): r "[^" ns "]: " x "\n"
+        set(i): {i + 1}
+    ]
+]
+
+# plain text; numbers: each line numbered (code and legal text)
+nsm_text(r): d numbers [
+    set(r): ""
+    btget(paras): d "paras"
+    set(num): 0
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(t): p "text"
+        btget(lst): p "list"
+        if(_): {lst = "bullet"} [ concat(t): "• " t ]
+        if(_): {lst = "number"} [
+            set(num): {num + 1}
+            str_from_int(ns): num
+            concat(t): ns ". " t
+        ]
+        else(_): [ set(num): 0 ]
+        if(_): numbers [
+            str_from_int(ls): {i + 1}
+            str_pad_left(ls): ls 4 " "
+            concat(t): ls "  " t
+        ]
+        concat(r): r t "\n"
+        set(i): {i + 1}
+    ]
+]
+
+nsm_rtf_escape(r): s [
+    set(r): ""
+    text_bytes(b): s
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        set(cp): x
+        set(k): 1
+        if(_): {x >= 240} [
+            set(cp): {x & 7}
+            set(k): 4
+        ]
+        elif(_): {x >= 224} [
+            set(cp): {x & 15}
+            set(k): 3
+        ]
+        elif(_): {x >= 192} [
+            set(cp): {x & 31}
+            set(k): 2
+        ]
+        set(j): 1
+        while(_): {j < k && i + j < n} [
+            at(y): b {i + j}
+            set(cp): {(cp << 6) | (y & 63)}
+            set(j): {j + 1}
+        ]
+        set(i): {i + k}
+        if(_): {cp = 92 || cp = 123 || cp = 125} [
+            chr(c): cp
+            concat(r): r "\\" c
+        ]
+        elif(_): {cp >= 128} [
+            set(sv): cp
+            if(_): {sv > 32767} [ set(sv): {sv - 65536} ]
+            str_from_int(cs): sv
+            concat(r): r "\\u" cs "?"
+        ]
+        else(_): [
+            chr(c): cp
+            concat(r): r c
+        ]
+    ]
+]
+
+nsm_rtf(r): d [
+    set(r): "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Times New Roman;}}\n"
+    btget(paras): d "paras"
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(level): p "level"
+        btget(align): p "align"
+        set(pre): "\\pard"
+        if(_): {align = "center"} [ concat(pre): pre "\\qc" ]
+        if(_): {align = "right"} [ concat(pre): pre "\\qr" ]
+        if(_): {align = "justify"} [ concat(pre): pre "\\qj" ]
+        if(_): {level > 0} [
+            set(sz): {(30 - level * 2) * 2}
+            str_from_int(szs): sz
+            concat(pre): pre "\\b\\fs" szs
+        ]
+        concat(r): r pre " "
+        nsm_pieces(pieces): p
+        len(np): pieces
+        set(j): 0
+        while(_): {j < np} [
+            at(pc): pieces j
+            at(x): pc 0
+            at(pr): pc 1
+            nsm_rtf_escape(h): x
+            set(on): ""
+            nsm_prop(b): pr "bold" false
+            nsm_prop(it): pr "italic" false
+            nsm_prop(u): pr "underline" false
+            nsm_prop(s): pr "strike" false
+            if(_): b [ concat(on): on "\\b" ]
+            if(_): it [ concat(on): on "\\i" ]
+            if(_): u [ concat(on): on "\\ul" ]
+            if(_): s [ concat(on): on "\\strike" ]
+            if(_): {on != ""} [ concat(r): r "{" on " " h "}" ]
+            else(_): [ concat(r): r h ]
+            set(j): {j + 1}
+        ]
+        if(_): {level > 0} [ concat(r): r "\\b0\\fs24" ]
+        concat(r): r "\\par\n"
+        set(i): {i + 1}
+    ]
+    concat(r): r "}\n"
+]
+
+# --- Markdown, HTML, RTF in
+
+nsm_from_markdown(r): text [
+    nsm_new(r):
+    str_replace(t): text "\r" ""
+    str_split(lines): t "\n"
+    len(n): lines
+    set(para): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        str_trim(tl): l
+        re_find(h): "^(#{1,6}) +(.*)$" tl
+        re_find(bul): "^( *)[-*+] +(.*)$" l
+        re_find(num): "^( *)[0-9]+[.)] +(.*)$" l
+        typeof(ht): h
+        typeof(bt): bul
+        typeof(nt): num
+        set(special): {ht = "vector" || bt = "vector" || nt = "vector" || tl = ""}
+        if(_): {special && para != ""} [
+            nsm_md_para(p): para
+            nsm_add(_): r p
+            set(para): ""
+        ]
+        if(_): {ht = "vector"} [
+            at(hs): h 1
+            at(body): h 2
+            nsm_md_para(p): body
+            len(lv): hs
+            btput(_): p "level" lv
+            nsm_add(_): r p
+        ]
+        elif(_): {bt = "vector" || nt = "vector"} [
+            set(m): bul
+            set(kind): "bullet"
+            if(_): {nt = "vector"} [
+                set(m): num
+                set(kind): "number"
+            ]
+            at(ind): m 1
+            at(body): m 2
+            nsm_md_para(p): body
+            btput(_): p "list" kind
+            len(il): ind
+            set(dep): {il / 2 + 1}
+            str_trunc(dep): dep
+            btput(_): p "depth" dep
+            nsm_add(_): r p
+        ]
+        elif(_): {tl != ""} [
+            if(_): {para != ""} [ concat(para): para " " ]
+            concat(para): para tl
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {para != ""} [
+        nsm_md_para(p): para
+        nsm_add(_): r p
+    ]
+]
+
+# a paragraph from Markdown inline marks: **bold**, *italic*, ~~strike~~,
+# [text](url), `code`
+nsm_md_para(r): md [
+    nsm_para(r): ""
+    btree(none):
+    set(rest): md
+    set(go): true
+    while(_): go [
+        re_pos(m): "\\*\\*([^*]+)\\*\\*|\\*([^*]+)\\*|~~([^~]+)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)|`([^`]+)`" rest
+        typeof(mt): m
+        if(_): {mt != "vector"} [
+            nsm_add_piece(_): r rest none
+            set(go): false
+        ]
+        else(_): [
+            at(ws): m 0
+            at(we): m 1
+            slice(before): rest 0 ws
+            nsm_add_piece(_): r before none
+            slice(tok): rest ws {we - ws}
+            btree(pr):
+            set(inner): tok
+            str_starts(b2): tok "**"
+            str_starts(s2): tok "~~"
+            str_starts(lk): tok "["
+            str_starts(cd): tok "`"
+            len(tkl): tok
+            if(_): b2 [
+                btput(_): pr "bold" true
+                slice(inner): tok 2 {tkl - 4}
+            ]
+            elif(_): s2 [
+                btput(_): pr "strike" true
+                slice(inner): tok 2 {tkl - 4}
+            ]
+            elif(_): lk [
+                re_find(lm): "^\\[([^\\]]+)\\]\\(([^)]+)\\)$" tok
+                at(inner): lm 1
+                at(url): lm 2
+                btput(_): pr "href" url
+            ]
+            elif(_): cd [
+                btput(_): pr "font" "Liberation Mono"
+                slice(inner): tok 1 {tkl - 2}
+            ]
+            else(_): [
+                btput(_): pr "italic" true
+                slice(inner): tok 1 {tkl - 2}
+            ]
+            nsm_add_piece(_): r inner pr
+            len(rl): rest
+            slice(rest): rest we {rl - we}
+        ]
+    ]
+]
+
+nsm_add_piece(r): p text props [
+    set(r): 0
+    if(_): {text = ""} [ return(r): r ]
+    vec(stack): ""
+    push(_): stack props
+    btget(href): props "href" ""
+    nsm_append(_): p text stack href
+]
+
+nsm_from_html(r): text [
+    nsm_new(r):
+    re_find(tm): "<title>([^<]*)</title>" text
+    typeof(tt): tm
+    if(_): {tt = "vector"} [
+        btget(meta): r "meta"
+        at(x): tm 1
+        btput(_): meta "title" x
+    ]
+    str_find(bs): text "<body" 0
+    set(i): 0
+    if(_): {bs >= 0} [ set(i): bs ]
+    len(n): text
+    set(p): null
+    vec(stack): ""
+    set(href): ""
+    set(listkind): ""
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): {b != 60} [
+            sb_next_lt(j): text i n
+            slice(raw): text i {j - i}
+            sb_xml_unescape(t): raw
+            re_replace(t): "[ \\t\\r\\n]+" t " "
+            if(_): {p != null && t != " "} [ nsm_append(_): p t stack href ]
+            set(i): j
+        ]
+        else(_): [
+            sb_xml_tag(tag): text i
+            at(kind): tag 0
+            at(name): tag 1
+            at(attrs): tag 2
+            at(i): tag 3
+            str_lower(nm): name
+            re_test(block): "^(p|h[1-6]|li|div)$" nm
+            if(_): {block && kind != "close"} [
+                nsm_para(p): ""
+                vec(stack): ""
+                re_find(hm): "^h([1-6])$" nm
+                typeof(hmt): hm
+                if(_): {hmt = "vector"} [
+                    at(lv): hm 1
+                    str_to_int(lvn): lv 10
+                    btput(_): p "level" lvn
+                ]
+                if(_): {nm = "li"} [ btput(_): p "list" listkind ]
+                nsm_add(_): r p
+            ]
+            elif(_): {block && kind = "close"} [ set(p): null ]
+            elif(_): {nm = "ul" && kind = "open"} [ set(listkind): "bullet" ]
+            elif(_): {nm = "ol" && kind = "open"} [ set(listkind): "number" ]
+            elif(_): {(nm = "ul" || nm = "ol") && kind = "close"} [ set(listkind): "" ]
+            elif(_): {nm = "br"} [
+                if(_): {p != null} [ nsm_append(_): p " " stack href ]
+            ]
+            elif(_): {nm = "a"} [
+                if(_): {kind = "open"} [
+                    sb_xml_attr(h): attrs "href"
+                    set(href): ""
+                    if(_): {h != null} [ set(href): h ]
+                ]
+                else(_): [ set(href): "" ]
+            ]
+            else(_): [
+                btree(pr):
+                set(known): true
+                if(_): {nm = "b" || nm = "strong"} [ btput(_): pr "bold" true ]
+                elif(_): {nm = "i" || nm = "em"} [ btput(_): pr "italic" true ]
+                elif(_): {nm = "u"} [ btput(_): pr "underline" true ]
+                elif(_): {nm = "s" || nm = "del" || nm = "strike"} [ btput(_): pr "strike" true ]
+                elif(_): {nm = "sub"} [ btput(_): pr "sub" true ]
+                elif(_): {nm = "sup"} [ btput(_): pr "sup" true ]
+                else(_): [ set(known): false ]
+                if(_): {known && kind = "open"} [ push(_): stack pr ]
+                if(_): {known && kind = "close"} [
+                    len(ns): stack
+                    if(_): {ns > 0} [ pop(_): stack ]
+                ]
+            ]
+        ]
+    ]
+]
+
+# RTF in: the text, paragraphs at \par, \b \i \ul \strike as spans
+nsm_from_rtf(r): text [
+    nsm_new(r):
+    nsm_para(p): ""
+    nsm_add(_): r p
+    btree(state):
+    vec(saved): ""
+    set(skipdepth): -1
+    set(depth): 0
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): {b = 123} [
+            set(depth): {depth + 1}
+            nsm_copy_props(c): state
+            push(_): saved c
+            set(i): {i + 1}
+            # destinations that are not text: font tables and the like
+            nsm_slice(peek): text i 12
+            re_test(dest): "^\\\\(\\*|fonttbl|colortbl|stylesheet|info|pict)" peek
+            if(_): {dest && skipdepth < 0} [ set(skipdepth): depth ]
+        ]
+        elif(_): {b = 125} [
+            if(_): {depth = skipdepth} [ set(skipdepth): -1 ]
+            set(depth): {depth - 1}
+            len(ns): saved
+            if(_): {ns > 0} [ pop(state): saved ]
+            set(i): {i + 1}
+        ]
+        elif(_): {b = 92} [
+            nsm_slice(peek): text i 24
+            re_find(cw): "^\\\\([a-z]+)(-?[0-9]+)? ?" peek
+            typeof(ct): cw
+            if(_): {ct = "vector"} [
+                at(whole): cw 0
+                at(word): cw 1
+                at(arg): cw 2
+                len(wl): whole
+                set(i): {i + wl}
+                if(_): {skipdepth < 0} [
+                    if(_): {word = "par" || word = "line"} [
+                        nsm_para(p): ""
+                        nsm_add(_): r p
+                    ]
+                    elif(_): {word = "b" || word = "i" || word = "ul" || word = "strike"} [
+                        set(key): "bold"
+                        if(_): {word = "i"} [ set(key): "italic" ]
+                        if(_): {word = "ul"} [ set(key): "underline" ]
+                        if(_): {word = "strike"} [ set(key): "strike" ]
+                        if(_): {arg = "0"} [ btdel(_): state key ]
+                        else(_): [ btput(_): state key true ]
+                    ]
+                    elif(_): {word = "ulnone"} [ btdel(_): state "underline" ]
+                    elif(_): {word = "u"} [
+                        str_to_int(cp): arg 10
+                        if(_): {cp < 0} [ set(cp): {cp + 65536} ]
+                        str_utf8_char(c): cp
+                        nsm_rtf_put(_): p c state
+                        # the replacement character after \uN
+                        if(_): {i < n} [
+                            byte(rc): text i
+                            if(_): {rc = 63} [ set(i): {i + 1} ]
+                        ]
+                    ]
+                    elif(_): {word = "tab"} [ nsm_rtf_put(_): p "\t" state ]
+                ]
+            ]
+            else(_): [
+                # \\ \{ \} and \'hh
+                nsm_slice(two): text {i + 1} 1
+                if(_): {two = "'"} [
+                    nsm_slice(hx): text {i + 2} 2
+                    str_to_int(code): hx 16
+                    chr(c): code
+                    if(_): {skipdepth < 0} [ nsm_rtf_put(_): p c state ]
+                    set(i): {i + 4}
+                ]
+                else(_): [
+                    if(_): {skipdepth < 0 && (two = "\\" || two = "{" || two = "}")} [ nsm_rtf_put(_): p two state ]
+                    set(i): {i + 2}
+                ]
+            ]
+        ]
+        elif(_): {b = 10 || b = 13} [ set(i): {i + 1} ]
+        else(_): [
+            slice(c): text i 1
+            if(_): {skipdepth < 0} [ nsm_rtf_put(_): p c state ]
+            set(i): {i + 1}
+        ]
+    ]
+    # the last paragraph is empty after a final \par
+    btget(paras): r "paras"
+    len(np): paras
+    if(_): {np > 1} [
+        at(last): paras {np - 1}
+        btget(lt): last "text"
+        if(_): {lt = ""} [ pop(_): paras ]
+    ]
+]
+
+nsm_copy_props(r): pr [
+    btree(r):
+    btkeys(ks): pr
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(v): pr k
+        btput(_): r k v
+        set(i): {i + 1}
+    ]
+]
+
+nsm_rtf_put(r): p c state [
+    vec(stack): ""
+    nsm_copy_props(c2): state
+    push(_): stack c2
+    nsm_append(r): p c stack ""
+]
+
+# --- find and replace
+
+# [[paragraph start end]...]; regex: pattern is a regular expression
+nsm_find(r): d pattern regex case [
+    vec(r): ""
+    btget(paras): d "paras"
+    len(n): paras
+    set(pat): pattern
+    if(_): {regex = false} [ re_escape_tl(pat): pattern ]
+    set(flags): ""
+    if(_): {case = false} [ set(flags): "i" ]
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(t): p "text"
+        set(from): 0
+        len(tl): t
+        set(go): true
+        while(_): {go && from <= tl} [
+            re_pos(m): pat t from flags
+            typeof(mt): m
+            if(_): {mt != "vector"} [ set(go): false ]
+            else(_): [
+                at(a): m 0
+                at(b): m 1
+                vec(e): ""
+                push(_): e i
+                push(_): e a
+                push(_): e b
+                push(_): r e
+                set(from): b
+                if(_): {b = a} [ set(from): {b + 1} ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+re_escape_tl(r): s [
+    re_replace(r): "([\\\\.^$|?*+()\\[\\]{}])" s "\\\\\\1"
+]
+
+nsm_replace(r): d find repl regex case [
+    set(r): 0
+    btget(paras): d "paras"
+    set(pat): find
+    if(_): {regex = false} [ re_escape_tl(pat): find ]
+    set(flags): ""
+    if(_): {case = false} [ set(flags): "i" ]
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(t): p "text"
+        re_all(hits): pat t flags
+        typeof(ht): hits
+        if(_): {ht = "vector"} [
+            len(k): hits
+            if(_): {k > 0} [
+                set(rp): repl
+                if(_): {regex = false} [ str_replace(rp): repl "\\" "\\\\" ]
+                re_replace(t2): pat t rp flags
+                btput(_): p "text" t2
+                # the text moved: its spans go
+                vec(none): ""
+                btput(_): p "spans" none
+                set(r): {r + k}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- statistics
+
+nsm_stats(r): d [
+    btree(r):
+    btget(paras): d "paras"
+    set(words): 0
+    set(chars): 0
+    set(nospace): 0
+    set(sentences): 0
+    btree(counts):
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(t): p "text"
+        utf8_count(c): t
+        set(chars): {chars + c}
+        re_replace(ns): "\\s" t ""
+        utf8_count(c2): ns
+        set(nospace): {nospace + c2}
+        re_all(ws): "[^\\s.,;:!?()«»\"“”—–-]+" t
+        typeof(wt): ws
+        if(_): {wt = "vector"} [
+            len(nw): ws
+            set(words): {words + nw}
+            set(k): 0
+            while(_): {k < nw} [
+                at(w): ws k
+                str_lower(lw): w
+                utf8_count(wl): lw
+                if(_): {wl > 3} [
+                    btget(c): counts lw 0
+                    btput(_): counts lw {c + 1}
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        re_all(ss): "[.!?…]+(\\s|$)" t
+        typeof(st): ss
+        set(ns_): 0
+        if(_): {st = "vector"} [ len(ns_): ss ]
+        str_trim(tt): t
+        if(_): {ns_ = 0 && tt != ""} [ set(ns_): 1 ]
+        set(sentences): {sentences + ns_}
+        set(i): {i + 1}
+    ]
+    btput(_): r "words" words
+    btput(_): r "chars" chars
+    btput(_): r "chars_no_spaces" nospace
+    btput(_): r "paragraphs" n
+    btput(_): r "sentences" sentences
+    set(avg): 0
+    if(_): {sentences > 0} [ set(avg): {words / (sentences * 1.0)} ]
+    btput(_): r "words_per_sentence" avg
+    set(mins): {words / 200.0}
+    btput(_): r "reading_minutes" mins
+    # words used three times or more, most first
+    vec(rep): ""
+    btkeys(ks): counts
+    btree(ord):
+    len(nk): ks
+    set(k): 0
+    while(_): {k < nk} [
+        at(w): ks k
+        btget(c): counts w
+        if(_): {c >= 3} [
+            str_from_int(cs): {100000 - c}
+            str_pad_left(cs): cs 6 "0"
+            concat(key): cs " " w
+            btput(_): ord key w
+        ]
+        set(k): {k + 1}
+    ]
+    btkeys(ok): ord
+    len(no): ok
+    set(k): 0
+    while(_): {k < no && k < 10} [
+        at(key): ok k
+        btget(w): ord key
+        btget(c): counts w
+        vec(e): ""
+        push(_): e w
+        push(_): e c
+        push(_): rep e
+        set(k): {k + 1}
+    ]
+    btput(_): r "repeated" rep
+]
+
+nsm_stats_line(r): d [
+    nsm_stats(s): d
+    btget(w): s "words"
+    btget(c): s "chars"
+    str_from_int(ws): w
+    str_from_int(cs): c
+    concat(r): ws " words, " cs " characters"
+]
+
+# --- typing aids
+
+# straight quotes, -- and ... as typographers set them
+nsm_autocorrect(r): text style [
+    set(open): "“"
+    set(close): "”"
+    if(_): {style = "ru"} [
+        set(open): "«"
+        set(close): "»"
+    ]
+    re_replace(r): "(^|[\\s(\\[{])\"" text "\\1OPENQ"
+    str_replace(r): r "\"" close
+    str_replace(r): r "OPENQ" open
+    re_replace(r): "(^|[\\s(\\[{])'" r "\\1‘"
+    str_replace(r): r "'" "’"
+    str_replace(r): r "---" "—"
+    str_replace(r): r "--" "—"
+    str_replace(r): r " - " " – "
+    str_replace(r): r "..." "…"
+    str_replace(r): r "(c)" "©"
+    str_replace(r): r "(tm)" "™"
+    str_replace(r): r "<<" "«"
+    str_replace(r): r ">>" "»"
+]
+
+nsm_specials(r): [
+    str_split(r): "« » „ “ ” ‘ ’ — – … № § © ® ™ ° ± × ÷ ≈ ≠ ≤ ≥ € ₽ £ ¥ • ‰ ¼ ½ ¾ ² ³ → ← ↑ ↓" " "
+]
+
+# word movement: the byte column of the next or previous word start
+nsm_word_right(r): text col [
+    len(n): text
+    set(r): col
+    # past the rest of this word, then the spaces
+    while(_): {r < n} [
+        byte(b): text r
+        if(_): {b = 32 || b = 9} [
+            while(_): {r < n} [
+                byte(b2): text r
+                if(_): {b2 != 32 && b2 != 9} [ return(r): r ]
+                set(r): {r + 1}
+            ]
+            return(r): r
+        ]
+        set(r): {r + 1}
+    ]
+]
+
+nsm_word_left(r): text col [
+    set(r): col
+    while(_): {r > 0} [
+        byte(b): text {r - 1}
+        if(_): {b = 32 || b = 9} [ set(r): {r - 1} ]
+        else(_): [
+            while(_): {r > 0} [
+                byte(b2): text {r - 1}
+                if(_): {b2 = 32 || b2 = 9} [ return(r): r ]
+                set(r): {r - 1}
+            ]
+            return(r): r
+        ]
+    ]
+]
+
+# smart Home: to the first non-blank, and from there to the line's start
+nsm_smart_home(r): text col [
+    set(first): 0
+    len(n): text
+    while(_): {first < n} [
+        byte(b): text first
+        if(_): {b != 32 && b != 9} [ set(n): first ]
+        else(_): [ set(first): {first + 1} ]
+    ]
+    set(r): first
+    if(_): {col = first} [ set(r): 0 ]
+]
+
+# --- structure: contents, outline, sections
+
+# headings: [[paragraph level text]...]
+nsm_toc(r): d [
+    vec(r): ""
+    btget(paras): d "paras"
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(lv): p "level"
+        if(_): {lv > 0} [
+            btget(t): p "text"
+            vec(e): ""
+            push(_): e i
+            push(_): e lv
+            push(_): e t
+            push(_): r e
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# the contents as text lines with dot leaders to a page (one page each
+# 40 paragraphs), width wide
+nsm_toc_text(r): d width [
+    set(r): ""
+    nsm_toc(t): d
+    len(n): t
+    set(i): 0
+    while(_): {i < n} [
+        at(e): t i
+        at(pi): e 0
+        at(lv): e 1
+        at(tx): e 2
+        str_repeat(ind): "  " {lv - 1}
+        concat(left): ind tx
+        set(page): {pi / 40 + 1}
+        str_trunc(page): page
+        str_from_int(ps): page
+        utf8_count(ll): left
+        len(pl): ps
+        set(dots): {width - ll - pl - 2}
+        if(_): {dots < 3} [ set(dots): 3 ]
+        str_repeat(leader): "." dots
+        concat(r): r left " " leader " " ps "\n"
+        set(i): {i + 1}
+    ]
+]
+
+# a heading's section: from it to the next heading of its level or higher
+nsm_section(r): d pi [
+    btget(paras): d "paras"
+    len(n): paras
+    at(p): paras pi
+    btget(lv): p "level"
+    set(r): {pi + 1}
+    while(_): {r < n} [
+        at(q): paras r
+        btget(ql): q "level"
+        if(_): {ql > 0 && ql <= lv} [ return(r): r ]
+        set(r): {r + 1}
+    ]
+]
+
+nsm_outline(r): d [
+    nsm_toc(r): d
+]
+
+# moves heading pi's section before the previous section of its level
+# (dir -1) or after the next (dir 1); its new paragraph index
+nsm_move_section(r): d pi dir [
+    btget(paras): d "paras"
+    nsm_section(end): d pi
+    at(p): paras pi
+    btget(lv): p "level"
+    set(r): pi
+    if(_): {dir < 0} [
+        # the previous heading of the same level
+        set(k): {pi - 1}
+        set(prev): -1
+        while(_): {k >= 0} [
+            at(q): paras k
+            btget(ql): q "level"
+            if(_): {ql > 0 && ql < lv} [ set(k): -1 ]
+            elif(_): {ql = lv} [
+                set(prev): k
+                set(k): -1
+            ]
+            set(k): {k - 1}
+        ]
+        if(_): {prev < 0} [ return(r): r ]
+        nsm_rotate(_): d prev pi end
+        set(r): prev
+    ]
+    else(_): [
+        len(n): paras
+        if(_): {end >= n} [ return(r): r ]
+        at(q): paras end
+        btget(ql): q "level"
+        if(_): {ql != lv} [ return(r): r ]
+        nsm_section(end2): d end
+        nsm_rotate(_): d pi end end2
+        set(r): {pi + end2 - end}
+    ]
+]
+
+# paragraphs [a, m) and [m, e) swapped
+nsm_rotate(r): d a m e [
+    btget(paras): d "paras"
+    vec(out): ""
+    len(n): paras
+    set(i): 0
+    while(_): {i < a} [
+        at(x): paras i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    set(i): m
+    while(_): {i < e} [
+        at(x): paras i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    set(i): a
+    while(_): {i < m} [
+        at(x): paras i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    set(i): e
+    while(_): {i < n} [
+        at(x): paras i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    btput(_): d "paras" out
+    set(r): 0
+]
+
+# --- comparing documents: [[op text]...] op " " same, "-" only in a,
+# "+" only in b
+nsm_compare(r): a b [
+    btget(pa): a "paras"
+    btget(pb): b "paras"
+    vec(ta): ""
+    vec(tb): ""
+    len(n): pa
+    set(i): 0
+    while(_): {i < n} [
+        at(p): pa i
+        btget(t): p "text"
+        push(_): ta t
+        set(i): {i + 1}
+    ]
+    len(m): pb
+    set(i): 0
+    while(_): {i < m} [
+        at(p): pb i
+        btget(t): p "text"
+        push(_): tb t
+        set(i): {i + 1}
+    ]
+    vec(tab): ""
+    set(sz): {(n + 1) * (m + 1)}
+    set(i): 0
+    while(_): {i < sz} [
+        push(_): tab 0
+        set(i): {i + 1}
+    ]
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        set(j): {m - 1}
+        while(_): {j >= 0} [
+            at(x): ta i
+            at(y): tb j
+            if(_): {x = y} [
+                at(v): tab {(i + 1) * (m + 1) + j + 1}
+                set(tab): {i * (m + 1) + j} {v + 1}
+            ]
+            else(_): [
+                at(v1): tab {(i + 1) * (m + 1) + j}
+                at(v2): tab {i * (m + 1) + j + 1}
+                set(mx): v1
+                if(_): {v2 > v1} [ set(mx): v2 ]
+                set(tab): {i * (m + 1) + j} mx
+            ]
+            set(j): {j - 1}
+        ]
+        set(i): {i - 1}
+    ]
+    vec(r): ""
+    set(i): 0
+    set(j): 0
+    while(_): {i < n || j < m} [
+        vec(e): ""
+        set(same): false
+        if(_): {i < n && j < m} [
+            at(x): ta i
+            at(y): tb j
+            set(same): {x = y}
+        ]
+        if(_): same [
+            push(_): e " "
+            at(x): ta i
+            push(_): e x
+            set(i): {i + 1}
+            set(j): {j + 1}
+        ]
+        else(_): [
+            set(down): 0
+            set(right): 0
+            if(_): {i < n} [ at(down): tab {(i + 1) * (m + 1) + j} ]
+            if(_): {j < m} [ at(right): tab {i * (m + 1) + j + 1} ]
+            if(_): {j >= m || (i < n && down >= right)} [
+                push(_): e "-"
+                at(x): ta i
+                push(_): e x
+                set(i): {i + 1}
+            ]
+            else(_): [
+                push(_): e "+"
+                at(y): tb j
+                push(_): e y
+                set(j): {j + 1}
+            ]
+        ]
+        push(_): r e
+    ]
+]
+
+# --- templates and fields
+
+nsm_template(r): name [
+    nsm_new(r):
+    vec(lines): ""
+    if(_): {name = "letter"} [
+        str_split(lines): "R|{author}|{date}|P|Dear ...,|P||P|Yours sincerely,|P|{author}" "|"
+    ]
+    elif(_): {name = "report"} [
+        str_split(lines): "1|{title}|P|{author}, {date}|1|Summary|P||1|Introduction|P||1|Results|P||1|Conclusions|P|" "|"
+    ]
+    elif(_): {name = "notes"} [
+        str_split(lines): "2|Notes, {date}|B|...|B|...|B|..." "|"
+    ]
+    else(_): [
+        set(r): null
+        return(r): r
+    ]
+    len(n): lines
+    set(i): 0
+    while(_): {i + 1 < n} [
+        at(kind): lines i
+        at(t): lines {i + 1}
+        nsm_para(p): t
+        if(_): {kind = "1" || kind = "2"} [
+            str_to_int(lv): kind 10
+            btput(_): p "level" lv
+        ]
+        if(_): {kind = "R"} [ btput(_): p "align" "right" ]
+        if(_): {kind = "B"} [ btput(_): p "list" "bullet" ]
+        nsm_add(_): r p
+        set(i): {i + 2}
+    ]
+]
+
+# {date} {title} {author} {file} {paragraphs} {words} in text
+nsm_fields(r): d text path [
+    set(r): text
+    time(t):
+    localtime(lt): t
+    at(y): lt 0
+    at(mo): lt 1
+    at(dd): lt 2
+    str_from_int(ys): y
+    str_from_int(ms): mo
+    str_pad_left(ms): ms 2 "0"
+    str_from_int(ds): dd
+    str_pad_left(ds): ds 2 "0"
+    concat(date): ys "-" ms "-" ds
+    btget(meta): d "meta"
+    btget(title): meta "title" ""
+    btget(author): meta "author" ""
+    nsm_stats(st): d
+    btget(w): st "words"
+    btget(np): st "paragraphs"
+    str_from_int(ws): w
+    str_from_int(nps): np
+    str_replace(r): r "{date}" date
+    str_replace(r): r "{title}" title
+    str_replace(r): r "{author}" author
+    str_replace(r): r "{file}" path
+    str_replace(r): r "{words}" ws
+    str_replace(r): r "{paragraphs}" nps
+]
+
+nsm_fill_fields(r): d path [
+    set(r): 0
+    btget(paras): d "paras"
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(t): p "text"
+        str_contains(has): t "{"
+        if(_): has [
+            nsm_fields(t2): d t path
+            if(_): {t2 != t} [
+                btput(_): p "text" t2
+                vec(none): ""
+                btput(_): p "spans" none
+                set(r): {r + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- undo for the pad: snapshots of the paragraph texts
+
+nsm_snapshot(r): [
+    set(paras): sb_paras?
+    vec(r): ""
+    len(n): paras
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        getf(t): p "text"
+        push(_): r t
+        set(i): {i + 1}
+    ]
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    vec(c): ""
+    push(_): c row
+    push(_): c col
+    push(_): r c
+]
+
+nsm_restore(r): snap [
+    vec(paras): "SbPara"
+    len(n): snap
+    set(i): 0
+    while(_): {i < n - 1} [
+        at(t): snap i
+        new(p): "SbPara" t
+        push(_): paras p
+        set(i): {i + 1}
+    ]
+    set(sb_paras): paras!
+    at(c): snap {n - 1}
+    at(row): c 0
+    at(col): c 1
+    set(sb_prow): row!
+    set(sb_pcol): col!
+    set(r): 0
+]
+
+# before a change: kind groups typing into one step ("type", "delete" or
+# "" for a step of its own)
+nsm_push_undo(r): kind [
+    set(r): 0
+    set(last): sb_undo_kind?
+    set(sb_undo_kind): kind!
+    if(_): {kind != "" && kind = last} [ return(r): r ]
+    nsm_snapshot(s):
+    set(u): sb_pundo?
+    push(_): u s
+    len(n): u
+    if(_): {n > 200} [
+        vec(keep): ""
+        set(i): {n - 200}
+        while(_): {i < n} [
+            at(x): u i
+            push(_): keep x
+            set(i): {i + 1}
+        ]
+        set(u): keep
+    ]
+    set(sb_pundo): u!
+    vec(none): ""
+    set(sb_predo): none!
+]
+
+nsm_undo(r): [
+    set(u): sb_pundo?
+    len(n): u
+    set(r): false
+    if(_): {n = 0} [ return(r): r ]
+    nsm_snapshot(now):
+    set(rd): sb_predo?
+    push(_): rd now
+    set(sb_predo): rd!
+    pop(s): u
+    set(sb_pundo): u!
+    nsm_restore(_): s
+    set(sb_undo_kind): ""!
+    set(r): true
+]
+
+nsm_redo(r): [
+    set(rd): sb_predo?
+    len(n): rd
+    set(r): false
+    if(_): {n = 0} [ return(r): r ]
+    nsm_snapshot(now):
+    set(u): sb_pundo?
+    push(_): u now
+    set(sb_pundo): u!
+    pop(s): rd
+    set(sb_predo): rd!
+    nsm_restore(_): s
+    set(sb_undo_kind): ""!
+    set(r): true
+]
+
+nsm_state(r): [
+    vec(u): ""
+    set(sb_pundo): u!
+    vec(rd): ""
+    set(sb_predo): rd!
+    set(sb_undo_kind): ""!
+    set(sb_autocorrect): "en"!
+    set(r): 0
+]
+
+# --- the command line: --convert in out
+
+nsm_read_doc(r): path [
+    set(r): null
+    sb_read(text): path
+    if(_): {text = null} [ return(r): r ]
+    sb_extension(ext): path
+    if(_): {ext = ".fodt"} [ nsm_from_fodt(r): text ]
+    elif(_): {ext = ".md"} [ nsm_from_markdown(r): text ]
+    elif(_): {ext = ".html" || ext = ".htm"} [ nsm_from_html(r): text ]
+    elif(_): {ext = ".rtf"} [ nsm_from_rtf(r): text ]
+    else(_): [
+        sbpadreset(_):
+        sbpadsettext(_): text
+        nsm_from_pad(r):
+    ]
+]
+
+nsm_doc_text(r): d path [
+    sb_extension(ext): path
+    if(_): {ext = ".fodt"} [ nsm_fodt(r): d ]
+    elif(_): {ext = ".md"} [ nsm_markdown(r): d ]
+    elif(_): {ext = ".html" || ext = ".htm"} [ nsm_html(r): d ]
+    elif(_): {ext = ".rtf"} [ nsm_rtf(r): d ]
+    else(_): [ nsm_text(r): d false ]
+]
+
+# 0 when it converted, 1 when it could not, -1 when the arguments are not
+# a conversion
+nsm_cli(r): args [
+    set(r): -1
+    len(n): args
+    if(_): {n < 1} [ return(r): r ]
+    at(a0): args 0
+    if(_): {a0 != "--convert" && a0 != "--stats"} [ return(r): r ]
+    set(r): 2
+    if(_): {(a0 = "--convert" && n != 3) || (a0 = "--stats" && n != 2)} [
+        print(_): "usage: ussr novosibirsk.su --convert IN OUT   (.fodt .txt .md .html .rtf)"
+        print(_): "       ussr novosibirsk.su --stats FILE"
+        return(r): r
+    ]
+    at(src): args 1
+    nsm_read_doc(d): src
+    set(r): 1
+    if(_): {d = null} [
+        concat(m): "novosibirsk: cannot read " src
+        print(_): m
+        return(r): r
+    ]
+    if(_): {a0 = "--stats"} [
+        nsm_stats(s): d
+        btget(w): s "words"
+        btget(c): s "chars"
+        btget(se): s "sentences"
+        btget(rm): s "reading_minutes"
+        str_from_int(ws): w
+        str_from_int(cs): c
+        str_from_int(ss): se
+        str_from_number(rms): rm 1
+        concat(m): ws " words, " cs " characters, " ss " sentences, " rms " minutes to read"
+        print(_): m
+        set(r): 0
+        return(r): r
+    ]
+    at(dst): args 2
+    nsm_doc_text(t): d dst
+    sb_write(_): dst t
+    set(r): 0
+    concat(m): "novosibirsk: wrote " dst
+    print(_): m
+]
+
+nsm_convert(r): src dst [
+    vec(a): ""
+    push(_): a "--convert"
+    push(_): a src
+    push(_): a dst
+    nsm_cli(r): a
+]
+
+# a slice that stops at the end of the text
+nsm_slice(r): s from count [
+    len(n): s
+    set(r): ""
+    if(_): {from >= n} [ return(r): r ]
+    if(_): {from + count > n} [ set(count): {n - from} ]
+    slice(r): s from count
+]

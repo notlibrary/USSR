@@ -1,0 +1,417 @@
+# Novosibirsk refine pass 1 (src/novosibirsk/more.su), with no window:
+# character and paragraph formatting, headings, lists, links and notes;
+# flat ODF out and back in with automatic styles and metadata; HTML,
+# Markdown, text and RTF out; Markdown, HTML and RTF in; find and replace
+# with regex and case; statistics; autocorrect; word movement; contents,
+# outline and section moves; compare; templates and fields; undo and redo
+# of the pad; the command line. Run from the repository root.
+$include "../src/novosibirsk/novosibirsk.su"
+
+nm_check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(nmc_line): "PASS " label ]
+    else(_): [
+        set(nmc_g): got
+        set(nmc_w): want
+        typeof(nmc_gt): got
+        typeof(nmc_wt): want
+        if(_): {nmc_gt != "string"} [ encode(nmc_g): got ]
+        if(_): {nmc_wt != "string"} [ encode(nmc_w): want ]
+        concat(nmc_line): "FAIL " label ": got " nmc_g ", want " nmc_w
+    ]
+    print(_): nmc_line
+]
+
+nm_has(r): label text part [
+    str_contains(nmh_v): text part
+    nm_check(r): label nmh_v true
+]
+
+# a sample: a heading, a paragraph with bold, italic, a link and a note, a
+# list of two, a centred paragraph
+nm_sample(r): [
+    nsm_new(r):
+    btget(meta): r "meta"
+    btput(_): meta "title" "Report"
+    btput(_): meta "author" "Ivan"
+    nsm_para(h): "Introduction"
+    btput(_): h "level" 1
+    nsm_add(_): r h
+    nsm_para(p): "Bold and italic with a link."
+    nsm_add(pi): r p
+    nsm_format(_): r pi 0 4 "bold" true
+    nsm_format(_): r pi 9 15 "italic" true
+    nsm_format(_): r pi 23 27 "href" "https://example.org"
+    nsm_format(_): r pi 0 4 "note" "A note."
+    nsm_para(l1): "first"
+    btput(_): l1 "list" "bullet"
+    nsm_add(_): r l1
+    nsm_para(l2): "second"
+    btput(_): l2 "list" "bullet"
+    nsm_add(_): r l2
+    nsm_para(c): "Centred"
+    btput(_): c "align" "center"
+    btput(_): c "before" 5
+    nsm_add(_): r c
+]
+
+nm_format(r): [
+    nsm_new(d):
+    nsm_para(p): "abcdefghij"
+    nsm_add(_): d p
+    nsm_format(_): d 0 2 6 "bold" true
+    nsm_format(_): d 0 4 8 "italic" true
+    btget(sp): p "spans"
+    len(v): sp
+    nm_check(_): "overlapping formats split into spans" v 3
+    nsm_pieces(pc): p
+    vec(desc): ""
+    len(n): pc
+    set(i): 0
+    while(_): {i < n} [
+        at(e): pc i
+        at(t): e 0
+        at(pr): e 1
+        btkeys(ks): pr
+        str_join(kj): ks "+"
+        concat(x): t ":" kj
+        push(_): desc x
+        set(i): {i + 1}
+    ]
+    str_join(v): desc " "
+    nm_check(_): "the pieces" v "ab: cd:bold ef:bold+italic gh:italic ij:"
+    nsm_format(_): d 0 0 10 "bold" false
+    nsm_pieces(pc): p
+    len(v): pc
+    nm_check(_): "bold taken off everywhere" v 3
+    nsm_format(_): d 0 0 10 "italic" false
+    btget(sp): p "spans"
+    len(v): sp
+    nm_check(_): "no format: no spans" v 0
+    set(r): 0
+]
+
+nm_odf(r): [
+    nm_sample(d):
+    nsm_fodt(x): d
+    nm_has(_): "ODF: a heading" x "<text:h text:style-name=\"Heading_20_1\" text:outline-level=\"1\">Introduction</text:h>"
+    nm_has(_): "ODF: bold in an automatic style" x "fo:font-weight=\"bold\""
+    nm_has(_): "ODF: a link" x "xlink:href=\"https://example.org\""
+    nm_has(_): "ODF: a footnote" x "<text:note text:note-class=\"footnote\">"
+    nm_has(_): "ODF: a list" x "<text:list text:style-name=\"Bullet\">"
+    nm_has(_): "ODF: alignment" x "fo:text-align=\"center\""
+    nm_has(_): "ODF: metadata" x "<dc:title>Report</dc:title>"
+    nsm_from_fodt(b): x
+    btget(ps): b "paras"
+    len(v): ps
+    nm_check(_): "read back: the paragraphs" v 5
+    at(h): ps 0
+    btget(v): h "level"
+    nm_check(_): "the heading's level" v 1
+    at(p): ps 1
+    btget(v): p "text"
+    nm_check(_): "the text" v "Bold and italic with a link."
+    nsm_pieces(pc): p
+    at(first): pc 0
+    at(fp): first 1
+    btget(v): fp "bold" false
+    nm_check(_): "bold read back" v true
+    btget(v): fp "note" ""
+    nm_check(_): "the note read back" v "A note."
+    at(l1): ps 2
+    btget(v): l1 "list"
+    nm_check(_): "the list read back" v "bullet"
+    at(c): ps 4
+    btget(v): c "align"
+    nm_check(_): "the alignment read back" v "center"
+    btget(v): c "before"
+    nm_check(_): "the spacing read back" v 5
+    btget(meta): b "meta"
+    btget(v): meta "author"
+    nm_check(_): "the author read back" v "Ivan"
+    nsm_fodt(x2): b
+    nm_check(_): "ODF out, in and out again is the same" x2 x
+    # the pad still reads it (one font, plain paragraphs)
+    sbpadload(_): x "fodt"
+    sbpadtext(v):
+    str_starts(v): v "Introduction\nBold and italic"
+    nm_check(_): "the pad reads the same file" v true
+    set(r): 0
+]
+
+nm_formats(r): [
+    nm_sample(d):
+    nsm_html(h): d
+    nm_has(_): "HTML: a heading" h "<h1>Introduction</h1>"
+    nm_has(_): "HTML: bold with a note mark" h "<b>Bold</b><sup><a href=\"#note1\">1</a></sup>"
+    nm_has(_): "HTML: a link" h "<a href=\"https://example.org\">link</a>"
+    nm_has(_): "HTML: a list" h "<ul>\n<li>first</li>\n<li>second</li>\n</ul>"
+    nm_has(_): "HTML: centred" h "<p style=\"text-align:center\">Centred</p>"
+    nm_has(_): "HTML: the notes" h "<li id=\"note1\">A note.</li>"
+    nsm_markdown(m): d
+    nm_check(_): "Markdown" m "# Introduction\n\n**Bold**[^1] and *italic* with a [link](https://example.org).\n\n- first\n- second\n\nCentred\n\n[^1]: A note.\n"
+    nsm_text(t): d true
+    str_split(tl): t "\n"
+    at(v): tl 2
+    nm_check(_): "text with line numbers and bullets" v "   3  • first"
+    nsm_rtf(rtf): d
+    nm_has(_): "RTF: bold" rtf "{\\b Bold}"
+    nm_has(_): "RTF: centred" rtf "\\pard\\qc Centred\\par"
+    nsm_new(u):
+    nsm_para(up): "Привет"
+    nsm_add(_): u up
+    nsm_rtf(rtf2): u
+    nm_has(_): "RTF: Unicode" rtf2 "\\u1055?"
+    nsm_from_rtf(back): rtf
+    btget(ps): back "paras"
+    at(p): ps 1
+    btget(v): p "text"
+    nm_check(_): "RTF in: the text" v "Bold and italic with a link."
+    nsm_pieces(pc): p
+    at(first): pc 0
+    at(fp): first 1
+    btget(v): fp "bold" false
+    nm_check(_): "RTF in: bold" v true
+    nsm_from_rtf(back2): rtf2
+    btget(ps): back2 "paras"
+    at(p): ps 0
+    btget(v): p "text"
+    nm_check(_): "RTF in: Unicode" v "Привет"
+
+    nsm_from_markdown(md): "# Title\n\nSome **bold** and *it* text,\nwrapped.\n\n- a\n  - b\n1. one\n2. two\n\nA [link](http://x.org) and `code`.\n"
+    btget(ps): md "paras"
+    len(v): ps
+    nm_check(_): "Markdown in: paragraphs" v 7
+    at(p): ps 1
+    btget(v): p "text"
+    nm_check(_): "Markdown in: joined lines, marks gone" v "Some bold and it text, wrapped."
+    at(p): ps 3
+    btget(v): p "depth"
+    nm_check(_): "Markdown in: a nested item" v 2
+    at(p): ps 5
+    btget(v): p "list"
+    nm_check(_): "Markdown in: numbers" v "number"
+    at(p): ps 6
+    nsm_pieces(pc): p
+    at(lk): pc 1
+    at(lp): lk 1
+    btget(v): lp "href" ""
+    nm_check(_): "Markdown in: a link" v "http://x.org"
+    nsm_from_html(hd): "<html><head><title>T</title></head><body><h2>Head</h2><p>One <b>bold</b> <a href=\"u\">x</a></p><ol><li>first</li></ol></body></html>"
+    btget(ps): hd "paras"
+    len(v): ps
+    nm_check(_): "HTML in: paragraphs" v 3
+    at(p): ps 0
+    btget(v): p "level"
+    nm_check(_): "HTML in: a heading" v 2
+    at(p): ps 2
+    btget(v): p "list"
+    nm_check(_): "HTML in: a numbered list" v "number"
+    btget(meta): hd "meta"
+    btget(v): meta "title"
+    nm_check(_): "HTML in: the title" v "T"
+    set(r): 0
+]
+
+nm_tools(r): [
+    nsm_new(d):
+    nsm_para(a): "The cat sat on the mat. The CAT ran!"
+    nsm_add(_): d a
+    nsm_para(b): "No cats here, catalogue aside."
+    nsm_add(_): d b
+    nsm_find(hits): d "cat" false false
+    len(v): hits
+    nm_check(_): "find, any case" v 4
+    nsm_find(hits): d "cat" false true
+    len(v): hits
+    nm_check(_): "find, matching case" v 3
+    nsm_find(hits): d "\\bcat\\b" true false
+    len(v): hits
+    nm_check(_): "find with a regex" v 2
+    nsm_replace(n): d "\\bcat\\b" "dog" true false
+    nm_check(_): "replace with a regex" n 2
+    nsm_get(p): d 0
+    btget(v): p "text"
+    nm_check(_): "replaced" v "The dog sat on the mat. The dog ran!"
+    nsm_replace(n): d "." "!" false true
+    nm_check(_): "a dot is a dot without regex" n 2
+    nsm_stats(st): d
+    btget(v): st "words"
+    nm_check(_): "words" v 14
+    btget(v): st "sentences"
+    nm_check(_): "sentences" v 3
+    btget(rep): st "repeated"
+    len(v): rep
+    nm_check(_): "no word repeated three times" v 0
+    nsm_autocorrect(v): "He said \"yes\" -- and left..." "en"
+    nm_check(_): "autocorrect, English" v "He said “yes” — and left…"
+    nsm_autocorrect(v): "Он сказал \"да\" - и ушёл" "ru"
+    nm_check(_): "autocorrect, Russian" v "Он сказал «да» – и ушёл"
+    nsm_specials(sp):
+    at(v): sp 0
+    nm_check(_): "special characters" v "«"
+    nsm_word_right(v): "one two  three" 0
+    nm_check(_): "next word" v 4
+    nsm_word_right(v): "one two  three" 4
+    nm_check(_): "past two spaces" v 9
+    nsm_word_left(v): "one two  three" 9
+    nm_check(_): "previous word" v 4
+    nsm_smart_home(v): "    indented" 10
+    nm_check(_): "smart Home: the text's start" v 4
+    nsm_smart_home(v): "    indented" 4
+    nm_check(_): "and then the line's" v 0
+
+    nsm_template(t): "report"
+    nsm_toc(toc): t
+    len(v): toc
+    nm_check(_): "a report template's headings" v 5
+    nsm_toc_text(tt): t 30
+    str_split(tl): tt "\n"
+    at(v): tl 1
+    nm_check(_): "contents with leaders" v "Summary .................... 1"
+    btget(meta): t "meta"
+    btput(_): meta "title" "Annual"
+    btput(_): meta "author" "Olga"
+    nsm_fill_fields(v): t "x.fodt"
+    nm_check(_): "fields filled" v 2
+    nsm_get(p): t 0
+    btget(v): p "text"
+    nm_check(_): "the title field" v "Annual"
+    nsm_get(p): t 1
+    btget(v): p "text"
+    str_starts(v): v "Olga, 20"
+    nm_check(_): "author and date" v true
+    nsm_template(v): "nosuch"
+    nm_check(_): "no such template" v null
+
+    nsm_new(o):
+    str_split(rows): "1:A|0:a1|1:B|0:b1|0:b2|1:C" "|"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(x): rows i
+        str_split(kv): x ":"
+        at(lv): kv 0
+        at(tx): kv 1
+        str_to_int(lvn): lv 10
+        nsm_para(p): tx
+        btput(_): p "level" lvn
+        nsm_add(_): o p
+        set(i): {i + 1}
+    ]
+    nsm_move_section(v): o 2 -1
+    nm_check(_): "a section moved up" v 0
+    nm_texts(v): o
+    nm_check(_): "with its paragraphs" v "B b1 b2 A a1 C"
+    nsm_move_section(_): o 0 1
+    nm_texts(v): o
+    nm_check(_): "and back down" v "A a1 B b1 b2 C"
+    nsm_new(o2):
+    str_split(rows): "A|a1|X|b1|C" "|"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(x): rows i
+        nsm_para(p): x
+        nsm_add(_): o2 p
+        set(i): {i + 1}
+    ]
+    nsm_compare(diff): o o2
+    vec(ops): ""
+    len(n): diff
+    set(i): 0
+    while(_): {i < n} [
+        at(e): diff i
+        at(op): e 0
+        at(tx): e 1
+        concat(x): op tx
+        push(_): ops x
+        set(i): {i + 1}
+    ]
+    str_join(v): ops ","
+    nm_check(_): "compare two documents" v " A, a1,-B,+X, b1,-b2, C"
+    set(r): 0
+]
+
+nm_texts(r): d [
+    btget(ps): d "paras"
+    vec(t): ""
+    len(n): ps
+    set(i): 0
+    while(_): {i < n} [
+        at(p): ps i
+        btget(x): p "text"
+        push(_): t x
+        set(i): {i + 1}
+    ]
+    str_join(r): t " "
+]
+
+nm_undo(r): [
+    sbpadreset(_):
+    sbpadsettext(_): "hello"
+    set(sb_pcol): 5!
+    nsm_push_undo(_): "type"
+    sbpadtype(_): " "
+    nsm_push_undo(_): "type"
+    sbpadtype(_): "world"
+    nsm_push_undo(_): ""
+    sbpadkey(_): SB_KEY_ENTER
+    sbpadtype(_): "next"
+    sbpadtext(v):
+    nm_check(_): "typed" v "hello world\nnext"
+    nsm_undo(_):
+    sbpadtext(v):
+    nm_check(_): "undo the new paragraph" v "hello world"
+    nsm_undo(_):
+    sbpadtext(v):
+    nm_check(_): "typing is one step" v "hello"
+    nsm_undo(v):
+    nm_check(_): "nothing more to undo" v false
+    nsm_redo(_):
+    nsm_redo(_):
+    sbpadtext(v):
+    nm_check(_): "redo twice" v "hello world\nnext"
+    nsm_from_pad(d):
+    nsm_stats_line(v): d
+    nm_check(_): "the status line's count" v "3 words, 15 characters"
+    set(r): 0
+]
+
+nm_cli(r): [
+    nm_sample(d):
+    nsm_fodt(x): d
+    writefile(_): "tests/novosibirsk-more-tmp.fodt" x
+    nsm_convert(v): "tests/novosibirsk-more-tmp.fodt" "tests/novosibirsk-more-tmp.md"
+    nm_check(_): "--convert to Markdown" v 0
+    readfile(md): "tests/novosibirsk-more-tmp.md"
+    str_starts(v): md "# Introduction"
+    nm_check(_): "the Markdown" v true
+    nsm_convert(v): "tests/novosibirsk-more-tmp.md" "tests/novosibirsk-more-tmp.html"
+    readfile(h): "tests/novosibirsk-more-tmp.html"
+    nm_has(_): "Markdown to HTML" h "<h1>Introduction</h1>"
+    vec(a): ""
+    push(_): a "--stats"
+    push(_): a "tests/novosibirsk-more-tmp.md"
+    nsm_cli(v): a
+    nm_check(_): "--stats" v 0
+    vec(a): ""
+    push(_): a "--open"
+    nsm_cli(v): a
+    nm_check(_): "not the command line's" v -1
+    remove_file(_): "tests/novosibirsk-more-tmp.fodt"
+    remove_file(_): "tests/novosibirsk-more-tmp.md"
+    remove_file(_): "tests/novosibirsk-more-tmp.html"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    sbsetup(_):
+    nm_format(_):
+    nm_odf(_):
+    nm_formats(_):
+    nm_tools(_):
+    nm_undo(_):
+    nm_cli(_):
+]
