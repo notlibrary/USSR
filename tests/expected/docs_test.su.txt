@@ -1,0 +1,7 @@
+docs/BUILTINS.md is up to date
+broken links: 0
+the help table reads: more than 100 commands
+
+--- stderr ---
+
+--- exit 0 ---
