@@ -1,0 +1,3788 @@
+# more.su - Petersburg refine pass 1: what the native widgets do not do,
+# in USSR on top of them. Programs include it next to (or instead of)
+# petersburg.su; the scene, the rasteriser, the layout and the widget
+# models work without a window, so they run in headless tests.
+#
+# Scene (ps_*): retained shapes with ids, layers and z-order.
+#   ps_scene(s):                   an empty scene
+#   ps_add(id): s kind pts props   kind line polyline polygon rect circle
+#                                  arc bezier text image; pts [[x y]...];
+#                                  props a btree or null: color, fill (-1
+#                                  none), width, dash [on off ...], alpha
+#                                  0..1, rule evenodd|nonzero, grad [x1 y1
+#                                  c1 x2 y2 c2], radius, start, end, text,
+#                                  layer, z, clip [x y w h], img
+#   ps_set(_): s id key value / ps_get(v): s id key / ps_delete(_): s id
+#   ps_raise(_) / ps_lower(_): s id     ps_layer_shown(_): s layer on
+#   ps_translate(_): s id dx dy / ps_rotate(_): s id deg cx cy /
+#   ps_scale(_): s id sx sy cx cy
+#   ps_hit(id): s x y             the topmost shape under a point, or 0
+#   ps_draw(_): s canvas          onto a Petersburg canvas
+#   ps_raster(img): s w h bg      pixels (an Omsk image): fills with both
+#                                  rules, gradients, alpha, clipping, wide
+#                                  and dashed lines; text as blocks
+#   ps_png(_): img path / ps_ppm(_): img path / ps_crc(n): img
+#   ps_tui(s): s cols rows cw ch  the scene as text with box glyphs
+#   ps_text(s): s / ps_from_text(s): text   a scene as lines, and back
+# Layout (pl_*): pl_box, pl_grid, pl_anchor, pl_mirror, pl_scale.
+# Widgets drawn on a canvas (pw_*): progress, slider, spin, radio, tabs,
+#   group, splitter, status, tooltip, textarea, tree, table, scroll, date,
+#   colour, menu, rich label, file chooser; pw_render(_): w scene theme,
+#   pw_pointer(_): w x y what, pw_key(_): w key, pw_wheel(_): w dir.
+# Services (pb_*): undo stack, command table and accelerators, data
+#   binding, easing and tweens, timers, a clipboard, jobs with progress
+#   and cancel, focus order, event recording and replay, the widget tree,
+#   a declarative UI text, images from memory.
+# Themes (pt_*): light, dark, contrast; pt_color(c): theme name.
+$once
+$include "petersburg.su"
+$include "../libs/strings.su"
+$include "../libs/math.su"
+$include "../libs/lists.su"
+$include "../libs/paths.su"
+$include "../omsk/image.su"
+
+global(_): pb_clip pb_tree pb_recording
+
+# ---------------------------------------------------------------- scene
+
+ps_scene(r): [
+    btree(r):
+    btree(items):
+    btput(_): r "items" items
+    btput(_): r "next" 1
+    btput(_): r "ztop" 0
+    btree(hidden):
+    btput(_): r "hidden_layers" hidden
+    btput(_): r "dirty" null
+]
+
+ps_pt(r): x y [
+    vec(r): ""
+    push(_): r x
+    push(_): r y
+]
+
+ps_add(r): s kind pts props [
+    btget(r): s "next"
+    btput(_): s "next" {r + 1}
+    btget(z): s "ztop"
+    btput(_): s "ztop" {z + 1}
+    btree(it):
+    btput(_): it "id" r
+    btput(_): it "kind" kind
+    btput(_): it "pts" pts
+    btput(_): it "color" 0
+    btput(_): it "fill" -1
+    btput(_): it "width" 1
+    btput(_): it "alpha" 1.0
+    btput(_): it "rule" "nonzero"
+    btput(_): it "layer" 0
+    btput(_): it "z" {z + 1}
+    vec(tf): ""
+    push(_): tf 1.0
+    push(_): tf 0.0
+    push(_): tf 0.0
+    push(_): tf 1.0
+    push(_): tf 0.0
+    push(_): tf 0.0
+    btput(_): it "tf" tf
+    typeof(pt): props
+    if(_): {pt = "btree"} [
+        btkeys(ks): props
+        len(n): ks
+        set(i): 0
+        while(_): {i < n} [
+            at(k): ks i
+            btget(v): props k
+            btput(_): it k v
+            set(i): {i + 1}
+        ]
+    ]
+    btget(items): s "items"
+    btput(_): items r it
+    ps_touch(_): s it
+]
+
+# props from "key value key value ..." pairs in a vector
+ps_props(r): pairs [
+    btree(r):
+    len(n): pairs
+    set(i): 0
+    while(_): {i + 1 < n} [
+        at(k): pairs i
+        at(v): pairs {i + 1}
+        btput(_): r k v
+        set(i): {i + 2}
+    ]
+]
+
+ps_item(r): s id [
+    btget(items): s "items"
+    btget(r): items id null
+]
+
+ps_set(r): s id key value [
+    set(r): 0
+    ps_item(it): s id
+    if(_): {it = null} [ return(r): r ]
+    ps_touch(_): s it
+    btput(_): it key value
+    ps_touch(_): s it
+]
+
+ps_get(r): s id key [
+    set(r): null
+    ps_item(it): s id
+    if(_): {it != null} [ btget(r): it key null ]
+]
+
+ps_delete(r): s id [
+    ps_item(it): s id
+    set(r): false
+    if(_): {it = null} [ return(r): r ]
+    ps_touch(_): s it
+    btget(items): s "items"
+    btdel(r): items id
+]
+
+ps_raise(r): s id [
+    btget(z): s "ztop"
+    btput(_): s "ztop" {z + 1}
+    ps_set(r): s id "z" {z + 1}
+]
+
+ps_lower(r): s id [
+    btget(items): s "items"
+    btkeys(ks): items
+    set(lo): 0
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(it): items k
+        btget(z): it "z"
+        if(_): {z < lo} [ set(lo): z ]
+        set(i): {i + 1}
+    ]
+    ps_set(r): s id "z" {lo - 1}
+]
+
+ps_layer_shown(r): s layer on [
+    set(r): 0
+    btget(h): s "hidden_layers"
+    if(_): on [ btdel(_): h layer ]
+    else(_): [ btput(_): h layer true ]
+    btput(_): s "dirty" "all"
+]
+
+# transforms: [a b c d e f] maps (x, y) to (a x + c y + e, b x + d y + f)
+ps_tf_mul(r): t u [
+    # t after u
+    at(a1): t 0
+    at(b1): t 1
+    at(c1): t 2
+    at(d1): t 3
+    at(e1): t 4
+    at(f1): t 5
+    at(a2): u 0
+    at(b2): u 1
+    at(c2): u 2
+    at(d2): u 3
+    at(e2): u 4
+    at(f2): u 5
+    vec(r): ""
+    push(_): r {a1 * a2 + c1 * b2}
+    push(_): r {b1 * a2 + d1 * b2}
+    push(_): r {a1 * c2 + c1 * d2}
+    push(_): r {b1 * c2 + d1 * d2}
+    push(_): r {a1 * e2 + c1 * f2 + e1}
+    push(_): r {b1 * e2 + d1 * f2 + f1}
+]
+
+ps_tf_apply(r): s id u [
+    ps_item(it): s id
+    set(r): 0
+    if(_): {it = null} [ return(r): r ]
+    ps_touch(_): s it
+    btget(t): it "tf"
+    ps_tf_mul(t2): u t
+    btput(_): it "tf" t2
+    ps_touch(_): s it
+]
+
+ps_translate(r): s id dx dy [
+    vec(u): ""
+    push(_): u 1.0
+    push(_): u 0.0
+    push(_): u 0.0
+    push(_): u 1.0
+    push(_): u dx
+    push(_): u dy
+    ps_tf_apply(r): s id u
+]
+
+ps_rotate(r): s id deg cx cy [
+    set(a): {deg * 3.141592653589793 / 180}
+    cos(co): a
+    sin(si): a
+    vec(u): ""
+    push(_): u co
+    push(_): u si
+    push(_): u {0 - si}
+    push(_): u co
+    push(_): u {cx - co * cx + si * cy}
+    push(_): u {cy - si * cx - co * cy}
+    ps_tf_apply(r): s id u
+]
+
+ps_scale(r): s id sx sy cx cy [
+    vec(u): ""
+    push(_): u sx
+    push(_): u 0.0
+    push(_): u 0.0
+    push(_): u sy
+    push(_): u {cx - sx * cx}
+    push(_): u {cy - sy * cy}
+    ps_tf_apply(r): s id u
+]
+
+ps_xy(r): t p [
+    at(x): p 0
+    at(y): p 1
+    at(a): t 0
+    at(b): t 1
+    at(c): t 2
+    at(d): t 3
+    at(e): t 4
+    at(f): t 5
+    vec(r): ""
+    push(_): r {a * x + c * y + e}
+    push(_): r {b * x + d * y + f}
+]
+
+# the item as paths of device points: [[closed pts]...]
+ps_paths(r): it [
+    vec(r): ""
+    btget(kind): it "kind"
+    btget(pts): it "pts"
+    btget(t): it "tf"
+    vec(raw): ""
+    set(closed): false
+    if(_): {kind = "rect"} [
+        at(p0): pts 0
+        at(p1): pts 1
+        at(x0): p0 0
+        at(y0): p0 1
+        at(x1): p1 0
+        at(y1): p1 1
+        ps_pt(q): x0 y0
+        push(_): raw q
+        ps_pt(q): x1 y0
+        push(_): raw q
+        ps_pt(q): x1 y1
+        push(_): raw q
+        ps_pt(q): x0 y1
+        push(_): raw q
+        set(closed): true
+    ]
+    elif(_): {kind = "circle" || kind = "arc"} [
+        at(c): pts 0
+        at(cx): c 0
+        at(cy): c 1
+        btget(rad): it "radius" 10
+        set(a0): 0
+        set(a1): 360
+        if(_): {kind = "arc"} [
+            btget(a0): it "start" 0
+            btget(a1): it "end" 90
+        ]
+        set(segs): 48
+        set(k): 0
+        while(_): {k <= segs} [
+            set(ang): {(a0 + (a1 - a0) * k / segs) * 3.141592653589793 / 180}
+            cos(co): ang
+            sin(si): ang
+            # counter-clockwise on screen: y grows downward
+            ps_pt(q): {cx + rad * co} {cy - rad * si}
+            push(_): raw q
+            set(k): {k + 1}
+        ]
+        set(closed): {kind = "circle"}
+    ]
+    elif(_): {kind = "bezier"} [
+        # cubic pieces: p0 c1 c2 p1 c1 c2 p2 ...; a quadratic when 3 points
+        len(np): pts
+        at(first): pts 0
+        push(_): raw first
+        if(_): {np = 3} [
+            at(p0): pts 0
+            at(p1): pts 1
+            at(p2): pts 2
+            set(k): 1
+            while(_): {k <= 24} [
+                set(u): {k / 24.0}
+                set(v): {1 - u}
+                at(x0): p0 0
+                at(y0): p0 1
+                at(x1): p1 0
+                at(y1): p1 1
+                at(x2): p2 0
+                at(y2): p2 1
+                ps_pt(q): {v * v * x0 + 2 * v * u * x1 + u * u * x2} {v * v * y0 + 2 * v * u * y1 + u * u * y2}
+                push(_): raw q
+                set(k): {k + 1}
+            ]
+        ]
+        else(_): [
+            set(j): 0
+            while(_): {j + 3 < np} [
+                at(p0): pts j
+                at(p1): pts {j + 1}
+                at(p2): pts {j + 2}
+                at(p3): pts {j + 3}
+                set(k): 1
+                while(_): {k <= 24} [
+                    set(u): {k / 24.0}
+                    set(v): {1 - u}
+                    at(x0): p0 0
+                    at(y0): p0 1
+                    at(x1): p1 0
+                    at(y1): p1 1
+                    at(x2): p2 0
+                    at(y2): p2 1
+                    at(x3): p3 0
+                    at(y3): p3 1
+                    set(w0): {v * v * v}
+                    set(w1): {3 * v * v * u}
+                    set(w2): {3 * v * u * u}
+                    set(w3): {u * u * u}
+                    ps_pt(q): {w0 * x0 + w1 * x1 + w2 * x2 + w3 * x3} {w0 * y0 + w1 * y1 + w2 * y2 + w3 * y3}
+                    push(_): raw q
+                    set(k): {k + 1}
+                ]
+                set(j): {j + 3}
+            ]
+        ]
+        btget(fill): it "fill" -1
+        set(closed): {fill >= 0}
+    ]
+    else(_): [
+        set(raw): pts
+        set(closed): {kind = "polygon"}
+    ]
+    vec(dev): ""
+    len(n): raw
+    set(i): 0
+    while(_): {i < n} [
+        at(p): raw i
+        ps_xy(q): t p
+        push(_): dev q
+        set(i): {i + 1}
+    ]
+    vec(path): ""
+    push(_): path closed
+    push(_): path dev
+    push(_): r path
+]
+
+# the bounding box [x0 y0 x1 y1] of an item on the device
+ps_bbox(r): it [
+    btget(kind): it "kind"
+    vec(r): ""
+    if(_): {kind = "text" || kind = "image"} [
+        btget(pts): it "pts"
+        at(p): pts 0
+        btget(t): it "tf"
+        ps_xy(q): t p
+        at(x): q 0
+        at(y): q 1
+        set(w): 0
+        set(h): 0
+        if(_): {kind = "text"} [
+            btget(txt): it "text" ""
+            btget(sc): it "size" 1
+            len(tl): txt
+            set(w): {tl * 7 * sc}
+            set(h): {7 * sc}
+        ]
+        else(_): [
+            btget(img): it "img"
+            btget(w): img "w"
+            btget(h): img "h"
+        ]
+        push(_): r x
+        push(_): r y
+        push(_): r {x + w}
+        push(_): r {y + h}
+        return(r): r
+    ]
+    ps_paths(ps): it
+    set(x0): 1000000000
+    set(y0): 1000000000
+    set(x1): -1000000000
+    set(y1): -1000000000
+    len(np): ps
+    set(i): 0
+    while(_): {i < np} [
+        at(path): ps i
+        at(pts): path 1
+        len(n): pts
+        set(j): 0
+        while(_): {j < n} [
+            at(p): pts j
+            at(x): p 0
+            at(y): p 1
+            if(_): {x < x0} [ set(x0): x ]
+            if(_): {y < y0} [ set(y0): y ]
+            if(_): {x > x1} [ set(x1): x ]
+            if(_): {y > y1} [ set(y1): y ]
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    btget(w): it "width" 1
+    push(_): r {x0 - w}
+    push(_): r {y0 - w}
+    push(_): r {x1 + w}
+    push(_): r {y1 + w}
+]
+
+# what changed since the last draw: a box, "all", or null
+ps_touch(r): s it [
+    set(r): 0
+    btget(d): s "dirty" null
+    if(_): {d = "all"} [ return(r): r ]
+    ps_bbox(b): it
+    if(_): {d = null} [
+        btput(_): s "dirty" b
+        return(r): r
+    ]
+    vec(u): ""
+    at(a0): d 0
+    at(b0): b 0
+    if(_): {b0 < a0} [ set(a0): b0 ]
+    push(_): u a0
+    at(a1): d 1
+    at(b1): b 1
+    if(_): {b1 < a1} [ set(a1): b1 ]
+    push(_): u a1
+    at(a2): d 2
+    at(b2): b 2
+    if(_): {b2 > a2} [ set(a2): b2 ]
+    push(_): u a2
+    at(a3): d 3
+    at(b3): b 3
+    if(_): {b3 > a3} [ set(a3): b3 ]
+    push(_): u a3
+    btput(_): s "dirty" u
+]
+
+ps_dirty(r): s [
+    btget(r): s "dirty" null
+]
+
+ps_clean(r): s [
+    set(r): 0
+    btput(_): s "dirty" null
+]
+
+# the ids in drawing order: layer, then z
+ps_order(r): s [
+    vec(r): ""
+    btget(items): s "items"
+    btget(hidden): s "hidden_layers"
+    btree(ord):
+    btkeys(ks): items
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(it): items k
+        btget(layer): it "layer" 0
+        btget(z): it "z"
+        bthas(hid): hidden layer
+        if(_): {hid = false} [
+            # one key orders by layer, z, id
+            set(key): {(layer + 1000) * 1000000000000 + (z + 500000000) * 1000 + k}
+            btput(_): ord key k
+        ]
+        set(i): {i + 1}
+    ]
+    btkeys(oks): ord
+    len(no): oks
+    set(i): 0
+    while(_): {i < no} [
+        at(k): oks i
+        btget(id): ord k
+        push(_): r id
+        set(i): {i + 1}
+    ]
+]
+
+# --- hit testing
+
+ps_inside(r): pts x y rule [
+    # winding number and crossings of a closed polygon
+    set(wn): 0
+    set(cr): 0
+    len(n): pts
+    set(i): 0
+    while(_): {i < n} [
+        at(a): pts i
+        at(b): pts {(i + 1) % n}
+        at(ax): a 0
+        at(ay): a 1
+        at(bx): b 0
+        at(by): b 1
+        if(_): {(ay <= y && by > y) || (ay > y && by <= y)} [
+            set(xc): {ax + (y - ay) * (bx - ax) / (by - ay)}
+            if(_): {xc > x} [
+                set(cr): {cr + 1}
+                if(_): {by > ay} [ set(wn): {wn + 1} ]
+                else(_): [ set(wn): {wn - 1} ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {rule = "evenodd"} [ set(r): {cr % 2 = 1} ]
+    else(_): [ set(r): {wn != 0} ]
+]
+
+ps_seg_dist(r): x y ax ay bx by [
+    set(dx): {bx - ax}
+    set(dy): {by - ay}
+    set(l2): {dx * dx + dy * dy}
+    set(t): 0
+    if(_): {l2 > 0} [ set(t): {((x - ax) * dx + (y - ay) * dy) / l2} ]
+    if(_): {t < 0} [ set(t): 0 ]
+    if(_): {t > 1} [ set(t): 1 ]
+    set(px): {ax + t * dx - x}
+    set(py): {ay + t * dy - y}
+    sqrt(r): {px * px + py * py}
+]
+
+ps_hits(r): it x y [
+    set(r): false
+    btget(kind): it "kind"
+    if(_): {kind = "text" || kind = "image"} [
+        ps_bbox(b): it
+        at(x0): b 0
+        at(y0): b 1
+        at(x1): b 2
+        at(y1): b 3
+        set(r): {x >= x0 && x < x1 && y >= y0 && y < y1}
+        return(r): r
+    ]
+    btget(fill): it "fill" -1
+    btget(rule): it "rule" "nonzero"
+    btget(w): it "width" 1
+    ps_paths(ps): it
+    len(np): ps
+    set(i): 0
+    while(_): {i < np} [
+        at(path): ps i
+        at(closed): path 0
+        at(pts): path 1
+        if(_): {closed && fill >= 0} [
+            ps_inside(r): pts x y rule
+            if(_): r [ return(r): r ]
+        ]
+        len(n): pts
+        set(last): {n - 1}
+        if(_): closed [ set(last): n ]
+        set(j): 0
+        while(_): {j < last} [
+            at(a): pts j
+            at(b): pts {(j + 1) % n}
+            at(ax): a 0
+            at(ay): a 1
+            at(bx): b 0
+            at(by): b 1
+            ps_seg_dist(d): x y ax ay bx by
+            if(_): {d <= w / 2.0 + 2} [
+                set(r): true
+                return(r): r
+            ]
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+ps_hit(r): s x y [
+    set(r): 0
+    ps_order(ids): s
+    btget(items): s "items"
+    len(n): ids
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(id): ids i
+        btget(it): items id
+        btget(hid): it "nohit" false
+        if(_): {hid = false} [
+            ps_hits(h): it x y
+            if(_): h [
+                set(r): id
+                return(r): r
+            ]
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+# --- dashes
+
+# a path's segments with dash [on off ...] applied: [[x0 y0 x1 y1]...]
+ps_segments(r): pts closed dash [
+    vec(r): ""
+    len(n): pts
+    set(last): {n - 1}
+    if(_): closed [ set(last): n ]
+    set(nd): 0
+    if(_): {dash != null} [ len(nd): dash ]
+    set(di): 0
+    set(left): 0
+    set(on): true
+    if(_): {nd > 0} [ at(left): dash 0 ]
+    set(j): 0
+    while(_): {j < last} [
+        at(a): pts j
+        at(b): pts {(j + 1) % n}
+        at(ax): a 0
+        at(ay): a 1
+        at(bx): b 0
+        at(by): b 1
+        if(_): {nd = 0} [
+            vec(sg): ""
+            push(_): sg ax
+            push(_): sg ay
+            push(_): sg bx
+            push(_): sg by
+            push(_): r sg
+        ]
+        else(_): [
+            set(dx): {bx - ax}
+            set(dy): {by - ay}
+            sqrt(len_): {dx * dx + dy * dy}
+            set(pos): 0
+            while(_): {pos < len_} [
+                set(step): left
+                if(_): {pos + step > len_} [ set(step): {len_ - pos} ]
+                if(_): {on && len_ > 0} [
+                    vec(sg): ""
+                    push(_): sg {ax + dx * pos / len_}
+                    push(_): sg {ay + dy * pos / len_}
+                    push(_): sg {ax + dx * (pos + step) / len_}
+                    push(_): sg {ay + dy * (pos + step) / len_}
+                    push(_): r sg
+                ]
+                set(pos): {pos + step}
+                set(left): {left - step}
+                if(_): {left <= 0} [
+                    set(di): {(di + 1) % nd}
+                    at(left): dash di
+                    set(on): {on = false}
+                ]
+            ]
+        ]
+        set(j): {j + 1}
+    ]
+]
+
+# --- onto a canvas
+
+ps_draw(r): s canvas [
+    set(r): 0
+    ps_order(ids): s
+    btget(items): s "items"
+    len(n): ids
+    set(i): 0
+    while(_): {i < n} [
+        at(id): ids i
+        btget(it): items id
+        ps_draw_item(_): it canvas
+        set(i): {i + 1}
+    ]
+    ps_clean(_): s
+]
+
+ps_draw_item(r): it canvas [
+    set(r): 0
+    btget(kind): it "kind"
+    btget(color): it "color" 0
+    if(_): {kind = "text"} [
+        btget(pts): it "pts"
+        at(p): pts 0
+        btget(t): it "tf"
+        ps_xy(q): t p
+        at(x): q 0
+        at(y): q 1
+        btget(txt): it "text" ""
+        btget(sc): it "size" 1
+        canvastextscale(_): canvas x y txt color sc
+        return(r): r
+    ]
+    if(_): {kind = "image"} [ return(r): r ]
+    btget(fill): it "fill" -1
+    btget(rule): it "rule" "nonzero"
+    btget(grad): it "grad" null
+    ps_paths(ps): it
+    len(np): ps
+    set(i): 0
+    while(_): {i < np} [
+        at(path): ps i
+        at(closed): path 0
+        at(pts): path 1
+        if(_): {closed && (fill >= 0 || grad != null)} [
+            ps_spans(spans): pts rule 0 0 100000 100000
+            len(ns): spans
+            set(k): 0
+            while(_): {k < ns} [
+                at(sp): spans k
+                at(y): sp 0
+                at(xa): sp 1
+                at(xb): sp 2
+                set(c): fill
+                if(_): {grad != null} [ ps_grad_at(c): grad {(xa + xb) / 2} y ]
+                canvasfill(_): canvas xa y {xb - xa} 1 c
+                set(k): {k + 1}
+            ]
+        ]
+        btget(w): it "width" 1
+        btget(dash): it "dash" null
+        if(_): {w > 0 && (fill < 0 || color != fill)} [
+            ps_segments(segs): pts closed dash
+            len(nsg): segs
+            set(k): 0
+            while(_): {k < nsg} [
+                at(sg): segs k
+                at(x0): sg 0
+                at(y0): sg 1
+                at(x1): sg 2
+                at(y1): sg 3
+                # wide lines: parallel strokes across the line
+                set(o): 0
+                while(_): {o < w} [
+                    set(off): {o - (w - 1) / 2.0}
+                    set(dx): {x1 - x0}
+                    set(dy): {y1 - y0}
+                    sqrt(ln): {dx * dx + dy * dy}
+                    set(nx): 0
+                    set(ny): 0
+                    if(_): {ln > 0} [
+                        set(nx): {0 - dy / ln * off}
+                        set(ny): {dx / ln * off}
+                    ]
+                    canvasline(_): canvas {x0 + nx} {y0 + ny} {x1 + nx} {y1 + ny} color
+                    set(o): {o + 1}
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# rows of a polygon to fill: [[y xa xb]...] (xb exclusive), inside a clip
+ps_spans(r): pts rule cx0 cy0 cx1 cy1 [
+    vec(r): ""
+    set(ymin): 1000000000
+    set(ymax): -1000000000
+    len(n): pts
+    set(i): 0
+    while(_): {i < n} [
+        at(p): pts i
+        at(y): p 1
+        if(_): {y < ymin} [ set(ymin): y ]
+        if(_): {y > ymax} [ set(ymax): y ]
+        set(i): {i + 1}
+    ]
+    ps_floor(ya): ymin
+    ps_ceil(yb): ymax
+    if(_): {ya < cy0} [ set(ya): cy0 ]
+    if(_): {yb > cy1} [ set(yb): cy1 ]
+    set(y): ya
+    while(_): {y < yb} [
+        set(sy): {y + 0.5}
+        # crossings with their direction
+        btree(xs):
+        set(i): 0
+        while(_): {i < n} [
+            at(a): pts i
+            at(b): pts {(i + 1) % n}
+            at(ax): a 0
+            at(ay): a 1
+            at(bx): b 0
+            at(by): b 1
+            if(_): {(ay <= sy && by > sy) || (ay > sy && by <= sy)} [
+                set(xc): {ax + (sy - ay) * (bx - ax) / (by - ay)}
+                set(d): 1
+                if(_): {by < ay} [ set(d): -1 ]
+                # a key that keeps equal crossings apart
+                set(key): {xc + i * 0.000001}
+                btput(_): xs key d
+            ]
+            set(i): {i + 1}
+        ]
+        btkeys(ks): xs
+        len(nk): ks
+        set(wn): 0
+        set(cr): 0
+        set(k): 0
+        while(_): {k + 1 < nk} [
+            at(x0): ks k
+            at(x1): ks {k + 1}
+            btget(d): xs x0
+            set(wn): {wn + d}
+            set(cr): {cr + 1}
+            set(fillit): {wn != 0}
+            if(_): {rule = "evenodd"} [ set(fillit): {cr % 2 = 1} ]
+            if(_): fillit [
+                set(fx0): {x0 + 0.5}
+                ps_floor(xa): fx0
+                set(fx1): {x1 + 0.5}
+                ps_floor(xb): fx1
+                if(_): {xa < cx0} [ set(xa): cx0 ]
+                if(_): {xb > cx1} [ set(xb): cx1 ]
+                if(_): {xb > xa} [
+                    vec(sp): ""
+                    push(_): sp y
+                    push(_): sp xa
+                    push(_): sp xb
+                    push(_): r sp
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+        set(y): {y + 1}
+    ]
+]
+
+# a gradient's colour at a point: [x1 y1 c1 x2 y2 c2], linear
+ps_grad_at(r): g x y [
+    at(x1): g 0
+    at(y1): g 1
+    at(c1): g 2
+    at(x2): g 3
+    at(y2): g 4
+    at(c2): g 5
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(l2): {dx * dx + dy * dy}
+    set(t): 0
+    if(_): {l2 > 0} [ set(t): {((x - x1) * dx + (y - y1) * dy) / l2} ]
+    if(_): {t < 0} [ set(t): 0 ]
+    if(_): {t > 1} [ set(t): 1 ]
+    ps_mix(r): c1 c2 t
+]
+
+ps_mix(r): c1 c2 t [
+    set(r1): {(c1 >> 16) & 255}
+    set(g1): {(c1 >> 8) & 255}
+    set(b1): {c1 & 255}
+    set(r2): {(c2 >> 16) & 255}
+    set(g2): {(c2 >> 8) & 255}
+    set(b2): {c2 & 255}
+    ps_round(rr): {r1 + (r2 - r1) * t}
+    ps_round(gg): {g1 + (g2 - g1) * t}
+    ps_round(bb): {b1 + (b2 - b1) * t}
+    set(r): {(rr << 16) | (gg << 8) | bb}
+]
+
+# --- the software rasteriser
+
+ps_raster(r): s w h bg [
+    vec(rgb): ""
+    set(cr): {(bg >> 16) & 255}
+    set(cg): {(bg >> 8) & 255}
+    set(cb): {bg & 255}
+    set(n): {w * h}
+    set(i): 0
+    while(_): {i < n} [
+        push(_): rgb cr
+        push(_): rgb cg
+        push(_): rgb cb
+        set(i): {i + 1}
+    ]
+    omsk_image(r): w h rgb
+    ps_order(ids): s
+    btget(items): s "items"
+    len(ni): ids
+    set(i): 0
+    while(_): {i < ni} [
+        at(id): ids i
+        btget(it): items id
+        ps_raster_item(_): r it
+        set(i): {i + 1}
+    ]
+]
+
+# one pixel, blended by alpha, inside the image and the clip
+ps_plot(r): img x y c a clip [
+    set(r): 0
+    btget(w): img "w"
+    btget(h): img "h"
+    ps_floor(xi): x
+    ps_floor(yi): y
+    if(_): {xi < 0 || yi < 0 || xi >= w || yi >= h} [ return(r): r ]
+    if(_): {clip != null} [
+        at(kx): clip 0
+        at(ky): clip 1
+        at(kw): clip 2
+        at(kh): clip 3
+        if(_): {xi < kx || yi < ky || xi >= kx + kw || yi >= ky + kh} [ return(r): r ]
+    ]
+    btget(rgb): img "rgb"
+    set(o): {(yi * w + xi) * 3}
+    set(nr): {(c >> 16) & 255}
+    set(ng): {(c >> 8) & 255}
+    set(nb): {c & 255}
+    if(_): {a < 1} [
+        at(or_): rgb o
+        at(og): rgb {o + 1}
+        at(ob): rgb {o + 2}
+        ps_round(nr): {or_ + (nr - or_) * a}
+        ps_round(ng): {og + (ng - og) * a}
+        ps_round(nb): {ob + (nb - ob) * a}
+    ]
+    set(rgb): o nr
+    set(rgb): {o + 1} ng
+    set(rgb): {o + 2} nb
+]
+
+ps_raster_item(r): img it [
+    set(r): 0
+    btget(kind): it "kind"
+    btget(color): it "color" 0
+    btget(a): it "alpha" 1.0
+    btget(clip): it "clip" null
+    btget(w): img "w"
+    btget(h): img "h"
+    if(_): {kind = "text"} [
+        # the text's place: a block per letter, a pixel of space between
+        ps_bbox(b): it
+        at(x0): b 0
+        at(y0): b 1
+        btget(txt): it "text" ""
+        btget(sc): it "size" 1
+        len(tl): txt
+        set(k): 0
+        while(_): {k < tl} [
+            byte(ch): txt k
+            if(_): {ch != 32} [
+                set(yy): {y0 + sc}
+                while(_): {yy < y0 + 6 * sc} [
+                    set(xx): {x0 + k * 7 * sc}
+                    while(_): {xx < x0 + k * 7 * sc + 5 * sc} [
+                        ps_plot(_): img xx yy color a clip
+                        set(xx): {xx + 1}
+                    ]
+                    set(yy): {yy + 1}
+                ]
+            ]
+            set(k): {k + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {kind = "image"} [
+        ps_bbox(b): it
+        at(x0): b 0
+        at(y0): b 1
+        btget(src): it "img"
+        btget(sw): src "w"
+        btget(sh): src "h"
+        btget(srgb): src "rgb"
+        set(yy): 0
+        while(_): {yy < sh} [
+            set(xx): 0
+            while(_): {xx < sw} [
+                set(o): {(yy * sw + xx) * 3}
+                at(pr): srgb o
+                at(pg): srgb {o + 1}
+                at(pb): srgb {o + 2}
+                ps_plot(_): img {x0 + xx} {y0 + yy} {(pr << 16) | (pg << 8) | pb} a clip
+                set(xx): {xx + 1}
+            ]
+            set(yy): {yy + 1}
+        ]
+        return(r): r
+    ]
+    btget(fill): it "fill" -1
+    btget(rule): it "rule" "nonzero"
+    btget(grad): it "grad" null
+    btget(lw): it "width" 1
+    btget(dash): it "dash" null
+    ps_paths(ps): it
+    len(np): ps
+    set(i): 0
+    while(_): {i < np} [
+        at(path): ps i
+        at(closed): path 0
+        at(pts): path 1
+        if(_): {closed && (fill >= 0 || grad != null)} [
+            ps_spans(spans): pts rule 0 0 w h
+            len(ns): spans
+            set(k): 0
+            while(_): {k < ns} [
+                at(sp): spans k
+                at(y): sp 0
+                at(xa): sp 1
+                at(xb): sp 2
+                set(x): xa
+                while(_): {x < xb} [
+                    set(c): fill
+                    if(_): {grad != null} [ ps_grad_at(c): grad {x + 0.5} {y + 0.5} ]
+                    ps_plot(_): img x y c a clip
+                    set(x): {x + 1}
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        if(_): {lw > 0 && (fill < 0 || color != fill)} [
+            ps_segments(segs): pts closed dash
+            len(nsg): segs
+            set(k): 0
+            while(_): {k < nsg} [
+                at(sg): segs k
+                ps_raster_line(_): img sg lw color a clip
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# a line of width lw: a square brush stepped a pixel at a time
+ps_raster_line(r): img sg lw c a clip [
+    set(r): 0
+    at(x0): sg 0
+    at(y0): sg 1
+    at(x1): sg 2
+    at(y1): sg 3
+    set(dx): {x1 - x0}
+    set(dy): {y1 - y0}
+    abs(adx): dx
+    abs(ady): dy
+    set(steps): adx
+    if(_): {ady > steps} [ set(steps): ady ]
+    ps_ceil(steps): steps
+    if(_): {steps < 1} [ set(steps): 1 ]
+    # each pixel once, even where brush squares overlap
+    btree(done):
+    btget(w): img "w"
+    set(half): {(lw - 1) / 2.0}
+    set(k): 0
+    while(_): {k <= steps} [
+        set(px): {x0 + dx * k / steps}
+        set(py): {y0 + dy * k / steps}
+        set(by): {py - half}
+        while(_): {by <= py + half + 0.0001} [
+            set(bx): {px - half}
+            while(_): {bx <= px + half + 0.0001} [
+                ps_floor(fx): bx
+                ps_floor(fy): by
+                set(key): {fy * (w + 1000) + fx}
+                bthas(seen): done key
+                if(_): {seen = false} [
+                    btput(_): done key true
+                    ps_plot(_): img fx fy c a clip
+                ]
+                set(bx): {bx + 1}
+            ]
+            set(by): {by + 1}
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+ps_pixel(r): img x y [
+    btget(w): img "w"
+    btget(rgb): img "rgb"
+    set(o): {(y * w + x) * 3}
+    at(pr): rgb o
+    at(pg): rgb {o + 1}
+    at(pb): rgb {o + 2}
+    set(r): {(pr << 16) | (pg << 8) | pb}
+]
+
+ps_round(r): x [
+    ps_floor(r): {x + 0.5}
+]
+
+# floor and ceil that always give an integer (math.su's give a real for
+# an integer)
+ps_floor(r): x [
+    typeof(t): x
+    set(r): x
+    if(_): {t != "integer"} [
+        floor(r): x
+        str_trunc(r): r
+    ]
+]
+
+ps_ceil(r): x [
+    typeof(t): x
+    set(r): x
+    if(_): {t != "integer"} [
+        ceil(r): x
+        str_trunc(r): r
+    ]
+]
+
+ps_crc(r): img [
+    btget(rgb): img "rgb"
+    crc32(r): rgb
+]
+
+ps_png(r): img path [
+    omsk_save(b): img "png" null
+    write_bytes(r): path b
+]
+
+ps_ppm(r): img path [
+    btget(w): img "w"
+    btget(h): img "h"
+    btget(rgb): img "rgb"
+    str_from_int(ws): w
+    str_from_int(hs): h
+    concat(head): "P6\n" ws " " hs "\n255\n"
+    vec(b): ""
+    len(hl): head
+    set(i): 0
+    while(_): {i < hl} [
+        byte(x): head i
+        push(_): b x
+        set(i): {i + 1}
+    ]
+    len(n): rgb
+    set(i): 0
+    while(_): {i < n} [
+        at(x): rgb i
+        push(_): b x
+        set(i): {i + 1}
+    ]
+    write_bytes(r): path b
+]
+
+# --- the scene as text: one shape a line, and back (a remote display)
+
+ps_text(r): s [
+    set(r): ""
+    btget(items): s "items"
+    ps_order(ids): s
+    len(n): ids
+    set(i): 0
+    while(_): {i < n} [
+        at(id): ids i
+        btget(it): items id
+        encode(e): it
+        concat(r): r e "\n"
+        set(i): {i + 1}
+    ]
+]
+
+ps_from_text(r): text [
+    ps_scene(r):
+    str_split(lines): text "\n"
+    btget(items): r "items"
+    set(top): 0
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        if(_): {l != ""} [
+            decode(pairs): l
+            btree(it):
+            len(np): pairs
+            set(j): 0
+            while(_): {j < np} [
+                at(pr): pairs j
+                at(k): pr 0
+                at(v): pr 1
+                btput(_): it k v
+                set(j): {j + 1}
+            ]
+            btget(img): it "img" null
+            if(_): {img != null} [
+                btree(ib):
+                len(nip): img
+                set(j): 0
+                while(_): {j < nip} [
+                    at(pr): img j
+                    at(k): pr 0
+                    at(v): pr 1
+                    btput(_): ib k v
+                    set(j): {j + 1}
+                ]
+                btput(_): it "img" ib
+            ]
+            btget(id): it "id"
+            btput(_): items id it
+            if(_): {id >= top} [ set(top): id ]
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): r "next" {top + 1}
+    btput(_): r "ztop" {top + 1}
+]
+
+# --- a terminal: the scene as text, box glyphs for rectangles
+
+ps_tui(r): s cols rows cw ch [
+    vec(grid): ""
+    set(n): {cols * rows}
+    set(i): 0
+    while(_): {i < n} [
+        push(_): grid " "
+        set(i): {i + 1}
+    ]
+    btget(items): s "items"
+    ps_order(ids): s
+    len(ni): ids
+    set(i): 0
+    while(_): {i < ni} [
+        at(id): ids i
+        btget(it): items id
+        btget(kind): it "kind"
+        ps_bbox(b): it
+        at(bx0): b 0
+        at(by0): b 1
+        at(bx1): b 2
+        at(by1): b 3
+        btget(lw): it "width" 1
+        if(_): {kind = "text"} [
+            ps_round(c0): {bx0 / cw}
+            ps_round(r0): {by0 / ch}
+            btget(txt): it "text" ""
+            len(tl): txt
+            set(k): 0
+            while(_): {k < tl} [
+                if(_): {c0 + k >= 0 && c0 + k < cols && r0 >= 0 && r0 < rows} [
+                    slice(cc): txt k 1
+                    set(grid): {r0 * cols + c0 + k} cc
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        elif(_): {kind = "rect"} [
+            ps_round(c0): {(bx0 + lw) / cw}
+            ps_round(r0): {(by0 + lw) / ch}
+            ps_round(c1): {(bx1 - lw) / cw}
+            ps_round(r1): {(by1 - lw) / ch}
+            set(c1): {c1 - 1}
+            set(r1): {r1 - 1}
+            btget(fill): it "fill" -1
+            if(_): {c1 > c0 && r1 > r0} [
+                set(yy): r0
+                while(_): {yy <= r1} [
+                    set(xx): c0
+                    while(_): {xx <= c1} [
+                        set(g): ""
+                        if(_): {fill >= 0} [ set(g): " " ]
+                        if(_): {yy = r0 || yy = r1} [ set(g): "─" ]
+                        if(_): {xx = c0 || xx = c1} [ set(g): "│" ]
+                        if(_): {yy = r0 && xx = c0} [ set(g): "┌" ]
+                        if(_): {yy = r0 && xx = c1} [ set(g): "┐" ]
+                        if(_): {yy = r1 && xx = c0} [ set(g): "└" ]
+                        if(_): {yy = r1 && xx = c1} [ set(g): "┘" ]
+                        if(_): {g != "" && xx >= 0 && xx < cols && yy >= 0 && yy < rows} [ set(grid): {yy * cols + xx} g ]
+                        set(xx): {xx + 1}
+                    ]
+                    set(yy): {yy + 1}
+                ]
+            ]
+        ]
+        elif(_): {kind = "line"} [
+            ps_round(c0): {bx0 / cw}
+            ps_round(r0): {(by0 + lw) / ch}
+            ps_round(c1): {bx1 / cw}
+            set(g): "─"
+            if(_): {bx1 - bx0 < by1 - by0} [ set(g): "│" ]
+            set(xx): c0
+            while(_): {xx < c1 && r0 >= 0 && r0 < rows} [
+                if(_): {xx >= 0 && xx < cols} [ set(grid): {r0 * cols + xx} g ]
+                set(xx): {xx + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): ""
+    set(yy): 0
+    while(_): {yy < rows} [
+        set(line): ""
+        set(xx): 0
+        while(_): {xx < cols} [
+            at(g): grid {yy * cols + xx}
+            concat(line): line g
+            set(xx): {xx + 1}
+        ]
+        str_trim_right(line): line
+        concat(r): r line "\n"
+        set(yy): {yy + 1}
+    ]
+]
+
+str_trim_right(r): s [
+    set(r): s
+    len(n): r
+    while(_): {n > 0} [
+        slice(c): r {n - 1} 1
+        if(_): {c != " "} [ return(r): r ]
+        slice(r): r 0 {n - 1}
+        set(n): {n - 1}
+    ]
+]
+
+# ---------------------------------------------------------------- layout
+
+# items: btrees with min, max (0: none), weight, size (fixed, 0: none);
+# -> rects [x y w h] along dir "h" or "v" inside [x y w h]
+pl_box(r): dir items rect spacing padding align [
+    vec(r): ""
+    at(rx): rect 0
+    at(ry): rect 1
+    at(rw): rect 2
+    at(rh): rect 3
+    set(x): {rx + padding}
+    set(y): {ry + padding}
+    set(w): {rw - 2 * padding}
+    set(h): {rh - 2 * padding}
+    len(n): items
+    set(main): w
+    set(cross): h
+    if(_): {dir = "v"} [
+        set(main): h
+        set(cross): w
+    ]
+    set(free): {main - spacing * (n - 1)}
+    # fixed sizes and minimums first
+    vec(sizes): ""
+    set(wsum): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(it): items i
+        btget(fx): it "size" 0
+        btget(mn): it "min" 0
+        btget(wt): it "weight" 0
+        set(sz): mn
+        if(_): {fx > 0} [ set(sz): fx ]
+        push(_): sizes sz
+        set(free): {free - sz}
+        if(_): {fx = 0} [ set(wsum): {wsum + wt} ]
+        set(i): {i + 1}
+    ]
+    # what is left goes by weight, capped at max (twice, for the capped)
+    set(round_): 0
+    while(_): {round_ < 3 && free > 0 && wsum > 0} [
+        set(given): 0
+        set(nsum): 0
+        set(i): 0
+        while(_): {i < n} [
+            at(it): items i
+            btget(fx): it "size" 0
+            btget(mx): it "max" 0
+            btget(wt): it "weight" 0
+            at(sz): sizes i
+            if(_): {fx = 0 && wt > 0 && (mx = 0 || sz < mx)} [
+                set(add): {free * wt / wsum}
+                ps_floor(add): add
+                if(_): {mx > 0 && sz + add > mx} [ set(add): {mx - sz} ]
+                set(sizes): i {sz + add}
+                set(given): {given + add}
+                if(_): {mx = 0 || sz + add < mx} [ set(nsum): {nsum + wt} ]
+            ]
+            set(i): {i + 1}
+        ]
+        set(free): {free - given}
+        set(wsum): nsum
+        set(round_): {round_ + 1}
+    ]
+    set(start): 0
+    if(_): {free > 0 && align = "center"} [
+        set(start): {free / 2}
+        ps_floor(start): start
+    ]
+    if(_): {free > 0 && align = "end"} [ set(start): free ]
+    set(pos): start
+    set(i): 0
+    while(_): {i < n} [
+        at(sz): sizes i
+        vec(q): ""
+        if(_): {dir = "h"} [
+            push(_): q {x + pos}
+            push(_): q y
+            push(_): q sz
+            push(_): q h
+        ]
+        else(_): [
+            push(_): q x
+            push(_): q {y + pos}
+            push(_): q w
+            push(_): q sz
+        ]
+        push(_): r q
+        set(pos): {pos + sz + spacing}
+        set(i): {i + 1}
+    ]
+]
+
+# cells: btrees with row, col, rowspan, colspan; colw/rowh: weights per
+# column and row -> a rect per cell
+pl_grid(r): cells colw rowh rect spacing [
+    at(rx): rect 0
+    at(ry): rect 1
+    at(rw): rect 2
+    at(rh): rect 3
+    pl_track(xs): colw rx rw spacing
+    pl_track(ys): rowh ry rh spacing
+    vec(r): ""
+    len(n): cells
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cells i
+        btget(row): c "row" 0
+        btget(col): c "col" 0
+        btget(rs): c "rowspan" 1
+        btget(cs): c "colspan" 1
+        at(xa): xs col
+        at(ya): ys row
+        at(xb): xs {col + cs}
+        at(yb): ys {row + rs}
+        vec(q): ""
+        push(_): q xa
+        push(_): q ya
+        push(_): q {xb - xa - spacing}
+        push(_): q {yb - ya - spacing}
+        push(_): r q
+        set(i): {i + 1}
+    ]
+]
+
+# the starts of tracks with weights, and the end, spacing after each
+pl_track(r): weights start total spacing [
+    vec(r): ""
+    len(n): weights
+    set(sum): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(wt): weights i
+        set(sum): {sum + wt}
+        set(i): {i + 1}
+    ]
+    set(avail): {total + spacing}
+    set(pos): start
+    set(i): 0
+    while(_): {i < n} [
+        push(_): r pos
+        at(wt): weights i
+        set(add): {avail * wt / sum}
+        ps_floor(add): add
+        set(pos): {pos + add}
+        set(i): {i + 1}
+    ]
+    push(_): r {start + avail}
+]
+
+# a child's rect when its parent resizes: anchors "l t r b" (any of them)
+pl_anchor(r): child oldparent newparent anchors [
+    at(cx): child 0
+    at(cy): child 1
+    at(cw): child 2
+    at(chh): child 3
+    at(ow): oldparent 2
+    at(oh): oldparent 3
+    at(nw): newparent 2
+    at(nh): newparent 3
+    str_contains(l): anchors "l"
+    str_contains(t): anchors "t"
+    str_contains(rr): anchors "r"
+    str_contains(b): anchors "b"
+    set(dw): {nw - ow}
+    set(dh): {nh - oh}
+    set(x): cx
+    set(w): cw
+    if(_): {rr && l} [ set(w): {cw + dw} ]
+    elif(_): rr [ set(x): {cx + dw} ]
+    set(y): cy
+    set(h): chh
+    if(_): {b && t} [ set(h): {chh + dh} ]
+    elif(_): b [ set(y): {cy + dh} ]
+    vec(r): ""
+    push(_): r x
+    push(_): r y
+    push(_): r w
+    push(_): r h
+]
+
+# right-to-left: rects mirrored inside a width
+pl_mirror(r): rects width [
+    vec(r): ""
+    len(n): rects
+    set(i): 0
+    while(_): {i < n} [
+        at(q): rects i
+        at(x): q 0
+        at(y): q 1
+        at(w): q 2
+        at(h): q 3
+        vec(m): ""
+        push(_): m {width - x - w}
+        push(_): m y
+        push(_): m w
+        push(_): m h
+        push(_): r m
+        set(i): {i + 1}
+    ]
+]
+
+# a scale factor for a screen: 96 dpi is 1, in steps of a quarter
+pl_scale(r): dpi [
+    set(r): {dpi / 96.0}
+    ps_round(q): {r * 4}
+    set(r): {q / 4.0}
+    if(_): {r < 1} [ set(r): 1.0 ]
+]
+
+pl_item(r): weight min max size [
+    btree(r):
+    btput(_): r "weight" weight
+    btput(_): r "min" min
+    btput(_): r "max" max
+    btput(_): r "size" size
+]
+
+pl_rect(r): x y w h [
+    vec(r): ""
+    push(_): r x
+    push(_): r y
+    push(_): r w
+    push(_): r h
+]
+
+# ---------------------------------------------------------------- themes
+
+pt_theme(r): name [
+    btree(r):
+    btput(_): r "name" name
+    btput(_): r "pad" 4
+    btput(_): r "scale" 1
+    if(_): {name = "dark"} [
+        btput(_): r "bg" 2105376
+        btput(_): r "panel" 3158064
+        btput(_): r "fg" 14737632
+        btput(_): r "muted" 8421504
+        btput(_): r "border" 5263440
+        btput(_): r "accent" 4227327
+        btput(_): r "select" 2899536
+        btput(_): r "field" 1579032
+    ]
+    elif(_): {name = "contrast"} [
+        btput(_): r "bg" 0
+        btput(_): r "panel" 0
+        btput(_): r "fg" 16777215
+        btput(_): r "muted" 16776960
+        btput(_): r "border" 16777215
+        btput(_): r "accent" 65535
+        btput(_): r "select" 255
+        btput(_): r "field" 0
+    ]
+    else(_): [
+        btput(_): r "name" "light"
+        btput(_): r "bg" 15790320
+        btput(_): r "panel" 14737632
+        btput(_): r "fg" 2105376
+        btput(_): r "muted" 8421504
+        btput(_): r "border" 10526880
+        btput(_): r "accent" 3381708
+        btput(_): r "select" 11591910
+        btput(_): r "field" 16777215
+    ]
+]
+
+pt_color(r): theme name [
+    btget(r): theme name 0
+]
+
+pt_accent(r): theme color [
+    set(r): 0
+    btput(_): theme "accent" color
+]
+
+# ---------------------------------------------------------------- widgets on a canvas
+
+pw_new(r): kind x y w h [
+    btree(r):
+    btput(_): r "kind" kind
+    pl_rect(rc): x y w h
+    btput(_): r "rect" rc
+    vec(ids): ""
+    btput(_): r "ids" ids
+    btput(_): r "events" 0
+]
+
+pw_contains(r): wd x y [
+    btget(rc): wd "rect"
+    at(rx): rc 0
+    at(ry): rc 1
+    at(rw): rc 2
+    at(rh): rc 3
+    set(r): {x >= rx && y >= ry && x < rx + rw && y < ry + rh}
+]
+
+pw_changed(r): wd [
+    btget(n): wd "events"
+    btput(_): wd "events" {n + 1}
+    set(r): 0
+]
+
+pw_progress(r): x y w h value max [
+    pw_new(r): "progress" x y w h
+    btput(_): r "value" value
+    btput(_): r "max" max
+]
+
+pw_slider(r): x y w h value lo hi [
+    pw_new(r): "slider" x y w h
+    btput(_): r "value" value
+    btput(_): r "lo" lo
+    btput(_): r "hi" hi
+]
+
+pw_spin(r): x y w h value step lo hi [
+    pw_new(r): "spin" x y w h
+    btput(_): r "value" value
+    btput(_): r "step" step
+    btput(_): r "lo" lo
+    btput(_): r "hi" hi
+]
+
+pw_radio(r): x y w h options selected [
+    pw_new(r): "radio" x y w h
+    btput(_): r "options" options
+    btput(_): r "selected" selected
+]
+
+pw_tabs(r): x y w h labels selected [
+    pw_new(r): "tabs" x y w h
+    btput(_): r "labels" labels
+    btput(_): r "selected" selected
+]
+
+pw_group(r): x y w h title [
+    pw_new(r): "group" x y w h
+    btput(_): r "title" title
+]
+
+pw_splitter(r): x y w h dir pos [
+    pw_new(r): "splitter" x y w h
+    btput(_): r "dir" dir
+    btput(_): r "pos" pos
+    btput(_): r "dragging" false
+]
+
+pw_status(r): x y w h parts [
+    pw_new(r): "status" x y w h
+    btput(_): r "parts" parts
+]
+
+pw_tooltip(r): text delay [
+    pw_new(r): "tooltip" 0 0 0 0
+    btput(_): r "text" text
+    btput(_): r "delay" delay
+    btput(_): r "since" -1
+    btput(_): r "shown" false
+]
+
+# hover at time t (ms) over (x, y), or leave with t -1
+pw_hover(r): tip x y t [
+    set(r): false
+    if(_): {t < 0} [
+        btput(_): tip "since" -1
+        btput(_): tip "shown" false
+        return(r): r
+    ]
+    btget(since): tip "since"
+    if(_): {since < 0} [
+        btput(_): tip "since" t
+        set(since): t
+    ]
+    btget(delay): tip "delay"
+    set(r): {t - since >= delay}
+    btput(_): tip "shown" r
+    if(_): r [
+        btget(text): tip "text"
+        len(tl): text
+        pl_rect(rc): {x + 12} {y + 16} {tl * 7 + 8} 15
+        btput(_): tip "rect" rc
+    ]
+]
+
+pw_rich(r): x y spans [
+    # spans: [[text color bold]...]
+    pw_new(r): "rich" x y 0 0
+    btput(_): r "spans" spans
+]
+
+pw_menu(r): x y items [
+    # items: [[label shortcut action]...]; "-" a separator
+    len(n): items
+    pw_new(r): "menu" x y 160 {n * 16 + 4}
+    btput(_): r "items" items
+    btput(_): r "hover" -1
+    btput(_): r "chosen" ""
+]
+
+# the text area: lines, a cursor, a selection, scrolling, a clipboard
+pw_textarea(r): x y w h text [
+    pw_new(r): "textarea" x y w h
+    str_split(lines): text "\n"
+    btput(_): r "lines" lines
+    btput(_): r "row" 0
+    btput(_): r "col" 0
+    btput(_): r "arow" -1
+    btput(_): r "acol" -1
+    btput(_): r "top" 0
+]
+
+pw_tree(r): x y w h root [
+    # root: [label children...] nested vectors
+    pw_new(r): "tree" x y w h
+    btput(_): r "root" root
+    btree(open):
+    btput(_): r "open" open
+    btput(_): r "selected" ""
+    btput(_): r "top" 0
+]
+
+pw_table(r): x y w h columns rows [
+    pw_new(r): "table" x y w h
+    btput(_): r "columns" columns
+    vec(widths): ""
+    len(nc): columns
+    set(i): 0
+    while(_): {i < nc} [
+        set(cw): {w / nc}
+        ps_floor(cw): cw
+        push(_): widths cw
+        set(i): {i + 1}
+    ]
+    btput(_): r "widths" widths
+    btput(_): r "rows" rows
+    btput(_): r "sortcol" -1
+    btput(_): r "desc" false
+    btput(_): r "selected" -1
+    btput(_): r "resizing" -1
+    btput(_): r "top" 0
+]
+
+pw_scroll(r): x y w h cw ch [
+    pw_new(r): "scroll" x y w h
+    btput(_): r "cw" cw
+    btput(_): r "ch" ch
+    btput(_): r "sx" 0
+    btput(_): r "sy" 0
+]
+
+pw_date(r): x y year month day [
+    pw_new(r): "date" x y 154 136
+    btput(_): r "year" year
+    btput(_): r "month" month
+    btput(_): r "day" day
+]
+
+pw_colour(r): x y h s v [
+    pw_new(r): "colour" x y 140 120
+    btput(_): r "h" h
+    btput(_): r "s" s
+    btput(_): r "v" v
+]
+
+pw_files(r): x y w h dir pattern [
+    pw_new(r): "files" x y w h
+    btput(_): r "pattern" pattern
+    btput(_): r "chosen" ""
+    pw_files_open(_): r dir
+]
+
+# --- the models
+
+pw_clampv(r): v lo hi [
+    set(r): v
+    if(_): {r < lo} [ set(r): lo ]
+    if(_): {r > hi} [ set(r): hi ]
+]
+
+pw_pointer(r): wd x y what [
+    # what: down, drag, up, click
+    set(r): false
+    btget(kind): wd "kind"
+    btget(rc): wd "rect"
+    at(rx): rc 0
+    at(ry): rc 1
+    at(rw): rc 2
+    at(rh): rc 3
+    pw_contains(inside): wd x y
+    if(_): {kind = "slider" && (what = "down" || what = "drag" || what = "click")} [
+        if(_): {inside || what = "drag"} [
+            btget(lo): wd "lo"
+            btget(hi): wd "hi"
+            set(t): {(x - rx) / (rw * 1.0)}
+            pw_clampv(t): t 0 1
+            ps_round(v): {lo + (hi - lo) * t}
+            btput(_): wd "value" v
+            set(r): true
+        ]
+    ]
+    elif(_): {kind = "spin" && what = "click" && inside} [
+        btget(v): wd "value"
+        btget(st): wd "step"
+        btget(lo): wd "lo"
+        btget(hi): wd "hi"
+        # the right fifth: up above the middle, down below
+        if(_): {x >= rx + rw - rw / 5} [
+            if(_): {y < ry + rh / 2} [ set(v): {v + st} ]
+            else(_): [ set(v): {v - st} ]
+            pw_clampv(v): v lo hi
+            btput(_): wd "value" v
+            set(r): true
+        ]
+    ]
+    elif(_): {kind = "radio" && what = "click" && inside} [
+        set(k): {(y - ry) / 18}
+        ps_floor(k): k
+        btget(opts): wd "options"
+        len(n): opts
+        if(_): {k < n} [
+            btput(_): wd "selected" k
+            set(r): true
+        ]
+    ]
+    elif(_): {kind = "tabs" && what = "click" && y < ry + 20 && inside} [
+        btget(labels): wd "labels"
+        len(n): labels
+        set(px): rx
+        set(i): 0
+        while(_): {i < n} [
+            at(l): labels i
+            len(ll): l
+            set(tw): {ll * 7 + 16}
+            if(_): {x >= px && x < px + tw} [
+                btput(_): wd "selected" i
+                set(r): true
+            ]
+            set(px): {px + tw}
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "splitter"} [
+        btget(dir): wd "dir"
+        btget(pos): wd "pos"
+        set(at_): {x - rx}
+        set(span): rw
+        if(_): {dir = "v"} [
+            set(at_): {y - ry}
+            set(span): rh
+        ]
+        if(_): {what = "down"} [
+            abs(d): {at_ - pos}
+            if(_): {d <= 3 && inside} [ btput(_): wd "dragging" true ]
+        ]
+        btget(dragging): wd "dragging"
+        if(_): {what = "drag" && dragging} [
+            pw_clampv(np): at_ 20 {span - 20}
+            btput(_): wd "pos" np
+            set(r): true
+        ]
+        if(_): {what = "up"} [ btput(_): wd "dragging" false ]
+    ]
+    elif(_): {kind = "menu" && inside} [
+        set(k): {(y - ry - 2) / 16}
+        ps_floor(k): k
+        btget(items): wd "items"
+        len(n): items
+        if(_): {k >= 0 && k < n} [
+            at(it): items k
+            at(lab): it 0
+            if(_): {lab != "-"} [
+                btput(_): wd "hover" k
+                if(_): {what = "click"} [
+                    at(act): it 2
+                    btput(_): wd "chosen" act
+                ]
+                set(r): true
+            ]
+        ]
+    ]
+    elif(_): {kind = "tree" && what = "click" && inside} [
+        pw_tree_rows(rows): wd
+        btget(top): wd "top"
+        set(k): {(y - ry) / 16 + top}
+        ps_floor(k): k
+        len(n): rows
+        if(_): {k < n} [
+            at(row): rows k
+            at(path): row 0
+            at(depth): row 1
+            at(kids): row 3
+            btput(_): wd "selected" path
+            # the arrow toggles
+            if(_): {kids && x < rx + depth * 12 + 12} [ pw_tree_toggle(_): wd path ]
+            set(r): true
+        ]
+    ]
+    elif(_): {kind = "table"} [
+        set(r): true
+        pw_table_pointer(r): wd x y what
+    ]
+    elif(_): {kind = "textarea" && what = "click" && inside} [
+        btget(top): wd "top"
+        set(row): {(y - ry - 2) / 12 + top}
+        ps_floor(row): row
+        set(col): {(x - rx - 4 + 3) / 7}
+        ps_floor(col): col
+        pw_ta_place(_): wd row col false
+        set(r): true
+    ]
+    elif(_): {kind = "date" && what = "click" && inside} [
+        if(_): {y < ry + 18} [
+            if(_): {x < rx + 20} [ pw_date_month(_): wd -1 ]
+            if(_): {x > rx + 134} [ pw_date_month(_): wd 1 ]
+        ]
+        else(_): [
+            pw_date_cells(cells): wd
+            set(cx_): {(x - rx) / 22}
+            ps_floor(cx_): cx_
+            set(cy_): {(y - ry - 32) / 17}
+            ps_floor(cy_): cy_
+            if(_): {cy_ >= 0 && cy_ < 6 && cx_ < 7} [
+                at(d): cells {cy_ * 7 + cx_}
+                if(_): {d > 0} [ btput(_): wd "day" d ]
+            ]
+        ]
+        set(r): true
+    ]
+    elif(_): {kind = "colour" && (what = "click" || what = "drag" || what = "down") && inside} [
+        if(_): {x < rx + 100} [
+            pw_clampv(s): {(x - rx) / 99.0} 0 1
+            pw_clampv(v): {1 - (y - ry) / 99.0} 0 1
+            btput(_): wd "s" s
+            btput(_): wd "v" v
+        ]
+        else(_): [
+            pw_clampv(h): {(y - ry) / 99.0 * 360} 0 359
+            btput(_): wd "h" h
+        ]
+        set(r): true
+    ]
+    elif(_): {kind = "files" && what = "click" && inside} [
+        btget(names): wd "names"
+        set(k): {(y - ry - 18) / 14}
+        ps_floor(k): k
+        len(n): names
+        if(_): {y >= ry + 18 && k < n} [
+            at(nm): names k
+            btget(dir): wd "dir"
+            str_ends(isd): nm "/"
+            if(_): {nm = "../"} [
+                path_dir(up): dir
+                pw_files_open(_): wd up
+            ]
+            elif(_): isd [
+                len(nl): nm
+                slice(sub): nm 0 {nl - 1}
+                path_join(p): dir sub
+                pw_files_open(_): wd p
+            ]
+            else(_): [
+                path_join(p): dir nm
+                btput(_): wd "chosen" p
+            ]
+            set(r): true
+        ]
+    ]
+    if(_): r [ pw_changed(_): wd ]
+]
+
+pw_wheel(r): wd dir [
+    btget(kind): wd "kind"
+    set(r): false
+    if(_): {kind = "scroll"} [
+        btget(sy): wd "sy"
+        btget(ch): wd "ch"
+        btget(rc): wd "rect"
+        at(h): rc 3
+        set(mx): {ch - h}
+        if(_): {mx < 0} [ set(mx): 0 ]
+        pw_clampv(sy): {sy - dir * 40} 0 mx
+        btput(_): wd "sy" sy
+        set(r): true
+    ]
+    if(_): {kind = "textarea" || kind = "tree" || kind = "table"} [
+        btget(top): wd "top"
+        set(top): {top - dir * 3}
+        if(_): {top < 0} [ set(top): 0 ]
+        btput(_): wd "top" top
+        set(r): true
+    ]
+]
+
+# the content of a scroll view at (cx, cy): where it shows on screen
+pw_scroll_to_screen(r): wd cx cy [
+    btget(rc): wd "rect"
+    at(x): rc 0
+    at(y): rc 1
+    btget(sx): wd "sx"
+    btget(sy): wd "sy"
+    ps_pt(r): {x + cx - sx} {y + cy - sy}
+]
+
+# --- text area editing
+
+pw_ta_line(r): wd row [
+    btget(lines): wd "lines"
+    at(r): lines row
+]
+
+pw_ta_place(r): wd row col extend [
+    set(r): 0
+    btget(lines): wd "lines"
+    len(n): lines
+    pw_clampv(row): row 0 {n - 1}
+    at(l): lines row
+    len(ll): l
+    pw_clampv(col): col 0 ll
+    btget(arow): wd "arow"
+    if(_): extend [
+        if(_): {arow < 0} [
+            btget(r0): wd "row"
+            btget(c0): wd "col"
+            btput(_): wd "arow" r0
+            btput(_): wd "acol" c0
+        ]
+    ]
+    else(_): [
+        btput(_): wd "arow" -1
+        btput(_): wd "acol" -1
+    ]
+    btput(_): wd "row" row
+    btput(_): wd "col" col
+    # keep the cursor in sight
+    btget(top): wd "top"
+    btget(rc): wd "rect"
+    at(h): rc 3
+    set(vis): {(h - 4) / 12}
+    ps_floor(vis): vis
+    if(_): {row < top} [ btput(_): wd "top" row ]
+    if(_): {row >= top + vis} [ btput(_): wd "top" {row - vis + 1} ]
+]
+
+# the selection as [r0 c0 r1 c1], ordered, or null
+pw_ta_sel(r): wd [
+    set(r): null
+    btget(ar): wd "arow"
+    if(_): {ar < 0} [ return(r): r ]
+    btget(ac): wd "acol"
+    btget(br): wd "row"
+    btget(bc): wd "col"
+    if(_): {ar = br && ac = bc} [ return(r): r ]
+    vec(r): ""
+    if(_): {ar < br || (ar = br && ac < bc)} [
+        push(_): r ar
+        push(_): r ac
+        push(_): r br
+        push(_): r bc
+    ]
+    else(_): [
+        push(_): r br
+        push(_): r bc
+        push(_): r ar
+        push(_): r ac
+    ]
+]
+
+pw_ta_text(r): wd [
+    btget(lines): wd "lines"
+    str_join(r): lines "\n"
+]
+
+pw_ta_selected(r): wd [
+    set(r): ""
+    pw_ta_sel(s): wd
+    if(_): {s = null} [ return(r): r ]
+    at(r0): s 0
+    at(c0): s 1
+    at(r1): s 2
+    at(c1): s 3
+    btget(lines): wd "lines"
+    set(i): r0
+    while(_): {i <= r1} [
+        at(l): lines i
+        len(ll): l
+        set(a): 0
+        set(b): ll
+        if(_): {i = r0} [ set(a): c0 ]
+        if(_): {i = r1} [ set(b): c1 ]
+        slice(part): l a {b - a}
+        concat(r): r part
+        if(_): {i < r1} [ concat(r): r "\n" ]
+        set(i): {i + 1}
+    ]
+]
+
+# text put in place of the selection, or at the cursor
+pw_ta_insert(r): wd text [
+    set(r): 0
+    pw_ta_delete_sel(_): wd
+    btget(lines): wd "lines"
+    btget(row): wd "row"
+    btget(col): wd "col"
+    at(l): lines row
+    len(ll): l
+    slice(head): l 0 col
+    slice(tail): l col {ll - col}
+    str_split(parts): text "\n"
+    len(np): parts
+    vec(out): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < row} [
+        at(x): lines i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    set(k): 0
+    while(_): {k < np} [
+        at(p): parts k
+        set(line): p
+        if(_): {k = 0} [ concat(line): head p ]
+        if(_): {k = np - 1} [
+            len(pl): line
+            set(col): pl
+            concat(line): line tail
+        ]
+        push(_): out line
+        set(k): {k + 1}
+    ]
+    set(i): {row + 1}
+    while(_): {i < n} [
+        at(x): lines i
+        push(_): out x
+        set(i): {i + 1}
+    ]
+    btput(_): wd "lines" out
+    pw_ta_place(_): wd {row + np - 1} col false
+    pw_changed(_): wd
+]
+
+pw_ta_delete_sel(r): wd [
+    set(r): false
+    pw_ta_sel(s): wd
+    if(_): {s = null} [ return(r): r ]
+    at(r0): s 0
+    at(c0): s 1
+    at(r1): s 2
+    at(c1): s 3
+    btget(lines): wd "lines"
+    at(la): lines r0
+    at(lb): lines r1
+    len(lbl): lb
+    slice(head): la 0 c0
+    slice(tail): lb c1 {lbl - c1}
+    vec(out): ""
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(x): lines i
+        if(_): {i < r0 || i > r1} [ push(_): out x ]
+        if(_): {i = r0} [
+            concat(j): head tail
+            push(_): out j
+        ]
+        set(i): {i + 1}
+    ]
+    btput(_): wd "lines" out
+    btput(_): wd "arow" -1
+    pw_ta_place(_): wd r0 c0 false
+    set(r): true
+]
+
+pw_key(r): wd key [
+    # keys: left right up down home end backspace delete enter, shift+...,
+    # ctrl+a ctrl+c ctrl+x ctrl+v, or a character
+    set(r): true
+    btget(kind): wd "kind"
+    if(_): {kind = "spin"} [
+        btget(v): wd "value"
+        btget(st): wd "step"
+        btget(lo): wd "lo"
+        btget(hi): wd "hi"
+        if(_): {key = "up"} [ set(v): {v + st} ]
+        elif(_): {key = "down"} [ set(v): {v - st} ]
+        else(_): [ set(r): false ]
+        pw_clampv(v): v lo hi
+        btput(_): wd "value" v
+        return(r): r
+    ]
+    if(_): {kind = "slider"} [
+        btget(v): wd "value"
+        btget(lo): wd "lo"
+        btget(hi): wd "hi"
+        if(_): {key = "right" || key = "up"} [ set(v): {v + 1} ]
+        elif(_): {key = "left" || key = "down"} [ set(v): {v - 1} ]
+        else(_): [ set(r): false ]
+        pw_clampv(v): v lo hi
+        btput(_): wd "value" v
+        return(r): r
+    ]
+    if(_): {kind = "tabs" || kind = "radio"} [
+        btget(sel): wd "selected"
+        set(listkey): "labels"
+        if(_): {kind = "radio"} [ set(listkey): "options" ]
+        btget(lst): wd listkey
+        len(n): lst
+        if(_): {key = "right" || key = "down"} [ set(sel): {(sel + 1) % n} ]
+        elif(_): {key = "left" || key = "up"} [ set(sel): {(sel + n - 1) % n} ]
+        else(_): [ set(r): false ]
+        btput(_): wd "selected" sel
+        return(r): r
+    ]
+    if(_): {kind = "tree"} [
+        pw_tree_rows(rows): wd
+        btget(sel): wd "selected"
+        len(n): rows
+        set(k): -1
+        set(i): 0
+        while(_): {i < n} [
+            at(row): rows i
+            at(p): row 0
+            if(_): {p = sel} [ set(k): i ]
+            set(i): {i + 1}
+        ]
+        if(_): {key = "down" && k + 1 < n} [ set(k): {k + 1} ]
+        elif(_): {key = "up" && k > 0} [ set(k): {k - 1} ]
+        elif(_): {(key = "right" || key = "left" || key = "enter") && k >= 0} [
+            at(row): rows k
+            at(p): row 0
+            btget(open): wd "open"
+            bthas(isopen): open p
+            if(_): {(key = "right" && isopen = false) || (key = "left" && isopen) || key = "enter"} [ pw_tree_toggle(_): wd p ]
+        ]
+        if(_): {k >= 0} [
+            at(row): rows k
+            at(p): row 0
+            btput(_): wd "selected" p
+        ]
+        return(r): r
+    ]
+    if(_): {kind != "textarea"} [
+        set(r): false
+        return(r): r
+    ]
+    btget(row): wd "row"
+    btget(col): wd "col"
+    btget(lines): wd "lines"
+    len(n): lines
+    at(l): lines row
+    len(ll): l
+    str_starts(shift): key "shift+"
+    set(k): key
+    if(_): shift [
+        len(kl): key
+        slice(k): key 6 {kl - 6}
+    ]
+    if(_): {k = "left"} [
+        if(_): {col > 0} [ pw_ta_place(_): wd row {col - 1} shift ]
+        elif(_): {row > 0} [
+            pw_ta_line(pl): wd {row - 1}
+            len(pll): pl
+            pw_ta_place(_): wd {row - 1} pll shift
+        ]
+    ]
+    elif(_): {k = "right"} [
+        if(_): {col < ll} [ pw_ta_place(_): wd row {col + 1} shift ]
+        elif(_): {row + 1 < n} [ pw_ta_place(_): wd {row + 1} 0 shift ]
+    ]
+    elif(_): {k = "up"} [ pw_ta_place(_): wd {row - 1} col shift ]
+    elif(_): {k = "down"} [ pw_ta_place(_): wd {row + 1} col shift ]
+    elif(_): {k = "home"} [ pw_ta_place(_): wd row 0 shift ]
+    elif(_): {k = "end"} [ pw_ta_place(_): wd row ll shift ]
+    elif(_): {key = "ctrl+a"} [
+        btput(_): wd "arow" 0
+        btput(_): wd "acol" 0
+        at(lastl): lines {n - 1}
+        len(lastn): lastl
+        btput(_): wd "row" {n - 1}
+        btput(_): wd "col" lastn
+    ]
+    elif(_): {key = "ctrl+c" || key = "ctrl+x"} [
+        pw_ta_selected(t): wd
+        pb_clipboard_set(_): t
+        if(_): {key = "ctrl+x"} [
+            pw_ta_delete_sel(_): wd
+            pw_changed(_): wd
+        ]
+    ]
+    elif(_): {key = "ctrl+v"} [
+        pb_clipboard_get(t):
+        pw_ta_insert(_): wd t
+    ]
+    elif(_): {key = "enter"} [ pw_ta_insert(_): wd "\n" ]
+    elif(_): {key = "backspace"} [
+        pw_ta_delete_sel(gone): wd
+        if(_): {gone = false} [
+            pw_ta_place(_): wd row col false
+            if(_): {col > 0 || row > 0} [
+                pw_key(_): wd "shift+left"
+                pw_ta_delete_sel(_): wd
+            ]
+        ]
+        pw_changed(_): wd
+    ]
+    elif(_): {key = "delete"} [
+        pw_ta_delete_sel(gone): wd
+        if(_): {gone = false} [
+            pw_ta_place(_): wd row col false
+            pw_key(_): wd "shift+right"
+            pw_ta_delete_sel(_): wd
+        ]
+        pw_changed(_): wd
+    ]
+    else(_): [
+        len(kl): key
+        if(_): {kl = 1} [ pw_ta_insert(_): wd key ]
+        else(_): [ set(r): false ]
+    ]
+]
+
+# --- the tree
+
+# visible rows: [path depth label haskids]
+pw_tree_rows(r): wd [
+    vec(r): ""
+    btget(root): wd "root"
+    btget(open): wd "open"
+    pw_tree_walk(_): root "" 0 open r
+]
+
+pw_tree_walk(r): node path depth open out [
+    set(r): 0
+    at(label): node 0
+    len(n): node
+    concat(p): path "/" label
+    vec(row): ""
+    push(_): row p
+    push(_): row depth
+    push(_): row label
+    push(_): row {n > 1}
+    push(_): out row
+    bthas(isopen): open p
+    if(_): isopen [
+        set(i): 1
+        while(_): {i < n} [
+            at(kid): node i
+            typeof(kt): kid
+            if(_): {kt = "string"} [
+                vec(leaf): ""
+                push(_): leaf kid
+                set(kid): leaf
+            ]
+            pw_tree_walk(_): kid p {depth + 1} open out
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+pw_tree_toggle(r): wd path [
+    btget(open): wd "open"
+    bthas(isopen): open path
+    if(_): isopen [ btdel(_): open path ]
+    else(_): [ btput(_): open path true ]
+    set(r): {isopen = false}
+]
+
+# --- the table
+
+pw_table_sorted(r): wd [
+    btget(rows): wd "rows"
+    btget(col): wd "sortcol"
+    set(r): rows
+    if(_): {col < 0} [ return(r): r ]
+    btget(desc): wd "desc"
+    # an insertion sort, stable; numbers as numbers
+    vec(r): ""
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        at(v): row col
+        set(j): 0
+        len(nr): r
+        set(place): nr
+        while(_): {j < nr} [
+            at(o): r j
+            at(ov): o col
+            pw_less(lt): v ov
+            pw_less(gt): ov v
+            set(before): lt
+            if(_): desc [ set(before): gt ]
+            if(_): {before} [
+                set(place): j
+                set(j): nr
+            ]
+            set(j): {j + 1}
+        ]
+        vec(nw): ""
+        set(j): 0
+        while(_): {j < nr} [
+            if(_): {j = place} [ push(_): nw row ]
+            at(o): r j
+            push(_): nw o
+            set(j): {j + 1}
+        ]
+        if(_): {place = nr} [ push(_): nw row ]
+        set(r): nw
+        set(i): {i + 1}
+    ]
+]
+
+pw_less(r): a b [
+    typeof(ta): a
+    typeof(tb): b
+    if(_): {(ta = "integer" || ta = "real") && (tb = "integer" || tb = "real")} [
+        set(r): {a < b}
+        return(r): r
+    ]
+    str_compare(c): a b
+    set(r): {c < 0}
+]
+
+pw_table_pointer(r): wd x y what [
+    set(r): false
+    btget(rc): wd "rect"
+    at(rx): rc 0
+    at(ry): rc 1
+    btget(widths): wd "widths"
+    len(nc): widths
+    # column edges
+    set(px): rx
+    set(edge): -1
+    set(colat): -1
+    set(i): 0
+    while(_): {i < nc} [
+        at(cw): widths i
+        if(_): {x >= px && x < px + cw} [ set(colat): i ]
+        abs(d): {x - (px + cw)}
+        if(_): {d <= 2} [ set(edge): i ]
+        set(px): {px + cw}
+        set(i): {i + 1}
+    ]
+    btget(resizing): wd "resizing"
+    if(_): {what = "down" && y < ry + 18 && edge >= 0} [
+        btput(_): wd "resizing" edge
+        set(r): true
+        return(r): r
+    ]
+    if(_): {what = "drag" && resizing >= 0} [
+        set(px): rx
+        set(i): 0
+        while(_): {i < resizing} [
+            at(cw): widths i
+            set(px): {px + cw}
+            set(i): {i + 1}
+        ]
+        set(nw): {x - px}
+        if(_): {nw < 16} [ set(nw): 16 ]
+        set(widths): resizing nw
+        set(r): true
+        return(r): r
+    ]
+    if(_): {what = "up"} [
+        btput(_): wd "resizing" -1
+        return(r): r
+    ]
+    if(_): {what = "click" && y < ry + 18 && colat >= 0} [
+        btget(sc): wd "sortcol"
+        btget(desc): wd "desc"
+        if(_): {sc = colat} [ btput(_): wd "desc" {desc = false} ]
+        else(_): [
+            btput(_): wd "sortcol" colat
+            btput(_): wd "desc" false
+        ]
+        set(r): true
+        return(r): r
+    ]
+    if(_): {what = "click" && y >= ry + 18} [
+        btget(top): wd "top"
+        set(k): {(y - ry - 18) / 16 + top}
+        ps_floor(k): k
+        btget(rows): wd "rows"
+        len(n): rows
+        if(_): {k < n} [
+            btput(_): wd "selected" k
+            set(r): true
+        ]
+    ]
+]
+
+# --- the date picker
+
+pw_date_cells(r): wd [
+    btget(y): wd "year"
+    btget(m): wd "month"
+    vec(r): ""
+    pw_weekday(wd0): y m 1
+    # Monday first
+    set(lead): {(wd0 + 6) % 7}
+    pw_month_days(nd): y m
+    set(i): 0
+    while(_): {i < 42} [
+        set(d): {i - lead + 1}
+        if(_): {d < 1 || d > nd} [ set(d): 0 ]
+        push(_): r d
+        set(i): {i + 1}
+    ]
+]
+
+pw_weekday(r): y m d [
+    # 0 Sunday .. 6 (Sakamoto)
+    str_split(ts): "0 3 2 5 0 3 5 1 4 6 2 4" " "
+    set(yy): y
+    if(_): {m < 3} [ set(yy): {y - 1} ]
+    at(tm): ts {m - 1}
+    str_to_int(tmn): tm 10
+    set(a): {yy / 4}
+    ps_floor(a): a
+    set(b): {yy / 100}
+    ps_floor(b): b
+    set(c): {yy / 400}
+    ps_floor(c): c
+    set(r): {(yy + a - b + c + tmn + d) % 7}
+]
+
+pw_month_days(r): y m [
+    set(r): 31
+    if(_): {m = 4 || m = 6 || m = 9 || m = 11} [ set(r): 30 ]
+    if(_): {m = 2} [
+        set(leap): {(y % 4 = 0 && y % 100 != 0) || y % 400 = 0}
+        set(r): 28
+        if(_): leap [ set(r): 29 ]
+    ]
+]
+
+pw_date_month(r): wd step [
+    btget(y): wd "year"
+    btget(m): wd "month"
+    set(m): {m + step}
+    if(_): {m < 1} [
+        set(m): 12
+        set(y): {y - 1}
+    ]
+    if(_): {m > 12} [
+        set(m): 1
+        set(y): {y + 1}
+    ]
+    btput(_): wd "year" y
+    btput(_): wd "month" m
+    btget(d): wd "day"
+    pw_month_days(nd): y m
+    if(_): {d > nd} [ btput(_): wd "day" nd ]
+    set(r): 0
+]
+
+# --- colours
+
+pw_hsv(r): h s v [
+    # -> 0xRRGGBB
+    set(c): {v * s}
+    set(hh): {h / 60.0}
+    ps_floor(hi): hh
+    set(f): {hh - hi}
+    set(p): {v - c}
+    set(q): {v - c * f}
+    set(t): {v - c * (1 - f)}
+    set(rr): v
+    set(gg): t
+    set(bb): p
+    set(k): {hi % 6}
+    if(_): {k = 1} [
+        set(rr): q
+        set(gg): v
+        set(bb): p
+    ]
+    elif(_): {k = 2} [
+        set(rr): p
+        set(gg): v
+        set(bb): t
+    ]
+    elif(_): {k = 3} [
+        set(rr): p
+        set(gg): q
+        set(bb): v
+    ]
+    elif(_): {k = 4} [
+        set(rr): t
+        set(gg): p
+        set(bb): v
+    ]
+    elif(_): {k = 5} [
+        set(rr): v
+        set(gg): p
+        set(bb): q
+    ]
+    ps_round(r8): {rr * 255}
+    ps_round(g8): {gg * 255}
+    ps_round(b8): {bb * 255}
+    set(r): {(r8 << 16) | (g8 << 8) | b8}
+]
+
+pw_colour_value(r): wd [
+    btget(h): wd "h"
+    btget(s): wd "s"
+    btget(v): wd "v"
+    pw_hsv(r): h s v
+]
+
+# --- the file chooser
+
+pw_files_open(r): wd dir [
+    set(r): 0
+    btput(_): wd "dir" dir
+    list_dir(names): dir
+    typeof(nt): names
+    vec(out): ""
+    push(_): out "../"
+    if(_): {nt = "vector"} [
+        list_sort(names): names
+        btget(pat): wd "pattern"
+        len(n): names
+        set(i): 0
+        while(_): {i < n} [
+            at(nm): names i
+            str_ends(isd): nm "/"
+            str_starts(hid): nm "."
+            set(ok): isd
+            if(_): {isd = false} [
+                glob_match(ok): pat nm
+                if(_): {pat = "" || pat = "*"} [ set(ok): true ]
+            ]
+            if(_): {ok && hid = false} [ push(_): out nm ]
+            set(i): {i + 1}
+        ]
+    ]
+    btput(_): wd "names" out
+]
+
+# --- drawing them
+
+pw_render(r): wd s theme [
+    set(r): 0
+    btget(ids): wd "ids"
+    len(n): ids
+    set(i): 0
+    while(_): {i < n} [
+        at(id): ids i
+        ps_delete(_): s id
+        set(i): {i + 1}
+    ]
+    vec(ids): ""
+    btput(_): wd "ids" ids
+    btget(kind): wd "kind"
+    btget(rc): wd "rect"
+    at(x): rc 0
+    at(y): rc 1
+    at(w): rc 2
+    at(h): rc 3
+    pt_color(fg): theme "fg"
+    pt_color(bg): theme "field"
+    pt_color(panel): theme "panel"
+    pt_color(border): theme "border"
+    pt_color(accent): theme "accent"
+    pt_color(sel): theme "select"
+    pt_color(muted): theme "muted"
+    if(_): {kind = "progress"} [
+        pw_box(_): wd s x y w h bg border
+        btget(v): wd "value"
+        btget(mx): wd "max"
+        set(fw): 0
+        if(_): {mx > 0} [ set(fw): {(w - 4) * v / mx} ]
+        ps_floor(fw): fw
+        if(_): {fw > 0} [ pw_box(_): wd s {x + 2} {y + 2} fw {h - 4} accent accent ]
+    ]
+    elif(_): {kind = "slider"} [
+        set(my): {y + h / 2}
+        ps_floor(my): my
+        pw_box(_): wd s x {my - 2} w 4 panel border
+        btget(v): wd "value"
+        btget(lo): wd "lo"
+        btget(hi): wd "hi"
+        set(t): 0
+        if(_): {hi > lo} [ set(t): {(v - lo) / (hi - lo * 1.0)} ]
+        set(kx): {x + t * w}
+        ps_floor(kx): kx
+        pw_box(_): wd s {kx - 4} y 8 h accent border
+    ]
+    elif(_): {kind = "spin"} [
+        pw_box(_): wd s x y w h bg border
+        btget(v): wd "value"
+        str_from_number(vs): v 0
+        typeof(vt): v
+        if(_): {vt = "integer"} [ str_from_int(vs): v ]
+        pw_text(_): wd s {x + 4} {y + (h - 7) / 2} vs fg
+        set(bx): {x + w - w / 5}
+        ps_floor(bx): bx
+        pw_box(_): wd s bx y {x + w - bx} {h / 2} panel border
+        pw_box(_): wd s bx {y + h / 2} {x + w - bx} {h - h / 2} panel border
+    ]
+    elif(_): {kind = "radio"} [
+        btget(opts): wd "options"
+        btget(selk): wd "selected"
+        len(no): opts
+        set(i): 0
+        while(_): {i < no} [
+            at(o): opts i
+            set(cy): {y + i * 18 + 8}
+            ps_pt(c): {x + 8} cy
+            vec(pts): ""
+            push(_): pts c
+            btree(pr):
+            btput(_): pr "radius" 6
+            btput(_): pr "color" border
+            btput(_): pr "fill" bg
+            ps_add(id): s "circle" pts pr
+            push(_): ids id
+            if(_): {i = selk} [
+                btree(pr2):
+                btput(_): pr2 "radius" 3
+                btput(_): pr2 "color" accent
+                btput(_): pr2 "fill" accent
+                ps_add(id): s "circle" pts pr2
+                push(_): ids id
+            ]
+            pw_text(_): wd s {x + 20} {cy - 3} o fg
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "tabs"} [
+        pw_box(_): wd s x {y + 20} w {h - 20} bg border
+        btget(labels): wd "labels"
+        btget(selk): wd "selected"
+        len(nl): labels
+        set(px): x
+        set(i): 0
+        while(_): {i < nl} [
+            at(l): labels i
+            len(ll): l
+            set(tw): {ll * 7 + 16}
+            set(face): panel
+            if(_): {i = selk} [ set(face): bg ]
+            pw_box(_): wd s px y tw 21 face border
+            pw_text(_): wd s {px + 8} {y + 7} l fg
+            set(px): {px + tw}
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "group"} [
+        pw_box(_): wd s x {y + 4} w {h - 4} -1 border
+        btget(t): wd "title"
+        len(tl): t
+        pw_box(_): wd s {x + 6} y {tl * 7 + 6} 9 panel panel
+        pw_text(_): wd s {x + 9} {y + 1} t fg
+    ]
+    elif(_): {kind = "splitter"} [
+        btget(dir): wd "dir"
+        btget(pos): wd "pos"
+        if(_): {dir = "v"} [ pw_box(_): wd s x {y + pos - 2} w 4 border border ]
+        else(_): [ pw_box(_): wd s {x + pos - 2} y 4 h border border ]
+    ]
+    elif(_): {kind = "status"} [
+        pw_box(_): wd s x y w h panel border
+        btget(parts): wd "parts"
+        len(np): parts
+        set(px): {x + 4}
+        set(i): 0
+        while(_): {i < np} [
+            at(p): parts i
+            pw_text(_): wd s px {y + (h - 7) / 2} p fg
+            len(pl): p
+            set(px): {px + pl * 7 + 12}
+            if(_): {i < np - 1} [ pw_line(_): wd s {px - 6} {y + 2} {px - 6} {y + h - 2} border ]
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "tooltip"} [
+        btget(shown): wd "shown"
+        if(_): shown [
+            pw_box(_): wd s x y w h 16777185 border
+            btget(t): wd "text"
+            pw_text(_): wd s {x + 4} {y + 4} t 0
+        ]
+    ]
+    elif(_): {kind = "rich"} [
+        btget(spans): wd "spans"
+        len(ns): spans
+        set(px): x
+        set(i): 0
+        while(_): {i < ns} [
+            at(sp): spans i
+            at(t): sp 0
+            at(c): sp 1
+            at(bold): sp 2
+            pw_text(_): wd s px y t c
+            if(_): bold [ pw_text(_): wd s {px + 1} y t c ]
+            len(tl): t
+            set(px): {px + tl * 7}
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "menu"} [
+        pw_box(_): wd s x y w h bg border
+        btget(items): wd "items"
+        btget(hov): wd "hover"
+        len(ni): items
+        set(i): 0
+        while(_): {i < ni} [
+            at(it): items i
+            at(lab): it 0
+            set(iy): {y + 2 + i * 16}
+            if(_): {lab = "-"} [ pw_line(_): wd s {x + 4} {iy + 8} {x + w - 4} {iy + 8} border ]
+            else(_): [
+                if(_): {i = hov} [ pw_box(_): wd s {x + 2} iy {w - 4} 16 sel sel ]
+                pw_text(_): wd s {x + 8} {iy + 5} lab fg
+                at(sc): it 1
+                len(sl): sc
+                pw_text(_): wd s {x + w - 8 - sl * 7} {iy + 5} sc muted
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "textarea"} [
+        pw_box(_): wd s x y w h bg border
+        btget(lines): wd "lines"
+        btget(top): wd "top"
+        btget(row): wd "row"
+        btget(col): wd "col"
+        pw_ta_sel(selr): wd
+        set(vis): {(h - 4) / 12}
+        ps_floor(vis): vis
+        len(nl): lines
+        set(i): 0
+        while(_): {i < vis && top + i < nl} [
+            set(k): {top + i}
+            at(l): lines k
+            set(ly): {y + 2 + i * 12}
+            if(_): {selr != null} [
+                at(r0): selr 0
+                at(c0): selr 1
+                at(r1): selr 2
+                at(c1): selr 3
+                if(_): {k >= r0 && k <= r1} [
+                    len(ll): l
+                    set(a): 0
+                    set(b): ll
+                    if(_): {k = r0} [ set(a): c0 ]
+                    if(_): {k = r1} [ set(b): c1 ]
+                    if(_): {b > a} [ pw_box(_): wd s {x + 4 + a * 7} ly {(b - a) * 7} 11 sel sel ]
+                ]
+            ]
+            pw_text(_): wd s {x + 4} {ly + 2} l fg
+            if(_): {k = row} [ pw_line(_): wd s {x + 4 + col * 7} ly {x + 4 + col * 7} {ly + 10} fg ]
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "tree"} [
+        pw_box(_): wd s x y w h bg border
+        pw_tree_rows(rows): wd
+        btget(top): wd "top"
+        btget(selp): wd "selected"
+        btget(open): wd "open"
+        len(nr): rows
+        set(vis): {h / 16}
+        ps_floor(vis): vis
+        set(i): 0
+        while(_): {i < vis && top + i < nr} [
+            at(row): rows {top + i}
+            at(p): row 0
+            at(depth): row 1
+            at(lab): row 2
+            at(kids): row 3
+            set(ry): {y + i * 16}
+            if(_): {p = selp} [ pw_box(_): wd s {x + 1} ry {w - 2} 16 sel sel ]
+            set(ix): {x + 4 + depth * 12}
+            if(_): kids [
+                bthas(isopen): open p
+                set(arrow): "+"
+                if(_): isopen [ set(arrow): "-" ]
+                pw_text(_): wd s ix {ry + 5} arrow muted
+            ]
+            pw_text(_): wd s {ix + 12} {ry + 5} lab fg
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "table"} [
+        pw_box(_): wd s x y w h bg border
+        btget(cols): wd "columns"
+        btget(widths): wd "widths"
+        btget(sc): wd "sortcol"
+        btget(desc): wd "desc"
+        pw_table_sorted(rows): wd
+        btget(selk): wd "selected"
+        btget(top): wd "top"
+        len(nc): cols
+        set(px): x
+        set(i): 0
+        while(_): {i < nc} [
+            at(cw): widths i
+            at(cn): cols i
+            pw_box(_): wd s px y cw 18 panel border
+            set(lab): cn
+            if(_): {i = sc && desc} [ concat(lab): cn " v" ]
+            elif(_): {i = sc} [ concat(lab): cn " ^" ]
+            pw_text(_): wd s {px + 4} {y + 6} lab fg
+            set(px): {px + cw}
+            set(i): {i + 1}
+        ]
+        len(nr): rows
+        set(vis): {(h - 18) / 16}
+        ps_floor(vis): vis
+        set(k): 0
+        while(_): {k < vis && top + k < nr} [
+            at(row): rows {top + k}
+            set(ry): {y + 18 + k * 16}
+            if(_): {top + k = selk} [ pw_box(_): wd s {x + 1} ry {w - 2} 16 sel sel ]
+            set(px): x
+            set(i): 0
+            while(_): {i < nc} [
+                at(cw): widths i
+                at(v): row i
+                typeof(vt): v
+                set(vs): v
+                if(_): {vt = "integer"} [ str_from_int(vs): v ]
+                if(_): {vt = "real"} [ str_from_number(vs): v 2 ]
+                pw_text(_): wd s {px + 4} {ry + 5} vs fg
+                set(px): {px + cw}
+                set(i): {i + 1}
+            ]
+            set(k): {k + 1}
+        ]
+    ]
+    elif(_): {kind = "scroll"} [
+        pw_box(_): wd s x y w h -1 border
+        btget(chh): wd "ch"
+        btget(sy): wd "sy"
+        if(_): {chh > h} [
+            set(th): {h * h / chh}
+            ps_floor(th): th
+            set(ty): {y + (h - th) * sy / (chh - h)}
+            ps_floor(ty): ty
+            pw_box(_): wd s {x + w - 6} ty 5 th muted muted
+        ]
+    ]
+    elif(_): {kind = "date"} [
+        pw_box(_): wd s x y w h bg border
+        btget(yy): wd "year"
+        btget(mm): wd "month"
+        btget(dd): wd "day"
+        str_from_int(ys): yy
+        str_from_int(ms): mm
+        str_pad_left(ms): ms 2 "0"
+        concat(head): ys "-" ms
+        pw_text(_): wd s {x + 6} {y + 6} "<" fg
+        pw_text(_): wd s {x + 52} {y + 6} head fg
+        pw_text(_): wd s {x + 140} {y + 6} ">" fg
+        vec(dn): ""
+        str_split(dn): "Mo Tu We Th Fr Sa Su" " "
+        set(i): 0
+        while(_): {i < 7} [
+            at(dl): dn i
+            pw_text(_): wd s {x + 4 + i * 22} {y + 22} dl muted
+            set(i): {i + 1}
+        ]
+        pw_date_cells(cells): wd
+        set(i): 0
+        while(_): {i < 42} [
+            at(d): cells i
+            if(_): {d > 0} [
+                set(cx_): {x + 4 + (i % 7) * 22}
+                set(cy_): {y + 32 + (i / 7 - (i % 7) / 7.0) * 17}
+                ps_floor(cy_): cy_
+                if(_): {d = dd} [ pw_box(_): wd s {cx_ - 2} {cy_ - 2} 20 13 sel sel ]
+                str_from_int(ds): d
+                pw_text(_): wd s cx_ {cy_ + 1} ds fg
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    elif(_): {kind = "colour"} [
+        btget(hh): wd "h"
+        # the saturation and value square in 10 x 10 cells, the hue bar
+        set(j): 0
+        while(_): {j < 10} [
+            set(i): 0
+            while(_): {i < 10} [
+                pw_hsv(c): hh {i / 9.0} {1 - j / 9.0}
+                pw_box(_): wd s {x + i * 10} {y + j * 10} 10 10 c c
+                set(i): {i + 1}
+            ]
+            pw_hsv(hc): {j * 36} 1 1
+            pw_box(_): wd s {x + 106} {y + j * 10} 14 10 hc hc
+            set(j): {j + 1}
+        ]
+        pw_colour_value(cur): wd
+        pw_box(_): wd s {x + 126} y 14 100 cur border
+    ]
+    elif(_): {kind = "files"} [
+        pw_box(_): wd s x y w h bg border
+        btget(dir): wd "dir"
+        pw_text(_): wd s {x + 4} {y + 5} dir muted
+        btget(names): wd "names"
+        len(nn): names
+        set(vis): {(h - 18) / 14}
+        ps_floor(vis): vis
+        set(i): 0
+        while(_): {i < nn && i < vis} [
+            at(nm): names i
+            pw_text(_): wd s {x + 8} {y + 22 + i * 14} nm fg
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+pw_box(r): wd s x y w h fill color [
+    btget(ids): wd "ids"
+    vec(pts): ""
+    ps_pt(a): x y
+    ps_pt(b): {x + w} {y + h}
+    push(_): pts a
+    push(_): pts b
+    btree(pr):
+    btput(_): pr "fill" fill
+    btput(_): pr "color" color
+    ps_add(r): s "rect" pts pr
+    push(_): ids r
+]
+
+pw_line(r): wd s x0 y0 x1 y1 color [
+    btget(ids): wd "ids"
+    vec(pts): ""
+    ps_pt(a): x0 y0
+    ps_pt(b): x1 y1
+    push(_): pts a
+    push(_): pts b
+    btree(pr):
+    btput(_): pr "color" color
+    ps_add(r): s "line" pts pr
+    push(_): ids r
+]
+
+pw_text(r): wd s x y text color [
+    btget(ids): wd "ids"
+    vec(pts): ""
+    ps_floor(xi): x
+    ps_floor(yi): y
+    ps_pt(a): xi yi
+    push(_): pts a
+    btree(pr):
+    btput(_): pr "color" color
+    btput(_): pr "text" text
+    ps_add(r): s "text" pts pr
+    push(_): ids r
+]
+
+# ---------------------------------------------------------------- services
+
+# --- undo: [label do undo] entries; do and undo are definition names
+# called with the entry's data, or the stack holds plain states
+pb_undo_new(r): limit [
+    btree(r):
+    vec(done): ""
+    vec(redo): ""
+    btput(_): r "done" done
+    btput(_): r "redo" redo
+    btput(_): r "limit" limit
+    btput(_): r "saved" 0
+]
+
+# a change: label, the state before and after (any values)
+pb_undo_push(r): u label before after [
+    set(r): 0
+    btget(done): u "done"
+    vec(e): ""
+    push(_): e label
+    push(_): e before
+    push(_): e after
+    # typing merges: the same label twice in a row keeps the first before
+    len(n): done
+    set(merged): false
+    if(_): {n > 0} [
+        at(last): done {n - 1}
+        at(ll): last 0
+        str_starts(typing): label "type"
+        if(_): {ll = label && typing} [
+            at(b0): last 1
+            vec(e2): ""
+            push(_): e2 label
+            push(_): e2 b0
+            push(_): e2 after
+            set(done): {n - 1} e2
+            set(merged): true
+        ]
+    ]
+    if(_): {merged = false} [ push(_): done e ]
+    btget(lim): u "limit"
+    len(n): done
+    if(_): {lim > 0 && n > lim} [
+        vec(rest): ""
+        set(i): {n - lim}
+        while(_): {i < n} [
+            at(x): done i
+            push(_): rest x
+            set(i): {i + 1}
+        ]
+        btput(_): u "done" rest
+    ]
+    vec(none): ""
+    btput(_): u "redo" none
+]
+
+# -> the state to go back to, or null
+pb_undo(r): u [
+    set(r): null
+    btget(done): u "done"
+    len(n): done
+    if(_): {n = 0} [ return(r): r ]
+    pop(e): done
+    btget(redo): u "redo"
+    push(_): redo e
+    at(r): e 1
+]
+
+pb_redo(r): u [
+    set(r): null
+    btget(redo): u "redo"
+    len(n): redo
+    if(_): {n = 0} [ return(r): r ]
+    pop(e): redo
+    btget(done): u "done"
+    push(_): done e
+    at(r): e 2
+]
+
+pb_undo_label(r): u [
+    set(r): ""
+    btget(done): u "done"
+    len(n): done
+    if(_): {n > 0} [
+        at(e): done {n - 1}
+        at(r): e 0
+    ]
+]
+
+pb_undo_mark_saved(r): u [
+    btget(done): u "done"
+    len(r): done
+    btput(_): u "saved" r
+]
+
+pb_undo_modified(r): u [
+    btget(done): u "done"
+    len(n): done
+    btget(sv): u "saved"
+    set(r): {n != sv}
+]
+
+# --- commands: name label shortcut enabled handler
+pb_commands(r): [
+    btree(r):
+]
+
+pb_command(r): table name label shortcut handler [
+    btree(c):
+    btput(_): c "name" name
+    btput(_): c "label" label
+    str_lower(sc): shortcut
+    btput(_): c "shortcut" sc
+    btput(_): c "handler" handler
+    btput(_): c "enabled" true
+    btput(_): table name c
+    set(r): 0
+]
+
+pb_enable(r): table name on [
+    btget(c): table name null
+    set(r): false
+    if(_): {c != null} [
+        btput(_): c "enabled" on
+        set(r): true
+    ]
+]
+
+# a key chord ("ctrl+s") -> the command's name that takes it, or ""
+pb_accelerator(r): table chord [
+    set(r): ""
+    str_lower(k): chord
+    btkeys(ks): table
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): ks i
+        btget(c): table nm
+        btget(sc): c "shortcut"
+        btget(en): c "enabled"
+        if(_): {sc = k && en} [
+            set(r): nm
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# runs a command's handler (a definition name, called with the name); its
+# result, or null when it is not there or switched off
+pb_run_command(r): table name [
+    set(r): null
+    btget(c): table name null
+    if(_): {c = null} [ return(r): r ]
+    btget(en): c "enabled"
+    if(_): {en = false} [ return(r): r ]
+    btget(h): c "handler"
+    async(p): h name
+    await(r): p
+]
+
+# a menu from commands: [[label shortcut name]...] for pw_menu
+pb_command_menu(r): table names [
+    vec(r): ""
+    len(n): names
+    set(i): 0
+    while(_): {i < n} [
+        at(nm): names i
+        vec(e): ""
+        if(_): {nm = "-"} [
+            push(_): e "-"
+            push(_): e ""
+            push(_): e ""
+        ]
+        else(_): [
+            btget(c): table nm
+            btget(lab): c "label"
+            btget(sc): c "shortcut"
+            push(_): e lab
+            push(_): e sc
+            push(_): e nm
+        ]
+        push(_): r e
+        set(i): {i + 1}
+    ]
+]
+
+# --- data binding: a model btree, bindings of its keys to targets; a
+# target is a canvas widget (its key is set) or a native handle (settext)
+pb_model(r): [
+    btree(r):
+    btree(b):
+    btput(_): r "__bindings" b
+]
+
+pb_bind(r): model key target field [
+    btget(b): model "__bindings"
+    btget(lst): b key null
+    if(_): {lst = null} [
+        vec(lst): ""
+        btput(_): b key lst
+    ]
+    vec(e): ""
+    push(_): e target
+    push(_): e field
+    push(_): lst e
+    btget(v): model key null
+    if(_): {v != null} [ pb_push_value(_): target field v ]
+    set(r): 0
+]
+
+pb_push_value(r): target field v [
+    set(r): 0
+    typeof(tt): target
+    if(_): {tt = "btree"} [ btput(_): target field v ]
+    elif(_): {tt = "integer"} [
+        typeof(vt): v
+        set(s): v
+        if(_): {vt = "integer"} [ str_from_int(s): v ]
+        if(_): {vt = "real"} [ str_from_number(s): v 2 ]
+        settext(_): target s
+    ]
+]
+
+# sets a value; every bound target follows; the number of targets
+pb_set(r): model key v [
+    btput(_): model key v
+    btget(b): model "__bindings"
+    btget(lst): b key null
+    set(r): 0
+    if(_): {lst = null} [ return(r): r ]
+    len(r): lst
+    set(i): 0
+    while(_): {i < r} [
+        at(e): lst i
+        at(t): e 0
+        at(f): e 1
+        pb_push_value(_): t f v
+        set(i): {i + 1}
+    ]
+]
+
+# a canvas widget changed: its value back into the model
+pb_pull(r): model key target field [
+    btget(v): target field
+    pb_set(r): model key v
+]
+
+# --- easing and tweens
+pb_ease(r): name t [
+    pw_clampv(t): t 0 1
+    set(r): t
+    if(_): {name = "in"} [ set(r): {t * t} ]
+    elif(_): {name = "out"} [ set(r): {t * (2 - t)} ]
+    elif(_): {name = "inout"} [
+        if(_): {t < 0.5} [ set(r): {2 * t * t} ]
+        else(_): [ set(r): {1 - (2 - 2 * t) * (2 - 2 * t) / 2} ]
+    ]
+    elif(_): {name = "cubic"} [ set(r): {t * t * t} ]
+    elif(_): {name = "sine"} [
+        cos(c): {t * 3.141592653589793}
+        set(r): {(1 - c) / 2}
+    ]
+    elif(_): {name = "bounce"} [
+        set(n1): 7.5625
+        set(d1): 2.75
+        if(_): {t < 1 / d1} [ set(r): {n1 * t * t} ]
+        elif(_): {t < 2 / d1} [
+            set(u): {t - 1.5 / d1}
+            set(r): {n1 * u * u + 0.75}
+        ]
+        elif(_): {t < 2.5 / d1} [
+            set(u): {t - 2.25 / d1}
+            set(r): {n1 * u * u + 0.9375}
+        ]
+        else(_): [
+            set(u): {t - 2.625 / d1}
+            set(r): {n1 * u * u + 0.984375}
+        ]
+    ]
+    elif(_): {name = "back"} [ set(r): {t * t * (2.70158 * t - 1.70158)} ]
+]
+
+pb_tween(r): from to t0 dur ease now [
+    set(t): 1
+    if(_): {dur > 0} [ set(t): {(now - t0) / (dur * 1.0)} ]
+    pb_ease(e): ease t
+    set(r): {from + (to - from) * e}
+]
+
+# --- timers: every ms milliseconds the handler (a definition name) is
+# called with the tick number, until pb_stop_timer or it returns false
+global(_): pb_timers pb_board
+
+# the timer's id is a btree the loop shares (btrees go by reference to
+# the processes a program starts): pb_stop_timer marks it
+pb_every(r): ms handler [
+    btree(r):
+    btput(_): r "stop" false
+    btput(_): r "ticks" 0
+    async(_): "pb_timer_loop" r ms handler
+]
+
+pb_timer_loop(r): ctl ms handler [
+    set(r): 0
+    set(tick): 0
+    set(go): true
+    while(_): go [
+        sleep(_): ms
+        btget(stop): ctl "stop"
+        if(_): stop [ set(go): false ]
+        if(_): go [
+            set(tick): {tick + 1}
+            btput(_): ctl "ticks" tick
+            async(p): handler tick
+            await(res): p
+            if(_): {res = false} [
+                set(go): false
+                btput(_): ctl "stop" true
+            ]
+        ]
+    ]
+]
+
+pb_stop_timer(r): ctl [
+    btput(_): ctl "stop" true
+    set(r): 0
+]
+
+pb_timer_ticks(r): ctl [
+    btget(r): ctl "ticks"
+]
+
+# --- the clipboard: a btree made by the program, so the callbacks it
+# starts share it (the system's clipboard is not reached yet)
+pb_clipboard_set(r): text [
+    if(_): {pb_board = null} [ btree(pb_board): ]
+    btput(_): pb_board "text" text
+    set(r): 0
+]
+
+pb_clipboard_get(r): [
+    set(r): ""
+    if(_): {pb_board != null} [ btget(r): pb_board "text" "" ]
+]
+
+# --- jobs: work in steps, with progress and cancel
+pb_job(r): total [
+    btree(r):
+    btput(_): r "total" total
+    btput(_): r "done" 0
+    btput(_): r "cancel" false
+    btput(_): r "state" "running"
+]
+
+# a step done; false when the job was cancelled (stop then)
+pb_job_step(r): job [
+    btget(c): job "cancel"
+    if(_): c [
+        btput(_): job "state" "cancelled"
+        set(r): false
+        return(r): r
+    ]
+    btget(d): job "done"
+    btget(t): job "total"
+    btput(_): job "done" {d + 1}
+    if(_): {d + 1 >= t} [ btput(_): job "state" "finished" ]
+    set(r): true
+]
+
+pb_job_cancel(r): job [
+    btput(_): job "cancel" true
+    set(r): 0
+]
+
+pb_job_percent(r): job [
+    btget(d): job "done"
+    btget(t): job "total"
+    set(r): 100
+    if(_): {t > 0} [
+        set(r): {d * 100 / t}
+        ps_floor(r): r
+    ]
+]
+
+# --- focus order: Tab and Shift+Tab over a list of native handles
+pb_tab(r): window order back [
+    getfocus(cur): window
+    len(n): order
+    set(k): -1
+    set(i): 0
+    while(_): {i < n} [
+        at(h): order i
+        if(_): {h = cur} [ set(k): i ]
+        set(i): {i + 1}
+    ]
+    pb_tab_next(nk): k n back
+    at(r): order nk
+    setfocus(_): r
+]
+
+pb_tab_next(r): k n back [
+    if(_): back [ set(r): {(k + n - 1) % n} ]
+    else(_): [ set(r): {(k + 1) % n} ]
+    if(_): {k < 0} [ set(r): 0 ]
+    if(_): {k < 0 && back} [ set(r): {n - 1} ]
+]
+
+# --- recording and replaying events
+pb_record(r): widget event a b c [
+    if(_): {pb_recording = null} [ set(pb_recording): "" ]
+    vec(ev): ""
+    push(_): ev widget
+    push(_): ev event
+    push(_): ev a
+    push(_): ev b
+    push(_): ev c
+    encode(e): ev
+    concat(pb_recording): pb_recording e "\n"
+    set(r): 0
+]
+
+pb_recording_text(r): [
+    set(r): pb_recording
+    if(_): {r = null} [ set(r): "" ]
+]
+
+# lines of [widget event a b c] -> the events; handles mapped by a btree
+# (recorded handle -> live one) when it is not null
+pb_replay_events(r): text [
+    vec(r): ""
+    str_split(lines): text "\n"
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        if(_): {l != ""} [
+            decode(e): l
+            push(_): r e
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+pb_replay(r): text map pause [
+    pb_replay_events(evs): text
+    len(r): evs
+    set(i): 0
+    while(_): {i < r} [
+        at(e): evs i
+        at(wd): e 0
+        if(_): {map != null} [ btget(wd): map wd wd ]
+        at(ev): e 1
+        at(a): e 2
+        at(b): e 3
+        at(c): e 4
+        inject(_): wd ev a b c
+        if(_): {pause > 0} [ sleep(_): pause ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- the widget tree: widgets made through pb_make know their parent
+pb_note(r): child parent kind [
+    if(_): {pb_tree = null} [ btree(pb_tree): ]
+    vec(e): ""
+    push(_): e parent
+    push(_): e kind
+    btput(_): pb_tree child e
+    set(r): child
+]
+
+pb_parent(r): widget [
+    set(r): 0
+    if(_): {pb_tree = null} [ return(r): r ]
+    btget(e): pb_tree widget null
+    if(_): {e != null} [ at(r): e 0 ]
+]
+
+pb_kind(r): widget [
+    set(r): ""
+    if(_): {pb_tree = null} [ return(r): r ]
+    btget(e): pb_tree widget null
+    if(_): {e != null} [ at(r): e 1 ]
+]
+
+pb_children(r): widget [
+    vec(r): ""
+    if(_): {pb_tree = null} [ return(r): r ]
+    btkeys(ks): pb_tree
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(e): pb_tree k
+        at(p): e 0
+        if(_): {p = widget} [ push(_): r k ]
+        set(i): {i + 1}
+    ]
+]
+
+# a native widget of a kind, noted in the tree
+pb_make(r): kind parent a [
+    set(r): 0
+    if(_): {kind = "label"} [ label(r): parent a ]
+    elif(_): {kind = "button"} [ button(r): parent a ]
+    elif(_): {kind = "textbox"} [ textbox(r): parent a ]
+    elif(_): {kind = "checkbox"} [ checkbox(r): parent a ]
+    elif(_): {kind = "listbox"} [ listbox(r): parent a ]
+    elif(_): {kind = "combobox"} [ combobox(r): parent a ]
+    elif(_): {kind = "canvas"} [ canvas(r): parent ]
+    elif(_): {kind = "toolbar"} [ toolbar(r): parent ]
+    elif(_): {kind = "image"} [ image(r): parent a ]
+    pb_note(_): r parent kind
+]
+
+# --- a declarative UI: kind{key=value, ...} with `strings` or "strings",
+# numbers, true/false, [lists] and nested kind{...} as children
+pb_ui_parse(r): text [
+    set(pb_ui_pos): 0
+    pb_ui_value(r): text
+]
+
+global(_): pb_ui_pos
+
+pb_ui_skip(r): text [
+    len(n): text
+    set(r): 0
+    while(_): {pb_ui_pos < n} [
+        byte(b): text pb_ui_pos
+        if(_): {b != 32 && b != 9 && b != 10 && b != 13} [ return(r): r ]
+        set(pb_ui_pos): {pb_ui_pos + 1}
+    ]
+]
+
+pb_ui_value(r): text [
+    pb_ui_skip(_): text
+    len(n): text
+    set(r): null
+    if(_): {pb_ui_pos >= n} [ return(r): r ]
+    byte(b): text pb_ui_pos
+    if(_): {b = 96 || b = 34} [
+        set(start): {pb_ui_pos + 1}
+        set(e): start
+        while(_): {e < n} [
+            byte(c): text e
+            if(_): {c = b} [
+                slice(r): text start {e - start}
+                set(pb_ui_pos): {e + 1}
+                return(r): r
+            ]
+            set(e): {e + 1}
+        ]
+        slice(r): text start {n - start}
+        set(pb_ui_pos): n
+        return(r): r
+    ]
+    if(_): {b = 91} [
+        set(pb_ui_pos): {pb_ui_pos + 1}
+        vec(r): ""
+        set(go): true
+        while(_): go [
+            pb_ui_skip(_): text
+            byte(c): text pb_ui_pos
+            if(_): {c = 93} [
+                set(pb_ui_pos): {pb_ui_pos + 1}
+                set(go): false
+            ]
+            else(_): [
+                pb_ui_value(v): text
+                push(_): r v
+                pb_ui_skip(_): text
+                byte(c2): text pb_ui_pos
+                if(_): {c2 = 44} [ set(pb_ui_pos): {pb_ui_pos + 1} ]
+            ]
+            if(_): {pb_ui_pos >= n} [ set(go): false ]
+        ]
+        return(r): r
+    ]
+    # a word: a number, true/false, or a kind{...}
+    set(start): pb_ui_pos
+    while(_): {pb_ui_pos < n} [
+        byte(c): text pb_ui_pos
+        set(word): {(c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c = 95 || c = 46 || c = 45}
+        if(_): {word = false} [ set(n): pb_ui_pos ]
+        else(_): [ set(pb_ui_pos): {pb_ui_pos + 1} ]
+    ]
+    len(n): text
+    slice(w): text start {pb_ui_pos - start}
+    pb_ui_skip(_): text
+    set(brace): false
+    if(_): {pb_ui_pos < n} [
+        byte(c): text pb_ui_pos
+        set(brace): {c = 123}
+    ]
+    if(_): {brace = false} [
+        if(_): {w = "true"} [ set(r): true ]
+        elif(_): {w = "false"} [ set(r): false ]
+        else(_): [
+            str_to_number(r): w
+            typeof(rt): r
+            if(_): {rt != "integer" && rt != "real"} [ set(r): w ]
+        ]
+        return(r): r
+    ]
+    set(pb_ui_pos): {pb_ui_pos + 1}
+    btree(r):
+    btput(_): r "kind" w
+    vec(kids): ""
+    btput(_): r "children" kids
+    set(go): true
+    while(_): go [
+        pb_ui_skip(_): text
+        if(_): {pb_ui_pos >= n} [ return(r): r ]
+        byte(c): text pb_ui_pos
+        if(_): {c = 125} [
+            set(pb_ui_pos): {pb_ui_pos + 1}
+            set(go): false
+        ]
+        elif(_): {c = 44} [ set(pb_ui_pos): {pb_ui_pos + 1} ]
+        else(_): [
+            # key=value, or a child kind{...}
+            set(save): pb_ui_pos
+            pb_ui_value(v): text
+            typeof(vt): v
+            if(_): {vt = "btree"} [ push(_): kids v ]
+            else(_): [
+                pb_ui_skip(_): text
+                byte(eq): text pb_ui_pos
+                if(_): {eq = 61} [
+                    set(pb_ui_pos): {pb_ui_pos + 1}
+                    pb_ui_value(val): text
+                    btput(_): r v val
+                ]
+            ]
+            if(_): {pb_ui_pos = save} [ set(pb_ui_pos): {pb_ui_pos + 1} ]
+        ]
+    ]
+]
+
+
+# makes the native widgets of a parsed UI in a window; names (name=...)
+# map to handles in the btree it gives back
+pb_ui_build(r): tree window [
+    btree(r):
+    pb_ui_make(_): tree window r
+]
+
+pb_ui_make(r): node parent names [
+    set(r): 0
+    btget(kind): node "kind"
+    btget(text): node "text" ""
+    btget(items): node "items" null
+    set(a): text
+    if(_): {kind = "listbox" || kind = "combobox"} [
+        set(a): items
+        if(_): {a = null} [ vec(a): "" ]
+    ]
+    if(_): {kind = "image"} [ btget(a): node "path" "" ]
+    set(self): parent
+    if(_): {kind != "window" && kind != "box"} [ pb_make(self): kind parent a ]
+    btget(name): node "name" ""
+    if(_): {name != ""} [ btput(_): names name self ]
+    vec(evs): ""
+    str_split(evs): "click change key char focus pointer wheel double" " "
+    set(i): 0
+    while(_): {i < 8} [
+        at(ev): evs i
+        concat(k): "on_" ev
+        btget(h): node k ""
+        if(_): {h != ""} [ on(_): self ev h ]
+        set(i): {i + 1}
+    ]
+    btget(row): node "row" -1
+    btget(col): node "col" -1
+    btget(expand): node "expand" false
+    if(_): {kind != "window" && kind != "box"} [
+        if(_): {row >= 0 && col >= 0} [ grid(_): self row col expand ]
+        else(_): [ pack(_): self expand ]
+    ]
+    btget(kids): node "children"
+    len(n): kids
+    set(i): 0
+    while(_): {i < n} [
+        at(k): kids i
+        set(into): parent
+        if(_): {kind = "toolbar"} [ set(into): self ]
+        pb_ui_make(_): k into names
+        set(i): {i + 1}
+    ]
+]
+
+# --- an image from pixels in memory: written to a scratch PPM and shown
+pb_image_pixels(r): widget img path [
+    ps_ppm(_): img path
+    reloadimage(r): widget path
+]

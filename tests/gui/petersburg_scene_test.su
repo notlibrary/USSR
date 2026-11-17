@@ -1,0 +1,41 @@
+# A more.su scene drawn onto a real Petersburg canvas, a widget built from
+# a declarative UI, and a canvas widget answering an injected pointer.
+#     ussr tests/gui/petersburg_scene_test.su
+$include "../../src/petersburg/more.su"
+
+global(_): pg_slider pg_canvas pg_scene pg_theme
+
+pg_pointer(r): c x y [
+    set(r): 0
+    pw_pointer(_): pg_slider x y "click"
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    createwindow(window): "Scene test" 320 240
+    pb_ui_parse(ui): "box{label{text=`From a UI text`, name=`title`}}"
+    pb_ui_build(names): ui window
+    btget(title): names "title" 0
+    gettext(t): title
+    if(_): {t = "From a UI text"} [ print(_): "PASS a widget from a declarative UI" ]
+    else(_): [ print(_): "FAIL a widget from a declarative UI" ]
+    pb_parent(p): title
+    if(_): {p = window} [ print(_): "PASS the widget tree knows its parent" ]
+    else(_): [ print(_): "FAIL the widget tree knows its parent" ]
+    canvas(pg_canvas): window
+    pack(_): pg_canvas true
+    run(_):
+    ps_scene(pg_scene):
+    pt_theme(pg_theme): "light"
+    pw_slider(pg_slider): 10 10 200 14 0 0 100
+    pw_render(_): pg_slider pg_scene pg_theme
+    ps_draw(_): pg_scene pg_canvas
+    canvascount(n): pg_canvas
+    if(_): {n > 0} [ print(_): "PASS a scene drawn on a canvas" ]
+    else(_): [ print(_): "FAIL a scene drawn on a canvas" ]
+    btget(clean): pg_scene "dirty"
+    if(_): {clean = null} [ print(_): "PASS drawing leaves the scene clean" ]
+    else(_): [ print(_): "FAIL drawing leaves the scene clean" ]
+    close(_): window
+    sleep(_): 100
+]
