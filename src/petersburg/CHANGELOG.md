@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.0-alpha
+Refine pass 1 from REFINE.md: `more.su`, in USSR on top of the native
+widgets. The scene, the rasteriser, the layout and the widget models need
+no window.
+- A retained scene (`ps_*`): shapes with ids that change or go one at a
+  time, layers and z-order, transforms, clipping, hit testing, a dirty
+  box; polylines, polygons (even-odd and non-zero fills), Béziers,
+  circles, arcs, text and images; line widths and dashes; gradients and
+  alpha. `ps_draw` puts it on a canvas.
+- A software rasteriser (`ps_raster`) for headless CI and golden images,
+  with PNG (through Omsk) and PPM output and a CRC; a terminal backend
+  (`ps_tui`) with box glyphs; a scene as text and back.
+- Layout (`pl_*`): boxes with spacing, padding, alignment, weights, min
+  and max; grids with spans and weights; anchors; right-to-left
+  mirroring; a DPI scale.
+- Themes (`pt_*`): light, dark and high contrast, with an accent.
+- Canvas widgets (`pw_*`), drawn into a scene and driven by pointer, wheel
+  and keys: progress, slider, spin, radio, tabs, group, splitter, status
+  bar, tooltip, text area (selection, cut/copy/paste), tree, table
+  (sorting, resizing), scroll view, date and colour pickers, menu, rich
+  label, file chooser.
+- Services (`pb_*`): an undo stack (merging typing, a limit, a saved
+  mark), a command table with accelerators and menus, data binding,
+  easing and tweens, timers (`pb_every`), a clipboard shared by
+  callbacks, jobs with progress and cancel, Tab focus order, event
+  recording and replay, the widget tree (`pb_make`, `pb_parent`,
+  `pb_children`), a declarative UI text (`kind{key=value, ...}`) built
+  into native widgets, and images from memory.
+- `examples/gallery.su` shows every control; `--shot FILE` renders the
+  canvas widgets to a PNG with no window.
+- `tests/petersburg_more_test.su` (132 checks, headless) and
+  `tests/gui/petersburg_scene_test.su`.
+
 ## 0.5.0-alpha
 - Outline fonts from the system: `fontinfo`, `loadfont`, `fontwidth`,
   `fontheight` and `canvasfonttext` draw anti-aliased TrueType text (`.ttf`,

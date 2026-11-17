@@ -1,0 +1,793 @@
+# Petersburg refine pass 1 (src/petersburg/more.su), headless: the scene
+# (ids, layers, transforms, hit tests), the software rasteriser (fills,
+# rules, alpha, gradients, clipping, wide and dashed lines; golden CRCs),
+# PNG and PPM files, the terminal backend, layout, themes, the canvas
+# widgets' models and drawing, undo, commands, binding, easing, timers,
+# jobs, focus order, replay, the widget tree and the declarative UI.
+# No window is opened. Run from the repository root.
+$include "../src/petersburg/more.su"
+
+pm_check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(pmc_line): "PASS " label ]
+    else(_): [
+        encode(pmc_g): got
+        encode(pmc_w): want
+        concat(pmc_line): "FAIL " label ": got " pmc_g ", want " pmc_w
+    ]
+    print(_): pmc_line
+]
+
+pm_rect(r): s x0 y0 x1 y1 fill color [
+    vec(pr_pts): ""
+    ps_pt(pr_a): x0 y0
+    ps_pt(pr_b): x1 y1
+    push(_): pr_pts pr_a
+    push(_): pr_pts pr_b
+    btree(pr_p):
+    btput(_): pr_p "fill" fill
+    btput(_): pr_p "color" color
+    ps_add(r): s "rect" pr_pts pr_p
+]
+
+pm_poly(r): coords [
+    vec(r): ""
+    len(pp_n): coords
+    set(pp_i): 0
+    while(_): {pp_i + 1 < pp_n} [
+        at(pp_x): coords pp_i
+        at(pp_y): coords {pp_i + 1}
+        ps_pt(pp_q): pp_x pp_y
+        push(_): r pp_q
+        set(pp_i): {pp_i + 2}
+    ]
+]
+
+pm_nums(r): text [
+    str_split(pn_p): text " "
+    vec(r): ""
+    len(pn_n): pn_p
+    set(pn_i): 0
+    while(_): {pn_i < pn_n} [
+        at(pn_x): pn_p pn_i
+        str_to_number(pn_v): pn_x
+        push(_): r pn_v
+        set(pn_i): {pn_i + 1}
+    ]
+]
+
+pm_scene(r): [
+    ps_scene(sc_s):
+    pm_rect(sc_a): sc_s 10 10 50 50 255 0
+    pm_rect(sc_b): sc_s 30 30 70 70 65280 0
+    pm_check(_): "ids count up" {sc_b = sc_a + 1} true
+    ps_hit(sc_v): sc_s 40 40
+    pm_check(_): "the top shape is hit" sc_v sc_b
+    ps_hit(sc_v): sc_s 15 15
+    pm_check(_): "the one below where only it is" sc_v sc_a
+    ps_hit(sc_v): sc_s 90 90
+    pm_check(_): "nothing" sc_v 0
+    ps_raise(_): sc_s sc_a
+    ps_hit(sc_v): sc_s 40 40
+    pm_check(_): "raised above" sc_v sc_a
+    ps_lower(_): sc_s sc_a
+    ps_hit(sc_v): sc_s 40 40
+    pm_check(_): "lowered below" sc_v sc_b
+    ps_set(_): sc_s sc_b "layer" 2
+    ps_layer_shown(_): sc_s 2 false
+    ps_hit(sc_v): sc_s 40 40
+    pm_check(_): "a hidden layer is not hit" sc_v sc_a
+    ps_layer_shown(_): sc_s 2 true
+    ps_get(sc_v): sc_s sc_b "fill"
+    pm_check(_): "get a property" sc_v 65280
+    ps_delete(sc_v): sc_s sc_b
+    pm_check(_): "delete" sc_v true
+    ps_hit(sc_v): sc_s 60 60
+    pm_check(_): "a deleted shape is gone" sc_v 0
+    ps_translate(_): sc_s sc_a 100 0
+    ps_hit(sc_v): sc_s 115 15
+    pm_check(_): "moved by a transform" sc_v sc_a
+    ps_hit(sc_v): sc_s 15 15
+    pm_check(_): "not where it was" sc_v 0
+    ps_clean(_): sc_s
+    ps_rotate(_): sc_s sc_a 90 130 30
+    ps_dirty(sc_d): sc_s
+    typeof(sc_v): sc_d
+    pm_check(_): "a change marks a dirty box" sc_v "vector"
+    ps_hit(sc_v): sc_s 130 30
+    pm_check(_): "rotated about its middle, the middle stays" sc_v sc_a
+
+    # lines, circles, polygons with holes
+    ps_scene(sc_t):
+
+    vec(sc_lp): ""
+    ps_pt(sc_p): 0 100
+    push(_): sc_lp sc_p
+    ps_pt(sc_p): 100 100
+    push(_): sc_lp sc_p
+    btree(sc_pr):
+    btput(_): sc_pr "width" 6
+    ps_add(sc_l): sc_t "line" sc_lp sc_pr
+    ps_hit(sc_v): sc_t 50 102
+    pm_check(_): "near a wide line" sc_v sc_l
+    ps_hit(sc_v): sc_t 50 110
+    pm_check(_): "off it" sc_v 0
+    vec(sc_cp): ""
+    ps_pt(sc_p): 200 200
+    push(_): sc_cp sc_p
+    btree(sc_pr):
+    btput(_): sc_pr "radius" 20
+    btput(_): sc_pr "fill" 1
+    ps_add(sc_c): sc_t "circle" sc_cp sc_pr
+    ps_hit(sc_v): sc_t 210 210
+    pm_check(_): "inside a filled circle" sc_v sc_c
+    ps_hit(sc_v): sc_t 220 220
+    pm_check(_): "outside it" sc_v 0
+    # a square inside a square, the same way round: evenodd leaves a hole
+    pm_nums(sc_q): "300 300 400 300 400 400 300 400 300 300 320 320 380 320 380 380 320 380 320 320"
+    pm_poly(sc_pp): sc_q
+    btree(sc_pr):
+    btput(_): sc_pr "fill" 1
+    btput(_): sc_pr "rule" "evenodd"
+    ps_add(sc_e): sc_t "polygon" sc_pp sc_pr
+    ps_hit(sc_v): sc_t 350 350
+    pm_check(_): "evenodd: the hole is not hit" sc_v 0
+    ps_set(_): sc_t sc_e "rule" "nonzero"
+    ps_hit(sc_v): sc_t 350 350
+    pm_check(_): "nonzero: it is" sc_v sc_e
+    set(r): 0
+]
+
+pm_raster(r): [
+    ps_scene(ra_s):
+    pm_rect(_): ra_s 2 2 10 10 16711680 16711680
+    ps_raster(ra_i): ra_s 16 16 16777215
+    ps_pixel(ra_v): ra_i 5 5
+    pm_check(_): "a filled rect" ra_v 16711680
+    ps_pixel(ra_v): ra_i 13 13
+    pm_check(_): "the background" ra_v 16777215
+    ps_pixel(ra_v): ra_i 10 5
+    pm_check(_): "the right edge is outside" ra_v 16777215
+    ps_crc(ra_c): ra_i
+    str_from_int(ra_cs): ra_c
+    concat(ra_line): "crc rect " ra_cs
+    print(_): ra_line
+
+    # alpha
+    pm_rect(ra_h): ra_s 0 0 16 16 0 0
+    ps_set(_): ra_s ra_h "alpha" 0.5
+    ps_raster(ra_i): ra_s 16 16 16777215
+    ps_pixel(ra_v): ra_i 13 13
+    pm_check(_): "half black over white" ra_v 8421504
+    ps_pixel(ra_v): ra_i 5 5
+    pm_check(_): "half black over red" ra_v 8388608
+    ps_delete(_): ra_s ra_h
+
+    # a gradient and a clip
+    ps_scene(ra_g):
+    pm_rect(ra_gid): ra_g 0 0 11 4 0 0
+    pm_nums(ra_gr): "0 0 0 10 0 16777215"
+    ps_set(_): ra_g ra_gid "grad" ra_gr
+    ps_set(_): ra_g ra_gid "width" 0
+    ps_raster(ra_i): ra_g 11 4 255
+    ps_pixel(ra_v): ra_i 0 1
+    set(ra_lo): {ra_v & 255}
+    ps_pixel(ra_v): ra_i 10 1
+    set(ra_hi): {ra_v & 255}
+    pm_check(_): "a gradient: dark on the left, light on the right" {ra_lo < 20 && ra_hi > 235} true
+    pm_nums(ra_cl): "0 0 5 4"
+    ps_set(_): ra_g ra_gid "clip" ra_cl
+    ps_raster(ra_i): ra_g 11 4 255
+    ps_pixel(ra_v): ra_i 8 1
+    pm_check(_): "outside the clip: the background" ra_v 255
+
+    # evenodd and nonzero
+    ps_scene(ra_e):
+    pm_nums(ra_q): "0 0 10 0 10 10 0 10 0 0 3 3 7 3 7 7 3 7 3 3"
+    pm_poly(ra_pp): ra_q
+    btree(ra_pr):
+    btput(_): ra_pr "fill" 0
+    btput(_): ra_pr "color" 0
+    btput(_): ra_pr "width" 0
+    btput(_): ra_pr "rule" "evenodd"
+    ps_add(ra_eid): ra_e "polygon" ra_pp ra_pr
+    ps_raster(ra_i): ra_e 10 10 16777215
+    ps_pixel(ra_v): ra_i 5 5
+    pm_check(_): "evenodd leaves the middle" ra_v 16777215
+    ps_pixel(ra_v): ra_i 1 5
+    pm_check(_): "and fills the ring" ra_v 0
+    ps_set(_): ra_e ra_eid "rule" "nonzero"
+    ps_raster(ra_i): ra_e 10 10 16777215
+    ps_pixel(ra_v): ra_i 5 5
+    pm_check(_): "nonzero fills the middle too" ra_v 0
+
+    # a wide line and a dashed one
+    ps_scene(ra_l):
+    vec(ra_lp): ""
+    ps_pt(ra_p): 0 5
+    push(_): ra_lp ra_p
+    ps_pt(ra_p): 19 5
+    push(_): ra_lp ra_p
+    btree(ra_pr):
+    btput(_): ra_pr "width" 3
+    ps_add(_): ra_l "line" ra_lp ra_pr
+    ps_raster(ra_i): ra_l 20 10 16777215
+    ps_pixel(ra_v): ra_i 10 4
+    ps_pixel(ra_v2): ra_i 10 6
+    ps_pixel(ra_v3): ra_i 10 8
+    pm_check(_): "three pixels wide" {ra_v = 0 && ra_v2 = 0 && ra_v3 = 16777215} true
+    ps_scene(ra_d):
+    btree(ra_pr):
+    pm_nums(ra_dash): "4 4"
+    btput(_): ra_pr "dash" ra_dash
+    ps_add(_): ra_d "line" ra_lp ra_pr
+    ps_raster(ra_i): ra_d 20 10 16777215
+    ps_pixel(ra_v): ra_i 1 5
+    ps_pixel(ra_v2): ra_i 6 5
+    ps_pixel(ra_v3): ra_i 9 5
+    pm_check(_): "a dash, a gap, a dash" {ra_v = 0 && ra_v2 = 16777215 && ra_v3 = 0} true
+
+    # a circle, a curve, an image, text
+    ps_scene(ra_m):
+    vec(ra_cp): ""
+    ps_pt(ra_p): 16 16
+    push(_): ra_cp ra_p
+    btree(ra_pr):
+    btput(_): ra_pr "radius" 10
+    btput(_): ra_pr "fill" 255
+    btput(_): ra_pr "color" 255
+    ps_add(_): ra_m "circle" ra_cp ra_pr
+    pm_nums(ra_bz): "0 31 10 0 22 0 31 31"
+    pm_poly(ra_bp): ra_bz
+    btree(ra_pr):
+    btput(_): ra_pr "color" 65280
+    ps_add(_): ra_m "bezier" ra_bp ra_pr
+    vec(ra_px): ""
+    set(ra_k): 0
+    while(_): {ra_k < 4} [
+        push(_): ra_px 255
+        push(_): ra_px 255
+        push(_): ra_px 0
+        set(ra_k): {ra_k + 1}
+    ]
+    omsk_image(ra_small): 2 2 ra_px
+    vec(ra_ip): ""
+    ps_pt(ra_p): 28 0
+    push(_): ra_ip ra_p
+    btree(ra_pr):
+    btput(_): ra_pr "img" ra_small
+    ps_add(_): ra_m "image" ra_ip ra_pr
+    vec(ra_tp): ""
+    ps_pt(ra_p): 1 24
+    push(_): ra_tp ra_p
+    btree(ra_pr):
+    btput(_): ra_pr "text" "Hi"
+    btput(_): ra_pr "color" 0
+    ps_add(_): ra_m "text" ra_tp ra_pr
+    ps_raster(ra_i): ra_m 32 32 16777215
+    ps_pixel(ra_v): ra_i 16 16
+    pm_check(_): "a filled circle's middle" ra_v 255
+    ps_pixel(ra_v): ra_i 29 1
+    pm_check(_): "an image from memory" ra_v 16776960
+    ps_pixel(ra_v): ra_i 3 27
+    pm_check(_): "text as blocks" ra_v 0
+    ps_crc(ra_c): ra_i
+    str_from_int(ra_cs): ra_c
+    concat(ra_line): "crc mixed " ra_cs
+    print(_): ra_line
+
+    # files: PNG back through Omsk, PPM by size
+    ps_png(_): ra_i "tests/petersburg-tmp.png"
+    read_bytes(ra_b): "tests/petersburg-tmp.png"
+    omsk_decode(ra_back): ra_b
+    ps_crc(ra_c2): ra_back
+    pm_check(_): "a PNG holds the same pixels" ra_c2 ra_c
+    remove_file(_): "tests/petersburg-tmp.png"
+    ps_ppm(_): ra_i "tests/petersburg-tmp.ppm"
+    read_bytes(ra_b): "tests/petersburg-tmp.ppm"
+    len(ra_v): ra_b
+    pm_check(_): "a PPM: header and pixels" ra_v {13 + 32 * 32 * 3}
+    remove_file(_): "tests/petersburg-tmp.ppm"
+
+    # the scene as text, and back
+    ps_text(ra_t): ra_m
+    ps_from_text(ra_m2): ra_t
+    ps_raster(ra_i2): ra_m2 32 32 16777215
+    ps_crc(ra_c3): ra_i2
+    pm_check(_): "a scene through its text draws the same" ra_c3 ra_c
+    set(r): 0
+]
+
+pm_tui(r): [
+    ps_scene(tu_s):
+    pm_rect(_): tu_s 0 0 80 48 -1 0
+    vec(tu_tp): ""
+    ps_pt(tu_p): 16 16
+    push(_): tu_tp tu_p
+    btree(tu_pr):
+    btput(_): tu_pr "text" "OK"
+    ps_add(_): tu_s "text" tu_tp tu_pr
+    ps_tui(tu_v): tu_s 12 4 8 16
+    pm_check(_): "a terminal frame" tu_v "┌────────┐\n│ OK     │\n└────────┘\n\n"
+    set(r): 0
+]
+
+pm_layout(r): [
+    vec(la_items): ""
+    pl_item(la_i): 0 0 0 100
+    push(_): la_items la_i
+    pl_item(la_i): 1 0 0 0
+    push(_): la_items la_i
+    pl_item(la_i): 3 0 50 0
+    push(_): la_items la_i
+    pl_rect(la_r): 0 0 410 30
+    pl_box(la_v): "h" la_items la_r 5 0 "start"
+    encode(la_v): la_v
+    pm_check(_): "a row: fixed, weighted, capped" la_v "[[0,0,100,30],[105,0,250,30],[360,0,50,30]]"
+    vec(la_items2): ""
+    pl_item(la_i): 0 20 0 0
+    push(_): la_items2 la_i
+    pl_rect(la_r): 0 0 100 100
+    pl_box(la_v): "v" la_items2 la_r 0 10 "center"
+    encode(la_v): la_v
+    pm_check(_): "a column, centred, with padding" la_v "[[10,40,80,20]]"
+    vec(la_cells): ""
+    btree(la_c):
+    btput(_): la_c "row" 0
+    btput(_): la_c "col" 0
+    btput(_): la_c "colspan" 2
+    push(_): la_cells la_c
+    btree(la_c):
+    btput(_): la_c "row" 1
+    btput(_): la_c "col" 1
+    push(_): la_cells la_c
+    pm_nums(la_cw): "1 1"
+    pm_nums(la_rh): "1 3"
+    pl_rect(la_r): 0 0 100 100
+    pl_grid(la_v): la_cells la_cw la_rh la_r 0
+    encode(la_v): la_v
+    pm_check(_): "a grid with a span and row weights" la_v "[[0,0,100,25],[50,25,50,75]]"
+    pl_rect(la_child): 10 10 50 20
+    pl_rect(la_old): 0 0 100 100
+    pl_rect(la_new): 0 0 200 150
+    pl_anchor(la_v): la_child la_old la_new "lr"
+    encode(la_v): la_v
+    pm_check(_): "anchored left and right: it stretches" la_v "[10,10,150,20]"
+    pl_anchor(la_v): la_child la_old la_new "rb"
+    encode(la_v): la_v
+    pm_check(_): "anchored right and bottom: it moves" la_v "[110,60,50,20]"
+    vec(la_rs): ""
+    push(_): la_rs la_child
+    pl_mirror(la_v): la_rs 100
+    encode(la_v): la_v
+    pm_check(_): "right to left" la_v "[[40,10,50,20]]"
+    pl_scale(la_v): 144
+    pm_check(_): "144 dpi" la_v 1.5
+    pl_scale(la_v): 120
+    pm_check(_): "120 dpi" la_v 1.25
+    pt_theme(la_t): "dark"
+    pt_color(la_v): la_t "bg"
+    pm_check(_): "a dark theme" la_v 2105376
+    pt_accent(_): la_t 16711680
+    pt_color(la_v): la_t "accent"
+    pm_check(_): "an accent colour" la_v 16711680
+    set(r): 0
+]
+
+pm_widgets(r): [
+    pw_slider(wi_s): 0 0 100 10 0 0 50
+    pw_pointer(_): wi_s 50 5 "down"
+    btget(wi_v): wi_s "value"
+    pm_check(_): "a slider follows the pointer" wi_v 25
+    pw_key(_): wi_s "right"
+    btget(wi_v): wi_s "value"
+    pm_check(_): "and the arrows" wi_v 26
+    pw_spin(wi_sp): 0 0 50 20 5 2 0 8
+    pw_pointer(_): wi_sp 48 2 "click"
+    pw_pointer(_): wi_sp 48 2 "click"
+    btget(wi_v): wi_sp "value"
+    pm_check(_): "a spin box stops at its top" wi_v 8
+    pw_key(_): wi_sp "down"
+    btget(wi_v): wi_sp "value"
+    pm_check(_): "and goes down" wi_v 6
+    str_split(wi_opts): "One Two Three" " "
+    pw_radio(wi_r): 0 0 80 54 wi_opts 0
+    pw_pointer(_): wi_r 10 40 "click"
+    btget(wi_v): wi_r "selected"
+    pm_check(_): "radio buttons" wi_v 2
+    pw_key(_): wi_r "down"
+    btget(wi_v): wi_r "selected"
+    pm_check(_): "they go round" wi_v 0
+    str_split(wi_tl): "File Edit" " "
+    pw_tabs(wi_t): 0 0 200 100 wi_tl 0
+    pw_pointer(_): wi_t 50 10 "click"
+    btget(wi_v): wi_t "selected"
+    pm_check(_): "a tab is picked" wi_v 1
+    pw_splitter(wi_sl): 0 0 200 100 "h" 100
+    pw_pointer(_): wi_sl 101 50 "down"
+    pw_pointer(_): wi_sl 150 50 "drag"
+    pw_pointer(_): wi_sl 150 50 "up"
+    btget(wi_v): wi_sl "pos"
+    pm_check(_): "a splitter is dragged" wi_v 150
+    pw_tooltip(wi_tt): "Saves the file" 500
+    pw_hover(wi_v): wi_tt 10 10 1000
+    pm_check(_): "a tooltip waits" wi_v false
+    pw_hover(wi_v): wi_tt 10 10 1600
+    pm_check(_): "then shows" wi_v true
+    pw_hover(wi_v): wi_tt 0 0 -1
+    btget(wi_v): wi_tt "shown"
+    pm_check(_): "and goes when the pointer leaves" wi_v false
+
+    # the text area
+    pw_textarea(wi_ta): 0 0 200 100 "hello\nworld"
+    pw_key(_): wi_ta "end"
+    pw_key(_): wi_ta "!"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "typing at the end" wi_v "hello!\nworld"
+    pw_key(_): wi_ta "enter"
+    pw_key(_): wi_ta "x"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "a new line" wi_v "hello!\nx\nworld"
+    pw_key(_): wi_ta "backspace"
+    pw_key(_): wi_ta "backspace"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "backspace joins lines" wi_v "hello!\nworld"
+    pw_key(_): wi_ta "home"
+    pw_key(_): wi_ta "shift+right"
+    pw_key(_): wi_ta "shift+right"
+    pw_ta_selected(wi_v): wi_ta
+    pm_check(_): "a selection" wi_v "he"
+    pw_key(_): wi_ta "ctrl+x"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "cut" wi_v "llo!\nworld"
+    pw_key(_): wi_ta "down"
+    pw_key(_): wi_ta "end"
+    pw_key(_): wi_ta "ctrl+v"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "paste" wi_v "llo!\nworldhe"
+    pw_key(_): wi_ta "ctrl+a"
+    pw_ta_selected(wi_v): wi_ta
+    pm_check(_): "select all" wi_v "llo!\nworldhe"
+    pw_ta_insert(_): wi_ta "a\nb"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "typing over a selection" wi_v "a\nb"
+    pw_pointer(_): wi_ta 6 4 "click"
+    btget(wi_v): wi_ta "col"
+    pm_check(_): "a click places the cursor" wi_v 0
+    pw_key(_): wi_ta "delete"
+    pw_ta_text(wi_v): wi_ta
+    pm_check(_): "delete" wi_v "\nb"
+
+    # the tree
+    vec(wi_root): ""
+    push(_): wi_root "src"
+    vec(wi_k): ""
+    push(_): wi_k "libs"
+    push(_): wi_k "strings.su"
+    push(_): wi_root wi_k
+    push(_): wi_root "README.md"
+    pw_tree(wi_tr): 0 0 200 100 wi_root
+    pw_tree_rows(wi_rows): wi_tr
+    len(wi_v): wi_rows
+    pm_check(_): "a closed tree: one row" wi_v 1
+    pw_pointer(_): wi_tr 5 5 "click"
+    pw_tree_rows(wi_rows): wi_tr
+    len(wi_v): wi_rows
+    pm_check(_): "its arrow opens it" wi_v 3
+    pw_key(_): wi_tr "down"
+    pw_key(_): wi_tr "right"
+    pw_tree_rows(wi_rows): wi_tr
+    len(wi_v): wi_rows
+    pm_check(_): "the keys open the next" wi_v 4
+    btget(wi_v): wi_tr "selected"
+    pm_check(_): "the selected path" wi_v "/src/libs"
+
+    # the table
+    str_split(wi_cols): "name size" " "
+    vec(wi_rowsv): ""
+    vec(wi_row): ""
+    push(_): wi_row "b"
+    push(_): wi_row 20
+    push(_): wi_rowsv wi_row
+    vec(wi_row): ""
+    push(_): wi_row "a"
+    push(_): wi_row 100
+    push(_): wi_rowsv wi_row
+    vec(wi_row): ""
+    push(_): wi_row "c"
+    push(_): wi_row 3
+    push(_): wi_rowsv wi_row
+    pw_table(wi_tb): 0 0 200 100 wi_cols wi_rowsv
+    pw_pointer(_): wi_tb 150 5 "click"
+    pw_table_sorted(wi_sv): wi_tb
+    at(wi_v): wi_sv 0
+    at(wi_v): wi_v 1
+    pm_check(_): "sorted by a number column" wi_v 3
+    pw_pointer(_): wi_tb 150 5 "click"
+    pw_table_sorted(wi_sv): wi_tb
+    at(wi_v): wi_sv 0
+    at(wi_v): wi_v 1
+    pm_check(_): "a second click: the other way" wi_v 100
+    pw_pointer(_): wi_tb 100 5 "down"
+    pw_pointer(_): wi_tb 60 5 "drag"
+    pw_pointer(_): wi_tb 60 5 "up"
+    btget(wi_w): wi_tb "widths"
+    at(wi_v): wi_w 0
+    pm_check(_): "a column is resized" wi_v 60
+    pw_pointer(_): wi_tb 10 40 "click"
+    btget(wi_v): wi_tb "selected"
+    pm_check(_): "a row is picked" wi_v 1
+
+    pw_scroll(wi_sc): 0 0 100 100 100 300
+    pw_wheel(_): wi_sc -1
+    pw_wheel(_): wi_sc -1
+    btget(wi_v): wi_sc "sy"
+    pm_check(_): "a scroll view scrolls" wi_v 80
+    pw_scroll_to_screen(wi_v): wi_sc 0 100
+    encode(wi_v): wi_v
+    pm_check(_): "content to screen" wi_v "[0,20]"
+    set(wi_i): 0
+    while(_): {wi_i < 10} [
+        pw_wheel(_): wi_sc -1
+        set(wi_i): {wi_i + 1}
+    ]
+    btget(wi_v): wi_sc "sy"
+    pm_check(_): "and stops at the end" wi_v 200
+
+    pw_date(wi_d): 0 0 2026 11 16
+    pw_date_cells(wi_c): wi_d
+    at(wi_v): wi_c 6
+    pm_check(_): "November 2026 starts on a Sunday" wi_v 1
+    pw_pointer(_): wi_d {4 + 22 * 2} {32 + 17 * 1 + 4} "click"
+    btget(wi_v): wi_d "day"
+    pm_check(_): "a day is picked" wi_v 4
+    pw_pointer(_): wi_d 140 5 "click"
+    btget(wi_v): wi_d "month"
+    pm_check(_): "the next month" wi_v 12
+    pw_pointer(_): wi_d 140 5 "click"
+    btget(wi_v): wi_d "year"
+    pm_check(_): "into the next year" wi_v 2027
+    pw_hsv(wi_v): 120 1 1
+    pm_check(_): "green from HSV" wi_v 65280
+    pw_colour(wi_co): 0 0 0 0 0
+    pw_pointer(_): wi_co 99 0 "click"
+    pw_colour_value(wi_v): wi_co
+    pm_check(_): "the picker: full red" wi_v 16711680
+
+    vec(wi_mi): ""
+    str_split(wi_e): "Open|Ctrl+O|open" "|"
+    push(_): wi_mi wi_e
+    str_split(wi_e): "-||" "|"
+    push(_): wi_mi wi_e
+    str_split(wi_e): "Quit|Ctrl+Q|quit" "|"
+    push(_): wi_mi wi_e
+    pw_menu(wi_m): 0 0 wi_mi
+    pw_pointer(_): wi_m 20 36 "click"
+    btget(wi_v): wi_m "chosen"
+    pm_check(_): "a menu item" wi_v "quit"
+    btget(wi_e0): wi_m "events"
+    pw_pointer(_): wi_m 20 20 "click"
+    btget(wi_v): wi_m "events"
+    pm_check(_): "a separator does nothing" {wi_v = wi_e0} true
+
+    make_dir(_): "tests/petersburg-tmp"
+    make_dir(_): "tests/petersburg-tmp/sub"
+    writefile(_): "tests/petersburg-tmp/a.su" "x"
+    writefile(_): "tests/petersburg-tmp/b.txt" "x"
+    pw_files(wi_f): 0 0 200 100 "tests/petersburg-tmp" "*.su"
+    btget(wi_v): wi_f "names"
+    encode(wi_v): wi_v
+    pm_check(_): "a file chooser filters" wi_v "[`../`,`a.su`,`sub/`]"
+    pw_pointer(_): wi_f 10 {18 + 14 + 5} "click"
+    btget(wi_v): wi_f "chosen"
+    pm_check(_): "and chooses" wi_v "tests/petersburg-tmp/a.su"
+    pw_pointer(_): wi_f 10 {18 + 28 + 5} "click"
+    btget(wi_v): wi_f "dir"
+    pm_check(_): "and goes into folders" wi_v "tests/petersburg-tmp/sub"
+    remove_file(_): "tests/petersburg-tmp/a.su"
+    remove_file(_): "tests/petersburg-tmp/b.txt"
+    remove_dir(_): "tests/petersburg-tmp/sub"
+    remove_dir(_): "tests/petersburg-tmp"
+
+    # every widget drawn: a golden image
+    ps_scene(wi_s2):
+    pt_theme(wi_th): "light"
+    vec(wi_all): ""
+    push(_): wi_all wi_s
+    push(_): wi_all wi_sp
+    push(_): wi_all wi_r
+    push(_): wi_all wi_t
+    push(_): wi_all wi_tb
+    push(_): wi_all wi_d
+    push(_): wi_all wi_tr
+    pw_progress(wi_p): 0 0 100 10 30 100
+    push(_): wi_all wi_p
+    str_split(wi_parts): "Ready|Ln 1" "|"
+    pw_status(wi_st): 0 0 120 16 wi_parts
+    push(_): wi_all wi_st
+    pw_group(wi_g): 0 0 100 60 "Options"
+    push(_): wi_all wi_g
+    len(wi_n): wi_all
+    set(wi_i): 0
+    while(_): {wi_i < wi_n} [
+        at(wi_w): wi_all wi_i
+        pw_render(_): wi_w wi_s2 wi_th
+        set(wi_i): {wi_i + 1}
+    ]
+    btget(wi_items): wi_s2 "items"
+    btlen(wi_v): wi_items
+    pm_check(_): "the widgets made shapes" {wi_v > 50} true
+    pw_render(_): wi_p wi_s2 wi_th
+    btlen(wi_v2): wi_items
+    pm_check(_): "drawing again replaces a widget's shapes" wi_v2 wi_v
+    ps_scene(wi_s3):
+    pw_render(_): wi_p wi_s3 wi_th
+    pw_render(_): wi_st wi_s3 wi_th
+    ps_raster(wi_img): wi_s3 120 16 16777215
+    ps_crc(wi_c): wi_img
+    str_from_int(wi_cs): wi_c
+    concat(wi_line): "crc widgets " wi_cs
+    print(_): wi_line
+    set(r): 0
+]
+
+pm_handler(r): name [
+    concat(r): "ran " name
+]
+
+pm_tick(r): n [
+    set(r): {n < 3}
+]
+
+pm_services(r): [
+    pb_undo_new(se_u): 3
+    pb_undo_push(_): se_u "type a" "" "a"
+    pb_undo_push(_): se_u "type a" "a" "ab"
+    pb_undo_push(_): se_u "bold" "ab" "**ab**"
+    pb_undo_modified(se_v): se_u
+    pm_check(_): "modified" se_v true
+    pb_undo(se_v): se_u
+    pm_check(_): "undo" se_v "ab"
+    pb_undo(se_v): se_u
+    pm_check(_): "typing merged into one step" se_v ""
+    pb_undo(se_v): se_u
+    pm_check(_): "nothing more" se_v null
+    pb_redo(se_v): se_u
+    pm_check(_): "redo" se_v "ab"
+    pb_undo_mark_saved(_): se_u
+    pb_undo_modified(se_v): se_u
+    pm_check(_): "saved" se_v false
+    set(se_i): 0
+    while(_): {se_i < 5} [
+        str_from_int(se_is): se_i
+        pb_undo_push(_): se_u se_is se_i {se_i + 1}
+        set(se_i): {se_i + 1}
+    ]
+    btget(se_d): se_u "done"
+    len(se_v): se_d
+    pm_check(_): "the limit" se_v 3
+
+    pb_commands(se_c):
+    pb_command(_): se_c "save" "Save" "Ctrl+S" "pm_handler"
+    pb_command(_): se_c "quit" "Quit" "Ctrl+Q" "pm_handler"
+    pb_accelerator(se_v): se_c "ctrl+s"
+    pm_check(_): "a shortcut finds its command" se_v "save"
+    pb_run_command(se_v): se_c "save"
+    pm_check(_): "it runs" se_v "ran save"
+    pb_enable(_): se_c "save" false
+    pb_accelerator(se_v): se_c "Ctrl+S"
+    pm_check(_): "a disabled command takes no key" se_v ""
+    pb_run_command(se_v): se_c "save"
+    pm_check(_): "and does not run" se_v null
+    vec(se_names): ""
+    push(_): se_names "save"
+    push(_): se_names "-"
+    push(_): se_names "quit"
+    pb_command_menu(se_m): se_c se_names
+    at(se_v): se_m 2
+    encode(se_v): se_v
+    pm_check(_): "a menu from commands" se_v "[`Quit`,`ctrl+q`,`quit`]"
+
+    pb_model(se_mod):
+    pw_slider(se_sl): 0 0 100 10 0 0 100
+    pb_bind(_): se_mod "volume" se_sl "value"
+    pb_set(se_v): se_mod "volume" 70
+    pm_check(_): "a bound value reaches its widget" se_v 1
+    btget(se_v): se_sl "value"
+    pm_check(_): "the slider shows it" se_v 70
+    pw_pointer(_): se_sl 20 5 "click"
+    pb_pull(_): se_mod "volume" se_sl "value"
+    btget(se_v): se_mod "volume"
+    pm_check(_): "and back from the widget" se_v 20
+
+    pb_ease(se_v): "in" 0.5
+    pm_check(_): "ease in" se_v 0.25
+    pb_ease(se_v): "out" 0.5
+    pm_check(_): "ease out" se_v 0.75
+    pb_ease(se_v): "bounce" 1
+    pm_check(_): "bounce lands" se_v 1.0
+    pb_tween(se_v): 0 100 1000 200 "linear" 1100
+    pm_check(_): "half way" se_v 50.0
+    pb_tween(se_v): 0 100 1000 200 "linear" 5000
+    pm_check(_): "past the end" se_v 100
+
+    pb_job(se_j): 4
+    pb_job_step(_): se_j
+    pb_job_percent(se_v): se_j
+    pm_check(_): "a job's progress" se_v 25
+    pb_job_cancel(_): se_j
+    pb_job_step(se_v): se_j
+    pm_check(_): "a cancelled job stops" se_v false
+    btget(se_v): se_j "state"
+    pm_check(_): "and says so" se_v "cancelled"
+
+    pb_tab_next(se_v): 2 3 false
+    pm_check(_): "Tab wraps round" se_v 0
+    pb_tab_next(se_v): 0 3 true
+    pm_check(_): "Shift+Tab goes back" se_v 2
+
+    pb_record(_): 5 "click" 0 0 0
+    pb_record(_): 7 "key" 65 0 0
+    pb_recording_text(se_t):
+    pb_replay_events(se_e): se_t
+    len(se_v): se_e
+    pm_check(_): "recorded events" se_v 2
+    at(se_v): se_e 1
+    at(se_v): se_v 2
+    pm_check(_): "with their values" se_v 65
+
+    pb_note(_): 10 1 "button"
+    pb_note(_): 11 1 "label"
+    pb_note(_): 12 10 "label"
+    pb_children(se_v): 1
+    encode(se_v): se_v
+    pm_check(_): "children" se_v "[10,11]"
+    pb_parent(se_v): 12
+    pm_check(_): "a parent" se_v 10
+    pb_kind(se_v): 11
+    pm_check(_): "a kind" se_v "label"
+
+    pb_ui_parse(se_ui): "window{title=`Hello`, label{text=`Name:`, row=0, col=0}, textbox{name=\"who\", row=0, col=1, expand=true}, button{text=`OK`, on_click=`ok_pressed`}, listbox{items=[`a`, `b`]}}"
+    btget(se_v): se_ui "kind"
+    pm_check(_): "a declarative UI" se_v "window"
+    btget(se_k): se_ui "children"
+    len(se_v): se_k
+    pm_check(_): "its children" se_v 4
+    at(se_tb): se_k 1
+    btget(se_v): se_tb "name"
+    pm_check(_): "a quoted string" se_v "who"
+    btget(se_v): se_tb "expand"
+    pm_check(_): "a true" se_v true
+    btget(se_v): se_tb "col"
+    pm_check(_): "a number" se_v 1
+    at(se_lb): se_k 3
+    btget(se_v): se_lb "items"
+    encode(se_v): se_v
+    pm_check(_): "a list" se_v "[`a`,`b`]"
+
+    pb_clipboard_set(_): "copied"
+    pb_clipboard_get(se_v):
+    pm_check(_): "the clipboard" se_v "copied"
+
+    pb_every(se_id): 5 "pm_tick"
+    set(se_wait): 0
+    btget(se_stop): se_id "stop"
+    while(_): {se_stop = false && se_wait < 400} [
+        sleep(_): 5
+        set(se_wait): {se_wait + 1}
+        btget(se_stop): se_id "stop"
+    ]
+    pb_timer_ticks(se_n): se_id
+    pm_check(_): "a timer ticks until its handler says no" se_n 3
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    pm_scene(_):
+    pm_raster(_):
+    pm_tui(_):
+    pm_layout(_):
+    pm_widgets(_):
+    pm_services(_):
+]

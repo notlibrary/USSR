@@ -1,0 +1,133 @@
+# gallery.su - every Petersburg control, as living documentation: the
+# native widgets in a window, and the canvas widgets of more.su drawn on a
+# canvas that takes the pointer and the wheel.
+#
+#     ussr src/petersburg/examples/gallery.su
+#     ussr src/petersburg/examples/gallery.su --shot gallery.png
+#
+# --shot draws the canvas widgets with the software rasteriser into a PNG
+# and opens no window (for headless machines and golden images).
+$include "../more.su"
+
+global(_): g_canvas g_scene g_theme g_widgets
+
+g_make(r): [
+    vec(r): ""
+    pw_progress(w): 10 10 180 12 65 100
+    push(_): r w
+    pw_slider(w): 10 34 180 14 40 0 100
+    push(_): r w
+    pw_spin(w): 10 58 80 20 5 1 0 10
+    push(_): r w
+    str_split(opts): "Small|Medium|Large" "|"
+    pw_radio(w): 10 88 100 54 opts 1
+    push(_): r w
+    str_split(tabs): "General|Advanced|About" "|"
+    pw_tabs(w): 210 10 220 90 tabs 0
+    push(_): r w
+    pw_group(w): 210 110 220 60 "Options"
+    push(_): r w
+    pw_textarea(w): 10 150 190 70 "A text area\nwith a cursor,\na selection and scrolling"
+    push(_): r w
+    vec(root): ""
+    push(_): root "src"
+    vec(kids): ""
+    push(_): kids "libs"
+    push(_): kids "strings.su"
+    push(_): kids "paths.su"
+    push(_): root kids
+    push(_): root "README.md"
+    pw_tree(w): 210 180 220 80 root
+    push(_): r w
+    str_split(cols): "name|size" "|"
+    vec(rows): ""
+    str_split(a): "petersburg.su|9" "|"
+    push(_): rows a
+    str_split(b): "more.su|60" "|"
+    push(_): rows b
+    pw_table(w): 450 10 180 80 cols rows
+    push(_): r w
+    pw_date(w): 450 100 2026 11 17
+    push(_): r w
+    pw_colour(w): 450 250 210 0.8 0.9
+    push(_): r w
+    str_split(parts): "Ready|gallery.su|Ln 1" "|"
+    pw_status(w): 0 384 640 16 parts
+    push(_): r w
+]
+
+g_draw(r): [
+    set(r): 0
+    len(n): g_widgets
+    set(i): 0
+    while(_): {i < n} [
+        at(w): g_widgets i
+        pw_render(_): w g_scene g_theme
+        set(i): {i + 1}
+    ]
+]
+
+g_redraw(r): [
+    set(r): 0
+    canvasclear(_): g_canvas 15790320
+    g_draw(_):
+    ps_draw(_): g_scene g_canvas
+]
+
+g_pointer(r): c x y [
+    set(r): 0
+    uilock(_):
+    len(n): g_widgets
+    set(i): 0
+    while(_): {i < n} [
+        at(w): g_widgets i
+        pw_pointer(_): w x y "click"
+        set(i): {i + 1}
+    ]
+    g_redraw(_):
+    uiunlock(_):
+]
+
+g_wheel(r): c x y dir [
+    set(r): 0
+    uilock(_):
+    len(n): g_widgets
+    set(i): 0
+    while(_): {i < n} [
+        at(w): g_widgets i
+        pw_contains(inside): w x y
+        if(_): inside [ pw_wheel(_): w dir ]
+        set(i): {i + 1}
+    ]
+    g_redraw(_):
+    uiunlock(_):
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    ps_scene(g_scene):
+    pt_theme(g_theme): "light"
+    g_make(g_widgets):
+    if(_): {arg_count >= 2} [
+        at(a0): arg_values 0
+        if(_): {a0 = "--shot"} [
+            at(path): arg_values 1
+            g_draw(_):
+            ps_raster(img): g_scene 640 400 15790320
+            ps_png(_): img path
+            concat(m): "gallery: " path
+            print(_): m
+            return(_): result
+        ]
+    ]
+    createwindow(window): "Petersburg gallery" 660 560
+    pb_ui_parse(ui): "box{label{text=`Native widgets`}, toolbar{button{text=`New`}, button{text=`Open`}}, textbox{text=`A text box`}, checkbox{text=`A check box`}, combobox{items=[`Red`, `Green`, `Blue`]}, listbox{items=[`First`, `Second`, `Third`]}}"
+    pb_ui_build(_): ui window
+    canvas(g_canvas): window
+    pack(_): g_canvas true
+    on(_): g_canvas "pointer" "g_pointer"
+    on(_): g_canvas "wheel" "g_wheel"
+    show(_): window
+    g_redraw(_):
+    run(_):
+]

@@ -1,0 +1,139 @@
+PASS ids count up
+PASS the top shape is hit
+PASS the one below where only it is
+PASS nothing
+PASS raised above
+PASS lowered below
+PASS a hidden layer is not hit
+PASS get a property
+PASS delete
+PASS a deleted shape is gone
+PASS moved by a transform
+PASS not where it was
+PASS a change marks a dirty box
+PASS rotated about its middle, the middle stays
+PASS near a wide line
+PASS off it
+PASS inside a filled circle
+PASS outside it
+PASS evenodd: the hole is not hit
+PASS nonzero: it is
+PASS a filled rect
+PASS the background
+PASS the right edge is outside
+crc rect 2458298266
+PASS half black over white
+PASS half black over red
+PASS a gradient: dark on the left, light on the right
+PASS outside the clip: the background
+PASS evenodd leaves the middle
+PASS and fills the ring
+PASS nonzero fills the middle too
+PASS three pixels wide
+PASS a dash, a gap, a dash
+PASS a filled circle's middle
+PASS an image from memory
+PASS text as blocks
+crc mixed 814389549
+PASS a PNG holds the same pixels
+PASS a PPM: header and pixels
+PASS a scene through its text draws the same
+PASS a terminal frame
+PASS a row: fixed, weighted, capped
+PASS a column, centred, with padding
+PASS a grid with a span and row weights
+PASS anchored left and right: it stretches
+PASS anchored right and bottom: it moves
+PASS right to left
+PASS 144 dpi
+PASS 120 dpi
+PASS a dark theme
+PASS an accent colour
+PASS a slider follows the pointer
+PASS and the arrows
+PASS a spin box stops at its top
+PASS and goes down
+PASS radio buttons
+PASS they go round
+PASS a tab is picked
+PASS a splitter is dragged
+PASS a tooltip waits
+PASS then shows
+PASS and goes when the pointer leaves
+PASS typing at the end
+PASS a new line
+PASS backspace joins lines
+PASS a selection
+PASS cut
+PASS paste
+PASS select all
+PASS typing over a selection
+PASS a click places the cursor
+PASS delete
+PASS a closed tree: one row
+PASS its arrow opens it
+PASS the keys open the next
+PASS the selected path
+PASS sorted by a number column
+PASS a second click: the other way
+PASS a column is resized
+PASS a row is picked
+PASS a scroll view scrolls
+PASS content to screen
+PASS and stops at the end
+PASS November 2026 starts on a Sunday
+PASS a day is picked
+PASS the next month
+PASS into the next year
+PASS green from HSV
+PASS the picker: full red
+PASS a menu item
+PASS a separator does nothing
+PASS a file chooser filters
+PASS and chooses
+PASS and goes into folders
+PASS the widgets made shapes
+PASS drawing again replaces a widget's shapes
+crc widgets 3940355376
+PASS modified
+PASS undo
+PASS typing merged into one step
+PASS nothing more
+PASS redo
+PASS saved
+PASS the limit
+PASS a shortcut finds its command
+PASS it runs
+PASS a disabled command takes no key
+PASS and does not run
+PASS a menu from commands
+PASS a bound value reaches its widget
+PASS the slider shows it
+PASS and back from the widget
+PASS ease in
+PASS ease out
+PASS bounce lands
+PASS half way
+PASS past the end
+PASS a job's progress
+PASS a cancelled job stops
+PASS and says so
+PASS Tab wraps round
+PASS Shift+Tab goes back
+PASS recorded events
+PASS with their values
+PASS children
+PASS a parent
+PASS a kind
+PASS a declarative UI
+PASS its children
+PASS a quoted string
+PASS a true
+PASS a number
+PASS a list
+PASS the clipboard
+PASS a timer ticks until its handler says no
+
+--- stderr ---
+
+--- exit 0 ---
