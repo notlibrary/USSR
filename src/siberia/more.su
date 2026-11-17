@@ -1,0 +1,3050 @@
+# more.su - Siberia refine pass 1: functions, names and sheet tools
+# beyond 0.2. siberia.su includes it; sb_call asks sbm_call first and an
+# unknown name in a formula asks sbm_name.
+#
+# Functions: VLOOKUP HLOOKUP INDEX MATCH XLOOKUP; SUMIF(S) COUNTIF(S)
+# AVERAGEIF(S); LEFT RIGHT MID FIND SEARCH SUBSTITUTE TRIM CONCAT
+# CONCATENATE TEXTJOIN TEXT VALUE REPT EXACT PROPER CHAR CODE; TODAY NOW
+# DATE TIME YEAR MONTH DAY HOUR MINUTE WEEKDAY DATEDIF EDATE EOMONTH
+# (serial days from 1899-12-30); SUMPRODUCT PRODUCT ROUNDUP ROUNDDOWN
+# CEILING FLOOR TRUNC SIGN LOG LOG10 LN EXP RAND RANDBETWEEN SIN COS TAN
+# ASIN ACOS ATAN ATAN2 DEGREES RADIANS FACT GCD LCM; MEDIAN MODE STDEV
+# STDEVP VAR VARP LARGE SMALL RANK PERCENTILE COUNTA COUNTBLANK; IFERROR
+# IFNA IFS SWITCH XOR ISBLANK ISNUMBER ISTEXT ISERROR ISLOGICAL; PMT FV PV
+# NPV IRR; SLOPE INTERCEPT CORREL FORECAST TREND; BITAND BITOR BITXOR
+# BITLSHIFT BITRSHIFT DEC2HEX HEX2DEC DEC2BIN BIN2DEC DEC2OCT OCT2DEC;
+# SUBTOTAL; USSR("definition", args...) calls a USSR definition with a
+# vector of the argument values.
+#
+# Sheet tools (sbm_*): names, sort, find and replace, fill series, insert
+# and delete rows and columns (references follow), remove duplicates,
+# transpose, text to columns, goal seek, the error checker, precedents and
+# dependents, scenarios, undo and redo, number formats, CSV with options
+# and Windows-1251, HTML and Markdown out, and the command line:
+#     ussr src/siberia/siberia.su --eval file.fods B5
+#     ussr src/siberia/siberia.su --convert in.csv out.fods|.html|.md
+$once
+$include "../libs/dates.su"
+$include "../libs/lists.su"
+
+global(_): sbm_ready
+
+sbm_state(r): [
+    set(sbm_ready): true
+    btree(names):
+    set(sb_names): names!
+    vec(u): ""
+    set(sb_undo): u!
+    vec(rd): ""
+    set(sb_redo): rd!
+    btree(sc):
+    set(sb_scenarios): sc!
+    set(r): 0
+]
+
+# --- argument helpers
+
+sbm_is_range(r): a [
+    typeof(t): a
+    set(r): {t = "vector"}
+]
+
+# a range's values, row by row
+sbm_values(r): a [
+    vec(r): ""
+    sbm_is_range(isr): a
+    if(_): {isr = false} [
+        push(_): r a
+        return(r): r
+    ]
+    at(r1): a 0
+    at(c1): a 1
+    at(r2): a 2
+    at(c2): a 3
+    set(row): r1
+    while(_): {row <= r2} [
+        set(col): c1
+        while(_): {col <= c2} [
+            sb_value(v): {row * SB_COLS + col}
+            push(_): r v
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+sbm_rows(r): a [
+    set(r): 1
+    sbm_is_range(isr): a
+    if(_): isr [
+        at(r1): a 0
+        at(r2): a 2
+        set(r): {r2 - r1 + 1}
+    ]
+]
+
+sbm_cols(r): a [
+    set(r): 1
+    sbm_is_range(isr): a
+    if(_): isr [
+        at(c1): a 1
+        at(c2): a 3
+        set(r): {c2 - c1 + 1}
+    ]
+]
+
+# one value from an argument: a single-cell range gives its value
+sbm_one(r): a [
+    set(r): a
+    sbm_is_range(isr): a
+    if(_): isr [
+        at(r1): a 0
+        at(c1): a 1
+        sb_value(r): {r1 * SB_COLS + c1}
+    ]
+]
+
+sbm_arg(r): args i [
+    at(a): args i
+    sbm_one(r): a
+]
+
+sbm_num_arg(r): args i [
+    sbm_arg(a): args i
+    sb_num(r): a
+]
+
+sbm_text_arg(r): args i [
+    sbm_arg(a): args i
+    sb_text_of(r): a
+]
+
+# the first error among the arguments (ranges not looked into), or null
+sbm_first_err(r): args [
+    set(r): null
+    len(n): args
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        sb_is_err(e): a
+        if(_): e [
+            set(r): a
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sbm_isnum(r): v [
+    typeof(t): v
+    set(r): {t = "integer" || t = "real"}
+]
+
+sbm_int(r): x [
+    str_trunc(r): x
+    if(_): {r > x} [ set(r): {r - 1} ]
+]
+
+# numbers of the arguments, ranges expanded, text and blanks skipped
+sbm_nums(r): args [
+    sb_collect(r): args
+]
+
+# --- criteria for the IF functions: 5, ">5", "<>x", "a*", "=b?"
+
+sbm_crit(r): v crit [
+    set(r): false
+    sbm_isnum(cn): crit
+    sbm_isnum(vn): v
+    if(_): cn [
+        if(_): vn [ set(r): {v = crit} ]
+        return(r): r
+    ]
+    typeof(ct): crit
+    if(_): {ct = "boolean"} [
+        set(r): {v = crit}
+        return(r): r
+    ]
+    sb_text_of(c): crit
+    set(op): "="
+    vec(ops): ""
+    str_split(ops): "<= >= <> < > =" " "
+    set(k): 0
+    while(_): {k < 6} [
+        at(o): ops k
+        sb_starts(s): c o
+        if(_): s [
+            set(op): o
+            len(ol): o
+            len(cl): c
+            slice(c): c ol {cl - ol}
+            set(k): 6
+        ]
+        set(k): {k + 1}
+    ]
+    str_trim(ct2): c
+    set(num): null
+    if(_): {ct2 != ""} [ str_to_number(num): ct2 ]
+    sbm_isnum(isn): num
+    if(_): isn [
+        if(_): {vn = false} [
+            set(r): {op = "<>"}
+            return(r): r
+        ]
+        sb_compare_op(r): v num op
+        return(r): r
+    ]
+    # text: case folded, * and ? wildcards for = and <>
+    typeof(vt): v
+    set(vs): ""
+    if(_): {vt != "null"} [ sb_text_of(vs): v ]
+    str_lower(vs): vs
+    str_lower(cs): c
+    if(_): {op = "=" || op = "<>"} [
+        sbm_wild(m): cs vs
+        set(r): m
+        if(_): {op = "<>"} [ set(r): {m = false} ]
+    ]
+    else(_): [
+        sb_compare_text(cmp): vs cs
+        if(_): {op = "<"} [ set(r): {cmp < 0} ]
+        elif(_): {op = ">"} [ set(r): {cmp > 0} ]
+        elif(_): {op = "<="} [ set(r): {cmp <= 0} ]
+        else(_): [ set(r): {cmp >= 0} ]
+    ]
+]
+
+# pattern with * and ? against text
+sbm_wild(r): p s [
+    len(np): p
+    len(ns): s
+    set(pi): 0
+    set(si): 0
+    set(star): -1
+    set(mark): 0
+    while(_): {si < ns} [
+        set(pc): 0
+        if(_): {pi < np} [ byte(pc): p pi ]
+        byte(sc): s si
+        if(_): {pi < np && (pc = 63 || pc = sc)} [
+            set(pi): {pi + 1}
+            set(si): {si + 1}
+        ]
+        elif(_): {pi < np && pc = 42} [
+            set(star): pi
+            set(mark): si
+            set(pi): {pi + 1}
+        ]
+        elif(_): {star >= 0} [
+            set(pi): {star + 1}
+            set(mark): {mark + 1}
+            set(si): mark
+        ]
+        else(_): [
+            set(r): false
+            return(r): r
+        ]
+    ]
+    while(_): {pi < np} [
+        byte(pc): p pi
+        if(_): {pc != 42} [
+            set(r): false
+            return(r): r
+        ]
+        set(pi): {pi + 1}
+    ]
+    set(r): true
+]
+
+# --- dates: serial numbers, day 1 = 1899-12-31 (as LibreOffice: 0 is
+# 1899-12-30), fractions are the time of day
+
+sbm_serial(r): y m d [
+    # months past 12 roll over, as DATE does
+    set(yy): y
+    set(mm): {m - 1}
+    sbm_int(q): {mm / 12}
+    set(yy): {yy + q}
+    set(mm): {mm - q * 12 + 1}
+    days_from_civil(dd): yy mm 1
+    set(r): {dd + 25569 + d - 1}
+]
+
+sbm_ymd(r): serial [
+    sbm_int(s): serial
+    civil_from_days(r): {s - 25569}
+]
+
+sbm_days_in(r): y m [
+    sbm_serial(a): y m 1
+    sbm_serial(b): y {m + 1} 1
+    set(r): {b - a}
+]
+
+sbm_now(r): [
+    time(t):
+    localtime(lt): t
+    at(y): lt 0
+    at(mo): lt 1
+    at(d): lt 2
+    at(h): lt 3
+    at(mi): lt 4
+    at(se): lt 5
+    sbm_serial(day): y mo d
+    set(r): {day + (h * 3600 + mi * 60 + se) / 86400.0}
+]
+
+# --- number formats: 0 0.00 #,##0 #,##0.00 0% 0.0% $#,##0.00 0.00E+00
+# yyyy-mm-dd dd.mm.yyyy mm/dd/yyyy hh:mm hh:mm:ss @ General
+
+sbm_format(r): v code [
+    sbm_isnum(isn): v
+    if(_): {isn = false || code = "" || code = "General" || code = "@"} [
+        sb_show_value(r): v
+        return(r): r
+    ]
+    str_lower(lc): code
+    str_contains(isdate): lc "yy"
+    str_contains(istime): lc "hh"
+    if(_): {isdate || istime} [
+        sbm_ymd(ymd): v
+        at(y): ymd 0
+        at(mo): ymd 1
+        at(d): ymd 2
+        sbm_int(day): v
+        set(frac): {v - day}
+        sbm_int(secs): {frac * 86400 + 0.5}
+        sbm_int(h): {secs / 3600}
+        sbm_int(mi): {(secs - h * 3600) / 60}
+        set(se): {secs - h * 3600 - mi * 60}
+        str_from_int(ys): y
+        sbm_two(ms): mo
+        sbm_two(ds): d
+        sbm_two(hs): h
+        sbm_two(mis): mi
+        sbm_two(ses): se
+        # minutes come after hours: "hh:mm" first, then months
+        set(r): lc
+        concat(hm): hs ":" mis
+        str_replace(r): r "hh:mm" hm
+        str_replace(r): r "yyyy" ys
+        str_replace(r): r "mm" ms
+        str_replace(r): r "dd" ds
+        str_replace(r): r "ss" ses
+        str_replace(r): r "hh" hs
+        return(r): r
+    ]
+    str_ends(pct): code "%"
+    set(x): v
+    if(_): pct [ set(x): {v * 100} ]
+    str_contains(sci): code "E+"
+    str_find(dot): code "." 0
+    set(dec): 0
+    if(_): {dot >= 0} [
+        set(k): {dot + 1}
+        len(cl): code
+        while(_): {k < cl} [
+            byte(b): code k
+            if(_): {b = 48 || b = 35} [ set(dec): {dec + 1} ]
+            set(k): {k + 1}
+        ]
+        if(_): sci [
+            str_find(epos): code "E" 0
+            set(dec): {epos - dot - 1}
+        ]
+    ]
+    if(_): sci [
+        set(ax): x
+        if(_): {x < 0} [ set(ax): {0 - x} ]
+        set(e): 0
+        if(_): {ax > 0} [
+            while(_): {ax >= 10} [
+                set(ax): {ax / 10.0}
+                set(e): {e + 1}
+            ]
+            while(_): {ax < 1} [
+                set(ax): {ax * 10.0}
+                set(e): {e - 1}
+            ]
+        ]
+        sb_round(m): ax dec
+        str_from_number(ms): m dec
+        if(_): {dec > 0} [ sbm_pad_dec(ms): ms dec ]
+        set(sign): "+"
+        if(_): {e < 0} [
+            set(sign): "-"
+            set(e): {0 - e}
+        ]
+        sbm_two(es): e
+        set(r): ""
+        if(_): {x < 0} [ set(r): "-" ]
+        concat(r): r ms "E" sign es
+        return(r): r
+    ]
+    sb_round(rx): x dec
+    set(ax): rx
+    if(_): {rx < 0} [ set(ax): {0 - rx} ]
+    str_from_number(s): ax dec
+    if(_): {dec = 0} [
+        sbm_int(ai): {ax + 0.0000001}
+        str_from_int(s): ai
+    ]
+    else(_): [ sbm_pad_dec(s): s dec ]
+    str_contains(group): code ","
+    if(_): group [ sbm_group(s): s ]
+    set(r): s
+    if(_): {rx < 0} [ concat(r): "-" r ]
+    str_starts(cur): code "$"
+    if(_): cur [ concat(r): "$" r ]
+    if(_): pct [ concat(r): r "%" ]
+]
+
+sbm_two(r): n [
+    str_from_int(r): n
+    if(_): {n < 10} [ concat(r): "0" r ]
+]
+
+sbm_pad_dec(r): s dec [
+    set(r): s
+    str_find(dot): r "." 0
+    if(_): {dot < 0} [
+        concat(r): r "."
+        len(dot): s
+    ]
+    len(n): r
+    set(have): {n - dot - 1}
+    while(_): {have < dec} [
+        concat(r): r "0"
+        set(have): {have + 1}
+    ]
+]
+
+sbm_group(r): s [
+    str_find(dot): s "." 0
+    set(intp): s
+    set(rest): ""
+    if(_): {dot >= 0} [
+        slice(intp): s 0 dot
+        len(n): s
+        slice(rest): s dot {n - dot}
+    ]
+    set(r): ""
+    len(n): intp
+    set(i): 0
+    while(_): {i < n} [
+        slice(c): intp i 1
+        if(_): {i > 0 && (n - i) % 3 = 0} [ concat(r): r "," ]
+        concat(r): r c
+        set(i): {i + 1}
+    ]
+    concat(r): r rest
+]
+
+# --- the functions
+
+# [handled value]
+sbm_call(r): name args [
+    vec(r): ""
+    len(n): args
+    sbm_fn(v): name args n
+    sbm_none(none):
+    set(done): true
+    typeof(vt): v
+    if(_): {vt = "string"} [
+        if(_): {v = none} [ set(done): false ]
+    ]
+    push(_): r done
+    push(_): r v
+]
+
+sbm_none(r): [
+    chr(z): 2
+    concat(r): z "none"
+]
+
+sbm_fn(r): name args n [
+    sbm_none(r):
+    sb_err(bad): "#VALUE!"
+    sb_err(na): "#N/A"
+    sb_err(numerr): "#NUM!"
+    sb_err(div0): "#DIV/0!"
+    # --- lookup
+    if(_): {name = "VLOOKUP" || name = "HLOOKUP"} [
+        set(r): bad
+        if(_): {n < 3} [ return(r): r ]
+        sbm_arg(key): args 0
+        at(tab): args 1
+        sbm_num_arg(idx): args 2
+        set(exact): false
+        if(_): {n >= 4} [
+            sbm_arg(ex): args 3
+            sb_num(exn): ex
+            set(exact): {exn = 0}
+        ]
+        sbm_is_range(isr): tab
+        if(_): {isr = false} [ return(r): r ]
+        at(r1): tab 0
+        at(c1): tab 1
+        at(r2): tab 2
+        at(c2): tab 3
+        set(vert): {name = "VLOOKUP"}
+        set(count): {r2 - r1 + 1}
+        set(width): {c2 - c1 + 1}
+        if(_): {vert = false} [
+            set(count): {c2 - c1 + 1}
+            set(width): {r2 - r1 + 1}
+        ]
+        if(_): {idx < 1 || idx > width} [
+            sb_err(r): "#REF!"
+            return(r): r
+        ]
+        set(found): -1
+        set(i): 0
+        while(_): {i < count} [
+            set(cell): {(r1 + i) * SB_COLS + c1}
+            if(_): {vert = false} [ set(cell): {r1 * SB_COLS + c1 + i} ]
+            sb_value(cv): cell
+            if(_): exact [
+                sbm_crit(m): cv key
+                sbm_isnum(kn): key
+                if(_): kn [ set(m): {cv = key} ]
+                if(_): m [
+                    set(found): i
+                    set(i): count
+                ]
+            ]
+            else(_): [
+                # sorted: the last not greater than the key
+                sb_compare_op(le): cv key "<="
+                typeof(lt_): cv
+                if(_): {le = true && lt_ != "null"} [ set(found): i ]
+                if(_): {le = false} [ set(i): count ]
+            ]
+            set(i): {i + 1}
+        ]
+        if(_): {found < 0} [
+            set(r): na
+            return(r): r
+        ]
+        if(_): vert [ sb_value(r): {(r1 + found) * SB_COLS + c1 + idx - 1} ]
+        else(_): [ sb_value(r): {(r1 + idx - 1) * SB_COLS + c1 + found} ]
+        return(r): r
+    ]
+    if(_): {name = "INDEX"} [
+        set(r): bad
+        if(_): {n < 2} [ return(r): r ]
+        at(tab): args 0
+        sbm_is_range(isr): tab
+        if(_): {isr = false} [ return(r): r ]
+        sbm_num_arg(ri): args 1
+        set(ci): 1
+        if(_): {n >= 3} [ sbm_num_arg(ci): args 2 ]
+        sbm_rows(nr): tab
+        sbm_cols(nc): tab
+        if(_): {nr = 1 && n = 2} [
+            set(ci): ri
+            set(ri): 1
+        ]
+        if(_): {ri < 1 || ri > nr || ci < 1 || ci > nc} [
+            sb_err(r): "#REF!"
+            return(r): r
+        ]
+        at(r1): tab 0
+        at(c1): tab 1
+        sb_value(r): {(r1 + ri - 1) * SB_COLS + c1 + ci - 1}
+        return(r): r
+    ]
+    if(_): {name = "MATCH"} [
+        set(r): bad
+        if(_): {n < 2} [ return(r): r ]
+        sbm_arg(key): args 0
+        at(tab): args 1
+        set(mt): 1
+        if(_): {n >= 3} [ sbm_num_arg(mt): args 2 ]
+        sbm_values(vs): tab
+        len(nv): vs
+        set(found): -1
+        set(i): 0
+        while(_): {i < nv} [
+            at(cv): vs i
+            if(_): {mt = 0} [
+                sbm_crit(m): cv key
+                sbm_isnum(kn): key
+                if(_): kn [ set(m): {cv = key} ]
+                if(_): m [
+                    set(found): i
+                    set(i): nv
+                ]
+            ]
+            elif(_): {mt > 0} [
+                sb_compare_op(le): cv key "<="
+                if(_): le [ set(found): i ]
+                else(_): [ set(i): nv ]
+            ]
+            else(_): [
+                sb_compare_op(ge): cv key ">="
+                if(_): ge [ set(found): i ]
+                else(_): [ set(i): nv ]
+            ]
+            set(i): {i + 1}
+        ]
+        set(r): na
+        if(_): {found >= 0} [ set(r): {found + 1} ]
+        return(r): r
+    ]
+    if(_): {name = "XLOOKUP"} [
+        set(r): bad
+        if(_): {n < 3} [ return(r): r ]
+        sbm_arg(key): args 0
+        at(look): args 1
+        at(ret): args 2
+        sbm_values(lv): look
+        sbm_values(rv): ret
+        len(nv): lv
+        set(i): 0
+        while(_): {i < nv} [
+            at(cv): lv i
+            sbm_crit(m): cv key
+            sbm_isnum(kn): key
+            if(_): kn [ set(m): {cv = key} ]
+            if(_): m [
+                at(r): rv i
+                return(r): r
+            ]
+            set(i): {i + 1}
+        ]
+        set(r): na
+        if(_): {n >= 4} [ sbm_arg(r): args 3 ]
+        return(r): r
+    ]
+    # --- conditional aggregates
+    if(_): {name = "SUMIF" || name = "COUNTIF" || name = "AVERAGEIF"} [
+        set(r): bad
+        if(_): {n < 2} [ return(r): r ]
+        at(rg): args 0
+        sbm_arg(crit): args 1
+        set(sr): rg
+        if(_): {n >= 3} [ at(sr): args 2 ]
+        sbm_values(cv): rg
+        sbm_values(sv): sr
+        set(sum): 0
+        set(cnt): 0
+        len(nc): cv
+        len(ns): sv
+        set(i): 0
+        while(_): {i < nc} [
+            at(v): cv i
+            sbm_crit(m): v crit
+            if(_): m [
+                set(cnt): {cnt + 1}
+                if(_): {i < ns} [
+                    at(x): sv i
+                    sbm_isnum(xn): x
+                    if(_): xn [ set(sum): {sum + x} ]
+                    elif(_): {name = "AVERAGEIF"} [ set(cnt): {cnt - 1} ]
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+        if(_): {name = "SUMIF"} [ set(r): sum ]
+        elif(_): {name = "COUNTIF"} [ set(r): cnt ]
+        elif(_): {cnt = 0} [ set(r): div0 ]
+        else(_): [ sb_arith(r): sum cnt "/" ]
+        return(r): r
+    ]
+    if(_): {name = "SUMIFS" || name = "COUNTIFS" || name = "AVERAGEIFS"} [
+        set(r): bad
+        set(first): 1
+        if(_): {name = "COUNTIFS"} [ set(first): 0 ]
+        if(_): {n < first + 2 || (n - first) % 2 != 0} [ return(r): r ]
+        vec(sv): ""
+        if(_): {first = 1} [
+            at(sr): args 0
+            sbm_values(sv): sr
+        ]
+        vec(lists): ""
+        vec(crits): ""
+        set(k): first
+        while(_): {k + 1 < n} [
+            at(rg): args k
+            sbm_values(cv): rg
+            push(_): lists cv
+            sbm_arg(c): args {k + 1}
+            push(_): crits c
+            set(k): {k + 2}
+        ]
+        at(l0): lists 0
+        len(nl): l0
+        len(nk): lists
+        set(sum): 0
+        set(cnt): 0
+        set(i): 0
+        while(_): {i < nl} [
+            set(all): true
+            set(j): 0
+            while(_): {j < nk && all} [
+                at(lv): lists j
+                at(c): crits j
+                len(lvn): lv
+                set(v): null
+                if(_): {i < lvn} [ at(v): lv i ]
+                sbm_crit(all): v c
+                set(j): {j + 1}
+            ]
+            if(_): all [
+                if(_): {first = 0} [ set(cnt): {cnt + 1} ]
+                else(_): [
+                    len(svn): sv
+                    if(_): {i < svn} [
+                        at(x): sv i
+                        sbm_isnum(xn): x
+                        if(_): xn [
+                            set(sum): {sum + x}
+                            set(cnt): {cnt + 1}
+                        ]
+                    ]
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+        if(_): {name = "SUMIFS"} [ set(r): sum ]
+        elif(_): {name = "COUNTIFS"} [ set(r): cnt ]
+        elif(_): {cnt = 0} [ set(r): div0 ]
+        else(_): [ sb_arith(r): sum cnt "/" ]
+        return(r): r
+    ]
+    # --- logic (errors are values here, not stoppers)
+    if(_): {name = "IFERROR" || name = "IFNA"} [
+        set(r): bad
+        if(_): {n != 2} [ return(r): r ]
+        sbm_arg(a): args 0
+        sb_is_err(e): a
+        if(_): {e && name = "IFNA"} [ set(e): {a = na} ]
+        if(_): e [ sbm_arg(r): args 1 ]
+        else(_): [ set(r): a ]
+        return(r): r
+    ]
+    if(_): {name = "ISERROR" || name = "ISBLANK" || name = "ISNUMBER" || name = "ISTEXT" || name = "ISLOGICAL" || name = "ISNA"} [
+        set(r): bad
+        if(_): {n != 1} [ return(r): r ]
+        sbm_arg(a): args 0
+        typeof(t): a
+        sb_is_err(e): a
+        if(_): {name = "ISERROR"} [ set(r): e ]
+        elif(_): {name = "ISNA"} [ set(r): {a = na} ]
+        elif(_): {name = "ISBLANK"} [ set(r): {t = "null"} ]
+        elif(_): {name = "ISNUMBER"} [ set(r): {t = "integer" || t = "real"} ]
+        elif(_): {name = "ISTEXT"} [ set(r): {t = "string" && e = false} ]
+        else(_): [ set(r): {t = "boolean"} ]
+        return(r): r
+    ]
+    sbm_first_err(err): args
+    if(_): {err != null} [
+        set(r): err
+        return(r): r
+    ]
+    if(_): {name = "IFS"} [
+        set(r): na
+        set(k): 0
+        while(_): {k + 1 < n} [
+            sbm_num_arg(c): args k
+            if(_): {c != 0} [
+                sbm_arg(r): args {k + 1}
+                return(r): r
+            ]
+            set(k): {k + 2}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "SWITCH"} [
+        set(r): na
+        if(_): {n < 3} [ return(r): r ]
+        sbm_arg(x): args 0
+        set(k): 1
+        while(_): {k + 1 < n} [
+            sbm_arg(c): args k
+            if(_): {c = x} [
+                sbm_arg(r): args {k + 1}
+                return(r): r
+            ]
+            set(k): {k + 2}
+        ]
+        if(_): {k < n} [ sbm_arg(r): args k ]
+        return(r): r
+    ]
+    if(_): {name = "XOR"} [
+        sbm_nums(v): args
+        sb_is_err(e): v
+        if(_): e [
+            set(r): v
+            return(r): r
+        ]
+        set(c): 0
+        len(nv): v
+        set(i): 0
+        while(_): {i < nv} [
+            at(x): v i
+            if(_): {x != 0} [ set(c): {c + 1} ]
+            set(i): {i + 1}
+        ]
+        set(r): {c % 2 = 1}
+        return(r): r
+    ]
+    # --- text
+    if(_): {name = "LEFT" || name = "RIGHT"} [
+        set(r): bad
+        if(_): {n < 1 || n > 2} [ return(r): r ]
+        sbm_text_arg(s): args 0
+        set(k): 1
+        if(_): {n = 2} [ sbm_num_arg(k): args 1 ]
+        sbm_int(k): k
+        if(_): {k < 0} [ return(r): r ]
+        utf8_count(len_): s
+        if(_): {k > len_} [ set(k): len_ ]
+        if(_): {name = "LEFT"} [ utf8_slice(r): s 0 k ]
+        else(_): [ utf8_slice(r): s {len_ - k} k ]
+        return(r): r
+    ]
+    if(_): {name = "MID"} [
+        set(r): bad
+        if(_): {n != 3} [ return(r): r ]
+        sbm_text_arg(s): args 0
+        sbm_num_arg(st): args 1
+        sbm_num_arg(k): args 2
+        sbm_int(st): st
+        sbm_int(k): k
+        if(_): {st < 1 || k < 0} [ return(r): r ]
+        utf8_count(len_): s
+        set(r): ""
+        if(_): {st <= len_} [
+            if(_): {st - 1 + k > len_} [ set(k): {len_ - st + 1} ]
+            utf8_slice(r): s {st - 1} k
+        ]
+        return(r): r
+    ]
+    if(_): {name = "FIND" || name = "SEARCH"} [
+        set(r): bad
+        if(_): {n < 2 || n > 3} [ return(r): r ]
+        sbm_text_arg(what): args 0
+        sbm_text_arg(s): args 1
+        set(st): 1
+        if(_): {n = 3} [ sbm_num_arg(st): args 2 ]
+        if(_): {name = "SEARCH"} [
+            str_lower(what): what
+            str_lower(s): s
+        ]
+        sbm_char_to_byte(bst): s {st - 1}
+        str_find(at_): s what bst
+        if(_): {at_ < 0} [
+            set(r): bad
+            return(r): r
+        ]
+        slice(pre): s 0 at_
+        utf8_count(r): pre
+        set(r): {r + 1}
+        return(r): r
+    ]
+    if(_): {name = "SUBSTITUTE"} [
+        set(r): bad
+        if(_): {n < 3 || n > 4} [ return(r): r ]
+        sbm_text_arg(s): args 0
+        sbm_text_arg(old): args 1
+        sbm_text_arg(nw): args 2
+        if(_): {old = ""} [
+            set(r): s
+            return(r): r
+        ]
+        if(_): {n = 3} [
+            str_replace(r): s old nw
+            return(r): r
+        ]
+        sbm_num_arg(which): args 3
+        set(r): ""
+        set(k): 0
+        set(p): 0
+        len(sl): s
+        len(ol): old
+        set(go): true
+        while(_): go [
+            str_find(at_): s old p
+            if(_): {at_ < 0} [ set(go): false ]
+            else(_): [
+                set(k): {k + 1}
+                slice(seg): s p {at_ - p}
+                concat(r): r seg
+                if(_): {k = which} [ concat(r): r nw ]
+                else(_): [ concat(r): r old ]
+                set(p): {at_ + ol}
+            ]
+        ]
+        slice(seg): s p {sl - p}
+        concat(r): r seg
+        return(r): r
+    ]
+    if(_): {name = "TRIM"} [
+        sbm_text_arg(s): args 0
+        str_trim(s): s
+        re_replace(r): " +" s " "
+        return(r): r
+    ]
+    if(_): {name = "CONCAT" || name = "CONCATENATE"} [
+        set(r): ""
+        set(i): 0
+        while(_): {i < n} [
+            at(a): args i
+            sbm_values(vs): a
+            len(nv): vs
+            set(k): 0
+            while(_): {k < nv} [
+                at(v): vs k
+                typeof(t): v
+                if(_): {t != "null"} [
+                    sb_text_of(s): v
+                    concat(r): r s
+                ]
+                set(k): {k + 1}
+            ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "TEXTJOIN"} [
+        set(r): bad
+        if(_): {n < 3} [ return(r): r ]
+        sbm_text_arg(sep): args 0
+        sbm_num_arg(skip): args 1
+        set(r): ""
+        set(first): true
+        set(i): 2
+        while(_): {i < n} [
+            at(a): args i
+            sbm_values(vs): a
+            len(nv): vs
+            set(k): 0
+            while(_): {k < nv} [
+                at(v): vs k
+                typeof(t): v
+                set(s): ""
+                if(_): {t != "null"} [ sb_text_of(s): v ]
+                if(_): {skip = 0 || s != ""} [
+                    if(_): {first = false} [ concat(r): r sep ]
+                    concat(r): r s
+                    set(first): false
+                ]
+                set(k): {k + 1}
+            ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "TEXT"} [
+        set(r): bad
+        if(_): {n != 2} [ return(r): r ]
+        sbm_arg(v): args 0
+        sbm_text_arg(code): args 1
+        sbm_format(r): v code
+        return(r): r
+    ]
+    if(_): {name = "VALUE"} [
+        sbm_arg(v): args 0
+        sb_num(r): v
+        return(r): r
+    ]
+    if(_): {name = "REPT"} [
+        sbm_text_arg(s): args 0
+        sbm_num_arg(k): args 1
+        set(r): ""
+        sbm_int(k): k
+        if(_): {k < 0} [
+            set(r): bad
+            return(r): r
+        ]
+        set(i): 0
+        while(_): {i < k} [
+            concat(r): r s
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "EXACT"} [
+        sbm_text_arg(a): args 0
+        sbm_text_arg(b): args 1
+        set(r): {a = b}
+        return(r): r
+    ]
+    if(_): {name = "PROPER"} [
+        sbm_text_arg(s): args 0
+        str_lower(s): s
+        set(r): ""
+        set(up): true
+        len(sl): s
+        set(i): 0
+        while(_): {i < sl} [
+            slice(c): s i 1
+            byte(b): s i
+            set(letter): {(b >= 97 && b <= 122) || b >= 128}
+            if(_): {up && b >= 97 && b <= 122} [ str_upper(c): c ]
+            concat(r): r c
+            set(up): {letter = false}
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "CHAR"} [
+        sbm_num_arg(k): args 0
+        sbm_int(k): k
+        chr(r): k
+        return(r): r
+    ]
+    if(_): {name = "CODE"} [
+        sbm_text_arg(s): args 0
+        set(r): bad
+        len(sl): s
+        if(_): {sl > 0} [ byte(r): s 0 ]
+        return(r): r
+    ]
+    # --- dates
+    if(_): {name = "TODAY"} [
+        sbm_now(t):
+        sbm_int(r): t
+        return(r): r
+    ]
+    if(_): {name = "NOW"} [
+        sbm_now(r):
+        return(r): r
+    ]
+    if(_): {name = "DATE"} [
+        set(r): bad
+        if(_): {n != 3} [ return(r): r ]
+        sbm_num_arg(y): args 0
+        sbm_num_arg(m): args 1
+        sbm_num_arg(d): args 2
+        sbm_int(y): y
+        sbm_int(m): m
+        sbm_int(d): d
+        sbm_serial(r): y m d
+        return(r): r
+    ]
+    if(_): {name = "TIME"} [
+        sbm_num_arg(h): args 0
+        sbm_num_arg(m): args 1
+        sbm_num_arg(s): args 2
+        set(r): {(h * 3600 + m * 60 + s) / 86400.0}
+        return(r): r
+    ]
+    if(_): {name = "YEAR" || name = "MONTH" || name = "DAY"} [
+        sbm_num_arg(v): args 0
+        sbm_ymd(ymd): v
+        if(_): {name = "YEAR"} [ at(r): ymd 0 ]
+        elif(_): {name = "MONTH"} [ at(r): ymd 1 ]
+        else(_): [ at(r): ymd 2 ]
+        return(r): r
+    ]
+    if(_): {name = "HOUR" || name = "MINUTE" || name = "SECOND"} [
+        sbm_num_arg(v): args 0
+        sbm_int(day): v
+        sbm_int(secs): {(v - day) * 86400 + 0.5}
+        sbm_int(h): {secs / 3600}
+        sbm_int(mi): {(secs - h * 3600) / 60}
+        if(_): {name = "HOUR"} [ set(r): h ]
+        elif(_): {name = "MINUTE"} [ set(r): mi ]
+        else(_): [ set(r): {secs - h * 3600 - mi * 60} ]
+        return(r): r
+    ]
+    if(_): {name = "WEEKDAY"} [
+        sbm_num_arg(v): args 0
+        set(type): 1
+        if(_): {n >= 2} [ sbm_num_arg(type): args 1 ]
+        sbm_int(s): v
+        # serial 1 (1899-12-31) was a Sunday
+        set(w): {(s + 6) % 7}
+        if(_): {type = 1} [ set(r): {w + 1} ]
+        elif(_): {type = 2} [ set(r): {(w + 6) % 7 + 1} ]
+        else(_): [ set(r): {(w + 6) % 7} ]
+        return(r): r
+    ]
+    if(_): {name = "EDATE" || name = "EOMONTH"} [
+        sbm_num_arg(v): args 0
+        sbm_num_arg(k): args 1
+        sbm_int(k): k
+        sbm_ymd(ymd): v
+        at(y): ymd 0
+        at(m): ymd 1
+        at(d): ymd 2
+        sbm_serial(first): y {m + k} 1
+        sbm_ymd(f2): first
+        at(y2): f2 0
+        at(m2): f2 1
+        sbm_days_in(dim): y2 m2
+        if(_): {name = "EOMONTH"} [ set(r): {first + dim - 1} ]
+        else(_): [
+            set(dd): d
+            if(_): {dd > dim} [ set(dd): dim ]
+            set(r): {first + dd - 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "DATEDIF"} [
+        set(r): bad
+        if(_): {n != 3} [ return(r): r ]
+        sbm_num_arg(a): args 0
+        sbm_num_arg(b): args 1
+        sbm_text_arg(unit): args 2
+        sb_upper(unit): unit
+        if(_): {b < a} [
+            set(r): numerr
+            return(r): r
+        ]
+        sbm_ymd(p): a
+        sbm_ymd(q): b
+        at(y1): p 0
+        at(m1): p 1
+        at(d1): p 2
+        at(y2): q 0
+        at(m2): q 1
+        at(d2): q 2
+        set(months): {(y2 - y1) * 12 + m2 - m1}
+        if(_): {d2 < d1} [ set(months): {months - 1} ]
+        if(_): {unit = "D"} [
+            sbm_int(r): {b - a}
+        ]
+        elif(_): {unit = "M"} [ set(r): months ]
+        elif(_): {unit = "Y"} [
+            sbm_int(r): {months / 12}
+        ]
+        elif(_): {unit = "YM"} [ set(r): {months % 12} ]
+        elif(_): {unit = "MD"} [
+            set(r): {d2 - d1}
+            if(_): {r < 0} [
+                sbm_days_in(pd): y2 {m2 - 1}
+                set(r): {r + pd}
+            ]
+        ]
+        else(_): [ set(r): numerr ]
+        return(r): r
+    ]
+    # --- maths
+    if(_): {name = "SUMPRODUCT"} [
+        set(r): bad
+        if(_): {n < 1} [ return(r): r ]
+        vec(lists): ""
+        set(i): 0
+        while(_): {i < n} [
+            at(a): args i
+            sbm_values(vs): a
+            push(_): lists vs
+            set(i): {i + 1}
+        ]
+        at(l0): lists 0
+        len(nl): l0
+        set(sum): 0
+        set(k): 0
+        while(_): {k < nl} [
+            set(p): 1
+            set(i): 0
+            while(_): {i < n} [
+                at(l): lists i
+                len(ln): l
+                if(_): {ln != nl} [ return(r): r ]
+                at(x): l k
+                sbm_isnum(xn): x
+                if(_): {xn = false} [ set(x): 0 ]
+                set(p): {p * x}
+                set(i): {i + 1}
+            ]
+            set(sum): {sum + p}
+            set(k): {k + 1}
+        ]
+        set(r): sum
+        return(r): r
+    ]
+    if(_): {name = "PRODUCT"} [
+        sbm_nums(v): args
+        sb_is_err(e): v
+        if(_): e [
+            set(r): v
+            return(r): r
+        ]
+        set(r): 1
+        len(nv): v
+        set(i): 0
+        while(_): {i < nv} [
+            at(x): v i
+            sb_mul(r): r x
+            set(i): {i + 1}
+        ]
+        if(_): {nv = 0} [ set(r): 0 ]
+        return(r): r
+    ]
+    if(_): {name = "ROUNDUP" || name = "ROUNDDOWN" || name = "TRUNC"} [
+        sbm_num_arg(x): args 0
+        set(d): 0
+        if(_): {n >= 2} [ sbm_num_arg(d): args 1 ]
+        sbm_int(d): d
+        pow(m): 10 d
+        set(ax): x
+        if(_): {x < 0} [ set(ax): {0 - x} ]
+        set(sc): {ax * m}
+        sbm_int(fl): {sc + 0.0000000001}
+        set(q): fl
+        if(_): {name = "ROUNDUP" && sc - fl > 0.0000000001} [ set(q): {fl + 1} ]
+        set(r): {q / m}
+        if(_): {d <= 0} [
+            str_trunc(r): r
+        ]
+        if(_): {x < 0} [ set(r): {0 - r} ]
+        return(r): r
+    ]
+    if(_): {name = "CEILING" || name = "FLOOR"} [
+        sbm_num_arg(x): args 0
+        set(s): 1
+        if(_): {n >= 2} [ sbm_num_arg(s): args 1 ]
+        if(_): {s = 0} [
+            set(r): 0
+            return(r): r
+        ]
+        set(q): {x / s}
+        sbm_int(fl): q
+        if(_): {name = "CEILING" && q - fl > 0.0000000001} [ set(fl): {fl + 1} ]
+        sb_mul(r): fl s
+        return(r): r
+    ]
+    if(_): {name = "SIGN"} [
+        sbm_num_arg(x): args 0
+        set(r): 0
+        if(_): {x > 0} [ set(r): 1 ]
+        if(_): {x < 0} [ set(r): -1 ]
+        return(r): r
+    ]
+    if(_): {name = "LN" || name = "LOG" || name = "LOG10" || name = "EXP"} [
+        sbm_num_arg(x): args 0
+        if(_): {name = "EXP"} [
+            exp(r): x
+            return(r): r
+        ]
+        if(_): {x <= 0} [
+            set(r): numerr
+            return(r): r
+        ]
+        ln(r): x
+        if(_): {name = "LOG10" || (name = "LOG" && n = 1)} [
+            ln(t): 10
+            set(r): {r / t}
+        ]
+        if(_): {name = "LOG" && n = 2} [
+            sbm_num_arg(b): args 1
+            ln(t): b
+            set(r): {r / t}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "RAND"} [
+        random64(x):
+        set(r): {(x & 4503599627370495) / 4503599627370496.0}
+        return(r): r
+    ]
+    if(_): {name = "RANDBETWEEN"} [
+        sbm_num_arg(a): args 0
+        sbm_num_arg(b): args 1
+        random64(x):
+        set(span): {b - a + 1}
+        set(r): {a + (x & 1099511627775) % span}
+        return(r): r
+    ]
+    if(_): {name = "SIN" || name = "COS" || name = "TAN" || name = "ASIN" || name = "ACOS" || name = "ATAN" || name = "DEGREES" || name = "RADIANS"} [
+        sbm_num_arg(x): args 0
+        if(_): {name = "SIN"} [ sin(r): x ]
+        elif(_): {name = "COS"} [ cos(r): x ]
+        elif(_): {name = "TAN"} [
+            sin(s): x
+            cos(c): x
+            set(r): {s / c}
+        ]
+        elif(_): {name = "ASIN"} [ asin(r): x ]
+        elif(_): {name = "ACOS"} [ acos(r): x ]
+        elif(_): {name = "ATAN"} [ atan2(r): x 1 ]
+        elif(_): {name = "DEGREES"} [ set(r): {x * 180 / M_PI} ]
+        else(_): [ set(r): {x * M_PI / 180} ]
+        return(r): r
+    ]
+    if(_): {name = "ATAN2"} [
+        sbm_num_arg(x): args 0
+        sbm_num_arg(y): args 1
+        atan2(r): y x
+        return(r): r
+    ]
+    if(_): {name = "FACT"} [
+        sbm_num_arg(x): args 0
+        sbm_int(k): x
+        set(r): 1
+        if(_): {k < 0} [
+            set(r): numerr
+            return(r): r
+        ]
+        set(i): 2
+        while(_): {i <= k} [
+            sb_mul(r): r i
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "GCD" || name = "LCM"} [
+        sbm_nums(v): args
+        len(nv): v
+        set(r): 0
+        if(_): {name = "LCM"} [ set(r): 1 ]
+        set(i): 0
+        while(_): {i < nv} [
+            at(x): v i
+            sbm_int(x): x
+            if(_): {name = "GCD"} [ sbm_gcd(r): r x ]
+            else(_): [
+                sbm_gcd(g): r x
+                if(_): {g = 0} [ set(r): 0 ]
+                else(_): [ set(r): {r / g * x} ]
+                str_trunc(r): r
+            ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    # --- statistics
+    if(_): {name = "MEDIAN" || name = "MODE" || name = "STDEV" || name = "STDEVP" || name = "VAR" || name = "VARP" || name = "COUNTA" || name = "COUNTBLANK"} [
+        if(_): {name = "COUNTA" || name = "COUNTBLANK"} [
+            set(c): 0
+            set(b): 0
+            set(i): 0
+            while(_): {i < n} [
+                at(a): args i
+                sbm_values(vs): a
+                len(nv): vs
+                set(k): 0
+                while(_): {k < nv} [
+                    at(v): vs k
+                    typeof(t): v
+                    if(_): {t = "null" || v = ""} [ set(b): {b + 1} ]
+                    else(_): [ set(c): {c + 1} ]
+                    set(k): {k + 1}
+                ]
+                set(i): {i + 1}
+            ]
+            set(r): c
+            if(_): {name = "COUNTBLANK"} [ set(r): b ]
+            return(r): r
+        ]
+        sbm_nums(v): args
+        sb_is_err(e): v
+        if(_): e [
+            set(r): v
+            return(r): r
+        ]
+        len(nv): v
+        if(_): {nv = 0} [
+            set(r): numerr
+            return(r): r
+        ]
+        if(_): {name = "MEDIAN"} [
+            list_sort(s): v
+            sbm_int(h): {nv / 2}
+            if(_): {nv % 2 = 1} [ at(r): s h ]
+            else(_): [
+                at(a): s {h - 1}
+                at(b): s h
+                set(r): {(a + b) / 2.0}
+                str_trunc(ri): r
+                if(_): {ri = r} [ set(r): ri ]
+            ]
+            return(r): r
+        ]
+        if(_): {name = "MODE"} [
+            btree(cnt):
+            set(best): -1
+            set(r): na
+            set(i): 0
+            while(_): {i < nv} [
+                at(x): v i
+                btget(c): cnt x 0
+                btput(_): cnt x {c + 1}
+                if(_): {c + 1 > best && c + 1 >= 2} [
+                    set(best): {c + 1}
+                    set(r): x
+                ]
+                set(i): {i + 1}
+            ]
+            return(r): r
+        ]
+        set(sum): 0
+        set(i): 0
+        while(_): {i < nv} [
+            at(x): v i
+            set(sum): {sum + x}
+            set(i): {i + 1}
+        ]
+        set(mean): {sum / (nv * 1.0)}
+        set(ss): 0
+        set(i): 0
+        while(_): {i < nv} [
+            at(x): v i
+            set(ss): {ss + (x - mean) * (x - mean)}
+            set(i): {i + 1}
+        ]
+        set(dn): nv
+        if(_): {name = "STDEV" || name = "VAR"} [ set(dn): {nv - 1} ]
+        if(_): {dn = 0} [
+            set(r): div0
+            return(r): r
+        ]
+        set(var): {ss / dn}
+        set(r): var
+        if(_): {name = "STDEV" || name = "STDEVP"} [ sqrt(r): var ]
+        return(r): r
+    ]
+    if(_): {name = "LARGE" || name = "SMALL"} [
+        at(a): args 0
+        vec(one): ""
+        push(_): one a
+        sbm_nums(v): one
+        sbm_num_arg(k): args 1
+        sbm_int(k): k
+        len(nv): v
+        if(_): {k < 1 || k > nv} [
+            set(r): numerr
+            return(r): r
+        ]
+        list_sort(s): v
+        if(_): {name = "SMALL"} [ at(r): s {k - 1} ]
+        else(_): [ at(r): s {nv - k} ]
+        return(r): r
+    ]
+    if(_): {name = "RANK"} [
+        sbm_num_arg(x): args 0
+        at(a): args 1
+        vec(one): ""
+        push(_): one a
+        sbm_nums(v): one
+        set(asc): 0
+        if(_): {n >= 3} [ sbm_num_arg(asc): args 2 ]
+        set(r): 1
+        set(found): false
+        len(nv): v
+        set(i): 0
+        while(_): {i < nv} [
+            at(y): v i
+            if(_): {y = x} [ set(found): true ]
+            if(_): {asc = 0 && y > x} [ set(r): {r + 1} ]
+            if(_): {asc != 0 && y < x} [ set(r): {r + 1} ]
+            set(i): {i + 1}
+        ]
+        if(_): {found = false} [ set(r): na ]
+        return(r): r
+    ]
+    if(_): {name = "PERCENTILE" || name = "QUARTILE"} [
+        at(a): args 0
+        vec(one): ""
+        push(_): one a
+        sbm_nums(v): one
+        sbm_num_arg(k): args 1
+        if(_): {name = "QUARTILE"} [ set(k): {k / 4.0} ]
+        len(nv): v
+        if(_): {nv = 0 || k < 0 || k > 1} [
+            set(r): numerr
+            return(r): r
+        ]
+        list_sort(s): v
+        set(pos): {k * (nv - 1)}
+        sbm_int(lo): pos
+        set(fr): {pos - lo}
+        at(a1): s lo
+        set(r): a1
+        if(_): {lo + 1 < nv && fr > 0} [
+            at(a2): s {lo + 1}
+            set(r): {a1 + (a2 - a1) * fr}
+        ]
+        return(r): r
+    ]
+    # --- finance
+    if(_): {name = "PMT" || name = "FV" || name = "PV"} [
+        set(r): bad
+        if(_): {n < 3} [ return(r): r ]
+        sbm_num_arg(rate): args 0
+        sbm_num_arg(np): args 1
+        sbm_num_arg(c): args 2
+        set(d): 0
+        set(type): 0
+        if(_): {n >= 4} [ sbm_num_arg(d): args 3 ]
+        if(_): {n >= 5} [ sbm_num_arg(type): args 4 ]
+        if(_): {rate = 0} [
+            if(_): {name = "PMT"} [ set(r): {0 - (c + d) / np} ]
+            elif(_): {name = "FV"} [ set(r): {0 - (d + c * np)} ]
+            else(_): [ set(r): {0 - (d + c * np)} ]
+            return(r): r
+        ]
+        pow(g): {1 + rate} np
+        if(_): {name = "PMT"} [
+            # c is pv, d is fv
+            set(r): {0 - rate * (c * g + d) / ((1 + rate * type) * (g - 1))}
+        ]
+        elif(_): {name = "FV"} [
+            # c is pmt, d is pv
+            set(r): {0 - (d * g + c * (1 + rate * type) * (g - 1) / rate)}
+        ]
+        else(_): [
+            # c is pmt, d is fv
+            set(r): {0 - (d + c * (1 + rate * type) * (g - 1) / rate) / g}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "NPV"} [
+        sbm_num_arg(rate): args 0
+        vec(rest): ""
+        set(i): 1
+        while(_): {i < n} [
+            at(a): args i
+            push(_): rest a
+            set(i): {i + 1}
+        ]
+        sbm_nums(v): rest
+        set(r): 0
+        len(nv): v
+        set(i): 0
+        while(_): {i < nv} [
+            at(x): v i
+            pow(g): {1 + rate} {i + 1}
+            set(r): {r + x / g}
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "IRR"} [
+        at(a): args 0
+        vec(one): ""
+        push(_): one a
+        sbm_nums(v): one
+        set(rate): 0.1
+        if(_): {n >= 2} [ sbm_num_arg(rate): args 1 ]
+        len(nv): v
+        set(k): 0
+        while(_): {k < 100} [
+            set(f): 0
+            set(df): 0
+            set(i): 0
+            while(_): {i < nv} [
+                at(x): v i
+                pow(g): {1 + rate} i
+                set(f): {f + x / g}
+                set(df): {df - i * x / (g * (1 + rate))}
+                set(i): {i + 1}
+            ]
+            if(_): {df = 0} [
+                set(r): numerr
+                return(r): r
+            ]
+            set(nr): {rate - f / df}
+            abs(step): {nr - rate}
+            set(rate): nr
+            if(_): {step < 0.0000000001} [
+                set(r): rate
+                return(r): r
+            ]
+            set(k): {k + 1}
+        ]
+        set(r): numerr
+        return(r): r
+    ]
+    # --- regression: pairs of ys and xs
+    if(_): {name = "SLOPE" || name = "INTERCEPT" || name = "CORREL" || name = "FORECAST" || name = "TREND"} [
+        set(off): 0
+        set(x0): 0
+        if(_): {name = "FORECAST"} [
+            sbm_num_arg(x0): args 0
+            set(off): 1
+        ]
+        at(ya): args off
+        at(xa): args {off + 1}
+        if(_): {name = "CORREL"} [
+            at(xa): args 0
+            at(ya): args 1
+        ]
+        if(_): {name = "TREND"} [ sbm_num_arg(x0): args 2 ]
+        sbm_values(ys): ya
+        sbm_values(xs): xa
+        len(ny): ys
+        len(nx): xs
+        if(_): {ny != nx} [
+            set(r): na
+            return(r): r
+        ]
+        set(sx): 0
+        set(sy): 0
+        set(sxx): 0
+        set(syy): 0
+        set(sxy): 0
+        set(k): 0
+        set(i): 0
+        while(_): {i < ny} [
+            at(x): xs i
+            at(y): ys i
+            sbm_isnum(xn): x
+            sbm_isnum(yn): y
+            if(_): {xn && yn} [
+                set(sx): {sx + x}
+                set(sy): {sy + y}
+                set(sxx): {sxx + x * x}
+                set(syy): {syy + y * y}
+                set(sxy): {sxy + x * y}
+                set(k): {k + 1}
+            ]
+            set(i): {i + 1}
+        ]
+        set(dx): {k * sxx - sx * sx}
+        if(_): {k < 2 || dx = 0} [
+            set(r): div0
+            return(r): r
+        ]
+        set(slope): {(k * sxy - sx * sy) / (dx * 1.0)}
+        set(icpt): {(sy - slope * sx) / k}
+        if(_): {name = "SLOPE"} [ set(r): slope ]
+        elif(_): {name = "INTERCEPT"} [ set(r): icpt ]
+        elif(_): {name = "CORREL"} [
+            set(dy): {k * syy - sy * sy}
+            sqrt(den): {dx * dy}
+            if(_): {den = 0} [ set(r): div0 ]
+            else(_): [ set(r): {(k * sxy - sx * sy) / den} ]
+        ]
+        else(_): [ set(r): {icpt + slope * x0} ]
+        return(r): r
+    ]
+    # --- bits and bases
+    if(_): {name = "BITAND" || name = "BITOR" || name = "BITXOR" || name = "BITLSHIFT" || name = "BITRSHIFT"} [
+        sbm_num_arg(a): args 0
+        sbm_num_arg(b): args 1
+        sbm_int(a): a
+        sbm_int(b): b
+        if(_): {a < 0 || b < 0 && name != "BITLSHIFT" && name != "BITRSHIFT"} [
+            set(r): numerr
+            return(r): r
+        ]
+        if(_): {name = "BITAND"} [ set(r): {a & b} ]
+        elif(_): {name = "BITOR"} [ set(r): {a | b} ]
+        elif(_): {name = "BITXOR"} [ set(r): {(a | b) - (a & b)} ]
+        elif(_): {name = "BITLSHIFT"} [ set(r): {a << b} ]
+        else(_): [ set(r): {a >> b} ]
+        return(r): r
+    ]
+    if(_): {name = "DEC2HEX" || name = "DEC2BIN" || name = "DEC2OCT"} [
+        sbm_num_arg(x): args 0
+        sbm_int(x): x
+        set(base): 16
+        if(_): {name = "DEC2BIN"} [ set(base): 2 ]
+        if(_): {name = "DEC2OCT"} [ set(base): 8 ]
+        set(places): 0
+        if(_): {n >= 2} [ sbm_num_arg(places): args 1 ]
+        if(_): {x < 0} [
+            # ten digits' two's complement, as LibreOffice
+            pow(lim): base 10
+            set(x): {lim + x}
+        ]
+        sbm_to_base(r): x base
+        len(rl): r
+        while(_): {rl < places} [
+            concat(r): "0" r
+            set(rl): {rl + 1}
+        ]
+        return(r): r
+    ]
+    if(_): {name = "HEX2DEC" || name = "BIN2DEC" || name = "OCT2DEC"} [
+        sbm_text_arg(s): args 0
+        set(base): 16
+        if(_): {name = "BIN2DEC"} [ set(base): 2 ]
+        if(_): {name = "OCT2DEC"} [ set(base): 8 ]
+        str_to_int(r): s base
+        typeof(t): r
+        if(_): {t != "integer"} [
+            set(r): numerr
+            return(r): r
+        ]
+        len(sl): s
+        pow(lim): base 10
+        if(_): {sl = 10 && r >= lim / 2} [ set(r): {r - lim} ]
+        return(r): r
+    ]
+    if(_): {name = "SUBTOTAL"} [
+        sbm_num_arg(f): args 0
+        sbm_int(f): f
+        if(_): {f > 100} [ set(f): {f - 100} ]
+        vec(names): ""
+        str_split(names): "AVERAGE COUNT COUNTA MAX MIN PRODUCT STDEV STDEVP SUM VAR VARP" " "
+        if(_): {f < 1 || f > 11} [
+            set(r): bad
+            return(r): r
+        ]
+        at(fn): names {f - 1}
+        vec(rest): ""
+        set(i): 1
+        while(_): {i < n} [
+            at(a): args i
+            push(_): rest a
+            set(i): {i + 1}
+        ]
+        sb_call(r): fn rest
+        return(r): r
+    ]
+    if(_): {name = "USSR"} [
+        set(r): bad
+        if(_): {n < 1} [ return(r): r ]
+        sbm_text_arg(fname): args 0
+        vec(vals): ""
+        set(i): 1
+        while(_): {i < n} [
+            at(a): args i
+            sbm_is_range(isr): a
+            if(_): isr [
+                sbm_values(vs): a
+                push(_): vals vs
+            ]
+            else(_): [ push(_): vals a ]
+            set(i): {i + 1}
+        ]
+        async(p): fname vals
+        await(r): p
+        if(_): {r = null} [ set(r): bad ]
+        return(r): r
+    ]
+]
+
+sbm_gcd(r): a b [
+    abs(x): a
+    abs(y): b
+    while(_): {y != 0} [
+        set(t): {x % y}
+        set(x): y
+        set(y): t
+    ]
+    set(r): x
+]
+
+sbm_to_base(r): x base [
+    str_trunc(x): x
+    set(d): "0123456789ABCDEF"
+    set(r): ""
+    if(_): {x = 0} [ set(r): "0" ]
+    while(_): {x > 0} [
+        set(k): {x % base}
+        slice(c): d k 1
+        concat(r): c r
+        sbm_int(x): {x / base}
+    ]
+]
+
+# a character index in s as a byte index
+sbm_char_to_byte(r): s k [
+    set(r): 0
+    len(n): s
+    set(c): 0
+    while(_): {r < n && c < k} [
+        set(r): {r + 1}
+        set(go): true
+        while(_): {go && r < n} [
+            byte(b): s r
+            if(_): {(b & 192) = 128} [ set(r): {r + 1} ]
+            else(_): [ set(go): false ]
+        ]
+        set(c): {c + 1}
+    ]
+]
+
+# --- names: "TAXES" = "B1", "DATA" = "A1:C10"
+
+sbm_define(r): name ref [
+    sb_upper(k): name
+    set(names): sb_names?
+    btput(_): names k ref
+    set(sb_names): names!
+    set(gen): sb_gen?
+    set(sb_gen): {gen + 1}!
+    set(r): 0
+]
+
+sbm_name(r): word [
+    sb_err(r): "#NAME?"
+    set(names): sb_names?
+    btget(ref): names word null
+    if(_): {ref = null} [ return(r): r ]
+    str_find(colon): ref ":" 0
+    if(_): {colon > 0} [
+        slice(a): ref 0 colon
+        len(rl): ref
+        slice(b): ref {colon + 1} {rl - colon - 1}
+        sb_ref(ia): a
+        sb_ref(ib): b
+        sb_range(r): ia ib
+    ]
+    else(_): [
+        sb_ref(i): ref
+        if(_): {i < 0} [ sb_err(r): "#REF!" ]
+        else(_): [ sb_value(r): i ]
+    ]
+]
+
+# --- whole-sheet helpers
+
+sbm_used(r): [
+    set(mr): sb_maxrow?
+    set(mc): sb_maxcol?
+    vec(r): ""
+    push(_): r mr
+    push(_): r mc
+]
+
+sbm_text_at(r): row col [
+    sb_cell(c): {row * SB_COLS + col}
+    getf(r): c "text"
+]
+
+sbm_put(r): row col text [
+    set(r): 0
+    if(_): {row < 0 || col < 0 || row >= SB_ROWS || col >= SB_COLS} [ return(r): r ]
+    sbm_text_at(old): row col
+    if(_): {old = text} [ return(r): r ]
+    sbm_record(_): row col old text
+    sb_set_index(_): {row * SB_COLS + col} text
+]
+
+# --- undo: [index old new] changes, grouped by sbm_mark
+
+sbm_record(r): row col old new [
+    set(u): sb_undo?
+    vec(e): ""
+    push(_): e {row * SB_COLS + col}
+    push(_): e old
+    push(_): e new
+    push(_): u e
+    set(sb_undo): u!
+    vec(none): ""
+    set(sb_redo): none!
+    set(r): 0
+]
+
+# a boundary: one undo goes back to the last mark
+sbm_mark(r): [
+    set(u): sb_undo?
+    push(_): u "mark"
+    set(sb_undo): u!
+    set(r): 0
+]
+
+sbm_undo(r): [
+    set(u): sb_undo?
+    set(rd): sb_redo?
+    set(r): 0
+    len(n): u
+    # past the marks at the end
+    while(_): {n > 0} [
+        at(top): u {n - 1}
+        typeof(t): top
+        if(_): {t = "string"} [
+            pop(_): u
+            set(n): {n - 1}
+        ]
+        else(_): [ set(n): {0 - n} ]
+    ]
+    set(n): {0 - n}
+    if(_): {n <= 0} [ return(r): r ]
+    push(_): rd "mark"
+    set(go): true
+    while(_): go [
+        len(n): u
+        if(_): {n = 0} [ set(go): false ]
+        else(_): [
+            at(top): u {n - 1}
+            typeof(t): top
+            if(_): {t = "string"} [ set(go): false ]
+            else(_): [
+                pop(e): u
+                at(i): e 0
+                at(old): e 1
+                sb_set_index(_): i old
+                push(_): rd e
+                set(r): {r + 1}
+            ]
+        ]
+    ]
+    set(sb_undo): u!
+    set(sb_redo): rd!
+]
+
+sbm_redo(r): [
+    set(u): sb_undo?
+    set(rd): sb_redo?
+    set(r): 0
+    set(go): true
+    set(started): false
+    while(_): go [
+        len(n): rd
+        if(_): {n = 0} [ set(go): false ]
+        else(_): [
+            pop(e): rd
+            typeof(t): e
+            if(_): {t = "string"} [
+                if(_): started [ set(go): false ]
+                push(_): u "mark"
+            ]
+            else(_): [
+                set(started): true
+                at(i): e 0
+                at(nw): e 2
+                sb_set_index(_): i nw
+                push(_): u e
+                set(r): {r + 1}
+            ]
+        ]
+    ]
+    set(sb_undo): u!
+    set(sb_redo): rd!
+]
+
+# --- references in formulas, moved
+
+# a reference ("$B3") moved by drow, dcol where it is relative; "" off the
+# sheet
+sbm_shift_ref(r): ref drow dcol [
+    re_find(m): "^(\\$?)([A-Z]+)(\\$?)([0-9]+)$" ref
+    set(r): ref
+    typeof(mt): m
+    if(_): {mt != "vector"} [ return(r): r ]
+    at(da): m 1
+    at(letters): m 2
+    at(db): m 3
+    at(digits): m 4
+    sbm_col_of(c): letters
+    str_to_int(row): digits 10
+    if(_): {da = ""} [ set(c): {c + dcol} ]
+    if(_): {db = ""} [ set(row): {row + drow} ]
+    if(_): {c < 0 || row < 1} [
+        set(r): ""
+        return(r): r
+    ]
+    sb_colname(cn): c
+    str_from_int(rs): row
+    concat(r): da cn db rs
+]
+
+sbm_col_of(r): letters [
+    set(r): 0
+    len(n): letters
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): letters i
+        set(r): {r * 26 + b - 64}
+        set(i): {i + 1}
+    ]
+    set(r): {r - 1}
+]
+
+# a formula's references moved (copying a formula drow, dcol away)
+sbm_shift_formula(r): text drow dcol [
+    set(r): text
+    sb_starts(f): text "="
+    if(_): {f = false} [ return(r): r ]
+    len(n): text
+    slice(body): text 1 {n - 1}
+    sb_tokens(toks): body
+    len(nt): toks
+    set(i): 0
+    while(_): {i < nt} [
+        at(t): toks i
+        at(kind): t 0
+        if(_): {kind = "ref"} [
+            at(word): t 1
+            sbm_shift_ref(nw): word drow dcol
+            if(_): {nw = ""} [ set(nw): "#REF!" ]
+            set(t): 1 nw
+        ]
+        set(i): {i + 1}
+    ]
+    sb_emit(e): toks false
+    concat(r): "=" e
+]
+
+# a formula's references after rows (or columns) at..at+count-1 were
+# inserted (count > 0) or deleted (count < 0)
+sbm_adjust_formula(r): text axis at count [
+    set(r): text
+    sb_starts(f): text "="
+    if(_): {f = false} [ return(r): r ]
+    len(n): text
+    slice(body): text 1 {n - 1}
+    sb_tokens(toks): body
+    len(nt): toks
+    set(i): 0
+    while(_): {i < nt} [
+        at(t): toks i
+        at(kind): t 0
+        if(_): {kind = "ref"} [
+            at(word): t 1
+            re_find(m): "^(\\$?)([A-Z]+)(\\$?)([0-9]+)$" word
+            typeof(mt): m
+            if(_): {mt = "vector"} [
+                at(da): m 1
+                at(letters): m 2
+                at(db): m 3
+                at(digits): m 4
+                sbm_col_of(c): letters
+                str_to_int(row): digits 10
+                set(row): {row - 1}
+                set(pos): row
+                if(_): {axis = "col"} [ set(pos): c ]
+                set(nw): word
+                if(_): {count > 0 && pos >= at} [ set(pos): {pos + count} ]
+                if(_): {count < 0 && pos >= at} [
+                    if(_): {pos < at - count} [ set(pos): -1 ]
+                    else(_): [ set(pos): {pos + count} ]
+                ]
+                if(_): {pos < 0} [ set(nw): "#REF!" ]
+                else(_): [
+                    if(_): {axis = "col"} [ set(c): pos ]
+                    else(_): [ set(row): pos ]
+                    sb_colname(cn): c
+                    str_from_int(rs): {row + 1}
+                    concat(nw): da cn db rs
+                ]
+                set(t): 1 nw
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    sb_emit(e): toks false
+    concat(r): "=" e
+]
+
+# rows (axis "row") or columns inserted at a position, count of them
+# (negative: deleted); every formula follows
+sbm_insert(r): axis at count [
+    sbm_mark(_):
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    # read everything first
+    vec(cells): ""
+    set(row): 0
+    while(_): {row <= mr} [
+        set(col): 0
+        while(_): {col <= mc} [
+            sbm_text_at(t): row col
+            if(_): {t != ""} [
+                vec(e): ""
+                push(_): e row
+                push(_): e col
+                push(_): e t
+                push(_): cells e
+                sbm_put(_): row col ""
+            ]
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+    len(n): cells
+    set(r): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(e): cells i
+        at(row): e 0
+        at(col): e 1
+        at(t): e 2
+        set(pos): row
+        if(_): {axis = "col"} [ set(pos): col ]
+        set(keep): true
+        if(_): {count > 0 && pos >= at} [ set(pos): {pos + count} ]
+        if(_): {count < 0 && pos >= at} [
+            if(_): {pos < at - count} [ set(keep): false ]
+            else(_): [ set(pos): {pos + count} ]
+        ]
+        if(_): keep [
+            sbm_adjust_formula(t2): t axis at count
+            if(_): {axis = "col"} [ sbm_put(_): row pos t2 ]
+            else(_): [ sbm_put(_): pos col t2 ]
+            set(r): {r + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- sort, find, replace, fill
+
+# rows r1..r2 of columns c1..c2 sorted by keys [[col ascending]...]
+sbm_sort(r): r1 c1 r2 c2 keys [
+    sbm_mark(_):
+    vec(rows): ""
+    set(row): r1
+    while(_): {row <= r2} [
+        vec(texts): ""
+        vec(vals): ""
+        set(col): c1
+        while(_): {col <= c2} [
+            sbm_text_at(t): row col
+            push(_): texts t
+            sb_value(v): {row * SB_COLS + col}
+            push(_): vals v
+            set(col): {col + 1}
+        ]
+        vec(e): ""
+        push(_): e texts
+        push(_): e vals
+        push(_): rows e
+        set(row): {row + 1}
+    ]
+    # insertion sort: stable, keys in order
+    len(n): rows
+    vec(out): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(e): rows i
+        len(no): out
+        set(place): no
+        set(j): 0
+        while(_): {j < no} [
+            at(o): out j
+            sbm_row_less(lt): e o keys c1
+            if(_): lt [
+                set(place): j
+                set(j): no
+            ]
+            set(j): {j + 1}
+        ]
+        vec(nw): ""
+        set(j): 0
+        while(_): {j < no} [
+            if(_): {j = place} [ push(_): nw e ]
+            at(o): out j
+            push(_): nw o
+            set(j): {j + 1}
+        ]
+        if(_): {place = no} [ push(_): nw e ]
+        set(out): nw
+        set(i): {i + 1}
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(e): out i
+        at(texts): e 0
+        set(col): c1
+        while(_): {col <= c2} [
+            at(t): texts {col - c1}
+            sbm_put(_): {r1 + i} col t
+            set(col): {col + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    set(r): n
+]
+
+sbm_row_less(r): a b keys c1 [
+    set(r): false
+    at(va): a 1
+    at(vb): b 1
+    len(nk): keys
+    set(k): 0
+    while(_): {k < nk} [
+        at(key): keys k
+        at(col): key 0
+        at(asc): key 1
+        at(x): va {col - c1}
+        at(y): vb {col - c1}
+        typeof(tx): x
+        typeof(ty): y
+        # blanks last either way
+        if(_): {tx = "null" && ty != "null"} [ return(r): r ]
+        if(_): {ty = "null" && tx != "null"} [
+            set(r): true
+            return(r): r
+        ]
+        sb_compare_op(lt): x y "<"
+        sb_compare_op(gt): x y ">"
+        if(_): {asc = false} [
+            set(t): lt
+            set(lt): gt
+            set(gt): t
+        ]
+        if(_): {lt = true} [
+            set(r): true
+            return(r): r
+        ]
+        if(_): {gt = true} [ return(r): r ]
+        set(k): {k + 1}
+    ]
+]
+
+# cells whose typed text holds find: their names
+sbm_find(r): find match_case [
+    vec(r): ""
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    set(f): find
+    if(_): {match_case = false} [ str_lower(f): find ]
+    set(row): 0
+    while(_): {row <= mr} [
+        set(col): 0
+        while(_): {col <= mc} [
+            sbm_text_at(t): row col
+            if(_): {match_case = false} [ str_lower(t): t ]
+            str_contains(hit): t f
+            if(_): {hit && f != ""} [
+                sb_cellname(nm): {row * SB_COLS + col}
+                push(_): r nm
+            ]
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+sbm_replace(r): find repl [
+    sbm_mark(_):
+    set(r): 0
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    set(row): 0
+    while(_): {row <= mr} [
+        set(col): 0
+        while(_): {col <= mc} [
+            sbm_text_at(t): row col
+            str_contains(hit): t find
+            if(_): {hit && find != ""} [
+                str_replace(t2): t find repl
+                sbm_put(_): row col t2
+                set(r): {r + 1}
+            ]
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+# the next item of a series from its first items (texts): numbers step,
+# weekday and month names go round, text with a number counts up
+sbm_series(r): seeds k [
+    len(n): seeds
+    at(first): seeds 0
+    str_to_number(fn): first
+    sbm_isnum(isn): fn
+    if(_): isn [
+        set(step): 1
+        if(_): {n >= 2} [
+            at(second): seeds 1
+            str_to_number(sn): second
+            sbm_isnum(sok): sn
+            if(_): sok [ set(step): {sn - fn} ]
+        ]
+        if(_): {n = 1} [ set(step): 0 ]
+        set(v): {fn + step * k}
+        sb_fmt(r): v
+        return(r): r
+    ]
+    vec(lists): ""
+    push(_): lists "Mon Tue Wed Thu Fri Sat Sun"
+    push(_): lists "Monday Tuesday Wednesday Thursday Friday Saturday Sunday"
+    push(_): lists "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec"
+    push(_): lists "January February March April May June July August September October November December"
+    set(li): 0
+    while(_): {li < 4} [
+        at(ls): lists li
+        str_split(words): ls " "
+        len(nw): words
+        set(i): 0
+        while(_): {i < nw} [
+            at(w): words i
+            if(_): {w = first} [
+                at(r): words {(i + k) % nw}
+                return(r): r
+            ]
+            set(i): {i + 1}
+        ]
+        set(li): {li + 1}
+    ]
+    re_find(m): "^(.*?)([0-9]+)$" first
+    typeof(mt): m
+    if(_): {mt = "vector"} [
+        at(pre): m 1
+        at(num): m 2
+        str_to_int(nv): num 10
+        str_from_int(ns): {nv + k}
+        concat(r): pre ns
+        return(r): r
+    ]
+    at(r): seeds {k % n}
+]
+
+# fill r1..r2 (down) or c1..c2 (right) from the first rows/columns:
+# formulas move their references, other cells follow a series
+sbm_fill(r): r1 c1 r2 c2 dir seeds_n [
+    sbm_mark(_):
+    set(r): 0
+    if(_): {dir = "down"} [
+        set(col): c1
+        while(_): {col <= c2} [
+            vec(seeds): ""
+            set(k): 0
+            while(_): {k < seeds_n} [
+                sbm_text_at(t): {r1 + k} col
+                push(_): seeds t
+                set(k): {k + 1}
+            ]
+            at(s0): seeds 0
+            sb_starts(isf): s0 "="
+            set(row): {r1 + seeds_n}
+            while(_): {row <= r2} [
+                set(k): {row - r1}
+                if(_): isf [
+                    at(src): seeds {k % seeds_n}
+                    sbm_shift_formula(t): src {k - k % seeds_n} 0
+                ]
+                else(_): [ sbm_series(t): seeds k ]
+                sbm_put(_): row col t
+                set(r): {r + 1}
+                set(row): {row + 1}
+            ]
+            set(col): {col + 1}
+        ]
+    ]
+    else(_): [
+        set(row): r1
+        while(_): {row <= r2} [
+            vec(seeds): ""
+            set(k): 0
+            while(_): {k < seeds_n} [
+                sbm_text_at(t): row {c1 + k}
+                push(_): seeds t
+                set(k): {k + 1}
+            ]
+            at(s0): seeds 0
+            sb_starts(isf): s0 "="
+            set(col): {c1 + seeds_n}
+            while(_): {col <= c2} [
+                set(k): {col - c1}
+                if(_): isf [
+                    at(src): seeds {k % seeds_n}
+                    sbm_shift_formula(t): src 0 {k - k % seeds_n}
+                ]
+                else(_): [ sbm_series(t): seeds k ]
+                sbm_put(_): row col t
+                set(r): {r + 1}
+                set(col): {col + 1}
+            ]
+            set(row): {row + 1}
+        ]
+    ]
+]
+
+# rows of the range that repeat an earlier row are removed; the count
+sbm_dedupe(r): r1 c1 r2 c2 [
+    sbm_mark(_):
+    btree(seen):
+    vec(keep): ""
+    set(row): r1
+    while(_): {row <= r2} [
+        set(key): ""
+        vec(texts): ""
+        set(col): c1
+        while(_): {col <= c2} [
+            sbm_text_at(t): row col
+            push(_): texts t
+            sb_value(v): {row * SB_COLS + col}
+            sb_text_of(vs): v
+            concat(key): key vs "\t"
+            set(col): {col + 1}
+        ]
+        bthas(dup): seen key
+        if(_): {dup = false} [
+            btput(_): seen key true
+            push(_): keep texts
+        ]
+        set(row): {row + 1}
+    ]
+    len(nk): keep
+    set(r): {r2 - r1 + 1 - nk}
+    set(row): r1
+    while(_): {row <= r2} [
+        set(i): {row - r1}
+        set(col): c1
+        while(_): {col <= c2} [
+            set(t): ""
+            if(_): {i < nk} [
+                at(texts): keep i
+                at(t): texts {col - c1}
+            ]
+            sbm_put(_): row col t
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+# the range's values copied turned over, to start at (dr, dc)
+sbm_transpose(r): r1 c1 r2 c2 dr dc [
+    sbm_mark(_):
+    set(r): 0
+    vec(cells): ""
+    set(row): r1
+    while(_): {row <= r2} [
+        set(col): c1
+        while(_): {col <= c2} [
+            sb_value(v): {row * SB_COLS + col}
+            typeof(t): v
+            set(s): ""
+            if(_): {t != "null"} [ sb_text_of(s): v ]
+            vec(e): ""
+            push(_): e {dr + col - c1}
+            push(_): e {dc + row - r1}
+            push(_): e s
+            push(_): cells e
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+    len(n): cells
+    set(i): 0
+    while(_): {i < n} [
+        at(e): cells i
+        at(a): e 0
+        at(b): e 1
+        at(s): e 2
+        sbm_put(_): a b s
+        set(r): {r + 1}
+        set(i): {i + 1}
+    ]
+]
+
+# a column's texts split at a delimiter into the columns to its right
+sbm_text_to_columns(r): r1 r2 col delim [
+    sbm_mark(_):
+    set(r): 0
+    set(row): r1
+    while(_): {row <= r2} [
+        sbm_text_at(t): row col
+        if(_): {t != ""} [
+            str_split(parts): t delim
+            len(np): parts
+            set(k): 0
+            while(_): {k < np} [
+                at(p): parts k
+                str_trim(p): p
+                sbm_put(_): row {col + k} p
+                set(k): {k + 1}
+            ]
+            set(r): {r + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+# --- analysis
+
+# the input of changing cell that makes target's value want: the input
+# (and it is left in place), or an error text
+sbm_goal_seek(r): target want changing [
+    sb_ref(ti): target
+    sb_ref(ci): changing
+    sbm_mark(_):
+    sb_cell(c): ci
+    getf(t0): c "text"
+    str_to_number(x0): t0
+    sbm_isnum(ok): x0
+    if(_): {ok = false} [ set(x0): 0 ]
+    set(x1): {x0 + 1}
+    if(_): {x0 != 0} [ set(x1): {x0 * 1.1} ]
+    sbm_seek_at(f0): ti ci x0 want
+    sbm_seek_at(f1): ti ci x1 want
+    set(k): 0
+    while(_): {k < 100} [
+        sb_is_err(e0): f0
+        sb_is_err(e1): f1
+        if(_): {e0 || e1} [
+            set(r): "the target gives an error"
+            return(r): r
+        ]
+        abs(af): f1
+        if(_): {af < 0.0000001} [
+            sb_fmt(xs): x1
+            sb_set_index(_): ci xs
+            set(r): x1
+            return(r): r
+        ]
+        if(_): {f1 = f0} [
+            set(r): "no answer found"
+            return(r): r
+        ]
+        set(x2): {x1 - f1 * (x1 - x0) / (f1 - f0)}
+        set(x0): x1
+        set(f0): f1
+        set(x1): x2
+        sbm_seek_at(f1): ti ci x1 want
+        set(k): {k + 1}
+    ]
+    set(r): "no answer found"
+]
+
+sbm_seek_at(r): ti ci x want [
+    sb_fmt(xs): x
+    sb_set_index(_): ci xs
+    sb_value(v): ti
+    sb_num(n): v
+    sb_is_err(e): n
+    set(r): n
+    if(_): {e = false} [ set(r): {n - want} ]
+]
+
+# every cell showing an error: [[name error why]...]
+sbm_errors(r): [
+    vec(r): ""
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    btree(why):
+    btput(_): why "#DIV/0!" "a division by zero"
+    btput(_): why "#REF!" "a reference outside the sheet, or deleted"
+    btput(_): why "#NAME?" "an unknown function or name"
+    btput(_): why "#VALUE!" "text where a number belongs, or a wrong argument"
+    btput(_): why "#N/A" "a lookup found nothing"
+    btput(_): why "#NUM!" "a number out of range"
+    btput(_): why "#CYCLE!" "the formula depends on itself"
+    btput(_): why "#ERROR!" "the formula cannot be read"
+    set(row): 0
+    while(_): {row <= mr} [
+        set(col): 0
+        while(_): {col <= mc} [
+            sb_value(v): {row * SB_COLS + col}
+            sb_is_err(e): v
+            if(_): e [
+                sb_show_value(s): v
+                sb_cellname(nm): {row * SB_COLS + col}
+                vec(x): ""
+                push(_): x nm
+                push(_): x s
+                btget(w): why s "an error"
+                push(_): x w
+                push(_): r x
+            ]
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+# the cells a formula reads (ranges as A1:B3)
+sbm_precedents(r): name [
+    vec(r): ""
+    sb_ref(i): name
+    sb_cell(c): i
+    getf(t): c "text"
+    sb_starts(f): t "="
+    if(_): {f = false} [ return(r): r ]
+    len(n): t
+    slice(body): t 1 {n - 1}
+    sb_tokens(toks): body
+    len(nt): toks
+    set(k): 0
+    while(_): {k < nt} [
+        at(tk): toks k
+        at(kind): tk 0
+        if(_): {kind = "ref"} [
+            at(word): tk 1
+            str_replace(w): word "$" ""
+            set(nx): k
+            if(_): {k + 2 < nt} [
+                at(t1): toks {k + 1}
+                at(t2): toks {k + 2}
+                at(k1): t1 0
+                at(x1): t1 1
+                at(k2): t2 0
+                if(_): {k1 = "op" && x1 = ":" && k2 = "ref"} [
+                    at(w2): t2 1
+                    str_replace(w2): w2 "$" ""
+                    concat(w): w ":" w2
+                    set(nx): {k + 2}
+                ]
+            ]
+            push(_): r w
+            set(k): nx
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+# the cells whose formulas read name (directly)
+sbm_dependents(r): name [
+    vec(r): ""
+    sb_ref(target): name
+    set(tc): {target % SB_COLS}
+    sbm_int(tr): {target / SB_COLS}
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    set(row): 0
+    while(_): {row <= mr} [
+        set(col): 0
+        while(_): {col <= mc} [
+            sb_cellname(nm): {row * SB_COLS + col}
+            sbm_precedents(ps): nm
+            len(np): ps
+            set(k): 0
+            set(hit): false
+            while(_): {k < np} [
+                at(p): ps k
+                str_find(colon): p ":" 0
+                if(_): {colon < 0} [
+                    sb_ref(pi): p
+                    if(_): {pi = target} [ set(hit): true ]
+                ]
+                else(_): [
+                    slice(a): p 0 colon
+                    len(pl): p
+                    slice(b): p {colon + 1} {pl - colon - 1}
+                    sb_ref(ia): a
+                    sb_ref(ib): b
+                    sb_range(rg): ia ib
+                    at(r1): rg 0
+                    at(c1): rg 1
+                    at(r2): rg 2
+                    at(c2): rg 3
+                    if(_): {tr >= r1 && tr <= r2 && tc >= c1 && tc <= c2} [ set(hit): true ]
+                ]
+                set(k): {k + 1}
+            ]
+            if(_): hit [ push(_): r nm ]
+            set(col): {col + 1}
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+# a scenario: the texts of some cells, saved and put back
+sbm_scenario_save(r): name cells [
+    set(sc): sb_scenarios?
+    btree(s):
+    len(n): cells
+    set(i): 0
+    while(_): {i < n} [
+        at(c): cells i
+        sbget(t): c
+        btput(_): s c t
+        set(i): {i + 1}
+    ]
+    btput(_): sc name s
+    set(sb_scenarios): sc!
+    set(r): n
+]
+
+sbm_scenario_apply(r): name [
+    set(sc): sb_scenarios?
+    btget(s): sc name null
+    set(r): 0
+    if(_): {s = null} [ return(r): r ]
+    sbm_mark(_):
+    btkeys(ks): s
+    len(n): ks
+    set(i): 0
+    while(_): {i < n} [
+        at(k): ks i
+        btget(t): s k
+        sb_ref(ix): k
+        set(col): {ix % SB_COLS}
+        sbm_int(row): {ix / SB_COLS}
+        sbm_put(_): row col t
+        set(i): {i + 1}
+    ]
+    set(r): n
+]
+
+# "Sum 6  Average 2  Count 3" for a range
+sbm_stats(r): r1 c1 r2 c2 [
+    vec(rg): ""
+    push(_): rg r1
+    push(_): rg c1
+    push(_): rg r2
+    push(_): rg c2
+    vec(args): ""
+    push(_): args rg
+    sbm_nums(v): args
+    sb_is_err(e): v
+    set(r): ""
+    if(_): e [ return(r): r ]
+    len(n): v
+    set(sum): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        set(sum): {sum + x}
+        set(i): {i + 1}
+    ]
+    sb_fmt(ss): sum
+    str_from_int(ns): n
+    concat(r): "Sum " ss "  Count " ns
+    if(_): {n > 0} [
+        sb_fmt(as): {sum / (n * 1.0)}
+        concat(r): "Sum " ss "  Average " as "  Count " ns
+    ]
+]
+
+# --- CSV with options, encodings, HTML and Markdown
+
+# rows of fields: delimiter, quote character, a decimal comma ("," numbers
+# become "." numbers)
+sbm_csv_rows(r): text delim quote [
+    vec(r): ""
+    vec(row): ""
+    set(field): ""
+    set(inq): false
+    len(n): text
+    byte(qb): quote 0
+    byte(db): delim 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): text i
+        if(_): inq [
+            if(_): {b = qb} [
+                set(b2): 0
+                if(_): {i + 1 < n} [ byte(b2): text {i + 1} ]
+                if(_): {b2 = qb} [
+                    concat(field): field quote
+                    set(i): {i + 1}
+                ]
+                else(_): [ set(inq): false ]
+            ]
+            else(_): [
+                slice(c): text i 1
+                concat(field): field c
+            ]
+        ]
+        elif(_): {b = qb} [ set(inq): true ]
+        elif(_): {b = db} [
+            push(_): row field
+            set(field): ""
+        ]
+        elif(_): {b = 10} [
+            push(_): row field
+            push(_): r row
+            vec(row): ""
+            set(field): ""
+        ]
+        elif(_): {b != 13} [
+            slice(c): text i 1
+            concat(field): field c
+        ]
+        set(i): {i + 1}
+    ]
+    len(nrow): row
+    if(_): {field != "" || nrow > 0} [
+        push(_): row field
+        push(_): r row
+    ]
+]
+
+# loads CSV text with options into the sheet: delimiter, quote, header
+# (the first row skipped), decimal comma; the rows loaded
+sbm_csv_load(r): text delim quote header comma [
+    sbsheetreset(_):
+    set(t): text
+    chr(b1): 239
+    chr(b2): 187
+    chr(b3): 191
+    concat(bomtext): b1 b2 b3
+    sb_starts(hasbom): t bomtext
+    if(_): hasbom [
+        len(tl): t
+        slice(t): t 3 {tl - 3}
+    ]
+    sbm_csv_rows(rows): t delim quote
+    len(n): rows
+    set(start): 0
+    if(_): header [ set(start): 1 ]
+    set(r): 0
+    set(i): start
+    while(_): {i < n && i - start < SB_ROWS} [
+        at(row): rows i
+        len(nc): row
+        set(j): 0
+        while(_): {j < nc && j < SB_COLS} [
+            at(f): row j
+            if(_): comma [
+                re_test(isnum): "^-?[0-9 ]+,[0-9]+$" f
+                if(_): isnum [
+                    str_replace(f): f "," "."
+                    str_replace(f): f " " ""
+                ]
+            ]
+            if(_): {f != ""} [ sb_set_index(_): {(i - start) * SB_COLS + j} f ]
+            set(j): {j + 1}
+        ]
+        set(r): {r + 1}
+        set(i): {i + 1}
+    ]
+]
+
+# the sheet as CSV with options: delimiter, decimal comma, a BOM
+sbm_csv_text(r): delim comma bom [
+    set(r): ""
+    if(_): bom [
+        chr(b1): 239
+        chr(b2): 187
+        chr(b3): 191
+        concat(r): b1 b2 b3
+    ]
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    set(row): 0
+    while(_): {row <= mr} [
+        set(col): 0
+        while(_): {col <= mc} [
+            sb_value(v): {row * SB_COLS + col}
+            typeof(t): v
+            set(s): ""
+            if(_): {t != "null"} [ sb_show_value(s): v ]
+            sbm_isnum(isn): v
+            if(_): {isn && comma} [ str_replace(s): s "." "," ]
+            str_contains(q1): s delim
+            str_contains(q2): s "\""
+            str_contains(q3): s "\n"
+            if(_): {q1 || q2 || q3} [
+                str_replace(s): s "\"" "\"\""
+                concat(s): "\"" s "\""
+            ]
+            if(_): {col > 0} [ concat(r): r delim ]
+            concat(r): r s
+            set(col): {col + 1}
+        ]
+        concat(r): r "\n"
+        set(row): {row + 1}
+    ]
+]
+
+# Windows-1251 bytes -> UTF-8 text, and back (bytes as a vector)
+sbm_cp1251_table(r): [
+    # 0x80..0xBF: the code points; 0xC0..0xFF are А..я (U+0410..U+044F)
+    tl_sb_nums(r): "1026 1027 8218 1107 8222 8230 8224 8225 8364 8240 1033 8249 1034 1036 1035 1039 1106 8216 8217 8220 8221 8226 8211 8212 152 8482 1113 8250 1114 1116 1115 1119 160 1038 1118 1032 164 1168 166 167 1025 169 1028 171 172 173 174 1031 176 177 1030 1110 1169 181 182 183 1105 8470 1108 187 1112 1029 1109 1111"
+]
+
+tl_sb_nums(r): text [
+    str_split(p): text " "
+    vec(r): ""
+    len(n): p
+    set(i): 0
+    while(_): {i < n} [
+        at(x): p i
+        str_to_int(v): x 10
+        push(_): r v
+        set(i): {i + 1}
+    ]
+]
+
+sbm_from_cp1251(r): bytes [
+    sbm_cp1251_table(tab):
+    vec(o): ""
+    len(n): bytes
+    set(i): 0
+    while(_): {i < n} [
+        at(b): bytes i
+        set(cp): b
+        if(_): {b >= 192} [ set(cp): {b - 192 + 1040} ]
+        elif(_): {b >= 128} [ at(cp): tab {b - 128} ]
+        sbm_put_utf8(_): o cp
+        set(i): {i + 1}
+    ]
+    bytes_text(r): o
+]
+
+sbm_to_cp1251(r): text [
+    sbm_cp1251_table(tab):
+    btree(back):
+    set(i): 0
+    while(_): {i < 64} [
+        at(cp): tab i
+        btput(_): back cp {i + 128}
+        set(i): {i + 1}
+    ]
+    text_bytes(b): text
+    vec(r): ""
+    len(n): b
+    set(i): 0
+    while(_): {i < n} [
+        at(x): b i
+        set(cp): x
+        set(len_): 1
+        if(_): {x >= 240} [
+            set(cp): {x & 7}
+            set(len_): 4
+        ]
+        elif(_): {x >= 224} [
+            set(cp): {x & 15}
+            set(len_): 3
+        ]
+        elif(_): {x >= 192} [
+            set(cp): {x & 31}
+            set(len_): 2
+        ]
+        set(k): 1
+        while(_): {k < len_ && i + k < n} [
+            at(y): b {i + k}
+            set(cp): {(cp << 6) | (y & 63)}
+            set(k): {k + 1}
+        ]
+        set(i): {i + len_}
+        if(_): {cp < 128} [ push(_): r cp ]
+        elif(_): {cp >= 1040 && cp <= 1103} [ push(_): r {cp - 1040 + 192} ]
+        else(_): [
+            btget(v): back cp 63
+            push(_): r v
+        ]
+    ]
+]
+
+sbm_put_utf8(r): v cp [
+    set(r): 0
+    if(_): {cp < 128} [ push(_): v cp ]
+    elif(_): {cp < 2048} [
+        push(_): v {192 | (cp >> 6)}
+        push(_): v {128 | (cp & 63)}
+    ]
+    else(_): [
+        push(_): v {224 | (cp >> 12)}
+        push(_): v {128 | ((cp >> 6) & 63)}
+        push(_): v {128 | (cp & 63)}
+    ]
+]
+
+sbm_html(r): [
+    set(r): "<table>\n"
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    set(row): 0
+    while(_): {row <= mr} [
+        concat(r): r "<tr>"
+        set(col): 0
+        while(_): {col <= mc} [
+            sb_value(v): {row * SB_COLS + col}
+            typeof(t): v
+            set(s): ""
+            if(_): {t != "null"} [ sb_show_value(s): v ]
+            sb_xml_escape(s): s
+            sbm_isnum(isn): v
+            if(_): isn [ concat(r): r "<td align=\"right\">" s "</td>" ]
+            else(_): [ concat(r): r "<td>" s "</td>" ]
+            set(col): {col + 1}
+        ]
+        concat(r): r "</tr>\n"
+        set(row): {row + 1}
+    ]
+    concat(r): r "</table>\n"
+]
+
+sbm_markdown(r): [
+    set(r): ""
+    sbm_used(u):
+    at(mr): u 0
+    at(mc): u 1
+    set(row): 0
+    while(_): {row <= mr} [
+        concat(r): r "|"
+        set(col): 0
+        while(_): {col <= mc} [
+            sb_value(v): {row * SB_COLS + col}
+            typeof(t): v
+            set(s): ""
+            if(_): {t != "null"} [ sb_show_value(s): v ]
+            str_replace(s): s "|" "\\|"
+            concat(r): r " " s " |"
+            set(col): {col + 1}
+        ]
+        concat(r): r "\n"
+        if(_): {row = 0} [
+            concat(r): r "|"
+            set(col): 0
+            while(_): {col <= mc} [
+                concat(r): r "---|"
+                set(col): {col + 1}
+            ]
+            concat(r): r "\n"
+        ]
+        set(row): {row + 1}
+    ]
+]
+
+# --- the command line: --eval file cell, --convert in out
+
+sbm_cli(r): args [
+    set(r): -1
+    len(n): args
+    if(_): {n < 1} [ return(r): r ]
+    at(a0): args 0
+    if(_): {a0 != "--eval" && a0 != "--convert"} [ return(r): r ]
+    set(r): 2
+    if(_): {n < 3} [
+        print(_): "usage: ussr siberia.su --eval file.fods|file.csv CELL..."
+        print(_): "       ussr siberia.su --convert in.csv|in.fods out.fods|.csv|.html|.md"
+        return(r): r
+    ]
+    if(_): {sbm_ready != true} [ sbsetup(_): ]
+    sbsheetreset(_):
+    at(path): args 1
+    sb_read(text): path
+    if(_): {text = null} [
+        concat(m): "siberia: cannot read " path
+        print(_): m
+        return(r): r
+    ]
+    sb_extension(ext): path
+    set(kind): "fods"
+    if(_): {ext = ".csv"} [ set(kind): "csv" ]
+    sbsheetload(why): text kind
+    if(_): {why != ""} [
+        concat(m): "siberia: " why
+        print(_): m
+        return(r): r
+    ]
+    set(r): 0
+    if(_): {a0 = "--eval"} [
+        set(i): 2
+        while(_): {i < n} [
+            at(c): args i
+            # "Sheet1.B5": the sheet name is left aside
+            str_find(dot): c "." 0
+            if(_): {dot >= 0} [
+                len(cl): c
+                slice(c): c {dot + 1} {cl - dot - 1}
+            ]
+            sb_ref(ix): c
+            if(_): {ix < 0} [
+                concat(m): "siberia: not a cell: " c
+                print(_): m
+                set(r): 1
+            ]
+            else(_): [
+                sb_value(v): ix
+                sb_show_value(s): v
+                print(_): s
+            ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    at(out): args 2
+    sb_extension(oe): out
+    set(t): ""
+    if(_): {oe = ".csv"} [ sbsheetcsv(t): ]
+    elif(_): {oe = ".html" || oe = ".htm"} [ sbm_html(t): ]
+    elif(_): {oe = ".md"} [ sbm_markdown(t): ]
+    else(_): [ sbsheetfods(t): ]
+    sb_write(_): out t
+    concat(m): "siberia: wrote " out
+    print(_): m
+]
+
+# count characters of s from character from (UTF-8 aware)
+utf8_slice(r): s from count [
+    utf8_index(a): s from
+    utf8_index(b): s {from + count}
+    slice(r): s a {b - a}
+]

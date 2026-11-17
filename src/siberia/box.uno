@@ -1,1 +1,1 @@
-'Package{name=`siberia`,version=`0.2.0`,description=`Spreadsheet (.fods, .csv); the document editor is now Novosibirsk`,entry=`siberia.su`,dependencies=[`petersburg`,`library`],files=[`siberia.su`,`README.md`,`CHANGELOG.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'
+'Package{name=`siberia`,version=`0.3.0`,description=`Spreadsheet (.fods, .csv); the document editor is now Novosibirsk`,entry=`siberia.su`,dependencies=[`petersburg`,`library`],files=[`siberia.su`,`more.su`,`README.md`,`CHANGELOG.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

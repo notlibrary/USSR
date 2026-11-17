@@ -1,0 +1,429 @@
+# Siberia refine pass 1 (src/siberia/more.su), with no window: lookups,
+# conditional aggregates, text, dates, maths, statistics, logic, finance,
+# regression, bits and bases, SUBTOTAL, USSR() user functions, named
+# ranges; sort, find and replace, fill series, inserting and deleting rows
+# and columns, removing duplicates, transposing, text to columns, goal
+# seek, the error checker, precedents and dependents, scenarios, undo and
+# redo, number formats, CSV options and Windows-1251, HTML and Markdown,
+# the command line, and a formula fuzz test. Run from the repository root.
+$include "../src/siberia/siberia.su"
+
+sm_check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(smc_line): "PASS " label ]
+    else(_): [
+        set(smc_g): got
+        set(smc_w): want
+        typeof(smc_gt): got
+        typeof(smc_wt): want
+        if(_): {smc_gt != "string"} [ encode(smc_g): got ]
+        if(_): {smc_wt != "string"} [ encode(smc_w): want ]
+        concat(smc_line): "FAIL " label ": got " smc_g ", want " smc_w
+    ]
+    print(_): smc_line
+]
+
+# a formula's shown value, in A100
+sm_eval(r): formula [
+    sbset(_): "A100" formula
+    sbshow(r): "A100"
+]
+
+sm_is(r): label formula want [
+    sm_eval(sm_got): formula
+    concat(sm_label): label " " formula
+    sm_check(r): sm_label sm_got want
+]
+
+# a definition a cell calls through USSR()
+sm_double_all(r): vals [
+    set(r): 0
+    len(n): vals
+    set(i): 0
+    while(_): {i < n} [
+        at(v): vals i
+        set(r): {r + v * 2}
+        set(i): {i + 1}
+    ]
+]
+
+sm_sum_first(r): vals [
+    at(v): vals 0
+    at(a): v 0
+    at(b): v 1
+    set(r): {a + b}
+]
+
+sm_data(r): [
+    sbsheetreset(_):
+    # A: names, B: amounts, C: regions, D: x, E: y
+    sbset(_): "A1" "apple"
+    sbset(_): "A2" "banana"
+    sbset(_): "A3" "cherry"
+    sbset(_): "A4" "date"
+    sbset(_): "B1" "10"
+    sbset(_): "B2" "20"
+    sbset(_): "B3" "30"
+    sbset(_): "B4" "40"
+    sbset(_): "C1" "north"
+    sbset(_): "C2" "south"
+    sbset(_): "C3" "north"
+    sbset(_): "C4" "south"
+    sbset(_): "D1" "1"
+    sbset(_): "D2" "2"
+    sbset(_): "D3" "3"
+    sbset(_): "D4" "4"
+    sbset(_): "E1" "3"
+    sbset(_): "E2" "5"
+    sbset(_): "E3" "7"
+    sbset(_): "E4" "9"
+    set(r): 0
+]
+
+sm_functions(r): [
+    sm_data(_):
+    sm_is(_): "lookup" "=VLOOKUP(\"cherry\",A1:B4,2,FALSE)" "30"
+    sm_is(_): "lookup" "=VLOOKUP(\"kiwi\",A1:B4,2,0)" "#N/A"
+    sm_is(_): "lookup" "=VLOOKUP(25,B1:C4,2)" "south"
+    sm_is(_): "lookup" "=HLOOKUP(\"south\",C2:D2,2,0)" "#REF!"
+    sm_is(_): "lookup" "=INDEX(A1:B4,3,2)" "30"
+    sm_is(_): "lookup" "=MATCH(\"date\",A1:A4,0)" "4"
+    sm_is(_): "lookup" "=MATCH(25,B1:B4)" "2"
+    sm_is(_): "lookup" "=XLOOKUP(\"banana\",A1:A4,B1:B4)" "20"
+    sm_is(_): "lookup" "=XLOOKUP(\"kiwi\",A1:A4,B1:B4,\"none\")" "none"
+    sm_is(_): "conditional" "=SUMIF(C1:C4,\"north\",B1:B4)" "40"
+    sm_is(_): "conditional" "=SUMIF(B1:B4,\">15\")" "90"
+    sm_is(_): "conditional" "=COUNTIF(A1:A4,\"*an*\")" "1"
+    sm_is(_): "conditional" "=COUNTIF(A1:A4,\"?????\")" "1"
+    sm_is(_): "conditional" "=AVERAGEIF(C1:C4,\"south\",B1:B4)" "30"
+    sm_is(_): "conditional" "=SUMIFS(B1:B4,C1:C4,\"north\",B1:B4,\">10\")" "30"
+    sm_is(_): "conditional" "=COUNTIFS(C1:C4,\"south\",D1:D4,\"<>2\")" "1"
+    sm_is(_): "text" "=LEFT(\"Siberia\",3)" "Sib"
+    sm_is(_): "text" "=RIGHT(\"Сибирь\",3)" "ирь"
+    sm_is(_): "text" "=MID(\"Novosibirsk\",5,4)" "sibi"
+    sm_is(_): "text" "=FIND(\"b\",\"abcabc\",3)" "5"
+    sm_is(_): "text" "=SEARCH(\"B\",\"abc\")" "2"
+    sm_is(_): "text" "=FIND(\"z\",\"abc\")" "#VALUE!"
+    sm_is(_): "text" "=SUBSTITUTE(\"a-b-c\",\"-\",\"+\")" "a+b+c"
+    sm_is(_): "text" "=SUBSTITUTE(\"a-b-c\",\"-\",\"+\",2)" "a-b+c"
+    sm_is(_): "text" "=TRIM(\"  a   b  \")" "a b"
+    sm_is(_): "text" "=CONCAT(A1,\" \",A2)" "apple banana"
+    sm_is(_): "text" "=TEXTJOIN(\", \",1,A1:A3)" "apple, banana, cherry"
+    sm_is(_): "text" "=TEXT(1234.5,\"#,##0.00\")" "1,234.50"
+    sm_is(_): "text" "=TEXT(0.256,\"0.0%\")" "25.6%"
+    sm_is(_): "text" "=TEXT(12345,\"0.00E+00\")" "1.23E+04"
+    sm_is(_): "text" "=TEXT(DATE(2026,11,17),\"yyyy-mm-dd\")" "2026-11-17"
+    sm_is(_): "text" "=TEXT(0.75,\"hh:mm\")" "18:00"
+    sm_is(_): "text" "=VALUE(\"42.5\")+1" "43.5"
+    sm_is(_): "text" "=REPT(\"ab\",3)" "ababab"
+    sm_is(_): "text" "=PROPER(\"hello big world\")" "Hello Big World"
+    sm_is(_): "text" "=EXACT(\"a\",\"A\")" "FALSE"
+    sm_is(_): "dates" "=DATE(2026,11,17)" "46343"
+    sm_is(_): "dates" "=YEAR(46343)&\"-\"&MONTH(46343)&\"-\"&DAY(46343)" "2026-11-17"
+    sm_is(_): "dates" "=WEEKDAY(DATE(2026,11,17))" "3"
+    sm_is(_): "dates" "=WEEKDAY(DATE(2026,11,17),2)" "2"
+    sm_is(_): "dates" "=DATE(2026,13,1)=DATE(2027,1,1)" "TRUE"
+    sm_is(_): "dates" "=EDATE(DATE(2026,1,31),1)=DATE(2026,2,28)" "TRUE"
+    sm_is(_): "dates" "=EOMONTH(DATE(2024,2,10),0)=DATE(2024,2,29)" "TRUE"
+    sm_is(_): "dates" "=DATEDIF(DATE(2020,5,15),DATE(2026,11,17),\"Y\")" "6"
+    sm_is(_): "dates" "=DATEDIF(DATE(2020,5,15),DATE(2026,11,17),\"M\")" "78"
+    sm_is(_): "dates" "=HOUR(0.5)+MINUTE(TIME(0,45,0))" "57"
+    sm_is(_): "maths" "=SUMPRODUCT(B1:B4,D1:D4)" "300"
+    sm_is(_): "maths" "=PRODUCT(D1:D4)" "24"
+    sm_is(_): "maths" "=ROUNDUP(2.341,2)" "2.35"
+    sm_is(_): "maths" "=ROUNDDOWN(-2.349,2)" "-2.34"
+    sm_is(_): "maths" "=CEILING(7,5)+FLOOR(7,5)" "15"
+    sm_is(_): "maths" "=LOG(1000)" "3"
+    sm_is(_): "maths" "=LOG(8,2)" "3"
+    sm_is(_): "maths" "=ROUND(LN(EXP(2)),6)" "2"
+    sm_is(_): "maths" "=ROUND(SIN(RADIANS(30)),6)" "0.5"
+    sm_is(_): "maths" "=DEGREES(ATAN2(1,1))" "45"
+    sm_is(_): "maths" "=FACT(5)" "120"
+    sm_is(_): "maths" "=GCD(12,18)+LCM(4,6)" "18"
+    sm_is(_): "maths" "=SIGN(-3)" "-1"
+    sm_is(_): "maths" "=AND(RAND()>=0,RAND()<1)" "TRUE"
+    sm_is(_): "maths" "=AND(RANDBETWEEN(3,5)>=3,RANDBETWEEN(3,5)<=5)" "TRUE"
+    sm_is(_): "statistics" "=MEDIAN(B1:B4)" "25"
+    sm_is(_): "statistics" "=MODE(1,2,2,3)" "2"
+    sm_is(_): "statistics" "=ROUND(STDEV(B1:B4),4)" "12.9099"
+    sm_is(_): "statistics" "=VARP(D1:D4)" "1.25"
+    sm_is(_): "statistics" "=LARGE(B1:B4,2)+SMALL(B1:B4,1)" "40"
+    sm_is(_): "statistics" "=RANK(30,B1:B4)" "2"
+    sm_is(_): "statistics" "=PERCENTILE(D1:D4,0.5)" "2.5"
+    sm_is(_): "statistics" "=COUNTA(A1:C4)+COUNTBLANK(F1:F3)" "15"
+    sm_is(_): "logic" "=IFERROR(1/0,\"none\")" "none"
+    sm_is(_): "logic" "=IFNA(VLOOKUP(\"x\",A1:B4,2,0),0)" "0"
+    sm_is(_): "logic" "=IFS(B1>50,\"big\",B1>5,\"some\")" "some"
+    sm_is(_): "logic" "=SWITCH(D2,1,\"one\",2,\"two\",\"many\")" "two"
+    sm_is(_): "logic" "=XOR(TRUE,TRUE,TRUE)" "TRUE"
+    sm_is(_): "logic" "=ISBLANK(F9)&ISNUMBER(B1)&ISTEXT(A1)&ISERROR(1/0)" "TRUETRUETRUETRUE"
+    sm_is(_): "finance" "=ROUND(PMT(0.05/12,360,200000),2)" "-1073.64"
+    sm_is(_): "finance" "=ROUND(FV(0.05,10,-100),2)" "1257.79"
+    sm_is(_): "finance" "=ROUND(PV(0.05,10,-100),2)" "772.17"
+    sm_is(_): "finance" "=ROUND(NPV(0.1,100,100,100),2)" "248.69"
+    sbset(_): "G1" "-100"
+    sbset(_): "G2" "60"
+    sbset(_): "G3" "60"
+    sm_is(_): "finance" "=ROUND(IRR(G1:G3),4)" "0.1307"
+    sm_is(_): "regression" "=SLOPE(E1:E4,D1:D4)" "2"
+    sm_is(_): "regression" "=INTERCEPT(E1:E4,D1:D4)" "1"
+    sm_is(_): "regression" "=CORREL(D1:D4,E1:E4)" "1"
+    sm_is(_): "regression" "=FORECAST(10,E1:E4,D1:D4)" "21"
+    sm_is(_): "regression" "=TREND(E1:E4,D1:D4,5)" "11"
+    sm_is(_): "bits" "=BITAND(12,10)&BITOR(12,10)&BITXOR(12,10)" "8146"
+    sm_is(_): "bits" "=DEC2HEX(255)&\" \"&DEC2BIN(5,8)&\" \"&DEC2OCT(8)" "FF 00000101 10"
+    sm_is(_): "bits" "=HEX2DEC(\"FF\")+BIN2DEC(\"101\")+OCT2DEC(\"10\")" "268"
+    sm_is(_): "bits" "=DEC2HEX(-1)" "FFFFFFFFFF"
+    sm_is(_): "subtotal" "=SUBTOTAL(9,B1:B4)" "100"
+    sm_is(_): "subtotal" "=SUBTOTAL(101,B1:B4)" "25"
+    sm_is(_): "user function, a range" "=USSR(\"sm_sum_first\",B1:B2)" "30"
+    sm_is(_): "user function" "=USSR(\"sm_double_all\",5)" "10"
+    sm_is(_): "unknown" "=NOSUCH(1)" "#NAME?"
+    sbm_define(_): "amounts" "B1:B4"
+    sbm_define(_): "first" "B1"
+    sm_is(_): "names" "=SUM(Amounts)" "100"
+    sm_is(_): "names" "=FIRST*2" "20"
+    sm_is(_): "names" "=SUM(unknownname)" "#NAME?"
+    set(r): 0
+]
+
+sm_tools(r): [
+    sm_data(_):
+    vec(keys): ""
+    vec(k): ""
+    push(_): k 2
+    push(_): k true
+    push(_): keys k
+    vec(k2): ""
+    push(_): k2 1
+    push(_): k2 false
+    push(_): keys k2
+    sbm_sort(_): 0 0 3 4 keys
+    sbget(v): "A1"
+    sbget(v2): "A2"
+    sm_check(_): "sort by region, then amount down" {v = "cherry" && v2 = "apple"} true
+    sbm_undo(n):
+    sbget(v): "A1"
+    sm_check(_): "undo the sort" v "apple"
+    sbm_redo(_):
+    sbget(v): "A1"
+    sm_check(_): "redo it" v "cherry"
+    sbm_undo(_):
+
+    sbm_find(hits): "AN" false
+    encode(v): hits
+    sm_check(_): "find" v "[`A2`]"
+    sbm_replace(n): "north" "N"
+    sm_check(_): "replace" n 2
+    sbget(v): "C3"
+    sm_check(_): "replaced" v "N"
+    sbm_undo(_):
+    sbget(v): "C3"
+    sm_check(_): "undo the replace" v "north"
+
+    sbset(_): "H1" "1"
+    sbset(_): "H2" "3"
+    sbm_fill(_): 0 7 4 7 "down" 2
+    sbget(v): "H5"
+    sm_check(_): "a number series" v "9"
+    sbset(_): "I1" "Mon"
+    sbm_fill(_): 0 8 2 8 "down" 1
+    sbget(v): "I3"
+    sm_check(_): "weekdays" v "Wed"
+    sbset(_): "J1" "Item9"
+    sbm_fill(_): 0 9 1 9 "down" 1
+    sbget(v): "J2"
+    sm_check(_): "text with a number" v "Item10"
+    sbset(_): "K1" "=B1*2"
+    sbm_fill(_): 0 10 3 10 "down" 1
+    sbget(v): "K4"
+    sm_check(_): "a formula filled down" v "=B4*2"
+    sbshow(v): "K4"
+    sm_check(_): "and its value" v "80"
+    sbset(_): "L1" "=$B$1+B1"
+    sbm_fill(_): 0 11 0 12 "right" 1
+    sbget(v): "M1"
+    sm_check(_): "absolute references stay" v "=$B$1+C1"
+
+    sbset(_): "F1" "=SUM(B1:B4)"
+    sbm_insert(_): "row" 1 2
+    sbget(v): "F1"
+    sm_check(_): "rows inserted: the range grows" v "=SUM(B1:B6)"
+    sbget(v): "A4"
+    sm_check(_): "the rows moved down" v "banana"
+    sbshow(v): "F1"
+    sm_check(_): "the sum is the same" v "100"
+    sbm_insert(_): "row" 1 -2
+    sbget(v): "F1"
+    sm_check(_): "and deleted again" v "=SUM(B1:B4)"
+    sbset(_): "F2" "=B2+1"
+    sbm_insert(_): "row" 1 -1
+    sbget(v): "F1"
+    sm_check(_): "a range shrinks" v "=SUM(B1:B3)"
+    sbshow(v): "F1"
+    sm_check(_): "without banana" v "80"
+    sbget(v): "F1"
+    sbm_insert(_): "col" 0 1
+    sbget(v): "G1"
+    sm_check(_): "a column inserted" v "=SUM(C1:C3)"
+
+    sbsheetreset(_):
+    sbset(_): "A1" "x"
+    sbset(_): "A2" "y"
+    sbset(_): "A3" "x"
+    sbset(_): "A4" "z"
+    sbset(_): "A5" "y"
+    sbm_dedupe(n): 0 0 4 0
+    sm_check(_): "duplicates removed" n 2
+    sbget(v): "A3"
+    sm_check(_): "what is left" v "z"
+    sbm_transpose(_): 0 0 2 0 0 2
+    sbget(v): "E1"
+    sm_check(_): "transposed" v "z"
+    sbset(_): "A10" "Ivanov, Ivan, 1990"
+    sbm_text_to_columns(_): 9 9 0 ","
+    sbget(v): "C10"
+    sm_check(_): "text to columns" v "1990"
+
+    sbsheetreset(_):
+    sbset(_): "A1" "2"
+    sbset(_): "B1" "=A1^2+3"
+    sbm_goal_seek(v): "B1" 19 "A1"
+    sbshow(v): "A1"
+    sm_check(_): "goal seek" v "4"
+    sbset(_): "C1" "=1/0"
+    sbset(_): "C2" "=nosuch(1)"
+    sbm_errors(errs):
+    len(v): errs
+    sm_check(_): "the error checker" v 2
+    at(e): errs 0
+    at(v): e 2
+    sm_check(_): "says why" v "a division by zero"
+    sbset(_): "D1" "=A1+SUM(A1:B1)"
+    sbm_precedents(ps): "D1"
+    encode(v): ps
+    sm_check(_): "precedents" v "[`A1`,`A1:B1`]"
+    sbm_dependents(ds): "A1"
+    encode(v): ds
+    sm_check(_): "dependents" v "[`B1`,`D1`]"
+    vec(cells): ""
+    push(_): cells "A1"
+    sbm_scenario_save(_): "base" cells
+    sbset(_): "A1" "10"
+    sbm_scenario_apply(_): "base"
+    sbget(v): "A1"
+    sm_check(_): "a scenario" v "4"
+    sbm_stats(v): 0 0 0 1
+    sm_check(_): "selection stats" v "Sum 23  Average 11.5  Count 2"
+    set(r): 0
+]
+
+sm_files(r): [
+    sbsheetreset(_):
+    sbm_csv_load(n): "name;amount\n\"a;b\";1,5\nc;2\n" ";" "\"" true true
+    sm_check(_): "CSV with ; and a header" n 2
+    sbget(v): "A1"
+    sm_check(_): "a quoted field" v "a;b"
+    sbshow(v): "B1"
+    sm_check(_): "a decimal comma" v "1.5"
+    sbm_csv_text(t): ";" true false
+    sm_check(_): "CSV out with a decimal comma" t "\"a;b\";1,5\nc;2\n"
+    sbm_csv_text(t): "," false true
+    text_bytes(tb): t
+    at(v): tb 0
+    sm_check(_): "a BOM" v 239
+    vec(win): ""
+    push(_): win 207
+    push(_): win 240
+    push(_): win 232
+    push(_): win 226
+    push(_): win 229
+    push(_): win 242
+    push(_): win 185
+    sbm_from_cp1251(v): win
+    sm_check(_): "Windows-1251 in" v "Привет№"
+    sbm_to_cp1251(back): v
+    encode(v): back
+    sm_check(_): "and out" v "[207,240,232,226,229,242,185]"
+    sbm_html(h):
+    str_contains(v): h "<td>a;b</td><td align=\"right\">1.5</td>"
+    sm_check(_): "HTML" v true
+    sbm_markdown(m):
+    str_starts(v): m "| a;b | 1.5 |\n|---|---|\n"
+    sm_check(_): "Markdown" v true
+
+    # the command line
+    sbsheetreset(_):
+    sbset(_): "A1" "6"
+    sbset(_): "A2" "=A1*7"
+    sbsheetcsv(c):
+    writefile(_): "tests/siberia-more-tmp.csv" c
+    vec(args): ""
+    push(_): args "--convert"
+    push(_): args "tests/siberia-more-tmp.csv"
+    push(_): args "tests/siberia-more-tmp.fods"
+    sbm_cli(v): args
+    sm_check(_): "--convert" v 0
+    vec(args): ""
+    push(_): args "--eval"
+    push(_): args "tests/siberia-more-tmp.fods"
+    push(_): args "Sheet1.A2"
+    sbm_cli(v): args
+    sm_check(_): "--eval" v 0
+    vec(args): ""
+    push(_): args "--open"
+    sbm_cli(v): args
+    sm_check(_): "other options: not the command line's" v -1
+    remove_file(_): "tests/siberia-more-tmp.csv"
+    remove_file(_): "tests/siberia-more-tmp.fods"
+
+    sbsheetreset(_):
+    sbm_format(v): 1234567.891 "#,##0.00"
+    sm_check(_): "a number format" v "1,234,567.89"
+    sbm_format(v): -0.5 "0%"
+    sm_check(_): "a negative percent" v "-50%"
+    sbm_format(v): 46343.5 "dd.mm.yyyy hh:mm"
+    sm_check(_): "a date and time" v "17.11.2026 12:00"
+    sbm_format(v): 3 "$#,##0.00"
+    sm_check(_): "currency" v "$3.00"
+    set(r): 0
+]
+
+sm_fuzz(r): [
+    sbsheetreset(_):
+    sbset(_): "A1" "5"
+    vec(parts): ""
+    str_split(parts): "A1 1 2.5 + - * / ^ & = < > <> ( ) , SUM( IF( VLOOKUP( \"x\" TRUE B2:C3 % : ; LEFT( TEXT( DATE( NAME" " "
+    len(np): parts
+    set(seed): 99
+    set(bad): 0
+    set(k): 0
+    while(_): {k < 250} [
+        set(f): "="
+        set(seed): {(seed * 1103515245 + 12345) % 2147483648}
+        set(len_): {seed % 8 + 1}
+        set(i): 0
+        while(_): {i < len_} [
+            set(seed): {(seed * 1103515245 + 12345) % 2147483648}
+            at(p): parts {seed % np}
+            concat(f): f p
+            set(i): {i + 1}
+        ]
+        sbset(_): "B1" f
+        sbshow(v): "B1"
+        typeof(t): v
+        if(_): {t != "string"} [ set(bad): {bad + 1} ]
+        set(k): {k + 1}
+    ]
+    sm_check(_): "random formulas never stop the sheet" bad 0
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    sbsetup(_):
+    sm_functions(_):
+    sm_tools(_):
+    sm_files(_):
+    sm_fuzz(_):
+]
