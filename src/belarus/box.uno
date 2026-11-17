@@ -1,0 +1,1 @@
+'Package{name=`belarus`,version=`0.2.0`,description=`Belarus: the USSR file system, inodes with B+ tree block maps, on disks, images and partitions; library and command line`,entry=`belarus.su`,dependencies=[`library`],files=[`belarus.su`,`more.su`,`README.md`,`CHANGELOG.md`,`REFINE.md`],license=`UNSPECIFIED`,minimum_ussr=`0.1.0`,source=``}'

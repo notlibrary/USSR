@@ -1,0 +1,266 @@
+$ belarus mkfs IMG --label refine
+tests/belarus-more-tmp.img: Belarus file system 'refine', 2048 blocks (8 MiB)
+$ belarus info IMG --json
+{"label": "refine", "uuid": "6644ca0b940f97fa", "block_size": 4096, "blocks": 2048, "free": 2030, "start_sector": 0, "root_inode": 17}
+# files
+$ belarus write IMG /etc/hostname moscow
+$ belarus append IMG /etc/hostname .local
+$ belarus cat IMG /etc/hostname
+moscow.local
+$ belarus append IMG /var/log/boot first_line
+$ belarus touch IMG /var/log/empty
+$ belarus touch IMG /etc/hostname
+$ belarus mv IMG /etc/hostname /etc/name
+$ belarus mkdir IMG /backup
+$ belarus cp IMG /etc /backup
+2 entries copied to /backup/etc
+$ belarus cp IMG /etc /backup
+[exit 1]
+$ belarus mv IMG /backup/etc/name /var
+$ belarus tree IMG /
+d         37  /
+d         12  /backup
+d          0  /backup/etc
+d         13  /etc
+-         12  /etc/name
+d         24  /var
+d         26  /var/log
+-         10  /var/log/boot
+-          0  /var/log/empty
+-         12  /var/name
+$ belarus truncate IMG /var/name 4
+$ belarus cat IMG /var/name
+mosc
+$ belarus truncate IMG /var/name 8
+$ belarus hexdump IMG /var/name
+00000000 6d 6f 73 63 00 00 00 00                          mosc....
+$ belarus truncate IMG /var/name x
+[exit 1]
+$ belarus cp IMG /backup /backup/inner
+[exit 1]
+$ belarus rm IMG /backup
+[exit 1]
+$ belarus rm IMG -r /backup
+removed 2 entries
+$ belarus rm IMG -r /
+[exit 1]
+# lines
+$ belarus head IMG /doc/lines.txt 3
+line 1
+line 2
+line 3
+$ belarus tail IMG /doc/lines.txt 2
+line 29
+line 30
+$ belarus head IMG /doc/lines.txt
+line 1
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+$ belarus grep IMG 2$ /doc
+/doc/lines.txt:2: line 2
+/doc/lines.txt:12: line 12
+/doc/lines.txt:22: line 22
+$ belarus grep IMG ^line_1[0-9]$
+/doc/lines.txt:10: line 10
+/doc/lines.txt:11: line 11
+/doc/lines.txt:12: line 12
+/doc/lines.txt:13: line 13
+/doc/lines.txt:14: line 14
+/doc/lines.txt:15: line 15
+/doc/lines.txt:16: line 16
+/doc/lines.txt:17: line 17
+/doc/lines.txt:18: line 18
+/doc/lines.txt:19: line 19
+$ belarus grep IMG nothing-like-this
+[exit 1]
+# links
+$ belarus ln IMG -s lines.txt /doc/latest
+$ belarus ln IMG -s /doc/latest /top
+$ belarus readlink IMG /top
+/doc/latest
+$ belarus head IMG /top 1
+line 1
+$ belarus ls IMG -l /doc
+l     36          9  2023-11-14 22:13  latest -> lines.txt
+-     31        231  2023-11-14 22:13  lines.txt
+$ belarus ln IMG /doc/lines.txt /hard
+[exit 1]
+$ belarus readlink IMG /doc/lines.txt
+[exit 1]
+$ belarus fsck IMG
+5 directories, 7 files, 281 bytes; 12 inodes, 0 block map nodes, map depth up to 1
+# inspecting
+$ belarus stat IMG /doc/lines.txt
+  path: /doc/lines.txt
+  type: file
+  size: 231 bytes in 1 blocks
+  time: 2023-11-14 22:13 UTC
+ inode: 31
+   map: 1 run(s), 0 map node(s), depth 1
+$ belarus stat IMG /top --json
+{"path": "/top", "type": "symbolic link", "size": 11, "mtime": 1700000000, "inode": 38, "blocks": 1, "runs": 1, "map_nodes": 0, "depth": 1, "target": "/doc/latest"}
+$ belarus ls IMG /doc --json
+[{"name": "latest", "type": "l", "size": 9, "mtime": 1700000000, "inode": 36}, {"name": "lines.txt", "type": "f", "size": 231, "mtime": 1700000000, "inode": 31}]
+$ belarus du IMG
+   0.2 KiB  /doc
+     0 KiB  /etc
+     0 KiB  /top
+     0 KiB  /var
+   0.3 KiB  / (total)
+$ belarus df IMG
+label refine: 160 KiB used, 7.8 MiB free of 8 MiB (1%)
+5 files, 5 directories, 2 links; 261 bytes in files
+$ belarus df IMG --json
+{"label": "refine", "blocks": 2048, "used": 40, "free": 2008, "files": 5, "directories": 5, "links": 2, "file_bytes": 261}
+$ belarus find IMG
+/
+/doc
+/doc/latest
+/doc/lines.txt
+/etc
+/etc/name
+/top
+/var
+/var/log
+/var/log/boot
+/var/log/empty
+/var/name
+$ belarus find IMG / --type d
+/
+/doc
+/etc
+/var
+/var/log
+$ belarus find IMG / --name *.txt
+/doc/lines.txt
+$ belarus find IMG / --size +100
+/doc/lines.txt
+$ belarus find IMG / --type l --name t?p
+/top
+$ belarus sha256sum IMG /doc/lines.txt
+a328ec5f9c28d95bf62c6d4376a2fef757d00f158bc7b1d2776ec200d5429ead  /doc/lines.txt
+$ belarus crc32 IMG /doc/latest
+225e940d  /doc/lines.txt
+$ belarus block IMG 0
+block 0: BELARUS1
+[[`block`,4096],[`blocks`,2048],[`created`,1700000000],[`label`,`refine`],[`magic`,`belarus`],[`root`,17],[`uuid`,`6644ca0b940f97fa`],[`version`,2]]
+$ belarus block IMG 1
+block 1: BLFREE01
+[[40,2008]]
+$ belarus block IMG 6000
+[exit 1]
+# host trees
+$ belarus putdir IMG HOST /import
+3 files put under /import
+$ belarus tree IMG /import
+d         25  /import
+-          6  /import/a.txt
+d         27  /import/sub
+-          5  /import/sub/b.txt
+-       7000  /import/sub/c.bin
+$ belarus getdir IMG /import OUT
+3 files written under tests/belarus-more-out
+beta
+
+$ belarus diff IMG /import/sub/c.bin tests/belarus-more-host/sub/c.bin
+the same
+$ belarus diff IMG /import/a.txt tests/belarus-more-diff.txt
+differ from byte 3 (6 bytes and 7 bytes)
+[exit 1]
+$ belarus putdir IMG nowhere /x
+[exit 1]
+# fragments
+$ belarus frag IMG
+     4 runs  /frag/one
+     4 runs  /frag/two
+77% of 9 files are in one run
+# the superblock, clone, grow
+$ belarus relabel IMG renamed
+label renamed
+$ belarus relabel IMG bad`label
+[exit 1]
+$ belarus uuid IMG
+uuid d02c9bcc2358ffcd
+$ belarus info IMG
+label renamed, uuid d02c9bcc2358ffcd
+size 8 MiB, free 7.8 MiB; starts at sector 0, root directory in inode 17
+$ belarus mkfs IMG2 --label two
+tests/belarus-more-two.img: Belarus file system 'two', 1024 blocks (4 MiB)
+$ belarus clone IMG IMG2 /doc
+3 entries cloned into tests/belarus-more-two.img
+$ belarus clone IMG IMG2 /import /copy
+5 entries cloned into tests/belarus-more-two.img
+$ belarus tree IMG2 /
+d         24  /
+d         25  /copy
+-          6  /copy/a.txt
+d         27  /copy/sub
+-          5  /copy/sub/b.txt
+-       7000  /copy/sub/c.bin
+d         32  /doc
+l          9  /doc/latest
+-        231  /doc/lines.txt
+$ belarus fsck IMG2
+4 directories, 5 files, 7251 bytes; 9 inodes, 0 block map nodes, map depth up to 1
+$ belarus grow IMG
+the file system already fills its space
+[exit 1]
+$ belarus grow IMG
+grown from 8 MiB to 12 MiB
+$ belarus df IMG
+label renamed: 252 KiB used, 11.8 MiB free of 12 MiB (2%)
+10 files, 8 directories, 2 links; 40040 bytes in files
+$ belarus fsck IMG
+8 directories, 12 files, 40060 bytes; 20 inodes, 0 block map nodes, map depth up to 1
+# dry run, repair
+$ belarus write IMG /dry nothing --dry-run
+dry run: nothing written
+$ belarus cat IMG /dry
+[exit 1]
+$ belarus fsck IMG
+3 blocks are neither used nor free
+8 directories, 12 files, 40060 bytes; 20 inodes, 0 block map nodes, map depth up to 1
+[exit 1]
+$ belarus fsck IMG --repair
+3 blocks are neither used nor free
+8 directories, 12 files, 40060 bytes; 20 inodes, 0 block map nodes, map depth up to 1
+repair: 3 lost block(s) given back to the free map
+after the repair:
+8 directories, 12 files, 40060 bytes; 20 inodes, 0 block map nodes, map depth up to 1
+$ belarus fsck IMG
+8 directories, 12 files, 40060 bytes; 20 inodes, 0 block map nodes, map depth up to 1
+# errors
+$ belarus stat IMG /nothing
+[exit 1]
+$ belarus mv IMG /nothing /x
+[exit 1]
+$ belarus head IMG /nothing
+[exit 1]
+$ belarus nonsense IMG
+[exit 2]
+
+--- stderr ---
+belarus: /backup/etc exists
+belarus: bad size x
+belarus: a directory cannot be copied into itself
+belarus: /backup is not empty
+belarus: rm -r / would empty the file system: remove what is in it
+belarus: hard links are not there yet: ln -s TARGET PATH
+belarus: /doc/lines.txt is not a symbolic link
+belarus: no block 6000
+belarus: nowhere is not a directory
+belarus: a label with a backquote
+belarus: no file /dry
+belarus: no file /nothing
+belarus: no file /nothing
+belarus: no file /nothing
+belarus: unknown command 'nonsense' (belarus help lists them)
+
+--- exit 0 ---
