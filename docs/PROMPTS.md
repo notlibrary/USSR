@@ -1101,3 +1101,27 @@ pick REFINE.md from subproject root folder(which also have box.uno in the subpro
 and use it as a prompt with things to do with it
 This is a long run task ~25-50 features for each of 27 subprojects
 Do not info on refining with global README until it ends use REFINE.md and subproject CHANGELOG.md
+
+Manual refining list(pull request it when whole list done):
+siberia: 
+- make formula editor text bar usable to edit selected cell formula
+- selecting copy paste cells
+- sum agregate
+- holding arrow keys moves cursor(SHIFT + arrow moves selection)
+- make help key works
+tula:
+- add long line other color dashed cross sight(scope) instead mouse cursor than adding point line or circle
+- add preview of drawing line or circle linked to mouse move
+- see librecad how scope is done
+- add holding arrow key moving
+stalin:
+- add creating partitions more than 128gb
+novosibirsk:
+- add holding arrow key scroll document
+- make help key works
+tver:
+- add F letter to the bottom bar F1 F2 F3 ... not 1 2 3
+kremlin:
+- add trash folder to bottom right corner with special icon
+- add holding arrow keys move folder selection cursor
+
