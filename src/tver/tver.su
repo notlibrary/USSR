@@ -32,11 +32,16 @@
 #
 # Hash keys: tver_window tver_status tver_paths tver_lists tver_dirs tver_memory
 # tver_names tver_marks tver_active tver_pending tver_repeat_key
-# tver_repeat_gen tver_prompt. Handlers serialize through Petersburg's uilock.
+# tver_repeat_gen tver_prompt, and keys.su's.
+#
+# 0.6: keys.su adds rename, view, edit, ZIP folders, the trash, find,
+# marking by pattern, history, bookmarks, filters and the user menu; the
+# engine under them is more.su. Handlers serialize through Petersburg's uilock.
 # Directory names in tver_names end with "/"; the parent entry is "../".
 $once
 $include "../petersburg/petersburg.su"
 $include "../libs/strings.su"
+$include "keys.su"
 
 $define TVER_KEY_ENTER 257
 $define TVER_KEY_TAB 258
@@ -234,7 +239,7 @@ tver_refresh(r): panel keep_index [
     at(_tvrf_old_names): _tvrf_all_names panel
     at(_tvrf_old_marks): _tvrf_all_marks panel
     at(_tvrf_list): _tvrf_lists panel
-    list_dir(_tvrf_listing): _tvrf_path
+    tvk_list(_tvrf_listing): _tvrf_path
     set(r): false
     if(_): {_tvrf_listing != null} [
         vec(_tvrf_names): ""
@@ -458,6 +463,7 @@ tverinitialize(result): window left_path left_list right_path right_list status 
     set(tver_repeat_key): 0!
     set(tver_repeat_gen): 0!
     set(tver_prompt): 0!
+    tvk_init(_):
     set(_tvi_i): 0
     set(result): 0
     while(_): {_tvi_i < 2} [
@@ -554,6 +560,7 @@ tver_arrow(r): window key [
 
 tverhandlekeyup(result): window key [
     set(result): 0
+    tvk_keyup(_): key
     set(_tku_key): tver_repeat_key?
     if(_): {key = _tku_key} [
         tver_stop_repeat(_):
@@ -564,6 +571,7 @@ tverfocus(result): window focused [
     set(result): 0
     if(_): {focused = 0} [
         tver_stop_repeat(_):
+        set(tver_mods): 0!
     ]
 ]
 
@@ -1017,11 +1025,12 @@ tver_dispatch_key(r): window key [
     if(_): {_tvk_prompt != 0} [
         set(_tvk_active): tver_active?
         if(_): {key = TVER_KEY_ENTER || key = TVER_KEY_KP_ENTER} [
-            tver_mkdir_finish(_): _tvk_active true
+            tvk_prompt_finish(_): _tvk_active true
         ]
         if(_): {key = TVER_KEY_ESCAPE} [
-            tver_mkdir_finish(_): _tvk_active false
+            tvk_prompt_finish(_): _tvk_active false
         ]
+        tvk_mod(_): key true
         return(_): r
     ]
     if(_): {key = TVER_KEY_UP || key = TVER_KEY_DOWN} [
@@ -1032,6 +1041,10 @@ tver_dispatch_key(r): window key [
     tver_stop_repeat(_):
     set(_tvk_active): tver_active?
     set(_tvk_lists): tver_lists?
+    tvk_key(_tvk_taken): window key _tvk_active
+    if(_): _tvk_taken [
+        return(_): r
+    ]
     if(_): {key = TVER_KEY_TAB} [
         set(_tvk_active): {1 - _tvk_active}
         set(tver_active): _tvk_active!
@@ -1150,7 +1163,8 @@ init(result): arg_count arg_values [
     listbox(left_files): window ""
     listbox(right_files): window ""
     label(status): window ""
-    label(keys): window "TAB panel  INS mark  ENTER open  F5 copy  F6 move  F7 mkdir  F8 delete"
+    tvm_keybar(_tva_bar):
+    label(keys): window _tva_bar
     grid(_): left_path 0 0 false
     grid(_): right_path 0 1 false
     grid(_): left_files 1 0 true

@@ -1,0 +1,609 @@
+# Tver refine pass 1 (src/tver/more.su), with no window: rename, new
+# files, sizes, recursive delete, the trash, copy policies, jobs and the
+# queue, comparing and synchronising folders, shredding, ZIP reading
+# (stored and deflated), extracting and packing, the viewer, opening and
+# editing plans, history, sorting and views, marks by pattern, find,
+# multi-rename, checksums, split and join, a line diff, duplicates, disk
+# usage, settings, the terminal view, 10 000 names and odd names.
+# Run from the repository root.
+$include "../src/tver/tver.su"
+
+tm_check(r): label got want [
+    set(r): 0
+    if(_): {got = want} [ concat(tmc_line): "PASS " label ]
+    else(_): [
+        set(tmc_g): got
+        set(tmc_w): want
+        typeof(tmc_gt): got
+        typeof(tmc_wt): want
+        if(_): {tmc_gt != "string"} [ encode(tmc_g): got ]
+        if(_): {tmc_wt != "string"} [ encode(tmc_w): want ]
+        concat(tmc_line): "FAIL " label ": got " tmc_g ", want " tmc_w
+    ]
+    print(_): tmc_line
+]
+
+tm_root(r): [
+    set(r): "tests/tver-more-tmp"
+]
+
+tm_files(r): [
+    tm_root(fr):
+    path_join(fa): fr "a"
+    path_join(fb): fr "b"
+    make_dir(_): fr
+    make_dir(_): fa
+    make_dir(_): fb
+    path_join(p): fa "one.txt"
+    writefile(_): p "first file\n"
+    path_join(p): fa "two.su"
+    writefile(_): p "print(_): 2\n"
+    path_join(sub): fa "sub"
+    make_dir(_): sub
+    path_join(p): sub "deep.txt"
+    writefile(_): p "deep down"
+
+    tvm_rename(fv): fa "one.txt" "uno.txt"
+    tm_check(_): "rename" fv ""
+    tvm_rename(fv): fa "uno.txt" "two.su"
+    tm_check(_): "rename onto another" fv "two.su is there already"
+    tvm_rename(fv): fa "uno.txt" "x/y"
+    tm_check(_): "a slash in a name" fv "a name cannot contain / or \\"
+    tvm_rename(fv): fa "uno.txt" "Uno.txt"
+    tm_check(_): "a change of case" fv ""
+    tvm_rename(_): fa "Uno.txt" "one.txt"
+    tvm_new_file(fv): fa "empty.txt"
+    tm_check(_): "a new file" fv ""
+    tvm_new_file(fv): fa "empty.txt"
+    tm_check(_): "not twice" fv "empty.txt is there already"
+
+    tvm_stats(fs): fa
+    btget(fv): fs "files"
+    tm_check(_): "files counted" fv 4
+    btget(fv): fs "dirs"
+    tm_check(_): "folders counted" fv 1
+    btget(fv): fs "bytes"
+    tm_check(_): "bytes counted" fv 32
+    tvm_describe(fv): fs
+    tm_check(_): "a confirmation's words" fv "4 files and 1 folder, 32 B"
+    tvm_human(fv): 1536
+    tm_check(_): "sizes for people" fv "1.5 KiB"
+
+    # copy policies
+    path_join(src): fa "one.txt"
+    path_join(dst): fb "one.txt"
+    tvm_copy_item(fv): src dst "skip"
+    tm_check(_): "copy" fv "copied"
+    tvm_copy_item(fv): src dst "skip"
+    tm_check(_): "skip what is there" fv "skipped"
+    tvm_copy_item(fv): src dst "different"
+    tm_check(_): "different: the same file is skipped" fv "skipped"
+    writefile(_): dst "changed"
+    tvm_copy_item(fv): src dst "different"
+    tm_check(_): "different: a changed one is overwritten" fv "overwrote"
+    tvm_copy_item(fv): src dst "rename"
+    tm_check(_): "rename beside it" fv "renamed one (2).txt"
+    tvm_copy_item(fv): src dst "ask"
+    tm_check(_): "no policy: refused" fv "failed: it is there already"
+    path_join(subdst): sub "again"
+    tvm_copy_item(fv): fa subdst "skip"
+    tm_check(_): "not into itself" fv "failed: a folder cannot go inside itself"
+
+    # a job: progress, a report, the queue
+    vec(pairs): ""
+    vec(pr): ""
+    push(_): pr src
+    path_join(t1): fb "job1.txt"
+    push(_): pr t1
+    push(_): pairs pr
+    vec(pr): ""
+    path_join(missing): fa "missing.txt"
+    push(_): pr missing
+    path_join(t2): fb "job2.txt"
+    push(_): pr t2
+    push(_): pairs pr
+    tvm_job(job): "copy" pairs "skip"
+    tvm_queue(q):
+    tvm_queue_add(_): q job
+    tvm_queue_step(fv): q
+    tm_check(_): "the queue runs a step" fv true
+    tvm_job_percent(fv): job
+    tm_check(_): "progress" fv 100
+    tvm_queue_step(_): q
+    tvm_queue_step(fv): q
+    tm_check(_): "an empty queue" fv false
+    tvm_job_report(fv): job
+    str_contains(fv2): fv "1 done, 1 failed"
+    tm_check(_): "what failed and why" fv2 true
+    tvm_job(job2): "move" pairs "skip"
+    tvm_job_cancel(_): job2
+    tvm_job_step(fv): job2
+    btget(fv): job2 "state"
+    tm_check(_): "a cancelled job" fv "cancelled"
+
+    # the trash
+    setenv(_): "HOME" fr
+    path_join(p): fa "empty.txt"
+    tvm_trash(fv): p
+    tm_check(_): "to the trash" fv ""
+    path_join(tidx): fr ".tver-trash/.index"
+    readfile(fv): tidx
+    str_contains(fv): fv "empty.txt\t"
+    tm_check(_): "the trash remembers where it was" fv true
+
+    # compare and sync
+    tvm_compare(cmp): fa fb false
+    encode(fv): cmp
+    tm_check(_): "compare" fv "[[`job1.txt`,`right`],[`one (2).txt`,`right`],[`one.txt`,`same`],[`sub/`,`left`],[`two.su`,`left`]]"
+    path_join(fbo): fb "one.txt"
+    writefile(_): fbo "first FILE\n"
+    tvm_compare(cmp): fa fb true
+    at(fv): cmp 2
+    at(fv): fv 1
+    tm_check(_): "compare by content" fv "content"
+    tvm_sync(sy): fa fb false
+    btget(fv): sy "copied"
+    tm_check(_): "sync one way" fv 2
+    btget(fv): sy "differ"
+    encode(fv): fv
+    tm_check(_): "what differs is left alone" fv "[`one.txt`]"
+    path_join(p): fb "sub/deep.txt"
+    file_exists(fv): p
+    tm_check(_): "folders too" fv true
+    tvm_sync(sy): fa fb true
+    path_join(p): fa "job1.txt"
+    file_exists(fv): p
+    tm_check(_): "sync both ways" fv true
+
+    path_join(p): fb "job1.txt"
+    tvm_shred(fv): p
+    file_exists(fv2): p
+    tm_check(_): "shredded" fv2 false
+
+    tvm_delete_tree(dr): fb
+    at(fv): dr 0
+    tm_check(_): "a folder with all in it deleted" fv 6
+    at(fv): dr 1
+    len(fv): fv
+    tm_check(_): "nothing failed" fv 0
+    set(r): 0
+]
+
+tm_zip(r): [
+    tvm_zip_list(zl): "tests/fixtures/tver/sample.zip"
+    len(zv): zl
+    tm_check(_): "a ZIP's entries" zv 4
+    tvm_zip_read(zb): "tests/fixtures/tver/sample.zip" "hi.txt"
+    bytes_text(zv): zb
+    tm_check(_): "a small deflated entry" zv "hello"
+    tvm_zip_read(zb): "tests/fixtures/tver/sample.zip" "docs/big.txt"
+    len(zv): zb
+    tm_check(_): "a big deflated entry" zv 10400
+    bytes_text(zt): zb
+    str_split(zls): zt "\n"
+    at(zv): zls 199
+    tm_check(_): "its last line" zv "line 3: the quick brown fox jumps over the lazy dog"
+    tvm_zip_read(zb): "tests/fixtures/tver/sample.zip" "stored.bin"
+    at(zv): zb 39
+    tm_check(_): "a stored entry" zv 39
+    tvm_zip_folder(zv): "tests/fixtures/tver/sample.zip" ""
+    encode(zv): zv
+    tm_check(_): "the top of a ZIP as a folder" zv "[`docs/`,`hi.txt`,`stored.bin`]"
+    tvm_zip_folder(zv): "tests/fixtures/tver/sample.zip" "docs"
+    encode(zv): zv
+    tm_check(_): "a folder inside it" zv "[`sub/`,`big.txt`]"
+    tm_root(zr):
+    path_join(zx): zr "x"
+    tvm_zip_extract(zv): "tests/fixtures/tver/sample.zip" zx
+    tm_check(_): "extract" zv 3
+    path_join(zp): zx "docs/big.txt"
+    tvm_size(zv): zp
+    tm_check(_): "an extracted file" zv 10400
+    path_join(zout): zr "packed.zip"
+    vec(zpaths): ""
+    path_join(zd): zx "docs"
+    push(_): zpaths zd
+    path_join(zh): zx "hi.txt"
+    push(_): zpaths zh
+    tvm_zip_pack(zv): zpaths zx zout
+    tm_check(_): "pack" zv 2
+    tvm_zip_read(zb): zout "docs/big.txt"
+    len(zv): zb
+    tm_check(_): "a packed entry reads back" zv 10400
+    tvm_zip_list(zv): "tests/tver_more_test.su"
+    tm_check(_): "not a ZIP" zv null
+    set(r): 0
+]
+
+tm_view(r): [
+    tm_root(vr):
+    path_join(vp): vr "u8.txt"
+    writefile(_): vp "привет\n"
+    tvm_view(vv): vp 4096
+    at(vk): vv 0
+    at(vt): vv 1
+    tm_check(_): "UTF-8" vk "utf-8"
+    tm_check(_): "its text" vt "привет\n"
+    vec(vb): ""
+    push(_): vb 255
+    push(_): vb 254
+    push(_): vb 72
+    push(_): vb 0
+    push(_): vb 105
+    push(_): vb 0
+    path_join(vp): vr "u16.txt"
+    write_bytes(_): vp vb
+    tvm_view(vv): vp 4096
+    encode(vv): vv
+    tm_check(_): "UTF-16 with a BOM" vv "[`utf-16`,`Hi`]"
+    vec(vb): ""
+    push(_): vb 99
+    push(_): vb 97
+    push(_): vb 102
+    push(_): vb 233
+    path_join(vp): vr "l1.txt"
+    write_bytes(_): vp vb
+    tvm_view(vv): vp 4096
+    encode(vv): vv
+    tm_check(_): "Latin-1" vv "[`latin-1`,`café`]"
+    vec(vb): ""
+    set(vi): 0
+    while(_): {vi < 20} [
+        push(_): vb vi
+        set(vi): {vi + 1}
+    ]
+    path_join(vp): vr "bin.dat"
+    write_bytes(_): vp vb
+    tvm_view(vv): vp 4096
+    at(vk): vv 0
+    tm_check(_): "binary: hex" vk "hex"
+    at(vt): vv 1
+    str_split(vl): vt "\n"
+    at(vv): vl 0
+    tm_check(_): "a hex line" vv "00000000  00 01 02 03 04 05 06 07  08 09 0a 0b 0c 0d 0e 0f  |................|"
+    at(vv): vl 1
+    tm_check(_): "a short last line" vv "00000010  10 11 12 13                                       |....|"
+    tvm_image_info(vv): "tests/fixtures/tver/sample.zip"
+    tm_check(_): "not an image" vv ""
+    vec(vb): ""
+    str_split(vpng): "137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 2 128 0 0 1 224 8 2" " "
+    len(vn): vpng
+    set(vi): 0
+    while(_): {vi < vn} [
+        at(vx): vpng vi
+        str_to_int(vxi): vx 10
+        push(_): vb vxi
+        set(vi): {vi + 1}
+    ]
+    path_join(vp): vr "pic.png"
+    write_bytes(_): vp vb
+    tvm_image_info(vv): vp
+    tm_check(_): "an image's size" vv "PNG 640x480"
+
+    unsetenv(_): "EDITOR"
+    tvm_editor(ve): "a.txt"
+    at(vv): ve 0
+    tm_check(_): "no EDITOR: Mbl through ussr" vv "ussr"
+    setenv(_): "EDITOR" "vi"
+    tvm_editor(ve): "a.txt"
+    at(vv): ve 0
+    tm_check(_): "EDITOR" vv "vi"
+    tvm_open_plan(vo): "x/b.dxf"
+    at(vv): vo 1
+    str_contains(vv): vv "tula/tula.su"
+    tm_check(_): "a drawing opens in Tula" vv true
+    path_join(vk2): vr "t.kl"
+    writefile(_): vk2 "name: T\ncommand: notepad todo.txt\n"
+    tvm_open_plan(vo): vk2
+    encode(vv): vo
+    tm_check(_): "a launcher runs its command" vv "[`notepad`,`todo.txt`]"
+    set(r): 0
+]
+
+tm_moving(r): [
+    tvm_history(mh):
+    tvm_history_go(_): mh "/a"
+    tvm_history_go(_): mh "/b"
+    tvm_history_go(_): mh "/c"
+    tvm_history_back(mv): mh
+    tm_check(_): "back" mv "/b"
+    tvm_history_back(mv): mh
+    tvm_history_forward(mv): mh
+    tm_check(_): "forward" mv "/b"
+    tvm_history_go(_): mh "/d"
+    tvm_history_forward(mv): mh
+    tm_check(_): "a new place drops what was ahead" mv null
+    str_split(mn): "../|src/|Alpha.txt|beta.su|alpine.md" "|"
+    tvm_jump(mv): mn "al" 0
+    tm_check(_): "quick search" mv 2
+    tvm_jump(mv): mn "al" 3
+    tm_check(_): "the next match" mv 4
+    vec(me): ""
+    str_split(mx): "../ 0|zeta/ -1|b.txt 50|a.su 300|c.md 10" "|"
+    len(mxn): mx
+    set(mi): 0
+    while(_): {mi < mxn} [
+        at(mxe): mx mi
+        str_split(mp): mxe " "
+        at(mpn): mp 0
+        at(mps): mp 1
+        str_to_int(mpv): mps 10
+        vec(mee): ""
+        push(_): mee mpn
+        push(_): mee mpv
+        push(_): me mee
+        set(mi): {mi + 1}
+    ]
+    tvm_sort(ms): me "size" false true
+    tm_names(mv): ms
+    tm_check(_): "by size, folders first" mv "../ zeta/ c.md b.txt a.su"
+    tvm_sort(ms): me "size" true true
+    tm_names(mv): ms
+    tm_check(_): "reversed" mv "../ zeta/ a.su b.txt c.md"
+    tvm_sort(ms): me "ext" false false
+    tm_names(mv): ms
+    tm_check(_): "by extension" mv "../ zeta/ c.md a.su b.txt"
+    tvm_detail(md): ms 40
+    at(mv): md 2
+    tm_check(_): "a detail line" mv "c.md                   10 B text"
+    str_split(mb): "a b c d e" " "
+    tvm_brief(mv): mb 2 4
+    encode(mv): mv
+    tm_check(_): "a brief view by columns" mv "[`a   d`,`b   e`,`c`]"
+    tvm_settings_new(mset):
+    str_split(mn2): "../|.git/|.env|a.su|b.txt" "|"
+    tvm_listing_filter(mv): "/x" mn2 mset
+    len(mv): mv
+    tm_check(_): "dot files shown by default" mv 5
+    btput(_): mset "hidden" false
+    btget(mf): mset "filters"
+    btput(_): mf "/x" "*.su"
+    tvm_listing_filter(mv): "/x" mn2 mset
+    encode(mv): mv
+    tm_check(_): "hidden and filtered" mv "[`../`,`a.su`]"
+    tvm_roots(mr):
+    len(mv): mr
+    tm_check(_): "drive roots" {mv > 0} true
+    tvm_kind(mv): "photo.JPG"
+    tm_check(_): "a kind" mv "image"
+    set(r): 0
+]
+
+tm_names(r): entries [
+    set(r): ""
+    len(n): entries
+    set(i): 0
+    while(_): {i < n} [
+        at(e): entries i
+        at(nm): e 0
+        if(_): {i > 0} [ concat(r): r " " ]
+        concat(r): r nm
+        set(i): {i + 1}
+    ]
+]
+
+tm_marks(r): [
+    str_split(kn): "../|src/|a.su|b.su|c.txt" "|"
+    vec(km): ""
+    set(ki): 0
+    while(_): {ki < 5} [
+        push(_): km false
+        set(ki): {ki + 1}
+    ]
+    tvm_select(km): kn km "*.su" true
+    encode(kv): km
+    tm_check(_): "mark by pattern" kv "[false,false,true,true,false]"
+    tvm_select(km): kn km "a*" false
+    encode(kv): km
+    tm_check(_): "unmark by pattern" kv "[false,false,false,true,false]"
+    tvm_invert(km): kn km
+    encode(kv): km
+    tm_check(_): "invert, never .." kv "[false,true,true,false,true]"
+    tvm_select_all(km): kn
+    encode(kv): km
+    tm_check(_): "all" kv "[false,true,true,true,true]"
+    tvm_select(km): kn km "*" true
+    tvm_select(km): kn km "../" true
+    at(kv): km 0
+    tm_check(_): ".. is never marked" kv false
+    set(r): 0
+]
+
+tm_tools(r): [
+    tm_root(tr):
+    path_join(td): tr "tools"
+    make_dir(_): td
+    path_join(p): td "a.txt"
+    writefile(_): p "alpha\nbeta\ngamma\n"
+    path_join(p): td "b.txt"
+    writefile(_): p "alpha\nBETA\ngamma\ndelta\n"
+    path_join(p): td "c.su"
+    writefile(_): p "alpha\nbeta\ngamma\n"
+    tvm_find(tv): td "*.txt" -1 -1 ""
+    len(tv): tv
+    tm_check(_): "find by name" tv 2
+    tvm_find(tv): td "*" -1 -1 "delta"
+    len(tv): tv
+    tm_check(_): "find by text" tv 1
+    tvm_find(tv): td "*" 20 -1 ""
+    len(tv): tv
+    tm_check(_): "find by size" tv 1
+
+    str_split(tn): "a.txt|b.txt" "|"
+    tvm_rename_plan(tp): tn "photo_[C:3].[E]" "" "" "keep" 1
+    encode(tv): tp
+    tm_check(_): "a rename plan" tv "[[`a.txt`,`photo_001.txt`],[`b.txt`,`photo_002.txt`]]"
+    tvm_rename_plan(tp): tn "[N]-x.[E]" "-x" "_new" "upper" 1
+    encode(tv): tp
+    tm_check(_): "search, replace and case" tv "[[`a.txt`,`A_NEW.TXT`],[`b.txt`,`B_NEW.TXT`]]"
+    vec(tswap): ""
+    str_split(tpr): "a.txt|b.txt" "|"
+    push(_): tswap tpr
+    str_split(tpr): "b.txt|a.txt" "|"
+    push(_): tswap tpr
+    tvm_rename_apply(tv): td tswap
+    tm_check(_): "a swap" tv ""
+    path_join(p): td "a.txt"
+    readfile(tv): p
+    str_contains(tv): tv "delta"
+    tm_check(_): "the names swapped" tv true
+    vec(tclash): ""
+    str_split(tpr): "a.txt|c.su" "|"
+    push(_): tclash tpr
+    tvm_rename_apply(tv): td tclash
+    tm_check(_): "a clash stops it" tv "c.su is there already"
+
+    str_split(tsn): "a.txt|b.txt|c.su" "|"
+    tvm_sums(tsum): td tsn "sha256"
+    tvm_verify(tv): td tsum "sha256"
+    encode(tv): tv
+    tm_check(_): "checksums verify" tv "[[`a.txt`,true],[`b.txt`,true],[`c.su`,true]]"
+    path_join(p): td "c.su"
+    writefile(_): p "changed"
+    tvm_verify(tv): td tsum "sha256"
+    at(tv): tv 2
+    at(tv): tv 1
+    tm_check(_): "a changed file fails" tv false
+    tvm_sums(tsum): td tsn "md5"
+    str_split(tl): tsum "  "
+    at(tv): tl 0
+    len(tv): tv
+    tm_check(_): "md5 too" tv 32
+
+    path_join(p): td "b.txt"
+    tvm_split(tv): p 10
+    tm_check(_): "split in parts" tv 2
+    concat(p1): p ".001"
+    path_join(pj): td "joined.txt"
+    tvm_join_parts(tv): p1 pj
+    tm_check(_): "joined" tv 2
+    readfile(tv): pj
+    tm_check(_): "the same bytes" tv "alpha\nbeta\ngamma\n"
+
+    tvm_diff(tops): "alpha\nbeta\ngamma\n" "alpha\nBETA\ngamma\ndelta\n"
+    tvm_diff_text(tv): tops 6
+    tm_check(_): "a side-by-side diff" tv "alpha  | alpha\nbeta   ~ BETA\ngamma  | gamma\n       > delta\n       |\n"
+
+    path_join(p): td "dup1.bin"
+    writefile(_): p "same bytes"
+    path_join(p): td "dup2.bin"
+    writefile(_): p "same bytes"
+    tvm_dupes(tg): td
+    len(tv): tg
+    tm_check(_): "duplicates found" tv 2
+    at(tv): tg 0
+    len(tv): tv
+    tm_check(_): "a pair" tv 2
+    tvm_usage(tu): tr
+    at(tv): tu 0
+    at(tv): tv 0
+    tm_check(_): "the biggest folder first" tv "x/"
+    tvm_info(tv): td
+    str_contains(tv): tv "entries here"
+    tm_check(_): "the info panel" tv true
+    set(r): 0
+]
+
+tm_settings(r): [
+    tvm_settings_parse(ss): "# mine\nbookmark /home/x\nhidden off\nfilter /src *.su\nmenu Build: make %n\nkey f5 copy\nleft /a\n"
+    btget(sv): ss "hidden"
+    tm_check(_): "hidden off" sv false
+    btget(sv): ss "bookmarks"
+    encode(sv): sv
+    tm_check(_): "bookmarks" sv "[`/home/x`]"
+    tvm_bookmark_add(_): ss "/tmp"
+    tvm_bookmark_add(sv): ss "/tmp"
+    tm_check(_): "a bookmark once" sv 2
+    tvm_bookmark_remove(sv): ss "/home/x"
+    tm_check(_): "a bookmark removed" sv 1
+    tvm_settings_text(st): ss
+    tvm_settings_parse(ss2): st
+    tvm_settings_text(st2): ss2
+    tm_check(_): "settings written and read back" st2 st
+    btget(sm): ss "menu"
+    at(se): sm 0
+    at(sc): se 1
+    tvm_menu_expand(sv): sc "/w" "x.su"
+    tm_check(_): "a user menu command" sv "make \"x.su\""
+    tvm_menu_expand(sv): "cat %f > %d/out" "/w" "x.su"
+    tm_check(_): "file and folder" sv "cat \"/w/x.su\" > \"/w\"/out"
+    tm_root(sr):
+    path_join(sp): sr "settings"
+    setenv(_): "TVER_SETTINGS" sp
+    tvm_settings_save(_): ss
+    tvm_settings_load(ss3):
+    btget(sv): ss3 "left"
+    tm_check(_): "settings saved" sv "/a"
+    set(r): 0
+]
+
+tm_scale(r): [
+    # 10 000 names sort and filter
+    vec(be): ""
+    set(bi): 0
+    while(_): {bi < 10000} [
+        str_from_int(bs): {(bi * 7919) % 10000}
+        concat(bn): "file" bs ".txt"
+        vec(e): ""
+        push(_): e bn
+        push(_): e bi
+        push(_): be e
+        set(bi): {bi + 1}
+    ]
+    tvm_sort(bs2): be "name" false true
+    at(bv): bs2 0
+    at(bv): bv 0
+    tm_check(_): "10 000 names sorted" bv "file0.txt"
+    vec(bn2): ""
+    len(bnn): bs2
+    set(bi): 0
+    while(_): {bi < bnn} [
+        at(e): bs2 bi
+        at(nm): e 0
+        push(_): bn2 nm
+        set(bi): {bi + 1}
+    ]
+    tvm_jump(bv): bn2 "file9999" 0
+    tm_check(_): "and searched" bv 9999
+    # odd names: pipes, backslashes, spaces, Cyrillic
+    tm_root(br):
+    path_join(bd): br "odd"
+    make_dir(_): bd
+    str_split(odd): "a|b.txt;back\\slash.txt;  spaced  .txt;файл.txt" ";"
+    set(made): 0
+    len(on): odd
+    set(bi): 0
+    while(_): {bi < on} [
+        at(nm): odd bi
+        tvm_new_file(w): bd nm
+        if(_): {w = ""} [ set(made): {made + 1} ]
+        set(bi): {bi + 1}
+    ]
+    tm_check(_): "odd names that can be made" {made >= 2} true
+    tvm_rename(bv): bd "файл.txt" "файл2.txt"
+    tm_check(_): "a Cyrillic rename" bv ""
+    tver_escape(bv): "a|b\\c"
+    tm_check(_): "list separators escaped" bv "a\\|b\\\\c"
+    tvm_tui(bv): "/left" bn2 0 "/right" bn2 1 0 20 4
+    str_split(bl): bv "\n"
+    at(bv): bl 0
+    tm_check(_): "a terminal view" bv "┌*/left ─┐┌ /right ┐"
+    set(r): 0
+]
+
+init(ret): arg_cnt arg_vec [
+    set(ret): 0
+    tm_root(ir):
+    tvm_delete_tree(_): ir
+    tm_files(_):
+    tm_zip(_):
+    tm_view(_):
+    tm_moving(_):
+    tm_marks(_):
+    tm_tools(_):
+    tm_settings(_):
+    tm_scale(_):
+    tvm_delete_tree(_): ir
+    file_exists(gone): ir
+    tm_check(_): "scratch removed" gone false
+]

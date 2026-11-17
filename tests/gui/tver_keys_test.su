@@ -1,0 +1,235 @@
+# Tver's refine-pass keys in a window (never shown): rename (F2), a new
+# file (Shift+F4), Space for a size, marking by pattern (Num +) and
+# inverting (Num *), mark all (Ctrl+A), swap panels (Ctrl+U), back
+# (Alt+Left), browsing a .zip with Enter and extracting with F5, and the
+# trash (Shift+F8 twice). Run from the repository root:
+#     ussr tests/gui/tver_keys_test.su
+$include "../../src/tver/tver.su"
+
+$define KEY_ENTER 257
+$define KEY_TAB 258
+$define KEY_F2 291
+$define KEY_F4 293
+$define KEY_F5 294
+$define KEY_F8 297
+$define KEY_SHIFT 340
+$define KEY_CTRL 341
+$define KEY_ALT 342
+$define KEY_LEFT 263
+$define KEY_KP_MULTIPLY 332
+$define KEY_KP_ADD 334
+
+key_handler(result): window key [
+    tverhandlekey(_): window key
+]
+
+keyup_handler(result): window key [
+    tverhandlekeyup(_): window key
+]
+
+panel_changed(result): widget [
+    tveractivatepanel(_): widget
+]
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 60
+    uiidle(_st_idle):
+    set(_st_tries): 0
+    while(_): {_st_idle = false && _st_tries < 200} [
+        sleep(_): 10
+        uiidle(_st_idle):
+        set(_st_tries): {_st_tries + 1}
+    ]
+    set(r): 0
+]
+
+press(r): window key [
+    inject(_): window "key" key 0 0
+    inject(_): window "keyup" key 0 0
+    settle(_):
+    set(r): 0
+]
+
+# a key with a modifier held
+chord(r): window mod key [
+    inject(_): window "key" mod 0 0
+    settle(_):
+    inject(_): window "key" key 0 0
+    inject(_): window "keyup" key 0 0
+    inject(_): window "keyup" mod 0 0
+    settle(_):
+    set(r): 0
+]
+
+type_prompt(r): text [
+    set(_tp_box): tver_prompt?
+    settext(_): _tp_box text
+    set(r): 0
+]
+
+marked_rows(r): list count [
+    set(r): ""
+    set(_mr_i): 0
+    while(_): {_mr_i < count} [
+        getmark(_mr_m): list _mr_i
+        if(_): _mr_m [
+            str_from_int(_mr_s): _mr_i
+            concat(r): r _mr_s " "
+        ]
+        set(_mr_i): {_mr_i + 1}
+    ]
+]
+
+init(result): arg_count arg_values [
+    getcwd(home):
+    concat(scratch): home "/tver_keys_fixture"
+    setenv(_): "HOME" scratch
+    setenv(_): "TVER_SETTINGS" "tver_keys_settings"
+    make_dir(_): "tver_keys_fixture"
+    cd(_): "tver_keys_fixture"
+    make_dir(_): "left"
+    make_dir(_): "right"
+    writefile(_): "left/a.txt" "aaa"
+    writefile(_): "left/b.su" "bb"
+    writefile(_): "left/c.su" "c"
+    read_bytes(zb): "../tests/fixtures/tver/sample.zip"
+    write_bytes(_): "left/sample.zip" zb
+    cd(_): "left"
+
+    createwindow(window): "Tver keys test" 900 620
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left): window ""
+    listbox(right): window ""
+    label(status): window ""
+    on(_): window "key" "key_handler"
+    on(_): window "keyup" "keyup_handler"
+    on(_): left "change" "panel_changed"
+    on(_): right "change" "panel_changed"
+    tverinitialize(_): window left_path left right_path right status
+    gettext(t): left
+    check(_): "listing" t "..|a.txt|b.su|c.su|sample.zip"
+
+    # F2: rename in place
+    setindex(_): left 1
+    press(_): window KEY_F2
+    type_prompt(_): "alpha.txt"
+    press(_): window KEY_ENTER
+    gettext(t): left
+    check(_): "F2 renames" t "..|alpha.txt|b.su|c.su|sample.zip"
+
+    # Shift+F4: a new empty file
+    chord(_): window KEY_SHIFT KEY_F4
+    type_prompt(_): "new.txt"
+    press(_): window KEY_ENTER
+    gettext(t): left
+    check(_): "Shift+F4 makes a file" t "..|alpha.txt|b.su|c.su|new.txt|sample.zip"
+
+    # Num + marks by pattern, Num * inverts, Ctrl+A marks all
+    press(_): window KEY_KP_ADD
+    type_prompt(_): "*.su"
+    press(_): window KEY_ENTER
+    marked_rows(m): left 6
+    check(_): "marked by pattern" m "2 3 "
+    gettext(t): status
+    check(_): "the status gives count and size" t "2 marked, 3 B"
+    press(_): window KEY_KP_MULTIPLY
+    marked_rows(m): left 6
+    check(_): "inverted, never .." m "1 4 5 "
+    chord(_): window KEY_CTRL 65
+    marked_rows(m): left 6
+    check(_): "all marked" m "1 2 3 4 5 "
+    press(_): window KEY_KP_MULTIPLY
+
+    # Space: a size
+    setindex(_): left 5
+    press(_): window 32
+    gettext(t): status
+    str_starts(ok): t "sample.zip: 1 file and 0 folders"
+    check(_): "Space tells the size" ok true
+
+    # Enter on a .zip: its folders; F5 extracts into the other panel
+    press(_): window KEY_ENTER
+    gettext(t): left
+    check(_): "a ZIP as a folder" t "..|docs/|hi.txt|stored.bin"
+    setindex(_): left 2
+    press(_): window KEY_F5
+    set(dirs): tver_dirs?
+    at(rd): dirs 1
+    concat(hp): rd "/hi.txt"
+    file_exists(e): hp
+    check(_): "F5 extracts into the other panel" e true
+    setindex(_): left 1
+    press(_): window KEY_ENTER
+    gettext(t): left
+    check(_): "a folder in the ZIP" t "..|sub/|big.txt"
+    setindex(_): left 0
+    press(_): window KEY_ENTER
+    setindex(_): left 0
+    press(_): window KEY_ENTER
+    gettext(t): left
+    check(_): "out of the ZIP again (the other panel is here too)" t "..|alpha.txt|b.su|c.su|hi.txt|new.txt|sample.zip"
+
+    # Ctrl+U swaps the panels, Alt+Left goes back
+    set(dirs): tver_dirs?
+    at(l0): dirs 0
+    at(r0): dirs 1
+    chord(_): window KEY_CTRL 85
+    set(dirs): tver_dirs?
+    at(l1): dirs 0
+    check(_): "Ctrl+U swaps" {l1 = r0} true
+    chord(_): window KEY_ALT KEY_LEFT
+    set(dirs): tver_dirs?
+    at(l2): dirs 0
+    check(_): "Alt+Left goes back" {l2 != r0} true
+    chord(_): window KEY_CTRL 85
+
+    # Shift+F8 twice: to the trash
+    set(dirs): tver_dirs?
+    at(ld): dirs 0
+    gettext(t): left
+    str_split(rows): t "|"
+    len(nr): rows
+    set(k): 0
+    set(i): 0
+    while(_): {i < nr} [
+        at(x): rows i
+        if(_): {x = "new.txt"} [ set(k): i ]
+        set(i): {i + 1}
+    ]
+    setindex(_): left k
+    chord(_): window KEY_SHIFT KEY_F8
+    gettext(t): status
+    str_starts(ok): t "Shift+F8 again moves"
+    check(_): "Shift+F8 asks first" ok true
+    chord(_): window KEY_SHIFT KEY_F8
+    concat(np): ld "/new.txt"
+    file_exists(e): np
+    check(_): "Shift+F8 again: gone from the panel" e false
+    concat(tp): scratch "/.tver-trash/new.txt"
+    file_exists(e): tp
+    check(_): "and in the trash" e true
+
+    close(_): window
+    sleep(_): 100
+    cd(_): home
+    tvm_delete_tree(_): "tver_keys_fixture"
+    remove_file(_): "tver_keys_settings"
+    file_exists(e): "tver_keys_fixture"
+    check(_): "fixture removed" e false
+    set(result): 0
+]
