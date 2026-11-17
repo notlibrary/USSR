@@ -1104,9 +1104,9 @@ Do not info on refining with global README until it ends use REFINE.md and subpr
 
 Manual refining list(pull request it when whole list done):
 siberia: 
-- make formula editor text bar usable to edit selected cell formula
+- make formula editor text box usable to edit selected cell formula
 - selecting copy paste cells
-- sum agregate
+- sum aggregate
 - holding arrow keys moves cursor(SHIFT + arrow moves selection)
 - make help key works
 tula:
