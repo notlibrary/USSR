@@ -15,10 +15,27 @@ ussr src/usa/usa.su -E file.c                # preprocess only
 
 Options: `-o out.ru`, `-I dir`, `-D NAME[=VALUE]`, `-E`, `-nostdlib`,
 `-trace` (each function says its name on stderr as it is entered: the
-last line before a VM error names the culprit). `-c`, `-O*`, `-g`, `-W*`,
+last line before a VM error names the culprit). `-w` silences warnings and
+`-Werror` makes the first one an error. `-c`, `-O*`, `-g`, `-W*`,
 `-f*`, `-m*`, `-std=`, `-l*`, `-L*` are accepted and ignored, so makefile
 lines work. usa finds its `include/` and `libc/` through `USA_HOME`, else
 in `src/usa`, `usa` or `.` from the current directory.
+
+## C11 and GNU features
+
+`_Generic`, `typeof` / `__typeof__`, `__COUNTER__`, `_Static_assert`,
+`_Alignof`, case ranges (`case 1 ... 3:`), `?:` with the middle left out,
+statement expressions, variable-length arrays and flexible array members.
+GCC's bit builtins are in `libc.c`: `__builtin_popcount`, `clz`, `ctz`,
+`ffs` and `parity` (also their `l` and `ll` forms) and
+`__builtin_bswap16/32/64`. `clz` and `ctz` of 0 give the width; in GCC
+that is undefined.
+`tests/refine1.c` exercises them, and its output must match
+`tests/refine1.txt`:
+
+```bash
+ussr src/usa/usa.su -o refine1.ru src/usa/tests/refine1.c && ussr refine1.ru | diff - src/usa/tests/refine1.txt
+```
 
 ## Pieces
 

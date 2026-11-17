@@ -34,7 +34,7 @@ global(_): pp_inc pp_once pp_cact pp_cse pp_ctk pp_act
 global(_): pp_out pp_outv pp_failed pp_msg pp_win pp_sigp pp_xargs pp_xafter
 global(_): pp_mapf pp_mapl pp_curline pp_dirs pp_sysdir pp_hide pp_more
 global(_): pp_dtab pp_dn pp_dv pp_dp pp_dlive pp_ndefs pp_ev_t pp_ev_k pp_ev_i
-global(_): pp_pend pp_pendl pp_idx
+global(_): pp_pend pp_pendl pp_idx pp_counter
 
 # ---- hash tables: a vector of n key buckets then n value buckets ----
 ht_new(r): n [
@@ -274,7 +274,7 @@ pp_settop(r): v x [
 pp_isdef(r): name [
     pp_find(i): name
     set(r): 0
-    if(_): {i >= 0 || name = "__FILE__" || name = "__LINE__"} [ set(r): 1 ]
+    if(_): {i >= 0 || name = "__FILE__" || name = "__LINE__" || name = "__COUNTER__"} [ set(r): 1 ]
 ]
 pp_hidden(r): name [
     set(r): 0
@@ -655,6 +655,13 @@ pp_expand(r): text depth [
                 if(_): {name = "__LINE__"} [
                     encode(ln): pp_curline
                     push(_): out ln
+                    set(changed): 1
+                ]
+                elif(_): {name = "__COUNTER__"} [
+                    # 0, 1, 2, ... one more at each use (GCC, Clang, MSVC)
+                    encode(cn): pp_counter
+                    add(pp_counter): pp_counter 1
+                    push(_): out cn
                     set(changed): 1
                 ]
                 elif(_): {name = "__FILE__"} [
@@ -1559,6 +1566,7 @@ pp_init(r): dirs defs [
     set(pp_pendl): 0
     set(pp_more): 0
     set(pp_curline): 0
+    set(pp_counter): 0
     set(pp_failed): 0
     set(pp_msg): ""
     set(pp_win): 0

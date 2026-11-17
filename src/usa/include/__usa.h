@@ -26,6 +26,31 @@ void abort(void);
 #define __builtin_trap() abort()
 #define __builtin_abort() abort()
 #define __builtin_unreachable() abort()
+/* GCC's bit builtins (libc.c) and the ones that are only names */
+int __builtin_popcount(unsigned int x);
+int __builtin_popcountl(unsigned long x);
+int __builtin_popcountll(unsigned long long x);
+int __builtin_clz(unsigned int x);
+int __builtin_clzl(unsigned long x);
+int __builtin_clzll(unsigned long long x);
+int __builtin_ctz(unsigned int x);
+int __builtin_ctzl(unsigned long x);
+int __builtin_ctzll(unsigned long long x);
+int __builtin_ffs(int x);
+int __builtin_ffsl(long x);
+int __builtin_ffsll(long long x);
+int __builtin_parity(unsigned int x);
+int __builtin_parityl(unsigned long x);
+int __builtin_parityll(unsigned long long x);
+unsigned short __builtin_bswap16(unsigned short x);
+unsigned int __builtin_bswap32(unsigned int x);
+unsigned long __builtin_bswap64(unsigned long x);
+#define __builtin_offsetof(type, member) ((size_t)&((type *)0)->member)
+#define __builtin_constant_p(x) 0
+#define __builtin_assume_aligned(p, ...) (p)
+#define __builtin_prefetch(...) ((void)0)
+#define __builtin_memcpy memcpy
+#define __builtin_memset memset
 int __start(long argc, __uval argv);
 int main();
 #endif

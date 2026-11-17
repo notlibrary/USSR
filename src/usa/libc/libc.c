@@ -2957,3 +2957,51 @@ int __start(long argc, __uval argv)
     __setidx(idx);
     return __start2(argc, argv, n);
 }
+
+/* GCC's bit builtins. clz and ctz of 0 are undefined in GCC: here they
+   give the width. */
+int __builtin_popcountl(unsigned long x)
+{
+    int n = 0;
+    while (x) { n += (int)(x & 1UL); x >>= 1; }
+    return n;
+}
+int __builtin_popcount(unsigned int x) { return __builtin_popcountl(x); }
+int __builtin_popcountll(unsigned long long x) { return __builtin_popcountl(x); }
+int __builtin_clzl(unsigned long x)
+{
+    int n = 0;
+    if (x == 0) return 64;
+    while (!(x & 0x8000000000000000UL)) { n++; x <<= 1; }
+    return n;
+}
+int __builtin_clz(unsigned int x) { return x == 0 ? 32 : __builtin_clzl(x) - 32; }
+int __builtin_clzll(unsigned long long x) { return __builtin_clzl(x); }
+int __builtin_ctzl(unsigned long x)
+{
+    int n = 0;
+    if (x == 0) return 64;
+    while (!(x & 1UL)) { n++; x >>= 1; }
+    return n;
+}
+int __builtin_ctz(unsigned int x) { return x == 0 ? 32 : __builtin_ctzl(x); }
+int __builtin_ctzll(unsigned long long x) { return __builtin_ctzl(x); }
+int __builtin_ffsl(long x) { return x == 0 ? 0 : __builtin_ctzl((unsigned long)x) + 1; }
+int __builtin_ffs(int x) { return x == 0 ? 0 : __builtin_ctz((unsigned int)x) + 1; }
+int __builtin_ffsll(long long x) { return __builtin_ffsl(x); }
+int __builtin_parityl(unsigned long x) { return __builtin_popcountl(x) & 1; }
+int __builtin_parity(unsigned int x) { return __builtin_popcountl(x) & 1; }
+int __builtin_parityll(unsigned long long x) { return __builtin_popcountl(x) & 1; }
+unsigned short __builtin_bswap16(unsigned short x)
+{
+    return (unsigned short)(((x & 0xffu) << 8) | (x >> 8));
+}
+unsigned int __builtin_bswap32(unsigned int x)
+{
+    return ((x & 0xffu) << 24) | ((x & 0xff00u) << 8) | ((x >> 8) & 0xff00u) | (x >> 24);
+}
+unsigned long __builtin_bswap64(unsigned long x)
+{
+    return ((unsigned long)__builtin_bswap32((unsigned int)(x & 0xffffffffUL)) << 32) |
+           __builtin_bswap32((unsigned int)(x >> 32));
+}

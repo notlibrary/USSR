@@ -723,6 +723,11 @@ p_unary(r): [
             nd_num(r): v ty_int
             return(_): r
         ]
+        if(_): {s = "_Generic"} [
+            p_generic(r):
+            p_postfix(r): r
+            return(_): r
+        ]
         if(_): {s = "sizeof" || s = "_Alignof" || s = "__alignof__"} [
             add(p_i): p_i 1
             set(t): {0 - 1}
@@ -1051,6 +1056,53 @@ p_rtcall(r): name args [
     nd_new(f): 25 pt s 0 0 0
     len(na): args
     nd_new(r): 16 ret f na 0 args
+]
+# _Generic(controlling, type: expr, ..., default: expr): the expression
+# whose type matches the controlling expression's (after array and
+# function decay; qualifiers are not part of usa's types)
+p_same_type(r): a b [
+    set(r): 0
+    if(_): {a = b} [
+        set(r): 1
+        return(_): r
+    ]
+    at(ka): ty_k a
+    at(kb): ty_k b
+    if(_): {ka = 9 && kb = 9} [
+        at(ba): ty_b a
+        at(bb): ty_b b
+        p_same_type(r): ba bb
+    ]
+]
+p_generic(r): [
+    add(p_i): p_i 1
+    p_expect(_): "("
+    set(gsave): p_ginit
+    vec(p_ginit): ""
+    p_assign(ce):
+    set(p_ginit): gsave
+    at(ct): nd_t ce
+    ty_decayed(ct): ct
+    set(r): null
+    set(dflt): null
+    while(_): {1 = 1} [
+        p_accept(more): ","
+        if(_): {more != 1} [ break(_): "" ]
+        p_is(isdef): "default"
+        set(at_): {0 - 1}
+        if(_): {isdef = 1} [ add(p_i): p_i 1 ]
+        else(_): [ p_typename(at_): ]
+        p_expect(_): ":"
+        p_assign(ae):
+        if(_): {isdef = 1} [ set(dflt): ae ]
+        else(_): [
+            p_same_type(hit): ct at_
+            if(_): {hit = 1 && r = null} [ set(r): ae ]
+        ]
+    ]
+    p_expect(_): ")"
+    if(_): {r = null} [ set(r): dflt ]
+    if(_): {r = null} [ p_fail(_): "_Generic: no association matches the controlling expression's type" ]
 ]
 p_primary(r): [
     p_mark(_):
