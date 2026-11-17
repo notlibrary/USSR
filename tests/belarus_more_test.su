@@ -88,6 +88,8 @@ bm_clean(r): [
 init(ret): arg_count arg_values [
     set(bmi): "tests/belarus-more-tmp.img"
     setenv(_): "BELARUS_TIME" "1700000000"
+    # UUIDs come from random64: the same seed, the same UUIDs on every machine
+    seed_random64(_): 1991
     bm_clean(_):
     bm_image(_): bmi 8
     bm_run(_): "mkfs IMG --label refine"
