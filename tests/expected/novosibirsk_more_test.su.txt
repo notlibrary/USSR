@@ -1,0 +1,90 @@
+PASS overlapping formats split into spans
+PASS the pieces
+PASS bold taken off everywhere
+PASS no format: no spans
+PASS ODF: a heading
+PASS ODF: bold in an automatic style
+PASS ODF: a link
+PASS ODF: a footnote
+PASS ODF: a list
+PASS ODF: alignment
+PASS ODF: metadata
+PASS read back: the paragraphs
+PASS the heading's level
+PASS the text
+PASS bold read back
+PASS the note read back
+PASS the list read back
+PASS the alignment read back
+PASS the spacing read back
+PASS the author read back
+PASS ODF out, in and out again is the same
+PASS the pad reads the same file
+PASS HTML: a heading
+PASS HTML: bold with a note mark
+PASS HTML: a link
+PASS HTML: a list
+PASS HTML: centred
+PASS HTML: the notes
+PASS Markdown
+PASS text with line numbers and bullets
+PASS RTF: bold
+PASS RTF: centred
+PASS RTF: Unicode
+PASS RTF in: the text
+PASS RTF in: bold
+PASS RTF in: Unicode
+PASS Markdown in: paragraphs
+PASS Markdown in: joined lines, marks gone
+PASS Markdown in: a nested item
+PASS Markdown in: numbers
+PASS Markdown in: a link
+PASS HTML in: paragraphs
+PASS HTML in: a heading
+PASS HTML in: a numbered list
+PASS HTML in: the title
+PASS find, any case
+PASS find, matching case
+PASS find with a regex
+PASS replace with a regex
+PASS replaced
+PASS a dot is a dot without regex
+PASS words
+PASS sentences
+PASS no word repeated three times
+PASS autocorrect, English
+PASS autocorrect, Russian
+PASS special characters
+PASS next word
+PASS past two spaces
+PASS previous word
+PASS smart Home: the text's start
+PASS and then the line's
+PASS a report template's headings
+PASS contents with leaders
+PASS fields filled
+PASS the title field
+PASS author and date
+PASS no such template
+PASS a section moved up
+PASS with its paragraphs
+PASS and back down
+PASS compare two documents
+PASS typed
+PASS undo the new paragraph
+PASS typing is one step
+PASS nothing more to undo
+PASS redo twice
+PASS the status line's count
+novosibirsk: wrote tests/novosibirsk-more-tmp.md
+PASS --convert to Markdown
+PASS the Markdown
+novosibirsk: wrote tests/novosibirsk-more-tmp.html
+PASS Markdown to HTML
+13 words, 75 characters, 6 sentences, 0.1 minutes to read
+PASS --stats
+PASS not the command line's
+
+--- stderr ---
+
+--- exit 0 ---

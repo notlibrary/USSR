@@ -23,6 +23,7 @@ $define SB_APP 1
 $endif
 $define SB_PAD 1
 $include "../siberia/siberia.su"
+$include "more.su"
 
 # --- the document -----------------------------------------------------------
 # Paragraphs are SbPara structs in sb_paras; the cursor is sb_prow (the
@@ -41,6 +42,7 @@ sbpadreset(r): [
     set(sb_ptopline): 0!
     set(sb_goalx): {0 - 1}!
     set(sb_dirty): false!
+    nsm_state(_):
     set(r): 0
 ]
 
@@ -1150,7 +1152,9 @@ sb_pad_draw(r): [
     str_from_int(rs): {row + 1}
     str_from_int(cs): {column + 1}
     str_from_int(ps): count
-    concat(left): "Paragraph " rs " of " ps ", column " cs
+    nsm_from_pad(_sbd_doc):
+    nsm_stats_line(_sbd_words): _sbd_doc
+    concat(left): "Paragraph " rs " of " ps ", column " cs " | " _sbd_words
     set(sb_status_left): left!
     sb_draw_status(_): w h
     sb_pad_draw_picker(_): w h
@@ -1356,6 +1360,48 @@ sb_pad_key_gui(r): key [
     ]
     set(ctrl): sb_ctrl?
     if(_): {ctrl = true} [
+        if(_): {key = 90 || key = 89} [
+            if(_): {key = 90} [ nsm_undo(_): ] else(_): [ nsm_redo(_): ]
+            set(sb_dirty): true!
+            return(_): r
+        ]
+        if(_): {key = SB_KEY_LEFT || key = SB_KEY_RIGHT || key = SB_KEY_BACKSPACE} [
+            set(row): sb_prow?
+            set(col): sb_pcol?
+            sb_para_text(t): row
+            if(_): {key = SB_KEY_RIGHT} [
+                nsm_word_right(c): t col
+                set(sb_pcol): c!
+            ]
+            else(_): [
+                nsm_word_left(c): t col
+                if(_): {key = SB_KEY_BACKSPACE && c < col} [
+                    nsm_push_undo(_): ""
+                    len(n): t
+                    slice(left): t 0 c
+                    slice(right): t col {n - col}
+                    concat(t2): left right
+                    sb_para_set(_): row t2
+                    set(sb_dirty): true!
+                ]
+                set(sb_pcol): c!
+            ]
+            set(sb_goalx): {0 - 1}!
+            return(_): r
+        ]
+        if(_): {key = SB_KEY_UP || key = SB_KEY_DOWN} [
+            set(row): sb_prow?
+            sb_pad_count(count):
+            if(_): {key = SB_KEY_UP} [
+                set(col): sb_pcol?
+                if(_): {col = 0 && row > 0} [ set(row): {row - 1} ]
+            ]
+            elif(_): {row + 1 < count} [ set(row): {row + 1} ]
+            set(sb_prow): row!
+            set(sb_pcol): 0!
+            set(sb_goalx): {0 - 1}!
+            return(_): r
+        ]
         if(_): {key = 66} [
             set(b): sb_bold?
             set(sb_bold): {b != true}!
@@ -1381,6 +1427,8 @@ sb_pad_key_gui(r): key [
             return(_): r
         ]
     ]
+    if(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER || key = SB_KEY_TAB} [ nsm_push_undo(_): "" ]
+    if(_): {key = SB_KEY_BACKSPACE || key = SB_KEY_DELETE} [ nsm_push_undo(_): "delete" ]
     sb_pad_key(_): key {ctrl = true}
 ]
 
@@ -1389,7 +1437,28 @@ sb_pad_key_gui(r): key [
 # A typed character in pad mode: to the font picker when it is open.
 sb_pad_char(r): s [
     set(picker): sb_picker?
-    if(_): {picker = true} [ sb_picker_char(r): s ] else(_): [ sbpadtype(r): s ]
+    if(_): {picker = true} [ sb_picker_char(r): s ]
+    else(_): [
+        nsm_push_undo(_): "type"
+        sbpadtype(r): s
+        # quotes, dashes and ellipses as they are typed
+        set(style): sb_autocorrect?
+        if(_): {style != "off"} [
+            set(row): sb_prow?
+            set(col): sb_pcol?
+            sb_para_text(t): row
+            len(n): t
+            slice(left): t 0 col
+            slice(right): t col {n - col}
+            nsm_autocorrect(nl): left style
+            if(_): {nl != left} [
+                concat(t2): nl right
+                sb_para_set(_): row t2
+                len(c2): nl
+                set(sb_pcol): c2!
+            ]
+        ]
+    ]
 ]
 
 sb_pad_wheel(r): direction [
@@ -1478,6 +1547,21 @@ sb_pad_toolbar(r): bar [
 
 $ifdef __MAIN__
 init(result): arg_count arg_values [
-    sb_app_main(result): "pad" "Novosibirsk" "usage: ussr novosibirsk.su [file.fodt|file.txt]" arg_count arg_values
+    vec(_nsa_args): ""
+    set(_nsa_i): 0
+    while(_): {_nsa_i < arg_count} [
+        at(_nsa_a): arg_values _nsa_i
+        push(_): _nsa_args _nsa_a
+        set(_nsa_i): {_nsa_i + 1}
+    ]
+    if(_): {arg_count > 0} [
+        at(_nsa_0): arg_values 0
+        if(_): {_nsa_0 = "--convert" || _nsa_0 = "--stats"} [
+            sbsetup(_):
+            nsm_cli(result): _nsa_args
+            return(_): result
+        ]
+    ]
+    sb_app_main(result): "pad" "Novosibirsk" "usage: ussr novosibirsk.su [file.fodt|file.txt] | --convert IN OUT | --stats FILE" arg_count arg_values
 ]
 $endif
