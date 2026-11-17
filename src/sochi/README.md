@@ -45,8 +45,15 @@ Play for Ivan: Qd 7d   ('text to chat)
 ## Playing at a window
 
 ```bash
-ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]
+ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]   # you and two bots
+ussr src/sochi/gui.su --host [--bots N] --name NICK         # a table on the LAN
+ussr src/sochi/gui.su --join [ADDRESS] --name NICK          # join one
 ```
+
+With `--host` the window opens a table on UDP port 33333 that anyone on
+the LAN can join, from a terminal (`sochi join`) or from another window
+(`--join`). **Fill with bots** gives the empty seats to bots and starts.
+`--join` takes the first table it finds, or the one at `ADDRESS`.
 
 A Petersburg table where you play against two bots. Cards show big
 letters for the ranks and drawn icons for spades, clubs, diamonds and

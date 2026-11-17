@@ -1,0 +1,50 @@
+# A window joins the terminal table on 127.0.0.1:33392 (see run.sh) and
+# plays its seat by clicks, the view coming from the host. Prints PASS or
+# FAIL.
+$include "player.su"
+
+init(ret): arg_count arg_values [
+    set(sgu_mode): "client"
+    set(sn_port): 33392
+    set(sgl_bid): false
+    set(sgl_clicks): 0
+    set(sgl_cards): 0
+    sgu_open(_): "Window" 2 7
+    socket_udp(sn_sock):
+    set(sgu_hhost): "127.0.0.1"
+    set(sgu_hport): 33392
+    sgu_join(seat): "127.0.0.1" 33392 "Window"
+    set(sn_seat): seat
+    if(_): {seat > 0} [ print(_): "PASS the window joined the terminal table" ]
+    else(_): [
+        concat(m): "FAIL " sgu_msg
+        print(_): m
+    ]
+    set(sgu_pause): 0
+    set(t): 0
+    set(phase): ""
+    set(views): 0
+    while(_): {t < 6000 && phase != "over" && seat > 0} [
+        sgu_tick(_):
+        typeof(tv): su_view
+        if(_): {tv = "vector"} [
+            at(phase): su_view V_PHASE
+            at(ctl): su_view V_CTL
+            set(views): {views + 1}
+            len(np): su_pending
+            if(_): {np = 0 && (ctl = seat || phase = "done")} [ sgl_move(_): ]
+        ]
+        set(t): {t + 1}
+    ]
+    if(_): {phase = "over"} [ print(_): "PASS the game was played to its end from the window" ]
+    else(_): [
+        concat(m): "FAIL the game stopped in phase " phase
+        print(_): m
+    ]
+    if(_): {sgl_cards >= 5} [ print(_): "PASS the window's clicks went to the host as moves" ]
+    else(_): [ print(_): "FAIL the window played no cards" ]
+    sn_send(_): sgu_hhost sgu_hport "BYE"
+    socket_close(_): sn_sock
+    destroy(_): sgu_win
+    set(ret): 0
+]

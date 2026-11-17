@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+- The window plays on the LAN.
+  - `gui.su --host [--bots N]` opens a table on UDP port 33333 (`--port P`)
+    with this window in seat 0. Terminal players (`sochi join`), terminal
+    bots (`sochi join --bot`) and other windows can join it. While the
+    table waits, **Fill with bots** seats bots in the empty places and
+    starts.
+  - `gui.su --join [ADDRESS]` joins the first table found on the LAN, or
+    the one at `ADDRESS` (`host` or `host:port`). The window draws the
+    views the host sends and sends the moves you click; they are resent
+    until the host has them, as at the terminal.
+  - The table is drawn from your seat: the others sit left and right, and
+    an empty seat or an offline player is marked.
+- `tests/sochi_lan/run.sh` runs both directions on 127.0.0.1: a window
+  hosting two terminal bots, and a window joining a terminal host. It is
+  run by hand, since it needs UDP ports.
+
 ## 0.3.0
 - `gui.su`: Sochi at a Petersburg table, you against two bots.
   - Cards are drawn on the canvas: big rank letters (7 8 9 10 J Q K A)
