@@ -23,6 +23,29 @@ A rule is `allow|deny in|out [tcp|udp|icmp|any] [port|lo-hi]
 `out`; a port is the local one coming in and the remote one going out;
 what is left out matches anything. `#` starts a comment.
 
+Since 0.2 a rule can say much more (see the top of `murmansk.su` and
+CHANGELOG.md):
+
+```
+set lan = 192.168.0.0/16, 10.0.0.0/8
+set mail = smtp,submission,imaps
+allow in tcp $mail from $lan
+ssh-in: allow log in tcp ssh from $lan    # admins only
+allow in tcp 8443 limit 20/s burst 40 perip 10
+allow in tcp 3389 during 08:00-18:00
+allow in tcp 9000 until 18:00
+reject in tcp 23
+allow in icmp echo-request limit 5/s
+allow out tcp 443 for lenin group ai
+scan 8 10 600
+antispoof on
+```
+
+The `fw` command also takes `insert N rule`, `move A B`, `delete NAME`,
+`test in tcp a.b.c.d PORT`, `conns`, `zero`, `top`, `lint`, `confirm`,
+`profile home|public|server`, `group G on|off`, `block IP SECONDS`,
+`unblock IP` and `iptables`.
+
 ## What it is asked
 
 Murmansk decides about what is new:
