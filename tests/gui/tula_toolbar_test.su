@@ -147,7 +147,7 @@ init(result): arg_count arg_values [
     press(_): "Load DXF"
     set(e): tula_entities?
     len(n): e
-    check(_): "Load DXF button loads" n 8
+    check(_): "Load DXF button loads" n 9
     press(_): "Zoom +"
     press(_): "Fit"
     set(v): tula_view?
@@ -157,7 +157,7 @@ init(result): arg_count arg_values [
     settext(_): filename "tula_toolbar_out.dxf"
     press(_): "Save DXF"
     status(t):
-    check(_): "Save DXF button saves" t "Saved 8 object(s) to tula_toolbar_out.dxf"
+    check(_): "Save DXF button saves" t "Saved 9 object(s) to tula_toolbar_out.dxf"
     file_exists(f): "tula_toolbar_out.dxf"
     check(_): "saved file exists" f true
     remove_file(_): "tula_toolbar_out.dxf"
