@@ -57,6 +57,22 @@ Linux `/dev/sda`. Anything else Stalin is given is a disk image file.
 | `stalin edit DEV N [options]` | changes type, name, flags, start or size of partition N |
 | `stalin wipe DEV` | erases both GPTs and the MBR partition area |
 | `stalin types` | the partition type names |
+| `stalin verify DEV` | overlaps, alignment, CRCs, the backup GPT, the protective MBR, firmware quirks, boot checks; exit 1 on a problem |
+| `stalin backup DEV FILE` / `restore DEV FILE` | the table as `sfdisk --dump` text, and back |
+| `stalin sort DEV` | renumbers the entries by their start |
+| `stalin newuuids DEV` | new disk and partition GUIDs (or MBR signature) for a cloned disk |
+| `stalin layout DEV NAME` | a whole GPT layout: `uefi-linux`, `bios-gpt`, `windows`, `moscow` |
+| `stalin apply DEV FILE` | a layout file: lines `TYPE SIZE [NAME]`, SIZE `512M`, `50%` or `rest` |
+| `stalin mbr2gpt DEV` / `gpt2mbr DEV` | converts the table when the partitions fit, keeping them |
+| `stalin grow IMG SIZE` / `shrink IMG` | makes an image larger (`+16M` or a new size) or cuts it after the last partition; the backup GPT moves to the end |
+| `stalin dump DEV N FILE` / `load DEV N FILE` | a partition's sectors to a file and back |
+| `stalin zero DEV N [--random]` | overwrites a partition's data with zeros or random bytes |
+| `stalin copy SRC DST` / `compare A B` | a sector copy checked by checksum; the sectors that differ |
+| `stalin mkfs DEV N fat32 [LABEL]` | a FAT32 file system (an EFI system partition, say) |
+| `stalin fsinfo DEV N` | used and free space in FAT32 and ext2/3/4 |
+| `stalin explain DEV` / `hexdump DEV LBA [N]` | every MBR and GPT header field and what it means; raw sectors |
+| `stalin eltorito ISO` | the El Torito boot catalog of an ISO image |
+| `stalin undo IMG` | puts back the sectors the last command wrote (images only) |
 
 Options:
 
@@ -66,13 +82,22 @@ Options:
 - `--start POS` and `--size SIZE` in sectors (`2048s`) or bytes with K, M,
   G, T (`1M`, `1.5G`); a bare number is MiB; `--size max` takes the rest.
   New partitions start on 1 MiB boundaries unless `--start` says otherwise;
-- `--name NAME`, `--uuid GUID`, `--attrs N` for GPT; `--boot on|off` is the
+- `--end POS` the partition ends just before POS; `--size 50%` takes that
+  share of the largest free space;
+- `--name NAME`, `--uuid GUID`, `--attrs A` for GPT, A a number or names
+  (`required`, `no-block-io`, `legacy-boot`, `growfs`, `read-only`, `hidden`,
+  `no-automount`, comma-separated); `--boot on|off` is the
   MBR active flag (one partition at a time) or the GPT legacy BIOS bootable
   attribute;
 - `--num N` the number `add` gives the partition;
 - `--sector N` the sector size of an image: 512 (default), 1024, 2048, 4096;
 - `--dry-run` prints the sectors a command would write and writes none;
-- `--yes` is required to write to a raw disk.
+- `--yes` is required to write to a raw disk;
+- `--json` prints `show` and `verify` as JSON.
+
+On an image every writing command keeps the sectors it replaced in
+`IMG.stalin-undo` (with an index in `IMG.stalin-undo.txt`) for `stalin
+undo`; writes of more than 32 MiB (a wipe, a load) are not kept.
 
 Moving or resizing a partition changes the table only: the data stays where
 it was.
@@ -91,7 +116,8 @@ edit logical partitions.
 File systems, recognised by their own headers: ext2, ext3, ext4 (label and
 size from the superblock), NTFS (serial), UFS1 and UFS2 (FFS2 on an
 OpenBSD or NetBSD partition), also inside a BSD disklabel, FAT12/16/32,
-exFAT, XFS, Btrfs and Linux swap. Stalin does not make file systems.
+exFAT, XFS, Btrfs and Linux swap; by signature also LUKS, LVM, mdraid, ReFS,
+F2FS, HFS+, APFS, ISO 9660, UDF and ZFS. `stalin mkfs` makes FAT32 only.
 
 Every byte goes through the ussr builtins `bread` and `bwrite`; `bsize` and
 `bdevices` find the disks (see `docs/API.md`).

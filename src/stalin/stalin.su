@@ -27,6 +27,7 @@ global(_): st_disk_guid st_disk_sig st_first st_last st_entry_count st_entry_siz
 global(_): st_yes st_dry st_wrote st_seeded st_counter
 global(_): st_o_start st_o_size st_o_type st_o_name st_o_boot st_o_uuid
 global(_): st_o_attrs st_o_num st_o_sector
+$include "more.su"
 
 st_types(r): [
     set(r): 0
@@ -40,6 +41,7 @@ st_types(r): [
     # with a GUID or MBR code names it when a table is shown
     set(st_type_table): '[[`linux`,`0FC63DAF-8483-4772-8E79-3D69D8477DE4`,`83`,`Linux filesystem: ext2, ext3, ext4`],[`swap`,`0657FD6D-A4AB-43C4-84E5-0933C84B4F4F`,`82`,`Linux swap`],[`home`,`933AC7E1-2EB4-4F13-B844-0E14E2AEF915`,``,`Linux /home`],[`lvm`,`E6D6D379-F507-44C2-A23C-238F2A3DF928`,`8E`,`Linux LVM`],[`raid`,`A19D880F-05FC-4D3B-A006-743F0F84911E`,`FD`,`Linux RAID`],[`ntfs`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`07`,`Microsoft basic data: NTFS, exFAT`],[`fat32`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0C`,`FAT32 (LBA)`],[`fat16`,`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`,`0E`,`FAT16 (LBA)`],[`fat32-chs`,``,`0B`,`FAT32 (CHS)`],[`fat16-chs`,``,`06`,`FAT16 (CHS)`],[`efi`,`C12A7328-F81F-11D2-BA4B-00A0C93EC93B`,`EF`,`EFI system partition`],[`msr`,`E3C9E316-0B5C-4DB8-817D-F92DF00215AE`,``,`Microsoft reserved`],[`winre`,`DE94BBA4-06D1-4D40-A16A-BFD50179D6AC`,`27`,`Windows recovery`],[`belarus`,`B3E1A2C5-5553-4252-8E4C-42454C415255`,`7F`,`Belarus (USSR B+ tree file system)`],[`bios-boot`,`21686148-6449-6E6F-744E-656564454649`,``,`BIOS boot (GRUB)`],[`ufs`,`516E7CB6-6ECF-11D6-8FF8-00022D09712B`,`A5`,`FreeBSD UFS (MBR: FreeBSD slice)`],[`freebsd-boot`,`83BD6B9D-7F41-11DC-BE0B-001560B84F0F`,``,`FreeBSD boot`],[`freebsd-swap`,`516E7CB5-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD swap`],[`freebsd-zfs`,`516E7CBA-6ECF-11D6-8FF8-00022D09712B`,``,`FreeBSD ZFS`],[`ffs2`,`824CC7A0-36A8-11E3-890A-952519AD3F61`,`A6`,`OpenBSD FFS2 (MBR: OpenBSD slice)`],[`netbsd`,`49F48D5A-B10E-11DC-B99B-0019D1879648`,`A9`,`NetBSD FFS`],[`extended`,``,`05`,`MBR extended partition`],[`extended-lba`,``,`0F`,`MBR extended partition (LBA)`]]'
     set(st_type_alias): '[[`ext2`,`linux`],[`ext3`,`linux`],[`ext4`,`linux`],[`linux-swap`,`swap`],[`windows`,`ntfs`],[`exfat`,`ntfs`],[`fat`,`fat32`],[`vfat`,`fat32`],[`esp`,`efi`],[`ufs2`,`ufs`],[`ufs1`,`ufs`],[`freebsd`,`ufs`],[`openbsd`,`ffs2`],[`ffs`,`netbsd`]]'
+    stm_types(_):
     set(st_typed): true
 ]
 
@@ -741,6 +743,7 @@ st_write(r): lba bytes what [
         print(_): m
         return(r): r
     ]
+    stm_remember(_): lba count
     bwrite(w): st_dev lba bytes st_sector
     if(_): {w != n} [
         concat(m): "writing " what " at LBA " tl " failed"
@@ -1060,6 +1063,18 @@ st_belarus_super(r): b [
 ]
 
 st_probe(r): start n code [
+    st_probe_base(r): start n code
+    at(f0): r 0
+    if(_): {f0 = ""} [
+        stm_probe(more): start n
+        at(f1): more 0
+        at(l1): more 1
+        set(r): 0 f1
+        set(r): 1 l1
+    ]
+]
+
+st_probe_base(r): start n code [
     vec(r): ""
     push(_): r ""
     push(_): r ""
@@ -1687,6 +1702,20 @@ st_usage(r): [
     print(_): "  stalin edit DEV N [options]    change partition N"
     print(_): "  stalin wipe DEV                erase the partition tables"
     print(_): "  stalin types                   partition type names"
+    print(_): "  stalin verify DEV [--json]     overlaps, alignment, CRCs, boot checks"
+    print(_): "  stalin backup DEV FILE         the table as sfdisk --dump text; restore DEV FILE"
+    print(_): "  stalin sort DEV / newuuids DEV renumber by start / new GUIDs for a clone"
+    print(_): "  stalin layout DEV NAME         uefi-linux, bios-gpt, windows, moscow"
+    print(_): "  stalin apply DEV FILE          lines: TYPE SIZE [NAME] (SIZE 512M, 50%, rest)"
+    print(_): "  stalin mbr2gpt DEV / gpt2mbr DEV  convert, keeping the partitions"
+    print(_): "  stalin grow IMG SIZE / shrink IMG  resize an image, moving the backup GPT"
+    print(_): "  stalin dump|load DEV N FILE    a partition's sectors to a file and back"
+    print(_): "  stalin zero DEV N [--random]   overwrite a partition's data"
+    print(_): "  stalin copy SRC DST / compare A B  sector copy with a checksum; differences"
+    print(_): "  stalin mkfs DEV N fat32 [LABEL] / fsinfo DEV N  FAT32; used and free space"
+    print(_): "  stalin explain DEV / hexdump DEV LBA [N]  MBR and GPT fields; raw sectors"
+    print(_): "  stalin eltorito ISO            an ISO's El Torito boot catalog"
+    print(_): "  stalin undo IMG                put back what the last command wrote"
     print(_): ""
     print(_): "options:"
     print(_): "  --type T      type name (stalin types), MBR hex code or GPT GUID"
@@ -1694,7 +1723,11 @@ st_usage(r): [
     print(_): "  --size SIZE   20M, 512K, 4096s, max (a bare number is MiB)"
     print(_): "  --name NAME   GPT partition name"
     print(_): "  --boot on|off MBR active flag; GPT legacy BIOS bootable attribute"
-    print(_): "  --uuid GUID   GPT partition GUID      --attrs N  GPT attribute bits"
+    print(_): "  --uuid GUID   GPT partition GUID"
+    print(_): "  --attrs A     GPT attribute bits: a number or names (required, no-block-io,"
+    print(_): "                legacy-boot, read-only, hidden, no-automount)"
+    print(_): "  --end POS     the partition ends just before POS; --size 50%: of the free space"
+    print(_): "  --json        show and verify as JSON"
     print(_): "  --num N       partition number for add"
     print(_): "  --sector N    sector size of an image (default 512)"
     print(_): "  --dry-run     show the sectors a command would write, write none"
@@ -2017,6 +2050,7 @@ st_align_up(r): x [
 # (-1: choose).
 st_place(r): skip old_start old_size [
     set(r): null
+    stm_sizes(_):
     st_free(free): skip
     set(start): old_start
     set(size): old_size
@@ -2126,7 +2160,7 @@ st_apply(r): p [
             st_err(r): "MBR partitions have no attribute bits"
             return(r): r
         ]
-        str_to_number(a): st_o_attrs
+        stm_attrs(a): st_o_attrs
         typeof(ta): a
         if(_): {ta != "integer"} [
             concat(m): "bad --attrs '" st_o_attrs "'"
@@ -2409,6 +2443,7 @@ stalin_main(r): args [
     vec(st_parts): "StPart"
     vec(st_notes): ""
     set(st_kind): "none"
+    stm_reset(_):
     vec(p): ""
     len(n): args
     set(plain): false
@@ -2425,6 +2460,16 @@ stalin_main(r): args [
         ]
         elif(_): {flag && (a = "--dry-run" || a = "-n")} [
             set(st_dry): true
+        ]
+        elif(_): {flag && a = "--json"} [
+            set(stm_json): true
+        ]
+        elif(_): {flag && a = "--random"} [
+            set(stm_random): true
+        ]
+        elif(_): {option && a = "--end"} [
+            at(stm_end): args {i + 1}
+            add(i): i 1
         ]
         elif(_): {option && a = "--start"} [
             at(st_o_start): args {i + 1}
@@ -2505,6 +2550,7 @@ stalin_main(r): args [
     set(r): -1
     if(_): {cmd = "help" || cmd = "--help" || cmd = "-h"} [ st_usage(r): ]
     elif(_): {cmd = "list"} [ st_cmd_list(r): ]
+    elif(_): {(cmd = "show" || cmd = "print") && stm_json} [ stm_cmd_show_json(r): p ]
     elif(_): {cmd = "show" || cmd = "print"} [ st_cmd_show(r): p ]
     elif(_): {cmd = "types"} [ st_cmd_types(r): ]
     elif(_): {cmd = "mkimg"} [ st_cmd_mkimg(r): p ]
@@ -2513,6 +2559,7 @@ stalin_main(r): args [
     elif(_): {cmd = "rm" || cmd = "remove" || cmd = "del"} [ st_cmd_rm(r): p ]
     elif(_): {cmd = "edit"} [ st_cmd_edit(r): p ]
     elif(_): {cmd = "wipe"} [ st_cmd_wipe(r): p ]
+    if(_): {r = -1} [ stm_cmd(r): cmd p ]
     if(_): {r = -1} [
         # "stalin disk.img" shows that disk
         file_exists(e): cmd
@@ -2528,6 +2575,7 @@ stalin_main(r): args [
             st_err(r): m
         ]
     ]
+    if(_): {cmd != "undo"} [ stm_journal_save(_): ]
 ]
 
 $ifdef __MAIN__

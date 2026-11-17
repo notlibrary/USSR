@@ -1,0 +1,320 @@
+# Stalin refine pass 1: the commands of src/stalin/more.su on a 64 MB
+# image in tests/stalin-more-tmp.img (and a copy, a backup text, a layout
+# file, a partition dump and a small ISO beside it). STALIN_SEED makes the
+# GUIDs, signatures and random bytes repeatable. Prints each command line,
+# what it printed and its exit status; errors land in stderr.
+$include "../src/stalin/stalin.su"
+
+global(_): smi
+
+sm_run(r): line [
+    concat(shown): "$ stalin " line
+    print(_): shown
+    sm_words(words): line
+    stalin_main(r): words
+    if(_): {r != 0} [
+        st_int(code): r
+        concat(st): "[exit " code "]"
+        print(_): st
+    ]
+]
+
+# Words of a line; IMG, COPY, BAK, LAY, DUMP and ISO stand for the files.
+sm_words(r): line [
+    str_split(w): line " "
+    vec(r): ""
+    len(n): w
+    set(i): 0
+    while(_): {i < n} [
+        at(x): w i
+        if(_): {x = "IMG"} [ set(x): smi ]
+        elif(_): {x = "COPY"} [ set(x): "tests/stalin-more-copy.img" ]
+        elif(_): {x = "BAK"} [ set(x): "tests/stalin-more.sfdisk" ]
+        elif(_): {x = "LAY"} [ set(x): "tests/stalin-more.layout" ]
+        elif(_): {x = "DUMP"} [ set(x): "tests/stalin-more.part" ]
+        elif(_): {x = "ISO"} [ set(x): "tests/stalin-more.iso" ]
+        if(_): {x != ""} [ push(_): r x ]
+        set(i): {i + 1}
+    ]
+]
+
+sm_rm(r): path [
+    set(r): 0
+    file_exists(e): path
+    if(_): e [ remove_file(_): path ]
+]
+
+sm_clean(r): [
+    set(r): 0
+    sm_rm(_): smi
+    concat(j): smi ".stalin-undo"
+    sm_rm(_): j
+    concat(j): j ".txt"
+    sm_rm(_): j
+    sm_rm(_): "tests/stalin-more-copy.img"
+    sm_rm(_): "tests/stalin-more-copy.img.stalin-undo"
+    sm_rm(_): "tests/stalin-more-copy.img.stalin-undo.txt"
+    sm_rm(_): "tests/stalin-more.sfdisk"
+    sm_rm(_): "tests/stalin-more.layout"
+    sm_rm(_): "tests/stalin-more.part"
+    sm_rm(_): "tests/stalin-more.iso"
+]
+
+# writes text bytes at a byte offset of the image
+sm_poke(r): byteoff text [
+    set(r): 0
+    st_div(lba): byteoff 512
+    bread(b): smi lba 1 512
+    set(o): {byteoff - lba * 512}
+    len(n): text
+    set(k): 0
+    while(_): {k < n} [
+        byte(c): text k
+        set(b): {o + k} c
+        set(k): {k + 1}
+    ]
+    bwrite(_): smi lba b 512
+]
+
+sm_poke_bytes(r): byteoff bytes [
+    set(r): 0
+    st_div(lba): byteoff 512
+    bread(b): smi lba 1 512
+    set(o): {byteoff - lba * 512}
+    len(n): bytes
+    set(k): 0
+    while(_): {k < n} [
+        at(c): bytes k
+        set(b): {o + k} c
+        set(k): {k + 1}
+    ]
+    bwrite(_): smi lba b 512
+]
+
+sm_blank(r): [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < 2048} [
+        push(_): r 0
+        set(i): {i + 1}
+    ]
+]
+
+# a small ISO: primary descriptor, El Torito boot record, a catalog
+sm_iso(r): [
+    set(r): 0
+    vec(z): ""
+    set(i): 0
+    while(_): {i < 2048} [
+        push(_): z 0
+        set(i): {i + 1}
+    ]
+    set(path): "tests/stalin-more.iso"
+    writefile(_): path ""
+    set(k): 0
+    while(_): {k < 24} [
+        bwrite(_): path k z 2048
+        set(k): {k + 1}
+    ]
+    # LBA 16: the primary volume descriptor
+    sm_blank(pv):
+    set(pv): 0 1
+    stm_put_text(_): pv 1 "CD001"
+    set(pv): 6 1
+    stm_put_text(_): pv 40 "STALIN_TEST"
+    bwrite(_): path 16 pv 2048
+    # LBA 17: the boot record, catalog at 20
+    sm_blank(br):
+    stm_put_text(_): br 1 "CD001"
+    set(br): 6 1
+    stm_put_text(_): br 7 "EL TORITO SPECIFICATION"
+    st_put(_): br 71 4 20
+    bwrite(_): path 17 br 2048
+    # LBA 18: the terminator
+    sm_blank(tm):
+    set(tm): 0 255
+    stm_put_text(_): tm 1 "CD001"
+    bwrite(_): path 18 tm 2048
+    # LBA 20: validation entry, default bootable entry, an EFI section
+    sm_blank(c):
+    set(c): 0 1
+    set(c): 30 85
+    set(c): 31 170
+    set(c): 32 136
+    set(c): 33 0
+    st_put(_): c 38 2 4
+    st_put(_): c 40 4 21
+    set(c): 64 145
+    set(c): 65 239
+    st_put(_): c 66 2 1
+    set(c): 96 136
+    st_put(_): c 102 2 2880
+    st_put(_): c 104 4 22
+    bwrite(_): path 20 c 2048
+]
+
+init(ret): arg_count arg_values [
+    set(smi): "tests/stalin-more-tmp.img"
+    setenv(_): "STALIN_SEED" "1945"
+    sm_clean(_):
+    sm_run(_): "mkimg IMG 64M"
+
+    print(_): "# layouts and verify"
+    sm_run(_): "layout IMG nonsense"
+    sm_run(_): "layout IMG uefi-linux"
+    sm_run(_): "verify IMG"
+    sm_run(_): "verify IMG --json"
+    sm_run(_): "show IMG --json"
+    sm_run(_): "layout IMG windows"
+    sm_run(_): "layout IMG bios-gpt"
+    sm_run(_): "verify IMG"
+    writefile(_): "tests/stalin-more.layout" "# a test layout\nefi 34M EFI\nlinux 1M small\nlinux 1M data\nlinux 50% half\nswap rest\n"
+    sm_run(_): "apply IMG LAY"
+    sm_run(_): "verify IMG"
+
+    print(_): "# backup, restore, sort, new identifiers"
+    sm_run(_): "backup IMG BAK"
+    readfile(bt): "tests/stalin-more.sfdisk"
+    print(_): bt
+    sm_run(_): "rm IMG 2"
+    sm_run(_): "rm IMG 4"
+    sm_run(_): "restore IMG BAK"
+    sm_run(_): "rm IMG 1"
+    sm_run(_): "sort IMG"
+    sm_run(_): "newuuids IMG"
+    sm_run(_): "restore IMG LAY"
+    sm_run(_): "restore IMG nofile"
+
+    print(_): "# undo"
+    sm_run(_): "rm IMG 2"
+    sm_run(_): "undo IMG"
+    sm_run(_): "show IMG"
+    sm_run(_): "undo IMG"
+
+    print(_): "# percent sizes, --end, named attributes"
+    sm_run(_): "restore IMG BAK"
+    sm_run(_): "rm IMG 5"
+    sm_run(_): "rm IMG 4"
+    sm_run(_): "add IMG --type linux --size 25% --name quarter"
+    sm_run(_): "add IMG --type srv --end 60M --name srv --attrs hidden,read-only"
+    sm_run(_): "edit IMG 2 --attrs no-automount,legacy-boot"
+    sm_run(_): "edit IMG 3 --attrs bogus"
+    sm_run(_): "show IMG"
+    sm_run(_): "backup IMG BAK"
+    readfile(bt): "tests/stalin-more.sfdisk"
+    print(_): bt
+
+    print(_): "# FAT32, file system space, more probes"
+    sm_run(_): "mkfs IMG 2 fat32"
+    sm_run(_): "mkfs IMG 1 ext4"
+    sm_run(_): "mkfs IMG 1 fat32 boot"
+    sm_run(_): "fsinfo IMG 1"
+    sm_run(_): "fsinfo IMG 2"
+    sm_run(_): "verify IMG"
+    # LUKS in 2 (LBA 71680), an LVM label in 3 (LBA 73728)
+    vec(lk): ""
+    push(_): lk 76
+    push(_): lk 85
+    push(_): lk 75
+    push(_): lk 83
+    push(_): lk 186
+    push(_): lk 190
+    sm_poke_bytes(_): {71680 * 512} lk
+    sm_poke(_): {73728 * 512 + 512} "LABELONE"
+    sm_run(_): "show IMG"
+
+    print(_): "# partition data"
+    sm_run(_): "dump IMG 2 DUMP"
+    sm_run(_): "zero IMG 2 --random"
+    sm_run(_): "load IMG 3 DUMP"
+    sm_run(_): "show IMG"
+    sm_run(_): "zero IMG 3"
+    sm_run(_): "dump IMG 9 DUMP"
+    sm_run(_): "load IMG 2 nofile"
+
+    print(_): "# images"
+    sm_run(_): "copy IMG COPY"
+    sm_run(_): "compare IMG COPY"
+    sm_run(_): "zero COPY 2"
+    sm_run(_): "compare IMG COPY"
+    sm_run(_): "grow COPY +16M"
+    sm_run(_): "verify COPY"
+    sm_run(_): "grow COPY 10M"
+    sm_run(_): "shrink COPY"
+    sm_run(_): "show COPY"
+    sm_run(_): "grow COPY 128M --dry-run"
+
+    print(_): "# explain, hexdump"
+    sm_run(_): "explain IMG"
+    sm_run(_): "hexdump IMG 1"
+    sm_run(_): "hexdump IMG 0 1"
+
+    print(_): "# MBR and back"
+    sm_run(_): "gpt2mbr IMG"
+    sm_run(_): "rm IMG 5"
+    sm_run(_): "gpt2mbr IMG"
+    sm_run(_): "verify IMG"
+    sm_run(_): "explain IMG"
+    sm_run(_): "backup IMG BAK"
+    readfile(bt): "tests/stalin-more.sfdisk"
+    print(_): bt
+    sm_run(_): "gpt2mbr IMG"
+    sm_run(_): "mbr2gpt IMG"
+    sm_run(_): "verify IMG"
+
+    print(_): "# El Torito"
+    sm_iso(_):
+    sm_run(_): "eltorito ISO"
+    sm_run(_): "eltorito IMG"
+
+    print(_): "# damaged tables"
+    sm_run(_): "init IMG gpt"
+    sm_run(_): "add IMG --type linux --size 8M"
+    sm_poke(_): {1 * 512 + 40} "garbage!"
+    sm_run(_): "verify IMG"
+    sm_poke(_): {2 * 512} "noise in the partition array"
+    sm_run(_): "verify IMG"
+    sm_poke(_): {450} "x"
+    sm_run(_): "verify IMG"
+    sm_run(_): "init IMG gpt"
+    sm_run(_): "add IMG --type linux --start 1000s --size 4M"
+    sm_run(_): "verify IMG"
+    # random bytes over the first sectors, again and again: no command
+    # may stop the program
+    random64(_):
+    set(round): 0
+    while(_): {round < 6} [
+        vec(junk): ""
+        set(i): 0
+        while(_): {i < 512} [
+            random64(x):
+            push(_): junk {x & 255}
+            set(i): {i + 1}
+        ]
+        set(junk): 510 85
+        set(junk): 511 170
+        bwrite(_): smi {round % 3} junk 512
+        vec(w): ""
+        push(_): w "verify"
+        push(_): w smi
+        stalin_main(_): w
+        push(_): w "--json"
+        stalin_main(_): w
+        vec(w): ""
+        push(_): w "show"
+        push(_): w smi
+        stalin_main(_): w
+        set(round): {round + 1}
+    ]
+    print(_): "fuzzed: every command came back"
+
+    print(_): "# usage errors"
+    sm_run(_): "verify"
+    sm_run(_): "backup IMG"
+    sm_run(_): "hexdump IMG"
+    sm_run(_): "undo"
+    sm_run(_): "nonsense-command"
+
+    sm_clean(_):
+    set(ret): 0
+]

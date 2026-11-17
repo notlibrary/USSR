@@ -8,6 +8,17 @@ $include "../src/stalin/stalin.su"
 
 global(_): img
 
+# undo journals stalin keeps beside the image
+t_unjournal(r): [
+    set(r): 0
+    concat(j): img ".stalin-undo"
+    file_exists(e): j
+    if(_): e [ remove_file(_): j ]
+    concat(j): j ".txt"
+    file_exists(e): j
+    if(_): e [ remove_file(_): j ]
+]
+
 stalin(r): line [
     concat(shown): "$ stalin " line
     print(_): shown
@@ -168,6 +179,7 @@ init(ret): arg_count arg_values [
     file_exists(old): img
     if(_): old [
         remove_file(_): img
+        t_unjournal(_):
     ]
     stalin(_): "types"
     stalin(_): "mkimg IMG 20M"
@@ -272,5 +284,6 @@ init(ret): arg_count arg_values [
     print(_): td
 
     remove_file(_): img
+    t_unjournal(_):
     set(ret): 0
 ]
