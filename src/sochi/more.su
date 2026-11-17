@@ -1,0 +1,582 @@
+# more.su - Sochi refine pass 1: odds, hand worth, save and resume, the
+# hand editor, log and CSV export, and the commands that use them.
+# sochi.su includes it.
+#
+#   sochi odds N A B        how N cards of a suit split between two hands
+#                           of A and B unknown cards
+#   sochi worth CARDS [TRUMP]   the tricks a hand is worth (an estimate)
+#   sochi show FILE         a saved game: names, scores, settlement
+#   sochi csv FILE OUT      a saved game's settlement as CSV (Siberia)
+# In a game: /odds SUIT, /worth, /save FILE, /log FILE, /csv FILE.
+$once
+
+# --- small numbers
+
+# n choose k (k <= n <= 32: exact in 64 bits)
+sx_choose(r): n k [
+    set(r): 0
+    if(_): {k < 0 || k > n} [ return(r): r ]
+    set(r): 1
+    set(i): 1
+    while(_): {i <= k} [
+        set(num): {r * (n - k + i)}
+        so_div(r): num i
+        set(i): {i + 1}
+    ]
+]
+
+# --- suit splits
+
+# for each k = 0..n, the chance (in thousandths) that the hand of a
+# unknown cards holds k of the n cards out, when the other hand holds b
+sx_split_odds(r): n a b [
+    vec(r): ""
+    sx_choose(all): {a + b} a
+    set(k): 0
+    while(_): {k <= n} [
+        sx_choose(c1): n k
+        sx_choose(c2): {a + b - n} {a - k}
+        set(p): 0
+        if(_): {all > 0} [
+            so_div(half): all 2
+            so_div(p): {c1 * c2 * 1000 + half} all
+        ]
+        push(_): r p
+        set(k): {k + 1}
+    ]
+]
+
+# "2-2 40.7%, 3-1 49.7%, 4-0 9.6%": the splits whichever hand has more
+sx_odds_text(r): n a b [
+    sx_split_odds(v): n a b
+    set(r): ""
+    set(hi): n
+    while(_): {hi * 2 >= n} [
+        set(lo): {n - hi}
+        at(p): v hi
+        if(_): {hi != lo} [
+            at(q): v lo
+            set(p): {p + q}
+        ]
+        so_int(hs): hi
+        so_int(ls): lo
+        str_trunc(whole): {p / 10}
+        so_int(ws): whole
+        so_int(ts): {p - whole * 10}
+        if(_): {r != ""} [ concat(r): r ", " ]
+        concat(r): r hs "-" ls " " ws "." ts "%"
+        set(hi): {hi - 1}
+    ]
+]
+
+# --- what a hand is worth: the tricks it should take
+#
+# Per suit, the top cards held in sequence from the ace are sure tricks,
+# a king with another card or a queen with two is half a trick, and in the
+# trump suit (or any suit of six or more) every card past the fourth is
+# one more. In halves of a trick.
+sx_suit_halves(r): cards s trump [
+    set(r): 0
+    vec(ranks): ""
+    set(k): 7
+    while(_): {k >= 0} [
+        so_has(h): cards {s * 8 + k}
+        if(_): h [ push(_): ranks k ]
+        set(k): {k - 1}
+    ]
+    len(n): ranks
+    if(_): {n = 0} [ return(r): r ]
+    # the sequence from the ace
+    set(top): 0
+    set(want): 7
+    set(go): true
+    set(i): 0
+    while(_): {go && i < n} [
+        at(rk): ranks i
+        if(_): {rk = want} [
+            set(top): {top + 1}
+            set(want): {want - 1}
+        ]
+        else(_): [ set(go): false ]
+        set(i): {i + 1}
+    ]
+    set(r): {top * 2}
+    if(_): {top = 0} [
+        at(first): ranks 0
+        if(_): {first = 6 && n >= 2} [ set(r): {r + 1} ]
+        if(_): {first = 5 && n >= 3} [ set(r): {r + 1} ]
+    ]
+    if(_): {(s = trump || n >= 6) && n > 4} [
+        set(extra): {n - 4}
+        if(_): {top > 4} [ set(extra): {n - top} ]
+        set(r): {r + extra * 2}
+    ]
+]
+
+# [halves per suit..., total halves]
+sx_worth(r): cards trump [
+    vec(r): ""
+    set(total): 0
+    set(s): 0
+    while(_): {s < 4} [
+        sx_suit_halves(h): cards s trump
+        push(_): r h
+        set(total): {total + h}
+        set(s): {s + 1}
+    ]
+    push(_): r total
+]
+
+sx_halves_text(r): h [
+    so_int(r): {h >> 1}
+    if(_): {(h & 1) = 1} [ concat(r): r ".5" ]
+]
+
+sx_worth_text(r): cards trump [
+    sx_worth(w): cards trump
+    at(total): w 4
+    sx_halves_text(r): total
+    concat(r): "about " r " tricks ("
+    set(s): 0
+    while(_): {s < 4} [
+        at(h): w s
+        so_suit_name(sn): s
+        sx_halves_text(hs): h
+        if(_): {s > 0} [ concat(r): r ", " ]
+        concat(r): r sn " " hs
+        set(s): {s + 1}
+    ]
+    concat(r): r ")"
+]
+
+# --- save and resume: every sg_ value of the game, as UNO
+
+sx_state(r): [
+    vec(r): ""
+    push(_): r "sochi-save-1"
+    push(_): r sg_names
+    push(_): r sg_kind
+    push(_): r sg_pool
+    push(_): r sg_mount
+    push(_): r sg_whist
+    push(_): r sg_psize
+    push(_): r sg_dealer
+    push(_): r sg_handno
+    push(_): r sg_hands
+    push(_): r sg_talon
+    push(_): r sg_discard
+    push(_): r sg_phase
+    push(_): r sg_turn
+    push(_): r sg_bids
+    push(_): r sg_high
+    push(_): r sg_hseat
+    push(_): r sg_decl
+    push(_): r sg_contract
+    push(_): r sg_trump
+    push(_): r sg_wst
+    push(_): r sg_open
+    push(_): r sg_trick
+    push(_): r sg_tseats
+    push(_): r sg_lead
+    push(_): r sg_tricks
+    push(_): r sg_trickno
+    push(_): r sg_last
+    push(_): r sg_log
+    push(_): r sg_logn
+    push(_): r sg_chat
+    push(_): r sg_result
+    push(_): r sg_ready
+    push(_): r sg_streak
+    push(_): r sg_tshow
+    push(_): r sg_seq
+    push(_): r sg_rng
+    push(_): r sg_actid
+    push(_): r sg_final
+    push(_): r sg_online
+]
+
+# writes the game to path: "" or why not
+sx_save(r): path [
+    set(r): ""
+    sx_state(v):
+    encode(t): v
+    open_file(h): path "wb"
+    if(_): {h < 0} [
+        concat(r): "cannot write " path
+        return(r): r
+    ]
+    write_file(_): h t
+    close_file(_): h
+]
+
+# try gives no result back: the value comes through a btree
+sx_decode_into(r): box t [
+    set(r): 0
+    decode(x): t
+    btput(_): box "v" x
+]
+
+# reads a game written by sx_save into the sg_ values: "" or why not
+sx_load(r): path [
+    set(r): ""
+    file_exists(e): path
+    if(_): {e = false} [
+        concat(r): "no file " path
+        return(r): r
+    ]
+    readfile(t): path
+    btree(box):
+    try(_): "sx_decode_into" box t
+    btget(v): box "v" null
+    typeof(tv): v
+    set(n): 0
+    if(_): {tv = "vector"} [ len(n): v ]
+    set(magic): ""
+    if(_): {n > 0} [ at(magic): v 0 ]
+    if(_): {n != 40 || magic != "sochi-save-1"} [
+        concat(r): path " is not a saved Sochi game"
+        return(r): r
+    ]
+    so_types(_):
+    at(sg_names): v 1
+    at(sg_kind): v 2
+    at(sg_pool): v 3
+    at(sg_mount): v 4
+    at(sg_whist): v 5
+    at(sg_psize): v 6
+    at(sg_dealer): v 7
+    at(sg_handno): v 8
+    at(sg_hands): v 9
+    at(sg_talon): v 10
+    at(sg_discard): v 11
+    at(sg_phase): v 12
+    at(sg_turn): v 13
+    at(sg_bids): v 14
+    at(sg_high): v 15
+    at(sg_hseat): v 16
+    at(sg_decl): v 17
+    at(sg_contract): v 18
+    at(sg_trump): v 19
+    at(sg_wst): v 20
+    at(sg_open): v 21
+    at(sg_trick): v 22
+    at(sg_tseats): v 23
+    at(sg_lead): v 24
+    at(sg_tricks): v 25
+    at(sg_trickno): v 26
+    at(sg_last): v 27
+    at(sg_log): v 28
+    at(sg_logn): v 29
+    at(sg_chat): v 30
+    at(sg_result): v 31
+    at(sg_ready): v 32
+    at(sg_streak): v 33
+    at(sg_tshow): v 34
+    at(sg_seq): v 35
+    at(sg_rng): v 36
+    at(sg_actid): v 37
+    at(sg_final): v 38
+    at(sg_online): v 39
+]
+
+# --- the hand editor: "seat1: As Ks 7h; seat2: ...; seat3: ...; talon: x y"
+
+sx_parse_cards(r): text [
+    vec(r): ""
+    str_split(ws): text " "
+    len(n): ws
+    set(i): 0
+    while(_): {i < n} [
+        at(w): ws i
+        if(_): {w != ""} [
+            so_parse_card(c): w
+            if(_): {c < 0} [
+                set(r): null
+                return(r): r
+            ]
+            push(_): r c
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# sets the hands and the talon of the hand being bid: "" or why not
+sx_set_deal(r): text [
+    set(r): ""
+    str_split(parts): text ";"
+    vec(hands): ""
+    push(_): hands null
+    push(_): hands null
+    push(_): hands null
+    set(talon): null
+    btree(seen):
+    len(np): parts
+    set(i): 0
+    while(_): {i < np} [
+        at(p): parts i
+        str_find(colon): p ":" 0
+        if(_): {colon < 0} [
+            concat(r): "no ':' in '" p "'"
+            return(r): r
+        ]
+        slice(who): p 0 colon
+        str_trim(who): who
+        str_lower(who): who
+        len(pl): p
+        slice(cs): p {colon + 1} {pl - colon - 1}
+        sx_parse_cards(cards): cs
+        if(_): {cards = null} [
+            concat(r): "a card I cannot read in '" cs "'"
+            return(r): r
+        ]
+        len(nc): cards
+        set(k): 0
+        while(_): {k < nc} [
+            at(c): cards k
+            btget(twice): seen c false
+            if(_): twice [
+                so_card_show(cn): c
+                concat(r): cn " is dealt twice"
+                return(r): r
+            ]
+            btput(_): seen c true
+            set(k): {k + 1}
+        ]
+        if(_): {who = "talon"} [ set(talon): cards ]
+        elif(_): {who = "seat1" || who = "seat2" || who = "seat3"} [
+            slice(ds): who 4 1
+            str_to_number(d): ds
+            set(hands): {d - 1} cards
+        ]
+        else(_): [
+            concat(r): "who is '" who "'? (seat1, seat2, seat3, talon)"
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+    set(k): 0
+    while(_): {k < 3} [
+        at(h): hands k
+        set(ok): false
+        if(_): {h != null} [
+            len(hn): h
+            set(ok): {hn = 10}
+        ]
+        if(_): {ok = false} [
+            so_int(ks): {k + 1}
+            concat(r): "seat" ks " needs 10 cards"
+            return(r): r
+        ]
+        so_sort(_): h
+        set(hands): k h
+        set(k): {k + 1}
+    ]
+    set(tn): 0
+    if(_): {talon != null} [ len(tn): talon ]
+    if(_): {tn != 2} [
+        set(r): "the talon needs 2 cards"
+        return(r): r
+    ]
+    set(sg_hands): hands
+    set(sg_talon): talon
+]
+
+# --- the log and the results
+
+sx_log_save(r): path [
+    set(r): ""
+    set(t): ""
+    len(n): sg_log
+    set(i): 0
+    while(_): {i < n} [
+        at(l): sg_log i
+        concat(t): t l "\n"
+        set(i): {i + 1}
+    ]
+    open_file(h): path "wb"
+    if(_): {h < 0} [
+        concat(r): "cannot write " path
+        return(r): r
+    ]
+    write_file(_): h t
+    close_file(_): h
+]
+
+sx_csv_text(r): [
+    so_settle(money):
+    set(r): "player,pool,mountain,whists_written,result\n"
+    set(i): 0
+    while(_): {i < 3} [
+        at(name): sg_names i
+        str_replace(name): name "\"" "\"\""
+        at(p): sg_pool i
+        at(m): sg_mount i
+        set(w): 0
+        set(j): 0
+        while(_): {j < 3} [
+            at(x): sg_whist {i * 3 + j}
+            set(w): {w + x}
+            set(j): {j + 1}
+        ]
+        at(res): money i
+        so_int(ps): p
+        so_int(ms): m
+        so_int(wsx): w
+        so_int(rs): res
+        concat(r): r "\"" name "\"," ps "," ms "," wsx "," rs "\n"
+        set(i): {i + 1}
+    ]
+]
+
+sx_csv_save(r): path [
+    set(r): ""
+    sx_csv_text(t):
+    open_file(h): path "wb"
+    if(_): {h < 0} [
+        concat(r): "cannot write " path
+        return(r): r
+    ]
+    write_file(_): h t
+    close_file(_): h
+]
+
+sx_show_text(r): [
+    sx_csv_text(r):
+    so_int(hn): sg_handno
+    so_int(ps): sg_psize
+    concat(r): "hand " hn ", pool to " ps ", phase " sg_phase "\n" r
+]
+
+# --- in a game: /odds /worth /save /log /csv (the line in lower case and
+# as typed); "" when it is not one of these
+
+sx_line_cmd(r): view lt t [
+    set(r): ""
+    str_split(w): t " "
+    len(nw): w
+    at(c): w 0
+    str_lower(c): c
+    set(arg): ""
+    if(_): {nw > 1} [ at(arg): w 1 ]
+    at(hand): view V_HAND
+    if(_): {c = "/odds"} [
+        so_suit_parse(s): arg
+        if(_): {s < 0} [
+            set(r): "/odds SUIT: s, c, d or h"
+            return(r): r
+        ]
+        # the suit's cards neither in my hand nor already played
+        set(mine): 0
+        len(hn): hand
+        set(i): 0
+        while(_): {i < hn} [
+            at(x): hand i
+            if(_): {(x >> 3) = s} [ set(mine): {mine + 1} ]
+            set(i): {i + 1}
+        ]
+        set(out): {8 - mine}
+        set(r): "the other hands hold "
+        so_int(os): out
+        sx_odds_text(ot): out 10 10
+        concat(r): r os ": " ot " (two hands of 10, before the talon)"
+    ]
+    elif(_): {c = "/worth"} [
+        sx_worth_text(r): hand -1
+    ]
+    elif(_): {c = "/save" || c = "/log" || c = "/csv"} [
+        if(_): {arg = ""} [
+            concat(r): c " FILE"
+            return(r): r
+        ]
+        set(e): ""
+        if(_): {c = "/save"} [ sx_save(e): arg ]
+        if(_): {c = "/log"} [ sx_log_save(e): arg ]
+        if(_): {c = "/csv"} [ sx_csv_save(e): arg ]
+        set(r): e
+        if(_): {e = ""} [ concat(r): "written: " arg ]
+    ]
+]
+
+# --- the command line: sochi odds|worth|show|csv ...
+
+sx_cmd(r): cmd args [
+    set(r): 0
+    len(n): args
+    if(_): {cmd = "odds"} [
+        if(_): {n < 3} [
+            print(_): "sochi odds N A B: N cards of a suit out, hands of A and B unknown cards"
+            set(r): 2
+            return(r): r
+        ]
+        at(ns): args 0
+        at(as): args 1
+        at(bs): args 2
+        str_to_number(nn): ns
+        str_to_number(na): as
+        str_to_number(nb): bs
+        if(_): {nn < 0 || nn > na + nb || nn > 8} [
+            print(_): "N must be 0..8 and at most A + B"
+            set(r): 2
+            return(r): r
+        ]
+        sx_odds_text(t): nn na nb
+        print(_): t
+    ]
+    elif(_): {cmd = "worth"} [
+        if(_): {n < 1} [
+            print(_): "sochi worth \"CARDS\" [TRUMP]: e.g. \"As Ks Qs 7s Ah 8d\" s"
+            set(r): 2
+            return(r): r
+        ]
+        at(cs): args 0
+        sx_parse_cards(cards): cs
+        if(_): {cards = null} [
+            print(_): "a card I cannot read"
+            set(r): 2
+            return(r): r
+        ]
+        set(trump): -1
+        if(_): {n > 1} [
+            at(ts): args 1
+            so_suit_parse(trump): ts
+        ]
+        sx_worth_text(t): cards trump
+        print(_): t
+    ]
+    elif(_): {cmd = "show" || cmd = "csv"} [
+        if(_): {n < 1 || (cmd = "csv" && n < 2)} [
+            print(_): "sochi show FILE, or sochi csv FILE OUT"
+            set(r): 2
+            return(r): r
+        ]
+        at(file): args 0
+        sx_load(e): file
+        if(_): {e != ""} [
+            print(_): e
+            set(r): 1
+            return(r): r
+        ]
+        if(_): {cmd = "show"} [
+            sx_show_text(t):
+            print_text_sx(_): t
+        ]
+        else(_): [
+            at(out): args 1
+            sx_csv_save(e): out
+            if(_): {e != ""} [
+                print(_): e
+                set(r): 1
+            ]
+        ]
+    ]
+]
+
+print_text_sx(r): t [
+    set(r): 0
+    len(n): t
+    if(_): {n > 0} [
+        byte(last): t {n - 1}
+        if(_): {last = 10} [ slice(t): t 0 {n - 1} ]
+    ]
+    print(_): t
+]

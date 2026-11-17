@@ -8,6 +8,8 @@ whist, raspasy 1-2-3, pool, mountain, whists and settlement. It has
 nicknames, chat, a terminal screen with suit symbols or `--ascii`, bots,
 and rejoin with the same nickname.
 
+**Refine pass 1 (0.2.0):** [x] done, [~] partly done; see CHANGELOG.md.
+
 ## Rules and variants
 - Other conventions as options: Leningradka (Piter), Rostov, Stalingrad
   (6♠ must be whisted), "gentleman's" vs responsible whist
@@ -49,12 +51,12 @@ and rejoin with the same nickname.
 - IPv6 and a configurable port
 
 ## Records
-- Game log saved as text and in a replayable format
+- [~] Game log saved as text and in a replayable format — partly: saved as text (/log) and the whole game as UNO (/save); no replay viewer yet
 - Replay viewer: step through a finished hand with all cards shown
 - Player statistics: games, wins, average result per hand type (stored
   in Dubna KV)
 - Leaderboards for a LAN group
-- Export of results to Siberia (CSV/FODS)
+- [~] Export of results to Siberia (CSV/FODS) — partly: CSV; not FODS
 
 ## Chat
 - Emotes and canned phrases ("пас", "вист"), plus chat history scrolling
@@ -62,7 +64,7 @@ and rejoin with the same nickname.
 - Mute
 
 ## Tests
-- Fuzz the packet parser
+- [x] Fuzz the packet parser
 - Rule tests checked against published Sochi scoring tables
 - Network tests with packet loss and reordering simulated
 - Bot-versus-bot tournaments as regression for bot strength
@@ -70,11 +72,11 @@ and rejoin with the same nickname.
 ## Teaching and analysis
 - A tutorial mode that explains the rules step by step with a scripted
   deal
-- A trainer: misère problems, "how many tricks is this hand worth",
-  whist-or-pass quizzes
+- [~] A trainer: misère problems, "how many tricks is this hand worth",
+  whist-or-pass quizzes — partly: how many tricks a hand is worth; no misère problems yet
 - After a hand: the double-dummy result and where the play lost tricks
-- A hand editor to set up any deal and play it out against bots
-- An odds helper: suit split probabilities for the cards still out
+- [~] A hand editor to set up any deal and play it out against bots — partly: sx_set_deal sets any deal (library); not yet a command at the table
+- [x] An odds helper: suit split probabilities for the cards still out
 
 ## Table and match options
 - Time controls: a clock per move with auto-play of a forced card
@@ -85,7 +87,7 @@ and rejoin with the same nickname.
 - Bots taking over a player who left, and giving the seat back on
   rejoin
 - Tournament mode: several tables, a schedule and a combined score
-- Save and resume an unfinished game from a file
+- [~] Save and resume an unfinished game from a file — partly: /save writes the game and sx_load reads it back; a host cannot start from a saved file yet
 - A turn bell or terminal title change when it is your move
 
 ## More games on the same engine

@@ -68,6 +68,7 @@ $define V_ERR 39
 $define V_FINAL 40
 $define V_ONLINE 41
 $define V_FIELDS 42
+$include "more.su"
 
 global(_): sg_typed sg_rank_names sg_suit_letters sg_suit_marks sg_uni
 global(_): sg_names sg_kind sg_pool sg_mount sg_whist sg_psize sg_dealer sg_handno
@@ -2764,11 +2765,16 @@ su_line_cmd(r): view line [
     so_head(c1): t 1
     if(_): {c1 = "/"} [
         str_lower(lt): t
+        sx_line_cmd(said): view lt t
         if(_): {lt = "/quit" || lt = "/q" || lt = "/exit"} [
             set(su_quit): true
         ]
+        elif(_): {said != ""} [
+            su_say(_): said
+            set(su_shown): -1
+        ]
         else(_): [
-            su_say(_): "Moves: a bid (6s, 7h, 8nt, mis, pass), two cards to discard (7s 8d), whist / pass / half, a card (Qh, 10s). 'text chats; when it is not your turn any line chats. /quit leaves."
+            su_say(_): "Moves: a bid (6s, 7h, 8nt, mis, pass), two cards to discard (7s 8d), whist / pass / half, a card (Qh, 10s). 'text chats; when it is not your turn any line chats. /odds SUIT, /worth, /save FILE, /log FILE, /csv FILE. /quit leaves."
             set(su_shown): -1
         ]
     ]
@@ -3033,6 +3039,12 @@ so_usage(r): [
     print(_): "  --bot          a bot plays this seat   --fast   bots do not pause"
     print(_): "  --port P       another UDP port    --seed N    repeatable deals"
     print(_): "  --ascii        letters for suits (s c d h)"
+    print(_): ""
+    print(_): "  sochi odds N A B         how N cards of a suit split between hands of A and B"
+    print(_): "  sochi worth CARDS [S]    the tricks a hand is worth (S: the trump suit)"
+    print(_): "  sochi show FILE          a game saved with /save: scores and settlement"
+    print(_): "  sochi csv FILE OUT       that settlement as CSV"
+    print(_): "  in a game: /odds SUIT, /worth, /save FILE, /log FILE, /csv FILE"
     set(r): 0
 ]
 
@@ -3053,6 +3065,7 @@ so_main(r): args [
     len(n): args
     set(i): 0
     set(bad): ""
+    vec(xargs): ""
     while(_): {i < n} [
         at(a): args i
         set(val): ""
@@ -3084,6 +3097,8 @@ so_main(r): args [
         elif(_): {a = "--ascii"} [ set(ascii): true ]
         elif(_): {a = "help" || a = "--help" || a = "-h"} [ set(cmd): "help" ]
         elif(_): {cmd = "" && (a = "host" || a = "join")} [ set(cmd): a ]
+        elif(_): {cmd = "" && (a = "odds" || a = "worth" || a = "show" || a = "csv")} [ set(cmd): a ]
+        elif(_): {cmd = "odds" || cmd = "worth" || cmd = "show" || cmd = "csv"} [ push(_): xargs a ]
         elif(_): {cmd = "join" && addr = ""} [ set(addr): a ]
         else(_): [ set(bad): a ]
         add(i): i 1
@@ -3098,6 +3113,10 @@ so_main(r): args [
     ]
     if(_): {cmd = "help"} [
         so_usage(r):
+        return(r): r
+    ]
+    if(_): {cmd = "odds" || cmd = "worth" || cmd = "show" || cmd = "csv"} [
+        sx_cmd(r): cmd xargs
         return(r): r
     ]
     if(_): {pool < 1} [ set(pool): 1 ]
