@@ -44,6 +44,7 @@
 # kernel (/dev/hda .. /dev/hdd).
 $once
 $include "../libs/strings.su"
+$include "more.su"
 
 # ---------------------------------------------------------------- helpers
 
@@ -147,6 +148,14 @@ bl_base(r): path [
 ]
 
 bl_now(r): [
+    # BELARUS_TIME (seconds) stamps every inode the same: repeatable images
+    getenv(fixed): "BELARUS_TIME"
+    typeof(tf): fixed
+    if(_): {tf = "string"} [
+        str_to_number(r): fixed
+        typeof(tr): r
+        if(_): {tr = "integer"} [ return(r): r ]
+    ]
     time(r):
 ]
 
@@ -1987,7 +1996,23 @@ bl_usage(r): [
     print(_): "  belarus write DEV PATH TEXT               TEXT as the file PATH"
     print(_): "  belarus mkdir DEV PATH                    a directory (and its parents)"
     print(_): "  belarus rm DEV PATH                       a file or an empty directory"
-    print(_): "  belarus fsck DEV                          checks the tree and the free space"
+    print(_): "  belarus fsck DEV [--repair]               checks the tree and the free space"
+    print(_): "  belarus mv|cp DEV FROM TO                 rename or move; copy a file or a tree"
+    print(_): "  belarus rm -r DEV PATH / touch DEV PATH   a whole tree; an empty file or a new time"
+    print(_): "  belarus append DEV PATH TEXT / truncate DEV PATH SIZE"
+    print(_): "  belarus head|tail DEV PATH [N] / hexdump DEV PATH [OFF [N]]"
+    print(_): "  belarus ln -s DEV TARGET PATH / readlink DEV PATH   symbolic links (cat follows)"
+    print(_): "  belarus putdir DEV HOSTDIR PATH / getdir DEV PATH HOSTDIR   whole trees"
+    print(_): "  belarus diff DEV PATH HOSTFILE / sha256sum|crc32 DEV PATH"
+    print(_): "  belarus clone DEV DEV2 [FROM [TO]]        a tree into another file system"
+    print(_): "  belarus stat DEV PATH / du DEV [PATH] / df DEV / frag DEV"
+    print(_): "  belarus find DEV [PATH] [--name GLOB] [--type f|d|l] [--size +N|-N]"
+    print(_): "  belarus grep DEV PATTERN [PATH]           regular expressions over files"
+    print(_): "  belarus block DEV N                       a metadata block's UNO text"
+    print(_): "  belarus relabel DEV LABEL / uuid DEV / grow DEV"
+    print(_): ""
+    print(_): "options: -l (ls with times), --json (ls, stat, info, df), --dry-run (write"
+    print(_): "nothing). BELARUS_TIME=SECONDS stamps every change with that time."
     print(_): ""
     print(_): "DEV is a disk or disk image: the first Belarus file system on it, or"
     print(_): "DEV@N for partition N. Make the partition with stalin (--type belarus)."
@@ -2116,6 +2141,7 @@ bl_type_char(r): rec [
     at(ty): rec 0
     set(r): "-"
     if(_): {ty = "d"} [ set(r): "d" ]
+    if(_): {ty = "l"} [ set(r): "l" ]
 ]
 
 bl_cmd_ls(r): fs path [
@@ -2244,6 +2270,7 @@ bl_get_host(r): fs path file [
 
 belarus_main(r): args [
     set(r): 2
+    blm_opts(args): args
     len(np): args
     set(cmd): "help"
     if(_): {np > 0} [ at(cmd): args 0 ]
@@ -2265,15 +2292,28 @@ belarus_main(r): args [
     if(_): {np > 3} [ at(a3): args 3 ]
     if(_): {np > 4} [ at(a4): args 4 ]
     set(r): -1
-    if(_): {cmd = "info"} [ bl_cmd_info(r): fs ]
+    blm_has(json): "--json"
+    blm_has(long): "-l"
+    if(_): {cmd = "info" && json} [ blm_cmd_info_json(r): fs ]
+    elif(_): {cmd = "info"} [ bl_cmd_info(r): fs ]
+    elif(_): {cmd = "ls" && (json || long)} [ blm_cmd_ls(r): fs a2 ]
     elif(_): {cmd = "ls"} [ bl_cmd_ls(r): fs a2 ]
     elif(_): {cmd = "tree"} [ bl_cmd_tree(r): fs a2 ]
     elif(_): {cmd = "fsck"} [
         bl_fsck(bad): fs
+        blm_has(repair): "--repair"
+        if(_): {repair && bad > 0} [
+            blm_repair(fixed): fs
+            if(_): {fixed > 0} [
+                print(_): "after the repair:"
+                bl_fsck(bad): fs
+            ]
+        ]
         set(r): 0
         if(_): {bad > 0} [ set(r): 1 ]
     ]
     elif(_): {cmd = "cat"} [
+        blm_follow(a2): fs a2
         bl_read_text(t): fs a2
         set(r): 1
         typeof(tt): t
@@ -2299,14 +2339,23 @@ belarus_main(r): args [
         bl_write_text(r): fs a2 a3
     ]
     elif(_): {cmd = "mkdir"} [ bl_mkdirs(r): fs a2 ]
-    elif(_): {cmd = "rm"} [ bl_remove(r): fs a2 ]
+    elif(_): {cmd = "rm"} [ blm_cmd_rm(r): fs a2 ]
     else(_): [
-        concat(m): "unknown command '" cmd "' (belarus help lists them)"
-        bl_err(_): m
-        return(r): r
+        blm_cmd(r): fs cmd args
+        if(_): {r = -2} [
+            set(r): 2
+            concat(m): "unknown command '" cmd "' (belarus help lists them)"
+            bl_err(_): m
+            return(r): r
+        ]
     ]
     if(_): {r < 0} [ set(r): 1 ]
     btget(dirty): fs "dirty"
+    blm_has(dry): "--dry-run"
+    if(_): {dirty && dry} [
+        print(_): "dry run: nothing written"
+        set(dirty): false
+    ]
     if(_): dirty [
         bl_sync(w): fs
         if(_): {w != 0} [ set(r): 1 ]

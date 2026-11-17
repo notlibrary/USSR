@@ -41,7 +41,29 @@ d         17  /etc
 | `belarus write DEV PATH TEXT` | TEXT as the file PATH |
 | `belarus mkdir DEV PATH` | a directory and its parents |
 | `belarus rm DEV PATH` | a file or an empty directory |
-| `belarus fsck DEV` | checks the tree, the directories and the free space |
+| `belarus fsck DEV [--repair]` | checks the tree, the directories and the free space; `--repair` gives lost blocks back |
+| `belarus mv DEV FROM TO` / `cp DEV FROM TO` | renames or moves; copies a file or a tree (into a directory that is there) |
+| `belarus rm -r DEV PATH` | a directory and everything under it |
+| `belarus touch DEV PATH` | an empty file, or a new modification time |
+| `belarus append DEV PATH TEXT` / `truncate DEV PATH SIZE` | more bytes at the end; a new size (new bytes read as 0) |
+| `belarus head DEV PATH [N]` / `tail` / `hexdump DEV PATH [OFF [N]]` | parts of a file, read with `bl_pread` |
+| `belarus ln -s DEV TARGET PATH` / `readlink DEV PATH` | symbolic links (type `l`); `cat`, `head`, `tail` and `ls` follow them |
+| `belarus putdir DEV HOSTDIR PATH` / `getdir DEV PATH HOSTDIR` | whole host directory trees in and out |
+| `belarus diff DEV PATH HOSTFILE` | the first byte that differs, or "the same" |
+| `belarus sha256sum DEV PATH` / `crc32 DEV PATH` | checksums of a file inside |
+| `belarus clone DEV DEV2 [FROM [TO]]` | a tree copied into another Belarus file system |
+| `belarus stat DEV PATH` | type, size, time, inode, blocks, runs, map nodes and depth |
+| `belarus du DEV [PATH]` / `df DEV` | space per entry; used and free blocks, files, directories, links |
+| `belarus find DEV [PATH] [--name GLOB] [--type f\|d\|l] [--size +N\|-N]` | entries by name, type and size |
+| `belarus grep DEV PATTERN [PATH]` | lines matching a regular expression, `path:line: text` |
+| `belarus frag DEV` | the files in most runs, and the share in one run |
+| `belarus block DEV N` | a metadata block's magic and UNO text |
+| `belarus relabel DEV LABEL` / `uuid DEV` / `grow DEV` | a new label; a new UUID; the file system grown to fill its partition or image |
+
+Options: `-l` lists with modification times (UTC), `--json` prints `ls`,
+`stat`, `info` and `df` as JSON, and `--dry-run` runs a command without
+writing anything. `BELARUS_TIME=SECONDS` stamps every inode with that time,
+so the same commands make the same image.
 
 DEV is a disk or a disk image. Belarus uses the first Belarus file system
 it finds on it (the whole disk, or a partition of an MBR or GPT table);

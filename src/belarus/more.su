@@ -1,0 +1,1455 @@
+# more.su - Belarus refine pass 1: the commands beyond 0.1. belarus.su
+# includes it; belarus_main hands blm_cmd every command it does not know,
+# and blm_opts takes the options out of the command line first.
+#
+#   mv FROM TO   cp FROM TO   rm -r PATH   touch PATH
+#   append PATH TEXT   truncate PATH SIZE
+#   head PATH [N]   tail PATH [N]   hexdump PATH [OFF [N]]
+#   ln -s TARGET PATH (symlink)   readlink PATH   (cat follows links)
+#   putdir HOSTDIR PATH   getdir PATH HOSTDIR   diff PATH HOSTFILE
+#   sha256sum PATH   crc32 PATH   clone DEV2 [FROM [TO]]
+#   stat PATH   du [PATH]   df   find [PATH] [--name GLOB] [--type T]
+#   [--size +N|-N]   grep PATTERN [PATH]   frag   block N
+#   fsck --repair   relabel LABEL   uuid   grow
+# Options: --json (ls, stat, info, df), -l (ls with times), --dry-run
+# (write nothing), -r, -s. BELARUS_TIME fixes every time stamp.
+$once
+
+global(_): blm_o
+
+# the options out of args: the rest, in order
+blm_opts(r): args [
+    btree(blm_o):
+    vec(r): ""
+    len(n): args
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        set(taken): false
+        if(_): {a = "--json" || a = "--dry-run" || a = "-l" || a = "-r" || a = "-s" || a = "--repair"} [
+            btput(_): blm_o a true
+            set(taken): true
+        ]
+        elif(_): {(a = "--name" || a = "--type" || a = "--size") && i + 1 < n} [
+            at(v): args {i + 1}
+            btput(_): blm_o a v
+            set(i): {i + 1}
+            set(taken): true
+        ]
+        if(_): {taken = false} [ push(_): r a ]
+        set(i): {i + 1}
+    ]
+]
+
+blm_has(r): name [
+    set(r): false
+    typeof(t): blm_o
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(r): blm_o name false
+]
+
+blm_opt(r): name [
+    set(r): null
+    typeof(t): blm_o
+    if(_): {t != "btree"} [ return(r): r ]
+    btget(r): blm_o name null
+]
+
+# --- small helpers
+
+blm_idiv(r): a b [
+    str_trunc(r): {a / b}
+]
+
+blm_pad(r): s w [
+    str_pad_left(r): s w " "
+]
+
+blm_json_str(r): s [
+    str_replace(r): s "\\" "\\\\"
+    str_replace(r): r "\"" "\\\""
+    str_replace(r): r "\n" "\\n"
+    concat(r): "\"" r "\""
+]
+
+blm_two(r): n [
+    bl_int(r): n
+    if(_): {n < 10} [ concat(r): "0" r ]
+]
+
+# seconds since 1970 as "YYYY-MM-DD HH:MM" in UTC
+blm_date(r): t [
+    blm_idiv(days): t 86400
+    set(secs): {t - days * 86400}
+    set(z): {days + 719468}
+    blm_idiv(era): z 146097
+    set(doe): {z - era * 146097}
+    blm_idiv(a1): doe 1460
+    blm_idiv(a2): doe 36524
+    blm_idiv(a3): doe 146096
+    blm_idiv(yoe): {doe - a1 + a2 - a3} 365
+    set(y): {yoe + era * 400}
+    blm_idiv(b1): yoe 4
+    blm_idiv(b2): yoe 100
+    set(doy): {doe - (365 * yoe + b1 - b2)}
+    blm_idiv(mp): {5 * doy + 2} 153
+    blm_idiv(c1): {153 * mp + 2} 5
+    set(d): {doy - c1 + 1}
+    set(m): {mp + 3}
+    if(_): {mp >= 10} [ set(m): {mp - 9} ]
+    if(_): {m <= 2} [ set(y): {y + 1} ]
+    blm_idiv(hh): secs 3600
+    blm_idiv(mm): {secs - hh * 3600} 60
+    bl_int(ys): y
+    blm_two(ms): m
+    blm_two(ds): d
+    blm_two(hs): hh
+    blm_two(ns): mm
+    concat(r): ys "-" ms "-" ds " " hs ":" ns
+]
+
+blm_type_char(r): ty [
+    set(r): "-"
+    if(_): {ty = "d"} [ set(r): "d" ]
+    if(_): {ty = "l"} [ set(r): "l" ]
+]
+
+blm_join(r): dir name [
+    if(_): {dir = "/"} [ concat(r): "/" name ]
+    else(_): [ concat(r): dir "/" name ]
+]
+
+blm_hex(r): b [
+    set(digits): "0123456789abcdef"
+    slice(h): digits {(b >> 4) & 15} 1
+    slice(l): digits {b & 15} 1
+    concat(r): h l
+]
+
+blm_hex_all(r): v [
+    set(r): ""
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        blm_hex(h): x
+        concat(r): r h
+        set(i): {i + 1}
+    ]
+]
+
+# a record or an error: [type size mtime inode] or null
+blm_need(r): fs path [
+    bl_clean(p): path
+    bl_get(r): fs p
+    typeof(t): r
+    if(_): {t != "vector"} [
+        concat(m): "no file " p
+        bl_err(_): m
+        set(r): null
+    ]
+]
+
+# --- symbolic links
+
+blm_link_text(r): fs ino [
+    bl_file_bytes(v): fs ino
+    bytes_text(r): v
+    typeof(t): r
+    if(_): {t != "string"} [ set(r): "" ]
+]
+
+# path with symbolic links in its last part followed (8 at most)
+blm_follow(r): fs path [
+    bl_clean(r): path
+    set(k): 0
+    while(_): {k < 8} [
+        bl_get(rec): fs r
+        typeof(t): rec
+        if(_): {t != "vector"} [ return(r): r ]
+        at(ty): rec 0
+        if(_): {ty != "l"} [ return(r): r ]
+        at(ino): rec 3
+        blm_link_text(target): fs ino
+        str_starts(abs): target "/"
+        if(_): abs [ set(r): target ]
+        else(_): [
+            bl_parent(up): r
+            blm_join(r): up target
+        ]
+        bl_clean(r): r
+        set(k): {k + 1}
+    ]
+]
+
+blm_cmd_symlink(r): fs target path [
+    set(r): 1
+    if(_): {target = "" || path = "" || path = "/"} [
+        bl_err(_): "ln -s TARGET PATH"
+        return(r): r
+    ]
+    bl_clean(p): path
+    bl_exists(e): fs p
+    if(_): e [
+        concat(m): p " exists"
+        bl_err(_): m
+        return(r): r
+    ]
+    bl_parent(up): p
+    bl_mkdirs(_): fs up
+    bl_create(ino): fs p "l"
+    if(_): {ino = 0} [ return(r): r ]
+    text_bytes(v): target
+    bl_write_ino(_): fs ino v
+    btput(_): fs "dirty" true
+    set(r): 0
+]
+
+blm_cmd_readlink(r): fs path [
+    set(r): 1
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    at(ty): rec 0
+    if(_): {ty != "l"} [
+        bl_clean(p): path
+        concat(m): p " is not a symbolic link"
+        bl_err(_): m
+        return(r): r
+    ]
+    at(ino): rec 3
+    blm_link_text(t): fs ino
+    print(_): t
+    set(r): 0
+]
+
+# --- files
+
+blm_cmd_mv(r): fs a b [
+    set(r): 1
+    bl_clean(bp): b
+    # into a directory that is there
+    bl_is_dir(isd): fs bp
+    if(_): isd [
+        bl_clean(ap): a
+        bl_base(name): ap
+        blm_join(bp): bp name
+    ]
+    bl_rename(w): fs a bp
+    if(_): {w = 0} [ set(r): 0 ]
+]
+
+blm_cmd_cp(r): fs a b [
+    set(r): 1
+    blm_need(rec): fs a
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(ap): a
+    bl_clean(bp): b
+    bl_is_dir(isd): fs bp
+    if(_): isd [
+        bl_base(name): ap
+        blm_join(bp): bp name
+    ]
+    bl_exists(e): fs bp
+    if(_): e [
+        concat(m): bp " exists"
+        bl_err(_): m
+        return(r): r
+    ]
+    concat(ap_): ap "/"
+    str_starts(inside): bp ap_
+    if(_): inside [
+        bl_err(_): "a directory cannot be copied into itself"
+        return(r): r
+    ]
+    bl_parent(up): bp
+    bl_mkdirs(_): fs up
+    bl_copy_tree(n): fs ap fs bp ""
+    if(_): {n > 0} [ blm_fix_links(_): fs ap fs bp ]
+    if(_): {n > 0} [
+        set(r): 0
+        bl_int(ns): n
+        concat(m): ns " entries copied to " bp
+        print(_): m
+    ]
+]
+
+# rm, and rm -r: deepest first
+blm_cmd_rm(r): fs path [
+    set(r): 1
+    blm_has(rec_): "-r"
+    if(_): {rec_ = false} [
+        bl_remove(w): fs path
+        if(_): {w = 0} [ set(r): 0 ]
+        return(r): r
+    ]
+    bl_clean(p): path
+    if(_): {p = "/"} [
+        bl_err(_): "rm -r / would empty the file system: remove what is in it"
+        return(r): r
+    ]
+    blm_need(x): fs p
+    if(_): {x = null} [ return(r): r ]
+    bl_walk(all): fs p
+    len(n): all
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(pr): all i
+        at(k): pr 0
+        bl_remove(w): fs k
+        if(_): {w != 0} [ return(r): r ]
+        set(i): {i - 1}
+    ]
+    bl_int(ns): n
+    concat(m): "removed " ns " entries"
+    print(_): m
+    set(r): 0
+]
+
+blm_cmd_touch(r): fs path [
+    set(r): 1
+    bl_clean(p): path
+    bl_lookup(ino): fs p
+    if(_): {ino != 0} [
+        bl_inode(node): fs ino
+        bl_now(now):
+        btput(_): node "mtime" now
+        bl_touch(_): node
+        btput(_): fs "dirty" true
+        set(r): 0
+        return(r): r
+    ]
+    bl_parent(up): p
+    bl_mkdirs(_): fs up
+    vec(empty): ""
+    bl_write_bytes(w): fs p empty
+    if(_): {w = 0} [ set(r): 0 ]
+]
+
+blm_cmd_append(r): fs path text [
+    set(r): 1
+    bl_clean(p): path
+    set(size): 0
+    bl_get(rec): fs p
+    typeof(t): rec
+    if(_): {t = "vector"} [
+        at(ty): rec 0
+        if(_): {ty != "f"} [
+            concat(m): p " is not a file"
+            bl_err(_): m
+            return(r): r
+        ]
+        at(size): rec 1
+    ]
+    else(_): [
+        bl_parent(up): p
+        bl_mkdirs(_): fs up
+    ]
+    text_bytes(v): text
+    bl_pwrite(w): fs p size v
+    if(_): {w >= 0} [ set(r): 0 ]
+]
+
+blm_cmd_truncate(r): fs path sizetext [
+    set(r): 1
+    str_to_number(want): sizetext
+    typeof(tw): want
+    if(_): {tw != "integer" || want < 0} [
+        concat(m): "bad size " sizetext
+        bl_err(_): m
+        return(r): r
+    ]
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(p): path
+    at(ty): rec 0
+    at(size): rec 1
+    if(_): {ty != "f"} [
+        concat(m): p " is not a file"
+        bl_err(_): m
+        return(r): r
+    ]
+    if(_): {want = size} [
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {want > size} [
+        # the new bytes read as zeros
+        vec(z): ""
+        push(_): z 0
+        bl_pwrite(w): fs p {want - 1} z
+        if(_): {w >= 0} [ set(r): 0 ]
+        return(r): r
+    ]
+    vec(keep): ""
+    if(_): {want > 0} [ bl_pread(keep): fs p 0 want ]
+    bl_write_bytes(w): fs p keep
+    if(_): {w = 0} [ set(r): 0 ]
+]
+
+# a file's text by pieces, without reading it whole
+blm_piece(r): fs path off count [
+    bl_pread(r): fs path off count
+]
+
+blm_cmd_head(r): fs path ntext [
+    set(r): 1
+    set(want): 10
+    if(_): {ntext != ""} [ str_to_number(want): ntext ]
+    blm_follow(p): fs path
+    blm_need(rec): fs p
+    if(_): {rec = null} [ return(r): r ]
+    at(size): rec 1
+    set(off): 0
+    set(lines): 0
+    set(cur): ""
+    while(_): {off < size && lines < want} [
+        set(k): 4096
+        if(_): {off + k > size} [ set(k): {size - off} ]
+        blm_piece(b): fs p off k
+        set(i): 0
+        while(_): {i < k && lines < want} [
+            at(c): b i
+            if(_): {c = 10} [
+                print(_): cur
+                set(cur): ""
+                set(lines): {lines + 1}
+            ]
+            else(_): [
+                chr(ch): c
+                concat(cur): cur ch
+            ]
+            set(i): {i + 1}
+        ]
+        set(off): {off + k}
+    ]
+    if(_): {lines < want && cur != ""} [ print(_): cur ]
+    set(r): 0
+]
+
+blm_cmd_tail(r): fs path ntext [
+    set(r): 1
+    set(want): 10
+    if(_): {ntext != ""} [ str_to_number(want): ntext ]
+    blm_follow(p): fs path
+    blm_need(rec): fs p
+    if(_): {rec = null} [ return(r): r ]
+    at(size): rec 1
+    # back from the end a piece at a time until want + 1 newlines
+    set(start): size
+    set(nl): 0
+    set(found): false
+    while(_): {start > 0 && found = false} [
+        set(k): 4096
+        if(_): {start - k < 0} [ set(k): start ]
+        set(start): {start - k}
+        blm_piece(b): fs p start k
+        set(i): {k - 1}
+        set(at_): start
+        while(_): {i >= 0 && found = false} [
+            at(c): b i
+            # the file's own last newline does not count
+            if(_): {c = 10 && at_ + i != size - 1} [
+                set(nl): {nl + 1}
+                if(_): {nl = want} [
+                    set(start): {at_ + i + 1}
+                    set(found): true
+                ]
+            ]
+            set(i): {i - 1}
+        ]
+    ]
+    if(_): {size - start > 0} [
+        blm_piece(b): fs p start {size - start}
+        bytes_text(t): b
+        typeof(tt): t
+        if(_): {tt = "string"} [ print_raw(_): t ]
+    ]
+    set(r): 0
+]
+
+blm_cmd_hexdump(r): fs path offtext ntext [
+    set(r): 1
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(p): path
+    at(size): rec 1
+    set(off): 0
+    set(count): 256
+    if(_): {offtext != ""} [ str_to_number(off): offtext ]
+    if(_): {ntext != ""} [ str_to_number(count): ntext ]
+    if(_): {off >= size} [
+        set(r): 0
+        return(r): r
+    ]
+    if(_): {off + count > size} [ set(count): {size - off} ]
+    bl_pread(b): fs p off count
+    set(i): 0
+    while(_): {i < count} [
+        bl_hex8(addr): {off + i}
+        set(line): addr
+        set(txt): ""
+        set(k): 0
+        while(_): {k < 16} [
+            if(_): {i + k < count} [
+                at(x): b {i + k}
+                blm_hex(h): x
+                concat(line): line " " h
+                set(c): "."
+                if(_): {x >= 32 && x < 127} [ chr(c): x ]
+                concat(txt): txt c
+            ]
+            else(_): [ concat(line): line "   " ]
+            set(k): {k + 1}
+        ]
+        concat(line): line "  " txt
+        print(_): line
+        set(i): {i + 16}
+    ]
+    set(r): 0
+]
+
+# --- host exchange
+
+blm_cmd_putdir(r): fs host path [
+    set(r): 1
+    is_dir(d): host
+    if(_): {d != 1 && d != true} [
+        concat(m): host " is not a directory"
+        bl_err(_): m
+        return(r): r
+    ]
+    bl_clean(p): path
+    bl_mkdirs(w): fs p
+    if(_): {w != 0} [ return(r): r ]
+    set(count): 0
+    vec(stack): ""
+    vec(top): ""
+    push(_): top host
+    push(_): top p
+    push(_): stack top
+    while(_): stack [
+        pop(e): stack
+        at(hd): e 0
+        at(fd): e 1
+        list_dir(names): hd
+        typeof(tn): names
+        if(_): {tn = "vector"} [
+            str_sort_blm(names): names
+            len(n): names
+            set(i): 0
+            while(_): {i < n} [
+                at(name): names i
+                if(_): {name != "." && name != ".."} [
+                    concat(hp): hd "/" name
+                    blm_join(fp): fd name
+                    is_dir(sub): hp
+                    if(_): {sub = 1 || sub = true} [
+                        bl_mkdirs(w): fs fp
+                        vec(nx): ""
+                        push(_): nx hp
+                        push(_): nx fp
+                        push(_): stack nx
+                    ]
+                    else(_): [
+                        bl_put_host(w): fs hp fp
+                        if(_): {w != 0} [ return(r): r ]
+                        set(count): {count + 1}
+                    ]
+                ]
+                set(i): {i + 1}
+            ]
+        ]
+    ]
+    bl_int(cs): count
+    concat(m): cs " files put under " p
+    print(_): m
+    set(r): 0
+]
+
+# names in order (list_dir gives the host's order)
+str_sort_blm(r): v [
+    btree(t):
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(x): v i
+        btput(_): t x true
+        set(i): {i + 1}
+    ]
+    btkeys(r): t
+]
+
+blm_cmd_getdir(r): fs path host [
+    set(r): 1
+    bl_clean(p): path
+    bl_is_dir(isd): fs p
+    if(_): {isd = false} [
+        concat(m): p " is not a directory"
+        bl_err(_): m
+        return(r): r
+    ]
+    bl_walk(all): fs p
+    len(n): all
+    len(pl): p
+    set(count): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rec): pr 1
+        at(ty): rec 0
+        len(kl): k
+        set(rest): ""
+        if(_): {kl > pl} [
+            slice(rest): k pl {kl - pl}
+            if(_): {p = "/"} [ concat(rest): "/" rest ]
+        ]
+        concat(hp): host rest
+        if(_): {ty = "d"} [
+            is_dir(there): hp
+            if(_): {there != 1 && there != true} [ make_dir(_): hp ]
+        ]
+        elif(_): {ty = "f"} [
+            bl_get_host(w): fs k hp
+            if(_): {w != 0} [ return(r): r ]
+            set(count): {count + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    bl_int(cs): count
+    concat(m): cs " files written under " host
+    print(_): m
+    set(r): 0
+]
+
+blm_cmd_diff(r): fs path host [
+    set(r): 2
+    bl_read_bytes(a): fs path
+    typeof(ta): a
+    if(_): {ta != "vector"} [
+        concat(m): "no file " path
+        bl_err(_): m
+        return(r): r
+    ]
+    read_bytes(b): host
+    typeof(tb): b
+    if(_): {tb != "vector"} [
+        concat(m): "cannot read " host
+        bl_err(_): m
+        return(r): r
+    ]
+    len(na): a
+    len(nb): b
+    sha256(ha): a
+    sha256(hb): b
+    encode(ea): ha
+    encode(eb): hb
+    if(_): {na = nb && ea = eb} [
+        print(_): "the same"
+        set(r): 0
+        return(r): r
+    ]
+    set(n): na
+    if(_): {nb < n} [ set(n): nb ]
+    set(i): 0
+    set(go): true
+    while(_): {go && i < n} [
+        at(x): a i
+        at(y): b i
+        if(_): {x != y} [ set(go): false ]
+        else(_): [ set(i): {i + 1} ]
+    ]
+    bl_int(is): i
+    bl_int(sa): na
+    bl_int(sb): nb
+    concat(m): "differ from byte " is " (" sa " bytes and " sb " bytes)"
+    print(_): m
+    set(r): 1
+]
+
+blm_cmd_sum(r): fs path kind [
+    set(r): 1
+    blm_follow(p): fs path
+    bl_read_bytes(v): fs p
+    typeof(t): v
+    if(_): {t != "vector"} [
+        concat(m): "no file " p
+        bl_err(_): m
+        return(r): r
+    ]
+    if(_): {kind = "sha256"} [
+        sha256(h): v
+        blm_hex_all(hs): h
+    ]
+    else(_): [
+        crc32(c): v
+        bl_hex8(hs): c
+        str_lower(hs): hs
+    ]
+    concat(m): hs "  " p
+    print(_): m
+    set(r): 0
+]
+
+blm_cmd_clone(r): fs spec from to [
+    set(r): 1
+    if(_): {spec = ""} [
+        bl_err(_): "clone DEV2 [FROM [TO]]"
+        return(r): r
+    ]
+    bl_open(dst): spec
+    typeof(td): dst
+    if(_): {td != "btree"} [ return(r): r ]
+    if(_): {from = ""} [ set(from): "/" ]
+    if(_): {to = ""} [ set(to): from ]
+    bl_clean(tp): to
+    bl_parent(up): tp
+    bl_mkdirs(_): dst up
+    bl_copy_tree(n): fs from dst tp ""
+    if(_): {n < 0} [ return(r): r ]
+    blm_fix_links(_): fs from dst tp
+    blm_has(dry): "--dry-run"
+    if(_): {dry = false} [
+        bl_sync(w): dst
+        if(_): {w != 0} [ return(r): r ]
+    ]
+    bl_int(ns): n
+    concat(m): ns " entries cloned into " spec
+    print(_): m
+    set(r): 0
+]
+
+# bl_copy_tree makes every non-directory a file: links get their type back
+blm_fix_links(r): src from dst to [
+    set(r): 0
+    bl_clean(f): from
+    bl_clean(t): to
+    bl_walk(all): src f
+    len(fl): f
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rc): pr 1
+        at(ty): rc 0
+        if(_): {ty = "l"} [
+            len(kl): k
+            slice(rest): k fl {kl - fl}
+            if(_): {f = "/"} [ concat(rest): "/" rest ]
+            concat(target): t rest
+            bl_clean(target): target
+            bl_lookup(ino): dst target
+            if(_): {ino != 0} [
+                bl_inode(node): dst ino
+                btput(_): node "type" "l"
+                bl_touch(_): node
+                btput(_): dst "dirty" true
+                set(r): {r + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- inspecting
+
+# [runs, map nodes, depth] of an inode
+blm_shape(r): fs ino [
+    bl_runs(runs): fs ino
+    bl_map_nodes(nodes): fs ino
+    len(nr): runs
+    len(nn): nodes
+    set(depth): 1
+    bl_inode(node): fs ino
+    btget(kind): node "kind"
+    while(_): {kind = "I"} [
+        set(depth): {depth + 1}
+        btget(map): node "map"
+        btfirst(f): map
+        btget(child): map f
+        bl_node(node): fs child false
+        btget(kind): node "kind"
+    ]
+    vec(r): ""
+    push(_): r nr
+    push(_): r nn
+    push(_): r depth
+]
+
+blm_cmd_stat(r): fs path [
+    set(r): 1
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(p): path
+    at(ty): rec 0
+    at(size): rec 1
+    at(mt): rec 2
+    at(ino): rec 3
+    blm_shape(sh): fs ino
+    at(runs): sh 0
+    at(nodes): sh 1
+    at(depth): sh 2
+    blm_idiv(blocks): {size + 4095} 4096
+    set(tn): "file"
+    if(_): {ty = "d"} [ set(tn): "directory" ]
+    if(_): {ty = "l"} [ set(tn): "symbolic link" ]
+    blm_date(ds): mt
+    bl_int(ss): size
+    bl_int(is): ino
+    bl_int(bs): blocks
+    bl_int(rs): runs
+    bl_int(ns): nodes
+    bl_int(dps): depth
+    bl_int(ms): mt
+    blm_has(js): "--json"
+    if(_): js [
+        blm_json_str(pj): p
+        concat(m): "{\"path\": " pj ", \"type\": \"" tn "\", \"size\": " ss ", \"mtime\": " ms ", \"inode\": " is ", \"blocks\": " bs ", \"runs\": " rs ", \"map_nodes\": " ns ", \"depth\": " dps
+        if(_): {ty = "l"} [
+            blm_link_text(lt): fs ino
+            blm_json_str(lj): lt
+            concat(m): m ", \"target\": " lj
+        ]
+        concat(m): m "}"
+        print(_): m
+        set(r): 0
+        return(r): r
+    ]
+    concat(m): "  path: " p
+    print(_): m
+    concat(m): "  type: " tn
+    if(_): {ty = "l"} [
+        blm_link_text(lt): fs ino
+        concat(m): m " to " lt
+    ]
+    print(_): m
+    concat(m): "  size: " ss " bytes in " bs " blocks"
+    print(_): m
+    concat(m): "  time: " ds " UTC"
+    print(_): m
+    concat(m): " inode: " is
+    print(_): m
+    concat(m): "   map: " rs " run(s), " ns " map node(s), depth " dps
+    print(_): m
+    set(r): 0
+]
+
+blm_cmd_du(r): fs path [
+    set(r): 1
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(p): path
+    bl_walk(all): fs p
+    # bytes per entry right under p
+    btree(per):
+    len(pl): p
+    set(total): 0
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rc): pr 1
+        at(sz): rc 1
+        at(ty): rc 0
+        if(_): {ty != "d"} [
+            set(total): {total + sz}
+            len(kl): k
+            if(_): {kl > pl} [
+                set(from): pl
+                if(_): {p != "/"} [ set(from): {pl + 1} ]
+                slice(rest): k from {kl - from}
+                str_find(sl): rest "/" 0
+                set(top): rest
+                if(_): {sl >= 0} [ slice(top): rest 0 sl ]
+                btget(was): per top 0
+                btput(_): per top {was + sz}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    btrange(rows): per
+    len(nr): rows
+    set(i): 0
+    while(_): {i < nr} [
+        at(row): rows i
+        at(name): row 0
+        at(b): row 1
+        bl_human(hs): b
+        blm_pad(hs): hs 10
+        blm_join(full): p name
+        concat(m): hs "  " full
+        print(_): m
+        set(i): {i + 1}
+    ]
+    bl_human(ht): total
+    blm_pad(ht): ht 10
+    concat(m): ht "  " p " (total)"
+    print(_): m
+    set(r): 0
+]
+
+blm_counts(r): fs [
+    bl_walk(all): fs "/"
+    set(files): 0
+    set(dirs): 0
+    set(links): 0
+    set(bytes): 0
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(rc): pr 1
+        at(ty): rc 0
+        at(sz): rc 1
+        if(_): {ty = "d"} [ set(dirs): {dirs + 1} ]
+        elif(_): {ty = "l"} [ set(links): {links + 1} ]
+        else(_): [
+            set(files): {files + 1}
+            set(bytes): {bytes + sz}
+        ]
+        set(i): {i + 1}
+    ]
+    vec(r): ""
+    push(_): r files
+    push(_): r dirs
+    push(_): r links
+    push(_): r bytes
+]
+
+blm_cmd_df(r): fs [
+    btget(blocks): fs "blocks"
+    btget(label): fs "label"
+    bl_free_count(free): fs
+    set(used): {blocks - free}
+    blm_counts(c): fs
+    at(files): c 0
+    at(dirs): c 1
+    at(links): c 2
+    at(bytes): c 3
+    str_trunc(pc): {used * 100.0 / blocks}
+    bl_int(bs): blocks
+    bl_int(us): used
+    bl_int(fs_): free
+    bl_int(ps): pc
+    bl_int(fls): files
+    bl_int(dss): dirs
+    bl_int(lks): links
+    bl_int(bys): bytes
+    blm_has(js): "--json"
+    if(_): js [
+        blm_json_str(lj): label
+        concat(m): "{\"label\": " lj ", \"blocks\": " bs ", \"used\": " us ", \"free\": " fs_ ", \"files\": " fls ", \"directories\": " dss ", \"links\": " lks ", \"file_bytes\": " bys "}"
+        print(_): m
+        set(r): 0
+        return(r): r
+    ]
+    bl_human(ht): {blocks << 12}
+    bl_human(hu): {used << 12}
+    bl_human(hf): {free << 12}
+    concat(m): "label " label ": " hu " used, " hf " free of " ht " (" ps "%)"
+    print(_): m
+    concat(m): fls " files, " dss " directories, " lks " links; " bys " bytes in files"
+    print(_): m
+    set(r): 0
+]
+
+# a glob (* ? [..]) as an anchored regular expression
+blm_glob(r): g [
+    set(r): "^"
+    len(n): g
+    set(i): 0
+    while(_): {i < n} [
+        slice(c): g i 1
+        if(_): {c = "*"} [ concat(r): r ".*" ]
+        elif(_): {c = "?"} [ concat(r): r "." ]
+        elif(_): {c = "[" || c = "]"} [ concat(r): r c ]
+        elif(_): {c = "." || c = "+" || c = "(" || c = ")" || c = "^" || c = "$" || c = "|" || c = "{" || c = "}" || c = "\\"} [ concat(r): r "\\" c ]
+        else(_): [ concat(r): r c ]
+        set(i): {i + 1}
+    ]
+    concat(r): r "$"
+]
+
+blm_cmd_find(r): fs path [
+    set(r): 1
+    if(_): {path = ""} [ set(path): "/" ]
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(p): path
+    blm_opt(gname): "--name"
+    blm_opt(gtype): "--type"
+    blm_opt(gsize): "--size"
+    set(re): ""
+    if(_): {gname != null} [ blm_glob(re): gname ]
+    set(sop): ""
+    set(slim): 0
+    if(_): {gsize != null} [
+        slice(sop): gsize 0 1
+        len(gl): gsize
+        slice(sn): gsize 1 {gl - 1}
+        if(_): {sop != "+" && sop != "-"} [
+            set(sop): "="
+            set(sn): gsize
+        ]
+        str_to_number(slim): sn
+    ]
+    bl_walk(all): fs p
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rc): pr 1
+        at(ty): rc 0
+        at(sz): rc 1
+        set(ok): true
+        if(_): {gtype != null && gtype != ty} [ set(ok): false ]
+        if(_): {ok && re != ""} [
+            bl_base(b): k
+            if(_): {k = "/"} [ set(b): "/" ]
+            re_test(ok): re b
+        ]
+        if(_): {ok && sop = "+"} [ set(ok): {sz > slim} ]
+        if(_): {ok && sop = "-"} [ set(ok): {sz < slim} ]
+        if(_): {ok && sop = "="} [ set(ok): {sz = slim} ]
+        if(_): ok [ print(_): k ]
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+blm_cmd_grep(r): fs pattern path [
+    set(r): 1
+    if(_): {pattern = ""} [
+        bl_err(_): "grep PATTERN [PATH]"
+        return(r): r
+    ]
+    if(_): {path = ""} [ set(path): "/" ]
+    blm_need(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    bl_clean(p): path
+    bl_walk(all): fs p
+    set(hits): 0
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rc): pr 1
+        at(ty): rc 0
+        if(_): {ty = "f"} [
+            bl_read_text(t): fs k
+            typeof(tt): t
+            if(_): {tt = "string"} [
+                str_split(lines): t "\n"
+                len(nl): lines
+                set(j): 0
+                while(_): {j < nl} [
+                    at(l): lines j
+                    re_test(hit): pattern l
+                    if(_): hit [
+                        bl_int(js): {j + 1}
+                        concat(m): k ":" js ": " l
+                        print(_): m
+                        set(hits): {hits + 1}
+                    ]
+                    set(j): {j + 1}
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {hits > 0} [ set(r): 0 ]
+]
+
+blm_cmd_frag(r): fs [
+    bl_walk(all): fs "/"
+    btree(byruns):
+    set(files): 0
+    set(single): 0
+    set(i): 0
+    len(n): all
+    while(_): {i < n} [
+        at(pr): all i
+        at(k): pr 0
+        at(rc): pr 1
+        at(ty): rc 0
+        at(sz): rc 1
+        at(ino): rc 3
+        if(_): {ty = "f" && sz > 0} [
+            set(files): {files + 1}
+            bl_runs(runs): fs ino
+            len(nr): runs
+            if(_): {nr = 1} [ set(single): {single + 1} ]
+            # most runs first: the key sorts by runs down, then path
+            set(inv): {1000000 - nr}
+            bl_int(is): inv
+            str_pad_left(is): is 8 "0"
+            concat(key): is " " k
+            btput(_): byruns key nr
+        ]
+        set(i): {i + 1}
+    ]
+    btrange(rows): byruns
+    len(nr): rows
+    set(i): 0
+    while(_): {i < nr && i < 10} [
+        at(row): rows i
+        at(key): row 0
+        at(c): row 1
+        len(kl): key
+        slice(path): key 9 {kl - 9}
+        if(_): {c > 1} [
+            bl_int(cs): c
+            blm_pad(cs): cs 6
+            concat(m): cs " runs  " path
+            print(_): m
+        ]
+        set(i): {i + 1}
+    ]
+    set(pc): 100
+    if(_): {files > 0} [ str_trunc(pc): {single * 100.0 / files} ]
+    bl_int(ps): pc
+    bl_int(fls): files
+    concat(m): ps "% of " fls " files are in one run"
+    print(_): m
+    set(r): 0
+]
+
+# a metadata block's header and text
+blm_cmd_block(r): fs ntext [
+    set(r): 1
+    str_to_number(blk): ntext
+    btget(blocks): fs "blocks"
+    typeof(tb): blk
+    if(_): {tb != "integer" || blk < 0 || blk >= blocks} [
+        concat(m): "no block " ntext
+        bl_err(_): m
+        return(r): r
+    ]
+    btget(dev): fs "dev"
+    bl_lba(lba): fs blk
+    bread(b): dev lba 8
+    bytes_text(head): b 0 24
+    typeof(th): head
+    if(_): {th != "string"} [
+        print(_): "not a metadata block"
+        return(r): r
+    ]
+    slice(magic): head 0 8
+    slice(lh): head 8 8
+    bl_unhex8(len_): lh
+    if(_): {len_ < 0} [
+        concat(m): "block " ntext ": not a metadata block"
+        print(_): m
+        return(r): r
+    ]
+    if(_): {len_ > 4096 - 24} [
+        # a text over several blocks
+        blm_idiv(more): {len_ + 24 + 4095} 4096
+        bread(b): dev lba {more * 8}
+    ]
+    bytes_text(text): b 24 len_
+    concat(m): "block " ntext ": " magic
+    print(_): m
+    print(_): text
+    set(r): 0
+]
+
+# --- repair: blocks neither used nor free go back to the free map
+
+blm_used(r): fs [
+    btree(r):
+    set(i): 0
+    while(_): {i < 17} [
+        btput(_): r i true
+        set(i): {i + 1}
+    ]
+    btget(base): fs "base"
+    bl_walk(all): fs "/"
+    len(n): all
+    set(i): 0
+    while(_): {i < n} [
+        at(pr): all i
+        at(rc): pr 1
+        at(ino): rc 3
+        btput(_): r ino true
+        bl_map_nodes(nodes): fs ino
+        len(nn): nodes
+        set(k): 0
+        while(_): {k < nn} [
+            at(b): nodes k
+            btput(_): r b true
+            set(k): {k + 1}
+        ]
+        bl_runs(runs): fs ino
+        len(nr): runs
+        set(k): 0
+        while(_): {k < nr} [
+            at(run): runs k
+            at(lba): run 0
+            at(c): run 1
+            set(first): {(lba - base) >> 3}
+            set(j): 0
+            while(_): {j < c} [
+                btput(_): r {first + j} true
+                set(j): {j + 1}
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+blm_is_free(r): fs blk [
+    btget(free): fs "free"
+    btfloor(s): free blk
+    set(r): false
+    if(_): {s = null} [ return(r): r ]
+    btget(l): free s
+    set(r): {blk < s + l}
+]
+
+blm_repair(r): fs [
+    blm_used(used): fs
+    btget(blocks): fs "blocks"
+    set(lost): 0
+    set(blk): 17
+    while(_): {blk < blocks} [
+        btget(u): used blk false
+        if(_): {u = false} [
+            blm_is_free(f): fs blk
+            if(_): {f = false} [
+                bl_free(_): fs blk 1
+                set(lost): {lost + 1}
+            ]
+        ]
+        set(blk): {blk + 1}
+    ]
+    if(_): {lost > 0} [ btput(_): fs "dirty" true ]
+    bl_int(ls): lost
+    concat(m): "repair: " ls " lost block(s) given back to the free map"
+    print(_): m
+    set(r): lost
+]
+
+# --- the superblock
+
+blm_cmd_relabel(r): fs label [
+    set(r): 1
+    len(n): label
+    if(_): {n = 0 || n > 64} [
+        bl_err(_): "relabel LABEL (1 to 64 characters)"
+        return(r): r
+    ]
+    str_find(bq): label "`" 0
+    if(_): {bq >= 0} [
+        bl_err(_): "a label with a backquote"
+        return(r): r
+    ]
+    btput(_): fs "label" label
+    btput(_): fs "dirty" true
+    concat(m): "label " label
+    print(_): m
+    set(r): 0
+]
+
+blm_cmd_uuid(r): fs [
+    random64(x):
+    bl_hex8(u1): {x & 4294967295}
+    bl_hex8(u2): {(x >> 32) & 4294967295}
+    concat(uuid): u1 u2
+    btput(_): fs "uuid" uuid
+    btput(_): fs "dirty" true
+    concat(m): "uuid " uuid
+    print(_): m
+    set(r): 0
+]
+
+# the file system grown to fill its partition (or its whole image)
+blm_cmd_grow(r): fs [
+    set(r): 1
+    btget(dev): fs "dev"
+    btget(base): fs "base"
+    btget(blocks): fs "blocks"
+    set(end): -1
+    if(_): {base = 0} [
+        bsize(bytes): dev
+        set(end): {bytes >> 9}
+    ]
+    else(_): [
+        bread(s0): dev 0 1
+        bl_parts(starts): dev s0
+        len(n): starts
+        set(i): 0
+        while(_): {i < n} [
+            at(s): starts i
+            if(_): {s = base} [ bl_part_end(end): dev s0 {i + 1} ]
+            set(i): {i + 1}
+        ]
+    ]
+    set(want): {(end - base) >> 3}
+    if(_): {want <= blocks} [
+        print(_): "the file system already fills its space"
+        return(r): r
+    ]
+    bl_free(_): fs blocks {want - blocks}
+    btput(_): fs "blocks" want
+    btput(_): fs "dirty" true
+    bl_human(ho): {blocks << 12}
+    bl_human(hn): {want << 12}
+    concat(m): "grown from " ho " to " hn
+    print(_): m
+    set(r): 0
+]
+
+# --- ls -l and --json, info --json
+
+blm_cmd_ls(r): fs path [
+    set(r): 1
+    blm_follow(p): fs path
+    blm_need(rec): fs p
+    if(_): {rec = null} [ return(r): r ]
+    at(ty): rec 0
+    vec(rows): ""
+    if(_): {ty = "d"} [
+        bl_list(names): fs p
+        len(n): names
+        set(i): 0
+        while(_): {i < n} [
+            at(name): names i
+            blm_join(full): p name
+            bl_get(e): fs full
+            vec(row): ""
+            push(_): row name
+            push(_): row e
+            push(_): rows row
+            set(i): {i + 1}
+        ]
+    ]
+    else(_): [
+        bl_base(b): p
+        vec(row): ""
+        push(_): row b
+        push(_): row rec
+        push(_): rows row
+    ]
+    blm_has(js): "--json"
+    len(n): rows
+    if(_): js [
+        set(t): "["
+        set(i): 0
+        while(_): {i < n} [
+            at(row): rows i
+            at(name): row 0
+            at(e): row 1
+            at(ety): e 0
+            at(esz): e 1
+            at(emt): e 2
+            at(eino): e 3
+            blm_json_str(nj): name
+            bl_int(ss): esz
+            bl_int(ms): emt
+            bl_int(is): eino
+            if(_): {i > 0} [ concat(t): t ", " ]
+            concat(t): t "{\"name\": " nj ", \"type\": \"" ety "\", \"size\": " ss ", \"mtime\": " ms ", \"inode\": " is "}"
+            set(i): {i + 1}
+        ]
+        concat(t): t "]"
+        print(_): t
+        set(r): 0
+        return(r): r
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        at(name): row 0
+        at(e): row 1
+        at(ety): e 0
+        at(esz): e 1
+        at(emt): e 2
+        at(eino): e 3
+        blm_type_char(c): ety
+        bl_int(ss): esz
+        blm_pad(ss): ss 10
+        blm_date(ds): emt
+        bl_int(is): eino
+        blm_pad(is): is 6
+        concat(line): c " " is " " ss "  " ds "  " name
+        if(_): {ety = "l"} [
+            blm_link_text(lt): fs eino
+            concat(line): line " -> " lt
+        ]
+        print(_): line
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+blm_cmd_info_json(r): fs [
+    btget(label): fs "label"
+    btget(uuid): fs "uuid"
+    btget(blocks): fs "blocks"
+    btget(root): fs "root"
+    btget(base): fs "base"
+    bl_free_count(free): fs
+    blm_json_str(lj): label
+    bl_int(bs): blocks
+    bl_int(fs_): free
+    bl_int(rs): root
+    bl_int(ss): base
+    concat(m): "{\"label\": " lj ", \"uuid\": \"" uuid "\", \"block_size\": 4096, \"blocks\": " bs ", \"free\": " fs_ ", \"start_sector\": " ss ", \"root_inode\": " rs "}"
+    print(_): m
+    set(r): 0
+]
+
+# --- the dispatcher belarus_main asks: -2 for a command it does not know
+
+blm_cmd(r): fs cmd p [
+    set(r): -2
+    len(np): p
+    set(a2): ""
+    set(a3): ""
+    set(x4): ""
+    if(_): {np > 2} [ at(a2): p 2 ]
+    if(_): {np > 3} [ at(a3): p 3 ]
+    if(_): {np > 4} [ at(x4): p 4 ]
+    if(_): {cmd = "mv" || cmd = "rename"} [ blm_cmd_mv(r): fs a2 a3 ]
+    elif(_): {cmd = "cp"} [ blm_cmd_cp(r): fs a2 a3 ]
+    elif(_): {cmd = "touch"} [ blm_cmd_touch(r): fs a2 ]
+    elif(_): {cmd = "append"} [ blm_cmd_append(r): fs a2 a3 ]
+    elif(_): {cmd = "truncate"} [ blm_cmd_truncate(r): fs a2 a3 ]
+    elif(_): {cmd = "head"} [ blm_cmd_head(r): fs a2 a3 ]
+    elif(_): {cmd = "tail"} [ blm_cmd_tail(r): fs a2 a3 ]
+    elif(_): {cmd = "hexdump"} [ blm_cmd_hexdump(r): fs a2 a3 x4 ]
+    elif(_): {cmd = "ln" || cmd = "symlink"} [
+        blm_has(s): "-s"
+        if(_): {cmd = "ln" && s = false} [
+            bl_err(_): "hard links are not there yet: ln -s TARGET PATH"
+            set(r): 1
+        ]
+        else(_): [ blm_cmd_symlink(r): fs a2 a3 ]
+    ]
+    elif(_): {cmd = "readlink"} [ blm_cmd_readlink(r): fs a2 ]
+    elif(_): {cmd = "putdir"} [ blm_cmd_putdir(r): fs a2 a3 ]
+    elif(_): {cmd = "getdir"} [ blm_cmd_getdir(r): fs a2 a3 ]
+    elif(_): {cmd = "diff"} [ blm_cmd_diff(r): fs a2 a3 ]
+    elif(_): {cmd = "sha256sum"} [ blm_cmd_sum(r): fs a2 "sha256" ]
+    elif(_): {cmd = "crc32"} [ blm_cmd_sum(r): fs a2 "crc32" ]
+    elif(_): {cmd = "clone"} [ blm_cmd_clone(r): fs a2 a3 x4 ]
+    elif(_): {cmd = "stat"} [ blm_cmd_stat(r): fs a2 ]
+    elif(_): {cmd = "du"} [
+        if(_): {a2 = ""} [ set(a2): "/" ]
+        blm_cmd_du(r): fs a2
+    ]
+    elif(_): {cmd = "df"} [ blm_cmd_df(r): fs ]
+    elif(_): {cmd = "find"} [ blm_cmd_find(r): fs a2 ]
+    elif(_): {cmd = "grep"} [ blm_cmd_grep(r): fs a2 a3 ]
+    elif(_): {cmd = "frag"} [ blm_cmd_frag(r): fs ]
+    elif(_): {cmd = "block"} [ blm_cmd_block(r): fs a2 ]
+    elif(_): {cmd = "relabel" || cmd = "label"} [ blm_cmd_relabel(r): fs a2 ]
+    elif(_): {cmd = "uuid"} [ blm_cmd_uuid(r): fs ]
+    elif(_): {cmd = "grow"} [ blm_cmd_grow(r): fs ]
+]

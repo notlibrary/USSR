@@ -1,0 +1,243 @@
+# Belarus refine pass 1: the commands of src/belarus/more.su on an 8 MiB
+# image in tests/belarus-more-tmp.img (and a second one for clone, a host
+# directory for putdir and getdir). BELARUS_TIME fixes the time stamps.
+# Prints each command line, what it printed and its exit status; errors
+# land in stderr.
+$include "../src/belarus/belarus.su"
+
+global(_): bmi
+
+bm_run(r): line [
+    concat(shown): "$ belarus " line
+    print(_): shown
+    str_split(w): line " "
+    vec(words): ""
+    len(n): w
+    set(i): 0
+    while(_): {i < n} [
+        at(x): w i
+        if(_): {x = "IMG"} [ set(x): bmi ]
+        elif(_): {x = "IMG2"} [ set(x): "tests/belarus-more-two.img" ]
+        elif(_): {x = "HOST"} [ set(x): "tests/belarus-more-host" ]
+        elif(_): {x = "OUT"} [ set(x): "tests/belarus-more-out" ]
+        # "_" is a space inside a word
+        str_replace(x): x "_" " "
+        if(_): {x != ""} [ push(_): words x ]
+        set(i): {i + 1}
+    ]
+    belarus_main(r): words
+    if(_): {r != 0} [
+        bl_int(code): r
+        concat(st): "[exit " code "]"
+        print(_): st
+    ]
+]
+
+bm_image(r): path mib [
+    open_file(h): path "wb"
+    close_file(_): h
+    vec(z): ""
+    set(i): 0
+    while(_): {i < 512} [
+        push(_): z 0
+        set(i): {i + 1}
+    ]
+    bwrite(_): path {(mib << 11) - 1} z
+    set(r): 0
+]
+
+# the image made mib MiB long, keeping what is in it
+bm_extend(r): path mib [
+    vec(z): ""
+    set(i): 0
+    while(_): {i < 512} [
+        push(_): z 0
+        set(i): {i + 1}
+    ]
+    bwrite(_): path {(mib << 11) - 1} z
+    set(r): 0
+]
+
+bm_rm(r): path [
+    set(r): 0
+    file_exists(e): path
+    if(_): e [ remove_file(_): path ]
+]
+
+bm_clean(r): [
+    set(r): 0
+    bm_rm(_): bmi
+    bm_rm(_): "tests/belarus-more-two.img"
+    bm_rm(_): "tests/belarus-more-host/a.txt"
+    bm_rm(_): "tests/belarus-more-host/sub/b.txt"
+    bm_rm(_): "tests/belarus-more-host/sub/c.bin"
+    bm_rm(_): "tests/belarus-more-out/a.txt"
+    bm_rm(_): "tests/belarus-more-out/sub/b.txt"
+    bm_rm(_): "tests/belarus-more-out/sub/c.bin"
+    bm_rm(_): "tests/belarus-more-diff.txt"
+    is_dir(d1): "tests/belarus-more-host/sub"
+    if(_): {d1 = 1 || d1 = true} [ remove_dir(_): "tests/belarus-more-host/sub" ]
+    is_dir(d2): "tests/belarus-more-host"
+    if(_): {d2 = 1 || d2 = true} [ remove_dir(_): "tests/belarus-more-host" ]
+    is_dir(d3): "tests/belarus-more-out/sub"
+    if(_): {d3 = 1 || d3 = true} [ remove_dir(_): "tests/belarus-more-out/sub" ]
+    is_dir(d4): "tests/belarus-more-out"
+    if(_): {d4 = 1 || d4 = true} [ remove_dir(_): "tests/belarus-more-out" ]
+]
+
+init(ret): arg_count arg_values [
+    set(bmi): "tests/belarus-more-tmp.img"
+    setenv(_): "BELARUS_TIME" "1700000000"
+    bm_clean(_):
+    bm_image(_): bmi 8
+    bm_run(_): "mkfs IMG --label refine"
+    bm_run(_): "info IMG --json"
+
+    print(_): "# files"
+    bm_run(_): "write IMG /etc/hostname moscow"
+    bm_run(_): "append IMG /etc/hostname .local"
+    bm_run(_): "cat IMG /etc/hostname"
+    bm_run(_): "append IMG /var/log/boot first_line"
+    bm_run(_): "touch IMG /var/log/empty"
+    bm_run(_): "touch IMG /etc/hostname"
+    bm_run(_): "mv IMG /etc/hostname /etc/name"
+    bm_run(_): "mkdir IMG /backup"
+    bm_run(_): "cp IMG /etc /backup"
+    bm_run(_): "cp IMG /etc /backup"
+    bm_run(_): "mv IMG /backup/etc/name /var"
+    bm_run(_): "tree IMG /"
+    bm_run(_): "truncate IMG /var/name 4"
+    bm_run(_): "cat IMG /var/name"
+    bm_run(_): "truncate IMG /var/name 8"
+    bm_run(_): "hexdump IMG /var/name"
+    bm_run(_): "truncate IMG /var/name x"
+    bm_run(_): "cp IMG /backup /backup/inner"
+    bm_run(_): "rm IMG /backup"
+    bm_run(_): "rm IMG -r /backup"
+    bm_run(_): "rm IMG -r /"
+
+    print(_): "# lines"
+    set(t): ""
+    set(i): 1
+    while(_): {i <= 30} [
+        bl_int(is): i
+        concat(t): t "line " is "\n"
+        set(i): {i + 1}
+    ]
+    bl_open(fs): bmi
+    bl_mkdirs(_): fs "/doc"
+    bl_write_text(_): fs "/doc/lines.txt" t
+    bl_sync(_): fs
+    bm_run(_): "head IMG /doc/lines.txt 3"
+    bm_run(_): "tail IMG /doc/lines.txt 2"
+    bm_run(_): "head IMG /doc/lines.txt"
+    bm_run(_): "grep IMG 2$ /doc"
+    bm_run(_): "grep IMG ^line_1[0-9]$"
+    bm_run(_): "grep IMG nothing-like-this"
+
+    print(_): "# links"
+    bm_run(_): "ln IMG -s lines.txt /doc/latest"
+    bm_run(_): "ln IMG -s /doc/latest /top"
+    bm_run(_): "readlink IMG /top"
+    bm_run(_): "head IMG /top 1"
+    bm_run(_): "ls IMG -l /doc"
+    bm_run(_): "ln IMG /doc/lines.txt /hard"
+    bm_run(_): "readlink IMG /doc/lines.txt"
+    bm_run(_): "fsck IMG"
+
+    print(_): "# inspecting"
+    bm_run(_): "stat IMG /doc/lines.txt"
+    bm_run(_): "stat IMG /top --json"
+    bm_run(_): "ls IMG /doc --json"
+    bm_run(_): "du IMG"
+    bm_run(_): "df IMG"
+    bm_run(_): "df IMG --json"
+    bm_run(_): "find IMG"
+    bm_run(_): "find IMG / --type d"
+    bm_run(_): "find IMG / --name *.txt"
+    bm_run(_): "find IMG / --size +100"
+    bm_run(_): "find IMG / --type l --name t?p"
+    bm_run(_): "sha256sum IMG /doc/lines.txt"
+    bm_run(_): "crc32 IMG /doc/latest"
+    bm_run(_): "block IMG 0"
+    bm_run(_): "block IMG 1"
+    bm_run(_): "block IMG 6000"
+
+    print(_): "# host trees"
+    make_dir(_): "tests/belarus-more-host"
+    make_dir(_): "tests/belarus-more-host/sub"
+    writefile(_): "tests/belarus-more-host/a.txt" "alpha\n"
+    writefile(_): "tests/belarus-more-host/sub/b.txt" "beta\n"
+    set(big): ""
+    set(i): 0
+    while(_): {i < 700} [
+        concat(big): big "0123456789"
+        set(i): {i + 1}
+    ]
+    writefile(_): "tests/belarus-more-host/sub/c.bin" big
+    bm_run(_): "putdir IMG HOST /import"
+    bm_run(_): "tree IMG /import"
+    bm_run(_): "getdir IMG /import OUT"
+    readfile(back): "tests/belarus-more-out/sub/b.txt"
+    print(_): back
+    bm_run(_): "diff IMG /import/sub/c.bin tests/belarus-more-host/sub/c.bin"
+    writefile(_): "tests/belarus-more-diff.txt" "alpine\n"
+    bm_run(_): "diff IMG /import/a.txt tests/belarus-more-diff.txt"
+    bm_run(_): "putdir IMG nowhere /x"
+
+    print(_): "# fragments"
+    # two files written a block at a time, in turn
+    bl_open(fs): bmi
+    vec(blk): ""
+    set(i): 0
+    while(_): {i < 4096} [
+        push(_): blk 65
+        set(i): {i + 1}
+    ]
+    bl_mkdirs(_): fs "/frag"
+    set(k): 0
+    while(_): {k < 4} [
+        bl_pwrite(_): fs "/frag/one" {k * 4096} blk
+        bl_sync(_): fs
+        bl_pwrite(_): fs "/frag/two" {k * 4096} blk
+        bl_sync(_): fs
+        set(k): {k + 1}
+    ]
+    bm_run(_): "frag IMG"
+
+    print(_): "# the superblock, clone, grow"
+    bm_run(_): "relabel IMG renamed"
+    bm_run(_): "relabel IMG bad`label"
+    bm_run(_): "uuid IMG"
+    bm_run(_): "info IMG"
+    bm_image(_): "tests/belarus-more-two.img" 4
+    bm_run(_): "mkfs IMG2 --label two"
+    bm_run(_): "clone IMG IMG2 /doc"
+    bm_run(_): "clone IMG IMG2 /import /copy"
+    bm_run(_): "tree IMG2 /"
+    bm_run(_): "fsck IMG2"
+    bm_run(_): "grow IMG"
+    bm_extend(_): bmi 12
+    bm_run(_): "grow IMG"
+    bm_run(_): "df IMG"
+    bm_run(_): "fsck IMG"
+
+    print(_): "# dry run, repair"
+    bm_run(_): "write IMG /dry nothing --dry-run"
+    bm_run(_): "cat IMG /dry"
+    # a lost block: taken from the free map by hand
+    bl_open(fs): bmi
+    bl_alloc(_): fs 3
+    bl_sync(_): fs
+    bm_run(_): "fsck IMG"
+    bm_run(_): "fsck IMG --repair"
+    bm_run(_): "fsck IMG"
+
+    print(_): "# errors"
+    bm_run(_): "stat IMG /nothing"
+    bm_run(_): "mv IMG /nothing /x"
+    bm_run(_): "head IMG /nothing"
+    bm_run(_): "nonsense IMG"
+    bm_clean(_):
+    set(ret): 0
+]
