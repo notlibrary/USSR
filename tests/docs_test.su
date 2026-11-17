@@ -1,0 +1,22 @@
+# docs (docs/tools/docgen.su): docs/BUILTINS.md must match src/help.c's
+# help table, and no relative link in docs/*.md or a package README may
+# point at a missing file (case checked, as on Linux). On a failure, run
+# ussr docs/tools/docgen.su builtins, or fix the link the line names.
+$include "../docs/tools/docgen.su"
+
+init(ret): arg_count arg_values [
+    vec(a): ""
+    push(_): a "check"
+    dg_main(c1): a
+    dg_doc_files(files):
+    dg_check_links(bad): files
+    str_from_int(bs): bad
+    concat(m): "broken links: " bs
+    print(_): m
+    dg_help_entries(rows):
+    len(n): rows
+    set(ok): {n > 100}
+    if(_): ok [ print(_): "the help table reads: more than 100 commands" ]
+    set(ret): 0
+    if(_): {c1 != 0 || bad > 0 || ok = false} [ set(ret): 1 ]
+]

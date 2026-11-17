@@ -10,14 +10,16 @@
 - The bootstrap notes (M5, self-host) and `PROMPTS.md`
 - The pipeline infographic and the Moscow and Kremlin GIFs
 
+**Refine pass 1 (0.2.0):** [x] done, [~] partly done; see CHANGELOG.md.
+
 ## New documents
 - A tutorial ("USSR in 30 minutes"): from hello world to a small Ukraine
   web app
 - A cookbook of short recipes: read a file, parse CSV, HTTP GET, run
   a command, async tasks, structs and UNO
-- A standard library reference generated from the `src/libs/*.su`
+- [x] A standard library reference generated from the `src/libs/*.su`
   header comments
-- A builtin reference: every native command with its arguments,
+- [x] A builtin reference: every native command with its arguments,
   results and errors, generated from the C tables so it cannot drift
 - A shell guide for the AGENTS.md features (aliases, `kiev.su`,
   bindings, pipes, environment), updated as each one lands
@@ -28,14 +30,14 @@
   and how a request flows
 - A Moscow (the USSR kernel/OS) architecture document, if it is not
   already covered
-- A packaging guide: writing `box.uno`, the subproject layout (README,
+- [x] A packaging guide: writing `box.uno`, the subproject layout (README,
   CHANGELOG, docs/API.md, examples, tests/TESTPLAN.md, and now
   REFINE.md) and publishing with Ural
-- A contributor guide: the build on each platform, running
+- [~] A contributor guide: the build on each platform, running
   `tests/run_all.sh` (native and russia passes), the expected-output
-  files, and code style (prefixes, globals)
+  files, and code style (prefixes, globals) — partly: the layout, tests that pass everywhere and conventions; the build itself stays in the manual's chapter 16
 - Error message catalogue: every diagnostic with a cause and a fix
-- A glossary: UNO, `.ru`, UUASM, M1–M5, ROUND, the town names
+- [x] A glossary: UNO, `.ru`, UUASM, M1–M5, ROUND, the town names
 - Release notes per version, collected from the subproject CHANGELOGs
 - A security model: what the scheduler, external commands, sockets and
   Ural do and do not protect against
@@ -61,10 +63,10 @@
 - A man page (`ussr.1`) and `--help` text generated from the manual
 
 ## Upkeep
-- A link checker for internal links across `docs/` and the subproject
+- [x] A link checker for internal links across `docs/` and the subproject
   READMEs
-- A docs-coverage report: builtins and library functions with no
-  documentation
+- [~] A docs-coverage report: builtins and library functions with no
+  documentation — partly: builtins without a help entry (docgen coverage); library functions not yet
 - Move `PROMPTS.md` (1 100 lines) into a history or research folder,
   out of the user-facing docs
 
@@ -84,13 +86,13 @@
 - A FAQ
 
 ## Project records
-- A roadmap built from the REFINE.md files: what is planned, in
+- [x] A roadmap built from the REFINE.md files: what is planned, in
   progress and done
 - Architecture decision records: one short file per decision (callbacks
   as processes, UNO over JSON, text results in Dubna)
-- A map of the repository: every folder in one page, with the town
+- [x] A map of the repository: every folder in one page, with the town
   names explained
-- A dependency diagram of the packages from their `box.uno` files
+- [~] A dependency diagram of the packages from their `box.uno` files — partly: a 'needed by' list in REPOSITORY_MAP.md, not a drawn diagram
 - A changelog policy and a release checklist
 - Credits and licences of bundled third-party code (BearSSL, GLFW,
   SQLite, zlib)
