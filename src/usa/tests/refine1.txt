@@ -1,0 +1,11 @@
+typeof: 7 5.5 3
+counter: 0 1
+generic: int double char* ulong other int 30
+popcount: 8 40 1
+clz/ctz: 31 63 3 40
+ffs: 0 3
+bswap: 3412 44332211 807060504030201
+misc: 5 4 8
+case ranges: 10 4 0
+elvis: 5 7
+vla: 9 16; flexible member: 4 9

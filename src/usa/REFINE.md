@@ -10,36 +10,38 @@ match gcc. Limits: no `long double` beyond double, no `-0.0`,
 `system()` returns -1, no signals, and the VM limits are 1M
 instructions, 1 024 nested calls and 2 billion steps.
 
+**Refine pass 1 (0.2.0):** [x] done, [~] partly done; see CHANGELOG.md.
+
 ## Language coverage
 - `setjmp` / `longjmp` (named among emscripten failures)
 - Designated initialisers and compound literals exist; test them in
   every position the C99 grammar allows (nested, in arrays of structs,
   as arguments)
-- Variable-length arrays
+- [x] Variable-length arrays
 - Packed bit-fields: today each bit-field has its own storage of its
   declared type, so struct sizes differ from gcc's
-- Flexible array members
-- `_Static_assert`, `_Alignof`, `_Alignas`, `_Generic`,
-  `_Noreturn`, `_Thread_local` (C11)
+- [x] Flexible array members
+- [~] `_Static_assert`, `_Alignof`, `_Alignas`, `_Generic`,
+  `_Noreturn`, `_Thread_local` (C11) — partly: _Static_assert, _Alignof (were there) and _Generic now; _Alignas is parsed and ignored; _Thread_local not yet
 - Wide characters and `wchar_t` strings (`L"..."`), plus `u8`/`u`/`U`
   literals
 - `_Complex` types
 - `inline` semantics and `static inline` in headers
-- GNU extensions that real code uses: `__attribute__` (more than
+- [~] GNU extensions that real code uses: `__attribute__` (more than
   skipped), statement expressions (present), `typeof`, `__builtin_*`
   (expect, clz, ctz, popcount, offsetof, va_*), case ranges, `?:` with
-  an omitted middle
-- `#include_next`, `__COUNTER__`, `_Pragma`, `#line` honoured in
-  diagnostics
+  an omitted middle — partly: typeof/__typeof__ and the __builtin_ bit functions added; case ranges and ?: with an omitted middle work; __attribute__ is still skipped
+- [~] `#include_next`, `__COUNTER__`, `_Pragma`, `#line` honoured in
+  diagnostics — partly: __COUNTER__ only
 - A 32-bit `long` mode (`-m32`-like) for code that assumes wasm32/ILP32
 - Signed or unsigned `char` as an option (`-fsigned-char`)
 
 ## Diagnostics
-- Warnings: unused variables, implicit declarations, format string
-  mismatches, sign compare, shadowing, missing return
+- [~] Warnings: unused variables, implicit declarations, format string
+  mismatches, sign compare, shadowing, missing return — partly: implicit declarations only (as before), now under -w and -Werror
 - Column numbers and caret lines in errors
 - Several errors per run, with recovery, not stopping at the first
-- `-Werror`, `-w` and `-Wall` flags
+- [x] `-Werror`, `-w` and `-Wall` flags
 
 ## Optimisation
 - Constant folding and propagation across statements

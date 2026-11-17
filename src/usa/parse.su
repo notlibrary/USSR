@@ -47,6 +47,13 @@ usa_error(r): ln msg [
 ]
 usa_warn(r): ln msg [
     set(r): 0
+    # -w: no warnings; -Werror: the first one stops the compile
+    if(_): {usa_nowarn = 1} [ return(_): r ]
+    if(_): {usa_werror = 1} [
+        concat(em): msg " [-Werror]"
+        usa_error(r): ln em
+        return(_): r
+    ]
     usa_where(w): ln
     concat(m): w ": warning: "
     concat(m): m msg
@@ -393,7 +400,7 @@ p_istype_at(r): i [
     at(k): tk_k i
     if(_): {k != 1} [ return(_): r ]
     at(s): tk_s i
-    if(_): {s = "void" || s = "char" || s = "short" || s = "int" || s = "long" || s = "float" || s = "double" || s = "signed" || s = "unsigned" || s = "_Bool" || s = "struct" || s = "union" || s = "enum" || s = "const" || s = "volatile" || s = "static" || s = "extern" || s = "typedef" || s = "inline" || s = "register" || s = "auto" || s = "restrict" || s = "__uval" || s = "__inline" || s = "__inline__" || s = "__restrict" || s = "__restrict__" || s = "_Noreturn" || s = "__extension__" || s = "__const" || s = "_Alignas" || s = "__signed__" || s = "bool"} [
+    if(_): {s = "void" || s = "char" || s = "short" || s = "int" || s = "long" || s = "float" || s = "double" || s = "signed" || s = "unsigned" || s = "_Bool" || s = "struct" || s = "union" || s = "enum" || s = "const" || s = "volatile" || s = "static" || s = "extern" || s = "typedef" || s = "inline" || s = "register" || s = "auto" || s = "restrict" || s = "__uval" || s = "__inline" || s = "__inline__" || s = "__restrict" || s = "__restrict__" || s = "_Noreturn" || s = "__extension__" || s = "__const" || s = "_Alignas" || s = "__signed__" || s = "bool" || s = "typeof" || s = "__typeof__" || s = "__typeof"} [
         set(r): 1
         return(_): r
     ]
@@ -486,6 +493,23 @@ p_declspec(r): [
                 if(_): {r >= 0 || base != ""} [ p_fail(_): "two or more data types in declaration specifiers" ]
                 add(p_i): p_i 1
                 p_enum(r):
+                sub(p_i): p_i 1
+            ]
+            elif(_): {s = "typeof" || s = "__typeof__" || s = "__typeof"} [
+                # typeof(type) or typeof(expression): the expression is not evaluated
+                if(_): {r >= 0 || base != ""} [ p_fail(_): "two or more data types in declaration specifiers" ]
+                add(p_i): p_i 1
+                p_expect(_): "("
+                p_istype(isty):
+                if(_): {isty = 1} [ p_typename(r): ]
+                else(_): [
+                    set(tsave): p_ginit
+                    vec(p_ginit): ""
+                    p_expr(te):
+                    set(p_ginit): tsave
+                    at(r): nd_t te
+                ]
+                p_expect(_): ")"
                 sub(p_i): p_i 1
             ]
             else(_): [

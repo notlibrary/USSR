@@ -33,6 +33,7 @@ global(_): fn_name fn_entry fn_params fn_locals fn_defined fn_np fn_sym fn_kind 
 global(_): g_fix_at g_fix_sym g_endfix g_calls g_calls_f
 global(_): g_slots g_slotn g_fp g_brk g_cont g_labels g_labn g_gotos g_goton g_cur g_icall
 global(_): g_leaves g_ret_slot g_va_slot g_frame usa_zero usa_trace g_hasvla bn_rem
+global(_): usa_nowarn usa_werror
 
 # ======================= pools =======================
 gen_init(r): [

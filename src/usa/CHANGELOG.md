@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+- Refine pass 1:
+  - `_Generic` selection, with pointer types matched through their
+    targets.
+  - `typeof`, `__typeof__` and `__typeof` of a type or of an expression
+    (not evaluated).
+  - `__COUNTER__`.
+  - GCC's bit builtins: `__builtin_popcount`, `clz`, `ctz`, `ffs` and
+    `parity` (with their `l` and `ll` forms), and `__builtin_bswap16`,
+    `32` and `64`.
+  - `__builtin_offsetof`, `__builtin_constant_p` (0),
+    `__builtin_assume_aligned`, `__builtin_prefetch`, `__builtin_memcpy`
+    and `__builtin_memset`.
+  - `-w` drops warnings; `-Werror` turns the first warning into an error
+    and writes no `.ru`.
+  - `tests/refine1.c` with its expected output `tests/refine1.txt` covers
+    these, plus case ranges, `?:` without a middle, VLAs, flexible array
+    members, `_Static_assert` and `_Alignof`.
 - Floating constants are converted exactly at compile time (round to
   nearest even, subnormals, hex floats); `DBL_MAX` no longer became
   infinity, which made printf of an infinity loop forever.
