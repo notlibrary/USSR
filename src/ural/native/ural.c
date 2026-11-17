@@ -6,6 +6,7 @@
 #include "ural_db.h"
 #include "ural_manifest.h"
 #include "ural_url.h"
+#include "ural_more.h"
 
 #include <curl/curl.h>
 #include <ctype.h>
@@ -1105,34 +1106,7 @@ static int url_belongs_to_server(const char *url, const char *server)
 
 static int version_compare(const char *left, const char *right)
 {
-    const unsigned char *a = (const unsigned char *)left;
-    const unsigned char *b = (const unsigned char *)right;
-    while (*a != '\0' && *b != '\0') {
-        if (isdigit(*a) && isdigit(*b)) {
-            const unsigned char *a_start, *b_start;
-            size_t a_len, b_len;
-            while (*a == '0') ++a;
-            while (*b == '0') ++b;
-            a_start = a;
-            b_start = b;
-            while (isdigit(*a)) ++a;
-            while (isdigit(*b)) ++b;
-            a_len = (size_t)(a - a_start);
-            b_len = (size_t)(b - b_start);
-            if (a_len != b_len) return a_len < b_len ? -1 : 1;
-            if (a_len != 0) {
-                int cmp = memcmp(a_start, b_start, a_len);
-                if (cmp != 0) return cmp < 0 ? -1 : 1;
-            }
-            continue;
-        }
-        if (*a != *b)
-            return *a < *b ? -1 : 1;
-        ++a;
-        ++b;
-    }
-    if (*a == '\0' && *b == '\0') return 0;
-    return *a == '\0' ? 1 : -1;
+    return ural_version_compare(left, right);
 }
 
 static int copy_column(sqlite3_stmt *stmt, int column, char **out)
@@ -1710,9 +1684,29 @@ static int install_package(install_context_t *ctx, const char *name, int force)
         goto done;
     }
     for (i = 0; i < manifest.dependency_count; ++i) {
-        if (install_package(ctx, manifest.dependencies[i], 0) != 0) {
+        char dep_name[128];
+        const char *dep_constraint = "";
+        if (ural_dependency_split(manifest.dependencies[i], dep_name, sizeof dep_name,
+                                  &dep_constraint) != 0) {
+            snprintf(ctx->err, ctx->err_size, "bad dependency '%s'", manifest.dependencies[i]);
             ural_manifest_free(&manifest);
             goto done;
+        }
+        if (install_package(ctx, dep_name, 0) != 0) {
+            ural_manifest_free(&manifest);
+            goto done;
+        }
+        if (dep_constraint[0] != '\0') {
+            char *have = NULL;
+            if (installed_version(ctx->db, dep_name, &have) <= 0 ||
+                !ural_constraint_satisfied(have, dep_constraint)) {
+                snprintf(ctx->err, ctx->err_size, "%s needs %s%s, but %s %s is what there is",
+                         name, dep_name, dep_constraint, dep_name, have ? have : "(none)");
+                free(have);
+                ural_manifest_free(&manifest);
+                goto done;
+            }
+            free(have);
         }
     }
     if (URAL_MKDIR(stage) != 0) {
@@ -2041,6 +2035,8 @@ static int list_callback(void *context, int columns, const char *const *names,
     return 0;
 }
 
+#include "ural_cmds.inc"
+
 static void usage(FILE *out)
 {
     fputs("Usage:\n"
@@ -2054,7 +2050,18 @@ static void usage(FILE *out)
           "  ural server add|remove URL\n"
           "  ural server list\n"
           "  ural pack TARGET-DIR PUBLIC-HTTPS-URL\n"
-          "  ural upload TARGET-DIR FTP-URL LOGIN PASSWORD\n", out);
+          "  ural upload TARGET-DIR FTP-URL LOGIN PASSWORD\n"
+          "  ural new NAME [DIR]             a package skeleton (box.uno, README, docs, tests)\n"
+          "  ural check [DIR]                validate a box.uno against its directory\n"
+          "  ural version patch|minor|major [DIR]  bump box.uno, add a CHANGELOG heading\n"
+          "  ural hash FILE                  FNV-1a and SHA-256 of a file\n"
+          "  ural compare V1 V2 / satisfies VERSION CONSTRAINT\n"
+          "  ural completion [bash|powershell]\n"
+          "  ural verify [PACKAGE...]        installed files against their recorded hashes\n"
+          "  ural doctor                     database, files and dependencies of everything\n"
+          "  ural info PACKAGE [--json] / files PACKAGE / tree PACKAGE / why PACKAGE\n"
+          "  ural list --json / backups / clean\n"
+          "  ural run PACKAGE [ARGS...]      ussr runs the package's entry\n", out);
 }
 
 int main(int argc, char **argv)
@@ -2070,9 +2077,13 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc == 2 && !strcmp(argv[1], "--version")) {
-        puts("ural 0.1.0");
+        puts("ural 0.2.0");
         free(state);
         return 0;
+    }
+    if (ural_more_nodb(argc, argv, &result)) {
+        free(state);
+        return result;
     }
     if (argc >= 2 && !strcmp(argv[1], "pack") && argc == 4) {
         if (make_directories(argv[2]) != 0) {
@@ -2122,6 +2133,12 @@ int main(int argc, char **argv)
         free(db_path);
         free(state);
         return 0;
+    }
+    if (ural_more_db(argc, argv, state, db.handle, &result)) {
+        ural_db_close(&db);
+        free(db_path);
+        free(state);
+        return result;
     }
     if (OPENSSL_init_ssl(0, NULL) != 1 ||
         curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {

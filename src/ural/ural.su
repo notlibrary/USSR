@@ -42,3 +42,41 @@ pack(code): target_dir public_url [
 upload(code): target_dir ftp_url login password [
     ural(code): "upload" target_dir ftp_url login password
 ]
+
+# Refine pass 1 commands
+
+new_package(code): name [
+    ural(code): "new" name
+]
+
+check_package(code): dir [
+    ural(code): "check" dir
+]
+
+bump_version(code): part dir [
+    ural(code): "version" part dir
+]
+
+verify_packages(code): [
+    ural(code): "verify"
+]
+
+doctor(code): [
+    ural(code): "doctor"
+]
+
+package_info(code): package [
+    ural(code): "info" package
+]
+
+package_tree(code): package [
+    ural(code): "tree" package
+]
+
+run_package(code): package [
+    ural(code): "run" package
+]
+
+clean_backups(code): [
+    ural(code): "clean"
+]
