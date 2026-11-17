@@ -1,0 +1,789 @@
+# gui.su - Sochi at a Petersburg table: you against two bots, cards drawn
+# on a canvas with big rank letters (7 8 9 10 J Q K A) and suit icons for
+# spades, clubs, diamonds and hearts, bids and moves as buttons.
+#
+#   ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]
+#
+# Click a bid, a contract or a whist choice; click two cards then
+# "Discard"; click a card to play it. Enter goes on to the next hand,
+# Escape closes the window. The rules are sochi.su's, so the game plays
+# exactly as at the terminal table.
+#
+# Petersburg runs every callback as its own process with a copy of the
+# globals, so the callbacks only queue what happened (vectors are shared
+# by reference) and the main loop plays the game, moves the bots and
+# draws.
+$once
+$include "sochi.su"
+$include "../petersburg/petersburg.su"
+$include "../libs/math.su"
+
+global(_): sgu_win sgu_cv sgu_q sgu_hits sgu_sel sgu_w sgu_h sgu_dirty
+global(_): sgu_wait sgu_msg sgu_pause
+
+$define SGU_FELT 3042874
+$define SGU_FELT_DARK 2305579
+$define SGU_CARD 16448245
+$define SGU_CARD_OFF 13619144
+$define SGU_EDGE 3355443
+$define SGU_RED 13111342
+$define SGU_BLACK 1118481
+$define SGU_GOLD 16766282
+$define SGU_BACK 2310286
+$define SGU_TEXT 15790320
+$define SGU_CHIP 15263976
+$define SGU_CW 76
+$define SGU_CH 108
+
+# --- suit icons, filled row by row
+
+# x intervals [x0 x1 ...] of a suit's shape on row y (unit square -1..1)
+sgu_rows(r): suit y [
+    vec(r): ""
+    if(_): {suit = 2} [
+        # diamond
+        set(ay): y
+        if(_): {ay < 0} [ set(ay): {0 - ay} ]
+        set(hw): {0.78 * (1 - ay)}
+        if(_): {hw > 0} [
+            push(_): r {0 - hw}
+            push(_): r hw
+        ]
+        return(r): r
+    ]
+    if(_): {suit = 3} [
+        # heart: two lobes over a point
+        set(k): -1
+        while(_): {k <= 1} [
+            set(dy): {y + 0.42}
+            if(_): {dy * dy <= 0.25} [
+                sqrt(dx): {0.25 - dy * dy}
+                push(_): r {k * 0.5 - dx}
+                push(_): r {k * 0.5 + dx}
+            ]
+            set(k): {k + 2}
+        ]
+        if(_): {y >= -0.42 && y <= 1} [
+            set(hw): {1 - (y + 0.42) / 1.42}
+            push(_): r {0 - hw}
+            push(_): r hw
+        ]
+        return(r): r
+    ]
+    if(_): {suit = 0} [
+        # spade: a heart upside down, on a stem
+        if(_): {y >= -1 && y <= 0.2} [
+            set(hw): {(y + 1) / 1.2}
+            push(_): r {0 - hw}
+            push(_): r hw
+        ]
+        set(k): -1
+        while(_): {k <= 1} [
+            set(dy): {y - 0.2}
+            if(_): {dy * dy <= 0.25} [
+                sqrt(dx): {0.25 - dy * dy}
+                push(_): r {k * 0.5 - dx}
+                push(_): r {k * 0.5 + dx}
+            ]
+            set(k): {k + 2}
+        ]
+    ]
+    else(_): [
+        # club: three leaves on a stem
+        vec(cx): ""
+        vec(cy): ""
+        push(_): cx 0
+        push(_): cy -0.48
+        push(_): cx -0.47
+        push(_): cy 0.14
+        push(_): cx 0.47
+        push(_): cy 0.14
+        set(i): 0
+        while(_): {i < 3} [
+            at(x0): cx i
+            at(y0): cy i
+            set(dy): {y - y0}
+            if(_): {dy * dy <= 0.1764} [
+                sqrt(dx): {0.1764 - dy * dy}
+                push(_): r {x0 - dx}
+                push(_): r {x0 + dx}
+            ]
+            set(i): {i + 1}
+        ]
+        if(_): {y >= -0.2 && y <= 0.3} [
+            push(_): r -0.2
+            push(_): r 0.2
+        ]
+    ]
+    # the stem of spades and clubs
+    if(_): {y >= 0.35 && y <= 1} [
+        set(hw): {0.08 + 0.34 * (y - 0.35) / 0.65}
+        push(_): r {0 - hw}
+        push(_): r hw
+    ]
+]
+
+sgu_suit_color(r): suit [
+    set(r): SGU_BLACK
+    if(_): {suit = 2 || suit = 3} [ set(r): SGU_RED ]
+]
+
+# a suit icon of half-size s centred at (x, y)
+sgu_icon(r): x y s suit [
+    set(r): 0
+    sgu_suit_color(col): suit
+    set(py): {0 - s}
+    while(_): {py <= s} [
+        sgu_rows(iv): suit {py / s}
+        len(n): iv
+        set(i): 0
+        while(_): {i + 1 < n} [
+            at(a): iv i
+            at(b): iv {i + 1}
+            canvasline(_): sgu_cv {x + a * s} {y + py} {x + b * s} {y + py} col
+            set(i): {i + 2}
+        ]
+        set(py): {py + 1}
+    ]
+]
+
+# --- cards
+
+sgu_text(r): x y t col scale [
+    set(r): 0
+    canvastextscale(_): sgu_cv x y t col scale
+]
+
+# a card face; state: 0 plain, 1 can be played (gold edge), 2 not now
+# (greyed), 3 chosen (raised, gold)
+sgu_card(r): x y c state [
+    set(r): 0
+    set(yy): y
+    if(_): {state = 3} [ set(yy): {y - 18} ]
+    set(edge): SGU_EDGE
+    if(_): {state = 1 || state = 3} [ set(edge): SGU_GOLD ]
+    canvasfill(_): sgu_cv {x - 2} {yy - 2} {SGU_CW + 4} {SGU_CH + 4} edge
+    set(face): SGU_CARD
+    if(_): {state = 2} [ set(face): SGU_CARD_OFF ]
+    canvasfill(_): sgu_cv x yy SGU_CW SGU_CH face
+    set(suit): {c >> 3}
+    at(rk): sg_rank_names {c & 7}
+    sgu_suit_color(col): suit
+    # the rank in big letters, a small suit under it, a big one below
+    sgu_text(_): {x + 6} {yy + 6} rk col 4
+    sgu_icon(_): {x + 16} {yy + 50} 8 suit
+    sgu_icon(_): {x + SGU_CW - 24} {yy + SGU_CH - 26} 17 suit
+]
+
+sgu_back(r): x y w h [
+    set(r): 0
+    canvasfill(_): sgu_cv {x - 1} {y - 1} {w + 2} {h + 2} SGU_EDGE
+    canvasfill(_): sgu_cv x y w h SGU_BACK
+    canvasrect(_): sgu_cv {x + 4} {y + 4} {w - 8} {h - 8} SGU_TEXT
+    set(k): 8
+    while(_): {k < w - 8} [
+        canvasline(_): sgu_cv {x + k} {y + 6} {x + k} {y + h - 6} 3367337
+        set(k): {k + 8}
+    ]
+]
+
+# --- buttons ("chips") and what a click hits
+
+sgu_hit(r): x y w h action [
+    set(r): 0
+    vec(e): ""
+    push(_): e x
+    push(_): e y
+    push(_): e w
+    push(_): e h
+    push(_): e action
+    push(_): sgu_hits e
+]
+
+# a button: its label (a bid shows its level and a suit icon)
+sgu_chip(r): x y w h label action [
+    set(r): 0
+    canvasfill(_): sgu_cv {x - 1} {y - 1} {w + 2} {h + 2} SGU_EDGE
+    canvasfill(_): sgu_cv x y w h SGU_CHIP
+    set(suit): -1
+    set(text): label
+    len(n): label
+    if(_): {n >= 2} [
+        slice(last): label {n - 1} 1
+        slice(head): label 0 {n - 1}
+        str_to_number(lv): head
+        typeof(tl): lv
+        if(_): {tl = "integer"} [
+            if(_): {last = "s"} [ set(suit): 0 ]
+            if(_): {last = "c"} [ set(suit): 1 ]
+            if(_): {last = "d"} [ set(suit): 2 ]
+            if(_): {last = "h"} [ set(suit): 3 ]
+        ]
+        if(_): {suit >= 0} [ set(text): head ]
+    ]
+    if(_): {label = "mis"} [ set(text): "Misere" ]
+    str_ends(nt): label "nt"
+    if(_): nt [
+        slice(text): label 0 {n - 2}
+        concat(text): text "NT"
+    ]
+    str_upper(shown): text
+    if(_): {label = "pass" || label = "whist" || label = "half" || label = "open" || label = "closed"} [
+        slice(f): label 0 1
+        str_upper(f): f
+        slice(rest): label 1 {n - 1}
+        concat(shown): f rest
+    ]
+    if(_): {label = "mis"} [ set(shown): "Misere" ]
+    len(tl): shown
+    set(tw): {tl * 14}
+    set(tx): {x + (w - tw) / 2}
+    if(_): {suit >= 0} [ set(tx): {x + (w - tw - 20) / 2} ]
+    sgu_text(_): tx {y + (h - 14) / 2} shown SGU_BLACK 2
+    if(_): {suit >= 0} [ sgu_icon(_): {tx + tw + 12} {y + h / 2} 9 suit ]
+    sgu_hit(_): x y w h action
+]
+
+# --- the table
+
+sgu_name_of(r): view seat [
+    at(names): view V_NAMES
+    at(r): names seat
+]
+
+sgu_player_box(r): x y view seat [
+    set(r): 0
+    sgu_name_of(nm): view seat
+    at(ctl): view V_CTL
+    set(col): SGU_TEXT
+    if(_): {ctl = seat} [ set(col): SGU_GOLD ]
+    sgu_text(_): x y nm col 2
+    at(bids): view V_BIDS
+    at(b): bids seat
+    set(note): ""
+    at(phase): view V_PHASE
+    if(_): {phase = "bid" && b != -1} [
+        so_bid_name(bn): b
+        concat(note): "bid " bn
+        if(_): {b = -2} [ set(note): "" ]
+    ]
+    at(decl): view V_DECL
+    if(_): {decl = seat && phase != "bid"} [
+        at(con): view V_CONTRACT
+        so_bid_name(cn): con
+        set(note): "declarer"
+        if(_): {con >= 0} [ concat(note): "plays " cn ]
+    ]
+    at(wst): view V_WST
+    at(w): wst seat
+    if(_): {w != ""} [ set(note): w ]
+    at(tricks): view V_TRICKS
+    at(tk): tricks seat
+    if(_): {phase = "play" || phase = "done"} [
+        so_int(ts): tk
+        if(_): {note != ""} [ concat(note): note ", " ]
+        concat(note): note ts " tricks"
+    ]
+    sgu_text(_): x {y + 22} note SGU_TEXT 2
+]
+
+# face-down cards (or the hand face up when it is open)
+sgu_side_hand(r): x y view seat [
+    set(r): 0
+    at(counts): view V_COUNTS
+    at(n): counts seat
+    at(others): view V_OTHERS
+    set(shown): null
+    typeof(to): others
+    if(_): {to = "vector"} [
+        len(no): others
+        if(_): {seat < no} [ at(shown): others seat ]
+    ]
+    if(_): {shown != null} [
+        sgu_legal_set(legal): view
+        len(hn): shown
+        set(i): 0
+        while(_): {i < hn} [
+            at(c): shown i
+            so_card_show(cn): c
+            concat(act): "p:" cn
+            btget(can): legal act false
+            set(st): 0
+            if(_): can [ set(st): 1 ]
+            set(cx): {x + i * 30}
+            sgu_card(_): cx y c st
+            if(_): can [ sgu_hit(_): cx y 30 SGU_CH act ]
+            set(i): {i + 1}
+        ]
+        return(r): r
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        sgu_back(_): {x + i * 18} y 50 72
+        set(i): {i + 1}
+    ]
+]
+
+sgu_legal_set(r): view [
+    btree(r):
+    at(legal): view V_LEGAL
+    len(n): legal
+    set(i): 0
+    while(_): {i < n} [
+        at(a): legal i
+        btput(_): r a true
+        set(i): {i + 1}
+    ]
+]
+
+# the cards on the table: the trick (or the last one), the talon
+sgu_center(r): view cx cy [
+    set(r): 0
+    at(trick): view V_TRICK
+    at(tseats): view V_TSEATS
+    at(talon): view V_TALON
+    len(nt): trick
+    set(i): 0
+    while(_): {i < nt} [
+        at(c): trick i
+        at(s): tseats i
+        set(x): {cx - SGU_CW / 2}
+        set(y): {cy - 10}
+        if(_): {s = 1} [
+            set(x): {cx - SGU_CW - 70}
+            set(y): {cy - 70}
+        ]
+        if(_): {s = 2} [
+            set(x): {cx + 70}
+            set(y): {cy - 70}
+        ]
+        sgu_card(_): x y c 0
+        set(i): {i + 1}
+    ]
+    len(nl): talon
+    if(_): {nl > 0} [
+        sgu_text(_): {cx - 60} {cy - 190} "talon" SGU_TEXT 2
+        set(i): 0
+        while(_): {i < nl} [
+            at(c): talon i
+            sgu_card(_): {cx - 40 + i * 84} {cy - 200} c 0
+            set(i): {i + 1}
+        ]
+    ]
+    if(_): {nt = 0} [
+        at(last): view V_LAST
+        sgu_text(_): {cx - 160} {cy + 20} last SGU_TEXT 2
+    ]
+]
+
+# the score sheet: pool, mountain, whists written and money so far
+sgu_scores(r): x y view [
+    set(r): 0
+    canvasfill(_): sgu_cv {x - 10} {y - 10} 290 230 SGU_FELT_DARK
+    at(psize): view V_PSIZE
+    at(handno): view V_HANDNO
+    so_int(ps): psize
+    so_int(hs): handno
+    concat(t): "pool to " ps ", hand " hs
+    sgu_text(_): x y t SGU_GOLD 2
+    sgu_text(_): x {y + 30} "        pool mnt whst" SGU_TEXT 2
+    so_settle(money):
+    at(pool): view V_POOL
+    at(mount): view V_MOUNT
+    at(whist): view V_WHIST
+    set(s): 0
+    while(_): {s < 3} [
+        sgu_name_of(nm): view s
+        concat(nm): nm "        "
+        slice(nm): nm 0 7
+        at(p): pool s
+        at(m): mount s
+        set(wsum): 0
+        set(j): 0
+        while(_): {j < 3} [
+            at(wx): whist {s * 3 + j}
+            set(wsum): {wsum + wx}
+            set(j): {j + 1}
+        ]
+        so_int(a): p
+        so_int(b): m
+        so_int(c): wsum
+        so_lpad(a): a 4
+        so_lpad(b): b 4
+        so_lpad(c): c 5
+        concat(line): nm " " a b c
+        sgu_text(_): x {y + 56 + s * 26} line SGU_TEXT 2
+        set(s): {s + 1}
+    ]
+    sgu_text(_): x {y + 140} "money" SGU_GOLD 2
+    set(s): 0
+    while(_): {s < 3} [
+        at(mv): money s
+        so_int(ms): mv
+        sgu_name_of(nm): view s
+        concat(line): nm ": " ms
+        sgu_text(_): x {y + 164 + s * 20} line SGU_TEXT 2
+        set(s): {s + 1}
+    ]
+]
+
+# what you may do now, as buttons
+sgu_actions(r): view x y w [
+    set(r): 0
+    at(legal): view V_LEGAL
+    at(phase): view V_PHASE
+    len(n): legal
+    if(_): {phase = "discard" && n > 0} [
+        len(ns): sgu_sel
+        so_int(cs): ns
+        concat(t): "Choose two cards for the talon (" cs " of 2)"
+        sgu_text(_): x y t SGU_GOLD 2
+        if(_): {ns = 2} [ sgu_chip(_): {x + 560} {y - 8} 140 34 "discard" "discard" ]
+        return(r): r
+    ]
+    # bids and contracts in a grid of 6 a row, ending just above y
+    set(cw): 92
+    set(chh): 34
+    set(nb): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(a): legal i
+        slice(verb): a 0 2
+        if(_): {verb != "p:"} [ set(nb): {nb + 1} ]
+        set(i): {i + 1}
+    ]
+    so_div(rows): {nb + 5} 6
+    set(y): {y - rows * (chh + 6)}
+    set(col): 0
+    set(row): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(a): legal i
+        len(al): a
+        slice(verb): a 0 2
+        slice(arg): a 2 {al - 2}
+        if(_): {verb != "p:"} [
+            sgu_chip(_): {x + col * (cw + 8)} {y + row * (chh + 6)} cw chh arg a
+            set(col): {col + 1}
+            if(_): {col >= 6} [
+                set(col): 0
+                set(row): {row + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sgu_draw(r): [
+    set(r): 0
+    vec(sgu_hits): ""
+    getwidth(w): sgu_cv
+    getheight(h): sgu_cv
+    if(_): {w < 400} [ set(w): 1200 ]
+    if(_): {h < 300} [ set(h): 800 ]
+    set(sgu_w): w
+    set(sgu_h): h
+    canvasclear(_): sgu_cv SGU_FELT
+    so_view(view): 0
+    at(phase): view V_PHASE
+    # the bots, top left and top right
+    sgu_player_box(_): 30 20 view 1
+    sgu_side_hand(_): 30 70 view 1
+    sgu_player_box(_): {w - 620} 20 view 2
+    sgu_side_hand(_): {w - 620} 70 view 2
+    # the trick in the middle
+    set(cx): {(w - 300) / 2}
+    sgu_center(_): view cx {h / 2 - 40}
+    # the score sheet on the right
+    sgu_scores(_): {w - 290} {h / 2 - 120} view
+    # your hand along the bottom
+    at(hand): view V_HAND
+    sgu_legal_set(legal): view
+    len(n): hand
+    set(span): {n * (SGU_CW + 8)}
+    set(x0): {(w - 300 - span) / 2}
+    if(_): {x0 < 20} [ set(x0): 20 ]
+    set(y0): {h - SGU_CH - 30}
+    at(ctl): view V_CTL
+    set(mine): {ctl = 0}
+    set(i): 0
+    while(_): {i < n} [
+        at(c): hand i
+        so_card_show(cn): c
+        concat(act): "p:" cn
+        btget(can): legal act false
+        set(st): 0
+        if(_): {phase = "play" && mine} [
+            set(st): 2
+            if(_): can [ set(st): 1 ]
+        ]
+        if(_): {phase = "discard" && mine} [
+            so_has(chosen): sgu_sel c
+            if(_): chosen [ set(st): 3 ]
+            concat(act): "sel:" cn
+            set(can): true
+        ]
+        set(x): {x0 + i * (SGU_CW + 8)}
+        sgu_card(_): x y0 c st
+        if(_): {can && mine} [ sgu_hit(_): x {y0 - 18} SGU_CW {SGU_CH + 18} act ]
+        set(i): {i + 1}
+    ]
+    sgu_player_box(_): x0 {y0 - 60} view 0
+    # the status line and the buttons
+    so_render_hint(hint): view
+    if(_): {sgu_msg != ""} [ set(hint): sgu_msg ]
+    sgu_text(_): {x0 + 300} {y0 - 60} hint SGU_GOLD 2
+    if(_): {phase = "done"} [
+        at(res): view V_RESULT
+        sgu_text(_): {cx - 160} {h / 2 + 90} res SGU_GOLD 2
+        sgu_chip(_): {cx - 70} {h / 2 + 120} 140 36 "Next hand" "n:"
+    ]
+    elif(_): {phase = "over"} [
+        sgu_text(_): {cx - 160} {h / 2 + 90} "Game over: the pool is closed" SGU_GOLD 3
+        sgu_chip(_): {cx - 70} {h / 2 + 130} 140 36 "New game" "new"
+    ]
+    elif(_): mine [ sgu_actions(_): view {x0} {y0 - 75} 600 ]
+    set(sgu_dirty): false
+]
+
+# --- what a click does
+
+sgu_find(r): x y [
+    set(r): ""
+    len(n): sgu_hits
+    # the last drawn is on top
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(e): sgu_hits i
+        at(hx): e 0
+        at(hy): e 1
+        at(hw): e 2
+        at(hh): e 3
+        if(_): {x >= hx && x < hx + hw && y >= hy && y < hy + hh} [
+            at(r): e 4
+            return(r): r
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+sgu_do(r): action [
+    set(r): 0
+    set(sgu_msg): ""
+    str_starts(sel): action "sel:"
+    if(_): sel [
+        len(al): action
+        slice(cn): action 4 {al - 4}
+        so_parse_card(c): cn
+        so_has(had): sgu_sel c
+        if(_): had [ so_remove(_): sgu_sel c ]
+        else(_): [
+            len(ns): sgu_sel
+            if(_): {ns < 2} [ push(_): sgu_sel c ]
+        ]
+    ]
+    elif(_): {action = "discard"} [
+        at(a): sgu_sel 0
+        at(b): sgu_sel 1
+        so_card_show(an): a
+        so_card_show(bn): b
+        concat(act): "d:" an " " bn
+        so_act(e): 0 act
+        set(sgu_msg): e
+        vec(sgu_sel): ""
+    ]
+    elif(_): {action = "new"} [
+        at(nm): sg_names 0
+        set(pool): sg_psize
+        so_table(_): pool {(sg_rng + 1) & 2147483647}
+        sgu_names(_): nm
+        so_new_game(_):
+    ]
+    elif(_): {action = "n:"} [
+        so_act(_): 0 "n:"
+        so_act(_): 1 "n:"
+        so_act(_): 2 "n:"
+    ]
+    else(_): [
+        so_act(e): 0 action
+        set(sgu_msg): e
+    ]
+    set(sgu_wait): 0
+    set(sgu_dirty): true
+]
+
+sgu_names(r): name [
+    set(r): 0
+    set(sg_names): 0 name
+    set(sg_names): 1 "Bot Anna"
+    set(sg_names): 2 "Bot Boris"
+    set(sg_kind): 1 "bot"
+    set(sg_kind): 2 "bot"
+]
+
+# a bot's move when it is a bot's turn, after a short pause
+sgu_bots(r): [
+    set(r): 0
+    so_ctl(ctl):
+    if(_): {ctl = 1 || ctl = 2} [
+        set(sgu_wait): {sgu_wait + 1}
+        if(_): {sgu_wait < sgu_pause} [ return(r): r ]
+        so_view(v): ctl
+        so_bot(a): v
+        if(_): {a != ""} [ so_act(_): ctl a ]
+        set(sgu_wait): 0
+        set(sgu_dirty): true
+    ]
+]
+
+# --- the callbacks: they only queue what happened
+
+sgu_pointer(r): canvas x y [
+    set(r): 0
+    vec(e): ""
+    push(_): e "click"
+    push(_): e x
+    push(_): e y
+    push(_): sgu_q e
+]
+
+sgu_key(r): window key [
+    set(r): 0
+    vec(e): ""
+    push(_): e "key"
+    push(_): e key
+    push(_): e 0
+    push(_): sgu_q e
+]
+
+sgu_events(r): [
+    set(r): 0
+    while(_): sgu_q [
+        at(e): sgu_q 0
+        len(n): sgu_q
+        vec(rest): ""
+        set(i): 1
+        while(_): {i < n} [
+            at(x): sgu_q i
+            push(_): rest x
+            set(i): {i + 1}
+        ]
+        # empty the shared queue in place (the callbacks hold it too)
+        while(_): sgu_q [ pop(_): sgu_q ]
+        len(nr): rest
+        set(i): 0
+        while(_): {i < nr} [
+            at(x): rest i
+            push(_): sgu_q x
+            set(i): {i + 1}
+        ]
+        at(kind): e 0
+        at(a1): e 1
+        at(a2): e 2
+        if(_): {kind = "click"} [
+            sgu_find(act): a1 a2
+            if(_): {act != ""} [ sgu_do(_): act ]
+        ]
+        elif(_): {kind = "key"} [
+            # Enter: the next hand; Escape: close
+            if(_): {a1 = 257 || a1 = 335} [
+                if(_): {sg_phase = "done"} [ sgu_do(_): "n:" ]
+            ]
+            if(_): {a1 = 256} [ close(_): sgu_win ]
+        ]
+    ]
+]
+
+sgu_main(r): args [
+    set(r): 0
+    set(name): "You"
+    set(pool): 10
+    set(seed): -1
+    len(n): args
+    set(i): 0
+    while(_): {i < n} [
+        at(a): args i
+        set(v): ""
+        if(_): {i + 1 < n} [ at(v): args {i + 1} ]
+        if(_): {a = "--name"} [ set(name): v ]
+        elif(_): {a = "--pool"} [ str_to_number(pool): v ]
+        elif(_): {a = "--seed"} [ str_to_number(seed): v ]
+        else(_): [
+            print(_): "usage: ussr src/sochi/gui.su [--name NICK] [--pool N] [--seed N]"
+            set(r): 2
+            return(r): r
+        ]
+        set(i): {i + 2}
+    ]
+    if(_): {seed < 0} [
+        time(t):
+        set(seed): {t & 2147483647}
+    ]
+    sgu_open(_): name pool seed
+    show(_): sgu_win
+    run(_):
+    sleep(_): 150
+    alive(sgu_up): sgu_win
+    while(_): sgu_up [
+        sgu_tick(_):
+        sleep(_): 50
+        alive(sgu_up): sgu_win
+    ]
+]
+
+# the game and the window (not shown yet)
+sgu_open(r): name pool seed [
+    set(r): 0
+    so_types(_):
+    set(sg_uni): false
+    so_table(_): pool seed
+    sgu_names(_): name
+    so_new_game(_):
+    vec(sgu_q): ""
+    vec(sgu_hits): ""
+    vec(sgu_sel): ""
+    set(sgu_wait): 0
+    set(sgu_pause): 12
+    set(sgu_msg): ""
+    set(sgu_dirty): true
+    set(sgu_w): 0
+    set(sgu_h): 0
+    createwindow(sgu_win): "Sochi" 1200 800
+    canvas(sgu_cv): sgu_win
+    pack(_): sgu_cv true
+    on(_): sgu_cv "pointer" "sgu_pointer"
+    on(_): sgu_win "key" "sgu_key"
+]
+
+# one turn of the main loop: what was clicked, a bot's move, a redraw
+sgu_tick(r): [
+    set(r): 0
+    sgu_events(_):
+    sgu_bots(_):
+    # at the end of a hand the bots are ready at once
+    if(_): {sg_phase = "done"} [
+        at(r1): sg_ready 1
+        at(r2): sg_ready 2
+        if(_): {r1 = 0} [ so_act(_): 1 "n:" ]
+        if(_): {r2 = 0} [ so_act(_): 2 "n:" ]
+    ]
+    getwidth(w): sgu_cv
+    getheight(h): sgu_cv
+    if(_): {w < 400} [ set(w): 1200 ]
+    if(_): {h < 300} [ set(h): 800 ]
+    if(_): {w != sgu_w || h != sgu_h} [ set(sgu_dirty): true ]
+    if(_): sgu_dirty [ sgu_draw(_): ]
+]
+
+$ifdef __MAIN__
+init(ret): arg_count arg_values [
+    vec(args): ""
+    set(i): 0
+    while(_): {i < arg_count} [
+        at(a): arg_values i
+        push(_): args a
+        set(i): {i + 1}
+    ]
+    sgu_main(ret): args
+]
+$endif

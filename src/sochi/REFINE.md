@@ -29,8 +29,8 @@ and rejoin with the same nickname.
 - Hints for the human player (`/hint`)
 
 ## Interface
-- A Petersburg GUI table with cards drawn on the canvas, click to play,
-  and animations
+- [~] A Petersburg GUI table with cards drawn on the canvas, click to play,
+  and animations — partly: gui.su, you against two bots; no animations, no network play
 - A Kremlin launcher and Mbltishi-friendly layout
 - The full score sheet ("пуля") drawn as a classic diagram
 - Undo of a misclick before others see it (within a second)

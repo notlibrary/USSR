@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+- `gui.su`: Sochi at a Petersburg table, you against two bots.
+  - Cards are drawn on the canvas: big rank letters (7 8 9 10 J Q K A)
+    and filled spade, club, diamond and heart icons, black or red.
+  - Bids, contracts and whist choices are buttons (bids show their level
+    and suit icon). To discard, click two cards, then Discard. To play,
+    click a card; the cards you may play have a gold edge and the rest
+    are greyed.
+  - The bots' hands are face down unless open. The trick or the last one
+    is in the middle, with the talon when it shows. A score sheet shows
+    the pool, mountain, whists and money.
+  - Enter goes to the next hand; Escape closes the window.
+  - Callbacks only queue clicks; the main loop plays, moves the bots and
+    redraws.
+- `tests/gui/sochi_gui_test.su` plays a whole short game through
+  injected canvas clicks.
+
 ## 0.2.0
 - Refine pass 1, in `more.su`:
   - An odds helper: `sochi odds N A B` and `/odds SUIT` give how the
