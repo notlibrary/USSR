@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0-alpha
+- `filedialog.su`: the standard Open and Save dialog,
+  `filedialog(path): mode title start filters`.
+  - It shows the files and folders (`..` first, folders before files) and
+    the Open / Save and Cancel buttons, with a box for the chosen path and
+    a filter, which takes "label|patterns" pairs.
+  - It is modal: it returns the chosen path, or "" on Cancel, Escape or
+    closing it.
+  - Save asks "Replace?" before an existing file, and adds the filter's
+    extension to a bare name.
+- `setmodal(window, true|false)`: while a modal window is open, the other
+  windows take no input, and a click on them brings it to the front.
+- `buttonicon(button, picture)`: a picture before a button's text, on
+  toolbars too. "folder" and "disk" (a diskette) are built in, and a .ppm
+  file works with magenta as the transparent colour.
+- `grid(widget, row, 2, expand)`: column 2 spans the whole row.
+
 ## 0.7.1-alpha
 - Windows are drawn only when something may have changed, at most 120
   times a second. Before, every scheduler pump drew every window and

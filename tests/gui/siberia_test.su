@@ -21,6 +21,30 @@ check(r): label got want [
     set(r): 0
 ]
 
+# the open file dialog: waits for it, puts path in its box and clicks its
+# button (Open or Save); true when there was one
+fd_answer(r): path [
+    set(r): false
+    set(k): 0
+    while(_): {k < 100} [
+        sleep(_): 20
+        set(st): pfd_dialog?
+        btget(w): st "win" null
+        btget(done): st "done" true
+        if(_): {w != null && done = false} [
+            btget(text): st "text"
+            settext(_): text path
+            pfd_cb_text(_): text
+            btget(ok): st "ok"
+            inject(_): ok "click" 0 0 0
+            sleep(_): 150
+            set(r): true
+            return(r): r
+        ]
+        set(k): {k + 1}
+    ]
+]
+
 settle(r): [
     sleep(_): 40
     uiidle(idle):
@@ -203,10 +227,10 @@ init(result): arg_count arg_values [
     tool(_): "new"
     sbget(got): "A1"
     check(_): "NEW empties the sheet" got ""
-    tool(_): "open"
-    ctrl(_): 85
-    typed(_): sheet_file
-    key(_): SB_KEY_ENTER
+    tool(_): "pick-open"
+    fd_answer(had): sheet_file
+    check(_): "OPEN shows the file dialog" had true
+    settle(_):
     sbshow(got): "A2"
     check(_): "opened again" got "24"
     typed(_): "x"

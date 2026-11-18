@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0-alpha
+- The toolbar starts with Open (a folder picture), Save (a diskette) and
+  Save As, in place of Load DXF and Save DXF.
+  - Open and Save As show Petersburg's file dialog, filtered to DXF
+    drawings; it blocks Tula until it is answered.
+  - Save writes the file named in the filename box (the dialog when the
+    box is empty).
+
 ## 0.6.1-alpha
 - The crosshair follows the mouse at the display's rate. The motion
   callback redraws at once (one redraw at a time; the newest position

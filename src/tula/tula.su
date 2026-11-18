@@ -29,6 +29,7 @@
 # tula_buttons tula_button_names (toolbar buttons, see tulatoolbar).
 $once
 $include "../petersburg/petersburg.su"
+$include "../petersburg/filedialog.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
 
@@ -683,6 +684,47 @@ tula_tb_save(result): widget [
     tulasave(_):
 ]
 
+$define TULA_FILTERS "DXF drawings (*.dxf)|*.dxf|All files|*"
+
+# the Open, Save and Save As buttons: Petersburg's file dialog (it blocks
+# until it is answered), then the drawing is read from or written to the
+# file it names, which the filename box keeps
+tula_pick(r): mode title [
+    set(box): tula_path?
+    gettext(start): box
+    filedialog(r): mode title start TULA_FILTERS
+]
+
+tula_tb_open(result): widget [
+    uilock(_):
+    tula_pick(p): "open" "Open a drawing"
+    uiunlock(_):
+    if(_): {p != ""} [
+        set(box): tula_path?
+        settext(_): box p
+        tulaload(_):
+    ]
+]
+
+tula_tb_save_file(result): widget [
+    set(box): tula_path?
+    gettext(name): box
+    str_trim(name): name
+    if(_): {name = ""} [ tula_tb_save_as(_): widget ]
+    else(_): [ tulasave(_): ]
+]
+
+tula_tb_save_as(result): widget [
+    uilock(_):
+    tula_pick(p): "save" "Save the drawing as"
+    uiunlock(_):
+    if(_): {p != ""} [
+        set(box): tula_path?
+        settext(_): box p
+        tulasave(_):
+    ]
+]
+
 tula_tb_zoom_in(result): widget [
     tulazoom(_): 1.25
 ]
@@ -714,6 +756,9 @@ tula_tb_pan_down(result): widget [
 
 tula_tb_add(r): bar label callback [
     button(r): bar label
+    # Open and Save carry their pictures (a folder, a diskette)
+    if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
+    if(_): {callback = "tula_tb_save_file"} [ buttonicon(_): r "disk" ]
     on(_): r "click" callback
     set(_tba_buttons): tula_buttons?
     set(_tba_names): tula_button_names?
@@ -725,10 +770,11 @@ tula_tb_add(r): bar label callback [
 # Petersburg's bitmap font can draw.
 tulatoolbar(toolbar): window [
     toolbar(toolbar): window
+    tula_tb_add(_): toolbar "Open" "tula_tb_open"
+    tula_tb_add(_): toolbar "Save" "tula_tb_save_file"
+    tula_tb_add(_): toolbar "Save As" "tula_tb_save_as"
     tula_tb_add(_): toolbar "Line" "tula_tb_line"
     tula_tb_add(_): toolbar "Circle" "tula_tb_circle"
-    tula_tb_add(_): toolbar "Load DXF" "tula_tb_load"
-    tula_tb_add(_): toolbar "Save DXF" "tula_tb_save"
     tula_tb_add(_): toolbar "Zoom +" "tula_tb_zoom_in"
     tula_tb_add(_): toolbar "Zoom -" "tula_tb_zoom_out"
     tula_tb_add(_): toolbar "Fit" "tula_tb_fit"

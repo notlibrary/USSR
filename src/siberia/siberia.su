@@ -24,6 +24,7 @@
 # namespace (sb_*): the sheet's cells are SbCell structs in sb_cells.
 $once
 $include "../petersburg/petersburg.su"
+$include "../petersburg/filedialog.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
 
@@ -2164,7 +2165,7 @@ sb_action(r): action [
     set(r): 0
     sb_status(_): ""
     sb_is_dirty(dirty):
-    if(_): {(action = "new" || action = "open") && dirty} [
+    if(_): {(action = "new" || action = "open" || action = "pick-open") && dirty} [
         set(sb_dlg_next): action!
         set(sb_dialog): "discard"!
         return(_): r
@@ -2177,6 +2178,35 @@ sb_action(r): action [
         else(_): [ sb_save(_): path ]
     ]
     elif(_): {action = "saveas"} [ sb_dialog_open(_): "save" ]
+    elif(_): {action = "pick-open"} [
+        sb_pick(p): "open"
+        if(_): {p != ""} [ sb_open(_): p ]
+    ]
+    elif(_): {action = "pick-save"} [
+        set(path): sb_path?
+        if(_): {path = ""} [ sb_action(_): "pick-saveas" ]
+        else(_): [ sb_save(_): path ]
+    ]
+    elif(_): {action = "pick-saveas"} [
+        sb_pick(p): "save"
+        if(_): {p != ""} [ sb_save(_): p ]
+    ]
+]
+
+# Petersburg's Open or Save dialog for the sheet or the document: the
+# chosen path, or "" (it blocks until it is answered)
+sb_pick(r): kind [
+    set(mode): sb_mode?
+    set(filters): "Spreadsheets (*.fods)|*.fods|CSV (*.csv)|*.csv|All files|*"
+    set(what): "spreadsheet"
+    if(_): {mode = "pad"} [
+        set(filters): "Documents (*.fodt)|*.fodt|Plain text (*.txt)|*.txt|All files|*"
+        set(what): "document"
+    ]
+    concat(title): "Open a " what
+    if(_): {kind = "save"} [ concat(title): "Save the " what " as" ]
+    set(start): sb_path?
+    filedialog(r): kind title start filters
 ]
 
 sb_new(r): [
@@ -2888,7 +2918,7 @@ sbtool(r): button [
     if(_): {dialog = ""} [
         set(mode): sb_mode?
         if(_): {mode != "pad"} [ sb_sheet_commit(_): ]
-        if(_): {action = "new" || action = "open" || action = "save" || action = "saveas"} [ sb_action(_): action ]
+        if(_): {action = "new" || action = "open" || action = "save" || action = "saveas" || action = "pick-open" || action = "pick-save" || action = "pick-saveas"} [ sb_action(_): action ]
         elif(_): {action = "help"} [ sb_help(_): ]
         elif(_): {action = "sum"} [ sbe_autosum(_): ]
 $ifdef SB_PAD
@@ -2936,9 +2966,13 @@ sbbuild(canvas): window mode [
     set(sb_uifont): ui!
     toolbar(bar): window
     sb_add_button(_): bar "NEW" "new"
-    sb_add_button(_): bar "OPEN" "open"
-    sb_add_button(_): bar "SAVE" "save"
-    sb_add_button(_): bar "SAVE AS" "saveas"
+    # Open and Save carry their pictures; the three open Petersburg's
+    # file dialog (Ctrl+O and Ctrl+S keep the prompt in the window)
+    sb_add_button(ob): bar "OPEN" "pick-open"
+    buttonicon(_): ob "folder"
+    sb_add_button(sv): bar "SAVE" "pick-save"
+    buttonicon(_): sv "disk"
+    sb_add_button(_): bar "SAVE AS" "pick-saveas"
 $ifdef SB_PAD
     if(_): {mode = "pad"} [ sb_pad_toolbar(_): bar ]
     else(_): [ sb_sheet_new(_): ]

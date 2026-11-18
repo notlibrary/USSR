@@ -1,0 +1,503 @@
+# filedialog.su - Petersburg's standard Open and Save dialog.
+#
+#   filedialog(path): mode title start filters
+#
+# mode is "open" or "save"; start is a folder, or a file whose folder
+# opens with its name filled in; filters are "label|patterns" pairs joined
+# by "|", patterns split by ";":
+#   "Drawings (*.dxf)|*.dxf|All files|*"
+# The chosen file's full path comes back (with "/" between folders), or ""
+# when the dialog was cancelled or closed. The dialog is modal: while it
+# is open the program's other windows take no input, and filedialog only
+# returns once it is answered.
+#
+#     [ the files and folders, ".." first          ]
+#     [ ...                                        ]
+#     [ Open / Save ]            [ Cancel ]
+#     [ the selected file (or folder), a path      ]
+#     [ the filter                                 ]
+#
+# Click a name to put it in the box; Open (Enter) opens a folder, or picks
+# the file; a path typed in the box works too. Save asks "Replace?" before
+# it picks a file that is there already, and adds the filter's extension
+# to a name without one. Escape or Cancel gives "".
+#
+# The dialog's state is a btree kept in the hash namespace (pfd_dialog?):
+# a callback runs with copies of the main process's variables, so each
+# callback takes it from there into pfd_st first. The callbacks take no
+# uilock, so a program may open the dialog from a callback that holds it.
+$once
+$include "petersburg.su"
+$include "../libs/strings.su"
+
+global(_): pfd_st
+
+# --- paths
+
+pfd_slashes(r): p [
+    str_replace(r): p "\\" "/"
+]
+
+# the folder above (a root stays where it is)
+pfd_parent(r): dir [
+    pfd_slashes(d): dir
+    len(n): d
+    # drop a trailing slash, but not a root's
+    if(_): {n > 1} [
+        slice(last): d {n - 1} 1
+        slice(before): d {n - 2} 1
+        if(_): {last = "/" && before != ":"} [
+            slice(d): d 0 {n - 1}
+            set(n): {n - 1}
+        ]
+    ]
+    set(r): d
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        slice(c): d i 1
+        if(_): {c = "/"} [
+            slice(r): d 0 i
+            # "C:" or "" are roots: keep their slash
+            len(rl): r
+            if(_): {rl = 0} [ set(r): "/" ]
+            elif(_): {rl = 2} [
+                slice(colon): r 1 1
+                if(_): {colon = ":"} [ concat(r): r "/" ]
+            ]
+            return(r): r
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+pfd_join(r): dir name [
+    pfd_slashes(d): dir
+    str_ends(slash): d "/"
+    if(_): slash [ concat(r): d name ]
+    else(_): [ concat(r): d "/" name ]
+]
+
+pfd_base(r): path [
+    pfd_slashes(p): path
+    len(n): p
+    set(r): p
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        slice(c): p i 1
+        if(_): {c = "/"} [
+            slice(r): p {i + 1} {n - i - 1}
+            return(r): r
+        ]
+        set(i): {i - 1}
+    ]
+]
+
+pfd_is_dir(r): path [
+    is_dir(d): path
+    set(r): {d = 1 || d = true}
+]
+
+# a relative path is taken from the folder shown
+pfd_absolute(r): text [
+    pfd_slashes(t): text
+    set(r): t
+    str_starts(slash): t "/"
+    set(drive): false
+    len(n): t
+    if(_): {n >= 2} [
+        slice(c): t 1 1
+        set(drive): {c = ":"}
+    ]
+    if(_): {slash || drive} [ return(r): r ]
+    btget(dir): pfd_st "dir"
+    pfd_join(r): dir t
+]
+
+# --- filters
+
+# [[label [patterns]] ...] from "label|p1;p2|label|..."
+pfd_filters(r): text [
+    vec(r): ""
+    str_split(parts): text "|"
+    len(n): parts
+    set(i): 0
+    while(_): {i + 1 < n} [
+        at(label): parts i
+        at(pats): parts {i + 1}
+        str_split(ps): pats ";"
+        vec(e): ""
+        push(_): e label
+        push(_): e ps
+        push(_): r e
+        set(i): {i + 2}
+    ]
+    len(nf): r
+    if(_): {nf = 0} [
+        vec(e): ""
+        push(_): e "All files"
+        vec(ps): ""
+        push(_): ps "*"
+        push(_): e ps
+        push(_): r e
+    ]
+]
+
+# does name match one of the patterns (*, *.ext, a name)?
+pfd_match(r): name pats [
+    set(r): false
+    str_lower(low): name
+    len(n): pats
+    set(i): 0
+    while(_): {i < n} [
+        at(p): pats i
+        str_trim(p): p
+        str_lower(p): p
+        if(_): {p = "*" || p = "*.*"} [ set(r): true ]
+        else(_): [
+            str_starts(star): p "*"
+            if(_): star [
+                len(pl): p
+                slice(tail): p 1 {pl - 1}
+                str_ends(hit): low tail
+                if(_): hit [ set(r): true ]
+            ]
+            elif(_): {p = low} [ set(r): true ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# the extension a name without one gets on Save ("" when the filter has
+# no single one)
+pfd_default_ext(r): pats [
+    set(r): ""
+    len(n): pats
+    if(_): {n < 1} [ return(r): r ]
+    at(p): pats 0
+    str_trim(p): p
+    str_starts(st): p "*."
+    len(pl): p
+    if(_): {st && pl > 2 && p != "*.*"} [ slice(r): p 1 {pl - 1} ]
+]
+
+# --- the list
+
+# a name as a list item: "|" and "\" escaped
+pfd_item(r): name [
+    str_replace(r): name "\\" "\\\\"
+    str_replace(r): r "|" "\\|"
+]
+
+# fills the list from the folder and the filter
+pfd_fill(r): [
+    set(r): 0
+    btget(dir): pfd_st "dir"
+    btget(filters): pfd_st "filters"
+    btget(fi): pfd_st "filter"
+    at(f): filters fi
+    at(pats): f 1
+    list_dir(names): dir
+    btree(folders):
+    btree(files):
+    typeof(tn): names
+    if(_): {tn = "vector"} [
+        len(n): names
+        set(i): 0
+        while(_): {i < n} [
+            at(x): names i
+            str_ends(isd): x "/"
+            if(_): isd [
+                len(xl): x
+                slice(x): x 0 {xl - 1}
+            ]
+            if(_): {x != "." && x != ".." && x != ""} [
+                pfd_join(full): dir x
+                if(_): {isd = false} [ pfd_is_dir(isd): full ]
+                str_lower(key): x
+                concat(key): key "\t" x
+                if(_): isd [ btput(_): folders key x ]
+                else(_): [
+                    pfd_match(ok): x pats
+                    if(_): ok [ btput(_): files key x ]
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    # what each list row means: [kind name]
+    vec(rows): ""
+    set(items): ""
+    pfd_parent(up): dir
+    if(_): {up != dir} [
+        vec(e): ""
+        push(_): e "up"
+        push(_): e ".."
+        push(_): rows e
+        set(items): ".."
+    ]
+    btrange(fs): folders
+    len(nf): fs
+    set(i): 0
+    while(_): {i < nf} [
+        at(pr): fs i
+        at(x): pr 1
+        vec(e): ""
+        push(_): e "folder"
+        push(_): e x
+        push(_): rows e
+        pfd_item(it): x
+        if(_): {items != ""} [ concat(items): items "|" ]
+        concat(items): items it "/"
+        set(i): {i + 1}
+    ]
+    btrange(fl): files
+    len(nl): fl
+    set(i): 0
+    while(_): {i < nl} [
+        at(pr): fl i
+        at(x): pr 1
+        vec(e): ""
+        push(_): e "file"
+        push(_): e x
+        push(_): rows e
+        pfd_item(it): x
+        if(_): {items != ""} [ concat(items): items "|" ]
+        concat(items): items it
+        set(i): {i + 1}
+    ]
+    btput(_): pfd_st "rows" rows
+    btget(list): pfd_st "list"
+    settext(_): list items
+]
+
+# shows folder dir, its path in the box
+pfd_go(r): dir [
+    set(r): 0
+    pfd_slashes(d): dir
+    btput(_): pfd_st "dir" d
+    btput(_): pfd_st "confirm" ""
+    pfd_fill(_):
+    btget(text): pfd_st "text"
+    pfd_join(shown): d ""
+    settext(_): text shown
+    pfd_ok_label(_):
+]
+
+pfd_ok_label(r): [
+    set(r): 0
+    btget(ok): pfd_st "ok"
+    btget(mode): pfd_st "mode"
+    set(label): "Open"
+    if(_): {mode = "save"} [ set(label): "Save" ]
+    settext(_): ok label
+]
+
+pfd_finish(r): result [
+    set(r): 0
+    btput(_): pfd_st "result" result
+    btput(_): pfd_st "done" true
+]
+
+# Open / Save: a folder opens; a file is the answer
+pfd_accept(r): [
+    set(r): 0
+    btget(text): pfd_st "text"
+    gettext(typed): text
+    str_trim(typed): typed
+    if(_): {typed = ""} [ return(r): r ]
+    pfd_absolute(path): typed
+    if(_): {path = ".."} [ set(path): "" ]
+    pfd_is_dir(isd): path
+    if(_): isd [
+        pfd_go(_): path
+        return(r): r
+    ]
+    str_ends(slash): path "/"
+    if(_): slash [ return(r): r ]
+    btget(mode): pfd_st "mode"
+    if(_): {mode = "open"} [
+        file_exists(e): path
+        if(_): e [ pfd_finish(_): path ]
+        else(_): [
+            btget(ok): pfd_st "ok"
+            settext(_): ok "Not found"
+        ]
+        return(r): r
+    ]
+    # Save: the filter's extension on a bare name, its folder must be there
+    pfd_base(name): path
+    str_find(dot): name "." 0
+    if(_): {dot < 0} [
+        btget(filters): pfd_st "filters"
+        btget(fi): pfd_st "filter"
+        at(f): filters fi
+        at(pats): f 1
+        pfd_default_ext(ext): pats
+        if(_): {ext != ""} [ concat(path): path ext ]
+    ]
+    pfd_parent(up): path
+    pfd_is_dir(upok): up
+    if(_): {upok = false} [
+        btget(ok): pfd_st "ok"
+        settext(_): ok "No folder"
+        return(r): r
+    ]
+    file_exists(there): path
+    btget(asked): pfd_st "confirm" ""
+    if(_): {there && asked != path} [
+        btput(_): pfd_st "confirm" path
+        btget(ok): pfd_st "ok"
+        settext(_): ok "Replace?"
+        return(r): r
+    ]
+    pfd_finish(_): path
+]
+
+# --- the callbacks (no uilock: see the top)
+
+pfd_cb_ok(result): widget [
+    set(pfd_st): pfd_dialog?
+    pfd_accept(_):
+]
+
+pfd_cb_cancel(result): widget [
+    set(pfd_st): pfd_dialog?
+    pfd_finish(_): ""
+]
+
+pfd_cb_list(result): widget [
+    set(pfd_st): pfd_dialog?
+    btget(rows): pfd_st "rows"
+    getindex(i): widget
+    len(n): rows
+    if(_): {i >= 0 && i < n} [
+        at(row): rows i
+        at(kind): row 0
+        at(name): row 1
+        btget(dir): pfd_st "dir"
+        btget(text): pfd_st "text"
+        if(_): {kind = "up"} [
+            pfd_parent(up): dir
+            pfd_join(shown): up ""
+        ]
+        elif(_): {kind = "folder"} [
+            pfd_join(f): dir name
+            pfd_join(shown): f ""
+        ]
+        else(_): [ pfd_join(shown): dir name ]
+        settext(_): text shown
+        btput(_): pfd_st "confirm" ""
+        pfd_ok_label(_):
+    ]
+]
+
+pfd_cb_filter(result): widget [
+    set(pfd_st): pfd_dialog?
+    getindex(i): widget
+    if(_): {i >= 0} [ btput(_): pfd_st "filter" i ]
+    pfd_fill(_):
+]
+
+pfd_cb_text(result): widget [
+    set(pfd_st): pfd_dialog?
+    # a new name: Save asks again before replacing
+    btput(_): pfd_st "confirm" ""
+    pfd_ok_label(_):
+]
+
+pfd_cb_key(result): window key [
+    set(pfd_st): pfd_dialog?
+    if(_): {key = 257 || key = 335} [ pfd_accept(_): ]
+    elif(_): {key = 256} [ pfd_finish(_): "" ]
+]
+
+# --- the dialog
+
+filedialog(r): mode title start filters [
+    set(r): ""
+    btree(pfd_st):
+    set(pfd_dialog): pfd_st!
+    btput(_): pfd_st "mode" mode
+    btput(_): pfd_st "done" false
+    btput(_): pfd_st "result" ""
+    btput(_): pfd_st "confirm" ""
+    pfd_filters(fl): filters
+    btput(_): pfd_st "filters" fl
+    btput(_): pfd_st "filter" 0
+    # where it opens: a folder, a file's folder (its name filled in), or
+    # the current folder
+    getcwd(cwd):
+    pfd_slashes(cwd): cwd
+    set(dir): cwd
+    set(name): ""
+    if(_): {start != ""} [
+        pfd_slashes(s): start
+        pfd_is_dir(sd): s
+        if(_): sd [ set(dir): s ]
+        else(_): [
+            pfd_parent(up): s
+            pfd_is_dir(upd): up
+            if(_): upd [
+                set(dir): up
+                pfd_base(name): s
+            ]
+        ]
+    ]
+    createwindow(win): title 560 460
+    listbox(list): win ""
+    grid(_): list 0 2 true
+    button(ok): win "Open"
+    grid(_): ok 1 0 false
+    button(cancel): win "Cancel"
+    grid(_): cancel 1 1 false
+    textbox(text): win ""
+    grid(_): text 2 2 false
+    # the filter's labels for the combo box
+    set(labels): ""
+    len(nfl): fl
+    set(i): 0
+    while(_): {i < nfl} [
+        at(f): fl i
+        at(lab): f 0
+        pfd_item(lab): lab
+        if(_): {i > 0} [ concat(labels): labels "|" ]
+        concat(labels): labels lab
+        set(i): {i + 1}
+    ]
+    combobox(combo): win labels
+    grid(_): combo 3 2 false
+    btput(_): pfd_st "win" win
+    btput(_): pfd_st "list" list
+    btput(_): pfd_st "ok" ok
+    btput(_): pfd_st "text" text
+    btput(_): pfd_st "combo" combo
+    on(_): ok "click" "pfd_cb_ok"
+    on(_): cancel "click" "pfd_cb_cancel"
+    on(_): list "change" "pfd_cb_list"
+    on(_): combo "change" "pfd_cb_filter"
+    on(_): text "change" "pfd_cb_text"
+    on(_): win "key" "pfd_cb_key"
+    pfd_go(_): dir
+    if(_): {name != ""} [
+        pfd_join(full): dir name
+        settext(_): text full
+    ]
+    setfocus(_): text
+    setmodal(_): win true
+    show(_): win
+    run(_):
+    # wait for the answer; the program's other windows take no input
+    set(waiting): true
+    while(_): waiting [
+        sleep(_): 20
+        btget(done): pfd_st "done"
+        alive(up): win
+        set(waiting): {done = false && up}
+    ]
+    btget(r): pfd_st "result"
+    alive(up): win
+    if(_): up [
+        setmodal(_): win false
+        destroy(_): win
+    ]
+]

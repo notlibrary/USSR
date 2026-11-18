@@ -77,6 +77,9 @@ typedef struct petersburg_widget
     int motion_dirty;  /* a move not sent yet (sent once per pump) */
     int motion_inside;
     int hide_cursor;   /* hide the system cursor over this canvas */
+    unsigned char *icon; /* a button's picture, RGBA, drawn before its text */
+    int icon_width;
+    int icon_height;
     int x;
     int y;
     int width;
@@ -124,6 +127,9 @@ static int petersburg_run_requested;
    each scheduler slice wait for the display's vertical sync. */
 static int petersburg_dirty = 1;
 static double petersburg_last_render = -1.0;
+/* A modal window (setmodal): while it is open the other windows get no
+   input, and a click on them brings it to the front. */
+static long petersburg_modal_id;
 #define PETERSBURG_FRAME (1.0 / 120.0)
 static int petersburg_last_error;
 static petersburg_event_t petersburg_events[64];
@@ -799,6 +805,12 @@ static void petersburg_layout_flow(petersburg_widget_t *window, int top)
                                       (column_width + gap);
                 widget->y = y;
                 widget->width = column_width;
+                if (widget->grid_column == 2)
+                {
+                    /* column 2: the whole row */
+                    widget->x = margin;
+                    widget->width = window->width - margin * 2;
+                }
                 widget->height = row_heights[row];
             }
             y += row_heights[row] + gap;
@@ -1006,6 +1018,8 @@ static void petersburg_layout_toolbar(petersburg_widget_t *toolbar)
         if (child->parent_id != toolbar->id)
             continue;
         width = (int)strlen(child->text) * 7 + 20;
+        if (child->icon != NULL)
+            width += child->icon_width + (child->text[0] != '\0' ? 6 : -8);
         child->x = x;
         child->y = toolbar->y + 3;
         child->width = width;
@@ -1018,6 +1032,7 @@ static void petersburg_layout_toolbar(petersburg_widget_t *toolbar)
 static void petersburg_render_button(const petersburg_widget_t *widget)
 {
     int inset = 10;
+    int text_x = widget->x + inset;
 
     /* A checked (pressed) button shows the active tool or mode. */
     if (widget->checked)
@@ -1025,10 +1040,110 @@ static void petersburg_render_button(const petersburg_widget_t *widget)
     else
         glColor3f(0.20f, 0.42f, 0.72f);
     petersburg_rect(widget->x, widget->y, widget->width, widget->height);
-    petersburg_text(widget->x + inset,
-                    widget->y + (widget->height - 7) / 2,
-                    widget->text, 1.0f, 1.0f, 1.0f,
-                    widget->width - inset * 2);
+    if (widget->icon != NULL && widget->icon_width > 0)
+    {
+        /* the picture at the left, centred in height, its alpha blended */
+        int ix = widget->x + 6;
+        int iy = widget->y + (widget->height - widget->icon_height) / 2;
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glRasterPos2i(ix, iy + widget->icon_height);
+        glPixelZoom(1.0f, -1.0f);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glDrawPixels(widget->icon_width, widget->icon_height, GL_RGBA,
+                     GL_UNSIGNED_BYTE, widget->icon);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glPixelZoom(1.0f, 1.0f);
+        glDisable(GL_BLEND);
+        text_x = ix + widget->icon_width + 6;
+    }
+    if (widget->text != NULL && widget->text[0] != '\0')
+        petersburg_text(text_x, widget->y + (widget->height - 7) / 2,
+                        widget->text, 1.0f, 1.0f, 1.0f,
+                        widget->x + widget->width - inset - text_x);
+}
+
+/* The built-in pictures, 18 x 18 RGBA: "folder" and "disk". NULL for
+   another name. */
+static unsigned char *petersburg_builtin_icon(const char *name, int *width,
+                                              int *height)
+{
+    enum { W = 18, H = 18 };
+    unsigned char *p;
+    int x;
+    int y;
+    int folder = strcmp(name, "folder") == 0;
+    int disk = strcmp(name, "disk") == 0;
+
+    if (!folder && !disk)
+        return NULL;
+    p = calloc(W * H, 4);
+    if (p == NULL)
+        return NULL;
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x)
+        {
+            unsigned char *q = p + (y * W + x) * 4;
+            unsigned r = 0, g = 0, b = 0, a = 0;
+            if (folder)
+            {
+                /* a manila folder: its tab, then the body, a darker edge */
+                int tab = y >= 3 && y <= 5 && x >= 1 && x <= 7;
+                int body = y >= 5 && y <= 15 && x >= 1 && x <= 16;
+                int edge = body && (y == 5 || y == 15 || x == 1 || x == 16);
+                int lip = y == 7 && x >= 1 && x <= 16;
+                if (tab || body)
+                {
+                    r = 240; g = 196; b = 82; a = 255;
+                }
+                if (tab && (y == 3 || x == 1 || x == 7))
+                {
+                    r = 176; g = 128; b = 34;
+                }
+                if (edge || lip)
+                {
+                    r = 176; g = 128; b = 34;
+                }
+            }
+            else
+            {
+                /* a diskette: dark case with a cut corner, the metal
+                   shutter at the top, the white label below */
+                int inside = x >= 1 && x <= 16 && y >= 1 && y <= 16 &&
+                             !(x >= 14 && y <= 3 && (x - 14) > (y - 1));
+                int shutter = x >= 5 && x <= 12 && y >= 1 && y <= 6;
+                int slot = x >= 9 && x <= 11 && y >= 2 && y <= 5;
+                int label = x >= 3 && x <= 14 && y >= 9 && y <= 16;
+                int line = label && (y == 11 || y == 13);
+                if (inside)
+                {
+                    r = 46; g = 64; b = 110; a = 255;
+                }
+                if (inside && shutter)
+                {
+                    r = 196; g = 202; b = 212;
+                }
+                if (inside && slot)
+                {
+                    r = 46; g = 64; b = 110;
+                }
+                if (inside && label)
+                {
+                    r = 246; g = 246; b = 240;
+                }
+                if (inside && line)
+                {
+                    r = 160; g = 168; b = 180;
+                }
+            }
+            q[0] = (unsigned char)r;
+            q[1] = (unsigned char)g;
+            q[2] = (unsigned char)b;
+            q[3] = (unsigned char)a;
+        }
+    *width = W;
+    *height = H;
+    return p;
 }
 
 /* Draws the retained primitives clipped to the canvas rectangle. */
@@ -1323,6 +1438,26 @@ static petersburg_widget_t *petersburg_window_for(GLFWwindow *native)
     return (petersburg_widget_t *)glfwGetWindowUserPointer(native);
 }
 
+static petersburg_widget_t *petersburg_find(long id);
+
+/* 1 when native is not the open modal window (its input is dropped) */
+static int petersburg_input_blocked(GLFWwindow *native)
+{
+    petersburg_widget_t *window = petersburg_window_for(native);
+    petersburg_widget_t *modal;
+
+    if (petersburg_modal_id == 0 || window == NULL)
+        return 0;
+    modal = petersburg_find(petersburg_modal_id);
+    if (modal == NULL || modal->native_window == NULL ||
+        glfwWindowShouldClose(modal->native_window))
+    {
+        petersburg_modal_id = 0;
+        return 0;
+    }
+    return window->id != petersburg_modal_id;
+}
+
 /* The cursor moved: the canvas under it keeps the position for its
    "motion" callback, sent once per pump (so a fast mouse does not flood
    the scheduler); leaving a canvas sends -1, -1. A canvas may ask for the
@@ -1337,7 +1472,7 @@ static void petersburg_cursor_pos(GLFWwindow *native, double x, double y)
     int framebuffer_height;
     int hide = 0;
 
-    if (window == NULL)
+    if (window == NULL || petersburg_input_blocked(native))
         return;
     glfwGetWindowSize(native, &logical_width, &logical_height);
     glfwGetFramebufferSize(native, &framebuffer_width, &framebuffer_height);
@@ -1404,6 +1539,13 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
     double mouse_y;
     (void)modifiers;
     petersburg_dirty = 1;
+    if (petersburg_input_blocked(native))
+    {
+        petersburg_widget_t *modal = petersburg_find(petersburg_modal_id);
+        if (action == GLFW_PRESS && modal != NULL)
+            glfwFocusWindow(modal->native_window);
+        return;
+    }
 
     if (window == NULL || action != GLFW_PRESS ||
         (button != GLFW_MOUSE_BUTTON_LEFT &&
@@ -1520,6 +1662,10 @@ static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
     char *text;
     petersburg_widget_t *window = petersburg_window_for(native);
     petersburg_dirty = 1;
+    if (petersburg_input_blocked(native))
+    {
+        return;
+    }
 
     /* typed text for the window, any script (Cyrillic too) */
     if (window != NULL && codepoint >= 32 && codepoint != 127 &&
@@ -1554,6 +1700,10 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     (void)scancode;
     (void)modifiers;
     petersburg_dirty = 1;
+    if (petersburg_input_blocked(native))
+    {
+        return;
+    }
 
     if (action == GLFW_RELEASE)
     {
@@ -1623,6 +1773,10 @@ static void petersburg_scroll(GLFWwindow *native, double x_offset,
     int framebuffer_height;
     (void)x_offset;
     petersburg_dirty = 1;
+    if (petersburg_input_blocked(native))
+    {
+        return;
+    }
 
     if (window == NULL || y_offset == 0.0)
         return;
@@ -1910,6 +2064,7 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->double_callback);
     free(widget->char_callback);
     free(widget->motion_callback);
+    free(widget->icon);
     free(widget);
 }
 
@@ -2703,7 +2858,7 @@ int ussr_petersburg_dispatch(
             !petersburg_expect_integer(values, 2, &column) ||
             (values[3].type != USSR_INTEGER &&
              values[3].type != USSR_BOOLEAN) ||
-            row < 0 || row >= 256 || column < 0 || column > 1 ||
+            row < 0 || row >= 256 || column < 0 || column > 2 ||
             (values[3].type == USSR_INTEGER &&
              values[3].data.integer != 0 &&
              values[3].data.integer != 1) ||
@@ -3153,6 +3308,82 @@ int ussr_petersburg_dispatch(
         *out = ussr_integer(petersburg_focus != NULL &&
                             petersburg_focus->parent_id == id
                                 ? petersburg_focus->id : 0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_set_modal") == 0)
+    {
+        long on;
+        /* setmodal(window, true): only this window takes input until it
+           closes or setmodal(window, false) */
+        if (value_count != 2 ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_WINDOW ||
+            (values[1].type != USSR_BOOLEAN && values[1].type != USSR_INTEGER))
+        {
+            fprintf(stderr, "USSR: %s expects a window and true or false\n", name);
+            return -1;
+        }
+        on = values[1].type == USSR_BOOLEAN ? values[1].data.boolean
+                                             : (long)values[1].data.integer;
+        if (on)
+        {
+            petersburg_modal_id = id;
+            if (widget->native_window != NULL)
+                glfwFocusWindow(widget->native_window);
+        }
+        else if (petersburg_modal_id == id)
+            petersburg_modal_id = 0;
+        *out = ussr_integer(0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_button_icon") == 0)
+    {
+        unsigned char *pixels;
+        int w = 0;
+        int h = 0;
+        /* buttonicon(button, "folder" | "disk" | "picture.ppm") */
+        if (!petersburg_arity(name, value_count, 2) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            !petersburg_expect_string(values, 1, &text) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_BUTTON)
+        {
+            fprintf(stderr, "USSR: %s expects a button and a picture\n", name);
+            return -1;
+        }
+        pixels = petersburg_builtin_icon(text, &w, &h);
+        if (pixels == NULL)
+        {
+            /* a PPM file: magenta (255, 0, 255) is transparent */
+            petersburg_widget_t image = {0};
+            size_t i;
+            if (!petersburg_read_ppm(&image, text))
+                return -1;
+            w = image.image_width;
+            h = image.image_height;
+            pixels = malloc((size_t)w * h * 4);
+            if (pixels == NULL)
+            {
+                free(image.pixels);
+                return -1;
+            }
+            for (i = 0; i < (size_t)w * h; ++i)
+            {
+                unsigned char *s = image.pixels + i * 3;
+                pixels[i * 4] = s[0];
+                pixels[i * 4 + 1] = s[1];
+                pixels[i * 4 + 2] = s[2];
+                pixels[i * 4 + 3] = (s[0] == 255 && s[1] == 0 && s[2] == 255)
+                                        ? 0 : 255;
+            }
+            free(image.pixels);
+        }
+        free(widget->icon);
+        widget->icon = pixels;
+        widget->icon_width = w;
+        widget->icon_height = h;
+        *out = ussr_integer(0);
         return 1;
     }
     if (strcmp(name, "petersburg_canvas_dash") == 0)

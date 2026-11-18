@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+- The toolbar's OPEN (a folder picture), SAVE (a diskette) and SAVE AS
+  show Petersburg's file dialog (spreadsheets, CSV or all files). It
+  blocks the window until it is answered.
+  - OPEN still asks before it drops unsaved changes.
+  - SAVE writes the file the sheet came from, or asks for one.
+  - Ctrl+O and Ctrl+S keep the prompt drawn in the window.
+
 ## 0.4.0
 - `edit.su`: editing at the window.
   - Selections: Shift with the arrows, Page Up/Down or Home/End, a
