@@ -332,4 +332,87 @@ Now the whole thing asking me to become the kernel developer Will do anyway it's
 
 If you think you are the better just do it talk is cheap
 
+## Stats
+
+   18631 text files.
+   12680 unique files.
+    9585 files ignored.
+
+github.com/AlDanial/cloc v 2.06  T=476.40 s (26.6 files/s, 7272.5 lines/s)
+---------------------------------------------------------------------------------------
+Language                             files          blank        comment           code
+---------------------------------------------------------------------------------------
+C                                     4493         175779         267939        1256143
+Perl                                   781          39622          36634         280289
+Text                                   387          28385              0         226818
+Assembly                               342          37486           2577         223330
+C/C++ Header                          1553          24729          66103         160982
+XML                                   2189          12140            125         123309
+Markdown                              1231          40101            442         122567
+make                                    93           3759           5136          71786
+Bourne Shell                           103          12887          10960          71296
+m4                                      34           3356           1802          25813
+D                                     1025              0              0          22224
+Python                                  70           1952           2475          15961
+PHP                                     18            398            194          11675
+Bourne Again Shell                       3           1806           2737          10040
+CMake                                  121           1536           2132          10031
+Tcl/Tk                                  15            556           3887           5916
+C#                                      42            743           2110           4448
+Pascal                                  38            862           9372           3999
+Fortran 77                              17             71             11           2820
+Ada                                     10            599            560           1682
+yacc                                     2            202             55           1570
+YAML                                    10            120             63           1104
+C++                                      7            221            233            795
+SVG                                      3              1              0            670
+IDL                                      1              0              0            642
+JSON                                    20              1              0            584
+HTML                                     1              5              1            544
+JavaScript                               3             79             54            492
+CSV                                      5              2              0            427
+lex                                      2            105              6            410
+awk                                      3             56             74            301
+Windows Module Definition                6              5              7            291
+Visual Studio Solution                   3              2              2            241
+CSS                                      1             10              1            222
+MSBuild script                           2              4              8            174
+Windows Resource File                    7             22             70            162
+Gencat NLS                               1              2              0            132
+vim script                               3             31             86            118
+DOS Batch                                7             13             24            114
+TNSDL                                    1              3              0            113
+Starlark                                 2             12             40             91
+WiX source                               2             12              0             76
+Scheme                                   8             15              6             71
+INI                                      2             11              0             56
+PlantUML                                 1             13              0             46
+Dockerfile                               2             15             32             44
+SQL                                      1              6              0             39
+Lisp                                     2              4             39             35
+SAS                                      1             14             22             32
+NAnt script                              1              7              0             26
+Ruby                                     1              5              8             16
+sed                                      2              0              6             15
+diff                                     1              0              0             11
+Snakemake                                1              0              1              5
+---------------------------------------------------------------------------------------
+SUM:                                 12680         387765         416034        2660798
+---------------------------------------------------------------------------------------
+
+   18631 text files.
+   13031 unique files.
+   21914 files ignored.
+
+github.com/AlDanial/cloc v 2.06  T=251.20 s (1.4 files/s, 808.9 lines/s)
+-------------------------------------------------------------------------------
+Language                     files          blank        comment           code
+-------------------------------------------------------------------------------
+USSR                           351           7813          11369         184024
+-------------------------------------------------------------------------------
+SUM:                           351           7813          11369         184024
+-------------------------------------------------------------------------------
+
+**~2.9 million lines** Claude is unstoppable Timestamp: 2026-11-18
+
 P.S. СССР Средство Создания Совершенных Разработок
