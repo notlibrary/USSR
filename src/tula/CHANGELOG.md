@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1-alpha
+- The crosshair follows the mouse at the display's rate. The motion
+  callback redraws at once (one redraw at a time; the newest position
+  wins) instead of waiting for the 15 ms loop. Together with Petersburg
+  0.7.1, a move went from about 150 ms to about 25 ms through the real
+  event path, one or two 60 Hz frames.
+
 ## 0.6.0-alpha
 - `scope.su`: a crosshair in place of the mouse arrow, as LibreCAD draws
   one: two dashed lines across the canvas, in another colour, through the

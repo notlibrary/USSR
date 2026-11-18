@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1-alpha
+- Windows are drawn only when something may have changed, at most 120
+  times a second. Before, every scheduler pump drew every window and
+  waited for the display's vertical sync, so a program with a window open
+  ran in 16 ms steps (200 x `sleep(5)` took 10 s; now 1 s). Something may
+  have changed after a Petersburg call that is not a read, input, a
+  resize or an expose.
+- Windows: a millisecond timer (`timeBeginPeriod(1)`), and the scheduler's
+  clock from the performance counter (`GetTickCount64` moves in 15.6 ms
+  steps), so `sleep` and timers are on time.
+
 ## 0.7.0-alpha
 - A held key sends its repeats (`GLFW_REPEAT`) to the window's `"key"`
   callback, so holding an arrow keeps moving in every program; text
