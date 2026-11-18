@@ -259,6 +259,26 @@ canvascursor(result): canvas mode [
     petersburg_canvas_cursor(result): canvas mode
 ]
 
+# canvaskeep marks the shapes drawn so far; canvasback drops the ones
+# drawn after the mark. A program redraws a moving overlay (a crosshair, a
+# rubber band) without drawing everything under it again.
+canvaskeep(result): canvas [
+    petersburg_canvas_keep(result): canvas
+]
+
+canvasback(result): canvas [
+    petersburg_canvas_back(result): canvas
+]
+
+# a dashed line, dash and gap pixels long (the segments are made natively)
+canvasdash(result): canvas x1 y1 x2 y2 color dash gap [
+    petersburg_canvas_dash(result): canvas x1 y1 x2 y2 color dash gap
+]
+
+canvasdashcircle(result): canvas cx cy radius color dash gap [
+    petersburg_canvas_dash_circle(result): canvas cx cy radius color dash gap
+]
+
 alive(result): widget [
     petersburg_alive(result): widget
 ]

@@ -11,8 +11,12 @@
 #
 # The canvas "motion" callback only keeps the position (it comes once per
 # frame); tsc_loop redraws when it changed, so a fast mouse never queues
-# more work than one redraw. Hash keys: tula_mx tula_my (-1: the cursor
-# is away) and tula_mdirty.
+# more work than one redraw. And that redraw is only the overlay: the
+# drawing is marked with canvaskeep after it is drawn, and a move drops
+# the old crosshair (canvasback) and draws the new one, its dashes cut
+# natively (canvasdash). Where Petersburg lacks these (tula_fast false)
+# everything is drawn again, as before. Hash keys: tula_mx tula_my (-1:
+# the cursor is away), tula_mdirty and tula_fast.
 $once
 
 $define TSC_CROSS 14697012
@@ -25,6 +29,7 @@ tsc_state(r): [
     set(tula_mx): -1!
     set(tula_my): -1!
     set(tula_mdirty): false!
+    set(tula_fast): false!
     set(r): 0
 ]
 
@@ -50,6 +55,11 @@ tsc_point(r): x y [
 # a dashed line from (x1, y1) to (x2, y2)
 tsc_dashed(r): canvas x1 y1 x2 y2 color [
     set(r): 0
+    set(fast): tula_fast?
+    if(_): {fast = true} [
+        canvasdash(_): canvas x1 y1 x2 y2 color TSC_DASH TSC_GAP
+        return(r): r
+    ]
     set(dx): {x2 - x1}
     set(dy): {y2 - y1}
     sqrt(len_): {dx * dx + dy * dy}
@@ -69,6 +79,11 @@ tsc_dashed(r): canvas x1 y1 x2 y2 color [
 tsc_dashed_circle(r): canvas cx cy radius color [
     set(r): 0
     if(_): {radius < 1} [ return(r): r ]
+    set(fast): tula_fast?
+    if(_): {fast = true} [
+        canvasdashcircle(_): canvas cx cy radius color TSC_DASH TSC_GAP
+        return(r): r
+    ]
     set(circ): {2 * 3.14159265 * radius}
     str_trunc(n): {circ / (TSC_DASH + TSC_GAP)}
     if(_): {n < 8} [
@@ -137,6 +152,19 @@ tsc_overlay(r): canvas [
     canvastext(_): canvas {px + 12} {py + 10} t TSC_CROSS
 ]
 
+# a move: just the overlay again over the kept drawing (or all of it)
+tsc_refresh(r): [
+    set(r): 0
+    set(canvas): tula_canvas?
+    set(fast): tula_fast?
+    if(_): {fast = true} [
+        canvasback(_): canvas
+        tsc_overlay(_): canvas
+        return(r): r
+    ]
+    tula_redraw(_):
+]
+
 # the window's redraw loop: a redraw when the cursor moved
 tsc_loop(r): window [
     set(r): 0
@@ -146,7 +174,7 @@ tsc_loop(r): window [
         if(_): {dirty = true} [
             uilock(_):
             set(tula_mdirty): false!
-            tula_redraw(_):
+            tsc_refresh(_):
             uiunlock(_):
         ]
         sleep(_): 15

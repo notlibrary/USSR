@@ -270,7 +270,10 @@ tula_redraw(r): [
         canvasline(_): _trd_canvas {_trd_px - 5} _trd_py {_trd_px + 5} _trd_py TULA_ANCHOR
         canvasline(_): _trd_canvas _trd_px {_trd_py - 5} _trd_px {_trd_py + 5} TULA_ANCHOR
     ]
-    # the crosshair and the preview of what is being drawn (scope.su)
+    # the crosshair and the preview of what is being drawn (scope.su), over
+    # the drawing kept for the moves that redraw only them
+    set(_trd_fast): tula_fast?
+    if(_): {_trd_fast = true} [ canvaskeep(_): _trd_canvas ]
     tsc_overlay(_): _trd_canvas
     set(r): 0
 ]
@@ -1314,6 +1317,10 @@ tula_scope_on(r): canvas [
     set(r): 0
     on(_): canvas "motion" "tula_app_motion"
     canvascursor(_): canvas "hidden"
+    # the overlay natives: moves redraw only the crosshair
+    canvaskeep(_): canvas
+    canvasback(_): canvas
+    set(tula_fast): true!
 ]
 
 tula_app_wheel(result): canvas x y direction [

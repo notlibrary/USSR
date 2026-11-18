@@ -95,6 +95,7 @@ typedef struct petersburg_widget
     petersburg_shape_t *shapes;
     size_t shape_count;
     size_t shape_capacity;
+    size_t keep_count;  /* canvaskeep: shapes up to here stay on canvasback */
     unsigned long background;
     int edge_to_edge; /* a fullscreen window: no margin around widgets */
     struct petersburg_widget *next;
@@ -1718,6 +1719,132 @@ static void petersburg_canvas_reset(petersburg_widget_t *canvas)
     for (index = 0; index < canvas->shape_count; ++index)
         free(canvas->shapes[index].text);
     canvas->shape_count = 0;
+    canvas->keep_count = 0;
+}
+
+/* Appends a shape (its text, if any, already owned by the shape). */
+static int petersburg_shape_push(petersburg_widget_t *canvas,
+                                 const petersburg_shape_t *shape)
+{
+    if (canvas->shape_count >= PETERSBURG_MAX_SHAPES)
+    {
+        fprintf(stderr, "USSR: Petersburg canvas holds at most %d shapes\n",
+                PETERSBURG_MAX_SHAPES);
+        return -1;
+    }
+    if (canvas->shape_count == canvas->shape_capacity)
+    {
+        size_t capacity = canvas->shape_capacity == 0
+                              ? 64 : canvas->shape_capacity * 2;
+        petersburg_shape_t *grown = realloc(canvas->shapes,
+                                            capacity * sizeof(*grown));
+        if (grown == NULL)
+        {
+            fprintf(stderr, "USSR: Petersburg could not grow a canvas\n");
+            return -1;
+        }
+        canvas->shapes = grown;
+        canvas->shape_capacity = capacity;
+    }
+    canvas->shapes[canvas->shape_count++] = *shape;
+    return 0;
+}
+
+/* canvasdash: a dashed line as line shapes, dash and gap pixels long;
+   canvasdashcircle: a dashed circle as arcs of about dash pixels. */
+static int petersburg_canvas_dash(const char *name, const ussr_value_t *values,
+                                  size_t value_count, int circle,
+                                  ussr_value_t *out)
+{
+    petersburg_widget_t *canvas;
+    petersburg_shape_t shape;
+    double v[6];
+    long id;
+    size_t numbers = circle ? 3 : 4;
+    size_t index;
+    double dash;
+    double gap;
+
+    if (!petersburg_arity(name, value_count, 1 + numbers + 3) ||
+        !petersburg_expect_integer(values, 0, &id) ||
+        (canvas = petersburg_find(id)) == NULL ||
+        canvas->type != PETERSBURG_CANVAS)
+    {
+        fprintf(stderr, "USSR: %s expects a canvas handle\n", name);
+        return -1;
+    }
+    for (index = 0; index < numbers; ++index)
+        if (!petersburg_expect_number(values, 1 + index, &v[index]))
+        {
+            fprintf(stderr, "USSR: %s expects finite numbers\n", name);
+            return -1;
+        }
+    memset(&shape, 0, sizeof(shape));
+    if (!petersburg_color_value(values, 1 + numbers, &shape.color) ||
+        !petersburg_expect_number(values, 2 + numbers, &dash) ||
+        !petersburg_expect_number(values, 3 + numbers, &gap) ||
+        dash <= 0.0 || gap < 0.0)
+    {
+        fprintf(stderr, "USSR: %s expects a color, then dash > 0 and gap >= 0\n", name);
+        return -1;
+    }
+    if (!circle)
+    {
+        double dx = v[2] - v[0];
+        double dy = v[3] - v[1];
+        double length = sqrt(dx * dx + dy * dy);
+        double d;
+        shape.kind = PETERSBURG_SHAPE_LINE;
+        if (length > 0.0)
+        {
+            double ux = dx / length;
+            double uy = dy / length;
+            for (d = 0.0; d < length; d += dash + gap)
+            {
+                double e = d + dash < length ? d + dash : length;
+                shape.v[0] = v[0] + ux * d;
+                shape.v[1] = v[1] + uy * d;
+                shape.v[2] = v[0] + ux * e;
+                shape.v[3] = v[1] + uy * e;
+                if (petersburg_shape_push(canvas, &shape) != 0)
+                    return -1;
+            }
+        }
+    }
+    else if (v[2] > 0.0)
+    {
+        double circumference = 2.0 * 3.14159265358979 * v[2];
+        long count = (long)(circumference / (dash + gap));
+        long i;
+        shape.kind = PETERSBURG_SHAPE_ARC;
+        shape.v[0] = v[0];
+        shape.v[1] = v[1];
+        shape.v[2] = v[2];
+        if (count < 8)
+        {
+            shape.kind = PETERSBURG_SHAPE_CIRCLE;
+            if (petersburg_shape_push(canvas, &shape) != 0)
+                return -1;
+        }
+        else
+        {
+            double step;
+            double on;
+            if (count > 2000)
+                count = 2000;
+            step = 360.0 / (double)count;
+            on = step * dash / (dash + gap);
+            for (i = 0; i < count; ++i)
+            {
+                shape.v[3] = step * (double)i;
+                shape.v[4] = step * (double)i + on;
+                if (petersburg_shape_push(canvas, &shape) != 0)
+                    return -1;
+            }
+        }
+    }
+    *out = ussr_integer(0);
+    return 1;
 }
 
 static void petersburg_free_widget(petersburg_widget_t *widget)
@@ -2976,6 +3103,35 @@ int ussr_petersburg_dispatch(
         *out = ussr_integer(petersburg_focus != NULL &&
                             petersburg_focus->parent_id == id
                                 ? petersburg_focus->id : 0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_canvas_dash") == 0)
+        return petersburg_canvas_dash(name, values, value_count, 0, out);
+    if (strcmp(name, "petersburg_canvas_dash_circle") == 0)
+        return petersburg_canvas_dash(name, values, value_count, 1, out);
+    if (strcmp(name, "petersburg_canvas_keep") == 0 ||
+        strcmp(name, "petersburg_canvas_back") == 0)
+    {
+        /* canvaskeep: the shapes so far stay; canvasback: the ones added
+           after canvaskeep go (an overlay redrawn without the rest) */
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_CANVAS)
+        {
+            fprintf(stderr, "USSR: %s expects a canvas handle\n", name);
+            return -1;
+        }
+        if (name[18] == 'k')
+            widget->keep_count = widget->shape_count;
+        else if (widget->keep_count <= widget->shape_count)
+        {
+            size_t index;
+            for (index = widget->keep_count; index < widget->shape_count; ++index)
+                free(widget->shapes[index].text);
+            widget->shape_count = widget->keep_count;
+        }
+        *out = ussr_integer((long)widget->shape_count);
         return 1;
     }
     if (strcmp(name, "petersburg_canvas_cursor") == 0)

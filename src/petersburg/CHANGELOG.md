@@ -8,6 +8,11 @@
   most once a frame (the latest position), and -1, -1 when it leaves.
 - `canvascursor(canvas, "hidden" | "normal")` hides the system cursor over
   a canvas, for programs that draw their own.
+- `canvaskeep(canvas)` and `canvasback(canvas)`: mark the shapes drawn so
+  far, then drop only what was added after the mark, so that a moving
+  overlay is redrawn alone.
+- `canvasdash` and `canvasdashcircle`: dashed lines and circles, cut into
+  segments natively.
 
 ## 0.6.0-alpha
 Refine pass 1 from REFINE.md: `more.su`, in USSR on top of the native

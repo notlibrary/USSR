@@ -104,6 +104,28 @@ init(result): arg_count arg_values [
     tula_redraw(_):
     canvascount(n7): canvas
     tst_check(_): "the overlay goes when the cursor leaves" {n7 < n1}
+    # the fast path: the drawing kept, a move redraws only the overlay,
+    # and it draws exactly what a full redraw draws
+    tulatool(_): "line"
+    inject(_): canvas "pointer" 403 297 0
+    tst_settle(_):
+    set(tula_mx): 603!
+    set(tula_my): 197!
+    set(tula_fast): false!
+    tula_redraw(_):
+    canvascount(full): canvas
+    set(tula_fast): true!
+    tula_redraw(_):
+    set(tula_mx): 700!
+    tsc_refresh(_):
+    set(tula_mx): 603!
+    tsc_refresh(_):
+    canvascount(quick): canvas
+    tst_check(_): "an overlay-only redraw draws the same as a full one" {quick = full}
+    set(tula_mx): -1!
+    tsc_refresh(_):
+    canvascount(bare): canvas
+    tst_check(_): "and drops it when the cursor leaves" {bare < full}
     close(_): window
     sleep(_): 100
     set(result): 0

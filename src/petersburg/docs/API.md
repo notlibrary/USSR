@@ -46,6 +46,8 @@ a diagnostic.
 | `fontwidth(font, size, text)` / `fontheight(font, size)` | Font handle, pixels per em, and text | Advance width of the text (a real) / line height (ascent + descent + line gap, an integer) in pixels; sizes are rounded to whole pixels as drawing does |
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `canvascursor(canvas, mode)` | Canvas, `"hidden"` or `"normal"` | Zero; `"hidden"` hides the system cursor while it is over the canvas, for programs that draw their own |
+| `canvaskeep(canvas)` / `canvasback(canvas)` | Canvas | The shape count; `canvaskeep` marks the shapes drawn so far, `canvasback` drops every shape added after the mark (`canvasclear` drops the mark), so a moving overlay is redrawn alone |
+| `canvasdash(canvas, x1, y1, x2, y2, color, dash, gap)` / `canvasdashcircle(canvas, cx, cy, radius, color, dash, gap)` | Canvas, numbers, color, dash and gap lengths in pixels | Zero; a dashed line (line shapes) or a dashed circle (arcs), cut natively |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
 | `getfocus(window)` | Window handle | Handle of the window's focused text box or list, or `0` |

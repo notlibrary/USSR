@@ -12,6 +12,11 @@
 - Holding an arrow key keeps panning (key repeats reach the window now).
 - The cursor uses Petersburg's new canvas `"motion"` event, redrawn at most
   once a frame by a small loop; `tests/gui/tula_scope_test.su`.
+- Fast: a mouse move redraws only the crosshair and the preview. The
+  drawing is kept on the canvas (`canvaskeep` / `canvasback`), and the
+  dashes are cut natively (`canvasdash`, `canvasdashcircle`). On a drawing
+  of 400 lines a move went from about 10 ms to well under 1 ms, with
+  exactly the same shapes drawn.
 
 ## 0.5.0-alpha
 Refine pass 1 from REFINE.md: the CAD engine in `more.su` (no window
