@@ -1127,3 +1127,18 @@ kremlin:
 - add holding arrow keys move folder selection cursor
 - add start menu buttons highlight on mouse move
 - add add shortcut menu item link to the folder or to executable program
+
+Now let's do standardized file open/save dialog for petersburg
+```
+[ list of files]
+      ...
+[ list of files]	  
+[open/save ][ cancel]
+[selected file(folder) text box]
+[filter_combo_box]
+
+```
+Then integrate petersburg open/save dialog start buttons into toolbars of tula siberia and novosibirsk
+Add 3 image buttons to toolbar `open(folder_icon)` `save(diskette_icon)` and `Save As(no_icon)`
+Each button runs appropriate petersburg dialog
+Dialog blocks io until canceled or answered
