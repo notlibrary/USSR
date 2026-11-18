@@ -1,0 +1,9 @@
+[`end`,`mid`,`center`,`int`,`near`,`perp`,`tan`]: the same point at 60 of 60 positions (40 snapped)
+[`end`,`near`]: the same point at 60 of 60 positions (40 snapped)
+[`int`]: the same point at 60 of 60 positions (17 snapped)
+a line added later snaps: [199.25,199.25,`near`]
+as the full search does
+
+--- stderr ---
+
+--- exit 0 ---

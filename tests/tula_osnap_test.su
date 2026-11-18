@@ -1,0 +1,98 @@
+# Tula's object snaps (src/tula/more.su): the cached, x-indexed search
+# that a mouse move uses (tl_osnap) must find the same point as checking
+# every entity and every pair of them (tl_osnap_slow), with the modes
+# that do not depend on the cursor kept between moves.
+$include "../src/tula/tula.su"
+
+init(result): arg_count arg_values [
+    tl_doc_new(doc):
+    set(tula_doc): doc!
+    vec(es): ""
+    set(i): 0
+    while(_): {i < 25} [
+        vec(e): ""
+        push(_): e "LINE"
+        push(_): e {i * 4.0}
+        push(_): e 0.0
+        push(_): e {100.0 - i * 2}
+        push(_): e 100.0
+        push(_): es e
+        vec(c): ""
+        push(_): c "CIRCLE"
+        push(_): c {i * 4.0}
+        push(_): c 50.0
+        push(_): c 9.0
+        push(_): es c
+        set(i): {i + 1}
+    ]
+    btput(_): doc "entities" es
+    vec(all): ""
+    push(_): all "end"
+    push(_): all "mid"
+    push(_): all "center"
+    push(_): all "int"
+    push(_): all "near"
+    push(_): all "perp"
+    push(_): all "tan"
+    vec(from): ""
+    push(_): from 5.0
+    push(_): from 5.0
+    vec(sets): ""
+    push(_): sets all
+    vec(ends): ""
+    push(_): ends "end"
+    push(_): ends "near"
+    push(_): sets ends
+    vec(ints): ""
+    push(_): ints "int"
+    push(_): sets ints
+    len(nsets): sets
+    set(s): 0
+    while(_): {s < nsets} [
+        at(modes): sets s
+        set(same): 0
+        set(found): 0
+        set(k): 0
+        while(_): {k < 60} [
+            set(x): {(k * 37) % 110 + 0.3}
+            set(y): {(k * 53) % 100 + 0.7}
+            tl_osnap(a): doc x y 5.0 modes from
+            tl_osnap_slow(b): doc x y 5.0 modes from
+            set(ok): false
+            if(_): {a = null && b = null} [ set(ok): true ]
+            elif(_): {a != null && b != null} [
+                at(ax): a 0
+                at(ay): a 1
+                at(bx): b 0
+                at(by): b 1
+                set(ok): {ax = bx && ay = by}
+                set(found): {found + 1}
+            ]
+            if(_): ok [ set(same): {same + 1} ]
+            set(k): {k + 1}
+        ]
+        encode(ms): modes
+        str_from_int(ss): same
+        str_from_int(fs): found
+        concat(m): ms ": the same point at " ss " of 60 positions (" fs " snapped)"
+        print(_): m
+        set(s): {s + 1}
+    ]
+    # a change to the drawing is seen: the kept points are made again
+    vec(e): ""
+    push(_): e "LINE"
+    push(_): e 200.0
+    push(_): e 200.0
+    push(_): e 210.0
+    push(_): e 210.0
+    push(_): es e
+    btput(_): doc "entities" es
+    tl_osnap(p): doc 199.0 199.5 5.0 all from
+    tl_osnap_slow(q): doc 199.0 199.5 5.0 all from
+    encode(ps): p
+    encode(qs): q
+    concat(m): "a line added later snaps: " ps
+    print(_): m
+    if(_): {ps = qs} [ print(_): "as the full search does" ]
+    set(result): 0
+]
