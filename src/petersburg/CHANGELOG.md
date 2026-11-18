@@ -16,6 +16,17 @@
   toolbars too. "folder" and "disk" (a diskette) are built in, and a .ppm
   file works with magenta as the transparent colour.
 - `grid(widget, row, 2, expand)`: column 2 spans the whole row.
+- `toolmenu(toolbar, label, items)`: a drop-down menu on a toolbar.
+  - `items` are separated by "|", and "-" draws a line.
+  - Picking an item (a click, or Up/Down and Enter) calls the menu's
+    "select" callback with the item's index. Escape or a click elsewhere
+    closes it.
+  - `setitems(menu, items)` replaces the items.
+- `recent.su`: the files a program used last, kept in `~/.<app>-recent`.
+  - `recentfiles(app)` and `recentadd(app, path)` read and update the list.
+  - `filemenuitems(list)` builds a standard File menu: New, Open...,
+    Save, Save As..., a line, the last 5 files, a line, Exit.
+  - `filemenuaction(index, list)` turns a picked item into an action.
 
 ## 0.7.1-alpha
 - Windows are drawn only when something may have changed, at most 120

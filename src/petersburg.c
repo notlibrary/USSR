@@ -33,7 +33,8 @@ typedef enum
     PETERSBURG_COMBOBOX,
     PETERSBURG_IMAGE,
     PETERSBURG_CANVAS,
-    PETERSBURG_TOOLBAR
+    PETERSBURG_TOOLBAR,
+    PETERSBURG_MENU  /* a toolbar entry that drops down a list of items */
 } petersburg_type_t;
 
 typedef enum
@@ -77,6 +78,8 @@ typedef struct petersburg_widget
     int motion_dirty;  /* a move not sent yet (sent once per pump) */
     int motion_inside;
     int hide_cursor;   /* hide the system cursor over this canvas */
+    char *menu_items;      /* a menu's items, "|" between, "-" a line */
+    char *select_callback; /* a menu's "select": menu, item index */
     unsigned char *icon; /* a button's picture, RGBA, drawn before its text */
     int icon_width;
     int icon_height;
@@ -380,6 +383,9 @@ static void petersburg_queue_key(
         return;
     petersburg_queue(window, window->key_callback, 1, key, 0, 0);
 }
+
+static petersburg_widget_t *petersburg_open_menu(const petersburg_widget_t *window);
+static void petersburg_render_menu(const petersburg_widget_t *menu);
 
 static void petersburg_rect(float x, float y, float width, float height)
 {
@@ -1430,6 +1436,11 @@ static void petersburg_render_window(petersburg_widget_t *window)
             break;
         }
     }
+    {
+        petersburg_widget_t *menu = petersburg_open_menu(window);
+        if (menu != NULL)
+            petersburg_render_menu(menu);
+    }
     glfwSwapBuffers(native);
 }
 
@@ -1438,7 +1449,170 @@ static petersburg_widget_t *petersburg_window_for(GLFWwindow *native)
     return (petersburg_widget_t *)glfwGetWindowUserPointer(native);
 }
 
+#define PETERSBURG_MENU_ROW 22
+#define PETERSBURG_MENU_SEP 9
+
+/* item index of a menu (its items in text form): 1 when there is one */
+static int petersburg_menu_item(const petersburg_widget_t *menu, int index,
+                                char *buffer, size_t size)
+{
+    petersburg_widget_t view;
+    memset(&view, 0, sizeof(view));
+    view.text = menu->menu_items;
+    return petersburg_item_at(&view, index, buffer, size);
+}
+
+/* the drop-down box below a menu's entry */
+static void petersburg_menu_box(const petersburg_widget_t *menu, int *x,
+                                int *y, int *w, int *h)
+{
+    int count = petersburg_item_count(menu->menu_items);
+    int i;
+    int widest = 0;
+    int height = 8;
+    char item[512];
+
+    for (i = 0; i < count; ++i)
+    {
+        int n;
+        if (!petersburg_menu_item(menu, i, item, sizeof(item)))
+            continue;
+        if (strcmp(item, "-") == 0)
+        {
+            height += PETERSBURG_MENU_SEP;
+            continue;
+        }
+        n = (int)strlen(item);
+        if (n > widest)
+            widest = n;
+        height += PETERSBURG_MENU_ROW;
+    }
+    *x = menu->x;
+    *y = menu->y + menu->height + 2;
+    *w = widest * 7 + 40;
+    if (*w < 180)
+        *w = 180;
+    *h = height;
+}
+
+/* the item at (mx, my) of an open menu: its index, -1 for none or a line */
+static int petersburg_menu_hit(const petersburg_widget_t *menu, double mx,
+                               double my)
+{
+    int x, y, w, h, i, row;
+    int count = petersburg_item_count(menu->menu_items);
+    char item[512];
+
+    petersburg_menu_box(menu, &x, &y, &w, &h);
+    if (mx < x || mx >= x + w || my < y || my >= y + h)
+        return -1;
+    row = y + 4;
+    for (i = 0; i < count; ++i)
+    {
+        int rh;
+        if (!petersburg_menu_item(menu, i, item, sizeof(item)))
+            continue;
+        rh = strcmp(item, "-") == 0 ? PETERSBURG_MENU_SEP : PETERSBURG_MENU_ROW;
+        if (my >= row && my < row + rh)
+            return strcmp(item, "-") == 0 ? -1 : i;
+        row += rh;
+    }
+    return -1;
+}
+
+/* the window a widget is in (a toolbar's entries are a level down) */
+static long petersburg_window_of(const petersburg_widget_t *widget);
+
+/* the menu open in window, or NULL */
+static petersburg_widget_t *petersburg_open_menu(const petersburg_widget_t *window)
+{
+    petersburg_widget_t *w;
+    if (window == NULL)
+        return NULL;
+    for (w = petersburg_widgets; w != NULL; w = w->next)
+        if (w->type == PETERSBURG_MENU && w->checked &&
+            petersburg_window_of(w) == window->id)
+            return w;
+    return NULL;
+}
+
+static void petersburg_menu_close(petersburg_widget_t *menu)
+{
+    if (menu != NULL)
+    {
+        menu->checked = 0;
+        menu->selected = -1;
+    }
+}
+
+/* the next item from index going dir (1 or -1), lines skipped */
+static int petersburg_menu_step(const petersburg_widget_t *menu, int index,
+                                int dir)
+{
+    int count = petersburg_item_count(menu->menu_items);
+    int k;
+    char item[512];
+    for (k = 0; k < count; ++k)
+    {
+        index += dir;
+        if (index < 0)
+            index = count - 1;
+        if (index >= count)
+            index = 0;
+        if (petersburg_menu_item(menu, index, item, sizeof(item)) &&
+            strcmp(item, "-") != 0)
+            return index;
+    }
+    return -1;
+}
+
+static void petersburg_render_menu(const petersburg_widget_t *menu)
+{
+    int x, y, w, h, i, row;
+    int count = petersburg_item_count(menu->menu_items);
+    char item[512];
+
+    petersburg_menu_box(menu, &x, &y, &w, &h);
+    glColor3f(0.04f, 0.05f, 0.07f);
+    petersburg_rect(x + 3, y + 3, w, h);
+    glColor3f(0.17f, 0.20f, 0.26f);
+    petersburg_rect(x, y, w, h);
+    row = y + 4;
+    for (i = 0; i < count; ++i)
+    {
+        if (!petersburg_menu_item(menu, i, item, sizeof(item)))
+            continue;
+        if (strcmp(item, "-") == 0)
+        {
+            glColor3f(0.36f, 0.40f, 0.48f);
+            petersburg_rect(x + 8, row + PETERSBURG_MENU_SEP / 2, w - 16, 1);
+            row += PETERSBURG_MENU_SEP;
+            continue;
+        }
+        if (i == menu->selected)
+        {
+            glColor3f(0.20f, 0.42f, 0.72f);
+            petersburg_rect(x + 2, row, w - 4, PETERSBURG_MENU_ROW);
+        }
+        petersburg_text(x + 14, row + (PETERSBURG_MENU_ROW - 7) / 2, item,
+                        0.95f, 0.96f, 0.98f, w - 28);
+        row += PETERSBURG_MENU_ROW;
+    }
+}
+
 static petersburg_widget_t *petersburg_find(long id);
+
+static long petersburg_window_of(const petersburg_widget_t *widget)
+{
+    const petersburg_widget_t *w = widget;
+    int depth = 0;
+    while (w != NULL && w->type != PETERSBURG_WINDOW && depth < 8)
+    {
+        w = petersburg_find(w->parent_id);
+        ++depth;
+    }
+    return w != NULL ? w->id : 0;
+}
 
 /* 1 when native is not the open modal window (its input is dropped) */
 static int petersburg_input_blocked(GLFWwindow *native)
@@ -1480,6 +1654,18 @@ static void petersburg_cursor_pos(GLFWwindow *native, double x, double y)
     {
         x *= (double)framebuffer_width / logical_width;
         y *= (double)framebuffer_height / logical_height;
+    }
+    {
+        petersburg_widget_t *menu = petersburg_open_menu(window);
+        if (menu != NULL)
+        {
+            int index = petersburg_menu_hit(menu, x, y);
+            if (index != menu->selected)
+            {
+                menu->selected = index;
+                petersburg_dirty = 1;
+            }
+        }
     }
     for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
     {
@@ -1565,6 +1751,25 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             mouse_y *= (double)framebuffer_height / logical_height;
         }
     }
+    {
+        /* an open menu: a click on an item picks it; any other click
+           closes the menu and does nothing else */
+        petersburg_widget_t *menu = petersburg_open_menu(window);
+        if (menu != NULL)
+        {
+            int index = petersburg_menu_hit(menu, mouse_x, mouse_y);
+            int x, y, w, h;
+            petersburg_menu_box(menu, &x, &y, &w, &h);
+            if (index >= 0 || mouse_x < x || mouse_x >= x + w ||
+                mouse_y < y || mouse_y >= y + h)
+            {
+                petersburg_menu_close(menu);
+                if (index >= 0)
+                    petersburg_queue(menu, menu->select_callback, 1, index, 0, 0);
+            }
+            return;
+        }
+    }
     for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
     {
         if (widget->parent_id != window->id ||
@@ -1630,7 +1835,14 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
                     mouse_x >= child->x && mouse_x < child->x + child->width &&
                     mouse_y >= child->y && mouse_y < child->y + child->height)
                 {
-                    petersburg_queue_event(child, 0);
+                    if (child->type == PETERSBURG_MENU)
+                    {
+                        /* a menu entry drops its list down */
+                        child->checked = 1;
+                        child->selected = -1;
+                    }
+                    else
+                        petersburg_queue_event(child, 0);
                     break;
                 }
         }
@@ -1703,6 +1915,25 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     if (petersburg_input_blocked(native))
     {
         return;
+    }
+    {
+        petersburg_widget_t *menu = petersburg_open_menu(petersburg_window_for(native));
+        if (menu != NULL && action != GLFW_RELEASE)
+        {
+            if (key == GLFW_KEY_ESCAPE)
+                petersburg_menu_close(menu);
+            else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_UP)
+                menu->selected = petersburg_menu_step(menu, menu->selected,
+                                                      key == GLFW_KEY_DOWN ? 1 : -1);
+            else if ((key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) &&
+                     menu->selected >= 0)
+            {
+                int index = menu->selected;
+                petersburg_menu_close(menu);
+                petersburg_queue(menu, menu->select_callback, 1, index, 0, 0);
+            }
+            return;
+        }
     }
 
     if (action == GLFW_RELEASE)
@@ -2064,6 +2295,8 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->double_callback);
     free(widget->char_callback);
     free(widget->motion_callback);
+    free(widget->menu_items);
+    free(widget->select_callback);
     free(widget->icon);
     free(widget);
 }
@@ -2306,6 +2539,9 @@ static int petersburg_set_callback(
     else if (strcmp(event_name, "motion") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         slot = &widget->motion_callback;
+    else if (strcmp(event_name, "select") == 0 &&
+             widget->type == PETERSBURG_MENU)
+        slot = &widget->select_callback;
     else if (strcmp(event_name, "key") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         slot = &widget->key_callback;
@@ -2620,6 +2856,15 @@ static int petersburg_inject(
     else if (strcmp(event_name, "motion") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->motion_callback, 2, a, b, 0);
+    else if (strcmp(event_name, "select") == 0 &&
+             widget->type == PETERSBURG_MENU)
+        petersburg_queue(widget, widget->select_callback, 1, a, 0, 0);
+    else if (strcmp(event_name, "click") == 0 &&
+             widget->type == PETERSBURG_MENU)
+    {
+        widget->checked = !widget->checked;
+        widget->selected = -1;
+    }
     else if (strcmp(event_name, "click") == 0 &&
              widget->type != PETERSBURG_WINDOW)
         petersburg_queue_event(widget, 0);
@@ -3308,6 +3553,44 @@ int ussr_petersburg_dispatch(
         *out = ussr_integer(petersburg_focus != NULL &&
                             petersburg_focus->parent_id == id
                                 ? petersburg_focus->id : 0);
+        return 1;
+    }
+    if (strcmp(name, "petersburg_create_menu") == 0 ||
+        strcmp(name, "petersburg_set_items") == 0)
+    {
+        const char *items;
+        char *copy;
+        int create = name[11] == 'c';
+        /* menu(toolbar, label, items) / setitems(menu, items) */
+        if (!petersburg_arity(name, value_count, create ? 3 : 2) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (create && !petersburg_expect_string(values, 1, &text)) ||
+            !petersburg_expect_string(values, create ? 2 : 1, &items) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != (create ? PETERSBURG_TOOLBAR : PETERSBURG_MENU))
+        {
+            fprintf(stderr, create ? "USSR: %s expects a toolbar, a label and items\n"
+                                   : "USSR: %s expects a menu and items\n", name);
+            return -1;
+        }
+        copy = petersburg_strdup(items);
+        if (copy == NULL)
+            return -1;
+        if (create)
+        {
+            widget = petersburg_add(PETERSBURG_MENU, id, text);
+            if (widget == NULL)
+            {
+                free(copy);
+                return -1;
+            }
+            widget->selected = -1;
+            *out = ussr_integer(widget->id);
+        }
+        else
+            *out = ussr_integer(0);
+        free(widget->menu_items);
+        widget->menu_items = copy;
         return 1;
     }
     if (strcmp(name, "petersburg_set_modal") == 0)

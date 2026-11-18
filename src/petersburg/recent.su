@@ -1,0 +1,112 @@
+# recent.su: the files a program opened or saved last, and the items of a
+# standard File menu built from them.
+#
+#     recentfiles(list): app          paths, newest first
+#     recentadd(list): app path       puts path first (10 kept)
+#     filemenuitems(items): list      "New|Open...|Save|Save As...|-|1 a|...|-|Exit"
+#     filemenuaction(pick): index list
+#         [action path]: action "new" "open" "save" "saveas" "recent"
+#         (path is the file) "exit", or "" for a line or "(no recent files)"
+#
+# The list lives in HOME/.<app>-recent (USERPROFILE on Windows), one path a
+# line; Tula's ~/.tula-recent is the same file.
+
+$once
+$include "../libs/strings.su"
+
+$define RECENT_KEEP 10
+$define RECENT_SHOWN 5
+
+recent_file(r): app [
+    getenv(h): "HOME"
+    if(_): {h = null || h = ""} [ getenv(h): "USERPROFILE" ]
+    if(_): {h = null || h = ""} [ set(h): "." ]
+    str_replace(h): h "\\" "/"
+    concat(r): h "/." app "-recent"
+]
+
+recentfiles(r): app [
+    recent_file(f): app
+    vec(r): ""
+    file_exists(e): f
+    if(_): e [
+        readfile(t): f
+        str_replace(t): t "\r" ""
+        str_split(all): t "\n"
+        len(n): all
+        set(i): 0
+        while(_): {i < n} [
+            at(x): all i
+            len(nr): r
+            if(_): {x != "" && nr < RECENT_KEEP} [ push(_): r x ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+recentadd(r): app path [
+    recentfiles(old): app
+    vec(r): ""
+    push(_): r path
+    len(n): old
+    set(i): 0
+    while(_): {i < n} [
+        at(x): old i
+        len(nr): r
+        if(_): {x != path && nr < RECENT_KEEP} [ push(_): r x ]
+        set(i): {i + 1}
+    ]
+    str_join(t): r "\n"
+    recent_file(f): app
+    writefile(_): f t
+]
+
+# a long path keeps its end: ".../folder/name.ext"
+recent_label(r): number path [
+    str_from_int(ns): number
+    set(p): path
+    len(n): p
+    if(_): {n > 56} [
+        slice(tail): p {n - 53} 53
+        concat(p): "..." tail
+    ]
+    # "|" separates the menu's items
+    str_replace(p): p "|" "/"
+    concat(r): ns "  " p
+]
+
+filemenuitems(r): list [
+    set(r): "New|Open...|Save|Save As...|-"
+    len(n): list
+    if(_): {n > RECENT_SHOWN} [ set(n): RECENT_SHOWN ]
+    if(_): {n = 0} [ concat(r): r "|(no recent files)" ]
+    set(i): 0
+    while(_): {i < n} [
+        at(x): list i
+        recent_label(l): {i + 1} x
+        concat(r): r "|" l
+        set(i): {i + 1}
+    ]
+    concat(r): r "|-|Exit"
+]
+
+filemenuaction(r): index list [
+    vec(r): ""
+    set(action): ""
+    set(path): ""
+    len(n): list
+    if(_): {n > RECENT_SHOWN} [ set(n): RECENT_SHOWN ]
+    set(rows): n
+    if(_): {rows = 0} [ set(rows): 1 ]
+    if(_): {index = 0} [ set(action): "new" ]
+    elif(_): {index = 1} [ set(action): "open" ]
+    elif(_): {index = 2} [ set(action): "save" ]
+    elif(_): {index = 3} [ set(action): "saveas" ]
+    elif(_): {index >= 5 && index < 5 + n} [
+        set(action): "recent"
+        at(path): list {index - 5}
+    ]
+    elif(_): {index = 5 + rows + 1} [ set(action): "exit" ]
+    push(_): r action
+    push(_): r path
+]

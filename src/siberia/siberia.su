@@ -25,6 +25,7 @@
 $once
 $include "../petersburg/petersburg.su"
 $include "../petersburg/filedialog.su"
+$include "../petersburg/recent.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
 
@@ -94,6 +95,7 @@ sbstate(r): [
     set(sb_ctrl): false!
     set(sb_alt): false!
     set(sb_uifont): 0!
+    set(sb_filemenu): 0!
     vec(v): ""
     set(sb_buttons): v!
     vec(v): ""
@@ -2165,7 +2167,7 @@ sb_action(r): action [
     set(r): 0
     sb_status(_): ""
     sb_is_dirty(dirty):
-    if(_): {(action = "new" || action = "open" || action = "pick-open") && dirty} [
+    if(_): {(action = "new" || action = "open" || action = "pick-open" || action = "recent" || action = "exit") && dirty} [
         set(sb_dlg_next): action!
         set(sb_dialog): "discard"!
         return(_): r
@@ -2191,6 +2193,78 @@ sb_action(r): action [
         sb_pick(p): "save"
         if(_): {p != ""} [ sb_save(_): p ]
     ]
+    elif(_): {action = "recent"} [
+        set(p): sb_recent_pick?
+        sb_open(_): p
+    ]
+    elif(_): {action = "exit"} [
+        set(w): sb_window?
+        destroy(_): w
+    ]
+]
+
+# --- the File menu: New, Open..., Save, Save As..., the last 5 files, Exit.
+# Siberia keeps ~/.siberia-recent, Novosibirsk ~/.novosibirsk-recent.
+
+sb_recent_app(r): [
+    set(r): "siberia"
+    set(mode): sb_mode?
+    if(_): {mode = "pad"} [ set(r): "novosibirsk" ]
+]
+
+sb_menu_refresh(r): [
+    set(r): 0
+    set(m): sb_filemenu?
+    typeof(mt): m
+    if(_): {mt != "integer"} [ return(_): r ]
+    if(_): {m = 0} [ return(_): r ]
+    sb_recent_app(app):
+    recentfiles(list): app
+    filemenuitems(items): list
+    setitems(_): m items
+]
+
+sb_remember(r): path [
+    set(r): 0
+    sb_recent_app(app):
+    recentadd(_): app path
+    sb_menu_refresh(_):
+]
+
+# an item of the File menu (its index)
+sbmenu(r): index [
+    set(r): 0
+    sb_recent_app(app):
+    recentfiles(list): app
+    filemenuaction(pick): index list
+    at(what): pick 0
+    at(path): pick 1
+    set(action): ""
+    if(_): {what = "new"} [ set(action): "new" ]
+    elif(_): {what = "open"} [ set(action): "pick-open" ]
+    elif(_): {what = "save"} [ set(action): "pick-save" ]
+    elif(_): {what = "saveas"} [ set(action): "pick-saveas" ]
+    elif(_): {what = "recent"} [
+        set(sb_recent_pick): path!
+        set(action): "recent"
+    ]
+    elif(_): {what = "exit"} [ set(action): "exit" ]
+    if(_): {action = ""} [ return(_): r ]
+    uilock(_):
+    set(dialog): sb_dialog?
+    if(_): {dialog = ""} [
+        set(mode): sb_mode?
+        if(_): {mode != "pad"} [ sb_sheet_commit(_): ]
+        sb_action(_): action
+    ]
+    if(_): {action != "exit"} [
+$ifdef SB_PAD
+        set(mode): sb_mode?
+        if(_): {mode = "pad"} [ sb_pad_tool_labels(_): ]
+$endif
+        sb_redraw(_):
+    ]
+    uiunlock(_):
 ]
 
 # Petersburg's Open or Save dialog for the sheet or the document: the
@@ -2273,6 +2347,7 @@ $endif
     ]
     set(sb_path): path!
     set(sb_dirty): false!
+    sb_remember(_): path
     sb_basename(base): path
     concat(msg): "Opened " base
     sb_status(_): msg
@@ -2311,6 +2386,7 @@ $endif
     if(_): ok [
         set(sb_path): path!
         set(sb_dirty): false!
+        sb_remember(_): path
         sb_basename(base): path
         concat(msg): "Saved " base
         if(_): {ext = ".csv"} [ concat(msg): msg " (formulas as their values)" ]
@@ -2965,6 +3041,12 @@ sbbuild(canvas): window mode [
     sb_find_ui_font(ui):
     set(sb_uifont): ui!
     toolbar(bar): window
+    sb_recent_app(app):
+    recentfiles(recent): app
+    filemenuitems(items): recent
+    toolmenu(fm): bar "FILE" items
+    on(_): fm "select" "sb_app_menu"
+    set(sb_filemenu): fm!
     sb_add_button(_): bar "NEW" "new"
     # Open and Save carry their pictures; the three open Petersburg's
     # file dialog (Ctrl+O and Ctrl+S keep the prompt in the window)
@@ -3000,6 +3082,10 @@ $endif
 $ifdef SB_APP
 sb_app_tool(result): button [
     sbtool(_): button
+]
+
+sb_app_menu(result): menu index [
+    sbmenu(_): index
 ]
 
 sb_app_pointer(result): canvas x y [

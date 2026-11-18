@@ -57,6 +57,11 @@ screen_y(r): y [
 ]
 
 init(result): arg_count arg_values [
+    # the recent-file lists go to a scratch HOME, not the user's
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
     createwindow(window): "Tula DXF test" 1100 800
     textbox(filename): window ""
     label(status): window ""

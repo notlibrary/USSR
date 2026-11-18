@@ -98,5 +98,6 @@ autom4te.cache/
 /src/russia/russia.ru
 kvr_tmp.db
 tests/gui/*_tmp.*
+tests/gui/home_tmp/
 .vibe_probe.tmp
 /src/.build-flags

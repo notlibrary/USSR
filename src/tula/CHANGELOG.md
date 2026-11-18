@@ -7,6 +7,9 @@
     drawings; it blocks Tula until it is answered.
   - Save writes the file named in the filename box (the dialog when the
     box is empty).
+- A File menu starts the toolbar: New, Open..., Save, Save As..., the last
+  5 drawings (from `~/.tula-recent`), and Exit. Saved drawings now go into
+  the recent list too, not only loaded ones.
 
 ## 0.6.1-alpha
 - The crosshair follows the mouse at the display's rate. The motion

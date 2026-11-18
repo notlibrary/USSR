@@ -7,6 +7,9 @@
   - OPEN still asks before it drops unsaved changes.
   - SAVE writes the file the sheet came from, or asks for one.
   - Ctrl+O and Ctrl+S keep the prompt drawn in the window.
+- A FILE menu starts the toolbar: New, Open..., Save, Save As..., the last
+  5 files (`~/.siberia-recent`), and Exit. A recent file and Exit ask
+  before they drop unsaved changes.
 
 ## 0.4.0
 - `edit.su`: editing at the window.
