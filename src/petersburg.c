@@ -3015,6 +3015,7 @@ int ussr_petersburg_dispatch(
         strcmp(name, "petersburg_alive") != 0 &&
         strcmp(name, "petersburg_canvas_count") != 0 &&
         strcmp(name, "petersburg_canvas_keep") != 0 &&
+        strcmp(name, "petersburg_mouse_held") != 0 &&
         strcmp(name, "petersburg_take_events") != 0 &&
         strcmp(name, "petersburg_on") != 0)
         petersburg_dirty = 1;
@@ -3623,6 +3624,25 @@ int ussr_petersburg_dispatch(
             *out = ussr_integer(0);
         free(widget->menu_items);
         widget->menu_items = copy;
+        return 1;
+    }
+    if (strcmp(name, "petersburg_mouse_held") == 0)
+    {
+        petersburg_widget_t *window;
+        /* mouseheld(widget): 1 while the left button is down in the
+           widget's window (a drag), else 0 */
+        if (!petersburg_arity(name, value_count, 1) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            (widget = petersburg_find(id)) == NULL)
+        {
+            fprintf(stderr, "USSR: %s expects a widget handle\n", name);
+            return -1;
+        }
+        window = petersburg_find(petersburg_window_of(widget));
+        *out = ussr_integer(window != NULL && window->native_window != NULL &&
+                            glfwGetMouseButton(window->native_window,
+                                               GLFW_MOUSE_BUTTON_LEFT) ==
+                                GLFW_PRESS);
         return 1;
     }
     if (strcmp(name, "petersburg_set_modal") == 0)

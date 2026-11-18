@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+- Cells can be selected with the mouse: press on a cell and drag to
+  another. Shift+click and then a drag keeps the first cell as the
+  anchor. Above or left of the grid the selection stops at the first row
+  or column, and past the visible cells the sheet scrolls along.
+
 ## 0.5.0
 - The toolbar's OPEN (a folder picture), SAVE (a diskette) and SAVE AS
   show Petersburg's file dialog (spreadsheets, CSV or all files). It

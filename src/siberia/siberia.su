@@ -96,6 +96,9 @@ sbstate(r): [
     set(sb_alt): false!
     set(sb_uifont): 0!
     set(sb_filemenu): 0!
+    set(sb_drag): false!
+    set(sb_drag_row): 0!
+    set(sb_drag_col): 0!
     vec(v): ""
     set(sb_buttons): v!
     vec(v): ""
@@ -2522,7 +2525,7 @@ $ifdef SB_PAD
 $else
     if(_): true [
 $endif
-        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows (or a Shift+click) selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
+        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows, a Shift+click or a drag with the mouse selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
     ]
     # a box drawn over the window (the native message box is too small)
     sbe_help(_): title text
@@ -2858,7 +2861,77 @@ sb_sheet_click(r): x y double [
     set(sb_row): row!
     set(sb_col): col!
     sb_reveal(_):
-    if(_): double [ sbe_begin(_): true ]
+    # a drag from here selects; Shift+click keeps its own anchor
+    set(sb_drag): true!
+    if(_): {shift = true} [
+        set(ar): sb_arow?
+        set(ac): sb_acol?
+        set(sb_drag_row): ar!
+        set(sb_drag_col): ac!
+    ]
+    else(_): [
+        set(sb_drag_row): row!
+        set(sb_drag_col): col!
+    ]
+    if(_): double [
+        set(sb_drag): false!
+        sbe_begin(_): true
+    ]
+]
+
+# The mouse moved over the sheet; held: the left button is down. A drag
+# from a cell selects the cells from it to the one under the mouse (past
+# the edges it scrolls).
+sb_sheet_drag(r): x y held [
+    set(r): false
+    set(drag): sb_drag?
+    if(_): {drag != true} [ return(_): r ]
+    if(_): {held = false} [
+        set(sb_drag): false!
+        return(_): r
+    ]
+    set(editing): sb_edit?
+    if(_): {editing = true} [ return(_): r ]
+    set(top): sb_top?
+    set(left): sb_left?
+    set(gy): {SB_BARH + SB_ROWH}
+    str_trunc(c): {(x - SB_HEADW) / SB_COLW}
+    str_trunc(k): {(y - gy) / SB_ROWH}
+    if(_): {x < SB_HEADW} [ set(c): -1 ]
+    if(_): {y < gy} [ set(k): -1 ]
+    set(row): {top + k}
+    set(col): {left + c}
+    if(_): {row < 0} [ set(row): 0 ]
+    if(_): {col < 0} [ set(col): 0 ]
+    if(_): {row > SB_ROWS - 1} [ set(row): {SB_ROWS - 1} ]
+    if(_): {col > SB_COLS - 1} [ set(col): {SB_COLS - 1} ]
+    set(cr): sb_row?
+    set(cc): sb_col?
+    if(_): {row = cr && col = cc} [ return(_): r ]
+    set(ar): sb_drag_row?
+    set(ac): sb_drag_col?
+    set(sb_arow): ar!
+    set(sb_acol): ac!
+    set(sb_row): row!
+    set(sb_col): col!
+    sb_reveal(_):
+    set(r): true
+]
+
+# the "motion" event: a drag over the sheet
+sbmotion(r): x y held [
+    set(r): 0
+    set(drag): sb_drag?
+    if(_): {drag != true} [ return(_): r ]
+    uilock(_):
+    set(dialog): sb_dialog?
+    set(mode): sb_mode?
+    if(_): {dialog = "" && mode != "pad"} [
+        sb_sheet_drag(moved): x y held
+        if(_): moved [ sb_redraw(_): ]
+    ]
+    else(_): [ set(sb_drag): false! ]
+    uiunlock(_):
 ]
 
 sb_sheet_wheel(r): direction [
@@ -3088,6 +3161,11 @@ sb_app_menu(result): menu index [
     sbmenu(_): index
 ]
 
+sb_app_motion(result): canvas x y [
+    mouseheld(held): canvas
+    sbmotion(_): x y {held = 1}
+]
+
 sb_app_pointer(result): canvas x y [
     sbclick(_): x y false
 ]
@@ -3172,6 +3250,7 @@ sb_app_main(result): mode title usage arg_count arg_values [
         ]
     ]
     on(_): canvas "pointer" "sb_app_pointer"
+    on(_): canvas "motion" "sb_app_motion"
     on(_): canvas "double" "sb_app_double"
     on(_): canvas "wheel" "sb_app_wheel"
     on(_): window "key" "sb_app_key"
