@@ -1818,6 +1818,27 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
                         widget->selected = 0;
                     if (widget->selected >= item_count)
                         widget->selected = item_count - 1;
+                    /* a second press on the same row soon after the
+                       first: "change" and then "double" with the row */
+                    if (button == GLFW_MOUSE_BUTTON_LEFT)
+                    {
+                        double now = glfwGetTime();
+                        if (petersburg_last_press_id == widget->id &&
+                            petersburg_last_press_x == widget->selected &&
+                            now - petersburg_last_press_time <=
+                                PETERSBURG_DOUBLE_SECONDS)
+                        {
+                            petersburg_queue_event(widget, 1);
+                            petersburg_queue(widget, widget->double_callback,
+                                             1, widget->selected, 0, 0);
+                            petersburg_last_press_time = -10.0;
+                            return;
+                        }
+                        petersburg_last_press_id = widget->id;
+                        petersburg_last_press_time = now;
+                        petersburg_last_press_x = widget->selected;
+                        petersburg_last_press_y = -1;
+                    }
                 }
                 else
                     widget->selected =
@@ -1884,7 +1905,9 @@ static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
         codepoint <= 0x10FFFF)
         petersburg_queue(window, window->char_callback, 1, (long)codepoint,
                          0, 0);
-    if (petersburg_focus == NULL || codepoint < 32 || codepoint > 126)
+    /* only a text box takes the characters (a list's text is its items) */
+    if (petersburg_focus == NULL || codepoint < 32 || codepoint > 126 ||
+        petersburg_focus->type != PETERSBURG_TEXTBOX)
         return;
     encoded[0] = (char)codepoint;
     length = strlen(encoded);
@@ -1947,7 +1970,10 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     /* a held key repeats (GLFW_REPEAT) like a new press, so holding an
        arrow keeps moving; widgets below still act on the first press */
     petersburg_queue_key(window, key);
-    if (petersburg_focus == NULL || action != GLFW_PRESS)
+    if (petersburg_focus == NULL)
+        return;
+    /* only a list repeats: a held arrow keeps moving its selection */
+    if (action != GLFW_PRESS && petersburg_focus->type != PETERSBURG_LIST)
         return;
     if (petersburg_focus->type == PETERSBURG_LIST)
     {
@@ -2534,7 +2560,8 @@ static int petersburg_set_callback(
              widget->type == PETERSBURG_CANVAS)
         slot = &widget->menu_callback;
     else if (strcmp(event_name, "double") == 0 &&
-             widget->type == PETERSBURG_CANVAS)
+             (widget->type == PETERSBURG_CANVAS ||
+              widget->type == PETERSBURG_LIST))
         slot = &widget->double_callback;
     else if (strcmp(event_name, "motion") == 0 &&
              widget->type == PETERSBURG_CANVAS)
@@ -2829,10 +2856,12 @@ static int petersburg_inject(
         return -1;
     }
     if ((strcmp(event_name, "key") == 0 ||
-         strcmp(event_name, "keyup") == 0) &&
+         strcmp(event_name, "keyup") == 0 ||
+         strcmp(event_name, "keyrepeat") == 0) &&
         widget->type == PETERSBURG_WINDOW)
         petersburg_key(widget->native_window, (int)a, 0,
-                       event_name[3] == 'u' ? GLFW_RELEASE : GLFW_PRESS, 0);
+                       event_name[3] == 'u' ? GLFW_RELEASE :
+                       event_name[3] == 'r' ? GLFW_REPEAT : GLFW_PRESS, 0);
     else if (strcmp(event_name, "focus") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         petersburg_window_focus(widget->native_window, a != 0);
@@ -2853,6 +2882,9 @@ static int petersburg_inject(
     else if (strcmp(event_name, "double") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->double_callback, 2, a, b, 0);
+    else if (strcmp(event_name, "double") == 0 &&
+             widget->type == PETERSBURG_LIST)
+        petersburg_queue(widget, widget->double_callback, 1, a, 0, 0);
     else if (strcmp(event_name, "motion") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->motion_callback, 2, a, b, 0);
