@@ -1,0 +1,347 @@
+# Siberia's sheets (src/siberia/sheets.su). Needs a GLFW-enabled ussr and
+# a display; the window is never shown. Run from the repository root:
+#     ussr tests/gui/siberia_sheets_test.su
+# Adding, switching, renaming and deleting sheets (by the API, the tabs
+# and the keys), references to other sheets (Sheet2.A1, Sheet2!A1,
+# 'My data'.A1, ranges), formulas following a rename, undo on another
+# sheet, and .fods files with several tables. Prints PASS or FAIL.
+$include "../../src/siberia/siberia.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 40
+    uiidle(idle):
+    set(tries): 0
+    while(_): {idle = false && tries < 300} [
+        sleep(_): 10
+        uiidle(idle):
+        set(tries): {tries + 1}
+    ]
+    sleep(_): 20
+    set(r): 0
+]
+
+key(r): code [
+    set(w): sb_window?
+    inject(_): w "key" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+keyup(r): code [
+    set(w): sb_window?
+    inject(_): w "keyup" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+ctrl(r): code [
+    key(_): 341
+    key(_): code
+    keyup(_): 341
+    set(r): 0
+]
+
+# Types text through "char" events, one code point each.
+typed(r): text [
+    set(w): sb_window?
+    vec(cps): ""
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        utf8_next(j): text i
+        byte(b): text i
+        set(cp): b
+        if(_): {j - i = 2} [
+            byte(b2): text {i + 1}
+            set(cp): {((b & 31) << 6) | (b2 & 63)}
+        ]
+        inject(_): w "char" cp 0 0
+        set(i): j
+    ]
+    settle(_):
+    set(r): 0
+]
+
+tool(r): action [
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(a): entry 1
+        if(_): {a = action} [
+            at(h): entry 0
+            inject(_): h "click" 0 0 0
+        ]
+        set(i): {i + 1}
+    ]
+    settle(_):
+    set(r): 0
+]
+
+test_tool(result): button [
+    sbtool(_): button
+]
+
+test_pointer(result): canvas x y [
+    sbclick(_): x y false
+]
+
+test_double(result): canvas x y [
+    sbclick(_): x y true
+]
+
+test_key(result): window k [
+    sbkey(_): k
+]
+
+test_keyup(result): window k [
+    sbkeyup(_): k
+]
+
+test_char(result): window cp [
+    sbchar(_): cp
+]
+
+listen(r): window canvas [
+    on(_): canvas "pointer" "test_pointer"
+    on(_): canvas "double" "test_double"
+    on(_): window "key" "test_key"
+    on(_): window "keyup" "test_keyup"
+    on(_): window "char" "test_char"
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(h): entry 0
+        on(_): h "click" "test_tool"
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+shifted(r): code [
+    key(_): 340
+    key(_): code
+    keyup(_): 340
+    set(r): 0
+]
+
+# a click in the tab strip at x
+tabclick(r): x double [
+    sb_canvas_size(size):
+    at(h): size 1
+    sbclick(_): x {h - SB_STATUSH - 10} double
+    set(r): 0
+]
+
+# an x inside tab i (-1: the "+" tab)
+tabx(r): i [
+    set(r): -1
+    sbs_tabs(tabs):
+    len(n): tabs
+    set(k): 0
+    while(_): {k < n} [
+        at(t): tabs k
+        at(ti): t 2
+        if(_): {ti = i} [
+            at(tx): t 0
+            set(r): {tx + 5}
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+init(result): arg_count arg_values [
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
+    sbsetup(_):
+    createwindow(window): "Siberia sheets test" SB_WIDTH SB_HEIGHT
+    sbbuild(canvas): window "sheet"
+    listen(_): window canvas
+    run(_):
+    settle(_):
+
+    # --- the API
+    sbsheetcount(n):
+    sbsheetname(nm): 0
+    check(_): "a new workbook has Sheet1" {n = 1 && nm = "Sheet1"} true
+    sbset(_): "A1" "5"
+    sbset(_): "A2" "1"
+    sbset(_): "A3" "2"
+    set(sb_row): 4!
+    sbsheetadd(i2): ""
+    sbsheetname(nm): i2
+    check(_): "an added sheet is Sheet2" {i2 = 1 && nm = "Sheet2"} true
+    sbsheetswitch(_): i2
+    sbget(a1): "A1"
+    set(r2): sb_row?
+    check(_): "Sheet2 is empty, its cursor at A1" {a1 = "" && r2 = 0} true
+    sbset(_): "A1" "7"
+    sbset(_): "B1" "=Sheet1.A1*2"
+    sbshow(v): "B1"
+    check(_): "Sheet1.A1 reads the other sheet" v "10"
+    sbset(_): "B2" "=sheet1!A1+A1"
+    sbshow(v): "B2"
+    check(_): "Sheet1!A1 too, any case, next to this sheet's A1" v "12"
+    sbset(_): "B3" "=SUM(Sheet1.A1:A3)"
+    sbshow(v): "B3"
+    check(_): "a range on another sheet" v "8"
+    sbset(_): "B4" "=Nope.A1"
+    sbshow(v): "B4"
+    check(_): "an unknown sheet is #REF!" v "#REF!"
+    sbsheetswitch(_): 0
+    sbget(a1): "A1"
+    set(r1): sb_row?
+    check(_): "back on Sheet1: its cells and its cursor" {a1 = "5" && r1 = 4} true
+    sbset(_): "A1" "6"
+    sbsheetswitch(_): 1
+    sbshow(v): "B1"
+    check(_): "a change on Sheet1 shows on Sheet2" v "12"
+
+    # --- renames: formulas follow
+    sbsheetrename(e): 0 "Data"
+    sbget(f): "B1"
+    sbshow(v): "B1"
+    check(_): "a rename rewrites the formulas" {e = "" && f = "=Data.A1*2" && v = "12"} true
+    sbsheetrename(e): 0 "My data"
+    sbget(f): "B3"
+    sbshow(v): "B3"
+    check(_): "a name with a space is quoted" {f = "=SUM('My data'.A1:A3)" && v = "9"} true
+    sbsheetrename(e): 0 "Sheet2"
+    check(_): "a rename to a taken name is refused" e "there is a sheet Sheet2 already"
+    sbsheetrename(e): 0 "a.b"
+    check(_): "and to a name with a dot" e "a sheet's name cannot have . ! [ or ]"
+
+    # --- copying a formula moves its cell, keeps its sheet
+    sbm_shift_formula(f): "='My data'.A1+Sheet2.$B$1" 1 1
+    check(_): "a copied formula keeps its sheets" f "='My data'.B2+Sheet2.$B$1"
+
+    # --- .fods: a table per sheet, and back
+    sbsheetfods(x):
+    str_find(t1): x "table:name=\"My data\"" 0
+    str_find(t2): x "table:name=\"Sheet2\"" 0
+    str_find(fx): x "[$&apos;My data&apos;.A1" 0
+    str_find(fx2): x "[$'My data'.A1" 0
+    check(_): "the file has both tables" {t1 >= 0 && t2 > t1} true
+    check(_): "and the reference to the other sheet" {fx >= 0 || fx2 >= 0} true
+    sbsheetload(err): x "fods"
+    sbsheetcount(n):
+    sbsheetname(n0): 0
+    sbsheetname(n1): 1
+    check(_): "loading it gives back the sheets" {err = "" && n = 2 && n0 = "My data" && n1 = "Sheet2"} true
+    set(cur): sb_sheet?
+    sbget(a1): "A1"
+    check(_): "on the first sheet" {cur = 0 && a1 = "6"} true
+    sbsheetswitch(_): 1
+    sbget(f): "B3"
+    sbshow(v): "B3"
+    check(_): "with the formulas" {f = "=SUM('My data'.A1:A3)" && v = "9"} true
+    # a file whose first sheet refers to a later one
+    set(lo): "<office:document><office:body><office:spreadsheet><table:table table:name=\"Front\"><table:table-row><table:table-cell table:formula=\"of:=[$Back.A1]*3\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell></table:table-row></table:table><table:table table:name=\"Back\"><table:table-row><table:table-cell office:value-type=\"float\" office:value=\"4\"><text:p>4</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document>"
+    sbsheetload(err): lo "fods"
+    sbget(f): "A1"
+    sbshow(v): "A1"
+    check(_): "a reference to a later table" {err = "" && f = "=Back.A1*3" && v = "12"} true
+
+    # --- the tabs
+    sbs_tabs(tabs):
+    len(nt): tabs
+    check(_): "a tab per sheet and a +" nt 3
+    tabx(px): -1
+    tabclick(_): px false
+    sbsheetcount(n):
+    set(cur): sb_sheet?
+    sbsheetname(nm): 2
+    check(_): "+ adds a sheet and shows it" {n = 3 && cur = 2 && nm = "Sheet3"} true
+    tabx(x0): 0
+    tabclick(_): x0 false
+    set(cur): sb_sheet?
+    check(_): "a click on a tab shows its sheet" cur 0
+    tabx(x1): 1
+    tabclick(_): x1 true
+    set(d): sb_dialog?
+    set(dt): sb_dlg_text?
+    check(_): "a double click asks for a new name" {d = "rename" && dt = "Back"} true
+    key(_): SB_KEY_BACKSPACE
+    key(_): SB_KEY_BACKSPACE
+    key(_): SB_KEY_BACKSPACE
+    key(_): SB_KEY_BACKSPACE
+    typed(_): "Rear"
+    key(_): SB_KEY_ENTER
+    sbsheetname(nm): 1
+    sbsheetswitch(_): 0
+    sbget(f): "A1"
+    check(_): "Enter renames it, and the formulas follow" {nm = "Rear" && f = "=Rear.A1*3"} true
+    sb_canvas_size(size):
+    at(h): size 1
+    tabx(x2): 2
+    sbrclick(_): x2 {h - SB_STATUSH - 10}
+    set(d): sb_dialog?
+    check(_): "a right click on a tab asks to delete it" d "delsheet"
+    key(_): SB_KEY_ENTER
+    sbsheetcount(n):
+    set(cur): sb_sheet?
+    check(_): "Enter deletes it" {n = 2 && cur = 1} true
+
+    # --- keys
+    set(cur0): sb_sheet?
+    ctrl(_): SB_KEY_PAGE_DOWN
+    set(cur1): sb_sheet?
+    ctrl(_): SB_KEY_PAGE_UP
+    set(cur2): sb_sheet?
+    check(_): "Ctrl+Page Down and Up step through the sheets" {cur0 = 1 && cur1 = 0 && cur2 = 1} true
+    key(_): 340
+    key(_): 300
+    keyup(_): 340
+    sbsheetcount(n):
+    set(cur): sb_sheet?
+    check(_): "Shift+F11 adds a sheet" {n = 3 && cur = 2} true
+
+    # --- undo of a change on another sheet
+    sbsheetswitch(_): 1
+    set(sb_row): 9!
+    set(sb_col): 0!
+    typed(_): "42"
+    key(_): SB_KEY_ENTER
+    sbget(a10): "A10"
+    sbsheetswitch(_): 0
+    ctrl(_): 90
+    sbsheetswitch(_): 1
+    sbget(a10b): "A10"
+    check(_): "undo puts back a cell of another sheet" {a10 = "42" && a10b = ""} true
+
+    # --- deleting
+    sbsheetdelete(e): 2
+    sbsheetdelete(e): 1
+    sbsheetdelete(e2): 0
+    sbsheetcount(n):
+    check(_): "the last sheet stays" {e = "" && e2 = "the last sheet stays" && n = 1} true
+    sbsheetswitch(_): 0
+    sbshow(v): "A1"
+    check(_): "a reference to a deleted sheet is #REF!" v "#REF!"
+    sb_new(_):
+    sbsheetcount(n):
+    sbsheetname(nm): 0
+    check(_): "New starts over with Sheet1" {n = 1 && nm = "Sheet1"} true
+    close(_): window
+    sleep(_): 100
+    set(result): 0
+]

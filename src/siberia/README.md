@@ -35,6 +35,25 @@ LOWER`; arguments are separated by `,` or `;`. Errors show in red:
 `#CYCLE!` (a cell that depends on itself). Numbers show up to 10
 significant digits.
 
+A drag with the mouse, Shift with the arrows or a Shift+click selects
+cells; the status bar shows their Sum, Average and Count.
+
+## Sheets
+
+A workbook has one or more sheets, shown as tabs under the grid.
+- **Switching:** click a tab, or use Ctrl+Page Down and Ctrl+Page Up.
+- **Adding:** `+` (or Shift+F11) adds a sheet.
+- **Renaming:** a double click on a tab renames it.
+- **Deleting:** a right click on a tab deletes it, after asking. The last
+  sheet stays.
+
+Formulas reach another sheet's cells as `Sheet2.A1` or `Sheet2!A1`. A name
+with spaces is quoted: `'My data'.A1`. Ranges work too:
+`SUM(Sheet2.A1:B9)`. Renaming a sheet rewrites the formulas that name it.
+A deleted or unknown sheet is `#REF!`.
+
+A `.fods` file keeps every sheet. CSV holds only the current one.
+
 Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit,
 F1 help. New and Open ask before unsaved changes are lost.
 

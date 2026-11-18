@@ -1815,7 +1815,8 @@ sbm_put(r): row col text [
 sbm_record(r): row col old new [
     set(u): sb_undo?
     vec(e): ""
-    push(_): e {row * SB_COLS + col}
+    set(cur): sb_sheet?
+    push(_): e {(cur + 1) * SB_CELLS + row * SB_COLS + col}
     push(_): e old
     push(_): e new
     push(_): u e
@@ -1908,6 +1909,15 @@ sbm_redo(r): [
 # a reference ("$B3") moved by drow, dcol where it is relative; "" off the
 # sheet
 sbm_shift_ref(r): ref drow dcol [
+    sbs_split(sp): ref
+    at(sheet): sp 0
+    if(_): {sheet != ""} [
+        at(cell): sp 1
+        sbm_shift_ref(moved): cell drow dcol
+        set(r): ""
+        if(_): {moved != ""} [ concat(r): sheet "." moved ]
+        return(r): r
+    ]
     re_find(m): "^(\\$?)([A-Z]+)(\\$?)([0-9]+)$" ref
     set(r): ref
     typeof(mt): m

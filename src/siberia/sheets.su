@@ -1,0 +1,571 @@
+# Siberia's sheets: a workbook holds one or more sheets, each an SbSheet
+# with its own rows of cells, its used area, its cursor, scroll and
+# selection. The current sheet's state is in the usual hash keys (sb_rows,
+# sb_maxrow, sb_row, ...); switching saves it into its SbSheet and loads
+# the other one's.
+#
+#   sbsheetcount(n):            how many sheets
+#   sbsheetname(name): i        a sheet's name
+#   sbsheetindex(i): name       a sheet by name (any case), -1 when none
+#   sbsheetadd(i): name         a new, empty sheet at the end ("" picks
+#                               "SheetN"); returns its index
+#   sbsheetswitch(r): i         makes sheet i the current one
+#   sbsheetrename(err): i name  "" or why not; formulas follow the name
+#   sbsheetdelete(err): i       "" or why not (the last sheet stays)
+#
+# A reference to another sheet ("Sheet2.A1", "Sheet2!A1", "'My data'.A1",
+# or in a .fods file "[$Sheet2.A1]") carries the sheet in the cell index:
+# (sheet + 1) * SB_CELLS + the cell's own index. A range's rows then carry
+# the same offset, so SUM and the other functions walk it unchanged.
+
+# SB_CELLS (SB_ROWS * SB_COLS) and SB_TABH are defined in siberia.su.
+
+sbs_state(r): [
+    set(r): 0
+    vec(v): ""
+    set(rows): sb_rows?
+    new(s): "SbSheet" "Sheet1" rows -1 -1 0 0 0 0 -1 -1
+    push(_): v s
+    set(sb_sheets): v!
+    set(sb_sheet): 0!
+]
+
+sbsheetcount(r): [
+    set(v): sb_sheets?
+    len(r): v
+]
+
+sbsheetname(r): i [
+    set(v): sb_sheets?
+    at(s): v i
+    getf(r): s "name"
+]
+
+sbsheetindex(r): name [
+    set(r): -1
+    str_lower(want): name
+    set(v): sb_sheets?
+    len(n): v
+    set(i): 0
+    while(_): {i < n} [
+        at(s): v i
+        getf(sn): s "name"
+        str_lower(sn): sn
+        if(_): {sn = want} [
+            set(r): i
+            return(r): r
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# the current sheet's state into its SbSheet
+sbs_save(r): [
+    set(r): 0
+    set(v): sb_sheets?
+    set(cur): sb_sheet?
+    at(s): v cur
+    set(x): sb_rows?
+    setf(_): s "rows" x
+    set(x): sb_maxrow?
+    setf(_): s "maxrow" x
+    set(x): sb_maxcol?
+    setf(_): s "maxcol" x
+    set(x): sb_row?
+    setf(_): s "row" x
+    set(x): sb_col?
+    setf(_): s "col" x
+    set(x): sb_top?
+    setf(_): s "top" x
+    set(x): sb_left?
+    setf(_): s "left" x
+    set(x): sb_arow?
+    setf(_): s "arow" x
+    set(x): sb_acol?
+    setf(_): s "acol" x
+]
+
+# sheet i's state into the hash keys, as the current sheet
+sbs_load(r): i [
+    set(r): 0
+    set(v): sb_sheets?
+    at(s): v i
+    getf(x): s "rows"
+    set(sb_rows): x!
+    getf(x): s "maxrow"
+    set(sb_maxrow): x!
+    getf(x): s "maxcol"
+    set(sb_maxcol): x!
+    getf(x): s "row"
+    set(sb_row): x!
+    getf(x): s "col"
+    set(sb_col): x!
+    getf(x): s "top"
+    set(sb_top): x!
+    getf(x): s "left"
+    set(sb_left): x!
+    getf(x): s "arow"
+    set(sb_arow): x!
+    getf(x): s "acol"
+    set(sb_acol): x!
+    set(sb_sheet): i!
+    set(sb_edit): false!
+    set(sb_drag): false!
+]
+
+sbs_new_rows(r): [
+    vec(r): ""
+    set(i): 0
+    while(_): {i < SB_ROWS} [
+        vec(cells): "SbCell"
+        new(row): "SbRow" cells
+        push(_): r row
+        set(i): {i + 1}
+    ]
+]
+
+sbsheetadd(r): name [
+    set(v): sb_sheets?
+    len(n): v
+    if(_): {name = ""} [
+        set(k): {n + 1}
+        set(go): true
+        while(_): go [
+            str_from_int(ks): k
+            concat(name): "Sheet" ks
+            sbsheetindex(there): name
+            if(_): {there < 0} [ set(go): false ] else(_): [ set(k): {k + 1} ]
+        ]
+    ]
+    sbs_new_rows(rows):
+    new(s): "SbSheet" name rows -1 -1 0 0 0 0 -1 -1
+    push(_): v s
+    set(r): n
+]
+
+sbsheetswitch(r): i [
+    set(r): 0
+    sbsheetcount(n):
+    set(cur): sb_sheet?
+    if(_): {i < 0 || i >= n || i = cur} [ return(r): r ]
+    sbs_save(_):
+    sbs_load(_): i
+]
+
+# the next (dir 1) or previous (dir -1) sheet, round
+sbsheetstep(r): dir [
+    sbsheetcount(n):
+    set(cur): sb_sheet?
+    set(i): {(cur + dir + n) % n}
+    sbsheetswitch(r): i
+]
+
+# a name as a formula writes it: quoted unless letters, digits and _
+sbs_quote(r): name [
+    set(r): name
+    set(plain): true
+    len(n): name
+    if(_): {n = 0} [ set(plain): false ]
+    if(_): {n > 0} [
+        byte(b0): name 0
+        sb_is_digit(d0): b0
+        if(_): d0 [ set(plain): false ]
+    ]
+    set(i): 0
+    while(_): {i < n} [
+        byte(b): name i
+        sb_is_letter(l): b
+        sb_is_digit(d): b
+        if(_): {(l = false && d = false) || b = 36} [ set(plain): false ]
+        set(i): {i + 1}
+    ]
+    if(_): {plain = false} [
+        str_replace(q): name "'" "''"
+        concat(r): "'" q "'"
+    ]
+]
+
+# a written sheet name: quotes and a leading $ dropped
+sbs_unquote(r): name [
+    set(r): name
+    len(n): name
+    if(_): {n > 0} [
+        byte(b): r 0
+        if(_): {b = 36} [
+            slice(r): r 1 {n - 1}
+            len(n): r
+        ]
+    ]
+    if(_): {n >= 2} [
+        byte(b0): r 0
+        byte(b1): r {n - 1}
+        if(_): {b0 = 39 && b1 = 39} [
+            slice(r): r 1 {n - 2}
+            str_replace(r): r "''" "'"
+        ]
+    ]
+]
+
+# the token for sheet!cell: [text index]; index -1 when either is unknown
+sbs_ref(r): sheet cell [
+    sbs_unquote(name): sheet
+    sbsheetindex(si): name
+    if(_): {si >= 0} [ sbsheetname(name): si ]
+    sb_upper(cu): cell
+    str_replace(cu): cu "$" ""
+    sb_ref(ci): cu
+    sb_upper(cw): cell
+    sbs_quote(qn): name
+    vec(r): ""
+    concat(text): qn "." cw
+    push(_): r text
+    if(_): {si >= 0 && ci >= 0} [ push(_): r {(si + 1) * SB_CELLS + ci} ]
+    else(_): [ push(_): r -1 ]
+]
+
+# a ref token's text split at its sheet: [sheet cell], sheet "" when none
+sbs_split(r): text [
+    vec(r): ""
+    len(n): text
+    set(i): n
+    set(dot): -1
+    while(_): {i > 0 && dot < 0} [
+        byte(b): text {i - 1}
+        if(_): {b = 46 || b = 33} [ set(dot): {i - 1} ]
+        set(i): {i - 1}
+    ]
+    if(_): {dot < 0} [
+        push(_): r ""
+        push(_): r text
+    ]
+    else(_): [
+        slice(a): text 0 dot
+        slice(b): text {dot + 1} {n - dot - 1}
+        push(_): r a
+        push(_): r b
+    ]
+]
+
+# a ref as OpenFormula writes it inside [...]: ".A1" or "$Sheet2.A1"
+sbs_of_piece(r): text [
+    sbs_split(p): text
+    at(sheet): p 0
+    at(cell): p 1
+    if(_): {sheet = ""} [ concat(r): "." cell ]
+    else(_): [ concat(r): "$" sheet "." cell ]
+]
+
+# the cells of sheet s: its rows vector, or null
+sbs_rows(r): s [
+    set(r): null
+    sbsheetcount(n):
+    if(_): {s >= 0 && s < n} [
+        set(cur): sb_sheet?
+        if(_): {s = cur} [ set(r): sb_rows? ]
+        else(_): [
+            set(v): sb_sheets?
+            at(sh): v s
+            getf(r): sh "rows"
+        ]
+    ]
+]
+
+# formulas that name sheet old now name new
+sbs_rename_refs(r): old new [
+    set(r): 0
+    str_lower(lo): old
+    sbs_quote(qn): new
+    set(v): sb_sheets?
+    len(ns): v
+    set(cur): sb_sheet?
+    set(s): 0
+    while(_): {s < ns} [
+        at(sh): v s
+        getf(rows): sh "rows"
+        getf(mr): sh "maxrow"
+        if(_): {s = cur} [ set(mr): sb_maxrow? ]
+        set(k): 0
+        while(_): {k <= mr} [
+            at(row): rows k
+            getf(cells): row "cells"
+            len(nc): cells
+            set(c): 0
+            while(_): {c < nc} [
+                at(cell): cells c
+                getf(text): cell "text"
+                sb_starts(f): text "="
+                if(_): f [
+                    len(tl): text
+                    slice(body): text 1 {tl - 1}
+                    sb_tokens(toks): body
+                    len(nt): toks
+                    set(changed): false
+                    set(i): 0
+                    while(_): {i < nt} [
+                        at(t): toks i
+                        at(kind): t 0
+                        if(_): {kind = "ref"} [
+                            at(word): t 1
+                            sbs_split(p): word
+                            at(sn): p 0
+                            sbs_unquote(sn): sn
+                            str_lower(sn): sn
+                            if(_): {sn = lo} [
+                                at(cw): p 1
+                                concat(nw): qn "." cw
+                                set(t): 1 nw
+                                set(changed): true
+                            ]
+                        ]
+                        set(i): {i + 1}
+                    ]
+                    if(_): changed [
+                        sb_emit(e): toks false
+                        concat(nt2): "=" e
+                        setf(_): cell "text" nt2
+                    ]
+                ]
+                set(c): {c + 1}
+            ]
+            set(k): {k + 1}
+        ]
+        set(s): {s + 1}
+    ]
+    set(gen): sb_gen?
+    set(sb_gen): {gen + 1}!
+]
+
+sbsheetrename(r): i name [
+    set(r): ""
+    str_trim(name): name
+    sbsheetcount(n):
+    if(_): {i < 0 || i >= n} [
+        set(r): "no such sheet"
+        return(r): r
+    ]
+    if(_): {name = ""} [
+        set(r): "a sheet needs a name"
+        return(r): r
+    ]
+    str_find(bad1): name "." 0
+    str_find(bad2): name "!" 0
+    str_find(bad3): name "[" 0
+    str_find(bad4): name "]" 0
+    if(_): {bad1 >= 0 || bad2 >= 0 || bad3 >= 0 || bad4 >= 0} [
+        set(r): "a sheet's name cannot have . ! [ or ]"
+        return(r): r
+    ]
+    sbsheetindex(there): name
+    if(_): {there >= 0 && there != i} [
+        concat(r): "there is a sheet " name " already"
+        return(r): r
+    ]
+    sbsheetname(old): i
+    set(v): sb_sheets?
+    at(s): v i
+    sbs_rename_refs(_): old name
+    setf(_): s "name" name
+]
+
+sbsheetdelete(r): i [
+    set(r): ""
+    sbsheetcount(n):
+    if(_): {i < 0 || i >= n} [
+        set(r): "no such sheet"
+        return(r): r
+    ]
+    if(_): {n <= 1} [
+        set(r): "the last sheet stays"
+        return(r): r
+    ]
+    sbs_save(_):
+    set(cur): sb_sheet?
+    set(v): sb_sheets?
+    vec(kept): ""
+    set(k): 0
+    while(_): {k < n} [
+        at(s): v k
+        if(_): {k != i} [ push(_): kept s ]
+        set(k): {k + 1}
+    ]
+    set(sb_sheets): kept!
+    # the sheet now current: the same one, or the deleted one's neighbour
+    set(next): cur
+    if(_): {cur > i} [ set(next): {cur - 1} ]
+    if(_): {cur = i && next >= n - 1} [ set(next): {n - 2} ]
+    sbs_load(_): next
+    # undo entries name sheets by their place, which has moved
+    vec(none): ""
+    set(sb_undo): none!
+    vec(none2): ""
+    set(sb_redo): none2!
+    set(gen): sb_gen?
+    set(sb_gen): {gen + 1}!
+]
+
+# a new, empty workbook: Sheet1 only
+sbs_reset(r): [
+    set(r): 0
+    set(cur): sb_sheet?
+    if(_): {cur != 0} [
+        sbs_save(_):
+        sbs_load(_): 0
+    ]
+    set(v): sb_sheets?
+    at(first): v 0
+    setf(_): first "name" "Sheet1"
+    vec(one): ""
+    push(_): one first
+    set(sb_sheets): one!
+]
+
+# --- the tabs under the grid: [x width index], index -1 for the "+" tab
+
+sbs_tabs(r): [
+    vec(r): ""
+    set(x): 4
+    sbsheetcount(n):
+    set(i): 0
+    while(_): {i < n} [
+        sbsheetname(name): i
+        sb_ui_width(tw): name
+        set(tabw): {tw + 24}
+        vec(t): ""
+        push(_): t x
+        push(_): t tabw
+        push(_): t i
+        push(_): r t
+        set(x): {x + tabw + 2}
+        set(i): {i + 1}
+    ]
+    vec(t): ""
+    push(_): t x
+    push(_): t 28
+    push(_): t -1
+    push(_): r t
+]
+
+# the tab at x: its index, -1 for "+", -2 for none
+sbs_tab_at(r): x [
+    set(r): -2
+    sbs_tabs(tabs):
+    len(n): tabs
+    set(i): 0
+    while(_): {i < n} [
+        at(t): tabs i
+        at(tx): t 0
+        at(tw): t 1
+        if(_): {x >= tx && x < tx + tw} [ at(r): t 2 ]
+        set(i): {i + 1}
+    ]
+]
+
+sbs_draw_tabs(r): w h [
+    set(r): 0
+    set(canvas): sb_canvas?
+    set(y): {h - SB_STATUSH - SB_TABH}
+    canvasfill(_): canvas 0 y w SB_TABH 14737632
+    canvasline(_): canvas 0 y w y 11842740
+    set(cur): sb_sheet?
+    sbs_tabs(tabs):
+    len(n): tabs
+    set(i): 0
+    while(_): {i < n} [
+        at(t): tabs i
+        at(tx): t 0
+        at(tw): t 1
+        at(ti): t 2
+        if(_): {ti = cur} [
+            canvasfill(_): canvas tx y tw {SB_TABH - 2} 16777215
+            canvasrect(_): canvas tx y tw {SB_TABH - 2} 7368816
+            canvasfill(_): canvas {tx + 1} y {tw - 2} 2 2192198
+        ]
+        else(_): [
+            canvasfill(_): canvas tx {y + 2} tw {SB_TABH - 5} 15329769
+            canvasrect(_): canvas tx {y + 2} tw {SB_TABH - 5} 11842740
+        ]
+        if(_): {ti >= 0} [
+            sbsheetname(label): ti
+            set(color): 5592405
+            if(_): {ti = cur} [ set(color): 0 ]
+        ]
+        else(_): [
+            set(label): "+"
+            set(color): 3355443
+        ]
+        sb_ui_width(lw): label
+        str_trunc(lx): {tx + (tw - lw) / 2}
+        sb_ui_text(_): lx {y + 4} label color
+        set(i): {i + 1}
+    ]
+]
+
+# a click on the tabs: switch, or "+" adds a sheet; a double click on a
+# tab renames it (a dialog)
+sbs_tab_click(r): x double [
+    set(r): 0
+    sbs_tab_at(i): x
+    if(_): {i = -2} [ return(r): r ]
+    sb_sheet_commit(_):
+    if(_): {i = -1} [
+        sbsheetadd(ni): ""
+        sbsheetswitch(_): ni
+        set(sb_dirty): true!
+        sbsheetname(nm): ni
+        concat(msg): "Added " nm
+        sb_status(_): msg
+        return(r): r
+    ]
+    sbsheetswitch(_): i
+    if(_): double [ sbs_ask_rename(_): ]
+]
+
+sbs_ask_rename(r): [
+    set(r): 0
+    set(cur): sb_sheet?
+    sbsheetname(name): cur
+    set(sb_dlg_text): name!
+    set(sb_dialog): "rename"!
+]
+
+sbs_ask_delete(r): [
+    set(r): 0
+    sbsheetcount(n):
+    if(_): {n <= 1} [
+        sb_status(_): "The last sheet stays"
+        return(r): r
+    ]
+    set(sb_dialog): "delsheet"!
+]
+
+# Enter in the rename dialog
+sbs_rename_done(r): text [
+    set(r): 0
+    set(cur): sb_sheet?
+    sbsheetname(old): cur
+    if(_): {text = old} [ return(r): r ]
+    sbsheetrename(err): cur text
+    if(_): {err = ""} [
+        set(sb_dirty): true!
+        concat(msg): "Renamed " old " to " text
+        sb_status(_): msg
+    ]
+    else(_): [
+        concat(msg): "Not renamed: " err
+        sb_status(_): msg
+    ]
+]
+
+# Enter in the delete dialog
+sbs_delete_done(r): [
+    set(r): 0
+    set(cur): sb_sheet?
+    sbsheetname(old): cur
+    sbsheetdelete(err): cur
+    if(_): {err = ""} [
+        set(sb_dirty): true!
+        concat(msg): "Deleted " old
+        sb_status(_): msg
+    ]
+    else(_): [ sb_status(_): err ]
+]
