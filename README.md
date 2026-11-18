@@ -333,7 +333,7 @@ Now the whole thing asking me to become the kernel developer Will do anyway it's
 If you think you are the better just do it talk is cheap
 
 ## Stats
-
+```
    18631 text files.
    12680 unique files.
     9585 files ignored.
@@ -412,6 +412,7 @@ USSR                           351           7813          11369         184024
 -------------------------------------------------------------------------------
 SUM:                           351           7813          11369         184024
 -------------------------------------------------------------------------------
+```
 
 **~2.9 million lines** Claude is unstoppable Timestamp: 2026-11-18
 
