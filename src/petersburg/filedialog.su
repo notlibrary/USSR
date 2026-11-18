@@ -280,6 +280,14 @@ pfd_go(r): dir [
     btget(text): pfd_st "text"
     pfd_join(shown): d ""
     settext(_): text shown
+    # the first row is chosen, so the arrows move from it
+    btget(rows): pfd_st "rows"
+    len(nr): rows
+    if(_): {nr > 0} [
+        btget(list): pfd_st "list"
+        setindex(_): list 0
+        pfd_show_row(_): 0
+    ]
     pfd_ok_label(_):
 ]
 
@@ -367,8 +375,38 @@ pfd_cb_cancel(result): widget [
 
 pfd_cb_list(result): widget [
     set(pfd_st): pfd_dialog?
-    btget(rows): pfd_st "rows"
     getindex(i): widget
+    pfd_show_row(_): i
+]
+
+# double click on a row: Open / Save on it (a folder opens)
+pfd_cb_double(result): widget index [
+    set(pfd_st): pfd_dialog?
+    pfd_show_row(_): index
+    pfd_accept(_):
+]
+
+# typing while the list has the focus starts a name in the box
+pfd_cb_char(result): window cp [
+    set(pfd_st): pfd_dialog?
+    btget(list): pfd_st "list"
+    getfocus(f): window
+    if(_): {f = list && cp >= 32 && cp < 127} [
+        btget(text): pfd_st "text"
+        btget(dir): pfd_st "dir"
+        chr(s): cp
+        pfd_join(shown): dir s
+        settext(_): text shown
+        setfocus(_): text
+        btput(_): pfd_st "confirm" ""
+        pfd_ok_label(_):
+    ]
+]
+
+# row i's path in the box
+pfd_show_row(r): i [
+    set(r): 0
+    btget(rows): pfd_st "rows"
     len(n): rows
     if(_): {i >= 0 && i < n} [
         at(row): rows i
@@ -474,6 +512,8 @@ filedialog(r): mode title start filters [
     on(_): ok "click" "pfd_cb_ok"
     on(_): cancel "click" "pfd_cb_cancel"
     on(_): list "change" "pfd_cb_list"
+    on(_): list "double" "pfd_cb_double"
+    on(_): win "char" "pfd_cb_char"
     on(_): combo "change" "pfd_cb_filter"
     on(_): text "change" "pfd_cb_text"
     on(_): win "key" "pfd_cb_key"
@@ -481,8 +521,18 @@ filedialog(r): mode title start filters [
     if(_): {name != ""} [
         pfd_join(full): dir name
         settext(_): text full
+        btget(rows): pfd_st "rows"
+        len(nr): rows
+        set(i): 0
+        while(_): {i < nr} [
+            at(row): rows i
+            at(rn): row 1
+            if(_): {rn = name} [ setindex(_): list i ]
+            set(i): {i + 1}
+        ]
     ]
-    setfocus(_): text
+    # the list has the focus: the arrows move at once, Enter opens
+    setfocus(_): list
     setmodal(_): win true
     show(_): win
     run(_):

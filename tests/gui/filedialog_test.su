@@ -122,9 +122,17 @@ init(result): arg_count arg_values [
     btget(rows): st "rows"
     encode(rs): rows
     fdt_check(_): "folders first, then the files the filter lets through" {rs = "[[`up`,`..`],[`folder`,`sub`],[`file`,`one.dxf`]]"}
+    fdt_settle(_):
+    # it starts on the first row (".."), the list focused
     fdt_text(t): st
-    concat(want): fdt_dir "/"
-    fdt_check(_): "the box shows the folder" {t = want}
+    pfd_parent(up): fdt_dir
+    pfd_join(want): up ""
+    fdt_check(_): "the box shows the first row" {t = want}
+    btget(list): st "list"
+    btget(w): st "win"
+    getfocus(f): w
+    getindex(li): list
+    fdt_check(_): "the list has the focus, on its first row" {f = list && li = 0}
     # the program's window takes no input meanwhile
     inject(_): main "key" 65 0 0
     fdt_settle(_):
@@ -167,6 +175,54 @@ init(result): arg_count arg_values [
     fdt_settle(_):
     set(nk): fdt_keys?
     fdt_check(_): "the program's window takes keys again" {nk = 1}
+
+    # --- held arrows, double clicks, typing over the list
+    set(fdt_answered): false!
+    async(_): "fdt_open" fdt_dir
+    fdt_up(st):
+    fdt_settle(_):
+    btget(w): st "win"
+    btget(list): st "list"
+    # no click first: the arrows move from the first row at once
+    inject(_): w "key" 264 0 0
+    inject(_): w "keyrepeat" 264 0 0
+    fdt_settle(_):
+    getindex(li): list
+    fdt_text(t): st
+    concat(want): fdt_dir "/one.dxf"
+    fdt_check(_): "a held Down keeps moving" {li = 2 && t = want}
+    inject(_): w "keyrepeat" 265 0 0
+    fdt_settle(_):
+    getindex(li): list
+    fdt_check(_): "and a held Up" {li = 1}
+    inject(_): list "double" 1 0 0
+    fdt_settle(_):
+    btget(rows): st "rows"
+    encode(rs): rows
+    fdt_check(_): "a double click on a folder goes into it" {rs = "[[`up`,`..`],[`file`,`three.dxf`]]"}
+    inject(_): list "double" 1 0 0
+    fdt_wait_answer(_):
+    set(a): fdt_answer?
+    concat(want): fdt_dir "/sub/three.dxf"
+    fdt_check(_): "a double click on a file answers it" {a = want}
+    set(fdt_answered): false!
+    async(_): "fdt_save" fdt_dir
+    fdt_up(st):
+    fdt_settle(_):
+    btget(w): st "win"
+    btget(list): st "list"
+    gettext(before): list
+    inject(_): w "char" 110 0 0
+    fdt_settle(_):
+    fdt_text(t): st
+    concat(want): fdt_dir "/n"
+    getfocus(f): w
+    btget(text): st "text"
+    gettext(after): list
+    fdt_check(_): "typing over the list starts a name in the box" {t = want && f = text}
+    fdt_check(_): "and leaves the list's items alone" {before = after}
+    fdt_key(_): st 256
+    fdt_wait_answer(_):
 
     # --- Cancel, and a name that is not there
     set(fdt_answered): false!

@@ -52,7 +52,7 @@ a diagnostic.
 | `setitems(menu, items)` | Menu handle, items as for `toolmenu` | Zero; replaces the menu's items |
 | `recentfiles(list): app` / `recentadd(list): app path` | A program name, a path | The program's recent files, newest first (10 kept, in `~/.<app>-recent`). `$include "recent.su"` |
 | `filemenuitems(items): list` / `filemenuaction(pick): index list` | A recent list, a picked index | The items of a standard File menu (New, Open..., Save, Save As..., the last 5 files, Exit), and `[action path]` for a picked item: `"new"`, `"open"`, `"save"`, `"saveas"`, `"recent"` with its path, `"exit"`, or `""` |
-| `filedialog(path): mode title start filters` | `"open"` or `"save"`, a title, a folder or file to start at, `"label\|patterns\|..."` filters (patterns split by `;`) | The chosen path, or `""` when cancelled; modal, it returns once answered. `$include "filedialog.su"` |
+| `filedialog(path): mode title start filters` | `"open"` or `"save"`, a title, a folder or file to start at, `"label\|patterns\|..."` filters (patterns split by `;`) | The chosen path, or `""` when cancelled; modal, it returns once answered. It opens focused on the list's first row; a double click on a row opens it (a folder too). `$include "filedialog.su"` |
 | `canvaskeep(canvas)` / `canvasback(canvas)` | Canvas | The shape count; `canvaskeep` marks the shapes drawn so far, `canvasback` drops every shape added after the mark (`canvasclear` drops the mark), so a moving overlay is redrawn alone |
 | `canvasdash(canvas, x1, y1, x2, y2, color, dash, gap)` / `canvasdashcircle(canvas, cx, cy, radius, color, dash, gap)` | Canvas, numbers, color, dash and gap lengths in pixels | Zero; a dashed line (line shapes) or a dashed circle (arcs), cut natively |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
@@ -72,6 +72,7 @@ a diagnostic.
 | `"pointer"` | Canvas | canvas, x, y in canvas pixels |
 | `"wheel"` | Canvas | canvas, x, y, direction (`1` away from the user, `-1` toward) |
 | `"double"` | Canvas | canvas, x, y of the second press of a double click (within 0.45 s and 5 pixels; its `"pointer"` event comes first) |
+| `"double"` | List | list, the row's index, when the same row is pressed twice within 0.45 s (its `"change"` event comes first) |
 | `"menu"` | Canvas | canvas, x, y of a right-button press |
 | `"motion"` | Canvas | canvas, x, y of the cursor as it moves over the canvas (at most once per frame, the latest position; `-1, -1` when it leaves) |
 | `"key"` | Window | window, GLFW key code (key press) |
