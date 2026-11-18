@@ -1,0 +1,81 @@
+# The KGB elements base (elements/ at the repository root): 118 chemical
+# elements as a KGB knowledge base. Runs read-only queries against it and
+# prints each command line, its output and its exit status (golden file).
+# Run from the repository root: ussr tests/kgb_elements_test.su
+$include "../src/kgb/kgb.su"
+
+kgb(r): line [
+    concat(shown): "$ kgb " line
+    print(_): shown
+    str_split(words): line " "
+    vec(args): ""
+    push(_): args "--kb"
+    push(_): args "elements"
+    len(n): words
+    set(i): 0
+    while(_): {i < n} [
+        at(w): words i
+        push(_): args w
+        set(i): {i + 1}
+    ]
+    kgb_main(r): args
+    if(_): {r != 0} [
+        str_from_int(code): r
+        concat(st): "[exit " code "]"
+        print(_): st
+    ]
+]
+
+init(result): arg_count arg_values [
+    # the base as a whole
+    kgb(_): "stats"
+    kgb(_): "check"
+    kgb(_): "validate"
+    kgb(_): "where atomic_number count"
+    kgb(_): "where atomic_number>=1 and atomic_number<=118 count"
+    kgb(_): "cats"
+
+    # lookup by name and by symbol (the aka fact)
+    kgb(_): "get iron atomic_number"
+    kgb(_): "get Fe atomic_mass_u"
+    kgb(_): "get Na electron_configuration"
+    kgb(_): "type Na"
+    kgb(_): "is Na alkali-metals"
+    kgb(_): "is Na nonmetals"
+    kgb(_): "get Og metal"
+    kgb(_): "where symbol=Au show name,density_g_cm3,melting_point_K,discovery_year"
+    kgb(_): "--format json where symbol=He show atomic_number,phase_at_stp,boiling_point_K"
+
+    # filters
+    kgb(_): "where group=17 sort by atomic_number show symbol,name,phase_at_stp"
+    kgb(_): "where melting_point_K>3000 sort by melting_point_K desc show symbol,melting_point_K"
+    kgb(_): "where melting_point_K<0 count"
+    kgb(_): "where phase_at_stp=liquid sort by atomic_number show symbol,melting_point_C"
+    kgb(_): "where phase_at_stp=gas sort by atomic_number show symbol"
+    kgb(_): "where density_g_cm3>20 sort by density_g_cm3 desc show symbol,density_g_cm3"
+    kgb(_): "where electronegativity_pauling>=3.4 sort by electronegativity_pauling desc show symbol,electronegativity_pauling"
+    kgb(_): "where ionization_energy_1_eV<4 sort by ionization_energy_1_eV show symbol,ionization_energy_1_eV"
+    kgb(_): "where radioactive=yes and atomic_number<84 show symbol,most_stable_isotope"
+    kgb(_): "where stable_isotopes>=7 sort by stable_isotopes desc show symbol,stable_isotopes"
+    kgb(_): "where discovery_year>=2000 sort by discovery_year show symbol,discovery_year,discovery_location"
+    kgb(_): "where discovery_year=antiquity count"
+    kgb(_): "where crystal_structure~diamond show symbol"
+    kgb(_): "where block=f count"
+    kgb(_): "where period=2 sort by atomic_number show symbol,category"
+    kgb(_): "where category~noble count"
+
+    # unknown and predicted values
+    kgb(_): "where melting_point_K=unknown count"
+    kgb(_): "where phase_at_stp=unknown sort by atomic_number show symbol"
+    kgb(_): "where density_g_cm3_predicted sort by atomic_number limit 5 show symbol,density_g_cm3_predicted"
+    kgb(_): "where category_basis count"
+
+    # aggregates, groups and sql
+    kgb(_): "where atomic_number group by series"
+    kgb(_): "where phase_at_stp group by phase_at_stp"
+    kgb(_): "where melting_point_K max melting_point_K"
+    kgb(_): "where period=4 avg electronegativity_pauling"
+    kgb(_): "sql select symbol, name, atomic_mass_u from nonmetals where atomic_number < 10 order by atomic_number"
+    kgb(_): "table halogens symbol atomic_number boiling_point_K"
+    set(result): 0
+]

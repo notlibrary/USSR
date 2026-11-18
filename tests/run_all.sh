@@ -119,6 +119,9 @@ suite() {
         if [ "$label" = russia ]; then
             case "$f" in
                 tests/oop/errors_deep_recursion.su|tests/oop/errors_try_quiet.su) continue ;;
+                # 40 queries over the 118-object elements base exceed
+                # russia.su's step limit
+                tests/kgb_elements_test.su) continue ;;
             esac
         fi
         want="tests/expected/${f#tests/}.txt"
