@@ -139,10 +139,21 @@ tl_add(r): doc e [
     btget(color): doc "color"
     if(_): {layer != "0"} [ tl_set_prop(_): e "layer" layer ]
     if(_): {color != 256} [ tl_set_prop(_): e "color" color ]
+    tl_take_current(_): doc e
     btget(es): doc "entities"
     push(_): es e
     len(n): es
     set(r): {n - 1}
+]
+
+# the current linetype and line weight (the ltype and lweight commands
+# with nothing selected, or Tula's toolbar menus) on a new entity e
+tl_take_current(r): doc e [
+    set(r): 0
+    btget(lt): doc "celtype" ""
+    btget(lw): doc "celweight" -1
+    if(_): {lt != ""} [ tl_set_prop(_): e "ltype" lt ]
+    if(_): {lw >= 0} [ tl_set_prop(_): e "lweight" lw ]
 ]
 
 tl_new(r): kind a [
@@ -3155,11 +3166,33 @@ tl_hsv(r): h s v [
     set(r): {(r8 << 16) | (g8 << 8) | b8}
 ]
 
+# a linetype's name as Tula keeps it: "dash dot", "Dash-Dot" -> DASHDOT,
+# "dash" -> DASHED, "solid" -> CONTINUOUS; "" stays "" (by layer)
+tl_ltype_name(r): name [
+    str_upper(r): name
+    str_replace(r): r " " ""
+    str_replace(r): r "-" ""
+    str_replace(r): r "_" ""
+    if(_): {r = "DASH" || r = "DASHES"} [ set(r): "DASHED" ]
+    elif(_): {r = "SOLID" || r = "LINE"} [ set(r): "CONTINUOUS" ]
+    elif(_): {r = "DOTS" || r = "DOTTED"} [ set(r): "DOT" ]
+    elif(_): {r = "BYLAYER"} [ set(r): "" ]
+]
+
+# the linetypes Tula draws
+$define TL_LTYPES "CONTINUOUS DASHED DASHDOT CENTER HIDDEN DOT"
+
 # dash pattern of a linetype in drawing units: [on off ...] or empty
 tl_ltype(r): name scale [
     vec(r): ""
-    str_upper(n): name
-    if(_): {n = "DASHED"} [
+    tl_ltype_name(n): name
+    if(_): {n = "DASHDOT"} [
+        push(_): r {8 * scale}
+        push(_): r {2.5 * scale}
+        push(_): r {0.5 * scale}
+        push(_): r {2.5 * scale}
+    ]
+    elif(_): {n = "DASHED"} [
         push(_): r {6 * scale}
         push(_): r {3 * scale}
     ]
@@ -3204,6 +3237,164 @@ tl_dash_line(r): x1 y1 x2 y2 pattern [
         set(pos): end
         set(k): {(k + 1) % np}
         set(count): {count + 1}
+    ]
+]
+
+# ltype or lweight (kind) set to text: on the selection, or, with nothing
+# selected, for the objects drawn next; the answer for the status line
+tl_set_style(r): doc kind text [
+    if(_): {kind = "ltype"} [
+        tl_ltype_name(v): text
+        str_split(known): TL_LTYPES " "
+        set(ok): {v = ""}
+        len(nk): known
+        set(i): 0
+        while(_): {i < nk} [
+            at(x): known i
+            if(_): {x = v} [ set(ok): true ]
+            set(i): {i + 1}
+        ]
+        if(_): {ok = false} [
+            concat(r): "linetypes: " TL_LTYPES
+            return(r): r
+        ]
+        set(key): "ltype"
+        set(cur): "celtype"
+        set(shown): v
+        if(_): {v = ""} [ set(shown): "BYLAYER" ]
+    ]
+    else(_): [
+        tl_lweight_parse(v): text
+        if(_): {v = null} [
+            set(r): "line weights: default, or millimetres (0.25, 0.5mm), or hundredths (50)"
+            return(r): r
+        ]
+        set(key): "lweight"
+        set(cur): "celweight"
+        set(shown): "default"
+        if(_): {v >= 0} [
+            str_from_number(ms): {v / 100.0} 2
+            concat(shown): ms " mm"
+        ]
+    ]
+    btget(sel): doc "selection"
+    btget(es): doc "entities"
+    len(ns): sel
+    if(_): {ns = 0} [
+        btput(_): doc cur v
+        concat(r): shown " for what comes next"
+        return(r): r
+    ]
+    tl_checkpoint(_): doc
+    set(i): 0
+    while(_): {i < ns} [
+        at(k): sel i
+        at(e): es k
+        if(_): {kind = "lweight" && v < 0} [ tl_set_prop(_): e key -1 ]
+        else(_): [ tl_set_prop(_): e key v ]
+        set(i): {i + 1}
+    ]
+    str_from_int(nss): ns
+    concat(r): shown " on " nss " object(s)"
+]
+
+# a drawn part as a path of points [x1 y1 x2 y2 ...]; s pixels a unit
+tl_path_pts(r): p s [
+    vec(r): ""
+    at(k): p 0
+    tl_fields(f): p
+    if(_): {k = "LINE"} [
+        at(x): f 1
+        push(_): r x
+        at(x): f 2
+        push(_): r x
+        at(x): f 3
+        push(_): r x
+        at(x): f 4
+        push(_): r x
+    ]
+    elif(_): {k = "POLYLINE"} [
+        at(closed): f 1
+        at(pts): f 2
+        list_concat(r): r pts
+        len(np): pts
+        if(_): {closed && np >= 4} [
+            at(x): pts 0
+            push(_): r x
+            at(x): pts 1
+            push(_): r x
+        ]
+    ]
+    elif(_): {k = "CIRCLE" || k = "ARC"} [
+        at(cx): f 1
+        at(cy): f 2
+        at(rad): f 3
+        set(a0): 0
+        set(sweep): 360
+        if(_): {k = "ARC"} [
+            at(a0): f 4
+            at(a1): f 5
+            set(sweep): {a1 - a0}
+            while(_): {sweep <= 0} [ set(sweep): {sweep + 360} ]
+        ]
+        # a segment about every 4 pixels of the curve
+        str_trunc(segs): {rad * s * sweep / 360 * 6.2832 / 4}
+        if(_): {segs < 12} [ set(segs): 12 ]
+        if(_): {segs > 720} [ set(segs): 720 ]
+        set(i): 0
+        while(_): {i <= segs} [
+            set(a): {(a0 + sweep * i / segs) * 3.14159265358979 / 180}
+            cos(ca): a
+            sin(sa): a
+            push(_): r {cx + rad * ca}
+            push(_): r {cy + rad * sa}
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+# a path cut by a dash pattern, which runs on round the corners: the
+# drawn pieces as LINEs (at most limit of them; the rest drawn solid)
+tl_dash_path(r): pts pattern limit [
+    vec(r): ""
+    len(n): pts
+    len(np): pattern
+    if(_): {np = 0 || n < 4} [ return(r): r ]
+    set(k): 0
+    at(left): pattern 0
+    set(count): 0
+    set(i): 0
+    while(_): {i + 3 < n} [
+        at(x1): pts i
+        at(y1): pts {i + 1}
+        at(x2): pts {i + 2}
+        at(y2): pts {i + 3}
+        tl_dist(len_): x1 y1 x2 y2
+        set(pos): 0
+        while(_): {pos < len_} [
+            if(_): {count >= limit} [
+                tl_line_e(l): {x1 + (x2 - x1) * pos / len_} {y1 + (y2 - y1) * pos / len_} x2 y2
+                push(_): r l
+                set(pos): len_
+            ]
+            else(_): [
+                set(step): left
+                if(_): {pos + step > len_} [ set(step): {len_ - pos} ]
+                set(end): {pos + step}
+                if(_): {k % 2 = 0} [
+                    tl_line_e(l): {x1 + (x2 - x1) * pos / len_} {y1 + (y2 - y1) * pos / len_} {x1 + (x2 - x1) * end / len_} {y1 + (y2 - y1) * end / len_}
+                    push(_): r l
+                    set(count): {count + 1}
+                ]
+                set(left): {left - step}
+                set(pos): end
+                if(_): {left <= TL_EPS} [
+                    set(k): {(k + 1) % np}
+                    at(left): pattern k
+                ]
+            ]
+        ]
+        set(i): {i + 2}
     ]
 ]
 
@@ -3762,10 +3953,11 @@ tl_dxf(r): doc version [
     tl_g(t): t "0" "TABLE"
     tl_g(t): t "2" "LTYPE"
     vec(lts): ""
-    str_split(lts): "CONTINUOUS DASHED CENTER HIDDEN DOT" " "
-    tl_gi(t): t "70" 5
+    str_split(lts): TL_LTYPES " "
+    len(nlt): lts
+    tl_gi(t): t "70" nlt
     set(i): 0
-    while(_): {i < 5} [
+    while(_): {i < nlt} [
         at(lt): lts i
         tl_g(t): t "0" "LTYPE"
         tl_g(t): t "2" lt
@@ -3879,6 +4071,43 @@ tl_dxf(r): doc version [
     tl_g(r): t "0" "EOF"
 ]
 
+# a line weight as written: "0.5", "0.5mm" or "50" (DXF's hundredths of a
+# millimetre) -> 50; "default", "thin" or "bylayer" -> -1; null when not one
+tl_lweight_parse(r): text [
+    set(r): null
+    str_lower(s): text
+    str_trim(s): s
+    if(_): {s = "default" || s = "thin" || s = "bylayer" || s = ""} [
+        set(r): -1
+        return(r): r
+    ]
+    str_ends(mm): s "mm"
+    if(_): mm [
+        len(n): s
+        slice(s): s 0 {n - 2}
+        str_trim(s): s
+    ]
+    str_to_number(v): s
+    typeof(tv): v
+    if(_): {tv != "integer" && tv != "real"} [ return(r): r ]
+    if(_): {v < 0} [ return(r): r ]
+    str_find(dot): s "." 0
+    if(_): {mm || dot >= 0 || v < 5} [ set(v): {v * 100} ]
+    str_trunc(r): {v + 0.5}
+    if(_): {r > 211} [ set(r): 211 ]
+]
+
+# a weight's width on the screen, in pixels (0: thin)
+tl_lweight_px(r): lw [
+    set(r): 0
+    typeof(t): lw
+    if(_): {t != "integer" && t != "real"} [ return(r): r ]
+    if(_): {lw <= 0} [ return(r): r ]
+    # 96 pixels an inch: 3.78 a millimetre
+    str_trunc(r): {lw / 100.0 * 3.78 + 0.5}
+    if(_): {r < 2} [ set(r): 0 ]
+]
+
 tl_dxf_common(r): t kind e [
     tl_g(r): t "0" kind
     tl_prop(ln): e "layer" "0"
@@ -3887,6 +4116,22 @@ tl_dxf_common(r): t kind e [
     if(_): {c != 256} [ tl_gi(r): r "62" c ]
     tl_prop(lt): e "ltype" ""
     if(_): {lt != ""} [ tl_g(r): r "6" lt ]
+    tl_prop(lw): e "lweight" -1
+    typeof(lwt): lw
+    if(_): {lwt = "integer" && lw >= 0} [ tl_gi(r): r "370" lw ]
+]
+
+# the linetype (6) and line weight (370) a DXF entity names, kept on e
+tl_dxf_take_props(r): e codes values [
+    set(r): 0
+    tula_dxf_str(lt): codes values 6 ""
+    tl_ltype_name(lt): lt
+    if(_): {lt != "" && lt != "BYLAYER"} [ tl_set_prop(_): e "ltype" lt ]
+    tula_dxf_num(lw): codes values 370 -1
+    if(_): {lw >= 0} [
+        str_trunc(lwi): lw
+        tl_set_prop(_): e "lweight" lwi
+    ]
 ]
 
 tl_dxf_entity_text(r): doc e r12 [
@@ -5996,11 +6241,21 @@ tl_command(r): doc line [
             set(r): "ok"
         ]
     ]
-    elif(_): {(cmd = "ltype" || cmd = "lweight" || cmd = "onlayer") && n >= 2} [
+    elif(_): {(cmd = "ltype" || cmd = "lweight") && n >= 2} [
+        # the rest of the line: "ltype dash dot" works
+        set(v): ""
+        set(j): 1
+        while(_): {j < n} [
+            at(wj): w j
+            if(_): {v != ""} [ concat(v): v " " ]
+            concat(v): v wj
+            set(j): {j + 1}
+        ]
+        tl_set_style(r): doc cmd v
+    ]
+    elif(_): {cmd = "onlayer" && n >= 2} [
         at(v): w 1
-        set(key): cmd
-        if(_): {cmd = "onlayer"} [ set(key): "layer" ]
-        if(_): {cmd = "ltype"} [ str_upper(v): v ]
+        set(key): "layer"
         tl_checkpoint(_): doc
         len(ns): sel
         set(i): 0
@@ -6413,7 +6668,27 @@ tl_draw(r): canvas e [
         btget(l): layers ln null
         if(_): {l != null} [ btget(lt): l "ltype" ]
     ]
-    tl_ltype(pat): lt 1
+    # the pattern's units are 1.5 pixels (times the drawing's ltscale),
+    # whatever the zoom, so dashes stay dashes
+    set(view): tula_view?
+    at(s): view 2
+    if(_): {s <= 0} [ set(s): 1 ]
+    btget(lts): doc "ltscale" 1
+    # the line weight, by layer when the entity has none
+    tl_prop(lw): e "lweight" -1
+    if(_): {lw < 0} [
+        btget(layers): doc "layers"
+        btget(l): layers ln null
+        if(_): {l != null} [ btget(lw): l "lweight" -1 ]
+    ]
+    tl_lweight_px(pen): lw
+    # a heavy line's round ends would close its gaps: longer dashes
+    set(grow): 1
+    if(_): {pen > 1} [ set(grow): {pen * 0.75} ]
+    if(_): {grow < 1} [ set(grow): 1 ]
+    tl_ltype(pat): lt {1.5 * lts * grow / s}
+    set(penon): tula_pen?
+    if(_): {pen > 0 && penon = true} [ canvaspen(_): canvas pen ]
     tl_explode_for_draw(parts): doc e
     len(n): parts
     set(i): 0
@@ -6421,13 +6696,9 @@ tl_draw(r): canvas e [
         at(p): parts i
         at(k): p 0
         len(npat): pat
-        if(_): {k = "LINE" && npat > 0} [
-            tl_fields(f): p
-            at(x1): f 1
-            at(y1): f 2
-            at(x2): f 3
-            at(y2): f 4
-            tl_dash_line(pieces): x1 y1 x2 y2 pat
+        if(_): {(k = "LINE" || k = "POLYLINE" || k = "CIRCLE" || k = "ARC") && npat > 0} [
+            tl_path_pts(path): p s
+            tl_dash_path(pieces): path pat 6000
             len(nq): pieces
             set(j): 0
             while(_): {j < nq} [
@@ -6439,6 +6710,7 @@ tl_draw(r): canvas e [
         else(_): [ tula_draw_entity(_): canvas p ink tink ]
         set(i): {i + 1}
     ]
+    if(_): {pen > 0 && penon = true} [ canvaspen(_): canvas 0 ]
 ]
 
 tl_background(r): [

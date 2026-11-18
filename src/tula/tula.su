@@ -284,6 +284,11 @@ tulainitialize(canvas): window status filename [
     tsc_state(_):
     set(tula_window): window!
     set(tula_filemenu): 0!
+    # canvaspen draws line weights; tula_scope_on turns it on where the
+    # runtime has it
+    set(tula_pen): false!
+    set(tula_ltmenu): 0!
+    set(tula_lwmenu): 0!
     set(tula_status): status!
     set(tula_path): filename!
     canvas(canvas): window
@@ -369,6 +374,9 @@ tula_add_entity(r): entity [
     len(_tae_count): _tae_entities
     set(r): {_tae_count < TULA_MAX_ENTITIES}
     if(_): r [
+        # the linetype and weight picked for new objects
+        set(_tae_doc): tula_doc?
+        tl_take_current(_): _tae_doc entity
         push(_): _tae_entities entity
     ]
 ]
@@ -746,6 +754,38 @@ tula_file_new(r): [
     uiunlock(_):
 ]
 
+# the Linetype and Weight menus: on the selected objects, or, with none
+# selected, for the objects drawn next
+$define TULA_LT_ITEMS "Continuous|Dashed|Dash dot|Center|Hidden|Dot|-|By layer"
+$define TULA_LT_NAMES "CONTINUOUS DASHED DASHDOT CENTER HIDDEN DOT - BYLAYER"
+$define TULA_LW_ITEMS "Default|0.25 mm|0.35 mm|0.5 mm|0.7 mm|1.0 mm|1.4 mm|2.0 mm"
+$define TULA_LW_VALUES "default 25 35 50 70 100 140 200"
+
+tula_style_pick(r): kind value [
+    set(r): 0
+    uilock(_):
+    tl_gui_doc(_tsp_doc):
+    tl_set_style(_tsp_answer): _tsp_doc kind value
+    tl_gui_store(_): _tsp_doc
+    tula_redraw(_):
+    tula_set_status(_): _tsp_answer
+    uiunlock(_):
+]
+
+tula_lt_select(result): menu index [
+    str_split(_tls_names): TULA_LT_NAMES " "
+    at(_tls_v): _tls_names index
+    if(_): {_tls_v != "-"} [ tula_style_pick(_): "ltype" _tls_v ]
+    set(result): 0
+]
+
+tula_lw_select(result): menu index [
+    str_split(_tlw_values): TULA_LW_VALUES " "
+    at(_tlw_v): _tlw_values index
+    tula_style_pick(_): "lweight" _tlw_v
+    set(result): 0
+]
+
 tula_file_select(result): menu index [
     set(result): 0
     recentfiles(list): "tula"
@@ -830,6 +870,12 @@ tulatoolbar(toolbar): window [
     toolmenu(_ttb_menu): toolbar "File" _ttb_items
     on(_): _ttb_menu "select" "tula_file_select"
     set(tula_filemenu): _ttb_menu!
+    toolmenu(_ttb_lt): toolbar "Linetype" TULA_LT_ITEMS
+    on(_): _ttb_lt "select" "tula_lt_select"
+    set(tula_ltmenu): _ttb_lt!
+    toolmenu(_ttb_lw): toolbar "Weight" TULA_LW_ITEMS
+    on(_): _ttb_lw "select" "tula_lw_select"
+    set(tula_lwmenu): _ttb_lw!
     tula_tb_add(_): toolbar "Open" "tula_tb_open"
     tula_tb_add(_): toolbar "Save" "tula_tb_save_file"
     tula_tb_add(_): toolbar "Save As" "tula_tb_save_as"
@@ -1268,6 +1314,8 @@ tula_dxf_read(r): path [
                         push(_): _tdr_skipped _tdr_kind
                     ]
                     else(_): [
+                        # its linetype and line weight (more.su)
+                        tl_dxf_take_props(_): _tdr_e _tdr_codes _tdr_values
                         push(_): _tdr_entities _tdr_e
                     ]
                 ]
@@ -1433,6 +1481,8 @@ tula_scope_on(r): canvas [
     canvaskeep(_): canvas
     canvasback(_): canvas
     set(tula_fast): true!
+    canvaspen(_): canvas 0
+    set(tula_pen): true!
 ]
 
 tula_app_wheel(result): canvas x y direction [

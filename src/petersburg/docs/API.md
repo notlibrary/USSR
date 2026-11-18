@@ -55,6 +55,7 @@ a diagnostic.
 | `filedialog(path): mode title start filters` | `"open"` or `"save"`, a title, a folder or file to start at, `"label\|patterns\|..."` filters (patterns split by `;`) | The chosen path, or `""` when cancelled; modal, it returns once answered. It opens focused on the list's first row; a double click on a row opens it (a folder too). `$include "filedialog.su"` |
 | `canvaskeep(canvas)` / `canvasback(canvas)` | Canvas | The shape count; `canvaskeep` marks the shapes drawn so far, `canvasback` drops every shape added after the mark (`canvasclear` drops the mark), so a moving overlay is redrawn alone |
 | `canvasdash(canvas, x1, y1, x2, y2, color, dash, gap)` / `canvasdashcircle(canvas, cx, cy, radius, color, dash, gap)` | Canvas, numbers, color, dash and gap lengths in pixels | Zero; a dashed line (line shapes) or a dashed circle (arcs), cut natively |
+| `canvaspen(canvas, width)` | Canvas, width in pixels (0 to 64) | Zero; the lines, circles and arcs drawn after it are that wide (0 or 1: thin), thick lines with round ends; `canvasclear` sets it back to thin |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
 | `getfocus(window)` | Window handle | Handle of the window's focused text box or list, or `0` |
