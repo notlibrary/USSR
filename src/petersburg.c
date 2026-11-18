@@ -6,6 +6,10 @@
 #include <string.h>
 
 #ifdef USSR_WITH_GLFW
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#endif
 #include <GLFW/glfw3.h>
 
 #include <ctype.h>
@@ -114,6 +118,13 @@ static petersburg_widget_t *petersburg_widgets;
 static long petersburg_next_id = 1;
 static int petersburg_initialized;
 static int petersburg_run_requested;
+/* Windows are drawn again only when something may have changed (a
+   Petersburg call that changes widgets or shapes, input, a resize or an
+   expose), at most PETERSBURG_FPS times a second. Drawing every pump made
+   each scheduler slice wait for the display's vertical sync. */
+static int petersburg_dirty = 1;
+static double petersburg_last_render = -1.0;
+#define PETERSBURG_FRAME (1.0 / 120.0)
 static int petersburg_last_error;
 static petersburg_event_t petersburg_events[64];
 static size_t petersburg_event_head;
@@ -210,6 +221,10 @@ static int petersburg_initialize(void)
         fprintf(stderr, "USSR: Petersburg could not initialize GLFW\n");
         return 0;
     }
+#ifdef _WIN32
+    /* waits to the millisecond, not the 15.6 ms default tick */
+    timeBeginPeriod(1);
+#endif
     petersburg_initialized = 1;
     return 1;
 }
@@ -268,6 +283,7 @@ static void petersburg_queue(
 {
     petersburg_event_t *event;
 
+    petersburg_dirty = 1;
     if (widget == NULL || callback == NULL || callback[0] == '\0' ||
         petersburg_last_error)
         return;
@@ -1363,6 +1379,22 @@ static void petersburg_cursor_pos(GLFWwindow *native, double x, double y)
                          hide ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
 }
 
+/* an expose or a resize: the window is drawn again */
+static void petersburg_window_refresh(GLFWwindow *native)
+{
+    (void)native;
+    petersburg_dirty = 1;
+}
+
+static void petersburg_framebuffer_size(GLFWwindow *native, int width,
+                                        int height)
+{
+    (void)native;
+    (void)width;
+    (void)height;
+    petersburg_dirty = 1;
+}
+
 static void petersburg_mouse_button(GLFWwindow *native, int button,
                                     int action, int modifiers)
 {
@@ -1371,6 +1403,7 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
     double mouse_x;
     double mouse_y;
     (void)modifiers;
+    petersburg_dirty = 1;
 
     if (window == NULL || action != GLFW_PRESS ||
         (button != GLFW_MOUSE_BUTTON_LEFT &&
@@ -1486,6 +1519,7 @@ static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
     size_t old_length;
     char *text;
     petersburg_widget_t *window = petersburg_window_for(native);
+    petersburg_dirty = 1;
 
     /* typed text for the window, any script (Cyrillic too) */
     if (window != NULL && codepoint >= 32 && codepoint != 127 &&
@@ -1519,6 +1553,7 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     char *text;
     (void)scancode;
     (void)modifiers;
+    petersburg_dirty = 1;
 
     if (action == GLFW_RELEASE)
     {
@@ -1567,6 +1602,7 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
 static void petersburg_window_focus(GLFWwindow *native, int focused)
 {
     petersburg_widget_t *window = petersburg_window_for(native);
+    petersburg_dirty = 1;
 
     if (window != NULL)
         petersburg_queue(window, window->focus_callback, 1,
@@ -1586,6 +1622,7 @@ static void petersburg_scroll(GLFWwindow *native, double x_offset,
     int framebuffer_width;
     int framebuffer_height;
     (void)x_offset;
+    petersburg_dirty = 1;
 
     if (window == NULL || y_offset == 0.0)
         return;
@@ -1721,6 +1758,9 @@ static void petersburg_canvas_reset(petersburg_widget_t *canvas)
     canvas->shape_count = 0;
     canvas->keep_count = 0;
 }
+
+static int petersburg_color_value(const ussr_value_t *values, size_t index,
+                                  unsigned long *color);
 
 /* Appends a shape (its text, if any, already owned by the shape). */
 static int petersburg_shape_push(petersburg_widget_t *canvas,
@@ -2037,6 +2077,8 @@ static int petersburg_create_window(
     glfwSetWindowFocusCallback(native, petersburg_window_focus);
     glfwSetScrollCallback(native, petersburg_scroll);
     glfwSetCursorPosCallback(native, petersburg_cursor_pos);
+    glfwSetWindowRefreshCallback(native, petersburg_window_refresh);
+    glfwSetFramebufferSizeCallback(native, petersburg_framebuffer_size);
     glfwMakeContextCurrent(native);
     glfwSwapInterval(1);
     out->type = USSR_INTEGER;
@@ -2536,6 +2578,14 @@ int ussr_petersburg_dispatch(
 
     if (name == NULL || strncmp(name, "petersburg_", 11) != 0)
         return 0;
+    if (strncmp(name, "petersburg_get_", 15) != 0 &&
+        strncmp(name, "petersburg_font_", 16) != 0 &&
+        strcmp(name, "petersburg_alive") != 0 &&
+        strcmp(name, "petersburg_canvas_count") != 0 &&
+        strcmp(name, "petersburg_canvas_keep") != 0 &&
+        strcmp(name, "petersburg_take_events") != 0 &&
+        strcmp(name, "petersburg_on") != 0)
+        petersburg_dirty = 1;
     if (strcmp(name, "petersburg_create_window") == 0)
         return petersburg_create_window(values, value_count, out);
     if (strcmp(name, "petersburg_maximize") == 0)
@@ -3204,11 +3254,18 @@ int ussr_petersburg_pump(
     {
         /* Never sleep past the next scheduler timer. */
         long timer = ussr_eq_next_timeout_ms();
-        if (timer == 0)
+        double wait = timer > 0 && timer < 50 ? (double)timer / 1000.0 : 0.05;
+        if (petersburg_dirty)
+        {
+            double owed = petersburg_last_render + PETERSBURG_FRAME -
+                          glfwGetTime();
+            if (owed < wait)
+                wait = owed;
+        }
+        if (timer == 0 || wait <= 0.0)
             glfwPollEvents();
         else
-            glfwWaitEventsTimeout(timer > 0 && timer < 50
-                                      ? (double)timer / 1000.0 : 0.05);
+            glfwWaitEventsTimeout(wait);
     }
     else
         glfwPollEvents();
@@ -3237,12 +3294,25 @@ int ussr_petersburg_pump(
         (void)petersburg_destroy(closing_id);
     }
 
-    for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
     {
-        if (widget->type == PETERSBURG_WINDOW && petersburg_run_requested)
+        double now = glfwGetTime();
+        int render = petersburg_dirty &&
+                     (petersburg_last_render < 0.0 ||
+                      now - petersburg_last_render >= PETERSBURG_FRAME);
+        for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
         {
-            petersburg_render_window(widget);
-            glfwShowWindow(widget->native_window);
+            if (widget->type == PETERSBURG_WINDOW && petersburg_run_requested)
+            {
+                if (render)
+                    petersburg_render_window(widget);
+                if (!glfwGetWindowAttrib(widget->native_window, GLFW_VISIBLE))
+                    glfwShowWindow(widget->native_window);
+            }
+        }
+        if (render && petersburg_run_requested)
+        {
+            petersburg_dirty = 0;
+            petersburg_last_render = now;
         }
     }
     if (petersburg_last_error)

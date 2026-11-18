@@ -29,6 +29,7 @@ tsc_state(r): [
     set(tula_mx): -1!
     set(tula_my): -1!
     set(tula_mdirty): false!
+    set(tula_mbusy): false!
     set(tula_fast): false!
     set(r): 0
 ]
@@ -39,6 +40,20 @@ tsc_motion(r): canvas x y [
     set(tula_mx): x!
     set(tula_my): y!
     set(tula_mdirty): true!
+    # redraw now, unless a redraw is already running: that one goes on
+    # until the last position is drawn (tsc_loop catches any it missed)
+    set(busy): tula_mbusy?
+    if(_): {busy = true} [ return(r): r ]
+    set(tula_mbusy): true!
+    set(more): true
+    while(_): more [
+        uilock(_):
+        set(tula_mdirty): false!
+        tsc_refresh(_):
+        uiunlock(_):
+        set(more): tula_mdirty?
+    ]
+    set(tula_mbusy): false!
 ]
 
 # the point a click at canvas x, y would take: [world x, world y]

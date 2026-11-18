@@ -7,6 +7,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <mmsystem.h>
 #elif defined(__EMSCRIPTEN__)
 #include <time.h>
 #else
@@ -97,7 +98,19 @@ void ussr_eq_cleanup(void)
 uint64_t ussr_eq_now_ms(void)
 {
 #if defined(_WIN32)
-    return (uint64_t)GetTickCount64();
+    /* the performance counter: GetTickCount64 moves in 15.6 ms steps, so
+       sleep(5) slept 15 ms and timers fired late */
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER count;
+    if (frequency.QuadPart == 0)
+    {
+        /* waits (Sleep, event timeouts) to the millisecond too */
+        timeBeginPeriod(1);
+        if (!QueryPerformanceFrequency(&frequency))
+            return (uint64_t)GetTickCount64();
+    }
+    QueryPerformanceCounter(&count);
+    return (uint64_t)(count.QuadPart / (frequency.QuadPart / 1000));
 #else
     struct timespec ts;
 
