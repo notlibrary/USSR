@@ -1353,6 +1353,10 @@ init(result): arg_count arg_values [
     on(_): canvas "wheel" "tula_app_wheel"
     on(_): window "key" "tula_app_key"
     try(_): "tula_scope_on" canvas
+    set(_tla_fast): tula_fast?
+    if(_): {_tla_fast = false} [
+        tula_set_status(_): "This ussr is older than Tula's crosshair: rebuild it (src/petersburg.c) for a fast cursor"
+    ]
     pack(_): canvas true
     maximize(_): window
     run(_):

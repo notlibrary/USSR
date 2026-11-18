@@ -17,6 +17,16 @@
   dashes are cut natively (`canvasdash`, `canvasdashcircle`). On a drawing
   of 400 lines a move went from about 10 ms to well under 1 ms, with
   exactly the same shapes drawn.
+- Object snaps no longer recompute everything on each move. The points
+  that do not depend on the cursor (end, mid, center, perp and tan from
+  the first point, and intersections of every pair of entities) are kept,
+  indexed by x, until the drawing, the modes or the first point change.
+  "near" is worked out only for entities whose box comes within reach. On
+  120 entities with every mode on, a move went from about 150 ms to well
+  under 50 ms, with the same snapped point (`tests/tula_osnap_test.su`
+  compares the two searches).
+- A `ussr` built before these Petersburg calls says so in Tula's status
+  line, instead of quietly redrawing everything on each move.
 
 ## 0.5.0-alpha
 Refine pass 1 from REFINE.md: the CAD engine in `more.su` (no window

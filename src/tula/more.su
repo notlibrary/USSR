@@ -1553,7 +1553,189 @@ tl_intersect(r): e f [
 
 # object snaps near (x, y) within tol: [x y kind] or null; modes: a list
 # of end mid center int perp tan near; from: [x y] the point drawn from
+# The snap point nearest (x, y) within tol, or null. The points that do
+# not depend on the cursor (end, mid, center, int: every pair of entities;
+# perp and tan from the first point) are kept in the document, indexed by
+# x, until the drawing, the modes or the first point change; a mouse move
+# looks only at the kept points within tol of x, and computes "near" only
+# for entities whose box comes within tol. The same point as checking
+# everything (tl_osnap_slow).
 tl_osnap(r): doc x y tol modes from [
+    set(r): null
+    btget(es): doc "entities"
+    vec(fixed): ""
+    set(wnear): false
+    len(nm): modes
+    set(i): 0
+    while(_): {i < nm} [
+        at(md): modes i
+        if(_): {md = "near"} [ set(wnear): true ]
+        else(_): [ push(_): fixed md ]
+        set(i): {i + 1}
+    ]
+    encode(ek): es
+    encode(mk): fixed
+    encode(fk): from
+    concat(key): mk "|" fk "|" ek
+    btget(have): doc "snap_key" ""
+    if(_): {have != key} [
+        tl_osnap_fixed(pts): es fixed from
+        btree(index):
+        len(np): pts
+        set(i): 0
+        while(_): {i < np} [
+            at(c): pts i
+            at(cx): c 0
+            btget(row): index cx null
+            if(_): {row = null} [
+                vec(row): ""
+                btput(_): index cx row
+            ]
+            push(_): row c
+            set(i): {i + 1}
+        ]
+        btput(_): doc "snap_index" index
+        tl_osnap_boxes(boxes): es
+        btput(_): doc "snap_boxes" boxes
+        btput(_): doc "snap_key" key
+    ]
+    btget(index): doc "snap_index"
+    set(best): tol
+    btrange(near): index {x - tol} {x + tol + 0.000001}
+    len(nr): near
+    set(i): 0
+    while(_): {i < nr} [
+        at(pr): near i
+        at(row): pr 1
+        len(nrow): row
+        set(k): 0
+        while(_): {k < nrow} [
+            at(c): row k
+            at(cx): c 0
+            at(cy): c 1
+            tl_dist(d): x y cx cy
+            if(_): {d <= best} [
+                set(best): d
+                set(r): c
+            ]
+            set(k): {k + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {wnear = false} [ return(r): r ]
+    vec(only): ""
+    push(_): only "near"
+    btget(boxes): doc "snap_boxes"
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(bx): boxes i
+        set(skip): false
+        if(_): {bx != null} [
+            at(x0): bx 0
+            at(y0): bx 1
+            at(x1): bx 2
+            at(y1): bx 3
+            set(skip): {x < x0 - tol || x > x1 + tol || y < y0 - tol || y > y1 + tol}
+        ]
+        if(_): {skip = false} [
+            at(e): es i
+            tl_snap_points(ps): e only from x y
+            len(np): ps
+            set(k): 0
+            while(_): {k < np} [
+                at(c): ps k
+                at(cx): c 0
+                at(cy): c 1
+                tl_dist(d): x y cx cy
+                if(_): {d <= best} [
+                    set(best): d
+                    set(r): c
+                ]
+                set(k): {k + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# [x0 y0 x1 y1] around each entity (null: always looked at)
+tl_osnap_boxes(r): es [
+    vec(r): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        at(kind): e 0
+        set(b): null
+        if(_): {kind = "LINE"} [
+            at(ax): e 1
+            at(ay): e 2
+            at(bx): e 3
+            at(by): e 4
+            vec(b): ""
+            if(_): {ax < bx} [ push(_): b ax ] else(_): [ push(_): b bx ]
+            if(_): {ay < by} [ push(_): b ay ] else(_): [ push(_): b by ]
+            if(_): {ax > bx} [ push(_): b ax ] else(_): [ push(_): b bx ]
+            if(_): {ay > by} [ push(_): b ay ] else(_): [ push(_): b by ]
+        ]
+        elif(_): {kind = "CIRCLE" || kind = "ARC"} [
+            at(cx): e 1
+            at(cy): e 2
+            at(rad): e 3
+            vec(b): ""
+            push(_): b {cx - rad}
+            push(_): b {cy - rad}
+            push(_): b {cx + rad}
+            push(_): b {cy + rad}
+        ]
+        push(_): r b
+        set(i): {i + 1}
+    ]
+]
+
+# the cursor-free snap points of entities es for modes
+tl_osnap_fixed(r): es modes from [
+    vec(r): ""
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(e): es i
+        tl_snap_points(ps): e modes from 0 0
+        list_concat(r): r ps
+        set(i): {i + 1}
+    ]
+    lenin_has_tl(wint): modes "int"
+    if(_): wint [
+        set(i): 0
+        while(_): {i < n} [
+            at(e): es i
+            set(j): {i + 1}
+            while(_): {j < n} [
+                at(f): es j
+                tl_intersect(ps): e f
+                len(np): ps
+                set(k): 0
+                while(_): {k < np} [
+                    at(p): ps k
+                    at(px): p 0
+                    at(py): p 1
+                    vec(c): ""
+                    push(_): c px
+                    push(_): c py
+                    push(_): c "int"
+                    push(_): r c
+                    set(k): {k + 1}
+                ]
+                set(j): {j + 1}
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+]
+
+# the uncached search (tests compare the two)
+tl_osnap_slow(r): doc x y tol modes from [
     set(r): null
     btget(es): doc "entities"
     set(best): tol
