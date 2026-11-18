@@ -10,6 +10,12 @@
     closing it.
   - Save asks "Replace?" before an existing file, and adds the filter's
     extension to a bare name.
+  - It opens on the list, on its first row, so the arrows move at once.
+    A double click on a row opens it (a folder too), and typing over the
+    list starts a name in the box.
+- Lists: a double click sends a "double" event with the row's index, and
+  a held Up or Down arrow keeps moving the selection. Typed characters no
+  longer go into a focused list's items. `inject` takes "keyrepeat".
 - `setmodal(window, true|false)`: while a modal window is open, the other
   windows take no input, and a click on them brings it to the front.
 - `buttonicon(button, picture)`: a picture before a button's text, on

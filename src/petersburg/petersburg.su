@@ -306,7 +306,7 @@ alive(result): widget [
     petersburg_alive(result): widget
 ]
 
-# Sends a synthetic "key"/"keyup"/"focus" (window), "pointer"/"wheel"
+# Sends a synthetic "key"/"keyup"/"keyrepeat" (a held key)/"focus" (window), "pointer"/"wheel"
 # (canvas) or "click" (widget) event through the normal input path.
 inject(result): widget event a b c [
     petersburg_inject(result): widget event a b c
