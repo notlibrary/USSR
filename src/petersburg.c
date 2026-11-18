@@ -55,6 +55,7 @@ typedef struct
     double v[6];
     unsigned long color;
     char *text;
+    double width; /* lines, circles, arcs: pixels wide (0 or 1: thin) */
 } petersburg_shape_t;
 
 typedef struct petersburg_widget
@@ -106,6 +107,7 @@ typedef struct petersburg_widget
     size_t shape_count;
     size_t shape_capacity;
     size_t keep_count;  /* canvaskeep: shapes up to here stay on canvasback */
+    double pen_width;   /* canvaspen: the width of the lines drawn next */
     unsigned long background;
     int edge_to_edge; /* a fullscreen window: no margin around widgets */
     struct petersburg_widget *next;
@@ -1001,6 +1003,44 @@ static void petersburg_color(unsigned long color)
               (float)(color & 255) / 255.0f);
 }
 
+/* a filled disc (a thick line's round end) */
+static void petersburg_disc(double x, double y, double radius)
+{
+    int i;
+    int n = radius < 3.0 ? 8 : 16;
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2d(x, y);
+    for (i = 0; i <= n; ++i)
+    {
+        double a = 6.283185307179586 * i / n;
+        glVertex2d(x + radius * cos(a), y + radius * sin(a));
+    }
+    glEnd();
+}
+
+/* a line width pixels wide: a quad, and round ends so joins close */
+static void petersburg_thick_line(double x1, double y1, double x2, double y2,
+                                  double width)
+{
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    double length = sqrt(dx * dx + dy * dy);
+    double h = width / 2.0;
+    if (length > 0.0)
+    {
+        double nx = -dy / length * h;
+        double ny = dx / length * h;
+        glBegin(GL_QUADS);
+        glVertex2d(x1 + nx, y1 + ny);
+        glVertex2d(x2 + nx, y2 + ny);
+        glVertex2d(x2 - nx, y2 - ny);
+        glVertex2d(x1 - nx, y1 - ny);
+        glEnd();
+    }
+    petersburg_disc(x1, y1, h);
+    petersburg_disc(x2, y2, h);
+}
+
 static int petersburg_arc_segments(double radius, double sweep)
 {
     double segments = radius * sweep / 4.0;
@@ -1053,7 +1093,8 @@ static void petersburg_render_button(const petersburg_widget_t *widget)
         int iy = widget->y + (widget->height - widget->icon_height) / 2;
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glRasterPos2i(ix, iy + widget->icon_height);
+        /* rows run down the screen from the top edge (zoom -1) */
+        glRasterPos2i(ix, iy);
         glPixelZoom(1.0f, -1.0f);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glDrawPixels(widget->icon_width, widget->icon_height, GL_RGBA,
@@ -1184,6 +1225,13 @@ static void petersburg_render_canvas(
         switch (shape->kind)
         {
         case PETERSBURG_SHAPE_LINE:
+            if (shape->width > 1.5)
+            {
+                petersburg_thick_line(ox + v[0] + 0.5, oy + v[1] + 0.5,
+                                      ox + v[2] + 0.5, oy + v[3] + 0.5,
+                                      shape->width);
+                break;
+            }
             glBegin(GL_LINES);
             glVertex2d(ox + v[0] + 0.5, oy + v[1] + 0.5);
             glVertex2d(ox + v[2] + 0.5, oy + v[3] + 0.5);
@@ -1204,6 +1252,36 @@ static void petersburg_render_canvas(
                     sweep += 2.0 * pi;
             }
             segments = petersburg_arc_segments(v[2], sweep);
+            if (shape->width > 1.5)
+            {
+                /* a ring between radius - w/2 and radius + w/2 */
+                double inner = v[2] - shape->width / 2.0;
+                double outer = v[2] + shape->width / 2.0;
+                if (inner < 0.0)
+                    inner = 0.0;
+                glBegin(GL_TRIANGLE_STRIP);
+                for (i = 0; i <= segments; ++i)
+                {
+                    double angle = start + sweep * i / segments;
+                    double c = cos(angle);
+                    double s = sin(angle);
+                    glVertex2d(ox + v[0] + outer * c + 0.5,
+                               oy + v[1] - outer * s + 0.5);
+                    glVertex2d(ox + v[0] + inner * c + 0.5,
+                               oy + v[1] - inner * s + 0.5);
+                }
+                glEnd();
+                if (shape->kind == PETERSBURG_SHAPE_ARC)
+                {
+                    double h = shape->width / 2.0;
+                    petersburg_disc(ox + v[0] + v[2] * cos(start) + 0.5,
+                                    oy + v[1] - v[2] * sin(start) + 0.5, h);
+                    petersburg_disc(ox + v[0] + v[2] * cos(start + sweep) + 0.5,
+                                    oy + v[1] - v[2] * sin(start + sweep) + 0.5,
+                                    h);
+                }
+                break;
+            }
             glBegin(shape->kind == PETERSBURG_SHAPE_CIRCLE
                         ? GL_LINE_LOOP : GL_LINE_STRIP);
             for (i = 0; i <= segments; ++i)
@@ -1417,7 +1495,7 @@ static void petersburg_render_window(petersburg_widget_t *window)
             if (widget->pixels != NULL && widget->image_width > 0 &&
                 widget->image_height > 0)
             {
-                glRasterPos2i(widget->x, widget->y + widget->height);
+                glRasterPos2i(widget->x, widget->y);
                 glPixelZoom(
                     (float)widget->width / widget->image_width,
                     -(float)widget->height / widget->image_height
@@ -2168,6 +2246,7 @@ static void petersburg_canvas_reset(petersburg_widget_t *canvas)
         free(canvas->shapes[index].text);
     canvas->shape_count = 0;
     canvas->keep_count = 0;
+    canvas->pen_width = 0.0;
 }
 
 static int petersburg_color_value(const ussr_value_t *values, size_t index,
@@ -2197,7 +2276,12 @@ static int petersburg_shape_push(petersburg_widget_t *canvas,
         canvas->shapes = grown;
         canvas->shape_capacity = capacity;
     }
-    canvas->shapes[canvas->shape_count++] = *shape;
+    canvas->shapes[canvas->shape_count] = *shape;
+    if (shape->kind == PETERSBURG_SHAPE_LINE ||
+        shape->kind == PETERSBURG_SHAPE_CIRCLE ||
+        shape->kind == PETERSBURG_SHAPE_ARC)
+        canvas->shapes[canvas->shape_count].width = canvas->pen_width;
+    ++canvas->shape_count;
     return 0;
 }
 
@@ -2766,6 +2850,9 @@ static int petersburg_canvas_shape(
         if (shape.text == NULL)
             return -1;
     }
+    if (kind == PETERSBURG_SHAPE_LINE || kind == PETERSBURG_SHAPE_CIRCLE ||
+        kind == PETERSBURG_SHAPE_ARC)
+        shape.width = canvas->pen_width;
     canvas->shapes[canvas->shape_count++] = shape;
     *out = ussr_integer(0);
     return 1;
@@ -3016,6 +3103,7 @@ int ussr_petersburg_dispatch(
         strcmp(name, "petersburg_canvas_count") != 0 &&
         strcmp(name, "petersburg_canvas_keep") != 0 &&
         strcmp(name, "petersburg_mouse_held") != 0 &&
+        strcmp(name, "petersburg_canvas_pen") != 0 &&
         strcmp(name, "petersburg_take_events") != 0 &&
         strcmp(name, "petersburg_on") != 0)
         petersburg_dirty = 1;
@@ -3624,6 +3712,25 @@ int ussr_petersburg_dispatch(
             *out = ussr_integer(0);
         free(widget->menu_items);
         widget->menu_items = copy;
+        return 1;
+    }
+    if (strcmp(name, "petersburg_canvas_pen") == 0)
+    {
+        double width;
+        /* canvaspen(canvas, width): lines, circles and arcs drawn after
+           it are width pixels wide (1: thin); canvasclear sets it back */
+        if (!petersburg_arity(name, value_count, 2) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            !petersburg_expect_number(values, 1, &width) ||
+            (widget = petersburg_find(id)) == NULL ||
+            widget->type != PETERSBURG_CANVAS || width < 0.0 || width > 64.0)
+        {
+            fprintf(stderr, "USSR: %s expects a canvas and a width of 0..64\n",
+                    name);
+            return -1;
+        }
+        widget->pen_width = width;
+        *out = ussr_integer(0);
         return 1;
     }
     if (strcmp(name, "petersburg_mouse_held") == 0)

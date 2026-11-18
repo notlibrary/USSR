@@ -302,6 +302,12 @@ setitems(result): menu items [
     petersburg_set_items(result): menu items
 ]
 
+# canvaspen(canvas, width): the lines, circles and arcs drawn after it are
+# width pixels wide (1, or 0, thin); canvasclear sets it back to thin
+canvaspen(result): canvas width [
+    petersburg_canvas_pen(result): canvas width
+]
+
 # 1 while the left mouse button is held down in widget's window (a drag)
 mouseheld(result): widget [
     petersburg_mouse_held(result): widget

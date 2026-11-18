@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0-alpha
+- Linetypes and line weights.
+  - Dash dot (DASHDOT) joins Dashed, Center, Hidden and Dot.
+  - Dashes now run along circles, arcs and polylines too, not only
+    lines, and carry on round corners.
+  - They keep the same size on the screen at any zoom: 1.5 pixels a
+    unit of the pattern, times the drawing's `ltscale` variable.
+  - Line weights are drawn: 0.5 mm is 2 pixels wide, 1 mm 4, with round
+    ends. A heavy line's dashes grow so its gaps stay open.
+  - The toolbar has Linetype and Weight menus. With objects selected
+    they change them; with nothing selected they set the linetype and
+    weight of the objects drawn next.
+  - The `ltype` and `lweight` commands do the same. They take the names
+    people write (`ltype dash dot`, `ltype dash`) and weights in
+    millimetres (`lweight 0.5`, `0.5mm`) or hundredths (`lweight 50`);
+    `default` goes back to thin.
+  - DXF files keep both: the linetype (group 6) and the weight (370) are
+    written and read back for each object. The LTYPE table lists DASHDOT.
+
 ## 0.7.0-alpha
 - The toolbar starts with Open (a folder picture), Save (a diskette) and
   Save As, in place of Load DXF and Save DXF.

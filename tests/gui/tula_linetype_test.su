@@ -1,0 +1,217 @@
+# Tula's linetypes (dashed, dash dot, ...) and line weights. Needs a
+# GLFW-enabled ussr and a display; the window is never shown. Run from the
+# repository root:
+#     ussr tests/gui/tula_linetype_test.su
+# The names and weights people write, dashes that run on round corners and
+# along circles, steady on the screen at any zoom, the ltype and lweight
+# commands and toolbar menus (for the selection, or for what is drawn next),
+# Petersburg's canvaspen, and DXF out and back in. Prints PASS or FAIL.
+$include "../../src/tula/tula.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(_chk_line): "PASS " label
+        print(_): _chk_line
+    ]
+    else(_): [
+        concat(_chk_line): "FAIL " label
+        print(_): _chk_line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+near(r): a b [
+    set(d): {a - b}
+    if(_): {d < 0} [ set(d): {0 - d} ]
+    set(r): {d < 0.0001}
+]
+
+# the drawing's shapes on the canvas for one entity alone
+shapes_for(r): e [
+    vec(es): ""
+    push(_): es e
+    set(tula_entities): es!
+    tula_redraw(_):
+    set(c): tula_canvas?
+    canvascount(all): c
+    vec(none): ""
+    set(tula_entities): none!
+    tula_redraw(_):
+    canvascount(empty): c
+    set(r): {all - empty}
+]
+
+init(result): arg_count arg_values [
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
+    createwindow(window): "Tula linetype test" 1100 800
+    textbox(filename): window ""
+    label(status_label): window ""
+    tulainitialize(canvas): window status_label filename
+    tulatoolbar(bar): window
+    run(_):
+    sleep(_): 100
+
+    # --- names and weights
+    tl_ltype_name(a): "dash dot"
+    tl_ltype_name(b): "Dash-Dot"
+    tl_ltype_name(c): "dash"
+    tl_ltype_name(d): "solid"
+    check(_): "dash dot, Dash-Dot, dash and solid" {a = "DASHDOT" && b = "DASHDOT" && c = "DASHED" && d = "CONTINUOUS"} true
+    tl_ltype(p): "DASHDOT" 1
+    len(np): p
+    check(_): "dash dot is dash, gap, dot, gap" np 4
+    tl_lweight_parse(w1): "0.5"
+    tl_lweight_parse(w2): "0.5mm"
+    tl_lweight_parse(w3): "50"
+    tl_lweight_parse(w4): "default"
+    tl_lweight_parse(w5): "2"
+    tl_lweight_parse(w6): "thick"
+    check(_): "weights in mm or hundredths" {w1 = 50 && w2 = 50 && w3 = 50 && w4 = -1 && w5 = 200 && w6 = null} true
+    tl_lweight_px(x1): 25
+    tl_lweight_px(x2): 50
+    tl_lweight_px(x3): 100
+    check(_): "0.25 mm is thin, 0.5 mm 2 pixels, 1 mm 4" {x1 = 0 && x2 = 2 && x3 = 4} true
+
+    # --- dashes along paths
+    vec(path): ""
+    push(_): path 0
+    push(_): path 0
+    push(_): path 10
+    push(_): path 0
+    push(_): path 10
+    push(_): path 10
+    vec(pat): ""
+    push(_): pat 4
+    push(_): pat 3
+    tl_dash_path(pieces): path pat 1000
+    len(npc): pieces
+    at(third): pieces 2
+    at(tx1): third 1
+    at(ty1): third 2
+    at(tx2): third 3
+    at(ty2): third 4
+    check(_): "a dash runs on round a corner" {npc = 4 && tx1 = 10 && ty1 = 0 && tx2 = 10 && ty2 = 1} true
+    tl_dash_path(few): path pat 2
+    len(nfew): few
+    at(last): few {nfew - 1}
+    at(lx2): last 3
+    at(ly2): last 4
+    check(_): "past the limit the rest is drawn solid" {lx2 = 10 && ly2 = 10} true
+    tl_circle_e(circ): 0 0 10
+    tl_path_pts(cp): circ 5
+    len(ncp): cp
+    at(cx0): cp 0
+    at(cxn): cp {ncp - 2}
+    set(closes): false
+    near(closes): cx0 cxn
+    check(_): "a circle's path goes round and closes" {ncp >= 26 && closes} true
+
+    # --- on the canvas: dashes stay the same size on the screen
+    tl_line_e(solid): 0 0 100 0
+    shapes_for(ns): solid
+    check(_): "a continuous line is one shape" ns 1
+    tl_line_e(dl): 0 0 100 0
+    tl_set_prop(_): dl "ltype" "DASHED"
+    set(v): tula_view?
+    at(s): v 2
+    shapes_for(nd1): dl
+    # 100 units at s pixels each, 13.5 pixels a dash and gap
+    str_trunc(want): {100 * s / 13.5}
+    check(_): "a dashed line is cut in dashes of 9 pixels" {nd1 >= want && nd1 <= want + 1} true
+    set(v): 2 {s * 2}
+    shapes_for(nd2): dl
+    set(v): 2 s
+    check(_): "zoomed in twice, twice the dashes" {nd2 >= nd1 * 2 - 1 && nd2 <= nd1 * 2 + 1} true
+    tl_circle_e(dc): 0 0 20
+    tl_set_prop(_): dc "ltype" "DASHDOT"
+    shapes_for(nc): dc
+    check(_): "a dash dot circle is dashed too" {nc > 4} true
+    # the pen: a weight draws through canvaspen
+    set(tula_pen): true!
+    tl_line_e(wl): 0 0 100 0
+    tl_set_prop(_): wl "lweight" 100
+    shapes_for(nw): wl
+    check(_): "a heavy line is still one shape" nw 1
+    canvaspen(pr): canvas 3
+    canvaspen(_): canvas 0
+    check(_): "canvaspen takes a width" pr 0
+
+    # --- the commands
+    tl_gui_doc(doc):
+    tl_command(ans): doc "ltype dash dot"
+    btget(cur): doc "celtype" ""
+    check(_): "ltype with nothing selected is for what comes next" {cur = "DASHDOT" && ans = "DASHDOT for what comes next"} true
+    tl_command(ans): doc "lweight 0.7mm"
+    btget(curw): doc "celweight" -1
+    check(_): "and lweight" {curw = 70 && ans = "0.7 mm for what comes next"} true
+    tl_command(ans): doc "ltype wiggly"
+    str_starts(bad): ans "linetypes: "
+    check(_): "an unknown linetype is refused" bad true
+    tl_gui_store(_): doc
+    tl_line_e(nl): 0 0 50 50
+    tula_add_entity(_): nl
+    tl_prop(nlt): nl "ltype" ""
+    tl_prop(nlw): nl "lweight" -1
+    check(_): "a new line takes them" {nlt = "DASHDOT" && nlw = 70} true
+    tl_gui_doc(doc):
+    tl_command(_): doc "select all"
+    tl_command(ans): doc "ltype hidden"
+    btget(es): doc "entities"
+    at(e0): es 0
+    tl_prop(e0lt): e0 "ltype" ""
+    check(_): "with a selection, ltype changes it" {e0lt = "HIDDEN" && ans = "HIDDEN on 1 object(s)"} true
+    tl_command(_): doc "select none"
+    tl_gui_store(_): doc
+
+    # --- the toolbar menus
+    set(ltm): tula_ltmenu?
+    set(lwm): tula_lwmenu?
+    gettext(ltl): ltm
+    gettext(lwl): lwm
+    check(_): "Linetype and Weight menus on the toolbar" {ltl = "Linetype" && lwl = "Weight"} true
+    inject(_): ltm "select" 1 0 0
+    sleep(_): 300
+    inject(_): lwm "select" 3 0 0
+    sleep(_): 300
+    set(doc): tula_doc?
+    btget(cur): doc "celtype" ""
+    btget(curw): doc "celweight" -1
+    check(_): "Linetype > Dashed, Weight > 0.5 mm" {cur = "DASHED" && curw = 50} true
+    inject(_): ltm "select" 7 0 0
+    sleep(_): 300
+    set(doc): tula_doc?
+    btget(cur): doc "celtype" "x"
+    check(_): "By layer drops the current linetype" cur ""
+
+    # --- DXF out and back
+    vec(es): ""
+    tl_line_e(xl): 0 0 40 0
+    tl_set_prop(_): xl "ltype" "DASHDOT"
+    tl_set_prop(_): xl "lweight" 50
+    push(_): es xl
+    set(tula_entities): es!
+    concat(out): _home_dir "/tula_linetype_tmp.dxf"
+    settext(_): filename out
+    tulasave(_):
+    readfile(txt): out
+    str_find(f6): txt "\n  6\nDASHDOT" 0
+    str_find(f6b): txt "\n6\nDASHDOT" 0
+    str_find(f370): txt "370\n50" 0
+    check(_): "the DXF names the linetype and the weight" {(f6 >= 0 || f6b >= 0) && f370 >= 0} true
+    vec(none): ""
+    set(tula_entities): none!
+    tulaload(_):
+    set(es): tula_entities?
+    at(back): es 0
+    tl_prop(blt): back "ltype" ""
+    tl_prop(blw): back "lweight" -1
+    check(_): "and loading it keeps them" {blt = "DASHDOT" && blw = 50} true
+    remove_file(_): out
+    destroy(_): window
+    set(result): 0
+]

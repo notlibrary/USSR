@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0-alpha
+- `canvaspen(canvas, width)`: the lines, circles and arcs drawn after it
+  are width pixels wide. Thick lines get round ends, so polylines join
+  cleanly. `canvasclear` sets the pen back to thin.
+- Fixed: a button's picture (`buttonicon`) was drawn below the button,
+  and an image widget below its box; both now sit where they belong.
+
 ## 0.8.1-alpha
 - `mouseheld(widget)`: 1 while the left mouse button is held down in the
   widget's window, for drags in a "motion" callback.
