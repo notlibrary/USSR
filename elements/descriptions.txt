@@ -1,0 +1,119 @@
+# atomic number | short description (written for this base)
+1|The lightest and most abundant element in the universe; a colourless, flammable diatomic gas that fuels the stars and forms water with oxygen.
+2|A colourless, inert noble gas, second lightest element; used for cooling superconducting magnets and for lifting balloons.
+3|The lightest metal, soft and silvery; the key element of rechargeable lithium-ion batteries and of mood-stabilising drugs.
+4|A light, stiff, grey metal transparent to X-rays; used in aerospace alloys and X-ray windows, and toxic when inhaled as dust.
+5|A hard, black metalloid; used in borosilicate glass, detergents, semiconductors and neutron-absorbing control rods.
+6|The basis of all known life, found as graphite, diamond and fullerenes; forms more compounds than any other element except hydrogen.
+7|A colourless gas making up about 78% of air; essential in proteins and DNA and fixed industrially into ammonia for fertilisers.
+8|A reactive colourless gas making up about 21% of air; needed for respiration and combustion, and the most abundant element in the Earth's crust.
+9|A pale yellow, extremely reactive gas, the most electronegative element; used in toothpaste fluorides, PTFE and uranium enrichment.
+10|A colourless, inert noble gas that glows reddish orange in discharge tubes, as in neon signs.
+11|A soft, silvery alkali metal that reacts vigorously with water; with chlorine it forms common table salt.
+12|A light, silvery alkaline earth metal that burns with a brilliant white flame; used in light alloys and essential in chlorophyll.
+13|A light, silvery, corrosion-resistant metal and the most abundant metal in the Earth's crust; used in cans, aircraft and wiring.
+14|A hard, blue-grey metalloid with a metallic lustre; the base of semiconductor electronics and solar cells, and of silicate rocks.
+15|A reactive nonmetal found as white, red and black allotropes; essential to DNA, bones and ATP, and used in fertilisers and matches.
+16|A yellow, brittle nonmetal; used to make sulfuric acid and in vulcanising rubber, and present in some amino acids.
+17|A yellow-green, toxic, reactive gas; used to disinfect water and to make PVC, and found in table salt.
+18|A colourless, inert noble gas making up about 0.93% of air; used as a shielding gas in welding and in incandescent bulbs.
+19|A soft, silvery alkali metal that reacts violently with water; essential for nerve function and widely used in fertilisers (potash).
+20|A soft, grey alkaline earth metal; the main mineral of bones, teeth and shells, and of limestone and cement.
+21|A soft, silvery transition metal; added in small amounts to aluminium alloys for sports equipment and aircraft.
+22|A strong, light, corrosion-resistant silvery metal; used in aerospace alloys and implants, and as the white pigment titanium dioxide.
+23|A hard, silvery-grey transition metal; mainly used to strengthen steel and in vanadium redox flow batteries.
+24|A hard, lustrous, steel-grey metal; used for chrome plating and to make stainless steel corrosion resistant.
+25|A hard, brittle, silvery metal; essential in steelmaking and in batteries, and a trace nutrient.
+26|The most used metal, mainly as steel; the main component of the Earth's core and the oxygen carrier in haemoglobin.
+27|A hard, lustrous, bluish-grey ferromagnetic metal; used in superalloys, magnets and battery cathodes, and the centre of vitamin B12.
+28|A silvery-white, hard, corrosion-resistant metal; used in stainless steel, coins, plating and batteries.
+29|A reddish, ductile metal with excellent electrical conductivity; used in wiring and plumbing, and in bronze and brass.
+30|A bluish-white metal; used to galvanise steel against corrosion and in brass, and an essential trace element.
+31|A soft, silvery metal that melts just above room temperature; used as gallium arsenide and gallium nitride in LEDs and electronics.
+32|A lustrous, hard, grey-white metalloid; a semiconductor used in fibre optics, infrared optics and early transistors.
+33|A grey metalloid notorious as a poison; used in semiconductors (gallium arsenide) and wood preservatives.
+34|A nonmetal with grey and red forms whose conductivity rises in light; used in glassmaking, photocells and as a trace nutrient.
+35|A dark red, volatile, toxic liquid, one of only two elements liquid at room temperature; used in flame retardants.
+36|A colourless, inert noble gas; used in some lighting and photographic flashes.
+37|A soft, silvery alkali metal that ignites in air; used in atomic clocks, photocells and research.
+38|A soft, silvery alkaline earth metal; its compounds give fireworks a red colour, and strontium-90 is a fission product.
+39|A silvery transition metal; used in red phosphors, YAG lasers and yttrium barium copper oxide superconductors.
+40|A strong, corrosion-resistant grey-white metal with low neutron absorption; used to clad nuclear fuel rods and as zirconia ceramics.
+41|A soft, grey, ductile metal; used in high-strength steels and in niobium-titanium superconducting magnets.
+42|A silvery metal with a very high melting point; used in high-strength steel alloys and as a catalyst, and essential in enzymes.
+43|The lightest element with no stable isotope; technetium-99m is the most used radioisotope in medical imaging.
+44|A hard, white platinum-group metal; used in electrical contacts, hard disks and as a catalyst.
+45|A rare, silvery-white, corrosion-resistant platinum-group metal; mainly used in car catalytic converters.
+46|A soft, silvery-white platinum-group metal that absorbs hydrogen; used in catalytic converters, electronics and dentistry.
+47|A soft, white, lustrous precious metal with the highest electrical and thermal conductivity of all elements; used in jewellery, coins and electronics.
+48|A soft, bluish-white, toxic metal; used in nickel-cadmium batteries, pigments and nuclear control rods.
+49|A very soft, silvery metal; used as indium tin oxide for the transparent electrodes of touch screens and displays.
+50|A soft, silvery metal resistant to corrosion; used to coat steel cans, in solder and in bronze.
+51|A brittle, silvery-grey metalloid; used in flame retardants, lead alloys for batteries and semiconductors.
+52|A brittle, silvery-white metalloid; used in solar panels (cadmium telluride), thermoelectrics and alloys.
+53|A lustrous, dark violet-black solid that sublimes into a violet gas; essential for thyroid hormones and used as an antiseptic.
+54|A colourless, dense, inert noble gas that does form some compounds; used in bright lamps, ion thrusters and anaesthesia.
+55|A soft, golden alkali metal that melts near body temperature; the basis of the second in atomic clocks.
+56|A soft, silvery alkaline earth metal; barium sulfate is used as a contrast agent in X-ray imaging and gives fireworks a green colour.
+57|A soft, silvery rare-earth metal that gives the lanthanides their name; used in camera lenses and nickel-metal hydride batteries.
+58|The most abundant rare-earth metal, iron-grey and reactive; used in lighter flints, polishing powders and catalytic converters.
+59|A soft, silvery rare-earth metal; used in strong magnets, aircraft engine alloys and yellow-green glass colouring.
+60|A silvery rare-earth metal; the key element of neodymium-iron-boron magnets in motors, wind turbines and headphones.
+61|A radioactive rare-earth metal with no stable isotope; once used in luminous paint and in nuclear batteries.
+62|A silvery rare-earth metal; used in samarium-cobalt magnets and in cancer medicine (samarium-153).
+63|The most reactive rare-earth metal; its compounds give the red and blue phosphors of screens and the anti-forgery marks on euro banknotes.
+64|A silvery rare-earth metal with unusual magnetic properties; used as a contrast agent in MRI scans.
+65|A silvery rare-earth metal; used in green phosphors and in Terfenol-D, a magnetostrictive alloy.
+66|A silvery rare-earth metal with a high magnetic susceptibility; added to neodymium magnets to keep them working when hot.
+67|A silvery rare-earth metal with the highest magnetic moment of any natural element; used in magnet pole pieces and lasers.
+68|A silvery rare-earth metal; erbium-doped fibre amplifiers boost signals in optical telecommunications, and it tints glass pink.
+69|One of the rarest rare-earth metals, silvery grey; used in portable X-ray sources and some lasers.
+70|A soft, silvery rare-earth metal; used in atomic clocks, lasers and as a stress gauge.
+71|The last and densest lanthanide, silvery white; used in catalysts and PET scanner detectors.
+72|A lustrous, silvery metal chemically almost identical to zirconium; used in nuclear control rods and microchip gate insulators.
+73|A hard, blue-grey, very corrosion-resistant metal; used in small high-capacity capacitors for electronics and in implants.
+74|The metal with the highest melting point, very dense and hard; used in filaments, cutting tools (tungsten carbide) and radiation shielding.
+75|One of the rarest elements in the crust, a dense silvery metal; used in jet engine superalloys and petroleum catalysts.
+76|A hard, brittle, bluish-white platinum-group metal, the densest naturally occurring element; its tetroxide is toxic.
+77|A very hard, dense, corrosion-resistant platinum-group metal; an iridium-rich layer marks the asteroid impact that ended the dinosaurs.
+78|A dense, unreactive, silvery-white precious metal; used in catalytic converters, jewellery, laboratory equipment and anticancer drugs.
+79|A dense, soft, yellow, unreactive precious metal; used as money, in jewellery and for corrosion-free electrical contacts.
+80|The only metal liquid at room temperature, silvery and toxic; once common in thermometers and still used in some lamps.
+81|A soft, toxic, grey post-transition metal; once used as a rat poison, now in infrared optics and electronics.
+82|A soft, dense, grey metal; used in lead-acid batteries and radiation shielding, and a cumulative poison.
+83|A brittle, pinkish-silver metal with a very long-lived isotope; used in low-melting alloys, cosmetics and stomach medicines.
+84|A rare, highly radioactive metal discovered by Marie and Pierre Curie; polonium-210 is a strong alpha emitter.
+85|One of the rarest natural elements, a radioactive halogen; astatine-211 is studied for targeted cancer therapy.
+86|A colourless, radioactive noble gas from the decay of radium; it seeps from the ground and is a lung cancer risk indoors.
+87|An extremely rare, highly radioactive alkali metal; only tiny amounts have ever been made, too few to see.
+88|A radioactive alkaline earth metal discovered by the Curies; it glows faintly and was once used in luminous paint.
+89|A radioactive, silvery metal that glows blue in the dark; gives the actinides their name, and actinium-225 is used in cancer therapy.
+90|A weakly radioactive, silvery metal more abundant than uranium; studied as a nuclear fuel and once used in gas mantles.
+91|A rare, dense, radioactive silvery metal found in uranium ores; it has few uses outside research.
+92|A dense, weakly radioactive, silvery metal; uranium-235 fuels nuclear reactors and weapons.
+93|The first transuranium element, a radioactive metal; produced in reactors and used to make plutonium-238.
+94|A radioactive, silvery metal made in reactors; plutonium-239 is used in nuclear weapons and reactor fuel, and plutonium-238 in space probe power sources.
+95|A radioactive, silvery metal; americium-241 is used in household smoke detectors.
+96|A radioactive, silvery metal named after Marie and Pierre Curie; it glows in the dark and has powered space probes.
+97|A radioactive metal made in tiny amounts in reactors; mainly used to make heavier elements.
+98|A radioactive metal; californium-252 is a strong neutron source used to start reactors and to find oil and gold.
+99|A radioactive metal first found in the debris of the first hydrogen bomb test; only tiny amounts have been made.
+100|A radioactive metal first found in hydrogen bomb debris; the heaviest element made by neutron capture, never made in weighable amounts.
+101|A synthetic, radioactive element made one atom at a time; named after Dmitri Mendeleev, who devised the periodic table.
+102|A synthetic, radioactive element made only in particle accelerators; its chemistry favours the +2 state.
+103|The last actinide, synthetic and radioactive; made only a few atoms at a time in accelerators.
+104|The first transactinide, a synthetic, radioactive element; behaves like hafnium in the few experiments done.
+105|A synthetic, radioactive element named after Dubna, home of the Joint Institute for Nuclear Research.
+106|A synthetic, radioactive element named after Glenn Seaborg; its chemistry resembles that of tungsten.
+107|A synthetic, radioactive element named after Niels Bohr; its few studied compounds behave like rhenium's.
+108|A synthetic, radioactive element named after the German state of Hesse; forms a volatile tetroxide like osmium.
+109|A synthetic, radioactive element named after Lise Meitner; its chemistry has not been studied.
+110|A synthetic, radioactive element named after Darmstadt, where it was first made; its chemistry is unknown.
+111|A synthetic, radioactive element named after Wilhelm Röntgen; predicted to be a dense noble metal like gold.
+112|A synthetic, radioactive element named after Nicolaus Copernicus; experiments suggest it is a volatile metal like mercury.
+113|A synthetic, radioactive element, the first discovered in Asia, named after Japan (Nihon).
+114|A synthetic, radioactive element named after the Flerov Laboratory in Dubna; it may be a volatile metal.
+115|A synthetic, radioactive element named after the Moscow region, where Dubna lies.
+116|A synthetic, radioactive element named after the Lawrence Livermore National Laboratory.
+117|A synthetic, radioactive element named after Tennessee; expected to behave less like a halogen than the lighter members of group 17.
+118|The heaviest known element, synthetic and radioactive, named after Yuri Oganessian; predicted to be a solid, unlike the other noble gases.

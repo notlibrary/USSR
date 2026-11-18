@@ -1,0 +1,213 @@
+$ kgb stats
+root        elements
+objects     118
+categories  12
+facts       6436
+properties  6436 (84 keys)
+files       130
+$ kgb check
+ok
+$ kgb validate
+[exit 1]
+$ kgb where atomic_number count
+118
+$ kgb where atomic_number>=1 and atomic_number<=118 count
+118
+$ kgb cats
+metalloids
+metals
+metals/actinides
+metals/alkali-metals
+metals/alkaline-earth-metals
+metals/lanthanides
+metals/post-transition-metals
+metals/transition-metals
+nonmetals
+nonmetals/halogens
+nonmetals/noble-gases
+nonmetals/reactive-nonmetals
+$ kgb get iron atomic_number
+26
+$ kgb get Fe atomic_mass_u
+55.845
+$ kgb get Na electron_configuration
+[Ne] 3s1
+$ kgb type Na
+metals > alkali-metals > sodium
+$ kgb is Na alkali-metals
+yes
+$ kgb is Na nonmetals
+no
+[exit 1]
+$ kgb get Og metal
+no
+$ kgb where symbol=Au show name,density_g_cm3,melting_point_K,discovery_year
+path | name | density_g_cm3 | melting_point_K | discovery_year
+metals/transition-metals/gold | Gold | 19.3 | 1337.33 | antiquity
+$ kgb --format json where symbol=He show atomic_number,phase_at_stp,boiling_point_K
+[{"atomic_number":"2","boiling_point_K":"4.22","path":"nonmetals/noble-gases/helium","phase_at_stp":"gas"}]
+$ kgb where group=17 sort by atomic_number show symbol,name,phase_at_stp
+path | symbol | name | phase_at_stp
+nonmetals/halogens/fluorine | F | Fluorine | gas
+nonmetals/halogens/chlorine | Cl | Chlorine | gas
+nonmetals/halogens/bromine | Br | Bromine | liquid
+nonmetals/halogens/iodine | I | Iodine | solid
+nonmetals/halogens/astatine | At | Astatine | unknown
+nonmetals/halogens/tennessine | Ts | Tennessine | unknown
+$ kgb where melting_point_K>3000 sort by melting_point_K desc show symbol,melting_point_K
+path | symbol | melting_point_K
+metals/transition-metals/tungsten | W | 3687.15
+metals/transition-metals/rhenium | Re | 3458.15
+metals/transition-metals/osmium | Os | 3306.15
+metals/transition-metals/tantalum | Ta | 3290.15
+$ kgb where melting_point_K<0 count
+0
+$ kgb where phase_at_stp=liquid sort by atomic_number show symbol,melting_point_C
+path | symbol | melting_point_C
+nonmetals/halogens/bromine | Br | -7.2
+metals/transition-metals/mercury | Hg | -38.83
+$ kgb where phase_at_stp=gas sort by atomic_number show symbol
+path | symbol
+nonmetals/reactive-nonmetals/hydrogen | H
+nonmetals/noble-gases/helium | He
+nonmetals/reactive-nonmetals/nitrogen | N
+nonmetals/reactive-nonmetals/oxygen | O
+nonmetals/halogens/fluorine | F
+nonmetals/noble-gases/neon | Ne
+nonmetals/halogens/chlorine | Cl
+nonmetals/noble-gases/argon | Ar
+nonmetals/noble-gases/krypton | Kr
+nonmetals/noble-gases/xenon | Xe
+nonmetals/noble-gases/radon | Rn
+$ kgb where density_g_cm3>20 sort by density_g_cm3 desc show symbol,density_g_cm3
+path | symbol | density_g_cm3
+metals/transition-metals/osmium | Os | 22.5872
+metals/transition-metals/iridium | Ir | 22.5622
+metals/transition-metals/platinum | Pt | 21.5
+metals/transition-metals/rhenium | Re | 20.8
+metals/actinides/neptunium | Np | 20.2
+$ kgb where electronegativity_pauling>=3.4 sort by electronegativity_pauling desc show symbol,electronegativity_pauling
+path | symbol | electronegativity_pauling
+nonmetals/halogens/fluorine | F | 3.98
+nonmetals/reactive-nonmetals/oxygen | O | 3.44
+$ kgb where ionization_energy_1_eV<4 sort by ionization_energy_1_eV show symbol,ionization_energy_1_eV
+path | symbol | ionization_energy_1_eV
+metals/alkali-metals/cesium | Cs | 3.8939
+$ kgb where radioactive=yes and atomic_number<84 show symbol,most_stable_isotope
+path | symbol | most_stable_isotope
+metals/lanthanides/promethium | Pm | Pm-145, half-life 17.7 years
+metals/transition-metals/technetium | Tc | Tc-97, half-life 4.21 million years
+$ kgb where stable_isotopes>=7 sort by stable_isotopes desc show symbol,stable_isotopes
+path | symbol | stable_isotopes
+metals/post-transition-metals/tin | Sn | 10
+nonmetals/noble-gases/xenon | Xe | 8
+metals/alkaline-earth-metals/barium | Ba | 7
+metals/lanthanides/dysprosium | Dy | 7
+metals/lanthanides/ytterbium | Yb | 7
+metals/transition-metals/mercury | Hg | 7
+metals/transition-metals/ruthenium | Ru | 7
+$ kgb where discovery_year>=2000 sort by discovery_year show symbol,discovery_year,discovery_location
+path | symbol | discovery_year | discovery_location
+metals/post-transition-metals/livermorium | Lv | 2000 | United States
+nonmetals/noble-gases/oganesson | Og | 2002 | Russia
+metals/post-transition-metals/moscovium | Mc | 2003 | Russia
+nonmetals/halogens/tennessine | Ts | 2010 | Russia/United States
+metals/post-transition-metals/nihonium | Nh | 2015 | Japan
+$ kgb where discovery_year=antiquity count
+13
+$ kgb where crystal_structure~diamond show symbol
+path | symbol
+metalloids/germanium | Ge
+metalloids/silicon | Si
+nonmetals/reactive-nonmetals/carbon | C
+$ kgb where block=f count
+28
+$ kgb where period=2 sort by atomic_number show symbol,category
+path | symbol | category
+metals/alkali-metals/lithium | Li | alkali metal
+metals/alkaline-earth-metals/beryllium | Be | alkaline earth metal
+metalloids/boron | B | metalloid
+nonmetals/reactive-nonmetals/carbon | C | reactive nonmetal
+nonmetals/reactive-nonmetals/nitrogen | N | reactive nonmetal
+nonmetals/reactive-nonmetals/oxygen | O | reactive nonmetal
+nonmetals/halogens/fluorine | F | halogen
+nonmetals/noble-gases/neon | Ne | noble gas
+$ kgb where category~noble count
+7
+$ kgb where melting_point_K=unknown count
+23
+$ kgb where phase_at_stp=unknown sort by atomic_number show symbol
+path | symbol
+nonmetals/halogens/astatine | At
+metals/alkali-metals/francium | Fr
+metals/actinides/fermium | Fm
+metals/actinides/mendelevium | Md
+metals/actinides/nobelium | No
+metals/transition-metals/lawrencium | Lr
+metals/transition-metals/rutherfordium | Rf
+metals/transition-metals/dubnium | Db
+metals/transition-metals/seaborgium | Sg
+metals/transition-metals/bohrium | Bh
+metals/transition-metals/hassium | Hs
+metals/transition-metals/meitnerium | Mt
+metals/transition-metals/darmstadtium | Ds
+metals/transition-metals/roentgenium | Rg
+metals/transition-metals/copernicium | Cn
+metals/post-transition-metals/nihonium | Nh
+metals/post-transition-metals/flerovium | Fl
+metals/post-transition-metals/moscovium | Mc
+metals/post-transition-metals/livermorium | Lv
+nonmetals/halogens/tennessine | Ts
+nonmetals/noble-gases/oganesson | Og
+$ kgb where density_g_cm3_predicted sort by atomic_number limit 5 show symbol,density_g_cm3_predicted
+path | symbol | density_g_cm3_predicted
+nonmetals/halogens/astatine | At | 7
+metals/alkali-metals/francium | Fr | 1.87
+metals/actinides/fermium | Fm | 9.7
+metals/actinides/mendelevium | Md | 10.3
+metals/actinides/nobelium | No | 9.9
+$ kgb where category_basis count
+10
+$ kgb where atomic_number group by series
+series | count
+actinides | 14
+alkali metals | 6
+alkaline earth metals | 6
+halogens | 6
+lanthanides | 14
+metalloids | 7
+noble gases | 7
+post-transition metals | 11
+reactive nonmetals | 7
+transition metals | 40
+$ kgb where phase_at_stp group by phase_at_stp
+phase_at_stp | count
+gas | 11
+liquid | 2
+solid | 84
+unknown | 21
+$ kgb where melting_point_K max melting_point_K
+3687.15
+$ kgb where period=4 avg electronegativity_pauling
+1.7788
+$ kgb sql select symbol, name, atomic_mass_u from nonmetals where atomic_number < 10 order by atomic_number
+path | symbol | name | atomic_mass_u
+nonmetals/reactive-nonmetals/hydrogen | H | Hydrogen | 1.008
+nonmetals/noble-gases/helium | He | Helium | 4.002602
+nonmetals/reactive-nonmetals/carbon | C | Carbon | 12.011
+nonmetals/reactive-nonmetals/nitrogen | N | Nitrogen | 14.007
+nonmetals/reactive-nonmetals/oxygen | O | Oxygen | 15.999
+nonmetals/halogens/fluorine | F | Fluorine | 18.99840316
+$ kgb table halogens symbol atomic_number boiling_point_K
+| object | symbol | atomic_number | boiling_point_K |
+|---|---|---|---|
+| astatine | At | 85 | unknown |
+| bromine | Br | 35 | 331.95 |
+| chlorine | Cl | 17 | 239.11 |
+| fluorine | F | 9 | 85.04 |
+| iodine | I | 53 | 457.55 |
+| tennessine | Ts | 117 | unknown |
+
+--- stderr ---
+
+--- exit 0 ---
