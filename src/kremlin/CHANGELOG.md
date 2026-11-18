@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0
+- `extra.su`: the Trash.
+  - A bin in the bottom-right corner of the desktop, with papers in it
+    when the Trash is full.
+  - Delete moves items to `.Trash` (folders that are not empty too). A
+    double click on the bin opens it, and its menu empties it.
+  - Inside the Trash an item's menu restores it to where it was deleted
+    from, or deletes it for good.
+- Hover: the KREMLIN button lights up under the pointer, and the menu's
+  items highlight as the pointer moves (Petersburg's canvas `"motion"`
+  event).
+- "Create shortcut on desktop" in an icon's menu puts a link to that folder
+  or file on the desktop. "Add shortcut..." in the desktop's own menu makes
+  one for any folder or program by its path. A launcher whose command is a folder's path opens it in
+  Kremlin, and one whose command is a document's path opens the document
+  as the desktop would.
+- Holding an arrow key keeps moving the selection (key repeats reach the
+  window now).
+
 ## 0.2.0
 Refine pass 1 from REFINE.md; the new code is `more.su`.
 - Trash: `kremlintrash` moves files and whole folders to `.trash` and

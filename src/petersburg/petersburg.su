@@ -253,6 +253,12 @@ getmark(result): list index [
 
 # --- lifetime and testing ----------------------------------------------------
 
+# "hidden" hides the system cursor while it is over the canvas (a program
+# that draws its own, such as a CAD crosshair); "normal" shows it again
+canvascursor(result): canvas mode [
+    petersburg_canvas_cursor(result): canvas mode
+]
+
 alive(result): widget [
     petersburg_alive(result): widget
 ]

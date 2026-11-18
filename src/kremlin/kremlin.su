@@ -116,6 +116,7 @@ $define KM_PAGE_LINE 0xB0B0B0
 $define KM_WINDOW 0x2B2F36
 $define KM_PROMPT 0x7CD67C
 $define KM_WHITE 0xFFFFFF
+$include "extra.su"
 
 # --- text -------------------------------------------------------------------
 
@@ -982,9 +983,11 @@ km_path_plan(r): path [
         km_launcher_parse(_kpp_l): _kpp_text
         at(_kpp_cmd): _kpp_l 1
         at(_kpp_console): _kpp_l 2
+        kmx_link_plan(_kpp_link): _kpp_cmd
         if(_): {_kpp_cmd = ""} [
             km_plan(r): "error" "This launcher has no command: right-click it and choose Edit command" "" false
         ]
+        elif(_): {_kpp_link != null} [ set(r): _kpp_link ]
         else(_): [
             km_split_command(_kpp_parts): _kpp_cmd
             at(_kpp_prog): _kpp_parts 0
@@ -1561,6 +1564,7 @@ km_seed(r): root [
 ]
 
 kremlinreset(r): root [
+    kmx_state(_):
     km_slashes(_krs_root): root
     km_strip_slash(_krs_root): _krs_root
     set(km_root): _krs_root!
@@ -2068,6 +2072,8 @@ km_item_menu(r): name [
         km_item(_kim_i): "Duplicate" "Ctrl+D" "duplicate"
         push(_): r _kim_i
     ]
+    km_item(_kim_i): "Create shortcut on desktop" "" "shortcut-here"
+    push(_): r _kim_i
     km_pin_index(_kim_p): name
     if(_): {_kim_p < 0} [ km_item(_kim_i): "Pin to panel" "Ctrl+P" "pin" ]
     else(_): [ km_item(_kim_i): "Unpin from panel" "Ctrl+P" "pin" ]
@@ -2088,6 +2094,8 @@ km_folder_menu(r): [
     km_item(_kfm_i): "New text file" "Ctrl+Shift+N" "newfile"
     push(_): r _kfm_i
     km_item(_kfm_i): "New launcher" "Ctrl+L" "newlauncher"
+    push(_): r _kfm_i
+    km_item(_kfm_i): "Add shortcut..." "" "shortcut"
     push(_): r _kfm_i
     km_item(_kfm_i): "-" "" ""
     push(_): r _kfm_i
@@ -2165,6 +2173,7 @@ km_help_text(r): [
     concat(r): r "F2  rename      Del  delete      Ctrl+D  duplicate\nCtrl+P  pin or unpin on the panel\n"
     concat(r): r "Ctrl+N  new folder      Ctrl+Shift+N  new text file\nCtrl+L  new launcher    Ctrl+R  run a command\n"
     concat(r): r "F5  refresh      F10 or Win  KREMLIN menu\nMenu key or Shift+F10  actions for the selection\nletters  jump to a name      Ctrl+Q  exit\nCtrl+X/C/V  cut, copy, paste      Ctrl+Z  undo"
+    concat(r): r "\n\nDel moves to the Trash, the bin in the bottom-right corner: double-click it to open it, right-click it to empty it; in the Trash an item's menu restores it. Right-click an icon and choose Create shortcut on desktop to link to it from the desktop; Add shortcut... in the desktop's own menu links any folder or program by its path."
 ]
 
 km_properties(r): name [
@@ -2282,10 +2291,32 @@ kremlinaction(r): action target [
     ]
     elif(_): {action = "delete"} [
         km_label(_kac_l): target
-        km_is_dir_name(_kac_d): target
-        concat(_kac_q): "Delete " _kac_l "? This cannot be undone."
-        if(_): _kac_d [ concat(_kac_q): "Delete the empty folder " _kac_l "?" ]
-        km_dialog_open(_): "confirm" "Delete" _kac_q "" "delete" target
+        kmx_in_trash(_kac_intrash):
+        if(_): _kac_intrash [
+            concat(_kac_q): "Delete " _kac_l " for good? This cannot be undone."
+            km_dialog_open(_): "confirm" "Delete" _kac_q "" "trash-delete" target
+        ]
+        else(_): [
+            concat(_kac_q): "Move " _kac_l " to the Trash?"
+            km_dialog_open(_): "confirm" "Delete" _kac_q "" "trash" target
+        ]
+    ]
+    elif(_): {action = "trash-open"} [ kmx_open_trash(_): ]
+    elif(_): {action = "trash-empty"} [
+        kmx_trash_count(_kac_tn):
+        str_from_int(_kac_tns): _kac_tn
+        concat(_kac_q): "Delete the " _kac_tns " item(s) in the Trash for good? This cannot be undone."
+        km_dialog_open(_): "confirm" "Empty Trash" _kac_q "" "trash-empty" ""
+    ]
+    elif(_): {action = "trash-restore"} [ kmx_restore(r): target ]
+    elif(_): {action = "trash-delete"} [
+        km_label(_kac_l): target
+        concat(_kac_q): "Delete " _kac_l " for good? This cannot be undone."
+        km_dialog_open(_): "confirm" "Delete" _kac_q "" "trash-delete" target
+    ]
+    elif(_): {action = "shortcut-here"} [ kmx_shortcut_on_desktop(r): target ]
+    elif(_): {action = "shortcut"} [
+        km_dialog_open(_): "input" "Add shortcut" "A folder or a program to link to (its full path):" "" "shortcut-target" ""
     ]
     elif(_): {action = "newfolder"} [
         km_dialog_open(_): "input" "New folder" "Name of the new folder:" "New folder" "newfolder" ""
@@ -2390,6 +2421,49 @@ km_dialog_ok(r): [
             km_message(_): "Run" _kdo_err
             set(_kdo_err): ""
         ]
+    ]
+    elif(_): {_kdo_action = "trash"} [
+        kmx_trash(_kdo_err): _kdo_arg
+        if(_): {_kdo_err != ""} [
+            km_message(_): "Delete" _kdo_err
+            set(_kdo_err): ""
+        ]
+    ]
+    elif(_): {_kdo_action = "trash-empty"} [
+        kmx_empty(_kdo_err):
+        if(_): {_kdo_err != ""} [
+            km_message(_): "Empty Trash" _kdo_err
+            set(_kdo_err): ""
+        ]
+    ]
+    elif(_): {_kdo_action = "trash-delete"} [
+        set(_kdo_dir): km_dir?
+        km_strip_slash(_kdo_n): _kdo_arg
+        km_join(_kdo_p): _kdo_dir _kdo_n
+        is_dir(_kdo_isd): _kdo_p
+        if(_): {_kdo_isd = 1} [ kmx_remove_tree(_): _kdo_p ]
+        else(_): [ remove_file(_): _kdo_p ]
+        kmx_origins(_kdo_o):
+        btdel(_): _kdo_o _kdo_n
+        kmx_save_origins(_): _kdo_o
+        kremlinrefresh(_):
+    ]
+    elif(_): {_kdo_action = "shortcut-target"} [
+        str_trim(_kdo_tv): _kdo_value
+        km_slashes(_kdo_tp): _kdo_tv
+        is_dir(_kdo_td): _kdo_tp
+        file_exists(_kdo_te): _kdo_tp
+        km_is_absolute(_kdo_ta): _kdo_tp
+        if(_): {_kdo_ta = false || (_kdo_te = false && _kdo_td != 1)} [
+            set(_kdo_err): "No folder or program there: give its full path"
+        ]
+        else(_): [
+            km_base(_kdo_tb): _kdo_tp
+            km_dialog_open(_): "input" "Add shortcut" "Name shown under the icon:" _kdo_tb "shortcut-name" _kdo_tp
+        ]
+    ]
+    elif(_): {_kdo_action = "shortcut-name"} [
+        kmx_shortcut(_kdo_err): _kdo_value _kdo_arg
     ]
     elif(_): {_kdo_action = "delete"} [
         kremlindelete(_kdo_err): _kdo_arg
@@ -2743,7 +2817,8 @@ km_draw_panel(r): canvas m hits [
     # the KREMLIN button
     set(_kdp_popup): km_popup?
     set(_kdp_col): KM_START
-    if(_): {_kdp_popup = "start"} [ set(_kdp_col): KM_START_ON ]
+    set(_kdp_hover): km_hover?
+    if(_): {_kdp_popup = "start" || _kdp_hover = "start"} [ set(_kdp_col): KM_START_ON ]
     set(_kdp_bw): {84 * _kdp_s}
     canvasfill(_): canvas {3 * _kdp_s} _kdp_by _kdp_bw _kdp_bh _kdp_col
     km_div(_kdp_cy): _kdp_bh 2
@@ -3100,6 +3175,7 @@ kremlindraw(r): [
     vec(_kdw_hits): ""
     if(_): {_kdw_top > 0} [ km_draw_location(_): _kdw_c _kdw_m _kdw_hits ]
     km_draw_icons(_): _kdw_c _kdw_m _kdw_hits
+    kmx_draw_trash(_): _kdw_c _kdw_m _kdw_hits
     km_draw_panel(_): _kdw_c _kdw_m _kdw_hits
     set(_kdw_popup): km_popup?
     if(_): {_kdw_popup = "calendar"} [ km_draw_calendar(_): _kdw_c _kdw_m _kdw_hits ]
@@ -3157,7 +3233,12 @@ km_open_context(r): x y keyboard [
     kremlinselected(_kcx_name):
     set(_kcx_sel): {0 - 1}
     if(_): keyboard [ set(_kcx_sel): 0 ]
-    if(_): {_kcx_name != ""} [
+    kmx_in_trash(_kcx_trash):
+    if(_): {_kcx_name != "" && _kcx_trash} [
+        kmx_trashed_menu(_kcx_items): _kcx_name
+        km_open_popup(_): "item" x y _kcx_items _kcx_name _kcx_sel
+    ]
+    elif(_): {_kcx_name != ""} [
         km_item_menu(_kcx_items): _kcx_name
         km_open_popup(_): "item" x y _kcx_items _kcx_name _kcx_sel
     ]
@@ -3210,6 +3291,7 @@ kremlinclick(r): x y [
         elif(_): {_kcl2_tag != "menu-body"} [ km_close_popup(_): ]
     ]
     elif(_): {_kcl2_tag = "start"} [ km_open_start(_): false ]
+    elif(_): {_kcl2_tag = "trash"} [ set(km_sel): {0 - 1}! ]
     elif(_): {_kcl2_tag = "clock"} [ km_open_calendar(_): ]
     elif(_): {_kcl2_tag = "back"} [ kremlinup(_): ]
     elif(_): {_kcl2_tag = "scroll-left"} [ kremlinwheelbody(_): 1 ]
@@ -3246,6 +3328,7 @@ kremlindouble(r): x y [
     set(_kdb_dialog): km_dialog?
     set(_kdb_popup): km_popup?
     km_hit(_kdb_tag): x y
+    if(_): {_kdb_dialog = "" && _kdb_popup = "" && _kdb_tag = "trash"} [ kmx_open_trash(_): ]
     if(_): {_kdb_dialog = "" && _kdb_popup = "" && _kdb_tag = ""} [
         set(_kdb_m): km_metrics?
         set(_kdb_scroll): km_scroll?
@@ -3277,6 +3360,10 @@ kremlinmenu(r): x y [
             str_to_number(_kmn_i): _kmn_is
             km_pin_menu(_kmn_items):
             km_open_popup(_): "pin" x y _kmn_items _kmn_i {0 - 1}
+        ]
+        elif(_): {_kmn_tag = "trash"} [
+            kmx_trash_menu(_kmn_items):
+            km_open_popup(_): "trash" x y _kmn_items "" {0 - 1}
         ]
         elif(_): {_kmn_tag = ""} [
             set(_kmn_m): km_metrics?
@@ -3650,6 +3737,16 @@ kremlin_app_menu(result): canvas x y [
     kremlinmenu(_): x y
 ]
 
+kremlin_app_motion(result): canvas x y [
+    kmx_hover(_): x y
+]
+
+# hover needs the "motion" event (a runtime without it skips it)
+kremlin_motion_on(r): canvas [
+    set(r): 0
+    on(_): canvas "motion" "kremlin_app_motion"
+]
+
 kremlin_app_wheel(result): canvas x y direction [
     kremlinwheel(_): direction
 ]
@@ -3730,6 +3827,7 @@ init(result): arg_count arg_values [
     on(_): window "key" "kremlin_app_key"
     on(_): window "keyup" "kremlin_app_keyup"
     on(_): window "focus" "kremlin_app_focus"
+    try(_): "kremlin_motion_on" canvas
     if(_): {_kin_window = false} [ fullscreen(_): window ]
     show(_): window
     set(km_tick_gen): 1!

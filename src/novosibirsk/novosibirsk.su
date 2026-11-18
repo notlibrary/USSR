@@ -24,6 +24,7 @@ $endif
 $define SB_PAD 1
 $include "../siberia/siberia.su"
 $include "more.su"
+$include "fonts.su"
 
 # --- the document -----------------------------------------------------------
 # Paragraphs are SbPara structs in sb_paras; the cursor is sb_prow (the
@@ -43,6 +44,7 @@ sbpadreset(r): [
     set(sb_goalx): {0 - 1}!
     set(sb_dirty): false!
     nsm_state(_):
+    sbx_state(_):
     set(r): 0
 ]
 
@@ -52,6 +54,8 @@ sb_pad_count(r): [
 ]
 
 sb_para_text(r): index [
+    # what is measured next belongs to this paragraph (fonts.su)
+    set(sb_mrow): index!
     set(paras): sb_paras?
     at(p): paras index
     getf(r): p "text"
@@ -108,6 +112,7 @@ sbpadsettext(r): text [
     set(sb_ptop): 0!
     set(sb_ptopline): 0!
     set(sb_goalx): {0 - 1}!
+    sbx_reset(_):
     set(r): 0
 ]
 
@@ -126,6 +131,12 @@ sbpadtext(r): [
 ]
 
 sb_measure(r): text [
+    set(mrow): sb_mrow?
+    sbx_has_spans(mixed): mrow
+    if(_): mixed [
+        sbx_measure(r): text
+        return(_): r
+    ]
     set(font): sb_pfont?
     if(_): {font > 0} [
         set(px): sb_ppx?
@@ -170,6 +181,7 @@ sb_wrap(r): text [
     set(start): 0
     while(_): {start < n} [
         set(end): start
+        set(sb_mbase): start!
         set(go): true
         while(_): go [
             # the next word and the spaces after it
@@ -242,6 +254,7 @@ sb_col_at_x(r): text starts k x [
     sb_line_start(start): starts k
     sb_line_limit(limit): text starts k
     set(r): start
+    set(sb_mbase): start!
     set(prev): 0.0
     set(go): {r < limit}
     while(_): go [
@@ -260,6 +273,7 @@ sb_col_at_x(r): text starts k x [
 sb_caret_x(r): text starts col [
     sb_line_of(k): starts col
     at(start): starts k
+    set(sb_mbase): start!
     slice(piece): text start {col - start}
     sb_measure(r): piece
 ]
@@ -274,6 +288,7 @@ sbpadtype(r): s [
     concat(t): left s right
     sb_para_set(_): row t
     len(sl): s
+    sbx_ins(_): row col sl
     set(sb_pcol): {col + sl}!
     set(sb_goalx): {0 - 1}!
     set(r): 0
@@ -321,6 +336,7 @@ sb_pad_enter(r): [
     new(b): "SbPara" right
     push(_): items a
     push(_): items b
+    sbx_split(_): row col
     sb_paras_splice(_): row 1 items
     set(sb_prow): {row + 1}!
     set(sb_pcol): 0!
@@ -338,6 +354,7 @@ sb_pad_backspace(r): [
         slice(right): t col {n - col}
         concat(t): left right
         sb_para_set(_): row t
+        sbx_del(_): row i col
         set(sb_pcol): i!
     ]
     elif(_): {row > 0} [
@@ -347,6 +364,7 @@ sb_pad_backspace(r): [
         vec(items): ""
         new(a): "SbPara" joined
         push(_): items a
+        sbx_merge(_): {row - 1} pl
         sb_paras_splice(_): {row - 1} 2 items
         set(sb_prow): {row - 1}!
         set(sb_pcol): pl!
@@ -366,6 +384,7 @@ sb_pad_delete(r): [
         slice(right): t i {n - i}
         concat(t): left right
         sb_para_set(_): row t
+        sbx_del(_): row col i
     ]
     elif(_): {row + 1 < count} [
         sb_para_text(next): {row + 1}
@@ -373,6 +392,7 @@ sb_pad_delete(r): [
         vec(items): ""
         new(a): "SbPara" joined
         push(_): items a
+        sbx_merge(_): row n
         sb_paras_splice(_): row 2 items
     ]
     set(r): 0
@@ -508,6 +528,13 @@ sbpadkey(r): key [
 # --- document files ---------------------------------------------------------
 
 sbpadfodt(r): [
+    # fonts on parts of the text: the richer writer keeps them
+    sbx_any(mixed):
+    if(_): mixed [
+        sbx_doc(d):
+        nsm_fodt(r): d
+        return(_): r
+    ]
     set(family): sb_family?
     typeof(tf): family
     if(_): {tf != "string" || family = ""} [ set(family): "Liberation Serif" ]
@@ -714,7 +741,12 @@ sb_load_fodt(r): s [
 sbpadload(r): text kind [
     sbpadreset(_):
     set(r): ""
-    if(_): {kind = "fodt"} [ sb_load_fodt(r): text ]
+    if(_): {kind = "fodt"} [
+        sb_load_fodt(r): text
+        # fonts on parts of the text
+        sbx_reset(_):
+        if(_): {r = ""} [ sbx_from_fodt(_): text ]
+    ]
     else(_): [ sbpadsettext(_): text ]
     set(sb_dirty): false!
 ]
@@ -1123,7 +1155,10 @@ sb_pad_draw(r): [
             len(end): t
             if(_): {k + 1 < nl} [ at(end): starts {k + 1} ]
             slice(piece): t start {end - start}
-            if(_): {font > 0} [ canvasfonttext(_): canvas SB_MARGIN y piece 0 font px ]
+            sbx_draw_sel(_): canvas p start end y lh t
+            sbx_has_spans(mixed): p
+            if(_): mixed [ sbx_draw_line(_): canvas SB_MARGIN y p start piece ]
+            elif(_): {font > 0} [ canvasfonttext(_): canvas SB_MARGIN y piece 0 font px ]
             else(_): [ canvastextscale(_): canvas SB_MARGIN {y + 3} piece 0 2 ]
             vec(entry): ""
             push(_): entry p
@@ -1134,6 +1169,8 @@ sb_pad_draw(r): [
             sb_line_of(ck): starts col
             if(_): {p = row && ck = k} [
                 slice(before): t start {col - start}
+                set(sb_mrow): p!
+                set(sb_mbase): start!
                 sb_measure(cx): before
                 str_trunc(cx): cx
                 canvasfill(_): canvas {SB_MARGIN + cx} y 2 lh 0
@@ -1192,6 +1229,8 @@ sb_pad_click(r): x y [
     sb_para_text(t): p
     sb_wrap(starts): t
     sb_col_at_x(c): t starts k {x - SB_MARGIN}
+    set(shift): sb_shift?
+    sbx_anchor(_): shift
     set(sb_prow): p!
     set(sb_pcol): c!
     set(sb_goalx): {0 - 1}!
@@ -1278,10 +1317,13 @@ sb_picker_choose(r): [
     if(_): {sel >= 0 && sel < n} [
         at(f): families sel
         getf(name): f "name"
-        set(sb_family): name!
-        set(sb_dirty): true!
-        sb_apply_font(_):
-        sb_pad_tool_labels(_):
+        sbx_apply_sel(part): "family" name
+        if(_): {part = false} [
+            set(sb_family): name!
+            set(sb_dirty): true!
+            sb_apply_font(_):
+            sb_pad_tool_labels(_):
+        ]
     ]
     set(sb_picker): false!
     set(r): 0
@@ -1359,6 +1401,24 @@ sb_pad_key_gui(r): key [
         return(_): r
     ]
     set(ctrl): sb_ctrl?
+    set(shift): sb_shift?
+    # Shift with a move key grows the selection, a move without it ends it
+    set(nav): {key = SB_KEY_UP || key = SB_KEY_DOWN || key = SB_KEY_LEFT || key = SB_KEY_RIGHT || key = SB_KEY_HOME || key = SB_KEY_END || key = SB_KEY_PAGE_UP || key = SB_KEY_PAGE_DOWN}
+    if(_): nav [ sbx_anchor(_): shift ]
+    # typing keys replace the selection
+    if(_): {key = SB_KEY_BACKSPACE || key = SB_KEY_DELETE} [
+        sbx_delete_sel(gone):
+        if(_): gone [ return(_): r ]
+    ]
+    if(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER || key = SB_KEY_TAB} [ sbx_delete_sel(_): ]
+    if(_): {ctrl = true && key = 65} [
+        sbx_select_all(_):
+        return(_): r
+    ]
+    if(_): {ctrl = true && (key = 66 || key = 73)} [
+        sbx_toggle_sel(done): key
+        if(_): done [ return(_): r ]
+    ]
     if(_): {ctrl = true} [
         if(_): {key = 90 || key = 89} [
             if(_): {key = 90} [ nsm_undo(_): ] else(_): [ nsm_redo(_): ]
@@ -1382,6 +1442,7 @@ sb_pad_key_gui(r): key [
                     slice(right): t col {n - col}
                     concat(t2): left right
                     sb_para_set(_): row t2
+                    sbx_del(_): row c col
                     set(sb_dirty): true!
                 ]
                 set(sb_pcol): c!
@@ -1439,6 +1500,7 @@ sb_pad_char(r): s [
     set(picker): sb_picker?
     if(_): {picker = true} [ sb_picker_char(r): s ]
     else(_): [
+        sbx_delete_sel(_):
         nsm_push_undo(_): "type"
         sbpadtype(r): s
         # quotes, dashes and ellipses as they are typed
@@ -1454,6 +1516,10 @@ sb_pad_char(r): s [
             if(_): {nl != left} [
                 concat(t2): nl right
                 sb_para_set(_): row t2
+                len(ln1): left
+                len(ln2): nl
+                if(_): {ln2 < ln1} [ sbx_del(_): row {col - (ln1 - ln2)} col ]
+                if(_): {ln2 > ln1} [ sbx_ins(_): row col {ln2 - ln1} ]
                 len(c2): nl
                 set(sb_pcol): c2!
             ]
@@ -1493,6 +1559,10 @@ sb_pad_tool(r): action [
     elif(_): {action = "smaller"} [ sb_pad_size_step(_): {0 - 1} ]
     elif(_): {action = "bigger"} [ sb_pad_size_step(_): 1 ]
     elif(_): {action = "bold" || action = "italic"} [
+        set(tk): 66
+        if(_): {action = "italic"} [ set(tk): 73 ]
+        sbx_toggle_sel(done): tk
+        if(_): done [ return(_): r ]
         if(_): {action = "bold"} [
             set(b): sb_bold?
             set(sb_bold): {b != true}!

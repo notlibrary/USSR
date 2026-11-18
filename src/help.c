@@ -127,6 +127,7 @@ static const help_entry_t g_help[] = {
     { "bsize", "bytes", "bsize(n): device", "size of a disk or image in bytes; -1 if unknown" },
     { "bcopy", "bytes", "bcopy(n): src slba dst dlba count [sector]", "copy sectors between disks or images; sectors copied or -1" },
     { "bdevices", "bytes", "bdevices(v):", "storage devices: [path bytes kind bus model sector] each" },
+    { "bsparse", "bytes", "bsparse(n): path bytes", "a new image file of that size that uses disk space only as it is written (sparse); -1 on error" },
     { "tls_recv_bytes", "bytes", "tls_recv_bytes(v): socket max", "tls_recv as a byte vector; null: wait_readable" },
 
     /* UDP datagrams */

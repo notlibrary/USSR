@@ -2037,6 +2037,10 @@ nsm_snapshot(r): [
     vec(c): ""
     push(_): c row
     push(_): c col
+    # the fonts on parts of the text (fonts.su) go back with an undo too
+    set(sp): sb_pspans?
+    encode(spt): sp
+    push(_): c spt
     push(_): r c
 ]
 
@@ -2056,6 +2060,15 @@ nsm_restore(r): snap [
     at(col): c 1
     set(sb_prow): row!
     set(sb_pcol): col!
+    len(nc): c
+    if(_): {nc > 2} [
+        at(spt): c 2
+        decode(sp): spt
+        set(sb_pspans): sp!
+    ]
+    else(_): [ sbx_reset(_): ]
+    set(sb_parow): -1!
+    set(sb_pacol): -1!
     set(r): 0
 ]
 

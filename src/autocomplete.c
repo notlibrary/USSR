@@ -299,6 +299,7 @@ static const char *ac_builtin_commands[] =
     "bwrite",
     "bsize",
     "bdevices",
+    "bsparse",
     "bcopy",
     "btree",
     "btput",

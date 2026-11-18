@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1-alpha
+- The bottom bar names the function keys `F1 Help  F2 Rename ... F9 Menu`,
+  not `1Help 2Rename ...`.
+
 ## 0.6.0-alpha
 Refine pass 1 from REFINE.md: the engine in `more.su` (no window needed),
 the keys in `keys.su`.

@@ -3186,6 +3186,74 @@ static int oop_do_bsize(
     return 0;
 }
 
+/* bsparse(n): path bytes: a new (or emptied) image file of that many
+ * bytes that takes disk space only where it is written: an NTFS sparse
+ * file on Windows, a file with a hole elsewhere (ftruncate). The size, or
+ * -1 when it cannot be made. Big disk images (a 2 TB one on a laptop) need
+ * it: extending a plain file reserves every byte. */
+static int oop_do_bsparse(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v;
+    ussr_value_t size_v;
+    const char *path;
+    long long bytes;
+    int ok = 0;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: bsparse(n): path bytes\n");
+        return -1;
+    }
+    if (ussr_argument_evaluate(&arguments[1], &size_v) != 0)
+        return -1;
+    if (size_v.type != USSR_INTEGER || size_v.data.integer < 0)
+    {
+        fprintf(stderr, "USSR: bsparse: the size is a whole number of bytes\n");
+        ussr_value_free(&size_v);
+        return -1;
+    }
+    bytes = (long long)size_v.data.integer;
+    ussr_value_free(&size_v);
+    if (!oop_path_argument("bsparse", arguments, 0, &path_v, &path))
+        return -1;
+#ifdef _WIN32
+    {
+        HANDLE handle = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
+                                    FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, NULL);
+        if (handle != INVALID_HANDLE_VALUE)
+        {
+            DWORD got = 0;
+            LARGE_INTEGER where;
+            /* not every file system has sparse files (FAT): then the file
+               is still made, at its full size */
+            DeviceIoControl(handle, FSCTL_SET_SPARSE, NULL, 0, NULL, 0,
+                            &got, NULL);
+            where.QuadPart = bytes;
+            ok = SetFilePointerEx(handle, where, NULL, FILE_BEGIN) != 0 &&
+                 SetEndOfFile(handle) != 0;
+            CloseHandle(handle);
+        }
+    }
+#else
+    {
+        int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0)
+        {
+            ok = ftruncate(fd, (off_t)bytes) == 0;
+            close(fd);
+        }
+    }
+#endif
+    ussr_value_free(&path_v);
+    *out_result = ussr_integer(ok ? (ussr_int_t)bytes : -1);
+    return 0;
+}
+
 /* Appends [path bytes kind bus model sector] to devices. */
 static int oop_block_device_push(ussr_vector_t *devices, const char *path,
                                  long long bytes, const char *kind,
@@ -5122,6 +5190,8 @@ int ussr_oop_dispatch(
         status = oop_do_bsize(arguments, argument_count, out_result);
     else if (strcmp(command, "bcopy") == 0)
         status = oop_do_bcopy(arguments, argument_count, out_result);
+    else if (strcmp(command, "bsparse") == 0)
+        status = oop_do_bsparse(arguments, argument_count, out_result);
     else if (strcmp(command, "bdevices") == 0)
         status = oop_do_bdevices(argument_count, out_result);
     else if (strcmp(command, "text_bytes") == 0)

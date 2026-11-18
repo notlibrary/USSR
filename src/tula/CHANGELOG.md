@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0-alpha
+- `scope.su`: a crosshair in place of the mouse arrow, as LibreCAD draws
+  one: two dashed lines across the canvas, in another colour, through the
+  point a click would take (grid and object snaps applied), with a pick
+  box at the centre and the coordinates beside it. The system cursor is
+  hidden over the canvas.
+- A live preview: after the first point, the line to the cursor (or the
+  circle through it) is drawn dashed with its length or radius, and
+  Escape drops the first point.
+- Holding an arrow key keeps panning (key repeats reach the window now).
+- The cursor uses Petersburg's new canvas `"motion"` event, redrawn at most
+  once a frame by a small loop; `tests/gui/tula_scope_test.su`.
+
 ## 0.5.0-alpha
 Refine pass 1 from REFINE.md: the CAD engine in `more.su` (no window
 needed), used by a new command line below the canvas and by scripts.

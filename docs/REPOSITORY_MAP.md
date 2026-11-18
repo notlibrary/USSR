@@ -13,24 +13,24 @@ what it is and what it depends on. The interpreter itself is the C in
 | [dubna](../src/dubna) | 0.2.0 | `dubna.su` | PostgreSQL client: protocol 3.0, TLS through Ryazan, SCRAM-SHA-256, parameterised queries (ROUND stack) | ryazan, library |
 | [kgb](../src/kgb) | 0.2.0 | `kgb.su` | Knowledge Giga Base: a fact-oriented Markdown knowledge base on folders (objects, categories, properties, queries) | library |
 | [klin](../src/klin) | 0.2.0 | `klin.su` | Small desktop calculator: casual, scientific and programmer modes (bases, bitwise, endianness) | petersburg, library |
-| [kremlin](../src/kremlin) | 0.2.0 | `kremlin.su` | Lightweight full-screen desktop: the folder ~/kremlin as icons, launchers, a panel with pins, a clock and a calendar | petersburg, library |
+| [kremlin](../src/kremlin) | 0.3.0 | `kremlin.su` | Lightweight full-screen desktop: the folder ~/kremlin as icons, launchers, a panel with pins, a clock and a calendar | petersburg, library |
 | [lenin](../src/lenin) | 0.2.0 | `lenin.su` | Lenin, the agent that enriches and refines neuroslop code with a centrifuge of AI models | library |
 | [library](../src/libs) | 0.2.0 | `standard.su` | USSR standard library |  |
 | [murmansk](../src/murmansk) | 0.2.0 | `murmansk.su` | The firewall of the Moscow network stack: ordered allow and deny rules with policies, stateful, its rules in /etc/murmansk.rules | library |
 | [novgorod](../src/novgorod) | 0.5.0 | `novgorod.su` | Anonymous HTTPS image forum for programmers with lightweight markup (ROUND stack) | ukraine, ryazan, omsk, dubna, library |
-| [novosibirsk](../src/novosibirsk) | 0.2.0 | `novosibirsk.su` | Document editor with system fonts (.fodt, .txt); split from Siberia's --pad | siberia, petersburg, library |
+| [novosibirsk](../src/novosibirsk) | 0.3.0 | `novosibirsk.su` | Document editor with system fonts (.fodt, .txt); split from Siberia's --pad | siberia, petersburg, library |
 | [omsk](../src/omsk) | 0.2.0 | `omsk.su` | Image thumbnails in pure USSR: PNG and baseline JPEG in, a JPEG fitted into a square box out (ROUND stack) | library |
-| [petersburg](../src/petersburg) | 0.6.0-alpha | `petersburg.su` | Cross-platform OpenGL GUI widgets, dialogs, events, and layout for USSR programs. | library, omsk |
+| [petersburg](../src/petersburg) | 0.7.0-alpha | `petersburg.su` | Cross-platform OpenGL GUI widgets, dialogs, events, and layout for USSR programs. | library, omsk |
 | [russia](../src/russia) | 0.1.0 | `russia.su` | Bootstrapped USSR interpreter | library |
 | [ryazan](../src/ryazan) | 0.2.0 | `ryazan.su` | Secure socket library: TLS clients and servers (Schannel or OpenSSL) and HTTPS requests | library |
-| [siberia](../src/siberia) | 0.3.0 | `siberia.su` | Spreadsheet (.fods, .csv); the document editor is now Novosibirsk | petersburg, library |
-| [sochi](../src/sochi) | 0.1.0 | `sochi.su` | Sochi: Preferans for three players by the Sochi rules, peer to peer over UDP port 33333 with LAN discovery, nicknames, chat and bots | library |
-| [stalin](../src/stalin) | 0.2.0 | `stalin.su` | Stalin: partition editor for GPT and MBR disks and images; lists HDD, SSD and flash devices; recognises ext4, NTFS, UFS and FFS2 | library |
-| [tula](../src/tula) | 0.5.0-alpha | `tula.su` | Small interactive 2D CAD with a snap grid, lines, circles, DXF viewing and export, and zoom. | petersburg, library |
-| [tver](../src/tver) | 0.6.0-alpha | `tver.su` | Two-panel keyboard-driven file manager for USSR. | petersburg, library |
+| [siberia](../src/siberia) | 0.4.0 | `siberia.su` | Spreadsheet (.fods, .csv); the document editor is now Novosibirsk | petersburg, library |
+| [sochi](../src/sochi) | 0.4.0 | `sochi.su` | Sochi: Preferans for three players by the Sochi rules, peer to peer over UDP port 33333 with LAN discovery, nicknames, chat and bots | library |
+| [stalin](../src/stalin) | 0.2.1 | `stalin.su` | Stalin: partition editor for GPT and MBR disks and images; lists HDD, SSD and flash devices; recognises ext4, NTFS, UFS and FFS2 | library |
+| [tula](../src/tula) | 0.6.0-alpha | `tula.su` | Small interactive 2D CAD with a snap grid, lines, circles, DXF viewing and export, and zoom. | petersburg, library |
+| [tver](../src/tver) | 0.6.1-alpha | `tver.su` | Two-panel keyboard-driven file manager for USSR. | petersburg, library |
 | [ukraine](../src/ukraine) | 0.2.0 | `ukraine.su` | HTTP server and web framework for USSR | library, ryazan |
 | [ural](../src/ural) | 0.2.0 | `ural.su` | Ural package manager for USSR | library |
-| [usa](../src/usa) | 0.1.0 | `usa.su` | usa: a small C compiler written in USSR; C99 in, .ru bytecode out, with its own C library | library |
+| [usa](../src/usa) | 0.2.0 | `usa.su` | usa: a small C compiler written in USSR; C99 in, .ru bytecode out, with its own C library | library |
 | [docs](../docs) | 0.2.0 | `README.md` | USSR manuals, specifications, and design documents |  |
 
 ## Needed by

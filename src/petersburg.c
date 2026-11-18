@@ -67,6 +67,12 @@ typedef struct petersburg_widget
     char *menu_callback;
     char *double_callback;
     char *char_callback;
+    char *motion_callback;
+    int motion_x;      /* the last cursor position over a canvas */
+    int motion_y;
+    int motion_dirty;  /* a move not sent yet (sent once per pump) */
+    int motion_inside;
+    int hide_cursor;   /* hide the system cursor over this canvas */
     int x;
     int y;
     int width;
@@ -1300,6 +1306,62 @@ static petersburg_widget_t *petersburg_window_for(GLFWwindow *native)
     return (petersburg_widget_t *)glfwGetWindowUserPointer(native);
 }
 
+/* The cursor moved: the canvas under it keeps the position for its
+   "motion" callback, sent once per pump (so a fast mouse does not flood
+   the scheduler); leaving a canvas sends -1, -1. A canvas may ask for the
+   system cursor to be hidden over it (canvascursor). */
+static void petersburg_cursor_pos(GLFWwindow *native, double x, double y)
+{
+    petersburg_widget_t *window = petersburg_window_for(native);
+    petersburg_widget_t *widget;
+    int logical_width;
+    int logical_height;
+    int framebuffer_width;
+    int framebuffer_height;
+    int hide = 0;
+
+    if (window == NULL)
+        return;
+    glfwGetWindowSize(native, &logical_width, &logical_height);
+    glfwGetFramebufferSize(native, &framebuffer_width, &framebuffer_height);
+    if (logical_width > 0 && logical_height > 0)
+    {
+        x *= (double)framebuffer_width / logical_width;
+        y *= (double)framebuffer_height / logical_height;
+    }
+    for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
+    {
+        int inside;
+        if (widget->parent_id != window->id ||
+            widget->type != PETERSBURG_CANVAS)
+            continue;
+        inside = x >= widget->x && x < widget->x + widget->width &&
+                 y >= widget->y && y < widget->y + widget->height;
+        if (inside && widget->hide_cursor)
+            hide = 1;
+        if (widget->motion_callback == NULL)
+            continue;
+        if (inside)
+        {
+            widget->motion_x = (int)(x - widget->x);
+            widget->motion_y = (int)(y - widget->y);
+            widget->motion_dirty = 1;
+            widget->motion_inside = 1;
+        }
+        else if (widget->motion_inside)
+        {
+            widget->motion_x = -1;
+            widget->motion_y = -1;
+            widget->motion_dirty = 1;
+            widget->motion_inside = 0;
+        }
+    }
+    if (glfwGetInputMode(native, GLFW_CURSOR) !=
+        (hide ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL))
+        glfwSetInputMode(native, GLFW_CURSOR,
+                         hide ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
+}
+
 static void petersburg_mouse_button(GLFWwindow *native, int button,
                                     int action, int modifiers)
 {
@@ -1465,8 +1527,9 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     }
     if (action != GLFW_PRESS && action != GLFW_REPEAT)
         return;
-    if (action == GLFW_PRESS)
-        petersburg_queue_key(window, key);
+    /* a held key repeats (GLFW_REPEAT) like a new press, so holding an
+       arrow keeps moving; widgets below still act on the first press */
+    petersburg_queue_key(window, key);
     if (petersburg_focus == NULL || action != GLFW_PRESS)
         return;
     if (petersburg_focus->type == PETERSBURG_LIST)
@@ -1679,6 +1742,7 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->menu_callback);
     free(widget->double_callback);
     free(widget->char_callback);
+    free(widget->motion_callback);
     free(widget);
 }
 
@@ -1845,6 +1909,7 @@ static int petersburg_create_window(
     glfwSetKeyCallback(native, petersburg_key);
     glfwSetWindowFocusCallback(native, petersburg_window_focus);
     glfwSetScrollCallback(native, petersburg_scroll);
+    glfwSetCursorPosCallback(native, petersburg_cursor_pos);
     glfwMakeContextCurrent(native);
     glfwSwapInterval(1);
     out->type = USSR_INTEGER;
@@ -1914,6 +1979,9 @@ static int petersburg_set_callback(
     else if (strcmp(event_name, "double") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         slot = &widget->double_callback;
+    else if (strcmp(event_name, "motion") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        slot = &widget->motion_callback;
     else if (strcmp(event_name, "key") == 0 &&
              widget->type == PETERSBURG_WINDOW)
         slot = &widget->key_callback;
@@ -2225,6 +2293,9 @@ static int petersburg_inject(
     else if (strcmp(event_name, "double") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->double_callback, 2, a, b, 0);
+    else if (strcmp(event_name, "motion") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        petersburg_queue(widget, widget->motion_callback, 2, a, b, 0);
     else if (strcmp(event_name, "click") == 0 &&
              widget->type != PETERSBURG_WINDOW)
         petersburg_queue_event(widget, 0);
@@ -2907,6 +2978,27 @@ int ussr_petersburg_dispatch(
                                 ? petersburg_focus->id : 0);
         return 1;
     }
+    if (strcmp(name, "petersburg_canvas_cursor") == 0)
+    {
+        const char *mode;
+        /* canvascursor(canvas, "hidden" | "normal") */
+        if (!petersburg_arity(name, value_count, 2) ||
+            !petersburg_expect_integer(values, 0, &id) ||
+            !petersburg_expect_string(values, 1, &mode))
+        {
+            fprintf(stderr, "USSR: %s expects a canvas and \"hidden\" or \"normal\"\n", name);
+            return -1;
+        }
+        widget = petersburg_find(id);
+        if (widget == NULL || widget->type != PETERSBURG_CANVAS)
+        {
+            fprintf(stderr, "USSR: %s expects a canvas\n", name);
+            return -1;
+        }
+        widget->hide_cursor = strcmp(mode, "hidden") == 0;
+        *out = ussr_integer(0);
+        return 1;
+    }
     if (strcmp(name, "petersburg_alive") == 0)
     {
         if (!petersburg_arity(name, value_count, 1) ||
@@ -2966,6 +3058,13 @@ int ussr_petersburg_pump(
         glfwPollEvents();
     if (petersburg_last_error)
         return -1;
+    for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
+        if (widget->motion_dirty)
+        {
+            widget->motion_dirty = 0;
+            petersburg_queue(widget, widget->motion_callback, 2,
+                             widget->motion_x, widget->motion_y, 0);
+        }
 
     for (;;)
     {

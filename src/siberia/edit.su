@@ -1,0 +1,509 @@
+# edit.su - Siberia's sheet editing at the window: a selection (Shift with
+# the arrows, Page Up/Down, Home/End or a click; Ctrl+A for everything
+# used), copy, cut and paste of cells (Ctrl+C, Ctrl+X, Ctrl+V; formulas
+# move their references), Sum, Average and Count of the selection in the
+# status bar, AutoSum (the SUM button or Alt+=), the formula bar as the
+# place to edit a cell (click it: a caret, Left/Right/Home/End move in the
+# text) and the help as a box over the sheet (F1 or HELP; any key or click
+# closes it). siberia.su includes it; its state lives in sbstate.
+$once
+
+sbe_state(r): [
+    set(sb_arow): -1!
+    set(sb_acol): -1!
+    set(sb_clip): ""!
+    set(sb_clip_r): 0!
+    set(sb_clip_c): 0!
+    set(sb_caret): 0!
+    set(sb_inbar): false!
+    set(sb_help_title): ""!
+    set(sb_help_text): ""!
+    set(sb_skipchar): false!
+    set(r): 0
+]
+
+# --- the selection: [r0 c0 r1 c1], the cursor's cell when there is none
+
+sbe_bounds(r): [
+    set(row): sb_row?
+    set(col): sb_col?
+    set(ar): sb_arow?
+    set(ac): sb_acol?
+    if(_): {ar < 0} [
+        set(ar): row
+        set(ac): col
+    ]
+    vec(r): ""
+    set(r0): ar
+    set(r1): row
+    if(_): {row < ar} [
+        set(r0): row
+        set(r1): ar
+    ]
+    set(c0): ac
+    set(c1): col
+    if(_): {col < ac} [
+        set(c0): col
+        set(c1): ac
+    ]
+    push(_): r r0
+    push(_): r c0
+    push(_): r r1
+    push(_): r c1
+]
+
+sbe_has_range(r): [
+    sbe_bounds(b):
+    at(r0): b 0
+    at(c0): b 1
+    at(r1): b 2
+    at(c1): b 3
+    set(r): {r0 != r1 || c0 != c1}
+]
+
+# before a move: Shift keeps (or starts) the selection, else it ends
+sbe_anchor(r): shift [
+    set(r): 0
+    if(_): {shift = true} [
+        set(ar): sb_arow?
+        if(_): {ar < 0} [
+            set(row): sb_row?
+            set(col): sb_col?
+            set(sb_arow): row!
+            set(sb_acol): col!
+        ]
+    ]
+    else(_): [
+        set(sb_arow): -1!
+        set(sb_acol): -1!
+    ]
+]
+
+sbe_select_all(r): [
+    set(r): 0
+    set(mr): sb_maxrow?
+    set(mc): sb_maxcol?
+    if(_): {mr < 0} [ set(mr): 0 ]
+    if(_): {mc < 0} [ set(mc): 0 ]
+    set(sb_arow): 0!
+    set(sb_acol): 0!
+    set(sb_row): mr!
+    set(sb_col): mc!
+]
+
+sbe_range_name(r): r0 c0 r1 c1 [
+    sb_cellname(a): {r0 * SB_COLS + c0}
+    sb_cellname(b): {r1 * SB_COLS + c1}
+    set(r): a
+    if(_): {a != b} [ concat(r): a ":" b ]
+]
+
+# "Sum: 6   Average: 2   Count: 3" of the selection's numbers, or ""
+sbe_stats(r): [
+    set(r): ""
+    sbe_has_range(multi):
+    if(_): {multi = false} [ return(r): r ]
+    sbe_bounds(b):
+    at(r0): b 0
+    at(c0): b 1
+    at(r1): b 2
+    at(c1): b 3
+    set(mr): sb_maxrow?
+    set(mc): sb_maxcol?
+    if(_): {r1 > mr} [ set(r1): mr ]
+    if(_): {c1 > mc} [ set(c1): mc ]
+    set(sum): 0
+    set(count): 0
+    set(filled): 0
+    set(rr): r0
+    while(_): {rr <= r1} [
+        set(cc): c0
+        while(_): {cc <= c1} [
+            set(ci): {rr * SB_COLS + cc}
+            sbm_text_at(t): rr cc
+            if(_): {t != ""} [
+                set(filled): {filled + 1}
+                sb_value(v): ci
+                sb_is_number(isn): v
+                if(_): isn [
+                    set(sum): {sum + v}
+                    set(count): {count + 1}
+                ]
+            ]
+            set(cc): {cc + 1}
+        ]
+        set(rr): {rr + 1}
+    ]
+    if(_): {count > 0} [
+        sb_show_value(ss): sum
+        sb_show_value(as): {sum / count}
+        str_from_int(cs): count
+        concat(r): "Sum: " ss "    Average: " as "    Count: " cs
+    ]
+    else(_): [
+        str_from_int(fs): filled
+        concat(r): "Count: " fs
+    ]
+]
+
+# --- copy, cut and paste
+
+sbe_copy(r): cut [
+    set(r): 0
+    sbe_bounds(b):
+    at(r0): b 0
+    at(c0): b 1
+    at(r1): b 2
+    at(c1): b 3
+    vec(rows): ""
+    set(rr): r0
+    while(_): {rr <= r1} [
+        vec(line): ""
+        set(cc): c0
+        while(_): {cc <= c1} [
+            sbm_text_at(t): rr cc
+            push(_): line t
+            set(cc): {cc + 1}
+        ]
+        push(_): rows line
+        set(rr): {rr + 1}
+    ]
+    encode(clip): rows
+    set(sb_clip): clip!
+    set(sb_clip_r): r0!
+    set(sb_clip_c): c0!
+    set(n): {(r1 - r0 + 1) * (c1 - c0 + 1)}
+    str_from_int(ns): n
+    concat(m): "Copied " ns " cell(s)"
+    if(_): {cut = true} [
+        sbm_mark(_):
+        set(rr): r0
+        while(_): {rr <= r1} [
+            set(cc): c0
+            while(_): {cc <= c1} [
+                sbm_put(_): rr cc ""
+                set(cc): {cc + 1}
+            ]
+            set(rr): {rr + 1}
+        ]
+        set(sb_dirty): true!
+        concat(m): "Cut " ns " cell(s)"
+    ]
+    set(sb_message): m!
+]
+
+sbe_paste(r): [
+    set(r): 0
+    set(clip): sb_clip?
+    if(_): {clip = ""} [
+        set(sb_message): "Nothing copied yet"!
+        return(r): r
+    ]
+    decode(rows): clip
+    set(fr): sb_clip_r?
+    set(fc): sb_clip_c?
+    set(row): sb_row?
+    set(col): sb_col?
+    set(dr): {row - fr}
+    set(dc): {col - fc}
+    sbm_mark(_):
+    len(nr): rows
+    set(maxc): 0
+    set(i): 0
+    while(_): {i < nr} [
+        at(line): rows i
+        len(nc): line
+        if(_): {nc > maxc} [ set(maxc): nc ]
+        set(j): 0
+        while(_): {j < nc} [
+            at(t): line j
+            str_starts(f): t "="
+            if(_): f [ sbm_shift_formula(t): t dr dc ]
+            sbm_put(_): {row + i} {col + j} t
+            set(j): {j + 1}
+        ]
+        set(i): {i + 1}
+    ]
+    # the pasted cells stay selected
+    set(sb_arow): row!
+    set(sb_acol): col!
+    set(er): {row + nr - 1}
+    set(ec): {col + maxc - 1}
+    if(_): {er >= SB_ROWS} [ set(er): {SB_ROWS - 1} ]
+    if(_): {ec >= SB_COLS} [ set(ec): {SB_COLS - 1} ]
+    set(sb_row): er!
+    set(sb_col): ec!
+    set(sb_dirty): true!
+    set(sb_message): "Pasted"!
+]
+
+sbe_clear(r): [
+    set(r): 0
+    sbe_bounds(b):
+    at(r0): b 0
+    at(c0): b 1
+    at(r1): b 2
+    at(c1): b 3
+    sbm_mark(_):
+    set(rr): r0
+    while(_): {rr <= r1} [
+        set(cc): c0
+        while(_): {cc <= c1} [
+            sbm_put(_): rr cc ""
+            set(cc): {cc + 1}
+        ]
+        set(rr): {rr + 1}
+    ]
+    set(sb_dirty): true!
+]
+
+# --- AutoSum
+
+sbe_is_num_cell(r): row col [
+    set(r): false
+    if(_): {row < 0 || col < 0} [ return(r): r ]
+    sbm_text_at(t): row col
+    if(_): {t = ""} [ return(r): r ]
+    sb_value(v): {row * SB_COLS + col}
+    sb_is_number(r): v
+]
+
+# a selection: a SUM under each column (or right of a one-row
+# selection); one cell: the SUM of the numbers just above it (or left)
+sbe_autosum(r): [
+    set(r): 0
+    sbe_bounds(b):
+    at(r0): b 0
+    at(c0): b 1
+    at(r1): b 2
+    at(c1): b 3
+    sbe_has_range(multi):
+    sbm_mark(_):
+    if(_): multi [
+        if(_): {r0 = r1} [
+            sbe_range_name(rn): r0 c0 r1 c1
+            concat(f): "=SUM(" rn ")"
+            sbm_put(_): r0 {c1 + 1} f
+        ]
+        else(_): [
+            set(cc): c0
+            while(_): {cc <= c1} [
+                sbe_range_name(rn): r0 cc r1 cc
+                concat(f): "=SUM(" rn ")"
+                sbm_put(_): {r1 + 1} cc f
+                set(cc): {cc + 1}
+            ]
+        ]
+        set(sb_dirty): true!
+        set(sb_message): "AutoSum"!
+        return(r): r
+    ]
+    set(row): sb_row?
+    set(col): sb_col?
+    # the numbers above, else to the left
+    set(k): {row - 1}
+    sbe_is_num_cell(n0): k col
+    while(_): n0 [
+        set(k): {k - 1}
+        sbe_is_num_cell(n0): k col
+    ]
+    if(_): {k < row - 1} [
+        sbe_range_name(rn): {k + 1} col {row - 1} col
+    ]
+    else(_): [
+        set(k): {col - 1}
+        sbe_is_num_cell(n0): row k
+        while(_): n0 [
+            set(k): {k - 1}
+            sbe_is_num_cell(n0): row k
+        ]
+        if(_): {k = col - 1} [
+            set(sb_message): "AutoSum: no numbers above or to the left"!
+            return(r): r
+        ]
+        sbe_range_name(rn): row {k + 1} row {col - 1}
+    ]
+    concat(f): "=SUM(" rn ")"
+    sbm_put(_): row col f
+    set(sb_dirty): true!
+    set(sb_message): f!
+]
+
+# --- the edit buffer with a caret
+
+# starts editing the current cell's text, the caret at its end
+sbe_begin(r): inbar [
+    set(r): 0
+    set(row): sb_row?
+    set(col): sb_col?
+    sbm_text_at(t): row col
+    set(sb_buf): t!
+    len(n): t
+    set(sb_caret): n!
+    set(sb_edit): true!
+    set(sb_inbar): inbar!
+]
+
+sbe_insert(r): s [
+    set(r): 0
+    set(buf): sb_buf?
+    set(k): sb_caret?
+    len(n): buf
+    if(_): {k > n} [ set(k): n ]
+    slice(a): buf 0 k
+    slice(b): buf k {n - k}
+    concat(buf): a s b
+    len(sl): s
+    set(sb_buf): buf!
+    set(sb_caret): {k + sl}!
+]
+
+sbe_backspace(r): [
+    set(r): 0
+    set(buf): sb_buf?
+    set(k): sb_caret?
+    if(_): {k <= 0} [ return(r): r ]
+    utf8_prev(i): buf k
+    len(n): buf
+    slice(a): buf 0 i
+    slice(b): buf k {n - k}
+    concat(buf): a b
+    set(sb_buf): buf!
+    set(sb_caret): i!
+]
+
+sbe_delete(r): [
+    set(r): 0
+    set(buf): sb_buf?
+    set(k): sb_caret?
+    len(n): buf
+    if(_): {k >= n} [ return(r): r ]
+    utf8_next(j): buf k
+    slice(a): buf 0 k
+    slice(b): buf j {n - j}
+    concat(buf): a b
+    set(sb_buf): buf!
+]
+
+sbe_caret_move(r): to [
+    set(r): 0
+    set(buf): sb_buf?
+    set(k): sb_caret?
+    len(n): buf
+    if(_): {to = "left" && k > 0} [ utf8_prev(k): buf k ]
+    elif(_): {to = "right" && k < n} [ utf8_next(k): buf k ]
+    elif(_): {to = "home"} [ set(k): 0 ]
+    elif(_): {to = "end"} [ set(k): n ]
+    set(sb_caret): k!
+]
+
+# the caret's byte index for a click x pixels into text
+sbe_caret_at(r): text x [
+    set(r): 0
+    len(n): text
+    set(best): 0
+    set(i): 0
+    while(_): {i <= n} [
+        slice(p): text 0 i
+        sb_ui_width(pw): p
+        if(_): {pw <= x + 3} [ set(best): i ]
+        if(_): {i >= n} [ set(i): {n + 1} ]
+        else(_): [ utf8_next(i): text i ]
+    ]
+    set(r): best
+]
+
+# the shown part of buf in room pixels with its caret: [shown caret_x]
+sbe_view(r): buf caret room [
+    vec(r): ""
+    set(start): 0
+    slice(pre): buf 0 caret
+    sb_ui_width(pw): pre
+    len(n): buf
+    while(_): {pw > room && start < caret} [
+        utf8_next(start): buf start
+        slice(pre): buf start {caret - start}
+        sb_ui_width(pw): pre
+    ]
+    slice(shown): buf start {n - start}
+    sb_fit(shown): shown room
+    push(_): r shown
+    push(_): r pw
+]
+
+# a click on the formula bar: edit there, the caret where it was clicked
+sbe_bar_click(r): x [
+    set(r): 0
+    set(editing): sb_edit?
+    if(_): {editing != true} [ sbe_begin(_): true ]
+    set(sb_inbar): true!
+    set(buf): sb_buf?
+    sbe_caret_at(k): buf {x - 74}
+    set(sb_caret): k!
+]
+
+# --- help: a box over the window
+
+sbe_help(r): title text [
+    set(sb_help_title): title!
+    set(sb_help_text): text!
+    set(sb_dialog): "help"!
+    set(r): 0
+]
+
+# words of text in lines of at most width pixels
+sbe_wrap(r): text width [
+    vec(r): ""
+    str_split(paras): text "\n"
+    len(np): paras
+    set(p): 0
+    while(_): {p < np} [
+        at(para): paras p
+        str_split(words): para " "
+        set(line): ""
+        len(nw): words
+        set(i): 0
+        while(_): {i < nw} [
+            at(wd): words i
+            set(try): wd
+            if(_): {line != ""} [ concat(try): line " " wd ]
+            sb_ui_width(tw): try
+            if(_): {tw > width && line != ""} [
+                push(_): r line
+                set(line): wd
+            ]
+            else(_): [ set(line): try ]
+            set(i): {i + 1}
+        ]
+        push(_): r line
+        set(p): {p + 1}
+    ]
+]
+
+sbe_draw_help(r): w h [
+    set(r): 0
+    set(canvas): sb_canvas?
+    set(bw): 640
+    if(_): {bw > w - 40} [ set(bw): {w - 40} ]
+    set(text): sb_help_text?
+    sbe_wrap(lines): text {bw - 40}
+    len(nl): lines
+    set(bh): {nl * 20 + 90}
+    if(_): {bh > h - 40} [ set(bh): {h - 40} ]
+    str_trunc(x): {(w - bw) / 2}
+    str_trunc(y): {(h - bh) / 2}
+    canvasfill(_): canvas {x + 4} {y + 4} bw bh 10066329
+    canvasfill(_): canvas x y bw bh 16250871
+    canvasrect(_): canvas x y bw bh 7368816
+    canvasfill(_): canvas x y bw 34 2192198
+    set(title): sb_help_title?
+    sb_ui_text(_): {x + 14} {y + 8} title 16777215
+    set(i): 0
+    set(maxl): {(bh - 80) / 20}
+    while(_): {i < nl && i < maxl} [
+        at(l): lines i
+        sb_ui_text(_): {x + 20} {y + 46 + i * 20} l 2236962
+        set(i): {i + 1}
+    ]
+    sb_ui_text(_): {x + 20} {y + bh - 26} "Any key or a click closes this." 6316128
+]

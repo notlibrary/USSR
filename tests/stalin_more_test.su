@@ -308,6 +308,19 @@ init(ret): arg_count arg_values [
     ]
     print(_): "fuzzed: every command came back"
 
+    print(_): "# big images: sparse, partitions past 128 GB"
+    sm_rm(_): "tests/stalin-more-big.img"
+    sm_run(_): "mkimg tests/stalin-more-big.img 2T --dry-run"
+    sm_run(_): "mkimg tests/stalin-more-big.img 2T"
+    sm_run(_): "init tests/stalin-more-big.img gpt"
+    sm_run(_): "add tests/stalin-more-big.img --type linux --size 1500G --name data"
+    sm_run(_): "add tests/stalin-more-big.img --type ntfs --name rest"
+    sm_run(_): "verify tests/stalin-more-big.img"
+    sm_run(_): "gpt2mbr tests/stalin-more-big.img"
+    sm_rm(_): "tests/stalin-more-big.img"
+    sm_rm(_): "tests/stalin-more-big.img.stalin-undo"
+    sm_rm(_): "tests/stalin-more-big.img.stalin-undo.txt"
+
     print(_): "# usage errors"
     sm_run(_): "verify"
     sm_run(_): "backup IMG"

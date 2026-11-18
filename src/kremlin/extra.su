@@ -1,0 +1,432 @@
+# extra.su - Kremlin: the Trash, hover highlights and shortcuts.
+#
+# The Trash is the desktop folder's .Trash (hidden like every dot name),
+# drawn as a bin in the bottom-right corner of the desktop: empty, or with
+# papers in it. Delete moves to it; double-clicking the bin opens it, and
+# its menu empties it. Inside the Trash, an item's menu restores it (to
+# where it was deleted from) or deletes it for good. Where each item came
+# from is kept in .Trash/.origins (one "name<TAB>path" a line).
+#
+# With the mouse over the KREMLIN menu its items highlight as the pointer
+# moves, and the KREMLIN button lights up (the canvas "motion" event).
+#
+# "Add shortcut..." in the desktop's menu makes a launcher (.kl) for a
+# folder or a program: opening it opens the folder in Kremlin, runs the
+# program, or opens the file the way the desktop would.
+$once
+
+$define KMX_TRASH ".Trash"
+
+kmx_state(r): [
+    set(km_hover): ""!
+    set(r): 0
+]
+
+kmx_trash_dir(r): [
+    set(root): km_root?
+    km_join(r): root KMX_TRASH
+]
+
+kmx_in_trash(r): [
+    set(dir): km_dir?
+    kmx_trash_dir(t):
+    km_strip_slash(d): dir
+    km_strip_slash(t2): t
+    set(r): {d = t2}
+]
+
+kmx_trash_count(r): [
+    set(r): 0
+    kmx_trash_dir(t):
+    is_dir(isd): t
+    if(_): {isd != 1} [ return(r): r ]
+    km_listing(names): t "name"
+    typeof(tn): names
+    if(_): {tn = "vector"} [ len(r): names ]
+]
+
+# the origins file as a btree name -> path
+kmx_origins(r): [
+    btree(r):
+    kmx_trash_dir(t):
+    km_join(p): t ".origins"
+    file_exists(e): p
+    if(_): {e = false} [ return(r): r ]
+    readfile(text): p
+    km_lines(lines): text
+    len(n): lines
+    set(i): 0
+    while(_): {i < n} [
+        at(l): lines i
+        chr(tab): 9
+        str_find(k): l tab 0
+        if(_): {k > 0} [
+            slice(nm): l 0 k
+            len(ll): l
+            slice(pa): l {k + 1} {ll - k - 1}
+            btput(_): r nm pa
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+kmx_save_origins(r): o [
+    set(r): 0
+    kmx_trash_dir(t):
+    km_join(p): t ".origins"
+    btrange(rows): o
+    chr(tab): 9
+    set(text): ""
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(row): rows i
+        at(k): row 0
+        at(v): row 1
+        concat(text): text k tab v "\n"
+        set(i): {i + 1}
+    ]
+    writefile(_): p text
+]
+
+# moves a listed name into the Trash: "" or why not
+kmx_trash(r): name [
+    set(r): ""
+    set(dir): km_dir?
+    km_strip_slash(n): name
+    km_join(from): dir n
+    kmx_trash_dir(t):
+    is_dir(isd): t
+    if(_): {isd != 1} [ make_dir(_): t ]
+    # a free name in the Trash: "name", "name 2", ...
+    set(dest): n
+    km_join(to): t dest
+    set(k): 2
+    file_exists(taken): to
+    while(_): taken [
+        str_from_int(ks): k
+        concat(dest): n " " ks
+        km_join(to): t dest
+        file_exists(taken): to
+        set(k): {k + 1}
+    ]
+    rename_path(ok): from to
+    if(_): {ok != 0} [
+        set(r): "Could not move it to the Trash (is it open in a program?)"
+        return(r): r
+    ]
+    kmx_origins(o):
+    btput(_): o dest from
+    kmx_save_origins(_): o
+    km_pin_index(pin): name
+    if(_): {pin >= 0} [ km_unpin_at(_): pin ]
+    set(sel): km_sel?
+    kremlinrefresh(_):
+    set(items): km_items?
+    len(left): items
+    if(_): {sel >= left} [ set(sel): {left - 1} ]
+    set(km_sel): sel!
+    km_label(l): name
+    concat(m): "Moved " l " to the Trash"
+    km_say(_): m
+]
+
+# puts a name in the Trash back where it was: "" or why not
+kmx_restore(r): name [
+    set(r): ""
+    km_strip_slash(n): name
+    kmx_trash_dir(t):
+    km_join(from): t n
+    kmx_origins(o):
+    btget(to): o n ""
+    if(_): {to = ""} [
+        set(r): "Kremlin does not know where this came from"
+        return(r): r
+    ]
+    file_exists(taken): to
+    if(_): taken [
+        set(r): "Something with that name is already back in its place"
+        return(r): r
+    ]
+    km_parent(up): to
+    is_dir(upd): up
+    if(_): {upd != 1} [ make_dir(_): up ]
+    rename_path(ok): from to
+    if(_): {ok != 0} [
+        set(r): "Could not restore it"
+        return(r): r
+    ]
+    btdel(_): o n
+    kmx_save_origins(_): o
+    kremlinrefresh(_):
+    concat(m): "Restored to " to
+    km_say(_): m
+]
+
+# deletes everything in the Trash for good: "" or why not
+kmx_empty(r): [
+    set(r): ""
+    kmx_trash_dir(t):
+    is_dir(isd): t
+    if(_): {isd != 1} [ return(r): r ]
+    list_dir(names): t
+    len(n): names
+    set(failed): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(x): names i
+        km_strip_slash(x2): x
+        if(_): {x2 != "." && x2 != ".."} [
+            km_join(p): t x2
+            is_dir(xd): p
+            if(_): {xd = 1} [
+                kmx_remove_tree(e): p
+                if(_): {e != 0} [ set(failed): {failed + 1} ]
+            ]
+            else(_): [
+                remove_file(e): p
+                if(_): {e != 0} [ set(failed): {failed + 1} ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    if(_): {failed > 0} [ set(r): "Some items could not be deleted (open in a program?)" ]
+    kremlinrefresh(_):
+    km_say(_): "The Trash is empty"
+]
+
+kmx_remove_tree(r): dir [
+    set(r): 0
+    list_dir(names): dir
+    typeof(tn): names
+    if(_): {tn = "vector"} [
+        len(n): names
+        set(i): 0
+        while(_): {i < n} [
+            at(x): names i
+            km_strip_slash(x2): x
+            if(_): {x2 != "." && x2 != ".."} [
+                km_join(p): dir x2
+                is_dir(xd): p
+                if(_): {xd = 1} [ kmx_remove_tree(_): p ]
+                else(_): [ remove_file(_): p ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    remove_dir(r): dir
+]
+
+# --- the bin in the corner
+
+# [x y w h] of the bin's cell for metrics m
+kmx_trash_box(r): m [
+    at(s): m 0
+    at(p): m 7
+    at(w): m 9
+    at(h): m 10
+    vec(r): ""
+    push(_): r {w - 76 * s}
+    push(_): r {h - p - 78 * s}
+    push(_): r {70 * s}
+    push(_): r {72 * s}
+]
+
+kmx_draw_trash(r): canvas m hits [
+    set(r): 0
+    at(s): m 0
+    kmx_trash_box(b): m
+    at(x): b 0
+    at(y): b 1
+    at(bw): b 2
+    at(bh): b 3
+    kmx_trash_count(full):
+    kmx_in_trash(inside):
+    set(hover): km_hover?
+    if(_): {inside || hover = "trash"} [
+        canvasfill(_): canvas {x + 2 * s} {y + s} {bw - 4 * s} {bh - 2 * s} KM_SELECT
+    ]
+    set(cx): {x + bw / 2}
+    set(u): s
+    # the lid and its handle
+    canvasfill(_): canvas {cx - 15 * u} {y + 9 * u} {30 * u} {3 * u} 13421772
+    canvasfill(_): canvas {cx - 5 * u} {y + 6 * u} {10 * u} {3 * u} 13421772
+    # the bin, narrower at the bottom, with its ribs
+    set(k): 0
+    while(_): {k < 30} [
+        set(inset): {k * 3 / 30}
+        set(yy): {y + 13 * u + k * u}
+        canvasline(_): canvas {cx - (13 - inset) * u} yy {cx + (13 - inset) * u} yy 11184810
+        set(k): {k + 1}
+    ]
+    set(k): -1
+    while(_): {k <= 1} [
+        canvasline(_): canvas {cx + k * 6 * u} {y + 16 * u} {cx + k * 5 * u} {y + 40 * u} 7829367
+        set(k): {k + 1}
+    ]
+    if(_): {full > 0} [
+        # papers over the rim
+        canvasfill(_): canvas {cx - 10 * u} {y + 2 * u} {8 * u} {7 * u} 16777215
+        canvasfill(_): canvas {cx + 1 * u} {y + 3 * u} {9 * u} {6 * u} 15790320
+        canvasline(_): canvas {cx - 9 * u} {y + 4 * u} {cx - 4 * u} {y + 4 * u} 10066329
+    ]
+    km_tr(label): "Trash"
+    km_text_width(tw): label s
+    km_text(_): canvas {cx - tw / 2 + s} {y + 49 * u + s} label KM_SHADOW s
+    km_text(_): canvas {cx - tw / 2} {y + 49 * u} label KM_TEXT s
+    km_hit_add(_): hits x y bw bh "trash"
+]
+
+kmx_open_trash(r): [
+    set(r): 0
+    kmx_trash_dir(t):
+    is_dir(isd): t
+    if(_): {isd != 1} [ make_dir(_): t ]
+    kremlinopen(_): t
+]
+
+kmx_trash_menu(r): [
+    vec(r): ""
+    km_item(i): "Open Trash" "" "trash-open"
+    push(_): r i
+    kmx_trash_count(n):
+    if(_): {n > 0} [
+        km_item(i): "Empty Trash" "" "trash-empty"
+        push(_): r i
+    ]
+]
+
+# an item's menu inside the Trash
+kmx_trashed_menu(r): name [
+    vec(r): ""
+    km_item(i): "Restore" "" "trash-restore"
+    push(_): r i
+    km_item(i): "Delete for good" "Del" "trash-delete"
+    push(_): r i
+]
+
+# --- hover: the menu item and the KREMLIN button under the pointer
+
+kmx_hover(r): x y [
+    set(r): 0
+    uilock(_):
+    km_hit(tag): x y
+    if(_): {x < 0 || y < 0} [ set(tag): "" ]
+    set(old): km_hover?
+    set(changed): {tag != old}
+    set(km_hover): tag!
+    set(popup): km_popup?
+    km_starts_with(isitem): tag "item:"
+    if(_): {popup != "" && popup != "calendar" && isitem} [
+        len(n): tag
+        slice(is): tag 5 {n - 5}
+        str_to_number(i): is
+        set(sel): km_popup_sel?
+        if(_): {i != sel} [
+            set(km_popup_sel): i!
+            set(changed): true
+        ]
+    ]
+    if(_): changed [ kremlindraw(_): ]
+    uiunlock(_):
+]
+
+# --- shortcuts
+
+# a launcher named name for target (a folder, a program or a file): ""
+# or why not
+kmx_shortcut(r): name target [
+    set(r): ""
+    str_trim(t): target
+    # quotes around a path with blanks are fine
+    len(tn): t
+    if(_): {tn > 1} [
+        slice(q0): t 0 1
+        slice(q1): t {tn - 1} 1
+        chr(dq): 34
+        if(_): {q0 = dq && q1 = dq} [ slice(t): t 1 {tn - 2} ]
+    ]
+    km_slashes(t): t
+    km_is_absolute(abs): t
+    file_exists(e): t
+    is_dir(isd): t
+    if(_): {abs = false || (e = false && isd != 1)} [
+        concat(r): "No folder or program at " t " (give its full path)"
+        return(r): r
+    ]
+    set(label): name
+    if(_): {label = ""} [ km_base(label): t ]
+    km_quote(cmd): t
+    kremlinnewlauncher(r): label cmd false
+    if(_): {r = ""} [
+        concat(m): "Shortcut to " t
+        km_say(_): m
+    ]
+]
+
+# what a launcher whose command is just a path opens: the folder in
+# Kremlin, or the file the way the desktop opens it; null for a command
+kmx_link_plan(r): cmd [
+    set(r): null
+    str_trim(t): cmd
+    len(tn): t
+    if(_): {tn < 2} [ return(r): r ]
+    chr(dq): 34
+    slice(q0): t 0 1
+    slice(q1): t {tn - 1} 1
+    if(_): {q0 = dq && q1 = dq} [ slice(t): t 1 {tn - 2} ]
+    else(_): [
+        str_find(sp): t " " 0
+        if(_): {sp >= 0} [ return(r): r ]
+    ]
+    km_slashes(t): t
+    km_is_absolute(abs): t
+    if(_): {abs = false} [ return(r): r ]
+    km_ext(e): t
+    if(_): {e = "kl"} [ return(r): r ]
+    is_dir(isd): t
+    if(_): {isd = 1} [
+        km_plan(r): "folder" t "" false
+        return(r): r
+    ]
+    file_exists(ex): t
+    if(_): {ex = false} [ return(r): r ]
+    # a program runs; a document or a .su opens as on the desktop
+    if(_): {e = "exe" || e = "com" || e = "bat" || e = "cmd" || e = ""} [ return(r): r ]
+    km_path_plan(r): t
+]
+
+# "Create shortcut on desktop" on an icon: a launcher on the desktop (the
+# root folder) that opens that folder or file; "" or why not
+kmx_shortcut_on_desktop(r): name [
+    set(r): ""
+    set(dir): km_dir?
+    km_strip_slash(n): name
+    km_join(target): dir n
+    set(root): km_root?
+    km_label(label): name
+    # a free file name on the desktop: "label.kl", "label 2.kl", ...
+    concat(file): label ".kl"
+    km_join(p): root file
+    set(k): 2
+    file_exists(taken): p
+    while(_): taken [
+        str_from_int(ks): k
+        concat(file): label " " ks ".kl"
+        km_join(p): root file
+        file_exists(taken): p
+        set(k): {k + 1}
+    ]
+    km_quote(cmd): target
+    km_launcher_text(text): label cmd false
+    writefile(_): p text
+    file_exists(ok): p
+    if(_): {ok = false} [
+        set(r): "Could not create the shortcut"
+        return(r): r
+    ]
+    kremlinrefresh(_):
+    concat(m): "Shortcut to " label " made on the desktop"
+    km_say(_): m
+]
+

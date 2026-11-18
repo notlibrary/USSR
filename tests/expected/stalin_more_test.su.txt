@@ -1,5 +1,5 @@
 $ stalin mkimg IMG 64M
-Created tests/stalin-more-tmp.img: 64 MiB, 131072 sectors
+Created tests/stalin-more-tmp.img: 64 MiB, 131072 sectors (sparse: disk space is used as it is written)
 # layouts and verify
 $ stalin layout IMG nonsense
 [exit 2]
@@ -592,6 +592,39 @@ Table: none
 Disk tests/stalin-more-tmp.img: 64 MiB, 131072 sectors of 512 bytes
 Table: none
 fuzzed: every command came back
+# big images: sparse, partitions past 128 GB
+$ stalin mkimg tests/stalin-more-big.img 2T --dry-run
+dry run: would create tests/stalin-more-big.img: 2 TiB, 4294967296 sectors
+$ stalin mkimg tests/stalin-more-big.img 2T
+Created tests/stalin-more-big.img: 2 TiB, 4294967296 sectors (sparse: disk space is used as it is written)
+$ stalin init tests/stalin-more-big.img gpt
+Disk tests/stalin-more-big.img: 2 TiB, 4294967296 sectors of 512 bytes
+Table: GPT, disk GUID E87CE3FB-F24C-4976-B09C-69B7F59D676A, usable sectors 34..4294967262, 128 entries
+No partitions.
+Free: 34..4294967262 (2 TiB)
+$ stalin add tests/stalin-more-big.img --type linux --size 1500G --name data
+Added partition 1: 1.5 TiB linux
+Disk tests/stalin-more-big.img: 2 TiB, 4294967296 sectors of 512 bytes
+Table: GPT, disk GUID E87CE3FB-F24C-4976-B09C-69B7F59D676A, usable sectors 34..4294967262, 128 entries
+#  START         END     SECTORS     SIZE  TYPE   FS  LABEL  NAME
+1   2048  3145730047  3145728000  1.5 TiB  linux             data
+Free: 3145730048..4294967262 (548 GiB)
+$ stalin add tests/stalin-more-big.img --type ntfs --name rest
+Added partition 2: 548 GiB ntfs
+Disk tests/stalin-more-big.img: 2 TiB, 4294967296 sectors of 512 bytes
+Table: GPT, disk GUID E87CE3FB-F24C-4976-B09C-69B7F59D676A, usable sectors 34..4294967262, 128 entries
+#       START         END     SECTORS     SIZE  TYPE   FS  LABEL  NAME
+1        2048  3145730047  3145728000  1.5 TiB  linux             data
+2  3145730048  4294967262  1149237215  548 GiB  ntfs              rest
+$ stalin verify tests/stalin-more-big.img
+problem: no EFI system partition and no BIOS boot partition: the disk cannot boot
+[exit 1]
+$ stalin gpt2mbr tests/stalin-more-big.img
+Disk tests/stalin-more-big.img: 2 TiB, 4294967296 sectors of 512 bytes
+Table: MBR, disk signature 0x6C7AAF14
+#       START         END     SECTORS     SIZE  TYPE   FS  LABEL
+1        2048  3145730047  3145728000  1.5 TiB  linux
+2  3145730048  4294967262  1149237215  548 GiB  ntfs
 # usage errors
 $ stalin verify
 [exit 2]

@@ -57,6 +57,7 @@ $define SB_KEY_F2 291
 $define SB_KEY_KP_ENTER 335
 
 $include "more.su"
+$include "edit.su"
 
 # --- small helpers ----------------------------------------------------------
 
@@ -108,6 +109,7 @@ sbstate(r): [
     # the pad's view follows its cursor; the shared key handlers set it
     set(sb_pfollow): true!
     sbm_state(_):
+    sbe_state(_):
 $ifdef SB_PAD
     vec(v): ""
     set(sb_families): v!
@@ -2063,6 +2065,11 @@ sb_draw_status(r): w h [
     if(_): {dirty = true} [ concat(name): name " *" ]
     set(msg): sb_message?
     set(left): sb_status_left?
+    set(mode): sb_mode?
+    if(_): {mode = "sheet"} [
+        sbe_stats(st):
+        if(_): {st != ""} [ set(left): st ]
+    ]
     if(_): {msg != ""} [ set(left): msg ]
     sb_ui_text(_): 8 {h - SB_STATUSH + 3} left 3355443
     sb_ui_width(nw): name
@@ -2075,6 +2082,10 @@ sb_draw_dialog(r): w h [
     set(kind): sb_dialog?
     set(r): 0
     if(_): {kind = ""} [ return(_): r ]
+    if(_): {kind = "help"} [
+        sbe_draw_help(_): w h
+        return(_): r
+    ]
     set(canvas): sb_canvas?
     set(bw): 560
     if(_): {bw > w - 20} [ set(bw): {w - 20} ]
@@ -2286,6 +2297,10 @@ $endif
 sb_dialog_key(r): key [
     set(r): 0
     set(kind): sb_dialog?
+    if(_): {kind = "help"} [
+        set(sb_dialog): ""!
+        return(_): r
+    ]
     set(ctrl): sb_ctrl?
     if(_): {key = SB_KEY_ESC} [ set(sb_dialog): ""! ]
     elif(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [
@@ -2313,7 +2328,7 @@ sb_dialog_key(r): key [
 
 sb_dialog_char(r): s [
     set(kind): sb_dialog?
-    if(_): {kind != "discard"} [
+    if(_): {kind != "discard" && kind != "help"} [
         set(text): sb_dlg_text?
         concat(text): text s
         set(sb_dlg_text): text!
@@ -2334,15 +2349,32 @@ sb_common_key(r): key [
     set(r): false
     set(ctrl): sb_ctrl?
     set(shift): sb_shift?
+    set(alt): sb_alt?
+    set(mode): sb_mode?
     if(_): {ctrl != true} [
         if(_): {key = SB_KEY_F1} [
             sb_help(_):
             set(r): true
         ]
+        # Alt+= : AutoSum (the "=" its char event brings is dropped)
+        if(_): {alt = true && key = 61 && mode = "sheet"} [
+            sb_sheet_commit(_):
+            sbe_autosum(_):
+            set(sb_skipchar): true!
+            set(r): true
+        ]
         return(_): r
     ]
     set(r): true
-    set(mode): sb_mode?
+    if(_): {mode = "sheet" && (key = 67 || key = 88 || key = 86 || key = 65)} [
+        sb_sheet_commit(_):
+        if(_): {key = 67} [ sbe_copy(_): false ]
+        elif(_): {key = 88} [ sbe_copy(_): true ]
+        elif(_): {key = 86} [ sbe_paste(_): ]
+        else(_): [ sbe_select_all(_): ]
+        sb_reveal(_):
+        return(_): r
+    ]
     if(_): {mode = "sheet" && (key = 90 || key = 89 || key = 68)} [
         if(_): {key = 90} [ sbm_undo(_): ]
         elif(_): {key = 89} [ sbm_redo(_): ]
@@ -2378,15 +2410,16 @@ $endif
 $ifdef SB_PAD
     if(_): {mode = "pad"} [
         set(title): "Novosibirsk"
-        set(text): "Type to write. Arrows, Home/End, Ctrl+Home/End and Page Up/Down move the cursor. FONT picks a system font; - and + change the size, B and I make the text bold or italic (Ctrl+B, Ctrl+I, Ctrl+[ and Ctrl+]). Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fodt (OpenDocument text) or .txt."
+        set(text): "Type to write. Arrows, Home/End, Ctrl+Home/End and Page Up/Down move the cursor. Shift with the arrows, Home/End or a click selects text (Ctrl+A all); typing or Delete replaces it. FONT, B and I (Ctrl+B, Ctrl+I) give the selected text a family, bold or italic, or the whole document when nothing is selected; - and + change the size (Ctrl+[ and Ctrl+]). Holding an arrow keeps moving and scrolls the page. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fodt (OpenDocument text) or .txt."
     ]
     else(_): [
 $else
     if(_): true [
 $endif
-        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell, F2 to change it, Enter to keep it, Esc to cancel, Delete to clear. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
+        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows (or a Shift+click) selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
     ]
-    messagebox(_): title text
+    # a box drawn over the window (the native message box is too small)
+    sbe_help(_): title text
     set(r): 0
 ]
 
@@ -2445,11 +2478,41 @@ sb_sheet_draw(r): [
         sb_cell(cur): index
         getf(content): cur "text"
     ]
-    sb_fit(shown): content {w - 90}
-    sb_ui_text(_): 74 6 shown 0
+    set(shown): content
+    set(cw): 0
     if(_): {editing = true} [
-        sb_ui_width(cw): shown
-        canvasfill(_): canvas {75 + cw} 6 1 16 0
+        set(caret): sb_caret?
+        sbe_view(vw): content caret {w - 90}
+        at(shown): vw 0
+        at(cw): vw 1
+        set(inbar): sb_inbar?
+        if(_): {inbar = true} [ canvasfill(_): canvas 70 3 {w - 76} {SB_BARH - 7} 16777215 ]
+    ]
+    else(_): [ sb_fit(shown): content {w - 90} ]
+    sb_ui_text(_): 74 6 shown 0
+    if(_): {editing = true} [ canvasfill(_): canvas {75 + cw} 6 1 16 0 ]
+    # the selection, under the grid
+    sbe_has_range(multi):
+    if(_): multi [
+        sbe_bounds(sbb):
+        at(sr0): sbb 0
+        at(sc0): sbb 1
+        at(sr1): sbb 2
+        at(sc1): sbb 3
+        if(_): {sr0 < top} [ set(sr0): top ]
+        if(_): {sc0 < left} [ set(sc0): left ]
+        if(_): {sr1 >= sr0 && sc1 >= sc0} [
+            set(sx): {SB_HEADW + (sc0 - left) * SB_COLW}
+            set(sy): {SB_BARH + SB_ROWH + (sr0 - top) * SB_ROWH}
+            set(sw): {(sc1 - sc0 + 1) * SB_COLW}
+            set(sh): {(sr1 - sr0 + 1) * SB_ROWH}
+            if(_): {sx + sw > w} [ set(sw): {w - sx} ]
+            if(_): {sy + sh > h - SB_STATUSH} [ set(sh): {h - SB_STATUSH - sy} ]
+            if(_): {sw > 0 && sh > 0} [
+                canvasfill(_): canvas sx sy sw sh 14018815
+                canvasrect(_): canvas sx sy sw sh 2192198
+            ]
+        ]
     ]
     # headers
     sb_visible_rows(vr): h
@@ -2520,14 +2583,10 @@ sb_sheet_draw(r): [
         if(_): {editing = true} [
             set(buf): sb_buf?
             canvasfill(_): canvas {x + 1} {y + 1} {SB_COLW - 1} {SB_ROWH - 1} 16777215
-            sb_ui_width(bw): buf
-            set(shown): buf
-            while(_): {bw > SB_COLW - 10} [
-                utf8_next(cut): shown 0
-                len(sl): shown
-                slice(shown): shown cut {sl - cut}
-                sb_ui_width(bw): shown
-            ]
+            set(caret): sb_caret?
+            sbe_view(cv): buf caret {SB_COLW - 10}
+            at(shown): cv 0
+            at(bw): cv 1
             sb_ui_text(_): {x + 4} {y + 3} shown 0
             canvasfill(_): canvas {x + 5 + bw} {y + 3} 1 16 0
         ]
@@ -2563,6 +2622,7 @@ sb_sheet_commit(r): [
         sbm_mark(_):
         sbm_put(_): row col buf
         set(sb_edit): false!
+        set(sb_inbar): false!
         set(sb_dirty): true!
     ]
     set(r): 0
@@ -2577,41 +2637,56 @@ sb_sheet_key(r): key [
     at(h): size 1
     sb_visible_rows(vr): h
     set(back): {shift = true}
+    set(inbar): sb_inbar?
     if(_): {editing = true} [
-        if(_): {key = SB_KEY_ESC} [ set(sb_edit): false! ]
-        elif(_): {key = SB_KEY_BACKSPACE} [
-            set(buf): sb_buf?
-            sb_drop_last(buf): buf
-            set(sb_buf): buf!
+        if(_): {key = SB_KEY_ESC} [
+            set(sb_edit): false!
+            set(sb_inbar): false!
         ]
+        elif(_): {key = SB_KEY_BACKSPACE} [ sbe_backspace(_): ]
+        elif(_): {key = SB_KEY_DELETE} [ sbe_delete(_): ]
+        elif(_): {key = SB_KEY_HOME} [ sbe_caret_move(_): "home" ]
+        elif(_): {key = SB_KEY_END} [ sbe_caret_move(_): "end" ]
+        elif(_): {key = SB_KEY_LEFT && inbar = true} [ sbe_caret_move(_): "left" ]
+        elif(_): {key = SB_KEY_RIGHT && inbar = true} [ sbe_caret_move(_): "right" ]
         elif(_): {key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [
             sb_sheet_commit(_):
+            sbe_anchor(_): false
             if(_): back [ sb_sheet_move(_): {0 - 1} 0 ] else(_): [ sb_sheet_move(_): 1 0 ]
         ]
         elif(_): {key = SB_KEY_TAB} [
             sb_sheet_commit(_):
+            sbe_anchor(_): false
             if(_): back [ sb_sheet_move(_): 0 {0 - 1} ] else(_): [ sb_sheet_move(_): 0 1 ]
         ]
         elif(_): {key = SB_KEY_UP} [
             sb_sheet_commit(_):
+            sbe_anchor(_): false
             sb_sheet_move(_): {0 - 1} 0
         ]
         elif(_): {key = SB_KEY_DOWN} [
             sb_sheet_commit(_):
+            sbe_anchor(_): false
             sb_sheet_move(_): 1 0
         ]
         elif(_): {key = SB_KEY_LEFT} [
             sb_sheet_commit(_):
+            sbe_anchor(_): false
             sb_sheet_move(_): 0 {0 - 1}
         ]
         elif(_): {key = SB_KEY_RIGHT} [
             sb_sheet_commit(_):
+            sbe_anchor(_): false
             sb_sheet_move(_): 0 1
         ]
         return(_): r
     ]
     set(row): sb_row?
     set(col): sb_col?
+    # Shift with a move key grows the selection; a move without it ends it
+    set(nav): {key = SB_KEY_UP || key = SB_KEY_DOWN || key = SB_KEY_LEFT || key = SB_KEY_RIGHT || key = SB_KEY_PAGE_UP || key = SB_KEY_PAGE_DOWN || key = SB_KEY_HOME || key = SB_KEY_END}
+    if(_): nav [ sbe_anchor(_): shift ]
+    if(_): {key = SB_KEY_TAB || key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [ sbe_anchor(_): false ]
     if(_): {key = SB_KEY_UP} [ sb_sheet_move(_): {0 - 1} 0 ]
     elif(_): {key = SB_KEY_DOWN || key = SB_KEY_ENTER || key = SB_KEY_KP_ENTER} [
         if(_): {back && key != SB_KEY_DOWN} [ sb_sheet_move(_): {0 - 1} 0 ] else(_): [ sb_sheet_move(_): 1 0 ]
@@ -2632,31 +2707,25 @@ sb_sheet_key(r): key [
         if(_): {mc < 0} [ set(mc): 0 ]
         sb_sheet_move(_): {mr - row} {mc - col}
     ]
-    elif(_): {key = SB_KEY_F2} [
-        sb_cell(cell): {row * SB_COLS + col}
-        getf(text): cell "text"
-        set(sb_buf): text!
-        set(sb_edit): true!
-    ]
-    elif(_): {key = SB_KEY_DELETE} [
-        sb_set_index(_): {row * SB_COLS + col} ""
-        set(sb_dirty): true!
-    ]
+    elif(_): {key = SB_KEY_F2} [ sbe_begin(_): true ]
+    elif(_): {key = SB_KEY_DELETE} [ sbe_clear(_): ]
     elif(_): {key = SB_KEY_BACKSPACE} [
         set(sb_buf): ""!
+        set(sb_caret): 0!
+        set(sb_inbar): false!
         set(sb_edit): true!
     ]
 ]
 
 sb_sheet_char(r): s [
     set(editing): sb_edit?
-    if(_): {editing = true} [
-        set(buf): sb_buf?
-        concat(buf): buf s
-        set(sb_buf): buf!
-    ]
+    if(_): {editing = true} [ sbe_insert(_): s ]
     else(_): [
+        # typing over a cell replaces it; arrows then move on
         set(sb_buf): s!
+        len(sl): s
+        set(sb_caret): sl!
+        set(sb_inbar): false!
         set(sb_edit): true!
     ]
     set(r): 0
@@ -2667,6 +2736,10 @@ sb_sheet_click(r): x y double [
     set(top): sb_top?
     set(left): sb_left?
     set(gy): {SB_BARH + SB_ROWH}
+    if(_): {y < SB_BARH && x >= 64} [
+        sbe_bar_click(_): x
+        return(_): r
+    ]
     if(_): {x < SB_HEADW || y < gy} [ return(_): r ]
     str_trunc(c): {(x - SB_HEADW) / SB_COLW}
     str_trunc(k): {(y - gy) / SB_ROWH}
@@ -2674,15 +2747,12 @@ sb_sheet_click(r): x y double [
     set(col): {left + c}
     if(_): {row >= SB_ROWS || col >= SB_COLS} [ return(_): r ]
     sb_sheet_commit(_):
+    set(shift): sb_shift?
+    sbe_anchor(_): shift
     set(sb_row): row!
     set(sb_col): col!
     sb_reveal(_):
-    if(_): double [
-        sb_cell(cell): {row * SB_COLS + col}
-        getf(text): cell "text"
-        set(sb_buf): text!
-        set(sb_edit): true!
-    ]
+    if(_): double [ sbe_begin(_): true ]
 ]
 
 sb_sheet_wheel(r): direction [
@@ -2738,6 +2808,13 @@ sbkeyup(r): key [
 
 sbchar(r): cp [
     uilock(_):
+    set(skip): sb_skipchar?
+    if(_): {skip = true} [
+        set(sb_skipchar): false!
+        uiunlock(_):
+        set(r): 0
+        return(_): r
+    ]
     set(ctrl): sb_ctrl?
     set(alt): sb_alt?
     if(_): {ctrl != true || alt = true} [
@@ -2764,7 +2841,8 @@ sbclick(r): x y double [
 $ifdef SB_PAD
     set(mode): sb_mode?
 $endif
-    if(_): {dialog = ""} [
+    if(_): {dialog = "help"} [ set(sb_dialog): ""! ]
+    elif(_): {dialog = ""} [
         set(sb_pfollow): true!
 $ifdef SB_PAD
         if(_): {mode = "pad"} [
@@ -2812,6 +2890,7 @@ sbtool(r): button [
         if(_): {mode != "pad"} [ sb_sheet_commit(_): ]
         if(_): {action = "new" || action = "open" || action = "save" || action = "saveas"} [ sb_action(_): action ]
         elif(_): {action = "help"} [ sb_help(_): ]
+        elif(_): {action = "sum"} [ sbe_autosum(_): ]
 $ifdef SB_PAD
         elif(_): {mode = "pad"} [ sb_pad_tool(_): action ]
 $endif
@@ -2866,6 +2945,7 @@ $ifdef SB_PAD
 $else
     sb_sheet_new(_):
 $endif
+    if(_): {mode != "pad"} [ sb_add_button(_): bar "SUM" "sum" ]
     sb_add_button(_): bar "HELP" "help"
     canvas(canvas): window
     set(sb_canvas): canvas!
