@@ -302,6 +302,11 @@ setitems(result): menu items [
     petersburg_set_items(result): menu items
 ]
 
+# 1 while the left mouse button is held down in widget's window (a drag)
+mouseheld(result): widget [
+    petersburg_mouse_held(result): widget
+]
+
 alive(result): widget [
     petersburg_alive(result): widget
 ]

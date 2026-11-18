@@ -31,11 +31,16 @@ $include "../libs/math.su"
 
 $define SB_COLS 52
 $define SB_ROWS 2000
+# cells in a sheet (SB_ROWS * SB_COLS): past it an index is on another sheet
+$define SB_CELLS 104000
+$define SB_TABH 24
 $define SB_COLW 96
 $define SB_ROWH 22
 $define SB_HEADW 48
 $define SB_BARH 28
 $define SB_STATUSH 22
+# the sheet tabs (SB_TABH, sheets.su) and the status bar under the grid
+$define SB_FOOTH 46
 $define SB_UIPX 14
 $define SB_MARGIN 56
 $define SB_WIDTH 960
@@ -60,6 +65,7 @@ $define SB_KEY_KP_ENTER 335
 
 $include "more.su"
 $include "edit.su"
+$include "sheets.su"
 
 # --- small helpers ----------------------------------------------------------
 
@@ -73,6 +79,7 @@ $ifdef SB_PAD
 $endif
     struct(SbParse): "toks:vector" "pos:number"
     struct(SbRow): "cells:vector"
+    struct(SbSheet): "name:string" "rows:vector" "maxrow:number" "maxcol:number" "row:number" "col:number" "top:number" "left:number" "arow:number" "acol:number"
     sbstate(r):
 ]
 
@@ -96,6 +103,9 @@ sbstate(r): [
     set(sb_alt): false!
     set(sb_uifont): 0!
     set(sb_filemenu): 0!
+    set(sb_drag): false!
+    set(sb_drag_row): 0!
+    set(sb_drag_col): 0!
     vec(v): ""
     set(sb_buttons): v!
     vec(v): ""
@@ -113,6 +123,7 @@ sbstate(r): [
     set(sb_pfollow): true!
     sbm_state(_):
     sbe_state(_):
+    sbs_state(_):
 $ifdef SB_PAD
     vec(v): ""
     set(sb_families): v!
@@ -492,6 +503,7 @@ sb_ref(r): s [
 # whole grid up front is slow, and slower again while a previous grid is
 # still waiting for the collector.
 sbsheetreset(r): [
+    sbs_reset(_):
     set(rows): sb_rows?
     len(n): rows
     if(_): {n = 0} [
@@ -520,9 +532,19 @@ sbsheetreset(r): [
 ]
 
 sb_cell(r): index [
+    set(rows): sb_rows?
+    if(_): {index >= SB_CELLS} [
+        str_trunc(sheet): {index / SB_CELLS}
+        sbs_rows(rows): {sheet - 1}
+        set(index): {index % SB_CELLS}
+        typeof(rt): rows
+        if(_): {rt != "vector"} [
+            set(r): sb_blank?
+            return(r): r
+        ]
+    ]
     set(col): {index % SB_COLS}
     str_trunc(rn): {(index - col) / SB_COLS}
-    set(rows): sb_rows?
     at(row): rows rn
     getf(cells): row "cells"
     len(n): cells
@@ -531,9 +553,14 @@ sb_cell(r): index [
 
 # The cell itself, giving its row cells when it has none yet.
 sb_cell_for_write(r): index [
+    set(rows): sb_rows?
+    if(_): {index >= SB_CELLS} [
+        str_trunc(sheet): {index / SB_CELLS}
+        sbs_rows(rows): {sheet - 1}
+        set(index): {index % SB_CELLS}
+    ]
     set(col): {index % SB_COLS}
     str_trunc(rn): {(index - col) / SB_COLS}
-    set(rows): sb_rows?
     at(row): rows rn
     getf(cells): row "cells"
     len(n): cells
@@ -549,6 +576,35 @@ sb_cell_for_write(r): index [
 ]
 
 sb_set_index(r): index text [
+    # a cell of another sheet (undo, redo): its own used area grows
+    if(_): {index >= SB_CELLS} [
+        str_trunc(sheet): {index / SB_CELLS}
+        set(sheet): {sheet - 1}
+        set(cur): sb_sheet?
+        sbsheetcount(ns):
+        if(_): {sheet < 0 || sheet >= ns} [
+            set(r): 0
+            return(r): r
+        ]
+        if(_): {sheet = cur} [ set(index): {index % SB_CELLS} ]
+        else(_): [
+            sb_cell_for_write(c): index
+            setf(_): c "text" text
+            set(gen): sb_gen?
+            set(sb_gen): {gen + 1}!
+            set(local): {index % SB_CELLS}
+            set(col): {local % SB_COLS}
+            str_trunc(row): {(local - col) / SB_COLS}
+            set(v): sb_sheets?
+            at(sh): v sheet
+            getf(mr): sh "maxrow"
+            getf(mc): sh "maxcol"
+            if(_): {text != "" && row > mr} [ setf(_): sh "maxrow" row ]
+            if(_): {text != "" && col > mc} [ setf(_): sh "maxcol" col ]
+            set(r): 0
+            return(r): r
+        ]
+    ]
     sb_cell_for_write(c): index
     setf(_): c "text" text
     set(gen): sb_gen?
@@ -656,6 +712,33 @@ sb_of_ref(r): s [
     slice(r): s i {n - i}
 ]
 
+# One side of an OpenFormula reference -> [text index]: ".A1" is this
+# sheet's A1, "$Sheet2.$A$1" (or "'My data'.A1") another sheet's.
+sb_of_side(r): s [
+    sbs_split(p): s
+    at(sheet): p 0
+    at(cell): p 1
+    sbs_unquote(sheet): sheet
+    # LibreOffice writes [$Sheet1.A1] for Sheet1's own cells: plain A1
+    if(_): {sheet != ""} [
+        sbsheetindex(si): sheet
+        set(cur): sb_sheet?
+        if(_): {si = cur} [ set(sheet): "" ]
+    ]
+    if(_): {sheet = ""} [
+        str_replace(cell): cell "$" ""
+        sb_ref(ci): cell
+        sb_upper(cu): cell
+        vec(r): ""
+        push(_): r cu
+        push(_): r ci
+    ]
+    else(_): [
+        str_replace(cell): cell "$" ""
+        sbs_ref(r): sheet cell
+    ]
+]
+
 sb_tokens(r): s [
     vec(r): ""
     len(n): s
@@ -730,27 +813,62 @@ sb_tokens(r): s [
             sb_push_tok(_): r "str" text text
             set(i): j
         ]
+        elif(_): {b = 39} [
+            # 'sheet name'.A1 (or !A1); '' is a quote in the name
+            set(j): {i + 1}
+            set(go): {j < n}
+            while(_): go [
+                byte(c): s j
+                set(two): false
+                if(_): {c = 39 && j + 1 < n} [
+                    byte(c2): s {j + 1}
+                    set(two): {c2 = 39}
+                ]
+                if(_): two [ set(j): {j + 2} ]
+                elif(_): {c = 39} [ set(go): false ]
+                else(_): [ set(j): {j + 1} ]
+                if(_): {j >= n} [ set(go): false ]
+            ]
+            slice(sheet): s i {j - i + 1}
+            set(k): {j + 2}
+            set(e): k
+            set(go): {e < n}
+            while(_): go [
+                byte(c): s e
+                sb_is_letter(cl): c
+                sb_is_digit(cd): c
+                if(_): {cl || cd} [ set(e): {e + 1} ] else(_): [ set(go): false ]
+                if(_): {e >= n} [ set(go): false ]
+            ]
+            set(cell): ""
+            if(_): {e > k} [ slice(cell): s k {e - k} ]
+            sbs_ref(tk): sheet cell
+            at(tt): tk 0
+            at(ti): tk 1
+            sb_push_tok(_): r "ref" tt ti
+            set(i): e
+        ]
         elif(_): {b = 91} [
             str_find(close): s "]" i
             if(_): {close < 0} [ set(close): n ]
             slice(inner): s {i + 1} {close - i - 1}
             str_find(colon): inner ":" 0
             if(_): {colon < 0} [
-                sb_of_ref(a): inner
-                sb_ref(ia): a
-                sb_upper(a): a
+                sb_of_side(t1): inner
+                at(a): t1 0
+                at(ia): t1 1
                 sb_push_tok(_): r "ref" a ia
             ]
             else(_): [
                 len(il): inner
                 slice(left): inner 0 colon
                 slice(right): inner {colon + 1} {il - colon - 1}
-                sb_of_ref(a): left
-                sb_of_ref(z): right
-                sb_ref(ia): a
-                sb_ref(iz): z
-                sb_upper(a): a
-                sb_upper(z): z
+                sb_of_side(t1): left
+                sb_of_side(t2): right
+                at(a): t1 0
+                at(ia): t1 1
+                at(z): t2 0
+                at(iz): t2 1
                 sb_push_tok(_): r "ref" a ia
                 sb_push_tok(_): r "op" ":" null
                 sb_push_tok(_): r "ref" z iz
@@ -767,10 +885,11 @@ sb_tokens(r): s [
                     byte(c): s j
                     sb_is_letter(cl): c
                     sb_is_digit(cd): c
-                    set(go): {cl || cd || c = 46}
+                    set(go): {cl || cd || c = 46 || c = 33}
                 ]
             ]
             slice(word): s i {j - i}
+            set(written): word
             sb_upper(word): word
             set(k): j
             set(go): {k < n}
@@ -784,8 +903,17 @@ sb_tokens(r): s [
                 else(_): [ set(go): false ]
             ]
             sb_ref(idx): word
+            sbs_split(sp): written
+            at(sheet): sp 0
             if(_): {next = 40 && k < n} [ sb_push_tok(_): r "name" word null ]
             elif(_): {idx != 0 - 1} [ sb_push_tok(_): r "ref" word idx ]
+            elif(_): {sheet != ""} [
+                at(cell): sp 1
+                sbs_ref(tk): sheet cell
+                at(tt): tk 0
+                at(ti): tk 1
+                sb_push_tok(_): r "ref" tt ti
+            ]
             else(_): [ sb_push_tok(_): r "name" word null ]
             set(i): j
         ]
@@ -834,8 +962,8 @@ sb_emit(r): toks of [
             concat(piece): piece "\""
         ]
         elif(_): {kind = "ref" && of} [
-            set(piece): "[."
-            concat(piece): piece text
+            sbs_of_piece(op): text
+            concat(piece): "[" op
             set(range): false
             if(_): {i + 2 < n} [
                 at(t1): toks {i + 1}
@@ -845,7 +973,8 @@ sb_emit(r): toks of [
                 set(range): {k1 = ":" && k2 = "ref"}
                 if(_): range [
                     at(z): t2 1
-                    concat(piece): piece ":." z
+                    sbs_of_piece(oz): z
+                    concat(piece): piece ":" oz
                     set(i): {i + 2}
                 ]
             ]
@@ -1054,6 +1183,14 @@ sb_range(r): a b [
     if(_): {a < 0 || b < 0} [
         sb_err(r): "#REF!"
         return(_): r
+    ]
+    if(_): {a >= SB_CELLS && b < SB_CELLS} [
+        str_trunc(k): {a / SB_CELLS}
+        set(b): {b + k * SB_CELLS}
+    ]
+    if(_): {b >= SB_CELLS && a < SB_CELLS} [
+        str_trunc(k): {b / SB_CELLS}
+        set(a): {a + k * SB_CELLS}
     ]
     set(ca): {a % SB_COLS}
     set(cb): {b % SB_COLS}
@@ -1687,13 +1824,33 @@ sb_repeat_attr(r): name count [
     ]
 ]
 
+# The workbook as .fods text: each sheet a table:table, in order.
 sbsheetfods(r): [
+    concat(r): SB_ODF_HEAD "office:mimetype=\"application/vnd.oasis.opendocument.spreadsheet\">\n<office:body>\n<office:spreadsheet>\n"
+    sbs_save(_):
+    set(cur): sb_sheet?
+    sbsheetcount(n):
+    set(i): 0
+    while(_): {i < n} [
+        sbs_load(_): i
+        sbsheetname(name): i
+        sb_fods_table(t): name
+        concat(r): r t
+        set(i): {i + 1}
+    ]
+    sbs_load(_): cur
+    concat(r): r "</office:spreadsheet>\n</office:body>\n</office:document>\n"
+]
+
+# The current sheet as a table:table named name.
+sb_fods_table(r): name [
     set(maxrow): sb_maxrow?
     set(maxcol): sb_maxcol?
     set(cells): {maxcol + 1}
     if(_): {cells < 1} [ set(cells): 1 ]
     str_from_int(cs): cells
-    concat(r): SB_ODF_HEAD "office:mimetype=\"application/vnd.oasis.opendocument.spreadsheet\">\n<office:body>\n<office:spreadsheet>\n<table:table table:name=\"Sheet1\">\n<table:table-column table:number-columns-repeated=\"" cs "\"/>\n"
+    sb_xml_escape(en): name
+    concat(r): "<table:table table:name=\"" en "\">\n<table:table-column table:number-columns-repeated=\"" cs "\"/>\n"
     set(row): 0
     set(blank_rows): 0
     while(_): {row <= maxrow} [
@@ -1730,7 +1887,7 @@ sbsheetfods(r): [
         set(row): {row + 1}
     ]
     if(_): {maxrow < 0} [ concat(r): r "<table:table-row><table:table-cell/></table:table-row>\n" ]
-    concat(r): r "</table:table>\n</office:spreadsheet>\n</office:body>\n</office:document>\n"
+    concat(r): r "</table:table>\n"
 ]
 
 sb_csv_field(r): s [
@@ -1835,12 +1992,44 @@ sb_load_csv(r): text [
     if(_): {(dirty || field != "") && row < SB_ROWS && col < SB_COLS} [ sb_set_index(_): {row * SB_COLS + col} field ]
 ]
 
+# the next "<table:table" (not -row, -cell, ...) from i, or -1
+sb_next_table(r): s i [
+    str_find(a): s "<table:table " i
+    str_find(b): s "<table:table>" i
+    set(r): a
+    if(_): {r < 0 || (b >= 0 && b < r)} [ set(r): b ]
+]
+
 sb_load_fods(r): s [
     set(r): "no table in this file"
-    str_find(start): s "<table:table " 0
-    if(_): {start < 0} [ str_find(start): s "<table:table>" 0 ]
+    sb_next_table(start): s 0
     if(_): {start < 0} [ return(_): r ]
     set(r): ""
+    set(first): true
+    while(_): {start >= 0} [
+        sb_xml_tag(tag): s start
+        at(attrs): tag 2
+        sb_xml_attr(name): attrs "table:name"
+        typeof(nt): name
+        if(_): {nt != "string"} [ set(name): "" ]
+        if(_): first [
+            if(_): {name != ""} [ sbsheetrename(_): 0 name ]
+        ]
+        else(_): [
+            sbsheetindex(dup): name
+            if(_): {dup >= 0} [ set(name): "" ]
+            sbsheetadd(si): name
+            sbsheetswitch(_): si
+        ]
+        set(first): false
+        sb_load_table(end): s start
+        sb_next_table(start): s end
+    ]
+    sbsheetswitch(_): 0
+]
+
+# One table:table from start into the current sheet; where it ends.
+sb_load_table(r): s start [
     len(n): s
     set(i): start
     set(row): 0
@@ -1963,6 +2152,7 @@ sb_load_fods(r): s [
             ]
         ]
     ]
+    set(r): i
 ]
 
 sbsheetload(r): text kind [
@@ -2101,9 +2291,18 @@ sb_draw_dialog(r): w h [
     set(title): "Open file"
     if(_): {kind = "save"} [ set(title): "Save as" ]
     if(_): {kind = "discard"} [ set(title): "Discard the unsaved changes?" ]
+    if(_): {kind = "rename"} [ set(title): "Rename the sheet" ]
+    if(_): {kind = "delsheet"} [
+        set(dcur): sb_sheet?
+        sbsheetname(dname): dcur
+        concat(title): "Delete the sheet " dname "?"
+    ]
     sb_ui_text(_): {x + 14} {y + 12} title 2236962
     if(_): {kind = "discard"} [
         sb_ui_text(_): {x + 14} {y + 48} "Enter: discard them      Esc: keep editing" 4473924
+    ]
+    elif(_): {kind = "delsheet"} [
+        sb_ui_text(_): {x + 14} {y + 48} "Enter: delete it and its cells      Esc: keep it" 4473924
     ]
     else(_): [
         canvasfill(_): canvas {x + 14} {y + 40} {bw - 28} 28 16777215
@@ -2127,6 +2326,7 @@ $ifdef SB_PAD
         if(_): {mode = "pad"} [ set(hint): ".fodt or .txt" ]
 $endif
         concat(hint): "Enter: OK    Esc: cancel    Formats: " hint
+        if(_): {kind = "rename"} [ set(hint): "Enter: rename    Esc: cancel    Formulas follow the new name" ]
         sb_ui_text(_): {x + 14} {y + 82} hint 6316128
     ]
 ]
@@ -2416,6 +2616,12 @@ sb_dialog_key(r): key [
             set(sb_dirty): false!
             sb_action(_): next
         ]
+        elif(_): {kind = "delsheet"} [ sbs_delete_done(_): ]
+        elif(_): {kind = "rename"} [
+            set(text): sb_dlg_text?
+            str_trim(text): text
+            sbs_rename_done(_): text
+        ]
         else(_): [
             set(text): sb_dlg_text?
             str_trim(text): text
@@ -2434,7 +2640,7 @@ sb_dialog_key(r): key [
 
 sb_dialog_char(r): s [
     set(kind): sb_dialog?
-    if(_): {kind != "discard" && kind != "help"} [
+    if(_): {kind != "discard" && kind != "help" && kind != "delsheet"} [
         set(text): sb_dlg_text?
         concat(text): text s
         set(sb_dlg_text): text!
@@ -2462,6 +2668,16 @@ sb_common_key(r): key [
             sb_help(_):
             set(r): true
         ]
+        # Shift+F11: a new sheet
+        if(_): {key = 300 && shift = true && mode = "sheet"} [
+            sb_sheet_commit(_):
+            sbs_tabs(tl):
+            len(tn): tl
+            at(plus): tl {tn - 1}
+            at(px): plus 0
+            sbs_tab_click(_): {px + 1} false
+            set(r): true
+        ]
         # Alt+= : AutoSum (the "=" its char event brings is dropped)
         if(_): {alt = true && key = 61 && mode = "sheet"} [
             sb_sheet_commit(_):
@@ -2472,6 +2688,13 @@ sb_common_key(r): key [
         return(_): r
     ]
     set(r): true
+    if(_): {mode = "sheet" && (key = SB_KEY_PAGE_DOWN || key = SB_KEY_PAGE_UP)} [
+        sb_sheet_commit(_):
+        set(dir): 1
+        if(_): {key = SB_KEY_PAGE_UP} [ set(dir): -1 ]
+        sbsheetstep(_): dir
+        return(_): r
+    ]
     if(_): {mode = "sheet" && (key = 67 || key = 88 || key = 86 || key = 65)} [
         sb_sheet_commit(_):
         if(_): {key = 67} [ sbe_copy(_): false ]
@@ -2516,13 +2739,13 @@ $endif
 $ifdef SB_PAD
     if(_): {mode = "pad"} [
         set(title): "Novosibirsk"
-        set(text): "Type to write. Arrows, Home/End, Ctrl+Home/End and Page Up/Down move the cursor. Shift with the arrows, Home/End or a click selects text (Ctrl+A all); typing or Delete replaces it. FONT, B and I (Ctrl+B, Ctrl+I) give the selected text a family, bold or italic, or the whole document when nothing is selected; - and + change the size (Ctrl+[ and Ctrl+]). Holding an arrow keeps moving and scrolls the page. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fodt (OpenDocument text) or .txt."
+        set(text): "Type to write. Arrows, Home/End, Ctrl+Home/End and Page Up/Down move the cursor. Shift with the arrows, Home/End or a click selects text (Ctrl+A all); typing or Delete replaces it. FONT, B and I (Ctrl+B, Ctrl+I) give the selected text a family, bold or italic, or the whole document when nothing is selected; - and + change the size (Ctrl+[ and Ctrl+]). Holding an arrow keeps moving and scrolls the page. Sheets: the tabs under the grid switch (Ctrl+Page Down/Up too), + (or Shift+F11) adds one, a double click renames it and a right click deletes it; Sheet2.A1 (or Sheet2!A1, 'My data'.A1) is a cell of another sheet. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fodt (OpenDocument text) or .txt."
     ]
     else(_): [
 $else
     if(_): true [
 $endif
-        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows (or a Shift+click) selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
+        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows, a Shift+click or a drag with the mouse selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Sheets: the tabs under the grid switch (Ctrl+Page Down/Up too), + (or Shift+F11) adds one, a double click renames it and a right click deletes it; Sheet2.A1 (or Sheet2!A1, 'My data'.A1) is a cell of another sheet. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
     ]
     # a box drawn over the window (the native message box is too small)
     sbe_help(_): title text
@@ -2532,7 +2755,7 @@ $endif
 # --- the GUI: sheet -----------------------------------------------------------
 
 sb_visible_rows(r): h [
-    str_trunc(r): {(h - SB_BARH - SB_ROWH - SB_STATUSH) / SB_ROWH}
+    str_trunc(r): {(h - SB_BARH - SB_ROWH - SB_FOOTH) / SB_ROWH}
     if(_): {r < 1} [ set(r): 1 ]
 ]
 
@@ -2613,7 +2836,7 @@ sb_sheet_draw(r): [
             set(sw): {(sc1 - sc0 + 1) * SB_COLW}
             set(sh): {(sr1 - sr0 + 1) * SB_ROWH}
             if(_): {sx + sw > w} [ set(sw): {w - sx} ]
-            if(_): {sy + sh > h - SB_STATUSH} [ set(sh): {h - SB_STATUSH - sy} ]
+            if(_): {sy + sh > h - SB_FOOTH} [ set(sh): {h - SB_FOOTH - sy} ]
             if(_): {sw > 0 && sh > 0} [
                 canvasfill(_): canvas sx sy sw sh 14018815
                 canvasrect(_): canvas sx sy sw sh 2192198
@@ -2625,7 +2848,7 @@ sb_sheet_draw(r): [
     sb_visible_cols(vc): w
     set(gy): {SB_BARH + SB_ROWH}
     canvasfill(_): canvas 0 SB_BARH w SB_ROWH 15329769
-    canvasfill(_): canvas 0 SB_BARH SB_HEADW {h - SB_BARH - SB_STATUSH} 15329769
+    canvasfill(_): canvas 0 SB_BARH SB_HEADW {h - SB_BARH - SB_FOOTH} 15329769
     set(c): 0
     while(_): {c <= vc && left + c < SB_COLS} [
         set(x): {SB_HEADW + c * SB_COLW}
@@ -2637,7 +2860,7 @@ sb_sheet_draw(r): [
         ]
         str_trunc(cx): {x + (SB_COLW - cnw) / 2}
         sb_ui_text(_): cx {SB_BARH + 3} cn 3355443
-        canvasline(_): canvas {x + SB_COLW} SB_BARH {x + SB_COLW} {h - SB_STATUSH} 14211288
+        canvasline(_): canvas {x + SB_COLW} SB_BARH {x + SB_COLW} {h - SB_FOOTH} 14211288
         set(c): {c + 1}
     ]
     set(k): 0
@@ -2653,7 +2876,7 @@ sb_sheet_draw(r): [
         canvasline(_): canvas 0 {y + SB_ROWH} w {y + SB_ROWH} 14211288
         set(k): {k + 1}
     ]
-    canvasline(_): canvas SB_HEADW SB_BARH SB_HEADW {h - SB_STATUSH} 11842740
+    canvasline(_): canvas SB_HEADW SB_BARH SB_HEADW {h - SB_FOOTH} 11842740
     canvasline(_): canvas 0 gy w gy 11842740
     # cells
     set(k): 0
@@ -2699,6 +2922,7 @@ sb_sheet_draw(r): [
         canvasrect(_): canvas x y {SB_COLW + 1} {SB_ROWH + 1} 2192198
         canvasrect(_): canvas {x + 1} {y + 1} {SB_COLW - 1} {SB_ROWH - 1} 2192198
     ]
+    sbs_draw_tabs(_): w h
     sb_draw_status(_): w h
     sb_draw_dialog(_): w h
     set(r): 0
@@ -2846,6 +3070,13 @@ sb_sheet_click(r): x y double [
         sbe_bar_click(_): x
         return(_): r
     ]
+    sb_canvas_size(csz):
+    at(ch): csz 1
+    if(_): {y >= ch - SB_FOOTH && y < ch - SB_STATUSH} [
+        sbs_tab_click(_): x double
+        return(_): r
+    ]
+    if(_): {y >= ch - SB_FOOTH} [ return(_): r ]
     if(_): {x < SB_HEADW || y < gy} [ return(_): r ]
     str_trunc(c): {(x - SB_HEADW) / SB_COLW}
     str_trunc(k): {(y - gy) / SB_ROWH}
@@ -2858,7 +3089,77 @@ sb_sheet_click(r): x y double [
     set(sb_row): row!
     set(sb_col): col!
     sb_reveal(_):
-    if(_): double [ sbe_begin(_): true ]
+    # a drag from here selects; Shift+click keeps its own anchor
+    set(sb_drag): true!
+    if(_): {shift = true} [
+        set(ar): sb_arow?
+        set(ac): sb_acol?
+        set(sb_drag_row): ar!
+        set(sb_drag_col): ac!
+    ]
+    else(_): [
+        set(sb_drag_row): row!
+        set(sb_drag_col): col!
+    ]
+    if(_): double [
+        set(sb_drag): false!
+        sbe_begin(_): true
+    ]
+]
+
+# The mouse moved over the sheet; held: the left button is down. A drag
+# from a cell selects the cells from it to the one under the mouse (past
+# the edges it scrolls).
+sb_sheet_drag(r): x y held [
+    set(r): false
+    set(drag): sb_drag?
+    if(_): {drag != true} [ return(_): r ]
+    if(_): {held = false} [
+        set(sb_drag): false!
+        return(_): r
+    ]
+    set(editing): sb_edit?
+    if(_): {editing = true} [ return(_): r ]
+    set(top): sb_top?
+    set(left): sb_left?
+    set(gy): {SB_BARH + SB_ROWH}
+    str_trunc(c): {(x - SB_HEADW) / SB_COLW}
+    str_trunc(k): {(y - gy) / SB_ROWH}
+    if(_): {x < SB_HEADW} [ set(c): -1 ]
+    if(_): {y < gy} [ set(k): -1 ]
+    set(row): {top + k}
+    set(col): {left + c}
+    if(_): {row < 0} [ set(row): 0 ]
+    if(_): {col < 0} [ set(col): 0 ]
+    if(_): {row > SB_ROWS - 1} [ set(row): {SB_ROWS - 1} ]
+    if(_): {col > SB_COLS - 1} [ set(col): {SB_COLS - 1} ]
+    set(cr): sb_row?
+    set(cc): sb_col?
+    if(_): {row = cr && col = cc} [ return(_): r ]
+    set(ar): sb_drag_row?
+    set(ac): sb_drag_col?
+    set(sb_arow): ar!
+    set(sb_acol): ac!
+    set(sb_row): row!
+    set(sb_col): col!
+    sb_reveal(_):
+    set(r): true
+]
+
+# the "motion" event: a drag over the sheet
+sbmotion(r): x y held [
+    set(r): 0
+    set(drag): sb_drag?
+    if(_): {drag != true} [ return(_): r ]
+    uilock(_):
+    set(dialog): sb_dialog?
+    set(mode): sb_mode?
+    if(_): {dialog = "" && mode != "pad"} [
+        sb_sheet_drag(moved): x y held
+        if(_): moved [ sb_redraw(_): ]
+    ]
+    else(_): [ set(sb_drag): false! ]
+    uiunlock(_):
 ]
 
 sb_sheet_wheel(r): direction [
@@ -2962,6 +3263,26 @@ $endif
     ]
     uiunlock(_):
     set(r): 0
+]
+
+# A right click: on a sheet's tab, it asks to delete that sheet.
+sbrclick(r): x y [
+    set(r): 0
+    uilock(_):
+    set(dialog): sb_dialog?
+    set(mode): sb_mode?
+    sb_canvas_size(csz):
+    at(ch): csz 1
+    if(_): {dialog = "" && mode != "pad" && y >= ch - SB_FOOTH && y < ch - SB_STATUSH} [
+        sbs_tab_at(i): x
+        if(_): {i >= 0} [
+            sb_sheet_commit(_):
+            sbsheetswitch(_): i
+            sbs_ask_delete(_):
+        ]
+        sb_redraw(_):
+    ]
+    uiunlock(_):
 ]
 
 sbwheel(r): direction [
@@ -3088,12 +3409,21 @@ sb_app_menu(result): menu index [
     sbmenu(_): index
 ]
 
+sb_app_motion(result): canvas x y [
+    mouseheld(held): canvas
+    sbmotion(_): x y {held = 1}
+]
+
 sb_app_pointer(result): canvas x y [
     sbclick(_): x y false
 ]
 
 sb_app_double(result): canvas x y [
     sbclick(_): x y true
+]
+
+sb_app_rclick(result): canvas x y [
+    sbrclick(_): x y
 ]
 
 sb_app_wheel(result): canvas x y direction [
@@ -3172,6 +3502,8 @@ sb_app_main(result): mode title usage arg_count arg_values [
         ]
     ]
     on(_): canvas "pointer" "sb_app_pointer"
+    on(_): canvas "motion" "sb_app_motion"
+    on(_): canvas "menu" "sb_app_rclick"
     on(_): canvas "double" "sb_app_double"
     on(_): canvas "wheel" "sb_app_wheel"
     on(_): window "key" "sb_app_key"

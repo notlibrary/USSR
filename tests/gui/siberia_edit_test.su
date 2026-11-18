@@ -197,6 +197,54 @@ init(result): arg_count arg_values [
     ctrl(_): 86
     sbget(c2): "C2"
     check(_): "a pasted formula follows its new place" c2 "=A2*10"
+    # --- a selection with the mouse: press on a cell, drag to another
+    set(sb_top): 0!
+    set(sb_left): 0!
+    set(gy): {SB_BARH + SB_ROWH}
+    set(xa): {SB_HEADW + 40}
+    set(xb): {SB_HEADW + SB_COLW + 40}
+    set(xc): {SB_HEADW + SB_COLW * 2 + 40}
+    set(y1): {gy + 10}
+    set(y2): {gy + SB_ROWH + 10}
+    set(y3): {gy + SB_ROWH * 2 + 10}
+    sbclick(_): xa y1 false
+    sbmotion(_): xb y3 true
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "a drag from A1 to B3 selects A1:B3" bs "[0,0,2,1]"
+    sbmotion(_): xa y2 true
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "dragging back shrinks it to A1:A2" bs "[0,0,1,0]"
+    sbmotion(_): xc y3 false
+    set(drag): sb_drag?
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "letting go ends the drag, the selection stays" {drag = false && bs = "[0,0,1,0]"} true
+    sbmotion(_): xc y3 true
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "a move after letting go selects nothing more" bs "[0,0,1,0]"
+    # Shift+click then a drag keeps the first cell as the anchor
+    sbclick(_): xa y1 false
+    set(sb_shift): true!
+    sbclick(_): xb y2 false
+    set(sb_shift): false!
+    sbmotion(_): xc y3 true
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "Shift+click and a drag select from the first cell" bs "[0,0,2,2]"
+    # above the grid the drag stops at the first row
+    sbclick(_): xb y3 false
+    sbmotion(_): xb 0 true
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "a drag above the grid stops at row 1" bs "[0,1,2,1]"
+    sbmotion(_): xb 0 false
+    set(cv): sb_canvas?
+    mouseheld(mh): cv
+    check(_): "mouseheld is 0 with no button down" mh 0
+    key(_): SB_KEY_DOWN
     sbshow(c2v): "C2"
     check(_): "and computes there" c2v "20"
     # --- AutoSum of the numbers above

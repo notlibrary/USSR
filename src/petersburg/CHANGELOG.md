@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1-alpha
+- `mouseheld(widget)`: 1 while the left mouse button is held down in the
+  widget's window, for drags in a "motion" callback.
+
 ## 0.8.0-alpha
 - `filedialog.su`: the standard Open and Save dialog,
   `filedialog(path): mode title start filters`.

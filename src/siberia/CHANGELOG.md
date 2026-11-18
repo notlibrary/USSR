@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0
+- Workbooks with several sheets.
+  - Tabs under the grid show the sheets. A click shows a sheet, `+` (or
+    Shift+F11) adds one, a double click renames it and a right click
+    deletes it (after asking). Ctrl+Page Down and Ctrl+Page Up step
+    through them.
+  - Each sheet keeps its own cells, cursor, scroll and selection.
+  - Formulas reach other sheets: `Sheet2.A1`, `Sheet2!A1`,
+    `'My data'.A1`, and ranges such as `SUM(Sheet2.A1:B9)`. A rename
+    rewrites the formulas that name the sheet; a deleted or unknown sheet
+    is `#REF!`.
+  - `.fods` files keep every sheet as a `table:table`, with references
+    to other sheets as `[$Sheet2.A1]`, so LibreOffice reads them back.
+    CSV still holds the current sheet only.
+  - Undo puts back changes made on any sheet. Deleting a sheet clears
+    the undo history.
+  - Scripting: `sbsheetcount`, `sbsheetname`, `sbsheetindex`,
+    `sbsheetadd`, `sbsheetswitch`, `sbsheetrename` and `sbsheetdelete`
+    (`sheets.su`).
+- Cells can be selected with the mouse, too: press on a cell and drag to
+  another. Shift+click and then a drag keeps the first cell as the
+  anchor. Above or left of the grid the selection stops at the first row
+  or column, and past the visible cells the sheet scrolls along.
+
 ## 0.5.0
 - The toolbar's OPEN (a folder picture), SAVE (a diskette) and SAVE AS
   show Petersburg's file dialog (spreadsheets, CSV or all files). It
