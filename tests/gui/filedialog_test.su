@@ -1,0 +1,236 @@
+# Petersburg's Open and Save dialog (src/petersburg/filedialog.su) and its
+# picture buttons. Needs a GLFW-enabled ussr and a display; the windows are
+# never shown. Run from the repository root:
+#     ussr tests/gui/filedialog_test.su
+# Opens the dialog on a scratch folder (tests/gui/fd_tmp), checks the list
+# and the filter, walks into a folder and picks a file with the keys and
+# the Open button, cancels, saves a new name (the extension added) and an
+# old one (Replace? first), and checks the program's own window takes no
+# input while the dialog is open. Prints PASS or FAIL.
+$include "../../src/petersburg/filedialog.su"
+
+global(_): fdt_dir
+
+fdt_check(r): label ok [
+    set(r): 0
+    if(_): ok [ concat(m): "PASS " label ]
+    else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+]
+
+# the main window's key callback: counts what reaches it
+fdt_main_key(result): window key [
+    set(n): fdt_keys?
+    set(fdt_keys): {n + 1}!
+]
+
+fdt_open(r): start [
+    filedialog(r): "open" "Open a drawing" start "Drawings (*.dxf)|*.dxf|All files|*"
+    set(fdt_answer): r!
+    set(fdt_answered): true!
+]
+
+fdt_save(r): start [
+    filedialog(r): "save" "Save the drawing" start "Drawings (*.dxf)|*.dxf|All files|*"
+    set(fdt_answer): r!
+    set(fdt_answered): true!
+]
+
+# waits for the dialog to be up: [state window]
+fdt_up(r): [
+    set(r): null
+    set(k): 0
+    while(_): {k < 100} [
+        sleep(_): 20
+        set(st): pfd_dialog?
+        btget(w): st "win" null
+        if(_): {w != null} [
+            set(r): st
+            return(r): r
+        ]
+        set(k): {k + 1}
+    ]
+]
+
+fdt_wait_answer(r): [
+    set(r): 0
+    set(k): 0
+    set(done): fdt_answered?
+    while(_): {done = false && k < 200} [
+        sleep(_): 20
+        set(done): fdt_answered?
+        set(k): {k + 1}
+    ]
+]
+
+fdt_settle(r): [
+    set(r): 0
+    sleep(_): 80
+]
+
+fdt_key(r): st code [
+    set(r): 0
+    btget(w): st "win"
+    inject(_): w "key" code 0 0
+    fdt_settle(_):
+]
+
+fdt_text(r): st [
+    btget(t): st "text"
+    gettext(r): t
+]
+
+fdt_rm(r): path [
+    set(r): 0
+    file_exists(e): path
+    if(_): e [ remove_file(_): path ]
+]
+
+init(result): arg_count arg_values [
+    getcwd(cwd):
+    pfd_slashes(cwd): cwd
+    concat(fdt_dir): cwd "/tests/gui/fd_tmp"
+    make_dir(_): fdt_dir
+    concat(sub): fdt_dir "/sub"
+    make_dir(_): sub
+    concat(f1): fdt_dir "/one.dxf"
+    concat(f2): fdt_dir "/two.txt"
+    concat(f3): sub "/three.dxf"
+    writefile(_): f1 "one"
+    writefile(_): f2 "two"
+    writefile(_): f3 "three"
+    set(fdt_keys): 0!
+    set(fdt_answered): false!
+    set(fdt_answer): ""!
+    createwindow(main): "File dialog test" 400 300
+    toolbar(bar): main
+    button(openb): bar "Open"
+    buttonicon(ri): openb "folder"
+    fdt_check(_): "a button takes the built-in folder picture" {ri = 0}
+    button(saveb): bar "Save"
+    buttonicon(ri): saveb "disk"
+    fdt_check(_): "and the diskette" {ri = 0}
+    button(asb): bar "Save As"
+    on(_): main "key" "fdt_main_key"
+    run(_):
+    fdt_settle(_):
+
+    # --- Open: the list, the filter, a folder, a file
+    async(_): "fdt_open" fdt_dir
+    fdt_up(st):
+    fdt_check(_): "the dialog opens" {st != null}
+    btget(rows): st "rows"
+    encode(rs): rows
+    fdt_check(_): "folders first, then the files the filter lets through" {rs = "[[`up`,`..`],[`folder`,`sub`],[`file`,`one.dxf`]]"}
+    fdt_text(t): st
+    concat(want): fdt_dir "/"
+    fdt_check(_): "the box shows the folder" {t = want}
+    # the program's window takes no input meanwhile
+    inject(_): main "key" 65 0 0
+    fdt_settle(_):
+    set(nk): fdt_keys?
+    fdt_check(_): "the program's window takes no keys while the dialog is open" {nk = 0}
+    # All files shows two.txt too
+    btget(combo): st "combo"
+    setindex(_): combo 1
+    pfd_cb_filter(_): combo
+    btget(rows): st "rows"
+    len(nr): rows
+    fdt_check(_): "All files lists every file" {nr = 4}
+    setindex(_): combo 0
+    pfd_cb_filter(_): combo
+    # keys in the list: Down to sub/, Open goes in
+    btget(list): st "list"
+    setfocus(_): list
+    setindex(_): list 0
+    fdt_key(_): st 264
+    fdt_text(t): st
+    concat(want): fdt_dir "/sub/"
+    fdt_check(_): "a folder picked in the list goes to the box" {t = want}
+    btget(ok): st "ok"
+    inject(_): ok "click" 0 0 0
+    fdt_settle(_):
+    btget(rows): st "rows"
+    encode(rs): rows
+    fdt_check(_): "Open goes into the folder" {rs = "[[`up`,`..`],[`file`,`three.dxf`]]"}
+    setfocus(_): list
+    setindex(_): list 0
+    fdt_key(_): st 264
+    inject(_): ok "click" 0 0 0
+    fdt_wait_answer(_):
+    set(a): fdt_answer?
+    concat(want): fdt_dir "/sub/three.dxf"
+    fdt_check(_): "Open on a file answers its path" {a = want}
+    alive(still): ok
+    fdt_check(_): "and the dialog goes" {still = false}
+    inject(_): main "key" 65 0 0
+    fdt_settle(_):
+    set(nk): fdt_keys?
+    fdt_check(_): "the program's window takes keys again" {nk = 1}
+
+    # --- Cancel, and a name that is not there
+    set(fdt_answered): false!
+    async(_): "fdt_open" fdt_dir
+    fdt_up(st):
+    btget(text): st "text"
+    concat(nothere): fdt_dir "/nothere.dxf"
+    settext(_): text nothere
+    btget(ok): st "ok"
+    inject(_): ok "click" 0 0 0
+    fdt_settle(_):
+    gettext(lab): ok
+    fdt_check(_): "Open on a missing file says so" {lab = "Not found"}
+    fdt_key(_): st 256
+    fdt_wait_answer(_):
+    set(a): fdt_answer?
+    fdt_check(_): "Escape cancels: an empty answer" {a = ""}
+
+    # --- Save: a new name gets the extension; an old one asks first
+    set(fdt_answered): false!
+    concat(start): fdt_dir "/one.dxf"
+    async(_): "fdt_save" start
+    fdt_up(st):
+    fdt_text(t): st
+    fdt_check(_): "Save opens with the file's name in the box" {t = start}
+    btget(ok): st "ok"
+    gettext(lab): ok
+    fdt_check(_): "its button says Save" {lab = "Save"}
+    inject(_): ok "click" 0 0 0
+    fdt_settle(_):
+    gettext(lab): ok
+    fdt_check(_): "an old file: Replace? first" {lab = "Replace?"}
+    btget(text): st "text"
+    settext(_): text "fresh"
+    pfd_cb_text(_): text
+    fdt_settle(_):
+    fdt_key(_): st 257
+    fdt_wait_answer(_):
+    set(a): fdt_answer?
+    concat(want): fdt_dir "/fresh.dxf"
+    fdt_check(_): "Enter saves a new name, with the filter's extension" {a = want}
+    set(fdt_answered): false!
+    async(_): "fdt_save" start
+    fdt_up(st):
+    btget(ok): st "ok"
+    inject(_): ok "click" 0 0 0
+    fdt_settle(_):
+    inject(_): ok "click" 0 0 0
+    fdt_wait_answer(_):
+    set(a): fdt_answer?
+    fdt_check(_): "Replace? again saves over the old file" {a = start}
+
+    # --- the parent of a root is the root
+    pfd_parent(p1): "C:/"
+    pfd_parent(p2): "C:/Users"
+    pfd_parent(p3): "/home/x/"
+    fdt_check(_): "the folder above" {p1 = "C:/" && p2 = "C:/" && p3 = "/home"}
+
+    fdt_rm(_): f1
+    fdt_rm(_): f2
+    fdt_rm(_): f3
+    remove_dir(_): sub
+    remove_dir(_): fdt_dir
+    close(_): main
+    sleep(_): 100
+    set(result): 0
+]

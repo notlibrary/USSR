@@ -21,7 +21,7 @@ a diagnostic.
 | `image(window, path)` | Window handle, P6 PPM path | Image handle |
 | `reloadimage(widget, path)` | Image handle, P6 PPM path | Zero; replaces the displayed image |
 | `pack(widget, expand)` | Handle, boolean | Zero; expands vertically when true |
-| `grid(widget, row, column, expand)` | Handle, non-negative row, column 0 or 1, boolean | Zero; responsive two-column placement |
+| `grid(widget, row, column, expand)` | Handle, non-negative row, column 0, 1 or 2 (both columns), boolean | Zero; responsive two-column placement |
 | `settext(widget, text)` / `gettext(widget)` | Handle and optional string | Zero / current string |
 | `getselection(widget)` | List or combo-box handle | Current selected item |
 | `getindex(widget)` / `setindex(widget, index)` | List or combo-box handle and optional row index | Current / updated zero-based row |
@@ -46,6 +46,13 @@ a diagnostic.
 | `fontwidth(font, size, text)` / `fontheight(font, size)` | Font handle, pixels per em, and text | Advance width of the text (a real) / line height (ascent + descent + line gap, an integer) in pixels; sizes are rounded to whole pixels as drawing does |
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `canvascursor(canvas, mode)` | Canvas, `"hidden"` or `"normal"` | Zero; `"hidden"` hides the system cursor while it is over the canvas, for programs that draw their own |
+| `setmodal(window, on)` | Window handle, boolean | Zero; while a modal window is open the other windows take no input, and a click on one brings the modal window to the front |
+| `buttonicon(button, picture)` | Button handle, `"folder"`, `"disk"` or a P6 PPM path | Zero; draws the picture before the button's text (toolbar buttons widen for it); magenta (255, 0, 255) in a PPM is transparent |
+| `toolmenu(toolbar, label, items)` | Toolbar handle, a label, `"item\|item\|-\|item"` (`-` draws a line) | The menu's handle. A click on it drops the items down; picking one (click, or Up/Down and Enter) calls its `"select"` callback with the menu and the item's index; Escape or a click elsewhere closes it |
+| `setitems(menu, items)` | Menu handle, items as for `toolmenu` | Zero; replaces the menu's items |
+| `recentfiles(list): app` / `recentadd(list): app path` | A program name, a path | The program's recent files, newest first (10 kept, in `~/.<app>-recent`). `$include "recent.su"` |
+| `filemenuitems(items): list` / `filemenuaction(pick): index list` | A recent list, a picked index | The items of a standard File menu (New, Open..., Save, Save As..., the last 5 files, Exit), and `[action path]` for a picked item: `"new"`, `"open"`, `"save"`, `"saveas"`, `"recent"` with its path, `"exit"`, or `""` |
+| `filedialog(path): mode title start filters` | `"open"` or `"save"`, a title, a folder or file to start at, `"label\|patterns\|..."` filters (patterns split by `;`) | The chosen path, or `""` when cancelled; modal, it returns once answered. `$include "filedialog.su"` |
 | `canvaskeep(canvas)` / `canvasback(canvas)` | Canvas | The shape count; `canvaskeep` marks the shapes drawn so far, `canvasback` drops every shape added after the mark (`canvasclear` drops the mark), so a moving overlay is redrawn alone |
 | `canvasdash(canvas, x1, y1, x2, y2, color, dash, gap)` / `canvasdashcircle(canvas, cx, cy, radius, color, dash, gap)` | Canvas, numbers, color, dash and gap lengths in pixels | Zero; a dashed line (line shapes) or a dashed circle (arcs), cut natively |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |

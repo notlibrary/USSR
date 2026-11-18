@@ -1,0 +1,150 @@
+# Petersburg's drop-down toolbar menu (toolmenu) and the File menu helpers
+# of src/petersburg/recent.su. Needs a GLFW-enabled ussr and a display; the
+# window is never shown. Run from the repository root:
+#     ussr tests/gui/filemenu_test.su
+# HOME points at a scratch folder (tests/gui/home_tmp) so the recent list is
+# not the user's. Prints PASS or FAIL.
+$include "../../src/petersburg/petersburg.su"
+$include "../../src/petersburg/recent.su"
+
+fmt_check(r): label ok [
+    set(r): 0
+    if(_): ok [ concat(m): "PASS " label ]
+    else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+]
+
+fmt_select(result): menu index [
+    set(fmt_picked): index!
+]
+
+# waits for a "select" to arrive: the index, or -1
+fmt_wait(r): [
+    set(r): -1
+    set(k): 0
+    while(_): {k < 50} [
+        sleep(_): 20
+        set(r): fmt_picked?
+        if(_): {r >= 0} [ return(r): r ]
+        set(k): {k + 1}
+    ]
+]
+
+init(result): arg_count arg_values [
+    set(result): 0
+    getcwd(cwd):
+    str_replace(cwd): cwd "\\" "/"
+    concat(home): cwd "/tests/gui/home_tmp"
+    make_dir(_): home
+    setenv(_): "HOME" home
+    concat(rf): home "/.fmtest-recent"
+    file_exists(old): rf
+    if(_): old [ remove_file(_): rf ]
+
+    # --- the recent list
+    recentfiles(l): "fmtest"
+    len(n): l
+    fmt_check(_): "no list yet: empty" {n = 0}
+    filemenuitems(items): l
+    fmt_check(_): "the menu says there are none" {items = "New|Open...|Save|Save As...|-|(no recent files)|-|Exit"}
+    filemenuaction(p): 7 l
+    at(a): p 0
+    fmt_check(_): "Exit follows the placeholder" {a = "exit"}
+    filemenuaction(p): 5 l
+    at(a): p 0
+    fmt_check(_): "the placeholder does nothing" {a = ""}
+    set(i): 1
+    while(_): {i <= 7} [
+        str_from_int(is): i
+        concat(f): "C:/work/f" is ".dxf"
+        recentadd(_): "fmtest" f
+        set(i): {i + 1}
+    ]
+    recentadd(l): "fmtest" "C:/work/f3.dxf"
+    at(first): l 0
+    at(second): l 1
+    len(n): l
+    fmt_check(_): "the latest comes first" {first = "C:/work/f3.dxf"}
+    fmt_check(_): "and is not listed twice" {second = "C:/work/f7.dxf" && n = 7}
+    recentfiles(l): "fmtest"
+    len(n): l
+    fmt_check(_): "the list is kept in HOME" {n = 7}
+    filemenuitems(items): l
+    fmt_check(_): "five of them are shown" {items = "New|Open...|Save|Save As...|-|1  C:/work/f3.dxf|2  C:/work/f7.dxf|3  C:/work/f6.dxf|4  C:/work/f5.dxf|5  C:/work/f4.dxf|-|Exit"}
+    set(ok): true
+    filemenuaction(p): 0 l
+    at(a): p 0
+    if(_): {a != "new"} [ set(ok): false ]
+    filemenuaction(p): 1 l
+    at(a): p 0
+    if(_): {a != "open"} [ set(ok): false ]
+    filemenuaction(p): 2 l
+    at(a): p 0
+    if(_): {a != "save"} [ set(ok): false ]
+    filemenuaction(p): 3 l
+    at(a): p 0
+    if(_): {a != "saveas"} [ set(ok): false ]
+    filemenuaction(p): 4 l
+    at(a): p 0
+    if(_): {a != ""} [ set(ok): false ]
+    fmt_check(_): "New, Open, Save, Save As, then a line" ok
+    filemenuaction(p): 6 l
+    at(a): p 0
+    at(f): p 1
+    fmt_check(_): "an item opens its recent file" {a = "recent" && f = "C:/work/f7.dxf"}
+    filemenuaction(p): 11 l
+    at(a): p 0
+    fmt_check(_): "Exit is last" {a = "exit"}
+    recent_label(lab): 1 "C:/a/very/long/folder/name/that/goes/on/and/on/and/on/drawing.dxf"
+    len(ln): lab
+    str_ends(tail): lab "on/drawing.dxf"
+    fmt_check(_): "a long path keeps its end" {tail && ln < 64}
+
+    # --- the widget
+    set(fmt_picked): -1!
+    createwindow(w): "File menu test" 500 300
+    toolbar(bar): w
+    toolmenu(m): bar "File" "One|-|Two|Three"
+    typeof(mt): m
+    fmt_check(_): "toolmenu gives a handle" {mt = "integer"}
+    on(_): m "select" "fmt_select"
+    button(_): bar "After"
+    run(_):
+    inject(_): m "select" 3 0 0
+    fmt_wait(got):
+    fmt_check(_): "select passes the index" {got = 3}
+    # open it, then Down twice (the line skipped) and Enter
+    set(fmt_picked): -1!
+    inject(_): m "click" 0 0 0
+    inject(_): w "key" 264 0 0
+    inject(_): w "key" 264 0 0
+    inject(_): w "key" 257 0 0
+    fmt_wait(got):
+    fmt_check(_): "the keys pick past the line" {got = 2}
+    # Up from the top wraps to the last item
+    set(fmt_picked): -1!
+    inject(_): m "click" 0 0 0
+    inject(_): w "key" 265 0 0
+    inject(_): w "key" 257 0 0
+    fmt_wait(got):
+    fmt_check(_): "Up wraps to the bottom" {got = 3}
+    # Escape closes it with no pick
+    set(fmt_picked): -1!
+    inject(_): m "click" 0 0 0
+    inject(_): w "key" 264 0 0
+    inject(_): w "key" 256 0 0
+    inject(_): w "key" 257 0 0
+    fmt_wait(got):
+    fmt_check(_): "Escape closes it" {got = -1}
+    setitems(sr): m "A|B"
+    fmt_check(_): "setitems takes new items" {sr = 0}
+    set(fmt_picked): -1!
+    inject(_): m "click" 0 0 0
+    inject(_): w "key" 264 0 0
+    inject(_): w "key" 264 0 0
+    inject(_): w "key" 257 0 0
+    fmt_wait(got):
+    fmt_check(_): "and picks from them" {got = 1}
+    destroy(_): w
+    remove_file(_): rf
+]

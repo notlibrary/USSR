@@ -279,6 +279,29 @@ canvasdashcircle(result): canvas cx cy radius color dash gap [
     petersburg_canvas_dash_circle(result): canvas cx cy radius color dash gap
 ]
 
+# setmodal(window, true): only this window takes input (a click on
+# another brings it to the front) until it closes or setmodal(window, false)
+setmodal(result): window on [
+    petersburg_set_modal(result): window on
+]
+
+# a picture on a button, before its text: "folder" and "disk" are built
+# in; a .ppm file works too (magenta, 255 0 255, is transparent)
+buttonicon(result): button picture [
+    petersburg_button_icon(result): button picture
+]
+
+# a drop-down menu on a toolbar: a click on label shows items ("|" between
+# them, "-" a line); picking one calls the menu's "select" callback with the
+# menu and the item's index
+toolmenu(result): toolbar label items [
+    petersburg_create_menu(result): toolbar label items
+]
+
+setitems(result): menu items [
+    petersburg_set_items(result): menu items
+]
+
 alive(result): widget [
     petersburg_alive(result): widget
 ]

@@ -27,6 +27,30 @@ near(r): label got want [
     check(r): label {_nr_d < 0.001} true
 ]
 
+# the open file dialog: waits for it, puts path in its box and clicks its
+# button (Open or Save); true when there was one
+fd_answer(r): path [
+    set(r): false
+    set(k): 0
+    while(_): {k < 100} [
+        sleep(_): 20
+        set(st): pfd_dialog?
+        btget(w): st "win" null
+        btget(done): st "done" true
+        if(_): {w != null && done = false} [
+            btget(text): st "text"
+            settext(_): text path
+            pfd_cb_text(_): text
+            btget(ok): st "ok"
+            inject(_): ok "click" 0 0 0
+            sleep(_): 150
+            set(r): true
+            return(r): r
+        ]
+        set(k): {k + 1}
+    ]
+]
+
 settle(r): [
     sleep(_): 60
     uiidle(_st_idle):
@@ -83,6 +107,11 @@ status(r): [
 ]
 
 init(result): arg_count arg_values [
+    # the recent-file lists go to a scratch HOME, not the user's
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
     createwindow(window): "Tula toolbar test" 1100 800
     textbox(filename): window ""
     label(status_label): window ""
@@ -99,7 +128,7 @@ init(result): arg_count arg_values [
         concat(all): all x "|"
         set(i): {i + 1}
     ]
-    check(_): "toolbar buttons" all "Line|Circle|Load DXF|Save DXF|Zoom +|Zoom -|Fit|Left|Right|Up|Down|"
+    check(_): "toolbar buttons" all "Open|Save|Save As|Line|Circle|Zoom +|Zoom -|Fit|Left|Right|Up|Down|"
 
     press(_): "Circle"
     status(t):
@@ -143,24 +172,76 @@ init(result): arg_count arg_values [
     status(t):
     check(_): "Fit on an empty drawing" t "Nothing to fit: the drawing is empty"
 
-    settext(_): filename "tests/gui/fixtures/sample.dxf"
-    press(_): "Load DXF"
+    # Open: Petersburg's file dialog, answered with the fixture
+    getcwd(_tt_cwd):
+    concat(_tt_sample): _tt_cwd "/tests/gui/fixtures/sample.dxf"
+    press(_): "Open"
+    fd_answer(_tt_had): _tt_sample
+    check(_): "Open shows the file dialog" _tt_had true
+    sleep(_): 200
     set(e): tula_entities?
     len(n): e
-    check(_): "Load DXF button loads" n 9
+    check(_): "Open loads the file chosen" n 9
+    gettext(_tt_box): filename
+    str_replace(_tt_sample2): _tt_sample "\\" "/"
+    check(_): "the filename box shows it" _tt_box _tt_sample2
     press(_): "Zoom +"
     press(_): "Fit"
     set(v): tula_view?
     at(sfit): v 2
-    near(_): "Fit button refits" sfit {700 / 137.5}
+    # the scale that fits the drawing's box (x1.1) in the canvas as it is
+    tula_canvas_center(_tt_c):
+    at(_tt_cx): _tt_c 0
+    at(_tt_cy): _tt_c 1
+    set(_tt_es): tula_entities?
+    tula_bounds(_tt_b): _tt_es
+    at(_tt_x0): _tt_b 0
+    at(_tt_y0): _tt_b 1
+    at(_tt_x1): _tt_b 2
+    at(_tt_y1): _tt_b 3
+    set(_tt_want): {_tt_cx * 2 / ((_tt_x1 - _tt_x0) * 1.1)}
+    set(_tt_hs): {_tt_cy * 2 / ((_tt_y1 - _tt_y0) * 1.1)}
+    if(_): {_tt_hs < _tt_want} [ set(_tt_want): _tt_hs ]
+    near(_): "Fit button refits" sfit _tt_want
 
     settext(_): filename "tula_toolbar_out.dxf"
-    press(_): "Save DXF"
+    press(_): "Save"
     status(t):
-    check(_): "Save DXF button saves" t "Saved 9 object(s) to tula_toolbar_out.dxf"
+    check(_): "Save writes the file named in the box" t "Saved 9 object(s) to tula_toolbar_out.dxf"
     file_exists(f): "tula_toolbar_out.dxf"
     check(_): "saved file exists" f true
     remove_file(_): "tula_toolbar_out.dxf"
+    # Save As: the dialog, a new name; the extension is added
+    concat(_tt_as): _tt_cwd "/tula_toolbar_as"
+    press(_): "Save As"
+    fd_answer(_tt_had): _tt_as
+    check(_): "Save As shows the file dialog" _tt_had true
+    sleep(_): 200
+    concat(_tt_asf): _tt_as ".dxf"
+    file_exists(f): _tt_asf
+    check(_): "Save As writes the new name, with .dxf" f true
+    # the File menu: saved and opened drawings come first in its list
+    recentfiles(_tt_rl): "tula"
+    at(_tt_r0): _tt_rl 0
+    str_replace(_tt_r0): _tt_r0 "\\" "/"
+    str_replace(_tt_asf2): _tt_asf "\\" "/"
+    check(_): "the drawing saved last is first in the recent list" _tt_r0 _tt_asf2
+    set(_tt_menu): tula_filemenu?
+    gettext(_tt_ml): _tt_menu
+    check(_): "the File menu is on the toolbar" _tt_ml "File"
+    inject(_): _tt_menu "select" 0 0 0
+    sleep(_): 300
+    set(e): tula_entities?
+    len(n): e
+    check(_): "File > New empties the drawing" n 0
+    gettext(_tt_box): filename
+    check(_): "and the filename box" _tt_box ""
+    inject(_): _tt_menu "select" 5 0 0
+    sleep(_): 300
+    set(e): tula_entities?
+    len(n): e
+    check(_): "File > the first recent drawing opens it" n 9
+    remove_file(_): _tt_asf
 
     # keyboard shortcuts through the window key event
     view(x0): 0

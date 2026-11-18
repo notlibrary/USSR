@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+- The toolbar's OPEN (a folder picture), SAVE (a diskette) and SAVE AS
+  show Petersburg's file dialog (documents, plain text or all files),
+  through Siberia's shared toolbar.
+- The FILE menu (New, Open..., Save, Save As..., the last 5 documents from
+  `~/.novosibirsk-recent`, Exit) comes from Siberia's shared toolbar.
+
 ## 0.3.0
 - `fonts.su`: fonts on parts of the text.
   - Select text with Shift and the arrows, Home/End or Page Up/Down, a
