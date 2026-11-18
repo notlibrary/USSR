@@ -1,0 +1,298 @@
+# Novosibirsk: fonts on parts of the text (src/novosibirsk/fonts.su).
+# Needs a GLFW-enabled ussr and a display; the window is never shown. Run
+# from the repository root:
+#     ussr tests/gui/novosibirsk_fonts_test.su
+# Selects text with Shift and the arrows, makes it bold, gives it another
+# family from the font picker, edits around and inside it, splits and
+# joins its paragraph, undoes, saves and reads it back, types over a
+# selection and opens the help, all through Petersburg's input path.
+# Prints PASS or FAIL per check.
+$include "../../src/novosibirsk/novosibirsk.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 40
+    uiidle(idle):
+    set(tries): 0
+    while(_): {idle = false && tries < 300} [
+        sleep(_): 10
+        uiidle(idle):
+        set(tries): {tries + 1}
+    ]
+    sleep(_): 20
+    set(r): 0
+]
+
+key(r): code [
+    set(w): sb_window?
+    inject(_): w "key" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+keyup(r): code [
+    set(w): sb_window?
+    inject(_): w "keyup" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+ctrl(r): code [
+    key(_): 341
+    key(_): code
+    keyup(_): 341
+    set(r): 0
+]
+
+# Types text through "char" events, one code point each.
+typed(r): text [
+    set(w): sb_window?
+    vec(cps): ""
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        utf8_next(j): text i
+        byte(b): text i
+        set(cp): b
+        if(_): {j - i = 2} [
+            byte(b2): text {i + 1}
+            set(cp): {((b & 31) << 6) | (b2 & 63)}
+        ]
+        inject(_): w "char" cp 0 0
+        set(i): j
+    ]
+    settle(_):
+    set(r): 0
+]
+
+tool(r): action [
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(a): entry 1
+        if(_): {a = action} [
+            at(h): entry 0
+            inject(_): h "click" 0 0 0
+        ]
+        set(i): {i + 1}
+    ]
+    settle(_):
+    set(r): 0
+]
+
+test_tool(result): button [
+    sbtool(_): button
+]
+
+test_pointer(result): canvas x y [
+    sbclick(_): x y false
+]
+
+test_double(result): canvas x y [
+    sbclick(_): x y true
+]
+
+test_key(result): window k [
+    sbkey(_): k
+]
+
+test_keyup(result): window k [
+    sbkeyup(_): k
+]
+
+test_char(result): window cp [
+    sbchar(_): cp
+]
+
+listen(r): window canvas [
+    on(_): canvas "pointer" "test_pointer"
+    on(_): canvas "double" "test_double"
+    on(_): window "key" "test_key"
+    on(_): window "keyup" "test_keyup"
+    on(_): window "char" "test_char"
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(h): entry 0
+        on(_): h "click" "test_tool"
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+shifted(r): code [
+    key(_): 340
+    key(_): code
+    keyup(_): 340
+    set(r): 0
+]
+
+spans_of(r): row [
+    set(sp): sb_pspans?
+    at(s): sp row
+    encode(r): s
+]
+
+init(result): arg_count arg_values [
+    getcwd(cwd):
+    concat(pad_file): cwd "/tests/gui/novosibirsk_fonts_tmp.fodt"
+    remove_file(_): pad_file
+    sbsetup(_):
+    createwindow(window): "Novosibirsk fonts test" SB_WIDTH SB_HEIGHT
+    sbbuild(canvas): window "pad"
+    listen(_): window canvas
+    run(_):
+    settle(_):
+    set(docfam): sb_family?
+    typed(_): "Hello world"
+    key(_): SB_KEY_HOME
+    shifted(_): SB_KEY_RIGHT
+    shifted(_): SB_KEY_RIGHT
+    shifted(_): SB_KEY_RIGHT
+    shifted(_): SB_KEY_RIGHT
+    shifted(_): SB_KEY_RIGHT
+    sbx_sel(s):
+    encode(ss): s
+    check(_): "Shift+Right selects Hello" ss "[0,0,0,5]"
+    ctrl(_): 66
+    spans_of(sp0): 0
+    check(_): "Ctrl+B makes just the selection bold" sp0 "[[0,5,``,1,-1]]"
+    set(db): sb_bold?
+    check(_): "the document stays regular" db false
+    # another family for the same words, from the picker
+    set(families): sb_families?
+    len(nf): families
+    set(other): ""
+    set(i): 0
+    while(_): {i < nf && other = ""} [
+        at(f): families i
+        getf(nm): f "name"
+        if(_): {nm != docfam} [ set(other): nm ]
+        set(i): {i + 1}
+    ]
+    sb_picker_open(_):
+    sb_family_index(pi): families other
+    set(sb_pick): pi!
+    sb_picker_choose(_):
+    sbx_props_at(pr): 0 2
+    at(pf): pr 0
+    at(pb): pr 1
+    check(_): "the picker gives the selection its family" {pf = other && pb = 1} true
+    set(fam2): sb_family?
+    check(_): "the document family is kept" fam2 docfam
+    # measuring follows the fonts: bold words in another family
+    set(sb_mrow): 0!
+    set(sb_mbase): 0!
+    sb_measure(wmixed): "Hello"
+    sbx_reset_probe(_):
+    check(_): "the mixed text is measured in its own font" {wmixed > 0} true
+    # typing at the end of the span carries it on; at its start it moves
+    key(_): SB_KEY_HOME
+    key(_): SB_KEY_RIGHT
+    key(_): SB_KEY_RIGHT
+    typed(_): "y"
+    sbpadtext(t1):
+    check(_): "typed inside the bold word" t1 "Heyllo world"
+    sbx_spans(s1): 0
+    at(e1): s1 0
+    at(e1b): e1 1
+    check(_): "the span grows with it" e1b 6
+    key(_): SB_KEY_HOME
+    typed(_): ">"
+    sbx_spans(s2): 0
+    at(e2): s2 0
+    at(e2a): e2 0
+    check(_): "text before it moves the span" e2a 1
+    # a paragraph split in the span, then joined again
+    key(_): SB_KEY_RIGHT
+    key(_): SB_KEY_RIGHT
+    key(_): SB_KEY_ENTER
+    sbx_spans(l0): 0
+    at(l0e): l0 0
+    at(l0a): l0e 0
+    at(l0b): l0e 1
+    check(_): "Enter keeps the first part on the first paragraph" {l0a = 1 && l0b = 3} true
+    sbx_spans(r1): 1
+    at(r1e): r1 0
+    at(r1a): r1e 0
+    at(r1b): r1e 1
+    check(_): "the second part starts the new paragraph" {r1a = 0 && r1b = 4} true
+    key(_): SB_KEY_BACKSPACE
+    sbx_spans(j0): 0
+    len(nj): j0
+    sbpadtext(t2):
+    check(_): "Backspace joins them back" t2 ">Heyllo world"
+    at(je): j0 {nj - 1}
+    at(jb): je 1
+    check(_): "and the span is whole again" jb 7
+    # undo and redo keep the fonts
+    ctrl(_): 90
+    ctrl(_): 89
+    sbx_spans(u0): 0
+    len(nu): u0
+    check(_): "undo and redo keep the spans" {nu >= 1} true
+    # saved and read back
+    sbpadfodt(fodt):
+    str_contains(hasfam): fodt other
+    check(_): "the .fodt names the selection's family" hasfam true
+    str_contains(hasbold): fodt "fo:font-weight=\"bold\""
+    check(_): "and its bold" hasbold true
+    sbpadload(err): fodt "fodt"
+    check(_): "the file loads" err ""
+    sbpadtext(t3):
+    check(_): "with the same text" t3 ">Heyllo world"
+    sbx_props_at(lp): 0 3
+    at(lf): lp 0
+    at(lb): lp 1
+    check(_): "and the same fonts" {lf = other && lb = 1} true
+    # typing over a selection replaces it
+    key(_): SB_KEY_END
+    shifted(_): SB_KEY_LEFT
+    shifted(_): SB_KEY_LEFT
+    shifted(_): SB_KEY_LEFT
+    shifted(_): SB_KEY_LEFT
+    shifted(_): SB_KEY_LEFT
+    typed(_): "there"
+    sbpadtext(t4):
+    check(_): "typing replaces the selection" t4 ">Heyllo there"
+    ctrl(_): 65
+    key(_): SB_KEY_DELETE
+    sbpadtext(t5):
+    check(_): "Ctrl+A then Delete empties the page" t5 ""
+    # help
+    key(_): SB_KEY_F1
+    set(d): sb_dialog?
+    check(_): "F1 opens the help box" d "help"
+    key(_): SB_KEY_ESC
+    set(d): sb_dialog?
+    check(_): "a key closes it" d ""
+    tool(_): "help"
+    set(d): sb_dialog?
+    check(_): "HELP opens it too" d "help"
+    key(_): SB_KEY_ENTER
+    remove_file(_): pad_file
+    close(_): window
+    sleep(_): 100
+    set(result): 0
+]
+
+sbx_reset_probe(r): [
+    set(r): 0
+]

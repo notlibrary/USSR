@@ -2357,7 +2357,7 @@ tvm_kind(r): name [
 ]
 
 tvm_keybar(r): [
-    set(r): "1Help 2Rename 3View 4Edit 5Copy 6Move 7Mkdir 8Delete 9Menu  Ctrl+R refresh  Ctrl+U swap  Ctrl+L go"
+    set(r): "F1 Help  F2 Rename  F3 View  F4 Edit  F5 Copy  F6 Move  F7 Mkdir  F8 Delete  F9 Menu   Ctrl+R refresh  Ctrl+U swap  Ctrl+L go"
 ]
 
 # two panels as text with box glyphs (a terminal view)

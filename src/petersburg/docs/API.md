@@ -45,6 +45,7 @@ a diagnostic.
 | `loadfont(path)` | Font file path | Font handle `1..64`, the same for the same path, or `0` when it cannot be used |
 | `fontwidth(font, size, text)` / `fontheight(font, size)` | Font handle, pixels per em, and text | Advance width of the text (a real) / line height (ascent + descent + line gap, an integer) in pixels; sizes are rounded to whole pixels as drawing does |
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
+| `canvascursor(canvas, mode)` | Canvas, `"hidden"` or `"normal"` | Zero; `"hidden"` hides the system cursor while it is over the canvas, for programs that draw their own |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
 | `getfocus(window)` | Window handle | Handle of the window's focused text box or list, or `0` |
@@ -63,6 +64,7 @@ a diagnostic.
 | `"wheel"` | Canvas | canvas, x, y, direction (`1` away from the user, `-1` toward) |
 | `"double"` | Canvas | canvas, x, y of the second press of a double click (within 0.45 s and 5 pixels; its `"pointer"` event comes first) |
 | `"menu"` | Canvas | canvas, x, y of a right-button press |
+| `"motion"` | Canvas | canvas, x, y of the cursor as it moves over the canvas (at most once per frame, the latest position; `-1, -1` when it leaves) |
 | `"key"` | Window | window, GLFW key code (key press) |
 | `"keyup"` | Window | window, GLFW key code (key release) |
 | `"focus"` | Window | window, `1` when focused, `0` when focus is lost |

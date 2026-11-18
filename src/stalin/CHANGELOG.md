@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+- Images of any size: `mkimg` makes a sparse file (the new `bsparse`
+  builtin), which takes disk space only as it is written. A 1 or 2 TB
+  image (partitions far past 128 GB) used to fail on a disk with less
+  free space than the image's size.
+- `mkimg --dry-run` writes nothing.
+- `file_exists` sees files of 2 GB and more on Windows (it used the 32-bit
+  `stat`); `tests/stalin_more_test.su` makes a 2 TB image with a 1.5 TB
+  partition.
+
 ## 0.2.0
 - Refine pass 1, in `more.su`: `verify` (overlaps, alignment, CRCs, the
   backup GPT's place, the protective MBR, the array at LBA 2 and 128

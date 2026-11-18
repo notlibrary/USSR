@@ -49,6 +49,7 @@ $define TULA_MAX_ENTITIES 10000
 # Toolbar and keyboard pan step in canvas pixels.
 $define TULA_PAN_STEP 100
 $include "more.su"
+$include "scope.su"
 
 tula_floor(r): x [
     str_trunc(_tf_t): x
@@ -269,10 +270,13 @@ tula_redraw(r): [
         canvasline(_): _trd_canvas {_trd_px - 5} _trd_py {_trd_px + 5} _trd_py TULA_ANCHOR
         canvasline(_): _trd_canvas _trd_px {_trd_py - 5} _trd_px {_trd_py + 5} TULA_ANCHOR
     ]
+    # the crosshair and the preview of what is being drawn (scope.su)
+    tsc_overlay(_): _trd_canvas
     set(r): 0
 ]
 
 tulainitialize(canvas): window status filename [
+    tsc_state(_):
     set(tula_window): window!
     set(tula_status): status!
     set(tula_path): filename!
@@ -740,6 +744,16 @@ tulakey(result): window key [
     if(_): {key = 257 || key = 335} [
         uilock(_):
         tl_gui_command(_):
+        uiunlock(_):
+        return(_): result
+    ]
+    if(_): {key = 256} [
+        # Escape drops the first point of a line or circle
+        uilock(_):
+        vec(_tk_none): ""
+        set(tula_anchor): _tk_none!
+        tula_set_status(_): "Cancelled"
+        tula_redraw(_):
         uiunlock(_):
         return(_): result
     ]
@@ -1290,6 +1304,18 @@ tula_app_pointer(result): canvas x y [
     tulaclick(_): canvas x y
 ]
 
+tula_app_motion(result): canvas x y [
+    tsc_motion(_): canvas x y
+]
+
+# the crosshair needs the "motion" event and a hidden system cursor;
+# a runtime without them (Moscow's) keeps the arrow
+tula_scope_on(r): canvas [
+    set(r): 0
+    on(_): canvas "motion" "tula_app_motion"
+    canvascursor(_): canvas "hidden"
+]
+
 tula_app_wheel(result): canvas x y direction [
     tulawheel(_): canvas x y direction
 ]
@@ -1319,6 +1345,7 @@ init(result): arg_count arg_values [
     on(_): canvas "pointer" "tula_app_pointer"
     on(_): canvas "wheel" "tula_app_wheel"
     on(_): window "key" "tula_app_key"
+    try(_): "tula_scope_on" canvas
     pack(_): canvas true
     maximize(_): window
     run(_):
@@ -1327,5 +1354,6 @@ init(result): arg_count arg_values [
         sleep(_): 200
         tulaload(_):
     ]
+    tsc_loop(_): window
 ]
 $endif

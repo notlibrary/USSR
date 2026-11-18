@@ -4288,7 +4288,13 @@ int ussr_execute_command(
 
     if (strcmp(command, "file_exists") == 0)
     {
+#ifdef _WIN32
+        /* the 64-bit stat: plain stat fails (EOVERFLOW) on files of 2 GB
+           and more, such as disk images */
+        struct _stat64 st;
+#else
         struct stat st;
+#endif
         ussr_value_t path_value;
         int exists;
 
@@ -4299,7 +4305,11 @@ int ussr_execute_command(
             return -1;
         }
 
+#ifdef _WIN32
+        exists = _stat64(path_value.data.string, &st) == 0;
+#else
         exists = stat(path_value.data.string, &st) == 0;
+#endif
         ussr_value_free(&path_value);
 
         result = ussr_boolean(exists);

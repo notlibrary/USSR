@@ -1,0 +1,155 @@
+# scope.su - Tula's cursor: a crosshair ("scope", as LibreCAD draws one)
+# in place of the mouse arrow, and a live preview of the line or circle
+# being drawn.
+#
+# The crosshair is two dashed lines across the whole canvas through the
+# point a click would take (grid snap and object snaps applied), with a
+# small pick box at the centre and the point's coordinates beside it.
+# Once the first point of a line or circle is down, the line to the
+# cursor (or the circle through it) is drawn dashed, with its length or
+# radius. The system cursor is hidden over the canvas.
+#
+# The canvas "motion" callback only keeps the position (it comes once per
+# frame); tsc_loop redraws when it changed, so a fast mouse never queues
+# more work than one redraw. Hash keys: tula_mx tula_my (-1: the cursor
+# is away) and tula_mdirty.
+$once
+
+$define TSC_CROSS 14697012
+$define TSC_PREVIEW 2201331
+$define TSC_DASH 9
+$define TSC_GAP 6
+$define TSC_BOX 5
+
+tsc_state(r): [
+    set(tula_mx): -1!
+    set(tula_my): -1!
+    set(tula_mdirty): false!
+    set(r): 0
+]
+
+# the canvas "motion" callback body
+tsc_motion(r): canvas x y [
+    set(r): 0
+    set(tula_mx): x!
+    set(tula_my): y!
+    set(tula_mdirty): true!
+]
+
+# the point a click at canvas x, y would take: [world x, world y]
+tsc_point(r): x y [
+    set(v): tula_view?
+    at(ox): v 0
+    at(oy): v 1
+    at(s): v 2
+    tula_snap(sx): {(x - ox) / s}
+    tula_snap(sy): {(oy - y) / s}
+    tl_gui_point(r): {(x - ox) / s} {(oy - y) / s} sx sy s
+]
+
+# a dashed line from (x1, y1) to (x2, y2)
+tsc_dashed(r): canvas x1 y1 x2 y2 color [
+    set(r): 0
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    sqrt(len_): {dx * dx + dy * dy}
+    if(_): {len_ < 1} [ return(r): r ]
+    set(ux): {dx / len_}
+    set(uy): {dy / len_}
+    set(d): 0
+    while(_): {d < len_} [
+        set(e): {d + TSC_DASH}
+        if(_): {e > len_} [ set(e): len_ ]
+        canvasline(_): canvas {x1 + ux * d} {y1 + uy * d} {x1 + ux * e} {y1 + uy * e} color
+        set(d): {e + TSC_GAP}
+    ]
+]
+
+# a dashed circle: arcs of about TSC_DASH pixels
+tsc_dashed_circle(r): canvas cx cy radius color [
+    set(r): 0
+    if(_): {radius < 1} [ return(r): r ]
+    set(circ): {2 * 3.14159265 * radius}
+    str_trunc(n): {circ / (TSC_DASH + TSC_GAP)}
+    if(_): {n < 8} [
+        canvascircle(_): canvas cx cy radius color
+        return(r): r
+    ]
+    if(_): {n > 720} [ set(n): 720 ]
+    set(step): {360.0 / n}
+    set(on): {step * TSC_DASH / (TSC_DASH + TSC_GAP)}
+    set(i): 0
+    while(_): {i < n} [
+        canvasarc(_): canvas cx cy radius {i * step} {i * step + on} color
+        set(i): {i + 1}
+    ]
+]
+
+# drawn last by tula_redraw: the preview, then the crosshair over it
+tsc_overlay(r): canvas [
+    set(r): 0
+    set(mx): tula_mx?
+    set(my): tula_my?
+    if(_): {mx < 0 || my < 0} [ return(r): r ]
+    tsc_point(pt): mx my
+    at(wx): pt 0
+    at(wy): pt 1
+    tula_to_screen_x(px): wx
+    tula_to_screen_y(py): wy
+    # the line or circle being drawn
+    set(tool): tula_tool?
+    set(anchor): tula_anchor?
+    len(na): anchor
+    set(note): ""
+    if(_): {na = 2 && (tool = "line" || tool = "circle")} [
+        at(ax): anchor 0
+        at(ay): anchor 1
+        tula_to_screen_x(sax): ax
+        tula_to_screen_y(say): ay
+        set(dx): {wx - ax}
+        set(dy): {wy - ay}
+        sqrt(dist): {dx * dx + dy * dy}
+        str_from_number(ds): dist 3
+        if(_): {tool = "line"} [
+            tsc_dashed(_): canvas sax say px py TSC_PREVIEW
+            concat(note): "length " ds
+        ]
+        else(_): [
+            set(v): tula_view?
+            at(s): v 2
+            tsc_dashed_circle(_): canvas sax say {dist * s} TSC_PREVIEW
+            tsc_dashed(_): canvas sax say px py TSC_PREVIEW
+            concat(note): "radius " ds
+        ]
+    ]
+    # the crosshair across the canvas and its pick box
+    getwidth(w): canvas
+    getheight(h): canvas
+    if(_): {w < 10} [ set(w): TULA_EXTENT_X ]
+    if(_): {h < 10} [ set(h): TULA_EXTENT_Y ]
+    tsc_dashed(_): canvas 0 py w py TSC_CROSS
+    tsc_dashed(_): canvas px 0 px h TSC_CROSS
+    canvasrect(_): canvas {px - TSC_BOX} {py - TSC_BOX} {TSC_BOX * 2} {TSC_BOX * 2} TSC_CROSS
+    str_from_number(xs): wx 3
+    str_from_number(ys): wy 3
+    concat(t): xs ", " ys
+    if(_): {note != ""} [ concat(t): t "   " note ]
+    canvastext(_): canvas {px + 12} {py + 10} t TSC_CROSS
+]
+
+# the window's redraw loop: a redraw when the cursor moved
+tsc_loop(r): window [
+    set(r): 0
+    alive(up): window
+    while(_): up [
+        set(dirty): tula_mdirty?
+        if(_): {dirty = true} [
+            uilock(_):
+            set(tula_mdirty): false!
+            tula_redraw(_):
+            uiunlock(_):
+        ]
+        sleep(_): 15
+        alive(up): window
+    ]
+]

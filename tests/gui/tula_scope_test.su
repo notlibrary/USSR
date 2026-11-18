@@ -1,0 +1,110 @@
+# Tula's crosshair and drawing preview (src/tula/scope.su). Needs a GUI-
+# enabled ussr (GLFW) and a display; the window is never shown. Run from
+# the repository root:
+#     ussr tests/gui/tula_scope_test.su
+# Moves the cursor with injected "motion" events, checks the crosshair is
+# drawn where a click would snap, the rubber-band line and circle follow
+# the cursor after the first point, Escape cancels, and the overlay goes
+# when the cursor leaves. Prints PASS or FAIL.
+$include "../../src/tula/tula.su"
+
+tst_check(r): label ok [
+    set(r): 0
+    if(_): ok [ concat(m): "PASS " label ]
+    else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+]
+
+tst_settle(r): [
+    sleep(_): 40
+    uiidle(idle):
+    set(tries): 0
+    while(_): {idle = false && tries < 200} [
+        sleep(_): 10
+        uiidle(idle):
+        set(tries): {tries + 1}
+    ]
+    set(r): 0
+]
+
+tst_pointer(result): canvas x y [
+    tulaclick(_): canvas x y
+]
+
+tst_motion(result): canvas x y [
+    tsc_motion(_): canvas x y
+]
+
+tst_key(result): window key [
+    tulakey(_): window key
+]
+
+# moves the cursor and redraws as the loop would
+tst_move(r): canvas x y [
+    inject(_): canvas "motion" x y 0
+    tst_settle(_):
+    uilock(_):
+    set(tula_mdirty): false!
+    tula_redraw(_):
+    uiunlock(_):
+    canvascount(r): canvas
+]
+
+init(result): arg_count arg_values [
+    createwindow(window): "Tula scope test" 1100 800
+    textbox(filename): window "tula_scope_out.dxf"
+    label(status): window ""
+    tulainitialize(canvas): window status filename
+    on(_): canvas "pointer" "tst_pointer"
+    on(_): canvas "motion" "tst_motion"
+    on(_): window "key" "tst_key"
+    pack(_): canvas true
+    canvascursor(cr): canvas "hidden"
+    tst_check(_): "canvascursor hides the cursor over the canvas" {cr = 0}
+    canvascount(base): canvas
+    tst_move(n1): canvas 403 297
+    tst_check(_): "the crosshair is drawn when the cursor is over the canvas" {n1 > base + 50}
+    set(mx): tula_mx?
+    set(my): tula_my?
+    tst_check(_): "the motion event gives the cursor position" {mx = 403 && my = 297}
+    # it sits where a click snaps: the same point as tulaclick takes
+    tsc_point(pt): 403 297
+    at(wx): pt 0
+    at(wy): pt 1
+    tula_snap(sx): wx
+    tula_snap(sy): wy
+    tst_check(_): "the crosshair is at the snapped point" {wx = sx && wy = sy}
+    # a line: the first point, then the preview follows the cursor
+    tulatool(_): "line"
+    inject(_): canvas "pointer" 403 297 0
+    tst_settle(_):
+    tst_move(n2): canvas 603 197
+    tst_check(_): "after the first point a dashed line follows the cursor" {n2 > n1 + 10}
+    tst_move(n3): canvas 803 197
+    tst_check(_): "a longer line has more dashes" {n3 > n2}
+    inject(_): canvas "pointer" 803 197 0
+    tst_settle(_):
+    set(es): tula_entities?
+    len(ne): es
+    tst_check(_): "the second click adds the line" {ne = 1}
+    # a circle preview, then Escape drops its centre
+    tulatool(_): "circle"
+    inject(_): canvas "pointer" 400 400 0
+    tst_settle(_):
+    tst_move(n4): canvas 480 400
+    tst_move(n5): canvas 600 400
+    tst_check(_): "the circle preview grows with the radius" {n5 > n4}
+    inject(_): window "key" 256 0 0
+    tst_settle(_):
+    set(anchor): tula_anchor?
+    len(na): anchor
+    tst_check(_): "Escape drops the first point" {na = 0}
+    # the cursor leaves: no crosshair
+    tst_move(n6): canvas -1 -1
+    tula_redraw(_):
+    canvascount(n7): canvas
+    tst_check(_): "the overlay goes when the cursor leaves" {n7 < n1}
+    close(_): window
+    sleep(_): 100
+    set(result): 0
+]

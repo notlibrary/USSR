@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0
+- `fonts.su`: fonts on parts of the text.
+  - Select text with Shift and the arrows, Home/End or Page Up/Down, a
+    Shift+click, or Ctrl+A. FONT, B and I (Ctrl+B, Ctrl+I) then give only
+    the selection its family, bold or italic; with nothing selected they
+    set the document's font, as before.
+  - Mixed text is measured and drawn piece by piece in each span's font,
+    so it wraps and places the caret correctly.
+  - Typing, Delete or Backspace over a selection replaces it.
+  - The spans follow edits, splits and joins, and undo keeps them.
+  - A `.fodt` with spans is written through the rich writer and read back
+    with them.
+- Help (F1 or HELP) is a box drawn over the page.
+- Holding an arrow key keeps moving and scrolls the page.
+- `tests/gui/novosibirsk_fonts_test.su`.
+
 ## 0.2.0
 Refine pass 1 from REFINE.md; the new code is `more.su`.
 - A richer document beside the pad's plain paragraphs: character

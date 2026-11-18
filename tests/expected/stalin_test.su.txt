@@ -50,7 +50,7 @@ luks             -    CA7D7CCB-63ED-4C53-861C-1742536059CC  LUKS (Linux encrypte
 
 aliases: ext2=linux ext3=linux ext4=linux linux-swap=swap windows=ntfs exfat=ntfs fat=fat32 vfat=fat32 esp=efi ufs2=ufs ufs1=ufs freebsd=ufs openbsd=ffs2 ffs=netbsd
 $ stalin mkimg IMG 20M
-Created tests/stalin-tmp.img: 20 MiB, 40960 sectors
+Created tests/stalin-tmp.img: 20 MiB, 40960 sectors (sparse: disk space is used as it is written)
 $ stalin mkimg IMG 20M
 [exit 2]
 $ stalin show IMG
@@ -287,7 +287,7 @@ Free: 26624..40959 (7 MiB)
 $ stalin wipe IMG
 Wiped the partition tables of tests/stalin-tmp.img
 $ stalin mkimg IMG 20M --sector 4096 --yes
-Created tests/stalin-tmp.img: 20 MiB, 5120 sectors
+Created tests/stalin-tmp.img: 20 MiB, 5120 sectors (sparse: disk space is used as it is written)
 $ stalin init IMG gpt --sector 4096
 Disk tests/stalin-tmp.img: 20 MiB, 5120 sectors of 4096 bytes
 Table: GPT, disk GUID FD03BA7A-036E-4109-A836-FFDB04E9E2C4, usable sectors 6..5114, 128 entries

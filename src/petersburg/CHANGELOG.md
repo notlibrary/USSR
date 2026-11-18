@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0-alpha
+- A held key sends its repeats (`GLFW_REPEAT`) to the window's `"key"`
+  callback, so holding an arrow keeps moving in every program; text
+  widgets still act on the first press only.
+- A canvas `"motion"` event: canvas, x, y as the cursor moves over it, at
+  most once a frame (the latest position), and -1, -1 when it leaves.
+- `canvascursor(canvas, "hidden" | "normal")` hides the system cursor over
+  a canvas, for programs that draw their own.
+
 ## 0.6.0-alpha
 Refine pass 1 from REFINE.md: `more.su`, in USSR on top of the native
 widgets. The scene, the rasteriser, the layout and the widget models need

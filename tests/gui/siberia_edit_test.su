@@ -1,0 +1,291 @@
+# Siberia editing GUI test (src/siberia/edit.su). Needs a GLFW-enabled
+# ussr and a display; the window is never shown. Run from the repository
+# root:
+#     ussr tests/gui/siberia_edit_test.su
+# Shift+arrow selections, their Sum/Average/Count, copy, cut and paste
+# (formulas move), AutoSum from the toolbar and Alt+=, editing in the
+# formula bar with a caret, and the help box, all through Petersburg's
+# input path. Prints PASS or FAIL per check.
+$include "../../src/siberia/siberia.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+settle(r): [
+    sleep(_): 40
+    uiidle(idle):
+    set(tries): 0
+    while(_): {idle = false && tries < 300} [
+        sleep(_): 10
+        uiidle(idle):
+        set(tries): {tries + 1}
+    ]
+    sleep(_): 20
+    set(r): 0
+]
+
+key(r): code [
+    set(w): sb_window?
+    inject(_): w "key" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+keyup(r): code [
+    set(w): sb_window?
+    inject(_): w "keyup" code 0 0
+    settle(_):
+    set(r): 0
+]
+
+ctrl(r): code [
+    key(_): 341
+    key(_): code
+    keyup(_): 341
+    set(r): 0
+]
+
+# Types text through "char" events, one code point each.
+typed(r): text [
+    set(w): sb_window?
+    vec(cps): ""
+    len(n): text
+    set(i): 0
+    while(_): {i < n} [
+        utf8_next(j): text i
+        byte(b): text i
+        set(cp): b
+        if(_): {j - i = 2} [
+            byte(b2): text {i + 1}
+            set(cp): {((b & 31) << 6) | (b2 & 63)}
+        ]
+        inject(_): w "char" cp 0 0
+        set(i): j
+    ]
+    settle(_):
+    set(r): 0
+]
+
+tool(r): action [
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(a): entry 1
+        if(_): {a = action} [
+            at(h): entry 0
+            inject(_): h "click" 0 0 0
+        ]
+        set(i): {i + 1}
+    ]
+    settle(_):
+    set(r): 0
+]
+
+test_tool(result): button [
+    sbtool(_): button
+]
+
+test_pointer(result): canvas x y [
+    sbclick(_): x y false
+]
+
+test_double(result): canvas x y [
+    sbclick(_): x y true
+]
+
+test_key(result): window k [
+    sbkey(_): k
+]
+
+test_keyup(result): window k [
+    sbkeyup(_): k
+]
+
+test_char(result): window cp [
+    sbchar(_): cp
+]
+
+listen(r): window canvas [
+    on(_): canvas "pointer" "test_pointer"
+    on(_): canvas "double" "test_double"
+    on(_): window "key" "test_key"
+    on(_): window "keyup" "test_keyup"
+    on(_): window "char" "test_char"
+    set(buttons): sb_buttons?
+    len(n): buttons
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): buttons i
+        at(h): entry 0
+        on(_): h "click" "test_tool"
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]
+
+shifted(r): code [
+    key(_): 340
+    key(_): code
+    keyup(_): 340
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    sbsetup(_):
+    createwindow(window): "Siberia edit test" SB_WIDTH SB_HEIGHT
+    sbbuild(canvas): window "sheet"
+    listen(_): window canvas
+    run(_):
+    settle(_):
+    typed(_): "1"
+    key(_): SB_KEY_ENTER
+    typed(_): "2"
+    key(_): SB_KEY_ENTER
+    typed(_): "3"
+    key(_): SB_KEY_ENTER
+    # --- a selection with the keyboard
+    key(_): 341
+    key(_): SB_KEY_HOME
+    keyup(_): 341
+    shifted(_): SB_KEY_DOWN
+    shifted(_): SB_KEY_DOWN
+    sbe_bounds(b):
+    encode(bs): b
+    check(_): "Shift+Down twice selects A1:A3" bs "[0,0,2,0]"
+    sbe_stats(st):
+    check(_): "the status bar sums the selection" st "Sum: 6    Average: 2    Count: 3"
+    # --- copy and paste
+    ctrl(_): 67
+    key(_): SB_KEY_RIGHT
+    set(ar): sb_arow?
+    check(_): "a plain arrow ends the selection" ar -1
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_UP
+    ctrl(_): 86
+    sbget(b1): "B1"
+    sbget(b3): "B3"
+    check(_): "paste puts the copied cells" {b1 = "1" && b3 = "3"} true
+    # a formula moves its references
+    key(_): 341
+    key(_): SB_KEY_HOME
+    keyup(_): 341
+    key(_): SB_KEY_RIGHT
+    key(_): SB_KEY_RIGHT
+    typed(_): "=A1*10"
+    key(_): SB_KEY_ENTER
+    key(_): SB_KEY_UP
+    ctrl(_): 67
+    key(_): SB_KEY_DOWN
+    ctrl(_): 86
+    sbget(c2): "C2"
+    check(_): "a pasted formula follows its new place" c2 "=A2*10"
+    sbshow(c2v): "C2"
+    check(_): "and computes there" c2v "20"
+    # --- AutoSum of the numbers above
+    key(_): 341
+    key(_): SB_KEY_HOME
+    keyup(_): 341
+    key(_): SB_KEY_DOWN
+    key(_): SB_KEY_DOWN
+    key(_): SB_KEY_DOWN
+    tool(_): "sum"
+    sbget(a4): "A4"
+    check(_): "the SUM button sums the column above" a4 "=SUM(A1:A3)"
+    sbshow(a4v): "A4"
+    check(_): "to 6" a4v "6"
+    # --- Alt+= under a selection
+    key(_): SB_KEY_RIGHT
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_UP
+    shifted(_): SB_KEY_DOWN
+    shifted(_): SB_KEY_DOWN
+    key(_): 342
+    key(_): 61
+    typed(_): "="
+    keyup(_): 342
+    sbget(b4): "B4"
+    check(_): "Alt+= puts a SUM under the selection" b4 "=SUM(B1:B3)"
+    set(editing): sb_edit?
+    check(_): "the '=' of Alt+= is not typed" editing false
+    # --- cut and undo
+    ctrl(_): 88
+    sbget(b2): "B2"
+    check(_): "cut empties the selection" b2 ""
+    ctrl(_): 90
+    sbget(b2): "B2"
+    check(_): "undo brings it back" b2 "2"
+    # --- Delete clears a selection
+    shifted(_): SB_KEY_UP
+    key(_): SB_KEY_DELETE
+    sbget(b1): "B1"
+    sbget(b2): "B2"
+    check(_): "Delete clears every selected cell" {b1 = "" && b2 = ""} true
+    ctrl(_): 90
+    # --- the formula bar
+    key(_): 341
+    key(_): SB_KEY_HOME
+    keyup(_): 341
+    key(_): SB_KEY_RIGHT
+    key(_): SB_KEY_RIGHT
+    inject(_): canvas "pointer" 300 10 0
+    settle(_):
+    set(editing): sb_edit?
+    set(inbar): sb_inbar?
+    check(_): "a click on the formula bar edits the cell there" {editing = true && inbar = true} true
+    key(_): SB_KEY_HOME
+    key(_): SB_KEY_RIGHT
+    typed(_): "("
+    key(_): SB_KEY_END
+    typed(_): "+1)"
+    set(row): sb_row?
+    set(col): sb_col?
+    check(_): "arrows move the caret, not the cell" {row = 0 && col = 2} true
+    key(_): SB_KEY_ENTER
+    sbget(c1): "C1"
+    check(_): "the bar's edit is kept" c1 "=(A1*10+1)"
+    sbshow(c1v): "C1"
+    check(_): "and computes" c1v "11"
+    # Backspace and Delete at the caret
+    key(_): SB_KEY_UP
+    key(_): SB_KEY_F2
+    key(_): SB_KEY_HOME
+    key(_): SB_KEY_DELETE
+    key(_): SB_KEY_END
+    key(_): SB_KEY_BACKSPACE
+    key(_): SB_KEY_ENTER
+    sbget(c1): "C1"
+    check(_): "Delete and Backspace work at the caret" c1 "(A1*10+1"
+    # --- help
+    key(_): SB_KEY_F1
+    set(d): sb_dialog?
+    check(_): "F1 opens the help box" d "help"
+    canvascount(shapes): canvas
+    check(_): "the help box is drawn" {shapes > 20} true
+    key(_): SB_KEY_ESC
+    set(d): sb_dialog?
+    check(_): "a key closes it" d ""
+    tool(_): "help"
+    set(d): sb_dialog?
+    check(_): "HELP opens it too" d "help"
+    inject(_): canvas "pointer" 50 300 0
+    settle(_):
+    set(d): sb_dialog?
+    check(_): "a click closes it" d ""
+    close(_): window
+    sleep(_): 100
+    set(result): 0
+]

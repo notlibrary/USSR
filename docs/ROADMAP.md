@@ -23,12 +23,12 @@ A snapshot: run the generator again after a refine pass.
 | [russia](../src/russia/REFINE.md) | 0 | 0 | 58 | `..........` |
 | [ryazan](../src/ryazan/REFINE.md) | 22 | 6 | 25 | `####......` |
 | [siberia](../src/siberia/REFINE.md) | 16 | 15 | 34 | `###.......` |
-| [sochi](../src/sochi/REFINE.md) | 0 | 0 | 51 | `..........` |
+| [sochi](../src/sochi/REFINE.md) | 2 | 6 | 43 | `..........` |
 | [stalin](../src/stalin/REFINE.md) | 18 | 10 | 21 | `####......` |
 | [tula](../src/tula/REFINE.md) | 26 | 24 | 8 | `######....` |
 | [tver](../src/tver/REFINE.md) | 18 | 26 | 17 | `#####.....` |
 | [ukraine](../src/ukraine/REFINE.md) | 22 | 12 | 26 | `####......` |
 | [ural](../src/ural/REFINE.md) | 10 | 5 | 44 | `##........` |
-| [usa](../src/usa/REFINE.md) | 0 | 0 | 62 | `..........` |
+| [usa](../src/usa/REFINE.md) | 3 | 4 | 55 | `..........` |
 | [docs](../docs/REFINE.md) | 7 | 3 | 36 | `#.........` |
-| **all** | **389** | **282** | **776** | |
+| **all** | **394** | **292** | **761** | |

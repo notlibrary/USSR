@@ -175,6 +175,10 @@ test_keyup(result): window k [
     kremlinkeyup(_): k
 ]
 
+test_motion(result): canvas x y [
+    kmx_hover(_): x y
+]
+
 init(result): arg_count arg_values [
     getcwd(cwd):
     km_slashes(cwd): cwd
@@ -189,6 +193,7 @@ init(result): arg_count arg_values [
     on(_): canvas "wheel" "test_wheel"
     on(_): window "key" "test_key"
     on(_): window "keyup" "test_keyup"
+    on(_): canvas "motion" "test_motion"
     run(_):
 
     canvascount(shapes): canvas
@@ -271,9 +276,75 @@ init(result): arg_count arg_values [
     key(_): 261
     set(dlg): km_dialog?
     check(_): "Del asks first" dlg "confirm"
+    set(dlgtext): km_dlg_text?
+    contains(intrash): dlgtext "Trash"
+    check(_): "Del offers the Trash" intrash true
     click_tag(_): "dialog-ok"
     km_index_of(i): "Songs/"
     check(_): "the folder is deleted" i {0 - 1}
+    is_dir(td): "tests/kremlin_gui_tmp/.Trash/Songs"
+    check(_): "it is in the Trash" td 1
+    kmx_trash_count(tn):
+    check(_): "the Trash counts it" tn 1
+    # the bin in the corner: its menu, then open it and restore
+    at_tag(ok): "menu" "trash"
+    check(_): "the bin is on the desktop" ok true
+    set(p): km_popup?
+    check(_): "right-click on the bin: its menu" p "trash"
+    key(_): 256
+    at_tag(_): "double" "trash"
+    kmx_in_trash(inside):
+    check(_): "a double click opens the Trash" inside true
+    kremlinselect(_): "Songs/"
+    kremlinaction(e): "trash-restore" "Songs/"
+    check(_): "restore puts it back" e ""
+    is_dir(back): "tests/kremlin_gui_tmp/Songs"
+    check(_): "where it was" back 1
+    kremlinup(_):
+    # hover: the KREMLIN button and the menu items follow the pointer
+    at_tag(_): "motion" "start"
+    set(hv): km_hover?
+    check(_): "the pointer over KREMLIN lights it" hv "start"
+    click_tag(_): "start"
+    at_tag(_): "motion" "item:1"
+    set(hs): km_popup_sel?
+    check(_): "a menu item under the pointer is highlighted" hs 1
+    at_tag(_): "motion" "item:2"
+    set(hs): km_popup_sel?
+    check(_): "and the highlight follows it" hs 2
+    key(_): 256
+    # Add shortcut: a launcher to a folder opens it in Kremlin
+    kremlinaction(_): "shortcut" ""
+    set(dlg): km_dialog?
+    check(_): "Add shortcut asks for a path" dlg "input"
+    getcwd(here):
+    km_slashes(here): here
+    km_join(target): here "tests/kremlin_gui_tmp/Documents"
+    set(km_dlg_value): target!
+    km_dialog_ok(e):
+    check(_): "the path is accepted" e ""
+    set(km_dlg_value): "Docs link"!
+    km_dialog_ok(e):
+    check(_): "the shortcut is made" e ""
+    km_index_of(li): "Docs link.kl"
+    check(_): "it is on the desktop" {li >= 0} true
+    kremlinplan(lp): "Docs link.kl"
+    at(lpa): lp 0
+    check(_): "opening it opens the folder in Kremlin" lpa "folder"
+    remove_file(_): "tests/kremlin_gui_tmp/Docs link.kl"
+    # from an icon's menu: a shortcut on the desktop to that folder
+    kremlinaction(e): "shortcut-here" "Documents/"
+    check(_): "Create shortcut on desktop works" e ""
+    kremlinplan(sp): "Documents.kl"
+    at(spa): sp 0
+    at(spt): sp 1
+    contains(spd): spt "Documents"
+    check(_): "the shortcut opens that folder" {spa = "folder" && spd} true
+    remove_file(_): "tests/kremlin_gui_tmp/Documents.kl"
+    kremlinrefresh(_):
+    kremlinselect(_): "Songs/"
+    key(_): 261
+    click_tag(_): "dialog-ok"
 
     # the KREMLIN menu starts an app
     click_tag(_): "start"
@@ -373,6 +444,9 @@ init(result): arg_count arg_values [
     remove_file(_): "tests/kremlin_gui_tmp/.runhistory"
     remove_file(_): "tests/kremlin_gui_tmp/.recent"
     remove_dir(_): "tests/kremlin_gui_tmp/Music 1"
+    remove_dir(_): "tests/kremlin_gui_tmp/.Trash/Songs"
+    remove_file(_): "tests/kremlin_gui_tmp/.Trash/.origins"
+    remove_dir(_): "tests/kremlin_gui_tmp/.Trash"
     remove_dir(_): "tests/kremlin_gui_tmp"
     file_exists(gone): "tests/kremlin_gui_tmp"
     check(_): "scratch desktop removed" gone false

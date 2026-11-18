@@ -1890,25 +1890,48 @@ st_cmd_mkimg(r): p [
         st_err(r): "mkimg makes image files, not devices"
         return(r): r
     ]
-    open_file(h): file "wb"
-    if(_): {h = -1} [
-        concat(m): "cannot create " file
-        st_err(r): m
-        return(r): r
-    ]
-    close_file(_): h
-    st_zeros(z): st_sector
-    bwrite(w): file {sectors - 1} z st_sector
-    if(_): {w < 0} [
-        concat(m): "cannot write " file
-        st_err(r): m
-        return(r): r
-    ]
     st_int(ts): sectors
     st_human(hs): {sectors * st_sector}
+    if(_): st_dry [
+        concat(m): "dry run: would create " file ": " hs ", " ts " sectors"
+        print(_): m
+        set(r): 0
+        return(r): r
+    ]
+    # a sparse file: a 1 TB image takes disk space only as it is written
+    # (a plain file of that size would reserve every byte, and a big one
+    # fails on a disk with less room than its size)
+    btree(box):
+    try(_): "st_sparse_into" box file {sectors * st_sector}
+    btget(made): box "made" -1
+    set(sparse): {made >= 0}
+    if(_): {sparse = false} [
+        open_file(h): file "wb"
+        if(_): {h = -1} [
+            concat(m): "cannot create " file
+            st_err(r): m
+            return(r): r
+        ]
+        close_file(_): h
+        st_zeros(z): st_sector
+        bwrite(w): file {sectors - 1} z st_sector
+        if(_): {w < 0} [
+            concat(m): "cannot write " file " (is there room for " hs " on the disk?)"
+            st_err(r): m
+            return(r): r
+        ]
+    ]
     concat(m): "Created " file ": " hs ", " ts " sectors"
+    if(_): sparse [ concat(m): m " (sparse: disk space is used as it is written)" ]
     print(_): m
     set(r): 0
+]
+
+# bsparse through try: a runtime without it (Moscow's) falls back
+st_sparse_into(r): box file bytes [
+    set(r): 0
+    bsparse(n): file bytes
+    btput(_): box "made" n
 ]
 
 st_cmd_init(r): p [

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+- `edit.su`: editing at the window.
+  - Selections: Shift with the arrows, Page Up/Down or Home/End, a
+    Shift+click, or Ctrl+A for everything used. The status bar shows the
+    selection's Sum, Average and Count.
+  - Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells, and formulas move
+    their references. Delete clears the whole selection.
+  - AutoSum: the SUM button or Alt+= puts `=SUM(...)` under each selected
+    column (right of a one-row selection), or sums the numbers above or
+    to the left of the current cell.
+  - The formula bar edits the cell: click it, and the caret goes where you
+    clicked; Left/Right/Home/End move in the text, and Backspace and Delete
+    work at the caret (F2 and a double click edit with a caret too).
+  - Help (F1 or HELP) is a box drawn over the sheet that any key or click
+    closes; the native message box was too small for the text.
+  - A held arrow key keeps moving (Petersburg now passes key repeats on).
+- `tests/gui/siberia_edit_test.su`.
+
 ## 0.3.0
 Refine pass 1 from REFINE.md; the new code is `more.su`.
 - About 110 more functions: VLOOKUP HLOOKUP INDEX MATCH XLOOKUP; SUMIF(S)

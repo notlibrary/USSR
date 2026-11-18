@@ -1,0 +1,771 @@
+# fonts.su - Novosibirsk: fonts for parts of the text, and a selection.
+#
+# Select text (Shift with the arrows, Home/End, Page Up/Down, Ctrl+Home/End,
+# or a Shift+click; Ctrl+A for all), then FONT, B or I (Ctrl+B, Ctrl+I)
+# give just that text the family, bold or italic; with nothing selected
+# they set the document's font as before. Typing, Backspace or Delete over
+# a selection replace it. Ctrl+Up/Down scroll the page a line.
+#
+# Each paragraph has spans [start end family bold italic] over byte offsets
+# in sb_pspans (a vector beside sb_paras): family "" and bold or italic -1
+# mean the document's. Edits move the spans with the text (sbx_ins,
+# sbx_del, sbx_split, sbx_merge); undo snapshots keep them. Measuring
+# (sb_measure) and drawing go piece by piece in each span's font, so lines
+# wrap and the caret sits right in mixed text. A .fodt with spans is
+# written through more.su's nsm_fodt and read back with nsm_from_fodt.
+$once
+
+sbx_state(r): [
+    set(r): 0
+    vec(sp): ""
+    vec(e): ""
+    push(_): sp e
+    set(sb_pspans): sp!
+    set(sb_parow): -1!
+    set(sb_pacol): -1!
+    set(sb_mrow): -1!
+    set(sb_mbase): 0!
+    btree(fc):
+    set(sb_fontcache): fc!
+]
+
+# one empty span list per paragraph
+sbx_reset(r): [
+    set(r): 0
+    sb_pad_count(n):
+    vec(sp): ""
+    set(i): 0
+    while(_): {i < n} [
+        vec(e): ""
+        push(_): sp e
+        set(i): {i + 1}
+    ]
+    set(sb_pspans): sp!
+    set(sb_parow): -1!
+    set(sb_pacol): -1!
+]
+
+# the span list of a paragraph (shared: changing it changes the document)
+sbx_spans(r): row [
+    set(sp): sb_pspans?
+    len(n): sp
+    sb_pad_count(count):
+    if(_): {n != count} [
+        # a path that did not keep them in step: start over, plain
+        sbx_reset(_):
+        set(sp): sb_pspans?
+    ]
+    vec(r): ""
+    if(_): {row >= 0 && row < count} [ at(r): sp row ]
+]
+
+sbx_set_spans(r): row spans [
+    set(r): 0
+    set(sp): sb_pspans?
+    len(n): sp
+    if(_): {row >= 0 && row < n} [ set(sp): row spans ]
+    set(sb_pspans): sp!
+]
+
+sbx_any(r): [
+    set(r): false
+    set(sp): sb_pspans?
+    len(n): sp
+    set(i): 0
+    while(_): {i < n} [
+        at(s): sp i
+        len(k): s
+        if(_): {k > 0} [ set(r): true ]
+        set(i): {i + 1}
+    ]
+]
+
+# --- the spans follow the text
+
+# n bytes inserted at at: spans after it move, a span around it grows
+sbx_ins(r): row at n [
+    set(r): 0
+    sbx_spans(s): row
+    len(k): s
+    set(i): 0
+    while(_): {i < k} [
+        at(e): s i
+        at(a): e 0
+        at(b): e 1
+        # typed inside a span or at its end: the span grows (the format
+        # goes on); at or before its start: it moves along
+        if(_): {a < at && at <= b} [ set(e): 1 {b + n} ]
+        elif(_): {a >= at} [
+            set(e): 0 {a + n}
+            set(e): 1 {b + n}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# bytes a..b-1 deleted
+sbx_del(r): row a b [
+    set(r): 0
+    sbx_spans(s): row
+    set(n): {b - a}
+    vec(out): ""
+    len(k): s
+    set(i): 0
+    while(_): {i < k} [
+        at(e): s i
+        at(sa): e 0
+        at(sb): e 1
+        set(na): sa
+        set(nb): sb
+        if(_): {sa >= b} [ set(na): {sa - n} ]
+        elif(_): {sa > a} [ set(na): a ]
+        if(_): {sb >= b} [ set(nb): {sb - n} ]
+        elif(_): {sb > a} [ set(nb): a ]
+        if(_): {nb > na} [
+            set(e): 0 na
+            set(e): 1 nb
+            push(_): out e
+        ]
+        set(i): {i + 1}
+    ]
+    sbx_set_spans(_): row out
+]
+
+# paragraph row split at col into row and row + 1
+sbx_split(r): row col [
+    set(r): 0
+    sbx_spans(s): row
+    vec(left): ""
+    vec(right): ""
+    len(k): s
+    set(i): 0
+    while(_): {i < k} [
+        at(e): s i
+        at(a): e 0
+        at(b): e 1
+        if(_): {a < col} [
+            encode(ex): e
+            decode(l): ex
+            if(_): {b > col} [ set(l): 1 col ]
+            push(_): left l
+        ]
+        if(_): {b > col} [
+            encode(ex): e
+            decode(rt): ex
+            set(na): {a - col}
+            if(_): {na < 0} [ set(na): 0 ]
+            set(rt): 0 na
+            set(rt): 1 {b - col}
+            push(_): right rt
+        ]
+        set(i): {i + 1}
+    ]
+    set(sp): sb_pspans?
+    vec(out): ""
+    len(n): sp
+    set(i): 0
+    while(_): {i < n} [
+        at(x): sp i
+        if(_): {i = row} [
+            push(_): out left
+            push(_): out right
+        ]
+        else(_): [ push(_): out x ]
+        set(i): {i + 1}
+    ]
+    set(sb_pspans): out!
+]
+
+# paragraphs row and row + 1 joined; left is row's length before
+sbx_merge(r): row left [
+    set(r): 0
+    set(sp): sb_pspans?
+    len(n): sp
+    if(_): {row + 1 >= n} [ return(r): r ]
+    at(a): sp row
+    at(b): sp {row + 1}
+    vec(joined): ""
+    len(ka): a
+    set(i): 0
+    while(_): {i < ka} [
+        at(e): a i
+        push(_): joined e
+        set(i): {i + 1}
+    ]
+    len(kb): b
+    set(i): 0
+    while(_): {i < kb} [
+        at(e): b i
+        at(s0): e 0
+        at(s1): e 1
+        set(e): 0 {s0 + left}
+        set(e): 1 {s1 + left}
+        push(_): joined e
+        set(i): {i + 1}
+    ]
+    vec(out): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(x): sp i
+        if(_): {i = row} [ push(_): out joined ]
+        elif(_): {i != row + 1} [ push(_): out x ]
+        set(i): {i + 1}
+    ]
+    set(sb_pspans): out!
+]
+
+# --- formatting a range
+
+# [family bold italic] of the span holding offset at (-1/"" inherit)
+sbx_props_at(r): row at [
+    vec(r): ""
+    push(_): r ""
+    push(_): r -1
+    push(_): r -1
+    sbx_spans(s): row
+    len(k): s
+    set(i): 0
+    while(_): {i < k} [
+        at(e): s i
+        at(a): e 0
+        at(b): e 1
+        if(_): {at >= a && at < b} [
+            at(f): e 2
+            at(bo): e 3
+            at(it): e 4
+            set(r): 0 f
+            set(r): 1 bo
+            set(r): 2 it
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sbx_mk(r): a b f bo it [
+    vec(r): ""
+    push(_): r a
+    push(_): r b
+    push(_): r f
+    push(_): r bo
+    push(_): r it
+]
+
+# key ("family", "bold", "italic") = value over bytes a..b-1 of row
+sbx_apply(r): row a b key value [
+    set(r): 0
+    if(_): {b <= a} [ return(r): r ]
+    sb_para_text(t): row
+    len(n): t
+    # cut the paragraph at every boundary, each piece with its props
+    btree(cuts):
+    btput(_): cuts 0 true
+    btput(_): cuts n true
+    btput(_): cuts a true
+    btput(_): cuts b true
+    sbx_spans(s): row
+    len(k): s
+    set(i): 0
+    while(_): {i < k} [
+        at(e): s i
+        at(sa): e 0
+        at(sb): e 1
+        btput(_): cuts sa true
+        btput(_): cuts sb true
+        set(i): {i + 1}
+    ]
+    btkeys(cs): cuts
+    len(nc): cs
+    vec(out): ""
+    set(i): 0
+    while(_): {i + 1 < nc} [
+        at(x0): cs i
+        at(x1): cs {i + 1}
+        if(_): {x1 > x0 && x0 < n} [
+            sbx_props_at(pr): row x0
+            at(f): pr 0
+            at(bo): pr 1
+            at(it): pr 2
+            if(_): {x0 >= a && x1 <= b} [
+                if(_): {key = "family"} [ set(f): value ]
+                if(_): {key = "bold"} [ set(bo): value ]
+                if(_): {key = "italic"} [ set(it): value ]
+            ]
+            set(plain): {f = "" && bo = -1 && it = -1}
+            if(_): {plain = false} [
+                # one span with the last when they are alike and touch
+                len(no): out
+                set(joined): false
+                if(_): {no > 0} [
+                    at(last): out {no - 1}
+                    at(lb): last 1
+                    at(lf): last 2
+                    at(lbo): last 3
+                    at(lit): last 4
+                    if(_): {lb = x0 && lf = f && lbo = bo && lit = it} [
+                        set(last): 1 x1
+                        set(joined): true
+                    ]
+                ]
+                if(_): {joined = false} [
+                    sbx_mk(ne): x0 x1 f bo it
+                    push(_): out ne
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+    sbx_set_spans(_): row out
+    set(sb_dirty): true!
+]
+
+# --- the selection: [r0 c0 r1 c1], or null when there is none
+
+sbx_sel(r): [
+    set(r): null
+    set(ar): sb_parow?
+    set(ac): sb_pacol?
+    if(_): {ar < 0} [ return(r): r ]
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    if(_): {ar = row && ac = col} [ return(r): r ]
+    vec(r): ""
+    set(before): {ar < row || (ar = row && ac < col)}
+    if(_): before [
+        push(_): r ar
+        push(_): r ac
+        push(_): r row
+        push(_): r col
+    ]
+    else(_): [
+        push(_): r row
+        push(_): r col
+        push(_): r ar
+        push(_): r ac
+    ]
+]
+
+sbx_anchor(r): shift [
+    set(r): 0
+    if(_): {shift = true} [
+        set(ar): sb_parow?
+        if(_): {ar < 0} [
+            set(row): sb_prow?
+            set(col): sb_pcol?
+            set(sb_parow): row!
+            set(sb_pacol): col!
+        ]
+    ]
+    else(_): [
+        set(sb_parow): -1!
+        set(sb_pacol): -1!
+    ]
+]
+
+sbx_select_all(r): [
+    set(r): 0
+    sb_pad_count(n):
+    set(sb_parow): 0!
+    set(sb_pacol): 0!
+    sb_para_text(t): {n - 1}
+    len(tl): t
+    set(sb_prow): {n - 1}!
+    set(sb_pcol): tl!
+]
+
+# key = value over the selection; false when there is none
+sbx_apply_sel(r): key value [
+    sbx_sel(s):
+    set(r): false
+    if(_): {s = null} [ return(r): r ]
+    at(r0): s 0
+    at(c0): s 1
+    at(r1): s 2
+    at(c1): s 3
+    nsm_push_undo(_): ""
+    set(row): r0
+    while(_): {row <= r1} [
+        sb_para_text(t): row
+        len(n): t
+        set(a): 0
+        set(b): n
+        if(_): {row = r0} [ set(a): c0 ]
+        if(_): {row = r1} [ set(b): c1 ]
+        sbx_apply(_): row a b key value
+        set(row): {row + 1}
+    ]
+    set(r): true
+]
+
+# the selected text removed, the cursor where it began; false if none
+sbx_delete_sel(r): [
+    sbx_sel(s):
+    set(r): false
+    if(_): {s = null} [ return(r): r ]
+    at(r0): s 0
+    at(c0): s 1
+    at(r1): s 2
+    at(c1): s 3
+    nsm_push_undo(_): ""
+    sb_para_text(t0): r0
+    if(_): {r0 = r1} [
+        len(n): t0
+        slice(left): t0 0 c0
+        slice(right): t0 c1 {n - c1}
+        concat(nt): left right
+        sb_para_set(_): r0 nt
+        sbx_del(_): r0 c0 c1
+    ]
+    else(_): [
+        # the first row up to c0, then the last row from c1
+        len(n0): t0
+        sbx_del(_): r0 c0 n0
+        sb_para_text(t1): r1
+        sbx_del(_): r1 0 c1
+        slice(left): t0 0 c0
+        len(n1): t1
+        slice(right): t1 c1 {n1 - c1}
+        # drop the rows between, then join the two that are left
+        set(k): {r1 - 1}
+        while(_): {k > r0} [
+            vec(none): ""
+            sb_paras_splice(_): k 1 none
+            set(sp): sb_pspans?
+            vec(out): ""
+            len(nsp): sp
+            set(j): 0
+            while(_): {j < nsp} [
+                at(x): sp j
+                if(_): {j != k} [ push(_): out x ]
+                set(j): {j + 1}
+            ]
+            set(sb_pspans): out!
+            set(k): {k - 1}
+        ]
+        sbx_merge(_): r0 c0
+        concat(joined): left right
+        vec(items): ""
+        new(a): "SbPara" joined
+        push(_): items a
+        sb_paras_splice(_): r0 2 items
+    ]
+    set(sb_prow): r0!
+    set(sb_pcol): c0!
+    set(sb_parow): -1!
+    set(sb_pacol): -1!
+    set(sb_goalx): {0 - 1}!
+    set(sb_dirty): true!
+    set(r): true
+]
+
+# --- fonts for pieces
+
+# a font handle for family, bold, italic (cached), 0 when there is none
+sbx_font(r): family bold italic [
+    set(r): 0
+    set(cache): sb_fontcache?
+    str_from_int(bs): bold
+    str_from_int(is): italic
+    concat(key): family "|" bs "|" is
+    btget(r): cache key -1
+    if(_): {r >= 0} [ return(r): r ]
+    set(r): 0
+    set(families): sb_families?
+    typeof(tf): families
+    if(_): {tf = "vector"} [
+        sb_family_index(i): families family
+        if(_): {i >= 0} [
+            at(f): families i
+            sb_face_path(path): f {bold = 1} {italic = 1}
+            loadfont(r): path
+        ]
+    ]
+    btput(_): cache key r
+]
+
+# the font handle of [family bold italic] props, the document's filled in
+sbx_handle(r): pr [
+    at(f): pr 0
+    at(bo): pr 1
+    at(it): pr 2
+    set(r): sb_pfont?
+    if(_): {f = "" && bo = -1 && it = -1} [ return(r): r ]
+    if(_): {f = ""} [ set(f): sb_family? ]
+    if(_): {bo = -1} [
+        set(db): sb_bold?
+        set(bo): 0
+        if(_): {db = true} [ set(bo): 1 ]
+    ]
+    if(_): {it = -1} [
+        set(di): sb_italic?
+        set(it): 0
+        if(_): {di = true} [ set(it): 1 ]
+    ]
+    sbx_font(r): f bo it
+    if(_): {r = 0} [ set(r): sb_pfont? ]
+]
+
+# text (bytes base.. of paragraph row) as [piece handle] parts
+sbx_pieces(r): row base text [
+    vec(r): ""
+    sbx_spans(s): row
+    len(n): text
+    len(k): s
+    if(_): {k = 0} [
+        vec(e): ""
+        push(_): e text
+        set(f0): sb_pfont?
+        push(_): e f0
+        push(_): r e
+        return(r): r
+    ]
+    set(pos): 0
+    while(_): {pos < n} [
+        sbx_props_at(pr): row {base + pos}
+        # how far these props go
+        set(stop): n
+        set(i): 0
+        while(_): {i < k} [
+            at(e): s i
+            at(a): e 0
+            at(b): e 1
+            set(la): {a - base}
+            set(lb): {b - base}
+            if(_): {la > pos && la < stop} [ set(stop): la ]
+            if(_): {lb > pos && lb < stop} [ set(stop): lb ]
+            set(i): {i + 1}
+        ]
+        slice(piece): text pos {stop - pos}
+        sbx_handle(h): pr
+        vec(e): ""
+        push(_): e piece
+        push(_): e h
+        push(_): r e
+        set(pos): stop
+    ]
+]
+
+# the width of text that starts at sb_mbase in paragraph sb_mrow
+sbx_measure(r): text [
+    set(row): sb_mrow?
+    set(base): sb_mbase?
+    set(px): sb_ppx?
+    sbx_pieces(ps): row base text
+    set(r): 0
+    len(n): ps
+    set(i): 0
+    while(_): {i < n} [
+        at(e): ps i
+        at(piece): e 0
+        at(h): e 1
+        if(_): {h > 0} [
+            fontwidth(w): h px piece
+            set(r): {r + w}
+        ]
+        else(_): [
+            len(pl): piece
+            set(r): {r + pl * 14}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+sbx_has_spans(r): row [
+    set(r): false
+    if(_): {row < 0} [ return(r): r ]
+    set(sp): sb_pspans?
+    len(n): sp
+    if(_): {row >= n} [ return(r): r ]
+    at(s): sp row
+    len(k): s
+    set(r): {k > 0}
+]
+
+# one line's text at x, y in its pieces' fonts
+sbx_draw_line(r): canvas x y row base text [
+    set(r): 0
+    set(px): sb_ppx?
+    sbx_pieces(ps): row base text
+    set(cx): x
+    len(n): ps
+    set(i): 0
+    while(_): {i < n} [
+        at(e): ps i
+        at(piece): e 0
+        at(h): e 1
+        if(_): {h > 0} [
+            canvasfonttext(_): canvas cx y piece 0 h px
+            fontwidth(w): h px piece
+        ]
+        else(_): [
+            canvastextscale(_): canvas cx {y + 3} piece 0 2
+            len(pl): piece
+            set(w): {pl * 14}
+        ]
+        set(cx): {cx + w}
+        set(i): {i + 1}
+    ]
+]
+
+# the selected part of one drawn line, as a light band
+sbx_draw_sel(r): canvas row start end y lh text [
+    set(r): 0
+    sbx_sel(s):
+    if(_): {s = null} [ return(r): r ]
+    at(r0): s 0
+    at(c0): s 1
+    at(r1): s 2
+    at(c1): s 3
+    if(_): {row < r0 || row > r1} [ return(r): r ]
+    set(a): start
+    set(b): end
+    if(_): {row = r0 && c0 > a} [ set(a): c0 ]
+    if(_): {row = r1 && c1 < b} [ set(b): c1 ]
+    if(_): {b < a} [ return(r): r ]
+    set(sb_mrow): row!
+    set(sb_mbase): start!
+    slice(p0): text start {a - start}
+    slice(p1): text start {b - start}
+    sb_measure(x0): p0
+    sb_measure(x1): p1
+    set(wd): {x1 - x0}
+    # an empty line inside the selection still shows it
+    if(_): {wd < 4 && row < r1} [ set(wd): 6 ]
+    if(_): {wd > 0} [ canvasfill(_): canvas {SB_MARGIN + x0} y wd lh 14018815 ]
+]
+
+# --- files: spans in and out of .fodt
+
+# the pad as an nsm document with its spans as character props
+sbx_doc(r): [
+    nsm_from_pad(r):
+    btget(paras): r "paras"
+    len(n): paras
+    set(fam): sb_family?
+    set(size): sb_size?
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(text): p "text"
+        len(tl): text
+        sbx_spans(s): i
+        vec(out): ""
+        set(pos): 0
+        len(k): s
+        set(j): 0
+        while(_): {j <= k} [
+            set(a): tl
+            set(b): tl
+            set(f): fam
+            set(bo): -1
+            set(it): -1
+            if(_): {j < k} [
+                at(e): s j
+                at(a): e 0
+                at(b): e 1
+                at(f): e 2
+                at(bo): e 3
+                at(it): e 4
+                if(_): {f = ""} [ set(f): fam ]
+            ]
+            # the gap before: the document's font, written out so that
+            # the file reads back with it
+            if(_): {a > pos} [
+                btree(gp):
+                btput(_): gp "font" fam
+                btput(_): gp "size" size
+                vec(gs): ""
+                push(_): gs pos
+                push(_): gs a
+                push(_): gs gp
+                push(_): out gs
+            ]
+            if(_): {j < k} [
+                btree(pr):
+                btput(_): pr "font" f
+                btput(_): pr "size" size
+                if(_): {bo = 1} [ btput(_): pr "bold" true ]
+                if(_): {it = 1} [ btput(_): pr "italic" true ]
+                vec(ns): ""
+                push(_): ns a
+                push(_): ns b
+                push(_): ns pr
+                push(_): out ns
+                set(pos): b
+            ]
+            set(j): {j + 1}
+        ]
+        btput(_): p "spans" out
+        set(i): {i + 1}
+    ]
+]
+
+# a .fodt's character fonts as the pad's spans (after sbpadload)
+sbx_from_fodt(r): text [
+    set(r): 0
+    nsm_from_fodt(d): text
+    typeof(td): d
+    if(_): {td != "btree"} [ return(r): r ]
+    btget(paras): d "paras"
+    len(n): paras
+    sb_pad_count(count):
+    if(_): {n != count} [ return(r): r ]
+    set(fam): sb_family?
+    vec(sp): ""
+    set(i): 0
+    while(_): {i < n} [
+        at(p): paras i
+        btget(spans): p "spans"
+        vec(out): ""
+        len(k): spans
+        set(j): 0
+        while(_): {j < k} [
+            at(e): spans j
+            at(a): e 0
+            at(b): e 1
+            at(pr): e 2
+            nsm_prop(f): pr "font" ""
+            nsm_prop(bo): pr "bold" false
+            nsm_prop(it): pr "italic" false
+            if(_): {f = fam} [ set(f): "" ]
+            set(bv): -1
+            set(iv): -1
+            if(_): bo [ set(bv): 1 ]
+            if(_): it [ set(iv): 1 ]
+            if(_): {f != "" || bv != -1 || iv != -1} [
+                sbx_mk(ne): a b f bv iv
+                push(_): out ne
+            ]
+            set(j): {j + 1}
+        ]
+        push(_): sp out
+        set(i): {i + 1}
+    ]
+    set(sb_pspans): sp!
+]
+
+# Ctrl+B (66) or Ctrl+I (73) on a selection: its start's bold (italic)
+# turned the other way over all of it; false when there is no selection
+sbx_toggle_sel(r): key [
+    set(r): false
+    sbx_sel(s):
+    if(_): {s = null} [ return(r): r ]
+    at(r0): s 0
+    at(c0): s 1
+    sbx_props_at(pr): r0 c0
+    set(k): "bold"
+    set(ix): 1
+    if(_): {key = 73} [
+        set(k): "italic"
+        set(ix): 2
+    ]
+    at(v): pr ix
+    if(_): {v = -1} [
+        set(dv): sb_bold?
+        if(_): {key = 73} [ set(dv): sb_italic? ]
+        set(v): 0
+        if(_): {dv = true} [ set(v): 1 ]
+    ]
+    set(nv): 1
+    if(_): {v = 1} [ set(nv): 0 ]
+    sbx_apply_sel(r): k nv
+]
