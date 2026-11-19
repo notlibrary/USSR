@@ -332,6 +332,15 @@ Now the whole thing asking me to become the kernel developer Will do anyway it's
 
 If you think you are the better just do it talk is cheap
 
+## Neuroslop and Dunning-Kruger effect
+The point against
+
+In short neuroslop is wrong cannot realize it's own incompetence and continue with more neuroslop
+
+In fact each next iteration(version) is better than previous because it realize and learns on errors
+
+It's AI not artificial spread idiot effect
+
 ## Stats
 ```
    18631 text files.
