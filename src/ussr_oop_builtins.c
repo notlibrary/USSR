@@ -637,6 +637,635 @@ static int oop_do_vremove(
     return 0;
 }
 
+/* --- zip archives of text: zip_read_text and zip_write_texts -------------
+ * OpenDocument files (.ods, .odt) are zip packages of XML. zip_read_text
+ * inflates one entry (DEFLATE, after Mark Adler's puff.c) and gives it as a
+ * string; zip_write_texts writes text entries stored, which ODF allows,
+ * in the order given (ODF wants "mimetype" first). No ZIP64. */
+
+#define OOP_ZIP_LIMIT (256u * 1024u * 1024u)
+
+typedef struct
+{
+    const unsigned char *in;
+    size_t inlen;
+    size_t incnt;
+    unsigned long bitbuf;
+    int bitcnt;
+    unsigned char *out;
+    size_t outlen; /* room */
+    size_t outcnt;
+    int error;
+} oop_inflate_t;
+
+static int oop_inf_bits(oop_inflate_t *s, int need)
+{
+    long val = (long)s->bitbuf;
+    while (s->bitcnt < need)
+    {
+        if (s->incnt == s->inlen)
+        {
+            s->error = 1;
+            return 0;
+        }
+        val |= (long)s->in[s->incnt++] << s->bitcnt;
+        s->bitcnt += 8;
+    }
+    s->bitbuf = (unsigned long)(val >> need);
+    s->bitcnt -= need;
+    return (int)(val & ((1L << need) - 1));
+}
+
+static int oop_inf_put(oop_inflate_t *s, unsigned char byte)
+{
+    if (s->outcnt == s->outlen)
+    {
+        size_t room = s->outlen ? s->outlen * 2 : 65536;
+        unsigned char *grown;
+        if (room > OOP_ZIP_LIMIT)
+            return -1;
+        grown = (unsigned char *)realloc(s->out, room + 1);
+        if (grown == NULL)
+            return -1;
+        s->out = grown;
+        s->outlen = room;
+    }
+    s->out[s->outcnt++] = byte;
+    return 0;
+}
+
+typedef struct
+{
+    short count[16];
+    short symbol[288];
+} oop_huffman_t;
+
+static int oop_inf_decode(oop_inflate_t *s, const oop_huffman_t *h)
+{
+    int code = 0, first = 0, index = 0, len;
+    for (len = 1; len < 16; ++len)
+    {
+        int count;
+        code |= oop_inf_bits(s, 1);
+        if (s->error)
+            return -1;
+        count = h->count[len];
+        if (code - count < first)
+            return h->symbol[index + (code - first)];
+        index += count;
+        first += count;
+        first <<= 1;
+        code <<= 1;
+    }
+    s->error = 1;
+    return -1;
+}
+
+/* 0 for a complete code, > 0 incomplete, < 0 over-subscribed */
+static int oop_inf_construct(oop_huffman_t *h, const short *length, int n)
+{
+    int symbol, len, left;
+    short offs[16];
+    for (len = 0; len < 16; ++len)
+        h->count[len] = 0;
+    for (symbol = 0; symbol < n; ++symbol)
+        h->count[length[symbol]]++;
+    if (h->count[0] == n)
+        return 0;
+    left = 1;
+    for (len = 1; len < 16; ++len)
+    {
+        left <<= 1;
+        left -= h->count[len];
+        if (left < 0)
+            return left;
+    }
+    offs[1] = 0;
+    for (len = 1; len < 15; ++len)
+        offs[len + 1] = (short)(offs[len] + h->count[len]);
+    for (symbol = 0; symbol < n; ++symbol)
+        if (length[symbol] != 0)
+            h->symbol[offs[length[symbol]]++] = (short)symbol;
+    return left;
+}
+
+static int oop_inf_codes(oop_inflate_t *s, const oop_huffman_t *lencode,
+                         const oop_huffman_t *distcode)
+{
+    static const short lbase[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17,
+        19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227,
+        258};
+    static const short lext[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2,
+        2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+    static const short dbase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49,
+        65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097,
+        6145, 8193, 12289, 16385, 24577};
+    static const short dext[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5,
+        6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+    for (;;)
+    {
+        int symbol = oop_inf_decode(s, lencode);
+        if (symbol < 0)
+            return -1;
+        if (symbol < 256)
+        {
+            if (oop_inf_put(s, (unsigned char)symbol) != 0)
+                return -1;
+        }
+        else if (symbol == 256)
+            return 0;
+        else
+        {
+            int len, dist;
+            symbol -= 257;
+            if (symbol >= 29)
+                return -1;
+            len = lbase[symbol] + oop_inf_bits(s, lext[symbol]);
+            symbol = oop_inf_decode(s, distcode);
+            if (symbol < 0 || symbol >= 30)
+                return -1;
+            dist = dbase[symbol] + oop_inf_bits(s, dext[symbol]);
+            if (s->error || (size_t)dist > s->outcnt)
+                return -1;
+            while (len-- > 0)
+                if (oop_inf_put(s, s->out[s->outcnt - (size_t)dist]) != 0)
+                    return -1;
+        }
+    }
+}
+
+static int oop_inf_stored(oop_inflate_t *s)
+{
+    unsigned len;
+    s->bitbuf = 0;
+    s->bitcnt = 0;
+    if (s->incnt + 4 > s->inlen)
+        return -1;
+    len = s->in[s->incnt] | ((unsigned)s->in[s->incnt + 1] << 8);
+    if (s->in[s->incnt + 2] != (unsigned char)~len ||
+        s->in[s->incnt + 3] != (unsigned char)(~len >> 8))
+        return -1;
+    s->incnt += 4;
+    if (s->incnt + len > s->inlen)
+        return -1;
+    while (len--)
+        if (oop_inf_put(s, s->in[s->incnt++]) != 0)
+            return -1;
+    return 0;
+}
+
+static int oop_inf_fixed(oop_inflate_t *s)
+{
+    static oop_huffman_t lencode, distcode;
+    static int built = 0;
+    if (!built)
+    {
+        short lengths[288];
+        int symbol;
+        for (symbol = 0; symbol < 144; ++symbol)
+            lengths[symbol] = 8;
+        for (; symbol < 256; ++symbol)
+            lengths[symbol] = 9;
+        for (; symbol < 280; ++symbol)
+            lengths[symbol] = 7;
+        for (; symbol < 288; ++symbol)
+            lengths[symbol] = 8;
+        oop_inf_construct(&lencode, lengths, 288);
+        for (symbol = 0; symbol < 30; ++symbol)
+            lengths[symbol] = 5;
+        oop_inf_construct(&distcode, lengths, 30);
+        built = 1;
+    }
+    return oop_inf_codes(s, &lencode, &distcode);
+}
+
+static int oop_inf_dynamic(oop_inflate_t *s)
+{
+    static const short order[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11,
+        4, 12, 3, 13, 2, 14, 1, 15};
+    short lengths[320];
+    oop_huffman_t lencode, distcode;
+    int nlen, ndist, ncode, index, err;
+
+    nlen = oop_inf_bits(s, 5) + 257;
+    ndist = oop_inf_bits(s, 5) + 1;
+    ncode = oop_inf_bits(s, 4) + 4;
+    if (s->error || nlen > 286 || ndist > 30)
+        return -1;
+    for (index = 0; index < ncode; ++index)
+        lengths[order[index]] = (short)oop_inf_bits(s, 3);
+    for (; index < 19; ++index)
+        lengths[order[index]] = 0;
+    if (s->error || oop_inf_construct(&lencode, lengths, 19) != 0)
+        return -1;
+    index = 0;
+    while (index < nlen + ndist)
+    {
+        int symbol = oop_inf_decode(s, &lencode);
+        int len = 0;
+        if (symbol < 0)
+            return -1;
+        if (symbol < 16)
+        {
+            lengths[index++] = (short)symbol;
+            continue;
+        }
+        if (symbol == 16)
+        {
+            if (index == 0)
+                return -1;
+            len = lengths[index - 1];
+            symbol = 3 + oop_inf_bits(s, 2);
+        }
+        else if (symbol == 17)
+            symbol = 3 + oop_inf_bits(s, 3);
+        else
+            symbol = 11 + oop_inf_bits(s, 7);
+        if (s->error || index + symbol > nlen + ndist)
+            return -1;
+        while (symbol--)
+            lengths[index++] = (short)len;
+    }
+    if (lengths[256] == 0)
+        return -1;
+    err = oop_inf_construct(&lencode, lengths, nlen);
+    if (err < 0 || (err > 0 && nlen - lencode.count[0] != 1))
+        return -1;
+    err = oop_inf_construct(&distcode, lengths + nlen, ndist);
+    if (err < 0 || (err > 0 && ndist - distcode.count[0] != 1))
+        return -1;
+    return oop_inf_codes(s, &lencode, &distcode);
+}
+
+/* Raw DEFLATE data in, *out malloc'd (NUL after), *outlen; 0 or -1. */
+static int oop_inflate(const unsigned char *in, size_t inlen,
+                       size_t expected, unsigned char **out, size_t *outlen)
+{
+    oop_inflate_t s;
+    int last;
+    memset(&s, 0, sizeof(s));
+    s.in = in;
+    s.inlen = inlen;
+    if (expected > 0 && expected < OOP_ZIP_LIMIT)
+    {
+        s.out = (unsigned char *)malloc(expected + 1);
+        if (s.out == NULL)
+            return -1;
+        s.outlen = expected;
+    }
+    do
+    {
+        int type, err;
+        last = oop_inf_bits(&s, 1);
+        type = oop_inf_bits(&s, 2);
+        if (s.error)
+            break;
+        if (type == 0)
+            err = oop_inf_stored(&s);
+        else if (type == 1)
+            err = oop_inf_fixed(&s);
+        else if (type == 2)
+            err = oop_inf_dynamic(&s);
+        else
+            err = -1;
+        if (err != 0 || s.error)
+        {
+            s.error = 1;
+            break;
+        }
+    } while (!last);
+    if (s.error)
+    {
+        free(s.out);
+        return -1;
+    }
+    if (s.out == NULL)
+    {
+        s.out = (unsigned char *)malloc(1);
+        if (s.out == NULL)
+            return -1;
+    }
+    s.out[s.outcnt] = '\0';
+    *out = s.out;
+    *outlen = s.outcnt;
+    return 0;
+}
+
+static uint32_t oop_crc32_table[256];
+
+static uint32_t oop_crc32(const unsigned char *data, size_t length)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t i;
+    if (oop_crc32_table[1] == 0)
+    {
+        uint32_t n, k, c;
+        for (n = 0; n < 256; ++n)
+        {
+            c = n;
+            for (k = 0; k < 8; ++k)
+                c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+            oop_crc32_table[n] = c;
+        }
+    }
+    for (i = 0; i < length; ++i)
+        crc = oop_crc32_table[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+static uint32_t oop_le32(const unsigned char *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+static unsigned oop_le16(const unsigned char *p)
+{
+    return (unsigned)p[0] | ((unsigned)p[1] << 8);
+}
+
+/* the whole file, malloc'd; NULL when it cannot be read or is too big */
+static unsigned char *oop_slurp(const char *path, size_t *length)
+{
+    FILE *f = fopen(path, "rb");
+    long size;
+    unsigned char *data;
+    if (f == NULL)
+        return NULL;
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0 ||
+        (unsigned long)size > OOP_ZIP_LIMIT || fseek(f, 0, SEEK_SET) != 0)
+    {
+        fclose(f);
+        return NULL;
+    }
+    data = (unsigned char *)malloc((size_t)size + 1);
+    if (data == NULL || fread(data, 1, (size_t)size, f) != (size_t)size)
+    {
+        free(data);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    *length = (size_t)size;
+    return data;
+}
+
+/* zip_read_text(s): path name -- the entry's text, or null (no such file
+   or entry, an unknown method, a bad CRC, or a 0 byte in it) */
+static int oop_do_zip_read_text(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v, name_v;
+    const char *path;
+    const char *name;
+    unsigned char *zip;
+    size_t size = 0;
+    size_t end, p;
+    unsigned count, k;
+    size_t name_length;
+
+    *out_result = ussr_null();
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: zip_read_text(s): path name\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &path_v) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &name_v) != 0)
+    {
+        ussr_value_free(&path_v);
+        return -1;
+    }
+    if (!oop_expect_string(&path_v, &path) || !oop_expect_string(&name_v, &name))
+    {
+        fprintf(stderr, "USSR: zip_read_text() expects a path and a name\n");
+        ussr_value_free(&path_v);
+        ussr_value_free(&name_v);
+        return -1;
+    }
+    name_length = strlen(name);
+    zip = oop_slurp(path, &size);
+    ussr_value_free(&path_v);
+    if (zip == NULL || size < 22)
+    {
+        free(zip);
+        ussr_value_free(&name_v);
+        return 0;
+    }
+    /* the end of central directory record, from the end */
+    end = size - 22;
+    for (;;)
+    {
+        if (oop_le32(zip + end) == 0x06054b50u)
+            break;
+        if (end == 0 || size - end > 65557)
+        {
+            free(zip);
+            ussr_value_free(&name_v);
+            return 0;
+        }
+        --end;
+    }
+    count = oop_le16(zip + end + 10);
+    p = oop_le32(zip + end + 16);
+    for (k = 0; k < count; ++k)
+    {
+        unsigned method, nl, xl, cl;
+        uint32_t crc, csize, usize, offset;
+        if (p + 46 > size || oop_le32(zip + p) != 0x02014b50u)
+            break;
+        method = oop_le16(zip + p + 10);
+        crc = oop_le32(zip + p + 16);
+        csize = oop_le32(zip + p + 20);
+        usize = oop_le32(zip + p + 24);
+        nl = oop_le16(zip + p + 28);
+        xl = oop_le16(zip + p + 30);
+        cl = oop_le16(zip + p + 32);
+        offset = oop_le32(zip + p + 42);
+        if (p + 46 + nl <= size && nl == name_length &&
+            memcmp(zip + p + 46, name, nl) == 0)
+        {
+            size_t data;
+            unsigned char *text = NULL;
+            size_t text_length = 0;
+            if ((size_t)offset + 30 > size ||
+                oop_le32(zip + offset) != 0x04034b50u)
+                break;
+            data = offset + 30 + oop_le16(zip + offset + 26) +
+                   oop_le16(zip + offset + 28);
+            if (data + csize > size)
+                break;
+            if (method == 0)
+            {
+                text = (unsigned char *)malloc((size_t)csize + 1);
+                if (text != NULL)
+                {
+                    memcpy(text, zip + data, csize);
+                    text[csize] = '\0';
+                    text_length = csize;
+                }
+            }
+            else if (method == 8)
+            {
+                if (oop_inflate(zip + data, csize, usize, &text,
+                                &text_length) != 0)
+                    text = NULL;
+            }
+            if (text != NULL && oop_crc32(text, text_length) == crc &&
+                memchr(text, 0, text_length) == NULL)
+                *out_result = ussr_string((const char *)text);
+            free(text);
+            break;
+        }
+        p += 46 + nl + xl + cl;
+    }
+    free(zip);
+    ussr_value_free(&name_v);
+    return 0;
+}
+
+static int oop_put16(FILE *f, unsigned v)
+{
+    return fputc((int)(v & 0xFF), f) != EOF && fputc((int)((v >> 8) & 0xFF), f) != EOF;
+}
+
+static int oop_put32(FILE *f, uint32_t v)
+{
+    return oop_put16(f, v & 0xFFFFu) && oop_put16(f, (v >> 16) & 0xFFFFu);
+}
+
+/* zip_write_texts(ok): path names texts -- a zip of the texts under the
+   names, stored, in order; true when it was written */
+static int oop_do_zip_write_texts(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t path_v, names_v, texts_v;
+    const char *path;
+    ussr_vector_t *names;
+    ussr_vector_t *texts;
+    FILE *f;
+    size_t i, n;
+    uint32_t *crcs = NULL;
+    uint32_t *offsets = NULL;
+    uint32_t central, central_size;
+    int ok = 1;
+
+    *out_result = ussr_boolean(0);
+    if (argument_count != 3)
+    {
+        fprintf(stderr, "USSR: zip_write_texts(ok): path names texts\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &path_v) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &names_v) != 0)
+    {
+        ussr_value_free(&path_v);
+        return -1;
+    }
+    if (oop_eval(&arguments[2], &texts_v) != 0)
+    {
+        ussr_value_free(&path_v);
+        ussr_value_free(&names_v);
+        return -1;
+    }
+    if (!oop_expect_string(&path_v, &path) ||
+        !oop_expect_vector(&names_v, &names) ||
+        !oop_expect_vector(&texts_v, &texts) ||
+        names->count != texts->count)
+    {
+        fprintf(stderr, "USSR: zip_write_texts() expects a path and two vectors of strings, as long\n");
+        ussr_value_free(&path_v);
+        ussr_value_free(&names_v);
+        ussr_value_free(&texts_v);
+        return -1;
+    }
+    n = names->count;
+    for (i = 0; i < n; ++i)
+        if (names->items[i].type != USSR_STRING ||
+            texts->items[i].type != USSR_STRING ||
+            names->items[i].data.string == NULL ||
+            texts->items[i].data.string == NULL)
+        {
+            fprintf(stderr, "USSR: zip_write_texts() entry %lu is not two strings\n",
+                    (unsigned long)i);
+            ussr_value_free(&path_v);
+            ussr_value_free(&names_v);
+            ussr_value_free(&texts_v);
+            return -1;
+        }
+    crcs = (uint32_t *)calloc(n + 1, sizeof(*crcs));
+    offsets = (uint32_t *)calloc(n + 1, sizeof(*offsets));
+    f = fopen(path, "wb");
+    if (crcs == NULL || offsets == NULL || f == NULL)
+        ok = 0;
+    for (i = 0; ok && i < n; ++i)
+    {
+        const char *nm = names->items[i].data.string;
+        const char *tx = texts->items[i].data.string;
+        size_t nl = strlen(nm);
+        size_t tl = strlen(tx);
+        long at = ftell(f);
+        if (at < 0 || tl > OOP_ZIP_LIMIT || nl > 0xFFFF)
+        {
+            ok = 0;
+            break;
+        }
+        offsets[i] = (uint32_t)at;
+        crcs[i] = oop_crc32((const unsigned char *)tx, tl);
+        /* local header: version 1.0, no flags, stored, 1980-01-01 */
+        ok = oop_put32(f, 0x04034b50u) && oop_put16(f, 10) &&
+             oop_put16(f, 0) && oop_put16(f, 0) && oop_put16(f, 0) &&
+             oop_put16(f, 0x21) && oop_put32(f, crcs[i]) &&
+             oop_put32(f, (uint32_t)tl) && oop_put32(f, (uint32_t)tl) &&
+             oop_put16(f, (unsigned)nl) && oop_put16(f, 0) &&
+             fwrite(nm, 1, nl, f) == nl && fwrite(tx, 1, tl, f) == tl;
+    }
+    if (ok)
+    {
+        long at = ftell(f);
+        ok = at >= 0;
+        central = (uint32_t)at;
+        for (i = 0; ok && i < n; ++i)
+        {
+            const char *nm = names->items[i].data.string;
+            size_t nl = strlen(nm);
+            size_t tl = strlen(texts->items[i].data.string);
+            ok = oop_put32(f, 0x02014b50u) && oop_put16(f, 20) &&
+                 oop_put16(f, 10) && oop_put16(f, 0) && oop_put16(f, 0) &&
+                 oop_put16(f, 0) && oop_put16(f, 0x21) &&
+                 oop_put32(f, crcs[i]) && oop_put32(f, (uint32_t)tl) &&
+                 oop_put32(f, (uint32_t)tl) && oop_put16(f, (unsigned)nl) &&
+                 oop_put16(f, 0) && oop_put16(f, 0) && oop_put16(f, 0) &&
+                 oop_put16(f, 0) && oop_put32(f, 0) &&
+                 oop_put32(f, offsets[i]) && fwrite(nm, 1, nl, f) == nl;
+        }
+        at = ftell(f);
+        ok = ok && at >= 0;
+        central_size = (uint32_t)at - central;
+        ok = ok && oop_put32(f, 0x06054b50u) && oop_put16(f, 0) &&
+             oop_put16(f, 0) && oop_put16(f, (unsigned)n) &&
+             oop_put16(f, (unsigned)n) && oop_put32(f, central_size) &&
+             oop_put32(f, central) && oop_put16(f, 0);
+    }
+    if (f != NULL && fclose(f) != 0)
+        ok = 0;
+    free(crcs);
+    free(offsets);
+    ussr_value_free(&path_v);
+    ussr_value_free(&names_v);
+    ussr_value_free(&texts_v);
+    *out_result = ussr_boolean(ok);
+    return 0;
+}
+
 /* utf8_chars(n): s -- the characters of a UTF-8 string (bytes that do
    not continue a sequence), counted natively. */
 static int oop_do_utf8_chars(
@@ -5425,6 +6054,10 @@ int ussr_oop_dispatch(
         status = oop_do_vjoin(arguments, argument_count, out_result);
     else if (strcmp(command, "utf8_chars") == 0)
         status = oop_do_utf8_chars(arguments, argument_count, out_result);
+    else if (strcmp(command, "zip_read_text") == 0)
+        status = oop_do_zip_read_text(arguments, argument_count, out_result);
+    else if (strcmp(command, "zip_write_texts") == 0)
+        status = oop_do_zip_write_texts(arguments, argument_count, out_result);
     else if (strcmp(command, "at") == 0)
         status = oop_do_at(arguments, argument_count, out_result);
     else if (strcmp(command, "len") == 0)

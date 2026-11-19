@@ -28,6 +28,8 @@ sbs_state(r): [
     push(_): v s
     set(sb_sheets): v!
     set(sb_sheet): 0!
+    # the sheet whose cell is being computed, plus one; 0: the one shown
+    set(sb_evsheet): 0!
 ]
 
 sbsheetcount(r): [

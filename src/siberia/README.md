@@ -11,12 +11,19 @@ program, [Novosibirsk](../novosibirsk/README.md).
 
 ## Files
 
-Siberia keeps sheets in OpenDocument's flat, single-XML form (`.fods`),
-which LibreOffice, Calligra and other ODF programs open and save directly.
-It also reads and writes `.csv` (values; `;` separated files are
-detected). Zip-packed `.ods` (and `.xlsx`) are refused with a message;
-save them as flat ODF in LibreOffice first. A name without an extension
-gets `.fods`.
+Siberia opens and saves OpenDocument spreadsheets, both formats:
+- `.ods`, the usual zipped package that LibreOffice saves.
+- `.fods`, the flat, single-XML form.
+
+LibreOffice, Calligra and other ODF programs open both. All the sheets and
+their formulas are kept; styles are not.
+
+It also reads and writes `.csv`. Formulas are saved as their values, and
+files separated by `;` are detected.
+
+`.xlsx` is refused with a message; save it as `.ods` in LibreOffice first.
+A name without an extension gets `.fods` (the file dialog's Spreadsheets
+filter adds `.ods`).
 
 ## Spreadsheet
 

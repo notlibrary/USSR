@@ -124,7 +124,7 @@ suite() {
                 tests/kgb_elements_test.su) continue ;;
                 # the vector toolkit (vcopy, vinsert, vremove, vjoin,
                 # utf8_chars) is ussr's own so far
-                tests/vector_toolkit_test.su|tests/novosibirsk_big_test.su) continue ;;
+                tests/vector_toolkit_test.su|tests/novosibirsk_big_test.su|tests/siberia_ods_test.su) continue ;;
             esac
         fi
         want="tests/expected/${f#tests/}.txt"
