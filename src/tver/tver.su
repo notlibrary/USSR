@@ -230,6 +230,151 @@ tver_marked_count(r): marks [
 
 # Rereads panel's directory and redraws its list. Marks survive for names
 # that are still present. Returns false when the directory is unreadable.
+# --- drives ---------------------------------------------------------------
+# tverdrives(_): left_box right_box wires a combo box over each panel with
+# the drives (C:, D: ... on Windows; /, then what is mounted under /mnt,
+# /media and /Volumes elsewhere). Picking one shows its root in that panel;
+# the box follows the panel as it moves. Ctrl+R looks for drives again.
+
+# "C:" for "C:/", the path itself otherwise
+tver_drive_label(r): root [
+    set(r): root
+    len(n): root
+    if(_): {n = 3} [
+        byte(b): root 1
+        if(_): {b = 58} [
+            slice(r): root 0 2
+            return(r): r
+        ]
+    ]
+    if(_): {n > 1} [
+        byte(e): root {n - 1}
+        if(_): {e = 47} [ slice(r): root 0 {n - 1} ]
+    ]
+]
+
+# the index of the drive that holds path (the longest root it starts
+# with, letters in any case), or -1
+tver_drive_of(r): path [
+    set(r): -1
+    set(roots): tver_drive_roots?
+    str_replace(p): path "\\" "/"
+    str_lower(pl): p
+    concat(pl): pl "/"
+    len(n): roots
+    set(best): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(root): roots i
+        str_lower(rl): root
+        str_starts(hit): pl rl
+        len(rn): rl
+        if(_): {hit && rn > best} [
+            set(r): i
+            set(best): rn
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tver_drive_scan(r): [
+    tvm_roots(roots):
+    set(tver_drive_roots): roots!
+    tver_drive_fill(r):
+]
+
+# the boxes' items from tver_drive_roots
+tver_drive_fill(r): [
+    set(r): 0
+    set(roots): tver_drive_roots?
+    set(boxes): tver_drive_boxes?
+    typeof(bt): boxes
+    if(_): {bt != "vector"} [ return(r): r ]
+    set(items): ""
+    len(n): roots
+    set(i): 0
+    while(_): {i < n} [
+        at(root): roots i
+        tver_drive_label(l): root
+        if(_): {i > 0} [ concat(items): items "|" ]
+        concat(items): items l
+        set(i): {i + 1}
+    ]
+    set(k): 0
+    while(_): {k < 2} [
+        at(box): boxes k
+        settext(_): box items
+        tver_drive_sync(_): k
+        set(k): {k + 1}
+    ]
+]
+
+# panel's box shows the drive its directory is on
+tver_drive_sync(r): panel [
+    set(r): 0
+    set(boxes): tver_drive_boxes?
+    typeof(bt): boxes
+    if(_): {bt != "vector"} [ return(r): r ]
+    set(dirs): tver_dirs?
+    at(path): dirs panel
+    tver_drive_of(i): path
+    at(box): boxes panel
+    getindex(cur): box
+    set(roots): tver_drive_roots?
+    len(nr): roots
+    if(_): {i >= 0 && i < nr && i != cur} [ setindex(_): box i ]
+]
+
+tverdrives(result): left_box right_box [
+    set(result): 0
+    vec(boxes): ""
+    push(_): boxes left_box
+    push(_): boxes right_box
+    set(tver_drive_boxes): boxes!
+    tver_drive_scan(_):
+]
+
+# a drive picked in a panel's box: that panel shows its root
+tverdrive(result): widget [
+    set(result): 0
+    uilock(_):
+    set(boxes): tver_drive_boxes?
+    set(panel): -1
+    at(b0): boxes 0
+    at(b1): boxes 1
+    if(_): {widget = b0} [ set(panel): 0 ]
+    if(_): {widget = b1} [ set(panel): 1 ]
+    if(_): {panel >= 0} [
+        getindex(i): widget
+        set(roots): tver_drive_roots?
+        len(n): roots
+        if(_): {i >= 0 && i < n} [
+            at(root): roots i
+            set(dirs): tver_dirs?
+            at(here): dirs panel
+            tver_drive_of(now): here
+            if(_): {now != i} [
+                tver_enter(ok): panel root
+                tver_drive_label(l): root
+                if(_): ok [
+                    set(tver_active): panel!
+                    set(lists): tver_lists?
+                    at(list): lists panel
+                    setfocus(_): list
+                    concat(m): "Drive " l
+                    tver_set_status(_): m
+                ]
+                else(_): [
+                    concat(m): "Drive " l " is not ready"
+                    tver_set_status(_): m
+                    tver_drive_sync(_): panel
+                ]
+            ]
+        ]
+    ]
+    uiunlock(_):
+]
+
 tver_refresh(r): panel keep_index [
     set(_tvrf_dirs): tver_dirs?
     set(_tvrf_all_names): tver_names?
@@ -327,6 +472,7 @@ tver_refresh(r): panel keep_index [
         ]
         set(r): true
     ]
+    if(_): r [ tver_drive_sync(_): panel ]
 ]
 
 # Saves the marked names of panel's current directory in tver_memory, which
@@ -463,6 +609,9 @@ tverinitialize(result): window left_path left_list right_path right_list status 
     set(tver_repeat_key): 0!
     set(tver_repeat_gen): 0!
     set(tver_prompt): 0!
+    set(tver_drive_boxes): 0!
+    vec(_tvi_roots): ""
+    set(tver_drive_roots): _tvi_roots!
     tvk_init(_):
     set(_tvi_i): 0
     set(result): 0
@@ -1139,6 +1288,10 @@ tver_app_panel(result): widget [
     tveractivatepanel(_): widget
 ]
 
+tver_app_drive(result): widget [
+    tverdrive(_): widget
+]
+
 init(result): arg_count arg_values [
     set(result): 0
     if(_): {arg_count > 1} [
@@ -1158,6 +1311,8 @@ init(result): arg_count arg_values [
         cd(_): _tva_dir
     ]
     createwindow(window): "Tver - Two-panel file manager" 900 620
+    combobox(left_drive): window ""
+    combobox(right_drive): window ""
     label(left_path): window ""
     label(right_path): window ""
     listbox(left_files): window ""
@@ -1165,18 +1320,24 @@ init(result): arg_count arg_values [
     label(status): window ""
     tvm_keybar(_tva_bar):
     label(keys): window _tva_bar
-    grid(_): left_path 0 0 false
-    grid(_): right_path 0 1 false
-    grid(_): left_files 1 0 true
-    grid(_): right_files 1 1 true
-    grid(_): status 2 0 false
-    grid(_): keys 2 1 false
+    grid(_): left_drive 0 0 false
+    grid(_): right_drive 0 1 false
+    grid(_): left_path 1 0 false
+    grid(_): right_path 1 1 false
+    grid(_): left_files 2 0 true
+    grid(_): right_files 2 1 true
+    # the status and the function keys each take a whole line
+    grid(_): status 3 2 false
+    grid(_): keys 4 2 false
     on(_): window "key" "tver_app_key"
     on(_): window "keyup" "tver_app_keyup"
     on(_): window "focus" "tver_app_focus"
     on(_): left_files "change" "tver_app_panel"
     on(_): right_files "change" "tver_app_panel"
+    on(_): left_drive "change" "tver_app_drive"
+    on(_): right_drive "change" "tver_app_drive"
     tverinitialize(_): window left_path left_files right_path right_files status
+    tverdrives(_): left_drive right_drive
     run(_):
 ]
 $endif

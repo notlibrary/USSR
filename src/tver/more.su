@@ -1312,7 +1312,49 @@ tvm_roots(r): [
             set(c): {c + 1}
         ]
     ]
-    else(_): [ push(_): r "/" ]
+    else(_): [
+        push(_): r "/"
+        # where Linux and macOS mount disks and sticks
+        getenv(user): "USER"
+        typeof(ut): user
+        vec(places): ""
+        push(_): places "/mnt"
+        push(_): places "/media"
+        if(_): {ut = "string" && user != ""} [
+            concat(um): "/media/" user
+            push(_): places um
+            concat(rm): "/run/media/" user
+            push(_): places rm
+        ]
+        push(_): places "/Volumes"
+        len(np): places
+        set(i): 0
+        while(_): {i < np} [
+            at(pl): places i
+            tvm_isdir(ok): pl
+            if(_): ok [
+                list_dir(names): pl
+                typeof(nt): names
+                if(_): {nt = "vector"} [
+                    len(nn): names
+                    set(k): 0
+                    while(_): {k < nn} [
+                        at(nm): names k
+                        str_ends(isd): nm "/"
+                        if(_): isd [
+                            len(nl): nm
+                            slice(nm): nm 0 {nl - 1}
+                        ]
+                        concat(full): pl "/" nm "/"
+                        tvm_isdir(d): full
+                        if(_): {d && nm != user} [ push(_): r full ]
+                        set(k): {k + 1}
+                    ]
+                ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
 ]
 
 tvm_history(r): [
@@ -2357,7 +2399,7 @@ tvm_kind(r): name [
 ]
 
 tvm_keybar(r): [
-    set(r): "F1 Help  F2 Rename  F3 View  F4 Edit  F5 Copy  F6 Move  F7 Mkdir  F8 Delete  F9 Menu   Ctrl+R refresh  Ctrl+U swap  Ctrl+L go"
+    set(r): "F1 Help  F2 Rename  F3 View  F4 Edit  F5 Copy  F6 Move  F7 Mkdir  F8 Delete  F9 Menu  Ctrl+R Refresh  Ctrl+U Swap"
 ]
 
 # two panels as text with box glyphs (a terminal view)

@@ -1,0 +1,150 @@
+# Tver's drive boxes and its one-line key bar. Needs a GLFW-enabled ussr
+# and a display; the window is never shown. Run from the repository root:
+#     ussr tests/gui/tver_drives_test.su
+# The window is laid out as tver.su lays it out: a drive box over each
+# panel, then the paths and the lists, the status line, and the function
+# keys on a line of their own. Picking a drive shows its root in that
+# panel, the box follows the panel, and a drive that is not there is
+# reported. Prints PASS or FAIL per check.
+$include "../../src/tver/tver.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    getcwd(home):
+    make_dir(_): "tver_drives_tmp"
+    make_dir(_): "tver_drives_tmp/inner"
+    writefile(_): "tver_drives_tmp/inner/x.txt" "x"
+    concat(fake): home "/tver_drives_tmp/"
+    str_replace(fake): fake "\\" "/"
+
+    createwindow(window): "Tver drives test" 900 620
+    combobox(left_drive): window ""
+    combobox(right_drive): window ""
+    label(left_path): window ""
+    label(right_path): window ""
+    listbox(left_files): window ""
+    listbox(right_files): window ""
+    label(status): window ""
+    tvm_keybar(bar):
+    label(keys): window bar
+    grid(_): left_drive 0 0 false
+    grid(_): right_drive 0 1 false
+    grid(_): left_path 1 0 false
+    grid(_): right_path 1 1 false
+    grid(_): left_files 2 0 true
+    grid(_): right_files 2 1 true
+    grid(_): status 3 2 false
+    grid(_): keys 4 2 false
+    tverinitialize(_): window left_path left_files right_path right_files status
+    tverdrives(_): left_drive right_drive
+    run(_):
+    sleep(_): 300
+
+    # --- the key bar: one line across the window
+    getwidth(kw): keys
+    getwidth(lw): left_files
+    check(_): "the key bar spans both panels" {kw > lw * 3 / 2} true
+    len(bl): bar
+    check(_): "and its text fits one line of it" {bl * 7 + 16 <= kw} true
+
+    # --- labels and which drive holds a path
+    tver_drive_label(a): "C:/"
+    tver_drive_label(b): "/"
+    tver_drive_label(c): "/media/me/stick/"
+    check(_): "drive labels" {a = "C:" && b = "/" && c = "/media/me/stick"} true
+    vec(roots): ""
+    push(_): roots "C:/"
+    push(_): roots "D:/"
+    push(_): roots "/"
+    push(_): roots "/media/me/stick/"
+    set(tver_drive_roots): roots!
+    tver_drive_of(i1): "c:\\Users\\me"
+    tver_drive_of(i2): "D:/"
+    tver_drive_of(i3): "/media/me/stick/photos"
+    tver_drive_of(i4): "/home/me"
+    tver_drive_of(i5): "E:/x"
+    check(_): "the drive of a path: any case, either slash, the longest root" {i1 = 0 && i2 = 1 && i3 = 3 && i4 = 2 && i5 = -1} true
+
+    # --- the real drives: the box shows the one we are on
+    tver_drive_scan(_):
+    set(real): tver_drive_roots?
+    len(nr): real
+    gettext(items): left_drive
+    getindex(li): left_drive
+    tver_drive_of(want): home
+    check(_): "the boxes list the drives and show the current one" {nr > 0 && items != "" && li = want} true
+
+    # --- picking a drive (here a folder standing in for one)
+    # the drive the tests run on, a missing one, and a folder as a third
+    set(homeroot): "/"
+    byte(h1): home 1
+    if(_): {h1 = 58} [
+        slice(hd): home 0 2
+        concat(homeroot): hd "/"
+    ]
+    vec(roots): ""
+    push(_): roots "Q:/no/such/drive/"
+    push(_): roots fake
+    push(_): roots homeroot
+    set(tver_drive_roots): roots!
+    tver_drive_fill(_):
+    setindex(_): right_drive 1
+    tverdrive(_): right_drive
+    set(dirs): tver_dirs?
+    at(rd): dirs 1
+    gettext(rl): right_files
+    set(act): tver_active?
+    check(_): "a picked drive shows its root in that panel" {rd = fake && rl = "..|inner/" && act = 1} true
+    gettext(st): status
+    str_starts(said): st "Drive "
+    check(_): "and says so" said true
+    tver_enter(_): 1 home
+    getindex(ri): right_drive
+    check(_): "leaving it, the box follows the panel" ri 2
+    setindex(_): right_drive 1
+    tverdrive(_): right_drive
+    concat(innerp): fake "inner"
+    tver_enter(_): 1 innerp
+    getindex(ri): right_drive
+    check(_): "inside the drive the box still shows it" ri 1
+    setindex(_): left_drive 0
+    tverdrive(_): left_drive
+    gettext(st): status
+    set(dirs): tver_dirs?
+    at(ld): dirs 0
+    getindex(li): left_drive
+    check(_): "a drive that is not there is reported, the panel stays" {st = "Drive Q:/no/such/drive is not ready" && ld = home} true
+
+    # --- F1: every key, Ctrl+L and the drive boxes too
+    tvk_help_text(help):
+    str_contains(h1): help "Ctrl+L Go to a path"
+    str_contains(h2): help "pick a drive"
+    str_contains(h3): help "F9 User menu"
+    check(_): "F1 lists all the keys" {h1 && h2 && h3} true
+
+    # --- Ctrl+R looks for drives again
+    tver_drive_scan(_):
+    set(again): tver_drive_roots?
+    len(na): again
+    check(_): "a rescan finds the real drives" na nr
+
+    destroy(_): window
+    cd(_): home
+    remove_file(_): "tver_drives_tmp/inner/x.txt"
+    remove_dir(_): "tver_drives_tmp/inner"
+    remove_dir(_): "tver_drives_tmp"
+    set(result): 0
+]

@@ -1,6 +1,7 @@
 # keys.su - Tver refine pass 1: the keys of the window, on top of more.su.
 # tver.su includes it; tver_dispatch_key asks tvk_key first.
 #
+#   F1             these keys in a message box
 #   F2, Shift+F6   rename            Shift+F4   a new empty file
 #   F3             view (text, hex, image size) in a message box
 #   F4             edit ($EDITOR, else Mbl)    Enter on a file: open it as
@@ -369,6 +370,10 @@ tvk_key(r): window key panel [
     ]
     elif(_): {key = 293 && shift} [ tvk_prompt(_): panel "newfile" "New file name: ENTER creates, ESC cancels" "" ]
     elif(_): {key = 292} [ tvk_view(_): path ]
+    elif(_): {key = 290 && alt = false && ctrl = false && shift = false} [
+        tvk_help_text(help):
+        messagebox(_): "Tver keys" help
+    ]
     elif(_): {key = 293} [
         tvm_editor(plan): path
         at(prog): plan 0
@@ -394,6 +399,8 @@ tvk_key(r): window key panel [
         tver_refresh(_): 0 k
         tvk_selected(k): 1
         tver_refresh(_): 1 k
+        # drives plugged in since
+        tver_drive_scan(_):
         tver_set_status(_): "Refreshed"
     ]
     elif(_): {ctrl && key = 85} [
@@ -512,6 +519,22 @@ tvk_key(r): window key panel [
         else(_): [ set(r): false ]
     ]
     else(_): [ set(r): false ]
+]
+
+# F1: every key, as the bottom bar has room for only the main ones
+tvk_help_text(r): [
+    set(r): "F1 Help   F2 Rename   F3 View   F4 Edit   F5 Copy   F6 Move\n"
+    concat(r): r "F7 New folder   F8 Delete   F9 User menu (~/.tver)\n"
+    concat(r): r "Shift+F4 New file   Shift+F6 Rename   Shift+F8 To the trash\n"
+    concat(r): r "Alt+F5 Pack into a .zip   Alt+F7 Find files\n\n"
+    concat(r): r "Tab Other panel   Insert Mark   Space Folder size   Enter Open\n"
+    concat(r): r "Ctrl+R Refresh (and look for drives)   Ctrl+U Swap the panels\n"
+    concat(r): r "Ctrl+E The other panel here   Ctrl+L Go to a path\n"
+    concat(r): r "Ctrl+D Bookmark this folder   Ctrl+B Next bookmark\n"
+    concat(r): r "Alt+Left / Alt+Right Back and forward\n"
+    concat(r): r "Ctrl+H Dot files   Ctrl+F Filter   Ctrl+A Mark all\n"
+    concat(r): r "Num+ / Num- Mark by pattern   Num* Invert   Ctrl+O Run a command\n\n"
+    concat(r): r "The boxes over the panels pick a drive (Alt+F1 / Alt+F2 too)."
 ]
 
 tvk_view(r): path [

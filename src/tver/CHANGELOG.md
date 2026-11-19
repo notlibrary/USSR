@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0-alpha
+- A drive box over each panel: C:, D: ... on Windows; elsewhere / and
+  the disks mounted under /mnt, /media and /Volumes.
+  - Picking a drive shows its root in that panel. A drive that isn't
+    ready is reported, and the panel stays where it was.
+  - The box follows its panel as it moves about.
+  - Ctrl+R looks for drives again, so a stick plugged in later shows up.
+  - Scripts wire it with `tverdrives(_): left_box right_box`.
+- The function keys take a whole line at the bottom. They had shared a
+  line with the status and were cut off in the right half. The status
+  line has its own line too.
+- F1 shows every key in a message box. The bar named F1 Help, but F1 did
+  nothing.
+- The bar says `Ctrl+R Refresh  Ctrl+U Swap`; `Ctrl+L` (go to a path) is
+  in F1's list.
+
 ## 0.6.1-alpha
 - The bottom bar names the function keys `F1 Help  F2 Rename ... F9 Menu`,
   not `1Help 2Rename ...`.
