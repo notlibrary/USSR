@@ -46,6 +46,7 @@ struct ussr_btree_t
     /* Mark-sweep GC registry linkage (gc.c). */
     unsigned char gc_mark;
     struct ussr_btree_t *gc_next;
+    struct ussr_btree_t *gc_prev; /* both ways: unlinking is O(1) */
 };
 
 /* ------------------------------------------------------------- */
@@ -195,25 +196,28 @@ ussr_btree_t *ussr_btree_create(void)
     if (tree == NULL)
         return NULL;
     tree->refcount = 1;
+    tree->gc_prev = NULL;
     tree->gc_next = g_gc_btrees;
+    if (g_gc_btrees != NULL)
+        g_gc_btrees->gc_prev = tree;
     g_gc_btrees = tree;
     return tree;
 }
 
 void ussr_btree_gc_unregister(ussr_btree_t *tree)
 {
-    ussr_btree_t **link = &g_gc_btrees;
-
-    while (*link != NULL)
-    {
-        if (*link == tree)
-        {
-            *link = tree->gc_next;
-            tree->gc_next = NULL;
-            return;
-        }
-        link = &(*link)->gc_next;
-    }
+    if (tree == NULL)
+        return;
+    if (tree->gc_prev != NULL)
+        tree->gc_prev->gc_next = tree->gc_next;
+    else if (g_gc_btrees == tree)
+        g_gc_btrees = tree->gc_next;
+    else
+        return; /* not in the list */
+    if (tree->gc_next != NULL)
+        tree->gc_next->gc_prev = tree->gc_prev;
+    tree->gc_next = NULL;
+    tree->gc_prev = NULL;
 }
 
 void ussr_btree_gc_drop_ref(ussr_btree_t *tree)

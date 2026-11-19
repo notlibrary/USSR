@@ -19,10 +19,14 @@
  * release owned scalar strings but never touch child references.
  */
 
-/* Collect roughly after this many fresh allocations. */
+/* Collect roughly after this many fresh allocations, or, once the heap
+ * is bigger, after as many as there were survivors last time: each
+ * collection walks the whole heap, so a fixed interval made building a
+ * big structure quadratic. */
 #define USSR_GC_ALLOC_THRESHOLD 4096UL
 
 static unsigned long gc_alloc_count = 0;
+static unsigned long gc_threshold = USSR_GC_ALLOC_THRESHOLD;
 static unsigned long gc_collected_total = 0;
 static int gc_pending = 0;
 
@@ -31,6 +35,7 @@ void ussr_gc_init(void)
     gc_alloc_count = 0;
     gc_collected_total = 0;
     gc_pending = 0;
+    gc_threshold = USSR_GC_ALLOC_THRESHOLD;
 }
 
 void ussr_gc_cleanup(void)
@@ -41,7 +46,7 @@ void ussr_gc_cleanup(void)
 
 void ussr_gc_note_alloc(void)
 {
-    if (++gc_alloc_count >= USSR_GC_ALLOC_THRESHOLD)
+    if (++gc_alloc_count >= gc_threshold)
     {
         gc_alloc_count = 0;
         gc_pending = 1;
@@ -180,6 +185,7 @@ static void gc_unref_garbage_child_mutable(ussr_value_t *value)
 size_t ussr_gc_sweep(void)
 {
     size_t collected = 0;
+    size_t survivors = 0;
     ussr_vector_t *v;
     ussr_struct_instance_t *s;
     ussr_btree_t *t;
@@ -218,6 +224,8 @@ size_t ussr_gc_sweep(void)
             ussr_uno_vector_destroy_raw(v);
             ++collected;
         }
+        else
+            ++survivors;
         v = next;
     }
 
@@ -231,6 +239,8 @@ size_t ussr_gc_sweep(void)
             ussr_uno_instance_destroy_raw(s);
             ++collected;
         }
+        else
+            ++survivors;
         s = next;
     }
 
@@ -244,12 +254,16 @@ size_t ussr_gc_sweep(void)
             ussr_btree_destroy_raw(t);
             ++collected;
         }
+        else
+            ++survivors;
         t = next;
     }
 
     gc_collected_total += collected;
     gc_pending = 0;
     gc_alloc_count = 0;
+    gc_threshold = survivors > USSR_GC_ALLOC_THRESHOLD
+                       ? (unsigned long)survivors : USSR_GC_ALLOC_THRESHOLD;
 
     return collected;
 }

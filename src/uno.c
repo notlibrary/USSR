@@ -157,28 +157,29 @@ void ussr_uno_gc_register_vector(ussr_vector_t *vector)
     if (vector == NULL)
         return;
     vector->gc_mark = 0;
+    vector->gc_prev = NULL;
     vector->gc_next = g_gc_vectors;
+    if (g_gc_vectors != NULL)
+        g_gc_vectors->gc_prev = vector;
     g_gc_vectors = vector;
 }
 
 void ussr_uno_gc_unregister_vector(ussr_vector_t *vector)
 {
-    ussr_vector_t **link;
-
+    /* The list is linked both ways, so a vector leaves it in O(1); a
+     * search from the head made freeing a big heap quadratic. */
     if (vector == NULL)
         return;
-
-    link = &g_gc_vectors;
-    while (*link != NULL)
-    {
-        if (*link == vector)
-        {
-            *link = vector->gc_next;
-            vector->gc_next = NULL;
-            return;
-        }
-        link = &(*link)->gc_next;
-    }
+    if (vector->gc_prev != NULL)
+        vector->gc_prev->gc_next = vector->gc_next;
+    else if (g_gc_vectors == vector)
+        g_gc_vectors = vector->gc_next;
+    else
+        return; /* not in the list */
+    if (vector->gc_next != NULL)
+        vector->gc_next->gc_prev = vector->gc_prev;
+    vector->gc_next = NULL;
+    vector->gc_prev = NULL;
 }
 
 void ussr_uno_gc_register_instance(ussr_struct_instance_t *instance)
@@ -186,28 +187,27 @@ void ussr_uno_gc_register_instance(ussr_struct_instance_t *instance)
     if (instance == NULL)
         return;
     instance->gc_mark = 0;
+    instance->gc_prev = NULL;
     instance->gc_next = g_gc_instances;
+    if (g_gc_instances != NULL)
+        g_gc_instances->gc_prev = instance;
     g_gc_instances = instance;
 }
 
 void ussr_uno_gc_unregister_instance(ussr_struct_instance_t *instance)
 {
-    ussr_struct_instance_t **link;
-
     if (instance == NULL)
         return;
-
-    link = &g_gc_instances;
-    while (*link != NULL)
-    {
-        if (*link == instance)
-        {
-            *link = instance->gc_next;
-            instance->gc_next = NULL;
-            return;
-        }
-        link = &(*link)->gc_next;
-    }
+    if (instance->gc_prev != NULL)
+        instance->gc_prev->gc_next = instance->gc_next;
+    else if (g_gc_instances == instance)
+        g_gc_instances = instance->gc_next;
+    else
+        return; /* not in the list */
+    if (instance->gc_next != NULL)
+        instance->gc_next->gc_prev = instance->gc_prev;
+    instance->gc_next = NULL;
+    instance->gc_prev = NULL;
 }
 
 void ussr_uno_vector_destroy_raw(ussr_vector_t *vector)

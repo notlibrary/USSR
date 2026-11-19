@@ -478,6 +478,275 @@ static int oop_do_pop(
     return 0;
 }
 
+/* Evaluates arguments[0] as a vector (*vec_v keeps the reference). */
+static int oop_vector_arg(ussr_argument_t *arguments, const char *name,
+                          ussr_value_t *vec_v, ussr_vector_t **vector)
+{
+    if (oop_eval(&arguments[0], vec_v) != 0)
+        return -1;
+    if (!oop_expect_vector(vec_v, vector))
+    {
+        fprintf(stderr, "USSR: %s() expects a vector as its first argument\n",
+                name);
+        ussr_value_free(vec_v);
+        return -1;
+    }
+    return 0;
+}
+
+/* vcopy(c): v -- a new vector with v's items (strings copied, vectors,
+   btrees and structs shared, as push shares them). */
+static int oop_do_vcopy(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t vec_v;
+    ussr_vector_t *vector;
+    ussr_vector_t *copy;
+    size_t i;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: vcopy(c): v\n");
+        return -1;
+    }
+    if (oop_vector_arg(arguments, "vcopy", &vec_v, &vector) != 0)
+        return -1;
+    copy = ussr_vector_create(vector->element_type);
+    if (copy == NULL)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    for (i = 0; i < vector->count; ++i)
+        if (ussr_vector_push(copy, vector->items[i]) != 0)
+        {
+            ussr_vector_release(copy);
+            ussr_value_free(&vec_v);
+            return -1;
+        }
+    ussr_value_free(&vec_v);
+    *out_result = ussr_vector_value(copy);
+    return 0;
+}
+
+/* vinsert(_): v index item -- puts item before index (index = len(v)
+   appends), moving the rest up, in place. */
+static int oop_do_vinsert(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t vec_v, index_v, item_v;
+    ussr_vector_t *vector;
+    ussr_int_t index = 0;
+    ussr_value_t moved;
+    size_t at;
+
+    if (argument_count != 3)
+    {
+        fprintf(stderr, "USSR: vinsert(_): v index item\n");
+        return -1;
+    }
+    if (oop_vector_arg(arguments, "vinsert", &vec_v, &vector) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &index_v) != 0)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    if (!oop_expect_integer(&index_v, &index) || index < 0 ||
+        (size_t)index > vector->count)
+    {
+        fprintf(stderr, "USSR: vinsert() index " USSR_INT_FMT " out of range\n",
+                index);
+        ussr_value_free(&vec_v);
+        ussr_value_free(&index_v);
+        return -1;
+    }
+    ussr_value_free(&index_v);
+    if (oop_eval(&arguments[2], &item_v) != 0)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    /* push checks the type and grows the vector; the new last item then
+       moves down to index */
+    if (ussr_vector_push(vector, item_v) != 0)
+    {
+        ussr_value_free(&item_v);
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    ussr_value_free(&item_v);
+    at = (size_t)index;
+    moved = vector->items[vector->count - 1];
+    memmove(&vector->items[at + 1], &vector->items[at],
+            (vector->count - 1 - at) * sizeof(vector->items[0]));
+    vector->items[at] = moved;
+    ussr_value_free(&vec_v);
+    *out_result = ussr_null();
+    return 0;
+}
+
+/* vremove(item): v index -- takes the item at index out, moving the rest
+   down, in place. */
+static int oop_do_vremove(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t vec_v, index_v;
+    ussr_vector_t *vector;
+    ussr_int_t index = 0;
+    size_t at;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: vremove(item): v index\n");
+        return -1;
+    }
+    if (oop_vector_arg(arguments, "vremove", &vec_v, &vector) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &index_v) != 0)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    if (!oop_expect_integer(&index_v, &index) || index < 0 ||
+        (size_t)index >= vector->count)
+    {
+        fprintf(stderr, "USSR: vremove() index " USSR_INT_FMT " out of range\n",
+                index);
+        ussr_value_free(&vec_v);
+        ussr_value_free(&index_v);
+        return -1;
+    }
+    ussr_value_free(&index_v);
+    at = (size_t)index;
+    /* the slot's reference moves to the result */
+    *out_result = vector->items[at];
+    memmove(&vector->items[at], &vector->items[at + 1],
+            (vector->count - 1 - at) * sizeof(vector->items[0]));
+    --vector->count;
+    ussr_value_free(&vec_v);
+    return 0;
+}
+
+/* utf8_chars(n): s -- the characters of a UTF-8 string (bytes that do
+   not continue a sequence), counted natively. */
+static int oop_do_utf8_chars(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t text_v;
+    const char *text;
+    const unsigned char *b;
+    ussr_int_t count = 0;
+
+    if (argument_count != 1)
+    {
+        fprintf(stderr, "USSR: utf8_chars(n): s\n");
+        return -1;
+    }
+    if (oop_eval(&arguments[0], &text_v) != 0)
+        return -1;
+    if (!oop_expect_string(&text_v, &text))
+    {
+        fprintf(stderr, "USSR: utf8_chars() expects a string\n");
+        ussr_value_free(&text_v);
+        return -1;
+    }
+    for (b = (const unsigned char *)text; *b != '\0'; ++b)
+        if ((*b & 0xC0) != 0x80)
+            ++count;
+    ussr_value_free(&text_v);
+    *out_result = ussr_integer(count);
+    return 0;
+}
+
+/* vjoin(s): v sep -- v's strings with sep between them, in one pass. */
+static int oop_do_vjoin(
+    ussr_argument_t *arguments,
+    size_t argument_count,
+    ussr_value_t *out_result
+)
+{
+    ussr_value_t vec_v, sep_v;
+    ussr_vector_t *vector;
+    const char *sep;
+    size_t sep_length;
+    size_t total = 0;
+    size_t i;
+    char *text;
+    char *end;
+
+    if (argument_count != 2)
+    {
+        fprintf(stderr, "USSR: vjoin(s): v sep\n");
+        return -1;
+    }
+    if (oop_vector_arg(arguments, "vjoin", &vec_v, &vector) != 0)
+        return -1;
+    if (oop_eval(&arguments[1], &sep_v) != 0)
+    {
+        ussr_value_free(&vec_v);
+        return -1;
+    }
+    if (!oop_expect_string(&sep_v, &sep))
+    {
+        fprintf(stderr, "USSR: vjoin() expects a string separator\n");
+        ussr_value_free(&vec_v);
+        ussr_value_free(&sep_v);
+        return -1;
+    }
+    sep_length = strlen(sep);
+    for (i = 0; i < vector->count; ++i)
+    {
+        const ussr_value_t *item = &vector->items[i];
+        if (item->type != USSR_STRING || item->data.string == NULL)
+        {
+            fprintf(stderr, "USSR: vjoin() item %lu is not a string\n",
+                    (unsigned long)i);
+            ussr_value_free(&vec_v);
+            ussr_value_free(&sep_v);
+            return -1;
+        }
+        total += strlen(item->data.string) + (i > 0 ? sep_length : 0);
+    }
+    text = (char *)malloc(total + 1);
+    if (text == NULL)
+    {
+        ussr_value_free(&vec_v);
+        ussr_value_free(&sep_v);
+        return -1;
+    }
+    end = text;
+    for (i = 0; i < vector->count; ++i)
+    {
+        size_t n = strlen(vector->items[i].data.string);
+        if (i > 0)
+        {
+            memcpy(end, sep, sep_length);
+            end += sep_length;
+        }
+        memcpy(end, vector->items[i].data.string, n);
+        end += n;
+    }
+    *end = '\0';
+    *out_result = ussr_string(text);
+    free(text);
+    ussr_value_free(&vec_v);
+    ussr_value_free(&sep_v);
+    return 0;
+}
+
 static int oop_do_at(
     ussr_argument_t *arguments,
     size_t argument_count,
@@ -5146,6 +5415,16 @@ int ussr_oop_dispatch(
         status = oop_do_push(arguments, argument_count, out_result);
     else if (strcmp(command, "pop") == 0)
         status = oop_do_pop(arguments, argument_count, out_result);
+    else if (strcmp(command, "vcopy") == 0)
+        status = oop_do_vcopy(arguments, argument_count, out_result);
+    else if (strcmp(command, "vinsert") == 0)
+        status = oop_do_vinsert(arguments, argument_count, out_result);
+    else if (strcmp(command, "vremove") == 0)
+        status = oop_do_vremove(arguments, argument_count, out_result);
+    else if (strcmp(command, "vjoin") == 0)
+        status = oop_do_vjoin(arguments, argument_count, out_result);
+    else if (strcmp(command, "utf8_chars") == 0)
+        status = oop_do_utf8_chars(arguments, argument_count, out_result);
     else if (strcmp(command, "at") == 0)
         status = oop_do_at(arguments, argument_count, out_result);
     else if (strcmp(command, "len") == 0)
