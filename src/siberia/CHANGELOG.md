@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0
+- `.ods`, OpenDocument's zipped spreadsheet, opens and saves like
+  `.fods`, with every sheet and formula.
+  - Opening reads the package's `content.xml`. LibreOffice's files are
+    deflated, and `zip_read_text` inflates them natively.
+  - Saving writes `mimetype` (first, as ODF asks), `content.xml`,
+    `styles.xml`, `meta.xml` and the manifest, stored, with
+    `zip_write_texts`.
+  - Checked with LibreOffice both ways: it opens Siberia's `.ods` (sheets,
+    recalculated formulas, a reference to another sheet), and Siberia opens
+    LibreOffice's.
+  - The file dialog's Spreadsheets filter takes `.ods` and `.fods`, and
+    adds `.ods` to a bare name.
+  - `.odt` (Novosibirsk) and `.xlsx` are still refused.
+- Fixed: a formula on another sheet worked out its own references (`A1`,
+  `SUM(B2:B3)`) on the sheet shown instead of its own, when it had not been
+  computed yet.
+
 ## 0.6.0
 - Workbooks with several sheets.
   - Tabs under the grid show the sheets. A click shows a sheet, `+` (or

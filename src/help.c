@@ -121,6 +121,8 @@ static const help_entry_t g_help[] = {
     { "bytes_text", "bytes", "bytes_text(s): v [from [count]]", "bytes as a string; null if one is 0" },
     { "sha256", "bytes", "sha256(v): data", "SHA-256 digest (32 bytes) of a string or byte vector" },
     { "crc32", "bytes", "crc32(n): data [from [count]]", "CRC-32 (zlib, GPT, PNG) of a string or byte vector" },
+    { "zip_read_text", "bytes", "zip_read_text(s): path name", "a zip entry's text (stored or deflated); null if missing or bad" },
+    { "zip_write_texts", "bytes", "zip_write_texts(ok): path names texts", "a zip of text entries, stored, in order (ODF's mimetype first)" },
     { "md5", "bytes", "md5(v): data", "MD5 digest (16 bytes); for old protocols only" },
     { "hmac_sha256", "bytes", "hmac_sha256(v): key data", "HMAC-SHA-256 (32 bytes)" },
     { "pbkdf2_sha256", "bytes", "pbkdf2_sha256(v): password salt iterations [length]", "PBKDF2-HMAC-SHA-256 key (default 32 bytes)" },

@@ -633,7 +633,15 @@ sb_value(r): index [
     else(_): [
         setf(_): c "gen" {0 - gen}
         getf(text): c "text"
+        # a cell of another sheet: its formula's own references (A1, B2:B3)
+        # are on that sheet, not on the one shown
+        set(outer): sb_evsheet?
+        if(_): {index >= SB_CELLS} [
+            str_trunc(k): {index / SB_CELLS}
+            set(sb_evsheet): k!
+        ]
         sb_compute(r): text
+        set(sb_evsheet): outer!
         setf(_): c "value" r
         setf(_): c "gen" gen
     ]
@@ -1029,6 +1037,22 @@ sb_peek_op(r): p [
 
 sb_formula(r): text [
     sb_tokens(toks): text
+    # evaluating a cell of sheet k - 1 (k > 0): its plain references are
+    # that sheet's cells
+    set(k): sb_evsheet?
+    if(_): {k > 0} [
+        len(nt): toks
+        set(i): 0
+        while(_): {i < nt} [
+            at(tk): toks i
+            at(kind): tk 0
+            at(v): tk 2
+            if(_): {kind = "ref"} [
+                if(_): {v >= 0 && v < SB_CELLS} [ set(tk): 2 {v + k * SB_CELLS} ]
+            ]
+            set(i): {i + 1}
+        ]
+    ]
     new(p): "SbParse" toks 0
     sb_expr(r): p
     getf(pos): p "pos"
@@ -2323,7 +2347,7 @@ sb_draw_dialog(r): w h [
         ]
         sb_ui_text(_): {x + 20} {y + 45} shown 0
         canvasfill(_): canvas {x + 21 + tw} {y + 44} 2 20 0
-        set(hint): ".fods or .csv"
+        set(hint): ".ods, .fods or .csv"
 $ifdef SB_PAD
         set(mode): sb_mode?
         if(_): {mode = "pad"} [ set(hint): ".fodt or .txt" ]
@@ -2474,7 +2498,7 @@ $endif
 # chosen path, or "" (it blocks until it is answered)
 sb_pick(r): kind [
     set(mode): sb_mode?
-    set(filters): "Spreadsheets (*.fods)|*.fods|CSV (*.csv)|*.csv|All files|*"
+    set(filters): "Spreadsheets (*.ods;*.fods)|*.ods;*.fods|OpenDocument (*.ods)|*.ods|Flat OpenDocument (*.fods)|*.fods|CSV (*.csv)|*.csv|All files|*"
     set(what): "spreadsheet"
     if(_): {mode = "pad"} [
         set(filters): "Documents (*.fodt)|*.fodt|Plain text (*.txt)|*.txt|All files|*"
@@ -2515,11 +2539,19 @@ $ifdef SB_PAD
     set(mode): sb_mode?
 $endif
     sb_extension(ext): path
-    if(_): {ext = ".ods" || ext = ".odt" || ext = ".xlsx" || ext = ".docx"} [
-        sb_status(_): "Packed (zip) files are not supported: save it as flat ODF (.fods/.fodt) first"
+    set(packed): {ext = ".odt" || ext = ".xlsx" || ext = ".docx"}
+$ifdef SB_PAD
+    if(_): {ext = ".ods" && mode = "pad"} [ set(packed): true ]
+$endif
+    if(_): packed [
+        sb_status(_): "Packed (zip) files other than .ods are not supported: save it as flat ODF (.fods/.fodt) first"
         return(_): r
     ]
-    sb_read(text): path
+    if(_): {ext = ".ods"} [
+        # an OpenDocument package: its content.xml has the same tables
+        sb_ods_read(text): path
+    ]
+    else(_): [ sb_read(text): path ]
     typeof(tt): text
     if(_): {tt != "string"} [
         concat(msg): "Cannot read " path
@@ -2563,8 +2595,17 @@ $ifdef SB_PAD
     set(mode): sb_mode?
 $endif
     sb_extension(ext): path
-    if(_): {ext = ".ods" || ext = ".odt" || ext = ".xlsx" || ext = ".docx"} [
-        sb_status(_): "Packed (zip) files are not supported: use .fods or .fodt"
+    set(packed): {ext = ".odt" || ext = ".xlsx" || ext = ".docx"}
+$ifdef SB_PAD
+    if(_): {ext = ".ods" && mode = "pad"} [ set(packed): true ]
+$endif
+    if(_): packed [
+        sb_status(_): "Packed (zip) files other than .ods are not supported: use .ods, .fods or .fodt"
+        return(_): r
+    ]
+    if(_): {ext = ".ods"} [
+        sb_ods_write(ok): path
+        sb_saved(r): path ext ok
         return(_): r
     ]
 $ifdef SB_PAD
@@ -2586,6 +2627,12 @@ $else
     if(_): {ext = ".csv"} [ sbsheetcsv(text): ] else(_): [ sbsheetfods(text): ]
 $endif
     sb_write(ok): path text
+    sb_saved(r): path ext ok
+]
+
+# after a write: the sheet is clean and named path, or why not
+sb_saved(r): path ext ok [
+    set(r): false
     if(_): ok [
         set(sb_path): path!
         set(sb_dirty): false!
@@ -2600,6 +2647,71 @@ $endif
         concat(msg): "Cannot write " path
         sb_status(_): msg
     ]
+]
+
+# --- .ods: an OpenDocument spreadsheet package (a zip) -----------------------
+# Its content.xml holds the tables as a .fods does, under
+# office:document-content; zip_read_text and zip_write_texts (native) read
+# and write the package. Siberia writes the parts stored (uncompressed),
+# mimetype first, with a manifest, as ODF asks.
+
+$define SB_ODS_MIME "application/vnd.oasis.opendocument.spreadsheet"
+
+sb_ods_read_into(r): box path [
+    zip_read_text(t): path "content.xml"
+    btput(_): box "text" t
+    set(r): 0
+]
+
+# content.xml's text, or null (not a package, or no zip_read_text here)
+sb_ods_read(r): path [
+    btree(box):
+    try(failed): "sb_ods_read_into" box path
+    btget(r): box "text" null
+]
+
+# the workbook as content.xml
+sbsheetodscontent(r): [
+    sbsheetfods(t):
+    re_replace(t): "<office:document " t "<office:document-content "
+    re_replace(t): " office:mimetype=\"[^\"]*\"" t ""
+    re_replace(r): "</office:document>" t "</office:document-content>"
+]
+
+sb_ods_write_into(r): box path [
+    sbsheetodscontent(content):
+    set(x): "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    set(ns): "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\""
+    concat(styles): x "<office:document-styles " ns " office:version=\"1.2\"/>\n"
+    concat(meta): x "<office:document-meta " ns " xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" office:version=\"1.2\"><office:meta><meta:generator>Siberia (USSR)</meta:generator></office:meta></office:document-meta>\n"
+    concat(manifest): x "<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.2\">\n"
+    concat(manifest): manifest " <manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.2\" manifest:media-type=\"" SB_ODS_MIME "\"/>\n"
+    concat(manifest): manifest " <manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n"
+    concat(manifest): manifest " <manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n"
+    concat(manifest): manifest " <manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n"
+    concat(manifest): manifest "</manifest:manifest>\n"
+    vec(names): ""
+    vec(texts): ""
+    push(_): names "mimetype"
+    push(_): texts SB_ODS_MIME
+    push(_): names "content.xml"
+    push(_): texts content
+    push(_): names "styles.xml"
+    push(_): texts styles
+    push(_): names "meta.xml"
+    push(_): texts meta
+    push(_): names "META-INF/manifest.xml"
+    push(_): texts manifest
+    zip_write_texts(ok): path names texts
+    btput(_): box "ok" ok
+    set(r): 0
+]
+
+# true when the .ods was written
+sb_ods_write(r): path [
+    btree(box):
+    try(failed): "sb_ods_write_into" box path
+    btget(r): box "ok" false
 ]
 
 # A key while the dialog is up.
@@ -2748,7 +2860,7 @@ $ifdef SB_PAD
 $else
     if(_): true [
 $endif
-        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows, a Shift+click or a drag with the mouse selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Sheets: the tabs under the grid switch (Ctrl+Page Down/Up too), + (or Shift+F11) adds one, a double click renames it and a right click deletes it; Sheet2.A1 (or Sheet2!A1, 'My data'.A1) is a cell of another sheet. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .fods (OpenDocument) or .csv."
+        set(text): "Arrows, Tab, Enter, Page Up/Down and Ctrl+Home move between cells. Type to replace a cell; F2, a double click or a click on the formula bar edits it with a caret (Left/Right/Home/End move in the text); Enter keeps it, Esc cancels, Delete clears. Shift with the arrows, a Shift+click or a drag with the mouse selects cells, Ctrl+A everything; the status bar shows their Sum, Average and Count. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste cells (formulas follow); SUM or Alt+= puts a SUM under the selection or the numbers above. Formulas start with =: + - * / ^ & %, comparisons, A1 references, A1:B5 ranges and SUM AVERAGE MIN MAX COUNT ABS INT ROUND SQRT MOD POWER IF AND OR NOT LEN UPPER LOWER PI. Sheets: the tabs under the grid switch (Ctrl+Page Down/Up too), + (or Shift+F11) adds one, a double click renames it and a right click deletes it; Sheet2.A1 (or Sheet2!A1, 'My data'.A1) is a cell of another sheet. Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit. Files: .ods and .fods (OpenDocument) or .csv."
     ]
     # a box drawn over the window (the native message box is too small)
     sbe_help(_): title text

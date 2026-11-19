@@ -1,0 +1,85 @@
+# Siberia and .ods, OpenDocument's zipped spreadsheet. Opens one LibreOffice
+# wrote (tests/fixtures/siberia/libreoffice.ods: two sheets, deflated, a
+# formula reaching the other sheet), saves .ods, and reads that back; plus
+# zip_read_text and zip_write_texts, the natives under it. Not in russia.su
+# yet.
+$include "../src/siberia/siberia.su"
+
+check(r): label ok [
+    if(_): ok [ concat(m): "PASS " label ] else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    sbsetup(_):
+    sbsheetreset(_):
+    set(lo): "tests/fixtures/siberia/libreoffice.ods"
+
+    # --- the package under it
+    zip_read_text(mime): lo "mimetype"
+    check(_): "the fixture is an ODF spreadsheet package" {mime = "application/vnd.oasis.opendocument.spreadsheet"}
+    zip_read_text(none): lo "no/such/part.xml"
+    check(_): "a missing part is null" {none = null}
+
+    # --- LibreOffice's .ods opens
+    sb_open(ok): lo
+    sbsheetcount(n):
+    sbsheetname(n0): 0
+    sbsheetname(n1): 1
+    check(_): "LibreOffice's .ods opens with both sheets" {ok && n = 2 && n0 = "Sheet1" && n1 = "Итоги"}
+    sbget(a2): "A2"
+    sbget(f4): "B4"
+    sbshow(v4): "B4"
+    check(_): "its cells and formulas" {a2 = "Хлеб" && f4 = "=SUM(B2:B3)" && v4 = "134.5"}
+    sbsheetswitch(_): 1
+    sbget(fa): "A1"
+    sbshow(va): "A1"
+    sbget(t2): "A2"
+    check(_): "the other sheet, and a formula reaching across" {fa = "=Sheet1.B4*2" && va = "269" && t2 = "text & <xml>"}
+    set(p): sb_path?
+    set(d): sb_dirty?
+    check(_): "the sheet takes its name, clean" {p = lo && d = false}
+
+    # --- saving .ods, and back
+    set(out): "tests/siberia_ods_tmp.ods"
+    sbsheetswitch(_): 0
+    sbset(_): "C2" "=B2*2"
+    sb_save(saved): out
+    zip_read_text(mime2): out "mimetype"
+    zip_read_text(manifest): out "META-INF/manifest.xml"
+    zip_read_text(content): out "content.xml"
+    str_contains(mf): manifest "content.xml"
+    str_starts(root): content "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content "
+    str_contains(cross): content "of:=[$Sheet1.B4]*2"
+    check(_): "an .ods is written: mimetype, manifest, content.xml" {saved && mime2 = "application/vnd.oasis.opendocument.spreadsheet" && mf && root && cross}
+    sb_new(_):
+    sb_open(back): out
+    sbsheetcount(nb):
+    sbshow(c2): "C2"
+    sbsheetswitch(_): 1
+    sbshow(vb): "A1"
+    check(_): "and opens again the same" {back && nb = 2 && c2 = "90" && vb = "269"}
+    remove_file(_): out
+
+    # --- what is still refused
+    sb_save(x): "tests/siberia_ods_tmp.xlsx"
+    set(msg): sb_message?
+    str_starts(said): msg "Packed (zip) files other than .ods"
+    check(_): ".xlsx is still refused, saying .ods works" {x = false && said}
+
+    # --- zip_write_texts: stored entries, in order
+    vec(names): ""
+    vec(texts): ""
+    push(_): names "first"
+    push(_): texts "один"
+    push(_): names "dir/second.txt"
+    push(_): texts ""
+    set(zp): "tests/siberia_ods_tmp.zip"
+    zip_write_texts(zok): zp names texts
+    zip_read_text(z1): zp "first"
+    zip_read_text(z2): zp "dir/second.txt"
+    check(_): "zip_write_texts writes what zip_read_text reads" {zok && z1 = "один" && z2 = ""}
+    remove_file(_): zp
+    set(result): 0
+]

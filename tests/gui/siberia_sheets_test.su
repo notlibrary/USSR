@@ -341,6 +341,17 @@ init(result): arg_count arg_values [
     sbsheetcount(n):
     sbsheetname(nm): 0
     check(_): "New starts over with Sheet1" {n = 1 && nm = "Sheet1"} true
+    # a formula on another sheet reads its own sheet's cells, even when it
+    # was never shown
+    sbset(_): "A1" "2"
+    sbset(_): "A2" "3"
+    sbset(_): "A3" "=SUM(A1:A2)*A1"
+    sbsheetadd(si): ""
+    sbsheetswitch(_): si
+    sbset(_): "A1" "100"
+    sbset(_): "B1" "=Sheet1.A3"
+    sbshow(v): "B1"
+    check(_): "Sheet1.A3 sums Sheet1's cells, not this sheet's" v "10"
     close(_): window
     sleep(_): 100
     set(result): 0
