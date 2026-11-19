@@ -125,6 +125,9 @@ sbstate(r): [
     sbe_state(_):
     sbs_state(_):
 $ifdef SB_PAD
+    sb_pad_probe(_):
+$endif
+$ifdef SB_PAD
     vec(v): ""
     set(sb_families): v!
     set(sb_family): ""!

@@ -161,8 +161,14 @@ sbx_split(r): row col [
         set(i): {i + 1}
     ]
     set(sp): sb_pspans?
-    vec(out): ""
+    set(native): sb_native?
     len(n): sp
+    if(_): {native && row < n} [
+        set(sp): row left
+        vinsert(_): sp {row + 1} right
+        return(r): r
+    ]
+    vec(out): ""
     set(i): 0
     while(_): {i < n} [
         at(x): sp i
@@ -202,6 +208,12 @@ sbx_merge(r): row left [
         set(e): 1 {s1 + left}
         push(_): joined e
         set(i): {i + 1}
+    ]
+    set(native): sb_native?
+    if(_): native [
+        set(sp): row joined
+        vremove(_): sp {row + 1}
+        return(r): r
     ]
     vec(out): ""
     set(i): 0

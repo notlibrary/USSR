@@ -284,6 +284,20 @@ else
     fail=$((fail + 1)); printf 'FAIL line numbers and ruler\n'
 fi
 
+# A big file: 50,000 lines (3.5 MB). Edits at the top and in the middle,
+# a line deleted and one added, then :wq, within the time limit. Saving
+# used to join the text one line at a time (quadratic) and every edit
+# copied the whole list, so this took minutes.
+awk 'BEGIN { for (i = 1; i <= 50000; i++) printf "line %d: привет, мир — the quick brown fox\n", i }' >"$TMP/big.txt"
+awk 'NR == 1 { sub(/^li/, "") } NR == 25000 { print "added"; next } { print }' "$TMP/big.txt" >"$TMP/big_want.txt"
+printf 'xx:25000\nddOadded\033oX\033dd:wq\n' | $LIMIT "$USSR" "$MBL" "$TMP/big.txt" >"$TMP/screen" 2>&1
+if cmp -s "$TMP/big.txt" "$TMP/big_want.txt"; then
+    pass=$((pass + 1)); printf 'PASS a 50000-line file edits and saves\n'
+else
+    fail=$((fail + 1)); printf 'FAIL a 50000-line file edits and saves\n'
+    diff "$TMP/big.txt" "$TMP/big_want.txt" | head -5
+fi
+
 rm -rf "$TMP"
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

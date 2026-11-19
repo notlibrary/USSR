@@ -37,6 +37,7 @@ sbpadreset(r): [
     new(p): "SbPara" ""
     push(_): paras p
     set(sb_paras): paras!
+    sb_wc_stale(_):
     set(sb_prow): 0!
     set(sb_pcol): 0!
     set(sb_ptop): 0!
@@ -46,6 +47,112 @@ sbpadreset(r): [
     nsm_state(_):
     sbx_state(_):
     set(r): 0
+]
+
+# --- big documents --------------------------------------------------------
+# With the runtime's vector toolkit (vcopy, vinsert, vremove, vjoin) the
+# paragraph list changes in place and the text is split and joined in one
+# pass; without it (Moscow, an older ussr) the lists are rebuilt as before.
+# Word and character counts are kept up to date paragraph by paragraph,
+# and each paragraph's wrapped lines are kept until its text, the width or
+# the font changes, so a frame costs what is on the screen, not the whole
+# document.
+
+sb_pad_probe_box(r): box [
+    vec(v): ""
+    push(_): v "a"
+    vcopy(c): v
+    vinsert(_): c 0 "b"
+    vremove(_): c 0
+    vjoin(_spb_s): c ""
+    re_all(_spb_w): "[^ ]+ *| +" "a b"
+    utf8_chars(_spb_n): "ab"
+    btput(_): box "ok" true
+    set(r): 0
+]
+
+sb_pad_probe(r): [
+    set(r): 0
+    btree(box):
+    try(failed): "sb_pad_probe_box" box
+    btget(ok): box "ok" false
+    set(sb_native): ok!
+    sb_wc_stale(_):
+    btree(cache):
+    set(sb_wcache): cache!
+    set(sb_wcache_key): ""!
+]
+
+# words and characters of one paragraph, counted as nsm_stats counts them
+sb_para_wc(r): text [
+    set(native): sb_native?
+    if(_): native [ utf8_chars(c): text ] else(_): [ utf8_count(c): text ]
+    set(w): 0
+    re_all(ws): "[^\\s.,;:!?()«»\"“”—–-]+" text
+    typeof(wt): ws
+    if(_): {wt = "vector"} [ len(w): ws ]
+    vec(r): ""
+    push(_): r w
+    push(_): r c
+]
+
+sb_wc_stale(r): [
+    set(sb_wcw): -1!
+    set(sb_wcc): 0!
+    set(r): 0
+]
+
+# the counts change by d (+1 or -1) times text's
+sb_wc_add(r): text d [
+    set(r): 0
+    set(w): sb_wcw?
+    if(_): {w < 0} [ return(r): r ]
+    sb_para_wc(x): text
+    at(xw): x 0
+    at(xc): x 1
+    set(c): sb_wcc?
+    set(sb_wcw): {w + d * xw}!
+    set(sb_wcc): {c + d * xc}!
+]
+
+# "N words, M characters" for the status line
+sb_wc_line(r): [
+    set(w): sb_wcw?
+    set(native): sb_native?
+    if(_): {w < 0 && native} [
+        # the whole text in one pass: words do not cross paragraphs (\s
+        # takes the newlines), and the newlines are not characters
+        sbpadtext(all):
+        re_all(ws): "[^\\s.,;:!?()«»\"“”—–-]+" all
+        len(w): ws
+        utf8_chars(c): all
+        sb_pad_count(np):
+        set(sb_wcw): w!
+        set(sb_wcc): {c - (np - 1)}!
+    ]
+    if(_): {w < 0} [
+        set(paras): sb_paras?
+        len(n): paras
+        set(w): 0
+        set(c): 0
+        set(i): 0
+        while(_): {i < n} [
+            at(p): paras i
+            getf(t): p "text"
+            sb_para_wc(x): t
+            at(xw): x 0
+            at(xc): x 1
+            set(w): {w + xw}
+            set(c): {c + xc}
+            set(i): {i + 1}
+        ]
+        set(sb_wcw): w!
+        set(sb_wcc): c!
+    ]
+    set(c): sb_wcc?
+    str_from_int(ws): w
+    str_from_int(cs): c
+    concat(r): ws " words, " cs " characters"
 ]
 
 sb_pad_count(r): [
@@ -64,6 +171,18 @@ sb_para_text(r): index [
 sb_para_set(r): index text [
     set(paras): sb_paras?
     at(p): paras index
+    getf(old): p "text"
+    sb_wc_add(_): old -1
+    sb_wc_add(_): text 1
+    set(native): sb_native?
+    if(_): native [
+        # a new paragraph in its place: undo snapshots share the old ones
+        new(np): "SbPara" text
+        set(paras): index np
+        set(sb_dirty): true!
+        set(r): 0
+        return(r): r
+    ]
     setf(_): p "text" text
     set(sb_dirty): true!
     set(r): 0
@@ -90,6 +209,31 @@ sb_clean_line(r): s [
 ]
 
 sbpadsettext(r): text [
+    set(native): sb_native?
+    if(_): native [
+        vec(paras): "SbPara"
+        re_split(lines): "\n" text
+        len(n): lines
+        set(i): 0
+        while(_): {i < n} [
+            at(line): lines i
+            re_test(odd): "[\\x00-\\x1f]" line
+            if(_): odd [ sb_clean_line(line): line ]
+            new(p): "SbPara" line
+            push(_): paras p
+            set(i): {i + 1}
+        ]
+        set(sb_paras): paras!
+        sb_wc_stale(_):
+        set(sb_prow): 0!
+        set(sb_pcol): 0!
+        set(sb_ptop): 0!
+        set(sb_ptopline): 0!
+        set(sb_goalx): {0 - 1}!
+        sbx_reset(_):
+        set(r): 0
+        return(r): r
+    ]
     vec(paras): "SbPara"
     len(n): text
     set(from): 0
@@ -107,6 +251,7 @@ sbpadsettext(r): text [
         set(i): {i + 1}
     ]
     set(sb_paras): paras!
+    sb_wc_stale(_):
     set(sb_prow): 0!
     set(sb_pcol): 0!
     set(sb_ptop): 0!
@@ -119,6 +264,19 @@ sbpadsettext(r): text [
 sbpadtext(r): [
     set(paras): sb_paras?
     len(n): paras
+    set(native): sb_native?
+    if(_): native [
+        vec(texts): ""
+        set(i): 0
+        while(_): {i < n} [
+            at(p): paras i
+            getf(t): p "text"
+            push(_): texts t
+            set(i): {i + 1}
+        ]
+        vjoin(r): texts "\n"
+        return(r): r
+    ]
     set(r): ""
     set(i): 0
     while(_): {i < n} [
@@ -174,6 +332,82 @@ sb_skip_spaces(r): s i n [
 # Start offsets of the wrapped lines of a paragraph: words move to the
 # next line when they do not fit; a word wider than the line breaks.
 sb_wrap(r): text [
+    set(native): sb_native?
+    set(mrow): sb_mrow?
+    sbx_has_spans(mixed): mrow
+    if(_): {native = false || mixed} [
+        sb_wrap_slow(r): text
+        return(r): r
+    ]
+    # the wrapped lines of a text stay right while the width and the font do
+    set(font): sb_pfont?
+    set(px): sb_ppx?
+    set(width): sb_pwidth?
+    encode(key): width
+    encode(fk): font
+    encode(pk): px
+    concat(key): key "|" fk "|" pk
+    set(cache): sb_wcache?
+    set(ck): sb_wcache_key?
+    btlen(cn): cache
+    if(_): {ck != key || cn > 20000} [
+        btree(cache):
+        set(sb_wcache): cache!
+        set(sb_wcache_key): key!
+    ]
+    btget(r): cache text null
+    if(_): {r != null} [ return(r): r ]
+    sb_wrap_words(r): text
+    btput(_): cache text r
+]
+
+# sb_wrap's lines, finding the words natively; a word wider than the line
+# hands the paragraph to sb_wrap_slow, which breaks it
+sb_wrap_words(r): text [
+    vec(r): ""
+    push(_): r 0
+    set(width): sb_pwidth?
+    len(n): text
+    if(_): {n = 0} [ return(r): r ]
+    re_all(toks): "[^ ]+ *| +" text
+    len(nt): toks
+    set(start): 0
+    set(end): 0
+    set(pos): 0
+    set(sb_mbase): 0!
+    set(k): 0
+    while(_): {k < nt} [
+        at(tok): toks k
+        len(tl): tok
+        set(wl): tl
+        set(sp): true
+        while(_): {sp && wl > 0} [
+            byte(b): tok {wl - 1}
+            if(_): {b = 32} [ set(wl): {wl - 1} ] else(_): [ set(sp): false ]
+        ]
+        set(wend): {pos + wl}
+        slice(piece): text start {wend - start}
+        sb_measure(w): piece
+        if(_): {w <= width} [
+            set(end): {pos + tl}
+            set(pos): end
+            set(k): {k + 1}
+        ]
+        elif(_): {end = start} [
+            sb_wrap_slow(r): text
+            return(r): r
+        ]
+        else(_): [
+            push(_): r end
+            set(start): end
+            set(sb_mbase): start!
+        ]
+    ]
+]
+
+# Start offsets of the wrapped lines, a byte at a time (mixed fonts, very
+# long words, or no vector toolkit).
+sb_wrap_slow(r): text [
     vec(r): ""
     push(_): r 0
     set(width): sb_pwidth?
@@ -299,6 +533,39 @@ sbpadtype(r): s [
 sb_paras_splice(r): index drop items [
     set(paras): sb_paras?
     len(n): paras
+    # the counts: out with the dropped, in with the new
+    set(k): 0
+    while(_): {k < drop && index + k < n} [
+        at(p): paras {index + k}
+        getf(t): p "text"
+        sb_wc_add(_): t -1
+        set(k): {k + 1}
+    ]
+    len(ni): items
+    set(k): 0
+    while(_): {k < ni} [
+        at(p): items k
+        getf(t): p "text"
+        sb_wc_add(_): t 1
+        set(k): {k + 1}
+    ]
+    set(native): sb_native?
+    if(_): native [
+        set(k): 0
+        while(_): {k < drop && index < n - k} [
+            vremove(_): paras index
+            set(k): {k + 1}
+        ]
+        set(k): 0
+        while(_): {k < ni} [
+            at(p): items k
+            vinsert(_): paras {index + k} p
+            set(k): {k + 1}
+        ]
+        set(sb_dirty): true!
+        set(r): 0
+        return(r): r
+    ]
     vec(out): "SbPara"
     set(i): 0
     while(_): {i < index} [
@@ -731,6 +998,7 @@ sb_load_fodt(r): s [
         push(_): paras p
     ]
     set(sb_paras): paras!
+    sb_wc_stale(_):
     set(sb_prow): 0!
     set(sb_pcol): 0!
     set(sb_ptop): 0!
@@ -1189,8 +1457,7 @@ sb_pad_draw(r): [
     str_from_int(rs): {row + 1}
     str_from_int(cs): {column + 1}
     str_from_int(ps): count
-    nsm_from_pad(_sbd_doc):
-    nsm_stats_line(_sbd_words): _sbd_doc
+    sb_wc_line(_sbd_words):
     concat(left): "Paragraph " rs " of " ps ", column " cs " | " _sbd_words
     set(sb_status_left): left!
     sb_draw_status(_): w h
