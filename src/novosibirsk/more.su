@@ -103,6 +103,7 @@ nsm_to_pad(r): d [
         push(_): paras sp
     ]
     set(sb_paras): paras!
+    sb_wc_stale(_):
     set(sb_prow): 0!
     set(sb_pcol): 0!
     set(r): n
@@ -2024,6 +2025,16 @@ nsm_fill_fields(r): d path [
 nsm_snapshot(r): [
     set(paras): sb_paras?
     vec(r): ""
+    set(native): sb_native?
+    if(_): native [
+        # [the paragraph list, the cursor]: paragraphs are replaced, not
+        # changed (sb_para_set), so a copy of the list keeps this state
+        vcopy(pc): paras
+        push(_): r pc
+        nsm_snapshot_cursor(c):
+        push(_): r c
+        return(r): r
+    ]
     len(n): paras
     set(i): 0
     while(_): {i < n} [
@@ -2044,9 +2055,50 @@ nsm_snapshot(r): [
     push(_): r c
 ]
 
+# [row col spans words chars]: the cursor, the fonts on parts of the text
+# (fonts.su) and the counts go back with an undo too
+nsm_snapshot_cursor(r): [
+    set(row): sb_prow?
+    set(col): sb_pcol?
+    vec(r): ""
+    push(_): r row
+    push(_): r col
+    set(sp): sb_pspans?
+    encode(spt): sp
+    push(_): r spt
+    set(w): sb_wcw?
+    set(c): sb_wcc?
+    push(_): r w
+    push(_): r c
+]
+
 nsm_restore(r): snap [
-    vec(paras): "SbPara"
     len(n): snap
+    if(_): {n = 2} [
+        at(first): snap 0
+        typeof(ft): first
+        if(_): {ft = "vector"} [
+            vcopy(paras): first
+            set(sb_paras): paras!
+            at(c): snap 1
+            at(row): c 0
+            at(col): c 1
+            set(sb_prow): row!
+            set(sb_pcol): col!
+            at(spt): c 2
+            decode(sp): spt
+            set(sb_pspans): sp!
+            at(w): c 3
+            at(cc): c 4
+            set(sb_wcw): w!
+            set(sb_wcc): cc!
+            set(sb_parow): -1!
+            set(sb_pacol): -1!
+            set(r): 0
+            return(r): r
+        ]
+    ]
+    vec(paras): "SbPara"
     set(i): 0
     while(_): {i < n - 1} [
         at(t): snap i
@@ -2055,6 +2107,7 @@ nsm_restore(r): snap [
         set(i): {i + 1}
     ]
     set(sb_paras): paras!
+    sb_wc_stale(_):
     at(c): snap {n - 1}
     at(row): c 0
     at(col): c 1

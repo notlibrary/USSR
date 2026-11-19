@@ -1,5 +1,21 @@
 # Mbl changelog
 
+## 0.3.0
+Big files. A 100,000-line (7.5 MB) file opens in about 0.4 s. Edits take
+about 35 ms each, and `:w` writes it at once; saving it used to take
+many minutes.
+- Saving joined the text with one `concat` per line, which copies
+  everything written so far each time (quadratic). It is now one native
+  `vjoin`, or, without it, a join of pairs, then pairs of pairs.
+- Every edit copied the whole line list. Lines now change in place
+  (`vinsert`, `vremove`, `set`), and an undo step keeps one native copy
+  (`vcopy`) of the lines.
+- Opening reads the file once and splits it natively (`re_split`). The
+  CRLF check no longer walks the text a byte at a time.
+- Mbl checks at start whether the runtime has the vector toolkit
+  (`try`). Where it doesn't (Moscow, an older ussr), it keeps the old
+  list rebuilding and the pairwise join, so it still runs there.
+
 ## 0.2.0
 
 Refine pass 1 from REFINE.md; the new code is `more.su`, which `Mbl.su`

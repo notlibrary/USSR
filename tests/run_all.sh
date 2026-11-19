@@ -122,6 +122,9 @@ suite() {
                 # 40 queries over the 118-object elements base exceed
                 # russia.su's step limit
                 tests/kgb_elements_test.su) continue ;;
+                # the vector toolkit (vcopy, vinsert, vremove, vjoin,
+                # utf8_chars) is ussr's own so far
+                tests/vector_toolkit_test.su|tests/novosibirsk_big_test.su) continue ;;
             esac
         fi
         want="tests/expected/${f#tests/}.txt"

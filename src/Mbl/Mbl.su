@@ -49,6 +49,10 @@ global(_): Mbl_rows Mbl_cols Mbl_mode Mbl_ub Mbl_ux Mbl_uy Mbl_uv Mbl_rb
 global(_): Mbl_rx Mbl_ry Mbl_rv Mbl_ver Mbl_saved_ver Mbl_dirty Mbl_msg
 global(_): Mbl_fe_ok Mbl_fe_yes Mbl_bom Mbl_bom_text Mbl_file
 global(_): Mbl_showname Mbl_running
+# 1 when the runtime has vcopy, vinsert, vremove and vjoin: lines are then
+# changed in place and the file joined in one pass, so big files stay
+# quick; without them (an older ussr, Moscow) the lists are rebuilt
+global(_): Mbl_native
 
 # ---------- terminal helpers ----------
 
@@ -94,7 +98,24 @@ Mbl_termsize(r): [
 
 # ---------- buffer helpers ----------
 
+# Is the vector toolkit there? (it fails, and try says so, where not)
+Mbl_probe(r): box [
+    vec(Mblpr_v): ""
+    push(_): Mblpr_v "a"
+    vcopy(Mblpr_c): Mblpr_v
+    vinsert(_): Mblpr_c 0 "b"
+    vremove(_): Mblpr_c 0
+    vjoin(Mblpr_s): Mblpr_c ""
+    btput(_): box "ok" true
+    set(r): 0
+]
+
 Mbl_setline(r): idx line [
+    if(_): {Mbl_native = 1} [
+        set(Mbl_buf): idx line
+        set(r): 0
+        return(r): r
+    ]
     vec(Mblsl_new): ""
     len(Mblsl_n): Mbl_buf
     set(Mblsl_i): 0
@@ -111,6 +132,11 @@ Mbl_setline(r): idx line [
 ]
 
 Mbl_linedel(r): idx [
+    if(_): {Mbl_native = 1} [
+        vremove(_): Mbl_buf idx
+        set(r): 0
+        return(r): r
+    ]
     vec(Mbldl_new): ""
     len(Mbldl_n): Mbl_buf
     set(Mbldl_i): 0
@@ -126,6 +152,16 @@ Mbl_linedel(r): idx [
 ]
 
 Mbl_lineins(r): idx line [
+    if(_): {Mbl_native = 1} [
+        len(Mblil_n): Mbl_buf
+        set(Mblil_at): idx
+        if(_): {Mblil_at > Mblil_n} [
+            set(Mblil_at): Mblil_n
+        ]
+        vinsert(_): Mbl_buf Mblil_at line
+        set(r): 0
+        return(r): r
+    ]
     vec(Mblil_new): ""
     len(Mblil_n): Mbl_buf
     set(Mblil_i): 0
@@ -345,14 +381,18 @@ Mbl_undo_reset(r): [
 
 # Pushes the current state on the undo (which = 0) or redo stack.
 Mbl_state_push(r): which [
+    set(Mblsp_b): Mbl_buf
+    if(_): {Mbl_native = 1} [
+        vcopy(Mblsp_b): Mbl_buf
+    ]
     if(_): {which = 0} [
-        push(_): Mbl_ub Mbl_buf
+        push(_): Mbl_ub Mblsp_b
         push(_): Mbl_ux Mbl_cx
         push(_): Mbl_uy Mbl_cy
         push(_): Mbl_uv Mbl_ver
     ]
     else(_): [
-        push(_): Mbl_rb Mbl_buf
+        push(_): Mbl_rb Mblsp_b
         push(_): Mbl_rx Mbl_cx
         push(_): Mbl_ry Mbl_cy
         push(_): Mbl_rv Mbl_ver
@@ -492,6 +532,40 @@ Mbl_load(r): path [
         ]
     ]
     set(Mbl_bom): 0
+    if(_): {Mbll_go = 1 && Mbl_native = 1} [
+        # One read and one native split: CRLF and LF both end a line, a
+        # last newline adds no empty line, bytes are kept as-is
+        set(Mbll_go): 0
+        readfile(Mbll_all): path
+        set(Mbl_crlf): false
+        typeof(Mbll_at): Mbll_all
+        if(_): {Mbll_at = "string"} [
+            # natively: str_contains walks the text byte by byte
+            re_test(Mbl_crlf): "\r\n" Mbll_all
+            re_split(Mbl_buf): "\r?\n" Mbll_all
+            set(Mbll_all): ""
+            len(Mbll_n): Mbl_buf
+            if(_): {Mbll_n > 0} [
+                at(Mbll_lastl): Mbl_buf {Mbll_n - 1}
+                if(_): {Mbll_lastl = ""} [
+                    pop(_): Mbl_buf
+                ]
+            ]
+            len(Mbll_n): Mbl_buf
+            if(_): {Mbll_n > 0} [
+                at(Mbll_cur): Mbl_buf 0
+                len(Mbll_cl): Mbll_cur
+                if(_): {Mbll_cl >= 3} [
+                    slice(Mbll_head): Mbll_cur 0 3
+                    if(_): {Mbll_head = Mbl_bom_text} [
+                        set(Mbl_bom): 1
+                        slice(Mbll_cur): Mbll_cur 3 {Mbll_cl - 3}
+                        set(Mbl_buf): 0 Mbll_cur
+                    ]
+                ]
+            ]
+        ]
+    ]
     if(_): {Mbll_go = 1} [
         # Line by line: CRLF and LF both end a line; bytes are kept as-is,
         # so UTF-8 text loads unchanged.
@@ -552,14 +626,8 @@ Mbl_save(r): [
         if(_): {Mbl_bom = 1} [
             set(Mbl_payload): Mbl_bom_text
         ]
-        len(Mblw_n): Mbl_buf
-        set(Mblw_i): 0
-        while(_): {Mblw_i < Mblw_n} [
-            at(Mblw_l): Mbl_buf Mblw_i
-            concat(Mbl_payload): Mbl_payload Mblw_l
-            concat(Mbl_payload): Mbl_payload Mblw_eol
-            set(Mblw_i): {Mblw_i + 1}
-        ]
+        Mbl_join_lines(Mblw_body): Mbl_buf Mblw_eol
+        concat(Mbl_payload): Mbl_payload Mblw_body Mblw_eol
         write_file_atomic(Mblw_ok): Mbl_file Mbl_payload
         if(_): {Mblw_ok != 0} [
             writefile(Mblw_ok): Mbl_file Mbl_payload
@@ -567,6 +635,43 @@ Mbl_save(r): [
         set(Mbl_saved_ver): Mbl_ver
         set(Mbl_dirty): 0
         set(Mbl_msg): "written"
+    ]
+]
+
+# The lines joined with sep. Without vjoin, pairs are joined, then pairs
+# of pairs: each byte is copied log2(lines) times, not once per line.
+Mbl_join_lines(r): lines sep [
+    if(_): {Mbl_native = 1} [
+        vjoin(r): lines sep
+        return(r): r
+    ]
+    vec(Mblj_level): ""
+    len(Mblj_n): lines
+    set(Mblj_i): 0
+    while(_): {Mblj_i < Mblj_n} [
+        at(Mblj_l): lines Mblj_i
+        push(_): Mblj_level Mblj_l
+        set(Mblj_i): {Mblj_i + 1}
+    ]
+    set(r): ""
+    len(Mblj_n): Mblj_level
+    while(_): {Mblj_n > 1} [
+        vec(Mblj_next): ""
+        set(Mblj_i): 0
+        while(_): {Mblj_i < Mblj_n} [
+            at(Mblj_a): Mblj_level Mblj_i
+            if(_): {Mblj_i + 1 < Mblj_n} [
+                at(Mblj_b): Mblj_level {Mblj_i + 1}
+                concat(Mblj_a): Mblj_a sep Mblj_b
+            ]
+            push(_): Mblj_next Mblj_a
+            set(Mblj_i): {Mblj_i + 2}
+        ]
+        set(Mblj_level): Mblj_next
+        len(Mblj_n): Mblj_level
+    ]
+    if(_): {Mblj_n = 1} [
+        at(r): Mblj_level 0
     ]
 ]
 
@@ -1153,6 +1258,13 @@ Mbl_dispatch(r): b [
 # ---------- entry ----------
 
 init(ret): arg_cnt arg_vec [
+    set(Mbl_native): 0
+    btree(Mblit_probe):
+    try(Mblit_failed): "Mbl_probe" Mblit_probe
+    btget(Mblit_ok): Mblit_probe "ok" false
+    if(_): {Mblit_ok = true} [
+        set(Mbl_native): 1
+    ]
     set(Mbl_file): ""
     set(Mbl_showname): "[No Name]"
     set(Mbl_pb): {0 - 1}

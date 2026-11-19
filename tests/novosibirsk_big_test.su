@@ -1,0 +1,109 @@
+# Novosibirsk on a big document (50,000 paragraphs): loading it, the text
+# coming back unchanged, editing in the middle, the word and character
+# counts kept up to date, undo, and wrapping with the line cache. Each step
+# used to walk (or copy) the whole document; with the vector toolkit they
+# do not. Not in russia.su yet (vcopy, vinsert, vremove, vjoin).
+$include "../src/novosibirsk/novosibirsk.su"
+
+check(r): label ok [
+    if(_): ok [ concat(m): "PASS " label ] else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+    set(r): 0
+]
+
+# the counts as nsm_stats makes them, over the whole document
+counted(r): [
+    nsm_from_pad(d):
+    nsm_stats_line(r): d
+]
+
+# on a small document the kept counts are nsm_stats's
+small_counts(r): [
+    sbpadload(_): "Paragraph 7: привет, world. The quick brown fox.\n\nПять слов — и «кавычки»!" "txt"
+    sb_wc_line(a):
+    counted(b):
+    set(r): {a = b}
+]
+
+init(result): arg_count arg_values [
+    sbsetup(_):
+    set(nat): sb_native?
+    check(_): "the vector toolkit is found" nat
+    small_counts(sc):
+    check(_): "the kept counts are nsm_stats's" sc
+    vec(lines): ""
+    set(i): 0
+    while(_): {i < 50000} [
+        str_from_int(n): i
+        concat(l): "Paragraph " n ": привет, world. The quick brown fox."
+        push(_): lines l
+        set(i): {i + 1}
+    ]
+    vjoin(text): lines "\n"
+    sbpadload(err): text "txt"
+    sb_pad_count(np):
+    check(_): "50000 paragraphs load" {err = "" && np = 50000}
+    sbpadtext(back):
+    check(_): "and come back unchanged" {back = text}
+    sb_wc_line(wc):
+    check(_): "words and characters of the whole" {wc = "400000 words, 2588890 characters"}
+
+    # editing in the middle: type, Enter, Backspace across the break
+    set(sb_prow): 25000!
+    set(sb_pcol): 9!
+    nsm_push_undo(_): "type"
+    sbpadtype(_): "XY"
+    sb_para_text(t): 25000
+    check(_): "typing goes in the middle" {t = "ParagraphXY 25000: привет, world. The quick brown fox."}
+    nsm_push_undo(_): ""
+    sbpadkey(_): SB_KEY_ENTER
+    sb_pad_count(np):
+    sb_para_text(t2): 25001
+    check(_): "Enter splits it" {np = 50001 && t2 = " 25000: привет, world. The quick brown fox."}
+    sb_wc_line(wc):
+    check(_): "the counts follow the edits" {wc = "400000 words, 2588892 characters"}
+    sbpadkey(_): SB_KEY_BACKSPACE
+    sb_pad_count(np):
+    sb_para_text(t): 25000
+    check(_): "Backspace joins them again" {np = 50000 && t = "ParagraphXY 25000: привет, world. The quick brown fox."}
+
+    # undo back to the start
+    nsm_undo(_):
+    nsm_undo(_):
+    sbpadtext(back):
+    sb_wc_line(wc):
+    check(_): "undo brings back the document and its counts" {back = text && wc = "400000 words, 2588890 characters"}
+    nsm_redo(_):
+    sb_para_text(t): 25000
+    check(_): "redo the typing" {t = "ParagraphXY 25000: привет, world. The quick brown fox."}
+
+    # wrapping: the cached, word-finding wrap agrees with the byte-at-a-time
+    # one, at a narrow width with the bitmap font
+    set(sb_pwidth): 300!
+    set(same): true
+    set(k): 0
+    while(_): {k < 50} [
+        set(row): {k * 997}
+        sb_para_text(pt): row
+        sb_wrap(a): pt
+        sb_wrap(a2): pt
+        sb_wrap_slow(b): pt
+        encode(ea): a
+        encode(ea2): a2
+        encode(eb): b
+        if(_): {ea != eb || ea2 != eb} [ set(same): false ]
+        set(k): {k + 1}
+    ]
+    check(_): "wrapped lines match the old wrap, cached or not" same
+    sb_wrap(sp): "   leading spaces then words"
+    sb_wrap_slow(sp2): "   leading spaces then words"
+    encode(s1): sp
+    encode(s2): sp2
+    check(_): "leading spaces wrap the same" {s1 = s2}
+    sb_wrap(lw): "averyveryveryveryveryveryverylongwordthatcannotfitonalineatallreally and more"
+    sb_wrap_slow(lw2): "averyveryveryveryveryveryverylongwordthatcannotfitonalineatallreally and more"
+    encode(s1): lw
+    encode(s2): lw2
+    check(_): "a word wider than the line breaks the same" {s1 = s2}
+    set(result): 0
+]

@@ -1,0 +1,13 @@
+PASS vinsert at the start, the middle and the end
+PASS vremove gives the item and closes the gap
+PASS vcopy is a copy
+PASS vjoin of nothing is empty
+PASS vjoin of 20000 lines
+PASS a typed vector takes its type
+PASS utf8_chars counts characters, not bytes
+PASS vremove past the end fails
+
+--- stderr ---
+USSR: vremove() index 99 out of range
+
+--- exit 0 ---

@@ -1097,6 +1097,18 @@ Mbl_del_lines(r): y1 y2 [
 ]
 
 Mbl_lines_text(r): y1 y2 [
+    if(_): {Mbl_native = 1} [
+        len(Mbllt_n): Mbl_buf
+        vec(Mbllt_v): ""
+        set(Mbllt_y): y1
+        while(_): {Mbllt_y <= y2 && Mbllt_y < Mbllt_n} [
+            at(Mbllt_l): Mbl_buf Mbllt_y
+            push(_): Mbllt_v Mbllt_l
+            set(Mbllt_y): {Mbllt_y + 1}
+        ]
+        vjoin(r): Mbllt_v "\n"
+        return(r): r
+    ]
     set(r): ""
     set(y): y1
     while(_): {y <= y2} [

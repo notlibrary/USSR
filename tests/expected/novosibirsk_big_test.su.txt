@@ -1,0 +1,18 @@
+PASS the vector toolkit is found
+PASS the kept counts are nsm_stats's
+PASS 50000 paragraphs load
+PASS and come back unchanged
+PASS words and characters of the whole
+PASS typing goes in the middle
+PASS Enter splits it
+PASS the counts follow the edits
+PASS Backspace joins them again
+PASS undo brings back the document and its counts
+PASS redo the typing
+PASS wrapped lines match the old wrap, cached or not
+PASS leading spaces wrap the same
+PASS a word wider than the line breaks the same
+
+--- stderr ---
+
+--- exit 0 ---

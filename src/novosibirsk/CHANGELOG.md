@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0
+Big documents. 100,000 paragraphs (7.5 MB of text) open in about 0.4 s,
+the first frame is drawn in about 0.4 s, and typing, Enter, Backspace and
+moving the cursor take milliseconds. Before, every frame took seconds and
+opening took a minute.
+- The status line's word and character counts were recounted over the
+  whole document on every frame. They are now kept up to date paragraph
+  by paragraph, and counted in one native pass when a document is opened.
+- Each paragraph's wrapped lines are cached. The cache is keyed by its
+  text, the page width and the font, so a frame wraps only paragraphs
+  that changed. Words are found natively (`re_all`) rather than a byte
+  at a time.
+- Opening splits the text natively, and cleans only lines with tabs or
+  control characters. Saving joins it in one pass (`vjoin`).
+- Enter and Backspace across paragraphs change the paragraph and span
+  lists in place (`vinsert`, `vremove`) rather than rebuilding them.
+- Undo keeps a copy of the paragraph list (`vcopy`) instead of copying
+  every paragraph's text. Paragraphs are replaced, not changed, so the
+  copy stays right; an undo step also brings back the counts.
+- Without the vector toolkit (Moscow, an older ussr) the old paths are
+  kept.
+
 ## 0.4.0
 - The toolbar's OPEN (a folder picture), SAVE (a diskette) and SAVE AS
   show Petersburg's file dialog (documents, plain text or all files),

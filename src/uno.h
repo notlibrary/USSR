@@ -75,6 +75,7 @@ struct ussr_struct_instance_t
      * chained into the GC heap list exactly once. */
     unsigned char gc_mark;
     struct ussr_struct_instance_t *gc_next;
+    struct ussr_struct_instance_t *gc_prev;
 };
 
 /* Positional construction, args in declared (parent-first) order.
@@ -161,6 +162,7 @@ struct ussr_vector_t
     /* Mark-sweep GC registry linkage (gc.c). */
     unsigned char gc_mark;
     struct ussr_vector_t *gc_next;
+    struct ussr_vector_t *gc_prev; /* both ways: unlinking is O(1) */
 };
 
 ussr_vector_t *ussr_vector_create(const char *element_type /* may be NULL or "" for any */);

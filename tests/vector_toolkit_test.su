@@ -1,0 +1,60 @@
+# The vector toolkit: vcopy, vinsert, vremove, vjoin, and utf8_chars.
+# They change a vector in place or work in one native pass, so editors can
+# keep big files (Mbl, Novosibirsk). Not in russia.su yet.
+$include "../src/libs/strings.su"
+
+check(r): label ok [
+    if(_): ok [ concat(m): "PASS " label ] else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+    set(r): 0
+]
+
+init(result): arg_count arg_values [
+    vec(v): ""
+    push(_): v "b"
+    push(_): v "d"
+    vinsert(_): v 0 "a"
+    vinsert(_): v 2 "c"
+    vinsert(_): v 4 "e"
+    vjoin(s): v ","
+    check(_): "vinsert at the start, the middle and the end" {s = "a,b,c,d,e"}
+    vremove(x): v 1
+    vremove(y): v 3
+    vjoin(s): v ""
+    check(_): "vremove gives the item and closes the gap" {x = "b" && y = "e" && s = "acd"}
+    vcopy(c): v
+    push(_): c "z"
+    set(c): 0 "A"
+    vjoin(s1): v ""
+    vjoin(s2): c ""
+    check(_): "vcopy is a copy" {s1 = "acd" && s2 = "Acdz"}
+    vec(e): ""
+    vjoin(s): e "-"
+    check(_): "vjoin of nothing is empty" {s = ""}
+    vec(big): ""
+    set(i): 0
+    while(_): {i < 20000} [
+        str_from_int(n): i
+        push(_): big n
+        set(i): {i + 1}
+    ]
+    vjoin(all): big "\n"
+    len(al): all
+    check(_): "vjoin of 20000 lines" {al = 108889}
+    struct(SbX): "a:number"
+    new(x1): "SbX" 1
+    vec(sv): "SbX"
+    vinsert(_): sv 0 x1
+    len(svl): sv
+    check(_): "a typed vector takes its type" {svl = 1}
+    utf8_chars(n1): "aбв😀"
+    utf8_chars(n2): ""
+    check(_): "utf8_chars counts characters, not bytes" {n1 = 4 && n2 = 0}
+    try(bad): "vremove_past_end" v
+    check(_): "vremove past the end fails" bad
+    set(result): 0
+]
+
+vremove_past_end(r): v [
+    vremove(r): v 99
+]
