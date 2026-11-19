@@ -11,6 +11,9 @@
 - The function keys take a whole line at the bottom. They had shared a
   line with the status and were cut off in the right half. The status
   line has its own line too.
+- Only one line lists commands. Between messages, the status line shows
+  the active panel and what is in it (`LEFT PANEL | 3 folders, 12 files |
+  2 marked`), not a second list of keys.
 - F1 shows every key in a message box. The bar named F1 Help, but F1 did
   nothing.
 - The bar says `Ctrl+R Refresh  Ctrl+U Swap`; `Ctrl+L` (go to a path) is

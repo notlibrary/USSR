@@ -182,14 +182,43 @@ tver_set_status(r): text [
     set(r): 0
 ]
 
+# The status line between messages: which panel is active and what is in
+# it ("LEFT PANEL | 3 folders, 12 files | 2 marked"). The commands are on
+# the key bar under it, the one line of them (F1 shows every key).
 tver_panel_status(r): [
     set(_tvps_a): tver_active?
-    if(_): {_tvps_a = 0} [
-        tver_set_status(_): "LEFT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
+    set(_tvps_text): "LEFT PANEL"
+    if(_): {_tvps_a = 1} [ set(_tvps_text): "RIGHT PANEL" ]
+    set(_tvps_all): tver_names?
+    set(_tvps_allm): tver_marks?
+    at(_tvps_names): _tvps_all _tvps_a
+    at(_tvps_marks): _tvps_allm _tvps_a
+    len(_tvps_n): _tvps_names
+    set(_tvps_dirs): 0
+    set(_tvps_files): 0
+    set(_tvps_i): 0
+    while(_): {_tvps_i < _tvps_n} [
+        at(_tvps_name): _tvps_names _tvps_i
+        if(_): {_tvps_name != "../"} [
+            tver_is_dir_name(_tvps_d): _tvps_name
+            if(_): _tvps_d [ set(_tvps_dirs): {_tvps_dirs + 1} ]
+            else(_): [ set(_tvps_files): {_tvps_files + 1} ]
+        ]
+        set(_tvps_i): {_tvps_i + 1}
     ]
-    else(_): [
-        tver_set_status(_): "RIGHT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
+    str_from_int(_tvps_ds): _tvps_dirs
+    str_from_int(_tvps_fs): _tvps_files
+    set(_tvps_dw): " folders, "
+    if(_): {_tvps_dirs = 1} [ set(_tvps_dw): " folder, " ]
+    set(_tvps_fw): " files"
+    if(_): {_tvps_files = 1} [ set(_tvps_fw): " file" ]
+    concat(_tvps_text): _tvps_text " | " _tvps_ds _tvps_dw _tvps_fs _tvps_fw
+    tver_marked_count(_tvps_m): _tvps_marks
+    if(_): {_tvps_m > 0} [
+        str_from_int(_tvps_ms): _tvps_m
+        concat(_tvps_text): _tvps_text " | " _tvps_ms " marked"
     ]
+    tver_set_status(_): _tvps_text
     set(r): 0
 ]
 

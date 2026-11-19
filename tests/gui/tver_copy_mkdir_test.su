@@ -195,7 +195,7 @@ init(result): arg_count arg_values [
     is_dir(d): "src/skipped"
     check(_): "escape creates nothing" d 0
     gettext(t): status
-    check(_): "escape restores status" t "LEFT PANEL | TAB switches | INS marks | F5 copies | F6 moves | F7 new dir | F8 deletes"
+    check(_): "escape restores status" t "LEFT PANEL | 2 folders, 2 files"
 
     # other Tver keys do nothing while the prompt is open
     press(_): window KEY_F7
