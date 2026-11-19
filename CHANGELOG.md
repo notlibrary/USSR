@@ -1,5 +1,13 @@
 # USSR programming language CHANGELOG
 
+## [0.5.1] - 2026-11-31
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [0.5.0] - 2026-11-16
 
 ### Added
