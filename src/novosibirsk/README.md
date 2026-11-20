@@ -26,9 +26,10 @@ installed on the system (Windows `Fonts` folders, `/usr/share/fonts`,
 `~/.fonts`, macOS font folders); **-**/**+** step the size through 8..72 pt;
 **B** and **I** (Ctrl+B, Ctrl+I) pick the bold and italic faces. Font, size and style
 apply to the whole document and are saved as its default paragraph style.
-The menu row is above compact File and Text toolbars, which sit side by side
-in a single row. **TOOLS** shows or hides either toolbar; hover over a button
-for its name, or drag a dotted grip to reorder them.
+The menu row is above compact File and Text toolbars, which start side by
+side. **TOOLS** shows or hides either toolbar; hover over a button for its
+name, or drag a dotted grip horizontally to reorder and vertically to move a
+toolbar to another row.
 
 Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit,
 F1 help. New and Open ask before unsaved changes are lost.

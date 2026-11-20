@@ -9,10 +9,11 @@ canvas. Start it from the repository root with a GLFW-enabled build:
 The window requests maximized display at startup. `src/tula/examples/hello.su`
 builds the same window from a script that includes `tula.su`.
 
-The menu row is above the compact File and Drawing toolbars, which sit side
-by side in a single row; the **Tools** menu can hide or show either one. Hover
-over a square button to see its tool name, or drag a dotted grip to reorder
-the toolbars. Arrow keys pan, `=`/`-` zoom and `F` fits.
+The menu row is above the compact File and Drawing toolbars, which start side
+by side; the **Tools** menu can hide or show either one. Hover over a square
+button to see its tool name, or drag a dotted grip horizontally to reorder
+the toolbars and vertically to move one to another row. Arrow keys pan,
+`=`/`-` zoom and `F` fits.
 
 Choose **Line** and click two points on the canvas, or choose **Circle** and
 click its center followed by a point on its circumference. Points snap to a
