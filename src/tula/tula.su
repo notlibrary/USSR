@@ -1298,8 +1298,8 @@ tula_tb_pan_down(result): widget [
     tulapan(_): 0 {0 - TULA_PAN_STEP}
 ]
 
-tula_tb_add(r): bar label callback [
-    button(r): bar label
+tula_tb_add(r): bar glyph label callback [
+    button(r): bar glyph
     if(_): {label != ""} [ buttonhint(_): r label ]
     if(_): {callback != ""} [
         if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
