@@ -1,0 +1,107 @@
+# Tula's scrollbars. Needs a GLFW-enabled ussr and a display; the window is
+# never shown. Run from the repository root:
+#     ussr tests/gui/tula_scroll_test.su
+# The bars measure the drawing joined with the view: zoomed in, a press on
+# the track pans a page, and a drag of the thumb pans to where it is
+# dropped, the drawing's extent kept still meanwhile. Prints PASS or FAIL.
+$include "../../src/tula/tula.su"
+
+check(r): label ok [
+    if(_): ok [ concat(m): "PASS " label ] else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+    set(r): 0
+]
+
+near(r): a b [
+    set(d): {a - b}
+    if(_): {d < 0} [ set(d): {0 - d} ]
+    set(r): {d < 0.01}
+]
+
+init(result): arg_count arg_values [
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
+    createwindow(window): "Tula scroll test" 1100 800
+    textbox(filename): window "tests/gui/fixtures/sample.dxf"
+    label(status): window ""
+    tulainitialize(canvas): window status filename
+    pack(_): canvas true
+    run(_):
+    sleep(_): 300
+    tulaload(_):
+    tula_canvas_wh(wh):
+    at(w): wh 0
+    at(h): wh 1
+
+    # fitted: everything in view, thumbs fill the tracks
+    tula_hbar(hb):
+    at(hf): hb 3
+    at(hv): hb 4
+    at(ht): hb 5
+    near(fits): hv ht
+    check(_): "fitted: the view holds the whole drawing" {hf = 0 && fits}
+
+    # zoomed in: a part of it
+    tulazoom(_): 4
+    tula_hbar(hb):
+    at(hv): hb 4
+    at(ht): hb 5
+    check(_): "zoomed in, the thumb shows a part" {hv < ht}
+    set(v): tula_view?
+    at(ox0): v 0
+    at(oy0): v 1
+    # a press at the right end of the horizontal track: a page right
+    tula_bar_press(onbar): {w - PSB_THICK - 3} {h - 6}
+    set(v): tula_view?
+    at(ox1): v 0
+    near(paged): ox1 {ox0 - w * 0.9}
+    check(_): "a press right of the thumb pans a page right" {onbar && paged}
+    # the vertical bar: a press at its top pans a page up
+    tula_bar_press(_): {w - 6} 2
+    set(v): tula_view?
+    at(oy1): v 1
+    near(up): oy1 {oy0 + h * 0.9}
+    check(_): "a press above the thumb pans a page up" up
+
+    # the thumb dragged to the left end: the drawing's left edge in view
+    tula_hbar(hb):
+    at(hl): hb 2
+    at(hf): hb 3
+    at(hv): hb 4
+    at(ht): hb 5
+    psb_thumb(t): hl hf hv ht
+    at(ts): t 0
+    at(tz): t 1
+    set(mid): {ts + tz / 2}
+    tula_bar_take(_): hb false mid "h"
+    set(bar): tula_bar?
+    check(_): "a press on the thumb takes it" {bar = "h"}
+    tula_extent(ext):
+    at(ex0): ext 0
+    tula_bar_drag(_): -500 {h - 6} true
+    set(v): tula_view?
+    at(ox2): v 0
+    at(s): v 2
+    near(atleft): ox2 {0 - ex0 * s}
+    check(_): "dragged to the left end, the extent's left edge is at the left" atleft
+    tula_extent(ext2):
+    encode(e1): ext
+    encode(e2): ext2
+    check(_): "the extent holds still during the drag" {e1 = e2}
+    tula_bar_drag(_): 0 0 false
+    set(bar): tula_bar?
+    check(_): "letting go ends the drag" {bar = ""}
+
+    # a press on a bar draws nothing
+    set(es): tula_entities?
+    len(n0): es
+    tula_bar_press(_): {w - 6} {h / 2}
+    tulaclick(_): canvas {w / 2} {h - 6}
+    set(es): tula_entities?
+    len(n1): es
+    check(_): "presses on the bars add nothing to the drawing" {n1 = n0}
+    destroy(_): window
+    set(result): 0
+]

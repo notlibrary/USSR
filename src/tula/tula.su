@@ -31,6 +31,7 @@ $once
 $include "../petersburg/petersburg.su"
 $include "../petersburg/filedialog.su"
 $include "../petersburg/recent.su"
+$include "../petersburg/scrollbar.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
 
@@ -274,6 +275,7 @@ tula_redraw(r): [
     ]
     # the crosshair and the preview of what is being drawn (scope.su), over
     # the drawing kept for the moves that redraw only them
+    tula_bars_draw(_): _trd_canvas
     set(_trd_fast): tula_fast?
     if(_): {_trd_fast = true} [ canvaskeep(_): _trd_canvas ]
     tsc_overlay(_): _trd_canvas
@@ -288,6 +290,12 @@ tulainitialize(canvas): window status filename [
     # runtime has it
     set(tula_pen): false!
     set(tula_ltmenu): 0!
+    # a scrollbar thumb being dragged ("h", "v" or ""), where it was taken,
+    # and the extent it showed then
+    set(tula_bar): ""!
+    set(tula_bar_grab): 0!
+    vec(_ti_ext): ""
+    set(tula_bar_ext): _ti_ext!
     set(tula_lwmenu): 0!
     set(tula_status): status!
     set(tula_path): filename!
@@ -387,6 +395,8 @@ tula_click_body(r): canvas x y [
     if(_): {canvas != _tc_canvas} [
         return(_): r
     ]
+    tula_bar_press(_tc_onbar): x y
+    if(_): _tc_onbar [ return(_): r ]
     tula_fit_view(_tc_fitted):
     if(_): _tc_fitted [
         tula_redraw(_):
@@ -573,6 +583,217 @@ tula_bounds_add(r): box x y [
         if(_): {y > _tba_d} [ set(box): 3 y ]
     ]
     set(r): 0
+]
+
+# --- scrollbars: the drawing's extent with what is in view -------------------
+
+tula_canvas_wh(r): [
+    set(_tcw_c): tula_canvas?
+    getwidth(_tcw_w): _tcw_c
+    getheight(_tcw_h): _tcw_c
+    if(_): {_tcw_w = 0} [
+        set(_tcw_w): 1000
+        set(_tcw_h): 700
+    ]
+    vec(r): ""
+    push(_): r _tcw_w
+    push(_): r _tcw_h
+]
+
+# what is in view, in drawing units: [x0 y0 x1 y1]
+tula_view_box(r): [
+    tula_canvas_wh(_tvb_wh):
+    at(_tvb_w): _tvb_wh 0
+    at(_tvb_h): _tvb_wh 1
+    set(_tvb_v): tula_view?
+    at(_tvb_ox): _tvb_v 0
+    at(_tvb_oy): _tvb_v 1
+    at(_tvb_s): _tvb_v 2
+    vec(r): ""
+    push(_): r {(0 - _tvb_ox) / _tvb_s}
+    push(_): r {(_tvb_oy - _tvb_h) / _tvb_s}
+    push(_): r {(_tvb_w - _tvb_ox) / _tvb_s}
+    push(_): r {_tvb_oy / _tvb_s}
+]
+
+# the drawing's bounds joined with the view (frozen while a thumb moves)
+tula_extent(r): [
+    set(_tex_bar): tula_bar?
+    if(_): {_tex_bar != ""} [
+        set(r): tula_bar_ext?
+        return(r): r
+    ]
+    tula_view_box(r):
+    set(_tex_es): tula_entities?
+    tula_bounds(_tex_b): _tex_es
+    len(_tex_n): _tex_b
+    if(_): {_tex_n = 4} [
+        at(_tex_x0): _tex_b 0
+        at(_tex_y0): _tex_b 1
+        at(_tex_x1): _tex_b 2
+        at(_tex_y1): _tex_b 3
+        tula_bounds_add(_): r _tex_x0 _tex_y0
+        tula_bounds_add(_): r _tex_x1 _tex_y1
+    ]
+]
+
+# a bar: [x y length first visible total], horizontal along the bottom and
+# vertical (top of the drawing first) on the right
+tula_hbar(r): [
+    tula_canvas_wh(_thb_wh):
+    at(_thb_w): _thb_wh 0
+    at(_thb_h): _thb_wh 1
+    tula_view_box(_thb_v):
+    tula_extent(_thb_e):
+    at(_thb_vx0): _thb_v 0
+    at(_thb_vx1): _thb_v 2
+    at(_thb_ex0): _thb_e 0
+    at(_thb_ex1): _thb_e 2
+    vec(r): ""
+    push(_): r 0
+    push(_): r {_thb_h - PSB_THICK}
+    push(_): r {_thb_w - PSB_THICK}
+    push(_): r {_thb_vx0 - _thb_ex0}
+    push(_): r {_thb_vx1 - _thb_vx0}
+    push(_): r {_thb_ex1 - _thb_ex0}
+]
+
+tula_vbar(r): [
+    tula_canvas_wh(_tvr_wh):
+    at(_tvr_w): _tvr_wh 0
+    at(_tvr_h): _tvr_wh 1
+    tula_view_box(_tvr_v):
+    tula_extent(_tvr_e):
+    at(_tvr_vy0): _tvr_v 1
+    at(_tvr_vy1): _tvr_v 3
+    at(_tvr_ey0): _tvr_e 1
+    at(_tvr_ey1): _tvr_e 3
+    vec(r): ""
+    push(_): r {_tvr_w - PSB_THICK}
+    push(_): r 0
+    push(_): r {_tvr_h - PSB_THICK}
+    push(_): r {_tvr_ey1 - _tvr_vy1}
+    push(_): r {_tvr_vy1 - _tvr_vy0}
+    push(_): r {_tvr_ey1 - _tvr_ey0}
+]
+
+tula_bar_draw_one(r): canvas b vertical [
+    at(_tbo_x): b 0
+    at(_tbo_y): b 1
+    at(_tbo_l): b 2
+    at(_tbo_f): b 3
+    at(_tbo_v): b 4
+    at(_tbo_t): b 5
+    psb_draw(r): canvas _tbo_x _tbo_y _tbo_l vertical _tbo_f _tbo_v _tbo_t
+]
+
+tula_bars_draw(r): canvas [
+    set(r): 0
+    tula_hbar(_tbd_h):
+    tula_bar_draw_one(_): canvas _tbd_h false
+    tula_vbar(_tbd_v):
+    tula_bar_draw_one(_): canvas _tbd_v true
+    tula_canvas_wh(_tbd_wh):
+    at(_tbd_w): _tbd_wh 0
+    at(_tbd_hh): _tbd_wh 1
+    canvasfill(_): canvas {_tbd_w - PSB_THICK} {_tbd_hh - PSB_THICK} PSB_THICK PSB_THICK PSB_TRACK
+]
+
+tula_bar_hit(r): b vertical px py [
+    at(_tbh_x): b 0
+    at(_tbh_y): b 1
+    at(_tbh_l): b 2
+    at(_tbh_f): b 3
+    at(_tbh_v): b 4
+    at(_tbh_t): b 5
+    psb_hit(r): _tbh_x _tbh_y _tbh_l vertical _tbh_f _tbh_v _tbh_t px py
+]
+
+# a press on a bar: true, having paged the view or taken the thumb
+tula_bar_press(r): px py [
+    set(r): false
+    tula_hbar(_tbp_h):
+    tula_bar_hit(_tbp_wh): _tbp_h false px py
+    tula_vbar(_tbp_v):
+    tula_bar_hit(_tbp_wv): _tbp_v true px py
+    tula_canvas_wh(_tbp_wh2):
+    at(_tbp_w): _tbp_wh2 0
+    at(_tbp_hh): _tbp_wh2 1
+    set(_tbp_view): tula_view?
+    if(_): {_tbp_wh != null} [
+        set(r): true
+        if(_): {_tbp_wh = 0} [ tula_bar_take(_): _tbp_h false px "h" ]
+        else(_): [
+            # a page: nine tenths of the view
+            at(_tbp_ox): _tbp_view 0
+            set(_tbp_view): 0 {_tbp_ox - _tbp_wh * _tbp_w * 0.9}
+        ]
+    ]
+    elif(_): {_tbp_wv != null} [
+        set(r): true
+        if(_): {_tbp_wv = 0} [ tula_bar_take(_): _tbp_v true py "v" ]
+        else(_): [
+            at(_tbp_oy): _tbp_view 1
+            set(_tbp_view): 1 {_tbp_oy - _tbp_wv * _tbp_hh * 0.9}
+        ]
+    ]
+    else(_): [
+        set(r): {px >= _tbp_w - PSB_THICK && py >= _tbp_hh - PSB_THICK}
+    ]
+    if(_): r [ tula_redraw(_): ]
+]
+
+tula_bar_take(r): b vertical along which [
+    set(r): 0
+    at(_tbt_x): b 0
+    at(_tbt_y): b 1
+    at(_tbt_l): b 2
+    at(_tbt_f): b 3
+    at(_tbt_v): b 4
+    at(_tbt_t): b 5
+    psb_thumb(_tbt_th): _tbt_l _tbt_f _tbt_v _tbt_t
+    at(_tbt_start): _tbt_th 0
+    set(_tbt_o): _tbt_x
+    if(_): vertical [ set(_tbt_o): _tbt_y ]
+    tula_extent(_tbt_e):
+    set(tula_bar_ext): _tbt_e!
+    set(tula_bar_grab): {along - _tbt_o - _tbt_start}!
+    set(tula_bar): which!
+]
+
+# a thumb dragged to px, py; held: the button is still down
+tula_bar_drag(r): px py held [
+    set(r): false
+    set(_tbg_bar): tula_bar?
+    if(_): {_tbg_bar = ""} [ return(r): r ]
+    if(_): {held = false} [
+        set(tula_bar): ""!
+        return(r): r
+    ]
+    set(r): true
+    set(_tbg_e): tula_bar_ext?
+    set(_tbg_view): tula_view?
+    at(_tbg_s): _tbg_view 2
+    set(_tbg_grab): tula_bar_grab?
+    if(_): {_tbg_bar = "h"} [
+        tula_hbar(_tbg_b):
+        at(_tbg_l): _tbg_b 2
+        at(_tbg_v): _tbg_b 4
+        at(_tbg_t): _tbg_b 5
+        psb_first_at(_tbg_f): _tbg_l _tbg_v _tbg_t {px - _tbg_grab}
+        at(_tbg_ex0): _tbg_e 0
+        set(_tbg_view): 0 {0 - (_tbg_ex0 + _tbg_f) * _tbg_s}
+    ]
+    else(_): [
+        tula_vbar(_tbg_b):
+        at(_tbg_l): _tbg_b 2
+        at(_tbg_v): _tbg_b 4
+        at(_tbg_t): _tbg_b 5
+        psb_first_at(_tbg_f): _tbg_l _tbg_v _tbg_t {py - _tbg_grab}
+        at(_tbg_ey1): _tbg_e 3
+        set(_tbg_view): 1 {(_tbg_ey1 - _tbg_f) * _tbg_s}
+    ]
+    tula_redraw(_):
 ]
 
 tula_bounds(r): entities [

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0-alpha
+- Scrollbars along the bottom and on the right of the drawing.
+  - They measure the drawing joined with what is in view, so the thumbs
+    show where the view is.
+  - A press on the track pans nine tenths of a page, and dragging a thumb
+    pans to where it is dropped. The extent holds still meanwhile.
+  - Presses on the bars draw nothing.
+- The whole drawing is drawn again when the window changes size
+  (resized, maximized or restored), so the grid and the bars fit it.
+
 ## 0.8.0-alpha
 - Linetypes and line weights.
   - Dash dot (DASHDOT) joins Dashed, Center, Hidden and Dot.

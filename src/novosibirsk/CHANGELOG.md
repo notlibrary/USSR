@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+- A scrollbar on the right, in paragraphs. A press on the track pages,
+  and dragging the thumb scrolls. The view stays there until the next
+  edit, as it does after the wheel.
+
 ## 0.5.0
 Big documents. 100,000 paragraphs (7.5 MB of text) open in about 0.4 s,
 the first frame is drawn in about 0.4 s, and typing, Enter, Backspace and

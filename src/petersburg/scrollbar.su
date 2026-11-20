@@ -1,0 +1,90 @@
+# scrollbar.su: scrollbars drawn on a Petersburg canvas, for programs that
+# draw their own view (Siberia, Novosibirsk, Tula).
+#
+# A bar is a strip of the canvas: at x, y, length pixels long, PSB_THICK
+# thick, vertical or not. What it shows is a position: the first unit in
+# view, how many are visible, and how many there are (any units: rows,
+# paragraphs, millimetres).
+#
+#     psb_draw(_): canvas x y length vertical first visible total
+#     psb_hit(where): x y length vertical first visible total px py
+#         -1 the track before the thumb, 0 the thumb, 1 the track after it,
+#         null outside the bar
+#     psb_thumb(r): length first visible total   -> [start size] in pixels
+#     psb_first_at(first): length visible total start
+#         the first unit when the thumb starts at pixel start (a drag)
+$once
+
+$define PSB_THICK 14
+$define PSB_MIN_THUMB 24
+$define PSB_TRACK 15592941
+$define PSB_EDGE 13158600
+$define PSB_THUMB 11053224
+
+psb_thumb(r): length first visible total [
+    vec(r): ""
+    if(_): {total <= visible || total <= 0 || length <= 0} [
+        push(_): r 0
+        push(_): r length
+        return(r): r
+    ]
+    set(size): {length * visible / total}
+    if(_): {size < PSB_MIN_THUMB} [ set(size): PSB_MIN_THUMB ]
+    if(_): {size > length} [ set(size): length ]
+    set(room): {length - size}
+    set(f): first
+    if(_): {f < 0} [ set(f): 0 ]
+    if(_): {f > total - visible} [ set(f): {total - visible} ]
+    set(start): {room * f / (total - visible)}
+    str_trunc(start): start
+    str_trunc(size): size
+    push(_): r start
+    push(_): r size
+]
+
+psb_draw(r): canvas x y length vertical first visible total [
+    set(r): 0
+    psb_thumb(t): length first visible total
+    at(start): t 0
+    at(size): t 1
+    if(_): vertical [
+        canvasfill(_): canvas x y PSB_THICK length PSB_TRACK
+        canvasline(_): canvas x y x {y + length} PSB_EDGE
+        canvasfill(_): canvas {x + 3} {y + start + 2} {PSB_THICK - 5} {size - 4} PSB_THUMB
+    ]
+    else(_): [
+        canvasfill(_): canvas x y length PSB_THICK PSB_TRACK
+        canvasline(_): canvas x y {x + length} y PSB_EDGE
+        canvasfill(_): canvas {x + start + 2} {y + 3} {size - 4} {PSB_THICK - 5} PSB_THUMB
+    ]
+]
+
+psb_hit(r): x y length vertical first visible total px py [
+    set(r): null
+    set(along): {px - x}
+    set(across): {py - y}
+    if(_): vertical [
+        set(along): {py - y}
+        set(across): {px - x}
+    ]
+    if(_): {along < 0 || along >= length || across < 0 || across >= PSB_THICK} [ return(r): r ]
+    psb_thumb(t): length first visible total
+    at(start): t 0
+    at(size): t 1
+    set(r): 0
+    if(_): {along < start} [ set(r): -1 ]
+    if(_): {along >= start + size} [ set(r): 1 ]
+]
+
+psb_first_at(r): length visible total start [
+    set(r): 0
+    if(_): {total <= visible} [ return(r): r ]
+    psb_thumb(t): length 0 visible total
+    at(size): t 1
+    set(room): {length - size}
+    if(_): {room <= 0} [ return(r): r ]
+    set(s): start
+    if(_): {s < 0} [ set(s): 0 ]
+    if(_): {s > room} [ set(s): room ]
+    set(r): {s * (total - visible) / room}
+]

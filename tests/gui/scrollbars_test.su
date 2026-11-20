@@ -1,0 +1,167 @@
+# Scrollbars: Petersburg's scrollbar.su, and the bars of Siberia (rows and
+# columns) and Novosibirsk (paragraphs). Needs a GLFW-enabled ussr and a
+# display; the windows are never shown. Run from the repository root:
+#     ussr tests/gui/scrollbars_test.su
+# A press on the track pages, a press on the thumb and a drag (the motion
+# handler told the button is held) scroll to where it is dropped, letting
+# go ends the drag. Prints PASS or FAIL per check.
+$include "../../src/novosibirsk/novosibirsk.su"
+
+check(r): label got want [
+    if(_): {got = want} [
+        concat(line): "PASS " label
+        print(_): line
+    ]
+    else(_): [
+        concat(line): "FAIL " label
+        print(_): line
+        print(_): got
+        print(_): want
+    ]
+    set(r): 0
+]
+
+# the middle of bar b's thumb: [x y]
+thumb_mid(r): b vertical [
+    at(x): b 0
+    at(y): b 1
+    at(len): b 2
+    at(first): b 3
+    at(vis): b 4
+    at(total): b 5
+    psb_thumb(t): len first vis total
+    at(start): t 0
+    at(size): t 1
+    vec(r): ""
+    if(_): vertical [
+        push(_): r {x + 6}
+        push(_): r {y + start + size / 2}
+    ]
+    else(_): [
+        push(_): r {x + start + size / 2}
+        push(_): r {y + 6}
+    ]
+]
+
+init(result): arg_count arg_values [
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
+
+    # --- the helper's arithmetic
+    psb_thumb(t): 400 0 100 100
+    encode(e): t
+    check(_): "everything in view: the thumb fills the track" e "[0,400]"
+    psb_thumb(t): 400 300 100 400
+    encode(e): t
+    check(_): "a quarter in view, at the end: a quarter thumb at the end" e "[300,100]"
+    psb_thumb(t): 400 0 1 100000
+    at(sz): t 1
+    check(_): "a tiny thumb keeps a size to take" sz PSB_MIN_THUMB
+    psb_hit(h1): 10 20 400 true 100 100 400 15 30
+    psb_hit(h2): 10 20 400 true 100 100 400 15 160
+    psb_hit(h3): 10 20 400 true 100 100 400 15 300
+    psb_hit(h4): 10 20 400 true 100 100 400 40 160
+    check(_): "a press before, on, after the thumb, and off the bar" {h1 = -1 && h2 = 0 && h3 = 1 && h4 = null} true
+    psb_first_at(f): 400 100 400 150
+    check(_): "a thumb dropped half way shows the middle" f 150
+
+    # --- Siberia: rows and columns
+    sbsetup(_):
+    createwindow(window): "Scrollbars test" SB_WIDTH SB_HEIGHT
+    sbbuild(_): window "sheet"
+    run(_):
+    sleep(_): 200
+    sbset(_): "A300" "the end"
+    sb_redraw(_):
+    sb_sheet_vbar(v):
+    at(vx): v 0
+    at(vy): v 1
+    at(vlen): v 2
+    at(vr): v 4
+    at(vt): v 5
+    check(_): "the row bar runs past the last used row" {vt = 300 + vr} true
+    # a press below the thumb: a page down
+    sbclick(_): {vx + 6} {vy + vlen - 3} false
+    set(top): sb_top?
+    check(_): "a press below the thumb pages down" top {vr - 1}
+    # the thumb taken and dragged to the end
+    sb_sheet_vbar(v):
+    thumb_mid(m): v true
+    at(mx): m 0
+    at(my): m 1
+    sbclick(_): mx my false
+    set(bar): sb_bar?
+    check(_): "a press on the thumb takes it" bar "v"
+    sbmotion(_): mx {vy + vlen + 50} true
+    set(top): sb_top?
+    check(_): "dragged to the end it shows the last rows" top {300 + vr - vr}
+    sbmotion(_): mx vy true
+    set(top): sb_top?
+    check(_): "and back to the top" top 0
+    sbmotion(_): mx {vy + vlen / 2} false
+    set(bar): sb_bar?
+    set(top): sb_top?
+    check(_): "letting go ends the drag where it was" {bar = "" && top = 0} true
+    set(row): sb_row?
+    check(_): "the cursor stays put" row 0
+    # columns
+    sb_sheet_hbar(hb):
+    at(hx): hb 0
+    at(hy): hb 1
+    at(hlen): hb 2
+    at(vc): hb 4
+    sbclick(_): {hx + hlen - 3} {hy + 6} false
+    set(left): sb_left?
+    check(_): "a press right of the column thumb pages right" left {vc - 1}
+    sbclick(_): {hx + 1} {hy + 6} false
+    set(left): sb_left?
+    check(_): "and left of it, back" left 0
+    destroy(_): window
+
+    # --- Novosibirsk: paragraphs
+    sbstate(_):
+    createwindow(pw): "Scrollbars pad test" SB_WIDTH SB_HEIGHT
+    sbbuild(_): pw "pad"
+    run(_):
+    sleep(_): 200
+    vec(lines): ""
+    set(i): 0
+    while(_): {i < 400} [
+        str_from_int(n): i
+        concat(l): "Paragraph " n
+        push(_): lines l
+        set(i): {i + 1}
+    ]
+    vjoin(text): lines "\n"
+    sbpadload(_): text "txt"
+    sb_redraw(_):
+    sb_pad_bar(pb):
+    at(px): pb 0
+    at(py): pb 1
+    at(plen): pb 2
+    at(pvis): pb 4
+    at(ptot): pb 5
+    check(_): "the pad's bar counts paragraphs" {ptot = 400 && pvis > 5} true
+    sbclick(_): {px + 6} {py + plen - 3} false
+    set(ptop): sb_ptop?
+    set(vl): sb_plines_visible?
+    check(_): "a press below the thumb pages down" ptop {vl - 1}
+    sb_redraw(_):
+    sb_pad_bar(pb):
+    thumb_mid(m): pb true
+    at(mx): m 0
+    at(my): m 1
+    sbclick(_): mx my false
+    sbmotion(_): mx {py + plen + 40} true
+    set(ptop): sb_ptop?
+    set(follow): sb_pfollow?
+    check(_): "the thumb dragged to the end shows the last paragraphs" {ptop = 400 - pvis && follow = false} true
+    sbmotion(_): mx 0 false
+    set(bar): sb_bar?
+    set(prow): sb_prow?
+    check(_): "letting go ends it; the cursor stays in the first paragraph" {bar = "" && prow = 0} true
+    destroy(_): pw
+    set(result): 0
+]

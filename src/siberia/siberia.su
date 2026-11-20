@@ -26,6 +26,7 @@ $once
 $include "../petersburg/petersburg.su"
 $include "../petersburg/filedialog.su"
 $include "../petersburg/recent.su"
+$include "../petersburg/scrollbar.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
 
@@ -104,6 +105,11 @@ sbstate(r): [
     set(sb_uifont): 0!
     set(sb_filemenu): 0!
     set(sb_drag): false!
+    # a scrollbar thumb being dragged: "v", "h" (the sheet), "p" (the
+    # pad) or ""; where in the thumb it was taken; the total it showed
+    set(sb_bar): ""!
+    set(sb_bar_grab): 0!
+    set(sb_bar_total): 0!
     set(sb_drag_row): 0!
     set(sb_drag_col): 0!
     vec(v): ""
@@ -2870,12 +2876,12 @@ $endif
 # --- the GUI: sheet -----------------------------------------------------------
 
 sb_visible_rows(r): h [
-    str_trunc(r): {(h - SB_BARH - SB_ROWH - SB_FOOTH) / SB_ROWH}
+    str_trunc(r): {(h - SB_BARH - SB_ROWH - SB_FOOTH - PSB_THICK) / SB_ROWH}
     if(_): {r < 1} [ set(r): 1 ]
 ]
 
 sb_visible_cols(r): w [
-    str_trunc(r): {(w - SB_HEADW) / SB_COLW}
+    str_trunc(r): {(w - SB_HEADW - PSB_THICK) / SB_COLW}
     if(_): {r < 1} [ set(r): 1 ]
 ]
 
@@ -3037,10 +3043,193 @@ sb_sheet_draw(r): [
         canvasrect(_): canvas x y {SB_COLW + 1} {SB_ROWH + 1} 2192198
         canvasrect(_): canvas {x + 1} {y + 1} {SB_COLW - 1} {SB_ROWH - 1} 2192198
     ]
+    sb_sheet_bars_draw(_): w h
     sbs_draw_tabs(_): w h
     sb_draw_status(_): w h
     sb_draw_dialog(_): w h
     set(r): 0
+]
+
+# --- the sheet's scrollbars: rows on the right, columns along the bottom ------
+# A bar is [x y length first visible total]. Rows run to the used area and
+# a screen past it (or past the view); a drag keeps the total it began with.
+
+sb_sheet_vbar(r): [
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    set(gy): {SB_BARH + SB_ROWH}
+    sb_visible_rows(vr): h
+    set(top): sb_top?
+    set(mr): sb_maxrow?
+    set(total): {mr + 1 + vr}
+    if(_): {total < top + vr} [ set(total): {top + vr} ]
+    if(_): {total > SB_ROWS} [ set(total): SB_ROWS ]
+    set(bar): sb_bar?
+    if(_): {bar = "v"} [ set(total): sb_bar_total? ]
+    vec(r): ""
+    push(_): r {w - PSB_THICK}
+    push(_): r gy
+    push(_): r {h - SB_FOOTH - PSB_THICK - gy}
+    push(_): r top
+    push(_): r vr
+    push(_): r total
+]
+
+sb_sheet_hbar(r): [
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    sb_visible_cols(vc): w
+    set(left): sb_left?
+    vec(r): ""
+    push(_): r SB_HEADW
+    push(_): r {h - SB_FOOTH - PSB_THICK}
+    push(_): r {w - PSB_THICK - SB_HEADW}
+    push(_): r left
+    push(_): r vc
+    push(_): r SB_COLS
+]
+
+sb_sheet_bars_draw(r): w h [
+    set(r): 0
+    set(canvas): sb_canvas?
+    sb_sheet_vbar(v):
+    sb_bar_draw(_): canvas v true
+    sb_sheet_hbar(hb):
+    sb_bar_draw(_): canvas hb false
+    canvasfill(_): canvas {w - PSB_THICK} {h - SB_FOOTH - PSB_THICK} PSB_THICK PSB_THICK PSB_TRACK
+]
+
+sb_bar_draw(r): canvas b vertical [
+    at(x): b 0
+    at(y): b 1
+    at(len): b 2
+    at(first): b 3
+    at(vis): b 4
+    at(total): b 5
+    psb_draw(r): canvas x y len vertical first vis total
+]
+
+# where a press at px, py is on bar b: -1, 0 (the thumb), 1, or null
+sb_bar_hit(r): b vertical px py [
+    at(x): b 0
+    at(y): b 1
+    at(len): b 2
+    at(first): b 3
+    at(vis): b 4
+    at(total): b 5
+    psb_hit(r): x y len vertical first vis total px py
+]
+
+# a press on a bar (or between them): true, having paged or taken the thumb
+sb_sheet_bar_press(r): px py [
+    set(r): false
+    sb_sheet_vbar(v):
+    sb_bar_hit(hv): v true px py
+    sb_sheet_hbar(hb):
+    sb_bar_hit(hh): hb false px py
+    if(_): {hv != null} [
+        set(r): true
+        at(vr): v 4
+        set(top): sb_top?
+        if(_): {hv = 0} [
+            sb_bar_take(_): v true py "v"
+        ]
+        else(_): [
+            set(top): {top + hv * (vr - 1)}
+            if(_): {top < 0} [ set(top): 0 ]
+            if(_): {top > SB_ROWS - 1} [ set(top): {SB_ROWS - 1} ]
+            set(sb_top): top!
+        ]
+    ]
+    elif(_): {hh != null} [
+        set(r): true
+        at(vc): hb 4
+        set(left): sb_left?
+        if(_): {hh = 0} [
+            sb_bar_take(_): hb false px "h"
+        ]
+        else(_): [
+            set(left): {left + hh * (vc - 1)}
+            if(_): {left > SB_COLS - vc} [ set(left): {SB_COLS - vc} ]
+            if(_): {left < 0} [ set(left): 0 ]
+            set(sb_left): left!
+        ]
+    ]
+    else(_): [
+        # the corner between them
+        sb_canvas_size(size):
+        at(w): size 0
+        at(h): size 1
+        set(r): {px >= w - PSB_THICK && py >= h - SB_FOOTH - PSB_THICK && py < h - SB_FOOTH}
+    ]
+]
+
+# the thumb of bar b is taken at along (x or y), for which ("v", "h", "p")
+sb_bar_take(r): b vertical along which [
+    set(r): 0
+    at(x): b 0
+    at(y): b 1
+    at(len): b 2
+    at(first): b 3
+    at(vis): b 4
+    at(total): b 5
+    psb_thumb(t): len first vis total
+    at(start): t 0
+    set(origin): x
+    if(_): vertical [ set(origin): y ]
+    set(sb_bar): which!
+    set(sb_bar_grab): {along - origin - start}!
+    set(sb_bar_total): total!
+    set(sb_drag): false!
+]
+
+# the first unit when bar b's thumb is dragged to along
+sb_bar_first(r): b vertical along [
+    at(x): b 0
+    at(y): b 1
+    at(len): b 2
+    at(vis): b 4
+    at(total): b 5
+    set(origin): x
+    if(_): vertical [ set(origin): y ]
+    set(grab): sb_bar_grab?
+    psb_first_at(f): len vis total {along - origin - grab}
+    str_trunc(r): {f + 0.5}
+]
+
+# a thumb dragged to px, py; held: the button is still down
+sb_bar_move(r): px py held [
+    set(r): false
+    set(bar): sb_bar?
+    if(_): {bar = ""} [ return(r): r ]
+    if(_): {held = false} [
+        set(sb_bar): ""!
+        return(r): r
+    ]
+    set(r): true
+    if(_): {bar = "v"} [
+        sb_sheet_vbar(v):
+        sb_bar_first(top): v true py
+        set(sb_top): top!
+    ]
+    elif(_): {bar = "h"} [
+        sb_sheet_hbar(hb):
+        sb_bar_first(left): hb false px
+        set(sb_left): left!
+    ]
+$ifdef SB_PAD
+    elif(_): {bar = "p"} [
+        sb_pad_bar(pb):
+        sb_bar_first(top): pb true py
+        sb_pad_count(n):
+        if(_): {top > n - 1} [ set(top): {n - 1} ]
+        set(sb_ptop): top!
+        set(sb_ptopline): 0!
+        set(sb_pfollow): false!
+    ]
+$endif
 ]
 
 sb_sheet_move(r): drow dcol [
@@ -3192,6 +3381,8 @@ sb_sheet_click(r): x y double [
         return(_): r
     ]
     if(_): {y >= ch - SB_FOOTH} [ return(_): r ]
+    sb_sheet_bar_press(onbar): x y
+    if(_): onbar [ return(_): r ]
     if(_): {x < SB_HEADW || y < gy} [ return(_): r ]
     str_trunc(c): {(x - SB_HEADW) / SB_COLW}
     str_trunc(k): {(y - gy) / SB_ROWH}
@@ -3264,6 +3455,14 @@ sb_sheet_drag(r): x y held [
 # the "motion" event: a drag over the sheet
 sbmotion(r): x y held [
     set(r): 0
+    set(bar): sb_bar?
+    if(_): {bar != ""} [
+        uilock(_):
+        sb_bar_move(moved): x y held
+        if(_): moved [ sb_redraw(_): ]
+        uiunlock(_):
+        return(_): r
+    ]
     set(drag): sb_drag?
     if(_): {drag != true} [ return(_): r ]
     uilock(_):

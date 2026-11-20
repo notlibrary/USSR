@@ -37,6 +37,14 @@ tsc_state(r): [
 # the canvas "motion" callback body
 tsc_motion(r): canvas x y [
     set(r): 0
+    set(bar): tula_bar?
+    if(_): {bar != ""} [
+        mouseheld(held): canvas
+        uilock(_):
+        tula_bar_drag(_): x y {held = 1}
+        uiunlock(_):
+        return(r): r
+    ]
     set(tula_mx): x!
     set(tula_my): y!
     set(tula_mdirty): true!
@@ -184,6 +192,9 @@ tsc_refresh(r): [
 tsc_loop(r): window [
     set(r): 0
     alive(up): window
+    set(canvas): tula_canvas?
+    set(lastw): -1
+    set(lasth): -1
     while(_): up [
         set(dirty): tula_mdirty?
         if(_): {dirty = true} [
@@ -191,6 +202,19 @@ tsc_loop(r): window [
             set(tula_mdirty): false!
             tsc_refresh(_):
             uiunlock(_):
+        ]
+        # a new size (the window resized, maximized or restored): the
+        # whole drawing again, so the grid and the scrollbars fit it
+        getwidth(w): canvas
+        getheight(h): canvas
+        if(_): {w != lastw || h != lasth} [
+            if(_): {lastw >= 0} [
+                uilock(_):
+                tula_redraw(_):
+                uiunlock(_):
+            ]
+            set(lastw): w
+            set(lasth): h
         ]
         sleep(_): 15
         alive(up): window
