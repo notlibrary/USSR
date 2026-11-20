@@ -1388,6 +1388,54 @@ sb_pad_reveal(r): [
     ]
 ]
 
+# the pad's scrollbar: [x y length first visible total], in paragraphs
+sb_pad_bar(r): [
+    sb_canvas_size(size):
+    at(w): size 0
+    at(h): size 1
+    set(top): sb_ptop?
+    sb_pad_count(n):
+    set(vis): 1
+    set(lines): sb_plines?
+    typeof(lt): lines
+    if(_): {lt = "vector"} [
+        len(nl): lines
+        if(_): {nl > 0} [
+            at(last): lines {nl - 1}
+            at(lp): last 0
+            set(vis): {lp - top + 1}
+        ]
+    ]
+    if(_): {vis < 1} [ set(vis): 1 ]
+    set(bar): sb_bar?
+    set(total): n
+    if(_): {bar = "p"} [ set(total): sb_bar_total? ]
+    vec(r): ""
+    push(_): r {w - PSB_THICK}
+    push(_): r 0
+    push(_): r {h - SB_STATUSH}
+    push(_): r top
+    push(_): r vis
+    push(_): r total
+]
+
+# a press on the pad's bar: true, having paged or taken the thumb
+sb_pad_bar_press(r): px py [
+    set(r): false
+    sb_pad_bar(b):
+    sb_bar_hit(where): b true px py
+    if(_): {where = null} [ return(r): r ]
+    set(r): true
+    if(_): {where = 0} [ sb_bar_take(_): b true py "p" ]
+    else(_): [
+        set(visible): sb_plines_visible?
+        set(step): {visible - 1}
+        if(_): {step < 1} [ set(step): 1 ]
+        sb_pad_scroll(_): {where * step}
+        set(sb_pfollow): false!
+    ]
+]
+
 sb_pad_draw(r): [
     set(canvas): sb_canvas?
     sb_canvas_size(size):
@@ -1451,6 +1499,8 @@ sb_pad_draw(r): [
         set(k): 0
     ]
     set(sb_plines): lines!
+    sb_pad_bar(pbar):
+    sb_bar_draw(_): canvas pbar true
     # status: where the cursor is
     sb_para_text(t): row
     utf8_column(column): t col
@@ -1473,6 +1523,8 @@ sb_pad_click(r): x y [
         sb_picker_click(_): x y
         return(_): r
     ]
+    sb_pad_bar_press(onbar): x y
+    if(_): onbar [ return(_): r ]
     set(lines): sb_plines?
     typeof(tl): lines
     if(_): {tl != "vector"} [ return(_): r ]

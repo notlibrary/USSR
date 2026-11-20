@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0-alpha
+- `scrollbar.su`: scrollbars drawn on a canvas, for programs that draw
+  their own view.
+  - `psb_draw` draws one, `psb_hit` tells whether a press is before the
+    thumb, on it or after it, `psb_thumb` gives the thumb's place, and
+    `psb_first_at` turns a thumb dragged to a pixel into the first unit
+    in view.
+  - Siberia, Novosibirsk and Tula use it.
+
 ## 0.9.0-alpha
 - `canvaspen(canvas, width)`: the lines, circles and arcs drawn after it
   are width pixels wide. Thick lines get round ends, so polylines join

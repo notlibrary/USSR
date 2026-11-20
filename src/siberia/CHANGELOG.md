@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+- Scrollbars: rows on the right of the grid, columns along its bottom.
+  - A press on the track pages, and dragging the thumb scrolls. The
+    cursor stays where it is.
+  - The row bar runs to the last used row and a screen past it.
+
 ## 0.7.0
 - `.ods`, OpenDocument's zipped spreadsheet, opens and saves like
   `.fods`, with every sheet and formula.

@@ -56,6 +56,7 @@ a diagnostic.
 | `canvaskeep(canvas)` / `canvasback(canvas)` | Canvas | The shape count; `canvaskeep` marks the shapes drawn so far, `canvasback` drops every shape added after the mark (`canvasclear` drops the mark), so a moving overlay is redrawn alone |
 | `canvasdash(canvas, x1, y1, x2, y2, color, dash, gap)` / `canvasdashcircle(canvas, cx, cy, radius, color, dash, gap)` | Canvas, numbers, color, dash and gap lengths in pixels | Zero; a dashed line (line shapes) or a dashed circle (arcs), cut natively |
 | `canvaspen(canvas, width)` | Canvas, width in pixels (0 to 64) | Zero; the lines, circles and arcs drawn after it are that wide (0 or 1: thin), thick lines with round ends; `canvasclear` sets it back to thin |
+| `psb_draw(_): canvas x y length vertical first visible total` and `psb_hit`, `psb_thumb`, `psb_first_at` | A canvas strip and a position (the first unit in view, how many are visible, how many there are) | A scrollbar drawn on a canvas (`PSB_THICK` pixels), whether a press is before (-1), on (0) or after (1) its thumb, the thumb's `[start size]`, and the first unit for a dragged thumb. `$include "scrollbar.su"` |
 | `getwidth(widget)` / `getheight(widget)` | Handle | Laid-out size in framebuffer pixels; `0` until the window first renders |
 | `setmark(list, index, marked)` / `getmark(list, index)` | List, row index, boolean | Zero / boolean; per-row highlight independent of the cursor |
 | `getfocus(window)` | Window handle | Handle of the window's focused text box or list, or `0` |
