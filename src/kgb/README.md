@@ -11,6 +11,8 @@ nuclear power plants and basic electronic components Even more obvious sample
 is food nutrition facts in the local cafe menu raw facts mass is everything
 actual user query is secondary thing for this type Also there must be good key
 classification for selected objects Ask mathematician whether it exists
+Approach requires only a working file system db manager code is purely 
+optional thing
 
 ## The two rules
 
