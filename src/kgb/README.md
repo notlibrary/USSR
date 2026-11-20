@@ -5,10 +5,12 @@ of facts kept in plain Markdown files and folders. There is no database file
 and no index: the folders are the database, so any editor, `git`, `grep` or
 file manager works on it too.
 
-This fact oriented approach works good for databases with 0-9000 very special objects
-Obvious examples are programming languages countries nuclear power plants and basic electronic components
-Even more obvious sample is food nutrition facts in the local cafe menu
-raw facts mass is everything actual user query is secondary thing for this type
+This fact oriented approach works good for databases with 0-9000 very special
+objects Obvious examples are programming languages chemical elements countries
+nuclear power plants and basic electronic components Even more obvious sample
+is food nutrition facts in the local cafe menu raw facts mass is everything
+actual user query is secondary thing for this type Also there must be good key
+classification for selected objects Ask mathematician whether it exists
 
 ## The two rules
 
