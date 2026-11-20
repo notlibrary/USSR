@@ -129,6 +129,18 @@ tsc_overlay(r): canvas [
     set(mx): tula_mx?
     set(my): tula_my?
     if(_): {mx < 0 || my < 0} [ return(r): r ]
+    set(boxing): tula_sel_on?
+    if(_): {boxing = true} [
+        set(from): tula_sel_from?
+        at(bx): from 0
+        at(by): from 1
+        set(color): 2003199
+        if(_): {mx < bx} [ set(color): 3381555 ]
+        tsc_dashed(_): canvas bx by mx by color
+        tsc_dashed(_): canvas mx by mx my color
+        tsc_dashed(_): canvas mx my bx my color
+        tsc_dashed(_): canvas bx my bx by color
+    ]
     tsc_point(pt): mx my
     at(wx): pt 0
     at(wy): pt 1
@@ -202,6 +214,18 @@ tsc_loop(r): window [
             set(tula_mdirty): false!
             tsc_refresh(_):
             uiunlock(_):
+        ]
+        # the select tool's box: done when the button is let go
+        set(boxing): tula_sel_on?
+        if(_): {boxing = true} [
+            mouseheld(held): canvas
+            if(_): {held = 0} [
+                uilock(_):
+                set(mx): tula_mx?
+                set(my): tula_my?
+                tula_sel_finish(_): mx my
+                uiunlock(_):
+            ]
         ]
         # a new size (the window resized, maximized or restored): the
         # whole drawing again, so the grid and the scrollbars fit it

@@ -47,7 +47,7 @@ a diagnostic.
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `canvascursor(canvas, mode)` | Canvas, `"hidden"` or `"normal"` | Zero; `"hidden"` hides the system cursor while it is over the canvas, for programs that draw their own |
 | `setmodal(window, on)` | Window handle, boolean | Zero; while a modal window is open the other windows take no input, and a click on one brings the modal window to the front |
-| `buttonicon(button, picture)` | Button handle, `"folder"`, `"disk"` or a P6 PPM path | Zero; draws the picture before the button's text (toolbar buttons widen for it); magenta (255, 0, 255) in a PPM is transparent |
+| `buttonicon(button, picture)` | Button handle, `"folder"`, `"disk"`, `"pointer"` or a P6 PPM path | Zero; draws the picture before the button's text (toolbar buttons widen for it); magenta (255, 0, 255) in a PPM is transparent |
 | `toolmenu(toolbar, label, items)` | Toolbar handle, a label, `"item\|item\|-\|item"` (`-` draws a line) | The menu's handle. A click on it drops the items down; picking one (click, or Up/Down and Enter) calls its `"select"` callback with the menu and the item's index; Escape or a click elsewhere closes it |
 | `setitems(menu, items)` | Menu handle, items as for `toolmenu` | Zero; replaces the menu's items |
 | `recentfiles(list): app` / `recentadd(list): app path` | A program name, a path | The program's recent files, newest first (10 kept, in `~/.<app>-recent`). `$include "recent.su"` |

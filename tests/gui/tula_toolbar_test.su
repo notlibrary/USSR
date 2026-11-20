@@ -128,7 +128,7 @@ init(result): arg_count arg_values [
         concat(all): all x "|"
         set(i): {i + 1}
     ]
-    check(_): "toolbar buttons" all "Open|Save|Save As|Line|Circle|Zoom +|Zoom -|Fit|Left|Right|Up|Down|"
+    check(_): "toolbar buttons" all "Open|Save|Save As|Select|Line|Circle|Zoom +|Zoom -|Fit|Left|Right|Up|Down|"
 
     press(_): "Circle"
     status(t):

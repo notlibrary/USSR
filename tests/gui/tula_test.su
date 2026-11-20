@@ -89,7 +89,7 @@ init(result): arg_count arg_values [
 
     point(_): canvas 50 650
     gettext(t): status
-    check(_): "tool required" t "Choose LINE or CIRCLE before drawing"
+    check(_): "tool required" t "Choose SELECT, LINE or CIRCLE first"
 
     click(_): line_button
     gettext(t): status
@@ -119,7 +119,7 @@ init(result): arg_count arg_values [
 
     tulatool(_): "arc"
     gettext(t): status
-    check(_): "unknown tool refused" t "Tula supports only line and circle tools"
+    check(_): "unknown tool refused" t "Tula's tools are select, line and circle"
 
     click(_): save_button
     gettext(t): status

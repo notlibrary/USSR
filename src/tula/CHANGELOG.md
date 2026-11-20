@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0-alpha
+- A select tool: the Select button (a mouse-pointer picture) comes first
+  among the tools.
+  - Clicking an object selects it; clicking empty space lets go.
+  - Dragging draws a box. Left to right, it takes what lies wholly
+    inside; right to left (a different colour), it also takes what it
+    touches.
+  - Selected objects are drawn thick, in blue, and the status line says
+    how many are selected.
+  - Delete erases the selection, with an undo step. Escape lets go.
+  - The Linetype and Weight menus and the commands that use the
+    selection (`ltype`, `lweight`, `move`, ...) work on what was picked.
+
 ## 0.9.0-alpha
 - Scrollbars along the bottom and on the right of the drawing.
   - They measure the drawing joined with what is in view, so the thumbs

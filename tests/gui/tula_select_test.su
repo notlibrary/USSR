@@ -1,0 +1,157 @@
+# Tula's select tool. Needs a GLFW-enabled ussr and a display; the window
+# is never shown. Run from the repository root:
+#     ussr tests/gui/tula_select_test.su
+# The Select button (with the pointer picture), a click picking an object
+# or nothing, a box left to right taking what is wholly inside and right
+# to left also what it touches, the selection drawn, the Linetype menu on
+# it, Delete erasing it and Escape letting go. A press is
+# tula_click_body, the button let go tula_sel_finish. Prints PASS or FAIL.
+$include "../../src/tula/tula.su"
+
+check(r): label ok [
+    if(_): ok [ concat(m): "PASS " label ] else(_): [ concat(m): "FAIL " label ]
+    print(_): m
+    set(r): 0
+]
+
+# drawing x, y to canvas pixels with the test's view (5 pixels a unit)
+sx(r): x [ set(r): {100 + 5 * x} ]
+sy(r): y [ set(r): {500 - 5 * y} ]
+
+# a press at canvas (x1, y1), let go at (x2, y2): the selection after
+drag(r): x1 y1 x2 y2 [
+    set(c): tula_canvas?
+    tula_click_body(_): c x1 y1
+    tula_sel_finish(_): x2 y2
+    tula_sel(s):
+    encode(r): s
+]
+
+init(result): arg_count arg_values [
+    getcwd(_home_cwd):
+    concat(_home_dir): _home_cwd "/tests/gui/home_tmp"
+    make_dir(_): _home_dir
+    setenv(_): "HOME" _home_dir
+    createwindow(window): "Tula select test" 1100 800
+    textbox(filename): window ""
+    label(status): window ""
+    tulainitialize(canvas): window status filename
+    tulatoolbar(_): window
+    pack(_): canvas true
+    run(_):
+    sleep(_): 300
+    tula_fit_view(_):
+    # two lines and a circle, in a known view
+    vec(es): ""
+    tl_line_e(l1): 0 0 10 0
+    tl_line_e(l2): 0 20 10 20
+    tl_circle_e(c1): 50 50 5
+    push(_): es l1
+    push(_): es l2
+    push(_): es c1
+    set(tula_entities): es!
+    set(v): tula_view?
+    set(v): 0 100
+    set(v): 1 500
+    set(v): 2 5
+    tula_redraw(_):
+
+    # --- the tool and its button
+    set(names): tula_button_names?
+    set(buttons): tula_buttons?
+    set(sb): 0
+    len(nb): names
+    set(i): 0
+    while(_): {i < nb} [
+        at(nm): names i
+        if(_): {nm = "Select"} [ at(sb): buttons i ]
+        set(i): {i + 1}
+    ]
+    check(_): "a Select button on the toolbar" {sb != 0}
+    inject(_): sb "click" 0 0 0
+    sleep(_): 300
+    set(tool): tula_tool?
+    getchecked(on): sb
+    gettext(st): status
+    str_starts(said): st "SELECT"
+    check(_): "it picks the select tool, pressed, and says how" {tool = "select" && on && said}
+    buttonicon(ri): sb "pointer"
+    check(_): "the pointer picture is built in" {ri = 0}
+
+    # --- clicks
+    sx(x): 5
+    sy(y): 0
+    drag(s): x y x y
+    check(_): "a click on a line picks it" {s = "[0]"}
+    sx(x): 50
+    sy(y): 55
+    drag(s): {x + 2} {y + 1} {x + 2} {y + 1}
+    check(_): "a click by the circle's edge picks the circle" {s = "[2]"}
+    sx(x): 30
+    sy(y): 30
+    drag(s): x y x y
+    gettext(st): status
+    check(_): "a click on nothing lets go" {s = "[]" && st = "Nothing selected"}
+
+    # --- boxes
+    sx(ax): -2
+    sy(ay): -2
+    sx(bx): 12
+    sy(by): 22
+    drag(s): ax ay bx by
+    check(_): "left to right round both lines takes both" {s = "[0,1]"}
+    sx(cx): 5
+    sy(cy): 2
+    drag(s): ax ay cx cy
+    check(_): "left to right over half a line takes nothing" {s = "[]"}
+    drag(s): cx cy ax ay
+    check(_): "right to left over half a line takes it" {s = "[0]"}
+    gettext(st): status
+    str_starts(said): st "1 object(s) selected"
+    check(_): "the status says how many" said
+
+    # --- drawn in the selection's colour
+    set(c): tula_canvas?
+    tula_redraw(_):
+    canvascount(n1): c
+    vec(none): ""
+    tula_sel_set(_): none
+    tula_redraw(_):
+    canvascount(n0): c
+    check(_): "the selection is drawn over the drawing" {n1 > n0}
+
+    # --- the Linetype menu on the selection
+    sx(x): 50
+    sy(y): 55
+    drag(_): x y x y
+    set(ltm): tula_ltmenu?
+    inject(_): ltm "select" 1 0 0
+    sleep(_): 300
+    set(es): tula_entities?
+    at(e0): es 0
+    at(e2): es 2
+    tl_prop(lt0): e0 "ltype" ""
+    tl_prop(lt2): e2 "ltype" ""
+    check(_): "Linetype changes the selected circle only" {lt2 = "DASHED" && lt0 = ""}
+
+    # --- Escape, then Delete
+    tulakey(_): window 256
+    tula_sel(s):
+    len(ns): s
+    check(_): "Escape lets go" {ns = 0}
+    tulakey(_): window 261
+    gettext(st): status
+    check(_): "Delete with nothing selected says so" {st = "Nothing selected to erase"}
+    drag(_): ax ay bx by
+    tulakey(_): window 261
+    set(es): tula_entities?
+    len(ne): es
+    at(left): es 0
+    at(kind): left 0
+    gettext(st): status
+    tula_sel(s):
+    len(ns): s
+    check(_): "Delete erases the selected lines, the circle stays" {ne = 1 && kind = "CIRCLE" && st = "Erased 2 object(s)" && ns = 0}
+    destroy(_): window
+    set(result): 0
+]
