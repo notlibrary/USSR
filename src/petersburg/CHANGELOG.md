@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.10.1-alpha
+- `buttonicon(button, "pointer")`: a built-in mouse-pointer picture.
+
 ## 0.10.0-alpha
 - `scrollbar.su`: scrollbars drawn on a canvas, for programs that draw
   their own view.

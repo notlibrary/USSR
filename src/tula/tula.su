@@ -35,6 +35,10 @@ $include "../petersburg/scrollbar.su"
 $include "../libs/strings.su"
 $include "../libs/math.su"
 
+# the select tool (see tula_sel_finish)
+$define TULA_SELECT_HELP "SELECT: click an object, or drag a box (left to right: inside it, right to left: touching it); DELETE erases"
+$define TULA_SELECT_INK 2003199
+$define TULA_PICK_PIXELS 6
 $define TULA_GRID_STEP 5
 $define TULA_BACKGROUND 16448250
 $define TULA_GRID_MINOR 15592941
@@ -275,6 +279,7 @@ tula_redraw(r): [
     ]
     # the crosshair and the preview of what is being drawn (scope.su), over
     # the drawing kept for the moves that redraw only them
+    tula_sel_draw(_): _trd_canvas
     tula_bars_draw(_): _trd_canvas
     set(_trd_fast): tula_fast?
     if(_): {_trd_fast = true} [ canvaskeep(_): _trd_canvas ]
@@ -294,6 +299,10 @@ tulainitialize(canvas): window status filename [
     # and the extent it showed then
     set(tula_bar): ""!
     set(tula_bar_grab): 0!
+    # the select tool's box: on while the button is down, from where
+    set(tula_sel_on): false!
+    vec(_ti_from): ""
+    set(tula_sel_from): _ti_from!
     vec(_ti_ext): ""
     set(tula_bar_ext): _ti_ext!
     set(tula_lwmenu): 0!
@@ -332,8 +341,8 @@ tula_tool_body(r): name [
     if(_): _tt_fitted [
         tula_redraw(_):
     ]
-    if(_): {name != "line" && name != "circle"} [
-        tula_set_status(_): "Tula supports only line and circle tools"
+    if(_): {name != "line" && name != "circle" && name != "select"} [
+        tula_set_status(_): "Tula's tools are select, line and circle"
         return(_): r
     ]
     set(tula_tool): name!
@@ -341,7 +350,10 @@ tula_tool_body(r): name [
     set(_tt_anchor): tula_anchor?
     vec(_tt_none): ""
     set(tula_anchor): _tt_none!
-    if(_): {name = "line"} [
+    if(_): {name = "select"} [
+        tula_set_status(_): TULA_SELECT_HELP
+    ]
+    elif(_): {name = "line"} [
         tula_set_status(_): "LINE tool: click the first snapped endpoint"
     ]
     else(_): [
@@ -362,7 +374,7 @@ tula_mark_tool(r): name [
     while(_): {_tmt_i < _tmt_n} [
         at(_tmt_label): _tmt_names _tmt_i
         at(_tmt_button): _tmt_buttons _tmt_i
-        if(_): {_tmt_label = "Line" || _tmt_label = "Circle"} [
+        if(_): {_tmt_label = "Select" || _tmt_label = "Line" || _tmt_label = "Circle"} [
             str_lower(_tmt_lower): _tmt_label
             setchecked(_): _tmt_button {_tmt_lower = name}
         ]
@@ -403,7 +415,15 @@ tula_click_body(r): canvas x y [
     ]
     set(_tc_tool): tula_tool?
     if(_): {_tc_tool = ""} [
-        tula_set_status(_): "Choose LINE or CIRCLE before drawing"
+        tula_set_status(_): "Choose SELECT, LINE or CIRCLE first"
+        return(_): r
+    ]
+    if(_): {_tc_tool = "select"} [
+        vec(_tc_from): ""
+        push(_): _tc_from x
+        push(_): _tc_from y
+        set(tula_sel_from): _tc_from!
+        set(tula_sel_on): true!
         return(_): r
     ]
     set(_tc_v): tula_view?
@@ -583,6 +603,210 @@ tula_bounds_add(r): box x y [
         if(_): {y > _tba_d} [ set(box): 3 y ]
     ]
     set(r): 0
+]
+
+# --- the select tool -----------------------------------------------------------
+# A click picks the object under the pointer (none: the selection empties);
+# a drag draws a box: left to right it takes what lies wholly inside, right
+# to left also what it touches. The selection is the drawing's (the select,
+# ltype and lweight commands and the Linetype and Weight menus use it);
+# Delete erases it, Escape drops it.
+
+
+# the selection, as indexes into the entities
+tula_sel(r): [
+    set(_tse_doc): tula_doc?
+    btget(r): _tse_doc "selection"
+]
+
+tula_sel_set(r): indexes [
+    set(r): 0
+    set(_tss_doc): tula_doc?
+    vec(_tss_v): ""
+    list_concat(_tss_v): _tss_v indexes
+    btput(_): _tss_doc "selection" _tss_v
+    len(_tss_n): _tss_v
+    if(_): {_tss_n > 0} [
+        str_from_int(_tss_ns): _tss_n
+        concat(_tss_m): _tss_ns " object(s) selected: DELETE erases, LINETYPE and WEIGHT change them, ESC lets go"
+        tula_set_status(_): _tss_m
+    ]
+]
+
+# the object nearest canvas point x, y within a few pixels: its index, or -1
+tula_sel_pick(r): x y [
+    set(r): -1
+    set(_tsp_v): tula_view?
+    at(_tsp_ox): _tsp_v 0
+    at(_tsp_oy): _tsp_v 1
+    at(_tsp_s): _tsp_v 2
+    set(_tsp_wx): {(x - _tsp_ox) / _tsp_s}
+    set(_tsp_wy): {(_tsp_oy - y) / _tsp_s}
+    set(_tsp_best): {TULA_PICK_PIXELS / _tsp_s}
+    tl_gui_doc(_tsp_doc):
+    set(_tsp_es): tula_entities?
+    len(_tsp_n): _tsp_es
+    set(_tsp_i): 0
+    while(_): {_tsp_i < _tsp_n} [
+        at(_tsp_e): _tsp_es _tsp_i
+        tl_editable(_tsp_ok): _tsp_doc _tsp_e
+        if(_): _tsp_ok [
+            tl_distance_to(_tsp_d): _tsp_doc _tsp_e _tsp_wx _tsp_wy
+            if(_): {_tsp_d <= _tsp_best} [
+                set(_tsp_best): _tsp_d
+                set(r): _tsp_i
+            ]
+        ]
+        set(_tsp_i): {_tsp_i + 1}
+    ]
+]
+
+# the objects in the box between canvas points (x1, y1) and (x2, y2)
+tula_sel_box(r): x1 y1 x2 y2 [
+    vec(r): ""
+    set(_tsb_v): tula_view?
+    at(_tsb_ox): _tsb_v 0
+    at(_tsb_oy): _tsb_v 1
+    at(_tsb_s): _tsb_v 2
+    set(_tsb_ax): {(x1 - _tsb_ox) / _tsb_s}
+    set(_tsb_bx): {(x2 - _tsb_ox) / _tsb_s}
+    set(_tsb_ay): {(_tsb_oy - y1) / _tsb_s}
+    set(_tsb_by): {(_tsb_oy - y2) / _tsb_s}
+    set(_tsb_x0): _tsb_ax
+    set(_tsb_x1): _tsb_bx
+    if(_): {_tsb_bx < _tsb_ax} [
+        set(_tsb_x0): _tsb_bx
+        set(_tsb_x1): _tsb_ax
+    ]
+    set(_tsb_y0): _tsb_ay
+    set(_tsb_y1): _tsb_by
+    if(_): {_tsb_by < _tsb_ay} [
+        set(_tsb_y0): _tsb_by
+        set(_tsb_y1): _tsb_ay
+    ]
+    # right to left: what it touches too
+    set(_tsb_cross): {x2 < x1}
+    tl_gui_doc(_tsb_doc):
+    set(_tsb_es): tula_entities?
+    len(_tsb_n): _tsb_es
+    set(_tsb_i): 0
+    while(_): {_tsb_i < _tsb_n} [
+        at(_tsb_e): _tsb_es _tsb_i
+        tl_editable(_tsb_ok): _tsb_doc _tsb_e
+        if(_): _tsb_ok [
+            set(_tsb_in): false
+            vec(_tsb_one): ""
+            push(_): _tsb_one _tsb_e
+            tula_bounds(_tsb_b): _tsb_one
+            len(_tsb_nb): _tsb_b
+            if(_): {_tsb_nb = 4} [
+                at(_tsb_e0): _tsb_b 0
+                at(_tsb_e1): _tsb_b 1
+                at(_tsb_e2): _tsb_b 2
+                at(_tsb_e3): _tsb_b 3
+                set(_tsb_in): {_tsb_e0 >= _tsb_x0 && _tsb_e2 <= _tsb_x1 && _tsb_e1 >= _tsb_y0 && _tsb_e3 <= _tsb_y1}
+            ]
+            if(_): {_tsb_in = false && _tsb_cross} [
+                tl_crosses_box(_tsb_in): _tsb_doc _tsb_e _tsb_x0 _tsb_y0 _tsb_x1 _tsb_y1
+            ]
+            if(_): _tsb_in [ push(_): r _tsb_i ]
+        ]
+        set(_tsb_i): {_tsb_i + 1}
+    ]
+]
+
+# the button let go at canvas x, y: a pick or a box
+tula_sel_finish(r): x y [
+    set(r): 0
+    set(_tsf_on): tula_sel_on?
+    if(_): {_tsf_on = false} [ return(r): r ]
+    set(tula_sel_on): false!
+    set(_tsf_from): tula_sel_from?
+    at(_tsf_x1): _tsf_from 0
+    at(_tsf_y1): _tsf_from 1
+    set(_tsf_dx): {x - _tsf_x1}
+    set(_tsf_dy): {y - _tsf_y1}
+    vec(_tsf_sel): ""
+    if(_): {_tsf_dx * _tsf_dx + _tsf_dy * _tsf_dy < 16} [
+        tula_sel_pick(_tsf_i): _tsf_x1 _tsf_y1
+        if(_): {_tsf_i >= 0} [ push(_): _tsf_sel _tsf_i ]
+    ]
+    else(_): [ tula_sel_box(_tsf_sel): _tsf_x1 _tsf_y1 x y ]
+    tula_sel_set(_): _tsf_sel
+    len(_tsf_n): _tsf_sel
+    if(_): {_tsf_n = 0} [ tula_set_status(_): "Nothing selected" ]
+    tula_redraw(_):
+]
+
+# the selected objects drawn again, in the selection's colour
+tula_sel_draw(r): canvas [
+    set(r): 0
+    tula_sel(_tsd_sel):
+    len(_tsd_n): _tsd_sel
+    if(_): {_tsd_n = 0} [ return(r): r ]
+    set(_tsd_es): tula_entities?
+    len(_tsd_ne): _tsd_es
+    set(_tsd_doc): tula_doc?
+    set(_tsd_pen): tula_pen?
+    if(_): {_tsd_pen = true} [ canvaspen(_): canvas 3 ]
+    set(_tsd_i): 0
+    while(_): {_tsd_i < _tsd_n} [
+        at(_tsd_k): _tsd_sel _tsd_i
+        if(_): {_tsd_k >= 0 && _tsd_k < _tsd_ne} [
+            at(_tsd_e): _tsd_es _tsd_k
+            tl_explode_for_draw(_tsd_parts): _tsd_doc _tsd_e
+            len(_tsd_np): _tsd_parts
+            set(_tsd_j): 0
+            while(_): {_tsd_j < _tsd_np} [
+                at(_tsd_p): _tsd_parts _tsd_j
+                tula_draw_entity(_): canvas _tsd_p TULA_SELECT_INK TULA_SELECT_INK
+                set(_tsd_j): {_tsd_j + 1}
+            ]
+        ]
+        set(_tsd_i): {_tsd_i + 1}
+    ]
+    if(_): {_tsd_pen = true} [ canvaspen(_): canvas 0 ]
+]
+
+# Delete: the selected objects go (an undo step first)
+tula_sel_erase(r): [
+    set(r): 0
+    tula_sel(_tsx_sel):
+    len(_tsx_n): _tsx_sel
+    if(_): {_tsx_n = 0} [
+        tula_set_status(_): "Nothing selected to erase"
+        return(_): r
+    ]
+    tl_gui_doc(_tsx_doc):
+    tl_checkpoint(_): _tsx_doc
+    set(_tsx_es): tula_entities?
+    len(_tsx_ne): _tsx_es
+    btree(_tsx_gone):
+    set(_tsx_i): 0
+    while(_): {_tsx_i < _tsx_n} [
+        at(_tsx_k): _tsx_sel _tsx_i
+        btput(_): _tsx_gone _tsx_k true
+        set(_tsx_i): {_tsx_i + 1}
+    ]
+    vec(_tsx_keep): ""
+    set(_tsx_i): 0
+    set(_tsx_count): 0
+    while(_): {_tsx_i < _tsx_ne} [
+        at(_tsx_e): _tsx_es _tsx_i
+        btget(_tsx_g): _tsx_gone _tsx_i false
+        if(_): _tsx_g [ set(_tsx_count): {_tsx_count + 1} ]
+        else(_): [ push(_): _tsx_keep _tsx_e ]
+        set(_tsx_i): {_tsx_i + 1}
+    ]
+    set(tula_entities): _tsx_keep!
+    btput(_): _tsx_doc "entities" _tsx_keep
+    vec(_tsx_none): ""
+    btput(_): _tsx_doc "selection" _tsx_none
+    tl_gui_store(_): _tsx_doc
+    tula_redraw(_):
+    str_from_int(_tsx_cs): _tsx_count
+    concat(_tsx_m): "Erased " _tsx_cs " object(s)"
+    tula_set_status(_): _tsx_m
 ]
 
 # --- scrollbars: the drawing's extent with what is in view -------------------
@@ -899,6 +1123,10 @@ tulafit(result): [
 ]
 
 # --- toolbar and keys -------------------------------------------------------------
+tula_tb_select(result): widget [
+    tulatool(_): "select"
+]
+
 tula_tb_line(result): widget [
     tulatool(_): "line"
 ]
@@ -1075,6 +1303,7 @@ tula_tb_add(r): bar label callback [
     # Open and Save carry their pictures (a folder, a diskette)
     if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
     if(_): {callback = "tula_tb_save_file"} [ buttonicon(_): r "disk" ]
+    if(_): {callback = "tula_tb_select"} [ buttonicon(_): r "pointer" ]
     on(_): r "click" callback
     set(_tba_buttons): tula_buttons?
     set(_tba_names): tula_button_names?
@@ -1100,6 +1329,7 @@ tulatoolbar(toolbar): window [
     tula_tb_add(_): toolbar "Open" "tula_tb_open"
     tula_tb_add(_): toolbar "Save" "tula_tb_save_file"
     tula_tb_add(_): toolbar "Save As" "tula_tb_save_as"
+    tula_tb_add(_): toolbar "Select" "tula_tb_select"
     tula_tb_add(_): toolbar "Line" "tula_tb_line"
     tula_tb_add(_): toolbar "Circle" "tula_tb_circle"
     tula_tb_add(_): toolbar "Zoom +" "tula_tb_zoom_in"
@@ -1123,11 +1353,20 @@ tulakey(result): window key [
         uiunlock(_):
         return(_): result
     ]
+    if(_): {key = 261} [
+        uilock(_):
+        tula_sel_erase(_):
+        uiunlock(_):
+        return(_): result
+    ]
     if(_): {key = 256} [
-        # Escape drops the first point of a line or circle
+        # Escape drops the first point of a line or circle, and the
+        # selection
         uilock(_):
         vec(_tk_none): ""
         set(tula_anchor): _tk_none!
+        set(tula_sel_on): false!
+        tula_sel_set(_): _tk_none
         tula_set_status(_): "Cancelled"
         tula_redraw(_):
         uiunlock(_):

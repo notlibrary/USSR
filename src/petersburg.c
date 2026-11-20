@@ -1121,8 +1121,28 @@ static unsigned char *petersburg_builtin_icon(const char *name, int *width,
     int y;
     int folder = strcmp(name, "folder") == 0;
     int disk = strcmp(name, "disk") == 0;
+    int pointer = strcmp(name, "pointer") == 0;
+    /* the mouse pointer: X its black edge, . its white inside */
+    static const char *const arrow[17] = {
+        "X           ",
+        "XX          ",
+        "X.X         ",
+        "X..X        ",
+        "X...X       ",
+        "X....X      ",
+        "X.....X     ",
+        "X......X    ",
+        "X.......X   ",
+        "X........X  ",
+        "X.....XXXXX ",
+        "X..X..X     ",
+        "X.X X..X    ",
+        "XX  X..X    ",
+        "X    X..X   ",
+        "     X..X   ",
+        "      XX    "};
 
-    if (!folder && !disk)
+    if (!folder && !disk && !pointer)
         return NULL;
     p = calloc(W * H, 4);
     if (p == NULL)
@@ -1132,7 +1152,21 @@ static unsigned char *petersburg_builtin_icon(const char *name, int *width,
         {
             unsigned char *q = p + (y * W + x) * 4;
             unsigned r = 0, g = 0, b = 0, a = 0;
-            if (folder)
+            if (pointer)
+            {
+                int ax = x - 5;
+                if (y < 17 && ax >= 0 && ax < 12)
+                {
+                    char c = arrow[y][ax];
+                    if (c == 'X')
+                        a = 255;
+                    else if (c == '.')
+                    {
+                        r = 255; g = 255; b = 255; a = 255;
+                    }
+                }
+            }
+            else if (folder)
             {
                 /* a manila folder: its tab, then the body, a darker edge */
                 int tab = y >= 3 && y <= 5 && x >= 1 && x <= 7;
