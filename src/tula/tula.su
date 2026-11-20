@@ -1300,47 +1300,86 @@ tula_tb_pan_down(result): widget [
 
 tula_tb_add(r): bar label callback [
     button(r): bar label
-    # Open and Save carry their pictures (a folder, a diskette)
-    if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
-    if(_): {callback = "tula_tb_save_file"} [ buttonicon(_): r "disk" ]
-    if(_): {callback = "tula_tb_select"} [ buttonicon(_): r "pointer" ]
-    on(_): r "click" callback
-    set(_tba_buttons): tula_buttons?
-    set(_tba_names): tula_button_names?
-    push(_): _tba_buttons r
-    push(_): _tba_names label
+    if(_): {label != ""} [ buttonhint(_): r label ]
+    if(_): {callback != ""} [
+        if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
+        if(_): {callback = "tula_tb_save_file"} [ buttonicon(_): r "disk" ]
+        if(_): {callback = "tula_tb_select"} [ buttonicon(_): r "pointer" ]
+        on(_): r "click" callback
+        set(_tba_buttons): tula_buttons?
+        set(_tba_names): tula_button_names?
+        push(_): _tba_buttons r
+        push(_): _tba_names label
+    ]
 ]
 
 # Creates the toolbar; call after tulainitialize. Labels use the characters
 # Petersburg's bitmap font can draw.
 tulatoolbar(toolbar): window [
-    toolbar(toolbar): window
+    toolbar(_ttb_menu_bar): window
+    setmovable(_): _ttb_menu_bar false
     recentfiles(_ttb_recent): "tula"
     filemenuitems(_ttb_items): _ttb_recent
-    toolmenu(_ttb_menu): toolbar "File" _ttb_items
+    toolmenu(_ttb_menu): _ttb_menu_bar "File" _ttb_items
     on(_): _ttb_menu "select" "tula_file_select"
     set(tula_filemenu): _ttb_menu!
-    toolmenu(_ttb_lt): toolbar "Linetype" TULA_LT_ITEMS
+    toolmenu(_ttb_lt): _ttb_menu_bar "Linetype" TULA_LT_ITEMS
     on(_): _ttb_lt "select" "tula_lt_select"
     set(tula_ltmenu): _ttb_lt!
-    toolmenu(_ttb_lw): toolbar "Weight" TULA_LW_ITEMS
+    toolmenu(_ttb_lw): _ttb_menu_bar "Weight" TULA_LW_ITEMS
     on(_): _ttb_lw "select" "tula_lw_select"
     set(tula_lwmenu): _ttb_lw!
-    tula_tb_add(_): toolbar "Open" "tula_tb_open"
-    tula_tb_add(_): toolbar "Save" "tula_tb_save_file"
-    tula_tb_add(_): toolbar "Save As" "tula_tb_save_as"
-    tula_tb_add(_): toolbar "Select" "tula_tb_select"
-    tula_tb_add(_): toolbar "Line" "tula_tb_line"
-    tula_tb_add(_): toolbar "Circle" "tula_tb_circle"
-    tula_tb_add(_): toolbar "Zoom +" "tula_tb_zoom_in"
-    tula_tb_add(_): toolbar "Zoom -" "tula_tb_zoom_out"
-    tula_tb_add(_): toolbar "Fit" "tula_tb_fit"
-    tula_tb_add(_): toolbar "Left" "tula_tb_pan_left"
-    tula_tb_add(_): toolbar "Right" "tula_tb_pan_right"
-    tula_tb_add(_): toolbar "Up" "tula_tb_pan_up"
-    tula_tb_add(_): toolbar "Down" "tula_tb_pan_down"
+    toolmenu(_ttb_tools): _ttb_menu_bar "Tools" "[x] File toolbar|[x] Drawing toolbar"
+    on(_): _ttb_tools "select" "tula_tools_select"
+    set(tula_tools_menu): _ttb_tools!
+    toolbar(_ttb_file_toolbar): window
+    set(tula_file_toolbar): _ttb_file_toolbar!
+    set(tula_file_toolbar_visible): true!
+    tula_tb_add(_): _ttb_file_toolbar "O" "Open" "tula_tb_open"
+    tula_tb_add(_): _ttb_file_toolbar "S" "Save" "tula_tb_save_file"
+    tula_tb_add(_): _ttb_file_toolbar "A" "Save As" "tula_tb_save_as"
+    toolbar(_ttb_toolbar): window
+    set(tula_toolbar): _ttb_toolbar!
+    set(tula_toolbar_visible): true!
+    tula_tb_add(_): _ttb_toolbar "P" "Select" "tula_tb_select"
+    tula_tb_add(_): _ttb_toolbar "L" "Line" "tula_tb_line"
+    tula_tb_add(_): _ttb_toolbar "C" "Circle" "tula_tb_circle"
+    tula_tb_add(_): _ttb_toolbar "|" "" ""
+    tula_tb_add(_): _ttb_toolbar "+" "Zoom +" "tula_tb_zoom_in"
+    tula_tb_add(_): _ttb_toolbar "-" "Zoom -" "tula_tb_zoom_out"
+    tula_tb_add(_): _ttb_toolbar "F" "Fit" "tula_tb_fit"
+    tula_tb_add(_): _ttb_toolbar "|" "" ""
+    tula_tb_add(_): _ttb_toolbar "<" "Left" "tula_tb_pan_left"
+    tula_tb_add(_): _ttb_toolbar ">" "Right" "tula_tb_pan_right"
+    tula_tb_add(_): _ttb_toolbar "^" "Up" "tula_tb_pan_up"
+    tula_tb_add(_): _ttb_toolbar "v" "Down" "tula_tb_pan_down"
     set(_ttb_tool): tula_tool?
     tula_mark_tool(_): _ttb_tool
+    set(toolbar): _ttb_toolbar
+]
+
+tula_tools_select(result): menu index [
+    set(result): 0
+    if(_): {index = 0} [
+        set(visible): tula_file_toolbar_visible?
+        set(tula_file_toolbar_visible): {visible != true}!
+        setvisible(_): tula_file_toolbar? {visible != true}
+    ]
+    elif(_): {index = 1} [
+        set(visible): tula_toolbar_visible?
+        set(tula_toolbar_visible): {visible != true}!
+        setvisible(_): tula_toolbar? {visible != true}
+    ]
+    set(file_mark): "[ ] "
+    set(draw_mark): "[ ] "
+    set(file_visible): tula_file_toolbar_visible?
+    set(draw_visible): tula_toolbar_visible?
+    if(_): file_visible [ set(file_mark): "[x] " ]
+    if(_): draw_visible [ set(draw_mark): "[x] " ]
+    concat(file_item): file_mark "File toolbar"
+    concat(draw_item): draw_mark "Drawing toolbar"
+    concat(items): file_item "|" draw_item
+    setitems(_): tula_tools_menu? items
 ]
 
 # GLFW key codes: arrows 262 right, 263 left, 264 down, 265 up; "=" 61,

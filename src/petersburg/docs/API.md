@@ -47,7 +47,10 @@ a diagnostic.
 | `canvascount(canvas)` | Canvas | Number of retained shapes |
 | `canvascursor(canvas, mode)` | Canvas, `"hidden"` or `"normal"` | Zero; `"hidden"` hides the system cursor while it is over the canvas, for programs that draw their own |
 | `setmodal(window, on)` | Window handle, boolean | Zero; while a modal window is open the other windows take no input, and a click on one brings the modal window to the front |
-| `buttonicon(button, picture)` | Button handle, `"folder"`, `"disk"`, `"pointer"` or a P6 PPM path | Zero; draws the picture before the button's text (toolbar buttons widen for it); magenta (255, 0, 255) in a PPM is transparent |
+| `buttonicon(button, picture)` | Button handle, `"folder"`, `"disk"`, `"pointer"` or a P6 PPM path | Zero; draws the picture in toolbar buttons; magenta (255, 0, 255) in a PPM is transparent |
+| `buttonhint(button, text)` | Button handle, tooltip text | Zero; shows the text while the pointer is held over the button |
+| `setvisible(toolbar, visible)` | Toolbar handle, boolean | Zero; shows or hides the toolbar |
+| `setmovable(toolbar, movable)` | Toolbar handle, boolean | Zero; enables or disables dragging to reorder it |
 | `toolmenu(toolbar, label, items)` | Toolbar handle, a label, `"item\|item\|-\|item"` (`-` draws a line) | The menu's handle. A click on it drops the items down; picking one (click, or Up/Down and Enter) calls its `"select"` callback with the menu and the item's index; Escape or a click elsewhere closes it |
 | `setitems(menu, items)` | Menu handle, items as for `toolmenu` | Zero; replaces the menu's items |
 | `recentfiles(list): app` / `recentadd(list): app path` | A program name, a path | The program's recent files, newest first (10 kept, in `~/.<app>-recent`). `$include "recent.su"` |
@@ -101,10 +104,13 @@ A canvas holds at most 200,000 shapes.
 
 ## Layout
 
-Toolbars dock at the top of their window, one below another in creation
-order, whatever the order other widgets were created in. A toolbar's
-buttons are placed left to right at their text width and behave like any
-other button (`"click"` callbacks, `settext`, `setchecked`, `inject`).
+Toolbars dock at the top of their window, one below another. Drag the dotted
+grip at the left of a toolbar to reorder it. Short button labels use compact
+square buttons, `|` creates a vertical separator, and `buttonhint` displays
+a tooltip while the pointer is held over a button. `setmovable(false)` keeps
+a toolbar in its current position. A toolbar's buttons are
+placed left to right and behave like any other button (`"click"` callbacks,
+`settext`, `setchecked`, `inject`).
 
 Widgets use a vertical flow by default; `grid` places widgets in up to two
 responsive columns with row-based heights. Expanded grid rows share positive

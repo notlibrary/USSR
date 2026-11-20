@@ -32,13 +32,15 @@ in `$ifdef __MAIN__`, so scripts that `$include` `tula.su` keep their own.
 
 ## Toolbar
 
-`tulatoolbar` creates a Petersburg toolbar, docked above the filename box and
-canvas, with these buttons:
+`tulatoolbar` creates a menu row and compact File and Drawing toolbars
+directly below it and above the filename box and canvas. The **Tools** menu
+has a checkbox for each toolbar. Drag a dotted grip to reorder the toolbars;
+hovering over a button shows its full tool name.
 
 | Button | Action |
 |---|---|
-| Line, Circle | `tulatool`; the active tool's button is drawn pressed |
-| Load DXF, Save DXF | `tulaload` / `tulasave` with the filename box |
+| Open, Save, Save As | File dialogs and the current filename box |
+| Select, Line, Circle | Select or draw; the active drawing tool is shown pressed |
 | Zoom +, Zoom - | `tulazoom` 1.25 / 0.8 about the canvas center |
 | Fit | `tulafit` |
 | Left, Right, Up, Down | `tulapan` by 100 pixels, showing more of the drawing on that side |
