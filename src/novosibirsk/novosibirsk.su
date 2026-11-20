@@ -1926,12 +1926,14 @@ sb_pad_toolbar(r): bar [
         set(sb_family): n0!
     ]
     sb_apply_font(_):
-    sb_add_button(_): bar "Font: ------------------------" "font"
-    sb_add_button(_): bar "-" "smaller"
-    sb_add_button(_): bar "12 pt" "size"
-    sb_add_button(_): bar "+" "bigger"
-    sb_add_button(_): bar "B" "bold"
-    sb_add_button(_): bar "I" "italic"
+    sb_add_button(_): bar "F" "Font family" "font"
+    button(_): bar "|"
+    sb_add_button(_): bar "-" "Smaller text" "smaller"
+    sb_add_button(_): bar "12" "Font size" "size"
+    sb_add_button(_): bar "+" "Larger text" "bigger"
+    button(_): bar "|"
+    sb_add_button(_): bar "B" "Bold" "bold"
+    sb_add_button(_): bar "I" "Italic" "italic"
 ]
 
 $ifdef __MAIN__

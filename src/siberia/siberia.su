@@ -3652,8 +3652,9 @@ sbfocus(r): focused [
     set(r): 0
 ]
 
-sb_add_button(r): bar label action [
-    button(r): bar label
+sb_add_button(r): bar glyph hint action [
+    button(r): bar glyph
+    buttonhint(_): r hint
     on(_): r "click" "sb_app_tool"
     set(buttons): sb_buttons?
     vec(entry): ""
@@ -3675,29 +3676,54 @@ sbbuild(canvas): window mode [
     set(sb_mode): mode!
     sb_find_ui_font(ui):
     set(sb_uifont): ui!
-    toolbar(bar): window
+    toolbar(menu_bar): window
+    setmovable(_): menu_bar false
     sb_recent_app(app):
     recentfiles(recent): app
     filemenuitems(items): recent
-    toolmenu(fm): bar "FILE" items
+    toolmenu(fm): menu_bar "FILE" items
     on(_): fm "select" "sb_app_menu"
     set(sb_filemenu): fm!
-    sb_add_button(_): bar "NEW" "new"
+$ifdef SB_PAD
+    if(_): {mode = "pad"} [
+        toolmenu(tm): menu_bar "TOOLS" "[x] File toolbar|[x] Text toolbar"
+    ]
+    else(_): [
+        toolmenu(tm): menu_bar "TOOLS" "[x] File toolbar|[x] Spreadsheet toolbar"
+    ]
+$else
+    toolmenu(tm): menu_bar "TOOLS" "[x] File toolbar|[x] Spreadsheet toolbar"
+$endif
+    on(_): tm "select" "sb_app_tools"
+    set(sb_tools_menu): tm!
+    toolbar(file_bar): window
+    set(sb_file_toolbar): file_bar!
+    set(sb_file_toolbar_visible): true!
+    sb_add_button(_): file_bar "N" "New" "new"
     # Open and Save carry their pictures; the three open Petersburg's
     # file dialog (Ctrl+O and Ctrl+S keep the prompt in the window)
-    sb_add_button(ob): bar "OPEN" "pick-open"
+    sb_add_button(ob): file_bar "O" "Open" "pick-open"
     buttonicon(_): ob "folder"
-    sb_add_button(sv): bar "SAVE" "pick-save"
+    sb_add_button(sv): file_bar "S" "Save" "pick-save"
     buttonicon(_): sv "disk"
-    sb_add_button(_): bar "SAVE AS" "pick-saveas"
+    sb_add_button(_): file_bar "A" "Save As" "pick-saveas"
+    toolbar(bar): window
+    set(sb_toolbar): bar!
+    set(sb_toolbar_visible): true!
 $ifdef SB_PAD
-    if(_): {mode = "pad"} [ sb_pad_toolbar(_): bar ]
+    if(_): {mode = "pad"} [
+        sb_pad_toolbar(_): bar
+        button(_): bar "|"
+    ]
     else(_): [ sb_sheet_new(_): ]
 $else
     sb_sheet_new(_):
 $endif
-    if(_): {mode != "pad"} [ sb_add_button(_): bar "SUM" "sum" ]
-    sb_add_button(_): bar "HELP" "help"
+    if(_): {mode != "pad"} [
+        sb_add_button(_): bar "M" "Sum" "sum"
+        button(_): bar "|"
+    ]
+    sb_add_button(_): bar "?" "Help" "help"
     canvas(canvas): window
     set(sb_canvas): canvas!
     pack(_): canvas true
@@ -3721,6 +3747,37 @@ sb_app_tool(result): button [
 
 sb_app_menu(result): menu index [
     sbmenu(_): index
+]
+
+sb_app_tools(result): menu index [
+    set(result): 0
+    if(_): {index = 0} [
+        set(visible): sb_file_toolbar_visible?
+        set(sb_file_toolbar_visible): {visible != true}!
+        setvisible(_): sb_file_toolbar? {visible != true}
+    ]
+    elif(_): {index = 1} [
+        set(visible): sb_toolbar_visible?
+        set(sb_toolbar_visible): {visible != true}!
+        setvisible(_): sb_toolbar? {visible != true}
+    ]
+    sb_tools_refresh(_):
+]
+
+sb_tools_refresh(r): [
+    set(file_mark): "[ ] "
+    set(app_mark): "[ ] "
+    set(file_visible): sb_file_toolbar_visible?
+    set(app_visible): sb_toolbar_visible?
+    if(_): file_visible [ set(file_mark): "[x] " ]
+    if(_): app_visible [ set(app_mark): "[x] " ]
+    concat(file_item): file_mark "File toolbar"
+    set(mode): sb_mode?
+    if(_): {mode = "pad"} [ concat(app_item): app_mark "Text toolbar" ]
+    else(_): [ concat(app_item): app_mark "Spreadsheet toolbar" ]
+    concat(items): file_item "|" app_item
+    setitems(_): sb_tools_menu? items
+    set(r): 0
 ]
 
 sb_app_motion(result): canvas x y [

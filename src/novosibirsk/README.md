@@ -21,11 +21,14 @@ extension gets `.fodt`.
 Type to write; any script works (input arrives through Petersburg's
 `"char"` event). Arrows, Home/End (of the wrapped line), Ctrl+Home/End,
 Page Up/Down, Enter, Backspace, Delete; Tab inserts four spaces; a click
-places the cursor. **FONT** lists the TrueType families installed on the
-system (Windows `Fonts` folders, `/usr/share/fonts`, `~/.fonts`, macOS
-font folders); **-**/**+** step the size through 8..72 pt; **B** and **I**
-(Ctrl+B, Ctrl+I) pick the bold and italic faces. Font, size and style
+places the cursor. The **F** toolbar button lists the TrueType families
+installed on the system (Windows `Fonts` folders, `/usr/share/fonts`,
+`~/.fonts`, macOS font folders); **-**/**+** step the size through 8..72 pt;
+**B** and **I** (Ctrl+B, Ctrl+I) pick the bold and italic faces. Font, size and style
 apply to the whole document and are saved as its default paragraph style.
+The menu row is above compact File and Text toolbars. **TOOLS** shows or
+hides either toolbar; hover over a button for its name, or drag a dotted
+grip to reorder them.
 
 Ctrl+N new, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+Q quit,
 F1 help. New and Open ask before unsaved changes are lost.

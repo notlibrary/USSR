@@ -60,8 +60,7 @@ button(result): window text [
     petersburg_create_button(result): window text
 ]
 
-# A horizontal strip; buttons created with the toolbar as their parent are
-# laid out left to right at their natural width.
+# A horizontal strip; its buttons are laid out left to right.
 toolbar(result): window [
     petersburg_create_toolbar(result): window ""
 ]
@@ -289,6 +288,18 @@ setmodal(result): window on [
 # in; a .ppm file works too (magenta, 255 0 255, is transparent)
 buttonicon(result): button picture [
     petersburg_button_icon(result): button picture
+]
+
+buttonhint(result): button text [
+    petersburg_button_hint(result): button text
+]
+
+setvisible(result): toolbar visible [
+    petersburg_set_visible(result): toolbar visible
+]
+
+setmovable(result): toolbar movable [
+    petersburg_set_movable(result): toolbar movable
 ]
 
 # a drop-down menu on a toolbar: a click on label shows items ("|" between
