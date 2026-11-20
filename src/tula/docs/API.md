@@ -32,10 +32,10 @@ in `$ifdef __MAIN__`, so scripts that `$include` `tula.su` keep their own.
 
 ## Toolbar
 
-`tulatoolbar` creates a menu row and compact File and Drawing toolbars
-directly below it and above the filename box and canvas. The **Tools** menu
-has a checkbox for each toolbar. Drag a dotted grip to reorder the toolbars;
-hovering over a button shows its full tool name.
+`tulatoolbar` creates a menu row with compact File and Drawing toolbars
+side by side in one row below it and above the filename box and canvas. The
+**Tools** menu has a checkbox for each toolbar. Drag a dotted grip to reorder
+them; hovering over a button shows its full tool name.
 
 | Button | Action |
 |---|---|

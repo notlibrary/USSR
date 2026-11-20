@@ -13,7 +13,7 @@ a diagnostic.
 | `fullscreen(window)` | Window handle | Zero; makes the window a borderless window covering the primary monitor, with widgets edge to edge (no margin); `1` when there is no monitor and it was maximized instead |
 | `label(window, text)` | Window handle, string | Label handle |
 | `button(parent, text)` | Window or toolbar handle, string | Button handle |
-| `toolbar(window)` | Window handle | Toolbar handle; docks at the top of the window, its buttons laid out left to right |
+| `toolbar(window)` | Window handle | Toolbar handle; movable toolbars share a row below fixed toolbars, with buttons laid out left to right |
 | `textbox(window, initial_text)` | Window handle, string | Text-box handle |
 | `checkbox(window, text)` | Window handle, string | Checkbox handle |
 | `listbox(window, items)` | Window handle, pipe-separated string | List handle |
@@ -104,13 +104,13 @@ A canvas holds at most 200,000 shapes.
 
 ## Layout
 
-Toolbars dock at the top of their window, one below another. Drag the dotted
-grip at the left of a toolbar to reorder it. Short button labels use compact
-square buttons, `|` creates a vertical separator, and `buttonhint` displays
-a tooltip while the pointer is held over a button. `setmovable(false)` keeps
-a toolbar in its current position. A toolbar's buttons are
-placed left to right and behave like any other button (`"click"` callbacks,
-`settext`, `setchecked`, `inject`).
+Fixed toolbars dock at the top of their window. Movable toolbars share one
+horizontal row immediately below them; drag the dotted grip at the left of
+a toolbar to reorder it in that row. Short button labels use compact square
+buttons, `|` creates a vertical separator, and `buttonhint` displays a
+tooltip while the pointer is held over a button. `setmovable(false)` keeps
+a toolbar in the fixed top row. Toolbar buttons behave like any other button
+(`"click"` callbacks, `settext`, `setchecked`, `inject`).
 
 Widgets use a vertical flow by default; `grid` places widgets in up to two
 responsive columns with row-based heights. Expanded grid rows share positive
