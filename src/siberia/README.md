@@ -45,9 +45,10 @@ significant digits.
 A drag with the mouse, Shift with the arrows or a Shift+click selects
 cells; the status bar shows their Sum, Average and Count.
 
-The menu row is above compact File and Spreadsheet toolbars. Use **TOOLS**
-to show or hide either one; hover over a button for its name, or drag a
-dotted grip to reorder the toolbars.
+The menu row is above compact File and Spreadsheet toolbars, which start side
+by side. Use **TOOLS** to show or hide either one; hover over a button for its
+name, or drag a dotted grip horizontally to reorder and vertically to move a
+toolbar to another row.
 
 ## Sheets
 

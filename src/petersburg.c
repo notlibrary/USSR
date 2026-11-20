@@ -113,9 +113,14 @@ typedef struct petersburg_widget
     int edge_to_edge; /* a fullscreen window: no margin around widgets */
     int visible;
     int movable;
+    int toolbar_row;
     int toolbar_order;
     int toolbar_dragging;
+    int toolbar_drag_x;
     int toolbar_drag_y;
+    int toolbar_drag_offset_x;
+    int toolbar_drag_offset_y;
+    int toolbar_row_y;
     struct petersburg_widget *next;
 } petersburg_widget_t;
 
@@ -877,14 +882,44 @@ static void petersburg_layout_flow(petersburg_widget_t *window, int top)
     }
 }
 
-/* Toolbars dock at the top of their window in creation order; everything
- * else flows (or sits in the grid) below them. */
+static int petersburg_toolbar_child_width(const petersburg_widget_t *child)
+{
+    int width;
+
+    if (strcmp(child->text, "|") == 0)
+        width = 8;
+    else if (strlen(child->text) <= 2)
+        width = 28;
+    else
+        width = (int)strlen(child->text) * 7 + 20;
+    if (child->icon != NULL)
+        width = child->icon_width + 10;
+    return width;
+}
+
+static int petersburg_toolbar_width(const petersburg_widget_t *toolbar)
+{
+    const petersburg_widget_t *child;
+    int width = toolbar->movable ? 20 : 4;
+
+    for (child = petersburg_widgets; child != NULL; child = child->next)
+        if (child->parent_id == toolbar->id)
+        {
+            int child_width = petersburg_toolbar_child_width(child);
+            width += child_width + (child_width == 8 ? 4 : 3);
+        }
+    return width + 4;
+}
+
+/* Fixed menu rows dock above draggable toolbars, which can occupy rows. */
 static void petersburg_layout(petersburg_widget_t *window)
 {
     petersburg_widget_t *widget;
     int margin = window->edge_to_edge ? 0 : 16;
     int gap = 8;
     int top = margin;
+    int row_count = 0;
+    int row;
     int order;
     int toolbar_count = 0;
 
@@ -897,7 +932,8 @@ static void petersburg_layout(petersburg_widget_t *window)
     for (order = 0; order < toolbar_count; ++order)
     {
         petersburg_widget_t *ordered = NULL;
-        for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
+        for (widget = petersburg_widgets; widget != NULL;
+             widget = widget->next)
             if (widget->parent_id == window->id &&
                 widget->type == PETERSBURG_TOOLBAR &&
                 widget->toolbar_order == order)
@@ -905,15 +941,52 @@ static void petersburg_layout(petersburg_widget_t *window)
                 ordered = widget;
                 break;
             }
-        if (ordered == NULL || !ordered->visible)
+        if (ordered == NULL || !ordered->visible || ordered->movable)
             continue;
         ordered->x = margin;
-        ordered->y = ordered->toolbar_dragging
-                         ? ordered->toolbar_drag_y : top;
+        ordered->y = top;
         ordered->width = window->width - margin * 2;
         ordered->height = ordered->preferred_height;
-        if (!ordered->toolbar_dragging)
-            top += ordered->height + gap;
+        top += ordered->height + gap;
+    }
+    for (widget = petersburg_widgets; widget != NULL; widget = widget->next)
+        if (widget->parent_id == window->id &&
+            widget->type == PETERSBURG_TOOLBAR &&
+            widget->visible && widget->movable &&
+            widget->toolbar_row >= row_count)
+            row_count = widget->toolbar_row + 1;
+    for (row = 0; row < row_count; ++row)
+    {
+        int toolbar_x = margin;
+        int toolbar_height = 0;
+        for (order = 0; order < toolbar_count; ++order)
+        {
+            petersburg_widget_t *ordered = NULL;
+            for (widget = petersburg_widgets; widget != NULL;
+                 widget = widget->next)
+                if (widget->parent_id == window->id &&
+                    widget->type == PETERSBURG_TOOLBAR &&
+                    widget->toolbar_order == order)
+                {
+                    ordered = widget;
+                    break;
+                }
+            if (ordered == NULL || !ordered->visible ||
+                !ordered->movable || ordered->toolbar_row != row)
+                continue;
+            ordered->height = ordered->preferred_height;
+            ordered->toolbar_row_y = top;
+            ordered->x = ordered->toolbar_dragging
+                             ? ordered->toolbar_drag_x : toolbar_x;
+            ordered->y = ordered->toolbar_dragging
+                             ? ordered->toolbar_drag_y : top;
+            ordered->width = petersburg_toolbar_width(ordered);
+            toolbar_x += ordered->width + gap;
+            if (ordered->height > toolbar_height)
+                toolbar_height = ordered->height;
+        }
+        if (toolbar_height > 0)
+            top += toolbar_height + gap;
     }
     petersburg_layout_flow(window, top);
 }
@@ -1096,14 +1169,7 @@ static void petersburg_layout_toolbar(petersburg_widget_t *toolbar)
         int width;
         if (child->parent_id != toolbar->id)
             continue;
-        if (strcmp(child->text, "|") == 0)
-            width = 8;
-        else if (strlen(child->text) <= 2)
-            width = 28;
-        else
-            width = (int)strlen(child->text) * 7 + 20;
-        if (child->icon != NULL)
-            width = child->icon_width + 10;
+        width = petersburg_toolbar_child_width(child);
         child->x = x;
         child->y = toolbar->y + 3;
         child->width = width;
@@ -1493,6 +1559,8 @@ static void petersburg_render_window(petersburg_widget_t *window)
                     petersburg_rect(widget->x + 8, widget->y + 12, 1, 2);
                     petersburg_rect(widget->x + 5, widget->y + 16, 1, 2);
                     petersburg_rect(widget->x + 8, widget->y + 16, 1, 2);
+                    petersburg_rect(widget->x + widget->width + 4,
+                                    widget->y + 5, 1, widget->height - 10);
                 }
                 petersburg_layout_toolbar(widget);
                 for (child = petersburg_widgets; child != NULL;
@@ -1867,8 +1935,10 @@ static void petersburg_cursor_pos(GLFWwindow *native, double x, double y)
             petersburg_find(petersburg_dragging_toolbar);
         if (dragged != NULL)
         {
+            dragged->toolbar_drag_x =
+                (int)x - dragged->toolbar_drag_offset_x;
             dragged->toolbar_drag_y =
-                (int)y - dragged->preferred_height / 2;
+                (int)y - dragged->toolbar_drag_offset_y;
             petersburg_dirty = 1;
         }
     }
@@ -1974,10 +2044,13 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
         if (dragged != NULL)
         {
             petersburg_widget_t *ordered[256];
-            petersburg_widget_t *result[256];
             petersburg_widget_t *candidate;
             size_t count = 0;
-            size_t i, insert = 0, output = 0;
+            size_t i;
+            int movable_count = 0;
+            int target_row = dragged->toolbar_row;
+            petersburg_widget_t *nearest = NULL;
+            double nearest_distance = 0.0;
             double drop_x, drop_y;
 
             glfwGetCursorPos(native, &drop_x, &drop_y);
@@ -1991,49 +2064,102 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
                     drop_y *= (double)fh / lh;
                 }
             }
+            dragged->toolbar_drag_x =
+                (int)drop_x - dragged->toolbar_drag_offset_x;
+            dragged->toolbar_drag_y =
+                (int)drop_y - dragged->toolbar_drag_offset_y;
+            dragged->x = dragged->toolbar_drag_x;
+            dragged->y = dragged->toolbar_drag_y;
             for (candidate = petersburg_widgets; candidate != NULL;
                  candidate = candidate->next)
                 if (candidate->parent_id == dragged->parent_id &&
                     candidate->type == PETERSBURG_TOOLBAR &&
                     count < sizeof(ordered) / sizeof(ordered[0]))
+                {
                     ordered[count++] = candidate;
+                    if (candidate->movable)
+                        ++movable_count;
+                    if (candidate != dragged && candidate->movable &&
+                        candidate->visible)
+                    {
+                        double center_y =
+                            candidate->toolbar_row_y + candidate->height / 2;
+                        double distance = drop_y - center_y;
+                        if (distance < 0.0)
+                            distance = -distance;
+                        if (nearest == NULL || distance < nearest_distance)
+                        {
+                            nearest = candidate;
+                            nearest_distance = distance;
+                        }
+                    }
+                }
+            if (nearest != NULL)
+            {
+                double center_y =
+                    nearest->toolbar_row_y + nearest->height / 2;
+                if (drop_y < center_y - nearest->height / 2)
+                    target_row = nearest->toolbar_row - 1;
+                else if (drop_y > center_y + nearest->height / 2)
+                    target_row = nearest->toolbar_row + 1;
+                else
+                    target_row = nearest->toolbar_row;
+            }
+            else
+            {
+                double center_y =
+                    dragged->toolbar_row_y + dragged->height / 2;
+                if (drop_y < center_y - dragged->height / 2)
+                    --target_row;
+                else if (drop_y > center_y + dragged->height / 2)
+                    ++target_row;
+            }
+            if (target_row < 0)
+                target_row = 0;
+            if (target_row >= movable_count)
+                target_row = movable_count - 1;
+            dragged->toolbar_row = target_row;
             for (i = 1; i < count; ++i)
             {
                 petersburg_widget_t *value = ordered[i];
                 size_t j = i;
-                while (j > 0 &&
-                       ordered[j - 1]->toolbar_order > value->toolbar_order)
+                while (j > 0)
                 {
+                    petersburg_widget_t *previous = ordered[j - 1];
+                    int move_previous = 0;
+                    if (previous->movable != value->movable)
+                        move_previous = previous->movable;
+                    else if (previous->movable)
+                    {
+                        if (previous->toolbar_row != value->toolbar_row)
+                            move_previous =
+                                previous->toolbar_row > value->toolbar_row;
+                        else if (previous->visible != value->visible)
+                            move_previous = !previous->visible;
+                        else if (previous->visible)
+                            move_previous =
+                                previous->x + previous->width / 2 >
+                                    value->x + value->width / 2 ||
+                                (previous->x + previous->width / 2 ==
+                                     value->x + value->width / 2 &&
+                                 previous->toolbar_order >
+                                     value->toolbar_order);
+                        else
+                            move_previous =
+                                previous->toolbar_order > value->toolbar_order;
+                    }
+                    else
+                        move_previous =
+                            previous->toolbar_order > value->toolbar_order;
+                    if (!move_previous)
+                        break;
                     ordered[j] = ordered[j - 1];
                     --j;
                 }
                 ordered[j] = value;
             }
-            {
-                size_t fixed_count = 0;
-                for (i = 0; i < count; ++i)
-                    if (!ordered[i]->movable)
-                        ++fixed_count;
-                if (drop_x >= dragged->x)
-                for (i = 0; i < count; ++i)
-                    if (ordered[i] != dragged && ordered[i]->visible &&
-                        ordered[i]->movable &&
-                        drop_y >= ordered[i]->y + ordered[i]->height / 2)
-                        ++insert;
-                insert += fixed_count;
-            }
             for (i = 0; i < count; ++i)
-                if (ordered[i] != dragged)
-                {
-                    if (output == insert)
-                        result[output++] = dragged;
-                    if (output < count)
-                        result[output++] = ordered[i];
-                }
-            if (output < count)
-                result[output++] = dragged;
-            for (i = 0; i < output; ++i)
-                result[i]->toolbar_order = (int)i;
+                ordered[i]->toolbar_order = (int)i;
             dragged->toolbar_dragging = 0;
         }
         petersburg_dragging_toolbar = 0;
@@ -2171,8 +2297,12 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             {
                 petersburg_dragging_toolbar = widget->id;
                 widget->toolbar_dragging = 1;
-                widget->toolbar_drag_y = (int)mouse_y -
-                                         widget->preferred_height / 2;
+                widget->toolbar_drag_x = (int)mouse_x;
+                widget->toolbar_drag_y = (int)mouse_y;
+                widget->toolbar_drag_offset_x =
+                    (int)mouse_x - widget->x;
+                widget->toolbar_drag_offset_y =
+                    (int)mouse_y - widget->y;
                 return;
             }
             for (child = petersburg_widgets; child != NULL; child = child->next)
