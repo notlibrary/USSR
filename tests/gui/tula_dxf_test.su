@@ -179,6 +179,7 @@ init(result): arg_count arg_values [
     at(s2): view 2
     near(_): "zoom button halves scale" s2 500
     set(step): tula_step?
+    set(tula_snap_grid): true!
     tula_snap(v): {step * 3.4}
     near(_): "snap follows visible grid" v {step * 3}
 

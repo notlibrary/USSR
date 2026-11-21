@@ -128,11 +128,16 @@ init(result): arg_count arg_values [
         concat(all): all x "|"
         set(i): {i + 1}
     ]
-    check(_): "toolbar buttons" all "Open|Save|Save As|Select|Line|Circle|Zoom +|Zoom -|Fit|Left|Right|Up|Down|"
+    check(_): "toolbar buttons" all "Open|Save|Save As|Select|Line|Circle|Circle Segment|Spline|Zoom +|Zoom -|Fit|Left|Right|Up|Down|Snap entity|Snap grid|Snap endpoints|Snap cross|"
+    set(tools_menu): tula_tools_menu?
+    tula_tools_select(_): tools_menu 2
+    check(_): "Tools menu hides the Snap toolbar" tula_snap_toolbar_visible? false
+    tula_tools_select(_): tools_menu 2
+    check(_): "Tools menu restores the Snap toolbar" tula_snap_toolbar_visible? true
 
     press(_): "Circle"
     status(t):
-    check(_): "Circle button selects tool" t "CIRCLE tool: click the snapped center"
+    check(_): "Circle button selects tool" t "CIRCLE tool: click the center"
     button_for(b): "Circle"
     getchecked(c): b
     check(_): "Circle button pressed" c true
@@ -143,7 +148,64 @@ init(result): arg_count arg_values [
     getchecked(c): b
     check(_): "Line button pressed" c true
     status(t):
-    check(_): "Line button selects tool" t "LINE tool: click the first snapped endpoint"
+    check(_): "Line button selects tool" t "LINE tool: click the first point; right-click to finish"
+    press(_): "Circle Segment"
+    status(t):
+    check(_): "Circle Segment button selects tool" t "CIRCLE SEGMENT: click center, radius, then end angle"
+    press(_): "Spline"
+    status(t):
+    check(_): "Spline button selects tool" t "SPLINE: click at least three points; right-click to finish"
+
+    check(_): "snapping starts off" {tula_snap_entity? = false && tula_snap_grid? = false && tula_snap_end? = false && tula_snap_cross? = false} true
+    tula_pick_point(p): 2.1 3.2 5
+    at(px): p 0
+    at(py): p 1
+    near(_): "without snap toggles the pointer stays unsnapped" px 2.1
+    near(_): "the free pointer keeps its y coordinate" py 3.2
+    set(tula_step): 5!
+    press(_): "Snap grid"
+    check(_): "grid snap turns on" tula_snap_grid? true
+    tula_pick_point(p): 2.1 3.2 5
+    at(px): p 0
+    at(py): p 1
+    near(_): "grid snap uses the adaptive grid step" px 0
+    near(_): "grid snap rounds both axes" py 5
+    press(_): "Snap grid"
+    check(_): "grid snap turns off" tula_snap_grid? false
+
+    vec(es): ""
+    tl_line_e(line): 0 0 10 0
+    push(_): es line
+    set(tula_entities): es!
+    press(_): "Snap entity"
+    tula_pick_point(p): 4.8 0.4 5
+    at(px): p 0
+    at(py): p 1
+    near(_): "entity snap projects onto a line" px 4.8
+    near(_): "entity snap finds the closest point" py 0
+    tula_pick_point(p): -0.5 0.4 5
+    at(px): p 0
+    near(_): "entity snap clamps to the finite segment" px 0
+    press(_): "Snap entity"
+    press(_): "Snap endpoints"
+    tula_pick_point(p): 0.4 0.4 5
+    at(px): p 0
+    at(py): p 1
+    near(_): "endpoint snap chooses a line endpoint" px 0
+    near(_): "endpoint snap chooses its endpoint y" py 0
+    tl_line_e(crossing): 5 -5 5 5
+    push(_): es crossing
+    set(tula_entities): es!
+    press(_): "Snap cross"
+    tula_pick_point(p): 4.8 0.4 5
+    at(px): p 0
+    at(py): p 1
+    near(_): "cross snap finds line intersections" px 5
+    near(_): "cross snap finds intersection y" py 0
+    press(_): "Snap endpoints"
+    press(_): "Snap cross"
+    vec(none): ""
+    set(tula_entities): none!
 
     view(s0): 2
     press(_): "Zoom +"

@@ -4,8 +4,9 @@
 #
 # Public API:
 #   tulainitialize(canvas): window status filename -> creates the canvas
-#   tulatool(r): name            -> "line" or "circle"
+#   tulatool(r): name            -> "line", "circle", "arc", "spline" or "select"
 #   tulaclick(r): canvas x y     -> canvas "pointer" callback body
+#   tulamenu(r): canvas x y      -> canvas "menu" callback body (right-click)
 #   tulasave(r):                 -> writes the DXF named by the filename box
 #   tulaload(r):                 -> reads the DXF named by the filename box
 #   tulawheel(r): canvas x y dir -> canvas "wheel" callback body (zoom at x, y)
@@ -23,9 +24,11 @@
 #   ["LINE", x1, y1, x2, y2]          ["CIRCLE", cx, cy, r]
 #   ["ARC", cx, cy, r, start, end]    (degrees, counter-clockwise)
 #   ["POLYLINE", closed, points]      (points = [x0, y0, x1, y1, ...])
+#   ["SPLINE", degree, control points] (control points are a flat x/y vector)
 #   ["POINT", x, y]                   ["TEXT", x, y, height, text]
 # Hash keys: tula_window tula_status tula_path tula_canvas tula_entities
 # tula_tool tula_anchor tula_view ([ox, oy, scale]) tula_fitted tula_step
+# tula_snap_grid/entity/end/cross (toolbar snap switches)
 # tula_buttons tula_button_names (toolbar buttons, see tulatoolbar).
 $once
 $include "../petersburg/petersburg.su"
@@ -95,9 +98,45 @@ tula_grid_step(r): scale [
 ]
 
 tula_snap(r): value [
-    set(_tsn_step): tula_step?
-    tula_floor(_tsn_k): {value / _tsn_step + 0.5}
-    set(r): {_tsn_k * _tsn_step}
+    set(r): value
+    set(_tsn_grid): tula_snap_grid?
+    if(_): {_tsn_grid = true} [
+        set(_tsn_step): tula_step?
+        tula_floor(_tsn_k): {value / _tsn_step + 0.5}
+        set(r): {_tsn_k * _tsn_step}
+    ]
+]
+
+# Apply enabled object snaps within ten screen pixels; the enabled grid is
+# the fallback, while the cursor remains completely free with no switches on.
+tula_pick_point(r): rawx rawy scale [
+    set(r): ""
+    tula_snap(sx): rawx
+    tula_snap(sy): rawy
+    tl_gui_point(pt): rawx rawy sx sy scale
+    at(px): pt 0
+    at(py): pt 1
+    set(_tpp_modes): ""
+    set(_tpp_entity): tula_snap_entity?
+    set(_tpp_end): tula_snap_end?
+    set(_tpp_cross): tula_snap_cross?
+    if(_): {_tpp_entity = true} [ push(_): _tpp_modes "near" ]
+    if(_): {_tpp_end = true} [ push(_): _tpp_modes "end" ]
+    if(_): {_tpp_cross = true} [ push(_): _tpp_modes "int" ]
+    len(_tpp_count): _tpp_modes
+    if(_): {_tpp_count > 0} [
+        tl_gui_doc(doc):
+        set(_tpp_entities): tula_entities?
+        btput(_): doc "entities" _tpp_entities
+        tl_osnap(snap): doc rawx rawy {10.0 / scale} _tpp_modes null
+        if(_): {snap != null} [
+            at(px): snap 0
+            at(py): snap 1
+        ]
+    ]
+    vec(r): ""
+    push(_): r px
+    push(_): r py
 ]
 
 tula_set_status(r): text [
@@ -269,9 +308,14 @@ tula_redraw(r): [
     ]
     set(_trd_anchor): tula_anchor?
     len(_trd_has): _trd_anchor
-    if(_): {_trd_has = 2} [
-        at(_trd_ax): _trd_anchor 0
-        at(_trd_ay): _trd_anchor 1
+    if(_): {_trd_has >= 2} [
+        set(_trd_i): 0
+        set(_trd_tool): tula_tool?
+        if(_): {_trd_tool = "line" || _trd_tool = "spline"} [
+            set(_trd_i): {_trd_has - 2}
+        ]
+        at(_trd_ax): _trd_anchor _trd_i
+        at(_trd_ay): _trd_anchor {_trd_i + 1}
         tula_to_screen_x(_trd_px): _trd_ax
         tula_to_screen_y(_trd_py): _trd_ay
         canvasline(_): _trd_canvas {_trd_px - 5} _trd_py {_trd_px + 5} _trd_py TULA_ANCHOR
@@ -319,6 +363,10 @@ tulainitialize(canvas): window status filename [
     set(tula_anchor): _ti_anchor!
     set(tula_tool): ""!
     set(tula_step): TULA_GRID_STEP!
+    set(tula_snap_grid): false!
+    set(tula_snap_entity): false!
+    set(tula_snap_end): false!
+    set(tula_snap_cross): false!
     # 5 pixels per unit, origin near the bottom-left; tula_fit_view moves it
     # to the real bottom-left once the canvas has been laid out.
     vec(_ti_view): ""
@@ -332,7 +380,7 @@ tulainitialize(canvas): window status filename [
     vec(_ti_names): ""
     set(tula_button_names): _ti_names!
     tula_redraw(_):
-    tula_set_status(_): "LINE tool: click two snapped points; CIRCLE tool: center then radius; Save exports DXF"
+    tula_set_status(_): "Choose a tool; cursor snapping is off"
 ]
 
 tula_tool_body(r): name [
@@ -341,8 +389,8 @@ tula_tool_body(r): name [
     if(_): _tt_fitted [
         tula_redraw(_):
     ]
-    if(_): {name != "line" && name != "circle" && name != "select"} [
-        tula_set_status(_): "Tula's tools are select, line and circle"
+    if(_): {name != "line" && name != "circle" && name != "arc" && name != "spline" && name != "select"} [
+        tula_set_status(_): "Tula's tools are select, line, circle segment and spline"
         return(_): r
     ]
     set(tula_tool): name!
@@ -354,10 +402,16 @@ tula_tool_body(r): name [
         tula_set_status(_): TULA_SELECT_HELP
     ]
     elif(_): {name = "line"} [
-        tula_set_status(_): "LINE tool: click the first snapped endpoint"
+        tula_set_status(_): "LINE tool: click the first point; right-click to finish"
+    ]
+    elif(_): {name = "circle"} [
+        tula_set_status(_): "CIRCLE tool: click the center"
+    ]
+    elif(_): {name = "arc"} [
+        tula_set_status(_): "CIRCLE SEGMENT: click center, radius, then end angle"
     ]
     else(_): [
-        tula_set_status(_): "CIRCLE tool: click the snapped center"
+        tula_set_status(_): "SPLINE: click at least three points; right-click to finish"
     ]
     len(_tt_had): _tt_anchor
     if(_): {_tt_had > 0} [
@@ -374,8 +428,9 @@ tula_mark_tool(r): name [
     while(_): {_tmt_i < _tmt_n} [
         at(_tmt_label): _tmt_names _tmt_i
         at(_tmt_button): _tmt_buttons _tmt_i
-        if(_): {_tmt_label = "Select" || _tmt_label = "Line" || _tmt_label = "Circle"} [
+        if(_): {_tmt_label = "Select" || _tmt_label = "Line" || _tmt_label = "Circle" || _tmt_label = "Circle Segment" || _tmt_label = "Spline"} [
             str_lower(_tmt_lower): _tmt_label
+            if(_): {_tmt_lower = "circle segment"} [ set(_tmt_lower): "arc" ]
             setchecked(_): _tmt_button {_tmt_lower = name}
         ]
         set(_tmt_i): {_tmt_i + 1}
@@ -401,96 +456,212 @@ tula_add_entity(r): entity [
     ]
 ]
 
+tula_draw_click(r): x y [
+    set(r): 0
+    set(tool): tula_tool?
+    set(anchor): tula_anchor?
+    len(n): anchor
+    if(_): {tool = "line"} [
+        if(_): {n = 0} [
+            vec(next): ""
+            push(_): next x
+            push(_): next y
+            set(tula_anchor): next!
+            tula_redraw(_):
+            tula_set_status(_): "Line start set; click the next point"
+            return(r): r
+        ]
+        at(ax): anchor 0
+        at(ay): anchor 1
+        if(_): {ax = x && ay = y} [
+            tula_set_status(_): "Line segment endpoints must be different"
+            return(r): r
+        ]
+        tl_line_e(entity): ax ay x y
+        tula_add_entity(added): entity
+        if(_): {added = false} [
+            tula_set_status(_): "Drawing is full"
+            return(r): r
+        ]
+        vec(next): ""
+        push(_): next x
+        push(_): next y
+        set(tula_anchor): next!
+        tula_redraw(_):
+        tula_set_status(_): "Line segment added; click another point or right-click to finish"
+        return(r): r
+    ]
+    if(_): {tool = "spline"} [
+        push(_): anchor x
+        push(_): anchor y
+        set(tula_anchor): anchor!
+        tula_redraw(_):
+        len(n): anchor
+        str_trunc(points): {n / 2}
+        concat(message): "Spline point " points " set; click more points or right-click to finish"
+        tula_set_status(_): message
+        return(r): r
+    ]
+    if(_): {tool = "arc"} [
+        if(_): {n = 0} [
+            vec(next): ""
+            push(_): next x
+            push(_): next y
+            set(tula_anchor): next!
+            tula_redraw(_):
+            tula_set_status(_): "Arc center set; click a radius point"
+            return(r): r
+        ]
+        at(cx): anchor 0
+        at(cy): anchor 1
+        if(_): {n = 2} [
+            tl_dist(radius): cx cy x y
+            if(_): {radius = 0} [
+                tula_set_status(_): "Arc radius must be greater than zero"
+                return(r): r
+            ]
+            tl_angle(start): cx cy x y
+            push(_): anchor radius
+            push(_): anchor start
+            set(tula_anchor): anchor!
+            tula_redraw(_):
+            tula_set_status(_): "Arc radius set; click the end angle"
+            return(r): r
+        ]
+        at(radius): anchor 2
+        at(start): anchor 3
+        tl_angle(angle): cx cy x y
+        tl_norm_deg(sweep): {angle - start}
+        if(_): {sweep = 0} [
+            tula_set_status(_): "Arc end angle must differ from its start"
+            return(r): r
+        ]
+        tl_arc_e(entity): cx cy radius start {start + sweep}
+        tula_add_entity(added): entity
+        if(_): {added = false} [
+            tula_set_status(_): "Drawing is full"
+            return(r): r
+        ]
+        vec(none): ""
+        set(tula_anchor): none!
+        tula_redraw(_):
+        tula_set_status(_): "Arc segment added"
+        return(r): r
+    ]
+    if(_): {tool = "circle"} [
+        if(_): {n = 0} [
+            vec(next): ""
+            push(_): next x
+            push(_): next y
+            set(tula_anchor): next!
+            tula_redraw(_):
+            tula_set_status(_): "Circle center set; click the radius"
+            return(r): r
+        ]
+        at(cx): anchor 0
+        at(cy): anchor 1
+        tl_dist(radius): cx cy x y
+        if(_): {radius = 0} [
+            tula_set_status(_): "Circle radius must be greater than zero"
+            return(r): r
+        ]
+        tl_circle_e(entity): cx cy radius
+        tula_add_entity(added): entity
+        if(_): {added = false} [
+            tula_set_status(_): "Drawing is full"
+            return(r): r
+        ]
+        vec(none): ""
+        set(tula_anchor): none!
+        tula_redraw(_):
+        set(entities): tula_entities?
+        len(count): entities
+        str_from_int(count_text): count
+        concat(message): "Circle added; " count_text " object(s)"
+        tula_set_status(_): message
+    ]
+]
+
 tula_click_body(r): canvas x y [
     set(r): 0
     set(_tc_canvas): tula_canvas?
-    if(_): {canvas != _tc_canvas} [
-        return(_): r
+    if(_): {canvas != _tc_canvas} [ return(r): r ]
+    tula_bar_press(onbar): x y
+    if(_): onbar [ return(r): r ]
+    tula_fit_view(fitted):
+    if(_): fitted [ tula_redraw(_): ]
+    set(tool): tula_tool?
+    if(_): {tool = ""} [
+        tula_set_status(_): "Choose SELECT, LINE, CIRCLE, CIRCLE SEGMENT or SPLINE first"
+        return(r): r
     ]
-    tula_bar_press(_tc_onbar): x y
-    if(_): _tc_onbar [ return(_): r ]
-    tula_fit_view(_tc_fitted):
-    if(_): _tc_fitted [
-        tula_redraw(_):
-    ]
-    set(_tc_tool): tula_tool?
-    if(_): {_tc_tool = ""} [
-        tula_set_status(_): "Choose SELECT, LINE or CIRCLE first"
-        return(_): r
-    ]
-    if(_): {_tc_tool = "select"} [
-        vec(_tc_from): ""
-        push(_): _tc_from x
-        push(_): _tc_from y
-        set(tula_sel_from): _tc_from!
+    if(_): {tool = "select"} [
+        vec(from): ""
+        push(_): from x
+        push(_): from y
+        set(tula_sel_from): from!
         set(tula_sel_on): true!
-        return(_): r
+        return(r): r
     ]
-    set(_tc_v): tula_view?
-    at(_tc_ox): _tc_v 0
-    at(_tc_oy): _tc_v 1
-    at(_tc_s): _tc_v 2
-    tula_snap(_tc_x): {(x - _tc_ox) / _tc_s}
-    tula_snap(_tc_y): {(_tc_oy - y) / _tc_s}
-    tl_gui_point(_tc_pt): {(x - _tc_ox) / _tc_s} {(_tc_oy - y) / _tc_s} _tc_x _tc_y _tc_s
-    at(_tc_x): _tc_pt 0
-    at(_tc_y): _tc_pt 1
-    str_from_number(_tc_xs): _tc_x 3
-    str_from_number(_tc_ys): _tc_y 3
-    set(_tc_anchor): tula_anchor?
-    len(_tc_has): _tc_anchor
-    if(_): {_tc_has = 0} [
-        push(_): _tc_anchor _tc_x
-        push(_): _tc_anchor _tc_y
+    set(v): tula_view?
+    at(ox): v 0
+    at(oy): v 1
+    at(scale): v 2
+    tula_pick_point(point): {(x - ox) / scale} {(oy - y) / scale} scale
+    at(px): point 0
+    at(py): point 1
+    tula_draw_click(r): px py
+]
+
+# Right-click ends the active multi-point line or spline without adding a
+# segment to the cursor; it cancels an unfinished circle or arc.
+tulafinish(r): [
+    set(r): 0
+    set(tool): tula_tool?
+    set(anchor): tula_anchor?
+    len(n): anchor
+    if(_): {tool = "spline" && n >= 6} [
+        str_trunc(points): {n / 2}
+        set(degree): 3
+        if(_): {points = 3} [ set(degree): 2 ]
+        tl_spline(entity): degree anchor
+        tula_add_entity(added): entity
+        if(_): {added = false} [
+            tula_set_status(_): "Drawing is full"
+            return(r): r
+        ]
         tula_redraw(_):
-        concat(_tc_msg): "First point: " _tc_xs ", " _tc_ys " - click next point"
-        tula_set_status(_): _tc_msg
-        return(_): r
+        set(entities): tula_entities?
+        len(count): entities
+        str_from_int(count_text): count
+        concat(message): "Spline added; " count_text " object(s)"
+        tula_set_status(_): message
     ]
-    at(_tc_ax): _tc_anchor 0
-    at(_tc_ay): _tc_anchor 1
-    vec(_tc_entity): ""
-    if(_): {_tc_tool = "line"} [
-        if(_): {_tc_ax = _tc_x && _tc_ay = _tc_y} [
-            tula_set_status(_): "Line endpoints must be different"
-            return(_): r
-        ]
-        push(_): _tc_entity "LINE"
-        push(_): _tc_entity _tc_ax
-        push(_): _tc_entity _tc_ay
-        push(_): _tc_entity _tc_x
-        push(_): _tc_entity _tc_y
-        set(_tc_name): "Line"
+    elif(_): {tool = "spline" && n > 0} [
+        tula_set_status(_): "Spline needs at least three points"
     ]
-    else(_): [
-        set(_tc_dx): {_tc_x - _tc_ax}
-        set(_tc_dy): {_tc_y - _tc_ay}
-        sqrt(_tc_radius): {_tc_dx * _tc_dx + _tc_dy * _tc_dy}
-        if(_): {_tc_radius = 0} [
-            tula_set_status(_): "Circle radius must be greater than zero"
-            return(_): r
-        ]
-        push(_): _tc_entity "CIRCLE"
-        push(_): _tc_entity _tc_ax
-        push(_): _tc_entity _tc_ay
-        push(_): _tc_entity _tc_radius
-        set(_tc_name): "Circle"
+    elif(_): {tool = "line" && n > 0} [
+        tula_set_status(_): "Line sequence finished"
     ]
-    tula_add_entity(_tc_added): _tc_entity
-    if(_): {_tc_added = false} [
-        tula_set_status(_): "Drawing is full"
-        return(_): r
+    elif(_): {tool = "arc" && n > 0} [
+        tula_set_status(_): "Arc segment cancelled"
     ]
-    vec(_tc_none): ""
-    set(tula_anchor): _tc_none!
+    elif(_): {tool = "circle" && n > 0} [
+        tula_set_status(_): "Circle cancelled"
+    ]
+    vec(none): ""
+    set(tula_anchor): none!
     tula_redraw(_):
-    set(_tc_entities): tula_entities?
-    len(_tc_count): _tc_entities
-    str_from_number(_tc_axs): _tc_ax 3
-    str_from_number(_tc_ays): _tc_ay 3
-    str_from_int(_tc_cs): _tc_count
-    concat(_tc_msg): _tc_name " added at grid snap (" _tc_axs ", " _tc_ays "); " _tc_cs " object(s)"
-    tula_set_status(_): _tc_msg
+]
+
+tulamenu(r): canvas x y [
+    set(r): 0
+    set(target): tula_canvas?
+    if(_): {canvas = target} [
+        uilock(_):
+        tulafinish(_):
+        uiunlock(_):
+    ]
 ]
 
 tulaclick(result): canvas x y [
@@ -1135,6 +1306,62 @@ tula_tb_circle(result): widget [
     tulatool(_): "circle"
 ]
 
+tula_tb_arc(result): widget [
+    tulatool(_): "arc"
+]
+
+tula_tb_spline(result): widget [
+    tulatool(_): "spline"
+]
+
+tula_snap_set(r): mode button [
+    set(r): 0
+    uilock(_):
+    if(_): {mode = "entity"} [
+        set(enabled): tula_snap_entity?
+        set(tula_snap_entity): {enabled != true}!
+    ]
+    elif(_): {mode = "grid"} [
+        set(enabled): tula_snap_grid?
+        set(tula_snap_grid): {enabled != true}!
+    ]
+    elif(_): {mode = "end"} [
+        set(enabled): tula_snap_end?
+        set(tula_snap_end): {enabled != true}!
+    ]
+    else(_): [
+        set(enabled): tula_snap_cross?
+        set(tula_snap_cross): {enabled != true}!
+    ]
+    if(_): {mode = "entity"} [ set(enabled): tula_snap_entity? ]
+    elif(_): {mode = "grid"} [ set(enabled): tula_snap_grid? ]
+    elif(_): {mode = "end"} [ set(enabled): tula_snap_end? ]
+    else(_): [ set(enabled): tula_snap_cross? ]
+    setchecked(_): button enabled
+    concat(message): "Snap " mode " "
+    if(_): enabled [ concat(message): message "on" ]
+    else(_): [ concat(message): message "off" ]
+    tula_set_status(_): message
+    set(tula_mdirty): true!
+    uiunlock(_):
+]
+
+tula_tb_snap_entity(result): widget [
+    tula_snap_set(_): "entity" widget
+]
+
+tula_tb_snap_grid(result): widget [
+    tula_snap_set(_): "grid" widget
+]
+
+tula_tb_snap_end(result): widget [
+    tula_snap_set(_): "end" widget
+]
+
+tula_tb_snap_cross(result): widget [
+    tula_snap_set(_): "cross" widget
+]
+
 tula_tb_load(result): widget [
     tulaload(_):
 ]
@@ -1305,6 +1532,14 @@ tula_tb_add(r): bar glyph label callback [
         if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
         if(_): {callback = "tula_tb_save_file"} [ buttonicon(_): r "disk" ]
         if(_): {callback = "tula_tb_select"} [ buttonicon(_): r "pointer" ]
+        if(_): {label = "Line"} [ buttonicon(_): r "src/tula/icons/line.ppm" ]
+        if(_): {label = "Circle"} [ buttonicon(_): r "src/tula/icons/circle.ppm" ]
+        if(_): {label = "Circle Segment"} [ buttonicon(_): r "src/tula/icons/arc.ppm" ]
+        if(_): {label = "Spline"} [ buttonicon(_): r "src/tula/icons/spline.ppm" ]
+        if(_): {label = "Snap entity"} [ buttonicon(_): r "src/tula/icons/snap-entity.ppm" ]
+        if(_): {label = "Snap grid"} [ buttonicon(_): r "src/tula/icons/snap-grid.ppm" ]
+        if(_): {label = "Snap endpoints"} [ buttonicon(_): r "src/tula/icons/snap-endpoints.ppm" ]
+        if(_): {label = "Snap cross"} [ buttonicon(_): r "src/tula/icons/snap-cross.ppm" ]
         on(_): r "click" callback
         set(_tba_buttons): tula_buttons?
         set(_tba_names): tula_button_names?
@@ -1329,7 +1564,7 @@ tulatoolbar(toolbar): window [
     toolmenu(_ttb_lw): _ttb_menu_bar "Weight" TULA_LW_ITEMS
     on(_): _ttb_lw "select" "tula_lw_select"
     set(tula_lwmenu): _ttb_lw!
-    toolmenu(_ttb_tools): _ttb_menu_bar "Tools" "[x] File toolbar|[x] Drawing toolbar"
+    toolmenu(_ttb_tools): _ttb_menu_bar "Tools" "[x] File toolbar|[x] Drawing toolbar|[x] Snap toolbar"
     on(_): _ttb_tools "select" "tula_tools_select"
     set(tula_tools_menu): _ttb_tools!
     toolbar(_ttb_file_toolbar): window
@@ -1344,6 +1579,8 @@ tulatoolbar(toolbar): window [
     tula_tb_add(_): _ttb_toolbar "P" "Select" "tula_tb_select"
     tula_tb_add(_): _ttb_toolbar "L" "Line" "tula_tb_line"
     tula_tb_add(_): _ttb_toolbar "C" "Circle" "tula_tb_circle"
+    tula_tb_add(_): _ttb_toolbar "A" "Circle Segment" "tula_tb_arc"
+    tula_tb_add(_): _ttb_toolbar "S" "Spline" "tula_tb_spline"
     tula_tb_add(_): _ttb_toolbar "|" "" ""
     tula_tb_add(_): _ttb_toolbar "+" "Zoom +" "tula_tb_zoom_in"
     tula_tb_add(_): _ttb_toolbar "-" "Zoom -" "tula_tb_zoom_out"
@@ -1353,6 +1590,22 @@ tulatoolbar(toolbar): window [
     tula_tb_add(_): _ttb_toolbar ">" "Right" "tula_tb_pan_right"
     tula_tb_add(_): _ttb_toolbar "^" "Up" "tula_tb_pan_up"
     tula_tb_add(_): _ttb_toolbar "v" "Down" "tula_tb_pan_down"
+    toolbar(_ttb_snap_toolbar): window
+    set(tula_snap_toolbar): _ttb_snap_toolbar!
+    set(tula_snap_toolbar_visible): true!
+    tula_tb_add(_): _ttb_snap_toolbar "E" "Snap entity" "tula_tb_snap_entity"
+    tula_tb_add(_): _ttb_snap_toolbar "G" "Snap grid" "tula_tb_snap_grid"
+    tula_tb_add(_): _ttb_snap_toolbar "P" "Snap endpoints" "tula_tb_snap_end"
+    tula_tb_add(_): _ttb_snap_toolbar "X" "Snap cross" "tula_tb_snap_cross"
+    set(_ttb_buttons): tula_buttons?
+    set(_ttb_names): tula_button_names?
+    len(_ttb_count): _ttb_buttons
+    set(_ttb_i): {_ttb_count - 4}
+    while(_): {_ttb_i < _ttb_count} [
+        at(_ttb_button): _ttb_buttons _ttb_i
+        setchecked(_): _ttb_button false
+        set(_ttb_i): {_ttb_i + 1}
+    ]
     set(_ttb_tool): tula_tool?
     tula_mark_tool(_): _ttb_tool
     set(toolbar): _ttb_toolbar
@@ -1370,15 +1623,24 @@ tula_tools_select(result): menu index [
         set(tula_toolbar_visible): {visible != true}!
         setvisible(_): tula_toolbar? {visible != true}
     ]
+    elif(_): {index = 2} [
+        set(visible): tula_snap_toolbar_visible?
+        set(tula_snap_toolbar_visible): {visible != true}!
+        setvisible(_): tula_snap_toolbar? {visible != true}
+    ]
     set(file_mark): "[ ] "
     set(draw_mark): "[ ] "
+    set(snap_mark): "[ ] "
     set(file_visible): tula_file_toolbar_visible?
     set(draw_visible): tula_toolbar_visible?
+    set(snap_visible): tula_snap_toolbar_visible?
     if(_): file_visible [ set(file_mark): "[x] " ]
     if(_): draw_visible [ set(draw_mark): "[x] " ]
+    if(_): snap_visible [ set(snap_mark): "[x] " ]
     concat(file_item): file_mark "File toolbar"
     concat(draw_item): draw_mark "Drawing toolbar"
-    concat(items): file_item "|" draw_item
+    concat(snap_item): snap_mark "Snap toolbar"
+    concat(items): file_item "|" draw_item "|" snap_item
     setitems(_): tula_tools_menu? items
 ]
 
@@ -1966,6 +2228,10 @@ tula_app_pointer(result): canvas x y [
     tulaclick(_): canvas x y
 ]
 
+tula_app_menu(result): canvas x y [
+    tulamenu(_): canvas x y
+]
+
 tula_app_motion(result): canvas x y [
     tsc_motion(_): canvas x y
 ]
@@ -2011,6 +2277,7 @@ init(result): arg_count arg_values [
     set(tula_cmdbox): _tla_cmd!
     tulatoolbar(_): window
     on(_): canvas "pointer" "tula_app_pointer"
+    on(_): canvas "menu" "tula_app_menu"
     on(_): canvas "wheel" "tula_app_wheel"
     on(_): window "key" "tula_app_key"
     try(_): "tula_scope_on" canvas
