@@ -111,7 +111,7 @@ tsc_dashed_circle(r): canvas cx cy radius color [
         canvascircle(_): canvas cx cy radius color
         return(r): r
     ]
-    if(_): {n > 720} [ set(n): 720 ]
+    if(_): {n > 120} [ set(n): 120 ]
     set(step): {360.0 / n}
     set(on): {step * TSC_DASH / (TSC_DASH + TSC_GAP)}
     set(i): 0
@@ -182,9 +182,10 @@ tsc_overlay(r): canvas [
         set(v): tula_view?
         at(s): v 2
         tl_dist(dist): ax ay wx wy
+        str_from_number(dist_text): dist 3
         tsc_dashed_circle(_): canvas sax say {dist * s} TSC_PREVIEW
         tsc_dashed(_): canvas sax say px py TSC_PREVIEW
-        concat(note): "radius " dist
+        concat(note): "radius " dist_text
     ]
     elif(_): {na = 4 && tool = "arc"} [
         at(ax): anchor 0
@@ -193,13 +194,14 @@ tsc_overlay(r): canvas [
         at(start): anchor 3
         tl_angle(angle): ax ay wx wy
         tl_norm_deg(sweep): {angle - start}
+        str_from_number(angle_text): angle 1
         set(v): tula_view?
         at(s): v 2
         tula_to_screen_x(sax): ax
         tula_to_screen_y(say): ay
         canvasarc(_): canvas sax say {radius * s} start {start + sweep} TSC_PREVIEW
         tsc_dashed(_): canvas sax say px py TSC_PREVIEW
-        concat(note): "angle " angle
+        concat(note): "angle " angle_text
     ]
     elif(_): {na >= 2 && tool = "spline"} [
         vec(ctrl): ""
@@ -208,9 +210,13 @@ tsc_overlay(r): canvas [
         push(_): ctrl wy
         len(nctrl): ctrl
         str_trunc(npoints): {nctrl / 2}
-        tl_bspline_points(curve): 3 ctrl {npoints * 12}
+        set(steps): {npoints * 8}
+        if(_): {steps < 24} [ set(steps): 24 ]
+        if(_): {steps > 96} [ set(steps): 96 ]
+        tl_bspline_points(curve): 3 ctrl steps
         len(ncurve): curve
         set(i): 0
+        str_from_int(npoints_text): npoints
         if(_): {ncurve >= 4} [
             at(x1): curve 0
             at(y1): curve 1
@@ -228,7 +234,7 @@ tsc_overlay(r): canvas [
                 set(i): {i + 2}
             ]
         ]
-        concat(note): "spline " npoints " points"
+        concat(note): "spline " npoints_text " points"
     ]
     # the crosshair across the canvas and its pick box
     getwidth(w): canvas
