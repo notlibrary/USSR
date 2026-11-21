@@ -94,5 +94,46 @@ init(result): arg_count arg_values [
     concat(m): "a line added later snaps: " ps
     print(_): m
     if(_): {ps = qs} [ print(_): "as the full search does" ]
+
+    vec(live_entities): ""
+    tl_line_e(horizontal): 0 0 10 0
+    push(_): live_entities horizontal
+    tl_line_e(vertical): 5 -5 5 5
+    push(_): live_entities vertical
+    set(tula_entities): live_entities!
+    set(tula_snap_grid): false!
+    set(tula_snap_entity): true!
+    set(tula_snap_end): false!
+    set(tula_snap_cross): false!
+    tula_pick_point(live): 4.8 0.4 5
+    at(live_x): live 0
+    at(live_y): live 1
+    tl_dist(live_error): live_x live_y 5 0.4
+    if(_): {live_error > 0.001} [
+        print(_): "FAIL live entity snap toggle"
+    ]
+
+    set(tula_snap_entity): false!
+    set(tula_snap_end): true!
+    set(tula_snap_cross): true!
+    tula_pick_point(live): 4.8 0.4 5
+    at(live_x): live 0
+    at(live_y): live 1
+    tl_dist(live_error): live_x live_y 5 0
+    if(_): {live_error > 0.001} [
+        print(_): "FAIL live endpoint/cross snap toggles"
+    ]
+
+    set(tula_snap_end): false!
+    set(tula_snap_cross): false!
+    set(tula_snap_grid): true!
+    set(tula_step): 5!
+    tula_pick_point(live): 2.1 3.2 1
+    at(live_x): live 0
+    at(live_y): live 1
+    tl_dist(live_error): live_x live_y 0 5
+    if(_): {live_error > 0.001} [
+        print(_): "FAIL live grid snap toggle"
+    ]
     set(result): 0
 ]

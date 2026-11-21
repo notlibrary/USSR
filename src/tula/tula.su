@@ -116,7 +116,7 @@ tula_pick_point(r): rawx rawy scale [
     tl_gui_point(pt): rawx rawy sx sy scale
     at(px): pt 0
     at(py): pt 1
-    set(_tpp_modes): ""
+    vec(_tpp_modes): ""
     set(_tpp_entity): tula_snap_entity?
     set(_tpp_end): tula_snap_end?
     set(_tpp_cross): tula_snap_cross?
