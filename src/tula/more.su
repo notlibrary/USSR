@@ -1405,7 +1405,7 @@ tl_cc(r): x1 y1 r1 x2 y2 r2 [
     ]
 ]
 
-# the segments of an entity: [[x1 y1 x2 y2]...] (lines and polylines)
+# the segments of lines, polylines and flattened curves
 tl_segments(r): e [
     vec(r): ""
     at(kind): e 0
@@ -1446,6 +1446,18 @@ tl_segments(r): e [
             push(_): r s
             set(i): {i + 1}
         ]
+    ]
+    elif(_): {kind = "SPLINE"} [
+        at(degree): e 1
+        at(ctrl): e 2
+        tl_bspline_points(points): degree ctrl 64
+        tl_poly_e(flat): false points
+        tl_segments(r): flat
+    ]
+    elif(_): {kind = "ELLIPSE"} [
+        tl_ellipse_points(points): e 64
+        tl_poly_e(flat): false points
+        tl_segments(r): flat
     ]
 ]
 
@@ -1865,11 +1877,43 @@ tl_snap_points(r): e modes from x y [
         ]
         return(r): r
     ]
-    if(_): {kind = "POINT" && (wend || wcen)} [
+    if(_): {kind = "POINT" && (wend || wcen || wnear)} [
         at(px): e 1
         at(py): e 2
         tl_snap_push(_): r px py "end"
         return(r): r
+    ]
+    if(_): {kind = "TEXT" && wnear} [
+        at(px): e 1
+        at(py): e 2
+        tl_snap_push(_): r px py "near"
+        return(r): r
+    ]
+    if(_): {kind = "SPLINE" && wend} [
+        at(ctrl): e 2
+        len(nctrl): ctrl
+        if(_): {nctrl >= 2} [
+            at(x): ctrl 0
+            at(y): ctrl 1
+            tl_snap_push(_): r x y "end"
+            set(last): {nctrl - 2}
+            at(x): ctrl last
+            at(y): ctrl {last + 1}
+            tl_snap_push(_): r x y "end"
+        ]
+    ]
+    if(_): {kind = "ELLIPSE" && wend} [
+        tl_ellipse_points(points): e 64
+        len(np): points
+        if(_): {np >= 4} [
+            at(x): points 0
+            at(y): points 1
+            tl_snap_push(_): r x y "end"
+            set(last): {np - 2}
+            at(x): points last
+            at(y): points {last + 1}
+            tl_snap_push(_): r x y "end"
+        ]
     ]
     tl_segments(segs): e
     len(ns): segs
@@ -1880,7 +1924,7 @@ tl_snap_points(r): e modes from x y [
         at(y1): s 1
         at(x2): s 2
         at(y2): s 3
-        if(_): wend [
+        if(_): {wend && kind != "SPLINE" && kind != "ELLIPSE"} [
             tl_snap_push(_): r x1 y1 "end"
             tl_snap_push(_): r x2 y2 "end"
         ]
@@ -1892,7 +1936,7 @@ tl_snap_points(r): e modes from x y [
             tl_snap_push_pt(_): r p "perp"
         ]
         if(_): wnear [
-            tl_foot(p): x1 y1 x2 y2 x y
+            tl_seg_foot(p): x y x1 y1 x2 y2
             tl_snap_push_pt(_): r p "near"
         ]
         set(i): {i + 1}
@@ -1928,6 +1972,20 @@ tl_foot(r): x1 y1 x2 y2 px py [
     set(l2): {dx * dx + dy * dy}
     set(t): 0
     if(_): {l2 > 0} [ set(t): {((px - x1) * dx + (py - y1) * dy) / l2} ]
+    tl_pt(r): {x1 + t * dx} {y1 + t * dy}
+]
+
+# The closest point on a finite segment, used by the entity-nearest snap.
+tl_seg_foot(r): px py x1 y1 x2 y2 [
+    set(dx): {x2 - x1}
+    set(dy): {y2 - y1}
+    set(l2): {dx * dx + dy * dy}
+    set(t): 0
+    if(_): {l2 > 0} [
+        set(t): {((px - x1) * dx + (py - y1) * dy) / l2}
+    ]
+    if(_): {t < 0} [ set(t): 0 ]
+    if(_): {t > 1} [ set(t): 1 ]
     tl_pt(r): {x1 + t * dx} {y1 + t * dy}
 ]
 

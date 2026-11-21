@@ -4,6 +4,10 @@ canvas_input(result): canvas x y [
     tulaclick(_): canvas x y
 ]
 
+canvas_menu(result): canvas x y [
+    tulamenu(_): canvas x y
+]
+
 canvas_wheel(result): canvas x y direction [
     tulawheel(_): canvas x y direction
 ]
@@ -15,10 +19,11 @@ key_input(result): window key [
 init(result): arg_count arg_values [
     createwindow(window): "Tula 2D CAD" 1100 800
     textbox(filename): window "drawing.dxf"
-    label(status): window "Choose a tool, draw on the snapped grid, then save DXF"
+    label(status): window "Choose a tool, enable snaps as needed, then save DXF"
     tulainitialize(canvas): window status filename
     tulatoolbar(_): window
     on(_): canvas "pointer" "canvas_input"
+    on(_): canvas "menu" "canvas_menu"
     on(_): canvas "wheel" "canvas_wheel"
     on(_): window "key" "key_input"
     pack(_): canvas true

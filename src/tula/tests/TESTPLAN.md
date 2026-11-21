@@ -2,9 +2,10 @@
 
 Automated (GLFW build and a display required):
 
-- `ussr tests/gui/tula_test.su`: tool-required message, snapped line and
-  circle input, degenerate line refusal, unknown tool refusal, the exact DXF
-  output, and the empty filename error.
+- `ussr tests/gui/tula_test.su`: tool-required message, grid-snapped
+  multi-segment line and circle input, right-click line completion,
+  center-radius-angle arc and multi-point spline creation, unknown tool
+  refusal, exact DXF output, and the empty filename error.
 - `ussr tests/gui/tula_dxf_test.su`: loads `tests/gui/fixtures/sample.dxf`
   (every supported entity, a `BLOCKS` section that must be ignored, and two
   unsupported entities), checks the parsed entities and the number of shapes
@@ -12,8 +13,8 @@ Automated (GLFW build and a display required):
   limits, snapping to the visible grid, pan, save/load round trip, CRLF
   input, and refusal of missing, truncated, binary and malformed files.
 - `ussr tests/gui/tula_toolbar_test.su`: every toolbar button reaches its
-  action (tool selection and pressed state, zoom, pan, fit, load, save) and
-  the keyboard shortcuts work.
+  action (tool selection and pressed state, all four independent snap modes,
+  zoom, pan, fit, load, save) and the keyboard shortcuts work.
 
 Manual:
 
@@ -24,3 +25,7 @@ Manual:
   grid stays aligned with the geometry.
 - Verify an unwritable destination reports an error without corrupting the
   drawing, and that the entity limit is enforced.
+- Verify entity, grid, endpoint and intersection snaps independently and in
+  combination; all are off on startup.
+- Draw a connected multi-segment line and a multi-point spline, then finish
+  each with a right-click; verify the preview follows the snapped cursor.

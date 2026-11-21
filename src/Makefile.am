@@ -208,6 +208,16 @@ EXTRA_DIST = \
 	tula/box.uno \
 	tula/docs/API.md \
 	tula/examples/hello.su \
+	tula/icons/arc.ppm \
+	tula/icons/circle.ppm \
+	tula/icons/line.ppm \
+	tula/icons/snap-cross.ppm \
+	tula/icons/snap-endpoints.ppm \
+	tula/icons/snap-entity.ppm \
+	tula/icons/snap-grid.ppm \
+	tula/icons/spline.ppm \
+	tula/more.su \
+	tula/scope.su \
 	tula/tests/TESTPLAN.md \
 	tula/tula.su \
 	tver/CHANGELOG.md \

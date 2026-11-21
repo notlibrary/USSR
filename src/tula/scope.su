@@ -1,9 +1,9 @@
 # scope.su - Tula's cursor: a crosshair ("scope", as LibreCAD draws one)
-# in place of the mouse arrow, and a live preview of the line or circle
+# in place of the mouse arrow, and live previews of the active drawing tool
 # being drawn.
 #
 # The crosshair is two dashed lines across the whole canvas through the
-# point a click would take (grid snap and object snaps applied), with a
+# point a click would take (enabled grid/object snaps applied), with a
 # small pick box at the centre and the point's coordinates beside it.
 # Once the first point of a line or circle is down, the line to the
 # cursor (or the circle through it) is drawn dashed, with its length or
@@ -70,9 +70,7 @@ tsc_point(r): x y [
     at(ox): v 0
     at(oy): v 1
     at(s): v 2
-    tula_snap(sx): {(x - ox) / s}
-    tula_snap(sy): {(oy - y) / s}
-    tl_gui_point(r): {(x - ox) / s} {(oy - y) / s} sx sy s
+    tula_pick_point(r): {(x - ox) / s} {(oy - y) / s} s
 ]
 
 # a dashed line from (x1, y1) to (x2, y2)
@@ -146,12 +144,22 @@ tsc_overlay(r): canvas [
     at(wy): pt 1
     tula_to_screen_x(px): wx
     tula_to_screen_y(py): wy
-    # the line or circle being drawn
+    # the active tool's preview follows the same snapped cursor as a click
     set(tool): tula_tool?
     set(anchor): tula_anchor?
     len(na): anchor
     set(note): ""
-    if(_): {na = 2 && (tool = "line" || tool = "circle")} [
+    if(_): {na >= 2 && tool = "line"} [
+        set(last): {na - 2}
+        at(ax): anchor last
+        at(ay): anchor {last + 1}
+        tula_to_screen_x(sax): ax
+        tula_to_screen_y(say): ay
+        tsc_dashed(_): canvas sax say px py TSC_PREVIEW
+        tl_readout(readout): ax ay wx wy
+        set(note): readout
+    ]
+    elif(_): {na = 2 && tool = "circle"} [
         at(ax): anchor 0
         at(ay): anchor 1
         tula_to_screen_x(sax): ax
@@ -160,17 +168,67 @@ tsc_overlay(r): canvas [
         set(dy): {wy - ay}
         sqrt(dist): {dx * dx + dy * dy}
         str_from_number(ds): dist 3
-        if(_): {tool = "line"} [
-            tsc_dashed(_): canvas sax say px py TSC_PREVIEW
-            concat(note): "length " ds
+        set(v): tula_view?
+        at(s): v 2
+        tsc_dashed_circle(_): canvas sax say {dist * s} TSC_PREVIEW
+        tsc_dashed(_): canvas sax say px py TSC_PREVIEW
+        concat(note): "radius " ds
+    ]
+    elif(_): {na = 2 && tool = "arc"} [
+        at(ax): anchor 0
+        at(ay): anchor 1
+        tula_to_screen_x(sax): ax
+        tula_to_screen_y(say): ay
+        set(v): tula_view?
+        at(s): v 2
+        tl_dist(dist): ax ay wx wy
+        tsc_dashed_circle(_): canvas sax say {dist * s} TSC_PREVIEW
+        tsc_dashed(_): canvas sax say px py TSC_PREVIEW
+        concat(note): "radius " dist
+    ]
+    elif(_): {na = 4 && tool = "arc"} [
+        at(ax): anchor 0
+        at(ay): anchor 1
+        at(radius): anchor 2
+        at(start): anchor 3
+        tl_angle(angle): ax ay wx wy
+        tl_norm_deg(sweep): {angle - start}
+        set(v): tula_view?
+        at(s): v 2
+        tula_to_screen_x(sax): ax
+        tula_to_screen_y(say): ay
+        canvasarc(_): canvas sax say {radius * s} start {start + sweep} TSC_PREVIEW
+        tsc_dashed(_): canvas sax say px py TSC_PREVIEW
+        concat(note): "angle " angle
+    ]
+    elif(_): {na >= 2 && tool = "spline"} [
+        vec(ctrl): ""
+        list_concat(ctrl): ctrl anchor
+        push(_): ctrl wx
+        push(_): ctrl wy
+        len(nctrl): ctrl
+        str_trunc(npoints): {nctrl / 2}
+        tl_bspline_points(curve): 3 ctrl {npoints * 12}
+        len(ncurve): curve
+        set(i): 0
+        if(_): {ncurve >= 4} [
+            at(x1): curve 0
+            at(y1): curve 1
+            tula_to_screen_x(sx1): x1
+            tula_to_screen_y(sy1): y1
+            set(i): 2
+            while(_): {i + 1 < ncurve} [
+                at(x2): curve i
+                at(y2): curve {i + 1}
+                tula_to_screen_x(sx2): x2
+                tula_to_screen_y(sy2): y2
+                tsc_dashed(_): canvas sx1 sy1 sx2 sy2 TSC_PREVIEW
+                set(sx1): sx2
+                set(sy1): sy2
+                set(i): {i + 2}
+            ]
         ]
-        else(_): [
-            set(v): tula_view?
-            at(s): v 2
-            tsc_dashed_circle(_): canvas sax say {dist * s} TSC_PREVIEW
-            tsc_dashed(_): canvas sax say px py TSC_PREVIEW
-            concat(note): "radius " ds
-        ]
+        concat(note): "spline " npoints " points"
     ]
     # the crosshair across the canvas and its pick box
     getwidth(w): canvas

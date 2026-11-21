@@ -9,16 +9,21 @@ canvas. Start it from the repository root with a GLFW-enabled build:
 The window requests maximized display at startup. `src/tula/examples/hello.su`
 builds the same window from a script that includes `tula.su`.
 
-The menu row is above the compact File and Drawing toolbars, which start side
-by side; the **Tools** menu can hide or show either one. Hover over a square
-button to see its tool name, or drag a dotted grip horizontally to reorder
-the toolbars and vertically to move one to another row. Arrow keys pan,
-`=`/`-` zoom and `F` fits.
+The menu row is above the compact File, Drawing and Snap toolbars. The
+**Tools** menu can hide or show each one. Hover over a square button to see
+its tool name, or drag a dotted grip horizontally to reorder toolbars and
+vertically to move one to another row. Arrow keys pan, `=`/`-` zoom and `F`
+fits.
 
-Choose **Line** and click two points on the canvas, or choose **Circle** and
-click its center followed by a point on its circumference. Points snap to a
-visible 5-unit grid. The fine grid is 5 units and major lines are 20 units
-apart. The drawing uses millimeters and is exported as ASCII DXF 2000.
+Choose **Line** and click successive points to add connected segments; a
+right-click finishes the sequence. **Circle** uses a center and radius point,
+**Circle Segment** uses center, radius, then end angle, and **Spline** accepts
+three or more points and draws an approximated B-spline (quadratic for three
+points, cubic for four or more). All cursor snaps are off by default. The
+Snap toolbar independently toggles nearest-point on entity, grid, endpoints
+and intersections. The adaptive minor grid starts at 5 units and major lines
+are 20 units apart. The drawing uses millimeters and is exported as ASCII DXF
+2000.
 
 Enter a filename (defaults to `drawing.dxf`) and click **Save DXF**, or
 **Load DXF** to view an existing drawing: lines, circles, arcs, polylines,
@@ -38,8 +43,8 @@ canvas (`canvasline`, `canvascircle`, ...). Number formatting comes from
 
 ## Tests
 
-`tests/gui/tula_test.su` drives Tula with injected clicks and pointer events
-and compares the exported DXF with the expected text;
+`tests/gui/tula_test.su` drives Tula with injected clicks and pointer events,
+tests the line, arc and spline tools, and compares exported DXF;
 `tests/gui/tula_dxf_test.su` checks DXF loading, rendering, zoom and the grid:
 
     ussr tests/gui/tula_test.su

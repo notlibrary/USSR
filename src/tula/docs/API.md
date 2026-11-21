@@ -6,8 +6,9 @@ recommended starting point.
 | Command | Arguments | Behavior |
 |---|---|---|
 | `tulainitialize(canvas)` | Window, status label, filename text box | Creates the drawing canvas and returns its Petersburg canvas handle |
-| `tulatool(_)` | `"line"` or `"circle"` | Selects the drawing tool and starts a fresh point sequence |
+| `tulatool(_)` | `"line"`, `"circle"`, `"arc"`, `"spline"` or `"select"` | Selects the drawing tool and starts a fresh point sequence |
 | `tulaclick(_)` | Canvas handle, canvas x, canvas y | Snaps and consumes a canvas pointer event |
+| `tulamenu(_)` | Canvas handle, canvas x, canvas y | Ends an active line or spline on a canvas right-click |
 | `tulasave(_)` | None | Writes the drawing to the filename field as ASCII DXF 2000 |
 | `tulaload(_)` | None | Reads the DXF named in the filename field, replaces the drawing and fits it in view |
 | `tulawheel(_)` | Canvas handle, x, y, direction | Canvas `"wheel"` callback: zooms 1.25x in (`1`) or out (`-1`) about x, y |
@@ -17,11 +18,17 @@ recommended starting point.
 | `tulatoolbar(toolbar)` | Window | Creates the toolbar described below; call after `tulainitialize` |
 | `tulakey(_)` | Window, GLFW key code | Window `"key"` callback: arrow keys pan, `=`/`-` (and keypad `+`/`-`) zoom, `F` fits |
 
-Line input is two canvas clicks; circle input is center then radius point.
-Points snap to the visible minor grid. Drawing units are millimeters; at 1x
-zoom one millimeter is 5 pixels and the origin starts at the lower-left of
-the canvas once the window has been laid out. Zoom is limited to 0.001 to
-1000 pixels per millimeter.
+Line input accepts successive points, creating a segment after each click;
+right-click ends the sequence. Circle input is center then radius point.
+Circle Segment input is center, radius point, then end-angle point (counter-
+clockwise). Spline input accepts three or more control points and saves a clamped
+B-spline (up to cubic), approximated for display. Cursor snapping is off by default.
+The Snap toolbar independently toggles nearest point on entity, adaptive
+grid, endpoints, and intersections; object snaps take priority over grid
+snap within ten screen pixels. Drawing units are millimeters; at 1x zoom
+one millimeter is 5 pixels and the origin starts at the lower-left of the
+canvas once the window has been laid out. Zoom is limited to 0.001 to 1000
+pixels per millimeter.
 
 ## Running and including
 
@@ -32,16 +39,17 @@ in `$ifdef __MAIN__`, so scripts that `$include` `tula.su` keep their own.
 
 ## Toolbar
 
-`tulatoolbar` creates a menu row with compact File and Drawing toolbars
+`tulatoolbar` creates a menu row with compact File, Drawing and Snap toolbars
 starting side by side below it and above the filename box and canvas. The
 **Tools** menu has a checkbox for each toolbar. Drag a dotted grip
-horizontally to reorder them or vertically to move a toolbar to another row;
-hovering over a button shows its full tool name.
+horizontally to reorder toolbars or vertically to move a toolbar to another
+row; hovering over a button shows its full tool name.
 
 | Button | Action |
 |---|---|
 | Open, Save, Save As | File dialogs and the current filename box |
-| Select, Line, Circle | Select or draw; the active drawing tool is shown pressed |
+| Select, Line, Circle, Circle Segment, Spline | Select or draw; the active drawing tool is shown pressed |
+| Snap entity, Snap grid, Snap endpoints, Snap cross | Independently enable the corresponding cursor snap; all start off |
 | Zoom +, Zoom - | `tulazoom` 1.25 / 0.8 about the canvas center |
 | Fit | `tulafit` |
 | Left, Right, Up, Down | `tulapan` by 100 pixels, showing more of the drawing on that side |
