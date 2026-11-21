@@ -48,6 +48,10 @@ struct GLFWwindow
     GLFWkeyfun key;
     GLFWwindowfocusfun focus;
     GLFWscrollfun scroll;
+    GLFWcursorposfun cursor_pos;
+    GLFWwindowrefreshfun refresh;
+    GLFWframebuffersizefun framebuffer_size;
+    int cursor_mode;
     struct GLFWwindow *above;
     struct GLFWwindow *below;
 };
@@ -63,6 +67,7 @@ static struct
     GLFWwindow *top;
     GLFWwindow *focused;
     GLFWwindow *current;
+    GLFWwindow *cursor_window;
     int hint_visible;
     int hint_decorated;
     int cursor_x, cursor_y;
@@ -91,6 +96,8 @@ static int (*glfw_title_draw)(int x, int y, const char *text, int max_width,
 /* the terminal (moscow.c) may take a window's keys: 1 when it did */
 static int (*glfw_key_filter)(GLFWwindow *window, int key, int action, int mods,
                               unsigned codepoint);
+
+static GLFWwindow *glfw_window_at(int x, int y, int *on_bar);
 
 /* --- the hardware */
 
@@ -485,6 +492,9 @@ static const char *glfw_arrow[19] = {
 static void glfw_pointer(void)
 {
     int r, c;
+    if (glfw.cursor_window != NULL &&
+        glfw.cursor_window->cursor_mode == GLFW_CURSOR_HIDDEN)
+        return;
     for (r = 0; r < 19; ++r)
         for (c = 0; glfw_arrow[r][c] != '\0'; ++c)
         {
@@ -680,6 +690,23 @@ static void glfw_raise(GLFWwindow *w)
     glfw.dirty = 1;
 }
 
+static void glfw_cursor_event(void)
+{
+    int on_bar;
+    GLFWwindow *w = glfw_window_at(glfw.cursor_x, glfw.cursor_y, &on_bar);
+    if (on_bar)
+        w = NULL;
+    if (w != glfw.cursor_window)
+    {
+        if (glfw.cursor_window != NULL && glfw.cursor_window->cursor_pos != NULL)
+            glfw.cursor_window->cursor_pos(glfw.cursor_window, -1.0, -1.0);
+        glfw.cursor_window = w;
+    }
+    if (w != NULL && w->cursor_pos != NULL)
+        w->cursor_pos(w, (double)(glfw.cursor_x - w->x),
+                      (double)(glfw.cursor_y - w->y));
+}
+
 /* the top visible window still there, for the focus */
 static GLFWwindow *glfw_topmost(void)
 {
@@ -709,6 +736,8 @@ static int glfw_resize(GLFWwindow *w, int width, int height)
     if (glfw.current == w)
         gl_bind(w, w->pixels, w->width, w->height);
     glfw.dirty = 1;
+    if (w->framebuffer_size != NULL)
+        w->framebuffer_size(w, width, height);
     return 1;
 }
 
@@ -752,6 +781,7 @@ GLFWwindow *glfwCreateWindow(int width, int height, const char *title,
     memcpy(w->title, title, n);
     w->decorated = glfw.hint_decorated;
     w->visible = glfw.hint_visible;
+    w->cursor_mode = GLFW_CURSOR_NORMAL;
     /* in the middle of the screen, a step down and right of a window
      * already there */
     w->x = (glfw.width - w->width) / 2;
@@ -796,6 +826,12 @@ void glfwDestroyWindow(GLFWwindow *w)
         glfw.current = NULL;
     if (glfw.pressed == w)
         glfw.pressed = NULL;
+    if (glfw.cursor_window == w)
+    {
+        if (w->cursor_pos != NULL)
+            w->cursor_pos(w, -1.0, -1.0);
+        glfw.cursor_window = NULL;
+    }
     if (glfw.dragging == w)
         glfw.dragging = NULL;
     if (glfw.focused == w)
@@ -817,6 +853,8 @@ void glfwShowWindow(GLFWwindow *w)
     {
         w->visible = 1;
         glfw_raise(w);
+        if (w->refresh != NULL)
+            w->refresh(w);
     }
 }
 
@@ -828,6 +866,11 @@ void glfwMakeContextCurrent(GLFWwindow *w)
 }
 
 GLFWwindow *glfwGetCurrentContext(void) { return glfw.current; }
+void glfwFocusWindow(GLFWwindow *w)
+{
+    if (w != NULL && w->visible)
+        glfw_raise(w);
+}
 void glfwSwapBuffers(GLFWwindow *w) { if (w->visible) glfw.dirty = 1; }
 void glfwSwapInterval(int interval) { (void)interval; }
 
@@ -860,6 +903,32 @@ void glfwSetWindowAttrib(GLFWwindow *w, int attrib, int value)
     if (attrib == GLFW_DECORATED)
         w->decorated = value;
     glfw.dirty = 1;
+}
+
+int glfwGetWindowAttrib(GLFWwindow *w, int attrib)
+{
+    if (attrib == GLFW_VISIBLE)
+        return w->visible;
+    if (attrib == GLFW_DECORATED)
+        return w->decorated;
+    if (attrib == GLFW_FOCUSED)
+        return w == glfw.focused;
+    return 0;
+}
+
+int glfwGetInputMode(GLFWwindow *w, int mode)
+{
+    return mode == GLFW_CURSOR ? w->cursor_mode : 0;
+}
+
+void glfwSetInputMode(GLFWwindow *w, int mode, int value)
+{
+    if (mode == GLFW_CURSOR &&
+        (value == GLFW_CURSOR_NORMAL || value == GLFW_CURSOR_HIDDEN))
+    {
+        w->cursor_mode = value;
+        glfw.dirty = 1;
+    }
 }
 
 void glfwMaximizeWindow(GLFWwindow *w)
@@ -939,6 +1008,28 @@ GLFWscrollfun glfwSetScrollCallback(GLFWwindow *w, GLFWscrollfun f)
 {
     GLFWscrollfun old = w->scroll;
     w->scroll = f;
+    return old;
+}
+
+GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow *w, GLFWcursorposfun f)
+{
+    GLFWcursorposfun old = w->cursor_pos;
+    w->cursor_pos = f;
+    return old;
+}
+
+GLFWwindowrefreshfun glfwSetWindowRefreshCallback(GLFWwindow *w, GLFWwindowrefreshfun f)
+{
+    GLFWwindowrefreshfun old = w->refresh;
+    w->refresh = f;
+    return old;
+}
+
+GLFWframebuffersizefun glfwSetFramebufferSizeCallback(GLFWwindow *w,
+                                                       GLFWframebuffersizefun f)
+{
+    GLFWframebuffersizefun old = w->framebuffer_size;
+    w->framebuffer_size = f;
     return old;
 }
 
@@ -1174,6 +1265,7 @@ static void glfw_move_to(int x, int y)
         if (glfw.dragging->y < GLFW_TITLE)
             glfw.dragging->y = GLFW_TITLE;
     }
+    glfw_cursor_event();
 }
 
 /* the wheel: z < 0 up, to the window under the pointer */

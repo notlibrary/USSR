@@ -288,8 +288,8 @@ $(NATIVE)/$(SQLITE)/sqlite3.c: $(DL)/$(SQLITE).tar.gz
 	tar -xzf $< -C $(NATIVE)
 	touch $@
 
-URAL_SRC := $(addprefix $(ROOT)/src/ural/native/,ural.c ural_db.c ural_archive.c ural_manifest.c ural_url.c)
-$(NATIVE)/ural: $(URAL_SRC) $(wildcard $(ROOT)/src/ural/native/*.h) $(NATIVE)/$(SQLITE)/sqlite3.c \
+URAL_SRC := $(addprefix $(ROOT)/src/ural/native/,ural.c ural_db.c ural_archive.c ural_manifest.c ural_url.c ural_more.c)
+$(NATIVE)/ural: $(ROOT)/moscow.mk $(URAL_SRC) $(wildcard $(ROOT)/src/ural/native/*.h) $(NATIVE)/$(SQLITE)/sqlite3.c \
 		$(DEPS)/lib/libcurl.a $(DEPS)/lib/libssl.a $(DEPS)/lib/libz.a
 	$(MUSL_GCC) -std=c11 -O2 -fPIE -w -D_GNU_SOURCE -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION \
 	    -DCURL_STATICLIB -I$(DEPS)/include -I$(NATIVE)/$(SQLITE) -I$(ROOT)/src/ural/native $(PIE) -o $@ \

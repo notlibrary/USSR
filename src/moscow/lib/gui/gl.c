@@ -401,6 +401,25 @@ static void gl_vertex(double x, double y)
             gl.n = 0;
         }
         break;
+    case GL_TRIANGLE_STRIP:
+        if (gl.n < 2)
+            gl.v[gl.n++] = v;
+        else
+        {
+            gl_triangle(&gl.v[0], &gl.v[1], &v);
+            gl.v[0] = gl.v[1];
+            gl.v[1] = v;
+        }
+        break;
+    case GL_TRIANGLE_FAN:
+        if (gl.n < 2)
+            gl.v[gl.n++] = v;
+        else
+        {
+            gl_triangle(&gl.v[0], &gl.v[1], &v);
+            gl.v[1] = v;
+        }
+        break;
     case GL_LINES:
         gl.v[gl.n++] = v;
         if (gl.n == 2)

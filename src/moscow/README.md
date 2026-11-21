@@ -46,6 +46,20 @@ release builds, makes that an error. `make -f moscow.mk boot` makes the boot
 image alone, `img` the disk, `iso` the ISO, `clean` all but what was fetched
 and built from it.
 
+On Ubuntu, the full disk build needs these packages:
+
+    sudo apt update
+    sudo apt install build-essential clang lld nasm flex bison perl curl xorriso \
+        cmake pkg-config libsqlite3-dev libcurl4-openssl-dev libssl-dev zlib1g-dev
+    make -f ussr-ubuntu.mk ussr
+    make -f moscow.mk -j"$(nproc)" STRICT=1
+
+Moscow's Petersburg GUI uses its own GLFW-compatible window layer and
+software OpenGL renderer on the VGA framebuffer; it does not need Ubuntu's
+GLFW or Mesa development packages. To build the hosted Linux `ussr` with
+GLFW and OpenGL instead, install `libglfw3-dev libgl1-mesa-dev` and build
+with `make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 ussr`.
+
 `ussr.img` is a raw disk image; write it to a USB stick to boot a real
 PC with a BIOS (or CSM). The BIOS loads the boot files and, when its EDD
 drive parameters identify the boot device as USB, Moscow copies the
