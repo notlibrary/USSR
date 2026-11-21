@@ -211,6 +211,10 @@ EXTRA_DIST = \
 	tula/icons/arc.ppm \
 	tula/icons/circle.ppm \
 	tula/icons/line.ppm \
+	tula/icons/pan-down.ppm \
+	tula/icons/pan-left.ppm \
+	tula/icons/pan-right.ppm \
+	tula/icons/pan-up.ppm \
 	tula/icons/snap-cross.ppm \
 	tula/icons/snap-endpoints.ppm \
 	tula/icons/snap-entity.ppm \

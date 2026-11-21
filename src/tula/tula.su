@@ -1541,6 +1541,10 @@ tula_tb_add(r): bar glyph label callback [
         if(_): {label = "Snap grid"} [ buttonicon(_): r "src/tula/icons/snap-grid.ppm" ]
         if(_): {label = "Snap endpoints"} [ buttonicon(_): r "src/tula/icons/snap-endpoints.ppm" ]
         if(_): {label = "Snap cross"} [ buttonicon(_): r "src/tula/icons/snap-cross.ppm" ]
+        if(_): {label = "Left"} [ buttonicon(_): r "src/tula/icons/pan-left.ppm" ]
+        if(_): {label = "Right"} [ buttonicon(_): r "src/tula/icons/pan-right.ppm" ]
+        if(_): {label = "Up"} [ buttonicon(_): r "src/tula/icons/pan-up.ppm" ]
+        if(_): {label = "Down"} [ buttonicon(_): r "src/tula/icons/pan-down.ppm" ]
         on(_): r "click" callback
         set(_tba_buttons): tula_buttons?
         set(_tba_names): tula_button_names?
