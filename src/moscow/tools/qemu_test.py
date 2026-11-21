@@ -2,7 +2,7 @@
 """Boots build/moscow/ussr.img in QEMU and drives the Russia shell.
 
     python src/moscow/tools/qemu_test.py [--qemu PATH] [--transcript FILE]
-                                         [--accel whpx|kvm] [--no-mbl]
+                                         [--accel whpx|kvm] [--no-usb] [--no-mbl]
                                          [--no-novgorod] [--no-install]
                                          [--no-sata] [--no-uefi]
 
@@ -403,6 +403,35 @@ class Machine:
             self.monitor.sock.close()
 
 
+def usb_boot(qemu, disk, work, port, log, check):
+    """Boot the raw image as a Legacy BIOS USB disk; its root should be RAM."""
+    usb = os.path.join(work, "ussr-usb.img")
+    shutil.copyfile(disk, usb)
+    m = Machine(qemu, [], port, log, extra=[
+        "-usb",
+        "-drive", "if=none,id=usbroot,format=raw,file=" + usb,
+        "-device", "usb-storage,drive=usbroot",
+        "-boot", "order=c",
+    ])
+    try:
+        boot = clean(m.serial.output_to_prompt(timeout=60))
+        check("Legacy BIOS boots the USB disk",
+              "USSR Unified Shell Script REPL" in boot, boot)
+        check("USB boot mounts the Belarus root from RAM",
+              re.search(r"root:    /dev/ram from sector \d+, Belarus 'ussr-install'", boot) is not None,
+              boot)
+        m.serial.command('writefile(_): "/home/usb-ram.txt" "volatile"')
+        m.serial.output_to_prompt()
+        m.serial.command('readfile(v): "/home/usb-ram.txt"\nprint(_): v')
+        got = clean(m.serial.output_to_prompt())
+        check("USB RAM root accepts writes", got == "volatile", repr(got))
+    except (TimeoutError, EOFError) as e:
+        check("Legacy BIOS USB boot conversation", False, str(e))
+    finally:
+        m.close()
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--qemu")
@@ -410,6 +439,8 @@ def main():
     ap.add_argument("--port", type=int, default=45321)
     ap.add_argument("--no-uefi", action="store_true",
                     help="no boot from the ISO under UEFI (OVMF)")
+    ap.add_argument("--no-usb", action="store_true",
+                    help="no Legacy BIOS boot from a USB mass-storage disk")
     ap.add_argument("--no-sata", action="store_true",
                     help="no install onto a SATA (AHCI) disk and boot from it")
     ap.add_argument("--no-install", action="store_true",
@@ -493,6 +524,9 @@ def main():
         check("serial conversation", False, str(e))
     finally:
         m.close()
+
+    if not args.no_usb:
+        failures += usb_boot(qemu, disk, work, args.port + 110, log, check)
 
     if not args.no_mbl:
         mbl(qemu, disk, args.port + 10, log, check)

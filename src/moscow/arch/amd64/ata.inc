@@ -6,7 +6,7 @@
 ; /dev/hda (primary master), /dev/hdb (primary slave), /dev/hdc and
 ; /dev/hdd (secondary), QEMU's -drive index=N the N-th of them; then
 ; /dev/sda, /dev/sdb ... the SATA disks, in the order of their ports; and
-; /dev/ram, the boot image a UEFI loader put in memory (BI_RAMDISK_*): the
+; /dev/ram, a boot image or USB root copied to memory (BI_RAMDISK_*): the
 ; live system's root, as the CD's image is after a BIOS boot.
 ;
 ; Offsets and lengths are in bytes underneath: lba * sector with any
