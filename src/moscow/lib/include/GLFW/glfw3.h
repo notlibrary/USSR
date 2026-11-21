@@ -22,6 +22,8 @@ typedef void GLvoid;
 #define GL_LINE_LOOP 0x0002
 #define GL_LINE_STRIP 0x0003
 #define GL_TRIANGLES 0x0004
+#define GL_TRIANGLE_STRIP 0x0005
+#define GL_TRIANGLE_FAN 0x0006
 #define GL_QUADS 0x0007
 #define GL_COLOR_BUFFER_BIT 0x00004000
 #define GL_MODELVIEW 0x1700
@@ -93,6 +95,9 @@ typedef void (*GLFWcharfun)(GLFWwindow *, unsigned int);
 typedef void (*GLFWkeyfun)(GLFWwindow *, int, int, int, int);
 typedef void (*GLFWwindowfocusfun)(GLFWwindow *, int);
 typedef void (*GLFWscrollfun)(GLFWwindow *, double, double);
+typedef void (*GLFWcursorposfun)(GLFWwindow *, double, double);
+typedef void (*GLFWwindowrefreshfun)(GLFWwindow *);
+typedef void (*GLFWframebuffersizefun)(GLFWwindow *, int, int);
 
 #define GLFW_TRUE 1
 #define GLFW_FALSE 0
@@ -111,6 +116,9 @@ typedef void (*GLFWscrollfun)(GLFWwindow *, double, double);
 #define GLFW_FOCUSED 0x00020001
 #define GLFW_VISIBLE 0x00020004
 #define GLFW_DECORATED 0x00020005
+#define GLFW_CURSOR 0x00033001
+#define GLFW_CURSOR_NORMAL 0x00034001
+#define GLFW_CURSOR_HIDDEN 0x00034002
 #define GLFW_CONTEXT_VERSION_MAJOR 0x00022002
 #define GLFW_CONTEXT_VERSION_MINOR 0x00022003
 
@@ -166,6 +174,7 @@ void glfwSetWindowShouldClose(GLFWwindow *window, int value);
 void glfwShowWindow(GLFWwindow *window);
 void glfwMakeContextCurrent(GLFWwindow *window);
 GLFWwindow *glfwGetCurrentContext(void);
+void glfwFocusWindow(GLFWwindow *window);
 void glfwSwapBuffers(GLFWwindow *window);
 void glfwSwapInterval(int interval);
 void glfwPollEvents(void);
@@ -175,6 +184,9 @@ void glfwGetWindowSize(GLFWwindow *window, int *width, int *height);
 void glfwSetWindowSize(GLFWwindow *window, int width, int height);
 void glfwSetWindowPos(GLFWwindow *window, int x, int y);
 void glfwSetWindowAttrib(GLFWwindow *window, int attrib, int value);
+int glfwGetWindowAttrib(GLFWwindow *window, int attrib);
+int glfwGetInputMode(GLFWwindow *window, int mode);
+void glfwSetInputMode(GLFWwindow *window, int mode, int value);
 void glfwMaximizeWindow(GLFWwindow *window);
 void glfwRestoreWindow(GLFWwindow *window);
 void glfwGetCursorPos(GLFWwindow *window, double *x, double *y);
@@ -187,6 +199,9 @@ GLFWcharfun glfwSetCharCallback(GLFWwindow *window, GLFWcharfun f);
 GLFWkeyfun glfwSetKeyCallback(GLFWwindow *window, GLFWkeyfun f);
 GLFWwindowfocusfun glfwSetWindowFocusCallback(GLFWwindow *window, GLFWwindowfocusfun f);
 GLFWscrollfun glfwSetScrollCallback(GLFWwindow *window, GLFWscrollfun f);
+GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow *window, GLFWcursorposfun f);
+GLFWwindowrefreshfun glfwSetWindowRefreshCallback(GLFWwindow *window, GLFWwindowrefreshfun f);
+GLFWframebuffersizefun glfwSetFramebufferSizeCallback(GLFWwindow *window, GLFWframebuffersizefun f);
 GLFWmonitor *glfwGetPrimaryMonitor(void);
 const GLFWvidmode *glfwGetVideoMode(GLFWmonitor *monitor);
 void glfwGetMonitorPos(GLFWmonitor *monitor, int *x, int *y);
