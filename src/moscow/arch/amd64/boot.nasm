@@ -144,12 +144,18 @@ stage2:
         call enable_a20
         jc .a20_fail
         call read_memory_map
+        mov dword [BOOTINFO + BI_RAMDISK_BASE], 0
+        mov dword [BOOTINFO + BI_RAMDISK_BASE + 4], 0
+        mov dword [BOOTINFO + BI_RAMDISK_BYTES], 0
+        mov dword [BOOTINFO + BI_RAMDISK_BYTES + 4], 0
         movzx eax, byte [boot_drive]
         mov [BOOTINFO + BI_DRIVE], eax
 
         ; from a hard disk the BIOS reads the files
         cmp byte [boot_cd], 0
         jne .page_tables
+        call bios_is_usb
+        mov [bios_usb], al
         call bios_load
         jc stage1_fail
         mov byte [bios_loaded], 1
@@ -345,10 +351,18 @@ bios_load:
         dec ebx
         jmp .file
 .done:
+        cmp byte [bios_usb], 0
+        je .files_end
+        call bios_load_usb_root
+        jc .usb_fail
+.files_end:
         mov eax, [load_at]
         mov [BOOTINFO + BI_FILES_END], eax
         mov dword [BOOTINFO + BI_FILES_END + 4], 0
         clc
+        ret
+.usb_fail:
+        stc
         ret
 .read_fail:
         mov si, msg_bios_read
@@ -368,6 +382,115 @@ bios_read:
         mov dl, [boot_drive]
         int 0x13
         popad
+        ret
+
+; Detect BIOS EDD USB mass storage before the runtime takes over the device.
+bios_is_usb:
+        mov word [EDD_BUFFER], EDD_SIZE
+        mov si, EDD_BUFFER
+        mov ax, 0x4800
+        mov dl, [boot_drive]
+        int 0x13
+        jc .no
+        cmp word [EDD_BUFFER], 46
+        jb .no
+        cmp dword [EDD_BUFFER + 38], 'USB '
+        jne .no
+        mov al, 1
+        ret
+.no:
+        xor al, al
+        ret
+
+; For a USB boot disk, copy its Belarus MBR partition after the loaded
+; programs. The runtime exposes this region as a writable, volatile /dev/ram.
+bios_load_usb_root:
+        mov dword [dap_lba], 0
+        mov dword [dap_lba + 4], 0
+        mov word [dap_count], 1
+        mov word [dap_offset], TOC_BUFFER
+        mov word [dap_segment], 0
+        call bios_read
+        jc .read_fail
+        cmp word [TOC_BUFFER + 510], 0xaa55
+        jne .partition_fail
+        mov si, TOC_BUFFER + 446
+        mov cx, 4
+.partition:
+        cmp byte [si + 4], 0x7f
+        je .found
+        add si, 16
+        loop .partition
+        jmp .partition_fail
+.found:
+        mov eax, [si + 8]
+        mov [usb_root_lba], eax
+        mov eax, [si + 12]
+        test eax, eax
+        jz .partition_fail
+        cmp eax, 0x7fffff
+        ja .memory_fail
+        shl eax, 9
+        mov [usb_root_bytes], eax
+        mov eax, [load_at]
+        add eax, 0xfff
+        and eax, -0x1000
+        mov [usb_root_base], eax
+        add eax, [usb_root_bytes]
+        jc .memory_fail
+        mov [usb_root_end], eax
+
+        ; The entire image must fit in one usable E820 range below 4 GiB.
+        movzx ecx, word [BOOTINFO + BI_NE820]
+        mov di, BOOTINFO + BI_E820
+.memory_range:
+        test ecx, ecx
+        jz .memory_fail
+        cmp dword [di + 16], 1
+        jne .next_range
+        cmp dword [di + 4], 0
+        jne .next_range
+        mov eax, [usb_root_base]
+        cmp eax, [di]
+        jb .next_range
+        mov eax, [di]
+        cmp dword [di + 12], 0
+        jne .has_memory
+        add eax, [di + 8]
+        jc .has_memory
+        cmp eax, [usb_root_end]
+        jae .has_memory
+.next_range:
+        add di, 24
+        dec ecx
+        jmp .memory_range
+.has_memory:
+        mov eax, [usb_root_base]
+        mov [load_at], eax
+        mov eax, [usb_root_lba]
+        mov ecx, [usb_root_bytes]
+        shr ecx, 9
+        call bios_read_high
+        jc .read_fail
+        mov eax, [usb_root_base]
+        mov [BOOTINFO + BI_RAMDISK_BASE], eax
+        mov dword [BOOTINFO + BI_RAMDISK_BASE + 4], 0
+        mov eax, [usb_root_bytes]
+        mov [BOOTINFO + BI_RAMDISK_BYTES], eax
+        mov dword [BOOTINFO + BI_RAMDISK_BYTES + 4], 0
+        clc
+        ret
+.read_fail:
+        mov si, msg_usb_read
+        stc
+        ret
+.partition_fail:
+        mov si, msg_usb_partition
+        stc
+        ret
+.memory_fail:
+        mov si, msg_usb_memory
+        stc
         ret
 
 ; eax = first sector, ecx = sectors -> read through the bounce buffer to
@@ -447,11 +570,19 @@ gdtr:
         dd gdt
 load_at:     dd 0                       ; bios_load: where the next file goes
 bios_loaded: db 0                       ; the files are in memory already
+bios_usb:    db 0
+usb_root_lba: dd 0
+usb_root_bytes: dd 0
+usb_root_base: dd 0
+usb_root_end: dd 0
 
 msg_hello:   db "Moscow boot: stage 2, entering long mode", 13, 10, 0
 msg_a20:     db "Moscow boot: A20 stays off", 13, 10, 0
 msg_bios_read: db "Moscow boot: disk read error (BIOS)", 13, 10, 0
 msg_toc16:   db "Moscow boot: no file table (MOSCOWFS)", 13, 10, 0
+msg_usb_read: db "Moscow boot: cannot read the USB Belarus partition", 13, 10, 0
+msg_usb_partition: db "Moscow boot: USB disk has no Belarus partition", 13, 10, 0
+msg_usb_memory: db "Moscow boot: not enough contiguous RAM for USB root", 13, 10, 0
 
 ; --- long mode ------------------------------------------------------------
 
@@ -476,9 +607,9 @@ long_entry:
         mov [BOOTINFO + BI_CD_BASE], rax
         mov [BOOTINFO + BI_CD_BYTES], rax
         mov [BOOTINFO + BI_RSDP], rax   ; the runtime looks in the BIOS areas
-        ; no framebuffer (VGA text mode is there) and no RAM disk
+        ; no framebuffer (VGA text mode is there)
         mov rdi, BOOTINFO + BI_FB_BASE
-        mov ecx, (BI_END - BI_FB_BASE) / 8
+        mov ecx, (BI_RAMDISK_BASE - BI_FB_BASE) / 8
         rep stosq
         cmp byte [boot_cd], 0
         je .read_table

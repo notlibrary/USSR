@@ -46,11 +46,14 @@ release builds, makes that an error. `make -f moscow.mk boot` makes the boot
 image alone, `img` the disk, `iso` the ISO, `clean` all but what was fetched
 and built from it.
 
-`ussr.img` is a raw disk image; `dd` it to a USB stick to boot a real
-PC with a BIOS (or CSM): the BIOS reads the boot files from whatever it
-boots, and the kernel takes the root from an IDE disk or a SATA disk on
-an AHCI controller (USB and NVMe drivers are not there yet). The
-installer, though, writes only to virtual disks: QEMU's and VirtualBox's.
+`ussr.img` is a raw disk image; write it to a USB stick to boot a real
+PC with a BIOS (or CSM). The BIOS loads the boot files and, when its EDD
+drive parameters identify the boot device as USB, Moscow copies the
+Belarus partition into RAM for `/dev/ram`. This root is writable for that
+boot, but its changes are lost at power-off; it needs enough contiguous
+RAM below 4 GiB. On other BIOS boot devices the root stays on the IDE or
+AHCI SATA disk. Native USB and NVMe storage drivers are not there yet.
+The installer writes only to virtual disks: QEMU's and VirtualBox's.
 
 In VirtualBox: the ISO on an IDE (PIIX4) CD drive, a disk on the SATA
 (AHCI) controller, `install(_):` onto `/dev/sda`, then the ISO out and
