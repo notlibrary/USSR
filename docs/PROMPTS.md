@@ -1142,3 +1142,31 @@ Then integrate petersburg open/save dialog start buttons into toolbars of tula s
 Add 3 image buttons to toolbar `open(folder_icon)` `save(diskette_icon)` and `Save As(no_icon)`
 Each button runs appropriate petersburg dialog
 Dialog blocks io until canceled or answered
+
+Can you make USSR toolbars looks like on the screenshot
+Small square buttons with vertical line divide toolbars and tooltip shows tool name
+which shows on holding cursor on button
+Toolbar must be movable with drag and drop between other toolbars
+Toolbars must be located right below menu bar
+Also for each toolbar add tools menu with toolbar name with 
+checkbox which hide/shows the toolbar do it for tula novosibirsk and siberia
+
+Add snap toolbar to the tula 4 buttons that set binary switches
+1. snap on entity
+2. snap on grid
+3. snap on endpoints
+4. snap on cross
+
+Implement the actual cursor snapping algorithms default is no snap at all
+
+Add part of the circle segment center-radius-angle button
+Add multiple points spline curve used to approximation other curves
+Change default line to work with multiple points
+1. it shows line preview
+2. when user click second point it offers 
+next point to click to create second line segment then third etc until user clicks right button
+
+Add icons for every button Line Circle Circle Segment Spline Snap on 
+
+
+ 
