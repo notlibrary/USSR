@@ -678,46 +678,50 @@ tl_bspline_points(r): degree ctrl steps [
     while(_): {s <= steps} [
         set(u): {s / (steps * 1.0)}
         if(_): {u >= 1} [ set(u): 0.9999999 ]
-        set(x): 0
-        set(y): 0
+        set(span): p
+        while(_): {span < n - 1} [
+            at(next_knot): k {span + 1}
+            if(_): {u < next_knot} [ break(_): "" ]
+            set(span): {span + 1}
+        ]
+        vec(d): ""
         set(j): 0
-        while(_): {j < n} [
-            tl_basis(b): j p u k
-            at(cx): ctrl {2 * j}
-            at(cy): ctrl {2 * j + 1}
-            set(x): {x + b * cx}
-            set(y): {y + b * cy}
+        while(_): {j <= p} [
+            set(index): {span - p + j}
+            at(cx): ctrl {2 * index}
+            at(cy): ctrl {2 * index + 1}
+            push(_): d cx
+            push(_): d cy
             set(j): {j + 1}
         ]
+        set(level): 1
+        while(_): {level <= p} [
+            set(j): p
+            while(_): {j >= level} [
+                set(i0): {span - p + j}
+                set(i1): {span + 1 + j - level}
+                at(k0): k i0
+                at(k1): k i1
+                set(alpha): 0
+                if(_): {k1 > k0} [
+                    set(alpha): {(u - k0) / (k1 - k0)}
+                ]
+                at(x0): d {2 * (j - 1)}
+                at(y0): d {2 * (j - 1) + 1}
+                at(x1): d {2 * j}
+                at(y1): d {2 * j + 1}
+                set(d): {2 * j} {(x0 * (1 - alpha) + x1 * alpha)}
+                set(d): {2 * j + 1} {(y0 * (1 - alpha) + y1 * alpha)}
+                set(j): {j - 1}
+            ]
+            set(level): {level + 1}
+        ]
+        at(x): d {2 * p}
+        at(y): d {2 * p + 1}
         push(_): r x
         push(_): r y
         set(s): {s + 1}
     ]
-]
-
-tl_basis(r): i p u k [
-    if(_): {p = 0} [
-        at(a): k i
-        at(b): k {i + 1}
-        set(r): 0
-        if(_): {u >= a && u < b} [ set(r): 1 ]
-        return(r): r
-    ]
-    at(ki): k i
-    at(kip): k {i + p}
-    at(ki1): k {i + 1}
-    at(kip1): k {i + p + 1}
-    set(left): 0
-    set(right): 0
-    if(_): {kip - ki > 0} [
-        tl_basis(b1): i {p - 1} u k
-        set(left): {(u - ki) / (kip - ki) * b1}
-    ]
-    if(_): {kip1 - ki1 > 0} [
-        tl_basis(b2): {i + 1} {p - 1} u k
-        set(right): {(kip1 - u) / (kip1 - ki1) * b2}
-    ]
-    set(r): {left + right}
 ]
 
 # --- what entities become when drawn: lines, arcs, circles, polylines,
@@ -1576,30 +1580,31 @@ tl_intersect(r): e f [
 
 # object snaps near (x, y) within tol: [x y kind] or null; modes: a list
 # of end mid center int perp tan near; from: [x y] the point drawn from
-# The snap point nearest (x, y) within tol, or null. The points that do
-# not depend on the cursor (end, mid, center, int: every pair of entities;
-# perp and tan from the first point) are kept in the document, indexed by
-# x, until the drawing, the modes or the first point change; a mouse move
-# looks only at the kept points within tol of x, and computes "near" only
-# for entities whose box comes within tol. The same point as checking
-# everything (tl_osnap_slow).
+# The snap point nearest (x, y) within tol, or null. Cursor-free endpoint,
+# midpoint, center, perpendicular and tangent points are indexed by x.
+# Intersections and nearest-point snaps are evaluated only for entities
+# whose bounds contain the cursor neighborhood.
 tl_osnap(r): doc x y tol modes from [
     set(r): null
     btget(es): doc "entities"
     vec(fixed): ""
     set(wnear): false
+    set(wint): false
     len(nm): modes
     set(i): 0
     while(_): {i < nm} [
         at(md): modes i
         if(_): {md = "near"} [ set(wnear): true ]
+        elif(_): {md = "int"} [ set(wint): true ]
         else(_): [ push(_): fixed md ]
         set(i): {i + 1}
     ]
     encode(ek): es
     encode(mk): fixed
     encode(fk): from
-    concat(key): mk "|" fk "|" ek
+    encode(nk): wnear
+    encode(ik): wint
+    concat(key): mk "|" fk "|" ek "|" nk "|" ik
     btget(have): doc "snap_key" ""
     if(_): {have != key} [
         tl_osnap_fixed(pts): es fixed from
@@ -1618,7 +1623,10 @@ tl_osnap(r): doc x y tol modes from [
             set(i): {i + 1}
         ]
         btput(_): doc "snap_index" index
-        tl_osnap_boxes(boxes): es
+        if(_): {wnear || wint} [
+            tl_osnap_boxes(boxes): doc es
+        ]
+        else(_): [ vec(boxes): "" ]
         btput(_): doc "snap_boxes" boxes
         btput(_): doc "snap_key" key
     ]
@@ -1644,6 +1652,19 @@ tl_osnap(r): doc x y tol modes from [
             set(k): {k + 1}
         ]
         set(i): {i + 1}
+    ]
+    if(_): wint [
+        btget(boxes): doc "snap_boxes"
+        tl_osnap_intersections_near(cross): es boxes x y tol best
+        if(_): {cross != null} [
+            at(cx): cross 0
+            at(cy): cross 1
+            tl_dist(d): x y cx cy
+            if(_): {d <= best} [
+                set(best): d
+                set(r): cross
+            ]
+        ]
     ]
     if(_): {wnear = false} [ return(r): r ]
     vec(only): ""
@@ -1682,8 +1703,64 @@ tl_osnap(r): doc x y tol modes from [
     ]
 ]
 
+# Check only entity pairs whose bounds contain the cursor tolerance box.
+tl_osnap_intersections_near(r): es boxes x y tol best [
+    set(r): null
+    len(n): es
+    set(i): 0
+    while(_): {i < n} [
+        at(a): boxes i
+        set(use_a): true
+        if(_): {a != null} [
+            at(x0): a 0
+            at(y0): a 1
+            at(x1): a 2
+            at(y1): a 3
+            set(use_a): {x >= x0 - tol && x <= x1 + tol && y >= y0 - tol && y <= y1 + tol}
+        ]
+        if(_): use_a [
+            at(e): es i
+            set(j): {i + 1}
+            while(_): {j < n} [
+                at(b): boxes j
+                set(use_b): true
+                if(_): {b != null} [
+                    at(x0): b 0
+                    at(y0): b 1
+                    at(x1): b 2
+                    at(y1): b 3
+                    set(use_b): {x >= x0 - tol && x <= x1 + tol && y >= y0 - tol && y <= y1 + tol}
+                ]
+                if(_): use_b [
+                    at(f): es j
+                    tl_intersect(points): e f
+                    len(np): points
+                    set(k): 0
+                    while(_): {k < np} [
+                        at(p): points k
+                        at(px): p 0
+                        at(py): p 1
+                        tl_dist(d): x y px py
+                        if(_): {d <= best} [
+                            set(best): d
+                            vec(c): ""
+                            push(_): c px
+                            push(_): c py
+                            push(_): c "int"
+                            set(r): c
+                        ]
+                        set(k): {k + 1}
+                    ]
+                ]
+                set(j): {j + 1}
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
 # [x0 y0 x1 y1] around each entity (null: always looked at)
-tl_osnap_boxes(r): es [
+tl_osnap_boxes(r): doc es [
     vec(r): ""
     len(n): es
     set(i): 0
@@ -1712,6 +1789,11 @@ tl_osnap_boxes(r): es [
             push(_): b {cx + rad}
             push(_): b {cy + rad}
         ]
+        elif(_): {kind = "POLYLINE" || kind = "SPLINE" || kind = "ELLIPSE" || kind = "HATCH"} [
+            tl_bbox(b): doc e
+            len(nb): b
+            if(_): {nb != 4} [ set(b): null ]
+        ]
         push(_): r b
         set(i): {i + 1}
     ]
@@ -1727,33 +1809,6 @@ tl_osnap_fixed(r): es modes from [
         tl_snap_points(ps): e modes from 0 0
         list_concat(r): r ps
         set(i): {i + 1}
-    ]
-    lenin_has_tl(wint): modes "int"
-    if(_): wint [
-        set(i): 0
-        while(_): {i < n} [
-            at(e): es i
-            set(j): {i + 1}
-            while(_): {j < n} [
-                at(f): es j
-                tl_intersect(ps): e f
-                len(np): ps
-                set(k): 0
-                while(_): {k < np} [
-                    at(p): ps k
-                    at(px): p 0
-                    at(py): p 1
-                    vec(c): ""
-                    push(_): c px
-                    push(_): c py
-                    push(_): c "int"
-                    push(_): r c
-                    set(k): {k + 1}
-                ]
-                set(j): {j + 1}
-            ]
-            set(i): {i + 1}
-        ]
     ]
 ]
 

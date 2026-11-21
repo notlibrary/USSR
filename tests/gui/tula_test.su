@@ -154,6 +154,11 @@ init(result): arg_count arg_values [
     tl_bspline_points(approximation): spline_degree control_points 64
     len(approximation_values): approximation
     check(_): "spline is approximated by a smooth point sequence" {approximation_values > control_point_values} true
+    check(_): "64 spline intervals produce 65 points" approximation_values 130
+    at(mid_x): approximation 64
+    at(mid_y): approximation 65
+    check(_): "quadratic spline midpoint x" mid_x 7.5
+    check(_): "quadratic spline midpoint y" mid_y 2.5
 
     tulatool(_): "line"
     tula_draw_click(_): 0 0

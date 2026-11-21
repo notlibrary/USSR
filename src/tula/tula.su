@@ -498,7 +498,8 @@ tula_draw_click(r): x y [
         tula_redraw(_):
         len(n): anchor
         str_trunc(points): {n / 2}
-        concat(message): "Spline point " points " set; click more points or right-click to finish"
+        str_from_int(points_text): points
+        concat(message): "Spline point " points_text " set; click more points or right-click to finish"
         tula_set_status(_): message
         return(r): r
     ]
