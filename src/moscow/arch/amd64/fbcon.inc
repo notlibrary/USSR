@@ -1,8 +1,8 @@
-; fbcon.inc - the console on a framebuffer, for the Moscow runtime
-; (ussr_rt.nasm includes it): booted from UEFI there is no VGA text mode,
-; so the console's 80x25 cells (character, attribute) go to a page of RAM
+; fbcon.inc - the console on a firmware framebuffer, for the Moscow runtime
+; (ussr_rt.nasm includes it): UEFI GOP or BIOS VBE gives no text mode, so
+; the console's 80x25 cells (character, attribute) go to a page of RAM
 ; shaped as VGA's text memory (vga_mem), and on every tick the cells that
-; changed since are drawn into the GOP framebuffer the loader handed over
+; changed since are drawn into the framebuffer the loader handed over
 ; (BI_FB_*), 8x16 pixels each from fbfont.inc - each pixel a square of
 ; fb_scale, the largest whole number the screen holds 80x25 of (2 on
 ; 1280x800) - in VGA's sixteen colours, the grid in the middle of the
@@ -13,7 +13,7 @@ FB_COLS         equ 80
 FB_ROWS         equ 25
 FB_CELLS        equ FB_COLS * FB_ROWS
 
-; Under UEFI (a framebuffer in the boot information): the console on it.
+; A framebuffer in the boot information: the console on it.
 ; vga_mem is VGA's text memory otherwise. Keeps every register.
 fbcon_init:
         push rax

@@ -216,8 +216,8 @@ gui_native(r): name a [
     if(_): {nw = 0 && (name = "petersburg_create_window" || name = "petersburg_message_box")} [
         gui_on(st):
         if(_): {st < 0} [
-            print(_): "USSR: no display framebuffer (use UEFI GOP or a Bochs VBE adapter)"
-            write_stderr(_): "USSR: no screen for windows (needs UEFI GOP or a Bochs VBE VGA adapter)\n"
+            print(_): "USSR: no display framebuffer (use UEFI GOP, BIOS VBE, or Bochs DISPI)"
+            write_stderr(_): "USSR: no screen for windows (needs UEFI GOP, BIOS VBE, or Bochs DISPI)\n"
             return(r): r
         ]
     ]

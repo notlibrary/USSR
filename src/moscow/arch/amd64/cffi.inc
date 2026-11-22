@@ -137,7 +137,7 @@ c3_rt_end:
 ; moscow_ticks() -> timer ticks, 100 a second; moscow_gui(on) gives the
 ; screen and the PS/2 port to the library (1) or back (0);
 ; moscow_term_raw() -> 1 in terminal_raw's mode; moscow_fb(i) -> the
-; UEFI framebuffer the console is on: 0 its address (0: none, VGA text
+; firmware framebuffer the console is on: 0 its address (0: none, VGA text
 ; mode), 1 width, 2 height, 3 pixels a line, 4 pixel format (1: BGRX)
 c_ticks:
         mov rax, [ticks]

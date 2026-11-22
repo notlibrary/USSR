@@ -11,9 +11,11 @@
  * be on any controller. It loads the files the table lists (the NASM
  * USSR runtime first) from 1 MiB up, as boot.nasm does; from a CD the
  * whole image too, wherever the firmware has room below 4 GiB, a RAM disk
- * (/dev/ram) the kernel takes as its root. What the loader allocated
- * (EfiLoaderData: the files, the RAM disk, the low pages) is reserved in
- * the memory map the kernel gets, so its heap stays off it. Then the GOP framebuffer (the console draws on it: UEFI has no
+ * (/dev/ram) the kernel takes as its root. The files and RAM disk are
+ * EfiLoaderData, reserved in the memory map so the kernel's heap stays off
+ * them. After boot services end, the kernel takes over its fixed low pages,
+ * which UEFI may reserve and cannot be allocated through AllocateAddress.
+ * Then the GOP framebuffer (the console draws on it: UEFI has no
  * VGA text mode), ACPI's RSDP, and the memory map in BIOS e820 form go
  * into the boot information block at 0x500; boot services end; the
  * identity page tables for the first 4 GiB go to 0x1000 as boot.nasm
@@ -543,7 +545,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
     u8 toc[512];
     u32 nfiles, i;
     u64 at, files_end, image_bytes = 0, ram = 0;
-    u64 low = 0x1000, region, pages;
+    u64 region, pages;
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
     UINTN map_size, map_key, desc_size, k;
     u32 desc_version;
@@ -593,8 +595,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
                                         (image_bytes + 4095) / 4096, &ram)))
             fail("no memory for the image");
     }
-    if (EFI_ERROR(bs->AllocatePages(AllocateAddress, EfiLoaderData, (RT_STACK_TOP - 0x1000) / 4096, &low)))
-        fail("the memory below 512 KiB is taken");
+    /* The kernel takes over its fixed low-memory tables and stack after
+     * ExitBootServices. UEFI firmware commonly reserves these legacy pages,
+     * so requiring AllocateAddress here rejects otherwise bootable systems. */
     at = RT_BASE;
     pages = (region - RT_BASE + 4095) / 4096;
     if (EFI_ERROR(bs->AllocatePages(AllocateAddress, EfiLoaderData, pages, &at)))

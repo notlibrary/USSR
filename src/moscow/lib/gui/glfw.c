@@ -1,12 +1,12 @@
 /* glfw.c - GLFW 3 for Moscow: a window system on the machine itself.
  *
- * The screen is the Bochs/QEMU standard VGA's linear framebuffer (PCI
- * 1234:1111, the DISPI registers at ports 0x1ce/0x1cf) at 32 bits a
- * pixel. The picture starts 256 KiB into video memory so that VGA text
- * mode's planes (the characters and the font) are left alone, and
- * gui_video_stop gives text mode back. The PS/2 controller is read here
- * while the GUI is on: keys become GLFW key codes and characters, the
- * mouse (a wheel mouse when it answers as one) moves a pointer.
+ * The screen is the firmware's linear framebuffer (UEFI GOP or BIOS VBE),
+ * or Bochs/QEMU standard VGA's DISPI framebuffer at 32 bits a pixel. The
+ * latter starts 256 KiB into video memory so VGA text mode stays intact;
+ * gui_video_stop returns the screen to the kernel console. The PS/2
+ * controller is read here while the GUI is on: keys become GLFW key codes
+ * and characters, the mouse (a wheel mouse when it answers as one) moves a
+ * pointer.
  *
  * Each window has its own pixels, which gl.c draws into; glfwPollEvents
  * delivers input and puts the windows on the screen, bottom to top, the
@@ -22,8 +22,8 @@
 /* the kernel's (arch/amd64/cffi.inc) */
 extern long moscow_ticks(void);
 extern void moscow_gui(long on);
-/* the UEFI framebuffer the console is on: 0 its address (0: VGA text
- * mode), 1 width, 2 height, 3 pixels a line */
+/* the firmware framebuffer the console is on: 0 its address (0: VGA
+ * text mode), 1 width, 2 height, 3 pixels a line */
 extern long moscow_fb(long which);
 
 static unsigned char petersburg_glyph(char character, int row);
@@ -64,7 +64,7 @@ static struct
     int first_row;          /* rows of video memory before the picture */
     int lfb_stride;
     int lfb_bgrx;
-    int uefi_framebuffer;
+    int firmware_framebuffer;
     uint32_t *screen;       /* composed here, then copied */
     GLFWwindow *bottom;
     GLFWwindow *top;
@@ -341,17 +341,17 @@ static void vmmouse_stop(void)
 
 /* --- starting and stopping */
 
-/* the picture: width x height at 32 bits; Bochs VBE or the UEFI framebuffer */
+/* the picture: width x height at 32 bits; Bochs VBE or firmware framebuffer */
 long gui_video_start(long width, long height)
 {
     uintptr_t lfb;
     long fb_width, fb_height, fb_stride, fb_format;
-    int id, uefi;
+    int id, firmware_framebuffer;
 
     if (glfw.on)
         return 0;
-    uefi = moscow_fb(0) != 0;
-    if (uefi)
+    firmware_framebuffer = moscow_fb(0) != 0;
+    if (firmware_framebuffer)
     {
         lfb = (uintptr_t)moscow_fb(0);
         fb_width = moscow_fb(1);
@@ -381,12 +381,12 @@ long gui_video_start(long width, long height)
         return -1;
     glfw.width = (int)width;
     glfw.height = (int)height;
-    glfw.uefi_framebuffer = uefi;
+    glfw.firmware_framebuffer = firmware_framebuffer;
     glfw.lfb_stride = (int)fb_stride;
     glfw.lfb_bgrx = (fb_format == 1);
-    glfw.first_row = uefi ? 0
+    glfw.first_row = firmware_framebuffer ? 0
                           : (int)((256 * 1024 + width * 4 - 1) / (width * 4));
-    if (!uefi)
+    if (!firmware_framebuffer)
     {
         dispi(4, 0);
         dispi(1, (int)width);
@@ -420,7 +420,7 @@ long gui_video_stop(void)
         return 0;
     vmmouse_stop();
     ps2_mouse(0xf5);
-    if (!glfw.uefi_framebuffer)
+    if (!glfw.firmware_framebuffer)
     {
         dispi(4, 0);
         vga_text_mode();
