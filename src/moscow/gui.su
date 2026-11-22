@@ -152,7 +152,7 @@ gui_size(r): text [
     set(r): 0
 ]
 
-# the screen graphic: 0, or -1 (no /lib/gui.so, no Bochs VGA)
+# the screen graphic: 0, or -1 (no /lib/gui.so or supported framebuffer)
 gui_on(r): [
     set(r): -1
     if(_): {gui_lib = null} [ return(r): r ]
@@ -216,7 +216,8 @@ gui_native(r): name a [
     if(_): {nw = 0 && (name = "petersburg_create_window" || name = "petersburg_message_box")} [
         gui_on(st):
         if(_): {st < 0} [
-            write_stderr(_): "USSR: no screen for windows (a VGA with VBE is needed: QEMU's standard VGA, VirtualBox's VBoxVGA, VMSVGA or VBoxSVGA)\n"
+            print(_): "USSR: no display framebuffer (use UEFI GOP or a Bochs VBE adapter)"
+            write_stderr(_): "USSR: no screen for windows (needs UEFI GOP or a Bochs VBE VGA adapter)\n"
             return(r): r
         ]
     ]
