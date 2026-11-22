@@ -688,16 +688,25 @@ serial_init:
         out dx, al                      ; DTR, RTS
         ret
 
-; UEFI need not leave the 8042 keyboard port enabled or translate scan
+; Firmware need not leave the 8042 keyboard port enabled or translate scan
 ; codes to set 1, which con_fill expects. Polling needs no keyboard IRQ.
 kbd_init:
         push rbx
-        mov ecx, 0x10000
+        mov ecx, 64
+.flush:
+        in al, 0x64
+        test al, 1
+        jz .wait_write
+        in al, 0x60
+        loop .flush
+        jmp .done
 .wait_write:
+        mov ecx, 0x10000
+.wait_command_write:
         in al, 0x64
         test al, 2
         jz .read_config
-        loop .wait_write
+        loop .wait_command_write
         jmp .done
 .read_config:
         mov al, 0x20
@@ -706,11 +715,17 @@ kbd_init:
 .wait_config:
         in al, 0x64
         test al, 1
-        jnz .got_config
+        jz .config_again
+        test al, 0x20                  ; discard a pending mouse byte
+        jnz .discard_config_byte
+        in al, 0x60
+        jmp .got_config
+.discard_config_byte:
+        in al, 0x60
+.config_again:
         loop .wait_config
         jmp .done
 .got_config:
-        in al, 0x60
         or al, 0x40                    ; translate keyboard scan codes to set 1
         and al, 0xec                   ; enable keyboard clock, disable PS/2 IRQs
         mov bl, al
@@ -745,24 +760,39 @@ kbd_init:
         mov al, 0xae
         out 0x64, al
         mov ecx, 0x10000
-.wait_command_write:
+.wait_enable_command:
         in al, 0x64
         test al, 2
         jz .enable_scanning
-        loop .wait_command_write
+        loop .wait_enable_command
         jmp .done
 .enable_scanning:
+        mov ecx, 0x10000
+.wait_keyboard_write:
+        in al, 0x64
+        test al, 2
+        jz .send_scanning
+        loop .wait_keyboard_write
+        jmp .done
+.send_scanning:
         mov al, 0xf4
         out 0x60, al
         mov ecx, 0x10000
 .wait_ack:
         in al, 0x64
         test al, 1
-        jnz .read_ack
+        jz .ack_again
+        test al, 0x20
+        jnz .discard_ack_byte
+        in al, 0x60
+        cmp al, 0xfa
+        je .done
+        jmp .done
+.discard_ack_byte:
+        in al, 0x60
+.ack_again:
         loop .wait_ack
         jmp .done
-.read_ack:
-        in al, 0x60
 .done:
         pop rbx
         ret

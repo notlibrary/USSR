@@ -59,7 +59,7 @@ BI_CD_DRIVE     equ 0x808               ; u64: the boot CD's IDE position + 1, o
 BI_CD_BASE      equ 0x810               ; u64: the image's first 2048-byte block on it
 BI_CD_BYTES     equ 0x818               ; u64: the image's size
 BI_RSDP         equ 0x820               ; u64: ACPI's RSDP from a UEFI loader, or 0
-; The GOP framebuffer the console draws on (no VGA text mode under UEFI),
+; The firmware framebuffer the console draws on (UEFI GOP or BIOS VBE),
 ; or 0; 32 bits a pixel
 BI_FB_BASE      equ 0x828               ; u64: its address, or 0
 BI_FB_WIDTH     equ 0x830               ; u64: pixels

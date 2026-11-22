@@ -55,11 +55,11 @@ On Ubuntu, the full disk build needs these packages:
     make -f moscow.mk -j"$(nproc)" STRICT=1
 
 Moscow's Petersburg GUI uses its own GLFW-compatible window layer and
-software OpenGL renderer on a Bochs VBE framebuffer or the UEFI GOP
-framebuffer; it does not need Ubuntu's GLFW or Mesa development packages.
-For Kremlin on physical hardware, boot the UEFI-enabled ISO rather than
-the BIOS-only raw image, because most physical GPUs do not provide Bochs
-VBE. The UEFI live root is volatile. To build the hosted Linux `ussr` with
+software OpenGL renderer on a firmware framebuffer (UEFI GOP or BIOS VBE),
+with Bochs DISPI as a fallback; it does not need Ubuntu's GLFW or Mesa
+development packages. For Kremlin on physical hardware, boot the
+UEFI-enabled ISO to use GOP; BIOS mode depends on the video adapter's VBE
+support. The UEFI live root is volatile. To build the hosted Linux `ussr` with
 GLFW and OpenGL instead, install `libglfw3-dev libgl1-mesa-dev` and build
 with `make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 ussr`.
 
@@ -127,11 +127,12 @@ as from a BIOS boot and gives the screen back to the console when it ends.
 qemu-system-x86_64 -m 2048 -bios edk2-x86_64-code.fd -cdrom USSR050.ISO   # or pflash, as OVMF likes
 ```
 
-In VirtualBox, "Enable EFI" in the machine's System settings boots it the same way.
-A disk Moscow is installed on boots from the BIOS (or CSM) only, as yet: the
-installer does not make an EFI system partition. Under the BIOS the CD drive must be
-on IDE (a CD on SATA boots, but stage 2 does not find it). It boots in QEMU and
-VirtualBox, from BIOS and UEFI.
+In VirtualBox, enable **System > Motherboard > Enable EFI** to boot the ISO using
+GOP, as on UEFI hardware. With EFI off, the BIOS loader uses VBE mode
+1024x768x32 when the adapter provides it; Kremlin otherwise requires a Bochs VBE
+adapter. For a BIOS boot, the CD drive must be on IDE (a CD on SATA boots, but
+stage 2 does not find it). A disk Moscow is installed on boots from the BIOS (or
+CSM) only, as yet: the installer does not make an EFI system partition.
 
 ## Installing
 
@@ -378,11 +379,10 @@ what it takes from a hosted system there:
 - `lib/gui/gl.c`: OpenGL 1.1 in software, the part Petersburg draws
   with (quads, lines, alpha textures for TrueType glyphs, glDrawPixels,
   scissor);
-- `lib/gui/glfw.c`: GLFW on the machine: the linear framebuffer at 32
-  bits of a display adapter with the Bochs VBE registers - QEMU's
-  standard VGA, or VirtualBox's VMSVGA, VBoxSVGA and VBoxVGA, all three
-  tried - set up through them (the picture starts 256 KiB into video
-  memory, so text mode comes back intact), the PS/2 keyboard as GLFW
+- `lib/gui/glfw.c`: GLFW on the machine: the firmware framebuffer (GOP
+  under UEFI, VBE mode 1024x768x32 under BIOS), or the Bochs DISPI
+  framebuffer at 32 bits (the picture starts 256 KiB into video memory,
+  so text mode comes back intact); the PS/2 keyboard as GLFW
   key codes and the mouse: QEMU's vmmouse (VMware's backdoor port
   0x5658) when there is one, which gives the pointer's place, so it
   follows the host's pointer in and out of QEMU's window without a grab;

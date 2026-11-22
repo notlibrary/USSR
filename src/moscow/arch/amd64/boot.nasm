@@ -160,6 +160,7 @@ stage2:
         jc stage1_fail
         mov byte [bios_loaded], 1
 .page_tables:
+        call bios_video
 
         ; identity map the first 4 GiB with 2 MiB pages
         cld
@@ -291,6 +292,7 @@ read_memory_map:
 
 BOUNCE_SEG      equ 0x2000              ; 0x20000, under 1 MiB, in one 64 KiB
 BOUNCE_SECTORS  equ 64
+VBE_MODE_INFO   equ 0x7300
 
 ; The file table to TOC_BUFFER, every file it lists from RT_BASE up (each
 ; on a FILE_ALIGN boundary), and the boot information for them, as the
@@ -494,6 +496,116 @@ bios_load_usb_root:
         stc
         ret
 
+; Use the standard 1024x768x32 VBE linear-framebuffer mode when present.
+; The runtime can then use the same framebuffer for the console and GUI as
+; it does under UEFI; otherwise it falls back to VGA text and Bochs DISPI.
+bios_video:
+        pushad
+        push ds
+        push es
+        xor ax, ax
+        mov ds, ax
+        mov es, ax
+        mov dword [BOOTINFO + BI_FB_BASE], 0
+        mov dword [BOOTINFO + BI_FB_BASE + 4], 0
+        mov dword [BOOTINFO + BI_FB_WIDTH], 0
+        mov dword [BOOTINFO + BI_FB_WIDTH + 4], 0
+        mov dword [BOOTINFO + BI_FB_HEIGHT], 0
+        mov dword [BOOTINFO + BI_FB_HEIGHT + 4], 0
+        mov dword [BOOTINFO + BI_FB_STRIDE], 0
+        mov dword [BOOTINFO + BI_FB_STRIDE + 4], 0
+        mov dword [BOOTINFO + BI_FB_FORMAT], 0
+        mov dword [BOOTINFO + BI_FB_FORMAT + 4], 0
+
+        mov ax, 0x4f01
+        mov cx, 0x118
+        mov di, VBE_MODE_INFO
+        int 0x10
+        cmp ax, 0x004f
+        jne .done
+        xor ax, ax
+        mov ds, ax
+        mov ax, [VBE_MODE_INFO]
+        and ax, 0x0091                 ; supported, graphics, linear framebuffer
+        cmp ax, 0x0091
+        jne .done
+        cmp word [VBE_MODE_INFO + 18], 1024
+        jne .done
+        cmp word [VBE_MODE_INFO + 20], 768
+        jne .done
+        cmp byte [VBE_MODE_INFO + 24], 1 ; one plane
+        jne .done
+        cmp byte [VBE_MODE_INFO + 25], 32
+        jne .done
+        cmp byte [VBE_MODE_INFO + 27], 6 ; direct color
+        jne .done
+        cmp byte [VBE_MODE_INFO + 31], 8
+        jne .done
+        cmp byte [VBE_MODE_INFO + 33], 8
+        jne .done
+        cmp byte [VBE_MODE_INFO + 34], 8
+        jne .done
+        cmp byte [VBE_MODE_INFO + 35], 8
+        jne .done
+        mov ax, [VBE_MODE_INFO + 16]
+        cmp ax, 4096
+        jb .done
+        test ax, 3
+        jnz .done
+        mov eax, [VBE_MODE_INFO + 40]
+        test eax, eax
+        jz .done
+        mov ebx, eax
+        movzx eax, word [VBE_MODE_INFO + 16]
+        movzx ecx, word [VBE_MODE_INFO + 20]
+        mul ecx
+        test edx, edx
+        jnz .done
+        add eax, ebx
+        jc .done
+        cmp byte [VBE_MODE_INFO + 32], 16 ; red at 16, blue at 0: BGRX
+        je .bgrx
+        cmp byte [VBE_MODE_INFO + 32], 0  ; red at 0, blue at 16: RGBX
+        jne .done
+        cmp byte [VBE_MODE_INFO + 36], 16
+        jne .done
+        xor ebx, ebx
+        mov byte [vbe_format], 0
+        jmp .set_mode
+.bgrx:
+        cmp byte [VBE_MODE_INFO + 36], 0
+        jne .done
+        mov byte [vbe_format], 1
+.set_mode:
+        mov ax, 0x4f02
+        mov bx, 0x4118                 ; 1024x768x32, linear framebuffer
+        int 0x10
+        cmp ax, 0x004f
+        jne .done
+        xor ax, ax
+        mov ds, ax
+        mov eax, [VBE_MODE_INFO + 40]
+        mov [BOOTINFO + BI_FB_BASE], eax
+        mov dword [BOOTINFO + BI_FB_BASE + 4], 0
+        movzx eax, word [VBE_MODE_INFO + 18]
+        mov [BOOTINFO + BI_FB_WIDTH], eax
+        mov dword [BOOTINFO + BI_FB_WIDTH + 4], 0
+        movzx eax, word [VBE_MODE_INFO + 20]
+        mov [BOOTINFO + BI_FB_HEIGHT], eax
+        mov dword [BOOTINFO + BI_FB_HEIGHT + 4], 0
+        movzx eax, word [VBE_MODE_INFO + 16]
+        shr eax, 2
+        mov [BOOTINFO + BI_FB_STRIDE], eax
+        mov dword [BOOTINFO + BI_FB_STRIDE + 4], 0
+        movzx eax, byte [vbe_format]
+        mov [BOOTINFO + BI_FB_FORMAT], eax
+        mov dword [BOOTINFO + BI_FB_FORMAT + 4], 0
+.done:
+        pop es
+        pop ds
+        popad
+        ret
+
 ; eax = first sector, ecx = sectors -> read through the bounce buffer to
 ; load_at and on (load_at moves past them). CF set on an error.
 bios_read_high:
@@ -576,6 +688,7 @@ usb_root_lba: dd 0
 usb_root_bytes: dd 0
 usb_root_base: dd 0
 usb_root_end: dd 0
+vbe_format: db 0
 
 msg_hello:   db "Moscow boot: stage 2, entering long mode", 13, 10, 0
 msg_a20:     db "Moscow boot: A20 stays off", 13, 10, 0
@@ -608,10 +721,7 @@ long_entry:
         mov [BOOTINFO + BI_CD_BASE], rax
         mov [BOOTINFO + BI_CD_BYTES], rax
         mov [BOOTINFO + BI_RSDP], rax   ; the runtime looks in the BIOS areas
-        ; no framebuffer (VGA text mode is there)
-        mov rdi, BOOTINFO + BI_FB_BASE
-        mov ecx, (BI_RAMDISK_BASE - BI_FB_BASE) / 8
-        rep stosq
+        ; bios_video filled BI_FB_* when VBE supplied a linear framebuffer
         cmp byte [boot_cd], 0
         je .read_table
         call cd_find

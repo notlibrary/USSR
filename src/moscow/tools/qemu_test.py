@@ -487,7 +487,7 @@ def main():
     shutil.copyfile(IMAGE, disk)
 
     # --- 1. the shell on the install disk
-    m = Machine(qemu, [(disk, "raw")], args.port, log)
+    m = Machine(qemu, [(disk, "raw")], args.port, log, monitor=args.port + 1)
     serial = m.serial
     try:
         boot = clean(serial.output_to_prompt(timeout=60))
@@ -502,6 +502,13 @@ def main():
               "net:     e1000 52:54:00:12:34:56, 10.0.2.15/24 (DHCP), gateway 10.0.2.2" in boot, boot)
         check("Murmansk loads its rules",
               "fw:      Murmansk, 3 rules from /etc/murmansk.rules; in deny, out allow" in boot, boot)
+        m.keys('print(_): "keyboard-ok"\n')
+        try:
+            got = clean(serial.output_to_prompt(timeout=20))
+        except (TimeoutError, EOFError):
+            got = ""
+        check("Legacy BIOS keyboard input reaches the shell",
+              "keyboard-ok" in got, repr(got))
         for line, want in CHECKS:
             serial.command(line)
             got = clean(serial.output_to_prompt())
