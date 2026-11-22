@@ -118,6 +118,8 @@ fbcon_sync:
         push rdi
         push r8
         cld
+        cmp qword [fb_on], 0
+        je .out
         cmp qword [fb_wipe], 0
         je .cells
         ; the GUI gave the screen back: all of it black first

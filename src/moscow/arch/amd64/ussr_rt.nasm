@@ -208,6 +208,17 @@ start:
         mov qword [vga_attr], 0x07
         mov qword [vga_base], 0x07
 
+        call fbcon_init                 ; make UEFI handoff progress visible
+        call vga_clear
+        mov esi, msg_boot_entered
+        call boot_progress
+        call serial_init
+        mov esi, msg_boot_serial
+        call boot_progress
+        call kbd_init
+        mov esi, msg_boot_keyboard
+        call boot_progress
+
         ; SSE: no FPU emulation, monitor coprocessor, OSFXSR, OSXMMEXCPT
         mov rax, cr0
         and ax, 0xfffb
@@ -217,20 +228,22 @@ start:
         or ax, 3 << 9
         mov cr4, rax
 
-        call serial_init
-        call kbd_init
-        call fbcon_init                 ; from UEFI: the console on its framebuffer
-        call vga_clear
         call gdt_init
         call acpi_init
         call idt_init
+        mov esi, msg_boot_platform
+        call boot_progress
         call native_init
         call heap_init
         call cffi_init
+        mov esi, msg_boot_memory
+        call boot_progress
         call ata_init
         call net_init
         call env_init
         sti
+        mov esi, msg_boot_devices
+        call boot_progress
 
         PUTS msg_start
         mov esi, name_moscow
@@ -242,6 +255,15 @@ start:
         call print_int
         PUTS msg_halted
         jmp sys_halt
+
+; esi = boot progress line. Draw synchronously so a pre-timer hang remains
+; visible on the UEFI framebuffer; the same line goes to COM1 when present.
+boot_progress:
+        push rsi
+        call con_puts
+        call fbcon_sync
+        pop rsi
+        ret
 
 
 ; The environment a session starts with.
@@ -7629,6 +7651,12 @@ s_inf:          db "inf", 0
 s_nan:          db "nan", 0
 
 msg_start:      db "USSR runtime: NASM VM for amd64, running moscow.ru", 10, 0
+msg_boot_entered: db "Moscow runtime: entered", 10, 0
+msg_boot_serial: db "Moscow runtime: serial ready", 10, 0
+msg_boot_keyboard: db "Moscow runtime: keyboard ready", 10, 0
+msg_boot_platform: db "Moscow runtime: platform ready", 10, 0
+msg_boot_memory: db "Moscow runtime: memory ready", 10, 0
+msg_boot_devices: db "Moscow runtime: devices ready", 10, 0
 msg_ended:      db "USSR runtime: moscow.ru ended with status ", 0
 msg_halted:     db "; halted", 10, 0
 msg_oom:        db 10, "USSR runtime: out of memory; halted", 10, 0
