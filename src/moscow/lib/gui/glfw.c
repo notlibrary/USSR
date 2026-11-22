@@ -62,6 +62,9 @@ static struct
     uint32_t *lfb;
     int width, height;
     int first_row;          /* rows of video memory before the picture */
+    int lfb_stride;
+    int lfb_bgrx;
+    int uefi_framebuffer;
     uint32_t *screen;       /* composed here, then copied */
     GLFWwindow *bottom;
     GLFWwindow *top;
@@ -338,34 +341,64 @@ static void vmmouse_stop(void)
 
 /* --- starting and stopping */
 
-/* the picture: width x height at 32 bits; 0, or -1 without a Bochs VGA */
+/* the picture: width x height at 32 bits; Bochs VBE or the UEFI framebuffer */
 long gui_video_start(long width, long height)
 {
     uintptr_t lfb;
-    int id;
+    long fb_width, fb_height, fb_stride, fb_format;
+    int id, uefi;
 
     if (glfw.on)
         return 0;
-    id = dispi_get(0);
-    lfb = vga_lfb();
-    if (id < 0xb0c0 || id > 0xb0cf || lfb == 0)
-        return -1;
+    uefi = moscow_fb(0) != 0;
+    if (uefi)
+    {
+        lfb = (uintptr_t)moscow_fb(0);
+        fb_width = moscow_fb(1);
+        fb_height = moscow_fb(2);
+        fb_stride = moscow_fb(3);
+        fb_format = moscow_fb(4);
+        if (lfb == 0 || fb_width < 1 || fb_width > 8192 ||
+            fb_height < 1 || fb_height > 8192 ||
+            fb_stride < fb_width || fb_stride > 8192 ||
+            (fb_format != 0 && fb_format != 1))
+            return -1;
+        width = fb_width;
+        height = fb_height;
+    }
+    else
+    {
+        id = dispi_get(0);
+        lfb = vga_lfb();
+        if (id < 0xb0c0 || id > 0xb0cf || lfb == 0 ||
+            width < 1 || width > 8192 || height < 1 || height > 8192)
+            return -1;
+        fb_stride = width;
+        fb_format = 1;
+    }
     glfw.screen = malloc((size_t)width * height * 4);
     if (glfw.screen == NULL)
         return -1;
     glfw.width = (int)width;
     glfw.height = (int)height;
-    glfw.first_row = (int)((256 * 1024 + width * 4 - 1) / (width * 4));
-    dispi(4, 0);
-    dispi(1, (int)width);
-    dispi(2, (int)height);
-    dispi(3, 32);
-    dispi(4, 0x01 | 0x40 | 0x80);       /* on, linear, memory kept */
-    dispi(6, (int)width);
-    dispi(7, (int)height + glfw.first_row);
-    dispi(8, 0);
-    dispi(9, glfw.first_row);
-    glfw.lfb = (uint32_t *)(lfb + (uintptr_t)glfw.first_row * width * 4);
+    glfw.uefi_framebuffer = uefi;
+    glfw.lfb_stride = (int)fb_stride;
+    glfw.lfb_bgrx = (fb_format == 1);
+    glfw.first_row = uefi ? 0
+                          : (int)((256 * 1024 + width * 4 - 1) / (width * 4));
+    if (!uefi)
+    {
+        dispi(4, 0);
+        dispi(1, (int)width);
+        dispi(2, (int)height);
+        dispi(3, 32);
+        dispi(4, 0x01 | 0x40 | 0x80);   /* on, linear, memory kept */
+        dispi(6, (int)width);
+        dispi(7, (int)height + glfw.first_row);
+        dispi(8, 0);
+        dispi(9, glfw.first_row);
+    }
+    glfw.lfb = (uint32_t *)(lfb + (uintptr_t)glfw.first_row * fb_stride * 4);
     glfw.mode.width = (int)width;
     glfw.mode.height = (int)height;
     glfw.mode.redBits = glfw.mode.greenBits = glfw.mode.blueBits = 8;
@@ -387,22 +420,11 @@ long gui_video_stop(void)
         return 0;
     vmmouse_stop();
     ps2_mouse(0xf5);
-    dispi(4, 0);
-    if (moscow_fb(0) != 0)
+    if (!glfw.uefi_framebuffer)
     {
-        /* booted from UEFI: no text mode to go back to, but the
-         * framebuffer the console draws on, as the firmware set it */
-        dispi(1, (int)moscow_fb(1));
-        dispi(2, (int)moscow_fb(2));
-        dispi(3, 32);
-        dispi(6, (int)moscow_fb(3));
-        dispi(7, (int)moscow_fb(2));
-        dispi(8, 0);
-        dispi(9, 0);
-        dispi(4, 0x01 | 0x40 | 0x80);   /* on, linear, memory kept */
-    }
-    else
+        dispi(4, 0);
         vga_text_mode();
+    }
     free(glfw.screen);
     glfw.screen = NULL;
     glfw.on = 0;
@@ -626,8 +648,18 @@ static void glfw_present(void)
     glfw_switcher_draw();
     glfw_pointer();
     for (r = 0; r < glfw.height; ++r)
-        memcpy(glfw.lfb + (size_t)r * glfw.width, glfw.screen + (size_t)r * glfw.width,
-               (size_t)glfw.width * 4);
+    {
+        uint32_t *dst = glfw.lfb + (size_t)r * glfw.lfb_stride;
+        const uint32_t *src = glfw.screen + (size_t)r * glfw.width;
+        int c;
+        if (glfw.lfb_bgrx)
+            memcpy(dst, src, (size_t)glfw.width * 4);
+        else
+            for (c = 0; c < glfw.width; ++c)
+                dst[c] = (src[c] << 16 & 0x00ff0000) |
+                         (src[c] & 0x0000ff00) |
+                         (src[c] >> 16 & 0x000000ff);
+    }
     glfw.dirty = 0;
 }
 

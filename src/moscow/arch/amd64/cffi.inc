@@ -138,7 +138,7 @@ c3_rt_end:
 ; screen and the PS/2 port to the library (1) or back (0);
 ; moscow_term_raw() -> 1 in terminal_raw's mode; moscow_fb(i) -> the
 ; UEFI framebuffer the console is on: 0 its address (0: none, VGA text
-; mode), 1 width, 2 height, 3 pixels a line
+; mode), 1 width, 2 height, 3 pixels a line, 4 pixel format (1: BGRX)
 c_ticks:
         mov rax, [ticks]
         ret
@@ -155,6 +155,12 @@ c_fb:
         xor eax, eax
         cmp qword [fb_on], 0
         je .out
+        cmp rdi, 4
+        jne .dimensions
+        mov rsi, [boot_info]
+        mov rax, [rsi + BI_FB_FORMAT]
+        jmp .out
+.dimensions:
         cmp rdi, 3
         ja .out
         mov rax, [fb_base + rdi * 8]    ; fb_base, fb_width, fb_height, fb_stride

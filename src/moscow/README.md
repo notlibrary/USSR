@@ -55,8 +55,11 @@ On Ubuntu, the full disk build needs these packages:
     make -f moscow.mk -j"$(nproc)" STRICT=1
 
 Moscow's Petersburg GUI uses its own GLFW-compatible window layer and
-software OpenGL renderer on the VGA framebuffer; it does not need Ubuntu's
-GLFW or Mesa development packages. To build the hosted Linux `ussr` with
+software OpenGL renderer on a Bochs VBE framebuffer or the UEFI GOP
+framebuffer; it does not need Ubuntu's GLFW or Mesa development packages.
+For Kremlin on physical hardware, boot the UEFI-enabled ISO rather than
+the BIOS-only raw image, because most physical GPUs do not provide Bochs
+VBE. The UEFI live root is volatile. To build the hosted Linux `ussr` with
 GLFW and OpenGL instead, install `libglfw3-dev libgl1-mesa-dev` and build
 with `make -f ussr-ubuntu.mk -j"$(nproc)" PETERSBURG_BUNDLE=1 ussr`.
 
