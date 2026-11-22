@@ -150,6 +150,37 @@ typedef struct EFI_BLOCK_IO_PROTOCOL
     EFI_STATUS (EFIAPI *ReadBlocks)(struct EFI_BLOCK_IO_PROTOCOL *, u32, u64, UINTN, void *);
 } EFI_BLOCK_IO_PROTOCOL;
 
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+typedef EFI_STATUS (EFIAPI *EFI_FILE_OPEN)(
+    EFI_FILE_PROTOCOL *, EFI_FILE_PROTOCOL **, CHAR16 *, u64, u64);
+typedef EFI_STATUS (EFIAPI *EFI_FILE_CLOSE)(EFI_FILE_PROTOCOL *);
+typedef EFI_STATUS (EFIAPI *EFI_FILE_READ)(
+    EFI_FILE_PROTOCOL *, UINTN *, void *);
+typedef EFI_STATUS (EFIAPI *EFI_FILE_SET_POSITION)(EFI_FILE_PROTOCOL *, u64);
+
+struct EFI_FILE_PROTOCOL
+{
+    u64 Revision;
+    EFI_FILE_OPEN Open;
+    EFI_FILE_CLOSE Close;
+    void *Delete;
+    EFI_FILE_READ Read;
+    void *Write;
+    void *GetPosition;
+    EFI_FILE_SET_POSITION SetPosition;
+    void *GetInfo;
+    void *SetInfo;
+    void *Flush;
+};
+
+typedef struct EFI_SIMPLE_FILE_SYSTEM_PROTOCOL EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
+struct EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+{
+    u64 Revision;
+    EFI_STATUS (EFIAPI *OpenVolume)(
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *, EFI_FILE_PROTOCOL **);
+};
+
 typedef struct
 {
     u32 Version, HorizontalResolution, VerticalResolution, PixelFormat;
@@ -173,6 +204,7 @@ typedef struct
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
 static EFI_GUID block_io_guid = { 0x964e5b21, 0x6459, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+static EFI_GUID simple_fs_guid = { 0x964e5b22, 0x6459, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
 static EFI_GUID gop_guid = { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } };
 static EFI_GUID acpi20_guid = { 0x8868e871, 0xe4f1, 0x11d3, { 0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81 } };
 static EFI_GUID acpi10_guid = { 0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } };
@@ -289,8 +321,10 @@ static EFI_STATUS fail(const char *why)
 typedef struct
 {
     EFI_BLOCK_IO_PROTOCOL *io;
+    EFI_FILE_PROTOCOL *file;
     u64 base;               /* its first byte on the device */
-    int cd;                 /* on a CD: loaded whole, the RAM disk */
+    int cd;
+    int ram;                /* loaded whole, the RAM disk */
 } image_t;
 
 static u8 *scratch;         /* 64 KiB, page aligned */
@@ -310,6 +344,19 @@ static int read_bytes(EFI_BLOCK_IO_PROTOCOL *io, u64 offset, UINTN n, void *dst)
     return 1;
 }
 
+static int image_read(const image_t *img, u64 offset, UINTN n, void *dst)
+{
+    if (img->file != 0)
+    {
+        UINTN bytes = n;
+        if (EFI_ERROR(img->file->SetPosition(img->file, offset)) ||
+            EFI_ERROR(img->file->Read(img->file, &bytes, dst)))
+            return 0;
+        return bytes == n;
+    }
+    return read_bytes(img->io, offset, n, dst);
+}
+
 /* a device holding the image: at its start (a disk), or where its El
  * Torito BIOS entry lies (a CD) */
 static int image_on(EFI_BLOCK_IO_PROTOCOL *io, image_t *img)
@@ -319,11 +366,13 @@ static int image_on(EFI_BLOCK_IO_PROTOCOL *io, image_t *img)
     if (!io->Media->MediaPresent || io->Media->LogicalPartition)
         return 0;
     img->io = io;
+    img->file = 0;
     if (bs_ == 512 && read_bytes(io, (u64)TOC_LBA * 512, 512, sector) &&
         same(sector, "MOSCOWFS", 8))
     {
         img->base = 0;
         img->cd = 0;
+        img->ram = 0;
         return 1;
     }
     if (bs_ == 2048 && read_bytes(io, 17 * 2048, 2048, sector) && sector[0] == 0 &&
@@ -339,9 +388,40 @@ static int image_on(EFI_BLOCK_IO_PROTOCOL *io, image_t *img)
             return 0;
         img->base = (u64)rba * 2048;
         img->cd = 1;
+        img->ram = 1;
         return 1;
     }
     return 0;
+}
+
+static int image_file_on(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs, image_t *img)
+{
+    static CHAR16 path[] = {
+        '\\', 'b', 'o', 'o', 't', '\\', 'u', 's', 's', 'r', '.', 'i', 'm', 'g', 0
+    };
+    EFI_FILE_PROTOCOL *root = 0, *file = 0;
+    u8 sector[512];
+    if (EFI_ERROR(fs->OpenVolume(fs, &root)) || root == 0)
+        return 0;
+    if (EFI_ERROR(root->Open(root, &file, path, 1, 0)) || file == 0)
+    {
+        root->Close(root);
+        return 0;
+    }
+    root->Close(root);
+    img->io = 0;
+    img->file = file;
+    img->base = 0;
+    img->cd = 0;
+    img->ram = 1;
+    if (!image_read(img, (u64)TOC_LBA * 512, sizeof(sector), sector) ||
+        !same(sector, "MOSCOWFS", 8))
+    {
+        file->Close(file);
+        img->file = 0;
+        return 0;
+    }
+    return 1;
 }
 
 static void find_image(image_t *img)
@@ -370,7 +450,19 @@ static void find_image(image_t *img)
     else if (disk.io)
         *img = disk;
     else
-        fail("no Moscow image (MOSCOWFS) on the disks or CDs");
+    {
+        if (EFI_ERROR(bs->LocateHandleBuffer(ByProtocol, &simple_fs_guid, 0, &n, &handles)))
+            fail("no Moscow image (MOSCOWFS) on the disks, CDs or EFI filesystems");
+        for (i = 0; i < n; ++i)
+        {
+            EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
+            if (EFI_ERROR(bs->HandleProtocol(handles[i], &simple_fs_guid, (void **)&fs)))
+                continue;
+            if (image_file_on(fs, img))
+                return;
+        }
+        fail("no Moscow image (MOSCOWFS) on the disks, CDs or \\boot\\ussr.img");
+    }
 }
 
 /* --- after boot services: the boot information, the tables, the jump */
@@ -468,10 +560,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
         fail("no memory for a buffer");
     scratch = (u8 *)scratch_at;
     find_image(&img);
-    say(img.cd ? "Moscow UEFI: the image on the CD\n" : "Moscow UEFI: the image on a disk\n");
+    say(img.file != 0 ? "Moscow UEFI: the image file on an EFI filesystem\n" :
+        img.cd ? "Moscow UEFI: the image on the CD\n" : "Moscow UEFI: the image on a disk\n");
 
     /* the file table */
-    if (!read_bytes(img.io, img.base + (u64)TOC_LBA * 512, 512, toc))
+    if (!image_read(&img, img.base + (u64)TOC_LBA * 512, 512, toc))
         fail("cannot read the file table");
     nfiles = *(u32 *)(toc + 8);
     if (nfiles == 0 || nfiles > TOC_MAX)
@@ -483,10 +576,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
         u8 *e = toc + 16 + i * 32;
         files_end += ((u64) * (u32 *)(e + 24) * 512 + FILE_ALIGN - 1) & ~(u64)(FILE_ALIGN - 1);
     }
-    if (img.cd)
+    if (img.ram)
     {
         u8 mbr[512];
-        if (!read_bytes(img.io, img.base, 512, mbr) || mbr[510] != 0x55 || mbr[511] != 0xaa)
+        if (!image_read(&img, img.base, 512, mbr) || mbr[510] != 0x55 || mbr[511] != 0xaa)
             fail("the image has no partition table");
         image_bytes = ((u64) * (u32 *)(mbr + 446 + 8) + *(u32 *)(mbr + 446 + 12)) * 512;
     }
@@ -523,26 +616,31 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
         while (off < total)
         {
             UINTN n = total - off > 32768 ? 32768 : (UINTN)(total - off);
-            if (!read_bytes(img.io, img.base + (u64)lba * 512 + off, n, (u8 *)(at + off)))
+            if (!image_read(&img, img.base + (u64)lba * 512 + off, n, (u8 *)(at + off)))
                 fail("cannot read a file");
             off += n;
         }
         at += (total + FILE_ALIGN - 1) & ~(u64)(FILE_ALIGN - 1);
     }
-    if (img.cd)
+    if (img.ram)
     {
-        /* the whole image, a RAM disk; 2048-byte blocks straight in */
+        /* the whole disk image, a RAM disk */
         u64 off = 0;
         say("Moscow UEFI: the image into memory\n");
         while (off < image_bytes)
         {
             UINTN n = image_bytes - off > 32768 ? 32768 : (UINTN)(image_bytes - off);
-            if (!read_bytes(img.io, img.base + off, n, (u8 *)(ram + off)))
+            if (!image_read(&img, img.base + off, n, (u8 *)(ram + off)))
                 fail("cannot read the image");
             off += n;
         }
         *(u64 *)(bootinfo + BI_RAMDISK_BASE) = ram;
         *(u64 *)(bootinfo + BI_RAMDISK_BYTES) = image_bytes;
+    }
+    if (img.file != 0)
+    {
+        img.file->Close(img.file);
+        img.file = 0;
     }
     *(u64 *)(bootinfo + BI_FILES_END) = at;
 
