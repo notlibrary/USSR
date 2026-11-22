@@ -114,8 +114,10 @@ qemu-system-x86_64 -m 2048 -cdrom USSR050.ISO
 It boots from UEFI too: a second El Torito entry, `/boot/efiboot.img`, is an EFI
 system partition (FAT12, made by `tools/mkesp.su`) with `\EFI\BOOT\BOOTX64.EFI`, the
 UEFI loader (`efi/loader.c`). The loader finds the image through the firmware, so the
-CD drive may be on any controller, loads the boot files from it and the whole image
-into memory: the kernel's root is that RAM disk, `/dev/ram`, writes and all, gone at
+CD drive may be on any controller. When Rufus writes the ISO in its recommended
+ISO Image mode, the UEFI loader also searches EFI-readable filesystems for
+`\boot\ussr.img`, loads its boot files and copies the whole image into memory:
+the kernel's root is that RAM disk, `/dev/ram`, writes and all, gone at
 the next boot as from the CD. UEFI has no VGA text mode, so the console draws on the
 firmware's framebuffer (GOP), 80x25 cells in an 8x16 font made from Pobeda
 (`arch/amd64/fbfont.inc`, by `tools/fbfont.py`), scaled to the screen; Kremlin runs

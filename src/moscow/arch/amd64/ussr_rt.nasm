@@ -218,6 +218,7 @@ start:
         mov cr4, rax
 
         call serial_init
+        call kbd_init
         call fbcon_init                 ; from UEFI: the console on its framebuffer
         call vga_clear
         call gdt_init
@@ -685,6 +686,85 @@ serial_init:
         mov dx, COM1 + 4
         mov al, 3
         out dx, al                      ; DTR, RTS
+        ret
+
+; UEFI need not leave the 8042 keyboard port enabled or translate scan
+; codes to set 1, which con_fill expects. Polling needs no keyboard IRQ.
+kbd_init:
+        push rbx
+        mov ecx, 0x10000
+.wait_write:
+        in al, 0x64
+        test al, 2
+        jz .read_config
+        loop .wait_write
+        jmp .done
+.read_config:
+        mov al, 0x20
+        out 0x64, al
+        mov ecx, 0x10000
+.wait_config:
+        in al, 0x64
+        test al, 1
+        jnz .got_config
+        loop .wait_config
+        jmp .done
+.got_config:
+        in al, 0x60
+        or al, 0x40                    ; translate keyboard scan codes to set 1
+        and al, 0xec                   ; enable keyboard clock, disable PS/2 IRQs
+        mov bl, al
+        mov ecx, 0x10000
+.wait_config_write:
+        in al, 0x64
+        test al, 2
+        jz .write_config
+        loop .wait_config_write
+        jmp .done
+.write_config:
+        mov al, 0x60
+        out 0x64, al
+        mov ecx, 0x10000
+.wait_config_data:
+        in al, 0x64
+        test al, 2
+        jz .write_config_data
+        loop .wait_config_data
+        jmp .done
+.write_config_data:
+        mov al, bl
+        out 0x60, al
+        mov ecx, 0x10000
+.wait_enable_write:
+        in al, 0x64
+        test al, 2
+        jz .enable_keyboard
+        loop .wait_enable_write
+        jmp .done
+.enable_keyboard:
+        mov al, 0xae
+        out 0x64, al
+        mov ecx, 0x10000
+.wait_command_write:
+        in al, 0x64
+        test al, 2
+        jz .enable_scanning
+        loop .wait_command_write
+        jmp .done
+.enable_scanning:
+        mov al, 0xf4
+        out 0x60, al
+        mov ecx, 0x10000
+.wait_ack:
+        in al, 0x64
+        test al, 1
+        jnz .read_ack
+        loop .wait_ack
+        jmp .done
+.read_ack:
+        in al, 0x60
+.done:
+        pop rbx
         ret
 
 ; al -> COM1 as is
