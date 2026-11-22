@@ -240,7 +240,7 @@ ANSWERS = [
 
 
 # sendkey names of the characters the GUI checks type
-SENDKEY = {" ": "spc", "(": "shift-9", ")": "shift-0", "_": "shift-minus",
+SENDKEY = {" ": "spc", "-": "minus", "(": "shift-9", ")": "shift-0", "_": "shift-minus",
            ":": "shift-semicolon", '"': "shift-apostrophe", ".": "dot",
            "/": "slash", "\n": "ret"}
 
