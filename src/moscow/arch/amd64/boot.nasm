@@ -392,9 +392,10 @@ bios_is_usb:
         mov dl, [boot_drive]
         int 0x13
         jc .no
-        cmp word [EDD_BUFFER], 46
+        cmp word [EDD_BUFFER], 48
         jb .no
-        cmp dword [EDD_BUFFER + 38], 'USB '
+        ; EDD 3.0: interface_type starts at byte 40 (host_bus_type at 36).
+        cmp dword [EDD_BUFFER + 40], 'USB '
         jne .no
         mov al, 1
         ret
