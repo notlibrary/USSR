@@ -513,6 +513,12 @@ static u32 e820_type(u32 efi)
 }
 
 static u8 bootinfo[BI_END];
+static u64 runtime_handoff;
+static const u8 runtime_handoff_code[] = {
+    0x0f, 0x22, 0xd8,             /* mov cr3, rax */
+    0x48, 0x89, 0xcc,             /* mov rsp, rcx */
+    0xff, 0xe2                    /* jmp rdx */
+};
 
 static void __attribute__((noreturn)) start_runtime(void)
 {
@@ -528,11 +534,12 @@ static void __attribute__((noreturn)) start_runtime(void)
         pd[i] = (i << 21) | 0x83;
     __asm__ volatile(
         "cli\n"
-        "mov %0, %%cr3\n"
-        "mov %1, %%rsp\n"
-        "jmp *%2\n"
-        : : "r"((u64)PAGE_PML4), "r"((u64)RT_STACK_TOP), "r"((u64)RT_BASE), "D"((u64)BOOTINFO)
-        : "memory");
+        "mov $0x1000, %%rax\n"
+        "mov $0x80000, %%rcx\n"
+        "mov $0x100000, %%rdx\n"
+        "mov $0x500, %%rdi\n"
+        "jmp *%0\n"
+        : : "r"(runtime_handoff) : "rax", "rcx", "rdx", "rdi", "memory");
     for (;;)
         ;
 }
@@ -561,6 +568,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
     if (EFI_ERROR(bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, 16, &scratch_at)))
         fail("no memory for a buffer");
     scratch = (u8 *)scratch_at;
+    runtime_handoff = 0xffffffff;
+    if (EFI_ERROR(bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, 1, &runtime_handoff)))
+        fail("no memory for the runtime handoff");
+    memcpy((void *)runtime_handoff, runtime_handoff_code, sizeof(runtime_handoff_code));
     find_image(&img);
     say(img.file != 0 ? "Moscow UEFI: the image file on an EFI filesystem\n" :
         img.cd ? "Moscow UEFI: the image on the CD\n" : "Moscow UEFI: the image on a disk\n");
@@ -647,15 +658,22 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
     }
     *(u64 *)(bootinfo + BI_FILES_END) = at;
 
-    /* the screen: GOP's framebuffer, 32 bits a pixel */
+    /* the screen: GOP's framebuffer, identity-mapped by the runtime up to 64 GiB */
     if (!EFI_ERROR(bs->LocateProtocol(&gop_guid, 0, (void **)&gop)) && gop && gop->Mode &&
-        gop->Mode->Info && gop->Mode->Info->PixelFormat <= 1 && gop->Mode->FrameBufferBase < 0x100000000ULL)
+        gop->Mode->Info && gop->Mode->Info->PixelFormat <= 1 &&
+        gop->Mode->Info->PixelsPerScanLine >= gop->Mode->Info->HorizontalResolution &&
+        gop->Mode->Info->VerticalResolution != 0 &&
+        gop->Mode->FrameBufferBase < (64ULL << 30) &&
+        (u64)gop->Mode->Info->PixelsPerScanLine <=
+            ((64ULL << 30) - gop->Mode->FrameBufferBase) /
+            ((u64)gop->Mode->Info->VerticalResolution * 4))
     {
         *(u64 *)(bootinfo + BI_FB_BASE) = gop->Mode->FrameBufferBase;
         *(u64 *)(bootinfo + BI_FB_WIDTH) = gop->Mode->Info->HorizontalResolution;
         *(u64 *)(bootinfo + BI_FB_HEIGHT) = gop->Mode->Info->VerticalResolution;
         *(u64 *)(bootinfo + BI_FB_STRIDE) = gop->Mode->Info->PixelsPerScanLine;
         *(u64 *)(bootinfo + BI_FB_FORMAT) = gop->Mode->Info->PixelFormat;   /* 1: BGRX */
+        say_hex("Moscow UEFI: framebuffer at ", gop->Mode->FrameBufferBase);
     }
     else
         say("Moscow UEFI: no framebuffer: the console is COM1 only\n");

@@ -208,16 +208,8 @@ start:
         mov qword [vga_attr], 0x07
         mov qword [vga_base], 0x07
 
-        call fbcon_init                 ; make UEFI handoff progress visible
-        call vga_clear
-        mov esi, msg_boot_entered
-        call boot_progress
         call serial_init
-        mov esi, msg_boot_serial
-        call boot_progress
         call kbd_init
-        mov esi, msg_boot_keyboard
-        call boot_progress
 
         ; SSE: no FPU emulation, monitor coprocessor, OSFXSR, OSXMMEXCPT
         mov rax, cr0
@@ -231,13 +223,21 @@ start:
         call gdt_init
         call acpi_init
         call idt_init
-        mov esi, msg_boot_platform
-        call boot_progress
         call native_init
         call heap_init
-        call cffi_init
+        call fbcon_init                 ; heap_init maps GOP addresses above 4 GiB
+        call vga_clear
+        mov esi, msg_boot_entered
+        call boot_progress
+        mov esi, msg_boot_serial
+        call boot_progress
+        mov esi, msg_boot_keyboard
+        call boot_progress
+        mov esi, msg_boot_platform
+        call boot_progress
         mov esi, msg_boot_memory
         call boot_progress
+        call cffi_init
         call ata_init
         call net_init
         call env_init
@@ -397,6 +397,23 @@ heap_init:
         mov r10, rax
 .top_ok:
         mov [ram_top], r10
+        ; GOP may put its BAR above 4 GiB. Keep usable RAM as the heap
+        ; limit, but identity-map the framebuffer before drawing on it.
+        mov rsi, [boot_info]
+        mov rax, [rsi + BI_FB_BASE]
+        test rax, rax
+        jz .map_top
+        mov rdx, [rsi + BI_FB_STRIDE]
+        imul rdx, [rsi + BI_FB_HEIGHT]
+        shl rdx, 2
+        add rax, rdx
+        mov rdx, 64 << 30
+        cmp rax, rdx
+        ja .map_top
+        cmp rax, r10
+        jbe .map_top
+        mov r10, rax
+.map_top:
         mov rax, MAP_LIMIT
         cmp r10, rax
         jbe .mapped
