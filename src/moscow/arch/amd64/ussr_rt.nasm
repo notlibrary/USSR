@@ -686,6 +686,31 @@ serial_init:
         mov dx, COM1 + 4
         mov al, 3
         out dx, al                      ; DTR, RTS
+        ; Detect a UART with its internal loopback, not the transmitter
+        ; empty bit: an unmapped port can read as 0xff and mask the keyboard.
+        mov al, 0x1e
+        out dx, al
+        mov dx, COM1
+        mov al, 0xae
+        out dx, al
+        mov ecx, 0x10000
+.loopback:
+        mov dx, COM1 + 5
+        in al, dx
+        test al, 1
+        jnz .loopback_read
+        loop .loopback
+        jmp .loopback_done
+.loopback_read:
+        mov dx, COM1
+        in al, dx
+        cmp al, 0xae
+        jne .loopback_done
+        mov qword [serial_on], 1
+.loopback_done:
+        mov dx, COM1 + 4
+        mov al, 3
+        out dx, al
         ret
 
 ; Firmware need not leave the 8042 keyboard port enabled or translate scan
@@ -799,17 +824,30 @@ kbd_init:
 
 ; al -> COM1 as is
 serial_raw:
+        cmp qword [serial_on], 0
+        je .out
         push rdx
+        push rcx
         push rax
         mov dx, COM1 + 5
+        mov ecx, 0x10000
 .wait:
         in al, dx
         test al, 0x20
-        jz .wait
+        jnz .send
+        loop .wait
+        mov qword [serial_on], 0
+        pop rax                         ; no UART: keep the display/keyboard alive
+        pop rcx
+        pop rdx
+        ret
+.send:
         pop rax
         mov dx, COM1
         out dx, al
+        pop rcx
         pop rdx
+.out:
         ret
 
 ; dil -> both screens; "\n" is CR LF on the serial line. Keeps registers.
@@ -1472,6 +1510,8 @@ con_fill:
         push rax
         push rcx
         push rsi
+        cmp qword [serial_on], 0
+        je .keyboard
         mov dx, COM1 + 5
         in al, dx
         test al, 1
@@ -7932,6 +7972,7 @@ apic_on:        resq 1                  ; apic.inc: the tick from the local APIC
 lapic_base:     resq 1
 lapic_count:    resq 1
 ioapic_count:   resq 1
+serial_on:      resq 1                  ; serial_init: COM1 passed loopback
 vga_mem:        resq 1                  ; the console's cells: VGA's, or fb_text
 fb_on:          resq 1                  ; fbcon.inc: the console on a framebuffer
 fb_base:        resq 1
