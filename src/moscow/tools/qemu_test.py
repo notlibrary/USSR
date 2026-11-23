@@ -38,7 +38,9 @@ alone from it after (--no-sata skips this).
 Then UEFI: the ISO under OVMF, UEFI firmware for QEMU (its edk2 file next
 to QEMU, or /usr/share/OVMF): BOOTX64.EFI loads Moscow, whose root is the
 image in memory and whose console is the framebuffer; Kremlin runs and
-gives the screen back (--no-uefi skips this).
+gives the screen back (--no-uefi skips this). The xHCI tests also boot a
+minimal UEFI image with PS/2 disabled. Use --xhci-only to run just those
+tests after building the boot image and BOOTX64.EFI.
 Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
@@ -386,14 +388,18 @@ class Machine:
         w, h = (int(x) for x in size.split())
         return w, h, rest
 
-    def keys(self, text):
-        """Types text on the PS/2 keyboard (QEMU's sendkey)."""
+    def keys(self, text, hold_ms=None):
+        """Types text on the emulated keyboard (QEMU's sendkey)."""
         for ch in text:
             name = SENDKEY.get(ch)
             if name is None:
                 name = "shift-" + ch.lower() if ch.isupper() else ch
-            self.monitor_command("sendkey " + name)
-            time.sleep(0.05)
+            if hold_ms is None:
+                self.monitor_command("sendkey " + name)
+                time.sleep(0.05)
+            else:
+                self.monitor_command("sendkey %s %d" % (name, hold_ms))
+                time.sleep((hold_ms + 30) / 1000)
 
     def close(self):
         if self.proc.poll() is None:
@@ -438,7 +444,9 @@ def main():
     ap.add_argument("--transcript")
     ap.add_argument("--port", type=int, default=45321)
     ap.add_argument("--no-uefi", action="store_true",
-                    help="no boot from the ISO under UEFI (OVMF)")
+                    help="skip UEFI (OVMF) boots")
+    ap.add_argument("--xhci-only", action="store_true",
+                    help="run only the UEFI xHCI keyboard tests")
     ap.add_argument("--no-usb", action="store_true",
                     help="no Legacy BIOS boot from a USB mass-storage disk")
     ap.add_argument("--no-sata", action="store_true",
@@ -466,9 +474,6 @@ def main():
     global ACCEL
     ACCEL = args.accel
     sys.stdout.reconfigure(errors="backslashreplace")
-    if not os.path.exists(IMAGE):
-        print("no %s: run make -f moscow.mk first" % IMAGE)
-        return 2
     qemu = find_qemu(args.qemu)
     log = []
     failures = 0
@@ -481,6 +486,17 @@ def main():
             if detail:
                 print(detail)
 
+    if args.xhci_only:
+        with tempfile.TemporaryDirectory(prefix="moscow_xhci_") as work:
+            ran = uefi_xhci(qemu, work, args.port, log, check)
+        if args.transcript:
+            with open(args.transcript, "wb") as f:
+                f.write(b"".join(log))
+        return int(bool(failures)) if ran else 2
+
+    if not os.path.exists(IMAGE):
+        print("no %s: run make -f moscow.mk first" % IMAGE)
+        return 2
     # a copy, so the checks' writes leave the built disk as it was
     work = tempfile.mkdtemp(prefix="moscow_test_")
     disk = os.path.join(work, "ussr.img")
@@ -558,6 +574,7 @@ def main():
         sata(qemu, disk, work, args.port + 95, log, check)
     if not args.no_uefi:
         uefi(qemu, work, args.port + 100, log, check)
+        uefi_xhci(qemu, work, args.port + 120, log, check)
 
     if args.transcript:
         with open(args.transcript, "wb") as f:
@@ -1768,6 +1785,70 @@ def find_ovmf(qemu):
     return None
 
 
+def uefi_drives(firmware, variables):
+    code, store = firmware
+    drives = ["-drive", "if=pflash,format=raw,readonly=on,file=" + code.replace(chr(92), "/")]
+    if store:
+        shutil.copyfile(store, variables)
+        drives += ["-drive", "if=pflash,format=raw,file=" + variables.replace(chr(92), "/")]
+    return drives
+
+
+def uefi_xhci(qemu, work, port, log, check):
+    firmware = find_ovmf(qemu)
+    boot_image = os.path.join(ROOT, "build", "moscow", "moscow.img")
+    loader = os.path.join(ROOT, "build", "moscow", "efi", "BOOTX64.EFI")
+    if firmware is None or not all(os.path.isfile(p) for p in (boot_image, loader)):
+        print("SKIP xHCI test needs OVMF, moscow.img and BOOTX64.EFI")
+        return False
+
+    esp = os.path.join(work, "xhci-esp")
+    os.makedirs(os.path.join(esp, "EFI", "BOOT"))
+    os.mkdir(os.path.join(esp, "boot"))
+    shutil.copyfile(loader, os.path.join(esp, "EFI", "BOOT", "BOOTX64.EFI"))
+    shutil.copyfile(boot_image, os.path.join(esp, "boot", "ussr.img"))
+    for keyboard in (True, False):
+        variables = os.path.join(work, "xhci_vars_%d.fd" % keyboard)
+        extra = uefi_drives(firmware, variables) + [
+            "-machine", "q35,i8042=off",
+            "-drive", "format=raw,file=fat:rw:" + esp.replace(chr(92), "/"),
+            "-device", "qemu-xhci,id=xhci",
+            "-device", "usb-mouse,bus=xhci.0,port=1",
+        ]
+        if keyboard:
+            extra += ["-device", "usb-kbd,bus=xhci.0,port=2"]
+        label = "UEFI xHCI keyboard" if keyboard else "UEFI without a keyboard"
+        try:
+            m = Machine(qemu, [], port, log, monitor=port + 1, extra=extra)
+        except (OSError, EOFError) as e:
+            check(label, False, str(e))
+            continue
+        try:
+            boot = clean(m.serial.output_to_prompt(timeout=60))
+            ready = "Moscow runtime: xHCI USB keyboard ready" in boot
+            check(label + " reaches the shell", ready == keyboard, boot)
+            if keyboard:
+                # A long line exercises both the transfer and event ring wrap.
+                m.keys('print(_): "USB-keyboard-ok-after-ring-wraz', hold_ms=40)
+                m.monitor_command("sendkey ctrl-h 40")
+                time.sleep(0.15)
+                m.keys('p"\n', hold_ms=40)
+                got = clean(m.serial.output_to_prompt())
+                check("UEFI xHCI keystrokes and Ctrl-H execute a shell command",
+                      "USB-keyboard-ok-after-ring-wrap" in got.splitlines(), got)
+            else:
+                m.serial.command('print(_): "serial-ok"')
+                got = clean(m.serial.output_to_prompt())
+                check("UEFI serial input works without a keyboard",
+                      "serial-ok" in got.splitlines(), got)
+        except (TimeoutError, EOFError) as e:
+            check(label, False, str(e))
+        finally:
+            m.close()
+        port += 2
+    return True
+
+
 def uefi(qemu, work, port, log, check):
     """The ISO under UEFI (OVMF): BOOTX64.EFI from the ISO's EFI system partition
     loads Moscow; the root is the image in memory (/dev/ram), the console the
@@ -1779,12 +1860,7 @@ def uefi(qemu, work, port, log, check):
     if fw is None:
         print("SKIP no OVMF (UEFI for QEMU): install ovmf")
         return
-    code, store = fw
-    extra = ["-drive", "if=pflash,format=raw,readonly=on,file=" + code.replace(chr(92), "/")]
-    if store:
-        copy = os.path.join(work, "ovmf_vars.fd")
-        shutil.copyfile(store, copy)
-        extra += ["-drive", "if=pflash,format=raw,file=" + copy.replace(chr(92), "/")]
+    extra = uefi_drives(fw, os.path.join(work, "ovmf_vars.fd"))
     m = Machine(qemu, [], port, log, monitor=port + 1, cdrom=ISO, extra=extra)
     serial = m.serial
     try:

@@ -526,16 +526,10 @@ input_ready:
         mov rax, [kq_head]
         cmp rax, [kq_tail]
         jne .yes
-        mov dx, COM1 + 5
-        in al, dx
-        test al, 1
-        jnz .yes
-        cmp qword [gui_on], 0
-        jne .no
-        in al, 0x64
-        test al, 1
-        jnz .yes
-.no:
+        call con_fill
+        mov rax, [kq_head]
+        cmp rax, [kq_tail]
+        jne .yes
         pop rdx
         pop rax
         stc

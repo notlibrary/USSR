@@ -20,7 +20,7 @@
 #                          image (arch/amd64/ata.inc)
 #
 # What a piece needs, and what happens without it:
-#   nasm, ussr                 always (NASM= and USSR= override)
+#   nasm, ussr, C toolchain    the runtime and its native xHCI driver
 #   clang, ld.lld              /lib/ctest.so, gui.so and tls.so (BearSSL,
 #                              fetched once); CLANG= and LLD= override
 #   Linux, gcc, flex, bison,   /bin/ussr, /bin/ural and /bin/moscow_native:
@@ -133,6 +133,17 @@ $(DL)/$(CACERT):
 # --- the boot image
 
 ARCH_SRC := $(wildcard $(ARCH)/*.nasm $(ARCH)/*.inc)
+# Clang targets ELF on Windows too. Native Linux builds can use GCC and ld.
+XHCI_CC ?= $(if $(call have,$(CLANG)),$(CLANG) --target=x86_64-unknown-elf,gcc)
+XHCI_LD ?= $(if $(call have,$(LLD)),$(LLD),ld)
+
+$(OUT)/xhci.o: $(ARCH)/xhci.c
+	mkdir -p $(OUT)
+	$(XHCI_CC) -m64 -ffreestanding -fpie -fno-stack-protector -mno-red-zone \
+	    -mgeneral-regs-only -fno-asynchronous-unwind-tables -O2 -Wall -Wextra -c $< -o $@
+
+$(OUT)/xhci.bin: $(OUT)/xhci.o $(ARCH)/xhci.ld
+	$(XHCI_LD) --oformat=binary -T $(ARCH)/xhci.ld $< -o $@
 # the USSR the .ru files are compiled from: any of the project's .su
 SU_SRC := $(wildcard $(ROOT)/src/*.su $(ROOT)/src/*/*.su $(ROOT)/src/*/*/*.su)
 RU := moscow install russia stalin belarus
@@ -140,9 +151,9 @@ RU := moscow install russia stalin belarus
 $(OUT)/boot.bin: $(ARCH_SRC)
 	mkdir -p $(OUT)
 	$(NASM) -f bin -i $(ARCH)/ $(ARCH)/boot.nasm -o $@
-$(OUT)/ussr_rt.bin: $(ARCH_SRC)
+$(OUT)/ussr_rt.bin: $(ARCH_SRC) $(OUT)/xhci.bin
 	mkdir -p $(OUT)
-	$(NASM) -f bin -i $(ARCH)/ $(ARCH)/ussr_rt.nasm -o $@
+	$(NASM) -f bin -i $(OUT)/ -i $(ARCH)/ $(ARCH)/ussr_rt.nasm -o $@
 
 # each compiled in its own folder, as its $include paths are written
 $(OUT)/moscow.ru $(OUT)/install.ru: $(OUT)/%.ru: $(SU_SRC) $(USSR)

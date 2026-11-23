@@ -144,6 +144,7 @@ stage2:
         call enable_a20
         jc .a20_fail
         call read_memory_map
+        mov dword [BOOTINFO + BI_UEFI], 0
         mov dword [BOOTINFO + BI_RAMDISK_BASE], 0
         mov dword [BOOTINFO + BI_RAMDISK_BASE + 4], 0
         mov dword [BOOTINFO + BI_RAMDISK_BYTES], 0

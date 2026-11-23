@@ -1,6 +1,6 @@
 ; ussr_rt.nasm - the NASM USSR runtime: a .ru bytecode VM on bare amd64.
 ;
-;     nasm -f bin -i src/moscow/arch/amd64/ ussr_rt.nasm -o ussr_rt.bin
+;     make -f moscow.mk boot
 ;
 ; boot.nasm loads this file at RT_BASE, enters long mode and jumps here
 ; with the boot information block (layout.inc) in rdi. The runtime sets
@@ -242,6 +242,17 @@ start:
         call net_init
         call env_init
         sti
+        mov rbx, [boot_info]
+        cmp dword [rbx + BI_UEFI], 1
+        jne .devices_ready
+        mov edi, ticks
+        call xhci_call
+        test eax, eax
+        jz .devices_ready
+        mov byte [xhci_on], 1
+        mov esi, msg_boot_usb
+        call boot_progress
+.devices_ready:
         mov esi, msg_boot_devices
         call boot_progress
 
@@ -265,6 +276,37 @@ boot_progress:
         pop rsi
         ret
 
+
+; SysV ABI for the freestanding driver. The runtime's callers may have
+; either stack alignment.
+xhci_call:
+        push rbp
+        mov rbp, rsp
+        and rsp, -16
+        call xhci_entry
+        mov rsp, rbp
+        pop rbp
+        ret
+
+; -> eax: USB scan code with extension and modifier bits, or zero.
+xhci_poll:
+        push rcx
+        push rsi
+        push rdi
+        push r8
+        push r9
+        push r10
+        push r11
+        xor edi, edi
+        call xhci_call
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rdi
+        pop rsi
+        pop rcx
+        ret
 
 ; The environment a session starts with.
 env_init:
@@ -759,6 +801,8 @@ kbd_init:
         mov ecx, 64
 .flush:
         in al, 0x64
+        cmp al, 0xff
+        je .done
         test al, 1
         jz .wait_write
         in al, 0x60
@@ -1488,7 +1532,7 @@ vga_clear:
         pop rax
         ret
 
-; -> eax: the next byte of the console - COM1 or the PS/2 keyboard - or
+; -> eax: the next byte of the console (COM1, PS/2 or USB), or
 ; -1 when there is none yet. Clobbers rdx. In raw mode (terminal_raw) the
 ; keyboard's arrows, Home, End, Insert, Delete, Page Up and Page Down
 ; come as the ANSI sequences a terminal sends for them; Ctrl with a
@@ -1549,6 +1593,7 @@ con_fill:
         push rax
         push rcx
         push rsi
+        push r8
         cmp qword [serial_on], 0
         je .keyboard
         mov dx, COM1 + 5
@@ -1562,7 +1607,20 @@ con_fill:
 .keyboard:
         cmp qword [gui_on], 0
         jne .done
+        cmp byte [xhci_on], 0
+        je .ps2
+        call xhci_poll
+        test eax, eax
+        jz .ps2
+        mov r8d, eax                   ; bit 9: Shift, bit 10: Ctrl
+        test eax, 0x100
+        jnz .extended
+        movzx eax, al
+        jmp .scan
+.ps2:
         in al, 0x64
+        cmp al, 0xff                   ; no 8042 controller
+        je .done
         test al, 1
         jz .done
         test al, 0x20                   ; mouse data: drop it
@@ -1589,10 +1647,16 @@ con_fill:
         je .shift_up
         test al, 0x80                   ; key releases
         jnz .done
+        mov r8d, [kbd_shift]
+        shl r8d, 9
+        cmp qword [kbd_ctrl], 0
+        je .scan
+        or r8d, 0x400
+.scan:
         cmp al, KEYMAP_SIZE
         jae .done
-        cmp qword [kbd_shift], 0
-        jne .shifted
+        test r8d, 0x200
+        jnz .shifted
         movzx eax, byte [keymap + rax]
         jmp .key
 .shifted:
@@ -1600,8 +1664,8 @@ con_fill:
 .key:
         test eax, eax
         jz .done
-        cmp qword [kbd_ctrl], 0
-        je .push
+        test r8d, 0x400
+        jz .push
         mov ecx, eax
         and ecx, ~0x20                  ; a b ... and A B ... alike
         cmp ecx, '@'
@@ -1652,6 +1716,7 @@ con_fill:
 .drop:
         in al, 0x60
 .done:
+        pop r8
         pop rsi
         pop rcx
         pop rax
@@ -7670,7 +7735,8 @@ s_nan:          db "nan", 0
 msg_start:      db "USSR runtime: NASM VM for amd64, running moscow.ru", 10, 0
 msg_boot_entered: db "Moscow runtime: entered", 10, 0
 msg_boot_serial: db "Moscow runtime: serial ready", 10, 0
-msg_boot_keyboard: db "Moscow runtime: keyboard ready", 10, 0
+msg_boot_keyboard: db "Moscow runtime: legacy keyboard probe complete", 10, 0
+msg_boot_usb:   db "Moscow runtime: xHCI USB keyboard ready", 10, 0
 msg_boot_platform: db "Moscow runtime: platform ready", 10, 0
 msg_boot_memory: db "Moscow runtime: memory ready", 10, 0
 msg_boot_devices: db "Moscow runtime: devices ready", 10, 0
@@ -7812,6 +7878,9 @@ rt_end:
 ; variables (zeroed at start), below the stack
 ; =====================================================================
 
+align 4096, db 0
+xhci_entry:     incbin "xhci.bin"
+
 absolute RT_DATA
 boot_info:      resq 1
 heap_base:      resq 1
@@ -7915,6 +7984,7 @@ ansi_state:     resq 1              ; 0, 1 after ESC, 2 in ESC [ ...
 ansi_np:        resq 1
 ansi_p:         resq ANSI_PARAMS
 ansi_rev:       resq 1
+xhci_on:        resq 1
 kbd_shift:      resq 1
 kbd_ctrl:       resq 1
 kbd_e0:         resq 1
