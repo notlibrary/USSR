@@ -9313,6 +9313,16 @@ repl(r): [
     if(_): {rp_rawp = 0} [ set(rp_tty): 1 ]
     vec(rp_hist): ""
     if(_): {rp_tty = 1} [ repl_hist_load(_): ]
+    getenv(rp_os): "OS"
+    if(_): {rp_os = "Moscow"} [
+        getenv(rp_desktop): "USSR_MOSCOW_DESKTOP"
+        if(_): {rp_desktop = "1"} [
+            setenv(_): "USSR_MOSCOW_DESKTOP" ""
+            print(_): "moscow: starting the desktop, Kremlin"
+            try(rp_bad): "repl_exec" "run(st): \"kremlin\" if(_): {st != 0} [ print(_): \"moscow: Kremlin exited with status\" print(_): st ]" 1
+            if(_): {rp_bad = 1} [ repl_failed(_): ]
+        ]
+    ]
     while(_): {rp_eof = 0} [
         set(rp_cont): 0
         if(_): {rp_dep > 0} [ set(rp_cont): 1 ]

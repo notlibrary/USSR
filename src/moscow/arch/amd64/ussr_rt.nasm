@@ -244,12 +244,29 @@ start:
         sti
         mov rbx, [boot_info]
         cmp dword [rbx + BI_UEFI], 1
-        jne .devices_ready
+        je .uefi_usb
+        mov edi, val_input_legacy
+        call .input_status
+        mov esi, msg_boot_legacy
+        call boot_progress
+        jmp .devices_ready
+.uefi_usb:
+        mov esi, msg_boot_usb_probe
+        call boot_progress
         mov edi, ticks
+        mov esi, xhci_trace
         call xhci_call
         test eax, eax
-        jz .devices_ready
+        jnz .usb_ready
+        mov edi, val_input_missing
+        call .input_status
+        mov esi, msg_boot_usb_missing
+        call boot_progress
+        jmp .devices_ready
+.usb_ready:
         mov byte [xhci_on], 1
+        mov edi, val_input_usb
+        call .input_status
         mov esi, msg_boot_usb
         call boot_progress
 .devices_ready:
@@ -266,6 +283,9 @@ start:
         call print_int
         PUTS msg_halted
         jmp sys_halt
+.input_status:
+        mov esi, env_usb_input
+        jmp env_set_z
 
 ; esi = boot progress line. Draw synchronously so a pre-timer hang remains
 ; visible on the UEFI framebuffer; the same line goes to COM1 when present.
@@ -287,6 +307,18 @@ xhci_call:
         mov rsp, rbp
         pop rbp
         ret
+
+; SysV callback from xHCI init: rdi is a description and rsi its value.
+xhci_trace:
+        push rsi
+        PUTS msg_boot_usb_detail
+        mov rsi, rdi
+        call con_puts
+        PUTC ' '
+        pop rax
+        call print_hex
+        PUTC 10
+        jmp fbcon_sync
 
 ; -> eax: USB scan code with extension and modifier bits, or zero.
 xhci_poll:
@@ -7726,6 +7758,14 @@ msg_boot_entered: db "Moscow runtime: entered", 10, 0
 msg_boot_serial: db "Moscow runtime: serial ready", 10, 0
 msg_boot_keyboard: db "Moscow runtime: legacy keyboard probe complete", 10, 0
 msg_boot_usb:   db "Moscow runtime: xHCI USB keyboard ready", 10, 0
+msg_boot_legacy: db "Moscow runtime: legacy boot; xHCI probe skipped", 10, 0
+msg_boot_usb_probe: db "Moscow runtime: probing xHCI after UEFI handoff", 10, 0
+msg_boot_usb_missing: db "Moscow runtime: no xHCI USB boot keyboard", 10, 0
+msg_boot_usb_detail: db "  xHCI: ", 0
+env_usb_input:     db "USSR_USB_INPUT", 0
+val_input_legacy:  db "legacy boot, xHCI probe skipped", 0
+val_input_missing: db "no xHCI USB boot keyboard detected", 0
+val_input_usb:     db "xHCI USB keyboard detected", 0
 msg_boot_platform: db "Moscow runtime: platform ready", 10, 0
 msg_boot_memory: db "Moscow runtime: memory ready", 10, 0
 msg_boot_devices: db "Moscow runtime: devices ready", 10, 0

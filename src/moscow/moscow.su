@@ -1416,6 +1416,12 @@ init(ret): arg_cnt arg_vec [
     btput(_): mo_files "next" 3
     set(mo_cwd): "/"
     mo_syscalls(_):
+    getenv(usb_input): "USSR_USB_INPUT"
+    typeof(usb_type): usb_input
+    if(_): {usb_type = "string"} [
+        concat(line): "console: " usb_input
+        print(_): line
+    ]
     set(ret): 0
     # an installed system starts with the desktop, the shell after it;
     # a key within 3 seconds (the keyboard or the serial line) skips it
@@ -1424,14 +1430,9 @@ init(ret): arg_cnt arg_vec [
         mo_key_within(skip): 300
         if(_): skip [ print(_): "moscow: no desktop" ]
         else(_): [
-            print(_): "moscow: starting the desktop, Kremlin"
-            vec(noargs): ""
-            mo_run(desktop_status): "kremlin" noargs
-            if(_): {desktop_status != 0} [
-                str_from_int(ds): desktop_status
-                concat(msg): "moscow: Kremlin exited with status " ds
-                print(_): msg
-            ]
+            # Launch from the interactive shell, using the same path as
+            # a user typing run(_): "kremlin".
+            setenv(_): "USSR_MOSCOW_DESKTOP" "1"
         ]
     ]
     set(go): true
