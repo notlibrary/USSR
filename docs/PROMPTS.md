@@ -1168,5 +1168,23 @@ next point to click to create second line segment then third etc until user clic
 
 Add icons for every button Line Circle Circle Segment Spline Snap on 
 
+We need kernel run bare metal from usb flash ISO with UEFI bootloader with running kremlin
+same in Virtual Box
+Bare metal We have wrong UEFI bootloader which says "image file is on the disk image file is less than 512kib"
+and stuck until ctrl+alt+del reboot
+
+In Virtual Box we have not working keyboard in ussr shell and vanishing kremlin
+There is no UEFI it boots from legacy bios
+See the commit history to understand what changed
+We made usb flash driver to fix no belarus root mount problem
+I do not know if it worked
+
+Now let's do the kremlin desktop fix so I can use it without mouse
+If I press tab than nothing selected(files or folders) it frames kremlin button in bold white focus rectangle
+then I press tab more it moves focus rectangle to next buttons `terminal files calculator home`
+it starts the focused button then I press enter If i press Ctrl+Esc it opens kremlin button menu
+Other usability fixes for kremlin you have is welcomed
+
+
 
  
