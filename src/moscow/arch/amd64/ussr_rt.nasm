@@ -7456,6 +7456,7 @@ bi_table:
         dq n_slice, bi_slice
         dq n_chr, bi_chr
         dq n_re_test, bi_re_test
+        dq n_k_re_valid, bi_k_re_valid
         dq n_re_find, bi_re_find
         dq n_re_pos, bi_re_pos
         dq n_re_all, bi_re_all

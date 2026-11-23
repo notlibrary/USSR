@@ -1644,9 +1644,18 @@ Mbl_do_search(r): backward count [
         set(Mbl_msg): "no previous pattern"
         return(r): r
     ]
+    if(_): {Mbl_moscow = true} [
+        k_re_valid(usable): Mbl_search
+        if(_): {usable = false} [
+            set(Mbl_msg): "bad pattern"
+            return(r): r
+        ]
+    ]
     set(k): 0
     while(_): {k < count} [
-        try(bad): "Mbl_search_try" backward
+        set(bad): 0
+        if(_): {Mbl_moscow = true} [ Mbl_search_try(_): backward ]
+        else(_): [ try(bad): "Mbl_search_try" backward ]
         if(_): {bad = 1} [
             set(Mbl_msg): "bad pattern"
             return(r): r
@@ -2440,6 +2449,13 @@ Mbl_substitute(r): y1 y2 spec [
     if(_): {pat = ""} [
         set(pat): Mbl_search
     ]
+    if(_): {Mbl_moscow = true} [
+        k_re_valid(usable): pat
+        if(_): {usable = false} [
+            set(Mbl_msg): "bad pattern"
+            return(r): {0 - 1}
+        ]
+    ]
     set(Mbl_search): pat
     # vi's & is the whole match
     str_replace(rep): rep "&" "\\0"
@@ -2785,9 +2801,10 @@ Mbl_more_cmd(r): cmd [
     if(_): {iss && rl > 1} [
         slice(spec): rest 1 {rl - 1}
         Mbl_begin_change(_):
-        try(bad): "Mbl_sub_try" y1 y2 spec
-        if(_): {bad = 1} [
-            set(Mbl_msg): "bad pattern"
+        if(_): {Mbl_moscow = true} [ Mbl_sub_try(_): y1 y2 spec ]
+        else(_): [
+            try(bad): "Mbl_sub_try" y1 y2 spec
+            if(_): {bad = 1} [ set(Mbl_msg): "bad pattern" ]
         ]
         return(r): r
     ]
@@ -2803,6 +2820,13 @@ Mbl_more_cmd(r): cmd [
                 set(y1): 0
                 Mbl_nlines(nl):
                 set(y2): {nl - 1}
+            ]
+            if(_): {Mbl_moscow = true} [
+                k_re_valid(usable): pat
+                if(_): {usable = false} [
+                    set(Mbl_msg): "bad pattern"
+                    return(r): r
+                ]
             ]
             Mbl_flags(fl):
             Mbl_begin_change(_):

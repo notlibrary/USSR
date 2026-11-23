@@ -1659,6 +1659,31 @@ re_pops:
         pop rbx
         ret
 
+; k_re_valid(ok): pattern -> whether it compiles, without printing an error.
+bi_k_re_valid:
+        cmp esi, 1
+        jne .invalid
+        cmp qword [rdi], T_STR
+        jne .invalid
+        push rdx
+        mov rax, [rdi + 8]
+        xor ecx, ecx
+        call re_compile
+        setnc al
+        movzx eax, al
+        call re_free_all
+        pop rdx
+        jmp .result
+.invalid:
+        xor eax, eax
+.result:
+        mov qword [rdx], T_BOOL
+        mov [rdx + 8], rax
+        xor eax, eax
+        ret
+
+n_k_re_valid: db "k_re_valid", 0
+
 bi_re_test:
         RE_ENTER n_re_test, 2, 0
         xor eax, eax
