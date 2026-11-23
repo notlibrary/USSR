@@ -52,7 +52,7 @@ global(_): Mbl_showname Mbl_running
 # 1 when the runtime has vcopy, vinsert, vremove and vjoin: lines are then
 # changed in place and the file joined in one pass, so big files stay
 # quick; without them (an older ussr, Moscow) the lists are rebuilt
-global(_): Mbl_native
+global(_): Mbl_native Mbl_moscow
 
 # ---------- terminal helpers ----------
 
@@ -502,6 +502,12 @@ Mbl_redo(r): [
 # "exists" (Mbl_fe_yes). If both probes answer the same, the builtin is
 # unusable -> Mbl_fe_ok stays 0 and Mbl_load falls back to `test -f`.
 Mbl_detect(r): [
+    if(_): {Mbl_moscow = true} [
+        # Moscow's file_exists returns a boolean.
+        set(Mbl_fe_ok): 1
+        set(Mbl_fe_yes): true
+        return(r): 0
+    ]
     set(Mbl_fe_ok): 0
     set(Mbl_fe_yes): 1
     writefile(Mbldt_w): ".Mbl_probe.tmp" "x"
@@ -1259,11 +1265,15 @@ Mbl_dispatch(r): b [
 
 init(ret): arg_cnt arg_vec [
     set(Mbl_native): 0
-    btree(Mblit_probe):
-    try(Mblit_failed): "Mbl_probe" Mblit_probe
-    btget(Mblit_ok): Mblit_probe "ok" false
-    if(_): {Mblit_ok = true} [
-        set(Mbl_native): 1
+    getenv(Mblit_os): "OS"
+    set(Mbl_moscow): {Mblit_os = "Moscow"}
+    # Russia on Moscow forwards try to the host VM. Use the portable
+    # vector operations directly, without probing for optional builtins.
+    if(_): {Mbl_moscow = false} [
+        btree(Mblit_probe):
+        try(Mblit_failed): "Mbl_probe" Mblit_probe
+        btget(Mblit_ok): Mblit_probe "ok" false
+        if(_): {Mblit_ok = true} [ set(Mbl_native): 1 ]
     ]
     set(Mbl_file): ""
     set(Mbl_showname): "[No Name]"

@@ -267,22 +267,21 @@ with ANSI escapes on the VGA screen as on a serial terminal.
 
 ## Editing a file: Mbl
 
-The Mbl editor (`src/Mbl/Mbl.su`, a vi-like editor) runs unchanged,
-from its source:
+The Mbl editor (`src/Mbl/Mbl.su`, a vi-like editor) runs from its
+source in the text console or in Kremlin's Mbltishi terminal:
 
     russia> run(_): "Mbl" "/home/notes.txt"
 
-`i` inserts, Esc goes back, `:wq` writes and quits (the header of
-`Mbl.su` lists the keys). The note is a file of the Belarus root: it
-is there after `halt(_):` and the next boot:
+`i` inserts text, Esc returns to normal mode, and `:wq` saves and quits.
+The saved file persists across reboots on an installed Belarus disk.
+On a live ISO's RAM-backed root, it lasts through the current boot.
 
     russia> cat(_): "/home/notes.txt"
 
-The name finds `/src/ussr/src/Mbl/Mbl.su`, the project as the install
-disk carries it; `/bin/ussr -c` compiles it, its `$include` of
-`../libs/strings.su` included, and the NASM runtime runs it (russia.ru
-does, on a disk with no `/bin/ussr`). Any program of the
-project runs that way, by name or by path. On the VGA screen a UTF-8
+The name resolves to `/src/ussr/src/Mbl/Mbl.su`, included on the install
+disk and in a full installation. Russia runs the editor from source
+when Moscow's NASM runtime lacks its optional vector operations.
+On the VGA screen a UTF-8
 character takes one cell, as Mbl counts them; the VGA font has only
 the ASCII ones, the others show as a block (a serial terminal shows
 them all).

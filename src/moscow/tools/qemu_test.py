@@ -574,6 +574,8 @@ def main():
         sata(qemu, disk, work, args.port + 95, log, check)
     if not args.no_uefi:
         uefi(qemu, work, args.port + 100, log, check)
+        if not args.no_mbl:
+            mbl_uefi(qemu, work, args.port + 130, log, check, desktop=not args.no_gui)
         uefi_xhci(qemu, work, args.port + 120, log, check, desktop=not args.no_gui)
 
     if args.transcript:
@@ -671,6 +673,75 @@ def mbl(qemu, disk, port, log, check):
         check("Mbl after the reboot", False, str(e))
     finally:
         m.close()
+
+
+def mbl_uefi(qemu, work, port, log, check, desktop=True):
+    firmware = find_ovmf(qemu)
+    if firmware is None or not os.path.isfile(ISO):
+        print("SKIP Mbl UEFI test needs OVMF and ussr.iso")
+        return
+    extra = uefi_drives(firmware, os.path.join(work, "mbl_uefi_vars.fd")) + [
+        "-machine", "q35,i8042=off",
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd,bus=xhci.0",
+    ]
+    m = Machine(qemu, [], port, log, monitor=port + 1, cdrom=ISO, extra=extra)
+    try:
+        boot = clean(m.serial.output_to_prompt(timeout=60))
+        check("UEFI Mbl test has a USB keyboard and a RAM root",
+              "xHCI USB keyboard ready" in boot and "root:    /dev/ram" in boot, boot)
+        m.keys('run(st): "Mbl" "/home/usb-note.txt"\n', hold_ms=50)
+        status = mbl_frame(m.serial)
+        check("UEFI Mbl opens from the USB keyboard", "NORMAL  /home/usb-note.txt" in status, status)
+        m.keys("iusb draft", hold_ms=50)
+        m.monitor_command("sendkey esc 50")
+        time.sleep(0.15)
+        m.keys("h", hold_ms=50)
+        m.serial.read_until(b"NORMAL  /home/usb-note.txt [+]", timeout=60)
+        m.serial.sock.sendall(b"0/draft\r")
+        m.serial.read_until(b"1:5 100%", timeout=60)
+        check("UEFI Mbl search moves to the match", True)
+        m.serial.sock.sendall(b"/[\r")
+        m.serial.read_until(b"bad pattern", timeout=60)
+        check("UEFI Mbl rejects an invalid pattern without exiting", True)
+        m.serial.sock.sendall(b":s/draft/saved/\r")
+        m.serial.read_until(b"usb saved", timeout=60)
+        m.keys(":wq\n", hold_ms=50)
+        m.serial.output_to_prompt(timeout=60)
+        m.serial.command('cat(_): "/home/usb-note.txt"')
+        got = clean(m.serial.output_to_prompt())
+        check("UEFI Mbl saves edits and substitutions from the console", got == "usb saved", repr(got))
+        if desktop and "gui:     Petersburg" in boot:
+            mbl_in_terminal(m, work, check)
+    except (TimeoutError, EOFError) as e:
+        check("UEFI Mbl conversation", False, str(e))
+    finally:
+        m.close()
+
+
+def mbl_in_terminal(m, work, check):
+    m.keys('run(_): "kremlin"\n', hold_ms=50)
+    deadline = time.monotonic() + 180
+    while not kremlin_panel(m.pixels(work)):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Kremlin did not render for the terminal test")
+        time.sleep(1)
+    for key in ("tab", "tab", "ret"):
+        m.monitor_command("sendkey " + key + " 80")
+        time.sleep(0.5)
+    m.serial.output_to_prompt(timeout=180)
+    m.keys('run(st): "Mbl" "/home/window-note.txt"\n', hold_ms=50)
+    status = mbl_frame(m.serial)
+    check("Mbl opens inside Kremlin's Mbltishi terminal",
+          "NORMAL  /home/window-note.txt" in status, status)
+    m.keys("iwindow note", hold_ms=50)
+    m.monitor_command("sendkey esc 50")
+    time.sleep(0.15)
+    m.keys(":wq\n", hold_ms=50)
+    m.serial.output_to_prompt(timeout=60)
+    m.keys('cat(_): "/home/window-note.txt"\n', hold_ms=50)
+    got = clean(m.serial.read_until(b"\r\nwindow note\r\n", timeout=60))
+    check("Mbl saves in Mbltishi and returns to its shell", got.endswith("window note"), got)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
