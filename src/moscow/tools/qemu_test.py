@@ -1922,6 +1922,38 @@ def uefi_usb_mouse(qemu, firmware, work, port, log, check):
                        for y in range(height - 250, height - 50)
                        for x in range(220)) > 1000
 
+        def press(key):
+            m.monitor_command("sendkey " + key + " 80")
+            time.sleep(1)
+            return m.pixels(work)
+
+        def panel_focus_x(frame):
+            stride = width * 3
+            runs = []
+            for y in range(height - 58, height):
+                row = frame[2][y * stride:y * stride + min(width, 600) * 3]
+                runs.extend((len(match[0]), match.start() // 3)
+                            for match in re.finditer(rb"(?:\xff\xff\xff){30,}", row))
+            return max(runs, default=(0, -1))[1]
+
+        focused = [panel_focus_x(press("tab")) for _ in range(5)]
+        check("USB Tab focuses Kremlin and four pins in order",
+              focused[0] in (3, 6) and all(a < b for a, b in zip(focused, focused[1:])),
+              repr(focused))
+        check("USB Shift+Tab moves panel focus backward",
+              panel_focus_x(press("shift-tab")) == focused[-2])
+        press("tab")
+        first = press("tab")
+        check("USB Tab wraps panel focus back to Kremlin",
+              panel_focus_x(first) == focused[0])
+        check("USB Enter activates the focused Kremlin button",
+              menu_changed(first, press("ret")))
+        closed = press("esc")
+        check("USB Ctrl+Esc opens the Kremlin menu",
+              menu_changed(closed, press("ctrl-esc")))
+        press("esc")
+        check("USB Escape clears panel focus", panel_focus_x(press("esc")) < 0)
+
         move(50 - width // 2, height - 22 - height // 2)
         before = m.pixels(work)
         click()
@@ -1950,16 +1982,27 @@ def uefi_usb_mouse(qemu, firmware, work, port, log, check):
         move(width - 50 - 56, height - 15 - 112)
         click()
         time.sleep(2)
-        calendar_area = (width - 264, height - 245, 230, 190)
-        calendar = region(m.pixels(work), *calendar_area)
-        m.monitor_command("mouse_move 0 0 -1")
-        time.sleep(2)
-        previous = region(m.pixels(work), *calendar_area)
-        check("USB wheel scroll changes the Kremlin calendar month", calendar != previous)
-        m.monitor_command("mouse_move 0 0 1")
-        time.sleep(2)
+        scale = 2 if focused[0] == 6 else 1
+        title_x, title_y = width - 202 * scale, height - 206 * scale
+        calendar_title = (title_x, title_y + 6 * scale, 176 * scale, 12 * scale)
+        calendar_frame = m.pixels(work)
+        check("USB click opens the Kremlin calendar",
+              pixel(calendar_frame, title_x, title_y + 2 * scale) == (179, 38, 30))
+        calendar = region(calendar_frame, *calendar_title)
+
+        def scroll_month(delta, changed):
+            m.monitor_command("mouse_move 0 0 %d" % delta)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                time.sleep(0.5)
+                title = region(m.pixels(work), *calendar_title)
+                if (title != calendar) == changed:
+                    return True
+            return False
+
+        check("USB wheel scroll changes the Kremlin calendar month", scroll_month(-1, True))
         check("USB wheel scroll in the opposite direction restores the month",
-              calendar == region(m.pixels(work), *calendar_area))
+              scroll_month(1, False))
     except (TimeoutError, EOFError) as e:
         check("UEFI xHCI desktop input", False, str(e))
     finally:

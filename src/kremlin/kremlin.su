@@ -1082,6 +1082,7 @@ kremlinopen(r): dir [
     km_strip_slash(_kop_d): _kop_d
     set(km_dir): _kop_d!
     set(km_sel): {0 - 1}!
+    set(km_panel_focus): {0 - 1}!
     set(km_scroll): 0!
     kremlinrefresh(_):
     set(r): 0
@@ -1574,6 +1575,8 @@ kremlinreset(r): root [
     set(_krs_src): km_source?
     set(_krs_ussr): km_ussr?
     set(km_sel): {0 - 1}!
+    set(km_panel_focus): {0 - 1}!
+    set(km_panel_count): 1!
     set(km_scroll): 0!
     set(km_popup): ""!
     set(km_dialog): ""!
@@ -2170,6 +2173,7 @@ km_help_text(r): [
     set(_khl_root): km_root?
     concat(r): "Your desktop is the folder " _khl_root ". Click selects, double-click opens, right-click shows what you can do; .kl files are launchers.\n\n"
     concat(r): r "Arrows, Home, End, PgUp, PgDn  move\nEnter  open      Shift+Enter  open with system\nBackspace  back to the folder above\n"
+    concat(r): r "Tab / Shift+Tab  focus panel buttons when no icon is selected\nEnter  activate the focused button      Ctrl+Esc  Kremlin menu\n"
     concat(r): r "F2  rename      Del  delete      Ctrl+D  duplicate\nCtrl+P  pin or unpin on the panel\n"
     concat(r): r "Ctrl+N  new folder      Ctrl+Shift+N  new text file\nCtrl+L  new launcher    Ctrl+R  run a command\n"
     concat(r): r "F5  refresh      F10 or Win  KREMLIN menu\nMenu key or Shift+F10  actions for the selection\nletters  jump to a name      Ctrl+Q  exit\nCtrl+X/C/V  cut, copy, paste      Ctrl+Z  undo"
@@ -2802,6 +2806,12 @@ km_draw_icons(r): canvas m hits [
     set(r): 0
 ]
 
+# Two white outlines make keyboard focus visible on every panel color.
+km_panel_outline(r): canvas x y w h [
+    canvasrect(_): canvas x y w h KM_WHITE
+    canvasrect(r): canvas {x + 1} {y + 1} {w - 2} {h - 2} KM_WHITE
+]
+
 km_draw_panel(r): canvas m hits [
     at(_kdp_s): m 0
     at(_kdp_p): m 7
@@ -2826,6 +2836,11 @@ km_draw_panel(r): canvas m hits [
     km_star(_): canvas {13 * _kdp_s + 1} {_kdp_by + _kdp_cy} {7 * _kdp_s} KM_GOLD
     km_text(_): canvas {24 * _kdp_s} _kdp_ty "KREMLIN" KM_TEXT _kdp_s
     km_hit_add(_): hits {3 * _kdp_s} _kdp_by _kdp_bw _kdp_bh "start"
+    set(_kdp_focus): km_panel_focus?
+    if(_): {_kdp_focus = 0} [
+        km_panel_outline(_): canvas {3 * _kdp_s} _kdp_by _kdp_bw _kdp_bh
+    ]
+    set(_kdp_count): 1
     # the clock, right-aligned
     localtime(_kdp_t):
     km_more_clock(_kdp_clock): _kdp_t
@@ -2873,10 +2888,16 @@ km_draw_panel(r): canvas m hits [
             str_from_int(_kdp_is): _kdp_i
             concat(_kdp_tag): "pin:" _kdp_is
             km_hit_add(_): hits _kdp_x _kdp_by _kdp_pw _kdp_bh _kdp_tag
+            if(_): {_kdp_focus = _kdp_count} [
+                km_panel_outline(_): canvas _kdp_x _kdp_by _kdp_pw _kdp_bh
+            ]
+            set(_kdp_count): {_kdp_count + 1}
             set(_kdp_x): {_kdp_x + _kdp_pw + 4 * _kdp_s}
         ]
         set(_kdp_i): {_kdp_i + 1}
     ]
+    set(km_panel_count): _kdp_count!
+    if(_): {_kdp_focus >= _kdp_count} [ set(km_panel_focus): {0 - 1}! ]
     # the latest message in what is left
     set(_kdp_msg): km_status?
     if(_): {_kdp_msg != ""} [
@@ -3269,6 +3290,7 @@ km_menu_pick(r): index [
 
 kremlinclick(r): x y [
     uilock(_):
+    set(km_panel_focus): {0 - 1}!
     km_hit(_kcl2_tag): x y
     set(_kcl2_dialog): km_dialog?
     set(_kcl2_popup): km_popup?
@@ -3325,6 +3347,7 @@ kremlinclick(r): x y [
 
 kremlindouble(r): x y [
     uilock(_):
+    set(km_panel_focus): {0 - 1}!
     set(_kdb_dialog): km_dialog?
     set(_kdb_popup): km_popup?
     km_hit(_kdb_tag): x y
@@ -3349,6 +3372,7 @@ kremlindouble(r): x y [
 
 kremlinmenu(r): x y [
     uilock(_):
+    set(km_panel_focus): {0 - 1}!
     set(_kmn_dialog): km_dialog?
     if(_): {_kmn_dialog = ""} [
         km_close_popup(_):
@@ -3457,6 +3481,7 @@ km_menu_step(r): i step [
 ]
 
 km_popup_key(r): key [
+    set(_kpk_shift): km_shift?
     set(_kpk_kind): km_popup?
     set(_kpk_sel): km_popup_sel?
     if(_): {key = KM_KEY_ESCAPE || key = KM_KEY_F10 || key = KM_KEY_LSUPER || key = KM_KEY_RSUPER} [
@@ -3468,11 +3493,11 @@ km_popup_key(r): key [
         elif(_): {key = KM_KEY_HOME} [ km_open_calendar(_): ]
         elif(_): {key = KM_KEY_ENTER} [ km_close_popup(_): ]
     ]
-    elif(_): {key = KM_KEY_DOWN || key = KM_KEY_TAB} [
+    elif(_): {key = KM_KEY_DOWN || (key = KM_KEY_TAB && _kpk_shift = false)} [
         km_menu_step(_kpk_sel): _kpk_sel 1
         set(km_popup_sel): _kpk_sel!
     ]
-    elif(_): {key = KM_KEY_UP} [
+    elif(_): {key = KM_KEY_UP || key = KM_KEY_TAB} [
         if(_): {_kpk_sel < 0} [ set(_kpk_sel): 0 ]
         km_menu_step(_kpk_sel): _kpk_sel {0 - 1}
         set(km_popup_sel): _kpk_sel!
@@ -3523,6 +3548,32 @@ km_context_point(r): [
         push(_): r 40
         push(_): r 40
     ]
+]
+
+km_panel_key(r): key [
+    set(r): false
+    set(_kpf_focus): km_panel_focus?
+    set(_kpf_count): km_panel_count?
+    set(_kpf_selected): km_sel?
+    set(_kpf_shift): km_shift?
+    set(_kpf_ctrl): km_ctrl?
+    set(_kpf_alt): km_alt?
+    if(_): {key = KM_KEY_TAB && _kpf_selected < 0 && _kpf_ctrl = false && _kpf_alt = false} [
+        if(_): {_kpf_shift && _kpf_focus < 0} [ set(_kpf_focus): 0 ]
+        set(_kpf_step): 1
+        if(_): _kpf_shift [ set(_kpf_step): {0 - 1} ]
+        set(km_panel_focus): {(_kpf_focus + _kpf_step + _kpf_count) % _kpf_count}!
+        set(r): true
+    ]
+    elif(_): {_kpf_focus >= 0 && (key = KM_KEY_ENTER || key = KM_KEY_KP_ENTER) && _kpf_ctrl = false && _kpf_alt = false} [
+        if(_): {_kpf_focus = 0} [ km_open_start(_): true ]
+        else(_): [
+            kremlinaction(_kpf_error): "pin-open" {_kpf_focus - 1}
+            km_report(_): _kpf_error
+        ]
+        set(r): true
+    ]
+    elif(_): {_kpf_focus >= 0} [ set(km_panel_focus): {0 - 1}! ]
 ]
 
 km_desktop_key(r): key [
@@ -3612,9 +3663,14 @@ kremlinkeybody(r): key [
     if(_): {r = false} [
         set(_kkb_dialog): km_dialog?
         set(_kkb_popup): km_popup?
+        set(_kkb_ctrl): km_ctrl?
         if(_): {_kkb_dialog != ""} [ km_dialog_key(_): key ]
+        elif(_): {_kkb_ctrl && key = KM_KEY_ESCAPE} [ km_open_start(_): true ]
         elif(_): {_kkb_popup != ""} [ km_popup_key(_): key ]
-        else(_): [ km_desktop_key(_): key ]
+        else(_): [
+            km_panel_key(_kkb_panel): key
+            if(_): {_kkb_panel = false} [ km_desktop_key(_): key ]
+        ]
     ]
 ]
 

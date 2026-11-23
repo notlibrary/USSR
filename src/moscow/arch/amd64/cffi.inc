@@ -148,8 +148,14 @@ c_ticks:
 c_gui:
         mov [gui_on], rdi
         test rdi, rdi
-        jnz .out
+        jnz .reset_keyboard
         mov qword [fb_wipe], 1          ; the console's screen again, all of it
+.reset_keyboard:
+        test byte [xhci_input], 1
+        jz .out
+        xor edi, edi
+        mov edx, 3
+        jmp xhci_call
 .out:
         ret
 
@@ -186,6 +192,16 @@ c_usb_mouse:
 .out:
         ret
 
+c_usb_key:
+        xor eax, eax
+        test byte [xhci_input], 1
+        jz .out
+        xor edi, edi
+        mov edx, 2
+        jmp xhci_call
+.out:
+        ret
+
 ; name, address
 c_exports:
         dq s_ticks, c_ticks
@@ -193,6 +209,7 @@ c_exports:
         dq s_term_raw, c_term_raw
         dq s_fb, c_fb
         dq s_usb_mouse, c_usb_mouse
+        dq s_usb_key, c_usb_key
         dq s_memcpy, c_memcpy
         dq s_memmove, c_memmove
         dq s_memset, c_memset
@@ -204,6 +221,7 @@ s_gui:          db "moscow_gui", 0
 s_term_raw:     db "moscow_term_raw", 0
 s_fb:           db "moscow_fb", 0
 s_usb_mouse:    db "moscow_usb_mouse", 0
+s_usb_key:      db "moscow_usb_key", 0
 s_memcpy:       db "memcpy", 0
 s_memmove:      db "memmove", 0
 s_memset:       db "memset", 0
