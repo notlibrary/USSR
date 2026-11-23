@@ -138,7 +138,9 @@ c3_rt_end:
 ; screen and the PS/2 port to the library (1) or back (0);
 ; moscow_term_raw() -> 1 in terminal_raw's mode; moscow_fb(i) -> the
 ; firmware framebuffer the console is on: 0 its address (0: none, VGA text
-; mode), 1 width, 2 height, 3 pixels a line, 4 pixel format (1: BGRX)
+; mode), 1 width, 2 height, 3 pixels a line, 4 pixel format (1: BGRX).
+; moscow_usb_mouse(1) checks whether a boot mouse was found.
+; moscow_usb_mouse(0) polls for a packed mouse report, zero if none.
 c_ticks:
         mov rax, [ticks]
         ret
@@ -171,12 +173,26 @@ c_term_raw:
         mov rax, [term_raw]
         ret
 
+c_usb_mouse:
+        xor eax, eax
+        test byte [xhci_input], 2
+        jz .out
+        mov eax, 1
+        test edi, edi
+        jnz .out
+        xor edi, edi
+        mov edx, 1
+        jmp xhci_call
+.out:
+        ret
+
 ; name, address
 c_exports:
         dq s_ticks, c_ticks
         dq s_gui, c_gui
         dq s_term_raw, c_term_raw
         dq s_fb, c_fb
+        dq s_usb_mouse, c_usb_mouse
         dq s_memcpy, c_memcpy
         dq s_memmove, c_memmove
         dq s_memset, c_memset
@@ -187,6 +203,7 @@ s_ticks:        db "moscow_ticks", 0
 s_gui:          db "moscow_gui", 0
 s_term_raw:     db "moscow_term_raw", 0
 s_fb:           db "moscow_fb", 0
+s_usb_mouse:    db "moscow_usb_mouse", 0
 s_memcpy:       db "memcpy", 0
 s_memmove:      db "memmove", 0
 s_memset:       db "memset", 0

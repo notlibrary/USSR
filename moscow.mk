@@ -137,7 +137,7 @@ ARCH_SRC := $(wildcard $(ARCH)/*.nasm $(ARCH)/*.inc)
 XHCI_CC ?= $(if $(call have,$(CLANG)),$(CLANG) --target=x86_64-unknown-elf,gcc)
 XHCI_LD ?= $(if $(call have,$(LLD)),$(LLD),ld)
 
-$(OUT)/xhci.o: $(ARCH)/xhci.c
+$(OUT)/xhci.o: $(ARCH)/xhci.c $(ARCH)/hid_mouse.h
 	mkdir -p $(OUT)
 	$(XHCI_CC) -m64 -ffreestanding -fpie -fno-stack-protector -mno-red-zone \
 	    -mgeneral-regs-only -fno-asynchronous-unwind-tables -O2 -Wall -Wextra -c $< -o $@

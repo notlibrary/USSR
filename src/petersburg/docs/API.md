@@ -80,6 +80,7 @@ a diagnostic.
 | `"double"` | Canvas | canvas, x, y of the second press of a double click (within 0.45 s and 5 pixels; its `"pointer"` event comes first) |
 | `"double"` | List | list, the row's index, when the same row is pressed twice within 0.45 s (its `"change"` event comes first) |
 | `"menu"` | Canvas | canvas, x, y of a right-button press |
+| `"middle"` | Canvas | canvas, x, y of a middle-button press |
 | `"motion"` | Canvas | canvas, x, y of the cursor as it moves over the canvas (at most once per frame, the latest position; `-1, -1` when it leaves) |
 | `"key"` | Window | window, GLFW key code (key press) |
 | `"keyup"` | Window | window, GLFW key code (key release) |
