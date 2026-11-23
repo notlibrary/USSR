@@ -1426,7 +1426,12 @@ init(ret): arg_cnt arg_vec [
         else(_): [
             print(_): "moscow: starting the desktop, Kremlin"
             vec(noargs): ""
-            mo_run(_): "kremlin" noargs
+            mo_run(desktop_status): "kremlin" noargs
+            if(_): {desktop_status != 0} [
+                str_from_int(ds): desktop_status
+                concat(msg): "moscow: Kremlin exited with status " ds
+                print(_): msg
+            ]
         ]
     ]
     set(go): true

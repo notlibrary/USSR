@@ -3827,7 +3827,11 @@ init(result): arg_count arg_values [
     on(_): window "key" "kremlin_app_key"
     on(_): window "keyup" "kremlin_app_keyup"
     on(_): window "focus" "kremlin_app_focus"
-    try(_): "kremlin_motion_on" canvas
+    # Moscow's Petersburg supports motion. Call the script function
+    # directly because Russia forwards try to the host VM.
+    km_moscow(_kin_moscow):
+    if(_): _kin_moscow [ kremlin_motion_on(_): canvas ]
+    else(_): [ try(_): "kremlin_motion_on" canvas ]
     if(_): {_kin_window = false} [ fullscreen(_): window ]
     show(_): window
     set(km_tick_gen): 1!

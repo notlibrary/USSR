@@ -314,8 +314,8 @@ class Machine:
     """QEMU with the given disks (path, format), COM1 on a socket."""
 
     def __init__(self, qemu, disks, port, log, monitor=None, forward=(), cdrom=None,
-                 sata=(), extra=()):
-        cmd = [qemu, "-display", "none", "-no-reboot", "-m", "2048",
+                 sata=(), extra=(), memory=2048):
+        cmd = [qemu, "-display", "none", "-no-reboot", "-m", str(memory),
                "-device", "isa-debug-exit,iobase=0xf4,iosize=4",
                "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port]
         if monitor:
@@ -1635,8 +1635,8 @@ def install(qemu, disk, work, port, log, check):
         check("qemu-img makes a qcow2 disk", False, r.stderr.decode("utf-8", "replace"))
         return 0
 
-    # --- 2. install(_): onto it
-    m = Machine(qemu, [(disk, "raw"), (target, "qcow2")], port, log)
+    # --- 2. install(_): onto it, with 1 GiB to catch copy-time memory growth
+    m = Machine(qemu, [(disk, "raw"), (target, "qcow2")], port, log, memory=1024)
     serial = m.serial
     try:
         boot = clean(serial.output_to_prompt(timeout=60))
@@ -1849,6 +1849,11 @@ def uefi_xhci(qemu, work, port, log, check):
     return True
 
 
+def kremlin_panel(shot):
+    width, height, _ = shot
+    return width >= 640 and height >= 480 and pixel(shot, 80, height - 23) == (179, 38, 30)
+
+
 def uefi(qemu, work, port, log, check):
     """The ISO under UEFI (OVMF): BOOTX64.EFI from the ISO's EFI system partition
     loads Moscow; the root is the image in memory (/dev/ram), the console the
@@ -1880,7 +1885,7 @@ def uefi(qemu, work, port, log, check):
         end = time.time() + 600
         while True:
             shot = m.pixels(work)
-            if shot[0] == 1024 and shot[1] == 768 and pixel(shot, 80, 745) == (179, 38, 30):
+            if kremlin_panel(shot):
                 check("UEFI: Kremlin's desktop", True)
                 break
             if time.time() > end:
@@ -1895,7 +1900,7 @@ def uefi(qemu, work, port, log, check):
         time.sleep(2)
         shot = m.pixels(work)
         check("UEFI: Kremlin gives the screen back to the console",
-              shot[0] != 1024 or pixel(shot, 80, 745) != (179, 38, 30), "screen %dx%d" % (shot[0], shot[1]))
+              not kremlin_panel(shot), "screen %dx%d" % (shot[0], shot[1]))
         serial.sock.sendall(bytes([4]))
         try:
             m.proc.wait(timeout=60)
