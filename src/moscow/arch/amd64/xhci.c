@@ -58,6 +58,8 @@ static volatile struct trb *keyboard_request;
 static uintptr_t operational, doorbells, interrupter;
 static volatile uint64_t *clock_ticks;
 static uint64_t probe_start;
+static void (*trace)(const char *, uintptr_t);
+static unsigned completion_code;
 
 static void clear(volatile void *ptr, unsigned bytes)
 {
@@ -232,10 +234,23 @@ static int wait_event(unsigned type, volatile struct trb *request,
                       struct trb *result)
 {
     uint64_t start = *clock_ticks;
+    completion_code = 0;
     for (unsigned spin = 0; within(start, 50, spin); ++spin) {
-        if (take_event(result) && event_type(result) == type &&
-            result->parameter == (uintptr_t)request)
-            return (result->status >> 24) == SUCCESS;
+        if (take_event(result) && event_type(result) == type) {
+            unsigned code = result->status >> 24;
+            if (result->parameter == (uintptr_t)request) {
+                completion_code = code;
+                return code == SUCCESS;
+            }
+            /* An EP0 failure can point at the Setup or Data TRB instead
+             * of the Status TRB. There is only one request in flight. */
+            if (type == TRANSFER_EVENT && (result->control >> 24) == slot &&
+                ((result->control >> 16) & 31) == 1 &&
+                code != SUCCESS && code != SHORT_PACKET) {
+                completion_code = code;
+                return 0;
+            }
+        }
         __asm__ volatile("pause");
     }
     return 0;
@@ -247,7 +262,10 @@ static int command(unsigned type, uint64_t parameter, uint32_t flags,
     volatile struct trb *request =
         enqueue(&command_ring, parameter, 0, TYPE(type) | flags);
     ring_doorbell(0, 0);
-    return wait_event(COMMAND_EVENT, request, result);
+    if (wait_event(COMMAND_EVENT, request, result))
+        return 1;
+    trace("command type/completion", (type << 8) | completion_code);
+    return 0;
 }
 
 static int control(unsigned request_type, unsigned request, unsigned value,
@@ -276,7 +294,10 @@ static int control(unsigned request_type, unsigned request, unsigned value,
         TYPE(STATUS) | IOC | (length ? 0 : 1 << 16));
     first->control = setup_flags | setup_cycle;
     ring_doorbell(slot, 1);
-    return wait_event(TRANSFER_EVENT, status, &event);
+    if (wait_event(TRANSFER_EVENT, status, &event))
+        return 1;
+    trace("USB request/completion", (request << 8) | completion_code);
+    return 0;
 }
 
 static void endpoint(unsigned dci, unsigned type, unsigned packet,
@@ -487,14 +508,22 @@ static int start_controller(uintptr_t base, uint32_t address, uint16_t pci_flags
     if ((cap >> 24) != 1 || op_offset < 0x20 || !ports || !slots ||
         db_offset < op_offset || db_offset > MMIO_BYTES - (slots + 1) * 4 ||
         rt_offset < op_offset || rt_offset > MMIO_BYTES - 0x40 ||
-        scratch_count > SCRATCH_COUNT || !claim_controller(base, hcc))
+        scratch_count > SCRATCH_COUNT) {
+        trace("unsupported capability/scratch count", ((uint64_t)cap << 32) | scratch_count);
         return 0;
+    }
+    if (!claim_controller(base, hcc)) {
+        trace("firmware did not release controller", address);
+        return 0;
+    }
 
     operational = base + op_offset;
     doorbells = base + db_offset;
     interrupter = base + rt_offset + 0x20;
-    if (!wait_bits(operational + USBSTS, NOT_READY, 0, 100))
+    if (!wait_bits(operational + USBSTS, NOT_READY, 0, 100)) {
+        trace("controller not ready", read32(operational + USBSTS));
         return 0;
+    }
     write32(operational + USBCMD, 0);
     if (!wait_bits(operational + USBSTS, HALTED, HALTED, 20))
         goto stop;
@@ -533,6 +562,7 @@ static int start_controller(uintptr_t base, uint32_t address, uint16_t pci_flags
     if (!wait_bits(operational + USBSTS, HALTED, 0, 20))
         goto stop;
 
+    trace("controller running; root ports", ports);
     int powered = 0;
     uintptr_t first_port = operational + PORTSC;
     for (unsigned i = 0; i < ports; ++i) {
@@ -550,12 +580,15 @@ static int start_controller(uintptr_t base, uint32_t address, uint16_t pci_flags
         uintptr_t port = first_port + i * PORT_STRIDE;
         if (!(read32(port) & CONNECTED))
             continue;
+        trace("connected root port", i + 1);
         uintptr_t protocol = port_protocol(base, hcc, i + 1);
         unsigned major = protocol ? read32(protocol) >> 24 :
                          ((read32(port) >> 10) & 15) >= 4 ? 3 : 2;
         unsigned speed_id = reset_port(port, major);
-        if (!speed_id)
+        if (!speed_id) {
+            trace("port reset failed; PORTSC", read32(port));
             continue;
+        }
         unsigned speed = usb_speed(protocol, speed_id, major);
         if (speed < 1 || speed > 4)
             continue;
@@ -577,6 +610,7 @@ static int start_controller(uintptr_t base, uint32_t address, uint16_t pci_flags
         }
     }
 stop:
+    trace("stopping controller; USBSTS", read32(operational + USBSTS));
     write32(operational + USBCMD, 0);
     wait_bits(operational + USBSTS, HALTED, HALTED, 20);
     /* A failed controller must not keep using the shared DMA buffers. */
@@ -598,12 +632,14 @@ static int probe(void)
             uint32_t address = device | (fn << 8);
             if ((pci_read(address | 8) >> 8) != 0x0c0330)
                 continue;
+            trace("PCI bus/device/function", (address & 0xffffff) >> 8);
             uint32_t low = pci_read(address | 0x10);
             if ((low & 7) != 0 && (low & 7) != 4)
                 continue;
             uintptr_t base = low & ~15u;
             if (low & 4)
                 base |= (uintptr_t)pci_read(address | 0x14) << 32;
+            trace("MMIO BAR", base);
             base = map_controller(base);
             if (!base)
                 continue;
@@ -687,10 +723,11 @@ static unsigned poll(void)
 /* The assembly caller supplies the runtime's timer on boot. Polling is
  * nonblocking and returns zero or an encoded key. */
 __attribute__((section(".text.entry")))
-unsigned xhci(volatile uint64_t *ticks)
+unsigned xhci(volatile uint64_t *ticks, void (*log)(const char *, uintptr_t))
 {
     if (!ticks)
         return poll();
     clock_ticks = ticks;
+    trace = log;
     return probe();
 }

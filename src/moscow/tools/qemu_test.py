@@ -569,7 +569,7 @@ def main():
     if not args.no_cd:
         failures += cd_boot(qemu, work, args.port + 90, log, check)
     if not args.no_install:
-        failures += install(qemu, disk, work, args.port + 1, log, check)
+        failures += install(qemu, disk, work, args.port + 1, log, check, desktop=not args.no_gui)
     if not args.no_sata:
         sata(qemu, disk, work, args.port + 95, log, check)
     if not args.no_uefi:
@@ -1626,7 +1626,7 @@ def cd_boot(qemu, work, port, log, check):
     return 0
 
 
-def install(qemu, disk, work, port, log, check):
+def install(qemu, disk, work, port, log, check, desktop=True):
     """Installs onto an empty qcow2 disk, then boots it alone."""
     target = os.path.join(work, "target.qcow2")
     r = subprocess.run([find_qemu_img(qemu), "create", "-f", "qcow2", target, "96M"],
@@ -1682,12 +1682,16 @@ def install(qemu, disk, work, port, log, check):
         check("the installed disk boots",
               "root:    /dev/hda from sector 8192, Belarus 'comrade'" in boot
               and "USSR Moscow on kremlin, installed from ussr-install." in boot, boot)
+        serial.command('ls(_): "/src/ussr/src/belarus"')
+        listed = clean(serial.output_to_prompt())
+        check("the installed disk includes the Belarus sources",
+              all(re.search(r"^- +\d+  " + re.escape(name) + r"$", listed, re.M)
+                  for name in ("README.md", "belarus.su")), listed)
         for line, want in [
             ('getenv(h): "HOSTNAME"', r""),
             ("print(_): h", r"kremlin"),
             ('cat(_): "/etc/hostname"', r"kremlin"),
             ('cat(_): "/etc/gui.conf"', r"screen=1024x768\ndesktop=on"),
-            ('ls(_): "/src/ussr/src/belarus"', r"- +\d+  README\.md\n- +\d+  belarus\.su"),
             ('readfile(c): "/src/ussr/src/belarus/belarus.su"', r""),
             ("len(cl): c", r""),
             ("print(_): {cl > 10000}", r"true"),
@@ -1703,6 +1707,24 @@ def install(qemu, disk, work, port, log, check):
         check("installed disk conversation", False, str(e))
     finally:
         m.close()
+
+    if desktop:
+        m = Machine(qemu, [(target, "qcow2")], port + 2, log, monitor=port + 3)
+        try:
+            started = clean(m.serial.read_until(b"moscow: starting the desktop, Kremlin", timeout=60))
+            check("Kremlin autostarts from the initialized shell",
+                  "USSR Unified Shell Script REPL" in started, started)
+            deadline = time.monotonic() + 120
+            visible = False
+            while not visible and time.monotonic() < deadline:
+                visible = kremlin_panel(m.pixels(work))
+                if not visible:
+                    time.sleep(1)
+            check("the installed disk renders the desktop at boot", visible)
+        except (TimeoutError, EOFError) as e:
+            check("installed desktop startup", False, str(e))
+        finally:
+            m.close()
     return 0
 
 
@@ -1826,7 +1848,9 @@ def uefi_xhci(qemu, work, port, log, check):
         try:
             boot = clean(m.serial.output_to_prompt(timeout=60))
             ready = "Moscow runtime: xHCI USB keyboard ready" in boot
-            check(label + " reaches the shell", ready == keyboard, boot)
+            summary = ("console: xHCI USB keyboard detected" if keyboard else
+                       "console: no xHCI USB boot keyboard detected")
+            check(label + " reaches the shell", ready == keyboard and summary in boot, boot)
             if keyboard:
                 # A long line exercises both the transfer and event ring wrap.
                 m.keys('print(_): "USB-keyboard-ok-after-ring-wraz', hold_ms=40)
