@@ -63,7 +63,8 @@ typedef u16 CHAR16;
 #define BI_FB_FORMAT    0x848
 #define BI_RAMDISK_BASE 0x850
 #define BI_RAMDISK_BYTES 0x858
-#define BI_END          0x860
+#define BI_UEFI         0x860
+#define BI_END          0x864
 
 typedef struct { u32 a; u16 b, c; u8 d[8]; } EFI_GUID;
 
@@ -617,6 +618,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system)
     memset(bootinfo, 0, sizeof(bootinfo));
     *(u32 *)(bootinfo + BI_MAGIC) = 0x43534f4d;      /* 'MOSC' */
     *(u32 *)(bootinfo + BI_NFILES) = nfiles;
+    *(u32 *)(bootinfo + BI_UEFI) = 1;
     at = RT_BASE;
     for (i = 0; i < nfiles; ++i)
     {

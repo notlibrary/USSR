@@ -69,7 +69,8 @@ BI_FB_FORMAT    equ 0x848               ; u64: 1 blue first (BGRX), 0 red first
 ; A root image copied to memory, a disk to the kernel (/dev/ram), or 0
 BI_RAMDISK_BASE equ 0x850
 BI_RAMDISK_BYTES equ 0x858
-BI_END          equ 0x860
+BI_UEFI         equ 0x860               ; u32: native UEFI boot
+BI_END          equ 0x864
 EDD_SIZE        equ 74
 CD_BUFFER       equ 0x70000             ; stage 2: one 2048-byte block of the CD
 ELTORITO_TABLE  equ 0x7c00 + 8          ; the boot information table, in stage 1

@@ -17,7 +17,7 @@ import sys
 SECTOR = 2048
 UCS2_ESCAPES = (b"%/@", b"%/C", b"%/E")  # levels 1, 2 and 3
 # what the build adds that is not in the folder
-BOOT_FILES = ("boot/ussr.img", "boot/boot.catalog")
+BOOT_FILES = ("boot/ussr.img", "boot/boot.catalog", "boot/efiboot.img")
 
 
 def descriptors(f):

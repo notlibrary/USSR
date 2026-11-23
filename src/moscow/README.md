@@ -123,6 +123,12 @@ firmware's framebuffer (GOP), 80x25 cells in an 8x16 font made from Pobeda
 (`arch/amd64/fbfont.inc`, by `tools/fbfont.py`), scaled to the screen; Kremlin runs
 as from a BIOS boot and gives the screen back to the console when it ends.
 
+After UEFI hands off, Moscow polls PCI xHCI for a USB HID boot keyboard on
+a root port. Plug the keyboard directly into a USB 2.0 or USB 3.x port before
+boot. The driver serves the text console and probes for a bounded time.
+PS/2 and COM1 also work at the console, and the graphical desktop uses its
+existing PS/2 input path.
+
 ```bash
 qemu-system-x86_64 -m 2048 -bios edk2-x86_64-code.fd -cdrom USSR050.ISO   # or pflash, as OVMF likes
 ```
