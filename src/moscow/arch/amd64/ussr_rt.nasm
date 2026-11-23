@@ -256,7 +256,13 @@ start:
         mov edi, ticks
         mov esi, xhci_trace
         call xhci_call
-        test eax, eax
+        mov [xhci_input], rax
+        test al, 2
+        jz .usb_keyboard
+        mov esi, msg_boot_usb_mouse
+        call boot_progress
+.usb_keyboard:
+        test byte [xhci_input], 1
         jnz .usb_ready
         mov edi, val_input_missing
         call .input_status
@@ -264,7 +270,6 @@ start:
         call boot_progress
         jmp .devices_ready
 .usb_ready:
-        mov byte [xhci_on], 1
         mov edi, val_input_usb
         call .input_status
         mov esi, msg_boot_usb
@@ -330,6 +335,7 @@ xhci_poll:
         push r10
         push r11
         xor edi, edi
+        xor edx, edx
         call xhci_call
         pop r11
         pop r10
@@ -1639,7 +1645,7 @@ con_fill:
 .keyboard:
         cmp qword [gui_on], 0
         jne .done
-        cmp byte [xhci_on], 0
+        test byte [xhci_input], 1
         je .ps2
         call xhci_poll
         test eax, eax
@@ -7758,6 +7764,7 @@ msg_boot_entered: db "Moscow runtime: entered", 10, 0
 msg_boot_serial: db "Moscow runtime: serial ready", 10, 0
 msg_boot_keyboard: db "Moscow runtime: legacy keyboard probe complete", 10, 0
 msg_boot_usb:   db "Moscow runtime: xHCI USB keyboard ready", 10, 0
+msg_boot_usb_mouse: db "Moscow runtime: xHCI USB mouse ready", 10, 0
 msg_boot_legacy: db "Moscow runtime: legacy boot; xHCI probe skipped", 10, 0
 msg_boot_usb_probe: db "Moscow runtime: probing xHCI after UEFI handoff", 10, 0
 msg_boot_usb_missing: db "Moscow runtime: no xHCI USB boot keyboard", 10, 0
@@ -8013,7 +8020,7 @@ ansi_state:     resq 1              ; 0, 1 after ESC, 2 in ESC [ ...
 ansi_np:        resq 1
 ansi_p:         resq ANSI_PARAMS
 ansi_rev:       resq 1
-xhci_on:        resq 1
+xhci_input:     resq 1
 kbd_shift:      resq 1
 kbd_ctrl:       resq 1
 kbd_e0:         resq 1

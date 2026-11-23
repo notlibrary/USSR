@@ -123,11 +123,13 @@ firmware's framebuffer (GOP), 80x25 cells in an 8x16 font made from Pobeda
 (`arch/amd64/fbfont.inc`, by `tools/fbfont.py`), scaled to the screen; Kremlin runs
 as from a BIOS boot and gives the screen back to the console when it ends.
 
-After UEFI hands off, Moscow polls PCI xHCI for a USB HID boot keyboard on
-a root port. Plug the keyboard directly into a USB 2.0 or USB 3.x port before
-boot. The driver serves the text console and probes for a bounded time.
-PS/2 and COM1 also work at the console, and the graphical desktop uses its
-existing PS/2 input path.
+After UEFI hands off, Moscow polls PCI xHCI for a USB HID boot keyboard and
+relative mouse. Plug them directly into USB 2.0 or USB 3.x ports before boot.
+The keyboard serves the text console. The mouse serves Kremlin and other
+Petersburg windows. Moscow reads the HID report layout for vertical scrolling
+and falls back to the boot mouse format. A middle click opens a desktop item
+in Kremlin, like a double click. The graphical desktop uses a PS/2 keyboard.
+PS/2 and COM1 also work at the text console.
 
 ```bash
 qemu-system-x86_64 -m 2048 -bios edk2-x86_64-code.fd -cdrom USSR050.ISO   # or pflash, as OVMF likes
@@ -388,12 +390,11 @@ what it takes from a hosted system there:
 - `lib/gui/glfw.c`: GLFW on the machine: the firmware framebuffer (GOP
   under UEFI, VBE mode 1024x768x32 under BIOS), or the Bochs DISPI
   framebuffer at 32 bits (the picture starts 256 KiB into video memory,
-  so text mode comes back intact); the PS/2 keyboard as GLFW
-  key codes and the mouse: QEMU's vmmouse (VMware's backdoor port
-  0x5658) when there is one, which gives the pointer's place, so it
-  follows the host's pointer in and out of QEMU's window without a grab;
-  else the PS/2 mouse (a wheel one when it answers as one), which gives
-  only moves. Windows are composed bottom to top with title bars in
+  so text mode comes back intact), the PS/2 keyboard as GLFW key codes,
+  and pointer input from a USB boot mouse when xHCI detects one. Otherwise
+  QEMU's vmmouse (VMware's backdoor port 0x5658) gives the pointer's
+  absolute position, or the PS/2 mouse gives relative movement and
+  optional wheel data. Windows are composed bottom to top with title bars in
   Pobeda, dragged by them and closed by their box; a desktop (a window
   without a frame over the whole screen, as Kremlin's) stays at the
   bottom when clicked. Alt+Tab switches windows, whichever program has

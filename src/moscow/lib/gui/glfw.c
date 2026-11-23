@@ -25,6 +25,7 @@ extern void moscow_gui(long on);
 /* the firmware framebuffer the console is on: 0 its address (0: VGA
  * text mode), 1 width, 2 height, 3 pixels a line */
 extern long moscow_fb(long which);
+extern uint64_t moscow_usb_mouse(long present);
 
 static unsigned char petersburg_glyph(char character, int row);
 
@@ -65,6 +66,7 @@ static struct
     int lfb_stride;
     int lfb_bgrx;
     int firmware_framebuffer;
+    int usb_mouse;
     uint32_t *screen;       /* composed here, then copied */
     GLFWwindow *bottom;
     GLFWwindow *top;
@@ -408,8 +410,12 @@ long gui_video_start(long width, long height)
     glfw.on = 1;
     glfw.dirty = 1;
     moscow_gui(1);
-    ps2_mouse_start();
-    vmmouse_start();
+    glfw.usb_mouse = moscow_usb_mouse(1) != 0;
+    if (!glfw.usb_mouse)
+    {
+        ps2_mouse_start();
+        vmmouse_start();
+    }
     return 0;
 }
 
@@ -418,8 +424,11 @@ long gui_video_stop(void)
 {
     if (!glfw.on)
         return 0;
-    vmmouse_stop();
-    ps2_mouse(0xf5);
+    if (!glfw.usb_mouse)
+    {
+        vmmouse_stop();
+        ps2_mouse(0xf5);
+    }
     if (!glfw.firmware_framebuffer)
     {
         dispi(4, 0);
@@ -1376,7 +1385,26 @@ static void vmmouse_input(void)
     }
 }
 
-/* everything the controller has */
+static void usb_mouse_input(void)
+{
+    for (int count = 0; count < 64; ++count)
+    {
+        uint64_t report = moscow_usb_mouse(0);
+        if (!report)
+            break;
+        int dx = (int8_t)(report >> 8), dy = (int8_t)(report >> 16);
+        glfw_move_to(glfw.cursor_x + dx, glfw.cursor_y + dy);
+        glfw_button(0, (report & 1) != 0);
+        glfw_button(1, (report & 2) != 0);
+        glfw_button(2, (report & 4) != 0);
+        int wheel = -(int8_t)(report >> 24);
+        int direction = wheel < 0 ? -1 : 1;
+        for (; wheel != 0; wheel -= direction)
+            glfw_wheel(direction);
+    }
+}
+
+/* everything the controllers have */
 static void glfw_input(void)
 {
     int spin;
@@ -1384,11 +1412,13 @@ static void glfw_input(void)
     {
         uint8_t status = port_in8(0x64);
         uint8_t byte;
-        if ((status & 1) == 0)
+        if (status == 0xff || (status & 1) == 0)
             break;
         byte = port_in8(0x60);
         if (status & 0x20)
         {
+            if (glfw.usb_mouse)
+                continue;
             if (glfw.packet_n == 0 && (byte & 8) == 0)
                 continue;       /* not the first byte of a packet */
             glfw.packet[glfw.packet_n++] = byte;
@@ -1401,7 +1431,10 @@ static void glfw_input(void)
         else
             glfw_scancode(byte);
     }
-    vmmouse_input();
+    if (glfw.usb_mouse)
+        usb_mouse_input();
+    else
+        vmmouse_input();
 }
 
 void glfwPollEvents(void)

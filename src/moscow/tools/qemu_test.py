@@ -39,8 +39,8 @@ Then UEFI: the ISO under OVMF, UEFI firmware for QEMU (its edk2 file next
 to QEMU, or /usr/share/OVMF): BOOTX64.EFI loads Moscow, whose root is the
 image in memory and whose console is the framebuffer; Kremlin runs and
 gives the screen back (--no-uefi skips this). The xHCI tests also boot a
-minimal UEFI image with PS/2 disabled. Use --xhci-only to run just those
-tests after building the boot image and BOOTX64.EFI.
+minimal UEFI image with PS/2 disabled and exercise a USB mouse in Kremlin
+when the ISO is available. Use --xhci-only to run just the xHCI tests.
 Prints PASS or FAIL per check and exits nonzero on any failure.
 """
 import argparse
@@ -446,7 +446,7 @@ def main():
     ap.add_argument("--no-uefi", action="store_true",
                     help="skip UEFI (OVMF) boots")
     ap.add_argument("--xhci-only", action="store_true",
-                    help="run only the UEFI xHCI keyboard tests")
+                    help="run only the UEFI xHCI input tests")
     ap.add_argument("--no-usb", action="store_true",
                     help="no Legacy BIOS boot from a USB mass-storage disk")
     ap.add_argument("--no-sata", action="store_true",
@@ -488,7 +488,7 @@ def main():
 
     if args.xhci_only:
         with tempfile.TemporaryDirectory(prefix="moscow_xhci_") as work:
-            ran = uefi_xhci(qemu, work, args.port, log, check)
+            ran = uefi_xhci(qemu, work, args.port, log, check, desktop=not args.no_gui)
         if args.transcript:
             with open(args.transcript, "wb") as f:
                 f.write(b"".join(log))
@@ -574,7 +574,7 @@ def main():
         sata(qemu, disk, work, args.port + 95, log, check)
     if not args.no_uefi:
         uefi(qemu, work, args.port + 100, log, check)
-        uefi_xhci(qemu, work, args.port + 120, log, check)
+        uefi_xhci(qemu, work, args.port + 120, log, check, desktop=not args.no_gui)
 
     if args.transcript:
         with open(args.transcript, "wb") as f:
@@ -1816,7 +1816,7 @@ def uefi_drives(firmware, variables):
     return drives
 
 
-def uefi_xhci(qemu, work, port, log, check):
+def uefi_xhci(qemu, work, port, log, check, desktop=True):
     firmware = find_ovmf(qemu)
     boot_image = os.path.join(ROOT, "build", "moscow", "moscow.img")
     loader = os.path.join(ROOT, "build", "moscow", "efi", "BOOTX64.EFI")
@@ -1851,6 +1851,8 @@ def uefi_xhci(qemu, work, port, log, check):
             summary = ("console: xHCI USB keyboard detected" if keyboard else
                        "console: no xHCI USB boot keyboard detected")
             check(label + " reaches the shell", ready == keyboard and summary in boot, boot)
+            check(label + " detects the USB mouse",
+                  "Moscow runtime: xHCI USB mouse ready" in boot, boot)
             if keyboard:
                 # A long line exercises both the transfer and event ring wrap.
                 m.keys('print(_): "USB-keyboard-ok-after-ring-wraz', hold_ms=40)
@@ -1870,7 +1872,98 @@ def uefi_xhci(qemu, work, port, log, check):
         finally:
             m.close()
         port += 2
+    if desktop and os.path.isfile(ISO):
+        uefi_usb_mouse(qemu, firmware, work, port, log, check)
     return True
+
+
+def uefi_usb_mouse(qemu, firmware, work, port, log, check):
+    extra = uefi_drives(firmware, os.path.join(work, "xhci_mouse_vars.fd")) + [
+        "-machine", "q35,i8042=off",
+        "-device", "qemu-xhci,id=mouse_xhci",
+        "-device", "usb-mouse,bus=mouse_xhci.0",
+        "-device", "qemu-xhci,id=keyboard_xhci",
+        "-device", "usb-kbd,bus=keyboard_xhci.0",
+    ]
+    m = Machine(qemu, [], port, log, monitor=port + 1, cdrom=ISO, extra=extra)
+    try:
+        boot = clean(m.serial.output_to_prompt(timeout=60))
+        if "gui:     Petersburg" not in boot:
+            print("SKIP xHCI desktop test needs /lib/gui.so on the ISO")
+            return
+        check("UEFI finds the mouse and keyboard on separate xHCI controllers",
+              all("xHCI USB " + device + " ready" in boot for device in ("mouse", "keyboard")), boot)
+        m.keys('run(_): "kremlin"\n', hold_ms=40)
+        deadline = time.monotonic() + 180
+        while True:
+            shot = m.pixels(work)
+            if kremlin_panel(shot):
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Kremlin did not render")
+            time.sleep(1)
+        width, height, _ = shot
+
+        def move(dx, dy):
+            while dx or dy:
+                x, y = max(-90, min(90, dx)), max(-90, min(90, dy))
+                m.monitor_command("mouse_move %d %d" % (x, y))
+                time.sleep(0.2)
+                dx -= x
+                dy -= y
+
+        def click(button=1):
+            m.monitor_command("mouse_button %d" % button)
+            time.sleep(0.25)
+            m.monitor_command("mouse_button 0")
+
+        def menu_changed(before, after):
+            return sum(pixel(before, x, y) != pixel(after, x, y)
+                       for y in range(height - 250, height - 50)
+                       for x in range(220)) > 1000
+
+        move(50 - width // 2, height - 22 - height // 2)
+        before = m.pixels(work)
+        click()
+        time.sleep(3)
+        opened = m.pixels(work)
+        check("USB mouse movement and click open the Kremlin menu", menu_changed(before, opened))
+        move(350, -300)
+        click()
+        time.sleep(3)
+        check("USB mouse release and a second click close the menu",
+              menu_changed(opened, m.pixels(work)))
+
+        def region(shot, x, y, width, height):
+            stride = shot[0] * 3
+            return b"".join(shot[2][row * stride + x * 3:row * stride + (x + width) * 3]
+                            for row in range(y, y + height))
+
+        move(56 - 400, 112 - (height - 322))
+        before_middle = m.pixels(work)
+        click(4)
+        time.sleep(3)
+        icon_area = (0, 0, 250, 200)
+        check("USB middle click opens the Documents desktop folder",
+              region(before_middle, *icon_area) != region(m.pixels(work), *icon_area))
+
+        move(width - 50 - 56, height - 15 - 112)
+        click()
+        time.sleep(2)
+        calendar_area = (width - 264, height - 245, 230, 190)
+        calendar = region(m.pixels(work), *calendar_area)
+        m.monitor_command("mouse_move 0 0 -1")
+        time.sleep(2)
+        previous = region(m.pixels(work), *calendar_area)
+        check("USB wheel scroll changes the Kremlin calendar month", calendar != previous)
+        m.monitor_command("mouse_move 0 0 1")
+        time.sleep(2)
+        check("USB wheel scroll in the opposite direction restores the month",
+              calendar == region(m.pixels(work), *calendar_area))
+    except (TimeoutError, EOFError) as e:
+        check("UEFI xHCI desktop input", False, str(e))
+    finally:
+        m.close()
 
 
 def kremlin_panel(shot):

@@ -71,6 +71,7 @@ typedef struct petersburg_widget
     char *focus_callback;
     char *wheel_callback;
     char *menu_callback;
+    char *middle_callback;
     char *double_callback;
     char *char_callback;
     char *motion_callback;
@@ -2175,7 +2176,8 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
 
     if (window == NULL || action != GLFW_PRESS ||
         (button != GLFW_MOUSE_BUTTON_LEFT &&
-         button != GLFW_MOUSE_BUTTON_RIGHT))
+         button != GLFW_MOUSE_BUTTON_RIGHT &&
+         button != GLFW_MOUSE_BUTTON_MIDDLE))
         return;
     glfwGetCursorPos(native, &mouse_x, &mouse_y);
     {
@@ -2217,11 +2219,11 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
             mouse_x < widget->x || mouse_x >= widget->x + widget->width ||
             mouse_y < widget->y || mouse_y >= widget->y + widget->height)
             continue;
-        if (button == GLFW_MOUSE_BUTTON_RIGHT)
+        if (button != GLFW_MOUSE_BUTTON_LEFT)
         {
-            /* only canvases take the right button: their "menu" event */
             if (widget->type == PETERSBURG_CANVAS)
-                petersburg_queue(widget, widget->menu_callback, 2,
+                petersburg_queue(widget, button == GLFW_MOUSE_BUTTON_RIGHT ?
+                                 widget->menu_callback : widget->middle_callback, 2,
                                  (long)(mouse_x - widget->x),
                                  (long)(mouse_y - widget->y), 0);
             return;
@@ -2778,6 +2780,7 @@ static void petersburg_free_widget(petersburg_widget_t *widget)
     free(widget->focus_callback);
     free(widget->wheel_callback);
     free(widget->menu_callback);
+    free(widget->middle_callback);
     free(widget->double_callback);
     free(widget->char_callback);
     free(widget->motion_callback);
@@ -3034,6 +3037,9 @@ static int petersburg_set_callback(
     else if (strcmp(event_name, "menu") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         slot = &widget->menu_callback;
+    else if (strcmp(event_name, "middle") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        slot = &widget->middle_callback;
     else if (strcmp(event_name, "double") == 0 &&
              (widget->type == PETERSBURG_CANVAS ||
               widget->type == PETERSBURG_LIST))
@@ -3357,6 +3363,9 @@ static int petersburg_inject(
     else if (strcmp(event_name, "menu") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->menu_callback, 2, a, b, 0);
+    else if (strcmp(event_name, "middle") == 0 &&
+             widget->type == PETERSBURG_CANVAS)
+        petersburg_queue(widget, widget->middle_callback, 2, a, b, 0);
     else if (strcmp(event_name, "double") == 0 &&
              widget->type == PETERSBURG_CANVAS)
         petersburg_queue(widget, widget->double_callback, 2, a, b, 0);
