@@ -74,7 +74,8 @@ static volatile uint32_t *output_context;
 static uint32_t input_context[33 * 16] ALIGNED(4096);
 static volatile uint8_t descriptor[CONFIG_BYTES] ALIGNED(1024);
 static uint8_t previous[6];
-static unsigned pending[6], pending_next, pending_count;
+/* A report can release six keys, change eight modifiers and press six keys. */
+static unsigned pending[20], pending_next, pending_count, previous_modifiers;
 static unsigned context_words, slot;
 static volatile uint64_t *clock_ticks;
 static uint64_t probe_start;
@@ -778,7 +779,62 @@ static const uint16_t scans[] = {
     [100] = 0x2b
 };
 
-static void decode_report(const volatile uint8_t report[8])
+static unsigned key_scan(unsigned usage)
+{
+    return usage < sizeof scans / sizeof scans[0] ? scans[usage] : 0;
+}
+
+static unsigned gui_key_scan(unsigned usage)
+{
+    static const uint8_t function_scans[] = {
+        0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43,
+        0x44, 0x57, 0x58
+    };
+    static const uint16_t keypad_scans[] = {
+        0x45, 0x135, 0x37, 0x4a, 0x4e, 0x11c,
+        0x4f, 0x50, 0x51, 0x4b, 0x4c, 0x4d, 0x47, 0x48, 0x49, 0x52, 0x53
+    };
+    if (usage >= 57 && usage <= 69)
+        return function_scans[usage - 57];
+    if (usage >= 83 && usage <= 99)
+        return keypad_scans[usage - 83];
+    if (usage == 101)
+        return 0x15d; /* Menu */
+    return key_scan(usage);
+}
+
+static int key_in(const volatile uint8_t *keys, unsigned count, unsigned usage)
+{
+    for (unsigned i = 0; i < count; ++i)
+        if (keys[i] == usage)
+            return 1;
+    return 0;
+}
+
+static void decode_gui_keys(const volatile uint8_t report[8])
+{
+    static const uint16_t modifier_scans[] = {
+        0x1d, 0x2a, 0x38, 0x15b, 0x11d, 0x36, 0x138, 0x15c
+    };
+    for (unsigned i = 0; i < sizeof previous; ++i) {
+        unsigned usage = previous[i], scan = gui_key_scan(usage);
+        if (scan && !key_in(report + 2, 6, usage) && !key_in(previous, i, usage))
+            pending[pending_count++] = scan | 0x80;
+    }
+    unsigned changed = previous_modifiers ^ report[0];
+    for (unsigned i = 0; i < 8; ++i)
+        if (changed & (1u << i))
+            pending[pending_count++] = modifier_scans[i] |
+                                      ((report[0] & (1u << i)) ? 0 : 0x80);
+    previous_modifiers = report[0];
+    for (unsigned i = 0; i < 6; ++i) {
+        unsigned usage = report[i + 2], scan = gui_key_scan(usage);
+        if (scan && !key_in(previous, 6, usage) && !key_in(report + 2, i, usage))
+            pending[pending_count++] = scan;
+    }
+}
+
+static void decode_report(const volatile uint8_t report[8], int gui)
 {
     unsigned modifiers = ((report[0] & 0x22) ? 0x200 : 0) |
                          ((report[0] & 0x11) ? 0x400 : 0);
@@ -788,17 +844,14 @@ static void decode_report(const volatile uint8_t report[8])
 
     pending_next = 0;
     pending_count = 0;
-    for (unsigned i = 2; i < 8; ++i) {
-        unsigned usage = report[i];
-        if (usage >= sizeof scans / sizeof scans[0] || !scans[usage])
-            continue;
-        int held = 0;
-        for (unsigned j = 0; j < sizeof previous; ++j)
-            held |= usage == previous[j];
-        for (unsigned j = 2; j < i; ++j)
-            held |= usage == report[j];
-        if (!held)
-            pending[pending_count++] = scans[usage] | modifiers;
+    if (gui) {
+        decode_gui_keys(report);
+    } else {
+        for (unsigned i = 0; i < 6; ++i) {
+            unsigned usage = report[i + 2], scan = key_scan(usage);
+            if (scan && !key_in(previous, 6, usage) && !key_in(report + 2, i, usage))
+                pending[pending_count++] = scan | modifiers;
+        }
     }
     for (unsigned i = 0; i < sizeof previous; ++i)
         previous[i] = report[i + 2];
@@ -831,14 +884,18 @@ static void service_events(struct controller *host)
     }
 }
 
-static unsigned poll_keyboard(void)
+static unsigned poll_keyboard(int gui)
 {
     if (pending_next < pending_count)
         return pending[pending_next++];
     struct input_device *device = &inputs[KEYBOARD];
-    if (device->received) {
+    if (device->disconnected) {
+        static const uint8_t released[8] = {0};
+        device->disconnected = 0;
+        decode_report(released, gui);
+    } else if (device->received) {
         if (device->received == 8)
-            decode_report(device->report);
+            decode_report(device->report, gui);
         device->received = 0;
         submit_report(device);
     }
@@ -879,8 +936,9 @@ static uint64_t poll_mouse(void)
 }
 
 /* Boot returns an input-device mask. A null timer polls the indicated
- * input. The keyboard returns a scan code. The mouse returns buttons,
- * signed X, signed Y, optional signed wheel, and a validity bit (32). */
+ * input. Modes 0 and 2 return console and GUI scan codes, respectively.
+ * Mode 1 returns mouse buttons, signed X, Y and wheel, with bit 32 set.
+ * Mode 3 clears keyboard state when switching between console and GUI. */
 __attribute__((section(".text.entry")))
 uint64_t xhci(volatile uint64_t *ticks, void (*log)(const char *, uintptr_t),
               unsigned kind)
@@ -890,7 +948,12 @@ uint64_t xhci(volatile uint64_t *ticks, void (*log)(const char *, uintptr_t),
         trace = log;
         return probe();
     }
+    if (kind == 3) {
+        pending_next = pending_count = previous_modifiers = 0;
+        clear(previous, sizeof previous);
+        return 0;
+    }
     for (unsigned i = 0; i < controllers_kept; ++i)
         service_events(&controllers[i]);
-    return kind == MOUSE ? poll_mouse() : poll_keyboard();
+    return kind == MOUSE ? poll_mouse() : poll_keyboard(kind == 2);
 }

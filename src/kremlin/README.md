@@ -19,8 +19,12 @@ Start it from the repository root with a GLFW-enabled build:
 The first start creates the desktop folder with `Welcome.txt`, `Documents`
 and `Apps`, which holds launchers for the terminal (the USSR REPL), Files
 (Tver), the calculator (Klin), Drawing (Tula) and your home folder; the first
-four are pinned to the panel. Kremlin finds USSR from `USSR_HOME`, or from the
-folder it was started in when that is the repository (or `src/kremlin`), and
+four are pinned to the panel. With no desktop item selected, **Tab** focuses
+Kremlin and then cycles through the visible pins. **Shift+Tab** goes
+backward, **Enter** activates the focused button, and **Escape** clears
+panel focus. **Ctrl+Esc** opens the Kremlin menu.
+
+Kremlin finds USSR from `USSR_HOME`, or from the folder it was started in when that is the repository (or `src/kremlin`), and
 remembers it in the settings.
 
 ## Using it

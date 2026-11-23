@@ -26,6 +26,7 @@ extern void moscow_gui(long on);
  * text mode), 1 width, 2 height, 3 pixels a line */
 extern long moscow_fb(long which);
 extern uint64_t moscow_usb_mouse(long present);
+extern unsigned long moscow_usb_key(void);
 
 static unsigned char petersburg_glyph(char character, int row);
 
@@ -407,6 +408,8 @@ long gui_video_start(long width, long height)
     glfw.mode.refreshRate = 60;
     glfw.cursor_x = (int)width / 2;
     glfw.cursor_y = (int)height / 2;
+    memset(glfw.keys, 0, sizeof glfw.keys);
+    glfw.ctrl = glfw.alt = glfw.shift = glfw.e0 = 0;
     glfw.on = 1;
     glfw.dirty = 1;
     moscow_gui(1);
@@ -1129,6 +1132,9 @@ static int glfw_extended(int code)
     case 0x51: return GLFW_KEY_PAGE_DOWN;
     case 0x52: return GLFW_KEY_INSERT;
     case 0x53: return GLFW_KEY_DELETE;
+    case 0x5b: return 343;     /* left Super */
+    case 0x5c: return 347;     /* right Super */
+    case 0x5d: return 348;     /* Menu */
     default: return 0;
     }
 }
@@ -1430,6 +1436,16 @@ static void glfw_input(void)
         }
         else
             glfw_scancode(byte);
+    }
+    for (spin = 0; spin < 64; ++spin)
+    {
+        unsigned long scan = moscow_usb_key();
+        if (!scan)
+            break;
+        unsigned code = scan & 0x7f;
+        int key = scan & 0x100 ? glfw_extended(code) :
+                  code < sizeof glfw_scan / sizeof glfw_scan[0] ? glfw_scan[code] : 0;
+        glfw_key_event(key, (scan & 0x80) == 0);
     }
     if (glfw.usb_mouse)
         usb_mouse_input();

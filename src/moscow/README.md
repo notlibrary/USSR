@@ -125,10 +125,10 @@ as from a BIOS boot and gives the screen back to the console when it ends.
 
 After UEFI hands off, Moscow polls PCI xHCI for a USB HID boot keyboard and
 relative mouse. Plug them directly into USB 2.0 or USB 3.x ports before boot.
-The keyboard serves the text console. The mouse serves Kremlin and other
-Petersburg windows. Moscow reads the HID report layout for vertical scrolling
+The keyboard serves the text console and Petersburg windows, including
+Kremlin. The mouse serves the graphical desktop. Moscow reads the HID report layout for vertical scrolling
 and falls back to the boot mouse format. A middle click opens a desktop item
-in Kremlin, like a double click. The graphical desktop uses a PS/2 keyboard.
+in Kremlin, like a double click. PS/2 keyboards also work in the desktop.
 PS/2 and COM1 also work at the text console.
 
 ```bash
