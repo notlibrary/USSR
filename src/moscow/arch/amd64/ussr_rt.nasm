@@ -3264,6 +3264,16 @@ vm_exec:
         rep stosq
         pop rax
         pop rcx
+        jmp .init_area
+.too_deep_pop:
+        add rsp, 8
+.too_deep:
+        mov esi, e_too_deep
+        jmp vm_error
+.fresh:
+        mov edi, VM_AREA
+        call alloc
+.init_area:
         mov r12, rax
         mov rbx, rax
         mov [r12 + VM.prog], r13
@@ -3280,35 +3290,6 @@ vm_exec:
         mov [r12 + VM.ltop], rax
         add rax, LSTACK_BYTES
         mov [r12 + VM.lend], rax
-        jmp .ready
-.too_deep_pop:
-        add rsp, 8
-.too_deep:
-        mov esi, e_too_deep
-        jmp vm_error
-.fresh:
-        mov edi, VM_size
-        call alloc
-        mov r12, rax
-        mov rbx, rax
-        mov [r12 + VM.prog], r13
-        mov [r12 + VM.has_init], r8
-        ; the arguments into R0 ..
-        push rcx
-        mov rsi, r11
-        mov rdi, rbx
-        shl ecx, 4
-        rep movsb
-        pop rcx
-        mov edi, FRAME_size * MAX_FRAMES
-        call alloc
-        mov [r12 + VM.frames], rax
-        mov edi, LSTACK_BYTES
-        call alloc
-        mov [r12 + VM.ltop], rax
-        add rax, LSTACK_BYTES
-        mov [r12 + VM.lend], rax
-.ready:
         mov [r12 + VM.rsp], rsp
         mov r14, [r13 + PROG.code]
         xor r15d, r15d
@@ -3342,6 +3323,14 @@ vm_halt:
         mov eax, 1
 vm_leave:
         mov rsp, [r12 + VM.rsp]
+        cmp qword [r12 + VM.has_init], 3
+        je .restore
+        ; The frame/local area is scratch. Values that escape via a global
+        ; or vm_result have their own allocations and live in the pool.
+        mov rdi, [cur_pool]
+        mov rsi, r12
+        call pool_free
+.restore:
         pop r15
         pop r14
         pop r13
