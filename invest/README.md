@@ -20,6 +20,9 @@ layers of the neural net this is all investment in neuroslop enrichment is about
 Also looks like the whole system is scalable forward I saw articles on learning
 quadrillion parameters transformers(the planet has 20 quadrillions of ants)
 
+Even more imagine global network of data centers dedicated to run AI models 
+some of them are underground inside former missile silos That's it end of fantasy
+
 With this my accidental role as investment
 consultant mitm is over It's all like aerospace industry there is nobody fool
 inside not a single I return to the lenin development
