@@ -1179,11 +1179,20 @@ See the commit history to understand what changed
 We made usb flash driver to fix no belarus root mount problem
 I do not know if it worked
 
+Can you make USSR toolbars looks like on the screenshot
+Small square buttons with vertical line divide tools and tooltip shows tool name
+which shows on holding cursor on button
+Toolbar must be movable with drag and drop between other toolbars
+Toolbars must be located right below menu bar
+Also for each toolbar add tools menu with toolbar name with 
+checkbox which hide/shows the toolbar do it for tula novosibirsk and siberia
+
 Now let's do the kremlin desktop fix so I can use it without mouse
 If I press tab than nothing selected(files or folders) it frames kremlin button in bold white focus rectangle
 then I press tab more it moves focus rectangle to next buttons `terminal files calculator home`
 it starts the focused button then I press enter If i press Ctrl+Esc it opens kremlin button menu
 Other usability fixes for kremlin you have is welcomed
+
 
 
 

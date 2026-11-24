@@ -403,4 +403,6 @@ It's clean repository checkout
 On building machine counting intermediate library code build artifacts it's over 
 **~3 million lines** Claude is unstoppable Timestamp: 2026-11-19
 
+USSR.iso with Moscow kernel now runs in VBox QEMU bochs and bare metal too
+
 P.S. СССР Средство Создания Совершенных Разработок
