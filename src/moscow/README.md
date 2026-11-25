@@ -5,23 +5,33 @@
 Moscow is the USSR kernel for amd64 PCs. A NASM boot loader starts a
 NASM USSR runtime on bare metal, the runtime runs the kernel `moscow.ru`
 (compiled from `moscow.su`), and the kernel mounts its root file system,
-[Belarus](../belarus/README.md), and runs the shell `russia.ru`:
-`src/russia/russia.su`, the USSR interpreter written in USSR, whose REPL
-is the shell. The install disk holds it all:
+[Belarus](../belarus/README.md), and starts the Rush shell from `rush.ru`.
+The install disk contains:
 
 | Part | Source | On the disk |
 |------|--------|-------------|
 | 1. boot loader | `arch/amd64/boot.nasm` | sectors 0..15 |
 | 2. USSR runtime | `arch/amd64/ussr_rt.nasm` | `ussr_rt.bin`, in the boot image |
 | 3. kernel | `moscow.su` | `moscow.ru`, in the boot image |
-| 3. shell | `../russia/russia.su` | `russia.ru`, in the boot image |
-| 4. root file system | `../belarus/belarus.su` | partition 1, from 4 MiB: `/bin`, `/boot`, `/etc`, `/src/ussr` |
-| 5. installer | `install.su` | `/bin/install.ru` |
+| 4. shell | `../russia/rush.su` | `rush.ru`, in the boot image |
+| 5. Russia compatibility runtime and compiler | `../russia/russia.su` | `russia.ru`, in the boot image |
+| 6. root file system | `../belarus/belarus.su` | partition 1, from 4 MiB: `/bin`, `/boot`, `/etc`, `/src/ussr` |
+| 7. installer | `install.su` | `/bin/install.ru` |
 
-The boot image (parts 1 to 3, `moscow.img` on its own) sits in front of
-the partition, where the boot loader reads it; the Belarus partition
-holds the programs (`install.ru`, `stalin.ru`, `belarus.ru`), copies of
-the boot files, `/etc` and the whole USSR project.
+The boot image (`moscow.img`) sits in front of the partition. The Belarus
+partition holds the precompiled installer and disk tools, Kremlin, Mbltishi,
+Mbl, copies of the boot files, `/etc`, and the USSR source tree.
+
+Rush keeps the `russia>` prompt, line editing, history and USSR
+`name(result): arguments` syntax. Single commands with literal or variable
+arguments run directly on the NASM VM. Expressions, control flow and command
+lists use `/bin/ussr -c` to compile the submission before the NASM VM executes
+it. Declare interactive functions in their own submission to reuse them later.
+
+Use `run(status): "ussr" "-c" "/home/example.su" "/home/example.ru"` to
+generate NASM-compatible bytecode. `run(status): "russia" "-c"
+"/home/example.su" "/home/example.ru"` builds a Russia compatibility file.
+Moscow chooses the runtime for a `.ru` from its header.
 
 Moscow is 64-bit monolithic OS kernel on it's own (not POSIX not UNIX-like not Microsoft and not *BSD)
 However it inevitably has some traits usually found in the Unix world(zoo)
@@ -484,12 +494,12 @@ USSR code runs on one of three runtimes in Moscow:
 | | runtime | what it runs |
 |---|---|---|
 | 1 | `/bin/ussr`, the native ussr: the same C as on a host, a Linux program (musl's crt) | what you give it: `run(_): "ussr" "a.su"` |
-| 2 | the NASM USSR runtime, `ussr_rt.nasm`, on the bare machine | every `.ru`, and every `.su` that `/bin/ussr` compiles |
-| 3 | russia.ru, the USSR interpreter written in USSR, itself a `.ru` on 2 | a `.su` that 2 cannot run: no `/bin/ussr`, or it calls what 2 does not have |
+| 2 | the NASM USSR runtime, `ussr_rt.nasm`, on the bare machine | Rush, native `.ru` files and supported compiled `.su` programs |
+| 3 | `russia.ru`, the USSR interpreter written in USSR | Russia compatibility `.ru` files and fallback execution of `.su` programs |
 
-`run` picks one, from the russia shell too:
+Rush uses `run` to launch programs.
 
-- A `.ru` runs on 2.
+- A `.ru` selects runtime 2 or 3 according to its ABI.
 - A `.su` is compiled by `/bin/ussr -c` into `/tmp/moscow-<task>.ru`, which is
   read, removed, and run on 2. Its arguments and its status are what they
   would be through russia. When it does not compile, ussr says why and `run`

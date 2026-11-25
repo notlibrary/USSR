@@ -4,8 +4,8 @@
 #     make -f moscow.mk [-j N] [USSR=./ussr] [STRICT=1] [all|img|iso|boot|clean]
 #
 # build/moscow/moscow.img  the boot image alone: boot.nasm -> boot.bin,
-#                          ussr_rt.nasm -> ussr_rt.bin, moscow.su and
-#                          russia.su -> .ru with `ussr -c`, put together by
+#                          ussr_rt.nasm -> ussr_rt.bin, moscow.su, rush.su
+#                          and russia.su -> .ru with `ussr -c`, put together by
 #                          image.nasm
 # build/moscow/ussr.img    the install disk: an MBR disk whose first 4 MiB
 #                          hold the boot image and whose one partition is a
@@ -146,7 +146,10 @@ $(OUT)/xhci.bin: $(OUT)/xhci.o $(ARCH)/xhci.ld
 	$(XHCI_LD) --oformat=binary -T $(ARCH)/xhci.ld $< -o $@
 # the USSR the .ru files are compiled from: any of the project's .su
 SU_SRC := $(wildcard $(ROOT)/src/*.su $(ROOT)/src/*/*.su $(ROOT)/src/*/*/*.su)
-RU := moscow install russia stalin belarus
+BOOT_FILES := ussr_rt.bin moscow.ru russia.ru rush.ru
+NATIVE_RU := install stalin belarus
+RUSSIA_RU := Mbl Mbltishi kremlin
+BIN_RU := $(NATIVE_RU) $(RUSSIA_RU)
 
 $(OUT)/boot.bin: $(ARCH_SRC)
 	mkdir -p $(OUT)
@@ -163,7 +166,17 @@ $(OUT)/russia.ru $(OUT)/stalin.ru $(OUT)/belarus.ru: $(OUT)/%.ru: $(SU_SRC) $(US
 	mkdir -p $(OUT)
 	cd $(ROOT)/src/$* && $(RUN_USSR) -c $*.su $@
 
-$(OUT)/moscow.img: $(ARCH_SRC) $(OUT)/boot.bin $(OUT)/ussr_rt.bin $(OUT)/moscow.ru $(OUT)/russia.ru
+$(OUT)/rush.ru: $(SU_SRC) $(USSR)
+	mkdir -p $(OUT)
+	cd $(ROOT)/src/russia && $(RUN_USSR) -c rush.su $@
+
+# These applications use Russia-specific commands or GUI callbacks. Build
+# their compatibility artifacts on the host, with source paths as installed.
+$(addprefix $(OUT)/,$(addsuffix .ru,$(RUSSIA_RU))): $(OUT)/%.ru: $(SU_SRC) $(USSR)
+	mkdir -p $(OUT)
+	cd $(ROOT) && $(RUN_USSR) src/russia/russia.su -c src/$*/$*.su $@
+
+$(OUT)/moscow.img: $(ARCH_SRC) $(OUT)/boot.bin $(addprefix $(OUT)/,$(BOOT_FILES))
 	$(NASM) -f bin -i $(OUT)/ -i $(ARCH)/ $(ARCH)/image.nasm -o $@
 	@size=$$(wc -c < $@); echo "build/moscow/moscow.img: $$size bytes"; \
 	if [ "$$size" -gt $$((4 * 1048576)) ]; then \
@@ -369,7 +382,7 @@ certs:
 	    echo "moscow.mk: no /etc/ssl/certs.pem" >&2
 endif
 
-$(IMG): $(OUT)/moscow.img $(addprefix $(OUT)/,$(addsuffix .ru,$(RU))) $(OUT)/ussr_rt.bin $(LIBS) $(PROGS) \
+$(IMG): $(OUT)/moscow.img $(addprefix $(OUT)/,$(addsuffix .ru,$(BIN_RU))) $(LIBS) $(PROGS) \
 		$(OUT)/murmansk.rules $(LIST) $(CERTS) FORCE
 	rm -f $@
 	$(STALIN) mkimg $@ 64M >/dev/null
@@ -381,8 +394,8 @@ $(IMG): $(OUT)/moscow.img $(addprefix $(OUT)/,$(addsuffix .ru,$(RU))) $(OUT)/uss
 	dd if=$(OUT)/moscow.img of=$@ bs=440 count=1 conv=notrunc 2>/dev/null; \
 	dd if=$(OUT)/moscow.img of=$@ bs=512 skip=1 seek=1 count=$$((boot / 512 - 1)) conv=notrunc 2>/dev/null
 	$(BELARUS) mkfs $@ --part 1 --label ussr-install
-	for f in ussr_rt.bin moscow.ru russia.ru; do $(BELARUS) put $@ $(OUT)/$$f /boot/$$f; done
-	for f in install stalin belarus; do $(BELARUS) put $@ $(OUT)/$$f.ru /bin/$$f.ru; done
+	for f in $(BOOT_FILES); do $(BELARUS) put $@ $(OUT)/$$f /boot/$$f; done
+	for f in $(BIN_RU); do $(BELARUS) put $@ $(OUT)/$$f.ru /bin/$$f.ru; done
 	$(BELARUS) write $@ /etc/hostname "moscow-install"
 	$(BELARUS) write $@ /etc/motd "$(MOTD)"
 	$(BELARUS) put $@ $(OUT)/murmansk.rules /etc/murmansk.rules
@@ -420,8 +433,8 @@ ifeq ($(call have,$(XORRISO)),yes)
 $(ISO): $(IMG) $(ISO_EFI) FORCE
 	rm -rf $@ $(STAGE)
 	mkdir -p $(STAGE)/boot $(STAGE)/bin $(STAGE)/etc/ssl $(STAGE)/src/ussr
-	for f in ussr_rt.bin moscow.ru russia.ru; do cp $(OUT)/$$f $(STAGE)/boot/$$f; done
-	for f in install stalin belarus; do cp $(OUT)/$$f.ru $(STAGE)/bin/$$f.ru; done
+	for f in $(BOOT_FILES); do cp $(OUT)/$$f $(STAGE)/boot/$$f; done
+	for f in $(BIN_RU); do cp $(OUT)/$$f.ru $(STAGE)/bin/$$f.ru; done
 	for f in ussr ural moscow_native; do \
 	    if [ -f $(NATIVE)/$$f ]; then cp $(NATIVE)/$$f $(STAGE)/bin/$$f; fi; \
 	done

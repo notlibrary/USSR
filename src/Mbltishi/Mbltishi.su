@@ -3,7 +3,7 @@
 # PuTTY or the Windows console run theirs. Mbl's town neighbour: Mbl
 # edits in it, Kremlin starts it from the panel.
 #
-#     run(_): "Mbltishi"                    the shell, russia.ru
+#     run(_): "Mbltishi"                    the shell, rush.ru
 #     run(_): "Mbltishi" "Mbl" "notes.txt"  another program
 #
 # The window is a Petersburg canvas; the terminal on it is Moscow's own
@@ -139,7 +139,7 @@ init(result): arg_count arg_values [
         set(result): 1
         return(_): result
     ]
-    set(_mb_prog): "russia"
+    set(_mb_prog): "rush"
     vec(_mb_args): ""
     set(_mb_i): _mb_first
     while(_): {_mb_i < arg_count} [
@@ -149,7 +149,7 @@ init(result): arg_count arg_values [
         set(_mb_i): {_mb_i + 1}
     ]
     concat(_mb_title): "Mbltishi - " _mb_prog
-    if(_): {_mb_prog = "russia"} [ set(_mb_title): "Mbltishi - USSR shell" ]
+    if(_): {_mb_prog = "rush"} [ set(_mb_title): "Mbltishi - USSR shell" ]
     createwindow(_mb_w): _mb_title MB_WIDTH MB_HEIGHT
     canvas(_mb_c): _mb_w
     pack(_): _mb_c true

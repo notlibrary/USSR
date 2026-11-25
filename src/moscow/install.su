@@ -7,7 +7,7 @@
 # with Stalin and a Belarus file system in it; copies the system - or the
 # whole project - from the install disk's file system; and makes the new
 # disk boot Moscow by copying the boot loader, the runtime, moscow.ru and
-# russia.ru in front of the partition.
+# russia.ru and rush.ru in front of the partition.
 #
 # Under ussr it installs into a disk image the same way:
 #

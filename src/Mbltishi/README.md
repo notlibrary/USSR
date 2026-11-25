@@ -7,7 +7,7 @@ spelt with Mbl's small "bl" for the Ы.
 
 ![Mbltishi on the Kremlin desktop, the USSR shell in it printing hello world](../../docs/images/kremlin.gif)
 
-    russia> run(_): "Mbltishi"                    # the shell, russia.ru
+    russia> run(_): "Mbltishi"                    # the shell, rush.ru
     russia> run(_): "Mbltishi" "Mbl" "notes.txt"  # another program
 
 Kremlin, the desktop, starts it from its TERMINAL pin on Moscow

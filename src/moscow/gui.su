@@ -406,6 +406,10 @@ sys_launch(r): a [
         ]
         set(words): rest
     ]
+    # Earlier Kremlin installs seeded this source path in Terminal.kl.
+    if(_): {target = "/src/ussr/src/Mbltishi/Mbltishi.su"} [
+        set(target): "/bin/Mbltishi.ru"
+    ]
     mo_find(found): target words
     typeof(tf): found
     if(_): {tf != "vector"} [ return(r): r ]
@@ -438,13 +442,13 @@ sys_terminal_open(r): a [
 ]
 
 # terminal_run(st): t [program [args ...]]: the console is terminal t
-# while the program runs - the shell, russia.ru, when none is named;
+# while the program runs - the shell, rush.ru, when none is named;
 # its status
 sys_terminal_run(r): a [
     set(r): 127
     if(_): {gui_lib = null} [ return(r): r ]
     mo_arg(t): a 0 -1
-    mo_arg(prog): a 1 "russia"
+    mo_arg(prog): a 1 "rush"
     vec(args): ""
     len(n): a
     set(i): 2

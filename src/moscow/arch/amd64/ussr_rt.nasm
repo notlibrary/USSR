@@ -69,6 +69,7 @@ OP_BAND         equ 0x1f
 OP_BOR          equ 0x20
 OP_SHL          equ 0x21
 OP_SHR          equ 0x22
+OP_JMP          equ 0x30
 OP_HALT         equ 0xf0
 
 MAX_FRAMES      equ 1024
@@ -4719,6 +4720,25 @@ bi_typeof:
         mov eax, e_typeof
         jmp bi_error
 
+; k_shell_eval(status): source bindings
+bi_k_shell_eval:
+        cmp esi, 2
+        jne .bad
+        cmp qword [rdi], T_STR
+        jne .bad
+        cmp qword [rdi + 16], T_BTREE
+        jne .bad
+        mov rsi, [rdi + 8]
+        mov rdi, [rdi + 24]
+        push rdx
+        call eval_text
+        pop rdx
+        cdqe
+        jmp bi_int_out
+.bad:
+        mov eax, e_shell_eval
+        jmp bi_error
+
 bi_k_getline:
         push rdx
         call read_line
@@ -4971,23 +4991,8 @@ bi_k_exec_bytes:
         push qword [clib_count]
         push qword [cfree_head]
         mov r8, [rdi + 8]
-        mov rcx, [r8 + VEC_COUNT]
-        lea rdi, [rcx + 8]
-        call alloc
-        mov rbx, rax
-        mov rsi, [r8 + VEC_ITEMS]
-        xor edx, edx
-.pack:
-        cmp rdx, rcx
-        jae .packed
-        mov r9, [rsi + 8]
-        mov [rbx + rdx], r9b
-        add rsi, 16
-        inc rdx
-        jmp .pack
-.packed:
-        mov rsi, rbx
-        mov rdx, rcx
+        call pack_byte_vector
+        mov rbx, rsi
         cmp rcx, 4
         jb .ru
         cmp dword [rbx], 0x464c457f
@@ -5022,6 +5027,207 @@ bi_k_exec_bytes:
 .bad:
         mov eax, e_exec_bytes
         jmp bi_error
+
+; k_shell_exec(status): bytecode bindings hashes
+; Execute compiled shell input in the shell's pool. Import and export
+; globals by name so the same bindings work for direct commands too.
+; Pure declaration entries return the number of functions without running.
+bi_k_shell_exec:
+        cmp esi, 3
+        jne .bad
+        cmp qword [rdi], T_VEC
+        jne .bad
+        cmp qword [rdi + 16], T_BTREE
+        jne .bad
+        cmp qword [rdi + 32], T_BTREE
+        jne .bad
+        push rdx
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        push qword [rdi + 40]
+        mov r12, [rdi + 24]
+        mov r8, [rdi + 8]
+        call pack_byte_vector
+        push rsi
+        call rt_load
+        test rax, rax
+        jz .failed
+        mov r13, rax
+        ; The compiler jumps over every function body at top level.
+        ; Recognize exactly those jumps followed by HALT before saving
+        ; declaration source for future entries.
+        xor ecx, ecx
+        mov rsi, [r13 + PROG.code]
+.declarations:
+        cmp rcx, [r13 + PROG.ncode]
+        jae .run
+        lea rax, [rsi + rcx * 8]
+        cmp byte [rax], OP_HALT
+        je .declared
+        cmp byte [rax], OP_JMP
+        jne .run
+        mov eax, [rax + 4]
+        cmp rax, rcx
+        jbe .run
+        mov rcx, rax
+        jmp .declarations
+.declared:
+        mov rax, [r13 + PROG.nfuncs]
+        jmp .release
+.run:
+        xor r15d, r15d
+        call .bindings
+        push r12
+        mov r12, [rsp + 16]
+        mov r15d, 2
+        call .bindings
+        pop r12
+        mov rdi, r13
+        mov rsi, -1                    ; a shell entry always runs top level
+        xor edx, edx
+        xor ecx, ecx
+        xor r8d, r8d
+        call vm_exec
+        push rax
+        mov r15d, 1
+        call .bindings
+        mov r12, [rsp + 16]
+        mov r15d, 3
+        call .bindings
+        pop rax
+        neg rax
+.release:
+        push rax
+        call free_shell_program
+        pop rax
+        jmp .free_bytes
+.failed:
+        mov rax, -1
+.free_bytes:
+        pop rsi
+        add rsp, 8
+        mov rdi, [cur_pool]
+        call pool_free
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rdx
+        jmp bi_int_out
+.bindings:
+        xor r14d, r14d
+.next:
+        cmp r14, [r13 + PROG.nsyms]
+        jae .bound
+        mov rax, [r13 + PROG.symtext]
+        push qword [rax + r14 * 8]
+        push qword T_STR
+        mov rbx, r14
+        shl rbx, 4
+        test r15b, 2
+        jnz .hash
+        add rbx, [r13 + PROG.globals]
+        jmp .lookup
+.hash:
+        add rbx, [r13 + PROG.hash]
+.lookup:
+        mov rdi, r12
+        mov rsi, rsp
+        call bt_find
+        test r15b, 1
+        jnz .export
+        test rax, rax
+        jz .advance
+        shl rcx, 4
+        lea rax, [rax + BTN_VALS + rcx]
+        COPYVAL rbx, rax, rdx
+        jmp .advance
+.export:
+        ; Avoid adding symbols that were only used as names.
+        cmp qword [rbx], T_UNSET
+        je .advance
+        test rax, rax
+        jnz .put
+        test r15b, 2
+        jnz .put
+        cmp qword [rbx], T_NULL
+        je .advance
+.put:
+        mov rdx, rbx
+        call bt_put
+.advance:
+        add rsp, 16
+        inc r14
+        jmp .next
+.bound:
+        ret
+.bad:
+        mov eax, e_shell_exec
+        jmp bi_error
+
+; r8 = vector -> rsi = packed bytes, rdx and rcx = size.
+pack_byte_vector:
+        mov rcx, [r8 + VEC_COUNT]
+        lea rdi, [rcx + 8]
+        call alloc
+        mov rsi, [r8 + VEC_ITEMS]
+        xor edx, edx
+.next:
+        cmp rdx, rcx
+        jae .done
+        mov r9, [rsi + 8]
+        mov [rax + rdx], r9b
+        add rsi, 16
+        inc rdx
+        jmp .next
+.done:
+        mov rsi, rax
+        ret
+
+; r13 = program loaded for one Rush entry. Globals, literals and struct
+; names can escape the VM, so their strings and values stay in the pool.
+; The loader's lookup tables (including its two large intern tables)
+; and function metadata are no longer referenced.
+free_shell_program:
+        mov r14, [r13 + PROG.funcs]
+        mov r15, [r13 + PROG.nfuncs]
+.functions:
+        test r15, r15
+        jz .tables
+        mov rsi, [r14 + FUNC.params]
+        call .free
+        mov rsi, [r14 + FUNC.locals]
+        call .free
+        add r14, FUNC_size
+        dec r15
+        jmp .functions
+.tables:
+        mov r14d, shell_program_tables
+.next:
+        mov eax, [r14]
+        cmp eax, -1
+        je .program
+        mov rsi, [r13 + rax]
+        call .free
+        add r14, 4
+        jmp .next
+.program:
+        mov rsi, r13
+.free:
+        test rsi, rsi
+        jz .done
+        mov rdi, [cur_pool]
+        jmp pool_free
+.done:
+        ret
+
+shell_program_tables:
+        dd PROG.htab, PROG.symtext, PROG.consts, PROG.strsym
+        dd PROG.globals, PROG.hash, PROG.symbuiltin, PROG.funcs, PROG.siteret, -1
 
 ; k_ru_check(_): -> the next .ru loaded is only checked, not run: its
 ; load fails quietly (k_exec_bytes gives 1), and k_ru_missing(s): then
@@ -5651,6 +5857,7 @@ op_eval:
         cmp qword [rbx], T_STR
         jne .bad
         mov rsi, [rbx + 8]
+        xor edi, edi                    ; use this program's variables
         call eval_text
         test eax, eax
         jnz vm_fail
@@ -5671,15 +5878,19 @@ EV_OUT          equ EV_MAX_ARGS * 16
 EV_NAME         equ EV_OUT + 16         ; bytes, length
 EV_RET          equ EV_NAME + 16
 EV_COUNT        equ EV_RET + 16
-EV_SIZE         equ EV_COUNT + 16
+EV_BINDINGS     equ EV_COUNT + 8
+EV_SIZE         equ EV_BINDINGS + 8
 
-; rsi = string -> eax: 0, or -1 after a message
+; rsi = string, rdi = shell bindings or 0 for EVAL.
+; Returns 0 on success, -1 after a runtime error, or 2 for shell input
+; that must go through the compiler. Shell mode accepts one command.
 eval_text:
         push rbp
         push r14
         push r15
         sub rsp, EV_SIZE
         mov rbp, rsp
+        mov [rbp + EV_BINDINGS], rdi
         lea r14, [rsi + STR_BYTES]      ; cursor
         mov r15, [rsi + STR_LEN]
         add r15, r14                    ; end
@@ -5687,6 +5898,11 @@ eval_text:
         call ev_skip_blank_lines
         cmp r14, r15
         jae .ok
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .name
+        cmp byte [r14], '#'
+        je .ok
+.name:
         call ev_ident
         jc .syntax
         mov [rbp + EV_NAME], rsi
@@ -5716,7 +5932,16 @@ eval_text:
         cmp r14, r15
         jae .call
         cmp byte [r14], 10
+        jne .argument_value
+        cmp qword [rbp + EV_BINDINGS], 0
+        jne .syntax
+        jmp .call
+.argument_value:
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .value
+        cmp byte [r14], '#'
         je .call
+.value:
         mov rax, [rbp + EV_COUNT]
         cmp rax, EV_MAX_ARGS
         jae .syntax
@@ -5725,10 +5950,29 @@ eval_text:
         call ev_value
         jc .syntax
         inc qword [rbp + EV_COUNT]
-        jmp .argument
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .argument
+        cmp r14, r15
+        jae .call
+        cmp byte [r14], ' '
+        je .argument
+        cmp byte [r14], 9
+        je .argument
+        cmp byte [r14], 13
+        je .argument
+        jmp .syntax
 .call:
         mov rsi, [rbp + EV_NAME]
         mov rcx, [rbp + EV_NAME + 8]
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .builtin
+        mov edi, s_shell_set
+        call bytes_eq_z
+        je .set
+        mov edi, s_shell_print
+        call bytes_eq_z
+        je .print
+.builtin:
         call builtin_find
         test rax, rax
         jz .unknown
@@ -5745,6 +5989,8 @@ eval_text:
         call r8
         test eax, eax
         jnz .failed
+        cmp qword [rbp + EV_BINDINGS], 0
+        jne .save
         ; the result into the return variable, when the program has it
         mov rsi, [rbp + EV_RET]
         mov rcx, [rbp + EV_RET + 8]
@@ -5756,7 +6002,38 @@ eval_text:
         lea rsi, [rbp + EV_OUT]
         COPYVAL rax, rsi, rdx
         jmp .command
+.set:
+        cmp qword [rbp + EV_COUNT], 1
+        jne .syntax
+        lea rax, [rbp + EV_OUT]
+        COPYVAL rax, rbp, rdx
+.save:
+        mov rsi, [rbp + EV_RET]
+        mov rcx, [rbp + EV_RET + 8]
+        mov edi, s_shell_discard
+        call bytes_eq_z
+        je .ok
+        call new_string
+        push rax
+        push qword T_STR
+        mov rdi, [rbp + EV_BINDINGS]
+        mov rsi, rsp
+        lea rdx, [rbp + EV_OUT]
+        call bt_put
+        add rsp, 16
+        jmp .ok
+.print:
+        ; The compiler implements print as an opcode.
+        cmp qword [rbp + EV_COUNT], 1
+        jne .syntax
+        lea rsi, [rbp + EV_ARGS]
+        xor edx, edx
+        call print_value
+        PUTC 10
+        jmp .ok
 .unknown:
+        cmp qword [rbp + EV_BINDINGS], 0
+        jne .compile
         PUTS msg_unknown1
         mov rsi, [rbp + EV_NAME]
         mov rcx, [rbp + EV_NAME + 8]
@@ -5764,6 +6041,8 @@ eval_text:
         PUTS msg_unknown2
         jmp .failed
 .syntax:
+        cmp qword [rbp + EV_BINDINGS], 0
+        jne .compile
         PUTS msg_eval1
         mov rsi, r14
         mov rcx, r15
@@ -5772,6 +6051,9 @@ eval_text:
         PUTS msg_eval2
 .failed:
         mov eax, -1
+        jmp .out
+.compile:
+        mov eax, 2
         jmp .out
 .ok:
         xor eax, eax
@@ -5881,6 +6163,8 @@ ev_value:
         mov rdi, s_false
         call bytes_eq_z
         je .false
+        cmp qword [rbp + EV_BINDINGS], 0
+        jne .binding
         call intern_find
         cmp eax, -1
         je .null
@@ -5888,6 +6172,21 @@ ev_value:
         xor edx, edx
         call var_cell
         pop rdx
+        COPYVAL rdx, rax, rcx
+        clc
+        ret
+.binding:
+        call new_string
+        push rax
+        push qword T_STR
+        mov rsi, rsp
+        mov rdi, [rbp + EV_BINDINGS]
+        call bt_find
+        add rsp, 16
+        test rax, rax
+        jz .null
+        shl rcx, 4
+        lea rax, [rax + BTN_VALS + rcx]
         COPYVAL rdx, rax, rcx
         clc
         ret
@@ -5923,9 +6222,21 @@ ev_value:
         cmp edi, 9
         ja .number_end
         imul rax, rax, 10
+        jo .overflow
+.add_digit:
         add rax, rdi
+        jo .overflow_after_add
+.advance_digit:
         inc r14
         jmp .digit
+.overflow:
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .add_digit
+        jmp .bad
+.overflow_after_add:
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .advance_digit
+        jmp .bad
 .number_end:
         cmp r14, rsi
         je .bad
@@ -7467,6 +7778,8 @@ bi_table:
         dq n_pop, bi_pop
         dq n_at, bi_at
         dq n_typeof, bi_typeof
+        dq n_k_shell_eval, bi_k_shell_eval
+        dq n_k_shell_exec, bi_k_shell_exec
         dq n_k_getline, bi_k_getline
         dq n_k_prompt, bi_k_prompt
         dq n_k_clear, bi_k_clear
@@ -7639,6 +7952,13 @@ n_push:         db "push", 0
 n_pop:          db "pop", 0
 n_at:           db "at", 0
 n_typeof:       db "typeof", 0
+n_k_shell_exec: db "k_shell_exec", 0
+e_shell_exec:  db "k_shell_exec(status): bytecode bindings hashes", 0
+n_k_shell_eval: db "k_shell_eval", 0
+e_shell_eval:  db "k_shell_eval(status): source bindings", 0
+s_shell_set:   db "set", 0
+s_shell_print: db "print", 0
+s_shell_discard: db "_", 0
 n_k_getline:    db "k_getline", 0
 n_k_prompt:     db "k_prompt", 0
 n_k_clear:      db "k_clear", 0

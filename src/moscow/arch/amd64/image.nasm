@@ -2,7 +2,7 @@
 ;
 ;     nasm -f bin -i BUILD/ -i src/moscow/arch/amd64/ image.nasm -o moscow.img
 ;
-; BUILD holds boot.bin, ussr_rt.bin, moscow.ru and russia.ru (moscow.mk
+; BUILD holds boot.bin, ussr_rt.bin, moscow.ru, russia.ru and rush.ru (moscow.mk
 ; makes them). The file table lists the runtime first: stage 2 jumps to
 ; the first file. Every file starts on a sector; the image is padded to
 ; a whole number of 64 KiB so emulators see a plausible disk.
@@ -32,14 +32,16 @@ image:
 
 toc:
         db "MOSCOWFS"
-        dd 3, 0
+        dd 4, 0
         FILE_ENTRY "ussr_rt.bin", f_runtime
         FILE_ENTRY "moscow.ru", f_moscow
         FILE_ENTRY "russia.ru", f_russia
+        FILE_ENTRY "rush.ru", f_rush
         times 512 - ($ - toc) db 0
 
         FILE_DATA f_runtime, "ussr_rt.bin"
         FILE_DATA f_moscow, "moscow.ru"
         FILE_DATA f_russia, "russia.ru"
+        FILE_DATA f_rush, "rush.ru"
 
         align 65536, db 0
