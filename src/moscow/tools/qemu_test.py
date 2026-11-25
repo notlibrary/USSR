@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boots build/moscow/ussr.img in QEMU and drives the Russia shell.
+"""Boots build/moscow/ussr.img in QEMU and drives the Rush shell.
 
     python src/moscow/tools/qemu_test.py [--qemu PATH] [--transcript FILE]
                                          [--accel whpx|kvm] [--no-usb] [--no-mbl]
@@ -8,12 +8,10 @@
 
 QEMU runs headless with the first serial port on a local TCP socket.
 The script waits for each "russia> " prompt (the PS1 Moscow sets), types
-a line of USSR into src/russia/russia.su, the interpreter running as the
-shell, and checks what it printed: plain USSR as on the hosted ussr, the
-kernel's commands on its Belarus root file system (ls, cat, writefile,
-run, ...) and the btree container.
+a line of USSR into Rush (src/russia/rush.su), and checks its output.
+The checks cover USSR syntax, Belarus file commands and btrees.
 
-Then the Mbl editor (src/Mbl/Mbl.su, run from its source) writes a note,
+Then the bundled Mbl editor writes a note,
 checked on the serial line and in the VGA text memory (read through the
 QEMU monitor); halt(_): stops the machine and the next boot finds the
 note on the disk and opens it again (--no-mbl skips this).
@@ -66,16 +64,14 @@ ISO = os.path.join(ROOT, "build", "moscow", "ussr.iso")
 PROMPT = b"russia> "
 ACCEL = None            # --accel: QEMU's -accel (whpx, kvm), else TCG
 
-# command, then a regular expression the whole output must match. The
-# shell is src/russia/russia.su, the USSR interpreter written in USSR;
-# the answers are the ones it gives on the hosted ussr, except where the
-# Moscow runtime says more (why an entry failed) or knows other files.
-FAILED = r"USSR scheduler: process \d+ \(init\) failed\nUSSR VM: execution failed \(status -1\)"
+# Each command and the expected output from Rush on Moscow.
 CHECKS = [
     ('print(_): "hello, Moscow"', r"hello, Moscow"),
     ("foo(r): x [ set(r): {x * x} ]", r""),
     ("foo(z): 7", r""),
     ("print(_): z", r"49"),
+    ("set(shell_cell): 12!", r""),
+    ("print(_): shell_cell?", r"12"),
     ("set(i): 0", r""),
     ("while(_): {i < 3} [ print(_): i set(i): {i + 1} ]", r"0\n1\n2"),
     ("set(t): 0", r""),
@@ -98,8 +94,8 @@ CHECKS = [
     ('decode(d): "[1,`a`,2.5]"', r""),
     ("print(_): d", r"\[1,`a`,2\.5\]"),
     ("print(_): {7 / 2}", r"3\.5"),
-    ("print(_): {1 / 0}", r"USSR VM: division by zero \(ip \d+\)\n" + FAILED),
-    ("nosuch(_): 1", r"USSR: unknown command 'nosuch' \(not in the Moscow runtime\)\n" + FAILED),
+    ("print(_): {1 / 0}", r"USSR VM: division by zero \(ip \d+\)"),
+    ("nosuch(_): 1", r"USSR: unknown command 'nosuch' \(not in the Moscow runtime\)"),
     # the btree container
     ("btree(bt):", r""),
     ('btput(_): bt "moscow" 1', r""),
@@ -110,11 +106,11 @@ CHECKS = [
     ("print(_): fl", r"kiev"),
     ("btlen(bn): bt", r""),
     ("print(_): bn", r"3"),
-    # the kernel's commands, through russia.su's host calls
+    # the kernel's commands, called directly by Rush
     ("uptime(_):", r"up \d+ s"),
     # the shell keeps its history in $HOME/.ussr_history, HOME being /
-    ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\nd +\d+  lib\nd +\d+  src"),
-    ('ls(_): "/bin"', r"- +\d+  belarus\.ru\n- +\d+  install\.ru\n(- +\d+  moscow_native\n)?- +\d+  stalin\.ru(\n- +\d+  ural)?(\n- +\d+  ussr)?"),
+    ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\n(d +\d+  home\n)?d +\d+  lib\nd +\d+  src(\nd +\d+  tmp)?"),
+    ('ls(_): "/bin"', r"- +\d+  Mbl\.ru\n- +\d+  Mbltishi\.ru\n- +\d+  belarus\.ru\n- +\d+  install\.ru\n- +\d+  kremlin\.ru\n(- +\d+  moscow_native\n)?- +\d+  stalin\.ru(\n- +\d+  ural)?(\n- +\d+  ussr)?"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
     ('readfile(n): "/home/notes.txt"', r""),
@@ -179,24 +175,24 @@ CHECKS = [
     # regular expressions: the NASM engine, with the list ussr's C one passes
     ('run(st): "/src/ussr/tests/regex_test.su"', r"(PASS [^\n]*\n)+regex: all passed"),
     ("print(_): st", r"0"),
-    (r're_test(b): "(" "x"', r"USSR: re_test: bad pattern: missing \)\n" + FAILED),
-    (r're_test(b): ")" "x"', r"USSR: re_test: bad pattern: unmatched \)\n" + FAILED),
-    (r're_test(b): "a)" "x"', r"USSR: re_test: bad pattern: unmatched \)\n" + FAILED),
-    (r're_test(b): "[a" "x"', r"USSR: re_test: bad pattern: missing \]\n" + FAILED),
-    (r're_test(b): "*a" "x"', r"USSR: re_test: bad pattern: nothing to repeat\n" + FAILED),
-    (r're_test(b): "+" "x"', r"USSR: re_test: bad pattern: nothing to repeat\n" + FAILED),
-    (r're_test(b): "?" "x"', r"USSR: re_test: bad pattern: nothing to repeat\n" + FAILED),
-    (r're_test(b): "a**" "x"', r"USSR: re_test: bad pattern: nothing to repeat\n" + FAILED),
-    (r're_test(b): "a{2}{3}" "x"', r"USSR: re_test: bad pattern: nothing to repeat\n" + FAILED),
-    (r're_test(b): "(a)\\1" "x"', r"USSR: re_test: bad pattern: backreferences are not supported\n" + FAILED),
-    (r're_test(b): "(?=a)" "x"', r"USSR: re_test: bad pattern: of \(\? only \(\?: is supported\n" + FAILED),
-    (r're_test(b): "\\q" "x"', r"USSR: re_test: bad pattern: unknown escape\n" + FAILED),
-    (r're_test(b): "\\" "x"', r"USSR: re_test: bad pattern: \\ at the end\n" + FAILED),
-    (r're_test(b): "\\xZ" "x"', r"USSR: re_test: bad pattern: \\x takes two hex digits\n" + FAILED),
-    (r're_test(b): "[z-a]" "x"', r"USSR: re_test: bad pattern: bad range\n" + FAILED),
-    (r're_test(b): "a{3,2}" "x"', r"USSR: re_test: bad pattern: bad \{n,m\}\n" + FAILED),
-    (r're_test(b): "a{1001}" "x"', r"USSR: re_test: bad pattern: bad \{n,m\}\n" + FAILED),
-    (r're_test(b): "(a{1000}){1000}" "x"', r"USSR: re_test: bad pattern: too big\n" + FAILED),
+    (r're_test(b): "(" "x"', r"USSR: re_test: bad pattern: missing \)"),
+    (r're_test(b): ")" "x"', r"USSR: re_test: bad pattern: unmatched \)"),
+    (r're_test(b): "a)" "x"', r"USSR: re_test: bad pattern: unmatched \)"),
+    (r're_test(b): "[a" "x"', r"USSR: re_test: bad pattern: missing \]"),
+    (r're_test(b): "*a" "x"', r"USSR: re_test: bad pattern: nothing to repeat"),
+    (r're_test(b): "+" "x"', r"USSR: re_test: bad pattern: nothing to repeat"),
+    (r're_test(b): "?" "x"', r"USSR: re_test: bad pattern: nothing to repeat"),
+    (r're_test(b): "a**" "x"', r"USSR: re_test: bad pattern: nothing to repeat"),
+    (r're_test(b): "a{2}{3}" "x"', r"USSR: re_test: bad pattern: nothing to repeat"),
+    (r're_test(b): "(a)\\1" "x"', r"USSR: re_test: bad pattern: backreferences are not supported"),
+    (r're_test(b): "(?=a)" "x"', r"USSR: re_test: bad pattern: of \(\? only \(\?: is supported"),
+    (r're_test(b): "\\q" "x"', r"USSR: re_test: bad pattern: unknown escape"),
+    (r're_test(b): "\\" "x"', r"USSR: re_test: bad pattern: \\ at the end"),
+    (r're_test(b): "\\xZ" "x"', r"USSR: re_test: bad pattern: \\x takes two hex digits"),
+    (r're_test(b): "[z-a]" "x"', r"USSR: re_test: bad pattern: bad range"),
+    (r're_test(b): "a{3,2}" "x"', r"USSR: re_test: bad pattern: bad \{n,m\}"),
+    (r're_test(b): "a{1001}" "x"', r"USSR: re_test: bad pattern: bad \{n,m\}"),
+    (r're_test(b): "(a{1000}){1000}" "x"', r"USSR: re_test: bad pattern: too big"),
     ('re_replace(s): "(\\\\w+)" "hello world" "<\\\\1>"', r""),
     ("print(_): s", r"<hello> <world>"),
     # a program's C code runs in ring 3: its own memory is fine, the
@@ -509,9 +505,10 @@ def main():
         boot = clean(serial.output_to_prompt(timeout=60))
         check("boot reaches the russia prompt",
               "USSR runtime: NASM VM for amd64, running moscow.ru" in boot
+              and "moscow: starting rush.ru" in boot
               and "USSR Unified Shell Script REPL" in boot, boot)
         check("kernel lists the image",
-              "image:   ussr_rt.bin moscow.ru russia.ru" in boot, boot)
+              "image:   ussr_rt.bin moscow.ru russia.ru rush.ru" in boot, boot)
         check("kernel mounts the Belarus root",
               "root:    /dev/hda from sector 8192, Belarus 'ussr-install'" in boot, boot)
         check("the network card gets an address from DHCP",
@@ -600,8 +597,7 @@ def mbl_frame(serial, timeout=120.0):
 
 
 def mbl(qemu, disk, port, log, check):
-    """Writes a note with the Mbl editor, src/Mbl/Mbl.su run from its
-    source by russia, halts, boots again and finds the note there."""
+    """Writes a note with Mbl, halts, and finds the note after reboot."""
     m = Machine(qemu, [(disk, "raw")], port, log, monitor=port + 1)
     serial = m.serial
     try:
@@ -1484,10 +1480,10 @@ def gui(qemu, disk, work, port, log, check):
         check("the shell in Mbltishi runs what is typed in its window", "hello world" in said, said)
         # Kremlin launched it as a task of its own, and goes on next to it
         m.keys("tasks(_):\n")
-        said = clean(serial.read_until(b"Mbltishi.su\r\n", timeout=120))
+        said = clean(serial.read_until(b"Mbltishi.ru\r\n", timeout=120))
         check("Mbltishi is a task of its own next to Kremlin's",
               re.search(r"^ +0  (run|wait) .*moscow$", said, re.M) is not None
-              and re.search(r"^ +\d+  run .*Mbltishi\.su$", said, re.M) is not None, said)
+              and re.search(r"^ +\d+  run .*Mbltishi\.ru$", said, re.M) is not None, said)
         m.monitor_command("sendkey ctrl-d")
         wait_for("Mbltishi closes with the shell",
                  lambda s: pixel(s, 500, 330) != (0, 0, 0) and pixel(s, 80, 745) == (179, 38, 30), 300)

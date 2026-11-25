@@ -6,7 +6,7 @@
 ; (the next STAGE2_SECTORS sectors) to 0x7e00 with the extended disk
 ; read. Stage 2 asks the BIOS for what only it knows (A20, the e820
 ; memory map) and, from a hard disk, for the file table and every file
-; it lists (the NASM USSR runtime first, then moscow.ru and russia.ru):
+; it lists (the NASM USSR runtime first):
 ; extended reads, 64 sectors at a time, to a buffer under 1 MiB, copied
 ; to their place from 1 MiB up in unreal mode. So the disk can be on
 ; whatever the BIOS boots from - IDE, SATA (AHCI), anything else - and the

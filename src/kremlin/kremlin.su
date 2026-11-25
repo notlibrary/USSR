@@ -1520,12 +1520,9 @@ km_seed(r): root [
     km_windows(_ksd_win):
     km_moscow(_ksd_mos):
     vec(_ksd_pins): ""
-    if(_): {_ksd_mos && _ksd_src != ""} [
-        # Moscow's terminal is Mbltishi, a window of its own
-        km_join(_ksd_mb): _ksd_src "Mbltishi/Mbltishi.su"
-        km_quote(_ksd_qm): _ksd_mb
-        concat(_ksd_term): _ksd_qu " " _ksd_qm
-        km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" _ksd_term false
+    if(_): _ksd_mos [
+        # Mbltishi is installed with the system and starts Rush in its window.
+        km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" "/bin/Mbltishi.ru" false
     ]
     elif(_): _ksd_win [
         km_write_launcher(_): _ksd_apps "Terminal.kl" "Terminal" _ksd_qu true

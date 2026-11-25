@@ -1,0 +1,78 @@
+# Rush is Moscow's console shell. Its code and command execution share
+# the NASM runtime. Russia remains independently runnable.
+$include "repl_io.su"
+
+init(r): argc argv [
+    global(_): rp_eof rp_tty rp_hist
+    set(r): 0
+    set(rp_eof): 0
+    vec(rp_hist): ""
+    terminal_raw(raw):
+    terminal_sane(_):
+    set(rp_tty): 0
+    if(_): {raw = 0} [
+        set(rp_tty): 1
+        repl_hist_load(_):
+    ]
+    print(_): "USSR Unified Shell Script REPL"
+    print(_): "USSR v0.5"
+    print(_): "Enter a command list or press Ctrl-D to exit."
+    print(_): ""
+    getenv(desktop): "USSR_MOSCOW_DESKTOP"
+    if(_): {desktop = "1"} [
+        setenv(_): "USSR_MOSCOW_DESKTOP" ""
+        print(_): "moscow: starting the desktop, Kremlin"
+        run(status): "kremlin"
+        if(_): {status != 0} [ print(_): "moscow: Kremlin exited with status" print(_): status ]
+    ]
+    btree(bindings):
+    btree(hashes):
+    set(definitions): ""
+    set(functions): 0
+    set(pending): ""
+    set(depth): 0
+    while(_): {rp_eof = 0} [
+        set(continuation): 0
+        if(_): {depth > 0} [ set(continuation): 1 ]
+        repl_prompt(prompt): continuation "russia> "
+        k_prompt(_): prompt
+        repl_rd(line):
+        if(_): {rp_eof = 0 && line != ""} [
+            if(_): {rp_tty = 1} [ repl_hist_add(_): line ]
+            if(_): {pending = ""} [ set(pending): line ]
+            else(_): [ concat(pending): pending "\n" line ]
+            repl_dep(depth): line depth
+            if(_): {depth = 0} [
+                k_shell_eval(status): pending bindings
+                if(_): {status = 2} [
+                    concat(source): definitions pending "\n"
+                    shell_compile(compiled): source
+                    if(_): {compiled = null} [
+                        print(_): "rush: this entry requires /bin/ussr -c"
+                    ]
+                    else(_): [
+                        at(status): compiled 0
+                        if(_): {status = 0} [
+                            at(code): compiled 1
+                            k_shell_exec(count): code bindings hashes
+                            if(_): {count > functions} [
+                                set(functions): count
+                                set(definitions): source
+                            ]
+                        ]
+                        elif(_): {status < 0} [
+                            at(missing): compiled 2
+                            if(_): {missing = ""} [ print(_): "rush: this entry requires /bin/ussr -c" ]
+                            else(_): [
+                                concat(message): "USSR: unknown command '" missing "' (not in the Moscow runtime)"
+                                print(_): message
+                            ]
+                        ]
+                    ]
+                ]
+                set(pending): ""
+            ]
+        ]
+    ]
+    print(_): ""
+]
