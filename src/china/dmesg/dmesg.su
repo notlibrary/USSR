@@ -1,0 +1,8 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 0} [ china_error(r): "usage: dmesg" return(r): r ]
+    k_boot_log(log):
+    template(_): "STR" log
+    set(r): 0
+]

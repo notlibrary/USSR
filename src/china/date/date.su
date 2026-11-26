@@ -1,0 +1,29 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc > 1} [ china_error(r): "usage: date [epoch]" return(r): r ]
+    if(_): {argc = 1} [
+        at(option): argv 0
+        if(_): {option != "epoch"} [ china_error(r): "usage: date [epoch]" return(r): r ]
+        time(now):
+        print(_): now
+        return(r): 0
+    ]
+    localtime(parts):
+    at(year): parts 0
+    encode(line): year
+    set(i): 1
+    while(_): {i < 6} [
+        set(sep): ":"
+        if(_): {i < 3} [ set(sep): "-" ]
+        if(_): {i = 3} [ set(sep): "T" ]
+        at(value): parts i
+        encode(digits): value
+        if(_): {value < 10} [ concat(digits): "0" digits ]
+        concat(line): line sep digits
+        set(i): {i + 1}
+    ]
+    concat(line): line "Z"
+    print(_): line
+    set(r): 0
+]

@@ -1,0 +1,9 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc > 1} [ china_error(r): "usage: cd [DIRECTORY]" return(r): r ]
+    getenv(home): "HOME"
+    china_operand(path): argv 0 home
+    china_chdir(r): path
+    if(_): {r != 0} [ china_error(r): "cd: directory unavailable" ]
+]

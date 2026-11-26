@@ -1,0 +1,11 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 1} [ china_error(r): "usage: kill TASK_ID" return(r): r ]
+    at(arg): argv 0
+    china_number(id): arg 999999999
+    if(_): {id < 1} [ china_error(r): "kill: invalid task ID" return(r): r ]
+    kill(status): id
+    set(r): 0
+    if(_): {status != 0} [ set(r): 1 ]
+]

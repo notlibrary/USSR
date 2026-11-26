@@ -1,0 +1,10 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 0} [ china_error(r): "usage: who" return(r): r ]
+    getenv(user): "USER"
+    getenv(host): "HOSTNAME"
+    concat(line): user " on " host " (Moscow console)"
+    print(_): line
+    set(r): 0
+]

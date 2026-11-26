@@ -1,0 +1,22 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc < 1 || argc > 2} [ china_error(r): "usage: head FILE [LINES]" return(r): r ]
+    at(file): argv 0
+    china_path(path): file
+    china_operand(arg): argv 1 "10"
+    china_number(lines): arg 1000000
+    if(_): {lines < 0} [ china_error(r): "head: invalid line count" return(r): r ]
+    china_text_size(size): path
+    if(_): {size < 0} [ china_error(r): "head: file unavailable" return(r): r ]
+    china_reader(reader): path 0
+    set(i): 0
+    while(_): {i < lines} [
+        china_line(line): reader
+        if(_): {line = null} [ return(r): 0 ]
+        if(_): {line = false} [ china_error(r): "head: cannot read text file" return(r): r ]
+        china_show_line(_): line
+        set(i): {i + 1}
+    ]
+    set(r): 0
+]

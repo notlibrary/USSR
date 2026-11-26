@@ -1,0 +1,51 @@
+$include "common.su"
+
+china_page(r): path offset rows [
+    china_reader(reader): path offset
+    set(i): 0
+    while(_): {i < rows} [
+        china_line(line): reader
+        if(_): {line = null || line = false} [ return(r): line ]
+        china_show_line(_): line
+        set(i): {i + 1}
+    ]
+    china_position(r): reader
+]
+
+china_pager(r): argc argv back [
+    if(_): {argc != 1} [ china_error(r): "usage: more|less FILE" return(r): r ]
+    at(file): argv 0
+    china_path(path): file
+    china_text_size(size): path
+    if(_): {size < 0} [ china_error(r): "pager: file unavailable" return(r): r ]
+    vec(history): ""
+    set(offset): 0
+    set(next): 0
+    set(r): 0
+    while(_): true [
+        china_page(next): path offset 20
+        if(_): {next = false} [ china_error(r): "pager: cannot read text file" return(r): r ]
+        set(done): {next = null || next >= size}
+        if(_): {done && back = false} [ return(r): 0 ]
+        set(prompt): "--More-- [Space next, q quit]"
+        if(_): back [
+            set(prompt): "--Less-- [Space next, b back, q quit]"
+            if(_): done [ set(prompt): "--End-- [b back, q quit]" ]
+        ]
+        k_prompt(_): prompt
+        terminal_raw(_):
+        terminal_getch(key):
+        terminal_sane(_):
+        template(_): "STR" "\n"
+        if(_): {key < 0 || key = 113 || key = 4 || key = 3} [ return(r): 0 ]
+        if(_): {key = 98 && back} [
+            len(n): history
+            if(_): {n > 0} [ pop(offset): history ]
+        ]
+        elif(_): {done = false && (key = 32 || key = 13 || key = 10)} [
+            push(_): history offset
+            set(offset): next
+        ]
+        elif(_): done [ return(r): 0 ]
+    ]
+]

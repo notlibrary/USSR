@@ -1,0 +1,7 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 0} [ china_error(r): "usage: ps" return(r): r ]
+    tasks(_):
+    set(r): 0
+]

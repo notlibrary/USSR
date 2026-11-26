@@ -1,0 +1,13 @@
+init(r): argc argv [
+    set(i): 0
+    while(_): {i < argc} [
+        at(word): argv i
+        typeof(kind): word
+        if(_): {kind != "string"} [ encode(word): word ]
+        if(_): {i > 0} [ template(_): "STR" " " ]
+        template(_): "STR" word
+        set(i): {i + 1}
+    ]
+    template(_): "STR" "\n"
+    set(r): 0
+]

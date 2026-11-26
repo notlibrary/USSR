@@ -1,0 +1,10 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc > 1} [ china_error(r): "usage: ls [PATH]" return(r): r ]
+    china_operand(file): argv 0 "."
+    china_path(path): file
+    ls(result): path
+    if(_): {result = null} [ return(r): 1 ]
+    set(r): 0
+]

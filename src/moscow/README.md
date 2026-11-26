@@ -28,6 +28,18 @@ arguments run directly on the NASM VM. Expressions, control flow and command
 lists use `/bin/ussr -c` to compile the submission before the NASM VM executes
 it. Declare interactive functions in their own submission to reuse them later.
 
+A single command can launch a program by name at the prompt:
+
+    Mbl():
+    kremlin():
+    head(_): "/etc/motd" 3
+
+Rush gives native commands precedence, then uses Moscow's executable lookup.
+Use an explicit path such as `/bin/ls.ru():` to select a program that shares
+a native command's name. Use `head(status):` to capture the exit status.
+Empty parentheses and `_` discard the status. For executable calls inside
+compiled command lists or with expression arguments, use `run(status): "name" ...`.
+
 Use `run(status): "ussr" "-c" "/home/example.su" "/home/example.ru"` to
 generate NASM-compatible bytecode. `run(status): "russia" "-c"
 "/home/example.su" "/home/example.ru"` builds a Russia compatibility file.
@@ -35,6 +47,10 @@ Moscow chooses the runtime for a `.ru` from its header.
 
 Moscow is 64-bit monolithic OS kernel on it's own (not POSIX not UNIX-like not Microsoft and not *BSD)
 However it inevitably has some traits usually found in the Unix world(zoo)
+
+The [China package](../china/README.md) supplies precompiled command-line
+programs on the live ISO and installed system. Use `run(_): "china"`
+in Rush to list them.
 
 ## Build and run
 

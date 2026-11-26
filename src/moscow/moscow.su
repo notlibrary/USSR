@@ -30,6 +30,7 @@ $include "../murmansk/murmansk.su"
 $include "tls.su"
 $include "gui.su"
 $include "linux.su"
+$include "china.su"
 
 global(_): mo_dev mo_base mo_files mo_cwd
 
@@ -734,12 +735,24 @@ sys_localtime(r): a [
 # run(status): name [args ...]: /bin/name.ru (or the path given) from
 # the root file system, else a program of the boot image
 sys_run(r): a [
-    set(r): 127
+    if(_): {a = null} [ return(r): 127 ]
     len(n): a
     if(_): {n = 0} [
         bl_err(_): "run(status): program [args ...]"
-        return(r): r
+        return(r): 127
     ]
+    mo_run_args(r): a false
+]
+
+# Rush probes for a program before it tries compiling a command.
+# Null means lookup missed. An executable may itself return 127.
+sys_shell_run(r): a [
+    mo_run_args(r): a true
+]
+
+mo_run_args(r): a probe [
+    len(n): a
+    if(_): {n = 0} [ return(r): null ]
     at(name): a 0
     vec(args): ""
     set(i): 1
@@ -748,7 +761,11 @@ sys_run(r): a [
         push(_): args x
         set(i): {i + 1}
     ]
-    mo_run(r): name args
+    if(_): probe [
+        str_find(slash): name "/" 0
+        if(_): {slash > 0} [ concat(name): mo_cwd "/" name ]
+    ]
+    mo_run_mode(r): name args probe
 ]
 
 # the last three bytes of s, "" when it is shorter
@@ -1077,6 +1094,10 @@ mo_unbuilt(r): found [
 ]
 
 mo_run(r): name args [
+    mo_run_mode(r): name args false
+]
+
+mo_run_mode(r): name args probe [
     set(r): 127
     mo_find(found): name args
     typeof(tf): found
@@ -1104,8 +1125,23 @@ mo_run(r): name args [
     len(na): args
     if(_): {na = 0} [
         if(_): {name = "rush" || name = "russia"} [ concat(name): name ".ru" ]
+        if(_): probe [
+            k_modules(modules):
+            len(n): modules
+            set(i): 0
+            while(_): {i < n} [
+                at(module): modules i
+                if(_): {name = module && module != "ussr_rt.bin"} [
+                    k_exec(r): name
+                    return(r): r
+                ]
+                set(i): {i + 1}
+            ]
+            return(r): null
+        ]
         k_exec(r): name
     ]
+    elif(_): probe [ set(r): null ]
     else(_): [
         concat(m): name ": no such program in /bin"
         bl_err(r): m
@@ -1309,6 +1345,14 @@ sys_help(r): a [
 
 mo_syscalls(r): [
     set(r): 0
+    k_syscall(_): "china_path" "sys_china_path"
+    k_syscall(_): "china_chdir" "sys_cd"
+    k_syscall(_): "china_stat" "sys_china_stat"
+    k_syscall(_): "china_read" "sys_china_read"
+    k_syscall(_): "china_du" "sys_china_du"
+    k_syscall(_): "china_copy" "sys_china_copy"
+    k_syscall(_): "china_mount" "sys_china_mount"
+    k_syscall(_): "shell_run" "sys_shell_run"
     k_syscall(_): "shell_compile" "sys_shell_compile"
     k_syscall(_): "help" "sys_help"
     k_syscall(_): "ls" "sys_ls"
@@ -1511,6 +1555,7 @@ init(ret): arg_cnt arg_vec [
             setenv(_): "USSR_MOSCOW_DESKTOP" "1"
         ]
     ]
+    k_boot_log_end(_):
     set(go): true
     while(_): go [
         print(_): "moscow: starting rush.ru"

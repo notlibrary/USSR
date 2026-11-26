@@ -1,0 +1,23 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 2} [ china_error(_): "usage: grep REGEX FILE" return(r): 2 ]
+    at(pattern): argv 0
+    at(file): argv 1
+    k_re_valid(valid): pattern
+    if(_): {valid = false} [ china_error(_): "grep: invalid regex" return(r): 2 ]
+    china_path(path): file
+    china_reader(reader): path 0
+    set(r): 1
+    while(_): true [
+        china_line(line): reader
+        if(_): {line = null} [ return(r): r ]
+        if(_): {line = false} [ china_error(_): "grep: cannot read text file" return(r): 2 ]
+        at(text): line 0
+        re_test(match): pattern text
+        if(_): match [
+            china_show_line(_): line
+            set(r): 0
+        ]
+    ]
+]

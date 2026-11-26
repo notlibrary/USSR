@@ -1,0 +1,12 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 2} [ china_error(r): "usage: mv FROM TO" return(r): r ]
+    at(from): argv 0
+    at(to): argv 1
+    if(_): {from = "" || to = ""} [ china_error(r): "mv: empty path" return(r): r ]
+    china_path(source): from
+    china_destination(dest): source to
+    rename_path(r): source dest
+    if(_): {r != 0} [ china_error(r): "mv: could not write destination" ]
+]

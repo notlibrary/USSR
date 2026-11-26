@@ -1,0 +1,9 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 0} [ china_error(r): "usage: mount" return(r): r ]
+    china_mount(info):
+    if(_): {info = ""} [ china_error(r): "mount: no Belarus root mounted" return(r): r ]
+    print(_): info
+    set(r): 0
+]

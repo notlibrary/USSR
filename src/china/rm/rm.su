@@ -1,0 +1,21 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc = 0} [ china_error(r): "usage: rm FILE ..." return(r): r ]
+    set(i): 0
+    set(r): 0
+    while(_): {i < argc} [
+        at(file): argv i
+        china_path(path): file
+        china_stat(rec): path
+        set(kind): ""
+        if(_): {rec != null} [ at(kind): rec 0 ]
+        set(status): 1
+        if(_): {kind = "f"} [ remove_file(status): path ]
+        if(_): {status != 0} [
+            concat(message): "rm: cannot remove file " path
+            china_error(r): message
+        ]
+        set(i): {i + 1}
+    ]
+]

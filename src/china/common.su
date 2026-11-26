@@ -1,0 +1,138 @@
+# Common helpers for the China programs. File commands resolve paths
+# against Rush's current Belarus directory.
+china_error(r): text [
+    concat(message): text "\n"
+    write_stderr(_): message
+    set(r): 1
+]
+
+china_operand(r): args index fallback [
+    set(r): fallback
+    len(n): args
+    if(_): {index < n} [ at(r): args index ]
+]
+
+china_number(r): text maximum [
+    set(r): -1
+    typeof(kind): text
+    if(_): {kind = "integer"} [
+        if(_): {text >= 0 && text <= maximum} [ set(r): text ]
+        return(r): r
+    ]
+    if(_): {kind != "string"} [ return(r): r ]
+    len(n): text
+    if(_): {n = 0 || n > 9} [ return(r): r ]
+    set(r): 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(ch): text i
+        if(_): {ch < 48 || ch > 57} [ return(r): -1 ]
+        set(r): {r * 10 + ch - 48}
+        if(_): {r > maximum} [ return(r): -1 ]
+        set(i): {i + 1}
+    ]
+]
+
+china_text_size(r): path [
+    set(r): -1
+    china_stat(rec): path
+    if(_): {rec = null} [ return(r): r ]
+    at(kind): rec 0
+    if(_): {kind = "f"} [ at(r): rec 1 ]
+]
+
+# A reader contains [path, next disk offset, unread text]. Empty input
+# is EOF. A failed disk read or a NUL byte returns null.
+china_reader(r): path offset [
+    vec(r): ""
+    push(_): r path
+    push(_): r offset
+    push(_): r ""
+]
+
+# -> [text, had newline], null at EOF, false on a read error.
+china_line(r): reader [
+    at(path): reader 0
+    at(offset): reader 1
+    at(chunk): reader 2
+    set(line): ""
+    while(_): true [
+        len(n): chunk
+        set(nl): 0
+        set(ch): 0
+        while(_): {nl < n && ch != 10} [
+            byte(ch): chunk nl
+            if(_): {ch != 10} [ set(nl): {nl + 1} ]
+        ]
+        if(_): {nl = n} [ set(nl): -1 ]
+        if(_): {nl >= 0} [
+            slice(part): chunk 0 nl
+            concat(line): line part
+            slice(rest): chunk {nl + 1} {n - nl - 1}
+            set(reader): 2 rest
+            vec(r): ""
+            push(_): r line
+            push(_): r true
+            return(r): r
+        ]
+        concat(line): line chunk
+        china_read(chunk): path offset 4096
+        if(_): {chunk = null} [ return(r): false ]
+        if(_): {chunk = ""} [
+            set(reader): 2 ""
+            if(_): {line = ""} [ return(r): null ]
+            vec(r): ""
+            push(_): r line
+            push(_): r false
+            return(r): r
+        ]
+        len(n): chunk
+        set(offset): {offset + n}
+        set(reader): 1 offset
+    ]
+]
+
+china_show_line(r): line [
+    at(text): line 0
+    at(newline): line 1
+    template(_): "STR" text
+    if(_): newline [ template(_): "STR" "\n" ]
+    set(r): 0
+]
+
+china_position(r): reader [
+    at(offset): reader 1
+    at(remaining): reader 2
+    len(n): remaining
+    set(r): {offset - n}
+]
+
+china_print_from(r): path offset [
+    set(r): 0
+    while(_): true [
+        china_read(chunk): path offset 4096
+        if(_): {chunk = null} [ china_error(r): "cannot read text file" return(r): r ]
+        len(n): chunk
+        if(_): {n = 0} [ return(r): 0 ]
+        template(_): "STR" chunk
+        set(offset): {offset + n}
+    ]
+]
+
+# Copy/move to an existing directory uses the source name in that directory.
+china_destination(r): source dest [
+    china_path(r): dest
+    is_dir(dir): r
+    if(_): dir [
+        len(n): source
+        set(i): {n - 1}
+        byte(ch): source i
+        while(_): {ch != 47 && i > 0} [
+            set(i): {i - 1}
+            byte(ch): source i
+        ]
+        slice(name): source {i + 1} {n - i - 1}
+        concat(r): r "/" name
+        china_path(r): r
+    ]
+]
