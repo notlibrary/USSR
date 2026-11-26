@@ -20,6 +20,12 @@ layers of the neural net this is all investment in neuroslop enrichment is about
 Also looks like the whole system is scalable forward I saw articles on learning
 quadrillion parameters transformers(the planet has 20 quadrillions of ants)
 
+>Data center become profitable only after 10 years of operation
+
+But we are talking about multiple data centers multiple times
+with continuous refining and enrichment what they produced on the way
+over 9000 accidental startup companies controlled by AI
+
 Even more imagine global network of data centers dedicated to run AI models 
 some of them are underground inside former missile silos That's it end of fantasy
 

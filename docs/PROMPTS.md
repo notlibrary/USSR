@@ -1193,6 +1193,17 @@ then I press tab more it moves focus rectangle to next buttons `terminal files c
 it starts the focused button then I press enter If i press Ctrl+Esc it opens kremlin button menu
 Other usability fixes for kremlin you have is welcomed
 
+I found a serious architecture critical flaw in the system when started as OS nasm runtime it uses russia as the shell then russia 
+starts it's own runtime making things slow we must divide the vm runtime the bytecode compiler and the shell
+nasm runtime has no bytecode compiler 1. so we must also compile all required .su to .ru beforehand and 2. provide shell
+code for ussr that scans input and run ongoing command through fast nasm runtime
+the shell code will be in folder russia not a separate project it default prompt will be `russia>`
+so visually nothing change but will be much faster
+also we may now run russia eg. to compile .su to .ru
+shell binary name will be `rush` and command syntax same as russia USSR have somw of it parts can directly be taken from russia
+
+
+
 
 
 
