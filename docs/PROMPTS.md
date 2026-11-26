@@ -1202,6 +1202,40 @@ so visually nothing change but will be much faster
 also we may now run russia eg. to compile .su to .ru
 shell binary name will be `rush` and command syntax same as russia USSR have somw of it parts can directly be taken from russia
 
+Now let's make quasi-pseudo-unix world for moscow kernel
+for this we make a separate USSR package(do not forget box.uno one for all world) called `china` 
+in it's subfolders we put world programs example `tail - USSR/src/china/tail` 
+we write world in ussr we need the following list:
+we need to compile it to .ru beforehand and pack into ussr image as separate programs
+they must be usable from livecd ussr.iso they are not unix commands no guarantee that opts
+are the same
+ 
+ - tail
+ - head
+ - more
+ - less
+ - ps
+ - ls
+ - grep
+ - dmesg
+ - mount
+ - cat
+ - mv
+ - cp
+ - rm
+ - mkdir
+ - cd
+ - who
+ - df
+ - du
+ - pwd
+ - whoami
+ - passwd
+ - kill
+ - date
+ - uname
+
+Add useful utils tha I forgot to mention too
 
 
 

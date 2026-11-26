@@ -286,6 +286,8 @@ With usa the second wave is done and USSR is complete. Its programs:
 - ukraine.su - HTTP server and web framework
 - kiev.su - the USSR startup configuration file
 - belarus.su - the USSR file system: per-file B+ tree block maps
+- china.su - native command-line tools for moscow
+- usa.su - C compiler to `.ru` bytecode
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
 - ural.su - USSR package manager
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
@@ -304,7 +306,6 @@ With usa the second wave is done and USSR is complete. Its programs:
 - kgb.su - Knowledge Giga Base, fact-oriented Markdown knowledge base
 - stalin.su - GPT/MBR partition editor
 - sochi.su - three-player Preferans over UDP
-- usa.su - C compiler to `.ru` bytecode
 - install.su - the moscow OS installer: `install(_):` puts USSR on a disk of its own
 
 This file is my personal devlog if you need user manual or more USSR design documents check the docs folder
@@ -331,6 +332,10 @@ Bill Gates or Richard Hipp
 Now the whole thing asking me to become the kernel developer Will do anyway it's asking for it
 
 If you think you are the better just do it talk is cheap
+
+Moscow kernel is not Unix GNU/Linux POSIX Windows or *BSD 
+It's designed specifically to work in heavy AI environment
+It can be called quasi-pseudo *nix but it's authors do not share this thought
 
 ## Neuroslop and Dunning-Kruger effect
 The point against
