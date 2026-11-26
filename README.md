@@ -335,7 +335,7 @@ If you think you are the better just do it talk is cheap
 
 Moscow kernel is not Unix GNU/Linux POSIX Windows or *BSD 
 It's designed specifically to work in heavy AI environment
-It can be called quasi-pseudo *nix but it's authors do not share this thought
+It can be called quasi-pseudo WINnix but it's authors do not share this thought
 
 ## Neuroslop and Dunning-Kruger effect
 The point against
