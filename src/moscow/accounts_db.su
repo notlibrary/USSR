@@ -1,0 +1,110 @@
+# Shared by the kernel and installer. The public text record is
+# user:role:salt:PBKDF2-HMAC-SHA256, one account per line.
+account_name_ok(r): name [
+    typeof(kind): name
+    if(_): {kind != "string"} [ return(r): false ]
+    re_test(r): "^[a-z][a-z0-9_-]{0,31}$" name
+]
+
+account_row(r): database name [
+    set(r): null
+    str_split(rows): database "\n"
+    len(n): rows
+    set(i): 0
+    while(_): {i < n} [
+        at(line): rows i
+        str_split(fields): line ":"
+        len(count): fields
+        if(_): {count = 4} [
+            at(user): fields 0
+            if(_): {user = name} [ return(r): fields ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# Read a secret directly from the terminal, without echo.
+account_secret(r): label [
+    set(r): ""
+    template(_): "STR" label
+    terminal_raw(_):
+    set(excess): 0
+    while(_): true [
+        terminal_getch(key):
+        if(_): {key < 0 || key = 3 || key = 4} [
+            set(r): null
+            break(_):
+        ]
+        if(_): {key = 10 || key = 13} [ break(_): ]
+        len(n): r
+        if(_): {key = 8 || key = 127} [
+            if(_): {excess > 0} [ set(excess): {excess - 1} ]
+            elif(_): {n > 0} [ slice(r): r 0 {n - 1} ]
+        ]
+        elif(_): {key >= 32 && key < 127} [
+            if(_): {n = 128} [ set(excess): {excess + 1} ]
+            else(_): [ chr(ch): key concat(r): r ch ]
+        ]
+    ]
+    terminal_sane(_):
+    print(_): ""
+    if(_): {excess > 0} [
+        print(_): "Use at most 128 characters."
+        set(r): null
+    ]
+]
+
+account_input(r): label [
+    template(_): "STR" label
+    set(r): ""
+    while(_): true [
+        terminal_getch(key):
+        if(_): {key < 0} [ return(r): null ]
+        if(_): {key = 10} [ return(r): r ]
+        if(_): {key != 13} [
+            chr(ch): key
+            concat(r): r ch
+        ]
+    ]
+]
+
+account_salt(r): [
+    set(r): ""
+    set(i): 0
+    while(_): {i < 2} [
+        random64(bits):
+        set(n): 0
+        while(_): {n < 16} [
+            set(digit): {bits & 15}
+            slice(ch): "0123456789abcdef" digit 1
+            concat(r): r ch
+            set(bits): {bits >> 4}
+            set(n): {n + 1}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+account_create_row(r): name role [
+    set(r): null
+    account_secret(password): "New password: "
+    if(_): {password = null} [ return(r): r ]
+    len(n): password
+    if(_): {n < 12} [
+        print(_): "Use at least 12 characters."
+        return(r): r
+    ]
+    account_secret(confirmation): "Repeat password: "
+    if(_): {password != confirmation} [
+        print(_): "Passwords differ."
+        return(r): r
+    ]
+    account_salt(salt):
+    k_password_hash(hash): password salt
+    concat(r): name ":" role ":" salt ":" hash "\n"
+]
+
+account_write(r): fs data [
+    bl_write_text(r): fs "/etc/passwd" data
+    if(_): {r = 0} [ bl_sync(r): fs ]
+]

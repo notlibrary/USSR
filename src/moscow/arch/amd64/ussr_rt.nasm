@@ -207,6 +207,7 @@ start:
         xor eax, eax
         rep stosq
         mov [boot_info], rbx
+        mov byte [account_admin], 1
         mov qword [vga_attr], 0x07
         mov qword [vga_base], 0x07
 
@@ -3208,6 +3209,10 @@ exec_file:
         pop rdx
         test rax, rax
         jz .load_failed
+        cmp qword [kernel_program], 0
+        jne .run
+        mov [kernel_program], rax
+.run:
         mov rdi, rax
         call vm_run
         jmp .release
@@ -4136,6 +4141,14 @@ op_oop:
         mov qword [rdx], T_NULL
         mov qword [rdx + 8], 0
         mov rdi, rbx
+        push rdi
+        push rsi
+        mov rdi, [bi_table + r10]
+        mov esi, account_builtins
+        call account_allowed
+        pop rsi
+        pop rdi
+        jc .denied
         call [bi_table + r10 + 8]
         pop rcx
         test eax, eax
@@ -4145,6 +4158,10 @@ op_oop:
         lea rax, [r12 + VM.tmp]
         COPYVAL rcx, rax, rdx
         jmp vm_next
+.denied:
+        pop rcx
+        call account_denied
+        jmp vm_fail
 .syscall:
         mov esi, edx
         lea rdx, [r12 + VM.tmp]
@@ -5401,6 +5418,15 @@ sys_find:
 ; the result -> runs the kernel's function with the arguments as one
 ; vector; eax 0, or -1 when it failed.
 sys_call:
+        push rdi
+        push rsi
+        imul rdi, rax, SYS_ENTRY
+        add rdi, sys_table
+        mov esi, account_syscalls
+        call account_allowed
+        pop rsi
+        pop rdi
+        jc account_denied
         push rbx
         push rbp
         push r12
@@ -5675,7 +5701,15 @@ builtin_find:
         add rdx, 16
         jmp .next
 .found:
+        push rsi
+        mov esi, account_builtins
+        call account_allowed
+        pop rsi
+        jc .denied
         mov rax, [bi_table + rdx + 8]
+        jmp .out
+.denied:
+        mov eax, account_denied
         jmp .out
 .none:
         xor eax, eax
@@ -7753,6 +7787,7 @@ bi_pwd:
 %include "cffi.inc"
 %include "bytes.inc"
 %include "sha256.inc"
+%include "accounts.inc"
 %include "mm.inc"
 %include "task.inc"
 %include "gc.inc"
@@ -7948,6 +7983,8 @@ bi_table:
         dq n_bcopy, bi_bcopy
         dq n_bdevices, bi_bdevices
         dq n_sha256, bi_sha256
+        dq n_k_password_hash, bi_k_password_hash
+        dq n_k_account_admin, bi_k_account_admin
         dq n_clear_bytes, bi_clear_bytes
         dq n_k_syscall, bi_k_syscall
         dq n_k_exec_bytes, bi_k_exec_bytes
@@ -8320,6 +8357,8 @@ xhci_entry:     incbin "xhci.bin"
 
 absolute RT_DATA
 boot_info:      resq 1
+kernel_program: resq 1
+account_admin:  resb 1
 heap_base:      resq 1
 ram_top:        resq 1
 kpool:          resq 1              ; the kernel's heap

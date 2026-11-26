@@ -31,8 +31,9 @@ current Belarus directory unless they start with `/`.
 | `rm` | `FILE ...`, remove files |
 | `mkdir`, `rmdir` | `DIRECTORY`, create a directory and its parents or remove an empty directory |
 | `cd`, `pwd` | `cd [DIRECTORY]` changes Rush's current directory, defaulting to HOME. `pwd` prints it. |
-| `who`, `whoami` | Display the current console identity from the session environment |
-| `passwd` | Reports that Moscow has no login password database |
+| `who`, `whoami` | Display the kernel console identity |
+| `reguser` | `USERNAME [ROLE]`, create an account from a master-admin session. The default role is `user`. |
+| `passwd` | Reports that password changes are unavailable |
 | `date` | UTC clock as ISO 8601, or seconds since the epoch with `epoch` |
 | `uname`, `uptime` | Show system identity or elapsed time since boot |
 | `echo` | Print arguments separated by spaces |

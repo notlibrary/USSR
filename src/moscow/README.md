@@ -52,6 +52,30 @@ The [China package](../china/README.md) supplies precompiled command-line
 programs on the live ISO and installed system. Use `run(_): "china"`
 in Rush to list them.
 
+## Console accounts
+
+The stock live media start a single master-admin session named `ted`.
+The Moscow installer asks for a username and password for the first
+master admin. The username defaults to `ted` and the role is `ted`.
+Installed systems ask for the account and password at boot. Older
+installations without an account database offer initial setup at the
+physical or serial console.
+
+`reguser(): "alice"` creates an ordinary account. A logged-in master
+admin can also assign the `ted` role with `reguser(): "alice" "ted"`.
+Passwords are 12–128 printable ASCII characters and are entered without echo. `/etc/passwd` records the username,
+role, salt, and PBKDF2-HMAC-SHA256 verifier. There is no `sudo`. Reboot
+to log in as a different user. `whoami():` reads the console identity from
+the kernel.
+
+Ordinary accounts can run packaged USSR bytecode and write to shared
+`/home` and `/tmp`. All roles other than `ted` have the same permissions.
+Raw devices, native executable loading, and account creation require the
+master-admin session. This is a single console account model with shared
+read access to the root filesystem.
+
+Run the QEMU account checks with `python src/moscow/tools/accounts_test.py`.
+
 ## Build and run
 
 Needs GNU make, NASM, QEMU and a built `ussr` (it compiles the `.su` files

@@ -20,6 +20,7 @@
 # question takes its default and the final "yes" is not given.
 $include "../stalin/stalin.su"
 $include "../belarus/belarus.su"
+$include "accounts_db.su"
 
 global(_): ins_moscow ins_copied ins_answers ins_eof
 
@@ -415,6 +416,15 @@ ins_main(r): args [
     push(_): what p
     ins_choose(scope): "What to copy" what "1"
 
+    set(account): null
+    if(_): ins_moscow [
+        ins_ask(admin): "Master admin username" "ted"
+        account_name_ok(valid): admin
+        if(_): {valid = false} [ ins_fail(r): "invalid username" return(r): r ]
+        account_create_row(account): admin "ted"
+        if(_): {account = null} [ ins_fail(r): "master admin was not created" return(r): r ]
+    ]
+
     # how much room that takes
     set(need): 1048576
     if(_): {scope = "1"} [ ins_size_of(need): src "/" ]
@@ -575,6 +585,7 @@ ins_main(r): args [
     ]
     concat(text): host "\n"
     bl_mkdirs(_): dst "/etc"
+    bl_mkdirs(_): dst "/home"
     bl_write_text(_): dst "/etc/hostname" text
     concat(motd): "USSR Moscow on " host ", installed from " src_label ". help(_): lists the commands.\n"
     bl_write_text(_): dst "/etc/motd" motd
@@ -593,6 +604,10 @@ ins_main(r): args [
     encode(record): ins_answers
     concat(record): record "\n"
     bl_write_text(_): dst "/etc/install.uno" record
+    if(_): {account != null} [
+        bl_write_text(w): dst "/etc/passwd" account
+        if(_): {w != 0} [ ins_fail(r): "account database could not be written" return(r): r ]
+    ]
     bl_sync(w): dst
     if(_): {w != 0} [
         ins_fail(r): "the file system could not be written"

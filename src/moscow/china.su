@@ -85,6 +85,8 @@ sys_china_copy(r): args [
     mo_arg(from): args 0 ""
     mo_arg(to): args 1 ""
     if(_): {from = "" || to = ""} [ return(r): r ]
+    account_write_allowed(ok): to
+    if(_): {ok = false} [ return(r): r ]
     bl_get(rec): fs from
     if(_): {rec = null} [ return(r): r ]
     at(kind): rec 0

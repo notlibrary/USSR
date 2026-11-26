@@ -31,6 +31,7 @@ $include "tls.su"
 $include "gui.su"
 $include "linux.su"
 $include "china.su"
+$include "accounts.su"
 
 global(_): mo_dev mo_base mo_files mo_cwd
 
@@ -165,6 +166,8 @@ sys_writefile(r): a [
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
     mo_arg(text): a 1 ""
+    account_write_allowed(ok): path
+    if(_): {ok = false} [ return(r): r ]
     bl_clean(p): path
     bl_parent(up): p
     bl_mkdirs(_): fs up
@@ -232,6 +235,8 @@ sys_make_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_write_allowed(ok): path
+    if(_): {ok = false} [ return(r): r ]
     bl_mkdirs(r): fs path
     mo_sync(_): fs
 ]
@@ -275,6 +280,8 @@ sys_copy_file(r): a [
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(from): a 0 ""
     mo_arg(to): a 1 ""
+    account_write_allowed(ok): to
+    if(_): {ok = false} [ return(r): r ]
     bl_exists(e): fs from
     if(_): {e = false} [ return(r): r ]
     bl_is_dir(d): fs from
@@ -294,6 +301,8 @@ sys_remove_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_write_allowed(ok): path
+    if(_): {ok = false} [ return(r): r ]
     bl_is_dir(d): fs path
     if(_): {d = false} [ return(r): r ]
     bl_remove(st): fs path
@@ -307,6 +316,8 @@ sys_remove_file(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_write_allowed(ok): path
+    if(_): {ok = false} [ return(r): r ]
     bl_remove(r): fs path
     mo_sync(_): fs
 ]
@@ -351,6 +362,10 @@ sys_open_file(r): a [
     mo_arg(mode): a 1 "r"
     str_find(w): mode "w" 0
     str_find(ap): mode "a" 0
+    if(_): {w >= 0 || ap >= 0} [
+        account_write_allowed(ok): path
+        if(_): {ok = false} [ return(r): r ]
+    ]
     mo_fs(fs):
     typeof(t): fs
     if(_): {t != "btree" || path = ""} [ return(r): r ]
@@ -659,6 +674,10 @@ sys_rename_path(r): a [
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(from): a 0 ""
     mo_arg(to): a 1 ""
+    account_write_allowed(from_ok): from
+    if(_): {from_ok = false} [ return(r): r ]
+    account_write_allowed(to_ok): to
+    if(_): {to_ok = false} [ return(r): r ]
     bl_rename(st): fs from to
     if(_): {st = 0} [
         mo_sync(_): fs
@@ -908,9 +927,17 @@ mo_find(r): name args [
     if(_): {mo_base >= 0} [ mo_fs(fs): ]
     mo_locate(path): fs name
     if(_): {path != ""} [
+        if(_): {mo_role != "ted"} [
+            bl_clean(path): path
+            str_find(bin): path "/bin/" 0
+            str_find(boot): path "/boot/" 0
+            if(_): {bin != 0 && boot != 0} [ return(r): null ]
+            if(_): {path = "/boot/moscow.ru"} [ return(r): null ]
+        ]
         mo_ext(ext): path
         set(runtime): 2
         if(_): {ext = ".su"} [
+            if(_): {mo_role != "ted"} [ return(r): null ]
             mo_compile(made): fs path
             at(cst): made 0
             at(cbytes): made 1
@@ -937,6 +964,7 @@ mo_find(r): name args [
         typeof(tb): bytes
         if(_): {tb = "vector"} [
             mo_is_elf(elf): bytes
+            if(_): {elf && mo_role != "ted"} [ return(r): null ]
             mo_is_russia(compat): bytes
             if(_): {ext = ".su" || compat} [
                 set(runtime): 3
@@ -1024,6 +1052,7 @@ sys_runtime(r): a [
     mo_ext(ext): path
     set(r): 2
     if(_): {ext = ".su"} [
+        if(_): {mo_role != "ted"} [ return(r): 0 ]
         # as run(_) does it: compiled and checked, so this is what it gets
         mo_compile(made): fs path
         at(cst): made 0
@@ -1120,6 +1149,11 @@ mo_run_mode(r): name args probe [
         gui_drop(_): id depth
         lx_drop(_): id depth
         return(r): r
+    ]
+    if(_): {mo_role != "ted"} [
+        if(_): probe [ return(r): null ]
+        print(_): "run: executable unavailable to this session"
+        return(r): 127
     ]
     # Try the boot image when the root has no matching program.
     len(na): args
@@ -1345,6 +1379,9 @@ sys_help(r): a [
 
 mo_syscalls(r): [
     set(r): 0
+    k_syscall(_): "account_identity" "sys_identity"
+    k_syscall(_): "whoami" "sys_whoami"
+    k_syscall(_): "account_register" "sys_account_register"
     k_syscall(_): "china_path" "sys_china_path"
     k_syscall(_): "china_chdir" "sys_cd"
     k_syscall(_): "china_stat" "sys_china_stat"
@@ -1543,9 +1580,17 @@ init(ret): arg_cnt arg_vec [
         print(_): line
     ]
     set(ret): 0
+    k_boot_log_end(_):
+    set(login_root): null
+    if(_): found [ mo_fs(login_root): ]
+    mo_login(logged): login_root
+    if(_): {logged = false} [
+        print(_): "Moscow: login ended."
+        k_halt(_):
+    ]
     # an installed system starts with the desktop, the shell after it;
     # a key within 3 seconds (the keyboard or the serial line) skips it
-    if(_): {gui_desktop && gui_lib != null} [
+    if(_): {mo_role = "ted" && gui_desktop && gui_lib != null} [
         print(_): "moscow: the desktop, Kremlin, in 3 seconds (a key: the shell)"
         mo_key_within(skip): 300
         if(_): skip [ print(_): "moscow: no desktop" ]
@@ -1555,7 +1600,6 @@ init(ret): arg_cnt arg_vec [
             setenv(_): "USSR_MOSCOW_DESKTOP" "1"
         ]
     ]
-    k_boot_log_end(_):
     set(go): true
     while(_): go [
         print(_): "moscow: starting rush.ru"
