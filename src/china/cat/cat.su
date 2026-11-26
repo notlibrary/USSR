@@ -1,0 +1,14 @@
+$include "../common.su"
+
+init(r): argc argv [
+    set(r): 0
+    if(_): {argc = 0} [ china_error(r): "usage: cat FILE ..." return(r): r ]
+    set(i): 0
+    while(_): {i < argc} [
+        at(file): argv i
+        china_path(path): file
+        china_print_from(status): path 0
+        if(_): {status != 0} [ set(r): 1 ]
+        set(i): {i + 1}
+    ]
+]

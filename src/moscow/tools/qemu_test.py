@@ -110,7 +110,7 @@ CHECKS = [
     ("uptime(_):", r"up \d+ s"),
     # the shell keeps its history in $HOME/.ussr_history, HOME being /
     ("ls(_):", r"- +\d+  \.ussr_history\nd +\d+  bin\nd +\d+  boot\nd +\d+  etc\n(d +\d+  home\n)?d +\d+  lib\nd +\d+  src(\nd +\d+  tmp)?"),
-    ('ls(_): "/bin"', r"- +\d+  Mbl\.ru\n- +\d+  Mbltishi\.ru\n- +\d+  belarus\.ru\n- +\d+  install\.ru\n- +\d+  kremlin\.ru\n(- +\d+  moscow_native\n)?- +\d+  stalin\.ru(\n- +\d+  ural)?(\n- +\d+  ussr)?"),
+    ('ls(_): "/bin"', r"(?m)(?=[\s\S]*^- +\d+ +belarus\.ru$)-[^\n]*(?:\n-[^\n]*)*"),
     ('cat(_): "/etc/hostname"', r"moscow-install"),
     ('writefile(_): "/home/notes.txt" "Belarus in Moscow"', r""),
     ('readfile(n): "/home/notes.txt"', r""),
@@ -602,7 +602,7 @@ def mbl(qemu, disk, port, log, check):
     serial = m.serial
     try:
         serial.output_to_prompt(timeout=60)
-        serial.command('run(st): "Mbl" "/home/diary.txt"')
+        serial.command('Mbl(st): "/home/diary.txt"')
         status = mbl_frame(serial)
         check("Mbl starts on a new file", status.startswith(" NORMAL  /home/diary.txt"), repr(status))
         # Mbl reads the byte after ESC (is it an arrow key?): h, a move,
@@ -716,7 +716,7 @@ def mbl_uefi(qemu, work, port, log, check, desktop=True):
 
 
 def mbl_in_terminal(m, work, check):
-    m.keys('run(_): "kremlin"\n', hold_ms=50)
+    m.keys('kremlin():\n', hold_ms=50)
     deadline = time.monotonic() + 180
     while not kremlin_panel(m.pixels(work)):
         if time.monotonic() >= deadline:

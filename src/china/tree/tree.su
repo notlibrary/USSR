@@ -1,0 +1,10 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc > 1} [ china_error(r): "usage: tree [PATH]" return(r): r ]
+    china_operand(file): argv 0 "."
+    china_path(path): file
+    china_stat(rec): path
+    if(_): {rec = null} [ china_error(r): "tree: path unavailable" return(r): r ]
+    tree(r): path
+]

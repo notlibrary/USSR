@@ -145,11 +145,13 @@ $(OUT)/xhci.o: $(ARCH)/xhci.c $(ARCH)/hid_mouse.h
 $(OUT)/xhci.bin: $(OUT)/xhci.o $(ARCH)/xhci.ld
 	$(XHCI_LD) --oformat=binary -T $(ARCH)/xhci.ld $< -o $@
 # the USSR the .ru files are compiled from: any of the project's .su
-SU_SRC := $(wildcard $(ROOT)/src/*.su $(ROOT)/src/*/*.su $(ROOT)/src/*/*/*.su)
+CHINA := $(ROOT)/src/china
+SU_SRC := $(filter-out $(CHINA)/%,$(wildcard $(ROOT)/src/*.su $(ROOT)/src/*/*.su $(ROOT)/src/*/*/*.su))
 BOOT_FILES := ussr_rt.bin moscow.ru russia.ru rush.ru
 NATIVE_RU := install stalin belarus
 RUSSIA_RU := Mbl Mbltishi kremlin
-BIN_RU := $(NATIVE_RU) $(RUSSIA_RU)
+CHINA_RU := china $(basename $(notdir $(wildcard $(CHINA)/*/*.su)))
+BIN_RU := $(NATIVE_RU) $(RUSSIA_RU) $(CHINA_RU)
 
 $(OUT)/boot.bin: $(ARCH_SRC)
 	mkdir -p $(OUT)
@@ -175,6 +177,15 @@ $(OUT)/rush.ru: $(SU_SRC) $(USSR)
 $(addprefix $(OUT)/,$(addsuffix .ru,$(RUSSIA_RU))): $(OUT)/%.ru: $(SU_SRC) $(USSR)
 	mkdir -p $(OUT)
 	cd $(ROOT) && $(RUN_USSR) src/russia/russia.su -c src/$*/$*.su $@
+
+$(OUT)/china.ru: $(CHINA)/china.su $(USSR)
+	mkdir -p $(OUT)
+	cd $(CHINA) && $(RUN_USSR) -c china.su $@
+
+$(foreach name,$(filter-out china,$(CHINA_RU)),$(eval $(OUT)/$(name).ru: $(CHINA)/$(name)/$(name).su))
+$(addprefix $(OUT)/,$(addsuffix .ru,$(filter-out china,$(CHINA_RU)))): $(OUT)/%.ru: $(CHINA)/common.su $(CHINA)/pager.su $(USSR)
+	mkdir -p $(OUT)
+	cd $(CHINA)/$* && $(RUN_USSR) -c $*.su $@
 
 $(OUT)/moscow.img: $(ARCH_SRC) $(OUT)/boot.bin $(addprefix $(OUT)/,$(BOOT_FILES))
 	$(NASM) -f bin -i $(OUT)/ -i $(ARCH)/ $(ARCH)/image.nasm -o $@

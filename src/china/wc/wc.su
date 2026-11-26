@@ -1,0 +1,21 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 1} [ china_error(r): "usage: wc FILE" return(r): r ]
+    at(file): argv 0
+    china_path(path): file
+    china_reader(reader): path 0
+    set(lines): 0
+    china_line(line): reader
+    while(_): {line != null && line != false} [
+        set(lines): {lines + 1}
+        china_line(line): reader
+    ]
+    if(_): {line = false} [ china_error(r): "wc: cannot read text file" return(r): r ]
+    china_position(bytes): reader
+    encode(l): lines
+    encode(b): bytes
+    concat(message): l " lines  " b " bytes"
+    print(_): message
+    set(r): 0
+]

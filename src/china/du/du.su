@@ -1,0 +1,13 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc > 1} [ china_error(r): "usage: du [PATH]" return(r): r ]
+    china_operand(file): argv 0 "."
+    china_path(path): file
+    china_du(size): path
+    if(_): {size < 0} [ china_error(r): "du: path unavailable" return(r): r ]
+    encode(digits): size
+    concat(line): digits " bytes  " path
+    print(_): line
+    set(r): 0
+]

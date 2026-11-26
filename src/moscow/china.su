@@ -1,0 +1,105 @@
+# Filesystem operations for China's native utilities.
+sys_china_path(r): args [
+    mo_arg(path): args 0 ""
+    set(first): 0
+    if(_): {path != ""} [ byte(first): path 0 ]
+    if(_): {first != 47} [ concat(path): mo_cwd "/" path ]
+    bl_clean(r): path
+]
+
+sys_china_stat(r): args [
+    set(r): null
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    mo_arg(path): args 0 ""
+    bl_get(r): fs path
+]
+
+# Return up to 4096 bytes of text, covering at most one extent.
+sys_china_read(r): args [
+    set(r): null
+    mo_arg(path): args 0 ""
+    mo_arg(offset): args 1 -1
+    mo_arg(count): args 2 4096
+    typeof(ot): offset
+    typeof(ct): count
+    if(_): {ot != "integer" || ct != "integer" || offset < 0 || count < 1 || count > 4096} [ return(r): r ]
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    bl_get(rec): fs path
+    if(_): {rec = null} [ return(r): r ]
+    at(kind): rec 0
+    if(_): {kind != "f"} [ return(r): r ]
+    at(size): rec 1
+    if(_): {offset >= size} [ return(r): "" ]
+    at(ino): rec 3
+    bl_runs(runs): fs ino
+    btget(dev): fs "dev"
+    len(total): runs
+    set(i): 0
+    set(left): {size - offset}
+    while(_): {i < total} [
+        at(run): runs i
+        at(lba): run 0
+        at(blocks): run 1
+        set(span): {blocks << 12}
+        if(_): {offset < span} [
+            if(_): {left > count} [ set(left): count ]
+            if(_): {left > span - offset} [ set(left): {span - offset} ]
+            bread(bytes): dev {(lba << 9) + offset} left 1
+            if(_): {bytes != null} [ bytes_text(r): bytes ]
+            return(r): r
+        ]
+        set(offset): {offset - span}
+        set(i): {i + 1}
+    ]
+]
+
+sys_china_du(r): args [
+    set(r): -1
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    mo_arg(path): args 0 ""
+    bl_walk(entries): fs path
+    len(n): entries
+    if(_): {n = 0} [ return(r): r ]
+    set(r): 0
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): entries i
+        at(rec): entry 1
+        at(kind): rec 0
+        if(_): {kind = "f"} [
+            at(size): rec 1
+            set(r): {r + size}
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+# Copy via Belarus extents, with an exclusive destination.
+sys_china_copy(r): args [
+    set(r): 1
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    mo_arg(from): args 0 ""
+    mo_arg(to): args 1 ""
+    if(_): {from = "" || to = ""} [ return(r): r ]
+    bl_get(rec): fs from
+    if(_): {rec = null} [ return(r): r ]
+    at(kind): rec 0
+    bl_exists(exists): fs to
+    if(_): {kind != "f" || exists} [ return(r): r ]
+    bl_copy_tree(copied): fs from fs to ""
+    if(_): {copied = 1} [
+        mo_sync(st): fs
+        if(_): {st = 0} [ set(r): 0 ]
+    ]
+]
+
+sys_china_mount(r): args [
+    set(r): ""
+    if(_): {mo_base < 0} [ return(r): r ]
+    str_from_int(sector): mo_base
+    concat(r): mo_dev " on / (Belarus, sector " sector ")"
+]

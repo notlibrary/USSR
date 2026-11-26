@@ -1,0 +1,7 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 0} [ china_error(r): "usage: uname" return(r): r ]
+    uname(_):
+    set(r): 0
+]

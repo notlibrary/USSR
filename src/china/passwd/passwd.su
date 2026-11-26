@@ -1,0 +1,6 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 0} [ china_error(r): "usage: passwd" return(r): r ]
+    china_error(r): "passwd: Moscow has no login password database"
+]

@@ -1,0 +1,17 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 1} [ china_error(r): "usage: touch FILE" return(r): r ]
+    at(file): argv 0
+    if(_): {file = ""} [ china_error(r): "touch: empty path" return(r): r ]
+    china_path(path): file
+    china_stat(rec): path
+    if(_): {rec = null} [
+        writefile(status): path ""
+        if(_): {status != 0} [ china_error(r): "touch: cannot create file" return(r): r ]
+        return(r): 0
+    ]
+    at(kind): rec 0
+    if(_): {kind != "f"} [ china_error(r): "touch: path is not a file" return(r): r ]
+    set(r): 0
+]

@@ -86,6 +86,7 @@ SYM_MAX         equ 65536           ; distinct names in a program
 LINE_MAX        equ 1000
 CAPTURE_BUF     equ 0x30000         ; encode's text, eval's strings
 CAPTURE_MAX     equ 0x20000
+BOOT_LOG_MAX    equ 4096
 VGA             equ 0xb8000
 
 ; A value: 16 bytes.
@@ -979,6 +980,14 @@ con_putc:
         push rax
         cmp qword [capture_on], 0
         jne .capture
+        cmp byte [boot_log_done], 0
+        jne .output
+        mov rax, [boot_log_len]
+        cmp rax, BOOT_LOG_MAX
+        jae .output
+        mov [boot_log_data + rax], dil
+        inc qword [boot_log_len]
+.output:
         mov eax, edi
         cmp al, 10
         jne .raw
@@ -4739,6 +4748,17 @@ bi_k_shell_eval:
         mov eax, e_shell_eval
         jmp bi_error
 
+bi_k_boot_log:
+        mov esi, boot_log_data
+        mov rcx, [boot_log_len]
+        call new_string
+        jmp bi_str_out
+
+bi_k_boot_log_end:
+        mov byte [boot_log_done], 1
+        xor eax, eax
+        ret
+
 bi_k_getline:
         push rdx
         call read_line
@@ -5873,13 +5893,15 @@ op_eval:
         jmp vm_error
 
 EV_MAX_ARGS     equ 16
-EV_ARGS         equ 0                   ; values
-EV_OUT          equ EV_MAX_ARGS * 16
+EV_PROGRAM_ARG  equ 0                   ; prefixed for shell_run
+EV_ARGS         equ EV_PROGRAM_ARG + 16 ; values
+EV_OUT          equ EV_ARGS + EV_MAX_ARGS * 16
 EV_NAME         equ EV_OUT + 16         ; bytes, length
 EV_RET          equ EV_NAME + 16
 EV_COUNT        equ EV_RET + 16
 EV_BINDINGS     equ EV_COUNT + 8
-EV_SIZE         equ EV_BINDINGS + 8
+EV_PROGRAM      equ EV_BINDINGS + 8     ; nonzero during executable lookup
+EV_SIZE         equ EV_PROGRAM + 8
 
 ; rsi = string, rdi = shell bindings or 0 for EVAL.
 ; Returns 0 on success, -1 after a runtime error, or 2 for shell input
@@ -5891,6 +5913,7 @@ eval_text:
         sub rsp, EV_SIZE
         mov rbp, rsp
         mov [rbp + EV_BINDINGS], rdi
+        mov qword [rbp + EV_PROGRAM], 0
         lea r14, [rsi + STR_BYTES]      ; cursor
         mov r15, [rsi + STR_LEN]
         add r15, r14                    ; end
@@ -5899,11 +5922,14 @@ eval_text:
         cmp r14, r15
         jae .ok
         cmp qword [rbp + EV_BINDINGS], 0
-        je .name
+        je .builtin_name
         cmp byte [r14], '#'
         je .ok
-.name:
+        call ev_shell_name
+        jmp .name
+.builtin_name:
         call ev_ident
+.name:
         jc .syntax
         mov [rbp + EV_NAME], rsi
         mov [rbp + EV_NAME + 8], rcx
@@ -5913,7 +5939,10 @@ eval_text:
         jne .syntax
         inc r14
         call ev_ident
-        jc .syntax
+        jnc .returned
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .syntax
+.returned:
         mov [rbp + EV_RET], rsi
         mov [rbp + EV_RET + 8], rcx
         cmp r14, r15
@@ -5975,7 +6004,19 @@ eval_text:
 .builtin:
         call builtin_find
         test rax, rax
+        jnz .invoke
+        cmp qword [rbp + EV_BINDINGS], 0
+        je .unknown
+        mov qword [rbp + EV_PROGRAM], 1
+        call new_string
+        mov qword [rbp + EV_PROGRAM_ARG], T_STR
+        mov [rbp + EV_PROGRAM_ARG + 8], rax
+        mov esi, s_shell_run
+        mov ecx, s_shell_run_len
+        call builtin_find
+        test rax, rax
         jz .unknown
+.invoke:
         mov r8, rax
         mov rsi, [rbp + EV_RET]
         mov rcx, [rbp + EV_RET + 8]
@@ -5983,12 +6024,19 @@ eval_text:
         mov [bi_retname], rax
         lea rdi, [rbp + EV_ARGS]
         mov esi, [rbp + EV_COUNT]
+        cmp qword [rbp + EV_PROGRAM], 0
+        je .args_ready
+        lea rdi, [rbp + EV_PROGRAM_ARG]
+        inc esi
+.args_ready:
         lea rdx, [rbp + EV_OUT]
         mov qword [rdx], T_NULL
         mov qword [rdx + 8], 0
         call r8
         test eax, eax
         jnz .failed
+        cmp qword [rbp + EV_PROGRAM], 0
+        jne .program_result
         cmp qword [rbp + EV_BINDINGS], 0
         jne .save
         ; the result into the return variable, when the program has it
@@ -6002,14 +6050,21 @@ eval_text:
         lea rsi, [rbp + EV_OUT]
         COPYVAL rax, rsi, rdx
         jmp .command
+.program_result:
+        cmp qword [rbp + EV_OUT], T_NULL
+        je .compile
+        jmp .save
 .set:
         cmp qword [rbp + EV_COUNT], 1
         jne .syntax
         lea rax, [rbp + EV_OUT]
-        COPYVAL rax, rbp, rdx
+        lea rsi, [rbp + EV_ARGS]
+        COPYVAL rax, rsi, rdx
 .save:
         mov rsi, [rbp + EV_RET]
         mov rcx, [rbp + EV_RET + 8]
+        test rcx, rcx
+        jz .ok
         mov edi, s_shell_discard
         call bytes_eq_z
         je .ok
@@ -6119,6 +6174,25 @@ ev_ident:
 .none:
         stc
         ret
+
+; A Rush command may be an executable path or include its extension.
+ev_shell_name:
+        mov rsi, r14
+.next:
+        cmp r14, r15
+        jae ev_ident.end
+        mov al, [r14]
+        cmp al, '/'
+        je .take
+        cmp al, '.'
+        je .take
+        cmp al, '-'
+        je .take
+        call is_name_byte
+        jnc ev_ident.end
+.take:
+        inc r14
+        jmp .next
 
 ; al -> carry set for letters, digits and _
 is_name_byte:
@@ -7780,6 +7854,8 @@ bi_table:
         dq n_typeof, bi_typeof
         dq n_k_shell_eval, bi_k_shell_eval
         dq n_k_shell_exec, bi_k_shell_exec
+        dq n_k_boot_log, bi_k_boot_log
+        dq n_k_boot_log_end, bi_k_boot_log_end
         dq n_k_getline, bi_k_getline
         dq n_k_prompt, bi_k_prompt
         dq n_k_clear, bi_k_clear
@@ -7959,6 +8035,10 @@ e_shell_eval:  db "k_shell_eval(status): source bindings", 0
 s_shell_set:   db "set", 0
 s_shell_print: db "print", 0
 s_shell_discard: db "_", 0
+s_shell_run:   db "shell_run"
+s_shell_run_len equ $ - s_shell_run
+n_k_boot_log:   db "k_boot_log", 0
+n_k_boot_log_end: db "k_boot_log_end", 0
 n_k_getline:    db "k_getline", 0
 n_k_prompt:     db "k_prompt", 0
 n_k_clear:      db "k_clear", 0
@@ -8460,6 +8540,9 @@ fb_cursor:      resq 1                  ; the cell with the bar, or -1
 fb_palette:     resd 16
 fb_text:        resw FB_CELLS           ; what the console writes
 fb_drawn:       resw FB_CELLS           ; what is on the screen
+boot_log_len:   resq 1
+boot_log_done:  resb 1
+boot_log_data:  resb BOOT_LOG_MAX
 rt_data_end:
 %if rt_data_end > CAPTURE_BUF
 %error "the runtime's variables run into the capture buffer"

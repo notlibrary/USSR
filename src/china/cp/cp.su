@@ -1,0 +1,12 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 2} [ china_error(r): "usage: cp FROM TO" return(r): r ]
+    at(from): argv 0
+    at(to): argv 1
+    if(_): {from = "" || to = ""} [ china_error(r): "cp: empty path" return(r): r ]
+    china_path(source): from
+    china_destination(dest): source to
+    china_copy(r): source dest
+    if(_): {r != 0} [ china_error(r): "cp: could not write destination" ]
+]
