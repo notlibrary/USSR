@@ -2,7 +2,6 @@ $include "../common.su"
 
 init(r): argc argv [
     if(_): {argc != 0} [ china_error(r): "usage: whoami" return(r): r ]
-    getenv(user): "USER"
-    print(_): user
+    whoami(user):
     set(r): 0
 ]

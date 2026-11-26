@@ -1,0 +1,136 @@
+$include "accounts_db.su"
+
+global(_): mo_user mo_role
+
+# Ordinary sessions can work in shared /home and /tmp. Normalize the
+# path before authorizing it so parent components cannot escape.
+account_write_allowed(r): path [
+    set(r): true
+    if(_): {mo_role = "ted"} [ return(r): r ]
+    bl_clean(clean): path
+    str_find(home): clean "/home/" 0
+    str_find(tmp): clean "/tmp/" 0
+    set(r): {home = 0 || tmp = 0 || clean = "/home" || clean = "/tmp"}
+    if(_): {r = false} [ print(_): "This path requires a master admin session." ]
+]
+
+sys_identity(r): args [ set(r): mo_user ]
+
+sys_whoami(r): args [
+    set(r): mo_user
+    if(_): {mo_user != null} [ print(_): mo_user ]
+]
+
+sys_account_register(r): args [
+    set(r): 1
+    if(_): {mo_role != "ted"} [
+        print(_): "reguser: master admin login required"
+        return(r): r
+    ]
+    mo_arg(name): args 0 ""
+    mo_arg(role): args 1 "user"
+    account_name_ok(valid): name
+    account_name_ok(role_ok): role
+    if(_): {valid = false || role_ok = false} [
+        print(_): "reguser: invalid username or role"
+        return(r): r
+    ]
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    bl_exists(exists): fs "/etc/passwd"
+    set(db): ""
+    if(_): exists [ bl_read_text(db): fs "/etc/passwd" ]
+    if(_): {db = null} [ return(r): r ]
+    account_row(existing): db name
+    if(_): {existing != null || (name = "ted" && mo_dev = "/dev/ram")} [
+        print(_): "reguser: account already exists"
+        return(r): r
+    ]
+    account_create_row(row): name role
+    if(_): {row = null} [ return(r): r ]
+    # The input can block. Remount and check for a duplicate before writing.
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    bl_exists(exists): fs "/etc/passwd"
+    set(db): ""
+    if(_): exists [ bl_read_text(db): fs "/etc/passwd" ]
+    if(_): {db = null} [ return(r): r ]
+    account_row(existing): db name
+    if(_): {existing != null} [
+        print(_): "reguser: account already exists"
+        return(r): r
+    ]
+    if(_): {db != ""} [
+        len(n): db
+        byte(last): db {n - 1}
+        if(_): {last != 10} [ concat(db): db "\n" ]
+    ]
+    concat(db): db row
+    account_write(r): fs db
+    if(_): {r = 0} [ print(_): "Account created." ]
+]
+
+mo_login(r): fs [
+    set(r): false
+    set(mo_user): null
+    set(mo_role): ""
+    if(_): {fs = null} [ return(r): r ]
+    bl_exists(exists): fs "/etc/passwd"
+    bl_exists(installed): fs "/etc/install.uno"
+    btget(label): fs "label"
+    if(_): {installed = false && label = "ussr-install" && (exists = false || mo_dev = "/dev/ram")} [
+        set(mo_user): "ted"
+        set(mo_role): "ted"
+    ]
+    else(_): [
+        if(_): {mo_user = null} [
+            if(_): {exists = false} [
+                print(_): "No account database. Set up the first master admin at this console."
+                account_input(name): "Master admin username [ted]: "
+                if(_): {name = null} [ return(r): r ]
+                if(_): {name = ""} [ set(name): "ted" ]
+                account_name_ok(valid): name
+                if(_): {valid = false} [ return(r): r ]
+                account_create_row(db): name "ted"
+                if(_): {db = null} [ return(r): r ]
+                bl_mkdirs(_): fs "/etc"
+                account_write(status): fs db
+                if(_): {status != 0} [ return(r): r ]
+            ]
+            else(_): [ bl_read_text(db): fs "/etc/passwd" ]
+            if(_): {db = null || db = ""} [
+                print(_): "Cannot read the account database."
+                return(r): r
+            ]
+            while(_): {mo_user = null} [
+                account_input(name): "login: "
+                if(_): {name = null} [ return(r): r ]
+                account_secret(password): "Password: "
+                if(_): {password = null} [ return(r): r ]
+                account_row(user): db name
+                set(salt): "00000000000000000000000000000000"
+                set(expected): ""
+                if(_): {user != null} [
+                    at(salt): user 2
+                    at(expected): user 3
+                ]
+                re_test(valid): "^[0-9a-f]{32}$" salt
+                if(_): valid [
+                    k_password_hash(actual): password salt
+                    if(_): {actual = expected && user != null} [
+                        set(mo_user): name
+                        at(mo_role): user 1
+                    ]
+                ]
+                if(_): {mo_user = null} [
+                    print(_): "Login incorrect."
+                    sleep(_): 1000
+                ]
+            ]
+        ]
+    ]
+    setenv(_): "USER" mo_user
+    if(_): {mo_role != "ted"} [ setenv(_): "HOME" "/home" ]
+    k_account_admin(_): {mo_role = "ted"}
+    set(r): true
+]

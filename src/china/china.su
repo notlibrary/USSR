@@ -2,7 +2,7 @@ init(r): argc argv [
     print(_): "China utilities for Moscow. Launch with run(status): \"NAME\" [arguments ...]."
     print(_): "cat cd cp date df dmesg du echo"
     print(_): "grep head kill less ls mkdir more mount"
-    print(_): "mv passwd ps pwd rm rmdir tail touch"
+    print(_): "mv passwd ps pwd reguser rm rmdir tail touch"
     print(_): "tree uname uptime wc who whoami"
     set(r): 0
 ]
