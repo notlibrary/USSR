@@ -1033,10 +1033,6 @@ n_sys_zero:
         xor eax, eax
         ret
 
-n_sys_notty:
-        mov rax, -E_NOTTY
-        ret
-
 n_sys_nomem:
         mov rax, -E_NOMEM
         ret
@@ -1340,7 +1336,6 @@ n_table:
         dq 104, n_sys_zero              ; getgid
         dq 107, n_sys_zero              ; geteuid
         dq 108, n_sys_zero              ; getegid
-        dq 16, n_sys_notty              ; ioctl: the console is lines
         dq 73, n_sys_zero               ; flock: one program at a file
         dq 280, n_sys_zero              ; utimensat
         dq 95, n_sys_umask

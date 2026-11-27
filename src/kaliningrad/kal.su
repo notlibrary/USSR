@@ -1,0 +1,29 @@
+# Hosted systems use their installed OpenSSH. Moscow ships kal-ssh.
+init(r): argc argv [
+    getenv(os): "OS"
+    if(_): {argc < 2 || argc > 4} [
+        print(_): "Usage: kal HOST USER [PORT] (Moscow also requires a host key fingerprint)"
+        return(r): 2
+    ]
+    at(host): argv 0
+    at(user): argv 1
+    set(port): "22"
+    if(_): {argc >= 3} [ at(port): argv 2 ]
+    typeof(port_type): port
+    if(_): {port_type = "integer"} [ encode(port): port ]
+    elif(_): {port_type != "string"} [ return(r): 2 ]
+    if(_): {os = "Moscow"} [
+        if(_): {argc != 4} [
+            print(_): "Usage: kal HOST USER PORT SHA256_HEX"
+            return(r): 2
+        ]
+        at(fingerprint): argv 3
+        run(r): "/bin/kal-ssh" host user port fingerprint
+        return(r): r
+    ]
+    if(_): {argc > 3} [
+        print(_): "Usage: kal HOST USER [PORT]"
+        return(r): 2
+    ]
+    ssh(r): "-l" user "-p" port "--" host
+]

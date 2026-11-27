@@ -1,0 +1,1 @@
+'Package{name=`kaliningrad`,version=`0.1.0`,description=`Console SSH client for Linux, Windows, and Moscow`,entry=`kal.su`,dependencies=[],files=[`kal.su`,`kal_ssh.c`,`README.md`],license=`UNSPECIFIED`,minimum_ussr=`0.5.0`,source=``}'
