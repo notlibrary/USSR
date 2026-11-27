@@ -235,22 +235,19 @@ ANSWERS = [
     (b"File system label [ussr]: ", "comrade"),
     (b"Host name [moscow]: ", "kremlin"),
     (b"What to copy [1]: ", ""),
-    (b"Master admin username [ted]: ", ""),
-    (b"New password: ", INSTALL_TEST_PASSWORD),
-    (b"Repeat password: ", INSTALL_TEST_PASSWORD),
     (b"Type yes to go ahead [no]: ", "yes"),
 ]
 
 
-def install_answer(serial, question, answer):
-    if question in (b"New password: ", b"Repeat password: "):
-        serial.sock.sendall(answer.encode() + b"\r")
-    else:
-        serial.command(answer)
-
-
-def login(serial, name="ted", password=INSTALL_TEST_PASSWORD):
-    boot = clean(serial.read_until(b"login: ", timeout=120))
+def login(serial, name="ted", password=INSTALL_TEST_PASSWORD, first_boot=False):
+    boot = ""
+    if first_boot:
+        boot = clean(serial.read_until(b"Master admin username [ted]: ", timeout=120)) + "\n"
+        serial.command(name)
+        for prompt in (b"New password: ", b"Repeat password: "):
+            serial.read_until(prompt, timeout=60)
+            serial.sock.sendall(password.encode() + b"\r")
+    boot += clean(serial.read_until(b"login: ", timeout=120))
     serial.command(name)
     serial.read_until(b"Password: ", timeout=30)
     serial.sock.sendall(password.encode() + b"\r")
@@ -1682,7 +1679,7 @@ def cd_boot(qemu, work, port, log, check):
         said = []
         for question, answer in [(b"Install onto [/dev/hda]: ", "")] + ANSWERS[1:]:
             said.append(clean(serial.read_until(question, timeout=120)))
-            install_answer(serial, question, answer)
+            serial.command(answer)
         said.append(clean(serial.output_to_prompt(timeout=1200)))
         text = "\n".join(said)
         check("it installs from the CD",
@@ -1699,7 +1696,7 @@ def cd_boot(qemu, work, port, log, check):
     m = Machine(qemu, [(target, "qcow2")], port + 2, log)
     serial = m.serial
     try:
-        boot = login(serial) + "\n" + clean(serial.read_until(b"(a key: the shell)", timeout=120))
+        boot = login(serial, first_boot=True) + "\n" + clean(serial.read_until(b"(a key: the shell)", timeout=120))
         serial.sock.sendall(b"\r")
         boot += "\n" + clean(serial.output_to_prompt(timeout=120))
         check("the disk installed from the CD boots alone",
@@ -1732,7 +1729,7 @@ def install(qemu, disk, work, port, log, check, desktop=True):
         said = []
         for question, answer in ANSWERS:
             said.append(clean(serial.read_until(question, timeout=120)))
-            install_answer(serial, question, answer)
+            serial.command(answer)
         said.append(clean(serial.output_to_prompt(timeout=900)))
         text = "\n".join(said)
         check("the installer lists the disks",
@@ -1760,7 +1757,7 @@ def install(qemu, disk, work, port, log, check, desktop=True):
     serial = m.serial
     try:
         # the desktop by default: a key on the serial line takes the shell
-        boot = login(serial) + "\n" + clean(serial.read_until(b"(a key: the shell)", timeout=60))
+        boot = login(serial, first_boot=True) + "\n" + clean(serial.read_until(b"(a key: the shell)", timeout=60))
         serial.sock.sendall(b"\r")
         boot += "\n" + clean(serial.output_to_prompt(timeout=60))
         check("the installed system starts the desktop by default",
@@ -1842,7 +1839,7 @@ def sata(qemu, disk, work, port, log, check):
         said = []
         for question, answer in answers:
             said.append(clean(serial.read_until(question, timeout=120)))
-            install_answer(serial, question, answer)
+            serial.command(answer)
         said.append(clean(serial.output_to_prompt(timeout=900)))
         text = "\n".join(said)
         check("the installer offers the SATA disk", "/dev/sda  96 MiB  QEMU HARDDISK" in text, text)
@@ -1859,7 +1856,7 @@ def sata(qemu, disk, work, port, log, check):
     m = Machine(qemu, [], port + 1, log, sata=[(target, "qcow2")])
     serial = m.serial
     try:
-        boot = login(serial) + "\n" + clean(serial.read_until(b"(a key: the shell)", timeout=120))
+        boot = login(serial, first_boot=True) + "\n" + clean(serial.read_until(b"(a key: the shell)", timeout=120))
         serial.sock.sendall(b"\r")
         boot += "\n" + clean(serial.output_to_prompt(timeout=60))
         check("the SATA disk boots alone, its root on /dev/sda",

@@ -20,7 +20,6 @@
 # question takes its default and the final "yes" is not given.
 $include "../stalin/stalin.su"
 $include "../belarus/belarus.su"
-$include "accounts_db.su"
 
 global(_): ins_moscow ins_copied ins_answers ins_eof
 
@@ -416,15 +415,6 @@ ins_main(r): args [
     push(_): what p
     ins_choose(scope): "What to copy" what "1"
 
-    set(account): null
-    if(_): ins_moscow [
-        ins_ask(admin): "Master admin username" "ted"
-        account_name_ok(valid): admin
-        if(_): {valid = false} [ ins_fail(r): "invalid username" return(r): r ]
-        account_create_row(account): admin "ted"
-        if(_): {account = null} [ ins_fail(r): "master admin was not created" return(r): r ]
-    ]
-
     # how much room that takes
     set(need): 1048576
     if(_): {scope = "1"} [ ins_size_of(need): src "/" ]
@@ -604,12 +594,13 @@ ins_main(r): args [
     btput(_): ins_answers "time" now
     encode(record): ins_answers
     concat(record): record "\n"
-    bl_write_text(_): dst "/etc/install.uno" record
-    if(_): {account != null} [
-        account_home(w): dst admin
-        if(_): {w != 0} [ ins_fail(r): "master admin home could not be created" return(r): r ]
-        bl_write_text(w): dst "/etc/passwd" account
-        if(_): {w != 0} [ ins_fail(r): "account database could not be written" return(r): r ]
+    bl_write_text(w): dst "/etc/install.uno" record
+    if(_): {w != 0} [ ins_fail(r): "installation record could not be written" return(r): r ]
+    # A fresh installation gets its first account on its own console.
+    bl_exists(accounts): dst "/etc/passwd"
+    if(_): accounts [
+        bl_remove(w): dst "/etc/passwd"
+        if(_): {w != 0} [ ins_fail(r): "copied account database could not be removed" return(r): r ]
     ]
     bl_sync(w): dst
     if(_): {w != 0} [
@@ -645,6 +636,7 @@ ins_main(r): args [
         concat(line): "Done: USSR is on " dev "; it does not boot (no room for the boot loader in front of the partition, or GPT)."
     ]
     print(_): line
+    if(_): bootable [ print(_): "Create the first master admin when you boot the installed system." ]
     set(r): 0
 ]
 
