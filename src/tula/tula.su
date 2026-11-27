@@ -4,7 +4,7 @@
 #
 # Public API:
 #   tulainitialize(canvas): window status filename -> creates the canvas
-#   tulatool(r): name            -> "line", "circle", "arc", "spline" or "select"
+#   tulatool(r): name            -> selects a geometry or annotation tool
 #   tulaclick(r): canvas x y     -> canvas "pointer" callback body
 #   tulamenu(r): canvas x y      -> canvas "menu" callback body (right-click)
 #   tulasave(r):                 -> writes the DXF named by the filename box
@@ -26,6 +26,7 @@
 #   ["POLYLINE", closed, points]      (points = [x0, y0, x1, y1, ...])
 #   ["SPLINE", degree, control points] (control points are a flat x/y vector)
 #   ["POINT", x, y]                   ["TEXT", x, y, height, text]
+#   ["DIM", type, x1, y1, x2, y2, x3, y3, text]
 # Hash keys: tula_window tula_status tula_path tula_canvas tula_entities
 # tula_tool tula_anchor tula_view ([ox, oy, scale]) tula_fitted tula_step
 # tula_snap_grid/entity/end/cross (toolbar snap switches)
@@ -60,6 +61,8 @@ $define TULA_MAX_ENTITIES 10000
 $define TULA_PAN_STEP 100
 $include "more.su"
 $include "scope.su"
+$include "annotations.su"
+$include "../petersburg/manual-events.su"
 
 tula_floor(r): x [
     str_trunc(_tf_t): x
@@ -280,14 +283,13 @@ tula_draw_entity(r): canvas entity ink tink [
         canvasline(_): canvas {_te_x1 - 3} {_te_y1 + 3} {_te_x1 + 3} {_te_y1 - 3} ink
     ]
     elif(_): {_te_kind = "TEXT"} [
-        # Petersburg's bitmap font has one size: the text sits on its DXF
-        # baseline point; its height only lifts the glyphs off the baseline.
         at(_te_a): entity 1
         at(_te_b): entity 2
+        at(_te_h): entity 3
         at(_te_text): entity 4
         tula_to_screen_x(_te_x1): _te_a
         tula_to_screen_y(_te_y1): _te_b
-        canvastext(_): canvas _te_x1 {_te_y1 - 7} _te_text tink
+        tula_drafting_label(_): canvas _te_x1 _te_y1 {_te_h * _te_s} _te_text tink
     ]
     set(r): 0
 ]
@@ -359,6 +361,9 @@ tulainitialize(canvas): window status filename [
     tl_doc_new(_ti_doc):
     set(tula_doc): _ti_doc!
     set(tula_cmdbox): 0!
+    set(tula_label_text): ""!
+    tula_drafting_font(font):
+    set(tula_draft_font): font!
     vec(_ti_anchor): ""
     set(tula_anchor): _ti_anchor!
     set(tula_tool): ""!
@@ -389,8 +394,9 @@ tula_tool_body(r): name [
     if(_): _tt_fitted [
         tula_redraw(_):
     ]
-    if(_): {name != "line" && name != "circle" && name != "arc" && name != "spline" && name != "select"} [
-        tula_set_status(_): "Tula's tools are select, line, circle segment and spline"
+    tula_annotation_tool(annotation): name
+    if(_): {annotation = false && name != "line" && name != "circle" && name != "arc" && name != "spline" && name != "select"} [
+        tula_set_status(_): "Unknown drawing tool"
         return(_): r
     ]
     set(tula_tool): name!
@@ -410,6 +416,18 @@ tula_tool_body(r): name [
     elif(_): {name = "arc"} [
         tula_set_status(_): "CIRCLE SEGMENT: click center, radius, then end angle"
     ]
+    elif(_): {name = "text"} [
+        set(tula_label_text): ""!
+        set(box): tula_cmdbox?
+        if(_): {box != 0} [ setfocus(_): box ]
+        tula_set_status(_): "TEXT: type a label in the command box, press Enter, then click to place it"
+    ]
+    elif(_): {name = "linear dimension"} [
+        tula_set_status(_): "LINEAR DIMENSION: click the first measured point"
+    ]
+    elif(_): {name = "diameter dimension"} [
+        tula_set_status(_): "DIAMETER DIMENSION: click the edge of a circle or hole"
+    ]
     else(_): [
         tula_set_status(_): "SPLINE: click at least three points; right-click to finish"
     ]
@@ -428,8 +446,9 @@ tula_mark_tool(r): name [
     while(_): {_tmt_i < _tmt_n} [
         at(_tmt_label): _tmt_names _tmt_i
         at(_tmt_button): _tmt_buttons _tmt_i
-        if(_): {_tmt_label = "Select" || _tmt_label = "Line" || _tmt_label = "Circle" || _tmt_label = "Circle Segment" || _tmt_label = "Spline"} [
-            str_lower(_tmt_lower): _tmt_label
+        str_lower(_tmt_lower): _tmt_label
+        tula_annotation_tool(annotation): _tmt_lower
+        if(_): {annotation || _tmt_label = "Select" || _tmt_label = "Line" || _tmt_label = "Circle" || _tmt_label = "Circle Segment" || _tmt_label = "Spline"} [
             if(_): {_tmt_lower = "circle segment"} [ set(_tmt_lower): "arc" ]
             setchecked(_): _tmt_button {_tmt_lower = name}
         ]
@@ -608,10 +627,16 @@ tula_click_body(r): canvas x y [
     at(ox): v 0
     at(oy): v 1
     at(scale): v 2
+    if(_): {tool = "diameter dimension"} [
+        tula_annotation_click(r): tool {(x - ox) / scale} {(oy - y) / scale}
+        return(r): r
+    ]
     tula_pick_point(point): {(x - ox) / scale} {(oy - y) / scale} scale
     at(px): point 0
     at(py): point 1
-    tula_draw_click(r): px py
+    tula_annotation_tool(annotation): tool
+    if(_): annotation [ tula_annotation_click(r): tool px py ]
+    else(_): [ tula_draw_click(r): px py ]
 ]
 
 # Right-click ends the active multi-point line or spline without adding a
@@ -1315,6 +1340,18 @@ tula_tb_spline(result): widget [
     tulatool(_): "spline"
 ]
 
+tula_tb_diameter_dimension(result): widget [
+    tulatool(result): "diameter dimension"
+]
+
+tula_tb_linear_dimension(result): widget [
+    tulatool(result): "linear dimension"
+]
+
+tula_tb_text(result): widget [
+    tulatool(result): "text"
+]
+
 tula_snap_set(r): mode button [
     set(r): 0
     uilock(_):
@@ -1379,7 +1416,10 @@ $define TULA_FILTERS "DXF drawings (*.dxf)|*.dxf|All files|*"
 tula_pick(r): mode title [
     set(box): tula_path?
     gettext(start): box
-    filedialog(r): mode title start TULA_FILTERS
+    getenv(os): "OS"
+    set(poll): ""
+    if(_): {os = "Moscow"} [ set(poll): "petersburg_poll_events" ]
+    pfd_open(r): mode title start TULA_FILTERS poll
 ]
 
 tula_tb_open(result): widget [
@@ -1526,6 +1566,17 @@ tula_tb_pan_down(result): widget [
     tulapan(_): 0 {0 - TULA_PAN_STEP}
 ]
 
+tula_tb_icon(r): widget name [
+    concat(path): "src/tula/icons/" name
+    getenv(root): "USSR_HOME"
+    if(_): {root != null && root != ""} [
+        concat(candidate): root "/" path
+        file_exists(found): candidate
+        if(_): found [ set(path): candidate ]
+    ]
+    buttonicon(r): widget path
+]
+
 tula_tb_add(r): bar glyph label callback [
     button(r): bar glyph
     if(_): {label != ""} [ buttonhint(_): r label ]
@@ -1533,18 +1584,21 @@ tula_tb_add(r): bar glyph label callback [
         if(_): {callback = "tula_tb_open"} [ buttonicon(_): r "folder" ]
         if(_): {callback = "tula_tb_save_file"} [ buttonicon(_): r "disk" ]
         if(_): {callback = "tula_tb_select"} [ buttonicon(_): r "pointer" ]
-        if(_): {label = "Line"} [ buttonicon(_): r "src/tula/icons/line.ppm" ]
-        if(_): {label = "Circle"} [ buttonicon(_): r "src/tula/icons/circle.ppm" ]
-        if(_): {label = "Circle Segment"} [ buttonicon(_): r "src/tula/icons/arc.ppm" ]
-        if(_): {label = "Spline"} [ buttonicon(_): r "src/tula/icons/spline.ppm" ]
-        if(_): {label = "Snap entity"} [ buttonicon(_): r "src/tula/icons/snap-entity.ppm" ]
-        if(_): {label = "Snap grid"} [ buttonicon(_): r "src/tula/icons/snap-grid.ppm" ]
-        if(_): {label = "Snap endpoints"} [ buttonicon(_): r "src/tula/icons/snap-endpoints.ppm" ]
-        if(_): {label = "Snap cross"} [ buttonicon(_): r "src/tula/icons/snap-cross.ppm" ]
-        if(_): {label = "Left"} [ buttonicon(_): r "src/tula/icons/pan-left.ppm" ]
-        if(_): {label = "Right"} [ buttonicon(_): r "src/tula/icons/pan-right.ppm" ]
-        if(_): {label = "Up"} [ buttonicon(_): r "src/tula/icons/pan-up.ppm" ]
-        if(_): {label = "Down"} [ buttonicon(_): r "src/tula/icons/pan-down.ppm" ]
+        if(_): {label = "Line"} [ tula_tb_icon(_): r "line.ppm" ]
+        if(_): {label = "Circle"} [ tula_tb_icon(_): r "circle.ppm" ]
+        if(_): {label = "Circle Segment"} [ tula_tb_icon(_): r "arc.ppm" ]
+        if(_): {label = "Spline"} [ tula_tb_icon(_): r "spline.ppm" ]
+        if(_): {label = "Text"} [ tula_tb_icon(_): r "text.ppm" ]
+        if(_): {label = "Linear Dimension"} [ tula_tb_icon(_): r "dimension-linear.ppm" ]
+        if(_): {label = "Diameter Dimension"} [ tula_tb_icon(_): r "dimension-diameter.ppm" ]
+        if(_): {label = "Snap entity"} [ tula_tb_icon(_): r "snap-entity.ppm" ]
+        if(_): {label = "Snap grid"} [ tula_tb_icon(_): r "snap-grid.ppm" ]
+        if(_): {label = "Snap endpoints"} [ tula_tb_icon(_): r "snap-endpoints.ppm" ]
+        if(_): {label = "Snap cross"} [ tula_tb_icon(_): r "snap-cross.ppm" ]
+        if(_): {label = "Left"} [ tula_tb_icon(_): r "pan-left.ppm" ]
+        if(_): {label = "Right"} [ tula_tb_icon(_): r "pan-right.ppm" ]
+        if(_): {label = "Up"} [ tula_tb_icon(_): r "pan-up.ppm" ]
+        if(_): {label = "Down"} [ tula_tb_icon(_): r "pan-down.ppm" ]
         on(_): r "click" callback
         set(_tba_buttons): tula_buttons?
         set(_tba_names): tula_button_names?
@@ -1586,6 +1640,9 @@ tulatoolbar(toolbar): window [
     tula_tb_add(_): _ttb_toolbar "C" "Circle" "tula_tb_circle"
     tula_tb_add(_): _ttb_toolbar "A" "Circle Segment" "tula_tb_arc"
     tula_tb_add(_): _ttb_toolbar "S" "Spline" "tula_tb_spline"
+    tula_tb_add(_): _ttb_toolbar "T" "Text" "tula_tb_text"
+    tula_tb_add(_): _ttb_toolbar "D" "Linear Dimension" "tula_tb_linear_dimension"
+    tula_tb_add(_): _ttb_toolbar "O" "Diameter Dimension" "tula_tb_diameter_dimension"
     tula_tb_add(_): _ttb_toolbar "|" "" ""
     tula_tb_add(_): _ttb_toolbar "+" "Zoom +" "tula_tb_zoom_in"
     tula_tb_add(_): _ttb_toolbar "-" "Zoom -" "tula_tb_zoom_out"
@@ -1653,9 +1710,11 @@ tula_tools_select(result): menu index [
 # "-" 45, keypad + 334, keypad - 333, "F" 70.
 tulakey(result): window key [
     set(result): 0
+    set(tool): tula_tool?
     if(_): {key = 257 || key = 335} [
         uilock(_):
-        tl_gui_command(_):
+        if(_): {tool = "text"} [ tula_annotation_text(_): ]
+        else(_): [ tl_gui_command(_): ]
         uiunlock(_):
         return(_): result
     ]
@@ -1671,12 +1730,18 @@ tulakey(result): window key [
         uilock(_):
         vec(_tk_none): ""
         set(tula_anchor): _tk_none!
+        set(tula_label_text): ""!
         set(tula_sel_on): false!
         tula_sel_set(_): _tk_none
         tula_set_status(_): "Cancelled"
         tula_redraw(_):
         uiunlock(_):
         return(_): result
+    ]
+    if(_): {tool = "text"} [
+        set(box): tula_cmdbox?
+        getfocus(focused): window
+        if(_): {box != 0 && focused = box} [ return(result): result ]
     ]
     if(_): {key = 263} [
         tulapan(_): TULA_PAN_STEP 0
@@ -2242,7 +2307,7 @@ tula_app_motion(result): canvas x y [
 ]
 
 # the crosshair needs the "motion" event and a hidden system cursor;
-# a runtime without them (Moscow's) keeps the arrow
+# a runtime without them keeps the arrow
 tula_scope_on(r): canvas [
     set(r): 0
     on(_): canvas "motion" "tula_app_motion"

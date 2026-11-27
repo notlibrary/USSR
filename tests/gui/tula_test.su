@@ -178,7 +178,7 @@ init(result): arg_count arg_values [
 
     tulatool(_): "ellipse"
     gettext(t): status
-    check(_): "unknown tool refused" t "Tula's tools are select, line, circle segment and spline"
+    check(_): "unknown tool refused" t "Unknown drawing tool"
 
     settext(_): filename ""
     click(_): save_button

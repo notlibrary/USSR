@@ -937,6 +937,24 @@ tl_dim_text(r): e [
     if(_): {t != ""} [ str_replace(r): t "<>" vs ]
 ]
 
+# Open arrow at an endpoint, with its legs extending towards the other end.
+tl_dim_arrow(r): parts x y toward_x toward_y height [
+    set(r): 0
+    tl_dist(distance): x y toward_x toward_y
+    if(_): {distance = 0} [ return(r): r ]
+    set(size): height
+    if(_): {distance / 3 < size} [ set(size): {distance / 3} ]
+    set(ux): {(toward_x - x) / distance}
+    set(uy): {(toward_y - y) / distance}
+    set(bx): {x + size * ux}
+    set(by): {y + size * uy}
+    set(wing): {size / 4}
+    tl_line_e(first): x y {bx - wing * uy} {by + wing * ux}
+    tl_line_e(second): x y {bx + wing * uy} {by - wing * ux}
+    push(_): parts first
+    push(_): parts second
+]
+
 # a dimension as lines, an arc and text
 tl_dim_parts(r): e [
     vec(r): ""
@@ -949,7 +967,24 @@ tl_dim_parts(r): e [
     at(y3): e 7
     tl_dim_text(t): e
     set(h): 2.5
-    if(_): {type = "radius" || type = "diameter"} [
+    if(_): {type = "diameter"} [
+        set(opposite_x): {2 * x1 - x2}
+        set(opposite_y): {2 * y1 - y2}
+        tl_line_e(line): opposite_x opposite_y x2 y2
+        push(_): r line
+        tl_dim_arrow(_): r opposite_x opposite_y x2 y2 h
+        tl_dim_arrow(_): r x2 y2 opposite_x opposite_y h
+        tl_dist(radius): x1 y1 x2 y2
+        tl_dist(label_distance): x1 y1 x3 y3
+        if(_): {label_distance > radius} [
+            tl_line_e(leader): x2 y2 x3 y3
+            push(_): r leader
+        ]
+        tl_text_e(tx): x3 {y3 + h * 0.45} h t
+        push(_): r tx
+        return(r): r
+    ]
+    if(_): {type = "radius"} [
         tl_line_e(l): x1 y1 x2 y2
         push(_): r l
         tl_text_e(tx): x3 y3 h t
@@ -1003,7 +1038,9 @@ tl_dim_parts(r): e [
     push(_): r e2
     tl_line_e(dl): ax ay bx by
     push(_): r dl
-    tl_text_e(tx): {(ax + bx) / 2} {(ay + by) / 2 + 1} h t
+    tl_dim_arrow(_): r ax ay bx by h
+    tl_dim_arrow(_): r bx by ax ay h
+    tl_text_e(tx): {(ax + bx) / 2} {(ay + by) / 2 + h * 0.45} h t
     push(_): r tx
 ]
 

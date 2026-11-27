@@ -153,7 +153,7 @@ $(OUT)/xhci.bin: $(OUT)/xhci.o $(ARCH)/xhci.ld
 CHINA := $(ROOT)/src/china
 SU_SRC := $(filter-out $(CHINA)/%,$(wildcard $(ROOT)/src/*.su $(ROOT)/src/*/*.su $(ROOT)/src/*/*/*.su))
 BOOT_FILES := ussr_rt.bin moscow.ru russia.ru rush.ru
-NATIVE_RU := install stalin belarus kal
+NATIVE_RU := install stalin belarus kal tula
 RUSSIA_RU := Mbl Mbltishi kremlin
 CHINA_RU := china $(basename $(notdir $(wildcard $(CHINA)/*/*.su)))
 BIN_RU := $(NATIVE_RU) $(RUSSIA_RU) $(CHINA_RU)
@@ -169,7 +169,7 @@ $(OUT)/ussr_rt.bin: $(ARCH_SRC) $(OUT)/xhci.bin
 $(OUT)/moscow.ru $(OUT)/install.ru: $(OUT)/%.ru: $(SU_SRC) $(USSR)
 	mkdir -p $(OUT)
 	cd $(HERE) && $(RUN_USSR) -c $*.su $@
-$(OUT)/russia.ru $(OUT)/stalin.ru $(OUT)/belarus.ru: $(OUT)/%.ru: $(SU_SRC) $(USSR)
+$(OUT)/russia.ru $(OUT)/stalin.ru $(OUT)/belarus.ru $(OUT)/tula.ru: $(OUT)/%.ru: $(SU_SRC) $(USSR)
 	mkdir -p $(OUT)
 	cd $(ROOT)/src/$* && $(RUN_USSR) -c $*.su $@
 

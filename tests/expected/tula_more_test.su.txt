@@ -71,6 +71,11 @@ PASS a rectangular array
 PASS a polar array
 PASS an unknown command
 PASS an aligned dimension
+PASS linear dimension has extension lines and two arrows
+PASS linear dimension label
+PASS diameter dimension has two arrows and a leader
+PASS diameter dimension label uses the DXF diameter prefix
+PASS diameter spans both edges of the hole
 PASS a radius
 PASS an angle
 PASS insert a symbol

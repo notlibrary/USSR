@@ -2737,9 +2737,8 @@ rt_load:
 
         ; k_ru_check armed this load: it only looks for a builtin call
         ; (OOP) of a name that is neither a builtin nor a kernel command,
-        ; or of petersburg_run (russia.ru's: it hands a program's events to
-        ; its callbacks, where the kernel command only returns), for
-        ; k_ru_missing, and fails quietly. Nothing of the program runs.
+        ; or petersburg_run when the program relies on Russia to dispatch
+        ; its events. Nothing of the checked program runs.
         cmp qword [ru_strict], 0
         je .checked
         mov qword [ru_strict], 0
@@ -2767,6 +2766,18 @@ rt_load:
         mov edi, s_pb_run
         call str_eq_z
         jne .check
+        ; Programs that call petersburg_take_events dispatch their own
+        ; callbacks. They can use the kernel's nonblocking GUI entry point.
+        xor r10d, r10d
+.event_symbol:
+        cmp r10, [r14 + PROG.nsyms]
+        jae .missing
+        mov rsi, [rdx + r10 * 8]
+        mov edi, s_pb_take_events
+        call str_eq_z
+        je .check
+        inc r10
+        jmp .event_symbol
 .missing:
         ; the name, for k_ru_missing
         mov rdx, [r14 + PROG.symtext]
@@ -8186,6 +8197,7 @@ name_moscow:    db "moscow.ru"
 name_moscow_len equ $ - name_moscow
 s_init:         db "init", 0
 s_pb_run:       db "petersburg_run", 0
+s_pb_take_events: db "petersburg_take_events", 0
 s_null:         db "null", 0
 s_integer:      db "integer", 0
 s_real:         db "real", 0

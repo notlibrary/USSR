@@ -346,6 +346,24 @@ ut_doc(r): [
     ut_check(_): "an unknown command" v "no command nosuch (help lists them)"
     tl_command(v): d "dim aligned 0,0 30,40 0,10"
     ut_check(_): "an aligned dimension" v "50"
+    tl_dim(draft_dim): "aligned" 0 0 30 40 0 10 ""
+    tl_dim_parts(draft_parts): draft_dim
+    len(part_count): draft_parts
+    ut_check(_): "linear dimension has extension lines and two arrows" part_count 8
+    at(draft_label): draft_parts 7
+    at(label_text): draft_label 4
+    ut_check(_): "linear dimension label" label_text "50"
+    tl_dim(hole_dim): "diameter" 0 0 5 0 12 0 ""
+    tl_dim_parts(hole_parts): hole_dim
+    len(part_count): hole_parts
+    ut_check(_): "diameter dimension has two arrows and a leader" part_count 7
+    at(hole_label): hole_parts 6
+    at(label_text): hole_label 4
+    ut_check(_): "diameter dimension label uses the DXF diameter prefix" label_text "%%c10"
+    at(diameter_line): hole_parts 0
+    at(left_end): diameter_line 1
+    at(right_end): diameter_line 3
+    ut_check(_): "diameter spans both edges of the hole" {left_end = -5 && right_end = 5} true
     tl_command(v): d "dim radius 50,25 60,25 70,30"
     ut_check(_): "a radius" v "R10"
     tl_command(v): d "dim angle 0,0 10,0 0,10"

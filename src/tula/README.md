@@ -6,6 +6,9 @@ canvas. Start it from the repository root with a GLFW-enabled build:
     ussr src/tula/tula.su                 # new drawing; saves to drawing.dxf
     ussr src/tula/tula.su plan.dxf        # opens plan.dxf
 
+On Moscow, use `run(_): "tula"` in Rush. The live ISO and installed system
+include Tula's precompiled bytecode.
+
 The window requests maximized display at startup. `src/tula/examples/hello.su`
 builds the same window from a script that includes `tula.su`.
 
@@ -33,6 +36,21 @@ zoom, and **Fit** shows the whole drawing. See `docs/API.md` for the
 supported DXF subset. The in-memory geometry is stored
 in world coordinates; the canvas is a rendered view, not the source of truth.
 Tula supports up to 10,000 entities per drawing.
+
+## Text and dimensions
+
+- **Text** focuses the command box. Type a label, press Enter, and click its
+  insertion point. Click again to repeat it or enter another label.
+- **Linear Dimension** takes two measured points and a third click to set
+  the offset. The dimension line is parallel to the measured segment and
+  uses its length in drawing units.
+- **Diameter Dimension** snaps to the outline of an existing circle. Click
+  the hole edge and then the label position to place a diameter line and
+  its measured value.
+
+Labels use the geometric Pobeda outline font for drafting-style lettering.
+Dimensions are single selectable objects in Tula. DXF export writes their
+visible lines, arrows, and text.
 
 ## Implementation
 

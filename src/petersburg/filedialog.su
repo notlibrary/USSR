@@ -452,6 +452,10 @@ pfd_cb_key(result): window key [
 # --- the dialog
 
 filedialog(r): mode title start filters [
+    pfd_open(r): mode title start filters ""
+]
+
+pfd_open(r): mode title start filters poll [
     set(r): ""
     btree(pfd_st):
     set(pfd_dialog): pfd_st!
@@ -539,6 +543,7 @@ filedialog(r): mode title start filters [
     # wait for the answer; the program's other windows take no input
     set(waiting): true
     while(_): waiting [
+        if(_): {poll != ""} [ try(_): poll ]
         sleep(_): 20
         btget(done): pfd_st "done"
         alive(up): win
