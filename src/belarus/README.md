@@ -150,3 +150,14 @@ both used and free, and that no block is lost.
 mounts its root file system with them and serves `ls`, `cat`,
 `readfile`, `writefile` and the other file commands from it;
 `tests/belarus_test.su` checks them on two images.
+
+
+### File modes and owners
+
+Inodes can carry a nine-bit permission mode and an account name. The two
+fields are appended after the original inode fields. Existing images
+default to `644` for files, `755` for directories and owner `ted`.
+Rename keeps both fields. Full filesystem copies preserve stored metadata.
+
+The image tool accepts `stat IMAGE PATH`, `chmod IMAGE PATH MODE`, and
+`chown IMAGE PATH OWNER`. Modes are interpreted as octal digits.

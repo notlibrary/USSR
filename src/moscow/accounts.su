@@ -2,7 +2,7 @@ $include "accounts_db.su"
 
 global(_): mo_user mo_role
 
-# Ordinary sessions can work in shared /home and /tmp. Normalize the
+# Ordinary sessions can work under /home and /tmp. Normalize the
 # path before authorizing it so parent components cannot escape.
 account_write_allowed(r): path [
     set(r): true
@@ -12,6 +12,136 @@ account_write_allowed(r): path [
     str_find(tmp): clean "/tmp/" 0
     set(r): {home = 0 || tmp = 0 || clean = "/home" || clean = "/tmp"}
     if(_): {r = false} [ print(_): "This path requires a master admin session." ]
+]
+
+# Group membership is not modeled. Compare the owner field and otherwise
+# use the other bits. Legacy shared directories retain their access.
+account_bits(r): fs path mask [
+    set(r): true
+    if(_): {mo_role = "ted"} [ return(r): r ]
+    bl_permissions(meta): fs path
+    if(_): {meta = null} [ return(r): r ]
+    at(mode): meta 0
+    at(owner): meta 1
+    at(explicit): meta 2
+    if(_): {explicit = false && path = "/tmp"} [ set(mode): 511 ]
+    if(_): {owner = mo_user} [ set(mode): {mode >> 6} ]
+    set(r): {(mode & mask) = mask}
+]
+
+account_access(r): fs path mask [
+    set(r): true
+    if(_): {mo_role = "ted"} [ return(r): r ]
+    bl_clean(p): path
+    account_bits(ok): fs p mask
+    while(_): {ok && p != "/"} [
+        bl_parent(p): p
+        account_bits(ok): fs p 1
+    ]
+    set(r): ok
+]
+
+# For existing content check its write bit; creating or changing a name
+# requires write and search access on the nearest existing parent.
+account_mutate(r): fs path entry [
+    account_write_allowed(r): path
+    if(_): {r = false || mo_role = "ted"} [ return(r): r ]
+    bl_clean(p): path
+    if(_): {entry && (p = "/home" || p = "/tmp")} [ return(r): false ]
+    bl_exists(exists): fs p
+    if(_): {entry || exists = false} [
+        bl_parent(p): p
+        bl_exists(exists): fs p
+        while(_): {exists = false && p != "/"} [
+            bl_parent(p): p
+            bl_exists(exists): fs p
+        ]
+        account_access(r): fs p 3
+    ]
+    else(_): [ account_access(r): fs p 2 ]
+]
+
+# Authorize the whole tree with its original modes before changing any
+# inode. Belarus walks directory inodes and treats links as entries.
+account_chmod_tree(r): fs path mode [
+    set(r): 1
+    bl_walk(entries): fs path
+    len(n): entries
+    if(_): {n = 0} [ return(r): r ]
+    if(_): {mo_role != "ted"} [
+        set(i): 0
+        while(_): {i < n} [
+            at(entry): entries i
+            at(file): entry 0
+            at(record): entry 1
+            at(kind): record 0
+            set(mask): 0
+            if(_): {kind = "d"} [ set(mask): 5 ]
+            account_access(ok): fs file mask
+            bl_permissions(meta): fs file
+            if(_): {meta = null} [ return(r): r ]
+            at(owner): meta 1
+            if(_): {ok = false || owner != mo_user} [
+                concat(message): "chmod: permission denied: " file
+                print(_): message
+                return(r): r
+            ]
+            set(i): {i + 1}
+        ]
+    ]
+    set(i): {n - 1}
+    while(_): {i >= 0} [
+        at(entry): entries i
+        at(file): entry 0
+        bl_set_permissions(status): fs file mode null
+        if(_): {status != 0} [ return(r): r ]
+        set(i): {i - 1}
+    ]
+    mo_sync(status): fs
+    if(_): {status = 0} [ set(r): 0 ]
+]
+
+sys_permissions(r): args [
+    set(r): 1
+    mo_arg(path): args 0 ""
+    mo_arg(value): args 1 null
+    mo_arg(op): args 2 "stat"
+    mo_arg(recursive): args 3 false
+    if(_): {path = ""} [ return(r): r ]
+    mo_fs(fs):
+    if(_): {fs = null} [ return(r): r ]
+    account_access(ok): fs path 0
+    if(_): {ok = false} [ return(r): r ]
+    if(_): {op = "stat"} [ bl_cmd_permissions(r): fs path return(r): r ]
+    bl_permissions(meta): fs path
+    if(_): {meta = null} [ print(_): "No such file." return(r): r ]
+    at(owner): meta 1
+    set(mode): null
+    set(new_owner): null
+    if(_): {op = "chmod"} [
+        if(_): {mo_role != "ted" && mo_user != owner} [
+            print(_): "chmod: file owner or master admin required"
+            return(r): r
+        ]
+        bl_mode_parse(mode): value
+        if(_): {mode < 0} [ print(_): "chmod: invalid octal mode" return(r): r ]
+        if(_): {recursive = true} [
+            account_chmod_tree(r): fs path mode
+            return(r): r
+        ]
+    ]
+    elif(_): {op = "chown"} [
+        if(_): {mo_role != "ted"} [ print(_): "chown: master admin required" return(r): r ]
+        bl_owner_ok(valid): value
+        if(_): {valid = false} [ print(_): "chown: invalid owner" return(r): r ]
+        set(new_owner): value
+    ]
+    else(_): [ return(r): r ]
+    bl_set_permissions(status): fs path mode new_owner
+    if(_): {status = 0} [
+        mo_sync(status): fs
+        if(_): {status = 0} [ set(r): 0 ]
+    ]
 ]
 
 sys_identity(r): args [ set(r): mo_user ]
@@ -66,6 +196,14 @@ sys_account_register(r): args [
         if(_): {last != 10} [ concat(db): db "\n" ]
     ]
     concat(db): db row
+    concat(home): "/home/" name
+    bl_exists(home_exists): fs home
+    if(_): home_exists [
+        print(_): "reguser: home path already exists"
+        return(r): r
+    ]
+    account_home(status): fs name
+    if(_): {status != 0} [ print(_): "reguser: could not create home" return(r): r ]
     account_write(r): fs db
     if(_): {r = 0} [ print(_): "Account created." ]
 ]
@@ -94,6 +232,8 @@ mo_login(r): fs [
                 account_create_row(db): name "ted"
                 if(_): {db = null} [ return(r): r ]
                 bl_mkdirs(_): fs "/etc"
+                account_home(status): fs name
+                if(_): {status != 0} [ return(r): r ]
                 account_write(status): fs db
                 if(_): {status != 0} [ return(r): r ]
             ]
@@ -130,7 +270,12 @@ mo_login(r): fs [
         ]
     ]
     setenv(_): "USER" mo_user
-    if(_): {mo_role != "ted"} [ setenv(_): "HOME" "/home" ]
+    if(_): installed [
+        concat(home): "/home/" mo_user
+        bl_is_dir(exists): fs home
+        if(_): exists [ setenv(_): "HOME" home ]
+        else(_): [ setenv(_): "HOME" "/home" ]
+    ]
     k_account_admin(_): {mo_role = "ted"}
     set(r): true
 ]

@@ -108,3 +108,11 @@ account_write(r): fs data [
     bl_write_text(r): fs "/etc/passwd" data
     if(_): {r = 0} [ bl_sync(r): fs ]
 ]
+
+
+account_home(r): fs name [
+    set(r): -1
+    concat(path): "/home/" name
+    bl_mkdirs(status): fs path
+    if(_): {status = 0} [ bl_set_permissions(r): fs path 448 name ]
+]

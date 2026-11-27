@@ -49,6 +49,15 @@ def main():
                             s.sock.sendall(password.encode() + b"\r")
                         out = q.clean(s.output_to_prompt(timeout=90))
                         check("created " + role + " account", out.strip() == "Account created.", out)
+                        check("registered home owner and mode",
+                              line(f'stat(): "/home/{name}"') == f"700 {name} /home/{name}")
+                    check("created private fixture", line('writefile(_): "/home/bob/hidden" "private"') == "")
+                    check("created fixture", line('writefile(_): "/home/alice/private" "test"') == "")
+                    check("changed owner", line('chown(): "alice" "/home/alice/private"') == "")
+                    check("changed mode", line('chmod(): 655 "/home/alice/private"') == "")
+                    check("reloaded mode and owner",
+                          line('stat(): "/home/alice/private"') == "655 alice /home/alice/private")
+                    check("invalid modes rejected", "invalid octal" in line('chmod(): 888 "/home/alice/private"'))
                 elif user == "alice":
                     line('setenv(_): "USER" "ted"')
                     check("USER cannot spoof identity", line("whoami():") == "alice")
@@ -57,8 +66,21 @@ def main():
                     check("ordinary user cannot access raw devices", "requires a master admin" in line('bread(_): "/dev/hda" 0 1'))
                     check("ordinary user cannot escape a writable path",
                           "requires a master admin" in line('writefile(_): "/home/../etc/passwd" ""'))
-                    check("ordinary user can write in home", line('writefile(_): "/home/note" "hello"') == "")
-                    check("ordinary user can run a China program", line('head(): "/home/note"') == "hello")
+                    check("login sets user home", line('getenv(home): "HOME"') == "" and
+                          line("print(_): home") == "/home/alice")
+                    check("metadata persists across reboot",
+                          line('stat(): "/home/alice/private"') == "655 alice /home/alice/private")
+                    check("ordinary user cannot read another home",
+                          "hidden" not in line('ls(_): "/home/bob"') and
+                          "private" not in line('cat(_): "/home/bob/hidden"'))
+                    check("ordinary user can write in home", line('writefile(_): "/home/alice/note" "hello"') == "")
+                    check("owner defaults to signed-in user",
+                          line('stat(): "/home/alice/note"') == "644 alice /home/alice/note")
+                    check("ordinary user can run a China program", line('head(): "/home/alice/note"') == "hello")
+                    check("owner can chmod", line('chmod(): 000 "/home/alice/note"') == "")
+                    check("mode blocks reading file", "cannot read text file" in line('head(): "/home/alice/note"'))
+                    check("ordinary user cannot chown",
+                          "master admin required" in line('chown(): "bob" "/home/alice/note"'))
                 else:
                     check("second master admin can register", "already exists" in line('reguser(): "alice" "ted"'))
             finally:

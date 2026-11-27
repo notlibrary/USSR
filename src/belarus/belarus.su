@@ -388,6 +388,13 @@ bl_node(r): fs blk inode [
         btput(_): r "type" ty
         btput(_): r "size" sz
         btput(_): r "mtime" mt
+        len(fields): v
+        if(_): {fields >= 8} [
+            at(mode): v 6
+            at(owner): v 7
+            btput(_): r "mode" mode
+            btput(_): r "owner" owner
+        ]
         set(at): 3
     ]
     at(kind): v at
@@ -432,6 +439,8 @@ bl_node_new(r): fs kind type [
         btput(_): r "size" 0
         bl_now(now):
         btput(_): r "mtime" now
+        btget(owner): fs "new_owner"
+        if(_): {owner != null} [ btput(_): r "owner" owner ]
     ]
     btree(map):
     btput(_): r "map" map
@@ -443,7 +452,7 @@ bl_inode(r): fs ino [
     bl_node(r): fs ino true
 ]
 
-# what a node is on disk: [type, size, mtime,] kind, next, pairs
+# Inodes can append mode and owner after the original six fields.
 bl_node_value(r): node [
     vec(r): ""
     btget(inode): node "inode"
@@ -461,6 +470,103 @@ bl_node_value(r): node [
     push(_): r kind
     push(_): r next
     push(_): r map
+    if(_): inode [
+        btget(mode): node "mode"
+        btget(owner): node "owner"
+        if(_): {mode != null || owner != null} [
+            push(_): r mode
+            push(_): r owner
+        ]
+    ]
+]
+
+# Modes are nine bits. A numeric operand is read as octal digits, as
+# in the command spelling 755. Strings may include leading zeroes.
+bl_mode_parse(r): value [
+    set(r): -1
+    typeof(kind): value
+    if(_): {kind = "integer"} [ encode(value): value ]
+    elif(_): {kind != "string"} [ return(r): r ]
+    len(n): value
+    if(_): {n = 0 || n > 4} [ return(r): r ]
+    set(bits): 0
+    set(i): 0
+    while(_): {i < n} [
+        byte(ch): value i
+        if(_): {ch < 48 || ch > 55} [ return(r): -1 ]
+        set(bits): {(bits << 3) | (ch - 48)}
+        set(i): {i + 1}
+    ]
+    if(_): {bits <= 511} [ set(r): bits ]
+]
+
+bl_owner_ok(r): owner [
+    set(r): false
+    typeof(kind): owner
+    if(_): {kind != "string"} [ return(r): r ]
+    re_test(r): "^[a-z][a-z0-9_-]{0,31}$" owner
+]
+
+bl_mode_text(r): bits [
+    set(r): ""
+    set(shift): 6
+    while(_): {shift >= 0} [
+        chr(digit): {48 + ((bits >> shift) & 7)}
+        concat(r): r digit
+        set(shift): {shift - 3}
+    ]
+]
+
+bl_permissions(r): fs path [
+    set(r): null
+    bl_lookup(ino): fs path
+    if(_): {ino = 0} [ return(r): r ]
+    bl_inode(node): fs ino
+    btget(kind): node "type"
+    btget(mode): node "mode"
+    btget(owner): node "owner" "ted"
+    set(explicit): {mode != null}
+    if(_): {explicit = false} [
+        set(mode): 420
+        if(_): {kind = "d"} [ set(mode): 493 ]
+    ]
+    if(_): {owner = null} [ set(owner): "ted" ]
+    vec(r): ""
+    push(_): r mode
+    push(_): r owner
+    push(_): r explicit
+]
+
+# Null leaves a property untouched. Callers handle authorization and sync.
+bl_set_permissions(r): fs path mode owner [
+    set(r): -1
+    if(_): {mode != null} [
+        typeof(kind): mode
+        if(_): {kind != "integer" || mode < 0 || mode > 511} [ return(r): r ]
+    ]
+    if(_): {owner != null} [
+        bl_owner_ok(ok): owner
+        if(_): {ok = false} [ return(r): r ]
+    ]
+    bl_lookup(ino): fs path
+    if(_): {ino = 0} [ return(r): r ]
+    bl_inode(node): fs ino
+    if(_): {mode != null} [ btput(_): node "mode" mode ]
+    if(_): {owner != null} [ btput(_): node "owner" owner ]
+    bl_touch(_): node
+    btput(_): fs "dirty" true
+    set(r): 0
+]
+
+bl_cmd_permissions(r): fs path [
+    bl_permissions(meta): fs path
+    if(_): {meta = null} [ return(r): -1 ]
+    at(bits): meta 0
+    at(owner): meta 1
+    bl_mode_text(mode): bits
+    concat(line): mode " " owner " " path
+    print(_): line
+    set(r): 0
 ]
 
 bl_touch(r): node [
@@ -1841,6 +1947,14 @@ bl_copy_tree(r): src from dst to report [
             ]
         ]
         if(_): {w != 0} [ return(r): r ]
+        at(sino): rec 3
+        bl_inode(snode): src sino
+        btget(mode): snode "mode"
+        btget(owner): snode "owner"
+        if(_): {mode != null || owner != null} [
+            bl_set_permissions(w): dst target mode owner
+            if(_): {w != 0} [ return(r): r ]
+        ]
         btput(_): dst "dirty" true
         if(_): {report != ""} [ try(_): report target rec ]
         set(copied): {copied + 1}
@@ -2339,6 +2453,11 @@ belarus_main(r): args [
         bl_write_text(r): fs a2 a3
     ]
     elif(_): {cmd = "mkdir"} [ bl_mkdirs(r): fs a2 ]
+    elif(_): {cmd = "chmod"} [
+        bl_mode_parse(bits): a3
+        bl_set_permissions(r): fs a2 bits null
+    ]
+    elif(_): {cmd = "chown"} [ bl_set_permissions(r): fs a2 null a3 ]
     elif(_): {cmd = "rm"} [ blm_cmd_rm(r): fs a2 ]
     else(_): [
         blm_cmd(r): fs cmd args

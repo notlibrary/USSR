@@ -79,6 +79,7 @@ mo_fs(r): [
         return(r): r
     ]
     bl_mount(r): mo_dev mo_base
+    if(_): {r != null && mo_user != null} [ btput(_): r "new_owner" mo_user ]
 ]
 
 # argument i of a kernel command, or def
@@ -102,6 +103,11 @@ sys_ls(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 "/"
+    bl_is_dir(directory): fs path
+    set(mask): 0
+    if(_): directory [ set(mask): 5 ]
+    account_access(ok): fs path mask
+    if(_): {ok = false} [ return(r): r ]
     bl_cmd_ls(st): fs path
     if(_): {st = 0} [
         bl_is_dir(d): fs path
@@ -116,7 +122,17 @@ sys_tree(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 "/"
-    bl_cmd_tree(r): fs path
+    if(_): {mo_role = "ted"} [ bl_cmd_tree(r): fs path return(r): r ]
+    bl_walk(entries): fs path
+    len(n): entries
+    set(i): 0
+    while(_): {i < n} [
+        at(entry): entries i
+        at(file): entry 0
+        account_access(ok): fs file 0
+        if(_): ok [ print(_): file ]
+        set(i): {i + 1}
+    ]
 ]
 
 sys_cat(r): a [
@@ -125,6 +141,8 @@ sys_cat(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_access(ok): fs path 4
+    if(_): {ok = false} [ return(r): r ]
     bl_read_text(r): fs path
     typeof(tr): r
     if(_): {tr = "string"} [ print_raw(_): r ]
@@ -136,6 +154,8 @@ sys_readfile(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_access(ok): fs path 4
+    if(_): {ok = false} [ return(r): r ]
     bl_exists(e): fs path
     if(_): e [ bl_read_text(r): fs path ]
 ]
@@ -145,6 +165,8 @@ sys_read_bytes(r): a [
     mo_fs(fs):
     if(_): {fs = null} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_access(ok): fs path 4
+    if(_): {ok = false} [ return(r): r ]
     bl_exists(e): fs path
     if(_): e [ bl_read_bytes(r): fs path ]
 ]
@@ -166,7 +188,7 @@ sys_writefile(r): a [
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
     mo_arg(text): a 1 ""
-    account_write_allowed(ok): path
+    account_mutate(ok): fs path false
     if(_): {ok = false} [ return(r): r ]
     bl_clean(p): path
     bl_parent(up): p
@@ -192,6 +214,8 @@ sys_file_exists(r): a [
     mo_fs(fs):
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
+    account_access(ok): fs path 0
+    if(_): {ok = false} [ return(r): r ]
     bl_exists(r): fs path
 ]
 
@@ -202,6 +226,8 @@ sys_is_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
+    account_access(ok): fs path 0
+    if(_): {ok = false} [ return(r): r ]
     bl_is_dir(d): fs path
     if(_): d [ set(r): 1 ]
 ]
@@ -212,6 +238,8 @@ sys_list_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 "/"
+    account_access(ok): fs path 5
+    if(_): {ok = false} [ return(r): r ]
     bl_list(names): fs path
     typeof(tn): names
     if(_): {tn != "vector"} [ return(r): r ]
@@ -235,7 +263,7 @@ sys_make_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
-    account_write_allowed(ok): path
+    account_mutate(ok): fs path true
     if(_): {ok = false} [ return(r): r ]
     bl_mkdirs(r): fs path
     mo_sync(_): fs
@@ -259,6 +287,8 @@ sys_cd(r): a [
         concat(path): base "/" path
     ]
     bl_clean(path): path
+    account_access(ok): fs path 1
+    if(_): {ok = false} [ return(r): r ]
     bl_is_dir(d): fs path
     if(_): d [
         set(mo_cwd): path
@@ -280,8 +310,10 @@ sys_copy_file(r): a [
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(from): a 0 ""
     mo_arg(to): a 1 ""
-    account_write_allowed(ok): to
+    account_mutate(ok): fs to false
     if(_): {ok = false} [ return(r): r ]
+    account_access(readable): fs from 4
+    if(_): {readable = false} [ return(r): r ]
     bl_exists(e): fs from
     if(_): {e = false} [ return(r): r ]
     bl_is_dir(d): fs from
@@ -301,7 +333,7 @@ sys_remove_dir(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
-    account_write_allowed(ok): path
+    account_mutate(ok): fs path true
     if(_): {ok = false} [ return(r): r ]
     bl_is_dir(d): fs path
     if(_): {d = false} [ return(r): r ]
@@ -316,7 +348,7 @@ sys_remove_file(r): a [
     typeof(t): fs
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(path): a 0 ""
-    account_write_allowed(ok): path
+    account_mutate(ok): fs path true
     if(_): {ok = false} [ return(r): r ]
     bl_remove(r): fs path
     mo_sync(_): fs
@@ -362,13 +394,17 @@ sys_open_file(r): a [
     mo_arg(mode): a 1 "r"
     str_find(w): mode "w" 0
     str_find(ap): mode "a" 0
-    if(_): {w >= 0 || ap >= 0} [
-        account_write_allowed(ok): path
-        if(_): {ok = false} [ return(r): r ]
-    ]
     mo_fs(fs):
     typeof(t): fs
     if(_): {t != "btree" || path = ""} [ return(r): r ]
+    if(_): {w >= 0 || ap >= 0} [
+        account_mutate(ok): fs path false
+        if(_): {ok = false} [ return(r): r ]
+    ]
+    if(_): {w < 0} [
+        account_access(ok): fs path 4
+        if(_): {ok = false} [ return(r): r ]
+    ]
     bl_is_dir(d): fs path
     if(_): d [ return(r): r ]
     set(text): ""
@@ -469,6 +505,8 @@ sys_close_file(r): a [
             return(r): r
         ]
         btget(path): f "path"
+        account_mutate(ok): fs path false
+        if(_): {ok = false} [ return(r): -1 ]
         btget(text): f "text"
         bl_clean(p): path
         bl_parent(up): p
@@ -674,9 +712,9 @@ sys_rename_path(r): a [
     if(_): {t != "btree"} [ return(r): r ]
     mo_arg(from): a 0 ""
     mo_arg(to): a 1 ""
-    account_write_allowed(from_ok): from
+    account_mutate(from_ok): fs from true
     if(_): {from_ok = false} [ return(r): r ]
-    account_write_allowed(to_ok): to
+    account_mutate(to_ok): fs to true
     if(_): {to_ok = false} [ return(r): r ]
     bl_rename(st): fs from to
     if(_): {st = 0} [
@@ -933,6 +971,16 @@ mo_find(r): name args [
             str_find(boot): path "/boot/" 0
             if(_): {bin != 0 && boot != 0} [ return(r): null ]
             if(_): {path = "/boot/moscow.ru"} [ return(r): null ]
+        ]
+        account_access(searchable): fs path 0
+        if(_): {searchable = false} [ return(r): null ]
+        bl_permissions(meta): fs path
+        if(_): {meta != null} [
+            at(explicit): meta 2
+            if(_): explicit [
+                account_access(executable): fs path 1
+                if(_): {executable = false} [ return(r): null ]
+            ]
         ]
         mo_ext(ext): path
         set(runtime): 2
@@ -1379,6 +1427,7 @@ sys_help(r): a [
 
 mo_syscalls(r): [
     set(r): 0
+    k_syscall(_): "permissions" "sys_permissions"
     k_syscall(_): "account_identity" "sys_identity"
     k_syscall(_): "whoami" "sys_whoami"
     k_syscall(_): "account_register" "sys_account_register"

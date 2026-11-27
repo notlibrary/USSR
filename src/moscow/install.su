@@ -586,6 +586,7 @@ ins_main(r): args [
     concat(text): host "\n"
     bl_mkdirs(_): dst "/etc"
     bl_mkdirs(_): dst "/home"
+    bl_mkdirs(_): dst "/tmp"
     bl_write_text(_): dst "/etc/hostname" text
     concat(motd): "USSR Moscow on " host ", installed from " src_label ". help(_): lists the commands.\n"
     bl_write_text(_): dst "/etc/motd" motd
@@ -605,6 +606,8 @@ ins_main(r): args [
     concat(record): record "\n"
     bl_write_text(_): dst "/etc/install.uno" record
     if(_): {account != null} [
+        account_home(w): dst admin
+        if(_): {w != 0} [ ins_fail(r): "master admin home could not be created" return(r): r ]
         bl_write_text(w): dst "/etc/passwd" account
         if(_): {w != 0} [ ins_fail(r): "account database could not be written" return(r): r ]
     ]

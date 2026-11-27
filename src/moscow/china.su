@@ -26,6 +26,10 @@ sys_china_read(r): args [
     if(_): {ot != "integer" || ct != "integer" || offset < 0 || count < 1 || count > 4096} [ return(r): r ]
     mo_fs(fs):
     if(_): {fs = null} [ return(r): r ]
+    account_access(ok): fs path 0
+    if(_): {ok = false} [ return(r): r ]
+    account_access(ok): fs path 4
+    if(_): {ok = false} [ return(r): r ]
     bl_get(rec): fs path
     if(_): {rec = null} [ return(r): r ]
     at(kind): rec 0
@@ -60,6 +64,8 @@ sys_china_du(r): args [
     mo_fs(fs):
     if(_): {fs = null} [ return(r): r ]
     mo_arg(path): args 0 ""
+    account_access(ok): fs path 0
+    if(_): {ok = false} [ return(r): r ]
     bl_walk(entries): fs path
     len(n): entries
     if(_): {n = 0} [ return(r): r ]
@@ -67,9 +73,11 @@ sys_china_du(r): args [
     set(i): 0
     while(_): {i < n} [
         at(entry): entries i
+        at(file): entry 0
         at(rec): entry 1
         at(kind): rec 0
-        if(_): {kind = "f"} [
+        account_access(ok): fs file 0
+        if(_): {kind = "f" && ok} [
             at(size): rec 1
             set(r): {r + size}
         ]
@@ -85,8 +93,10 @@ sys_china_copy(r): args [
     mo_arg(from): args 0 ""
     mo_arg(to): args 1 ""
     if(_): {from = "" || to = ""} [ return(r): r ]
-    account_write_allowed(ok): to
+    account_mutate(ok): fs to true
     if(_): {ok = false} [ return(r): r ]
+    account_access(readable): fs from 4
+    if(_): {readable = false} [ return(r): r ]
     bl_get(rec): fs from
     if(_): {rec = null} [ return(r): r ]
     at(kind): rec 0
@@ -94,6 +104,8 @@ sys_china_copy(r): args [
     if(_): {kind != "f" || exists} [ return(r): r ]
     bl_copy_tree(copied): fs from fs to ""
     if(_): {copied = 1} [
+        bl_set_permissions(st): fs to null mo_user
+        if(_): {st != 0} [ return(r): r ]
         mo_sync(st): fs
         if(_): {st = 0} [ set(r): 0 ]
     ]
