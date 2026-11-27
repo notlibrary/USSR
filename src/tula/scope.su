@@ -271,7 +271,13 @@ tsc_loop(r): window [
     set(canvas): tula_canvas?
     set(lastw): -1
     set(lasth): -1
+    getenv(os): "OS"
     while(_): up [
+        if(_): {os = "Moscow"} [
+            petersburg_poll_events(running):
+            alive(still_open): window
+            if(_): {running = 0 || still_open = false} [ return(r): r ]
+        ]
         set(dirty): tula_mdirty?
         if(_): {dirty = true} [
             uilock(_):

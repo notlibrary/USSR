@@ -468,8 +468,9 @@ what it takes from a hosted system there:
   carries out the console's ANSI sequences;
 - `lib/gui/moscow.c`: what `gui.su` calls.
 
-`src/moscow/gui.su` makes every `petersburg_*` native a kernel command;
-russia.su delivers the events itself (`petersburg_take_events`). The
+`src/moscow/gui.su` exposes Petersburg natives as kernel commands.
+Russia delivers its programs' callbacks using `petersburg_take_events`.
+Native programs such as Tula poll that command directly. The
 screen goes graphic with the first window and back to text with the
 last. A window belongs to the program run that made it (its task and
 depth): it gets only its own events, and its windows go when it ends.

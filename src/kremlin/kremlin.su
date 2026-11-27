@@ -1006,11 +1006,17 @@ km_path_plan(r): path [
         km_plan(r): "launch" _kpp_ussr _kpp_q false
     ]
     elif(_): {_kpp_e = "dxf" && _kpp_src != ""} [
-        km_join(_kpp_tula): _kpp_src "tula/tula.su"
-        km_quote(_kpp_q1): _kpp_tula
+        km_moscow(_kpp_mos):
         km_quote(_kpp_q2): path
-        concat(_kpp_params): _kpp_q1 " " _kpp_q2
-        km_plan(r): "launch" _kpp_ussr _kpp_params true
+        if(_): _kpp_mos [
+            km_plan(r): "launch" "/bin/tula.ru" _kpp_q2 true
+        ]
+        else(_): [
+            km_join(_kpp_tula): _kpp_src "tula/tula.su"
+            km_quote(_kpp_q1): _kpp_tula
+            concat(_kpp_params): _kpp_q1 " " _kpp_q2
+            km_plan(r): "launch" _kpp_ussr _kpp_params true
+        ]
     ]
     else(_): [
         km_plan(r): "launch" path "" false
@@ -1545,9 +1551,12 @@ km_seed(r): root [
         concat(_ksd_cmd): _ksd_qu " " _ksd_qs
         km_write_launcher(_): _ksd_apps "Calculator.kl" "Calculator" _ksd_cmd false
         push(_): _ksd_pins "Apps/Calculator.kl"
-        km_join(_ksd_s): _ksd_src "tula/tula.su"
-        km_quote(_ksd_qs): _ksd_s
-        concat(_ksd_cmd): _ksd_qu " " _ksd_qs
+        if(_): _ksd_mos [ set(_ksd_cmd): "/bin/tula.ru" ]
+        else(_): [
+            km_join(_ksd_s): _ksd_src "tula/tula.su"
+            km_quote(_ksd_qs): _ksd_s
+            concat(_ksd_cmd): _ksd_qu " " _ksd_qs
+        ]
         km_write_launcher(_): _ksd_apps "Drawing.kl" "Drawing" _ksd_cmd false
     ]
     push(_): _ksd_pins "Apps/Home.kl"

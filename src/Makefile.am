@@ -142,6 +142,7 @@ EXTRA_DIST = \
 	petersburg/box.uno \
 	petersburg/docs/API.md \
 	petersburg/examples/hello.su \
+	petersburg/manual-events.su \
 	petersburg/petersburg.su \
 	petersburg/tests/TESTPLAN.md \
 	russia/box.uno \
@@ -205,11 +206,14 @@ EXTRA_DIST = \
 	stalin/tests/TESTPLAN.md \
 	tula/CHANGELOG.md \
 	tula/README.md \
+	tula/annotations.su \
 	tula/box.uno \
 	tula/docs/API.md \
 	tula/examples/hello.su \
 	tula/icons/arc.ppm \
 	tula/icons/circle.ppm \
+	tula/icons/dimension-diameter.ppm \
+	tula/icons/dimension-linear.ppm \
 	tula/icons/line.ppm \
 	tula/icons/pan-down.ppm \
 	tula/icons/pan-left.ppm \
@@ -220,6 +224,7 @@ EXTRA_DIST = \
 	tula/icons/snap-entity.ppm \
 	tula/icons/snap-grid.ppm \
 	tula/icons/spline.ppm \
+	tula/icons/text.ppm \
 	tula/more.su \
 	tula/scope.su \
 	tula/tests/TESTPLAN.md \

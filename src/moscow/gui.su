@@ -3,10 +3,8 @@
 # /lib/gui.so with what it stands on there - OpenGL in software and GLFW
 # on the framebuffer with the PS/2 keyboard and USB or PS/2 mouse
 # (src/moscow/lib/gui.c) - and this file calls it with c_call: every
-# petersburg_* native the hosted ussr has is a kernel command here, so
-# Petersburg programs - Kremlin, Tver, Klin - run from their source
-# through russia.su, which delivers their events itself
-# (petersburg_take_events).
+# supported petersburg_* natives are kernel commands here. Russia or
+# native applications poll petersburg_take_events to dispatch callbacks.
 #
 # The screen goes graphic with the first window and back to text when
 # the last one is gone. Every window belongs to the program that made
@@ -223,6 +221,10 @@ gui_native(r): name a [
     ]
     # files the native reads come from the root file system
     if(_): {name = "petersburg_create_image" || name = "petersburg_reload_image"} [
+        at(path): a 1
+        gui_hand(_): path
+    ]
+    if(_): {name = "petersburg_button_icon"} [
         at(path): a 1
         gui_hand(_): path
     ]
@@ -516,13 +518,21 @@ sys_gui(r): a [
 # --- the natives, each a kernel command
 
 sys_pb_alive(r): a [ gui_native(r): "petersburg_alive" a ]
+sys_pb_button_hint(r): a [ gui_native(r): "petersburg_button_hint" a ]
+sys_pb_button_icon(r): a [ gui_native(r): "petersburg_button_icon" a ]
 sys_pb_canvas_arc(r): a [ gui_native(r): "petersburg_canvas_arc" a ]
+sys_pb_canvas_back(r): a [ gui_native(r): "petersburg_canvas_back" a ]
 sys_pb_canvas_circle(r): a [ gui_native(r): "petersburg_canvas_circle" a ]
 sys_pb_canvas_clear(r): a [ gui_native(r): "petersburg_canvas_clear" a ]
 sys_pb_canvas_count(r): a [ gui_native(r): "petersburg_canvas_count" a ]
+sys_pb_canvas_cursor(r): a [ gui_native(r): "petersburg_canvas_cursor" a ]
+sys_pb_canvas_dash(r): a [ gui_native(r): "petersburg_canvas_dash" a ]
+sys_pb_canvas_dash_circle(r): a [ gui_native(r): "petersburg_canvas_dash_circle" a ]
 sys_pb_canvas_fill(r): a [ gui_native(r): "petersburg_canvas_fill" a ]
 sys_pb_canvas_font_text(r): a [ gui_native(r): "petersburg_canvas_font_text" a ]
+sys_pb_canvas_keep(r): a [ gui_native(r): "petersburg_canvas_keep" a ]
 sys_pb_canvas_line(r): a [ gui_native(r): "petersburg_canvas_line" a ]
+sys_pb_canvas_pen(r): a [ gui_native(r): "petersburg_canvas_pen" a ]
 sys_pb_canvas_rect(r): a [ gui_native(r): "petersburg_canvas_rect" a ]
 sys_pb_canvas_text(r): a [ gui_native(r): "petersburg_canvas_text" a ]
 sys_pb_canvas_text_scaled(r): a [ gui_native(r): "petersburg_canvas_text_scaled" a ]
@@ -534,6 +544,7 @@ sys_pb_create_combobox(r): a [ gui_native(r): "petersburg_create_combobox" a ]
 sys_pb_create_image(r): a [ gui_native(r): "petersburg_create_image" a ]
 sys_pb_create_label(r): a [ gui_native(r): "petersburg_create_label" a ]
 sys_pb_create_list(r): a [ gui_native(r): "petersburg_create_list" a ]
+sys_pb_create_menu(r): a [ gui_native(r): "petersburg_create_menu" a ]
 sys_pb_create_textbox(r): a [ gui_native(r): "petersburg_create_textbox" a ]
 sys_pb_create_toolbar(r): a [ gui_native(r): "petersburg_create_toolbar" a ]
 sys_pb_create_window(r): a [ gui_native(r): "petersburg_create_window" a ]
@@ -555,6 +566,7 @@ sys_pb_grid(r): a [ gui_native(r): "petersburg_grid" a ]
 sys_pb_inject(r): a [ gui_native(r): "petersburg_inject" a ]
 sys_pb_maximize(r): a [ gui_native(r): "petersburg_maximize" a ]
 sys_pb_message_box(r): a [ gui_native(r): "petersburg_message_box" a ]
+sys_pb_mouse_held(r): a [ gui_native(r): "petersburg_mouse_held" a ]
 sys_pb_on(r): a [ gui_native(r): "petersburg_on" a ]
 sys_pb_pack(r): a [ gui_native(r): "petersburg_pack" a ]
 sys_pb_reload_image(r): a [ gui_native(r): "petersburg_reload_image" a ]
@@ -562,20 +574,32 @@ sys_pb_run(r): a [ gui_native(r): "petersburg_run" a ]
 sys_pb_set_checked(r): a [ gui_native(r): "petersburg_set_checked" a ]
 sys_pb_set_focus(r): a [ gui_native(r): "petersburg_set_focus" a ]
 sys_pb_set_index(r): a [ gui_native(r): "petersburg_set_index" a ]
+sys_pb_set_items(r): a [ gui_native(r): "petersburg_set_items" a ]
 sys_pb_set_mark(r): a [ gui_native(r): "petersburg_set_mark" a ]
+sys_pb_set_modal(r): a [ gui_native(r): "petersburg_set_modal" a ]
+sys_pb_set_movable(r): a [ gui_native(r): "petersburg_set_movable" a ]
 sys_pb_set_text(r): a [ gui_native(r): "petersburg_set_text" a ]
+sys_pb_set_visible(r): a [ gui_native(r): "petersburg_set_visible" a ]
 sys_pb_show(r): a [ gui_native(r): "petersburg_show" a ]
 
 gui_syscalls(r): [
     set(r): 0
     k_syscall(_): "petersburg_alive" "sys_pb_alive"
+    k_syscall(_): "petersburg_button_hint" "sys_pb_button_hint"
+    k_syscall(_): "petersburg_button_icon" "sys_pb_button_icon"
     k_syscall(_): "petersburg_canvas_arc" "sys_pb_canvas_arc"
+    k_syscall(_): "petersburg_canvas_back" "sys_pb_canvas_back"
     k_syscall(_): "petersburg_canvas_circle" "sys_pb_canvas_circle"
     k_syscall(_): "petersburg_canvas_clear" "sys_pb_canvas_clear"
     k_syscall(_): "petersburg_canvas_count" "sys_pb_canvas_count"
+    k_syscall(_): "petersburg_canvas_cursor" "sys_pb_canvas_cursor"
+    k_syscall(_): "petersburg_canvas_dash" "sys_pb_canvas_dash"
+    k_syscall(_): "petersburg_canvas_dash_circle" "sys_pb_canvas_dash_circle"
     k_syscall(_): "petersburg_canvas_fill" "sys_pb_canvas_fill"
     k_syscall(_): "petersburg_canvas_font_text" "sys_pb_canvas_font_text"
+    k_syscall(_): "petersburg_canvas_keep" "sys_pb_canvas_keep"
     k_syscall(_): "petersburg_canvas_line" "sys_pb_canvas_line"
+    k_syscall(_): "petersburg_canvas_pen" "sys_pb_canvas_pen"
     k_syscall(_): "petersburg_canvas_rect" "sys_pb_canvas_rect"
     k_syscall(_): "petersburg_canvas_text" "sys_pb_canvas_text"
     k_syscall(_): "petersburg_canvas_text_scaled" "sys_pb_canvas_text_scaled"
@@ -587,6 +611,7 @@ gui_syscalls(r): [
     k_syscall(_): "petersburg_create_image" "sys_pb_create_image"
     k_syscall(_): "petersburg_create_label" "sys_pb_create_label"
     k_syscall(_): "petersburg_create_list" "sys_pb_create_list"
+    k_syscall(_): "petersburg_create_menu" "sys_pb_create_menu"
     k_syscall(_): "petersburg_create_textbox" "sys_pb_create_textbox"
     k_syscall(_): "petersburg_create_toolbar" "sys_pb_create_toolbar"
     k_syscall(_): "petersburg_create_window" "sys_pb_create_window"
@@ -608,6 +633,7 @@ gui_syscalls(r): [
     k_syscall(_): "petersburg_inject" "sys_pb_inject"
     k_syscall(_): "petersburg_maximize" "sys_pb_maximize"
     k_syscall(_): "petersburg_message_box" "sys_pb_message_box"
+    k_syscall(_): "petersburg_mouse_held" "sys_pb_mouse_held"
     k_syscall(_): "petersburg_on" "sys_pb_on"
     k_syscall(_): "petersburg_pack" "sys_pb_pack"
     k_syscall(_): "petersburg_reload_image" "sys_pb_reload_image"
@@ -615,8 +641,12 @@ gui_syscalls(r): [
     k_syscall(_): "petersburg_set_checked" "sys_pb_set_checked"
     k_syscall(_): "petersburg_set_focus" "sys_pb_set_focus"
     k_syscall(_): "petersburg_set_index" "sys_pb_set_index"
+    k_syscall(_): "petersburg_set_items" "sys_pb_set_items"
     k_syscall(_): "petersburg_set_mark" "sys_pb_set_mark"
+    k_syscall(_): "petersburg_set_modal" "sys_pb_set_modal"
+    k_syscall(_): "petersburg_set_movable" "sys_pb_set_movable"
     k_syscall(_): "petersburg_set_text" "sys_pb_set_text"
+    k_syscall(_): "petersburg_set_visible" "sys_pb_set_visible"
     k_syscall(_): "petersburg_show" "sys_pb_show"
     k_syscall(_): "petersburg_take_events" "sys_pb_take_events"
     k_syscall(_): "launch" "sys_launch"

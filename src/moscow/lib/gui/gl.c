@@ -679,7 +679,14 @@ void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid
             if (ch == 1)
                 out[c] = ((uint32_t)p[0] << 16) | ((uint32_t)p[0] << 8) | p[0];
             else
-                out[c] = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+            {
+                uint32_t color = ((uint32_t)p[0] << 16) |
+                                 ((uint32_t)p[1] << 8) | p[2];
+                if (ch == 4 && gl.blend_on)
+                    out[c] = gl_mix(out[c], color, p[3]);
+                else
+                    out[c] = color;
+            }
         }
     }
 }

@@ -115,8 +115,10 @@ init(result): arg_count arg_values [
     createwindow(window): "Tula toolbar test" 1100 800
     textbox(filename): window ""
     label(status_label): window ""
-    tulainitialize(_): window status_label filename
-    tulatoolbar(bar): window
+    tulainitialize(canvas): window status_label filename
+    textbox(command): window ""
+    set(tula_cmdbox): command!
+    tulatoolbar(_): window
     on(_): window "key" "tulakey"
 
     set(names): tula_button_names?
@@ -128,7 +130,7 @@ init(result): arg_count arg_values [
         concat(all): all x "|"
         set(i): {i + 1}
     ]
-    check(_): "toolbar buttons" all "Open|Save|Save As|Select|Line|Circle|Circle Segment|Spline|Zoom +|Zoom -|Fit|Left|Right|Up|Down|Snap entity|Snap grid|Snap endpoints|Snap cross|"
+    check(_): "toolbar buttons" all "Open|Save|Save As|Select|Line|Circle|Circle Segment|Spline|Text|Linear Dimension|Diameter Dimension|Zoom +|Zoom -|Fit|Left|Right|Up|Down|Snap entity|Snap grid|Snap endpoints|Snap cross|"
     set(tools_menu): tula_tools_menu?
     tula_tools_select(_): tools_menu 2
     check(_): "Tools menu hides the Snap toolbar" tula_snap_toolbar_visible? false
@@ -156,7 +158,52 @@ init(result): arg_count arg_values [
     status(t):
     check(_): "Spline button selects tool" t "SPLINE: click at least three points; right-click to finish"
 
-    check(_): "snapping starts off" {tula_snap_entity? = false && tula_snap_grid? = false && tula_snap_end? = false && tula_snap_cross? = false} true
+    press(_): "Text"
+    check(_): "Text button selects tool" tula_tool? "text"
+    set(font): tula_draft_font?
+    check(_): "Drafting font loads" {font > 0} true
+    settext(_): command "HOLE A"
+    inject(_): window "key" 257 0 0
+    settle(_):
+    tula_to_screen_x(sx): 0
+    tula_to_screen_y(sy): 12
+    tulaclick(_): canvas sx sy
+    set(es): tula_entities?
+    at(entity): es 0
+    at(text): entity 4
+    check(_): "Text places the entered label" text "HOLE A"
+    press(_): "Linear Dimension"
+    check(_): "Linear Dimension button selects tool" tula_tool? "linear dimension"
+    tula_to_screen_y(sy): 0
+    tulaclick(_): canvas sx sy
+    tula_to_screen_x(sx): 15
+    tulaclick(_): canvas sx sy
+    tula_to_screen_y(sy): -5
+    tulaclick(_): canvas sx sy
+    set(es): tula_entities?
+    at(entity): es 1
+    tl_dim_value(value): entity
+    near(_): "Linear Dimension measures the selected points" value 15
+    tl_circle_e(hole): 20 20 5
+    tula_add_entity(_): hole
+    press(_): "Diameter Dimension"
+    check(_): "Diameter Dimension button selects tool" tula_tool? "diameter dimension"
+    tula_to_screen_x(sx): 25
+    tula_to_screen_y(sy): 20
+    tulaclick(_): canvas sx sy
+    tula_to_screen_x(sx): 30
+    tula_to_screen_y(sy): 25
+    tulaclick(_): canvas sx sy
+    set(es): tula_entities?
+    at(entity): es 3
+    tl_dim_value(value): entity
+    near(_): "Diameter Dimension measures the selected circle" value 10
+
+    set(entity_snap): tula_snap_entity?
+    set(grid_snap): tula_snap_grid?
+    set(endpoint_snap): tula_snap_end?
+    set(cross_snap): tula_snap_cross?
+    check(_): "snapping starts off" {entity_snap = false && grid_snap = false && endpoint_snap = false && cross_snap = false} true
     tula_pick_point(p): 2.1 3.2 5
     at(px): p 0
     at(py): p 1

@@ -1,0 +1,179 @@
+# Interactive text and dimension tools. Keep dimensions as one entity
+# until DXF export expands them into their lines and label.
+tula_annotation_tool(r): tool [
+    set(r): {tool = "text" || tool = "linear dimension" || tool = "diameter dimension"}
+]
+
+tula_annotation_add(r): entity message [
+    set(r): 0
+    set(entities): tula_entities?
+    len(n): entities
+    if(_): {n >= TULA_MAX_ENTITIES} [
+        tula_set_status(_): "Drawing is full"
+        return(r): r
+    ]
+    tl_gui_doc(doc):
+    tl_checkpoint(_): doc
+    tula_add_entity(_): entity
+    vec(empty): ""
+    set(tula_anchor): empty!
+    tula_redraw(_):
+    tula_set_status(_): message
+]
+
+tula_annotation_text(r): [
+    set(r): 0
+    set(box): tula_cmdbox?
+    if(_): {box = 0} [ return(r): r ]
+    gettext(text): box
+    str_trim(trimmed): text
+    if(_): {trimmed = ""} [
+        tula_set_status(_): "Type a label before pressing Enter"
+        return(r): r
+    ]
+    set(tula_label_text): text!
+    settext(_): box ""
+    tula_set_status(_): "Click to place the text"
+]
+
+# Pick a drawn circle by its edge, favoring the nearest outline.
+tula_annotation_hole(r): x y [
+    set(r): null
+    set(view): tula_view?
+    at(scale): view 2
+    set(best): {TULA_PICK_PIXELS / scale}
+    tl_gui_doc(doc):
+    set(entities): tula_entities?
+    len(n): entities
+    set(i): 0
+    while(_): {i < n} [
+        at(entity): entities i
+        at(kind): entity 0
+        tl_visible(visible): doc entity
+        if(_): {kind = "CIRCLE" && visible} [
+            at(cx): entity 1
+            at(cy): entity 2
+            at(radius): entity 3
+            tl_dist(d): cx cy x y
+            abs(gap): {d - radius}
+            if(_): {radius > 0 && gap <= best} [
+                set(best): gap
+                set(r): entity
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
+
+tula_annotation_click(r): tool x y [
+    set(r): 0
+    if(_): {tool = "text"} [
+        set(text): tula_label_text?
+        if(_): {text = ""} [
+            tula_set_status(_): "Type a label in the command box and press Enter"
+            return(r): r
+        ]
+        tl_text_e(entity): x y 2.5 text
+        tula_annotation_add(r): entity "Text added; click again to repeat, or enter a new label"
+        return(r): r
+    ]
+    set(points): tula_anchor?
+    len(n): points
+    if(_): {tool = "diameter dimension"} [
+        if(_): {n = 0} [
+            tula_annotation_hole(hole): x y
+            if(_): {hole = null} [
+                tula_set_status(_): "Click the edge of a circle or hole"
+                return(r): r
+            ]
+            at(cx): hole 1
+            at(cy): hole 2
+            at(radius): hole 3
+            push(_): points cx
+            push(_): points cy
+            push(_): points radius
+            tula_redraw(_):
+            tula_set_status(_): "Click to position the diameter label"
+            return(r): r
+        ]
+        at(cx): points 0
+        at(cy): points 1
+        at(radius): points 2
+        tl_dist(distance): cx cy x y
+        if(_): {distance = 0} [
+            tula_set_status(_): "Place the label away from the center"
+            return(r): r
+        ]
+        set(edge_x): {cx + (x - cx) * radius / distance}
+        set(edge_y): {cy + (y - cy) * radius / distance}
+        tl_dim(entity): "diameter" cx cy edge_x edge_y x y ""
+        tula_annotation_add(r): entity "Diameter dimension added"
+        return(r): r
+    ]
+    if(_): {n < 4} [
+        if(_): {n = 2} [
+            at(ax): points 0
+            at(ay): points 1
+            if(_): {ax = x && ay = y} [
+                tula_set_status(_): "Choose a different second point"
+                return(r): r
+            ]
+        ]
+        push(_): points x
+        push(_): points y
+        tula_redraw(_):
+        if(_): {n = 0} [ tula_set_status(_): "Click the second measured point" ]
+        else(_): [ tula_set_status(_): "Click to offset the dimension line" ]
+        return(r): r
+    ]
+    at(ax): points 0
+    at(ay): points 1
+    at(bx): points 2
+    at(by): points 3
+    tl_dim(entity): "aligned" ax ay bx by x y ""
+    tula_annotation_add(r): entity "Linear dimension added"
+]
+
+tula_drafting_font(r): [
+    set(r): 0
+    set(path): "fonts/pobeda.ttf"
+    getenv(root): "USSR_HOME"
+    if(_): {root != null && root != ""} [
+        concat(candidate): root "/fonts/pobeda.ttf"
+        file_exists(found): candidate
+        if(_): found [ set(path): candidate ]
+    ]
+    file_exists(found): path
+    if(_): found [ loadfont(r): path ]
+]
+
+# Render DXF's diameter escape as a circle with a slash, independent of
+# whether the local font has a diameter glyph. Other lettering uses the
+# scalable, geometric Pobeda outline font.
+tula_drafting_label(r): canvas x y height text ink [
+    set(r): 0
+    set(px): {height * 1.4}
+    if(_): {px < 1} [ set(px): 1 ]
+    if(_): {px > 1000} [ set(px): 1000 ]
+    str_starts(diameter): text "%%c"
+    if(_): diameter [
+        set(radius): {px * 0.24}
+        set(cx): {x + radius + 1}
+        set(cy): {y - radius - 1}
+        canvascircle(_): canvas cx cy radius ink
+        canvasline(_): canvas {cx - radius} {cy + radius} {cx + radius} {cy - radius} ink
+        set(x): {x + 2 * radius + 3}
+        len(n): text
+        slice(text): text 3 {n - 3}
+    ]
+    set(font): tula_draft_font?
+    if(_): {font != null && font > 0} [
+        canvasfonttext(r): canvas x {y - 0.9 * px} text ink font px
+    ]
+    else(_): [
+        str_trunc(scale): {height / 7 + 0.5}
+        if(_): {scale < 1} [ set(scale): 1 ]
+        if(_): {scale > 16} [ set(scale): 16 ]
+        canvastextscale(r): canvas x {y - 7 * scale} text ink scale
+    ]
+]

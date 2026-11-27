@@ -1,0 +1,39 @@
+# The Moscow NASM runtime can poll and dispatch its window events directly.
+# Polling also works inside a modal dialog while the outer callback waits.
+$once
+
+petersburg_poll_events(r): [
+    set(r): 0
+    petersburg_take_events(events):
+    len(n): events
+    if(_): {n = 0} [ return(r): r ]
+    at(r): events 0
+    if(_): {r = 0} [ return(r): r ]
+    set(i): 1
+    while(_): {i < n} [
+        at(event): events i
+        at(callback): event 0
+        at(widget): event 1
+        len(count): event
+        if(_): {count = 2} [
+            try(_): callback widget
+        ]
+        else(_): [
+            at(a): event 2
+            if(_): {count = 3} [
+                try(_): callback widget a
+            ]
+            else(_): [
+                at(b): event 3
+                if(_): {count = 4} [
+                    try(_): callback widget a b
+                ]
+                else(_): [
+                    at(c): event 4
+                    try(_): callback widget a b c
+                ]
+            ]
+        ]
+        set(i): {i + 1}
+    ]
+]
