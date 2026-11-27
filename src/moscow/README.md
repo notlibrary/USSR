@@ -55,11 +55,11 @@ in Rush to list them.
 ## Console accounts
 
 The stock live media start a single master-admin session named `ted`.
-The Moscow installer asks for a username and password for the first
-master admin. The username defaults to `ted` and the role is `ted`.
-Installed systems ask for the account and password at boot. Older
-installations without an account database offer initial setup at the
-physical or serial console.
+Installation copies the system. On the first boot from the installed
+disk, Moscow asks for a username and password for the first master admin.
+The username defaults to `ted` and the role is `ted`. After setup, sign in
+with the new account. Older installations without an account database
+also offer initial setup at the physical or serial console.
 
 `reguser(): "alice"` creates an ordinary account. A logged-in master
 admin can also assign the `ted` role with `reguser(): "alice" "ted"`.
