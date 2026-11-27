@@ -100,12 +100,14 @@ $ belarus fsck IMG
 $ belarus stat IMG /doc/lines.txt
   path: /doc/lines.txt
   type: file
+  mode: 644
+ owner: ted
   size: 231 bytes in 1 blocks
   time: 2023-11-14 22:13 UTC
  inode: 31
    map: 1 run(s), 0 map node(s), depth 1
 $ belarus stat IMG /top --json
-{"path": "/top", "type": "symbolic link", "size": 11, "mtime": 1700000000, "inode": 38, "blocks": 1, "runs": 1, "map_nodes": 0, "depth": 1, "target": "/doc/latest"}
+{"path": "/top", "type": "symbolic link", "size": 11, "mtime": 1700000000, "inode": 38, "blocks": 1, "runs": 1, "map_nodes": 0, "depth": 1, "target": "/doc/latest", "mode": "644", "owner": "ted"}
 $ belarus ls IMG /doc --json
 [{"name": "latest", "type": "l", "size": 9, "mtime": 1700000000, "inode": 36}, {"name": "lines.txt", "type": "f", "size": 231, "mtime": 1700000000, "inode": 31}]
 $ belarus du IMG
