@@ -1576,13 +1576,27 @@ static void petersburg_render_window(petersburg_widget_t *window)
             }
             break;
         case PETERSBURG_TEXTBOX:
+        {
+            const unsigned char *p = (const unsigned char *)widget->text;
+            if (widget == petersburg_focus)
+            {
+                glColor3f(0.44f, 0.67f, 0.96f);
+                petersburg_rect(widget->x, widget->y, widget->width, widget->height);
+            }
             glColor3f(0.07f, 0.08f, 0.11f);
-            petersburg_rect(widget->x, widget->y, widget->width,
-                            widget->height);
-            petersburg_text(widget->x + inset, widget->y + 12,
-                            widget->text, 0.95f, 0.96f, 0.98f,
-                            widget->width - inset * 2);
+            petersburg_rect(widget->x + 1, widget->y + 1, widget->width - 2,
+                            widget->height - 2);
+            while (*p != '\0' && *p < 0x80)
+                ++p;
+            if (*p != '\0' && petersburg_font_count > 0)
+                petersburg_font_text(widget->x + inset, widget->y + 8, widget->text,
+                                     0xF2F5FA, 1, 16, widget->x + widget->width - inset);
+            else
+                petersburg_text(widget->x + inset, widget->y + 12,
+                                widget->text, 0.95f, 0.96f, 0.98f,
+                                widget->width - inset * 2);
             break;
+        }
         case PETERSBURG_CHECKBOX:
             glColor3f(0.86f, 0.89f, 0.94f);
             petersburg_rect(widget->x, widget->y + 9, 18, 18);
@@ -2346,7 +2360,7 @@ static void petersburg_mouse_button(GLFWwindow *native, int button,
 static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
 {
     char encoded[5] = {0, 0, 0, 0, 0};
-    size_t length;
+    size_t length = 1;
     size_t old_length;
     char *text;
     petersburg_widget_t *window = petersburg_window_for(native);
@@ -2362,11 +2376,23 @@ static void petersburg_character(GLFWwindow *native, unsigned int codepoint)
         petersburg_queue(window, window->char_callback, 1, (long)codepoint,
                          0, 0);
     /* only a text box takes the characters (a list's text is its items) */
-    if (petersburg_focus == NULL || codepoint < 32 || codepoint > 126 ||
-        petersburg_focus->type != PETERSBURG_TEXTBOX)
+    if (petersburg_focus == NULL || codepoint < 32 || codepoint == 127 ||
+        codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF) ||
+        petersburg_focus->type != PETERSBURG_TEXTBOX ||
+        window == NULL || petersburg_focus->parent_id != window->id)
         return;
-    encoded[0] = (char)codepoint;
-    length = strlen(encoded);
+    if (codepoint < 0x80)
+        encoded[0] = (char)codepoint;
+    else
+    {
+        length = codepoint < 0x800 ? 2 : codepoint < 0x10000 ? 3 : 4;
+        for (size_t i = length - 1; i > 0; --i)
+        {
+            encoded[i] = (char)(0x80 | (codepoint & 0x3F));
+            codepoint >>= 6;
+        }
+        encoded[0] = (char)((0xFFu << (8 - length)) | codepoint);
+    }
     old_length = strlen(petersburg_focus->text);
     if (old_length > SIZE_MAX - length - 1)
         return;
@@ -2387,7 +2413,6 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
 {
     petersburg_widget_t *window = petersburg_window_for(native);
     size_t length;
-    char *text;
     (void)scancode;
     (void)modifiers;
     petersburg_dirty = 1;
@@ -2450,15 +2475,12 @@ static void petersburg_key(GLFWwindow *native, int key, int scancode,
     length = strlen(petersburg_focus->text);
     if (length == 0)
         return;
-    text = realloc(petersburg_focus->text, length);
-    if (text == NULL)
+    do
     {
-        fprintf(stderr, "USSR: Petersburg could not shrink text-box content\n");
-        petersburg_last_error = 1;
-        return;
-    }
-    text[length - 1] = '\0';
-    petersburg_focus->text = text;
+        --length;
+    } while (length > 0 &&
+             ((unsigned char)petersburg_focus->text[length] & 0xC0) == 0x80);
+    petersburg_focus->text[length] = '\0';
     petersburg_queue_event(petersburg_focus, 1);
 }
 

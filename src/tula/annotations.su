@@ -28,7 +28,8 @@ tula_annotation_text(r): [
     gettext(text): box
     str_trim(trimmed): text
     if(_): {trimmed = ""} [
-        tula_set_status(_): "Type a label before pressing Enter"
+        setfocus(_): box
+        tula_set_status(_): "Type in the Command / drawing label field, then press Enter"
         return(r): r
     ]
     set(tula_label_text): text!
@@ -70,7 +71,7 @@ tula_annotation_click(r): tool x y [
     if(_): {tool = "text"} [
         set(text): tula_label_text?
         if(_): {text = ""} [
-            tula_set_status(_): "Type a label in the command box and press Enter"
+            tula_set_status(_): "Type in the Command / drawing label field and press Enter"
             return(r): r
         ]
         tl_text_e(entity): x y 2.5 text

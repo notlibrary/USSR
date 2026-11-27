@@ -39,7 +39,7 @@ Tula supports up to 10,000 entities per drawing.
 
 ## Text and dimensions
 
-- **Text** focuses the command box. Type a label, press Enter, and click its
+- **Text** focuses the **Command / drawing label** field above the canvas. Type a label, press Enter, and click its
   insertion point. Click again to repeat it or enter another label.
 - **Linear Dimension** takes two measured points and a third click to set
   the offset. The dimension line is parallel to the measured segment and
