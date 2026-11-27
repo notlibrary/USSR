@@ -162,7 +162,12 @@ init(result): arg_count arg_values [
     check(_): "Text button selects tool" tula_tool? "text"
     set(font): tula_draft_font?
     check(_): "Drafting font loads" {font > 0} true
-    settext(_): command "HOLE A"
+    getfocus(focused): window
+    check(_): "Text focuses the drawing label field" focused command
+    inject(_): window "char" 1044 0 0
+    inject(_): window "char" 1068 0 0
+    inject(_): window "key" 259 0 0
+    inject(_): window "char" 1040 0 0
     inject(_): window "key" 257 0 0
     settle(_):
     tula_to_screen_x(sx): 0
@@ -171,7 +176,7 @@ init(result): arg_count arg_values [
     set(es): tula_entities?
     at(entity): es 0
     at(text): entity 4
-    check(_): "Text places the entered label" text "HOLE A"
+    check(_): "Text places the entered label" text "ДА"
     press(_): "Linear Dimension"
     check(_): "Linear Dimension button selects tool" tula_tool? "linear dimension"
     tula_to_screen_y(sy): 0

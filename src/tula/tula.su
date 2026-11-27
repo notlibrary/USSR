@@ -420,7 +420,7 @@ tula_tool_body(r): name [
         set(tula_label_text): ""!
         set(box): tula_cmdbox?
         if(_): {box != 0} [ setfocus(_): box ]
-        tula_set_status(_): "TEXT: type a label in the command box, press Enter, then click to place it"
+        tula_set_status(_): "TEXT: type in the Command / drawing label field below, press Enter, then click the drawing"
     ]
     elif(_): {name = "linear dimension"} [
         tula_set_status(_): "LINEAR DIMENSION: click the first measured point"
@@ -2342,8 +2342,9 @@ init(result): arg_count arg_values [
     createwindow(window): "Tula 2D CAD" 1100 800
     textbox(filename): window _tla_file
     label(status): window ""
-    tulainitialize(canvas): window status filename
+    label(_): window "Command / drawing label"
     textbox(_tla_cmd): window ""
+    tulainitialize(canvas): window status filename
     set(tula_cmdbox): _tla_cmd!
     tulatoolbar(_): window
     on(_): canvas "pointer" "tula_app_pointer"
