@@ -52,6 +52,9 @@ The [China package](../china/README.md) supplies precompiled command-line
 programs on the live ISO and installed system. Use `run(_): "china"`
 in Rush to list them.
 
+[Kaliningrad](../kaliningrad/README.md) opens a remote SSH shell from the
+Moscow console. Linux-built images include its native SSH backend.
+
 ## Console accounts
 
 The stock live media start a single master-admin session named `ted`.

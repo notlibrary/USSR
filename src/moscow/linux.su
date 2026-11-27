@@ -500,6 +500,17 @@ lx_read(r): t fd buf n [
     btget(f): t fd
     btget(kind): f "kind"
     if(_): {kind = "con"} [
+        btget(raw): f "raw" false
+        if(_): raw [
+            if(_): {n = 0} [ return(r): 0 ]
+            terminal_raw(_):
+            terminal_getch(key):
+            terminal_sane(_):
+            if(_): {key < 0} [ return(r): 0 ]
+            k_upoke(w): buf key 1
+            if(_): {w < 0} [ return(r): w ]
+            return(r): 1
+        ]
         btget(line): f "buf"
         len(ln): line
         if(_): {ln = 0} [
@@ -1561,6 +1572,18 @@ lx_fcntl(r): t fd cmd arg [
     elif(_): {cmd = 5} [ k_upoke(_): arg 2 2 ]
 ]
 
+# 0x4b00 toggles unechoed reads on this console descriptor.
+lx_ioctl(r): t fd req value [
+    set(r): -25
+    if(_): {req != 19200} [ return(r): r ]
+    btget(file): t fd
+    if(_): {file = null} [ return(r): -9 ]
+    btget(kind): file "kind"
+    if(_): {kind != "con"} [ return(r): r ]
+    btput(_): file "raw" {value != 0}
+    set(r): 0
+]
+
 # __linux: [number, six arguments]
 sys_linux(r): v [
     at(n): v 0
@@ -1578,6 +1601,7 @@ sys_linux(r): v [
     elif(_): {n = 2} [ lx_open(r): t a b ]
     elif(_): {n = 257} [ lx_open(r): t b c ]
     elif(_): {n = 3} [ lx_close(r): t a ]
+    elif(_): {n = 16} [ lx_ioctl(r): t a b c ]
     elif(_): {n = 8} [ lx_seek(r): t a b c ]
     elif(_): {n = 4 || n = 6} [ lx_stat(r): t a b ]
     elif(_): {n = 5} [ lx_fstat(r): t a b ]

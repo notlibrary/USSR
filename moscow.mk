@@ -23,7 +23,7 @@
 #   nasm, ussr, C toolchain    the runtime and its native xHCI driver
 #   clang, ld.lld              /lib/ctest.so, gui.so and tls.so (BearSSL,
 #                              fetched once); CLANG= and LLD= override
-#   Linux, gcc, flex, bison,   /bin/ussr, /bin/ural and /bin/moscow_native:
+#   Linux, gcc, flex, bison,   /bin/ussr, /bin/ural, /bin/moscow_native and /bin/kal-ssh:
 #   perl, curl                 static PIE against musl, with zlib, OpenSSL,
 #                              curl and SQLite, all fetched once
 #   clang, lld-link            BOOTX64.EFI, the UEFI loader (efi/loader.c),
@@ -88,6 +88,8 @@ ZLIB := zlib-1.3.2
 ZLIB_SHA256 := bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
 OPENSSL := openssl-3.5.9
 OPENSSL_SHA256 := 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+LIBSSH2 := libssh2-1.11.1
+LIBSSH2_SHA256 := d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7
 CURL := curl-8.23.0
 CURL_SHA256 := e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49
 SQLITE := sqlite-autoconf-3540100
@@ -123,6 +125,9 @@ $(DL)/$(ZLIB).tar.gz:
 	$(call fetch,https://zlib.net/fossils/$(ZLIB).tar.gz https://github.com/madler/zlib/releases/download/v$(ZLIB:zlib-%=%)/$(ZLIB).tar.gz,$(ZLIB_SHA256))
 $(DL)/$(OPENSSL).tar.gz:
 	$(call fetch,https://github.com/openssl/openssl/releases/download/$(OPENSSL)/$(OPENSSL).tar.gz https://www.openssl.org/source/$(OPENSSL).tar.gz,$(OPENSSL_SHA256))
+$(DL)/$(LIBSSH2).tar.gz:
+	$(call fetch,https://libssh2.org/download/$(LIBSSH2).tar.gz,$(LIBSSH2_SHA256))
+
 $(DL)/$(CURL).tar.gz:
 	$(call fetch,https://curl.se/download/$(CURL).tar.gz https://github.com/curl/curl/releases/download/curl-$(subst .,_,$(CURL:curl-%=%))/$(CURL).tar.gz,$(CURL_SHA256))
 $(DL)/$(SQLITE).tar.gz:
@@ -148,7 +153,7 @@ $(OUT)/xhci.bin: $(OUT)/xhci.o $(ARCH)/xhci.ld
 CHINA := $(ROOT)/src/china
 SU_SRC := $(filter-out $(CHINA)/%,$(wildcard $(ROOT)/src/*.su $(ROOT)/src/*/*.su $(ROOT)/src/*/*/*.su))
 BOOT_FILES := ussr_rt.bin moscow.ru russia.ru rush.ru
-NATIVE_RU := install stalin belarus
+NATIVE_RU := install stalin belarus kal
 RUSSIA_RU := Mbl Mbltishi kremlin
 CHINA_RU := china $(basename $(notdir $(wildcard $(CHINA)/*/*.su)))
 BIN_RU := $(NATIVE_RU) $(RUSSIA_RU) $(CHINA_RU)
@@ -167,6 +172,10 @@ $(OUT)/moscow.ru $(OUT)/install.ru: $(OUT)/%.ru: $(SU_SRC) $(USSR)
 $(OUT)/russia.ru $(OUT)/stalin.ru $(OUT)/belarus.ru: $(OUT)/%.ru: $(SU_SRC) $(USSR)
 	mkdir -p $(OUT)
 	cd $(ROOT)/src/$* && $(RUN_USSR) -c $*.su $@
+
+$(OUT)/kal.ru: $(ROOT)/src/kaliningrad/kal.su $(USSR)
+	mkdir -p $(OUT)
+	cd $(ROOT)/src/kaliningrad && $(RUN_USSR) -c kal.su $@
 
 $(OUT)/rush.ru: $(SU_SRC) $(USSR)
 	mkdir -p $(OUT)
@@ -271,7 +280,7 @@ NATIVE_TOOLS := gcc make flex bison perl curl
 NATIVE_OK := $(if $(filter Linux,$(shell uname -s)),$(if $(strip $(foreach t,$(NATIVE_TOOLS),$(if $(call have,$(t)),,$(t)))),,yes))
 
 ifeq ($(NATIVE_OK),yes)
-PROGS := $(NATIVE)/ussr $(NATIVE)/ural $(NATIVE)/moscow_native
+PROGS := $(NATIVE)/ussr $(NATIVE)/ural $(NATIVE)/moscow_native $(NATIVE)/kal-ssh
 PREFIX := $(NATIVE)/musl
 MUSL_GCC := $(PREFIX)/bin/musl-gcc
 MLIB := $(PREFIX)/lib
@@ -318,6 +327,20 @@ $(DEPS)/lib/libcurl.a: $(DL)/$(CURL).tar.gz $(DEPS)/lib/libssl.a $(DEPS)/lib/lib
 	    $(MAKE) -j$(JOBS) -C lib >/dev/null 2>&1 && $(MAKE) -C lib install >/dev/null 2>&1 && \
 	    $(MAKE) -C include install >/dev/null 2>&1
 
+$(DEPS)/lib/libssh2.a: $(DL)/$(LIBSSH2).tar.gz $(DEPS)/lib/libssl.a
+	tar -xzf $< -C $(NATIVE)
+	cd $(NATIVE)/$(LIBSSH2) && CC=$(MUSL_GCC) CFLAGS="$(PICFLAGS)" \
+	    CPPFLAGS="-I$(DEPS)/include" LDFLAGS="-L$(DEPS)/lib -static" LIBS= \
+	    ./configure --prefix=$(DEPS) --with-crypto=openssl --with-libssl-prefix=$(DEPS) \
+	        --disable-shared --enable-static --without-libz >/dev/null && \
+	    $(MAKE) -C src -j$(JOBS) >/dev/null && $(MAKE) -C src install >/dev/null && \
+	    cp include/libssh2.h $(DEPS)/include/
+
+$(NATIVE)/kal-ssh: $(ROOT)/src/kaliningrad/kal_ssh.c $(DEPS)/lib/libssh2.a
+	$(MUSL_GCC) -fPIE -O2 -Wall -Wextra -I$(DEPS)/include $(PIE) -o $@ $< \
+	    -L$(DEPS)/lib -lssh2 -lcrypto $(MLIB)/crtn.o
+	strip $@ 2>/dev/null || true
+
 $(NATIVE)/$(SQLITE)/sqlite3.c: $(DL)/$(SQLITE).tar.gz
 	mkdir -p $(NATIVE)
 	tar -xzf $< -C $(NATIVE)
@@ -351,7 +374,7 @@ $(NATIVE)/ussr: $(USSR_SRC) $(DEPS)/lib/libssl.a | $(MUSL_GCC)
 $(NATIVE)/moscow_native: $(ROOT)/tests/moscow_native.c | $(MUSL_GCC)
 	$(MUSL_GCC) -fPIE -O1 -w $(PIE) -o $@ $< $(MLIB)/crtn.o
 else
-$(call missing,Linux programs need Linux and $(NATIVE_TOOLS): no new /bin/ussr /bin/ural /bin/moscow_native)
+$(call missing,Linux programs need Linux and $(NATIVE_TOOLS): no new /bin/ussr /bin/ural /bin/moscow_native /bin/kal-ssh)
 PROGS :=
 endif
 
@@ -416,7 +439,7 @@ $(IMG): $(OUT)/moscow.img $(addprefix $(OUT)/,$(addsuffix .ru,$(BIN_RU))) $(LIBS
 	    [ -f "$$so" ] || { echo "moscow.mk: no /lib/*.so" >&2; break; }; \
 	    $(BELARUS) put $@ $$so /lib/$$(basename $$so); \
 	done
-	for f in ussr ural moscow_native; do \
+	for f in ussr ural moscow_native kal-ssh; do \
 	    if [ -f $(NATIVE)/$$f ]; then $(BELARUS) put $@ $(NATIVE)/$$f /bin/$$f; \
 	    else echo "moscow.mk: no /bin/$$f" >&2; fi; \
 	done
@@ -446,7 +469,7 @@ $(ISO): $(IMG) $(ISO_EFI) FORCE
 	mkdir -p $(STAGE)/boot $(STAGE)/bin $(STAGE)/etc/ssl $(STAGE)/src/ussr
 	for f in $(BOOT_FILES); do cp $(OUT)/$$f $(STAGE)/boot/$$f; done
 	for f in $(BIN_RU); do cp $(OUT)/$$f.ru $(STAGE)/bin/$$f.ru; done
-	for f in ussr ural moscow_native; do \
+	for f in ussr ural moscow_native kal-ssh; do \
 	    if [ -f $(NATIVE)/$$f ]; then cp $(NATIVE)/$$f $(STAGE)/bin/$$f; fi; \
 	done
 	printf '%s' "moscow-install" >$(STAGE)/etc/hostname
@@ -481,7 +504,7 @@ endif
 clean:
 	rm -rf $(OUT)/*.bin $(OUT)/*.ru $(OUT)/*.img $(OUT)/*.iso $(OUT)/iso $(OUT)/lib \
 	    $(OUT)/files.txt $(OUT)/murmansk.rules \
-	    $(NATIVE)/ussr $(NATIVE)/ural $(NATIVE)/moscow_native $(NATIVE)/src
+	    $(NATIVE)/ussr $(NATIVE)/ural $(NATIVE)/moscow_native $(NATIVE)/kal-ssh $(NATIVE)/src
 
 FORCE:
 .PHONY: all boot img iso clean certs FORCE
