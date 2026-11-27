@@ -802,6 +802,10 @@ blm_cmd_stat(r): fs path [
     bl_int(ns): nodes
     bl_int(dps): depth
     bl_int(ms): mt
+    bl_permissions(meta): fs p
+    at(bits): meta 0
+    at(owner): meta 1
+    bl_mode_text(mode): bits
     blm_has(js): "--json"
     if(_): js [
         blm_json_str(pj): p
@@ -811,7 +815,8 @@ blm_cmd_stat(r): fs path [
             blm_json_str(lj): lt
             concat(m): m ", \"target\": " lj
         ]
-        concat(m): m "}"
+        blm_json_str(oj): owner
+        concat(m): m ", \"mode\": \"" mode "\", \"owner\": " oj "}"
         print(_): m
         set(r): 0
         return(r): r
@@ -823,6 +828,10 @@ blm_cmd_stat(r): fs path [
         blm_link_text(lt): fs ino
         concat(m): m " to " lt
     ]
+    print(_): m
+    concat(m): "  mode: " mode
+    print(_): m
+    concat(m): " owner: " owner
     print(_): m
     concat(m): "  size: " ss " bytes in " bs " blocks"
     print(_): m

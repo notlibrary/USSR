@@ -17,6 +17,8 @@ current Belarus directory unless they start with `/`.
 | Command | Operands and behavior |
 | --- | --- |
 | `head`, `tail` | `FILE [LINES]`, default 10 |
+| `chmod`, `chown` | `chmod [-R] MODE PATH` changes octal permissions. Use `chmod(): "-R" 755 "/path"` in Rush to include all descendants. `chown OWNER PATH` changes the owner. |
+| `stat` | `PATH`, print mode, owner, and path |
 | `cat` | `FILE ...`, display text in order |
 | `more`, `less` | `FILE`, Space or Enter to advance, q to quit, b to go back in less |
 | `grep` | `REGEX FILE`, statuses 0 for a match, 1 for no match, 2 for an error |
@@ -32,7 +34,7 @@ current Belarus directory unless they start with `/`.
 | `mkdir`, `rmdir` | `DIRECTORY`, create a directory and its parents or remove an empty directory |
 | `cd`, `pwd` | `cd [DIRECTORY]` changes Rush's current directory, defaulting to HOME. `pwd` prints it. |
 | `who`, `whoami` | Display the kernel console identity |
-| `reguser` | `USERNAME [ROLE]`, create an account from a master-admin session. The default role is `user`. |
+| `reguser` | `USERNAME [ROLE]`, create an account from a master-admin session. The default role is `user`. Creates a private home in `/home/USERNAME`. |
 | `passwd` | Reports that password changes are unavailable |
 | `date` | UTC clock as ISO 8601, or seconds since the epoch with `epoch` |
 | `uname`, `uptime` | Show system identity or elapsed time since boot |

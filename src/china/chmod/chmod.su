@@ -1,0 +1,17 @@
+$include "../common.su"
+
+init(r): argc argv [
+    set(recursive): false
+    set(index): 0
+    china_operand(option): argv 0 ""
+    if(_): {option = "-R"} [
+        set(recursive): true
+        set(index): 1
+    ]
+    if(_): {argc != index + 2} [ china_error(r): "usage: chmod [-R] MODE PATH" return(r): r ]
+    at(value): argv index
+    at(file): argv {index + 1}
+    if(_): {file = ""} [ china_error(r): "chmod: empty path" return(r): r ]
+    china_path(path): file
+    permissions(r): path value "chmod" recursive
+]

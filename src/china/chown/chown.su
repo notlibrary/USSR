@@ -1,0 +1,10 @@
+$include "../common.su"
+
+init(r): argc argv [
+    if(_): {argc != 2} [ china_error(r): "usage: chown OWNER PATH" return(r): r ]
+    at(value): argv 0
+    at(file): argv 1
+    if(_): {file = ""} [ china_error(r): "chown: empty path" return(r): r ]
+    china_path(path): file
+    permissions(r): path value "chown"
+]

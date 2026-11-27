@@ -197,7 +197,7 @@ account_builtins:
         db 0
 
 account_syscalls:
-        db "run",0,"shell_run",0,"runtime",0,"whoami",0,"account_identity",0,"account_register",0,"help",0
+        db "permissions",0,"run",0,"shell_run",0,"runtime",0,"whoami",0,"account_identity",0,"account_register",0,"help",0
         db "getcwd",0,"cd",0,"china_chdir",0,"china_path",0,"china_read",0,"china_stat",0
         db "china_du",0,"china_mount",0,"df",0,"ls",0,"cat",0,"tree",0,"readfile",0
         db "read_bytes",0,"file_exists",0,"is_dir",0,"list_dir",0,"localtime",0,"tasks",0

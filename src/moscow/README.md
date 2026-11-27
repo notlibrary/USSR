@@ -68,11 +68,20 @@ role, salt, and PBKDF2-HMAC-SHA256 verifier. There is no `sudo`. Reboot
 to log in as a different user. `whoami():` reads the console identity from
 the kernel.
 
-Ordinary accounts can run packaged USSR bytecode and write to shared
-`/home` and `/tmp`. All roles other than `ted` have the same permissions.
+Ordinary accounts can run packaged USSR bytecode and write in their
+home directory and shared `/tmp`. All roles other than `ted` have the same permissions.
 Raw devices, native executable loading, and account creation require the
 master-admin session. This is a single console account model with shared
 read access to the root filesystem.
+
+New accounts receive a private `700` directory at `/home/USERNAME`.
+Login sets `HOME` to that directory. Use `chmod(): 755 "/home/alice/tool"`,
+`chown(): "alice" "/home/alice/tool"`, and `stat(): "/home/alice/tool"`
+to manage and inspect the metadata. An owner or master admin can change mode.
+Changing the owner requires a master admin. Moscow uses owner and other bits
+for access checks. Group bits are stored for compatibility with standard
+octal notation. Packaged executables from older images retain their
+original launch behavior until an explicit mode is set.
 
 Run the QEMU account checks with `python src/moscow/tools/accounts_test.py`.
 
