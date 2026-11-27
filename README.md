@@ -289,6 +289,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - china.su - native command-line tools for moscow
 - usa.su - C compiler to `.ru` bytecode
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
+- kaliningrad.su(kal.su) - SSH client
 - ural.su - USSR package manager
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
 - Mbl.su - vi-like console text editor
