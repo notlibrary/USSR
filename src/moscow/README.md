@@ -796,6 +796,21 @@ unchanged; a write that covers a disk sector in part reads it first.
 `sha256.inc` gives Stalin the hash it makes GUIDs and disk signatures
 with.
 
+Ethernet (`net.inc`, `re.inc`): Moscow probes all PCI bus numbers for
+onboard or add-in RTL8111H/RTL8168H-family controllers. It recognizes
+PCI ID `10ec:8168` with MAC XID `0x540`, `0x541`, or `0x6c0`, using a
+firmware-assigned register BAR below 4 GiB. The first usable controller
+appears as `re0`. The Intel e1000 remains the fallback when no supported
+Realtek controller starts. Both use the same USSR Ethernet, DHCP and
+IPv4 stack.
+
+For the first hardware test, plug in Ethernet before boot. Use
+`net(_):` to check for `re0`, its MAC, and its link or IP address.
+If the link is up and DHCP has not assigned an address yet, run
+`dhcp(_): "renew"`, then try `ping(_): "your-router-address" 2`.
+If the boot log reports an unsupported MAC XID, include that line in
+the test results. QEMU's RTL8139 uses a different hardware interface.
+
 Builtins with the hosted ussr's meaning: `len byte slice chr vec push
 pop at typeof struct new getf setf encode decode try write_stderr fail
 re_test re_find re_pos re_all re_replace re_split (`arch/amd64/regex.inc`, the
@@ -839,7 +854,7 @@ The kernel's own services, used by `moscow.su`:
 | `k_ru_check(_):` | the next `.ru` loaded is only checked, not run: its load fails quietly (`k_exec_bytes` gives 1) |
 | `k_ru_missing(s):` | a command the last checked `.ru` calls that the runtime does not have (or `petersburg_run`, which is russia.ru's), or `""` |
 | `k_syscall(_): name function` | the kernel's `function` answers `name` from now on |
-| `net_info(v):` | `[mac, link up]` of the network card, or null |
+| `net_info(v):` | `[mac, link up, interface name]` of the network card, or null |
 | `net_recv(v):` | the next Ethernet frame as a byte vector, or null |
 | `net_send(n): head [tail [from [count]]]` | one frame: a byte vector, then a string or byte vector (or part of one) |
 | `net_sum(n): data [from [count]]` | the 16-bit one's complement sum of IP checksums, folded |

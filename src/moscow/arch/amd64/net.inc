@@ -1,9 +1,8 @@
 ; net.inc - the network card for the Moscow runtime (ussr_rt.nasm
-; includes it): an Intel 8254x (e1000) driver, the card QEMU gives a pc
-; machine, found on PCI bus 0, polled (its interrupts are off), and the
+; includes it): polled Intel 8254x and Realtek RTL8111H/RTL8168H drivers and the
 ; builtins the kernel's TCP/IP stack (src/moscow/net.su) is written on:
 ;
-;   net_info(v):              [mac, link up], mac a vector of 6 bytes;
+;   net_info(v):              [mac, link up, interface name], mac a vector of 6 bytes;
 ;                             null when there is no card
 ;   net_recv(v):              the next Ethernet frame as a byte vector,
 ;                             or null when none has come
@@ -21,6 +20,8 @@
 ; Descriptor rings and buffers come from the heap once, at start, and
 ; are never given back.
 
+NET_INTEL       equ 1
+NET_REALTEK     equ 2
 E1000_VENDOR    equ 0x8086
 NET_RX          equ 32                  ; receive descriptors
 NET_TX          equ 16                  ; transmit descriptors
@@ -91,6 +92,8 @@ pci_write:
         pop r11
 %endmacro
 
+%include "re.inc"
+
 ; Finds and starts the card. Keeps registers.
 net_init:
         push rax
@@ -99,6 +102,9 @@ net_init:
         push rdx
         push rsi
         push rdi
+        call rtl_init
+        cmp qword [net_up], NET_REALTEK
+        je .out
         xor ebx, ebx                    ; device << 11, bus 0, function 0
 .slot:
         cmp ebx, 32 << 11
@@ -225,7 +231,7 @@ net_init:
         EWRITE E_TIPG, 0x0060200a
         ; EN, PSP, collision threshold 15, collision distance 64
         EWRITE E_TCTL, (1 << 1) | (1 << 3) | (0x0f << 4) | (0x40 << 12)
-        mov qword [net_up], 1
+        mov qword [net_up], NET_INTEL
         jmp .out
 .none:
         mov qword [net_up], 0
@@ -238,7 +244,7 @@ net_init:
         pop rax
         ret
 
-; net_info(v): -> [mac, link up], or null without a card
+; net_info(v): -> [mac, link up, interface name], or null without a card
 bi_net_info:
         cmp qword [net_up], 0
         je .none
@@ -262,10 +268,29 @@ bi_net_info:
         mov [rsp + 8], r8
         mov rsi, rsp
         call vec_push
+        cmp qword [net_up], NET_REALTEK
+        je .realtek
         EREAD E_STATUS
+        jmp .link
+.realtek:
+        mov rax, [net_mmio]
+        movzx eax, byte [rax + RE_PHY_STATUS]
+.link:
         shr eax, 1
-        and eax, 1                      ; LU
+        and eax, 1                      ; link up
         mov qword [rsp], T_BOOL
+        mov [rsp + 8], rax
+        mov rsi, rsp
+        call vec_push
+        mov esi, net_intel_name
+        cmp qword [net_up], NET_REALTEK
+        jne .name
+        mov esi, net_realtek_name
+.name:
+        push rdi
+        call new_string_z
+        pop rdi
+        mov qword [rsp], T_STR
         mov [rsp + 8], rax
         mov rsi, rsp
         call vec_push
@@ -278,6 +303,9 @@ bi_net_info:
         xor eax, eax
         ret
 
+net_intel_name:   db "e1000", 0
+net_realtek_name: db "re0", 0
+
 ; net_recv(v): -> the next frame, or null
 bi_net_recv:
         cmp qword [net_up], 0
@@ -286,6 +314,8 @@ bi_net_recv:
         mov r8, rcx
         shl r8, 4
         add r8, [net_rx_ring]
+        cmp qword [net_up], NET_REALTEK
+        je .re_rx
         test byte [r8 + 12], 1          ; DD: the card has filled it
         jz .none
         push rdx
@@ -297,6 +327,10 @@ bi_net_recv:
         jnz .whole
         xor r12d, r12d                  ; a frame over 2048 bytes: dropped
 .whole:
+        cmp r12d, NET_BUF
+        jbe .make_vector
+        xor r12d, r12d
+.make_vector:
         call vec_new
         mov rdi, rax
         test r12, r12
@@ -310,6 +344,10 @@ bi_net_recv:
         mov [rdi + VEC_CAP], r12
         mov [rdi + VEC_COUNT], r12
         mov rsi, [rbx]                  ; the buffer
+        cmp qword [net_up], NET_REALTEK
+        jne .copy_frame
+        mov rsi, [rbx + 8]
+.copy_frame:
         xor ecx, ecx
 .item:
         mov qword [rax], T_INT
@@ -321,9 +359,16 @@ bi_net_recv:
         jb .item
 .given:
         ; the descriptor back to the card
+        cmp qword [net_up], NET_REALTEK
+        je .re_release
         mov byte [rbx + 12], 0
         mov rcx, [net_rx_next]
         EWRITE E_RDT, ecx
+        jmp .advance
+.re_release:
+        call re_release_rx
+        mov rcx, [net_rx_next]
+.advance:
         inc rcx
         and ecx, NET_RX - 1
         mov [net_rx_next], rcx
@@ -332,9 +377,40 @@ bi_net_recv:
         pop rbx
         pop rdx
         jmp bi_vec_out
+.re_rx:
+        mov eax, [r8]
+        test eax, RE_OWN
+        jnz .none
+        push rdx
+        push rbx
+        push r12
+        mov rbx, r8
+        xor r12d, r12d
+        mov ecx, eax
+        and ecx, RE_FRAME | RE_RX_ERROR
+        cmp ecx, RE_FRAME
+        jne .make_vector
+        and eax, 0x3fff
+        sub eax, 4                     ; Realtek reports the Ethernet FCS
+        cmp eax, NET_FRAME_MAX
+        ja .make_vector
+        cmp eax, 14
+        jb .make_vector
+        mov r12d, eax
+        jmp .make_vector
 .none:
         mov qword [rdx], T_NULL
         xor eax, eax
+        ret
+
+; Return an RX buffer only after the CPU has finished reading it.
+re_release_rx:
+        mov eax, [rbx]
+        and eax, RE_EOR
+        or eax, RE_OWN | NET_BUF
+        mov dword [rbx + 4], 0
+        sfence
+        mov [rbx], eax
         ret
 
 ; rsi = a value (string or byte vector), r8 = destination, r9 = room ->
@@ -415,6 +491,7 @@ bi_net_send:
         push rdx
         push rbx
         push r12
+        push r13
         mov rbx, rdi
         mov r12d, esi
         ; wait for the descriptor to be free (the card is quick)
@@ -422,6 +499,8 @@ bi_net_send:
         shl rcx, 4
         add rcx, [net_tx_ring]
         mov rdx, rcx
+        cmp qword [net_up], NET_REALTEK
+        je .re_slot
         mov ecx, 10000000
 .busy:
         test byte [rdx + 12], 1
@@ -429,8 +508,19 @@ bi_net_send:
         pause
         loop .busy
         jmp .fail_pop
+.re_slot:
+        test dword [rdx], RE_OWN
+        jnz .re_busy
+        mov r8, [rdx + 8]
+        jmp .copy
+.re_busy:
+        mov rax, [net_mmio]
+        mov byte [rax + RE_TX_POLL], 0x40
+        jmp .fail_pop
 .free:
         mov r8, [rdx]                   ; its buffer
+.copy:
+        mov r13, r8
         mov r9, NET_FRAME_MAX
         mov rsi, rbx
         xor ecx, ecx
@@ -461,17 +551,18 @@ bi_net_send:
         cmp rax, -1
         je .fail_pop
 .built:
-        sub r8, [rdx]                   ; the length
+        sub r8, r13                     ; the length
         cmp r8, 60                      ; the shortest frame, padded
         jae .long_enough
-        mov rdi, [rdx]
-        add rdi, r8
+        lea rdi, [r13 + r8]
         mov rcx, 60
         sub rcx, r8
         xor eax, eax
         rep stosb
         mov r8d, 60
 .long_enough:
+        cmp qword [net_up], NET_REALTEK
+        je .re_submit
         mov [rdx + 8], r8w              ; length
         mov byte [rdx + 10], 0          ; cso
         mov byte [rdx + 11], 0x0b       ; cmd: EOP, IFCS, RS
@@ -481,12 +572,29 @@ bi_net_send:
         and ecx, NET_TX - 1
         mov [net_tx_next], rcx
         EWRITE E_TDT, ecx
+        jmp .sent
+.re_submit:
+        mov eax, [rdx]
+        and eax, RE_EOR
+        or eax, r8d
+        or eax, RE_OWN | RE_FRAME
+        mov dword [rdx + 4], 0
+        sfence
+        mov [rdx], eax
+        sfence
+        mov rax, [net_mmio]
+        mov byte [rax + RE_TX_POLL], 0x40
+        inc qword [net_tx_next]
+        and qword [net_tx_next], NET_TX - 1
+.sent:
         mov rax, r8
+        pop r13
         pop r12
         pop rbx
         pop rdx
         jmp bi_int_out
 .fail_pop:
+        pop r13
         pop r12
         pop rbx
         pop rdx

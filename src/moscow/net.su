@@ -1,5 +1,5 @@
 # net.su - Moscow's network stack, in USSR: Ethernet, ARP, IPv4, ICMP
-# (echo), UDP (DHCP) and TCP, over the runtime's e1000 driver (net_info,
+# (echo), UDP (DHCP) and TCP, over the runtime's Ethernet drivers (net_info,
 # net_recv, net_send and net_sum, arch/amd64/net.inc). moscow.su includes
 # it and gives programs the hosted ussr's socket commands through it,
 # so Ukraine and Novgorod serve from Moscow as they serve from Linux.
@@ -29,7 +29,7 @@
 # socket_recv gives text (without 0 bytes, which a USSR string cannot
 # hold), socket_recv_bytes the bytes.
 
-global(_): net_mac net_ip net_mask net_gw net_dns net_how net_ipid
+global(_): net_name net_mac net_ip net_mask net_gw net_dns net_how net_ipid
 global(_): net_arp net_socks net_conns net_listen net_next net_port
 global(_): net_pings net_dhcp net_dhcp_on net_udp
 
@@ -199,12 +199,14 @@ net_start(r): [
     set(net_how): "none"
     set(net_dhcp_on): false
     set(net_mac): null
+    set(net_name): ""
     net_info(info):
     typeof(t): info
     if(_): {t != "vector"} [ return(r): r ]
     at(net_mac): info 0
+    at(net_name): info 2
     net_dhcp_run(ok):
-    if(_): {ok = false} [
+    if(_): {ok = false && net_name = "e1000"} [
         net_ip_parse(net_ip): "10.0.2.15"
         net_ip_parse(net_mask): "255.255.255.0"
         net_ip_parse(net_gw): "10.0.2.2"
@@ -217,8 +219,20 @@ net_start(r): [
 # one line about the card and the address
 net_describe(r): [
     set(r): "no network card"
-    if(_): {net_how = "none"} [ return(r): r ]
+    if(_): {net_name = ""} [ return(r): r ]
     net_mac_text(m): net_mac
+    if(_): {net_name = "re0"} [
+        net_info(info):
+        at(link): info 1
+        if(_): {link = false} [
+            concat(r): net_name " " m ", link down"
+            return(r): r
+        ]
+        if(_): {net_how = "none"} [
+            concat(r): net_name " " m ", link up, no DHCP address"
+            return(r): r
+        ]
+    ]
     net_ip_text(a): net_ip
     set(bits): 0
     set(k): net_mask
@@ -228,7 +242,7 @@ net_describe(r): [
     ]
     str_from_int(bs): bits
     net_ip_text(g): net_gw
-    concat(r): "e1000 " m ", " a "/" bs " (" net_how "), gateway " g
+    concat(r): net_name " " m ", " a "/" bs " (" net_how "), gateway " g
 ]
 
 # --- sending
