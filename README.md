@@ -269,11 +269,13 @@ Lenin runs on a hosted `ussr`, and in Moscow on its `/bin/ussr`: OpenSSL for the
 models' HTTPS, and `posix_spawn` to run each test as a program, Moscow having no
 shell.
 
-The project now has three main tracks, with the Moscow OS kernel underneath:
+The project now has five main tracks(approved ways of using), with the Moscow OS kernel underneath:
 
 1. The ROUND stack forum: Ryazan, Ukraine, Novgorod, Omsk and Dubna
 2. The Kremlin GUI desktop and its apps, with the USSR shell
 3. Lenin, the neuroslop code refining and enrichment AI agent
+4. Making moscow self sufficient able to build new version of itself with it's own tools 
+5. Deep network stack services(SSHD, FTPD, DNS) whole that network OS must have
 
 ## The project is complete
 
@@ -289,7 +291,7 @@ With usa the second wave is done and USSR is complete. Its programs:
 - china.su - native command-line tools for moscow
 - usa.su - C compiler to `.ru` bytecode
 - library (`src/libs`) - the USSR standard library: io, math, bytes, strings, vectors
-- kaliningrad.su(kal.su) - SSH client
+- kaliningrad.su(kal.su) - the SSH client
 - ural.su - USSR package manager
 - petersburg - OpenGL GUI widgets, dialogs, events and layout
 - Mbl.su - vi-like console text editor
